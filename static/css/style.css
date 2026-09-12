@@ -676,6 +676,42 @@ body.ws-resizing #ws-grip::after { background: var(--accent); }
   box-shadow: 0 0 4px var(--amber); }
 .ws-children { margin-left: 14px; border-left: 1px solid var(--border-subtle); }
 .ws-empty { color: var(--dim); font-size: 11px; padding: 14px; text-align: center; }
+.ws-changes-head {
+  display: flex; align-items: center; gap: 5px; padding: 7px 8px; margin: 4px 8px 2px;
+  font-size: 10.5px; font-weight: 700; color: var(--amber); cursor: pointer;
+  text-transform: uppercase; letter-spacing: 0.5px; border-radius: 5px;
+  user-select: none;
+}
+.ws-changes-head:hover { background: var(--accent-bg); }
+.ws-changes-head .caret { font-size: 9px; }
+#ws-changes-count { font-weight: 700; margin-left: auto; }
+#ws-changes-list { padding: 0 8px 4px 6px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 6px; }
+.ws-chg { color: var(--amber); }
+#ws-filter-bar { padding: 0 10px 6px; }
+#ws-filter {
+  width: 100%; background: var(--bg-input); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 9px; font-size: 11px; font-family: inherit; outline: none;
+}
+#ws-filter:focus { border-color: var(--accent); }
+
+/* ---------- capabilities panel ---------- */
+.cap-group { border: 1px solid var(--border); border-radius: 8px; margin-top: 8px; overflow: hidden; }
+.cap-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; background: var(--panel2); font-weight: 700; font-size: 12px;
+}
+.cap-toggle {
+  font-size: 10px; font-weight: 700; padding: 3px 10px; border-radius: 12px; cursor: pointer;
+  background: var(--bg-input); color: var(--dim); border: 1px solid var(--border);
+}
+.cap-toggle.on { background: rgba(74,222,128,0.15); color: var(--green); border-color: rgba(74,222,128,0.4); }
+.cap-toggle:hover { border-color: var(--accent); }
+.cap-body { padding: 8px 12px; display: flex; flex-direction: column; gap: 5px; }
+.cap-item { font-size: 11px; line-height: 1.45; padding: 3px 0; }
+.cap-item b { color: var(--text); }
+.cap-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; background: var(--dim); }
+.cap-dot.on { background: var(--green); box-shadow: 0 0 4px var(--green); }
+.cap-dot.err { background: var(--red); box-shadow: 0 0 4px var(--red); }
 #ws-file-head {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
   border-bottom: 1px solid var(--border);

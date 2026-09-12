@@ -45,6 +45,10 @@ def _load_app_config() -> dict:
         },
         "router": {"enabled": True, "confidence_threshold": 0.7},
         "agent": {"exec_timeout_s": 120, "max_steps": 30, "idle_unload_s": 120},
+        "capabilities": {
+            "web": True, "web_search_api_key": "", "skills": True,
+            "mcp": True, "mcp_servers": {}, "plugins": True,
+        },
     }
     try:
         if cfg.exists():
@@ -55,7 +59,7 @@ def _load_app_config() -> dict:
             for k, sub in base["small_models"].items():
                 if isinstance(d.get("small_models", {}).get(k), dict):
                     sub.update(d["small_models"][k])
-            for k in ("router", "agent"):
+            for k in ("router", "agent", "capabilities"):
                 if isinstance(d.get(k), dict):
                     base[k].update(d[k])
     except Exception as e:

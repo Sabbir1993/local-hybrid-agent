@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 # Import modular components
 from core.config import (
+    BASE_DIR,
     PROXY_HOST,
     PROXY_PORT,
     LLAMA_SERVER_PORT,
@@ -95,9 +96,15 @@ from core.agent_tools import (
     _ws_resolve,
     _ws_changes,
 )
+from core.registry import registry, bootstrap_builtin_tools
+from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch
+from core.skills import register_skill_tools, load_skills, skills_prompt_fragment
+from core.plugins import load_plugins, plugins_prompt_fragment, plugins_status, fire_hook
+from core.mcp import connect_all_mcp, mcp_status, stop_all_mcp
 from core.agent_loop import (
     run_tool,
     AGENT_SYSTEM_PROMPT,
+    all_tools,
     is_degeneration_or_loop,
     sanitize_user_facing_content,
     validate_and_repair_tool_args,
@@ -119,7 +126,7 @@ _shutdown_done = False
 
 
 def _shutdown_cleanup() -> None:
-    """Kill llama-server + small models. Blocking, idempotent — safe to call twice."""
+    """Kill llama-server + small models + MCP servers. Blocking, idempotent."""
     global _shutdown_done
     if _shutdown_done:
         return
@@ -133,12 +140,21 @@ def _shutdown_cleanup() -> None:
             inst._stop()
         except Exception as e:
             print(f"[server_manager] {role} cleanup error: {e}", file=sys.stderr)
+    try:
+        stop_all_mcp()
+    except Exception as e:
+        print(f"[server_manager] mcp cleanup error: {e}", file=sys.stderr)
     print("[server_manager] shutdown cleanup complete")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    bootstrap_builtin_tools()
+    register_web_tools()
+    register_skill_tools()
+    load_plugins()
     await asyncio.get_event_loop().run_in_executor(None, kill_orphan_llama_servers)
+    mcp_startup = asyncio.create_task(connect_all_mcp())
     if _initial_profile_path is not None and _initial_profile_path.exists():
         try:
             state.profile_path = _initial_profile_path
@@ -793,6 +809,10 @@ async def agent_run(req: AgentRequest):
 
     ws_path = str(active_workspace())
     sys_prompt = AGENT_SYSTEM_PROMPT.format(workspace=ws_path)
+    # capability prompt fragments: skills listing + plugin guidance
+    for frag in (skills_prompt_fragment(), plugins_prompt_fragment()):
+        if frag:
+            sys_prompt += "\n" + frag
     has_sys = False
     for m in msgs:
         if m.get("role") == "system":
@@ -882,7 +902,7 @@ async def agent_run(req: AgentRequest):
                 if step == 0 and req.mode != "main" and not is_creation_or_code and needle_available() and not any(
                         m.get("role") in ("tool", "assistant") for m in msgs[1:]):
                     nr = await asyncio.get_event_loop().run_in_executor(
-                        None, needle_route, last_query, AGENT_TOOLS)
+                        None, needle_route, last_query, all_tools())
                     if nr:
                         model_info = get_model_info("needle")
                         yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
@@ -923,7 +943,8 @@ async def agent_run(req: AgentRequest):
                 model_info = get_model_info(lane_name)
                 yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
 
-                tools_for_lane = AGENT_CORE_TOOLS if lane_name == "executor" else AGENT_TOOLS
+                # executor lane gets the lean core set; main lane sees everything
+                tools_for_lane = AGENT_CORE_TOOLS if lane_name == "executor" else all_tools()
 
                 step_rid = monitor_begin(f"agent/{lane_name}", True, json.dumps({"messages": msgs}).encode())
                 res_dict = None
@@ -985,7 +1006,7 @@ async def agent_run(req: AgentRequest):
                     res_dict = None
                     streamed_content = []
                     try:
-                        async for ev, val in _llm_chat_stream(state.client, msgs, AGENT_TOOLS, req.temperature, req.max_tokens, rid=esc_rid):
+                        async for ev, val in _llm_chat_stream(state.client, msgs, all_tools(), req.temperature, req.max_tokens, rid=esc_rid):
                             if ev == "thought_delta":
                                 yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
                             elif ev == "content_delta":
@@ -1065,6 +1086,7 @@ async def agent_run(req: AgentRequest):
                         continue
 
                     result = await run_tool(name, args)
+                    await fire_hook("after_tool", name, args, result)
                     ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
                     yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': name, 'ok': ok, 'result': result})}\n\n"
                     actions_taken.append({"name": name, "args": args, "ok": ok, "result": result})
@@ -1158,8 +1180,21 @@ def _ws_diff_lines(before: Optional[str], after: str) -> list:
 
 @app.get("/agent/ws/tree")
 async def agent_ws_tree(path: str = ""):
-    return {"root": str(active_workspace()), "project": get_active_project(),
-            "nodes": _ws_tree_scan(path)}
+    # session-changes list for the pinned group at the top of the panel
+    ws = active_workspace()
+    changes = []
+    for k, rec in _ws_changes.items():
+        try:
+            rel = str(Path(k).relative_to(ws)).replace("\\", "/")
+        except ValueError:
+            rel = Path(k).name
+        changes.append({
+            "path": rel,
+            "status": "created" if rec.get("before") is None else "modified",
+        })
+    changes.sort(key=lambda x: x["path"])
+    return {"root": str(ws), "project": get_active_project(),
+            "nodes": _ws_tree_scan(path), "changes": changes}
 
 
 @app.get("/agent/ws/file")
@@ -1243,6 +1278,61 @@ async def models_status():
         "project": get_active_project(),
     }
     return s
+
+
+class CapToggleReq(BaseModel):
+    section: str          # web | skills | mcp | plugins
+    enabled: bool
+
+
+@app.get("/control/capabilities")
+async def capabilities_status():
+    caps = APP_CONFIG.get("capabilities", {})
+    skills = load_skills() if caps.get("skills") else {}
+    return {
+        "web": {
+            "enabled": bool(caps.get("web")),
+            "tools": [{"name": t.name, "description": t.schema["function"]["description"][:120]}
+                      for t in registry.list(source="web")],
+        },
+        "skills": {
+            "enabled": bool(caps.get("skills")),
+            "items": [{"name": s["name"], "description": s["description"]} for s in skills.values()],
+        },
+        "mcp": {
+            "enabled": bool(caps.get("mcp")),
+            "servers": mcp_status(),
+        },
+        "plugins": {
+            "enabled": bool(caps.get("plugins")),
+            "items": plugins_status(),
+        },
+        "total_tools": len(registry.schemas()),
+    }
+
+
+@app.post("/control/capabilities")
+async def capabilities_toggle(req: CapToggleReq):
+    """Toggle a capability section on/off; persists to config.json."""
+    cfg_path = BASE_DIR / "config.json"
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return JSONResponse({"error": f"config.json unreadable: {e}"}, status_code=500)
+    caps = cfg.setdefault("capabilities", {})
+    caps[req.section] = req.enabled
+    try:
+        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    except Exception as e:
+        return JSONResponse({"error": f"config.json write failed: {e}"}, status_code=500)
+    # apply live
+    APP_CONFIG.setdefault("capabilities", {})[req.section] = req.enabled
+    registry.set_source_enabled(req.section, req.enabled)
+    if req.section == "web" and req.enabled:
+        register_web_tools()
+    if req.section == "skills" and req.enabled:
+        register_skill_tools()
+    return {"ok": True, "section": req.section, "enabled": req.enabled}
 
 
 class ProjectReq(BaseModel):

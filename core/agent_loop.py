@@ -11,6 +11,7 @@ from .agent_tools import (
     TOOL_IMPLS,
     active_workspace,
 )
+from .registry import registry, bootstrap_builtin_tools
 
 AGENT_SYSTEM_PROMPT = """You are an autonomous AI coding agent and orchestrator.
 Your goal is to solve the user's task step-by-step using your available tools.
@@ -368,6 +369,10 @@ def _extract_text_tool_calls(text: str) -> list:
 
 
 async def run_tool(name: str, args: dict) -> str:
+    # registry first (covers builtin + web + skills + mcp + plugins);
+    # fall back to the raw builtin table for the executor lane's core set
+    if registry.get(name) is not None:
+        return await registry.async_run(name, args)
     impl = TOOL_IMPLS.get(name)
     if not impl:
         return f"error: unknown tool {name}"
@@ -381,3 +386,8 @@ async def run_tool(name: str, args: dict) -> str:
         return await asyncio.get_event_loop().run_in_executor(None, impl, args)
     except Exception as e:
         return f"error: {type(e).__name__}: {e}"
+
+
+def all_tools() -> list:
+    """Full tool schema list: builtins + every registered capability."""
+    return registry.schemas()
