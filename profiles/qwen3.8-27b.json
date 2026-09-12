@@ -1,0 +1,42 @@
+{
+  "name": "qwen3.8-27b",
+  "description": "Dense 27B hybrid-attention model. No MoE offload needed - tune GPU split only.",
+  "model_type": "dense",
+  "llama_bin_dir": "E:\\AI\\llama-vulkan",
+  "model_path": "E:\\AI\\Models\\Qwen3.8-27B-Q4_K_M.gguf",
+  "context_size": 32768,
+  "flash_attn": "on",
+  "kv_cache_type": "f16",
+  "gpu_devices": [
+    1,
+    2
+  ],
+  "gpu_devices_note": "Physical Vulkan indices from llama-bench --list-devices on THIS machine: 0 = UHD 770 iGPU (excluded), 1 and 2 = the A770s.",
+  "autotune": {
+    "n_gpu_layers": 999,
+    "split_mode": "layer",
+    "tensor_split_candidates": [
+      "1,1",
+      "10,9",
+      "9,10",
+      "11,9",
+      "9,11"
+    ],
+    "bench_prompt_tokens": 512,
+    "bench_gen_tokens": 128,
+    "repetitions": 3
+  },
+  "tuned": {
+    "note": "Filled in automatically by autotune.py - do not hand-edit unless you know what you're changing.",
+    "tensor_split": "9,11",
+    "n_gpu_layers": 999,
+    "measured_tg_tokens_per_sec": 14.648719,
+    "measured_pp_tokens_per_sec": 252.575397,
+    "tuned_at": "2026-09-07T21:33:02"
+  },
+  "server_extra_args": [
+    "--metrics"
+  ],
+  "ubatch_size": 512,
+  "threads": 14
+}

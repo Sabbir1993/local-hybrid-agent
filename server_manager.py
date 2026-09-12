@@ -1,0 +1,1648 @@
+#!/usr/bin/env python3
+"""
+server_manager.py - process manager + thin proxy around llama-server.
+
+Modularized orchestration layer for dual-A770 Intel Arc Vulkan runtime.
+Imports core components from the `core` package.
+"""
+
+import argparse
+import asyncio
+import json
+import os
+import re
+import string
+import subprocess
+import sys
+import time
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Optional, Union
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+import httpx
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from pydantic import BaseModel
+
+# Import modular components
+from core.config import (
+    PROXY_HOST,
+    PROXY_PORT,
+    LLAMA_SERVER_PORT,
+    UI_FILE,
+    STATIC_DIR,
+    CONFIG_DEFAULTS,
+    CONFIG_INT_FIELDS,
+    CONFIG_CHOICE_FIELDS,
+    CONFIG_TARGETS,
+    MODEL_CONFIG_KEYS,
+)
+from core.db import (
+    db_record_request,
+    db_report,
+    db_list_projects,
+    db_create_project,
+    db_delete_project,
+    db_list_sessions,
+    db_create_session,
+    db_update_session_title,
+    db_delete_session,
+    db_load_messages,
+    db_append_message,
+)
+from core.gpu import get_gpu_stats
+from core.profiles import (
+    MODELS_DIR,
+    find_mtp_draft,
+    save_model_config,
+    load_model_configs,
+    _model_key,
+)
+from core.monitor import (
+    _monitor_state,
+    MONITOR_RECENT_MAX,
+    monitor_begin,
+    monitor_token,
+    monitor_end,
+    extract_usage_from_stream,
+)
+from core.process import kill_orphan_llama_servers
+from core.small_model import (
+    APP_CONFIG,
+    WORKSPACE_ROOT,
+    small_models,
+    needle_available,
+    needle_route,
+)
+from core.state import (
+    state,
+    keepalive_loop,
+)
+from core.agent_tools import (
+    AGENT_TOOLS,
+    AGENT_CORE_TOOLS,
+    active_workspace,
+    get_active_project,
+    set_active_project,
+    _ws_resolve,
+    _ws_changes,
+)
+from core.agent_loop import (
+    run_tool,
+    AGENT_SYSTEM_PROMPT,
+    is_degeneration_or_loop,
+    sanitize_user_facing_content,
+    validate_and_repair_tool_args,
+    fast_sandbox_check,
+    validate_and_finalize_response,
+    safe_parse_and_repair_args,
+    _extract_text_tool_calls,
+)
+
+_initial_profile_path: Optional[Path] = None
+_models_dir: Optional[Path] = None
+
+# Last model that was loaded (model_path); lets GET /control/config serve the
+# saved per-model config after unload/refresh instead of showing raw defaults.
+curStatus_model_hint: Optional[str] = None
+
+
+_shutdown_done = False
+
+
+def _shutdown_cleanup() -> None:
+    """Kill llama-server + small models. Blocking, idempotent — safe to call twice."""
+    global _shutdown_done
+    if _shutdown_done:
+        return
+    _shutdown_done = True
+    try:
+        state._stop_process_locked()
+    except Exception as e:
+        print(f"[server_manager] main model cleanup error: {e}", file=sys.stderr)
+    for role, inst in small_models.instances.items():
+        try:
+            inst._stop()
+        except Exception as e:
+            print(f"[server_manager] {role} cleanup error: {e}", file=sys.stderr)
+    print("[server_manager] shutdown cleanup complete")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await asyncio.get_event_loop().run_in_executor(None, kill_orphan_llama_servers)
+    if _initial_profile_path is not None and _initial_profile_path.exists():
+        try:
+            state.profile_path = _initial_profile_path
+            state.profile = json.loads(_initial_profile_path.read_text())
+            print(f"[server_manager] Selected initial profile: {state.profile.get('name')}")
+        except Exception as e:
+            print(f"[server_manager] Warning loading initial profile JSON: {e}")
+
+    state.watchdog_task = asyncio.create_task(state.watchdog())
+    state.keepalive_task = asyncio.create_task(keepalive_loop())
+    small_models.start_reaper()
+    yield
+    # Fast, cancellable: stop background loops first
+    for task in (state.watchdog_task, state.keepalive_task, small_models.reaper_task):
+        if task:
+            task.cancel()
+    # Blocking process teardown runs off the loop thread so the loop stays
+    # responsive to a second Ctrl+C; shielded so cancellation mid-wait still
+    # lets the kill sequence finish. If interrupted anyway, finish synchronously.
+    try:
+        await asyncio.shield(asyncio.to_thread(_shutdown_cleanup))
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        _shutdown_cleanup()
+
+
+app = FastAPI(title="A770-Dual Runtime", lifespan=lifespan)
+
+
+class SwitchRequest(BaseModel):
+    profile: Optional[str] = None
+    target: Optional[str] = None
+
+
+class KeepaliveRequest(BaseModel):
+    enabled: bool
+
+
+class ConfigRequest(BaseModel):
+    updates: dict
+    persist: bool = True
+    restart: bool = True
+
+
+def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
+    if profile is None:
+        return "No profile loaded to update"
+    if key == "keepalive_interval_s":
+        try:
+            state.keepalive_interval_s = max(5, min(600, int(value)))
+        except (TypeError, ValueError):
+            return "keepalive_interval_s must be an integer"
+        return None
+    if isinstance(value, str) and not value.strip():
+        value = CONFIG_DEFAULTS.get(key)
+        if value is None:
+            return f"{key} cannot be empty"
+    if key == "mtp_enabled":
+        if isinstance(value, str):
+            value = value.strip().lower() in ("true", "1", "on", "yes")
+        profile["mtp_enabled"] = bool(value)
+        return None
+    if key in CONFIG_INT_FIELDS:
+        lo, hi = CONFIG_INT_FIELDS[key]
+        try:
+            v = int(value)
+        except (TypeError, ValueError):
+            return f"{key} must be an integer"
+        v = max(lo, min(hi, v))
+        if key == "context_size":
+            v -= v % 8
+        section, field = CONFIG_TARGETS[key]
+        if section:
+            profile.setdefault(section, {})[field] = v
+        else:
+            profile[field] = v
+        return None
+    if key in CONFIG_CHOICE_FIELDS:
+        value = str(value).strip()
+        if value not in CONFIG_CHOICE_FIELDS[key]:
+            return f"{key} must be one of {CONFIG_CHOICE_FIELDS[key]}"
+        section, field = CONFIG_TARGETS[key]
+        if section:
+            profile.setdefault(section, {})[field] = value
+        else:
+            profile[field] = value
+        return None
+    if key == "tensor_split":
+        value = str(value).strip()
+        segs = [s.strip() for s in value.split(",")]
+        if not (1 <= len(segs) <= 4) or not all(s.isdigit() and int(s) >= 0 for s in segs):
+            return "tensor_split must be comma-separated non-negative integers, e.g. 9,11 (0,1 = GPU 2 only, 1,0 = GPU 1 only)"
+        if not any(int(s) > 0 for s in segs):
+            return "tensor_split: at least one GPU share must be > 0 (e.g. 0,1 or 1,0)"
+        profile.setdefault("tuned", {})["tensor_split"] = ",".join(segs)
+        return None
+    return f"unknown config field: {key}"
+
+
+def _config_for_profile(p: dict) -> dict:
+    t = p.get("tuned", {})
+    return {
+        "context_size": p.get("context_size", CONFIG_DEFAULTS["context_size"]),
+        "n_gpu_layers": t.get("n_gpu_layers", p.get("n_gpu_layers", CONFIG_DEFAULTS["n_gpu_layers"])),
+        "tensor_split": t.get("tensor_split", p.get("tensor_split", CONFIG_DEFAULTS["tensor_split"])),
+        "split_mode": p.get("split_mode", CONFIG_DEFAULTS["split_mode"]),
+        "threads": p.get("threads", CONFIG_DEFAULTS["threads"]),
+        "threads_batch": p.get("threads_batch", CONFIG_DEFAULTS["threads_batch"]),
+        "batch_size": p.get("batch_size", CONFIG_DEFAULTS["batch_size"]),
+        "ubatch_size": p.get("ubatch_size", CONFIG_DEFAULTS["ubatch_size"]),
+        "n_slots": p.get("n_slots", CONFIG_DEFAULTS["n_slots"]),
+        "flash_attn": p.get("flash_attn", CONFIG_DEFAULTS["flash_attn"]),
+        "kv_cache_type": p.get("kv_cache_type", CONFIG_DEFAULTS["kv_cache_type"]),
+        "keepalive_interval_s": state.keepalive_interval_s,
+        "llama_bin_dir": p.get("llama_bin_dir", CONFIG_DEFAULTS["llama_bin_dir"]),
+        "gpu_devices": p.get("gpu_devices", CONFIG_DEFAULTS["gpu_devices"]),
+        "mtp_available": bool(p.get("mtp_draft_path")),
+        "mtp_draft_path": p.get("mtp_draft_path"),
+        "mtp_enabled": bool(p.get("mtp_enabled", False)) if not p.get("mtp_draft_path") else bool(p.get("mtp_enabled", True)),
+        "mtp_draft_n_max": p.get("mtp_draft_n_max", 3),
+    }
+
+
+def _standalone_profile(target: str) -> Optional[dict]:
+    """Profile dict for a selected-but-unloaded model: saved config + MTP detection.
+
+    Same merge logic build_dynamic_profile() uses at load time, so values shown
+    and saved in the drawer match what the model will actually launch with.
+    """
+    p = Path(target)
+    if not p.exists():
+        return None
+    saved = load_model_configs().get(_model_key(p)) or {}
+    prof = {"name": p.stem, "model_path": str(p)}
+    for k, v in CONFIG_DEFAULTS.items():
+        prof.setdefault(k, v)
+    for k in MODEL_CONFIG_KEYS:
+        if k in saved:
+            prof[k] = saved[k]
+    # n_gpu_layers / tensor_split live in the "tuned" section while loaded;
+    # put saved values there so _config_for_profile/save round-trip correctly
+    prof.setdefault("tuned", {})
+    if "n_gpu_layers" in saved:
+        prof["tuned"]["n_gpu_layers"] = saved["n_gpu_layers"]
+    if "tensor_split" in saved:
+        prof["tuned"]["tensor_split"] = saved["tensor_split"]
+    prof["mtp_draft_path"] = str(find_mtp_draft(str(p)))
+    return prof
+
+
+@app.get("/control/config")
+async def get_config(model: Optional[str] = None):
+    # The ?model= target wins when it names a different model than the one
+    # loaded — the drawer edits the dropdown-selected model, not what's in VRAM.
+    if state.profile is not None:
+        loaded_key = _model_key(state.profile.get("model_path") or "")
+        if not model or _model_key(model) == loaded_key:
+            return _config_for_profile(state.profile)
+    target = model or curStatus_model_hint
+    if target and Path(target).exists():
+        prof = _standalone_profile(target)
+        if prof:
+            return _config_for_profile(prof)
+    if state.profile is not None:
+        return _config_for_profile(state.profile)
+    return JSONResponse({"error": "no profile loaded"}, status_code=400)
+
+
+@app.post("/control/config")
+async def set_config(req: ConfigRequest, model: Optional[str] = None):
+    global curStatus_model_hint
+    # validate + persist against the live profile when it matches the request
+    # target (or no target); otherwise against a temp profile built from the
+    # selected model's saved config
+    if state.profile is not None:
+        loaded_key = _model_key(state.profile.get("model_path") or "")
+        if not model or _model_key(model) == loaded_key:
+            prof = state.profile
+        else:
+            prof = _standalone_profile(model)
+            if prof is None:
+                return JSONResponse({"error": f"model file not found: {model}"}, status_code=404)
+    else:
+        target = model or curStatus_model_hint
+        if not target:
+            return JSONResponse({"error": "no profile loaded"}, status_code=400)
+        prof = _standalone_profile(target)
+        if prof is None:
+            return JSONResponse({"error": f"model file not found: {target}"}, status_code=404)
+    errors = []
+    for key, value in req.updates.items():
+        err = _apply_config_update(prof, key, value)
+        if err:
+            errors.append(err)
+    if errors:
+        return JSONResponse({"error": "; ".join(errors)}, status_code=400)
+    m_id = prof.get("model_path") or prof.get("name")
+    if req.persist and m_id:
+        save_model_config(m_id, prof)
+        curStatus_model_hint = m_id
+    was_running = state.process is not None and state.process.poll() is None
+    if req.restart and was_running and state.profile is not None:
+        try:
+            target = state.profile_path or state.profile
+            await state.load_profile(target)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+    return {"ok": True, "restarted": req.restart and was_running,
+            "config": _config_for_profile(prof)}
+
+
+@app.get("/control/status")
+async def status():
+    ctx_info = {"n_ctx": 32768, "n_past": 0, "n_prompt": 0, "pct": 0.0}
+    if state.process and state.process.poll() is None:
+        try:
+            resp = await state.client.get("/slots", timeout=1.5)
+            if resp.status_code == 200:
+                slots = resp.json()
+                if slots and isinstance(slots, list):
+                    s0 = slots[0]
+                    n_ctx = s0.get("n_ctx") or 32768
+                    n_prompt = s0.get("n_prompt_tokens") or 0
+                    n_decoded = (s0.get("next_token") or [{}])[0].get("n_decoded") or 0
+                    n_past = n_prompt + n_decoded
+                    pct = round((n_past / max(1, n_ctx)) * 100, 1)
+                    ctx_info = {
+                        "n_ctx": n_ctx,
+                        "n_past": n_past,
+                        "n_prompt": n_prompt,
+                        "pct": pct
+                    }
+        except Exception:
+            pass
+
+    return {
+        "profile": state.profile.get("name") if state.profile else None,
+        "model": state.profile.get("model_path") if state.profile else None,
+        "tensor_split": (state.profile.get("tuned", {}).get("tensor_split")
+                         if state.profile else None),
+        "measured_tg_tokens_per_sec": (state.profile.get("tuned", {}).get("measured_tg_tokens_per_sec")
+                                       if state.profile else None),
+        "uptime_s": time.time() - state.started_at if state.started_at else None,
+        "restart_count": state.restart_count,
+        "pid": state.process.pid if state.process and state.process.poll() is None else None,
+        "keepalive": state.keepalive_enabled,
+        "mtp_enabled": bool(state.profile.get("mtp_enabled")) if state.profile else False,
+        "mtp_draft_path": state.profile.get("mtp_draft_path") if state.profile else None,
+        "context": ctx_info,
+    }
+
+
+@app.get("/static/{file_path:path}")
+async def serve_static(file_path: str):
+    p = (STATIC_DIR / file_path).resolve()
+    if p.exists() and p.is_file() and str(p).startswith(str(STATIC_DIR.resolve())):
+        media = "text/css" if p.suffix == ".css" else ("application/javascript" if p.suffix == ".js" else None)
+        return FileResponse(p, media_type=media)
+    return JSONResponse({"error": "file not found"}, status_code=404)
+
+
+@app.get("/")
+async def ui_root():
+    if UI_FILE.exists():
+        return FileResponse(UI_FILE, media_type="text/html",
+                            headers={"Cache-Control": "no-store, max-age=0"})
+    return JSONResponse({"error": f"ui.html not found at {UI_FILE}"}, status_code=404)
+
+
+@app.get("/control/gpu")
+async def gpu():
+    return await get_gpu_stats()
+
+
+@app.get("/control/profiles")
+async def profiles():
+    pdir = Path(__file__).resolve().parent / "profiles"
+    models_out = []
+    profiles_out = []
+    if pdir.is_dir():
+        for f in sorted(pdir.glob("*.json")):
+            try:
+                d = json.loads(f.read_text())
+                m_path_str = d.get("model_path", "")
+                m_path = Path(m_path_str) if m_path_str else None
+                profiles_out.append({
+                    "type": "profile",
+                    "name": d.get("name", f.stem),
+                    "path": str(f),
+                    "model_path": m_path_str,
+                    "model_exists": m_path.exists() if m_path else False,
+                })
+            except Exception:
+                continue
+
+    search_dirs = [MODELS_DIR]
+    if _models_dir and _models_dir.exists() and _models_dir != MODELS_DIR:
+        search_dirs.insert(0, _models_dir)
+
+    for p in profiles_out:
+        if p.get("model_path"):
+            parent = Path(p["model_path"]).parent
+            if parent.exists() and parent.name.lower() != "orchestrator" and parent not in search_dirs:
+                search_dirs.append(parent)
+
+    seen_paths = set()
+    for sdir in search_dirs:
+        if sdir.exists() and sdir.is_dir():
+            for gfile in sorted(sdir.glob("*.gguf")):
+                if gfile.stem.lower().startswith(("mtp-", "mmproj-")):
+                    continue
+                if "orchestrator" in [part.lower() for part in gfile.parts]:
+                    continue
+                resolved_str = str(gfile.resolve())
+                if resolved_str in seen_paths:
+                    continue
+                seen_paths.add(resolved_str)
+                mtp = find_mtp_draft(str(gfile))
+                try:
+                    size_gb = round(gfile.stat().st_size / (1024**3), 1)
+                except OSError:
+                    size_gb = None
+                family = gfile.stem.split("-")[0]
+                models_out.append({
+                    "type": "model",
+                    "name": gfile.name,
+                    "path": str(gfile),
+                    "model_path": str(gfile),
+                    "model_exists": True,
+                    "mtp_available": bool(mtp),
+                    "mtp_draft_path": str(mtp) if mtp else None,
+                    "size_gb": size_gb,
+                    "family": family,
+                })
+
+    return {"models": models_out, "profiles": profiles_out}
+
+
+@app.post("/control/stop")
+async def stop_server():
+    await state.stop()
+    return {"ok": True, "stopped": True}
+
+
+@app.post("/control/start")
+async def start_server():
+    if state.profile is None and state.profile_path is None:
+        return JSONResponse({"error": "No model or profile selected. Select a model/profile first."}, status_code=400)
+    try:
+        await state.start()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"ok": True, "pid": state.process.pid if state.process else None}
+
+
+@app.post("/control/restart")
+async def restart_server():
+    try:
+        await state.start()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"ok": True, "pid": state.process.pid if state.process else None}
+
+
+@app.post("/control/keepalive")
+async def set_keepalive(req: KeepaliveRequest):
+    state.keepalive_enabled = req.enabled
+    state.last_activity = time.time()
+    print(f"[server_manager] keepalive {'enabled' if req.enabled else 'disabled'}")
+    return {"ok": True, "keepalive": state.keepalive_enabled}
+
+
+@app.post("/control/switch")
+async def switch(req: SwitchRequest):
+    global curStatus_model_hint
+    target = req.target or req.profile
+    if not target:
+        return JSONResponse({"error": "No profile or model target specified"}, status_code=400)
+    
+    path = Path(target)
+    if not path.exists():
+        return JSONResponse({"error": f"Target file not found: {target}"}, status_code=404)
+        
+    try:
+        await state.load_profile(path)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    curStatus_model_hint = state.profile.get("model_path") if state.profile else None
+    return {"ok": True, "profile": state.profile.get("name", path.stem)}
+
+
+@app.get("/control/monitor")
+async def monitor():
+    now = time.time()
+    STALE_S = 120
+    for rid in list(_monitor_state["active"].keys()):
+        req = _monitor_state["active"][rid]
+        if now - req["last_token_s"] > STALE_S:
+            _monitor_state["active"].pop(rid, None)
+            req.update({
+                "status": 499, "completion_tokens": req.get("gen_tokens"),
+                "duration_s": round(now - req["start"], 2), "tps": None,
+                "prompt_tps": None, "end": now, "stale": True,
+            })
+            _monitor_state["recent"].append(req)
+    if len(_monitor_state["recent"]) > MONITOR_RECENT_MAX:
+        _monitor_state["recent"] = _monitor_state["recent"][-MONITOR_RECENT_MAX:]
+    active = []
+    for rid, req in list(_monitor_state["active"].items()):
+        info = dict(req)
+        elapsed = max(0.05, now - req["start"])
+        info["elapsed_s"] = round(elapsed, 2)
+        toks = req.get("gen_tokens", 0)
+        if toks > 0 and elapsed > 0:
+            cumulative_tps = toks / elapsed
+            live_tps = req.get("gen_tps") or cumulative_tps
+            if live_tps > cumulative_tps * 2.0 or live_tps < cumulative_tps * 0.5:
+                live_tps = cumulative_tps
+            info["gen_tps"] = round(live_tps, 1)
+        else:
+            info["gen_tps"] = 0.0
+        active.append(info)
+    active.sort(key=lambda x: -x["id"])
+    recent = []
+    for r in _monitor_state["recent"]:
+        info = {k: r.get(k) for k in ("id", "endpoint", "stream", "status",
+                                       "prompt_tokens", "completion_tokens",
+                                       "tps", "duration_s", "prompt_tps", "gen_tps")}
+        info["ago_s"] = round(now - r["end"], 1)
+        info["ended_at"] = r["end"]
+        recent.append(info)
+    recent.sort(key=lambda x: -x["id"])
+    return {
+        "active": active,
+        "recent": recent[:30],
+        "llama_pid": state.process.pid if state.process and state.process.poll() is None else None,
+        "keepalive": state.keepalive_enabled,
+    }
+
+
+@app.get("/control/report")
+async def report(days: int = 30, model: Optional[str] = None):
+    try:
+        days = max(1, min(365, int(days)))
+    except ValueError:
+        days = 30
+    return db_report(days, model)
+
+
+class AgentRequest(BaseModel):
+    messages: list
+    max_steps: int = 12
+    temperature: float = 0.4
+    max_tokens: int = 4096
+    large_model: Optional[str] = None
+    mode: Optional[str] = "main"
+
+
+AGENT_MAX_STEPS = 30
+
+
+async def _process_sse_stream(response, rid: Optional[int] = None):
+    content_acc = []
+    reasoning_acc = []
+    accumulated_tcs = {}
+    in_think_tag = False
+
+    async for line in response.aiter_lines():
+        line = line.strip()
+        if not line or not line.startswith("data: "):
+            continue
+        raw = line[6:].strip()
+        if raw == "[DONE]":
+            break
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+
+        choices = data.get("choices") or []
+        if not choices:
+            continue
+        delta = choices[0].get("delta") or {}
+
+        r_chunk = delta.get("reasoning_content")
+        if r_chunk:
+            reasoning_acc.append(r_chunk)
+            if rid:
+                monitor_token(rid, 1)
+            yield ("thought_delta", r_chunk)
+
+        c_chunk = delta.get("content")
+        if c_chunk:
+            if "<think>" in c_chunk:
+                in_think_tag = True
+                parts = c_chunk.split("<think>", 1)
+                if parts[0]:
+                    content_acc.append(parts[0])
+                    if rid:
+                        monitor_token(rid, 1)
+                    yield ("content_delta", parts[0])
+                if len(parts) > 1 and parts[1]:
+                    if "</think>" in parts[1]:
+                        in_think_tag = False
+                        th_part, post = parts[1].split("</think>", 1)
+                        reasoning_acc.append(th_part)
+                        if rid:
+                            monitor_token(rid, 1)
+                        yield ("thought_delta", th_part)
+                        if post:
+                            content_acc.append(post)
+                            if rid:
+                                monitor_token(rid, 1)
+                            yield ("content_delta", post)
+                    else:
+                        reasoning_acc.append(parts[1])
+                        if rid:
+                            monitor_token(rid, 1)
+                        yield ("thought_delta", parts[1])
+            elif "</think>" in c_chunk and in_think_tag:
+                in_think_tag = False
+                th_part, post = c_chunk.split("</think>", 1)
+                if th_part:
+                    reasoning_acc.append(th_part)
+                    if rid:
+                        monitor_token(rid, 1)
+                    yield ("thought_delta", th_part)
+                if post:
+                    content_acc.append(post)
+                    if rid:
+                        monitor_token(rid, 1)
+                    yield ("content_delta", post)
+            elif in_think_tag:
+                reasoning_acc.append(c_chunk)
+                if rid:
+                    monitor_token(rid, 1)
+                yield ("thought_delta", c_chunk)
+            else:
+                content_acc.append(c_chunk)
+                if rid:
+                    monitor_token(rid, 1)
+                yield ("content_delta", c_chunk)
+
+        tcs = delta.get("tool_calls") or []
+        for tc in tcs:
+            idx = tc.get("index", 0)
+            if idx not in accumulated_tcs:
+                accumulated_tcs[idx] = {
+                    "id": tc.get("id") or f"call_{idx}",
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""}
+                }
+            fn = tc.get("function") or {}
+            if fn.get("name"):
+                accumulated_tcs[idx]["function"]["name"] += fn["name"]
+                if rid:
+                    monitor_token(rid, 1)
+            if fn.get("arguments"):
+                accumulated_tcs[idx]["function"]["arguments"] += fn["arguments"]
+                if rid:
+                    # Estimate generated token count from character chunks
+                    chunk_toks = max(1, len(fn["arguments"]) // 4)
+                    monitor_token(rid, chunk_toks)
+
+    tool_calls = [accumulated_tcs[k] for k in sorted(accumulated_tcs.keys())]
+    full_content = "".join(content_acc)
+    full_reasoning = "".join(reasoning_acc)
+    yield ("result", {
+        "content": full_content,
+        "reasoning": full_reasoning,
+        "tool_calls": tool_calls
+    })
+
+
+async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=4096, repeat_penalty=1.15, rid: Optional[int] = None):
+    payload = {
+        "messages": msgs,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "repeat_penalty": repeat_penalty,
+        "stream": True,
+    }
+    if tools:
+        payload["tools"] = tools
+
+    async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=600.0) as response:
+        if response.status_code != 200:
+            err_text = await response.aread()
+            err_msg = err_text.decode("utf-8", "replace")[:300]
+            if response.status_code == 500 and "Failed to parse tool call arguments as JSON" in err_msg:
+                sanitized_msgs = []
+                for m in msgs:
+                    m_copy = dict(m)
+                    if m_copy.get("tool_calls"):
+                        new_tcs = []
+                        for tc in m_copy["tool_calls"]:
+                            tc_c = dict(tc)
+                            fn_c = dict(tc_c.get("function", {}))
+                            raw_a = fn_c.get("arguments", "{}")
+                            if isinstance(raw_a, str):
+                                try:
+                                    json.loads(raw_a)
+                                except Exception:
+                                    fn_c["arguments"] = json.dumps(safe_parse_and_repair_args(raw_a))
+                            else:
+                                fn_c["arguments"] = json.dumps(raw_a)
+                            tc_c["function"] = fn_c
+                            new_tcs.append(tc_c)
+                        m_copy["tool_calls"] = new_tcs
+                    sanitized_msgs.append(m_copy)
+                payload["messages"] = sanitized_msgs
+                async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=600.0) as retry_resp:
+                    if retry_resp.status_code != 200:
+                        re_err = await retry_resp.aread()
+                        payload_notools = dict(payload)
+                        payload_notools.pop("tools", None)
+                        try:
+                            async with client_or_state.stream("POST", "/v1/chat/completions", json=payload_notools, timeout=600.0) as fb_resp:
+                                if fb_resp.status_code == 200:
+                                    async for item in _process_sse_stream(fb_resp, rid=rid):
+                                        yield item
+                                    return
+                        except Exception:
+                            pass
+                        raise RuntimeError(f"upstream {retry_resp.status_code}: {re_err.decode('utf-8', 'replace')[:200]}")
+                    async for item in _process_sse_stream(retry_resp, rid=rid):
+                        yield item
+                return
+            raise RuntimeError(f"upstream {response.status_code}: {err_msg}")
+
+        async for item in _process_sse_stream(response, rid=rid):
+            yield item
+
+
+@app.post("/agent/run")
+async def agent_run(req: AgentRequest):
+    ex_inst = small_models.instances["executor"]
+    main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
+    if not main_ready and req.mode == "main":
+        target = state.profile_path or state.profile or _initial_profile_path
+        if target:
+            try:
+                print(f"[server_manager] agent/run (mode=main): model not running — auto-starting on demand...")
+                await state.load_profile(target)
+                main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
+            except Exception as e:
+                print(f"[server_manager] auto-start main model failed: {e}", file=sys.stderr)
+    if not main_ready and not ex_inst.available:
+        return JSONResponse({"error": "No model loaded. Please load or start a model from the top toolbar first."}, status_code=400)
+
+    steps = max(1, min(req.max_steps, APP_CONFIG["agent"].get("max_steps", AGENT_MAX_STEPS)))
+    msgs = [dict(m) for m in req.messages]
+
+    ws_path = str(active_workspace())
+    sys_prompt = AGENT_SYSTEM_PROMPT.format(workspace=ws_path)
+    has_sys = False
+    for m in msgs:
+        if m.get("role") == "system":
+            has_sys = True
+            m["content"] = (m.get("content") or "").strip() + "\n\n" + sys_prompt
+            break
+    if not has_sys:
+        msgs.insert(0, {"role": "system", "content": sys_prompt})
+
+    use_executor = ex_inst.available and (req.mode != "main" or not main_ready)
+    last_query = ""
+    for m in reversed(msgs):
+        if m.get("role") == "user":
+            last_query = str(m.get("content", ""))
+            break
+
+    def get_model_info(lane: str) -> dict:
+        if lane == "main":
+            m_name = state.profile.get("model_path", "") if state.profile else ""
+            m_base = Path(m_name).name if m_name else "Main LLM"
+            clean_name = m_base.replace(".gguf", "")
+            return {
+                "lane": "main",
+                "model": clean_name,
+                "display": f"🧠 {clean_name}",
+                "device": "Dual Intel Arc A770 (Vulkan)",
+                "role": "Main Autonomous LLM"
+            }
+        elif lane == "executor":
+            m_name = ex_inst.model_path.name if ex_inst.model_path else "Qwen2.5-VL-3B"
+            clean_name = m_name.replace(".gguf", "")
+            return {
+                "lane": "executor",
+                "model": clean_name,
+                "display": f"⚡ {clean_name}",
+                "device": "Arc A770 #1 (Vulkan1)",
+                "role": "Executor Model"
+            }
+        elif lane == "needle":
+            return {
+                "lane": "needle",
+                "model": "Needle Router",
+                "display": "⚡ Needle Router",
+                "device": "CPU Router",
+                "role": "Fast Router"
+            }
+        return {"lane": lane, "model": lane, "display": lane, "device": "Dual Intel Arc A770", "role": "Agent"}
+
+    simple_greetings = {"hi", "hello", "hey", "help", "who are you", "what can you do", "good morning", "good evening", "how are you", "test", "hi there"}
+    clean_q = last_query.strip().lower()
+    if clean_q in simple_greetings or (len(clean_q) <= 3 and not clean_q.startswith("/")):
+        async def direct_chat():
+            model_info = get_model_info("main" if main_ready else "executor")
+            yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
+            active_client = state.client if main_ready else ex_inst.client
+            if not main_ready and ex_inst.available:
+                await ex_inst.ensure_loaded()
+                active_client = ex_inst.client
+            chat_rid = monitor_begin("agent/direct", True, json.dumps({"messages": msgs}).encode())
+            try:
+                async for ev, val in _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens, rid=chat_rid):
+                    if ev == "thought_delta":
+                        yield f"event: thought_delta\ndata: {json.dumps({'step': 1, 'delta': val, 'model': model_info['display']})}\n\n"
+                    elif ev == "content_delta":
+                        yield f"event: delta\ndata: {json.dumps({'text': val})}\n\n"
+            finally:
+                req_mon = _monitor_state["active"].get(chat_rid)
+                toks = req_mon.get("gen_tokens") if req_mon else None
+                dt = (time.time() - req_mon["start"]) if req_mon else None
+                tps = (toks / dt) if (toks and dt and dt > 0) else None
+                monitor_end(chat_rid, 200, completion_tokens=toks, tps=tps, duration=dt)
+            yield f"event: done\ndata: {{}}\n\n"
+        return StreamingResponse(direct_chat(), media_type="text/event-stream")
+
+    async def sse():
+        actions_taken = []
+        final_content = ""
+        final_reasoning = ""
+        try:
+            for step in range(steps):
+                yield f"event: step\ndata: {json.dumps({'step': step + 1, 'total': steps})}\n\n"
+                tool_calls = None
+                content = ""
+                reasoning = ""
+
+                is_creation_or_code = any(w in last_query.lower() for w in ("make", "create", "generate", "write", "build", "code", "add", "fix", "html", "script", "page"))
+                if step == 0 and req.mode != "main" and not is_creation_or_code and needle_available() and not any(
+                        m.get("role") in ("tool", "assistant") for m in msgs[1:]):
+                    nr = await asyncio.get_event_loop().run_in_executor(
+                        None, needle_route, last_query, AGENT_TOOLS)
+                    if nr:
+                        model_info = get_model_info("needle")
+                        yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
+                        if nr.get("reasoning"):
+                            yield f"event: thought\ndata: {json.dumps({'step': step + 1, 'text': nr['reasoning'], 'model': model_info['display']})}\n\n"
+                        tc_id = "n0"
+                        yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': nr['name'], 'args': nr['args'], 'model': model_info['display'], 'device': model_info['device']})}\n\n"
+                        result = await run_tool(nr["name"], nr["args"])
+                        ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
+                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': nr['name'], 'ok': ok, 'result': result, 'model': model_info['display']})}\n\n"
+                        actions_taken.append({"name": nr["name"], "args": nr["args"], "ok": ok, "result": result})
+                        msgs.append({"role": "assistant", "content": "",
+                                     "tool_calls": [{"id": tc_id, "type": "function",
+                                                     "function": {"name": nr["name"],
+                                                                  "arguments": json.dumps(nr["args"])}}]})
+                        msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                        continue
+
+                lane_name = "main" if req.mode == "main" or not use_executor else "executor"
+                if lane_name == "executor":
+                    try:
+                        await ex_inst.ensure_loaded()
+                        active_client = ex_inst.client
+                    except Exception as e:
+                        print(f"[server_manager] executor unavailable: {e}; routing to main model", file=sys.stderr)
+                        lane_name = "main"
+                        active_client = state.client
+                else:
+                    if not state.client or state.process is None:
+                        target = state.profile_path or state.profile or _initial_profile_path
+                        if target:
+                            await state.load_profile(target)
+                    active_client = state.client
+
+                if active_client is None:
+                    raise RuntimeError(f"Model engine '{lane_name}' is not ready or failed to connect.")
+
+                model_info = get_model_info(lane_name)
+                yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
+
+                tools_for_lane = AGENT_CORE_TOOLS if lane_name == "executor" else AGENT_TOOLS
+
+                step_rid = monitor_begin(f"agent/{lane_name}", True, json.dumps({"messages": msgs}).encode())
+                res_dict = None
+                streamed_content = []
+                try:
+                    async for ev, val in _llm_chat_stream(active_client, msgs, tools_for_lane, req.temperature, req.max_tokens, rid=step_rid):
+                        if ev == "thought_delta":
+                            yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
+                        elif ev == "content_delta":
+                            streamed_content.append(val)
+                            yield f"event: delta\ndata: {json.dumps({'text': val})}\n\n"
+                        elif ev == "result":
+                            res_dict = val
+                finally:
+                    req_mon = _monitor_state["active"].get(step_rid)
+                    toks = req_mon.get("gen_tokens") if req_mon else len(streamed_content)
+                    dt = (time.time() - req_mon["start"]) if req_mon else None
+                    tps = (toks / dt) if (toks and dt and dt > 0) else None
+                    monitor_end(step_rid, 200, completion_tokens=toks, tps=tps, duration=dt)
+
+                content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
+                reasoning = res_dict.get("reasoning", "") if res_dict else ""
+                tool_calls = res_dict.get("tool_calls", []) if res_dict else []
+
+                if not tool_calls:
+                    text_to_check = content or reasoning
+                    parsed_tc = _extract_text_tool_calls(text_to_check)
+                    if parsed_tc:
+                        tool_calls = parsed_tc
+
+                is_loop, _ = is_degeneration_or_loop(content + "\n" + reasoning)
+                creation_keywords = ("make", "create", "generate", "write", "build", "code", "landing page", "html", "script")
+                action_keywords = ("read", "list", "check", "show", "inspect", "view", "find", "search", "run", "execute", "directory", "folder", "file", "files")
+                wants_creation = any(w in last_query.lower() for w in creation_keywords)
+                wants_action = any(w in last_query.lower() for w in action_keywords)
+                refusal_phrases = ("please specify the exact file", "please provide the code", "provide the content", "i cannot create", "what content would you like", "to read the directory", "in python, you can", "here is how you can")
+                refused = any(rp in content.lower() for rp in refusal_phrases)
+
+                tutorial_code_emitted = bool(not tool_calls and "```python" in content and any(kw in last_query.lower() for kw in ("read", "list", "check", "directory", "folder", "workspace", "file")))
+
+                should_escalate = (
+                    lane_name == "executor"
+                    and main_ready
+                    and (
+                        is_loop
+                        or (wants_creation and step == 0 and (refused or not tool_calls))
+                        or (wants_action and step == 0 and (tutorial_code_emitted or refused))
+                        or (step == 0 and not content.strip() and not tool_calls)
+                    )
+                )
+
+                if should_escalate:
+                    print(f"[server_manager] Executor failed/tutorialized on step {step+1}; auto-escalating to Main Model.", file=sys.stderr)
+                    yield "event: delta_reset\ndata: {}\n\n"
+                    lane_name = "main"
+                    model_info = get_model_info("main")
+                    yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
+                    esc_rid = monitor_begin("agent/main-escalated", True, json.dumps({"messages": msgs}).encode())
+                    res_dict = None
+                    streamed_content = []
+                    try:
+                        async for ev, val in _llm_chat_stream(state.client, msgs, AGENT_TOOLS, req.temperature, req.max_tokens, rid=esc_rid):
+                            if ev == "thought_delta":
+                                yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
+                            elif ev == "content_delta":
+                                streamed_content.append(val)
+                                yield f"event: delta\ndata: {json.dumps({'text': val})}\n\n"
+                            elif ev == "result":
+                                res_dict = val
+                    finally:
+                        req_mon = _monitor_state["active"].get(esc_rid)
+                        toks = req_mon.get("gen_tokens") if req_mon else len(streamed_content)
+                        dt = (time.time() - req_mon["start"]) if req_mon else None
+                        tps = (toks / dt) if (toks and dt and dt > 0) else None
+                        monitor_end(esc_rid, 200, completion_tokens=toks, tps=tps, duration=dt)
+                    content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
+                    reasoning = res_dict.get("reasoning", "") if res_dict else ""
+                    tool_calls = res_dict.get("tool_calls", []) if res_dict else []
+                    if not tool_calls:
+                        parsed_tc = _extract_text_tool_calls(content or reasoning)
+                        if parsed_tc:
+                            tool_calls = parsed_tc
+
+                final_content = content
+                final_reasoning = reasoning
+
+                if not tool_calls:
+                    val_text, was_synth, note = validate_and_finalize_response(
+                        last_query, final_content, final_reasoning, actions_taken)
+                    if was_synth and val_text != final_content:
+                        if not final_content.strip():
+                            yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
+                        else:
+                            yield "event: delta_reset\ndata: {}\n\n"
+                            yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
+                    yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                    return
+
+                yield f"event: lane\ndata: {json.dumps({'lane': lane_name})}\n\n"
+                
+                clean_tool_calls = []
+                parsed_actions = []
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "?")
+                    tc_id = tc.get("id") or f"call_{step}_{name}"
+                    args_raw = fn.get("arguments") or {}
+                    args = safe_parse_and_repair_args(args_raw, name, last_query)
+                    repaired_args, val_err = validate_and_repair_tool_args(name, args, last_query)
+                    if not val_err:
+                        args = repaired_args
+                    
+                    clean_args_str = json.dumps(args)
+                    clean_tc = {
+                        "id": tc_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": clean_args_str
+                        }
+                    }
+                    clean_tool_calls.append(clean_tc)
+                    parsed_actions.append((name, tc_id, args))
+
+                history_content = sanitize_user_facing_content(content)
+                msgs.append({"role": "assistant", "content": history_content, "tool_calls": clean_tool_calls})
+
+                for name, tc_id, args in parsed_actions:
+                    yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': name, 'args': args})}\n\n"
+
+                    approved, note = fast_sandbox_check(name, args)
+                    yield f"event: verify\ndata: {json.dumps({'id': tc_id, 'name': name, 'approved': approved, 'note': note})}\n\n"
+                    if not approved:
+                        result = f"error: sandbox violation — {note}"
+                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': name, 'ok': False, 'result': result})}\n\n"
+                        actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                        msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                        continue
+
+                    result = await run_tool(name, args)
+                    ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
+                    yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': name, 'ok': ok, 'result': result})}\n\n"
+                    actions_taken.append({"name": name, "args": args, "ok": ok, "result": result})
+                    msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+
+            val_text, was_synth, note = validate_and_finalize_response(
+                last_query, final_content, final_reasoning, actions_taken)
+            if was_synth or not final_content.strip():
+                yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
+            yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'note': 'max steps reached', 'text': ''})}\n\n"
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            yield f"event: delta\ndata: {json.dumps({'text': f'⚠️ Agent loop error: {e}'})}\n\n"
+            yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(sse(), media_type="text/event-stream")
+
+
+@app.get("/agent/workspace")
+async def agent_workspace():
+    ws = active_workspace()
+    files = []
+    for f in ws.rglob("*"):
+        if f.is_file():
+            files.append({
+                "path": str(f.relative_to(ws)),
+                "size": f.stat().st_size,
+            })
+    files.sort(key=lambda x: x["path"])
+    return {"root": str(ws), "project": get_active_project(), "files": files[:500]}
+
+
+def _ws_tree_scan(rel_dir: str) -> list:
+    """One level of the workspace tree from the agent tools module."""
+    ignored = {".git", "__pycache__", "node_modules", ".venv", "venv", "_agent_run.py"}
+    ws = active_workspace().resolve()
+    base = ws if not rel_dir else (ws / rel_dir).resolve()
+    try:
+        base.relative_to(ws)
+    except ValueError:
+        return []
+    out = []
+    try:
+        entries = sorted(os.scandir(str(base)), key=lambda e: (not e.is_dir(), e.name.lower()))
+    except (PermissionError, OSError):
+        return out
+    for e in entries:
+        if e.name in ignored:
+            continue
+        rel = str(Path(e.path).relative_to(ws)).replace("\\", "/")
+        if e.is_dir(follow_symlinks=False):
+            out.append({"name": e.name, "path": rel, "dir": True,
+                       "children": None})   # loaded lazily on expand
+        else:
+            try:
+                sz = e.stat().st_size
+            except OSError:
+                sz = 0
+            changed = any(k.replace("\\", "/").endswith("/" + rel) or
+                          k.replace("\\", "/") == rel for k in _ws_changes.keys())
+            out.append({"name": e.name, "path": rel, "dir": False,
+                        "size": sz, "changed": changed})
+    return out
+
+
+def _ws_diff_lines(before: Optional[str], after: str) -> list:
+    """Minimal line diff (unified-like) using difflib; returns per-line dicts."""
+    import difflib
+    b = (before or "").splitlines()
+    a = (after or "").splitlines()
+    ops = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, b, a).get_opcodes():
+        if tag == "equal":
+            for ln in b[i1:i2]:
+                ops.append({"t": " ", "s": ln})
+        elif tag == "delete":
+            for ln in b[i1:i2]:
+                ops.append({"t": "-", "s": ln})
+        elif tag == "insert":
+            for ln in a[j1:j2]:
+                ops.append({"t": "+", "s": ln})
+        elif tag == "replace":
+            for ln in b[i1:i2]:
+                ops.append({"t": "-", "s": ln})
+            for ln in a[j1:j2]:
+                ops.append({"t": "+", "s": ln})
+    return ops
+
+
+@app.get("/agent/ws/tree")
+async def agent_ws_tree(path: str = ""):
+    return {"root": str(active_workspace()), "project": get_active_project(),
+            "nodes": _ws_tree_scan(path)}
+
+
+@app.get("/agent/ws/file")
+async def agent_ws_file(path: str):
+    try:
+        p = _ws_resolve(path)
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    if not p.is_file():
+        return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    rec = _ws_changes.get(str(p), {})
+    before = rec.get("before")
+    changed = bool(rec) and rec.get("after") is not None
+    resp = {
+        "path": path, "size": len(content.encode("utf-8", errors="replace")),
+        "content": content, "changed": changed,
+        "status": ("created" if before is None else "modified") if changed else "unchanged",
+    }
+    if changed and before is not None:
+        resp["diff"] = _ws_diff_lines(before, content)
+    elif changed and before is None:
+        resp["diff"] = [{"t": "+", "s": ln} for ln in content.splitlines()]
+    return resp
+
+
+class VisionReq(BaseModel):
+    image_b64: str
+    mime: str = "image/png"
+    question: str = "Describe this image in detail for a coding agent."
+
+
+@app.post("/agent/vision")
+async def agent_vision(req: VisionReq):
+    inst = small_models.instances["vision"]
+    if not inst.available:
+        return JSONResponse({"error": "vision model not configured (config.json small_models.vision.model/mmproj)"}, status_code=400)
+    try:
+        await inst.ensure_loaded()
+        r = await inst.client.post("/v1/chat/completions", json={
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": req.question},
+                    {"type": "image_url", "image_url": {"url": f"data:{req.mime};base64,{req.image_b64}"}},
+                ],
+            }],
+            "max_tokens": 400,
+            "temperature": 0.1,
+        }, timeout=120.0)
+        inst.last_used = time.time()
+        data = r.json()
+        return {"description": (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/agent/unload_small_models")
+async def unload_small_models_endpoint():
+    small_models.unload_all()
+    return {"ok": True, "unloaded": True}
+
+
+@app.get("/control/models")
+async def models_status():
+    s = {
+        "main": {
+            "loaded": state.process is not None and state.process.poll() is None,
+            "model": state.profile.get("model_path") if state.profile else None,
+            "pid": state.process.pid if state.process and state.process.poll() is None else None,
+        },
+        "small": small_models.status(),
+        "router": {
+            "enabled": bool(APP_CONFIG["router"].get("enabled", True)),
+            "available": needle_available(),
+            "confidence_threshold": APP_CONFIG["router"].get("confidence_threshold", 0.7),
+        },
+        "project": get_active_project(),
+    }
+    return s
+
+
+class ProjectReq(BaseModel):
+    name: str
+    workspace_dir: Optional[str] = None
+
+
+class SessionReq(BaseModel):
+    title: Optional[str] = None
+
+
+class BrowseFolderReq(BaseModel):
+    initial_dir: Optional[str] = ""
+
+
+class MkdirReq(BaseModel):
+    path: str
+    name: str
+
+
+def _get_drives() -> list:
+    drives = []
+    if sys.platform == "win32":
+        try:
+            from ctypes import windll
+            bitmask = windll.kernel32.GetLogicalDrives()
+            for letter in string.ascii_uppercase:
+                if bitmask & 1:
+                    d = f"{letter}:\\"
+                    if os.path.exists(d):
+                        drives.append(d)
+                bitmask >>= 1
+        except Exception as e:
+            print(f"[server_manager] Failed to query logical drives: {e}", file=sys.stderr)
+    if not drives:
+        drives = ["E:\\", "C:\\"] if sys.platform == "win32" else ["/"]
+    return drives
+
+
+def _ask_directory_native(initial_dir: str = "") -> str:
+    init_dir = (initial_dir or "").strip()
+    if not init_dir or not os.path.isdir(init_dir):
+        if os.path.isdir("E:\\AI"):
+            init_dir = "E:\\AI"
+        elif WORKSPACE_ROOT and os.path.isdir(str(WORKSPACE_ROOT)):
+            init_dir = str(WORKSPACE_ROOT)
+        else:
+            init_dir = os.path.expanduser("~")
+
+    try:
+        py_script = f"""
+import sys, os
+try:
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
+    root.lift()
+    root.focus_force()
+    res = filedialog.askdirectory(title='Select Local Workspace Directory', initialdir={repr(init_dir)}, mustexist=False)
+    root.destroy()
+    if res:
+        print(os.path.normpath(res))
+except Exception:
+    sys.exit(1)
+"""
+        proc = subprocess.run(
+            [sys.executable, "-c", py_script],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return os.path.normpath(proc.stdout.strip())
+    except Exception as e:
+        print(f"[server_manager] tkinter subprocess failed ({e}), trying PowerShell fallback", file=sys.stderr)
+
+    try:
+        escaped_init = init_dir.replace("'", "''")
+        ps_cmd = (
+            "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; "
+            "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+            "$f.Description = 'Select Local Workspace Directory'; "
+            "$f.ShowNewFolderButton = $true; "
+            f"$f.SelectedPath = '{escaped_init}'; "
+            "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { "
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            "Write-Output $f.SelectedPath }"
+        )
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=120
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return os.path.normpath(res.stdout.strip())
+    except Exception as e:
+        print(f"[server_manager] PowerShell folder dialog failed: {e}", file=sys.stderr)
+
+    return ""
+
+
+@app.post("/control/browse_folder")
+async def browse_folder(req: Optional[BrowseFolderReq] = None):
+    init_dir = req.initial_dir if req else ""
+    try:
+        selected_path = await asyncio.to_thread(_ask_directory_native, init_dir)
+        return {
+            "ok": True,
+            "path": selected_path or "",
+            "cancelled": not bool(selected_path),
+        }
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/control/fs/browse")
+async def fs_browse(path: Optional[str] = ""):
+    drives = _get_drives()
+    raw_path = (path or "").strip()
+    if not raw_path:
+        if os.path.isdir("E:\\AI"):
+            target_path = Path("E:\\AI")
+        elif WORKSPACE_ROOT and os.path.isdir(str(WORKSPACE_ROOT)):
+            target_path = Path(WORKSPACE_ROOT)
+        elif drives:
+            target_path = Path(drives[0])
+        else:
+            target_path = Path(os.path.expanduser("~"))
+    else:
+        target_path = Path(raw_path).expanduser().resolve()
+
+    if not target_path.exists() or not target_path.is_dir():
+        if target_path.parent.exists() and target_path.parent.is_dir():
+            target_path = target_path.parent
+        else:
+            target_path = Path("E:\\AI") if os.path.isdir("E:\\AI") else Path(str(WORKSPACE_ROOT))
+
+    subdirs = []
+    try:
+        with os.scandir(str(target_path)) as it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        name = entry.name
+                        if not name.startswith(('.', '$')) and name.lower() not in (
+                            'system volume information', 'recovery', '$recycle.bin'
+                        ):
+                            subdirs.append(name)
+                except (PermissionError, OSError):
+                    continue
+    except (PermissionError, OSError) as e:
+        print(f"[server_manager] fs_browse scan error on {target_path}: {e}", file=sys.stderr)
+
+    subdirs.sort(key=lambda s: s.lower())
+    parent_dir = str(target_path.parent) if target_path.parent != target_path else None
+
+    return {
+        "ok": True,
+        "current": str(target_path),
+        "parent": parent_dir,
+        "drives": drives,
+        "subdirs": subdirs[:250],
+    }
+
+
+@app.post("/control/fs/mkdir")
+async def fs_mkdir(req: MkdirReq):
+    try:
+        base = Path(req.path).expanduser().resolve()
+        name = req.name.strip()
+        if not name or any(c in name for c in '<>:"/\\|?*'):
+            return JSONResponse({"ok": False, "error": "Invalid folder name"}, status_code=400)
+        target = base / name
+        target.mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "path": str(target.resolve())}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+class MessageReq(BaseModel):
+    role: str
+    content: str
+    meta: Optional[dict] = None
+
+
+@app.get("/control/projects")
+async def list_projects():
+    projs = db_list_projects()
+    active_p = None
+    curr_proj = get_active_project()
+    if curr_proj:
+        for p in projs:
+            if p["name"] == curr_proj:
+                active_p = p
+                break
+    return {
+        "projects": projs,
+        "active": curr_proj,
+        "active_project": active_p,
+        "workspace": str(active_workspace()),
+        "workspace_root": str(WORKSPACE_ROOT),
+    }
+
+
+@app.post("/control/projects")
+async def create_project(req: ProjectReq):
+    try:
+        p = db_create_project(req.name, req.workspace_dir, WORKSPACE_ROOT)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "project": p}
+
+
+@app.delete("/control/projects/{pid}")
+async def delete_project(pid: int):
+    pname = None
+    for p in db_list_projects():
+        if p["id"] == pid:
+            pname = p["name"]
+            break
+    db_delete_project(pid)
+    curr_proj = get_active_project()
+    if curr_proj:
+        projs = db_list_projects()
+        if not any(p["name"] == curr_proj for p in projs):
+            set_active_project(None)
+    return {"ok": True, "deleted_id": pid, "deleted_name": pname}
+
+
+@app.post("/control/projects/{pid}/activate")
+async def activate_project(pid: int):
+    if pid == 0:
+        set_active_project(None)
+        return {"ok": True, "active": None, "workspace": str(active_workspace())}
+    for p in db_list_projects():
+        if p["id"] == pid:
+            set_active_project(p["name"])
+            return {"ok": True, "active": p["name"], "project": p, "workspace": str(active_workspace())}
+    return JSONResponse({"error": "project not found"}, status_code=404)
+
+
+@app.get("/control/projects/{pid}/sessions")
+async def list_sessions(pid: int):
+    return {"sessions": db_list_sessions(pid)}
+
+
+@app.post("/control/projects/{pid}/sessions")
+async def create_session(pid: int, req: SessionReq):
+    try:
+        s = db_create_session(pid, req.title)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "session": s}
+
+
+@app.patch("/control/sessions/{sid}")
+async def update_session(sid: int, req: SessionReq):
+    try:
+        db_update_session_title(sid, req.title)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True}
+
+
+@app.delete("/control/sessions/{sid}")
+async def delete_session(sid: int):
+    db_delete_session(sid)
+    return {"ok": True}
+
+
+@app.get("/control/sessions/{sid}/messages")
+async def get_messages(sid: int):
+    return {"messages": db_load_messages(sid)}
+
+
+@app.post("/control/sessions/{sid}/messages")
+async def post_message(sid: int, req: MessageReq):
+    try:
+        mid = db_append_message(sid, req.role, req.content, req.meta)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "id": mid}
+
+
+@app.api_route("/{path:path}", methods=["GET", "POST"])
+async def proxy(path: str, request: Request):
+    if path in ("favicon.ico", "index.html"):
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    if state.process is None or state.process.poll() is not None or state.client is None:
+        target = state.profile_path or state.profile
+        if target:
+            try:
+                print(f"[server_manager] proxy {path}: model not running — auto-starting...")
+                await state.load_profile(target)
+            except Exception as e:
+                return JSONResponse({
+                    "error": {
+                        "message": f"Model failed to auto-start: {e}",
+                        "type": "model_start_failed"
+                    }
+                }, status_code=503)
+        else:
+            return JSONResponse({
+                "error": {
+                    "message": "No model is loaded. Select a model from the dropdown and click ▶ to load it into GPU VRAM.",
+                    "type": "model_not_loaded"
+                }
+            }, status_code=503)
+
+    body = await request.body()
+    t0 = time.time()
+    state.last_activity = time.time()
+    is_streaming = b'"stream":true' in body or b'"stream": true' in body
+    rid = monitor_begin(path, is_streaming, body)
+    model_name = state.profile.get("model_path") if state.profile else None
+
+    async def do_request():
+        return await state.client.request(
+            request.method, f"/{path}",
+            content=body,
+            headers={k: v for k, v in request.headers.items() if k.lower() != "host"},
+            params=request.query_params,
+        )
+
+    if is_streaming:
+        async def stream_gen():
+            status = 500
+            usage = None
+            try:
+                async with state.client.stream(
+                    request.method, f"/{path}", content=body,
+                    headers={k: v for k, v in request.headers.items() if k.lower() != "host"},
+                    params=request.query_params,
+                ) as r:
+                    status = r.status_code
+                    async for chunk in r.aiter_bytes():
+                        u = extract_usage_from_stream(chunk.decode("utf-8", "replace"), rid)
+                        if u:
+                            usage = u
+                        yield chunk
+                dt = time.time() - t0
+            except (asyncio.CancelledError, GeneratorExit):
+                dt = time.time() - t0
+                req = _monitor_state["active"].get(rid)
+                ptoks = usage.get("prompt_tokens") if usage else None
+                ctoks = usage.get("completion_tokens") if usage else (req["gen_tokens"] if req else None)
+                tps = (ctoks / dt) if ctoks else None
+                monitor_end(rid, 499, ptoks, ctoks, tps, dt)
+                db_record_request(path, model_name, ptoks, ctoks, tps, dt, None, True, 499)
+                return
+            dt = time.time() - t0
+            ptoks = usage.get("prompt_tokens") if usage else None
+            ctoks = usage.get("completion_tokens") if usage else None
+            tps = (ctoks / dt) if usage and ctoks else None
+            print(f"[server_manager] {path} streamed in {dt:.2f}s "
+                  f"({ctoks or '?'} tok{'' if ctoks is None else ''})")
+            monitor_end(rid, status, ptoks, ctoks, tps, dt)
+            db_record_request(path, model_name, ptoks, ctoks, tps, dt, None, True, status)
+        return StreamingResponse(stream_gen(), media_type="text/event-stream")
+
+    r = await do_request()
+    dt = time.time() - t0
+    ptoks = ctoks = tps = prompt_tps = None
+    try:
+        data = r.json()
+        usage = data.get("usage", {})
+        ptoks = usage.get("prompt_tokens")
+        ctoks = usage.get("completion_tokens")
+        if ctoks and dt > 0:
+            tps = ctoks / dt
+            print(f"[server_manager] {path}: {ctoks} tokens in {dt:.2f}s "
+                  f"= {tps:.1f} t/s")
+        tim = data.get("timings", {})
+        if isinstance(tim, dict) and tim.get("prompt_per_second"):
+            prompt_tps = tim.get("prompt_per_second")
+    except Exception:
+        pass
+    monitor_end(rid, r.status_code, ptoks, ctoks, tps, dt, prompt_tps)
+    db_record_request(path, model_name, ptoks, ctoks, tps, dt, prompt_tps, False, r.status_code)
+    return JSONResponse(content=r.json() if r.headers.get("content-type", "").startswith("application/json") else {"raw": r.text},
+                         status_code=r.status_code)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--profile", required=False, default=None, help="Path to initial profile JSON (optional)")
+    ap.add_argument("--models-dir", required=False, default=None, help="Path to directory containing .gguf models")
+    ap.add_argument("--port", type=int, default=PROXY_PORT, help="Port for this proxy (default 8000)")
+    args = ap.parse_args()
+
+    global _initial_profile_path, _models_dir
+    if args.profile:
+        _initial_profile_path = Path(args.profile)
+    if args.models_dir:
+        _models_dir = Path(args.models_dir)
+
+    uvicorn.run(app, host=PROXY_HOST, port=args.port)
+
+
+if __name__ == "__main__":
+    main()

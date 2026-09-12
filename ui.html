@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A770 Runtime — Control Center</title>
+<script>
+  (function() {
+    var t = localStorage.getItem('a770_theme') || 'claude';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<link rel="stylesheet" href="/static/css/style.css">
+
+</head>
+<body>
+<div id="app">
+  <aside>
+    <div class="logo" title="Dual Intel Arc A770 Vulkan Runtime Manager">⬡ A770 <span>RUNTIME</span><small>DUAL GPU · VULKAN</small></div>
+
+    <button id="btn-newchat" class="btn blue" style="padding:9px 12px; font-size:12px; font-weight:700; margin-bottom:2px;" title="Start a fresh chat">＋ New Chat</button>
+
+    <section id="projects-card" class="card" style="padding:10px; display:none;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+        <span style="font-size:9.5px; color:var(--dim); letter-spacing:1.8px; font-weight:700; text-transform:uppercase;">Projects</span>
+        <div style="display:flex; gap:4px; align-items:center;">
+          <button id="btn-delproject" class="btn ghost" style="width:auto; margin:0; padding:2px 6px; font-size:9.5px; color:var(--red); display:none;" title="Delete active project from agent (files on disk are NOT deleted)">🗑️ Remove</button>
+          <button id="btn-newproject" class="btn ghost" style="width:auto; margin:0; padding:2px 8px; font-size:10px;" title="Create project with optional custom local directory">＋ New</button>
+        </div>
+      </div>
+      <div style="display:flex; gap:5px; align-items:center; margin-bottom:6px;">
+        <select id="project-sel" title="Active project — agent workspace & sessions are scoped to it" style="flex:1; min-width:0; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:11.5px; font-family:inherit; cursor:pointer;"></select>
+        <button id="btn-delproject-icon" class="btn ghost" style="width:auto; margin:0; padding:5px 7px; font-size:11px; color:var(--red); border:1px solid var(--border); border-radius:6px; display:none;" title="Delete active project from agent (files on disk are NOT deleted)">🗑️</button>
+      </div>
+      <div id="project-dir-badge" style="font-size:10px; color:var(--dim); word-break:break-all; line-height:1.35; padding:5px 7px; background:var(--bg); border-radius:6px; border:1px solid var(--border);" title="Project workspace root">
+        <span style="color:var(--accent);">📁</span> <span id="project-dir-path">Default sandbox</span>
+      </div>
+    </section>
+
+    <section class="card" style="flex:1; display:flex; flex-direction:column; overflow:hidden; padding:10px 8px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:0 4px 6px; border-bottom:1px solid var(--border); margin-bottom:8px;">
+        <span id="session-title" style="font-size:9.5px; color:var(--dim); letter-spacing:1.8px; font-weight:700; text-transform:uppercase;" title="Chat sessions — persisted in projects.db">Recent Chats</span>
+      </div>
+      <div id="session-list" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; padding-right:2px;">
+        <div class="dim" style="font-size:12px; padding:6px;">no chats yet</div>
+      </div>
+    </section>
+  </aside>
+
+  <main>
+    <header>
+      <div class="model-group" title="Pick a model, then load or unload it">
+        <select id="profile" title="Select a GGUF model (grouped by family)"></select>
+        <button id="btn-load-header" title="Load the selected model into GPU VRAM"><span>▶</span></button>
+      </div>
+      <span id="pill" class="pill off" title="Current llama-server status &amp; uptime"><i></i><span id="pill-text">Model unloaded</span></span>
+      <span class="chip mono" id="chip-ts" title="Generation throughput speed in tokens per second">⚡ — t/s</span>
+      <span class="chip mono" id="chip-ctx" title="Current KV-cache context window consumption in tokens" style="cursor:help;">🧠 0 / 32k (0%)</span>
+      <div class="mode-switch" title="Switch between direct LLM conversation and Autonomous Coding Agent">
+        <button id="mode-chat" class="mode-btn active" type="button" title="Direct, fast conversation with the loaded LLM">💬 Chat</button>
+        <button id="mode-agent" class="mode-btn" type="button" title="Autonomous coding agent that reads/writes files in the active project workspace">🤖 Agent Task</button>
+      </div>
+      <div class="spacer"></div>
+      <button id="btn-theme" class="btn ghost icon-btn" title="Quick cycle color theme">🎨 Theme</button>
+      <button id="btn-settings" class="btn ghost icon-btn" title="Hardware status (GPUs), color theme, model launch parameters & sampling settings">⚙️ Settings</button>
+      <button id="btn-monitor" class="btn ghost icon-btn" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">📡 Monitor</button>
+      <button id="btn-report" class="btn ghost icon-btn" title="Token usage report: prompts vs completions, per-model and per-day totals">📊 Report</button>
+      <button id="btn-docs" class="btn ghost icon-btn" title="Step-by-step guide: connect any OpenAI-compatible agent to this runtime">📖 Docs</button>
+      <button id="btn-chatclear" class="btn ghost" style="width:auto; margin:0; padding:7px 12px;" title="Clear conversation history without unloading model">🧹 Clear Chat</button>
+    </header>
+
+    <div id="chat"><div id="chat-inner">
+      <div id="empty">
+        <div class="big">⚡</div>
+        <h2>A770 Dual Runtime</h2>
+        <p id="empty-model" class="mono">Model unloaded</p>
+        <div class="empty-card">
+          <p><b>No model is currently loaded in GPU VRAM.</b></p>
+          <p class="dim" style="margin-top: 6px;">Select a model from the top dropdown and click <b>▶ Load</b>, or simply type a message below.</p>
+        </div>
+      </div>
+    </div></div>
+
+    <footer>
+      <div id="f-inner">
+        <div class="composer">
+          <div id="agent-banner" style="display:none; font-size:10.5px; padding:6px 10px; margin-bottom:6px; border-radius:6px; background:rgba(245,158,11,0.12); color:var(--amber); border:1px solid rgba(245,158,11,0.3);">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+              <span>🛠️ <b>Agent Task Mode Active:</b> Autonomous tool-use loop for file editing &amp; sandbox execution.</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span style="font-size:10px; opacity:0.85;">Engine:</span>
+                <select id="agent-engine" style="background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:5px; font-size:10.5px; padding:2px 6px; outline:none; cursor:pointer;" title="Choose agent orchestration engine">
+                  <option value="main" selected>🧠 Direct Main Model (Loaded GPU LLM - Fast &amp; Reliable)</option>
+                  <option value="tiered">⚡ Hybrid Orchestrator (MiniCPM + Auto-Escalate to Main)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div id="attach-preview-bar" class="attach-preview-bar"></div>
+          <textarea id="input" placeholder="Message the model…" title="Type your prompt here. Press Enter to send, Shift+Enter for newline"></textarea>
+          <div class="comp-actions">
+            <button id="btn-attach" class="comp-tool" title="Attach text/code files — their content is appended to your prompt">📎</button>
+            <input type="file" id="file-input" multiple accept=".txt,.md,.py,.js,.ts,.json,.c,.cpp,.h,.cs,.java,.rs,.go,.html,.css,.xml,.yml,.yaml,.toml,.ini,.cfg,.log,.csv,.sql,.sh,.ps1,.bat,.png,.jpg,.jpeg,.webp,.gif" style="display:none">
+            <span class="comp-hint" id="attach-info">Enter to send · Shift+Enter for newline</span>
+            <button id="btn-send" class="comp-btn" title="Send prompt (Enter)">➤</button>
+            <button id="btn-abort" class="comp-btn" style="display:none" title="Cancel active generation">■</button>
+          </div>
+        </div>
+      </div>
+    </footer>
+  </main>
+</div>
+
+<div id="toast"></div>
+<div id="ws-rail" title="Project workspace files" style="display:none;">📂</div>
+<div id="ws-panel">
+  <div id="ws-grip" title="Drag to resize panel width"></div>
+  <div class="drawer-head">
+    <span title="Active project workspace directory">📁 Workspace</span>
+    <button class="btn ghost" id="ws-close" style="width:auto; margin:0; padding:4px 10px;" title="Collapse panel">✕</button>
+  </div>
+  <div id="ws-file-view" style="display:none;">
+    <div id="ws-file-head">
+      <button class="btn ghost" id="ws-back" style="width:auto; margin:0; padding:3px 10px; font-size:11px;" title="Back to file tree">← Tree</button>
+      <span id="ws-file-path" class="mono" title="Workspace-relative path"></span>
+      <span id="ws-file-badge" title="Session change status"></span>
+    </div>
+    <pre id="ws-file-code"></pre>
+  </div>
+  <div id="ws-tree-view">
+    <div id="ws-root-path" class="mono" title="Workspace root directory on disk"></div>
+    <div id="ws-tree"></div>
+  </div>
+</div>
+<div id="monitor-drawer">
+  <div class="drawer-head">
+    <span>📡 Real-time Monitor</span>
+    <button class="btn ghost" id="mon-close" style="width:auto; margin:0; padding:4px 10px;">✕</button>
+  </div>
+  <div class="drawer-body">
+    <div class="mon-section">
+      <h4>Active generations</h4>
+      <div id="mon-active-list"><div class="mon-empty">No active requests</div></div>
+    </div>
+    <div class="mon-section">
+      <h4>Recent requests</h4>
+      <div id="mon-recent-list" style="display:flex; flex-direction:column; gap:4px;"><div class="mon-empty">Waiting…</div></div>
+    </div>
+  </div>
+</div>
+
+<div id="settings-drawer">
+  <div class="drawer-head">
+    <span>⚙️ Settings &amp; Hardware</span>
+    <button class="btn ghost" id="settings-close" style="width:auto; margin:0; padding:4px 10px;">✕</button>
+  </div>
+  <div class="drawer-body">
+    <section class="card" id="sec-theme">
+      <h3 title="Choose interface color theme">🎨 Color Theme</h3>
+      <div class="theme-grid">
+        <button type="button" class="btn theme-opt" data-t="slate" onclick="setTheme('slate')">
+          <span class="theme-swatch" style="background:#6366f1;"></span> Slate &amp; Indigo
+        </button>
+        <button type="button" class="btn theme-opt" data-t="claude" onclick="setTheme('claude')">
+          <span class="theme-swatch" style="background:#d97757;"></span> Claude Warm
+        </button>
+        <button type="button" class="btn theme-opt" data-t="tokyonight" onclick="setTheme('tokyonight')">
+          <span class="theme-swatch" style="background:#7aa2f7;"></span> Tokyo Night
+        </button>
+        <button type="button" class="btn theme-opt" data-t="oled" onclick="setTheme('oled')">
+          <span class="theme-swatch" style="background:#3b82f6; border: 1px solid #555;"></span> OLED Black
+        </button>
+        <button type="button" class="btn theme-opt" data-t="nord" onclick="setTheme('nord')">
+          <span class="theme-swatch" style="background:#88c0d0;"></span> Nord Arctic
+        </button>
+        <button type="button" class="btn theme-opt" data-t="classic" onclick="setTheme('classic')">
+          <span class="theme-swatch" style="background:#6c8cff;"></span> Classic Dark
+        </button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3 title="Dedicated VRAM usage & compute engine utilization for both Arc A770 GPUs">GPUs (2x Arc A770)</h3>
+      <div id="gpu-list"><div class="dim" style="font-size:12px">querying…</div></div>
+    </section>
+
+    <details class="card fold" id="sec-cfg" open>
+      <summary title="Adjust llama-server launch parameters and persist them to profile JSON">Model Config · Restart to Apply</summary>
+      <div class="cfg-grid">
+        <div class="cfg-item" title="Context size in tokens (n_ctx). Maximum prompt + completion memory allocated in VRAM">
+          <label for="cfg-ctx">Context size <span class="info" title="Maximum token context window size (e.g. 32768, 65536)">ⓘ</span></label>
+          <input type="number" id="cfg-ctx" step="8" min="512" max="262144" value="32768" title="Context size (n_ctx) in tokens (512–262144)">
+        </div>
+        <div class="cfg-item" title="Number of model layers offloaded to GPUs (n_gpu_layers). 999 offloads all layers to VRAM">
+          <label for="cfg-ngl">GPU layers <span class="info" title="999 = offload all layers to GPU VRAM">ⓘ</span></label>
+          <input type="number" id="cfg-ngl" min="0" max="999" value="999" title="Number of GPU layers (n_gpu_layers)">
+        </div>
+        <div class="cfg-item" title="Number of CPU threads for prompt computation (threads). 0 = auto-detect">
+          <label for="cfg-threads">CPU threads <span class="info" title="0 = auto-detect optimal CPU thread count">ⓘ</span></label>
+          <input type="number" id="cfg-threads" min="0" max="64" value="0" title="CPU threads (0 = auto)">
+        </div>
+        <div class="cfg-item" title="Number of CPU threads for batch evaluation (threads_batch). 0 = same as CPU threads">
+          <label for="cfg-tb">Batch threads <span class="info" title="0 = same thread count as CPU threads">ⓘ</span></label>
+          <input type="number" id="cfg-tb" min="0" max="64" value="0" title="Batch threads (0 = default)">
+        </div>
+        <div class="cfg-item" title="Logical batch size for prompt ingest (batch_size). Default 2048">
+          <label for="cfg-batch">Batch size <span class="info" title="Logical prompt evaluation batch size (0 = default 2048)">ⓘ</span></label>
+          <input type="number" id="cfg-batch" min="0" max="8192" value="0" title="Batch size (0 = default 2048)">
+        </div>
+        <div class="cfg-item" title="Physical micro-batch size (ubatch_size). Default 512. Lower values reduce peak VRAM spikes">
+          <label for="cfg-ubatch">Ubatch size <span class="info" title="Physical micro-batch size. Lower reduces VRAM spikes during long prompt ingest">ⓘ</span></label>
+          <input type="number" id="cfg-ubatch" min="0" max="4096" value="0" title="Physical micro-batch size (ubatch_size)">
+        </div>
+        <div class="cfg-item" title="Number of parallel sequence processing slots (n_slots / n_parallel)">
+          <label for="cfg-np">Parallel slots <span class="info" title="Number of simultaneous sequence processing slots (default 1)">ⓘ</span></label>
+          <input type="number" id="cfg-np" min="0" max="64" value="0" title="Parallel slots (0 = default 1)">
+        </div>
+        <div class="cfg-item" title="Seconds between background ping queries when idle (default 25s)">
+          <label for="cfg-kai">Keepalive (s) <span class="info" title="Idle interval (seconds) before sending 1-token keepalive ping">ⓘ</span></label>
+          <input type="number" id="cfg-kai" min="5" max="600" value="25" title="Keepalive ping interval in seconds">
+        </div>
+        <div class="cfg-item cfg-full" title="GPU shares. 9,11 = both GPUs (~45%/55% split) · 0,1 = GPU 2 only · 1,0 = GPU 1 only">
+          <label for="cfg-ts">Tensor split <span class="info" title="Comma-separated shares per GPU. 0,1 = only GPU 2 works · 1,0 = only GPU 1 works · 9,11 = balanced dual-GPU split">ⓘ</span></label>
+          <input type="text" id="cfg-ts" value="9,11" title="GPU share: 0,1 = GPU 2 only · 1,0 = GPU 1 only · 9,11 = both GPUs">
+          <small style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;">0,1 → GPU 2 only · 1,0 → GPU 1 only · 9,11 → dual</small>
+        </div>
+        <div class="cfg-item" title="GPU split strategy: 'layer' splits transformer layers; 'row' splits tensor matrices">
+          <label for="cfg-sm">Split mode <span class="info" title="'layer' (pipeline split) is recommended for Arc GPUs">ⓘ</span></label>
+          <select id="cfg-sm" title="GPU split mode (layer recommended)"><option value="layer">layer</option><option value="row">row</option></select>
+        </div>
+        <div class="cfg-item" title="Enable FlashAttention (on/off/auto). Speeds up context processing and saves VRAM">
+          <label for="cfg-fa">Flash attention <span class="info" title="Accelerates Vulkan context evaluation & saves VRAM">ⓘ</span></label>
+          <select id="cfg-fa" title="Flash attention setting"><option value="on">on</option><option value="off">off</option><option value="auto">auto</option></select>
+        </div>
+        <div class="cfg-item cfg-full" title="Data type for KV cache. 'f16' is default; 'q8_0' cuts KV memory footprint in half">
+          <label for="cfg-ct">KV cache type <span class="info" title="q8_0 cuts KV memory usage by 50% with negligible loss">ⓘ</span></label>
+          <select id="cfg-ct" title="KV cache quantization type"><option value="f16">f16</option><option value="q8_0">q8_0 (½ KV RAM)</option><option value="q5_0">q5_0</option><option value="q4_0">q4_0</option><option value="bf16">bf16</option><option value="f32">f32</option></select>
+        </div>
+        <div class="cfg-item cfg-full" id="mtp-row" style="display:none" title="MTP speculative decoding: a small draft model proposes token chains the target model verifies in one pass — typically 1.5-2x tokens/sec on Vulkan">
+          <label for="cfg-mtp">⚡ MTP draft <span class="info" title="Enables speculative decoding with the auto-detected MTP draft file">ⓘ</span></label>
+          <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
+            <label class="switch"><input type="checkbox" id="cfg-mtp"><span class="slider"></span></label>
+            <div style="flex:1"><b id="mtp-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">speculative decoding available</small></div>
+          </div>
+          <label for="mtp-nmax" style="margin-top:6px">Draft tokens (n-max) <span class="info" title="Tokens drafted per step (default 3)">ⓘ</span></label>
+          <input type="number" id="mtp-nmax" min="1" max="16" value="3" title="Max draft tokens per speculative step">
+        </div>
+      </div>
+      <div class="keep-row" title="Windows demotes GPU VRAM to system RAM ~70s after idle, causing throughput drop (14.4 → 7.7 t/s). A 1-token ping every 25s while idle keeps VRAM resident.">
+        <label class="switch" title="Toggle keepalive background pings"><input type="checkbox" id="ka"><span class="slider"></span></label>
+        <div><b title="Keep VRAM resident in Arc GPUs">Keepalive</b><small>1-token ping while idle — keeps A770s at full speed</small></div>
+      </div>
+      <div class="cfg-note" title="Configuration note">Saved per-model into model_configs.json. Unload the model, then load it again to apply changes.</div>
+      <button id="btn-apply" class="btn accent" style="margin-top:6px" title="Save configuration for this model. If the model is loaded, you will be asked to unload & reload to apply.">💾 Save Config</button>
+    </details>
+
+    <details class="card fold" id="sec-chat" open>
+      <summary title="Configure system prompt and sampling hyperparameters">Chat &amp; Sampling</summary>
+      <label for="sysprompt" title="System prompt instructions given to the LLM">System prompt <span class="info" title="Global instructions guiding model behavior and tone">ⓘ</span></label>
+      <textarea id="sysprompt" rows="3" placeholder="You are a helpful assistant." title="System prompt text"></textarea>
+
+      <div class="smp-grid">
+        <div class="smp-row" title="Controls randomness of output (temperature)">
+          <label for="temp">Temperature <span class="info" title="Higher = creative, lower = deterministic">ⓘ</span></label>
+          <input type="range" id="temp" min="0" max="2" step="0.05" value="1.0" title="Temperature slider (0.0 to 2.0)">
+          <span class="mono smp-val" id="tempv">1.00</span>
+        </div>
+        <div class="smp-row" title="Nucleus sampling threshold (top_p)">
+          <label for="topp">Top P <span class="info" title="Considers top tokens with cumulative probability up to P">ⓘ</span></label>
+          <input type="range" id="topp" min="0" max="1" step="0.01" value="0.95" title="Top P slider (0.0 to 1.0)">
+          <span class="mono smp-val" id="toppv">0.95</span>
+        </div>
+        <div class="smp-row" title="Minimum token probability threshold relative to top candidate (min_p)">
+          <label for="minp">Min P <span class="info" title="Filters out low-probability tail tokens">ⓘ</span></label>
+          <input type="range" id="minp" min="0" max="0.3" step="0.005" value="0" title="Min P slider (0.0 to 0.3)">
+          <span class="mono smp-val" id="minpv">0.000</span>
+        </div>
+        <div class="smp-row" title="Penalizes repeated tokens (repeat_penalty)">
+          <label for="rep">Repeat penalty <span class="info" title="Higher values reduce text repetition; 1.0 = off">ⓘ</span></label>
+          <input type="range" id="rep" min="1" max="2" step="0.01" value="1.0" title="Repeat penalty slider (1.0 to 2.0)">
+          <span class="mono smp-val" id="repv">1.00</span>
+        </div>
+        <div class="smp-row" title="Penalizes tokens that have appeared at all in the context (presence_penalty)">
+          <label for="presence">Presence penalty <span class="info" title="Positive values push the model toward new topics; 0.0 = off">ⓘ</span></label>
+          <input type="range" id="presence" min="-2" max="2" step="0.05" value="0" title="Presence penalty slider (-2.0 to 2.0)">
+          <span class="mono smp-val" id="presencev">0.00</span>
+        </div>
+        <div class="smp-row" title="Limits candidate pool to K highest probability tokens (0 = off)">
+          <label for="topk">Top K <span class="dim">(0 = off)</span> <span class="info" title="Limits pool to K highest probability tokens">ⓘ</span></label>
+          <input type="number" id="topk" value="20" min="0" max="200" title="Top K candidate count (0 = disabled)">
+          <span class="mono smp-val"></span>
+        </div>
+        <div class="smp-row" title="Maximum tokens to generate per response. Tip: set -1 for unlimited generation (only stopped by stop strings/EOS or manual Stop)">
+          <label for="maxtok">Max tokens <span class="info" title="Set -1 = no output limit: the model generates until EOS or you press Stop. Higher values need more KV cache (context_size). Leave 512 for chat; use -1 for long-form writing">ⓘ</span></label>
+          <input type="number" id="maxtok" value="-1" min="-1" max="8192" title="Maximum generation tokens (-1 = unlimited)">
+          <span class="mono smp-val"></span>
+        </div>
+      </div>
+    </details>
+  </div>
+</div>
+
+<div id="proj-modal" hidden>
+  <div id="proj-box">
+    <h2>📁 Create New Project <button class="rep-close" id="proj-modal-close">✕</button></h2>
+    <div style="display:flex; flex-direction:column; gap:12px; margin-top:14px;">
+      <div>
+        <label style="display:block; font-size:11px; color:var(--dim); font-weight:700; margin-bottom:5px; text-transform:uppercase; letter-spacing:1px;">Project Name *</label>
+        <input type="text" id="new-proj-name" placeholder="e.g. backend-api, my-agent-app" style="width:100%; background:#15171d; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; font-family:inherit;">
+      </div>
+      <div>
+        <label style="display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--dim); font-weight:700; margin-bottom:5px; text-transform:uppercase; letter-spacing:1px;">
+          <span>Local Workspace Directory <span style="font-weight:normal; text-transform:none; color:var(--accent);">(Optional)</span></span>
+        </label>
+        <div style="display:flex; gap:8px; align-items:stretch;">
+          <input type="text" id="new-proj-dir" placeholder="e.g. E:\AI\my-code or C:\Users\..." style="flex:1; min-width:0; background:#15171d; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; font-family:inherit;">
+          <button type="button" class="btn blue" id="btn-browse-dir" title="Choose local directory on this machine" style="width:auto; margin:0; padding:0 14px; white-space:nowrap; display:inline-flex; align-items:center; gap:6px; font-weight:600; font-size:11.5px; cursor:pointer;">
+            <span id="btn-browse-dir-icon">📁</span> <span id="btn-browse-dir-text">Browse…</span>
+          </button>
+        </div>
+        <div style="display:flex; gap:6px; margin-top:7px; flex-wrap:wrap; align-items:center;">
+          <span style="font-size:10px; color:var(--dim);">Quick:</span>
+          <button type="button" class="btn ghost btn-quick-dir" data-dir="E:\AI" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;">E:\AI</button>
+          <button type="button" class="btn ghost btn-quick-dir" data-dir="E:\AI\vulkan-arc" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;">vulkan-arc</button>
+          <button type="button" class="btn ghost" id="btn-open-dir-picker" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px; color:var(--accent); border-color:rgba(99,102,241,0.4);">📂 In-App Browser</button>
+        </div>
+        <small style="color:var(--dim); font-size:10px; line-height:1.4; display:block; margin-top:6px;">
+          Anchor the project sandbox to an existing local folder. Agent tools (read, write, edit, python) will operate inside this directory. Leave blank to use default workspace sandbox.
+        </small>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+        <button class="btn ghost" id="btn-proj-cancel" style="width:auto; margin:0; padding:6px 14px;">Cancel</button>
+        <button class="btn blue" id="btn-proj-submit" style="width:auto; margin:0; padding:6px 16px; font-weight:700;">Create Project</button>
+      </div>
+      <div id="proj-manage-section" style="margin-top:14px; border-top:1px solid var(--border); padding-top:12px;">
+        <div style="font-size:10px; color:var(--dim); font-weight:700; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+          <span>Registered Projects</span>
+          <span style="font-size:9.5px; font-weight:normal; text-transform:none; color:var(--dim);">🗑️ Only removes from agent (disk files kept)</span>
+        </div>
+        <div id="proj-manage-list" style="max-height:140px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; padding-right:2px;">
+          <div style="color:var(--dim); font-size:11px; padding:6px; text-align:center;">No projects registered.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="dir-picker-modal" hidden>
+  <div id="dir-picker-box">
+    <h2>📂 Choose Workspace Directory <button class="rep-close" id="dir-picker-close">✕</button></h2>
+    
+    <div style="display:flex; align-items:center; gap:8px; margin-top:10px; margin-bottom:8px;">
+      <span style="font-size:10.5px; color:var(--dim); font-weight:700; text-transform:uppercase; letter-spacing:0.5px;">Drives:</span>
+      <div id="dir-picker-drives" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:6px; background:#10141f; border:1px solid var(--border); border-radius:6px; padding:6px 10px; margin-bottom:10px;">
+      <button class="btn ghost" id="btn-dir-picker-up" title="Up to parent folder" style="width:auto; margin:0; padding:2px 8px; font-size:11px;">⬆ Up</button>
+      <div id="dir-picker-path" class="mono" style="font-size:11.5px; color:var(--text); word-break:break-all; flex:1;"></div>
+    </div>
+
+    <div id="dir-picker-list" style="max-height:260px; min-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; background:#0d111a; padding:6px; display:flex; flex-direction:column; gap:2px;">
+      <div style="color:var(--dim); font-size:11px; padding:10px; text-align:center;">Loading directories...</div>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; gap:8px; flex-wrap:wrap;">
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="text" id="dir-picker-new-name" placeholder="New folder name" style="width:130px; background:#15171d; color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11px;">
+        <button class="btn ghost" id="btn-dir-picker-mkdir" style="width:auto; margin:0; padding:5px 10px; font-size:11px;">+ New</button>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn ghost" id="btn-dir-picker-cancel" style="width:auto; margin:0; padding:5px 14px;">Cancel</button>
+        <button class="btn blue" id="btn-dir-picker-select" style="width:auto; margin:0; padding:5px 16px; font-weight:700;">✔ Select This Folder</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="report-modal" hidden>
+  <div id="report-box">
+    <h2>📊 Token Usage Report <button class="rep-close" id="rep-close">✕</button></h2>
+    <div id="rep-days" style="display:flex; gap:6px; margin-bottom:12px;">
+      <button class="btn ghost rep-day" data-days="1" style="width:auto; margin:0; padding:4px 10px;">Today</button>
+      <button class="btn ghost rep-day" data-days="7" style="width:auto; margin:0; padding:4px 10px;">7d</button>
+      <button class="btn blue rep-day" data-days="30" style="width:auto; margin:0; padding:4px 10px;">30d</button>
+      <button class="btn ghost rep-day" data-days="365" style="width:auto; margin:0; padding:4px 10px;">All</button>
+    </div>
+    <div id="rep-content"><div class="mon-empty">Loading…</div></div>
+  </div>
+</div>
+<div id="docs-modal" hidden>
+  <div id="docs-box">
+    <h2>📖 Connect an Agent <button class="rep-close" id="docs-close">✕</button></h2>
+    <div class="doc-step">
+      <div class="doc-num">1</div>
+      <div>
+        <b>Load a model</b>
+        <p>Pick a model from the dropdown and press <b>▶ Load</b>. The server must show <span class="pill on" style="padding:2px 8px; font-size:10px;"><i></i>Loaded</span> before any agent can connect.</p>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-num">2</div>
+      <div>
+        <b>Point your agent at the base URL</b>
+        <div class="doc-copy">
+          <code id="doc-base-url">http://localhost:8000/v1</code>
+          <button class="btn ghost doc-copy-btn" data-copy="doc-base-url">📋 Copy</button>
+        </div>
+        <p class="doc-note">OpenAI-compatible. Works with any client that accepts a custom base URL — Continue, Cline, LibreChat, Open WebUI, LangChain, the OpenAI SDKs, etc.</p>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-num">3</div>
+      <div>
+        <b>Use this exact Model ID</b>
+        <div class="doc-copy">
+          <code id="doc-model-id">—</code>
+          <button class="btn ghost doc-copy-btn" data-copy="doc-model-id">📋 Copy</button>
+        </div>
+        <p class="doc-note">This is the <b>currently loaded model's file path</b>. Most agents require it in the <code>model</code> field. No API key needed — put any placeholder like <code>none</code> if the client insists on one.</p>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-num">4</div>
+      <div>
+        <b>Example: OpenAI Python SDK</b>
+        <pre class="doc-code" id="doc-example">from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="none",
+)
+resp = client.chat.completions.create(
+    model="&lt;paste the Model ID from step 3&gt;",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(resp.choices[0].message.content)</pre>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-num">5</div>
+      <div>
+        <b>Verify it's working</b>
+        <p>Open <b>📡 Monitor</b> in this UI — you'll see your agent's calls appear in real time (endpoint, tokens, prompt/gen speed). All traffic is also recorded in 📊 Report.</p>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="modal-bg" hidden>
+  <div id="modal">
+    <h2>Clear everything?</h2>
+    <p>This will <b>unload the model</b> (frees VRAM on both Arc A770s) and <b>clear this chat</b>.<br><br>
+    Tip: re-loading the model restores full speed — a fresh process runs at maximum t/s even after hours of idle.</p>
+    <div class="row">
+      <button class="btn ghost" id="m-cancel">Cancel</button>
+      <button class="btn red" id="m-ok">Yes, clear it all</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/highlight.js"></script>
+<script src="/static/js/app.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.db
+usage.db
+projects.db
+node_modules/
+.venv/
+venv/
+scratch/

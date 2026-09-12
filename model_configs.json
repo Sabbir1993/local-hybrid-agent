@@ -1,0 +1,92 @@
+{
+  "qwen3.8-27b-q4_k_m.gguf": {
+    "context_size": 131072,
+    "n_gpu_layers": 999,
+    "threads": 10,
+    "threads_batch": 0,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "n_slots": 1,
+    "tensor_split": "11,9",
+    "split_mode": "layer",
+    "flash_attn": "auto",
+    "kv_cache_type": "q8_0",
+    "mtp_enabled": true,
+    "mtp_draft_n_max": 3,
+    "keepalive_interval_s": 25,
+    "gpu_devices": [
+      1,
+      2
+    ]
+  },
+  "qwen3.8-flash-next-ud-q2_k_xl.gguf": {
+    "context_size": 65536,
+    "flash_attn": "on",
+    "kv_cache_type": "f16",
+    "gpu_devices": [
+      1,
+      2
+    ],
+    "split_mode": "layer"
+  },
+  "qwen3.5-9b-uncensored-hauhaucs-aggressive-q4_k_m.gguf": {
+    "context_size": 131072,
+    "n_gpu_layers": 999,
+    "threads": 0,
+    "threads_batch": 0,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "n_slots": 1,
+    "tensor_split": "1,0",
+    "split_mode": "layer",
+    "flash_attn": "auto",
+    "kv_cache_type": "q8_0",
+    "mtp_enabled": true,
+    "mtp_draft_n_max": 3,
+    "keepalive_interval_s": 25,
+    "gpu_devices": [
+      1,
+      2
+    ]
+  },
+  "kwaipilot_kat-coder-v2.5-dev-q4_k_s.gguf": {
+    "context_size": 131072,
+    "n_gpu_layers": 999,
+    "threads": 12,
+    "threads_batch": 0,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "n_slots": 1,
+    "tensor_split": "9,11",
+    "split_mode": "layer",
+    "flash_attn": "auto",
+    "kv_cache_type": "q8_0",
+    "mtp_enabled": true,
+    "mtp_draft_n_max": 3,
+    "keepalive_interval_s": 25,
+    "gpu_devices": [
+      1,
+      2
+    ]
+  },
+  "spark-x2.5-4b-q4_k_m.gguf": {
+    "context_size": 231072,
+    "n_gpu_layers": 999,
+    "threads": 0,
+    "threads_batch": 0,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "n_slots": 1,
+    "tensor_split": "1,0",
+    "split_mode": "layer",
+    "flash_attn": "auto",
+    "kv_cache_type": "q8_0",
+    "mtp_enabled": true,
+    "mtp_draft_n_max": 3,
+    "keepalive_interval_s": 25,
+    "gpu_devices": [
+      1,
+      2
+    ]
+  }
+}
