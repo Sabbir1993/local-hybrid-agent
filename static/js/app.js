@@ -1307,6 +1307,34 @@ window.addEventListener('keydown', e => {
   });
 })();
 
+/* Plan mode: read-only agent exploration + proposed plan (no file writes) */
+let planMode = false;
+(function initPlanToggle() {
+  const t = $('plan-toggle');
+  if (!t) return;
+  t.checked = localStorage.getItem('agent_plan') === '1';
+  planMode = t.checked;
+  t.addEventListener('change', () => {
+    planMode = t.checked;
+    try { localStorage.setItem('agent_plan', t.checked ? '1' : '0'); } catch (e) {}
+    const banner = $('agent-banner');
+    if (banner && planMode) {
+      banner.style.background = 'rgba(99,102,241,0.12)';
+      banner.style.borderColor = 'rgba(99,102,241,0.45)';
+      toast('📋 Plan mode ON — agent will explore and propose a plan, no file writes');
+    } else if (banner) {
+      banner.style.background = '';
+      banner.style.borderColor = '';
+      toast('Plan mode OFF — agent can create/modify files');
+    }
+  });
+  // reflect initial state on the banner
+  if (planMode) {
+    const banner = $('agent-banner');
+    if (banner) { banner.style.background = 'rgba(99,102,241,0.12)'; banner.style.borderColor = 'rgba(99,102,241,0.45)'; }
+  }
+})();
+
 /* mode switcher: Chat vs Agent */
 let agentMode = false;
 
@@ -2161,6 +2189,7 @@ async function runAgentSSE(text) {
         body: JSON.stringify({
           messages: hist,
           mode: engineMode,
+          plan: planMode,
           temperature: parseFloat($('temp').value),
           max_tokens: parseInt($('maxtok').value) > 0 ? parseInt($('maxtok').value) : 4096,
         }),

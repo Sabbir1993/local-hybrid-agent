@@ -72,7 +72,7 @@
   "spark-x2.5-4b-q4_k_m.gguf": {
     "context_size": 231072,
     "n_gpu_layers": 999,
-    "threads": 0,
+    "threads": 12,
     "threads_batch": 0,
     "batch_size": 2048,
     "ubatch_size": 512,

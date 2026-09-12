@@ -610,9 +610,24 @@ class AgentRequest(BaseModel):
     max_tokens: int = 4096
     large_model: Optional[str] = None
     mode: Optional[str] = "main"
+    plan: bool = False
 
 
 AGENT_MAX_STEPS = 30
+
+# Tools allowed in plan mode: read/explore only — nothing that mutates disk
+PLAN_MODE_TOOLS = {"list_files", "read_file", "grep", "search_memory", "list_skills", "read_skill",
+                   "analyze_image", "web_fetch", "web_search"}
+
+PLAN_MODE_PROMPT = """
+
+PLAN MODE ACTIVE — READ-ONLY.
+You must NOT create, edit, write, or revert any files, and must not run code that
+changes anything. Your job is to investigate, then produce an implementation plan.
+1. Explore the workspace with read-only tools (list_files, read_file, grep, web_*) as needed.
+2. Then output a clear numbered plan: files to create/modify (exact paths), the change in each, and the execution order.
+3. End with: 'Say "proceed" (or switch off Plan mode) to execute this plan.'
+Never attempt file modifications in plan mode; mutating tools are unavailable."""
 
 
 async def _process_sse_stream(response, rid: Optional[int] = None):
@@ -813,6 +828,8 @@ async def agent_run(req: AgentRequest):
     for frag in (skills_prompt_fragment(), plugins_prompt_fragment()):
         if frag:
             sys_prompt += "\n" + frag
+    if req.plan:
+        sys_prompt += PLAN_MODE_PROMPT
     has_sys = False
     for m in msgs:
         if m.get("role") == "system":
@@ -899,7 +916,7 @@ async def agent_run(req: AgentRequest):
                 reasoning = ""
 
                 is_creation_or_code = any(w in last_query.lower() for w in ("make", "create", "generate", "write", "build", "code", "add", "fix", "html", "script", "page"))
-                if step == 0 and req.mode != "main" and not is_creation_or_code and needle_available() and not any(
+                if (not req.plan) and step == 0 and req.mode != "main" and not is_creation_or_code and needle_available() and not any(
                         m.get("role") in ("tool", "assistant") for m in msgs[1:]):
                     nr = await asyncio.get_event_loop().run_in_executor(
                         None, needle_route, last_query, all_tools())
@@ -943,8 +960,13 @@ async def agent_run(req: AgentRequest):
                 model_info = get_model_info(lane_name)
                 yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
 
-                # executor lane gets the lean core set; main lane sees everything
-                tools_for_lane = AGENT_CORE_TOOLS if lane_name == "executor" else all_tools()
+                # executor lane gets the lean core set; main lane sees everything;
+                # plan mode restricts to read-only exploration tools
+                if req.plan:
+                    tools_for_lane = [t for t in all_tools()
+                                     if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
+                else:
+                    tools_for_lane = AGENT_CORE_TOOLS if lane_name == "executor" else all_tools()
 
                 step_rid = monitor_begin(f"agent/{lane_name}", True, json.dumps({"messages": msgs}).encode())
                 res_dict = None
@@ -1003,10 +1025,13 @@ async def agent_run(req: AgentRequest):
                     model_info = get_model_info("main")
                     yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
                     esc_rid = monitor_begin("agent/main-escalated", True, json.dumps({"messages": msgs}).encode())
+                    esc_tools = ([t for t in all_tools()
+                                  if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
+                                 if req.plan else all_tools())
                     res_dict = None
                     streamed_content = []
                     try:
-                        async for ev, val in _llm_chat_stream(state.client, msgs, all_tools(), req.temperature, req.max_tokens, rid=esc_rid):
+                        async for ev, val in _llm_chat_stream(state.client, msgs, esc_tools, req.temperature, req.max_tokens, rid=esc_rid):
                             if ev == "thought_delta":
                                 yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
                             elif ev == "content_delta":
@@ -1075,6 +1100,14 @@ async def agent_run(req: AgentRequest):
 
                 for name, tc_id, args in parsed_actions:
                     yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': name, 'args': args})}\n\n"
+
+                    if req.plan and name not in PLAN_MODE_TOOLS:
+                        # plan mode: mutating tools are unavailable — hard block
+                        result = f"error: plan mode is active — '{name}' is read-only-restricted. Produce the plan instead."
+                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': name, 'ok': False, 'result': result})}\n\n"
+                        actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                        msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                        continue
 
                     approved, note = fast_sandbox_check(name, args)
                     yield f"event: verify\ndata: {json.dumps({'id': tc_id, 'name': name, 'approved': approved, 'note': note})}\n\n"

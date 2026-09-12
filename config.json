@@ -40,7 +40,9 @@
       "echo": {
         "transport": "stdio",
         "command": "python",
-        "args": ["core/echo_mcp_server.py"]
+        "args": [
+          "core/echo_mcp_server.py"
+        ]
       }
     },
     "plugins": true

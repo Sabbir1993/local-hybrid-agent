@@ -87,12 +87,18 @@
           <div id="agent-banner" style="display:none; font-size:10.5px; padding:6px 10px; margin-bottom:6px; border-radius:6px; background:rgba(245,158,11,0.12); color:var(--amber); border:1px solid rgba(245,158,11,0.3);">
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
               <span>🛠️ <b>Agent Task Mode Active:</b> Autonomous tool-use loop for file editing &amp; sandbox execution.</span>
-              <div style="display:flex; align-items:center; gap:6px;">
-                <span style="font-size:10px; opacity:0.85;">Engine:</span>
-                <select id="agent-engine" style="background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:5px; font-size:10.5px; padding:2px 6px; outline:none; cursor:pointer;" title="Choose agent orchestration engine">
-                  <option value="main" selected>🧠 Direct Main Model (Loaded GPU LLM - Fast &amp; Reliable)</option>
-                  <option value="tiered">⚡ Hybrid Orchestrator (MiniCPM + Auto-Escalate to Main)</option>
-                </select>
+              <div style="display:flex; align-items:center; gap:10px;">
+                <label style="display:flex; align-items:center; gap:5px; cursor:pointer; user-select:none;" title="Plan mode: agent explores read-only and proposes a plan instead of writing files. Turn off to execute.">
+                  <input type="checkbox" id="plan-toggle" style="accent-color:var(--amber); cursor:pointer;">
+                  <b>📋 Plan Mode</b>
+                </label>
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <span style="font-size:10px; opacity:0.85;">Engine:</span>
+                  <select id="agent-engine" style="background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:5px; font-size:10.5px; padding:2px 6px; outline:none; cursor:pointer;" title="Choose agent orchestration engine">
+                    <option value="main" selected>🧠 Direct Main Model (Loaded GPU LLM - Fast &amp; Reliable)</option>
+                    <option value="tiered">⚡ Hybrid Orchestrator (MiniCPM + Auto-Escalate to Main)</option>
+                  </select>
+                </div>
               </div>
             </div>
           </div>
@@ -167,30 +173,6 @@
     <button class="btn ghost" id="settings-close" style="width:auto; margin:0; padding:4px 10px;">✕</button>
   </div>
   <div class="drawer-body">
-    <section class="card" id="sec-theme">
-      <h3 title="Choose interface color theme">🎨 Color Theme</h3>
-      <div class="theme-grid">
-        <button type="button" class="btn theme-opt" data-t="slate" onclick="setTheme('slate')">
-          <span class="theme-swatch" style="background:#6366f1;"></span> Slate &amp; Indigo
-        </button>
-        <button type="button" class="btn theme-opt" data-t="claude" onclick="setTheme('claude')">
-          <span class="theme-swatch" style="background:#d97757;"></span> Claude Warm
-        </button>
-        <button type="button" class="btn theme-opt" data-t="tokyonight" onclick="setTheme('tokyonight')">
-          <span class="theme-swatch" style="background:#7aa2f7;"></span> Tokyo Night
-        </button>
-        <button type="button" class="btn theme-opt" data-t="oled" onclick="setTheme('oled')">
-          <span class="theme-swatch" style="background:#3b82f6; border: 1px solid #555;"></span> OLED Black
-        </button>
-        <button type="button" class="btn theme-opt" data-t="nord" onclick="setTheme('nord')">
-          <span class="theme-swatch" style="background:#88c0d0;"></span> Nord Arctic
-        </button>
-        <button type="button" class="btn theme-opt" data-t="classic" onclick="setTheme('classic')">
-          <span class="theme-swatch" style="background:#6c8cff;"></span> Classic Dark
-        </button>
-      </div>
-    </section>
-
     <section class="card">
       <h3 title="Dedicated VRAM usage & compute engine utilization for both Arc A770 GPUs">GPUs (2x Arc A770)</h3>
       <div id="gpu-list"><div class="dim" style="font-size:12px">querying…</div></div>
@@ -459,6 +441,44 @@ print(resp.choices[0].message.content)</pre>
       <div>
         <b>Verify it's working</b>
         <p>Open <b>📡 Monitor</b> in this UI — you'll see your agent's calls appear in real time (endpoint, tokens, prompt/gen speed). All traffic is also recorded in 📊 Report.</p>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-num">6</div>
+      <div>
+        <b>Extend the agent with capabilities</b>
+        <p class="doc-note">All capabilities are managed in <b>Settings → 🧩 Capabilities</b> (toggles persist to <code>config.json</code>). The agent gets the tools automatically after a restart.</p>
+
+        <p><b>🌐 Web browsing</b> — built in. The agent can <code>web_search</code> (DuckDuckGo, keyless) and <code>web_fetch</code> any URL. Optional: set <code>capabilities.web_search_api_key</code> in config.json if you hit search rate limits.</p>
+
+        <p><b>🎯 Skills</b> — create a folder with a SKILL.md:</p>
+        <pre class="doc-code">skills/my-skill/SKILL.md
+---
+name: my-skill
+description: One line shown to the agent.
+triggers: keyword1, keyword2
+---
+Full instructions the agent reads via read_skill.</pre>
+
+        <p><b>🔌 MCP servers</b> — add to <code>config.json</code>, restart:</p>
+        <pre class="doc-code">"capabilities": { "mcp_servers": {
+  "filesystem": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "E:\\AI\\workspace"]
+  },
+  "remote": { "transport": "http", "url": "http://127.0.0.1:9000/mcp" }
+}}</pre>
+        <p class="doc-note">Tools appear as <code>mcp__&lt;server&gt;__&lt;tool&gt;</code>. A working <code>echo</code> test server is preconfigured.</p>
+
+        <p><b>🧩 Plugins</b> — Python modules in <code>plugins/&lt;name&gt;/plugin.py</code>:</p>
+        <pre class="doc-code">def register(api):
+    api.add_system_prompt("Always do X.")
+    api.add_tool("my_tool", my_fn, "Description shown to the agent.",
+                 {"type": "object", "properties": {}})
+    api.on_event("after_tool", lambda name, args, result: None)</pre>
+
+        <p class="doc-note"><b>See everything registered:</b> Settings → 🧩 Capabilities shows every tool from every source with status and toggles — or open <code>http://localhost:8000/control/capabilities</code> in a browser for the full JSON listing (web tools, skills, MCP servers + their tools, plugins, total count).</p>
       </div>
     </div>
   </div>
