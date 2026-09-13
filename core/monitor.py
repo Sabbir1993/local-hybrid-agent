@@ -10,22 +10,26 @@ _monitor_state = {
 MONITOR_RECENT_MAX = 60
 
 
-def monitor_begin(endpoint: str, stream: bool, body_bytes: bytes) -> int:
+def monitor_begin(endpoint: str, stream: bool, body_bytes: bytes, model: Optional[str] = None) -> int:
     _monitor_state["seq"] += 1
     rid = _monitor_state["seq"]
     prompt_tok = None
     client = None
+    req_model = model
     try:
         d = json.loads(body_bytes)
         if isinstance(d, dict):
             n_msgs = len(d.get("messages", [])) or None
             prompt_tok = n_msgs
             client = d.get("client") or d.get("user")
+            if not req_model and d.get("model"):
+                req_model = d.get("model")
     except Exception:
         pass
     _monitor_state["active"][rid] = {
         "id": rid,
         "endpoint": endpoint,
+        "model": req_model,
         "stream": stream,
         "start": time.time(),
         "first_token_s": None,
@@ -63,7 +67,7 @@ def monitor_token(rid: int, n: int = 1) -> None:
         req["gen_tps"] = ema * 0.5 + gen_rate * 0.5
 
 
-def monitor_end(rid: int, status: int, prompt_tokens=None, completion_tokens=None, tps=None, duration=None, prompt_tps=None) -> None:
+def monitor_end(rid: int, status: int, prompt_tokens=None, completion_tokens=None, tps=None, duration=None, prompt_tps=None, model=None) -> None:
     req = _monitor_state["active"].pop(rid, None)
     if req is None:
         return
@@ -72,6 +76,7 @@ def monitor_end(rid: int, status: int, prompt_tokens=None, completion_tokens=Non
         "completion_tokens": completion_tokens or req.get("gen_tokens"),
         "tps": tps, "duration_s": duration or (time.time() - req["start"]),
         "prompt_tps": prompt_tps,
+        "model": model or req.get("model"),
         "end": time.time(),
     })
     _monitor_state["recent"].append(req)

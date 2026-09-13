@@ -11,7 +11,7 @@
   })();
 </script>
 <link rel="stylesheet" href="/static/css/style.css">
-
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
 <div id="app">
@@ -20,20 +20,12 @@
 
     <button id="btn-newchat" class="btn blue" style="padding:9px 12px; font-size:12px; font-weight:700; margin-bottom:2px;" title="Start a fresh chat">＋ New Chat</button>
 
-    <section id="projects-card" class="card" style="padding:10px; display:none;">
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+    <section id="projects-card" class="card" style="padding:10px 8px; display:none; max-height:220px; flex-direction:column;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding:0 4px;">
         <span style="font-size:9.5px; color:var(--dim); letter-spacing:1.8px; font-weight:700; text-transform:uppercase;">Projects</span>
-        <div style="display:flex; gap:4px; align-items:center;">
-          <button id="btn-delproject" class="btn ghost" style="width:auto; margin:0; padding:2px 6px; font-size:9.5px; color:var(--red); display:none;" title="Delete active project from agent (files on disk are NOT deleted)">🗑️ Remove</button>
-          <button id="btn-newproject" class="btn ghost" style="width:auto; margin:0; padding:2px 8px; font-size:10px;" title="Create project with optional custom local directory">＋ New</button>
-        </div>
+        <button id="btn-newproject" class="btn ghost" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;" title="Create project with optional custom local directory">＋ New</button>
       </div>
-      <div style="display:flex; gap:5px; align-items:center; margin-bottom:6px;">
-        <select id="project-sel" title="Active project — agent workspace & sessions are scoped to it" style="flex:1; min-width:0; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:11.5px; font-family:inherit; cursor:pointer;"></select>
-        <button id="btn-delproject-icon" class="btn ghost" style="width:auto; margin:0; padding:5px 7px; font-size:11px; color:var(--red); border:1px solid var(--border); border-radius:6px; display:none;" title="Delete active project from agent (files on disk are NOT deleted)">🗑️</button>
-      </div>
-      <div id="project-dir-badge" style="font-size:10px; color:var(--dim); word-break:break-all; line-height:1.35; padding:5px 7px; background:var(--bg); border-radius:6px; border:1px solid var(--border);" title="Project workspace root">
-        <span style="color:var(--accent);">📁</span> <span id="project-dir-path">Default sandbox</span>
+      <div id="projects-list" style="overflow-y:auto; display:flex; flex-direction:column; gap:3px; max-height:160px; padding-right:2px;">
       </div>
     </section>
 
@@ -66,7 +58,6 @@
       <button id="btn-monitor" class="btn ghost icon-btn" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">📡 Monitor</button>
       <button id="btn-report" class="btn ghost icon-btn" title="Token usage report: prompts vs completions, per-model and per-day totals">📊 Report</button>
       <button id="btn-docs" class="btn ghost icon-btn" title="Step-by-step guide: connect any OpenAI-compatible agent to this runtime">📖 Docs</button>
-      <button id="btn-chatclear" class="btn ghost" style="width:auto; margin:0; padding:7px 12px;" title="Clear conversation history without unloading model">🧹 Clear Chat</button>
     </header>
 
     <div id="chat"><div id="chat-inner">
@@ -84,30 +75,23 @@
     <footer>
       <div id="f-inner">
         <div class="composer">
-          <div id="agent-banner" style="display:none; font-size:10.5px; padding:6px 10px; margin-bottom:6px; border-radius:6px; background:rgba(245,158,11,0.12); color:var(--amber); border:1px solid rgba(245,158,11,0.3);">
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
-              <span>🛠️ <b>Agent Task Mode Active:</b> Autonomous tool-use loop for file editing &amp; sandbox execution.</span>
-              <div style="display:flex; align-items:center; gap:10px;">
-                <label style="display:flex; align-items:center; gap:5px; cursor:pointer; user-select:none;" title="Plan mode: agent explores read-only and proposes a plan instead of writing files. Turn off to execute.">
-                  <input type="checkbox" id="plan-toggle" style="accent-color:var(--amber); cursor:pointer;">
-                  <b>📋 Plan Mode</b>
-                </label>
-                <div style="display:flex; align-items:center; gap:6px;">
-                  <span style="font-size:10px; opacity:0.85;">Engine:</span>
-                  <select id="agent-engine" style="background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:5px; font-size:10.5px; padding:2px 6px; outline:none; cursor:pointer;" title="Choose agent orchestration engine">
-                    <option value="main" selected>🧠 Direct Main Model (Loaded GPU LLM - Fast &amp; Reliable)</option>
-                    <option value="tiered">⚡ Hybrid Orchestrator (MiniCPM + Auto-Escalate to Main)</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          </div>
           <div id="attach-preview-bar" class="attach-preview-bar"></div>
-          <textarea id="input" placeholder="Message the model…" title="Type your prompt here. Press Enter to send, Shift+Enter for newline"></textarea>
+          <div style="position:relative;">
+            <textarea id="input" placeholder="Message the model…" title="Type your prompt here. Press Enter to send, Shift+Enter for newline. @ = tag project files (agent mode). / = commands"></textarea>
+            <div id="cmd-menu" style="display:none;"></div>
+          </div>
           <div class="comp-actions">
             <button id="btn-attach" class="comp-tool" title="Attach text/code files — their content is appended to your prompt">📎</button>
             <input type="file" id="file-input" multiple accept=".txt,.md,.py,.js,.ts,.json,.c,.cpp,.h,.cs,.java,.rs,.go,.html,.css,.xml,.yml,.yaml,.toml,.ini,.cfg,.log,.csv,.sql,.sh,.ps1,.bat,.png,.jpg,.jpeg,.webp,.gif" style="display:none">
+            <select id="agent-plan-sel" style="display:none;" class="comp-select" title="Plan explores &amp; proposes changes; Build executes them">
+              <option value="build" selected>🔨 Build</option>
+              <option value="plan">📋 Plan</option>
+            </select>
             <span class="comp-hint" id="attach-info">Enter to send · Shift+Enter for newline</span>
+            <select id="agent-engine" style="display:none;" class="comp-select" title="Agent orchestration engine">
+              <option value="main" selected>🧠 Main LLM</option>
+              <option value="tiered">⚡ Orchestrator</option>
+            </select>
             <button id="btn-send" class="comp-btn" title="Send prompt (Enter)">➤</button>
             <button id="btn-abort" class="comp-btn" style="display:none" title="Cancel active generation">■</button>
           </div>
@@ -130,12 +114,7 @@
   </div>
   <div id="ws-tree-view">
     <div id="ws-root-path" class="mono" title="Workspace root directory on disk"></div>
-    <div id="ws-changes" style="display:none;">
-      <div class="ws-changes-head" id="ws-changes-toggle" title="Files the agent created or modified this session">
-        <span class="caret">▶</span> Session Changes <span id="ws-changes-count" class="mono"></span>
-      </div>
-      <div id="ws-changes-list"></div>
-    </div>
+
     <div id="ws-filter-bar">
       <input type="text" id="ws-filter" placeholder="Filter files…" title="Filter tree by name">
     </div>
@@ -173,12 +152,25 @@
     <button class="btn ghost" id="settings-close" style="width:auto; margin:0; padding:4px 10px;">✕</button>
   </div>
   <div class="drawer-body">
-    <section class="card">
-      <h3 title="Dedicated VRAM usage & compute engine utilization for both Arc A770 GPUs">GPUs (2x Arc A770)</h3>
-      <div id="gpu-list"><div class="dim" style="font-size:12px">querying…</div></div>
-    </section>
+    <details class="card fold" id="sec-theme">
+      <summary title="Select color palette and interface theme">🎨 Appearance &amp; Themes</summary>
+      <div class="theme-grid">
+        <button type="button" class="theme-opt" data-t="slate" onclick="setTheme('slate')"><span class="theme-swatch" style="background:#79c0ff"></span> Slate &amp; Indigo</button>
+        <button type="button" class="theme-opt" data-t="claude" onclick="setTheme('claude')"><span class="theme-swatch" style="background:#d97757"></span> Claude Warm</button>
+        <button type="button" class="theme-opt" data-t="tokyonight" onclick="setTheme('tokyonight')"><span class="theme-swatch" style="background:#7aa2f7"></span> Tokyo Night</button>
+        <button type="button" class="theme-opt" data-t="nord" onclick="setTheme('nord')"><span class="theme-swatch" style="background:#88c0d0"></span> Nord Arctic</button>
+        <button type="button" class="theme-opt" data-t="classic" onclick="setTheme('classic')"><span class="theme-swatch" style="background:#6c8cff"></span> Classic Dark</button>
+        <button type="button" class="theme-opt" data-t="oled" onclick="setTheme('oled')"><span class="theme-swatch" style="background:#3b82f6"></span> OLED Black</button>
+        <button type="button" class="theme-opt" data-t="light" onclick="setTheme('light')" style="grid-column: span 2;"><span class="theme-swatch" style="background:#2563eb; border:1px solid #94a3b8;"></span> ☀️ Pure Light (Modern Crisp)</button>
+      </div>
+    </details>
 
-    <details class="card fold" id="sec-cfg" open>
+    <details class="card fold" id="sec-gpus">
+      <summary title="Dedicated VRAM usage & compute engine utilization for both Arc A770 GPUs">GPUs (2x Arc A770)</summary>
+      <div id="gpu-list"><div class="dim" style="font-size:12px">querying…</div></div>
+    </details>
+
+    <details class="card fold" id="sec-cfg">
       <summary title="Adjust llama-server launch parameters and persist them to profile JSON">Model Config · Restart to Apply</summary>
       <div class="cfg-grid">
         <div class="cfg-item" title="Context size in tokens (n_ctx). Maximum prompt + completion memory allocated in VRAM">
@@ -248,7 +240,8 @@
       <button id="btn-apply" class="btn accent" style="margin-top:6px" title="Save configuration for this model. If the model is loaded, you will be asked to unload & reload to apply.">💾 Save Config</button>
     </details>
 
-    <details class="card fold" id="sec-chat" open>      <summary title="Configure system prompt and sampling hyperparameters">Chat &amp; Sampling</summary>
+    <details class="card fold" id="sec-chat">
+      <summary title="Configure system prompt and sampling hyperparameters">Chat &amp; Sampling</summary>
       <label for="sysprompt" title="System prompt instructions given to the LLM">System prompt <span class="info" title="Global instructions guiding model behavior and tone">ⓘ</span></label>
       <textarea id="sysprompt" rows="3" placeholder="You are a helpful assistant." title="System prompt text"></textarea>
 
@@ -480,6 +473,20 @@ Full instructions the agent reads via read_skill.</pre>
 
         <p class="doc-note"><b>See everything registered:</b> Settings → 🧩 Capabilities shows every tool from every source with status and toggles — or open <code>http://localhost:8000/control/capabilities</code> in a browser for the full JSON listing (web tools, skills, MCP servers + their tools, plugins, total count).</p>
       </div>
+    </div>
+  </div>
+</div>
+<div id="perm-modal" hidden>
+  <div id="perm-box">
+    <h2>🔑 Shell Execution Permission <button class="rep-close" id="perm-close-x">✕</button></h2>
+    <p class="dim" style="margin:8px 0 4px; font-size:11px;">The agent wants to run a shell command:</p>
+    <pre id="perm-cmd" class="mono" style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:12px; white-space:pre-wrap; word-break:break-all; margin:0 0 6px;"></pre>
+    <p class="dim" id="perm-note" style="font-size:10.5px; margin:0 0 12px;"></p>
+    <div style="display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; align-items:center;">
+      <button class="btn ghost" id="perm-deny" style="width:auto; margin:0; padding:7px 14px;">✕ Deny</button>
+      <button class="btn accent" id="perm-allow" style="width:auto; margin:0; padding:7px 15px; font-weight:600;">▶ Just once</button>
+      <button class="btn ghost" id="perm-project" style="width:auto; margin:0; padding:7px 14px; color:var(--amber); border-color:var(--amber);">📁 For this project</button>
+      <button class="btn ghost" id="perm-always" style="width:auto; margin:0; padding:7px 14px; color:var(--green); border-color:var(--green);">✓ Always (globally)</button>
     </div>
   </div>
 </div>

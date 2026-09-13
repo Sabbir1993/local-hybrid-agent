@@ -58,10 +58,14 @@ def parse_skill_md(path: Path) -> Optional[dict]:
 
 
 def load_skills() -> dict:
-    """All discovered skills: {dir_name: skill_dict}."""
+    """All discovered skills: {dir_name: skill_dict}.
+    Stored globally for the entire application in the runtime skills/ directory.
+    """
     out = {}
     if not SKILLS_DIR.is_dir():
+        SKILLS_DIR.mkdir(parents=True, exist_ok=True)
         return out
+
     for d in sorted(SKILLS_DIR.iterdir()):
         if not d.is_dir():
             continue
@@ -81,7 +85,8 @@ def skills_prompt_fragment() -> str:
         return ""
     lines = [
         "",
-        "Available Skills (use read_skill to load full instructions before following one):",
+        "Available Skills:",
+        "When the user's request starts with or mentions a skill name, slash command, or trigger (e.g. /grill-me, grill-me, grill, /<skill-name>), you MUST call read_skill(<name>) on your FIRST step to load and strictly follow that skill's instructions.",
     ]
     for sk in skills.values():
         lines.append(f"- {sk['name']}: {sk['description']}")

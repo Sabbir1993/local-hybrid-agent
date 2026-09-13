@@ -58,6 +58,8 @@ from core.db import (
     db_delete_session,
     db_load_messages,
     db_append_message,
+    db_get_project_allow_patterns,
+    db_add_project_allow_pattern,
 )
 from core.gpu import get_gpu_stats
 from core.profiles import (
@@ -101,6 +103,8 @@ from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch
 from core.skills import register_skill_tools, load_skills, skills_prompt_fragment
 from core.plugins import load_plugins, plugins_prompt_fragment, plugins_status, fire_hook
 from core.mcp import connect_all_mcp, mcp_status, stop_all_mcp
+from core.shell_tools import (register_shell_tools, add_allow_pattern,
+                              shell_cfg, permission_callback)
 from core.agent_loop import (
     run_tool,
     AGENT_SYSTEM_PROMPT,
@@ -152,6 +156,7 @@ async def lifespan(app: FastAPI):
     bootstrap_builtin_tools()
     register_web_tools()
     register_skill_tools()
+    register_shell_tools()
     load_plugins()
     await asyncio.get_event_loop().run_in_executor(None, kill_orphan_llama_servers)
     mcp_startup = asyncio.create_task(connect_all_mcp())
@@ -579,7 +584,7 @@ async def monitor():
     active.sort(key=lambda x: -x["id"])
     recent = []
     for r in _monitor_state["recent"]:
-        info = {k: r.get(k) for k in ("id", "endpoint", "stream", "status",
+        info = {k: r.get(k) for k in ("id", "endpoint", "model", "stream", "status",
                                        "prompt_tokens", "completion_tokens",
                                        "tps", "duration_s", "prompt_tps", "gen_tps")}
         info["ago_s"] = round(now - r["end"], 1)
@@ -614,6 +619,48 @@ class AgentRequest(BaseModel):
 
 
 AGENT_MAX_STEPS = 30
+
+# ---------------- shell permission flow ----------------
+# pending shell permission requests: req_id -> {cmd, event, result}
+_perm_pending: dict[str, dict] = {}
+
+
+class PermissionAnswerReq(BaseModel):
+    req_id: str
+    decision: str            # allow | project | always | deny
+    pattern: Optional[str] = None
+    project_id: Optional[Union[int, str]] = None
+
+
+@app.post("/agent/permission")
+async def agent_permission_answer(req: PermissionAnswerReq):
+    """UI answers a permission_request emitted on the agent SSE stream."""
+    rec = _perm_pending.get(req.req_id)
+    if rec is None:
+        return JSONResponse({"error": "unknown or expired permission request"}, status_code=404)
+    if req.decision == "always" and req.pattern:
+        add_allow_pattern(req.pattern)
+    elif req.decision == "project" and req.pattern:
+        # Save to project-specific allowed patterns
+        target_proj = req.project_id or get_active_project()
+        if target_proj:
+            db_add_project_allow_pattern(target_proj, req.pattern)
+    rec["result"] = {"allow": req.decision != "deny",
+                     "note": f"pattern allowed for {req.decision}" if req.decision in ("always", "project") else ""}
+    rec["event"].set()
+    return {"ok": True, "decision": req.decision}
+
+
+async def _await_permission(req_id: str, ev: asyncio.Event):
+    """Wait for the UI's answer to a shell permission request (180s cap)."""
+    try:
+        await asyncio.wait_for(ev.wait(), timeout=180)
+    except asyncio.TimeoutError:
+        _perm_pending.pop(req_id, None)
+        return False, "permission request timed out (180s)"
+    rec = _perm_pending.pop(req_id, None) or {}
+    res = rec.get("result") or {"allow": False, "note": "no answer"}
+    return res.get("allow", False), res.get("note", "")
 
 # Tools allowed in plan mode: read/explore only — nothing that mutates disk
 PLAN_MODE_TOOLS = {"list_files", "read_file", "grep", "search_memory", "list_skills", "read_skill",
@@ -805,6 +852,7 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
 
 @app.post("/agent/run")
 async def agent_run(req: AgentRequest):
+    # route through the registry so web/skills/mcp/plugin/shell tools are visible
     ex_inst = small_models.instances["executor"]
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
     if not main_ready and req.mode == "main":
@@ -888,7 +936,7 @@ async def agent_run(req: AgentRequest):
             if not main_ready and ex_inst.available:
                 await ex_inst.ensure_loaded()
                 active_client = ex_inst.client
-            chat_rid = monitor_begin("agent/direct", True, json.dumps({"messages": msgs}).encode())
+            chat_rid = monitor_begin("agent/direct", True, json.dumps({"messages": msgs}).encode(), model=model_info.get("model"))
             try:
                 async for ev, val in _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens, rid=chat_rid):
                     if ev == "thought_delta":
@@ -966,9 +1014,15 @@ async def agent_run(req: AgentRequest):
                     tools_for_lane = [t for t in all_tools()
                                      if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
                 else:
-                    tools_for_lane = AGENT_CORE_TOOLS if lane_name == "executor" else all_tools()
+                    if lane_name == "executor":
+                        # core tools plus shell and skills so executor can install packages/run commands
+                        tools_for_lane = [t for t in all_tools()
+                                         if t.get("function", {}).get("name") in
+                                         ("write_file", "read_file", "edit_file", "list_files", "run_python", "run_shell", "read_skill", "list_skills")]
+                    else:
+                        tools_for_lane = all_tools()
 
-                step_rid = monitor_begin(f"agent/{lane_name}", True, json.dumps({"messages": msgs}).encode())
+                step_rid = monitor_begin(f"agent/{lane_name}", True, json.dumps({"messages": msgs}).encode(), model=model_info.get("model"))
                 res_dict = None
                 streamed_content = []
                 try:
@@ -985,28 +1039,25 @@ async def agent_run(req: AgentRequest):
                     toks = req_mon.get("gen_tokens") if req_mon else len(streamed_content)
                     dt = (time.time() - req_mon["start"]) if req_mon else None
                     tps = (toks / dt) if (toks and dt and dt > 0) else None
-                    monitor_end(step_rid, 200, completion_tokens=toks, tps=tps, duration=dt)
+                    monitor_end(step_rid, 200, completion_tokens=toks, tps=tps, duration=dt, model=model_info.get("model"))
 
                 content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                 reasoning = res_dict.get("reasoning", "") if res_dict else ""
                 tool_calls = res_dict.get("tool_calls", []) if res_dict else []
 
                 if not tool_calls:
-                    text_to_check = content or reasoning
-                    parsed_tc = _extract_text_tool_calls(text_to_check)
-                    if parsed_tc:
-                        tool_calls = parsed_tc
+                    final_content = content
+                    final_reasoning = reasoning
 
-                is_loop, _ = is_degeneration_or_loop(content + "\n" + reasoning)
-                creation_keywords = ("make", "create", "generate", "write", "build", "code", "landing page", "html", "script")
-                action_keywords = ("read", "list", "check", "show", "inspect", "view", "find", "search", "run", "execute", "directory", "folder", "file", "files")
-                wants_creation = any(w in last_query.lower() for w in creation_keywords)
-                wants_action = any(w in last_query.lower() for w in action_keywords)
-                refusal_phrases = ("please specify the exact file", "please provide the code", "provide the content", "i cannot create", "what content would you like", "to read the directory", "in python, you can", "here is how you can")
-                refused = any(rp in content.lower() for rp in refusal_phrases)
-
-                tutorial_code_emitted = bool(not tool_calls and "```python" in content and any(kw in last_query.lower() for kw in ("read", "list", "check", "directory", "folder", "workspace", "file")))
-
+                # Auto-escalation heuristics:
+                # If the executor lane degraded into an infinite repeat loop, refused,
+                # or outputted markdown tutorial code instead of executing tool calls on step 0,
+                # escalate to the powerful main model immediately.
+                is_loop = is_degeneration_or_loop(content)
+                refused = any(w in content.lower() for w in ("i cannot", "i can't", "i am unable", "as an ai", "i don't have access"))
+                tutorial_code_emitted = ("```" in content and not tool_calls)
+                wants_action = any(w in last_query.lower() for w in ("run", "install", "test", "check", "exec", "open", "read", "view", "find", "grep"))
+                wants_creation = any(w in last_query.lower() for w in ("make", "create", "generate", "write", "build", "code", "add", "fix", "html", "script", "page"))
                 should_escalate = (
                     lane_name == "executor"
                     and main_ready
@@ -1024,7 +1075,7 @@ async def agent_run(req: AgentRequest):
                     lane_name = "main"
                     model_info = get_model_info("main")
                     yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
-                    esc_rid = monitor_begin("agent/main-escalated", True, json.dumps({"messages": msgs}).encode())
+                    esc_rid = monitor_begin("agent/main-escalated", True, json.dumps({"messages": msgs}).encode(), model=model_info.get("model"))
                     esc_tools = ([t for t in all_tools()
                                   if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
                                  if req.plan else all_tools())
@@ -1044,7 +1095,7 @@ async def agent_run(req: AgentRequest):
                         toks = req_mon.get("gen_tokens") if req_mon else len(streamed_content)
                         dt = (time.time() - req_mon["start"]) if req_mon else None
                         tps = (toks / dt) if (toks and dt and dt > 0) else None
-                        monitor_end(esc_rid, 200, completion_tokens=toks, tps=tps, duration=dt)
+                        monitor_end(esc_rid, 200, completion_tokens=toks, tps=tps, duration=dt, model=model_info.get("model"))
                     content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                     reasoning = res_dict.get("reasoning", "") if res_dict else ""
                     tool_calls = res_dict.get("tool_calls", []) if res_dict else []
@@ -1117,6 +1168,35 @@ async def agent_run(req: AgentRequest):
                         actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                         continue
+
+                    # shell commands: ask permission here (not inside the tool)
+                    # so the SSE stream can emit the modal event while we wait
+                    if name == "run_shell" and "command" in str(args or {}):
+                        cmd = str(args.get("command") or args.get("cmd") or "")
+                        cfg = shell_cfg()
+                        import fnmatch as _fn
+                        pats = [str(p).strip().lower() for p in (cfg.get("allow_patterns") or [])]
+                        # check active project patterns as well
+                        cur_proj = get_active_project()
+                        if cur_proj:
+                            proj_pats = [str(p).strip().lower() for p in db_get_project_allow_patterns(cur_proj)]
+                            pats.extend(proj_pats)
+                        if cfg.get("ask_first", True) and not any(
+                                _fn.fnmatch(cmd.strip().lower(), p) for p in pats):
+                            import uuid as _uuid
+                            preq_id = _uuid.uuid4().hex[:12]
+                            ev = asyncio.Event()
+                            _perm_pending[preq_id] = {"cmd": cmd, "event": ev, "result": None}
+                            yield f"event: permission_request\ndata: {json.dumps({'req_id': preq_id, 'cmd': cmd})}\n\n"
+                            allowed, pnote = await _await_permission(preq_id, ev)
+                            if not allowed:
+                                result = f"error: user denied shell command: {cmd}" + (f" ({pnote})" if pnote else "")
+                                yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': name, 'ok': False, 'result': result})}\n\n"
+                                actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                                msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                                continue
+                        # approved via pattern or modal: tool skips its own gate
+                        args = {**args, "_pre_approved": True}
 
                     result = await run_tool(name, args)
                     await fire_hook("after_tool", name, args, result)
@@ -1318,10 +1398,17 @@ class CapToggleReq(BaseModel):
     enabled: bool
 
 
+class ShellSettingsReq(BaseModel):
+    ask_first: Optional[bool] = None
+    allow_patterns: Optional[list] = None
+    timeout_s: Optional[int] = None
+
+
 @app.get("/control/capabilities")
 async def capabilities_status():
     caps = APP_CONFIG.get("capabilities", {})
     skills = load_skills() if caps.get("skills") else {}
+    sh = shell_cfg()
     return {
         "web": {
             "enabled": bool(caps.get("web")),
@@ -1340,8 +1427,39 @@ async def capabilities_status():
             "enabled": bool(caps.get("plugins")),
             "items": plugins_status(),
         },
+        "shell": {
+            "enabled": bool(sh.get("enabled")),
+            "ask_first": bool(sh.get("ask_first", True)),
+            "timeout_s": sh.get("timeout_s", 60),
+            "allow_patterns": sh.get("allow_patterns", []),
+        },
         "total_tools": len(registry.schemas()),
     }
+
+
+@app.post("/control/shell_settings")
+async def shell_settings(req: ShellSettingsReq):
+    """Edit shell permission settings; persists to config.json."""
+    import json as _json
+    cfg_path = BASE_DIR / "config.json"
+    try:
+        cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return JSONResponse({"error": f"config.json unreadable: {e}"}, status_code=500)
+    shell = cfg.setdefault("capabilities", {}).setdefault("shell", {})
+    if req.ask_first is not None:
+        shell["ask_first"] = bool(req.ask_first)
+    if req.allow_patterns is not None:
+        shell["allow_patterns"] = [str(p).strip() for p in req.allow_patterns if str(p).strip()]
+    if req.timeout_s is not None:
+        shell["timeout_s"] = max(5, min(600, int(req.timeout_s)))
+    try:
+        cfg_path.write_text(_json.dumps(cfg, indent=2), encoding="utf-8")
+    except Exception as e:
+        return JSONResponse({"error": f"config.json write failed: {e}"}, status_code=500)
+    # live update
+    APP_CONFIG["capabilities"]["shell"] = shell
+    return {"ok": True, "shell": shell}
 
 
 @app.post("/control/capabilities")
@@ -1359,7 +1477,15 @@ async def capabilities_toggle(req: CapToggleReq):
     except Exception as e:
         return JSONResponse({"error": f"config.json write failed: {e}"}, status_code=500)
     # apply live
-    APP_CONFIG.setdefault("capabilities", {})[req.section] = req.enabled
+    caps_live = APP_CONFIG.setdefault("capabilities", {})
+    if req.section == "shell":
+        caps_live.setdefault("shell", {})["enabled"] = req.enabled
+        if req.enabled:
+            register_shell_tools()
+        else:
+            registry.set_source_enabled("shell", False)
+        return {"ok": True, "section": req.section, "enabled": req.enabled}
+    caps_live[req.section] = req.enabled
     registry.set_source_enabled(req.section, req.enabled)
     if req.section == "web" and req.enabled:
         register_web_tools()
@@ -1681,8 +1807,9 @@ async def proxy(path: str, request: Request):
     t0 = time.time()
     state.last_activity = time.time()
     is_streaming = b'"stream":true' in body or b'"stream": true' in body
-    rid = monitor_begin(path, is_streaming, body)
     model_name = state.profile.get("model_path") if state.profile else None
+    clean_model_name = Path(model_name).name.replace(".gguf", "") if model_name else None
+    rid = monitor_begin(path, is_streaming, body, model=clean_model_name)
 
     async def do_request():
         return await state.client.request(

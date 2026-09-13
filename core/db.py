@@ -113,10 +113,12 @@ def _init_projects_db() -> sqlite3.Connection:
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
     """)
-    # migration: older DBs lack the workspace_dir column
+    # migration: older DBs lack the workspace_dir column or allow_patterns
     cols = [r[1] for r in conn.execute("PRAGMA table_info(projects)")]
     if "workspace_dir" not in cols:
         conn.execute("ALTER TABLE projects ADD COLUMN workspace_dir TEXT")
+    if "allow_patterns" not in cols:
+        conn.execute("ALTER TABLE projects ADD COLUMN allow_patterns TEXT DEFAULT '[]'")
     conn.commit()
     return conn
 
@@ -125,12 +127,54 @@ _projects_db = _init_projects_db()
 
 
 def _proj_row(r) -> dict:
+    import json as _json
+    pats = []
+    try:
+        if "allow_patterns" in r.keys() and r["allow_patterns"]:
+            pats = _json.loads(r["allow_patterns"])
+    except Exception:
+        pats = []
     return {"id": r["id"], "name": r["name"], "created_at": r["created_at"],
-            "workspace_dir": r["workspace_dir"]}
+            "workspace_dir": r["workspace_dir"], "allow_patterns": pats}
 
 
 def db_list_projects() -> list:
     return [_proj_row(r) for r in _projects_db.execute("SELECT * FROM projects ORDER BY name")]
+
+
+def db_get_project_allow_patterns(name_or_id) -> list:
+    """Return list of allowed command patterns for a specific project."""
+    import json as _json
+    if not name_or_id:
+        return []
+    try:
+        if isinstance(name_or_id, int) or (isinstance(name_or_id, str) and name_or_id.isdigit()):
+            row = _projects_db.execute("SELECT allow_patterns FROM projects WHERE id = ?", (int(name_or_id),)).fetchone()
+        else:
+            row = _projects_db.execute("SELECT allow_patterns FROM projects WHERE name = ?", (str(name_or_id),)).fetchone()
+        if row and row["allow_patterns"]:
+            return _json.loads(row["allow_patterns"]) or []
+    except Exception:
+        pass
+    return []
+
+
+def db_add_project_allow_pattern(name_or_id, pattern: str) -> list:
+    """Add a command pattern to a project's allowed patterns list."""
+    import json as _json
+    pattern = pattern.strip()
+    if not pattern or not name_or_id:
+        return []
+    pats = db_get_project_allow_patterns(name_or_id)
+    if pattern not in pats:
+        pats.append(pattern)
+        val = _json.dumps(pats)
+        if isinstance(name_or_id, int) or (isinstance(name_or_id, str) and name_or_id.isdigit()):
+            _projects_db.execute("UPDATE projects SET allow_patterns = ? WHERE id = ?", (val, int(name_or_id)))
+        else:
+            _projects_db.execute("UPDATE projects SET allow_patterns = ? WHERE name = ?", (val, str(name_or_id)))
+        _projects_db.commit()
+    return pats
 
 
 def db_create_project(name: str, workspace_dir: str = None, workspace_root: Path = None) -> dict:

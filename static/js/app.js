@@ -10,10 +10,12 @@ let messages = [];       // {role, content, reasoning, tps?, ntok?, secs?}
 let generating = false;
 let ctrl = null;
 let curStatus = null;
+let agentMode = false;
+let planMode = false;
 
 /* ---------------- theme management ---------------- */
 const THEME_KEY = 'a770_theme';
-const THEMES = ['slate', 'claude', 'tokyonight', 'oled', 'nord', 'classic'];
+const THEMES = ['slate', 'claude', 'tokyonight', 'oled', 'nord', 'classic', 'light'];
 const THEME_NAMES = {
   slate: 'Slate & Indigo',
   claude: 'Claude Warm',
@@ -21,6 +23,7 @@ const THEME_NAMES = {
   oled: 'OLED Black',
   nord: 'Nord Arctic',
   classic: 'Classic Dark',
+  light: 'Pure Light ☀️',
 };
 
 function getSavedTheme() {
@@ -50,6 +53,10 @@ function cycleTheme() {
 window.setTheme = setTheme;
 window.cycleTheme = cycleTheme;
 applyTheme(getSavedTheme());
+
+if ($('btn-theme')) {
+  $('btn-theme').onclick = cycleTheme;
+}
 
 /* ---------------- helpers ---------------- */
 function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -227,17 +234,215 @@ function bubbleHtml(m, idx) {
     return `<div class="msg user"><div class="bubble">${imgs}${md(displayText || '(attachment)')}${filesTag}</div></div>`;
   }
   let inner = '';
+  
+  // Render collapsible Antigravity agent action items & tool calls (if present in message)
+  if (m.acts && m.acts.length) {
+    inner += agentActsHtml(m.acts);
+  }
+
   if (m.reasoning) {
     inner += `<details class="think"><summary>💭 Thinking</summary><div>${esc(m.reasoning).replace(/\n/g, '<br>')}</div></details>`;
   }
   const isLast = idx === messages.length - 1;
   const hasText = !!(m.content && m.content.trim());
-  const body = hasText ? md(m.content) : (generating && isLast ? '<span class="cursor">▍</span>' : '');
+  let body = hasText ? md(m.content) : (generating && isLast ? '<span class="cursor">▍</span>' : '');
+  
+  // Render interactive grill-me / ask_question choice cards if options or question frontiers are present
+  if (hasText && !generating) {
+    const qCards = renderInteractiveQuestions(m.content, idx);
+    if (qCards) {
+      body += qCards;
+    }
+  }
+
   if (body) {
     inner += `<div class="bubble">${body}${generating && isLast && hasText ? '<span class="cursor">▍</span>' : ''}</div>`;
   }
   if (m.tps) inner += `<div class="meta">${m.ntok} tok · ${m.tps.toFixed(1)} t/s · ${m.secs.toFixed(1)}s</div>`;
   return `<div class="msg bot">${inner}</div>`;
+}
+
+// Global state for multi-select question answers: { [msgIdx]: { [qId]: Set(options) } }
+window._grillSelected = window._grillSelected || {};
+
+function toggleGrillOption(idx, qId, val, isMulti) {
+  window._grillSelected[idx] = window._grillSelected[idx] || {};
+  if (!isMulti) {
+    window._grillSelected[idx][qId] = new Set([val]);
+  } else {
+    window._grillSelected[idx][qId] = window._grillSelected[idx][qId] || new Set();
+    if (window._grillSelected[idx][qId].has(val)) {
+      window._grillSelected[idx][qId].delete(val);
+    } else {
+      window._grillSelected[idx][qId].add(val);
+    }
+  }
+  // Update DOM classes for selected pills
+  const container = $(`grill-q-${idx}-${qId}`);
+  if (container) {
+    container.querySelectorAll('.grill-pill').forEach(pill => {
+      const pVal = pill.getAttribute('data-val');
+      const isSel = window._grillSelected[idx][qId].has(pVal);
+      pill.classList.toggle('active', isSel);
+    });
+  }
+}
+
+// Track submitted question cards so previous rounds show submitted status and do not get re-submitted
+window._grillSubmitted = window._grillSubmitted || new Set();
+
+function submitGrillAnswers(idx) {
+  if (window._grillSubmitted.has(idx)) return;
+  const qState = window._grillSelected[idx] || {};
+  const lines = [];
+  
+  // Collect from pills
+  for (const [qId, setVals] of Object.entries(qState)) {
+    const chosen = Array.from(setVals);
+    const customInp = $(`grill-custom-${idx}-${qId}`);
+    if (customInp && customInp.value.trim()) {
+      chosen.push(customInp.value.trim());
+    }
+    if (chosen.length > 0) {
+      lines.push(`${qId}: ${chosen.join(', ')}`);
+    }
+  }
+  
+  // Check any standalone inputs where no pill was clicked
+  const card = $(`grill-card-${idx}`);
+  if (card) {
+    card.querySelectorAll('.grill-custom-input').forEach(inp => {
+      const qId = inp.getAttribute('data-qid');
+      if (!qState[qId] || qState[qId].size === 0) {
+        if (inp.value.trim()) {
+          lines.push(`${qId}: ${inp.value.trim()}`);
+        }
+      }
+    });
+  }
+
+  if (lines.length === 0) {
+    toast('Please select an option or write an answer first', true);
+    return;
+  }
+
+  // Mark as submitted
+  window._grillSubmitted.add(idx);
+  const btn = card ? card.querySelector('.grill-submit-btn') : null;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '✓ Answer Submitted';
+  }
+  
+  const text = lines.join('\n');
+  if (agentMode) {
+    runAgentSSE(text);
+  } else {
+    send(text);
+  }
+}
+
+function renderInteractiveQuestions(rawText, idx) {
+  // Check if text matches grill-me format or question frontiers
+  // Look for ❓, Q1/Q2, Question 1, or ➡️ / recommended markers
+  const hasTrigger = rawText.includes('❓') || 
+                     /\b(?:Q[0-9]+|Question\s+[0-9]+)\b/i.test(rawText) ||
+                     rawText.includes('➡️') ||
+                     /(?:^|\n)\s*(?:[-*•]|\([a-zA-Z0-9]+\)|[0-9]+\))\s*\[[ x]\]/i.test(rawText);
+  if (!hasTrigger) return '';
+
+  // Split into question chunks: match starting with ❓, Q1:, Question 1:, etc.
+  const blocks = rawText.split(/(?:^|\n)(?=(?:❓|#{1,4}\s*Q[0-9]+|#{1,4}\s*Question\s+[0-9]+|\bQ[0-9]+|\bQuestion\s+[0-9]+|\*\*[0-9]+\.\*\*)[.:\s-])/gi).filter(b => b.trim());
+  const parsedQuestions = [];
+
+  for (const block of blocks) {
+    // Match Q identifier and title
+    const qMatch = block.match(/(?:❓\s*)?(?:#{1,4}\s*)?(?:[*_]{0,2})(Q[0-9]+|Question\s+[0-9]+|\b[0-9]+)[*_]{0,2}\s*[-–:.)]\s*([^\n]+)/i);
+    if (!qMatch) continue;
+    let rawQId = qMatch[1].trim();
+    if (!rawQId.toLowerCase().startsWith('q')) {
+      const numOnly = rawQId.replace(/\D/g, '');
+      rawQId = numOnly ? `Q${numOnly}` : rawQId;
+    } else {
+      rawQId = rawQId.replace(/Question\s*/i, 'Q').toUpperCase();
+    }
+    const qId = rawQId;
+    const qTitle = qMatch[2].replace(/[*_#]/g, '').trim();
+
+    // Look for recommended answer (➡️ ... or Recommendation: ... or (Recommended: ...))
+    let recommendation = '';
+    const recMatch = block.match(/(?:➡️|Recommendation:?|Recommended:?)\s*([^\n]+)/i);
+    if (recMatch) {
+      recommendation = recMatch[1].replace(/[*_]/g, '').trim();
+    }
+
+    // Look for options like: - [ ] Option or - Option A or (A) Option or A) Option
+    const options = [];
+    const lines = block.split('\n');
+    for (const line of lines) {
+      const optMatch = line.match(/^\s*(?:[-*•]|\([a-zA-Z0-9]+\)|[a-zA-Z0-9]+[.)])\s*(?:\[[ x]\]\s*)?([^\n]+)/);
+      if (optMatch) {
+        let optText = optMatch[1].replace(/[*_]/g, '').trim();
+        if (!optText.startsWith('❓') && !optText.startsWith('➡️') && !optText.toLowerCase().startsWith('recommend') && optText.length > 1 && optText.length < 150) {
+          if (/^(?:\(Recommended\)|\(Rec\)|\bRecommended:?\b)/i.test(optText)) {
+            optText = optText.replace(/^(?:\(Recommended\)|\(Rec\)|\bRecommended:?\b)/i, '').trim();
+            if (!recommendation) recommendation = optText;
+          }
+          if (optText && !options.includes(optText)) {
+            options.push(optText);
+          }
+        }
+      }
+    }
+
+    if (recommendation) {
+      const cleanRec = recommendation.replace(/^(?:\(Recommended\)|\(Rec\)|\bRecommended:?\b)/i, '').trim();
+      if (cleanRec && !options.some(o => o.toLowerCase().includes(cleanRec.toLowerCase()) || cleanRec.toLowerCase().includes(o.toLowerCase()))) {
+        options.unshift(cleanRec);
+      }
+    }
+
+    if (options.length > 0 || recommendation) {
+      parsedQuestions.push({ qId, qTitle, recommendation, options });
+    }
+  }
+
+  if (parsedQuestions.length === 0) return '';
+
+  const isSubmitted = window._grillSubmitted.has(idx);
+  let html = `<div class="grill-interactive-box" id="grill-card-${idx}">`;
+  html += `<div class="grill-box-header"><span>🎯 Decision Options</span><span class="grill-box-sub">${isSubmitted ? 'Answers submitted' : 'Click an option or type custom input'}</span></div>`;
+
+  for (const q of parsedQuestions) {
+    html += `<div class="grill-q-block" id="grill-q-${idx}-${q.qId}">`;
+    html += `<div class="grill-q-label"><strong>${esc(q.qId)}</strong>: ${esc(q.qTitle)}</div>`;
+    html += `<div class="grill-options-grid">`;
+
+    for (const opt of q.options) {
+      const isRec = q.recommendation && (opt === q.recommendation || opt.includes(q.recommendation) || q.recommendation.includes(opt));
+      const cleanVal = opt.replace(/^(?:\(Recommended\)|\(Rec\)|\bRecommended:?\b)/i, '').trim();
+      const isSelected = window._grillSelected[idx] && window._grillSelected[idx][q.qId] && window._grillSelected[idx][q.qId].has(cleanVal);
+      html += `<button type="button" class="grill-pill ${isRec ? 'recommended' : ''} ${isSelected ? 'active' : ''}" data-val="${esc(cleanVal)}" ${isSubmitted ? 'disabled' : ''} onclick="toggleGrillOption(${idx}, '${esc(q.qId)}', '${esc(cleanVal).replace(/'/g, "\\'")}', true)">`;
+      if (isRec) html += `<span class="grill-pill-badge">★ Recommended</span>`;
+      html += `<span>${esc(cleanVal)}</span>`;
+      html += `</button>`;
+    }
+
+    html += `</div>`;
+    if (!isSubmitted) {
+      html += `<div class="grill-custom-row">`;
+      html += `<input type="text" id="grill-custom-${idx}-${q.qId}" data-qid="${esc(q.qId)}" class="grill-custom-input" placeholder="Or write custom answer for ${esc(q.qId)}..." onkeydown="if(event.key==='Enter'){event.preventDefault(); submitGrillAnswers(${idx});}">`;
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  html += `<div class="grill-footer">`;
+  html += `<button type="button" class="btn primary grill-submit-btn" ${isSubmitted ? 'disabled' : ''} onclick="submitGrillAnswers(${idx})">${isSubmitted ? '✓ Answer Submitted' : '✓ Submit Decisions'}</button>`;
+  html += `</div>`;
+  html += `</div>`;
+
+  return html;
 }
 
 function setGenUI(on) {
@@ -450,7 +655,7 @@ $('ka').onchange = async e => {
 };
 
 /* chat clear (chat only) */
-$('btn-chatclear').onclick = () => { messages = []; renderAll(); };
+if ($('btn-chatclear')) $('btn-chatclear').onclick = () => { messages = []; renderAll(); };
 
 /* ---------------- real-time monitor ---------------- */
 let monOpen = false;
@@ -475,7 +680,7 @@ function monFmtTime(r) {
 // Render recent list only when it changes, so entries don't flicker/rerender on every poll
 let monRecentKey = '';
 function renderMonitorRecent(list) {
-  const key = list.map(r => `${r.id}:${r.status}:${r.completion_tokens}:${r.duration_s}`).join('|');
+  const key = list.map(r => `${r.id}:${r.model || ''}:${r.status}:${r.completion_tokens}:${r.duration_s}`).join('|');
   if (key === monRecentKey) return;
   monRecentKey = key;
   const rl = $('mon-recent-list');
@@ -483,11 +688,22 @@ function renderMonitorRecent(list) {
     rl.innerHTML = '<div class="mon-empty">No requests yet</div>';
     return;
   }
-  rl.innerHTML = list.map(r => `
+  rl.innerHTML = list.map(r => {
+    let mTag = '';
+    if (r.model) {
+      mTag = `<span class="mon-model-tag" title="${esc(r.model)}">${esc(r.model)}</span>`;
+    } else if (r.endpoint && r.endpoint.includes('executor')) {
+      mTag = `<span class="mon-model-tag" title="Qwen2.5-VL-3B">Qwen2.5-VL-3B</span>`;
+    }
+    return `
     <div class="mon-recent" title="Executed at ${esc(monFmtTime(r))}">
-      <span class="ep">${esc(r.endpoint)}</span>
+      <div class="mon-recent-left">
+        <span class="ep">${esc(r.endpoint)}</span>
+        ${mTag}
+      </div>
       <span class="num">${r.prompt_tokens || '–'}→${r.completion_tokens || '–'} tok · ${monFmtTps(r)} · ${r.duration_s ? r.duration_s.toFixed(1) + 's' : '—'} · 🕒 ${esc(monFmtTime(r))}${r.status >= 400 ? ' ⚠ ' + r.status : ''}</span>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 async function pollMonitor() {
@@ -498,11 +714,22 @@ async function pollMonitor() {
     if (!d.active || !d.active.length) {
       al.innerHTML = '<div class="mon-empty">No active requests</div>';
     } else {
-      al.innerHTML = d.active.map(r => `
+      al.innerHTML = d.active.map(r => {
+        let mTag = '';
+        if (r.model) {
+          mTag = `<span class="mon-model-tag" title="${esc(r.model)}">${esc(r.model)}</span>`;
+        } else if (r.endpoint && r.endpoint.includes('executor')) {
+          mTag = `<span class="mon-model-tag" title="Qwen2.5-VL-3B">Qwen2.5-VL-3B</span>`;
+        }
+        return `
         <div class="mon-active">
-          <div class="row1"><span class="ep">${esc(r.endpoint)}</span><span class="tps">${(r.gen_tps || 0).toFixed(1)} t/s</span></div>
+          <div class="row1">
+            <span class="ep">${esc(r.endpoint)} ${mTag}</span>
+            <span class="tps">${(r.gen_tps || 0).toFixed(1)} t/s</span>
+          </div>
           <div class="row1"><span class="dim">${r.elapsed_s}s elapsed · gen ${r.gen_tokens} tok</span><span class="dim">${r.prompt_tokens ? 'prompt ' + r.prompt_tokens + ' msgs' : ''}</span></div>
-        </div>`).join('');
+        </div>`;
+      }).join('');
     }
     // recent requests (rendered only on change)
     renderMonitorRecent(d.recent || []);
@@ -547,7 +774,6 @@ async function loadCapabilities() {
     const d = await (await fetch('/control/capabilities')).json();
     if (d.error) { box.innerHTML = '<div class="mon-empty">' + esc(d.error) + '</div>'; return; }
     let h = `<div class="rep-cell" style="display:flex; align-items:center; justify-content:space-between;"><span><b>${d.total_tools}</b> tools registered</span></div>`;
-
     // Web
     h += capSection('web', '🌐 Web Browsing', d.web.enabled,
       (d.web.tools || []).map(t => `<div class="cap-item">🔗 <b>${esc(t.name)}</b> — ${esc(t.description || '')}</div>`).join(''),
@@ -579,6 +805,33 @@ async function loadCapabilities() {
         </div>`).join('') || '<div class="cap-item dim">none in plugins/ yet</div>',
       'Python modules loaded from plugins/*/plugin.py');
 
+    // Shell
+    const sh = d.shell || {};
+    const shellInner = `
+      <div class="cap-item">
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+          <input type="checkbox" id="shell-ask" ${sh.ask_first ? 'checked' : ''} style="accent-color:var(--green);">
+          <b>Ask before running</b> <span class="dim">(permission modal; matched patterns skip asking)</span>
+        </label>
+      </div>
+      <div class="cap-item">
+        <b>Allowed patterns</b> <span class="dim">(wildcards ok, <code>*</code> = allow all)</span>
+        <div id="shell-pats" style="display:flex; flex-direction:column; gap:3px; margin-top:4px;">
+          ${(sh.allow_patterns || []).map((p, i) => `
+            <div style="display:flex; gap:5px; align-items:center;">
+              <input type="text" class="shell-pat" data-i="${i}" value="${esc(p)}" style="flex:1; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;">
+              <button class="btn ghost shell-pat-del" data-i="${i}" style="width:auto; margin:0; padding:2px 7px; font-size:10px; color:var(--red);">✕</button>
+            </div>`).join('')}
+        </div>
+        <div style="display:flex; gap:5px; margin-top:5px;">
+          <input type="text" id="shell-pat-new" placeholder="e.g. git * or npx skills * or *" style="flex:1; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;">
+          <button class="btn ghost" id="shell-pat-add" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">+ Add</button>
+        </div>
+        <button class="btn accent" id="shell-pats-save" style="width:auto; margin:6px 0 0; padding:4px 12px; font-size:10.5px;">💾 Save patterns</button>
+      </div>`;
+    h += capSection('shell', '⌨️ Shell Execution', sh.enabled, shellInner,
+      'run_shell tool — agent runs commands like "npx skills add …" in the workspace');
+
     box.innerHTML = h;
     box.querySelectorAll('.cap-toggle').forEach(t => {
       t.onclick = async () => {
@@ -596,6 +849,49 @@ async function loadCapabilities() {
         } catch (e) { toast('Toggle failed: ' + e.message, true); }
       };
     });
+
+    // shell section controls
+    const askEl = box.querySelector('#shell-ask');
+    if (askEl) askEl.onchange = async () => {
+      try {
+        const r = await fetch('/control/shell_settings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ask_first: askEl.checked }),
+        });
+        if (!r.ok) throw new Error('save failed');
+        toast(askEl.checked ? 'Shell: will ask before unmatched commands' : 'Shell: no permission prompts');
+      } catch (e) { toast('Save failed: ' + e.message, true); }
+    };
+    const addBtn = box.querySelector('#shell-pat-add');
+    const newPat = box.querySelector('#shell-pat-new');
+    if (addBtn && newPat) addBtn.onclick = () => {
+      if (!newPat.value.trim()) return;
+      const wrap = box.querySelector('#shell-pats');
+      const i = wrap.querySelectorAll('.shell-pat').length;
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex; gap:5px; align-items:center;';
+      row.innerHTML = `<input type="text" class="shell-pat" value="${esc(newPat.value.trim())}" style="flex:1; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;">
+        <button class="btn ghost shell-pat-del" style="width:auto; margin:0; padding:2px 7px; font-size:10px; color:var(--red);">✕</button>`;
+      wrap.appendChild(row);
+      newPat.value = '';
+      wirePatDel(row.querySelector('.shell-pat-del'));
+    };
+    const saveBtn = box.querySelector('#shell-pats-save');
+    if (saveBtn) saveBtn.onclick = async () => {
+      const pats = [...box.querySelectorAll('.shell-pat')].map(i => i.value.trim()).filter(Boolean);
+      try {
+        const r = await fetch('/control/shell_settings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ allow_patterns: pats }),
+        });
+        if (!r.ok) throw new Error('save failed');
+        toast(`Saved ${pats.length} shell pattern(s) ✓`);
+      } catch (e) { toast('Save failed: ' + e.message, true); }
+    };
+    function wirePatDel(btn) {
+      btn.onclick = () => btn.closest('div[style]').remove();
+    }
+    box.querySelectorAll('.shell-pat-del').forEach(wirePatDel);
   } catch (e) {
     box.innerHTML = '<div class="mon-empty">Failed: ' + esc(e.message) + '</div>';
   }
@@ -1035,8 +1331,9 @@ async function buildPromptText(text) {
     }
   }
   const parts = [...textParts, ...imgParts];
-  if (!parts.length) return text;
-  return (text ? text + '\n\n' : '') + parts.join('\n\n');
+  const base = (text ? text + '\n\n' : '') + parts.join('\n\n');
+  if (!agentMode) return base;
+  return await expandAtTags(base);
 }
 
 function clearAttachments() {
@@ -1062,6 +1359,13 @@ function wsFileIcon(name) {
   return map[e] || '📄';
 }
 
+function fmtSize(bytes) {
+  if (bytes == null) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
 async function wsLoadTree(dirPath, targetEl, indent) {
   try {
     const r = await fetch('/agent/ws/tree?path=' + encodeURIComponent(dirPath || ''));
@@ -1082,12 +1386,13 @@ async function wsLoadTree(dirPath, targetEl, indent) {
     wrap.className = 'ws-children';
     d.nodes.forEach(n => {
       const row = document.createElement('div');
-      row.className = 'ws-node' + (n.dir ? ' dir' : '');
+      row.className = 'ws-node' + (n.dir ? ' dir' : '') + (n.changed ? ' changed' : '');
       row.dataset.path = (n.path || '').toLowerCase();
-      row.title = n.path + (n.size != null ? ` · ${(n.size / 1024).toFixed(1)} KB` : '');
+      const sizeStr = (!n.dir && n.size != null) ? fmtSize(n.size) : '';
+      row.title = n.path + (sizeStr ? ` · ${sizeStr}` : '') + (n.changed ? ` · ${n.status || 'modified'} this session` : '');
       const caret = n.dir ? '<span class="caret">▶</span>' : '<span class="caret" style="visibility:hidden;">▶</span>';
-      const chdot = n.changed ? '<span class="chdot" title="modified this session"></span>' : '';
-      row.innerHTML = `${caret}<span>${n.dir ? '📁' : wsFileIcon(n.name)}</span>${chdot}<span class="nm">${esc(n.name)}</span>`;
+      const sizeTag = sizeStr ? `<span class="ws-size">${sizeStr}</span>` : '';
+      row.innerHTML = `${caret}<span>${n.dir ? '📁' : wsFileIcon(n.name)}</span><span class="nm">${esc(n.name)}</span>${sizeTag}`;
       if (n.dir) {
         const kids = document.createElement('div');
         kids.className = 'ws-children';
@@ -1120,30 +1425,6 @@ async function wsLoadTree(dirPath, targetEl, indent) {
   }
 }
 
-/* Session Changes pinned group (created/modified this session) */
-function renderWsChanges(changes) {
-  const box = $('ws-changes');
-  if (!box) return;
-  const list = $('ws-changes-list');
-  const cnt = $('ws-changes-count');
-  if (!changes.length) {
-    box.style.display = 'none';
-    return;
-  }
-  box.style.display = 'block';
-  if (cnt) cnt.textContent = changes.length;
-  if (list) {
-    list.innerHTML = changes.map(c => `
-      <div class="ws-node ws-chg" data-path="${esc(c.path.toLowerCase())}" title="${esc(c.path)} — ${c.status} this session. Click to open diff.">
-        <span class="caret" style="visibility:hidden;">▶</span>
-        <span>${c.status === 'created' ? '✚' : '●'}</span>
-        <span class="nm" style="${c.status === 'created' ? 'color:var(--green);' : ''}">${esc(c.path)}</span>
-      </div>`).join('');
-    list.querySelectorAll('.ws-chg').forEach(row => {
-      row.onclick = () => wsShowFile(row.dataset.path);
-    });
-  }
-}
 
 /* client-side filter box */
 let wsFilterT;
@@ -1171,15 +1452,6 @@ function wsApplyFilter() {
     }
     grp.style.display = any ? grp.style.display : 'none';
   });
-}
-if ($('ws-changes-toggle')) {
-  $('ws-changes-toggle').onclick = () => {
-    const list = $('ws-changes-list');
-    const t = $('ws-changes-toggle');
-    const open = list.style.display !== 'none';
-    list.style.display = open ? 'none' : 'block';
-    t.querySelector('.caret').style.transform = open ? '' : 'rotate(90deg)';
-  };
 }
 if ($('ws-refresh')) $('ws-refresh').onclick = () => wsRefreshTree();
 
@@ -1260,7 +1532,9 @@ function updateWsRail() {
 
 function setWsPanel(open) {
   wsPanelOpen = open;
-  $('ws-panel').classList.toggle('open', open);
+  const panel = $('ws-panel');
+  panel.style.right = '';
+  panel.classList.toggle('open', open);
   updateWsRail();
   if (open) wsRefreshTree();
 }
@@ -1271,6 +1545,60 @@ $('ws-back').onclick = wsShowTree;
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && wsPanelOpen) setWsPanel(false);
 });
+
+/* ---------------- shell permission modal ---------------- */
+function showPermModal(reqId, cmd) {
+  const m = $('perm-modal');
+  if (!m) return;
+  m.dataset.reqId = reqId;
+  $('perm-cmd').textContent = cmd;
+  // suggest the leading command word as an allow pattern, * for everything
+  const firstWord = (cmd.trim().split(/\s+/)[0] || '*') + ' *';
+  const projName = curProject ? (curProject.name || 'this project') : 'active project';
+  $('perm-note').innerHTML = `Permission scopes for <code>${esc(firstWord)}</code>:<br>` +
+    `• <b>Just once:</b> Run this command now without saving.<br>` +
+    `• <b>For this project:</b> Automatically permit in <i>${esc(projName)}</i>.<br>` +
+    `• <b>Always:</b> Allow globally across all projects in <code>config.json</code>.`;
+  m.dataset.pattern = firstWord;
+  m.hidden = false;
+}
+
+async function answerPermission(decision) {
+  const m = $('perm-modal');
+  const reqId = m.dataset.reqId;
+  m.hidden = true;
+  if (!reqId) return;
+  const pattern = (decision === 'always' || decision === 'project') ? m.dataset.pattern : null;
+  const projectId = (curProject && curProject.id) ? curProject.id : null;
+  try {
+    await fetch('/agent/permission', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        req_id: reqId,
+        decision,
+        pattern,
+        project_id: projectId
+      }),
+    });
+  } catch (e) { /* stream may have ended */ }
+
+  if (decision === 'always') {
+    toast(`✓ Pattern "${m.dataset.pattern}" allow-listed globally`);
+  } else if (decision === 'project') {
+    const pName = curProject ? curProject.name : 'project';
+    toast(`✓ Pattern "${m.dataset.pattern}" allowed for ${pName}`);
+  } else if (decision === 'allow') {
+    toast('▶ Shell command approved once');
+  } else if (decision === 'deny') {
+    toast('✕ Shell command denied');
+  }
+}
+
+if ($('perm-allow')) $('perm-allow').onclick = () => answerPermission('allow');
+if ($('perm-project')) $('perm-project').onclick = () => answerPermission('project');
+if ($('perm-always')) $('perm-always').onclick = () => answerPermission('always');
+if ($('perm-deny')) $('perm-deny').onclick = () => answerPermission('deny');
+if ($('perm-close-x')) $('perm-close-x').onclick = () => answerPermission('deny');
 
 /* drag the left-edge grip to resize the workspace panel width */
 (function initWsGrip() {
@@ -1307,37 +1635,165 @@ window.addEventListener('keydown', e => {
   });
 })();
 
-/* Plan mode: read-only agent exploration + proposed plan (no file writes) */
-let planMode = false;
-(function initPlanToggle() {
-  const t = $('plan-toggle');
-  if (!t) return;
-  t.checked = localStorage.getItem('agent_plan') === '1';
-  planMode = t.checked;
-  t.addEventListener('change', () => {
-    planMode = t.checked;
-    try { localStorage.setItem('agent_plan', t.checked ? '1' : '0'); } catch (e) {}
-    const banner = $('agent-banner');
-    if (banner && planMode) {
-      banner.style.background = 'rgba(99,102,241,0.12)';
-      banner.style.borderColor = 'rgba(99,102,241,0.45)';
-      toast('📋 Plan mode ON — agent will explore and propose a plan, no file writes');
-    } else if (banner) {
-      banner.style.background = '';
-      banner.style.borderColor = '';
-      toast('Plan mode OFF — agent can create/modify files');
+/* Plan/Build dropdown selector (default Build) */
+(function initPlanSeg() {
+  const planSel = $('agent-plan-sel');
+  if (!planSel) return;
+  planMode = localStorage.getItem('agent_plan') === 'plan';
+  planSel.value = planMode ? 'plan' : 'build';
+  function apply(silent) {
+    planSel.value = planMode ? 'plan' : 'build';
+    const input = $('input');
+    if (input && agentMode) {
+      input.placeholder = planMode
+        ? 'Plan mode — agent explores read-only and proposes a plan…'
+        : 'Describe a coding task (e.g. "Find and fix bug in main.py")…';
     }
-  });
-  // reflect initial state on the banner
-  if (planMode) {
-    const banner = $('agent-banner');
-    if (banner) { banner.style.background = 'rgba(99,102,241,0.12)'; banner.style.borderColor = 'rgba(99,102,241,0.45)'; }
+    if (!silent) toast(planMode ? '📋 Plan — agent proposes, nothing is written' : '🔨 Build — agent executes changes');
   }
+  planSel.onchange = () => {
+    planMode = planSel.value === 'plan';
+    try { localStorage.setItem('agent_plan', planMode ? 'plan' : 'build'); } catch (e) {}
+    apply();
+  };
+  apply(true);
+  window._setPlanMode = (on) => {
+    planMode = on;
+    try { localStorage.setItem('agent_plan', on ? 'plan' : 'build'); } catch (e) {}
+    apply(true);
+  };
 })();
 
-/* mode switcher: Chat vs Agent */
-let agentMode = false;
+/* ---------------- @ file tagging & / commands (agent mode) ---------------- */
+let cmdMenu = { open: false, kind: null, items: [], sel: 0, tokenStart: -1 };
 
+function cmdMenuClose() {
+  cmdMenu.open = false; cmdMenu.kind = null; cmdMenu.items = []; cmdMenu.sel = 0; cmdMenu.tokenStart = -1;
+  const m = $('cmd-menu');
+  if (m) { m.style.display = 'none'; m.innerHTML = ''; }
+}
+
+function cmdMenuRender() {
+  const m = $('cmd-menu');
+  if (!m || !cmdMenu.open || !cmdMenu.items.length) { cmdMenuClose(); return; }
+  m.innerHTML = cmdMenu.items.map((it, i) => `
+    <div class="cmd-item ${i === cmdMenu.sel ? 'sel' : ''}" data-i="${i}">
+      <span class="cmd-icon">${it.icon || ''}</span>
+      <span class="cmd-name">${esc(it.name)}</span>
+      ${it.desc ? `<span class="cmd-desc">${esc(it.desc)}</span>` : ''}
+    </div>`).join('');
+  m.style.display = 'block';
+  m.querySelectorAll('.cmd-item').forEach(el => {
+    el.onclick = () => cmdMenuPick(parseInt(el.dataset.i));
+  });
+}
+
+async function cmdMenuOpen(kind, query) {
+  cmdMenu.open = true; cmdMenu.kind = kind; cmdMenu.sel = 0;
+  const m = $('cmd-menu');
+  if (kind === 'files') {
+    // fetch the workspace flat file list once per open (agent mode, project set)
+    try {
+      const d = await (await fetch('/agent/workspace')).json();
+      const q = query.toLowerCase();
+      cmdMenu.items = (d.files || [])
+        .filter(f => !q || f.path.toLowerCase().includes(q))
+        .slice(0, 12)
+        .map(f => ({ icon: wsFileIcon(f.path), name: f.path, desc: `${(f.size / 1024).toFixed(1)} KB`, value: f.path }));
+    } catch (e) { cmdMenuClose(); return; }
+  } else if (kind === 'slash') {
+    const all = [
+      { icon: '📋', name: 'plan', desc: 'switch to Plan mode (read-only, propose)' },
+      { icon: '🔨', name: 'build', desc: 'switch to Build mode (execute)' },
+    ];
+    try {
+      const d = await (await fetch('/control/capabilities')).json();
+      (d.skills && d.skills.items || []).forEach(s => {
+        all.push({ icon: '🎯', name: s.name, desc: s.description || '', isSkill: true });
+      });
+    } catch (e) {}
+    const q = query.toLowerCase();
+    cmdMenu.items = all.filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 14);
+    if (!cmdMenu.items.length) { cmdMenuClose(); return; }
+  }
+  cmdMenuRender();
+}
+
+function cmdMenuPick(i) {
+  const it = cmdMenu.items[i];
+  if (!it) return;
+  const input = $('input');
+  const before = input.value.slice(0, cmdMenu.tokenStart);
+  const afterStart = cmdMenu.tokenStart + currentToken(input).length;
+  const after = input.value.slice(afterStart);
+  if (cmdMenu.kind === 'files') {
+    input.value = before + '@' + it.value + ' ' + after.replace(/^\s?/, '');
+  } else if (cmdMenu.kind === 'slash') {
+    if (it.name === 'plan') { window._setPlanMode && window._setPlanMode(true); }
+    else if (it.name === 'build') { window._setPlanMode && window._setPlanMode(false); }
+    else if (it.isSkill) {
+      input.value = before + '/' + it.name + ' ' + after;
+    }
+    else { input.value = before + '/' + it.name + ' ' + after; }
+  }
+  cmdMenuClose();
+  input.focus();
+}
+
+function currentToken(input) {
+  // text from the last @ or / up to the caret (or end of the current word)
+  const pos = input.selectionStart != null ? input.selectionStart : input.value.length;
+  const upto = input.value.slice(0, pos);
+  const m = upto.match(/(?:^|\s)([@\/])([^@\/\s]*)$/);
+  return m ? { ch: m[1], text: m[2], start: pos - m[2].length - 1 } : null;
+}
+
+(function initCmdMenu() {
+  const input = $('input');
+  if (!input) return;
+  input.addEventListener('input', () => {
+    if (!agentMode) { cmdMenuClose(); return; }
+    const tok = currentToken(input);
+    if (tok && tok.ch === '@') {
+      if (!cmdMenu.open || cmdMenu.kind !== 'files') cmdMenu.tokenStart = tok.start;
+      cmdMenuOpen('files', tok.text);
+    } else if (tok && tok.ch === '/' && tok.start === 0) {
+      if (!cmdMenu.open || cmdMenu.kind !== 'slash') cmdMenu.tokenStart = tok.start;
+      cmdMenuOpen('slash', tok.text);
+    } else {
+      cmdMenuClose();
+    }
+  });
+  input.addEventListener('keydown', e => {
+    if (!cmdMenu.open || !cmdMenu.items.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); cmdMenu.sel = (cmdMenu.sel + 1) % cmdMenu.items.length; cmdMenuRender(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); cmdMenu.sel = (cmdMenu.sel - 1 + cmdMenu.items.length) % cmdMenu.items.length; cmdMenuRender(); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); cmdMenuPick(cmdMenu.sel); }
+    else if (e.key === 'Escape') { cmdMenuClose(); }
+  }, true);   // capture: run before the global Enter-to-send handler
+})();
+
+/* @tagged files get expanded into the prompt on send (agent mode) */
+async function expandAtTags(text) {
+  if (!text.includes('@')) return text;
+  // @path tokens: @rel/path.ext (letters, digits, _ - . / \ space-free)
+  const tags = [...text.matchAll(/@([\w\-./\\]+\.[\w]+)/g)].map(m => m[1]);
+  if (!tags.length) return text;
+  let out = text;
+  for (const t of tags.slice(0, 5)) {
+    try {
+      const r = await fetch('/agent/ws/file?path=' + encodeURIComponent(t));
+      const d = await r.json();
+      if (!r.ok || d.error) continue;
+      const clipped = d.content.length > 12000
+        ? d.content.slice(0, 12000) + '\n... (truncated, ' + d.content.length + ' chars)' : d.content;
+      out = out.split('@' + t).join('see file "' + t + '":\n' + clipped);
+    } catch (e) { /* leave the tag as-is */ }
+  }
+  return out;
+}
+
+/* mode switcher: Chat vs Agent */
 function setAppMode(isAgent, isUserSwitch = false) {
   const prevMode = agentMode;
   agentMode = !!isAgent;
@@ -1348,9 +1804,15 @@ function setAppMode(isAgent, isUserSwitch = false) {
   if (btnChat) btnChat.classList.toggle('active', !agentMode);
   if (btnAgent) btnAgent.classList.toggle('active', agentMode);
   const banner = $('agent-banner');
-  if (banner) banner.style.display = agentMode ? 'block' : 'none';
+  if (banner) banner.style.display = 'none';
   const projCard = $('projects-card');
   if (projCard) projCard.style.display = agentMode ? 'block' : 'none';
+  // plan/build select + engine select only in agent mode
+  const planSel = $('agent-plan-sel');
+  if (planSel) planSel.style.display = agentMode ? 'inline-block' : 'none';
+  const eng = $('agent-engine');
+  if (eng) eng.style.display = agentMode ? 'inline-block' : 'none';
+  if (agentMode && window._setPlanMode) window._setPlanMode(planMode);   // refresh placeholder
   // workspace side panel needs agent mode + an active project
   if (!agentMode && wsPanelOpen) setWsPanel(false);
   updateWsRail();
@@ -1400,35 +1862,55 @@ let curSession = null;      // {id, title}
 async function loadProjects() {
   try {
     const d = await (await fetch('/control/projects')).json();
-    const sel = $('project-sel');
-    sel.innerHTML = '';
-    const none = document.createElement('option');
-    none.value = '';
-    none.textContent = 'No project (scratch)';
-    sel.appendChild(none);
-    (d.projects || []).forEach(p => {
-      const o = document.createElement('option');
-      o.value = p.id;
-      o.textContent = '📁 ' + p.name;
-      if (d.active === p.name) o.selected = true;
-      sel.appendChild(o);
-    });
+    const list = $('projects-list');
     if (d.active) {
       const p = (d.projects || []).find(x => x.name === d.active);
       if (p) curProject = p;
     } else curProject = null;
 
-    // Update delete buttons visibility
-    const delBtn = $('btn-delproject');
-    const delIcon = $('btn-delproject-icon');
-    if (delBtn) delBtn.style.display = curProject ? 'inline-block' : 'none';
-    if (delIcon) delIcon.style.display = curProject ? 'inline-block' : 'none';
-    if (curProject) {
-      if (delBtn) delBtn.title = `Delete project "${curProject.name}" from agent (files on disk are preserved)`;
-      if (delIcon) delIcon.title = `Delete project "${curProject.name}" from agent (files on disk are preserved)`;
+    if (list) {
+      list.innerHTML = '';
+      const userProjects = (d.projects || []).filter(p => p.id !== 0 && p.name !== 'scratch' && p.name !== 'default');
+
+      if (!userProjects.length) {
+        list.innerHTML = `
+          <div class="project-empty-state">
+            <span style="font-size:11px; color:var(--dim);">No custom projects yet</span>
+            <button class="btn ghost" style="font-size:10.5px; padding:3px 8px; margin-top:4px;" onclick="$('btn-newproject').click()">+ Create Project</button>
+          </div>`;
+      } else {
+        userProjects.forEach(p => {
+          const ws = p.workspace_dir || `${d.workspace_root || 'E:\\AI\\workspace'}\\${p.name}`;
+          const isCur = curProject && curProject.id === p.id;
+          const row = document.createElement('div');
+          row.className = 'project-row' + (isCur ? ' cur' : '');
+          row.title = `Project: ${p.name}\nDirectory: ${ws}`;
+          row.innerHTML = `
+            <div class="proj-icon-wrapper">
+              <svg class="proj-dir-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+            </div>
+            <div class="proj-meta">
+              <div class="proj-name">${esc(p.name)}</div>
+              <div class="proj-path" title="${esc(ws)}">${esc(ws)}</div>
+            </div>
+            <span class="p-del" title="Remove project registration (files preserved)">✕</span>
+          `;
+          row.onclick = e => {
+            if (e.target.classList.contains('p-del')) {
+              e.stopPropagation();
+              deleteProject(p.id, p.name);
+              return;
+            }
+            activateProject(p.id);
+          };
+          list.appendChild(row);
+        });
+      }
     }
 
-    // Populate registered projects in modal
+    // Populate registered projects in manage modal if open
     const mList = $('proj-manage-list');
     if (mList) {
       if (!d.projects || d.projects.length === 0) {
@@ -1452,19 +1934,6 @@ async function loadProjects() {
       }
     }
 
-    // Update workspace directory badge
-    const badgePath = $('project-dir-path');
-    const badge = $('project-dir-badge');
-    if (badgePath && badge) {
-      if (curProject) {
-        const ws = curProject.workspace_dir || `${d.workspace_root || 'E:\\AI\\workspace'}\\${curProject.name}`;
-        badgePath.textContent = ws;
-        badge.title = `Project workspace: ${ws}${curProject.workspace_dir ? ' (custom local folder)' : ' (default)'}`;
-      } else {
-        badgePath.textContent = 'Scratch sandbox';
-        badge.title = 'No active project';
-      }
-    }
     updateWsRail();
     loadSessions();
   } catch (e) {}
@@ -1610,8 +2079,8 @@ $('btn-newproject').onclick = () => {
 const closeProjModal = () => { $('proj-modal').hidden = true; };
 $('btn-proj-cancel').onclick = closeProjModal;
 $('proj-modal-close').onclick = closeProjModal;
-$('btn-delproject').onclick = () => { if (curProject) deleteProject(curProject.id, curProject.name); };
-$('btn-delproject-icon').onclick = () => { if (curProject) deleteProject(curProject.id, curProject.name); };
+if ($('btn-delproject')) $('btn-delproject').onclick = () => { if (curProject) deleteProject(curProject.id, curProject.name); };
+if ($('btn-delproject-icon')) $('btn-delproject-icon').onclick = () => { if (curProject) deleteProject(curProject.id, curProject.name); };
 
 async function submitNewProject() {
   const name = $('new-proj-name').value.trim();
@@ -1830,11 +2299,13 @@ async function activateProject(pid) {
   } catch (e) { toast('Activate failed', true); }
 }
 
-$('project-sel').onchange = e => {
-  const v = e.target.value;
-  if (!v) { setNoProject(); return; }
-  activateProject(parseInt(v));
-};
+if ($('project-sel')) {
+  $('project-sel').onchange = e => {
+    const v = e.target.value;
+    if (!v) { setNoProject(); return; }
+    activateProject(parseInt(v));
+  };
+}
 
 async function setNoProject() {
   try { await fetch('/control/projects/0/activate', { method: 'POST' }); } catch (e) {}
@@ -2221,7 +2692,15 @@ async function runAgentSSE(text) {
           else if (ev === 'thought_delta') {
             L.reasoning = (L.reasoning || '') + (d.delta || '');
           }
-          else if (ev === 'tool_call') L.acts.push({ type: 'tool_call', ...d });
+          else if (ev === 'tool_call') {
+            // If the model was streaming its preamble before calling a tool, keep it as thought/reasoning or preamble
+            L.acts.push({ type: 'tool_call', ...d });
+            if (L.content && L.content.trim()) {
+              if (!L.reasoning) L.reasoning = L.content.trim();
+              else L.reasoning += '\n\n' + L.content.trim();
+              L.content = '';
+            }
+          }
           else if (ev === 'tool_result') {
             L.acts.push({ type: 'tool_result', ...d });
             // agent changed a file -> refresh the workspace side panel
@@ -2230,8 +2709,16 @@ async function runAgentSSE(text) {
             }
           }
           else if (ev === 'verify') L.acts.push({ type: 'verify', ...d });
+          else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd);
           else if (ev === 'delta') L.content += (d.text || '');
-          else if (ev === 'delta_reset') L.content = '';
+          else if (ev === 'delta_reset') {
+            // If replacing content with synthesized final answer, preserve any prior streamed text as reasoning so it doesn't vanish
+            if (L.content && L.content.trim()) {
+              if (!L.reasoning) L.reasoning = L.content.trim();
+              else L.reasoning += '\n\n' + L.content.trim();
+            }
+            L.content = '';
+          }
           else if (ev === 'validated') L.acts.push({ type: 'validated', ...d });
           else if (ev === 'error') throw new Error(d.error);
           renderLast();

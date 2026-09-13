@@ -5,16 +5,16 @@
     "executor": {
       "model": "orchestrator/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
       "mmproj": "orchestrator/mmproj-model-f16.gguf",
-      "port": 8091,
+      "port": 24576,
       "gpu": 1,
-      "ctx": 8192
+      "ctx": 24576
     },
     "vision": {
       "model": "orchestrator/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
       "mmproj": "orchestrator/mmproj-model-f16.gguf",
-      "port": 8092,
+      "port": 16184,
       "gpu": 1,
-      "ctx": 4096
+      "ctx": 8092
     },
     "embedder": {
       "model": "orchestrator/nomic-embed-text-v1.5-Q8_0.gguf",
@@ -40,11 +40,15 @@
       "echo": {
         "transport": "stdio",
         "command": "python",
-        "args": [
-          "core/echo_mcp_server.py"
-        ]
+        "args": ["core/echo_mcp_server.py"]
       }
     },
-    "plugins": true
+    "plugins": true,
+    "shell": {
+      "enabled": true,
+      "ask_first": true,
+      "timeout_s": 60,
+      "allow_patterns": ["git status*", "git diff*", "git log*", "dir *", "type *"]
+    }
   }
 }

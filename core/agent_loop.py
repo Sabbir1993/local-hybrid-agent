@@ -27,7 +27,8 @@ Important Operating & Path Rules:
 6. Provide concise, direct final answers without repeating sentences.
 7. High Efficiency & No Redundant Reads: Never call 'read_file' on a file you just created or edited with 'write_file' or 'edit_file'. Once 'write_file' reports success, the file is saved and ready. Conclude your response immediately without redundant read-backs.
 8. Action-First File Creation: When the user asks to create, make, build, or write code or a file (e.g. 'make an html file', 'create calculator.html', 'why not you write on that file'), DO NOT ask for more instructions or passively refuse. Call 'write_file' or 'edit_file' immediately with complete, functional, professional code.
-9. Proactive Autonomous Execution: Never refuse by saying 'I need more details' or 'what exact changes would you like' when the goal is clear (e.g. building a calculator, fixing an issue, creating a page). Take initiative, design the full solution, write the code directly to disk, and present the result. If a file exists, read it or overwrite it as appropriate."""
+9. Proactive Autonomous Execution: Never refuse by saying 'I need more details' or 'what exact changes would you like' when the goal is clear (e.g. building a calculator, fixing an issue, creating a page). Take initiative, design the full solution, write the code directly to disk, and present the result. If a file exists, read it or overwrite it as appropriate.
+10. Shell and CLI Execution: You HAVE full terminal execution capability via the 'run_shell' tool. When the user asks to run commands, add skills (e.g. 'npx skills add ...'), install packages, or run git, do NOT refuse or tell the user to open a terminal; call 'run_shell' directly to execute the command."""
 
 
 def is_degeneration_or_loop(text: str) -> tuple[bool, str]:
