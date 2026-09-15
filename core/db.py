@@ -22,9 +22,22 @@ def _init_usage_db() -> sqlite3.Connection:
         duration_s REAL,
         prompt_tps REAL,
         stream INTEGER,
-        status INTEGER
+        status INTEGER,
+        prompt_cached_tokens INTEGER DEFAULT 0,
+        completion_cached_tokens INTEGER DEFAULT 0,
+        is_orchestrator INTEGER DEFAULT 0
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts)")
+    # Schema migration for existing DB
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(requests)")]
+    if "prompt_cached_tokens" not in cols:
+        conn.execute("ALTER TABLE requests ADD COLUMN prompt_cached_tokens INTEGER DEFAULT 0")
+    if "completion_cached_tokens" not in cols:
+        conn.execute("ALTER TABLE requests ADD COLUMN completion_cached_tokens INTEGER DEFAULT 0")
+    if "is_orchestrator" not in cols:
+        conn.execute("ALTER TABLE requests ADD COLUMN is_orchestrator INTEGER DEFAULT 0")
+    # Backfill is_orchestrator for older records
+    conn.execute("UPDATE requests SET is_orchestrator = 1 WHERE is_orchestrator = 0 AND (LOWER(COALESCE(model,'')) LIKE '%orchestrator%' OR LOWER(endpoint) LIKE 'agent/%')")
     conn.commit()
     return conn
 
@@ -35,15 +48,25 @@ _usage_db = _init_usage_db()
 def db_record_request(endpoint: str, model: Optional[str], prompt_tokens: Optional[int],
                       completion_tokens: Optional[int], tps: Optional[float],
                       duration_s: float, prompt_tps: Optional[float],
-                      stream: bool, status: int) -> None:
-    """Persist one completed request."""
+                      stream: bool, status: int,
+                      prompt_cached_tokens: Optional[int] = 0,
+                      completion_cached_tokens: Optional[int] = 0,
+                      is_orchestrator: bool = False) -> None:
+    """Persist one completed request with input/output cache and orchestrator attribution."""
     try:
+        m_lower = (model or "").lower()
+        ep_lower = (endpoint or "").lower()
+        if not is_orchestrator:
+            if "orchestrator" in m_lower or "orchestrator" in ep_lower or ep_lower.startswith("agent/executor") or ep_lower.startswith("agent/needle"):
+                is_orchestrator = True
+
         _usage_db.execute(
-            "INSERT INTO requests (ts, endpoint, model, prompt_tokens, completion_tokens, total_tokens, tps, duration_s, prompt_tps, stream, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (time.time(), endpoint, model, prompt_tokens, completion_tokens,
+            "INSERT INTO requests (ts, endpoint, model, prompt_tokens, completion_tokens, total_tokens, tps, duration_s, prompt_tps, stream, status, prompt_cached_tokens, completion_cached_tokens, is_orchestrator) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (time.time(), endpoint, model, prompt_tokens or 0, completion_tokens or 0,
              (prompt_tokens or 0) + (completion_tokens or 0), tps, duration_s,
-             prompt_tps, 1 if stream else 0, status),
+             prompt_tps, 1 if stream else 0, status,
+             prompt_cached_tokens or 0, completion_cached_tokens or 0, 1 if is_orchestrator else 0),
         )
         _usage_db.commit()
     except Exception as e:
@@ -51,37 +74,118 @@ def db_record_request(endpoint: str, model: Optional[str], prompt_tokens: Option
 
 
 def db_report(days: int = 30, model: Optional[str] = None) -> dict:
-    """Aggregate token usage report."""
+    """Aggregate token usage report including prompt/completion cache hits and orchestrator counts."""
     since = time.time() - days * 86400
-    q = "SELECT COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0), COALESCE(AVG(tps),0), COALESCE(AVG(duration_s),0) FROM requests WHERE ts >= ?"
+    q = """
+        SELECT
+            COUNT(*),
+            COALESCE(SUM(prompt_tokens), 0),
+            COALESCE(SUM(completion_tokens), 0),
+            COALESCE(SUM(total_tokens), 0),
+            COALESCE(AVG(tps), 0),
+            COALESCE(AVG(duration_s), 0),
+            COALESCE(SUM(prompt_cached_tokens), 0),
+            COALESCE(SUM(completion_cached_tokens), 0),
+            COALESCE(SUM(CASE WHEN is_orchestrator = 1 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN is_orchestrator = 1 THEN total_tokens ELSE 0 END), 0)
+        FROM requests
+        WHERE ts >= ?
+    """
     args: list = [since]
     if model:
         q += " AND model = ?"
         args.append(model)
     row = _usage_db.execute(q, args).fetchone()
-    by_model = _usage_db.execute(
-        "SELECT model, COUNT(*), SUM(prompt_tokens), SUM(completion_tokens), SUM(total_tokens) FROM requests WHERE ts >= ? GROUP BY model ORDER BY SUM(total_tokens) DESC",
+
+    total_reqs = row[0]
+    total_prompt = row[1]
+    total_gen = row[2]
+    total_toks = row[3]
+    avg_tps = round(row[4], 2) if row[4] else 0
+    avg_dur = round(row[5], 2) if row[5] else 0
+    prompt_cached = row[6]
+    completion_cached = row[7]
+    orch_reqs = row[8]
+    orch_toks = row[9]
+    total_cached = prompt_cached + completion_cached
+
+    cache_hit_rate = round((prompt_cached / max(1, total_prompt)) * 100, 1)
+
+    by_model_rows = _usage_db.execute(
+        """SELECT
+            model,
+            MAX(is_orchestrator) as is_orch,
+            COUNT(*),
+            COALESCE(SUM(prompt_tokens), 0),
+            COALESCE(SUM(prompt_cached_tokens), 0),
+            COALESCE(SUM(completion_tokens), 0),
+            COALESCE(SUM(completion_cached_tokens), 0),
+            COALESCE(SUM(total_tokens), 0)
+        FROM requests
+        WHERE ts >= ?
+        GROUP BY model
+        ORDER BY SUM(total_tokens) DESC""",
         (since,),
     ).fetchall()
-    by_day = _usage_db.execute(
-        "SELECT date(ts, 'unixepoch') AS d, COUNT(*), SUM(prompt_tokens), SUM(completion_tokens), SUM(total_tokens) FROM requests WHERE ts >= ? GROUP BY d ORDER BY d DESC",
+
+    by_day_rows = _usage_db.execute(
+        """SELECT
+            date(ts, 'unixepoch') AS d,
+            COUNT(*),
+            COALESCE(SUM(prompt_tokens), 0),
+            COALESCE(SUM(prompt_cached_tokens), 0),
+            COALESCE(SUM(completion_tokens), 0),
+            COALESCE(SUM(completion_cached_tokens), 0),
+            COALESCE(SUM(total_tokens), 0),
+            COALESCE(SUM(CASE WHEN is_orchestrator = 1 THEN 1 ELSE 0 END), 0)
+        FROM requests
+        WHERE ts >= ?
+        GROUP BY d
+        ORDER BY d DESC""",
         (since,),
     ).fetchall()
+
     return {
         "days": days,
-        "requests": row[0],
-        "prompt_tokens": row[1],
-        "completion_tokens": row[2],
-        "total_tokens": row[3],
-        "avg_tps": round(row[4], 2) if row[4] else 0,
-        "avg_duration_s": round(row[5], 2) if row[5] else 0,
+        "requests": total_reqs,
+        "prompt_tokens": total_prompt,
+        "completion_tokens": total_gen,
+        "total_tokens": total_toks,
+        "avg_tps": avg_tps,
+        "avg_duration_s": avg_dur,
+        "prompt_cached_tokens": prompt_cached,
+        "completion_cached_tokens": completion_cached,
+        "total_cached_tokens": total_cached,
+        "cache_hit_rate": cache_hit_rate,
+        "orchestrator_requests": orch_reqs,
+        "orchestrator_total_tokens": orch_toks,
         "by_model": [
-            {"model": m or "unknown", "requests": c, "prompt_tokens": p, "completion_tokens": g, "total_tokens": t}
-            for m, c, p, g, t in by_model
+            {
+                "model": m or "unknown",
+                "is_orchestrator": bool(is_orch or "orchestrator" in (m or "").lower()),
+                "requests": c,
+                "prompt_tokens": p,
+                "prompt_cached_tokens": pc,
+                "completion_tokens": g,
+                "completion_cached_tokens": gc,
+                "total_tokens": t,
+                "total_cached_tokens": pc + gc,
+            }
+            for m, is_orch, c, p, pc, g, gc, t in by_model_rows
         ],
         "by_day": [
-            {"day": d, "requests": c, "prompt_tokens": p, "completion_tokens": g, "total_tokens": t}
-            for d, c, p, g, t in by_day
+            {
+                "day": d,
+                "requests": c,
+                "prompt_tokens": p,
+                "prompt_cached_tokens": pc,
+                "completion_tokens": g,
+                "completion_cached_tokens": gc,
+                "total_tokens": t,
+                "total_cached_tokens": pc + gc,
+                "orchestrator_requests": orc,
+            }
+            for d, c, p, pc, g, gc, t, orc in by_day_rows
         ],
     }
 

@@ -1,0 +1,153 @@
+"""
+routes/capabilities.py - Tool capabilities, shell execution settings, and model routing status.
+"""
+
+import json
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+from core.config import BASE_DIR
+from core.small_model import (
+    APP_CONFIG,
+    small_models,
+    needle_available,
+)
+from core.state import state
+from core.agent_tools import get_active_project
+from core.registry import registry
+from core.web_tools import register_web_tools
+from core.skills import register_skill_tools, load_skills
+from core.plugins import plugins_status
+from core.mcp import mcp_status
+from core.shell_tools import (
+    register_shell_tools,
+    shell_cfg,
+)
+
+router = APIRouter(tags=["capabilities"])
+
+@router.get("/control/models")
+async def models_status():
+    s = {
+        "main": {
+            "loaded": state.process is not None and state.process.poll() is None,
+            "model": state.profile.get("model_path") if state.profile else None,
+            "pid": state.process.pid if state.process and state.process.poll() is None else None,
+        },
+        "small": small_models.status(),
+        "router": {
+            "enabled": bool(APP_CONFIG["router"].get("enabled", True)),
+            "available": needle_available(),
+            "confidence_threshold": APP_CONFIG["router"].get("confidence_threshold", 0.7),
+        },
+        "project": get_active_project(),
+    }
+    return s
+
+
+class CapToggleReq(BaseModel):
+    section: str          # web | skills | mcp | plugins
+    enabled: bool
+
+
+class ShellSettingsReq(BaseModel):
+    ask_first: Optional[bool] = None
+    allow_patterns: Optional[list] = None
+    timeout_s: Optional[int] = None
+
+
+@router.get("/control/capabilities")
+async def capabilities_status():
+    caps = APP_CONFIG.get("capabilities", {})
+    skills = load_skills() if caps.get("skills") else {}
+    sh = shell_cfg()
+    return {
+        "web": {
+            "enabled": bool(caps.get("web")),
+            "tools": [{"name": t.name, "description": t.schema["function"]["description"][:120]}
+                      for t in registry.list(source="web")],
+        },
+        "skills": {
+            "enabled": bool(caps.get("skills")),
+            "items": [{"name": s["name"], "description": s["description"]} for s in skills.values()],
+        },
+        "mcp": {
+            "enabled": bool(caps.get("mcp")),
+            "servers": mcp_status(),
+        },
+        "plugins": {
+            "enabled": bool(caps.get("plugins")),
+            "items": plugins_status(),
+        },
+        "shell": {
+            "enabled": bool(sh.get("enabled")),
+            "ask_first": bool(sh.get("ask_first", True)),
+            "timeout_s": sh.get("timeout_s", 60),
+            "allow_patterns": sh.get("allow_patterns", []),
+        },
+        "total_tools": len(registry.schemas()),
+    }
+
+
+@router.post("/control/shell_settings")
+async def shell_settings(req: ShellSettingsReq):
+    """Edit shell permission settings; persists to config.json."""
+    import json as _json
+    cfg_path = BASE_DIR / "config.json"
+    try:
+        cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return JSONResponse({"error": f"config.json unreadable: {e}"}, status_code=500)
+    shell = cfg.setdefault("capabilities", {}).setdefault("shell", {})
+    if req.ask_first is not None:
+        shell["ask_first"] = bool(req.ask_first)
+    if req.allow_patterns is not None:
+        shell["allow_patterns"] = [str(p).strip() for p in req.allow_patterns if str(p).strip()]
+    if req.timeout_s is not None:
+        shell["timeout_s"] = max(5, min(600, int(req.timeout_s)))
+    try:
+        cfg_path.write_text(_json.dumps(cfg, indent=2), encoding="utf-8")
+    except Exception as e:
+        return JSONResponse({"error": f"config.json write failed: {e}"}, status_code=500)
+    # live update
+    APP_CONFIG["capabilities"]["shell"] = shell
+    return {"ok": True, "shell": shell}
+
+
+@router.post("/control/capabilities")
+async def capabilities_toggle(req: CapToggleReq):
+    """Toggle a capability section on/off; persists to config.json."""
+    cfg_path = BASE_DIR / "config.json"
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return JSONResponse({"error": f"config.json unreadable: {e}"}, status_code=500)
+    caps = cfg.setdefault("capabilities", {})
+    caps[req.section] = req.enabled
+    try:
+        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    except Exception as e:
+        return JSONResponse({"error": f"config.json write failed: {e}"}, status_code=500)
+    # apply live
+    caps_live = APP_CONFIG.setdefault("capabilities", {})
+    if req.section == "shell":
+        caps_live.setdefault("shell", {})["enabled"] = req.enabled
+        if req.enabled:
+            register_shell_tools()
+        else:
+            registry.set_source_enabled("shell", False)
+        return {"ok": True, "section": req.section, "enabled": req.enabled}
+    caps_live[req.section] = req.enabled
+    registry.set_source_enabled(req.section, req.enabled)
+    if req.section == "web" and req.enabled:
+        register_web_tools()
+    if req.section == "skills" and req.enabled:
+        register_skill_tools()
+    return {"ok": True, "section": req.section, "enabled": req.enabled}
+
+
+

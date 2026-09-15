@@ -67,7 +67,7 @@ def monitor_token(rid: int, n: int = 1) -> None:
         req["gen_tps"] = ema * 0.5 + gen_rate * 0.5
 
 
-def monitor_end(rid: int, status: int, prompt_tokens=None, completion_tokens=None, tps=None, duration=None, prompt_tps=None, model=None) -> None:
+def monitor_end(rid: int, status: int, prompt_tokens=None, completion_tokens=None, tps=None, duration=None, prompt_tps=None, model=None, prompt_cached=None, completion_cached=None) -> None:
     req = _monitor_state["active"].pop(rid, None)
     if req is None:
         return
@@ -77,6 +77,8 @@ def monitor_end(rid: int, status: int, prompt_tokens=None, completion_tokens=Non
         "tps": tps, "duration_s": duration or (time.time() - req["start"]),
         "prompt_tps": prompt_tps,
         "model": model or req.get("model"),
+        "prompt_cached": prompt_cached or req.get("prompt_cached", 0),
+        "completion_cached": completion_cached or req.get("completion_cached", 0),
         "end": time.time(),
     })
     _monitor_state["recent"].append(req)
@@ -95,6 +97,49 @@ class RequestMonitor:
         monitor_token(self.rid, n)
 
 
+def parse_cache_tokens(usage: Optional[dict], timings: Optional[dict] = None) -> tuple[int, int]:
+    """Extract (prompt_cached_tokens, completion_cached_tokens) from usage/timings dictionaries."""
+    prompt_cached = 0
+    completion_cached = 0
+
+    if isinstance(usage, dict):
+        # 1. Input / prompt cache read
+        pt_details = usage.get("prompt_tokens_details") or {}
+        if isinstance(pt_details, dict) and pt_details.get("cached_tokens") is not None:
+            prompt_cached = int(pt_details.get("cached_tokens") or 0)
+        elif usage.get("cached_tokens") is not None:
+            prompt_cached = int(usage.get("cached_tokens") or 0)
+        elif usage.get("tokens_cached") is not None:
+            prompt_cached = int(usage.get("tokens_cached") or 0)
+        elif usage.get("cache_read_input_tokens") is not None:
+            prompt_cached = int(usage.get("cache_read_input_tokens") or 0)
+
+        # 2. Output / completion cache read (speculative decoding / draft model / KV cache reuse)
+        ct_details = usage.get("completion_tokens_details") or {}
+        if isinstance(ct_details, dict):
+            if ct_details.get("accepted_prediction_tokens") is not None:
+                completion_cached = int(ct_details.get("accepted_prediction_tokens") or 0)
+            elif ct_details.get("cached_tokens") is not None:
+                completion_cached = int(ct_details.get("cached_tokens") or 0)
+        if not completion_cached:
+            if usage.get("draft_tokens_accepted") is not None:
+                completion_cached = int(usage.get("draft_tokens_accepted") or 0)
+            elif usage.get("accepted_prediction_tokens") is not None:
+                completion_cached = int(usage.get("accepted_prediction_tokens") or 0)
+
+    if isinstance(timings, dict):
+        if not prompt_cached:
+            if timings.get("tokens_cached") is not None:
+                prompt_cached = int(timings.get("tokens_cached") or 0)
+            elif isinstance(timings.get("prompt_tokens_details"), dict):
+                prompt_cached = int(timings["prompt_tokens_details"].get("cached_tokens") or 0)
+        if not completion_cached:
+            if timings.get("n_accepted") is not None:
+                completion_cached = int(timings.get("n_accepted") or 0)
+
+    return prompt_cached, completion_cached
+
+
 def extract_usage_from_stream(chunk_text: str, rid: int) -> Optional[dict]:
     usage = None
     for line in chunk_text.split("\n"):
@@ -108,6 +153,11 @@ def extract_usage_from_stream(chunk_text: str, rid: int) -> Optional[dict]:
             j = json.loads(payload)
             if isinstance(j.get("usage"), dict):
                 usage = j["usage"]
+                pc, cc = parse_cache_tokens(usage, j.get("timings"))
+                req = _monitor_state["active"].get(rid)
+                if req:
+                    if pc: req["prompt_cached"] = pc
+                    if cc: req["completion_cached"] = cc
             ch = j.get("choices") or []
             if ch:
                 delta = ch[0].get("delta") or {}

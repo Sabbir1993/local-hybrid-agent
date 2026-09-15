@@ -12,6 +12,20 @@ let ctrl = null;
 let curStatus = null;
 let agentMode = false;
 let planMode = false;
+let chatWebSearch = true;
+try {
+  const savedWeb = localStorage.getItem('chat_web_search');
+  if (savedWeb !== null) chatWebSearch = savedWeb === '1';
+} catch (e) {}
+
+function updateWebToggleUI() {
+  const btn = $('btn-web-toggle');
+  if (!btn) return;
+  btn.classList.toggle('active', !!chatWebSearch);
+  btn.title = chatWebSearch
+    ? 'Web Search is ON (model searches web & fetches URLs) — Click to turn OFF'
+    : 'Web Search is OFF (offline local knowledge only) — Click to turn ON';
+}
 
 /* ---------------- theme management ---------------- */
 const THEME_KEY = 'a770_theme';
@@ -149,16 +163,10 @@ async function pollStatus() {
     }
 
     // update context consumption chip
-    const cChip = $('chip-ctx');
-    if (cChip && s.context) {
-      const ctx = s.context;
-      const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
-      cChip.textContent = `🧠 ${fmtK(ctx.n_past)} / ${fmtK(ctx.n_ctx)} (${ctx.pct}%)`;
-      cChip.title = `KV Context: ${ctx.n_past.toLocaleString()} / ${ctx.n_ctx.toLocaleString()} tokens used (${ctx.pct}%) · Prompt: ${ctx.n_prompt.toLocaleString()}`;
-      if (ctx.pct > 85) cChip.style.color = 'var(--red)';
-      else if (ctx.pct > 70) cChip.style.color = 'var(--amber)';
-      else cChip.style.color = 'var(--dim)';
+    if (s.context && s.context.n_ctx) {
+      curCtxMax = s.context.n_ctx;
     }
+    updateContextChip();
   } catch (e) {
     pollFailures++;
     if (pollFailures >= 2) {
@@ -196,6 +204,51 @@ async function pollGpu() {
   } catch (e) { /* manager restarting */ }
 }
 
+let curCtxMax = 32768;
+
+function getMsgTokens(m) {
+  if (!m) return 0;
+  if (typeof m.ntok === 'number' && m.ntok > 0) return m.ntok;
+  if (m.meta && typeof m.meta.ntok === 'number' && m.meta.ntok > 0) return m.meta.ntok;
+  let textLen = (m.content || '').length + (m.reasoning || '').length;
+  if (Array.isArray(m.images) && m.images.length > 0) {
+    textLen += m.images.length * 576 * 3.5;
+  }
+  return Math.max(1, Math.round(textLen / 3.5));
+}
+
+function updateContextChip() {
+  const cChip = $('chip-ctx');
+  if (!cChip) return;
+
+  let promptToks = 0;
+  let compToks = 0;
+  let totalToks = 0;
+
+  if (Array.isArray(messages) && messages.length > 0) {
+    for (const m of messages) {
+      const tok = getMsgTokens(m);
+      if (m.role === 'assistant') {
+        compToks += tok;
+      } else {
+        promptToks += tok;
+      }
+      totalToks += tok;
+    }
+  }
+
+  const nCtx = (curStatus && curStatus.context && curStatus.context.n_ctx) ? curStatus.context.n_ctx : curCtxMax;
+  const pct = Math.min(100, Number(((totalToks / Math.max(1, nCtx)) * 100).toFixed(1)));
+  const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
+
+  cChip.textContent = `🧠 ${fmtK(totalToks)} / ${fmtK(nCtx)} (${pct}%)`;
+  cChip.title = `Session Tokens: ${totalToks.toLocaleString()} / ${nCtx.toLocaleString()} tokens used (${pct}%) · Prompt: ${promptToks.toLocaleString()} · Completion: ${compToks.toLocaleString()} · ${messages.length} messages`;
+
+  if (pct > 85) cChip.style.color = 'var(--red)';
+  else if (pct > 70) cChip.style.color = 'var(--amber)';
+  else cChip.style.color = 'var(--dim)';
+}
+
 /* ---------------- chat ---------------- */
 function renderAll() {
   const inner = $('chat-inner');
@@ -212,6 +265,7 @@ function renderAll() {
     </div>`;
   const chat = $('chat');
   chat.scrollTop = chat.scrollHeight;
+  updateContextChip();
 }
 
 function renderLast() {
@@ -221,7 +275,7 @@ function renderLast() {
 function bubbleHtml(m, idx) {
   if (m.role === 'user') {
     const imgs = (m.images || []).map(u =>
-      `<img src="${u}" style="max-width:240px; max-height:180px; border-radius:8px; display:block; margin:6px 0; border:1px solid rgba(255,255,255,0.15); box-shadow:0 2px 8px rgba(0,0,0,0.3);">`).join('');
+      `<img src="${u}" class="chat-img-thumb" alt="Attachment" title="Click to enlarge" onclick="openImageModal(this.src, 'Image attachment')" style="max-width:240px; max-height:180px; border-radius:8px; display:block; margin:6px 0; border:1px solid rgba(255,255,255,0.15); box-shadow:0 2px 8px rgba(0,0,0,0.3); cursor:zoom-in;">`).join('');
     const filesTag = m.files ? `<div class="dim" style="font-size:10.5px; margin-top:4px;">📎 ${esc(m.files)}</div>` : '';
     // Display clean user text, strip any injected vision/file tags from the bubble UI
     let displayText = m.displayContent || m.content || '';
@@ -245,7 +299,7 @@ function bubbleHtml(m, idx) {
   }
   const isLast = idx === messages.length - 1;
   const hasText = !!(m.content && m.content.trim());
-  let body = hasText ? md(m.content) : (generating && isLast ? '<span class="cursor">▍</span>' : '');
+  let body = hasText ? md(m.content) : (generating && isLast ? (m.statusText ? `<span class="dim" style="font-size:12px; font-style:italic;">${esc(m.statusText)}</span> ` : '') + '<span class="cursor">▍</span>' : '');
   
   // Render interactive grill-me / ask_question choice cards if options or question frontiers are present
   if (hasText && !generating) {
@@ -472,49 +526,81 @@ async function send(inputText) {
       return;
     }
   }
-  const fullPrompt = await buildPromptText(text);
-  const nFiles = attachments.filter(a => a.content != null).length;
-  const sentImages = attachments.filter(a => a.isImage && a.dataUrl).map(a => a.dataUrl);
-  const sentFiles = attachments.map(a => a.name).join(', ');
+  const sentAttachments = attachments.slice();
+  const sentImages = sentAttachments.filter(a => a.isImage && a.dataUrl).map(a => a.dataUrl);
+  const sentFiles = sentAttachments.map(a => a.name).join(', ');
+  const nFiles = sentAttachments.filter(a => a.content != null).length;
   if (input) input.value = '';
   clearAttachments();
-  const sys = $('sysprompt').value.trim();
-  const msgs = [];
-  if (sys) msgs.push({ role: 'system', content: sys });
-  for (const m of messages) msgs.push({ role: m.role, content: m.content });
-  msgs.push({ role: 'user', content: fullPrompt });
-  messages.push({ role: 'user', content: text || `📎 ${nFiles} file(s) attached`,
-                  images: sentImages.length ? sentImages : undefined,
-                  files: sentFiles || undefined });
-  messages.push({ role: 'assistant', content: '', reasoning: '' });
-  ensureSession(text ? text.slice(0, 60) : 'Files session').then(() => persistMsg('user', text || `📎 ${nFiles} file(s) attached`));
+
+  const userMsg = {
+    role: 'user',
+    content: text || (sentFiles ? `📎 ${sentFiles}` : '(attachment)'),
+    displayContent: text,
+    images: sentImages.length ? sentImages : undefined,
+    files: sentFiles || undefined
+  };
+  messages.push(userMsg);
+
+  const assistantMsg = {
+    role: 'assistant',
+    content: '',
+    reasoning: '',
+    acts: [],
+    statusText: sentImages.length ? '🔍 Analyzing image...' : ''
+  };
+  messages.push(assistantMsg);
+
   renderAll();
   setGenUI(true);
   ctrl = new AbortController();
+
+  let fullPrompt = text;
+  try {
+    fullPrompt = await buildPromptText(text, sentAttachments, ctrl.signal);
+    userMsg.content = fullPrompt;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      assistantMsg.content = '⏹️ Generation cancelled';
+      assistantMsg.statusText = '';
+      setGenUI(false);
+      renderLast();
+      return;
+    }
+    console.warn('Chat prompt build warning:', err);
+  }
+  assistantMsg.statusText = '';
+  renderLast();
+
+  const userMeta = {
+    images: sentImages.length ? sentImages : undefined,
+    files: sentFiles || undefined,
+    displayContent: text || undefined
+  };
+  ensureSession(text ? text.slice(0, 60) : (sentFiles ? `📎 ${sentFiles}` : 'Files session')).then(() => persistMsg('user', fullPrompt, userMeta));
+
+  const sys = $('sysprompt').value.trim();
+  const msgs = [];
+  if (sys) msgs.push({ role: 'system', content: sys });
+  for (const m of messages.slice(0, -1)) msgs.push({ role: m.role, content: m.content });
   const t0 = performance.now();
-  let usage = null;
   const last = () => messages[messages.length - 1];
   try {
-    const res = await fetch('/v1/chat/completions', {
+    const res = await fetch('/chat/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: msgs,
+        web_search: !!chatWebSearch,
+        system_prompt: sys || undefined,
         temperature: parseFloat($('temp').value),
-        top_p: parseFloat($('topp').value),
-        min_p: parseFloat($('minp').value),
-        repeat_penalty: parseFloat($('rep').value),
-        top_k: parseInt($('topk').value) || 0,
-        presence_penalty: parseFloat($('presence').value),
-        max_tokens: parseInt($('maxtok').value),
-        stream: true,
-        stream_options: { include_usage: true },
+        max_tokens: parseInt($('maxtok').value) > 0 ? parseInt($('maxtok').value) : 4096,
       }),
       signal: ctrl.signal,
     });
     if (!res.ok) {
       const e = await res.json().catch(() => ({}));
-      throw new Error((e.error && e.error.message) || ('HTTP ' + res.status));
+      throw new Error(e.error || ('HTTP ' + res.status));
     }
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -524,22 +610,51 @@ async function send(inputText) {
       if (done) break;
       buf += dec.decode(value, { stream: true });
       let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (!line.startsWith('data:')) continue;
-        const pay = line.slice(5).trim();
-        if (pay === '[DONE]') continue;
-        try {
-          const j = JSON.parse(pay);
-          const d = j.choices && j.choices[0] && j.choices[0].delta;
-          if (d) {
-            if (d.reasoning_content) last().reasoning += d.reasoning_content;
-            if (d.content) last().content += d.content;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const raw = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const evM = raw.match(/^event: (.+)$/m);
+        const dtM = raw.match(/^data: (.+)$/m);
+        if (!evM || !dtM) continue;
+        const ev = evM[1];
+        let d = {};
+        try { d = JSON.parse(dtM[1]); } catch (e) {}
+        const L = last();
+        if (ev === 'delta') {
+          L.content += (d.text || '');
+        } else if (ev === 'thought_delta') {
+          L.reasoning = (L.reasoning || '') + (d.delta || '');
+        } else if (ev === 'thought') {
+          L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + (d.text || '');
+        } else if (ev === 'delta_reset') {
+          if (L.content && L.content.trim()) {
+            L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + L.content.trim();
           }
-          if (j.usage) usage = j.usage;
-          renderLast();
-        } catch (e) { /* partial line */ }
+          L.content = '';
+        } else if (ev === 'tool_call') {
+          if (!L.acts) L.acts = [];
+          L.acts.push({ type: 'tool_call', ...d });
+          if (L.content && L.content.trim()) {
+            L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + L.content.trim();
+            L.content = '';
+          }
+        } else if (ev === 'tool_result') {
+          if (!L.acts) L.acts = [];
+          L.acts.push({ type: 'tool_result', ...d });
+        } else if (ev === 'done') {
+          if (d && (d.completion_tokens || d.total_tokens)) {
+            if (d.completion_tokens) L.ntok = d.completion_tokens;
+            if (d.prompt_tokens && messages.length >= 2) {
+              const uMsg = messages[messages.length - 2];
+              if (uMsg && uMsg.role === 'user') {
+                uMsg.ntok = d.prompt_tokens;
+              }
+            }
+          }
+        } else if (ev === 'error') {
+          throw new Error(d.error || 'Chat execution error');
+        }
+        renderLast();
       }
     }
   } catch (e) {
@@ -554,13 +669,21 @@ async function send(inputText) {
     last().content = last().content.slice(m[0].length).trim();
   }
   const dt = (performance.now() - t0) / 1000;
-  const ntok = usage ? usage.completion_tokens : Math.max(1, Math.round(last().content.length / 3.5));
+  const fullLen = (last().content || '').length + (last().reasoning || '').length;
+  const ntok = last().ntok || Math.max(1, Math.round(fullLen / 3.5));
   last().tps = ntok / dt; last().ntok = ntok; last().secs = dt;
   if (ntok > 1) $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
-  persistMsg('assistant', last().content, { tps: last().tps, ntok, secs: dt, reasoning: last().reasoning || undefined });
+  persistMsg('assistant', last().content, {
+    tps: last().tps,
+    ntok,
+    secs: dt,
+    reasoning: last().reasoning || undefined,
+    acts: (last().acts && last().acts.length) ? last().acts : undefined
+  });
   ctrl = null;
   setGenUI(false);
   renderLast();
+  updateContextChip();
 }
 
 /* ---------------- server controls ---------------- */
@@ -920,26 +1043,96 @@ async function loadReport(days) {
     const fmt = n => n == null ? '0' : n.toLocaleString();
     let html = `
       <div class="rep-grid">
-        <div class="rep-cell"><b>${fmt(d.total_tokens)}</b><span>total tokens</span></div>
-        <div class="rep-cell"><b>${fmt(d.prompt_tokens)}</b><span>prompt tokens</span></div>
-        <div class="rep-cell"><b>${fmt(d.completion_tokens)}</b><span>generated</span></div>
-      </div>
-      <div class="rep-grid" style="grid-template-columns: 1fr 1fr 1fr;">
-        <div class="rep-cell"><b>${fmt(d.requests)}</b><span>requests</span></div>
-        <div class="rep-cell"><b>${d.avg_tps}</b><span>avg t/s</span></div>
-        <div class="rep-cell"><b>${d.avg_duration_s}</b><span>avg secs</span></div>
+        <div class="rep-cell"><b>${fmt(d.total_tokens)}</b><span>Total Tokens</span></div>
+        <div class="rep-cell"><b>${fmt(d.prompt_tokens)}</b><span>Prompt Tokens</span></div>
+        <div class="rep-cell"><b>${fmt(d.completion_tokens)}</b><span>Generated</span></div>
+        <div class="rep-cell" style="border-color: rgba(56,189,248,0.35); background: rgba(56,189,248,0.06);" title="Total tokens read directly from prompt and output cache">
+          <b style="color: #38bdf8;">${fmt(d.total_cached_tokens)}</b>
+          <span>Total Read From Cache (${d.cache_hit_rate || 0}% hit)</span>
+        </div>
+        <div class="rep-cell" title="Input tokens read from prompt / KV cache without re-evaluation">
+          <b class="rep-cache-val">${fmt(d.prompt_cached_tokens)}</b>
+          <span>Input Cache Read</span>
+        </div>
+        <div class="rep-cell" title="Output tokens read from speculative draft / accepted cache">
+          <b class="rep-gen-val">${fmt(d.completion_cached_tokens)}</b>
+          <span>Output Cache Read</span>
+        </div>
+        <div class="rep-cell" title="Total calls and tokens executed by orchestrator models (executor, vision, embedder, router)">
+          <b style="color: #f59e0b;">⚡ ${fmt(d.orchestrator_requests)} <small style="font-size:11px; font-weight:normal; color:var(--dim);">(${fmt(d.orchestrator_total_tokens)} tok)</small></b>
+          <span>Orchestrator Models</span>
+        </div>
+        <div class="rep-cell"><b>${fmt(d.requests)}</b><span>Total Requests</span></div>
+        <div class="rep-cell"><b>${d.avg_tps} t/s</b><span>Avg Speed (${d.avg_duration_s}s)</span></div>
       </div>`;
+
     if (d.by_model && d.by_model.length) {
-      html += `<div class="rep-sub">By model</div><table class="rep-table"><tr><th>Model</th><th>Req</th><th>Prompt</th><th>Gen</th><th>Total</th></tr>`;
+      html += `
+        <div class="rep-sub">
+          <span>By Model</span>
+          <span style="font-size:9.5px; font-weight:normal; text-transform:none; color:var(--dim);">Includes main &amp; orchestrator lanes</span>
+        </div>
+        <table class="rep-table">
+          <tr>
+            <th>Model</th>
+            <th>Role</th>
+            <th>Req</th>
+            <th>Prompt</th>
+            <th title="Input tokens read from cache">In Cache</th>
+            <th>Gen</th>
+            <th title="Output tokens read from cache">Out Cache</th>
+            <th>Total</th>
+          </tr>`;
       d.by_model.forEach(m => {
-        html += `<tr><td title="${esc(m.model || '')}">${esc((m.model || 'unknown').split('\\').pop().split('/').pop())}</td><td>${fmt(m.requests)}</td><td>${fmt(m.prompt_tokens)}</td><td>${fmt(m.completion_tokens)}</td><td>${fmt(m.total_tokens)}</td></tr>`;
+        const isOrch = !!m.is_orchestrator;
+        const roleBadge = isOrch
+          ? `<span class="badge-orch" title="Orchestrator sub-model">⚡ Orch</span>`
+          : `<span class="badge-main" title="Main model">Main</span>`;
+        const rawName = (m.model || 'unknown').split('\\').pop().split('/').pop();
+        html += `
+          <tr>
+            <td title="${esc(m.model || '')}">${esc(rawName)}</td>
+            <td>${roleBadge}</td>
+            <td>${fmt(m.requests)}</td>
+            <td>${fmt(m.prompt_tokens)}</td>
+            <td class="rep-cache-val">${fmt(m.prompt_cached_tokens)}</td>
+            <td>${fmt(m.completion_tokens)}</td>
+            <td class="rep-gen-val">${fmt(m.completion_cached_tokens)}</td>
+            <td><b>${fmt(m.total_tokens)}</b></td>
+          </tr>`;
       });
       html += `</table>`;
     }
+
     if (d.by_day && d.by_day.length) {
-      html += `<div class="rep-sub">By day</div><table class="rep-table"><tr><th>Day</th><th>Req</th><th>Prompt</th><th>Gen</th><th>Total</th></tr>`;
+      html += `
+        <div class="rep-sub">
+          <span>By Day</span>
+          <span style="font-size:9.5px; font-weight:normal; text-transform:none; color:var(--dim);">Daily usage &amp; cache hits</span>
+        </div>
+        <table class="rep-table">
+          <tr>
+            <th>Day</th>
+            <th>Req</th>
+            <th title="Orchestrator requests">Orch</th>
+            <th>Prompt</th>
+            <th title="Input tokens read from cache">In Cache</th>
+            <th>Gen</th>
+            <th title="Output tokens read from cache">Out Cache</th>
+            <th>Total</th>
+          </tr>`;
       d.by_day.forEach(x => {
-        html += `<tr><td>${x.day}</td><td>${fmt(x.requests)}</td><td>${fmt(x.prompt_tokens)}</td><td>${fmt(x.completion_tokens)}</td><td>${fmt(x.total_tokens)}</td></tr>`;
+        html += `
+          <tr>
+            <td>${x.day}</td>
+            <td>${fmt(x.requests)}</td>
+            <td style="color:#f59e0b;">${fmt(x.orchestrator_requests)}</td>
+            <td>${fmt(x.prompt_tokens)}</td>
+            <td class="rep-cache-val">${fmt(x.prompt_cached_tokens)}</td>
+            <td>${fmt(x.completion_tokens)}</td>
+            <td class="rep-gen-val">${fmt(x.completion_cached_tokens)}</td>
+            <td><b>${fmt(x.total_tokens)}</b></td>
+          </tr>`;
       });
       html += `</table>`;
     }
@@ -1022,9 +1215,12 @@ document.querySelectorAll('.rep-day').forEach(b => {
           groups[fam].forEach(m => {
             const o = document.createElement('option');
             o.value = m.path;
+            const name = (m.name || '').trim();
+            const shortName = name.length > 20 ? (name.slice(0, 20) + '...') : name;
             const size = m.size_gb != null ? ` · ${m.size_gb}GB` : '';
             const mtp = m.mtp_available ? ' ⚡MTP' : '';
-            o.textContent = `${m.name}${size}${mtp}`;
+            o.textContent = `${shortName}${size}${mtp}`;
+            o.title = `${m.name}${size}${mtp}`;
             o.dataset.mtp = m.mtp_available ? '1' : '';
             o.dataset.mtpPath = m.mtp_draft_path || '';
             g.appendChild(o);
@@ -1079,6 +1275,11 @@ async function loadConfig() {
 
 function fillConfigForm(c) {
     $('cfg-ctx').value = c.context_size ?? CFG_DEFAULTS.ctx;
+    // Keep the context chip n_ctx in sync as soon as we know the model's window size
+    if (c.context_size && c.context_size > 0) {
+      curCtxMax = c.context_size;
+      updateContextChip();
+    }
     $('cfg-ngl').value = c.n_gpu_layers ?? CFG_DEFAULTS.ngl;
     $('cfg-threads').value = c.threads ?? CFG_DEFAULTS.threads;
     $('cfg-tb').value = c.threads_batch ?? CFG_DEFAULTS.tb;
@@ -1191,7 +1392,7 @@ function refreshAttachUI() {
     } else {
       previewBar.innerHTML = attachments.map((a, i) => {
         const thumb = a.isImage && a.dataUrl ?
-          `<img src="${a.dataUrl}" alt="thumb">` :
+          `<img src="${a.dataUrl}" alt="${esc(a.name)}" class="chat-img-thumb" title="Click to enlarge">` :
           `<span style="font-size:20px; line-height:1;">📄</span>`;
         return `<div class="attach-card">
           ${thumb}
@@ -1225,6 +1426,30 @@ function removeAttachment(idx) {
   }
 }
 
+function preloadAttachmentVision(att) {
+  if (!att || !att.isImage || !att.b64 || att.visionPromise) return;
+  att.visionPromise = (async () => {
+    try {
+      const r = await fetch('/agent/vision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_b64: att.b64,
+          mime: att.mime || 'image/png',
+          question: 'Describe this image in detail for a coding agent. Include any visible text, errors, or UI elements.'
+        })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+      att.visionDescription = j.description || '';
+      return att.visionDescription;
+    } catch (err) {
+      att.visionDescription = `(vision unavailable: ${err.message})`;
+      return att.visionDescription;
+    }
+  })();
+}
+
 $('btn-attach').onclick = () => $('file-input').click();
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
 
@@ -1247,6 +1472,7 @@ function addAttachmentFile(f, namePrefix = 'screenshot') {
       attachments[idx].dataUrl = url;
       attachments[idx].b64 = (url.split(',')[1] || '');
       attachments[idx].mime = f.type || 'image/png';
+      preloadAttachmentVision(attachments[idx]);
     } else {
       attachments[idx].content = url;
     }
@@ -1313,20 +1539,34 @@ $('attach-info').onclick = () => {
   }
 };
 
-async function buildPromptText(text) {
-  const textParts = attachments.filter(a => a.content != null).map(a =>
+async function buildPromptText(text, attList = null, signal = null) {
+  const list = (attList && attList.length) ? attList : attachments;
+  const textParts = list.filter(a => a.content != null).map(a =>
     `--- FILE: ${a.name} ---\n${a.content}\n--- END ${a.name} ---`);
   const imgParts = [];
-  for (const a of attachments.filter(x => x.isImage && x.b64)) {
+  for (const a of list.filter(x => x.isImage && (x.b64 || x.visionPromise || x.visionDescription))) {
     try {
-      const r = await fetch('/agent/vision', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_b64: a.b64, mime: a.mime, question: 'Describe this image in detail for a coding agent. Include any visible text, errors, or UI elements.' }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
-      imgParts.push(`--- IMAGE: ${a.name} ---\n${j.description}\n--- END ${a.name} ---`);
+      let desc = a.visionDescription;
+      if (!desc && a.visionPromise) {
+        desc = await a.visionPromise;
+      } else if (!desc && a.b64) {
+        const r = await fetch('/agent/vision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_b64: a.b64,
+            mime: a.mime || 'image/png',
+            question: 'Describe this image in detail for a coding agent. Include any visible text, errors, or UI elements.'
+          }),
+          signal: signal || undefined
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+        desc = j.description || '';
+      }
+      imgParts.push(`--- IMAGE: ${a.name} ---\n${desc}\n--- END ${a.name} ---`);
     } catch (err) {
+      if (err.name === 'AbortError') throw err;
       imgParts.push(`--- IMAGE: ${a.name} ---\n(vision unavailable: ${err.message})\n--- END ${a.name} ---`);
     }
   }
@@ -1812,6 +2052,8 @@ function setAppMode(isAgent, isUserSwitch = false) {
   if (planSel) planSel.style.display = agentMode ? 'inline-block' : 'none';
   const eng = $('agent-engine');
   if (eng) eng.style.display = agentMode ? 'inline-block' : 'none';
+  const webToggle = $('btn-web-toggle');
+  if (webToggle) webToggle.style.display = agentMode ? 'none' : 'flex';
   if (agentMode && window._setPlanMode) window._setPlanMode(planMode);   // refresh placeholder
   // workspace side panel needs agent mode + an active project
   if (!agentMode && wsPanelOpen) setWsPanel(false);
@@ -1991,17 +2233,58 @@ async function loadSessions() {
       };
       list.appendChild(row);
     });
+
+    // Auto-restore active session on initial load / refresh
+    if (!curSession && d.sessions && d.sessions.length) {
+      const savedSid = localStorage.getItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
+      const target = (savedSid && d.sessions.find(x => String(x.id) === String(savedSid))) || d.sessions[0];
+      if (target) {
+        openSession(target);
+      }
+    }
   } catch (e) {}
 }
 
 async function openSession(s) {
   try {
-    const d = await (await fetch(`/control/sessions/${s.id}/messages`)).json();
-    messages = d.messages.map(m => ({
-      role: m.role, content: m.content, reasoning: '',
-      acts: (m.meta && m.meta.acts) || [], tps: m.meta && m.meta.tps, ntok: m.meta && m.meta.ntok, secs: m.meta && m.meta.secs,
-    }));
+    // Fetch messages and config in parallel so curCtxMax is ready before rendering.
+    // This eliminates the race where openSession() finishes before loadProfiles() or
+    // pollStatus() has had a chance to set curCtxMax from the actual model window size.
+    const sel = $('profile');
+    const modelTarget = (sel && sel.value) ? sel.value : (curStatus && curStatus.model);
+    const cfgUrl = '/control/config' + (modelTarget ? '?model=' + encodeURIComponent(modelTarget) : '');
+    const [msgRes, cfgRes] = await Promise.allSettled([
+      fetch(`/control/sessions/${s.id}/messages`).then(r => r.json()),
+      fetch(cfgUrl).then(r => r.json()).catch(() => null),
+    ]);
+
+    const d = (msgRes.status === 'fulfilled' ? msgRes.value : null) || {};
+    const cfg = cfgRes.status === 'fulfilled' ? cfgRes.value : null;
+
+    // Immediately seed curCtxMax from the config response (no need to wait for loadProfiles)
+    if (cfg && cfg.context_size > 0) curCtxMax = cfg.context_size;
+
+    messages = (d.messages || []).map(m => {
+      const meta = m.meta || {};
+      const textLen = (m.content || '').length + ((meta.reasoning) || '').length;
+      const tok = (typeof meta.ntok === 'number') ? meta.ntok : Math.max(1, Math.round(textLen / 3.5));
+      return {
+        role: m.role,
+        content: m.content || '',
+        displayContent: meta.displayContent || undefined,
+        images: meta.images || undefined,
+        files: meta.files || undefined,
+        reasoning: meta.reasoning || '',
+        acts: meta.acts || [],
+        tps: meta.tps,
+        ntok: tok,
+        secs: meta.secs,
+      };
+    });
     curSession = s;
+    try {
+      localStorage.setItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id', String(s.id));
+    } catch (e) {}
     renderAll();
     loadSessions();
   } catch (e) { toast('Failed to load session', true); }
@@ -2009,7 +2292,14 @@ async function openSession(s) {
 
 async function deleteSession(sid) {
   try { await fetch(`/control/sessions/${sid}`, { method: 'DELETE' }); } catch (e) {}
-  if (curSession && curSession.id === sid) { curSession = null; messages = []; renderAll(); }
+  if (curSession && curSession.id === sid) {
+    curSession = null;
+    messages = [];
+    try {
+      localStorage.removeItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
+    } catch (e) {}
+    renderAll();
+  }
   loadSessions();
 }
 
@@ -2049,7 +2339,16 @@ function ensureSession(promptText) {
     body: JSON.stringify({ title: desiredTitle }),
   })
     .then(r => r.json())
-    .then(j => { curSession = j.session; loadSessions(); return curSession; })
+    .then(j => {
+      curSession = j.session;
+      if (curSession) {
+        try {
+          localStorage.setItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id', String(curSession.id));
+        } catch (e) {}
+      }
+      loadSessions();
+      return curSession;
+    })
     .catch(() => null);
 }
 
@@ -2057,6 +2356,9 @@ $('btn-newchat').onclick = () => {
   if (generating) { toast('Generation in progress', true); return; }
   curSession = null;
   messages = [];
+  try {
+    localStorage.removeItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
+  } catch (e) {}
   renderAll();
   loadSessions();
   $('input').focus();
@@ -2491,16 +2793,18 @@ function agentActsHtml(acts) {
 
   // Count files & searches for header summary like: "Exploring 14 files, 3 searches"
   const fileOps = allTools.filter(t => ['read_file', 'write_file', 'edit_file'].includes(t.name));
+  const webOps = allTools.filter(t => ['web_search', 'web_fetch'].includes(t.name));
   const searchOps = allTools.filter(t => ['grep', 'list_files'].includes(t.name));
-  const otherOps = allTools.filter(t => !['read_file', 'write_file', 'edit_file', 'grep', 'list_files'].includes(t.name));
+  const otherOps = allTools.filter(t => !['read_file', 'write_file', 'edit_file', 'grep', 'list_files', 'web_search', 'web_fetch'].includes(t.name));
 
   const summaryParts = [];
+  if (webOps.length > 0) summaryParts.push(`${webOps.length} web search${webOps.length !== 1 ? 'es' : ''}`);
   if (fileOps.length > 0) summaryParts.push(`${fileOps.length} file${fileOps.length !== 1 ? 's' : ''}`);
   if (searchOps.length > 0) summaryParts.push(`${searchOps.length} search${searchOps.length !== 1 ? 'es' : ''}`);
   if (otherOps.length > 0) summaryParts.push(`${otherOps.length} action${otherOps.length !== 1 ? 's' : ''}`);
   if (summaryParts.length === 0) summaryParts.push(`${totalOps} step${totalOps !== 1 ? 's' : ''}`);
 
-  const summaryTitle = isAllDone ? `Explored ${summaryParts.join(', ')}` : `Exploring ${summaryParts.join(', ')}`;
+  const summaryTitle = isAllDone ? `Completed ${summaryParts.join(', ')}` : `Running ${summaryParts.join(', ')}`;
 
   let h = '<div class="agy-agent-container">';
   h += `<details class="agy-agent-drawer" open>
@@ -2565,6 +2869,20 @@ function agentActsHtml(acts) {
       iconClass = 'python';
       iconSymbol = '⚡';
       label = esc(t.args.file || (t.args.code ? t.args.code.slice(0, 30) + '…' : 'python code'));
+    } else if (t.name === 'web_search') {
+      verb = 'Searched web';
+      iconClass = 'search';
+      iconSymbol = '🌐';
+      label = esc(t.args.query || t.args.q || 'web query');
+      if (t.result) {
+        const matches = (t.result.match(/https?:\/\//g) || []).length;
+        if (matches > 0) extra = `<span class="agy-step-count">${matches} source${matches !== 1 ? 's' : ''}</span>`;
+      }
+    } else if (t.name === 'web_fetch') {
+      verb = 'Fetched page';
+      iconClass = 'file';
+      iconSymbol = '🔗';
+      label = esc(t.args.url || 'web page');
     }
 
     const isRunning = t.result === null;
@@ -2631,22 +2949,59 @@ async function runAgentSSE(text) {
       return;
     }
   }
-  const sentImages = attachments.filter(a => a.isImage && a.dataUrl).map(a => a.dataUrl);
-  const sentFiles = attachments.map(a => a.name).join(', ');
-  const fullPrompt = await buildPromptText(text);
+  const input = $('input');
+  const sentAttachments = attachments.slice();
+  const sentImages = sentAttachments.filter(a => a.isImage && a.dataUrl).map(a => a.dataUrl);
+  const sentFiles = sentAttachments.map(a => a.name).join(', ');
+  const nFiles = sentAttachments.filter(a => a.content != null).length;
+  if (input) input.value = '';
   clearAttachments();
-  messages.push({
+
+  const userMsg = {
     role: 'user',
-    content: fullPrompt,
+    content: text || (sentFiles ? `📎 ${sentFiles}` : '(attachment)'),
     displayContent: text,
     images: sentImages.length ? sentImages : undefined,
     files: sentFiles || undefined
-  });
-  messages.push({ role: 'assistant', content: '', reasoning: '', acts: [] });
-  ensureSession(text.slice(0, 60)).then(() => persistMsg('user', text || fullPrompt));
+  };
+  messages.push(userMsg);
+
+  const assistantMsg = {
+    role: 'assistant',
+    content: '',
+    reasoning: '',
+    acts: [],
+    statusText: sentImages.length ? '🔍 Analyzing image...' : ''
+  };
+  messages.push(assistantMsg);
+
   renderAll();
   setGenUI(true);
   ctrl = new AbortController();
+
+  let fullPrompt = text;
+  try {
+    fullPrompt = await buildPromptText(text, sentAttachments, ctrl.signal);
+    userMsg.content = fullPrompt;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      assistantMsg.content = '⏹️ Generation cancelled';
+      assistantMsg.statusText = '';
+      setGenUI(false);
+      renderLast();
+      return;
+    }
+    console.warn('Agent prompt build warning:', err);
+  }
+  assistantMsg.statusText = '';
+  renderLast();
+
+  const userMeta = {
+    images: sentImages.length ? sentImages : undefined,
+    files: sentFiles || undefined,
+    displayContent: text || undefined
+  };
+  ensureSession((text || (sentFiles ? `📎 ${sentFiles}` : 'Agent task')).slice(0, 60)).then(() => persistMsg('user', fullPrompt, userMeta));
   const last = () => messages[messages.length - 1];
   (async () => {
     let usage = null;
@@ -2728,10 +3083,11 @@ async function runAgentSSE(text) {
         last().content = 'Task completed. See tool operations above for details.';
       }
       const dt = (performance.now() - t0) / 1000;
-      const ntok = Math.max(1, Math.round(last().content.length / 3.5));
+      const fullLen = (last().content || '').length + (last().reasoning || '').length;
+      const ntok = Math.max(1, Math.round(fullLen / 3.5));
       last().tps = ntok / dt; last().ntok = ntok; last().secs = dt;
       if (ntok > 1) $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
-      persistMsg('assistant', last().content, { tps: last().tps, ntok, secs: dt, acts: last().acts });
+      persistMsg('assistant', last().content, { tps: last().tps, ntok, secs: dt, reasoning: last().reasoning || undefined, acts: last().acts });
     } catch (e) {
       if (e.name !== 'AbortError') {
         last().content += (last().content ? '\n\n' : '') + '⚠️ ' + e.message;
@@ -2740,6 +3096,7 @@ async function runAgentSSE(text) {
     ctrl = null;
     setGenUI(false);
     renderLast();
+    updateContextChip();
     if (wsPanelOpen) wsRefreshTree();   // final state of workspace after the task
   })();
 }
@@ -2750,7 +3107,6 @@ function submitPrompt() {
   const text = input ? input.value.trim() : '';
   const hasFiles = attachments && attachments.some(a => a.content != null || (a.isImage && a.b64));
   if ((!text && !hasFiles) || generating) return;
-  if (input) input.value = '';
   if (agentMode) runAgentSSE(text); else send(text);
 }
 $('input').addEventListener('keydown', e => {
@@ -2771,14 +3127,73 @@ Object.keys(CFG_INPUT_DEFAULTS).forEach(id => {
 });
 $('btn-send').onclick = submitPrompt;
 $('btn-abort').onclick = () => { if (ctrl) ctrl.abort(); };
+const btnWebToggle = $('btn-web-toggle');
+if (btnWebToggle) {
+  btnWebToggle.onclick = () => {
+    chatWebSearch = !chatWebSearch;
+    try { localStorage.setItem('chat_web_search', chatWebSearch ? '1' : '0'); } catch (e) {}
+    updateWebToggleUI();
+    toast(chatWebSearch ? '🌐 Web search enabled for chat' : '🌐 Web search disabled (offline mode)');
+  };
+  updateWebToggleUI();
+}
 $('temp').oninput = e => { $('tempv').textContent = parseFloat(e.target.value).toFixed(2); };
 $('topp').oninput = e => { $('toppv').textContent = parseFloat(e.target.value).toFixed(2); };
 $('minp').oninput = e => { $('minpv').textContent = parseFloat(e.target.value).toFixed(3); };
 $('rep').oninput = e => { $('repv').textContent = parseFloat(e.target.value).toFixed(2); };
 $('presence').oninput = e => { $('presencev').textContent = parseFloat(e.target.value).toFixed(2); };
 
+/* image preview lightbox modal */
+function openImageModal(src, title = 'Image attachment') {
+  const m = $('img-modal');
+  const img = $('img-full');
+  const t = $('img-title');
+  const dl = $('img-dl');
+  if (!m || !img || !src) return;
+  img.src = src;
+  if (t) t.textContent = title;
+  if (dl) dl.href = src;
+  m.hidden = false;
+  m.removeAttribute('hidden');
+  m.style.display = 'flex';
+}
+
+function closeImageModal() {
+  const m = $('img-modal');
+  if (m) {
+    m.hidden = true;
+    m.setAttribute('hidden', '');
+    m.style.display = 'none';
+    const img = $('img-full');
+    if (img) img.src = '';
+  }
+}
+
+// Global click handler to expand images on popup
+document.addEventListener('click', e => {
+  const img = e.target.closest('.msg .bubble img, .attach-preview-bar .attach-card img, .chat-img-thumb');
+  if (img && !e.target.closest('.attach-card-remove')) {
+    e.stopPropagation();
+    openImageModal(img.src, img.alt || img.title || 'Image preview');
+  }
+});
+
+const imgModal = $('img-modal');
+if (imgModal) {
+  imgModal.addEventListener('click', e => {
+    if (e.target.id === 'img-modal' || e.target.id === 'img-body') {
+      closeImageModal();
+    }
+  });
+}
+const imgClose = $('img-close');
+if (imgClose) {
+  imgClose.addEventListener('click', () => closeImageModal());
+}
+
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
+    closeImageModal();
     const sd = $('settings-drawer');
     if (sd) sd.classList.remove('open');
     const md = $('monitor-drawer');
