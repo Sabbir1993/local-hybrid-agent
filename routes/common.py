@@ -138,18 +138,21 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
 
 
 
-async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=4096, repeat_penalty=1.15, rid: Optional[int] = None):
+async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None):
     payload = {
         "messages": msgs,
         "temperature": temperature,
-        "max_tokens": max_tokens,
         "repeat_penalty": repeat_penalty,
         "stream": True,
     }
+    if max_tokens is not None and int(max_tokens) > 0:
+        payload["max_tokens"] = int(max_tokens)
+    else:
+        payload["max_tokens"] = -1
     if tools:
         payload["tools"] = tools
 
-    async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=600.0) as response:
+    async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=None) as response:
         if response.status_code != 200:
             err_text = await response.aread()
             err_msg = err_text.decode("utf-8", "replace")[:300]
@@ -175,13 +178,13 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
                         m_copy["tool_calls"] = new_tcs
                     sanitized_msgs.append(m_copy)
                 payload["messages"] = sanitized_msgs
-                async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=600.0) as retry_resp:
+                async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=None) as retry_resp:
                     if retry_resp.status_code != 200:
                         re_err = await retry_resp.aread()
                         payload_notools = dict(payload)
                         payload_notools.pop("tools", None)
                         try:
-                            async with client_or_state.stream("POST", "/v1/chat/completions", json=payload_notools, timeout=600.0) as fb_resp:
+                            async with client_or_state.stream("POST", "/v1/chat/completions", json=payload_notools, timeout=None) as fb_resp:
                                 if fb_resp.status_code == 200:
                                     async for item in _process_sse_stream(fb_resp, rid=rid):
                                         yield item

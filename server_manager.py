@@ -44,6 +44,7 @@ from core.skills import register_skill_tools
 from core.small_model import small_models
 from core.state import keepalive_loop, state
 from core.web_tools import register_web_tools
+from core.file_tools import register_file_tools
 
 from routes import (
     agent_router,
@@ -86,6 +87,7 @@ async def lifespan(app: FastAPI):
     register_web_tools()
     register_skill_tools()
     register_shell_tools()
+    register_file_tools()
     load_plugins()
     await asyncio.get_event_loop().run_in_executor(None, kill_orphan_llama_servers)
     asyncio.create_task(connect_all_mcp())

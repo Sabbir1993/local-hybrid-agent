@@ -5,16 +5,16 @@
     "executor": {
       "model": "orchestrator/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
       "mmproj": "orchestrator/mmproj-model-f16.gguf",
-      "port": 24576,
+      "port": 8091,
       "gpu": 1,
       "ctx": 24576
     },
     "vision": {
       "model": "orchestrator/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
       "mmproj": "orchestrator/mmproj-model-f16.gguf",
-      "port": 16184,
+      "port": 8092,
       "gpu": 1,
-      "ctx": 8092
+      "ctx": 24576
     },
     "embedder": {
       "model": "orchestrator/nomic-embed-text-v1.5-Q8_0.gguf",
@@ -27,7 +27,7 @@
     "confidence_threshold": 0.7
   },
   "agent": {
-    "exec_timeout_s": 120,
+    "exec_timeout_s": 0,
     "max_steps": 30,
     "idle_unload_s": 0
   },
@@ -47,7 +47,7 @@
     "shell": {
       "enabled": true,
       "ask_first": true,
-      "timeout_s": 60,
+      "timeout_s": 0,
       "allow_patterns": ["git status*", "git diff*", "git log*", "dir *", "type *"]
     }
   }

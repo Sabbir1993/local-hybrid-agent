@@ -26,7 +26,7 @@ class ProxyState:
         self.keepalive_enabled = False
         self.keepalive_interval_s = KEEPALIVE_INTERVAL_S
         self.last_activity = time.time()
-        self.client = httpx.AsyncClient(base_url=f"http://127.0.0.1:{LLAMA_SERVER_PORT}", timeout=600.0)
+        self.client = httpx.AsyncClient(base_url=f"http://127.0.0.1:{LLAMA_SERVER_PORT}", timeout=None)
 
     async def load_profile(self, target: Union[Path, dict, str]):
         async with self.lock:

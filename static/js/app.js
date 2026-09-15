@@ -92,6 +92,12 @@ function md(s) {
       t = t.replace(/^#{1,3} (.*)$/gm, '<b>$1</b>');
       t = t.replace(/^\s*[-*] (.*)$/gm, '• $1');
       t = t.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      // Parse [DOWNLOAD: filename] markers emitted by the agent
+      t = t.replace(/\[DOWNLOAD:\s*([^\]]+)\]/g, (_, fname) => {
+        const cleanName = fname.trim();
+        const url = `/agent/download?path=${encodeURIComponent(cleanName)}`;
+        return `<a href="${url}" class="download-link" download="${esc(cleanName)}" title="Download ${esc(cleanName)}">⬇ ${esc(cleanName)}</a>`;
+      });
       t = t.replace(/\n/g, '<br>');
       out += t;
     }
@@ -268,8 +274,70 @@ function renderAll() {
   updateContextChip();
 }
 
+function onThinkSummaryClick(idx, ev) {
+  const details = ev.currentTarget.closest('details');
+  if (details && messages[idx]) {
+    messages[idx]._thinkOpen = !details.open;
+  }
+}
+window.onThinkSummaryClick = onThinkSummaryClick;
+
+function onToggleThink(idx, isOpen) {
+  if (messages[idx]) {
+    messages[idx]._thinkOpen = isOpen;
+  }
+}
+window.onToggleThink = onToggleThink;
+
 function renderLast() {
-  renderAll();
+  const inner = $('chat-inner');
+  if (!inner) return;
+  const lastIdx = messages.length - 1;
+  if (lastIdx < 0 || inner.children.length !== messages.length || $('empty')) {
+    renderAll();
+    return;
+  }
+
+  const lastEl = inner.lastElementChild;
+  const m = messages[lastIdx];
+
+  // Preserve existing details state and scroll position if user interacted with it
+  const prevThink = lastEl.querySelector('details.think');
+  let thinkScrollTop = -1;
+  let thinkWasAtBottom = true;
+  if (prevThink) {
+    if (m._thinkOpen === undefined) {
+      m._thinkOpen = prevThink.open;
+    }
+    const prevDiv = prevThink.querySelector('.think-content, div');
+    if (prevDiv) {
+      thinkScrollTop = prevDiv.scrollTop;
+      thinkWasAtBottom = (prevDiv.scrollHeight - prevDiv.scrollTop - prevDiv.clientHeight) < 40;
+    }
+  }
+
+  // Generate new HTML for the last message
+  const temp = document.createElement('div');
+  temp.innerHTML = bubbleHtml(m, lastIdx);
+  const newEl = temp.firstElementChild;
+  if (newEl) {
+    inner.replaceChild(newEl, lastEl);
+
+    // Auto-scroll thinking container to keep up with stream
+    const newThink = newEl.querySelector('details.think');
+    const newThinkDiv = newThink ? newThink.querySelector('.think-content, div') : null;
+    if (newThinkDiv) {
+      if (generating && !m.content && thinkWasAtBottom) {
+        newThinkDiv.scrollTop = newThinkDiv.scrollHeight;
+      } else if (thinkScrollTop >= 0) {
+        newThinkDiv.scrollTop = thinkScrollTop;
+      }
+    }
+  }
+
+  const chat = $('chat');
+  if (chat) chat.scrollTop = chat.scrollHeight;
+  updateContextChip();
 }
 
 function bubbleHtml(m, idx) {
@@ -285,6 +353,9 @@ function bubbleHtml(m, idx) {
     if (displayText.includes('--- FILE:')) {
       displayText = displayText.replace(/--- FILE:[\s\S]*?--- END [^\n]+ ---/g, '').trim();
     }
+    if (displayText.includes('[Attached Files]')) {
+      displayText = displayText.replace(/\[Attached Files\][\s\S]*?--- END [^\n]+ ---(\s*\[NOTE:.*\])?/g, '').trim();
+    }
     return `<div class="msg user"><div class="bubble">${imgs}${md(displayText || '(attachment)')}${filesTag}</div></div>`;
   }
   let inner = '';
@@ -294,12 +365,29 @@ function bubbleHtml(m, idx) {
     inner += agentActsHtml(m.acts);
   }
 
-  if (m.reasoning) {
-    inner += `<details class="think"><summary>💭 Thinking</summary><div>${esc(m.reasoning).replace(/\n/g, '<br>')}</div></details>`;
-  }
   const isLast = idx === messages.length - 1;
   const hasText = !!(m.content && m.content.trim());
-  let body = hasText ? md(m.content) : (generating && isLast ? (m.statusText ? `<span class="dim" style="font-size:12px; font-style:italic;">${esc(m.statusText)}</span> ` : '') + '<span class="cursor">▍</span>' : '');
+
+  if (m.reasoning) {
+    const isGeneratingThis = generating && isLast;
+    const isActivelyThinking = isGeneratingThis && !hasText;
+    // Auto-expand while thinking if user hasn't explicitly toggled it
+    const isOpen = m._thinkOpen !== undefined ? m._thinkOpen : isActivelyThinking;
+    const statusLabel = isActivelyThinking ? '💭 Thinking...' : '💭 Thinking';
+    const thinkBody = esc(m.reasoning).replace(/\n/g, '<br>') + (isActivelyThinking ? '<span class="cursor">▍</span>' : '');
+    inner += `<details class="think" ${isOpen ? 'open' : ''} ontoggle="onToggleThink(${idx}, this.open)"><summary onclick="onThinkSummaryClick(${idx}, event)">${statusLabel}</summary><div class="think-content">${thinkBody}</div></details>`;
+  }
+
+  let body = '';
+  if (hasText) {
+    body = md(m.content);
+  } else if (generating && isLast) {
+    if (m.statusText) {
+      body = `<span class="dim" style="font-size:12px; font-style:italic;">${esc(m.statusText)}</span> <span class="cursor">▍</span>`;
+    } else if (!m.reasoning) {
+      body = '<span class="cursor">▍</span>';
+    }
+  }
   
   // Render interactive grill-me / ask_question choice cards if options or question frontiers are present
   if (hasText && !generating) {
@@ -594,7 +682,7 @@ async function send(inputText) {
         web_search: !!chatWebSearch,
         system_prompt: sys || undefined,
         temperature: parseFloat($('temp').value),
-        max_tokens: parseInt($('maxtok').value) > 0 ? parseInt($('maxtok').value) : 4096,
+        max_tokens: (isNaN(parseInt($('maxtok').value)) || parseInt($('maxtok').value) <= 0) ? -1 : parseInt($('maxtok').value),
       }),
       signal: ctrl.signal,
     });
@@ -1391,14 +1479,24 @@ function refreshAttachUI() {
       previewBar.innerHTML = '';
     } else {
       previewBar.innerHTML = attachments.map((a, i) => {
-        const thumb = a.isImage && a.dataUrl ?
-          `<img src="${a.dataUrl}" alt="${esc(a.name)}" class="chat-img-thumb" title="Click to enlarge">` :
-          `<span style="font-size:20px; line-height:1;">📄</span>`;
-        return `<div class="attach-card">
+        let thumb;
+        if (a.isImage && a.dataUrl) {
+          thumb = `<img src="${a.dataUrl}" alt="${esc(a.name)}" class="chat-img-thumb" title="Click to enlarge">`;
+        } else if (a.isDoc) {
+          const docIcon = a.uploading ? '⏳' : (a.truncated ? '📄⚡' : '📄');
+          const docTitle = a.uploading ? 'Uploading & extracting...' : (a.truncated ? 'Truncated — agent will use read_file_chunk for more' : 'Document uploaded & extracted');
+          thumb = `<span style="font-size:20px; line-height:1;" title="${docTitle}">${docIcon}</span>`;
+        } else {
+          thumb = `<span style="font-size:20px; line-height:1;">📝</span>`;
+        }
+        const statusBadge = a.isDoc && a.uploading
+          ? `<span class="attach-doc-uploading">uploading…</span>`
+          : (a.isDoc && a.truncated ? `<span class="attach-doc-badge truncated" title="Content truncated — agent will page through using read_file_chunk">chunked</span>` : (a.isDoc ? `<span class="attach-doc-badge ok">extracted</span>` : ''));
+        return `<div class="attach-card ${a.isDoc && a.uploading ? 'uploading' : ''}">
           ${thumb}
           <div class="attach-card-info">
             <span class="attach-card-name" title="${esc(a.name)}">${esc(a.name)}</span>
-            <span class="attach-card-size">${fmtBytes(a.size || 0)}</span>
+            <span class="attach-card-size">${fmtBytes(a.size || 0)}${statusBadge}</span>
           </div>
           <span class="attach-card-remove" onclick="removeAttachment(${i})" title="Remove attachment">✕</span>
         </div>`;
@@ -1452,9 +1550,52 @@ function preloadAttachmentVision(att) {
 
 $('btn-attach').onclick = () => $('file-input').click();
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
+const DOC_RE = /\.(xlsx?|pdf|pptx?|docx?|csv)$/i;
 
-function addAttachmentFile(f, namePrefix = 'screenshot') {
+async function addAttachmentFile(f, namePrefix = 'screenshot') {
   const isImage = IMAGE_RE.test(f.name || '') || (f.type && f.type.startsWith('image/'));
+  const isDoc = !isImage && DOC_RE.test(f.name || '');
+
+  if (isDoc) {
+    // --- Document files: upload to server for extraction ---
+    const maxDocBytes = 200 * 1024 * 1024; // 200MB cap for docs
+    if (f.size > maxDocBytes) {
+      toast(`"${f.name || 'File'}" is ${fmtBytes(f.size)} — max size is ${fmtBytes(maxDocBytes)}`, true);
+      return;
+    }
+    const att = { name: f.name, size: f.size, isImage: false, isDoc: true, uploading: true, truncated: false };
+    attachments.push(att);
+    refreshAttachUI();
+    try {
+      const fd = new FormData();
+      fd.append('files', f, f.name);
+      const res = await fetch('/agent/upload', { method: 'POST', body: fd });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.detail || j.error || 'HTTP ' + res.status);
+      const fileData = (j.files || [])[0] || {};
+      const idx = attachments.indexOf(att);
+      if (idx >= 0) {
+        attachments[idx].uploading = false;
+        attachments[idx].preview = fileData.preview || '';
+        attachments[idx].truncated = fileData.truncated || false;
+        attachments[idx].serverPath = fileData.path || f.name;
+        attachments[idx].content = fileData.preview || ''; // for buildPromptText compat
+      }
+      toast(`📄 ${f.name} uploaded & extracted`);
+    } catch (err) {
+      const idx = attachments.indexOf(att);
+      if (idx >= 0) {
+        attachments[idx].uploading = false;
+        attachments[idx].preview = `(upload failed: ${err.message})`;
+        attachments[idx].content = attachments[idx].preview;
+      }
+      toast(`Failed to upload ${f.name}: ${err.message}`, true);
+    }
+    refreshAttachUI();
+    return;
+  }
+
+  // --- Images and text/code files: local FileReader ---
   const maxBytes = isImage ? (15 * 1024 * 1024) : (512 * 1024);
   if (f.size > maxBytes) {
     toast(`"${f.name || 'File'}" is ${fmtBytes(f.size)} — max size is ${fmtBytes(maxBytes)}`, true);
@@ -1595,6 +1736,10 @@ function wsFileIcon(name) {
     php: '🐘', sql: '🗄️', yml: '🔧', yaml: '🔧', toml: '🔧',
     png: '🖼️', jpg: '🖼️', jpeg: '🖼️', webp: '🖼️', svg: '🖼️',
     gguf: '🧠', db: '🗄️',
+    // Document types
+    xlsx: '📊', xls: '📊', csv: '📋',
+    pdf: '📕', pptx: '📊', ppt: '📊',
+    docx: '📄', doc: '📄',
   };
   return map[e] || '📄';
 }
@@ -2082,15 +2227,18 @@ function setAppMode(isAgent, isUserSwitch = false) {
     }
     curSession = null;
     messages = [];
+    try {
+      localStorage.removeItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
+    } catch (e) {}
     renderAll();
-    loadSessions();
+    loadSessions(false);
     if ($('input')) {
       $('input').value = '';
       $('input').focus();
     }
     clearAttachments();
   } else {
-    loadSessions();
+    loadSessions(true);
   }
 }
 
@@ -2101,7 +2249,7 @@ $('mode-agent').onclick = () => setAppMode(true, true);
 let curProject = null;      // {id, name}
 let curSession = null;      // {id, title}
 
-async function loadProjects() {
+async function loadProjects(autoRestoreSessions = false) {
   try {
     const d = await (await fetch('/control/projects')).json();
     const list = $('projects-list');
@@ -2177,7 +2325,7 @@ async function loadProjects() {
     }
 
     updateWsRail();
-    loadSessions();
+    loadSessions(autoRestoreSessions);
   } catch (e) {}
 }
 
@@ -2202,7 +2350,7 @@ async function deleteProject(pid, pname) {
   }
 }
 
-async function loadSessions() {
+async function loadSessions(autoRestore = false) {
   const list = $('session-list');
   const url = agentMode
     ? (curProject ? `/control/projects/${curProject.id}/sessions` : null)
@@ -2234,10 +2382,10 @@ async function loadSessions() {
       list.appendChild(row);
     });
 
-    // Auto-restore active session on initial load / refresh
-    if (!curSession && d.sessions && d.sessions.length) {
+    // Auto-restore active session on initial load / refresh if saved
+    if (autoRestore && !curSession && d.sessions && d.sessions.length) {
       const savedSid = localStorage.getItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
-      const target = (savedSid && d.sessions.find(x => String(x.id) === String(savedSid))) || d.sessions[0];
+      const target = savedSid ? d.sessions.find(x => String(x.id) === String(savedSid)) : null;
       if (target) {
         openSession(target);
       }
@@ -2300,7 +2448,7 @@ async function deleteSession(sid) {
     } catch (e) {}
     renderAll();
   }
-  loadSessions();
+  loadSessions(false);
 }
 
 function persistMsg(role, content, meta) {
@@ -2360,8 +2508,12 @@ $('btn-newchat').onclick = () => {
     localStorage.removeItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
   } catch (e) {}
   renderAll();
-  loadSessions();
-  $('input').focus();
+  loadSessions(false);
+  if ($('input')) {
+    $('input').value = '';
+    $('input').focus();
+  }
+  clearAttachments();
   toast(agentMode ? 'New agent task started' : 'New chat started');
 };
 
@@ -3009,6 +3161,10 @@ async function runAgentSSE(text) {
     try {
       const hist = messages.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
       const engineMode = $('agent-engine') ? $('agent-engine').value : 'tiered';
+      // Collect doc attachments that were server-uploaded for context injection
+      const docAttachments = sentAttachments
+        .filter(a => a.isDoc && a.serverPath)
+        .map(a => ({ name: a.name, path: a.serverPath, preview: a.preview || '', truncated: a.truncated || false }));
       const res = await fetch('/agent/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3017,7 +3173,8 @@ async function runAgentSSE(text) {
           mode: engineMode,
           plan: planMode,
           temperature: parseFloat($('temp').value),
-          max_tokens: parseInt($('maxtok').value) > 0 ? parseInt($('maxtok').value) : 4096,
+          max_tokens: (isNaN(parseInt($('maxtok').value)) || parseInt($('maxtok').value) <= 0) ? -1 : parseInt($('maxtok').value),
+          attachments: docAttachments,
         }),
         signal: ctrl.signal,
       });
@@ -3213,7 +3370,7 @@ window.addEventListener('keydown', e => {
 
 /* boot */
 loadProfiles();   // loadConfig() runs inside once the dropdown is ready
-loadProjects();
+loadProjects(true);
 
 // Restore saved mode and agent engine preference across page refreshes
 try {

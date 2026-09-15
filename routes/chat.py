@@ -38,7 +38,7 @@ class ChatRunRequest(BaseModel):
     messages: list
     web_search: bool = True
     temperature: float = 0.7
-    max_tokens: int = 4096
+    max_tokens: int = -1
     system_prompt: Optional[str] = None
 
 

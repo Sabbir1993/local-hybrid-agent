@@ -98,7 +98,7 @@ class SmallModelInstance:
         self.gpu = int(cfg.get("gpu", 1))
         self.ctx = int(cfg.get("ctx", 4096))
         self.process: Optional[subprocess.Popen] = None
-        self.client = httpx.AsyncClient(base_url=f"http://127.0.0.1:{self.port}", timeout=120.0)
+        self.client = httpx.AsyncClient(base_url=f"http://127.0.0.1:{self.port}", timeout=None)
         self.last_used = 0.0
         self.lock = asyncio.Lock()
         self.load_error: Optional[str] = None
@@ -275,7 +275,7 @@ async def describe_image_file(p: Path, question: str = "Describe this image in d
         }],
         "max_tokens": 400,
         "temperature": 0.1,
-    }, timeout=120.0)
+    }, timeout=None)
     inst.last_used = time.time()
     data = r.json()
     return (data.get("choices") or [{}])[0].get("message", {}).get("content") or "(vision model returned no text)"

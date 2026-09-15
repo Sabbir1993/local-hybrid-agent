@@ -10,7 +10,7 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=1.9">
+<link rel="stylesheet" href="/static/css/style.css?v=2.0">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
@@ -81,8 +81,8 @@
             <div id="cmd-menu" style="display:none;"></div>
           </div>
           <div class="comp-actions">
-            <button id="btn-attach" class="comp-tool" title="Attach text/code files — their content is appended to your prompt">📎</button>
-            <input type="file" id="file-input" multiple accept=".txt,.md,.py,.js,.ts,.json,.c,.cpp,.h,.cs,.java,.rs,.go,.html,.css,.xml,.yml,.yaml,.toml,.ini,.cfg,.log,.csv,.sql,.sh,.ps1,.bat,.png,.jpg,.jpeg,.webp,.gif" style="display:none">
+            <button id="btn-attach" class="comp-tool" title="Attach files — images, text/code, or documents (Excel, PDF, PowerPoint, Word, CSV)">📎</button>
+            <input type="file" id="file-input" multiple accept=".txt,.md,.py,.js,.ts,.json,.c,.cpp,.h,.cs,.java,.rs,.go,.html,.css,.xml,.yml,.yaml,.toml,.ini,.cfg,.log,.csv,.sql,.sh,.ps1,.bat,.png,.jpg,.jpeg,.webp,.gif,.xlsx,.xls,.pdf,.pptx,.ppt,.docx,.doc" style="display:none">
             <button id="btn-web-toggle" class="comp-tool comp-web-btn active" type="button" title="Web Search: ON (click to disable)">
               <span class="web-icon">🌐</span>
             </button>
@@ -281,7 +281,7 @@
         </div>
         <div class="smp-row" title="Maximum tokens to generate per response. Tip: set -1 for unlimited generation (only stopped by stop strings/EOS or manual Stop)">
           <label for="maxtok">Max tokens <span class="info" title="Set -1 = no output limit: the model generates until EOS or you press Stop. Higher values need more KV cache (context_size). Leave 512 for chat; use -1 for long-form writing">ⓘ</span></label>
-          <input type="number" id="maxtok" value="-1" min="-1" max="8192" title="Maximum generation tokens (-1 = unlimited)">
+          <input type="number" id="maxtok" value="-1" min="-1" max="262144" title="Maximum generation tokens (-1 = unlimited)">
           <span class="mono smp-val"></span>
         </div>
       </div>
@@ -521,7 +521,7 @@ Full instructions the agent reads via read_skill.</pre>
 </div>
 
 <script src="/static/js/highlight.js"></script>
-<script src="/static/js/app.js?v=1.9"></script>
+<script src="/static/js/app.js?v=2.0"></script>
 
 </body>
 </html>

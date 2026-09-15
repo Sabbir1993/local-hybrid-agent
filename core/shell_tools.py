@@ -75,7 +75,8 @@ async def tool_run_shell(args: dict) -> str:
             if not allowed:
                 return f"error: user denied shell command: {cmd}" + (f" ({note})" if note else "")
 
-    timeout = int(cfg.get("timeout_s", 60) or 60)
+    raw_t = cfg.get("timeout_s", 0)
+    timeout = int(raw_t) if raw_t and int(raw_t) > 0 else None
     from .agent_tools import active_workspace
     from .config import BASE_DIR
     # Skill management commands operate in global application root

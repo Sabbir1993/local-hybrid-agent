@@ -10,11 +10,12 @@ import time
 from pathlib import Path
 from typing import Optional, Union
 
-from fastapi import APIRouter
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi import APIRouter, UploadFile, File as FastAPIFile
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 
 from core.config import BASE_DIR
+from core.file_tools import extract_file_content, MIME_MAP
 from core.db import (
     db_record_request,
     db_add_project_allow_pattern,
@@ -64,14 +65,21 @@ from .common import _process_sse_stream, _llm_chat_stream
 
 router = APIRouter(tags=["agent"])
 
+class AttachedFile(BaseModel):
+    name: str
+    path: str
+    preview: str = ""
+    truncated: bool = False
+
 class AgentRequest(BaseModel):
     messages: list
     max_steps: int = 12
     temperature: float = 0.4
-    max_tokens: int = 4096
+    max_tokens: int = -1
     large_model: Optional[str] = None
     mode: Optional[str] = "main"
     plan: bool = False
+    attachments: list[AttachedFile] = []
 
 
 AGENT_MAX_STEPS = 30
@@ -152,6 +160,32 @@ async def agent_run(req: AgentRequest):
 
     steps = max(1, min(req.max_steps, APP_CONFIG["agent"].get("max_steps", AGENT_MAX_STEPS)))
     msgs = [dict(m) for m in req.messages]
+
+    # --- Inject attached file content into the last user message ---
+    if req.attachments:
+        file_context_parts = []
+        for att in req.attachments:
+            header = f"--- ATTACHED FILE: {att.name} (workspace path: {att.path}) ---"
+            preview = att.preview or "(no content extracted)"
+            footer = (
+                f"--- END {att.name} ---\n"
+                f"[NOTE: This file was truncated at 12,000 chars. "
+                f"Use read_file_chunk('{att.path}', offset_chars=12000) to read more.]"
+                if att.truncated else
+                f"--- END {att.name} ---"
+            )
+            file_context_parts.append(f"{header}\n{preview}\n{footer}")
+        file_context = "\n\n".join(file_context_parts)
+        # Inject into last user message
+        injected = False
+        for m in reversed(msgs):
+            if m.get("role") == "user":
+                existing = m.get("content") or ""
+                m["content"] = f"{existing}\n\n[Attached Files]\n{file_context}" if existing else f"[Attached Files]\n{file_context}"
+                injected = True
+                break
+        if not injected and file_context:
+            msgs.append({"role": "user", "content": f"[Attached Files]\n{file_context}"})
 
     ws_path = str(active_workspace())
     sys_prompt = AGENT_SYSTEM_PROMPT.format(workspace=ws_path)
@@ -544,6 +578,74 @@ async def agent_workspace():
     return {"root": str(ws), "project": get_active_project(), "files": files[:500]}
 
 
+@router.post("/agent/upload")
+async def agent_upload(files: list[UploadFile] = FastAPIFile(...)):
+    """Upload one or more document files to the active project workspace.
+
+    Saves each file, extracts its text content, and returns a preview
+    suitable for injecting into the agent's message context.
+    """
+    ws = active_workspace()
+    results = []
+    for uf in files:
+        fname = uf.filename or "upload"
+        # Sanitize filename
+        safe_name = Path(fname).name
+        dest = ws / safe_name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = await uf.read()
+            dest.write_bytes(data)
+        except Exception as e:
+            results.append({
+                "name": safe_name,
+                "path": safe_name,
+                "size": 0,
+                "preview": f"(upload error: {e})",
+                "truncated": False,
+                "error": str(e),
+            })
+            continue
+        size = len(data)
+        # Extract text content for context injection
+        try:
+            preview, truncated = await asyncio.get_event_loop().run_in_executor(
+                None, extract_file_content, dest)
+        except Exception as e:
+            preview = f"(extraction error: {e})"
+            truncated = False
+        results.append({
+            "name": safe_name,
+            "path": safe_name,
+            "size": size,
+            "preview": preview,
+            "truncated": truncated,
+        })
+    return {"files": results}
+
+
+@router.get("/agent/download")
+async def agent_download(path: str):
+    """Serve a workspace file as a download attachment.
+
+    Query param:  ?path=relative/path/to/file.xlsx
+    Sandbox-safe: resolves via _ws_resolve to prevent path traversal.
+    """
+    try:
+        p = _ws_resolve(path)
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    if not p.is_file():
+        return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+    suffix = p.suffix.lower()
+    mime = MIME_MAP.get(suffix, "application/octet-stream")
+    return FileResponse(
+        str(p),
+        media_type=mime,
+        headers={"Content-Disposition": f'attachment; filename="{p.name}"'},
+    )
+
+
 def _ws_tree_scan(rel_dir: str) -> list:
     """One level of the workspace tree from the agent tools module."""
     ignored = {".git", "__pycache__", "node_modules", ".venv", "venv", "_agent_run.py"}
@@ -670,7 +772,7 @@ async def agent_vision(req: VisionReq):
             }],
             "max_tokens": 400,
             "temperature": 0.1,
-        }, timeout=120.0)
+        }, timeout=None)
         inst.last_used = time.time()
         data = r.json()
         return {"description": (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""}

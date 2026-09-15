@@ -173,7 +173,8 @@ def tool_run_python(args: dict) -> str:
     ws.mkdir(parents=True, exist_ok=True)
     script = ws / "_agent_run.py"
     script.write_text(code, encoding="utf-8")
-    timeout = int(APP_CONFIG["agent"].get("exec_timeout_s", 120))
+    raw_t = APP_CONFIG.get("agent", {}).get("exec_timeout_s", 0)
+    timeout = int(raw_t) if raw_t and int(raw_t) > 0 else None
     try:
         proc = subprocess.run(
             [sys.executable, str(script)],
