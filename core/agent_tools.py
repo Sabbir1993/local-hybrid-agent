@@ -2,13 +2,14 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
 from .db import _projects_db
-from .small_model import APP_CONFIG, WORKSPACE_ROOT, describe_image_file
+from .small_model import APP_CONFIG, WORKSPACE_ROOT, COMMON_ROOT, describe_image_file
 
 MAX_TOOL_OUTPUT = 20000   # chars per tool result fed back to the model
 MAX_EDIT_BYTES = 512 * 1024
@@ -45,6 +46,39 @@ def active_workspace() -> Path:
         p.mkdir(parents=True, exist_ok=True)
         return p
     return WORKSPACE_ROOT.resolve()
+
+
+def common_workspace() -> Path:
+    p = COMMON_ROOT.resolve()
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _common_resolve(rel: str) -> Path:
+    common = common_workspace()
+    clean = str(rel).strip().replace("\\", "/")
+
+    common_str = str(common).replace("\\", "/")
+    if clean.lower().startswith(common_str.lower()):
+        clean = clean[len(common_str):].lstrip("/")
+
+    prefixes = ["/common/", "common/", "/workspace/", "workspace/"]
+    for prefix in prefixes:
+        if clean.lower().startswith(prefix):
+            clean = clean[len(prefix):]
+            break
+
+    clean = clean.lstrip("/\\")
+    if not clean or clean == ".":
+        return common
+
+    p = (common / clean).resolve()
+    try:
+        p.relative_to(common)
+    except ValueError:
+        if not str(p).lower().startswith(str(common).lower()):
+            raise PermissionError(f"path escapes common space: {rel}")
+    return p
 
 
 def _ws_resolve(rel: str) -> Path:
@@ -141,6 +175,103 @@ def tool_write_file(args: dict) -> str:
     p.write_text(content, encoding="utf-8")
     _snapshot_change(p)
     return f"wrote {len(content)} chars to {path_arg} ({'overwrote' if existed else 'created'})"
+
+
+def _parse_tabular_text(content: str) -> list[list[str]]:
+    lines = [l.strip() for l in content.strip().splitlines() if l.strip()]
+    if not lines:
+        return []
+
+    # Check if markdown table or pipe-separated
+    if any("|" in l for l in lines):
+        rows = []
+        for l in lines:
+            if re.match(r"^\|?[\s\-:|]+\|?$", l):
+                continue
+            cells = [c.strip() for c in l.split("|")]
+            if l.startswith("|") and cells and cells[0] == "":
+                cells.pop(0)
+            if l.endswith("|") and cells and cells[-1] == "":
+                cells.pop()
+            if cells:
+                rows.append(cells)
+        if rows:
+            return rows
+
+    # Check if CSV
+    import csv
+    import io
+    try:
+        reader = csv.reader(io.StringIO(content))
+        rows = [[c.strip() for c in row] for row in reader if any(c.strip() for c in row)]
+        if rows and len(rows[0]) > 1:
+            return rows
+    except Exception:
+        pass
+
+    return [[l] for l in lines]
+
+
+def _save_text_as_excel(p: Path, content: str) -> bool:
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        rows = _parse_tabular_text(content)
+        if not rows:
+            return False
+        for r_idx, row in enumerate(rows, start=1):
+            for c_idx, val in enumerate(row, start=1):
+                val_clean = str(val).strip()
+                if val_clean.lower() == "true":
+                    ws.cell(row=r_idx, column=c_idx, value=True)
+                elif val_clean.lower() == "false":
+                    ws.cell(row=r_idx, column=c_idx, value=False)
+                else:
+                    try:
+                        if "." in val_clean:
+                            ws.cell(row=r_idx, column=c_idx, value=float(val_clean))
+                        else:
+                            ws.cell(row=r_idx, column=c_idx, value=int(val_clean))
+                    except ValueError:
+                        ws.cell(row=r_idx, column=c_idx, value=val_clean)
+        wb.save(str(p))
+        return True
+    except Exception as e:
+        print(f"[_save_text_as_excel error: {e}]", file=sys.stderr)
+        return False
+
+
+def tool_write_file_common(args: dict) -> str:
+    path_arg = args.get("path") or args.get("file") or args.get("filename")
+    if not path_arg and args.get("content"):
+        c_low = args["content"][:300].lower()
+        if "<!doctype html" in c_low or "<html" in c_low:
+            path_arg = "index.html"
+        elif "def " in c_low or "import " in c_low:
+            path_arg = "main.py"
+        elif "|" in c_low:
+            path_arg = "data.csv"
+        else:
+            path_arg = "output.txt"
+    if not path_arg:
+        raise ValueError("path required")
+    p = _common_resolve(path_arg)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    content = args.get("content", "")
+    if len(content) > MAX_EDIT_BYTES:
+        raise ValueError("content too large")
+    existed = p.exists()
+
+    # Handle .xlsx / .xls conversion if structured text data is provided
+    if p.suffix.lower() in (".xlsx", ".xls"):
+        saved = _save_text_as_excel(p, content)
+        if saved:
+            return f"Wrote Excel file to common space: {p.name} ({'overwrote' if existed else 'created'}). [DOWNLOAD: {p.name}]"
+
+    p.write_text(content, encoding="utf-8")
+    return f"Wrote {len(content)} chars to common space: {p.name} ({'overwrote' if existed else 'created'}). [DOWNLOAD: {p.name}]"
 
 
 def tool_edit_file(args: dict) -> str:
@@ -397,11 +528,34 @@ AGENT_CORE_TOOLS = [
     if t["function"]["name"] in ("write_file", "read_file", "edit_file", "list_files", "run_python")
 ]
 
+CHAT_WRITE_FILE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "write_file",
+        "description": "Create or write a file in the shared common space and share a downloadable link with the user. Use this whenever the user asks to generate, create, fill, or save data to an Excel (.xlsx), CSV, code, or document file.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Filename or path (e.g. route_sample_file.xlsx, data.csv, script.py, output.txt)"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The complete file content to write. For spreadsheets (.xlsx, .csv), provide formatted CSV rows or markdown table rows."
+                }
+            },
+            "required": ["path", "content"]
+        }
+    }
+}
+
 TOOL_IMPLS = {
     "list_files": tool_list_files,
     "read_file": tool_read_file,
     "grep": tool_grep,
     "write_file": tool_write_file,
+    "write_file_common": tool_write_file_common,
     "edit_file": tool_edit_file,
     "run_python": tool_run_python,
     "list_diff": tool_list_diff,

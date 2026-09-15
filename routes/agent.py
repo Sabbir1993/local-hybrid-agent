@@ -30,8 +30,10 @@ from core.agent_tools import (
     AGENT_TOOLS,
     AGENT_CORE_TOOLS,
     active_workspace,
+    common_workspace,
     get_active_project,
     _ws_resolve,
+    _common_resolve,
     _ws_changes,
 )
 from core.registry import registry
@@ -579,19 +581,24 @@ async def agent_workspace():
 
 
 @router.post("/agent/upload")
-async def agent_upload(files: list[UploadFile] = FastAPIFile(...)):
-    """Upload one or more document files to the active project workspace.
-
-    Saves each file, extracts its text content, and returns a preview
-    suitable for injecting into the agent's message context.
+async def agent_upload(files: list[UploadFile] = FastAPIFile(...), space: Optional[str] = None):
+    """Upload one or more document files.
+    
+    If space == 'common' or no project is active (chat mode), saves to common space.
+    If space == 'workspace' or a project is active, saves to the active project workspace.
     """
-    ws = active_workspace()
+    if space == "common" or (not get_active_project() and space != "workspace"):
+        target_dir = common_workspace()
+    else:
+        target_dir = active_workspace()
+    target_dir.mkdir(parents=True, exist_ok=True)
+
     results = []
     for uf in files:
         fname = uf.filename or "upload"
         # Sanitize filename
         safe_name = Path(fname).name
-        dest = ws / safe_name
+        dest = target_dir / safe_name
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
             data = await uf.read()
@@ -625,18 +632,42 @@ async def agent_upload(files: list[UploadFile] = FastAPIFile(...)):
 
 
 @router.get("/agent/download")
-async def agent_download(path: str):
-    """Serve a workspace file as a download attachment.
+@router.get("/download")
+async def agent_download(path: str, space: Optional[str] = None):
+    """Serve a file as a download attachment.
 
     Query param:  ?path=relative/path/to/file.xlsx
-    Sandbox-safe: resolves via _ws_resolve to prevent path traversal.
+    Checks common space first (for chat mode), then active workspace (for project tasks).
+    Sandbox-safe: resolves via _common_resolve and _ws_resolve to prevent path traversal.
     """
-    try:
-        p = _ws_resolve(path)
-    except PermissionError as e:
-        return JSONResponse({"error": str(e)}, status_code=403)
-    if not p.is_file():
+    p = None
+    if space == "common":
+        try:
+            cand = _common_resolve(path)
+            if cand.is_file():
+                p = cand
+        except Exception:
+            pass
+
+    if p is None:
+        try:
+            cand = _common_resolve(path)
+            if cand.is_file():
+                p = cand
+        except Exception:
+            pass
+
+    if p is None:
+        try:
+            cand = _ws_resolve(path)
+            if cand.is_file():
+                p = cand
+        except Exception:
+            pass
+
+    if p is None or not p.is_file():
         return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+
     suffix = p.suffix.lower()
     mime = MIME_MAP.get(suffix, "application/octet-stream")
     return FileResponse(

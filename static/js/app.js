@@ -91,7 +91,12 @@ function md(s) {
       t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
       t = t.replace(/^#{1,3} (.*)$/gm, '<b>$1</b>');
       t = t.replace(/^\s*[-*] (.*)$/gm, '• $1');
-      t = t.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      t = t.replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/agent\/download|\/download)[^)]+)\)/g, (match, text, url) => {
+        if (url.startsWith('/agent/download') || url.startsWith('/download')) {
+          return `<a href="${url}" class="download-link" download title="Download ${text}">⬇ ${text}</a>`;
+        }
+        return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+      });
       // Parse [DOWNLOAD: filename] markers emitted by the agent
       t = t.replace(/\[DOWNLOAD:\s*([^\]]+)\]/g, (_, fname) => {
         const cleanName = fname.trim();
@@ -1569,7 +1574,8 @@ async function addAttachmentFile(f, namePrefix = 'screenshot') {
     try {
       const fd = new FormData();
       fd.append('files', f, f.name);
-      const res = await fetch('/agent/upload', { method: 'POST', body: fd });
+      const spaceParam = agentMode ? 'workspace' : 'common';
+      const res = await fetch(`/agent/upload?space=${spaceParam}`, { method: 'POST', body: fd });
       const j = await res.json();
       if (!res.ok) throw new Error(j.detail || j.error || 'HTTP ' + res.status);
       const fileData = (j.files || [])[0] || {};
@@ -1751,6 +1757,31 @@ function fmtSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
 }
 
+/* Session Changes pinned group (created/modified this session) */
+function renderWsChanges(changes) {
+  const box = $('ws-changes');
+  if (!box) return;
+  const list = $('ws-changes-list');
+  const cnt = $('ws-changes-count');
+  if (!changes || !changes.length) {
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = 'block';
+  if (cnt) cnt.textContent = changes.length;
+  if (list) {
+    list.innerHTML = changes.map(c => `
+      <div class="ws-node ws-chg" data-path="${esc(c.path.toLowerCase())}" title="${esc(c.path)} — ${c.status} this session. Click to open diff.">
+        <span class="caret" style="visibility:hidden;">▶</span>
+        <span>${c.status === 'created' ? '✚' : '●'}</span>
+        <span class="nm" style="${c.status === 'created' ? 'color:var(--green);' : ''}">${esc(c.path)}</span>
+      </div>`).join('');
+    list.querySelectorAll('.ws-chg').forEach(row => {
+      row.onclick = () => wsShowFile(row.dataset.path);
+    });
+  }
+}
+
 async function wsLoadTree(dirPath, targetEl, indent) {
   try {
     const r = await fetch('/agent/ws/tree?path=' + encodeURIComponent(dirPath || ''));
@@ -1761,7 +1792,9 @@ async function wsLoadTree(dirPath, targetEl, indent) {
       if (rp) rp.textContent = '📁 ' + (d.root || '');
       const tn = $('ws-title-name');
       if (tn) tn.textContent = d.project || 'Workspace';
-      renderWsChanges(d.changes || []);
+      if (typeof renderWsChanges === 'function') {
+        try { renderWsChanges(d.changes || []); } catch (err) { console.warn(err); }
+      }
     }
     if (!d.nodes || !d.nodes.length) {
       targetEl.innerHTML = '<div class="ws-empty" style="padding:6px 0 0 14px;">(empty)</div>';
@@ -1838,6 +1871,19 @@ function wsApplyFilter() {
     grp.style.display = any ? grp.style.display : 'none';
   });
 }
+
+if ($('ws-changes-toggle')) {
+  $('ws-changes-toggle').onclick = () => {
+    const list = $('ws-changes-list');
+    const t = $('ws-changes-toggle');
+    if (!list || !t) return;
+    const open = list.style.display !== 'none';
+    list.style.display = open ? 'none' : 'block';
+    const caret = t.querySelector('.caret');
+    if (caret) caret.style.transform = open ? '' : 'rotate(90deg)';
+  };
+}
+
 if ($('ws-refresh')) $('ws-refresh').onclick = () => wsRefreshTree();
 
 async function wsShowFile(path) {

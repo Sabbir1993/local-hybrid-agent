@@ -122,7 +122,8 @@ async def serve_static(file_path: str):
     p = (STATIC_DIR / file_path).resolve()
     if p.exists() and p.is_file() and str(p).startswith(str(STATIC_DIR.resolve())):
         media = "text/css" if p.suffix == ".css" else ("application/javascript" if p.suffix == ".js" else None)
-        return FileResponse(p, media_type=media)
+        return FileResponse(p, media_type=media,
+                            headers={"Cache-Control": "no-cache, must-revalidate"})
     return JSONResponse({"error": "file not found"}, status_code=404)
 
 

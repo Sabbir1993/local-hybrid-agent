@@ -1,6 +1,7 @@
 {
   "models_dir": "E:/AI/Models",
   "workspace_dir": "E:/AI/workspace",
+  "common_dir": "E:/AI/common",
   "small_models": {
     "executor": {
       "model": "orchestrator/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",

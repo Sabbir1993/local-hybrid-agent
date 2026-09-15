@@ -10,7 +10,7 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=2.0">
+<link rel="stylesheet" href="/static/css/style.css?v=2.2">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
@@ -117,7 +117,12 @@
   </div>
   <div id="ws-tree-view">
     <div id="ws-root-path" class="mono" title="Workspace root directory on disk"></div>
-
+    <div id="ws-changes" style="display:none;">
+      <div class="ws-changes-head" id="ws-changes-toggle" title="Files the agent created or modified this session">
+        <span class="caret">▶</span> Session Changes <span id="ws-changes-count" class="mono"></span>
+      </div>
+      <div id="ws-changes-list"></div>
+    </div>
     <div id="ws-filter-bar">
       <input type="text" id="ws-filter" placeholder="Filter files…" title="Filter tree by name">
     </div>
@@ -521,7 +526,7 @@ Full instructions the agent reads via read_skill.</pre>
 </div>
 
 <script src="/static/js/highlight.js"></script>
-<script src="/static/js/app.js?v=2.0"></script>
+<script src="/static/js/app.js?v=2.2"></script>
 
 </body>
 </html>

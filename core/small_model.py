@@ -33,6 +33,28 @@ def _load_workspace_root() -> Path:
 WORKSPACE_ROOT = _load_workspace_root()
 
 
+def _load_common_root() -> Path:
+    cfg = BASE_DIR / "config.json"
+    try:
+        if cfg.exists():
+            d = json.loads(cfg.read_text())
+            v = d.get("common_dir")
+            if v:
+                p = Path(v)
+                p.mkdir(parents=True, exist_ok=True)
+                return p.resolve()
+    except Exception:
+        pass
+    p = Path("E:\\AI\\common")
+    if not p.parent.exists():
+        p = BASE_DIR / "common"
+    p.mkdir(parents=True, exist_ok=True)
+    return p.resolve()
+
+
+COMMON_ROOT = _load_common_root()
+
+
 def _load_app_config() -> dict:
     cfg = BASE_DIR / "config.json"
     base = {

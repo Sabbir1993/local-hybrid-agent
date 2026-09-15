@@ -18,6 +18,7 @@ from core.small_model import APP_CONFIG
 from core.state import state
 from core.registry import registry
 from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch
+from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA
 from core.agent_loop import (
     run_tool,
     safe_parse_and_repair_args,
@@ -70,22 +71,36 @@ async def chat_run(req: ChatRunRequest):
     import re as _re
     url_matches = _re.findall(r'https?://[^\s<>")\]]+', last_query)
 
-    chat_tools = None
+    # Tools for Chat Mode: Always equip write_file (saves to shared common space)
+    chat_tools = [CHAT_WRITE_FILE_SCHEMA]
     if use_web:
         register_web_tools()
-        tools_list = []
         for t_name in ("web_search", "web_fetch"):
             rt = registry.get(t_name)
             if rt and rt.schema:
-                tools_list.append(rt.schema)
-        if tools_list:
-            chat_tools = tools_list
+                chat_tools.append(rt.schema)
 
     sys_parts = []
     if req.system_prompt and req.system_prompt.strip():
         sys_parts.append(req.system_prompt.strip())
 
-    if use_web and chat_tools:
+    file_prompt = (
+        "FILE CREATION & DOWNLOAD SYSTEM (COMMON STORAGE):\n"
+        "You have the capability to create, write, generate, or fill files using the `write_file(path, content)` tool.\n"
+        "All files you write are automatically saved to the shared common storage space and made available as direct download links.\n\n"
+        "RULES FOR FILES:\n"
+        "1. When the user asks to create, fill, write, generate, or share a file (e.g. 'fill data on that excel file and share with me', 'create data.csv', 'make a script'):\n"
+        "   - NEVER refuse by saying 'I don't have the ability to directly edit or open local files on your computer'.\n"
+        "   - Call `write_file(path=..., content=...)` immediately with the full content or data rows.\n"
+        "2. For Excel spreadsheets (.xlsx) or CSV files, provide the tabular data rows in `content` with the desired filename (e.g. path='route_sample_file_2026_09_10.xlsx'). It will automatically be created as a real, valid spreadsheet workbook.\n"
+        "3. When you generate or write a file, you MUST include a download link in your final response using this exact syntax:\n"
+        "   [DOWNLOAD: filename]\n"
+        "   For example: `[DOWNLOAD: route_sample_file_2026_09_10.xlsx]`\n"
+        "   The user interface will automatically convert `[DOWNLOAD: filename]` into a clickable download button."
+    )
+    sys_parts.append(file_prompt)
+
+    if use_web:
         web_prompt = (
             "You are a helpful, knowledgeable, and accurate AI assistant equipped with LIVE REAL-TIME INTERNET BROWSING & SEARCH.\n"
             "You have access to web tools:\n"
@@ -118,6 +133,7 @@ async def chat_run(req: ChatRunRequest):
         chat_rid = monitor_begin("chat/run", True, json.dumps({"messages": msgs}).encode(), model=clean_model_name)
         t0 = time.time()
         max_turns = 4 if chat_tools else 1
+        written_files = []
 
         try:
             for turn in range(max_turns):
@@ -164,7 +180,7 @@ async def chat_run(req: ChatRunRequest):
                     if parsed_tc:
                         tool_calls = parsed_tc
 
-                # Auto-recovery: if model emitted a refusal saying it can't browse the internet
+                # Auto-recovery 1: if model emitted a refusal saying it can't browse the internet
                 is_refusal = any(w in content.lower() for w in (
                     "i can't browse the live internet", "i cannot browse the live internet",
                     "i can't browse", "i cannot browse", "i don't have internet", "i lack internet",
@@ -194,7 +210,89 @@ async def chat_run(req: ChatRunRequest):
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": res_str})
                         continue
 
+                # Auto-recovery 2: if model emitted a refusal regarding local file access or emitted data without calling write_file
+                is_file_refusal = any(w in content.lower() for w in (
+                    "i don't have the ability to directly edit or open local files",
+                    "i don't have the ability to directly edit",
+                    "cannot directly edit or open local files",
+                    "cannot directly edit or open",
+                    "i lack the ability to directly edit",
+                    "cannot access your local files",
+                    "cannot save files to your computer",
+                    "as an ai, i cannot create files",
+                ))
+                is_file_intent = any(w in last_query.lower() for w in (
+                    "fill", "write", "save", "create", "generate", "make", "export", "share with me"
+                )) and any(w in last_query.lower() for w in (
+                    "file", "excel", ".xlsx", ".csv", ".json", ".py", ".html", ".txt"
+                ))
+
+                if (is_file_refusal or is_file_intent) and turn == 0 and not tool_calls:
+                    table_match = _re.search(r'(\|.+?\|\n\|[\s\-:|]+\|\n(?:\|.+?\|\n?)+)', content)
+                    code_match = _re.search(r'```(?:[a-zA-Z0-9_\-]+)?\n([\s\S]+?)\n```', content)
+
+                    data_to_save = None
+                    if table_match:
+                        data_to_save = table_match.group(1).strip()
+                    elif code_match:
+                        data_to_save = code_match.group(1).strip()
+                    elif "|" in content and content.count("\n") >= 2:
+                        data_to_save = content.strip()
+
+                    if data_to_save:
+                        fname_cand = None
+                        f_matches = _re.findall(r'[\w\-.]+\.(?:xlsx|xls|csv|json|py|html|txt|md)', last_query, _re.IGNORECASE)
+                        if f_matches:
+                            fname_cand = f_matches[0]
+                        if not fname_cand:
+                            for m in msgs:
+                                m_cnt = str(m.get("content", ""))
+                                att_m = _re.findall(r'--- FILE:\s*([\w\-.]+\.(?:xlsx|xls|csv|json|py|html|txt|md))\s*---', m_cnt, _re.IGNORECASE)
+                                if att_m:
+                                    fname_cand = att_m[0]
+                                    break
+                        if not fname_cand:
+                            c_matches = _re.findall(r'[\w\-.]+\.(?:xlsx|xls|csv|json|py|html|txt|md)', content, _re.IGNORECASE)
+                            if c_matches:
+                                fname_cand = c_matches[0]
+                        if not fname_cand:
+                            fname_cand = "data.xlsx" if ("excel" in last_query.lower() or "excel" in content.lower()) else "data.csv"
+
+                        target_filename = Path(fname_cand).name
+                        tc_id = "recov_write_0"
+                        yield "event: delta_reset\ndata: {}\n\n"
+                        yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': 'write_file', 'args': {'path': target_filename, 'content': data_to_save}})}\n\n"
+                        res_str = tool_write_file_common({"path": target_filename, "content": data_to_save})
+                        ok = not res_str.startswith("error:")
+                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': 'write_file', 'ok': ok, 'result': res_str})}\n\n"
+                        written_files.append(target_filename)
+
+                        final_msg = f"I have filled and saved the data to **{target_filename}** in common storage.\n\n[DOWNLOAD: {target_filename}]"
+                        if table_match:
+                            final_msg += f"\n\nHere is a preview of the saved rows:\n\n{table_match.group(1)}"
+                        yield f"event: delta\ndata: {json.dumps({'text': final_msg})}\n\n"
+                        content = final_msg
+
+                        msgs.append({
+                            "role": "assistant",
+                            "content": final_msg,
+                            "tool_calls": [{"id": tc_id, "type": "function", "function": {"name": "write_file", "arguments": json.dumps({"path": target_filename, "content": data_to_save})}}]
+                        })
+                        msgs.append({"role": "tool", "tool_call_id": tc_id, "content": res_str})
+
+                        gen_toks = max(1, round(len(content) / 3.5))
+                        prompt_toks = sum(len(m.get("content", "")) for m in msgs) // 4
+                        yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
+                        return
+
                 if not tool_calls or not chat_tools:
+                    if written_files:
+                        for wf in written_files:
+                            if f"[DOWNLOAD: {wf}]" not in (content or "") and f"download?path={wf}" not in (content or "").lower():
+                                dl_tag = f"\n\n[DOWNLOAD: {wf}]"
+                                yield f"event: delta\ndata: {json.dumps({'text': dl_tag})}\n\n"
+                                content = (content or "") + dl_tag
+
                     gen_toks = 0
                     prompt_toks = 0
                     if res_dict:
@@ -240,6 +338,11 @@ async def chat_run(req: ChatRunRequest):
                         elif t_name == "web_fetch":
                             u = args.get("url") or ""
                             res_str = await tool_web_fetch({"url": u})
+                        elif t_name == "write_file":
+                            res_str = tool_write_file_common(args)
+                            p_name = args.get("path") or args.get("file") or args.get("filename")
+                            if p_name:
+                                written_files.append(Path(p_name).name)
                         else:
                             res_str = await run_tool(t_name, args)
                         ok = not (isinstance(res_str, str) and (res_str.startswith("error:") or res_str.startswith("File not found")))
@@ -259,6 +362,13 @@ async def chat_run(req: ChatRunRequest):
                 msgs.append({"role": "assistant", "content": content or "", "tool_calls": clean_tool_calls})
                 for tid, r_out in tool_results_list:
                     msgs.append({"role": "tool", "tool_call_id": tid, "content": r_out})
+
+            if written_files:
+                for wf in written_files:
+                    if f"[DOWNLOAD: {wf}]" not in (content or "") and f"download?path={wf}" not in (content or "").lower():
+                        dl_tag = f"\n\n[DOWNLOAD: {wf}]"
+                        yield f"event: delta\ndata: {json.dumps({'text': dl_tag})}\n\n"
+                        content = (content or "") + dl_tag
 
             gen_toks = 0
             prompt_toks = 0
