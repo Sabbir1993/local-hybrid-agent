@@ -525,9 +525,34 @@ Full instructions the agent reads via read_skill.</pre>
   </div>
 </div>
 
+<!-- Rich File Preview Modal -->
+<div id="preview-modal" hidden style="display:none;">
+  <div id="preview-box">
+    <div id="preview-header">
+      <div class="preview-title-group">
+        <span id="preview-icon">👁️</span>
+        <span id="preview-title" class="mono">file.ext</span>
+        <span id="preview-badge" class="badge-main">Preview</span>
+      </div>
+      <div class="preview-actions">
+        <div id="preview-controls" style="display:flex; gap:6px; align-items:center;"></div>
+        <a id="preview-dl" class="btn ghost icon-btn" download title="Download file">⬇ Download</a>
+        <a id="preview-raw-link" class="btn ghost icon-btn" target="_blank" rel="noopener" title="Open raw in new tab">↗ New Tab</a>
+        <button id="preview-close" class="btn ghost icon-btn" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <div id="preview-body">
+      <div id="preview-content"></div>
+    </div>
+  </div>
+</div>
+
 <script src="/static/js/highlight.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="/static/js/theme.js?v=2.3"></script>
 <script src="/static/js/utils.js?v=2.3"></script>
+<script src="/static/js/preview.js?v=2.3"></script>
 <script src="/static/js/gpu-status.js?v=2.3"></script>
 <script src="/static/js/chat.js?v=2.3"></script>
 <script src="/static/js/controls.js?v=2.3"></script>

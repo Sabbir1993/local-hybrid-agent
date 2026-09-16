@@ -267,6 +267,11 @@ function agentActsHtml(acts) {
 
     const isRunning = t.result === null;
 
+    const isPreviewable = p && /\.(html|htm|csv|xlsx|xls|pdf|md|py|js|ts|json|txt|svg|png|jpg|jpeg|webp)$/i.test(p);
+    const previewBtn = isPreviewable
+      ? `<button type="button" class="btn ghost" style="padding:1px 7px; font-size:10px; margin-left:auto; border-radius:4px;" onclick="event.stopPropagation(); openFilePreview('${esc(p).replace(/'/g, "\\'")}', '${esc(p).replace(/'/g, "\\'")}')" title="Preview file">👁️ Preview</button>`
+      : '';
+
     h += `<details class="agy-step-detail">
       <summary class="agy-step-row">
         <span class="agy-step-verb">${verb}</span>
@@ -279,7 +284,8 @@ function agentActsHtml(acts) {
       <div class="agy-detail-body">
         <div class="agy-detail-bar">
           <span>${esc(t.name)} ${p ? '· ' + esc(p) : ''}</span>
-          ${t.model ? `<span style="font-family:monospace; opacity:0.8;">${esc(t.model)}</span>` : ''}
+          ${previewBtn}
+          ${t.model ? `<span style="font-family:monospace; opacity:0.8; margin-left:8px;">${esc(t.model)}</span>` : ''}
         </div>`;
 
     if (t.thought) {

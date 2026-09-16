@@ -15,6 +15,9 @@ function renderAll() {
   const chat = $('chat');
   chat.scrollTop = chat.scrollHeight;
   updateContextChip();
+  if (typeof renderInlineMermaid === 'function') {
+    renderInlineMermaid(inner);
+  }
 }
 
 function onThinkSummaryClick(idx, ev) {
@@ -81,6 +84,9 @@ function renderLast() {
   const chat = $('chat');
   if (chat) chat.scrollTop = chat.scrollHeight;
   updateContextChip();
+  if (newEl && !generating && typeof renderInlineMermaid === 'function') {
+    renderInlineMermaid(newEl);
+  }
 }
 
 function bubbleHtml(m, idx) {

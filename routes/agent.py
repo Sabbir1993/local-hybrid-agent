@@ -677,6 +677,63 @@ async def agent_download(path: str, space: Optional[str] = None):
     )
 
 
+@router.get("/agent/raw")
+@router.get("/raw")
+async def agent_raw(path: str, space: Optional[str] = None):
+    """Serve a file inline for previews (HTML, PDF, text, images, spreadsheets).
+    
+    Query param: ?path=relative/path/to/file.html
+    Content-Disposition is 'inline' so browser can render in iframe/embed.
+    """
+    p = None
+    if space == "common":
+        try:
+            cand = _common_resolve(path)
+            if cand.is_file():
+                p = cand
+        except Exception:
+            pass
+
+    if p is None:
+        try:
+            cand = _common_resolve(path)
+            if cand.is_file():
+                p = cand
+        except Exception:
+            pass
+
+    if p is None:
+        try:
+            cand = _ws_resolve(path)
+            if cand.is_file():
+                p = cand
+        except Exception:
+            pass
+
+    if p is None or not p.is_file():
+        return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+
+    suffix = p.suffix.lower()
+    mime = MIME_MAP.get(suffix)
+    if not mime:
+        if suffix in {".html", ".htm"}:
+            mime = "text/html; charset=utf-8"
+        elif suffix in {".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".md", ".txt", ".json", ".log", ".yaml", ".yml", ".toml", ".ini", ".sh", ".bat", ".ps1", ".sql", ".csv"}:
+            mime = "text/plain; charset=utf-8"
+        elif suffix == ".svg":
+            mime = "image/svg+xml"
+        elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            mime = f"image/{suffix.lstrip('.')}"
+        else:
+            mime = "application/octet-stream"
+
+    headers = {
+        "Content-Disposition": f'inline; filename="{p.name}"',
+        "Cache-Control": "no-cache, must-revalidate",
+    }
+    return FileResponse(str(p), media_type=mime, headers=headers)
+
+
 def _ws_tree_scan(rel_dir: str) -> list:
     """One level of the workspace tree from the agent tools module."""
     ignored = {".git", "__pycache__", "node_modules", ".venv", "venv", "_agent_run.py"}

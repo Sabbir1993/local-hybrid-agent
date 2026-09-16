@@ -8,9 +8,24 @@ function md(s) {
   for (let i = 0; i < parts.length; i++) {
     if (i % 2 === 1) { // fenced code block: ```lang\ncode
       const m = parts[i].match(/^([\w#+.-]*)\n([\s\S]*)$/);
-      const lang = hlLangFor(m ? m[1] : '');
+      const rawLang = m ? m[1].toLowerCase() : '';
       const code = m ? m[2] : parts[i];
-      out += '<pre><code>' + (lang ? hlCode(code, lang) : esc(code)) + '</code></pre>';
+      if (rawLang === 'mermaid') {
+        // Render interactive Mermaid diagram box
+        out += `<div class="mermaid-box">
+          <div class="mermaid-header">
+            <span>📊 Mermaid Diagram</span>
+            <div style="display:flex; gap:6px;">
+              <button class="btn ghost" style="padding:2px 6px; font-size:10px;" onclick="openFilePreview('diagram.mermaid', 'Mermaid Diagram', this.closest('.mermaid-box').querySelector('.mermaid-code-raw').textContent)">⤢ Fullscreen</button>
+            </div>
+          </div>
+          <div class="mermaid-viewport"><div class="dim" style="font-size:11px;">Rendering diagram…</div></div>
+          <pre class="mermaid-code-raw" style="display:none;">${esc(code)}</pre>
+        </div>`;
+      } else {
+        const lang = hlLangFor(rawLang);
+        out += '<pre><code>' + (lang ? hlCode(code, lang) : esc(code)) + '</code></pre>';
+      }
     } else {
       let t = esc(parts[i]);
       t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -19,7 +34,12 @@ function md(s) {
       t = t.replace(/^\s*[-*] (.*)$/gm, '• $1');
       t = t.replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/agent\/download|\/download)[^)]+)\)/g, (match, text, url) => {
         if (url.startsWith('/agent/download') || url.startsWith('/download')) {
-          return `<a href="${url}" class="download-link" download title="Download ${text}">⬇ ${text}</a>`;
+          const m = url.match(/[?&]path=([^&]+)/);
+          const fpath = m ? decodeURIComponent(m[1]) : text;
+          return `<span style="display:inline-flex; align-items:center; gap:4px; margin:2px 0;">
+            <button type="button" class="file-action-badge primary" onclick="openFilePreview('${esc(fpath).replace(/'/g, "\\'")}', '${esc(text).replace(/'/g, "\\'")}')" title="Preview ${esc(text)}">👁️ Preview ${esc(text)}</button>
+            <a href="${url}" class="file-action-badge" download title="Download ${esc(text)}">⬇</a>
+          </span>`;
         }
         return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
       });
@@ -27,7 +47,10 @@ function md(s) {
       t = t.replace(/\[DOWNLOAD:\s*([^\]]+)\]/g, (_, fname) => {
         const cleanName = fname.trim();
         const url = `/agent/download?path=${encodeURIComponent(cleanName)}`;
-        return `<a href="${url}" class="download-link" download="${esc(cleanName)}" title="Download ${esc(cleanName)}">⬇ ${esc(cleanName)}</a>`;
+        return `<span style="display:inline-flex; align-items:center; gap:4px; margin:2px 0;">
+          <button type="button" class="file-action-badge primary" onclick="openFilePreview('${esc(cleanName).replace(/'/g, "\\'")}', '${esc(cleanName).replace(/'/g, "\\'")}')" title="Preview ${esc(cleanName)}">👁️ Preview ${esc(cleanName)}</button>
+          <a href="${url}" class="file-action-badge" download="${esc(cleanName)}" title="Download ${esc(cleanName)}">⬇ Download</a>
+        </span>`;
       });
       t = t.replace(/\n/g, '<br>');
       out += t;

@@ -63,9 +63,31 @@ function closeImageModal() {
     m.setAttribute('hidden', '');
     m.style.display = 'none';
     const img = $('img-full');
-    if (img) img.src = '';
+    if (img) {
+      img.src = '';
+      img.style.transform = '';
+    }
   }
 }
+
+// Ctrl + Wheel Zoom for Image Modal
+let imgModalZoom = 1.0;
+const imgBody = $('img-body');
+if (imgBody) {
+  imgBody.addEventListener('wheel', e => {
+    if (e.ctrlKey) {
+      e.preventDefault();
+      const img = $('img-full');
+      if (!img) return;
+      const delta = e.deltaY < 0 ? 0.15 : -0.15;
+      imgModalZoom = Math.min(4.0, Math.max(0.4, imgModalZoom + delta));
+      img.style.transform = `scale(${imgModalZoom})`;
+      img.style.transformOrigin = 'center center';
+      img.style.transition = 'transform 0.12s ease';
+    }
+  }, { passive: false });
+}
+
 
 // Global click handler to expand images on popup
 document.addEventListener('click', e => {
@@ -89,9 +111,25 @@ if (imgClose) {
   imgClose.addEventListener('click', () => closeImageModal());
 }
 
+const prevModal = $('preview-modal');
+if (prevModal) {
+  prevModal.addEventListener('click', e => {
+    if (e.target.id === 'preview-modal') {
+      if (typeof closeFilePreview === 'function') closeFilePreview();
+    }
+  });
+}
+const prevClose = $('preview-close');
+if (prevClose) {
+  prevClose.addEventListener('click', () => {
+    if (typeof closeFilePreview === 'function') closeFilePreview();
+  });
+}
+
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     closeImageModal();
+    if (typeof closeFilePreview === 'function') closeFilePreview();
     const sd = $('settings-drawer');
     if (sd) sd.classList.remove('open');
     const md = $('monitor-drawer');
