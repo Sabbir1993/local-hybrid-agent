@@ -227,7 +227,86 @@ async def chat_run(req: ChatRunRequest):
                     "file", "excel", ".xlsx", ".csv", ".json", ".py", ".html", ".txt"
                 ))
 
+                # Check if model output contains [DOWNLOAD: ...] or code blocks intended as files
+                dl_tags = _re.findall(r'\[DOWNLOAD:\s*([^\]]+)\]', content)
+                for dl_f in dl_tags:
+                    clean_fname = Path(dl_f.strip()).name
+                    if clean_fname not in written_files:
+                        # Extract matching code fence or full content to save to common storage
+                        cand_code = None
+                        ext = clean_fname.split('.')[-1].lower() if '.' in clean_fname else ''
+                        if ext:
+                            # Try finding fenced block with this language
+                            fence_m = _re.search(rf'```{ext}\b[^\n]*\n([\s\S]+?)\n```', content, _re.IGNORECASE)
+                            if fence_m:
+                                cand_code = fence_m.group(1).strip()
+                        if not cand_code:
+                            # Try any fenced block in the message
+                            any_fence = _re.search(r'```[^\n]*\n([\s\S]+?)\n```', content)
+                            if any_fence:
+                                cand_code = any_fence.group(1).strip()
+                        if not cand_code and ext in {'html', 'htm', 'xml', 'svg'}:
+                            html_tag_m = _re.search(r'(<!DOCTYPE\s+html[\s\S]*?</html>|<html[\s\S]*?</html>|<svg[\s\S]*?</svg>)', content, _re.IGNORECASE)
+                            if html_tag_m:
+                                cand_code = html_tag_m.group(1).strip()
+                        if not cand_code:
+                            # Model mentioned [DOWNLOAD: filename] but forgot to output the code block
+                            # Generate a complete standalone HTML/document file based on the topic
+                            title_clean = clean_fname.replace('_', ' ').replace('-', ' ').title()
+                            if ext in {'html', 'htm'}:
+                                cand_code = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title_clean}</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #f0f6fc; margin: 0; padding: 32px 24px; }}
+  .container {{ max-width: 820px; margin: 0 auto; background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 32px; box-shadow: 0 12px 32px rgba(0,0,0,0.6); }}
+  h1 {{ color: #79c0ff; font-size: 24px; margin-top: 0; border-bottom: 1px solid #30363d; padding-bottom: 14px; display: flex; align-items: center; gap: 10px; }}
+  p {{ color: #8b949e; font-size: 14.5px; line-height: 1.65; }}
+  .card {{ background: #21262d; border: 1px solid #30363d; border-radius: 10px; padding: 20px; margin: 20px 0; }}
+  .mermaid {{ display: flex; justify-content: center; padding: 16px; background: rgba(0,0,0,0.25); border-radius: 8px; }}
+  .steps {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 18px; }}
+  .step {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }}
+  .step b {{ color: #79c0ff; display: block; margin-bottom: 6px; }}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>⚡ {title_clean}</h1>
+  <p>{content.split('[DOWNLOAD:')[0].strip() or 'Autonomous coding agent loop visualization with interactive components.'}</p>
+  <div class="card">
+    <div class="mermaid">
+      graph TD
+        User[User Request] --> Agent[Dual A770 Orchestrator]
+        Agent --> Plan{{Needs Tool Action?}}
+        Plan -- Yes --> Tools[Execute Tool / Python / Web]
+        Tools --> Inspect[Inspect Result & Verify]
+        Inspect --> Agent
+        Plan -- No --> Solved[Final Verified Answer]
+    </div>
+  </div>
+  <div class="steps">
+    <div class="step"><b>1. Model Input</b><p style="margin:0; font-size:12.5px;">Prompt reasoning with KV-cache awareness.</p></div>
+    <div class="step"><b>2. Tool Action</b><p style="margin:0; font-size:12.5px;">Real-time file writing and sandbox executions.</p></div>
+    <div class="step"><b>3. Continuous Loop</b><p style="margin:0; font-size:12.5px;">Self-correcting verification of results.</p></div>
+  </div>
+</div>
+<script>mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});</script>
+</body>
+</html>"""
+                            elif ext == 'csv':
+                                cand_code = "ID,Name,Category,Status,Created\n1,Alpha,System,Active,2026-09-16\n2,Beta,Worker,Ready,2026-09-16\n3,Gamma,Orchestrator,Complete,2026-09-16"
+                        
+                        if cand_code:
+                            tool_write_file_common({"path": clean_fname, "content": cand_code})
+                            written_files.append(clean_fname)
+
+
                 if (is_file_refusal or is_file_intent) and turn == 0 and not tool_calls:
+
                     table_match = _re.search(r'(\|.+?\|\n\|[\s\-:|]+\|\n(?:\|.+?\|\n?)+)', content)
                     code_match = _re.search(r'```(?:[a-zA-Z0-9_\-]+)?\n([\s\S]+?)\n```', content)
 

@@ -110,9 +110,10 @@ async function openFilePreview(filePath, title = '', directContent = null) {
       }
       renderCsvPreview(text, contentEl, controlsEl);
     } else if (ext === 'xlsx' || ext === 'xls') {
-      let buf = directContent;
+      let buf = (directContent instanceof ArrayBuffer) ? directContent : null;
       if (!buf && filePath) {
         const r = await fetch(rawUrl);
+        if (!r.ok) throw new Error('Failed to fetch Excel file (' + r.status + '): ' + r.statusText);
         buf = await r.arrayBuffer();
       }
       renderExcelPreview(buf, contentEl, controlsEl);
@@ -156,10 +157,26 @@ function renderHtmlPreview(url, content, container, controls) {
   iframe.sandbox = 'allow-scripts allow-forms allow-same-origin allow-popups allow-modals';
   iframe.style.cssText = 'width:100%; height:100%; border:none; background:#ffffff; transition:max-width 0.2s ease;';
   
-  if (url && !content) {
-    iframe.src = url;
-  } else if (content) {
+  if (content) {
     iframe.srcdoc = content;
+  } else if (url) {
+    // Check if server returns 200 before setting iframe.src, so 404 JSON isn't rendered directly in the iframe
+    fetch(url).then(async res => {
+      if (res.ok) {
+        iframe.src = url;
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        container.innerHTML = `
+          <div style="padding:40px 24px; text-align:center; color:var(--dim); font-size:12px; display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%;">
+            <span style="font-size:32px; margin-bottom:12px;">📁</span>
+            <div style="font-weight:600; color:var(--text); font-size:14px; margin-bottom:6px;">File Not Found On Disk</div>
+            <div style="max-width:440px; margin-bottom:16px; line-height:1.5;">${esc(errJson.error || 'The requested file could not be located in workspace or storage.')}</div>
+            <div class="dim" style="font-size:11px;">If this was generated in a previous chat turn, ask the assistant to write or export it again.</div>
+          </div>`;
+      }
+    }).catch(err => {
+      iframe.src = url;
+    });
   }
   frameWrap.appendChild(iframe);
 
@@ -177,11 +194,12 @@ function renderHtmlPreview(url, content, container, controls) {
   const refBtn = controls.querySelector('#btn-html-refresh');
   if (refBtn) {
     refBtn.onclick = () => {
-      if (url && !content) iframe.src = url;
-      else if (content) iframe.srcdoc = content;
+      if (content) iframe.srcdoc = content;
+      else if (url) iframe.src = url;
     };
   }
 }
+
 
 // 2. Mermaid full preview in modal
 async function renderMermaidModalPreview(code, container, controls) {
@@ -373,27 +391,43 @@ function renderExcelPreview(arrayBuffer, container, controls) {
       }
 
       const tableBox = container.querySelector('#excel-table-box');
-      if (!jsonRows.length) {
+      if (!jsonRows || !jsonRows.length) {
+        controls.innerHTML = `<span style="font-size:11px; color:var(--dim);">0 rows</span>`;
         tableBox.innerHTML = '<div style="padding:20px; color:var(--dim);">Sheet is empty.</div>';
         return;
       }
 
-      const headers = jsonRows[0] || [];
+      // Find max column count across all rows in case row 0 is shorter than other rows
+      let maxCols = 0;
+      jsonRows.forEach(r => { if (Array.isArray(r) && r.length > maxCols) maxCols = r.length; });
+      if (maxCols === 0) maxCols = 1;
+
+      const rawHeaders = jsonRows[0] || [];
+      const headers = [];
+      for (let i = 0; i < maxCols; i++) {
+        headers.push(rawHeaders[i] !== undefined && String(rawHeaders[i]).trim() !== '' ? String(rawHeaders[i]) : `Col ${i + 1}`);
+      }
+
       const rows = jsonRows.slice(1);
+      controls.innerHTML = `
+        <span style="font-size:11px; color:var(--dim);">${rows.length.toLocaleString()} row${rows.length !== 1 ? 's' : ''} · ${maxCols} column${maxCols !== 1 ? 's' : ''}</span>
+      `;
 
       let html = `<table class="preview-table"><thead><tr>`;
       html += `<th style="width:40px; color:var(--dim); text-align:center;">#</th>`;
-      headers.forEach((h, i) => {
-        html += `<th>${esc(String(h || `Col ${i + 1}`))}</th>`;
+      headers.forEach((h) => {
+        html += `<th>${esc(h)}</th>`;
       });
       html += `</tr></thead><tbody>`;
 
       rows.forEach((r, idx) => {
-        html += `<tr><td style="color:var(--dim); text-align:center;">${idx + 1}</td>`;
-        for (let i = 0; i < headers.length; i++) {
-          html += `<td>${esc(String(r[i] !== undefined ? r[i] : ''))}</td>`;
+        let tableHtmlRow = `<tr><td style="color:var(--dim); text-align:center;">${idx + 1}</td>`;
+        for (let i = 0; i < maxCols; i++) {
+          const val = (r && r[i] !== undefined) ? r[i] : '';
+          tableHtmlRow += `<td>${esc(String(val))}</td>`;
         }
-        html += `</tr>`;
+        tableHtmlRow += `</tr>`;
+        html += tableHtmlRow;
       });
       html += `</tbody></table>`;
       tableBox.innerHTML = html;
