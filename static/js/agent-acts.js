@@ -11,6 +11,9 @@ function toolIcon(name) {
     case 'revert': return '↩️';
     case 'analyze_image': return '🖼️';
     case 'search_memory': return '🧠';
+    case 'create_plan': return '📋';
+    case 'update_plan_item': return '✔️';
+    case 'get_plan': return '🗒️';
     default: return '🛠️';
   }
 }
@@ -148,6 +151,29 @@ function copyCodexCode(btn) {
 }
 const copyToolResult = copyCodexCode;
 
+/* ---------------- structured plan checklist ---------------- */
+function planPanelHtml(acts) {
+  if (!acts || !acts.length) return '';
+  const plans = acts.filter(a => a.type === 'plan' && Array.isArray(a.items) && a.items.length);
+  if (!plans.length) return '';
+  const items = plans[plans.length - 1].items;
+  const done = items.filter(i => i.status === 'done').length;
+  const failed = items.filter(i => i.status === 'failed').length;
+  const total = items.length;
+  const pct = total ? Math.round(((done + failed) / total) * 100) : 0;
+  let h = '<div class="plan-panel">';
+  h += `<div class="plan-head"><span class="plan-title">📋 Task Plan</span><span class="plan-progress">${done}/${total} done${failed ? ` · ${failed} failed` : ''}</span></div>`;
+  h += `<div class="plan-bar"><div class="plan-bar-fill${failed ? ' has-failed' : ''}" style="width:${pct}%"></div></div>`;
+  h += '<ol class="plan-items">';
+  items.forEach(it => {
+    const st = it.status || 'pending';
+    const mark = st === 'done' ? '✅' : st === 'failed' ? '❌' : st === 'in_progress' ? '⏳' : '☐';
+    h += `<li class="plan-item st-${st}"><span class="plan-mark">${mark}</span><span class="plan-text">${esc(it.text || '')}</span>${it.note ? `<span class="plan-note">${esc(it.note)}</span>` : ''}</li>`;
+  });
+  h += '</ol></div>';
+  return h;
+}
+
 function agentActsHtml(acts) {
   if (!acts || !acts.length) return '';
   const steps = parseStepsFromActs(acts);
@@ -249,6 +275,21 @@ function agentActsHtml(acts) {
       iconClass = 'python';
       iconSymbol = '⚡';
       label = esc(t.args.file || (t.args.code ? t.args.code.slice(0, 30) + '…' : 'python code'));
+    } else if (t.name === 'create_plan') {
+      verb = 'Planned';
+      iconClass = 'plan';
+      iconSymbol = '📋';
+      label = `${(t.args.items && t.args.items.length) || '?'} steps`;
+    } else if (t.name === 'update_plan_item') {
+      verb = 'Plan update';
+      iconClass = 'plan';
+      iconSymbol = '✔️';
+      label = `step ${esc(String(t.args.item != null ? t.args.item : '?'))} → ${esc(String(t.args.status || ''))}`;
+    } else if (t.name === 'get_plan') {
+      verb = 'Checked plan';
+      iconClass = 'plan';
+      iconSymbol = '🗒️';
+      label = 'plan status';
     } else if (t.name === 'web_search') {
       verb = 'Searched web';
       iconClass = 'search';

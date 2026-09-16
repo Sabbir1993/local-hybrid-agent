@@ -216,6 +216,17 @@ def _init_projects_db() -> sqlite3.Connection:
         created_at REAL NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+    CREATE TABLE IF NOT EXISTS plan_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        ord INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        note TEXT,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_plan_items_session ON plan_items(session_id);
     """)
     # migration: older DBs lack the workspace_dir column or allow_patterns
     cols = [r[1] for r in conn.execute("PRAGMA table_info(projects)")]
@@ -310,6 +321,10 @@ def db_create_project(name: str, workspace_dir: str = None, workspace_root: Path
 
 def db_delete_project(pid: int) -> None:
     _projects_db.execute(
+        "DELETE FROM plan_items WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
+        (pid,)
+    )
+    _projects_db.execute(
         "DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
         (pid,)
     )
@@ -351,6 +366,7 @@ def db_update_session_title(sid: int, title: str) -> None:
 
 
 def db_delete_session(sid: int) -> None:
+    _projects_db.execute("DELETE FROM plan_items WHERE session_id = ?", (sid,))
     _projects_db.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
     _projects_db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
     _projects_db.commit()
@@ -370,3 +386,50 @@ def db_append_message(sid: int, role: str, content: str, meta: dict = None) -> i
         (sid, role, content, json.dumps(meta) if meta else None, time.time()))
     _projects_db.commit()
     return cur.lastrowid
+
+
+# ---------------- structured plan tracking ----------------
+_VALID_PLAN_STATUS = ("pending", "in_progress", "done", "failed")
+
+
+def db_set_plan_items(sid: int, texts: list) -> list:
+    """Replace the session's plan with an ordered list of step texts (status reset to pending)."""
+    now = time.time()
+    _projects_db.execute("DELETE FROM plan_items WHERE session_id = ?", (sid,))
+    for i, t in enumerate(texts, start=1):
+        _projects_db.execute(
+            "INSERT INTO plan_items (session_id, ord, text, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'pending', ?, ?)",
+            (sid, i, str(t)[:300], now, now))
+    _projects_db.commit()
+    return db_get_plan_items(sid)
+
+
+def db_get_plan_items(sid: int) -> list:
+    if sid is None:
+        return []
+    return [
+        {"id": r["id"], "ord": r["ord"], "text": r["text"],
+         "status": r["status"], "note": r["note"]}
+        for r in _projects_db.execute(
+            "SELECT * FROM plan_items WHERE session_id = ? ORDER BY ord", (sid,))
+    ]
+
+
+def db_set_plan_item_status(sid: int, ord_no: int, status: str, note: Optional[str] = None) -> Optional[dict]:
+    """Update one plan item by its 1-based step number. Returns the updated row or None."""
+    if status not in _VALID_PLAN_STATUS:
+        raise ValueError(f"invalid plan status '{status}'")
+    cur = _projects_db.execute(
+        "UPDATE plan_items SET status = ?, note = COALESCE(?, note), updated_at = ? "
+        "WHERE session_id = ? AND ord = ?",
+        (status, note, time.time(), sid, int(ord_no)))
+    _projects_db.commit()
+    if cur.rowcount <= 0:
+        return None
+    row = _projects_db.execute(
+        "SELECT * FROM plan_items WHERE session_id = ? AND ord = ?", (sid, int(ord_no))).fetchone()
+    if row is None:
+        return None
+    return {"id": row["id"], "ord": row["ord"], "text": row["text"],
+            "status": row["status"], "note": row["note"]}

@@ -67,7 +67,9 @@ async function runAgentSSE(text) {
     files: sentFiles || undefined,
     displayContent: text || undefined
   };
-  ensureSession((text || (sentFiles ? `📎 ${sentFiles}` : 'Agent task')).slice(0, 60)).then(() => persistMsg('user', fullPrompt, userMeta));
+  // await session creation so the structured-plan tools receive a real session_id
+  await ensureSession((text || (sentFiles ? `📎 ${sentFiles}` : 'Agent task')).slice(0, 60));
+  persistMsg('user', fullPrompt, userMeta);
   const last = () => messages[messages.length - 1];
   (async () => {
     let usage = null;
@@ -86,6 +88,7 @@ async function runAgentSSE(text) {
           messages: hist,
           mode: engineMode,
           plan: planMode,
+          session_id: (curSession && curSession.id) ? curSession.id : null,
           temperature: parseFloat($('temp').value),
           max_tokens: (isNaN(parseInt($('maxtok').value)) || parseInt($('maxtok').value) <= 0) ? -1 : parseInt($('maxtok').value),
           attachments: docAttachments,
@@ -146,6 +149,13 @@ async function runAgentSSE(text) {
             L.content = '';
           }
           else if (ev === 'validated') L.acts.push({ type: 'validated', ...d });
+          else if (ev === 'plan') {
+            // structured plan checklist — keep only the latest snapshot in acts
+            if (!L.acts) L.acts = [];
+            const planAct = { type: 'plan', items: d.items || [] };
+            const pi = L.acts.findIndex(a => a.type === 'plan');
+            if (pi >= 0) L.acts[pi] = planAct; else L.acts.push(planAct);
+          }
           else if (ev === 'error') throw new Error(d.error);
           renderLast();
         }

@@ -109,6 +109,11 @@ function bubbleHtml(m, idx) {
   }
   let inner = '';
   
+  // Structured plan checklist (create_plan / update_plan_item tracking)
+  if (m.acts && m.acts.length) {
+    inner += planPanelHtml(m.acts);
+  }
+
   // Render collapsible Antigravity agent action items & tool calls (if present in message)
   if (m.acts && m.acts.length) {
     inner += agentActsHtml(m.acts);

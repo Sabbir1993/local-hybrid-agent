@@ -1,4 +1,4 @@
-﻿"""core/file_tools.py — Document-file extraction engine and agent tools.
+"""core/file_tools.py — Document-file extraction engine and agent tools.
 
 Supports: .xlsx/.xls (Excel), .csv, .pdf, .pptx/.ppt (PowerPoint),
           .docx/.doc (Word), .json, .xml (pass-through text).
@@ -35,6 +35,10 @@ MIME_MAP = {
     ".doc":  "application/msword",
     ".json": "application/json",
     ".xml":  "application/xml",
+    ".png":  "image/png",
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
 }
 
 DOCUMENT_EXTENSIONS = set(MIME_MAP.keys()) | {".txt", ".md"}
@@ -228,6 +232,8 @@ def extract_file_content(path, max_chars: int = DEFAULT_MAX_CHARS):
         text = _extract_pptx(p)
     elif suffix in (".docx", ".doc"):
         text = _extract_docx(p)
+    elif suffix in (".png", ".jpg", ".jpeg", ".webp"):
+        text = f"[IMAGE ATTACHMENT: {p.name}]\nWorkspace path: {p.name}\n(Perceptual pre-processing ready: Call analyze_image for grounded OCR coordinates or scene summary.)"
     else:
         # json, xml, txt, md, etc. - raw text
         text = _extract_text(p)

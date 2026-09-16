@@ -19,11 +19,14 @@ from core.file_tools import extract_file_content, MIME_MAP
 from core.db import (
     db_record_request,
     db_add_project_allow_pattern,
+    db_get_plan_items,
+    db_get_project_allow_patterns,
 )
 from core.small_model import (
     APP_CONFIG,
     small_models,
     needle_route,
+    needle_available,
 )
 from core.state import state
 from core.agent_tools import (
@@ -32,6 +35,7 @@ from core.agent_tools import (
     active_workspace,
     common_workspace,
     get_active_project,
+    set_plan_context,
     _ws_resolve,
     _common_resolve,
     _ws_changes,
@@ -61,6 +65,7 @@ from core.monitor import (
     _monitor_state,
     monitor_begin,
     monitor_end,
+    parse_cache_tokens,
 )
 from . import common
 from .common import _process_sse_stream, _llm_chat_stream
@@ -81,6 +86,7 @@ class AgentRequest(BaseModel):
     large_model: Optional[str] = None
     mode: Optional[str] = "main"
     plan: bool = False
+    session_id: Optional[int] = None
     attachments: list[AttachedFile] = []
 
 
@@ -128,9 +134,10 @@ async def _await_permission(req_id: str, ev: asyncio.Event):
     res = rec.get("result") or {"allow": False, "note": "no answer"}
     return res.get("allow", False), res.get("note", "")
 
-# Tools allowed in plan mode: read/explore only — nothing that mutates disk
+# Tools allowed in plan mode: read/explore only — nothing that mutates disk.
+# create_plan/get_plan ARE allowed: the deliverable of plan mode is the tracked plan itself.
 PLAN_MODE_TOOLS = {"list_files", "read_file", "grep", "search_memory", "list_skills", "read_skill",
-                   "analyze_image", "web_fetch", "web_search"}
+                   "analyze_image", "web_fetch", "web_search", "create_plan", "get_plan"}
 
 PLAN_MODE_PROMPT = """
 
@@ -138,8 +145,9 @@ PLAN MODE ACTIVE — READ-ONLY.
 You must NOT create, edit, write, or revert any files, and must not run code that
 changes anything. Your job is to investigate, then produce an implementation plan.
 1. Explore the workspace with read-only tools (list_files, read_file, grep, web_*) as needed.
-2. Then output a clear numbered plan: files to create/modify (exact paths), the change in each, and the execution order.
-3. End with: 'Say "proceed" (or switch off Plan mode) to execute this plan.'
+2. Then call create_plan ONCE with your final ordered steps (the items array) so the plan is tracked and displayed to the user.
+3. Then output the same plan as a clear numbered list: files to create/modify (exact paths), the change in each, and the execution order.
+4. End with: 'Say "proceed" (or switch off Plan mode) to execute this plan.'
 Never attempt file modifications in plan mode; mutating tools are unavailable."""
 
 
@@ -197,6 +205,23 @@ async def agent_run(req: AgentRequest):
             sys_prompt += "\n" + frag
     if req.plan:
         sys_prompt += PLAN_MODE_PROMPT
+    # point the plan tools at this session; in Build mode, inject the tracked plan
+    # so the agent continues it step by step and keeps statuses up to date
+    set_plan_context(req.session_id)
+    if req.session_id and not req.plan:
+        plan_items = db_get_plan_items(req.session_id)
+        if plan_items:
+            done_n = sum(1 for i in plan_items if i["status"] == "done")
+            fail_n = sum(1 for i in plan_items if i["status"] == "failed")
+            sys_prompt += (
+                "\n\nACTIVE PLAN — tracked with create_plan / update_plan_item. Work through the "
+                "pending or failed steps in order, and call update_plan_item(item=N, status='done' "
+                "or 'failed') immediately after each step finishes or fails:\n"
+                + "\n".join(
+                    f"{i['ord']}. [{i['status']}] {i['text']}" + (f" — {i['note']}" if i.get("note") else "")
+                    for i in plan_items)
+                + f"\n({done_n}/{len(plan_items)} done, {fail_n} failed)"
+            )
     has_sys = False
     for m in msgs:
         if m.get("role") == "system":
@@ -340,10 +365,12 @@ async def agent_run(req: AgentRequest):
                                      if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
                 else:
                     if lane_name == "executor":
-                        # core tools plus shell and skills so executor can install packages/run commands
+                        # core tools plus shell, skills and plan tracking so the
+                        # executor can install packages, run commands, and tick plan items
                         tools_for_lane = [t for t in all_tools()
                                          if t.get("function", {}).get("name") in
-                                         ("write_file", "read_file", "edit_file", "list_files", "run_python", "run_shell", "read_skill", "list_skills")]
+                                         ("write_file", "read_file", "edit_file", "list_files", "run_python", "run_shell", "read_skill", "list_skills",
+                                          "create_plan", "update_plan_item", "get_plan")]
                     else:
                         tools_for_lane = all_tools()
 
@@ -550,13 +577,23 @@ async def agent_run(req: AgentRequest):
                     yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': name, 'ok': ok, 'result': result})}\n\n"
                     actions_taken.append({"name": name, "args": args, "ok": ok, "result": result})
                     msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                    # structured plan state → UI checklist
+                    if name in ("create_plan", "update_plan_item", "get_plan") and req.session_id:
+                        yield f"event: plan\ndata: {json.dumps({'items': db_get_plan_items(req.session_id)})}\n\n"
 
             val_text, was_synth, note = validate_and_finalize_response(
                 last_query, final_content, final_reasoning, actions_taken)
             if was_synth or not final_content.strip():
                 yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
             yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
-            yield f"event: done\ndata: {json.dumps({'note': 'max steps reached', 'text': ''})}\n\n"
+            plan_note = "max steps reached"
+            if req.session_id:
+                pi = db_get_plan_items(req.session_id)
+                if pi:
+                    pd = sum(1 for i in pi if i["status"] == "done")
+                    pf = sum(1 for i in pi if i["status"] == "failed")
+                    plan_note += f" — plan progress: {pd}/{len(pi)} done, {pf} failed"
+            yield f"event: done\ndata: {json.dumps({'note': plan_note, 'text': ''})}\n\n"
         except asyncio.CancelledError:
             pass
         except Exception as e:

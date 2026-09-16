@@ -1835,3 +1835,86 @@ body.ws-resizing #ws-grip::after { background: var(--accent); }
   background: var(--accent); color: #ffffff;
 }
 
+/* ---------------- structured plan checklist panel ---------------- */
+.plan-panel {
+  margin: 0 0 10px 0;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12px;
+}
+.plan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.plan-title {
+  font-weight: 700;
+  color: var(--text);
+  font-size: 12px;
+}
+.plan-progress {
+  color: var(--dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.plan-bar {
+  height: 4px;
+  border-radius: 3px;
+  background: var(--border-subtle);
+  overflow: hidden;
+  margin-bottom: 9px;
+}
+.plan-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--green);
+  transition: width 0.4s ease;
+}
+.plan-bar-fill.has-failed {
+  background: linear-gradient(90deg, var(--red) 0%, var(--green) 100%);
+}
+.plan-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.plan-item {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  line-height: 1.45;
+  padding: 2px 0;
+}
+.plan-mark {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+.plan-text {
+  color: var(--text);
+}
+.plan-item.st-done .plan-text {
+  color: var(--dim);
+  text-decoration: line-through;
+  text-decoration-color: var(--green);
+}
+.plan-item.st-failed .plan-text {
+  color: var(--red);
+}
+.plan-item.st-in_progress .plan-text {
+  color: var(--accent);
+  font-weight: 600;
+}
+.plan-note {
+  color: var(--dim);
+  font-size: 10.5px;
+  font-style: italic;
+}
+

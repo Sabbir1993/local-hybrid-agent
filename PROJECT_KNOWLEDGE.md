@@ -520,10 +520,35 @@ The UI's `runAgentSSE()` consumes exactly these:
 Three layers of enforcement, deliberately redundant:
 
 1. **Prompt** — `PLAN_MODE_PROMPT` tells the model it is read-only and must produce a numbered plan.
-2. **Tool schemas** — only `PLAN_MODE_TOOLS` are offered: `list_files`, `read_file`, `grep`, `search_memory`, `list_skills`, `read_skill`, `analyze_image`, `web_fetch`, `web_search`.
+2. **Tool schemas** — only `PLAN_MODE_TOOLS` are offered: `list_files`, `read_file`, `grep`, `search_memory`, `list_skills`, `read_skill`, `analyze_image`, `web_fetch`, `web_search`, plus `create_plan` and `get_plan` (the plan itself is plan mode's deliverable).
 3. **Hard block at dispatch** — even if the model emits a mutating call anyway, the loop refuses it: `"error: plan mode is active — '<name>' is read-only-restricted."`
 
 Plan mode also disables the Needle fast path.
+
+### Structured plan tracking (`plan_items`)
+
+Plan mode and Build mode now share a **persistent, DB-backed task plan**:
+
+- **Storage** — `plan_items` table in `projects.db` (session-scoped, ordered, `status` ∈
+  `pending / in_progress / done / failed`, optional note). Rows cascade-delete with their session
+  (`db_delete_session` / `db_delete_project` remove them explicitly).
+- **Tools** — `core/agent_tools.py`: `create_plan(items: [str])` (replaces the session's plan),
+  `update_plan_item(item: 1-based, status, note?)`, `get_plan()`. They resolve the session from
+  `_plan_session_id`, set per run by `set_plan_context(req.session_id)` in `routes/agent.py`.
+- **Request field** — `/agent/run` accepts `session_id`; the UI sends `curSession.id`
+  (agent-run.js now *awaits* `ensureSession` first so the first message has one).
+- **Prompt injection** — in Build mode, an existing plan is appended to the system prompt as an
+  `ACTIVE PLAN` block with per-step statuses; the agent is told to work pending/failed steps in
+  order and tick them with `update_plan_item` after each finishes or fails.
+- **Lane visibility** — plan tools are in `PLAN_MODE_TOOLS` and in the executor lane's core tuple,
+  so both the 3B executor and the main model can create/update the plan.
+- **SSE contract** — after any plan tool runs, the loop emits `event: plan` with the full item
+  snapshot; the UI (`agent-run.js` → `planPanelHtml` in agent-acts.js, styled in style.css) renders
+  a checklist with a progress bar in the message bubble. The snapshot lives in `meta.acts`
+  (`{type:'plan', items:[...]}`, latest wins), so it is persisted with the assistant message and
+  restored on session reload.
+- **Max-steps wrap-up** — hitting the step cap now reports plan progress in the `done` event
+  (`max steps reached — plan progress: 3/5 done, 1 failed`) instead of an empty cliff.
 
 ### Shell permission flow
 

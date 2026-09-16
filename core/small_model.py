@@ -305,6 +305,7 @@ async def describe_image_file(p: Path, question: str = "Describe this image in d
 
 # ---------------- Needle CPU router (fast lane, 0 VRAM) ----------------
 _needle_agent = None
+_needle_tools_names = None
 _needle_failed = False
 
 
@@ -325,12 +326,14 @@ def needle_available() -> bool:
 def needle_route(query: str, tools: list) -> Optional[dict]:
     if not needle_available():
         return None
-    global _needle_agent
+    global _needle_agent, _needle_tools_names
     try:
-        if _needle_agent is None:
-            plain = [t["function"] for t in tools]
+        plain = [t["function"] for t in tools if isinstance(t, dict) and "function" in t]
+        tool_names = tuple(sorted(t.get("name", "") for t in plain))
+        if _needle_agent is None or _needle_tools_names != tool_names:
             import needle as _nd
             _needle_agent = _nd.Needle(tools=plain)
+            _needle_tools_names = tool_names
         resp = _needle_agent.complete(query)
         if resp.get("type") != "call" or not resp.get("function_calls"):
             return None
@@ -345,3 +348,4 @@ def needle_route(query: str, tools: list) -> Optional[dict]:
         print(f"[server_manager] needle route failed: {e}", file=sys.stderr)
         _needle_failed = True
         return None
+
