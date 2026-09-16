@@ -1,0 +1,93 @@
+/* ---------------- server controls ---------------- */
+async function warmup() {
+  try {
+    toast('Warming up shaders (first request compile takes ~10s)…');
+    await fetch('/v1/chat/completions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }], max_tokens: 1, temperature: 0 }),
+    });
+  } catch (e) { /* non-fatal */ }
+}
+
+async function loadSelectedModel() {
+  const sel = $('profile');
+  const target = sel.value;
+  if (!target) { toast('Please select a model from the dropdown first', true); return; }
+  if (curStatus && curStatus.pid) {  // loaded -> unload
+    if (ctrl) ctrl.abort();
+    try { await fetch('/control/stop', { method: 'POST' }); } catch (e) {}
+    pollStatus(); pollGpu();
+    toast('Model unloaded — VRAM freed on both A770s');
+    return;
+  }
+  setPill('loading');
+  toast('Loading model into Arc A770 VRAM (~10–60s)…');
+  try {
+    const r = await fetch('/control/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: target })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  } catch (e) {
+    toast('Load failed: ' + e.message, true);
+    pollStatus();
+    return;
+  }
+  await warmup();
+  pollStatus();
+  loadConfig();
+  toast('Model loaded ✅');
+}
+
+$('btn-load-header').onclick = loadSelectedModel;
+
+function setLoadBtn(mode) {
+  const b = $('btn-load-header');
+  b.classList.remove('unload', 'loading');
+  if (mode === 'on') {
+    b.innerHTML = '<span>■</span>';
+    b.classList.add('unload');
+    b.title = 'Unload model — terminate llama-server and free VRAM/DRAM';
+  } else if (mode === 'loading') {
+    b.innerHTML = '<span class="spinner"></span>';
+    b.classList.add('loading');
+    b.title = 'Loading model into VRAM…';
+  } else {
+    b.innerHTML = '<span>▶</span>';
+    b.title = 'Load the selected model into GPU VRAM';
+  }
+}
+
+/* clear everything */
+$('m-cancel').onclick = () => { $('modal-bg').hidden = true; };
+$('modal-bg').onclick = e => { if (e.target.id === 'modal-bg') $('modal-bg').hidden = true; };
+$('m-ok').onclick = async () => {
+  $('modal-bg').hidden = true;
+  if (ctrl) ctrl.abort();
+  try { await fetch('/control/stop', { method: 'POST' }); } catch (e) {}
+  messages = [];
+  renderAll();
+  pollStatus(); pollGpu();
+  toast('Cleared — model unloaded, VRAM freed, chat reset');
+};
+
+/* keepalive toggle (Model Config card) */
+$('ka').onchange = async e => {
+  const on = e.target.checked;
+  e.target._user = true;
+  try {
+    const r = await fetch('/control/keepalive', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: on }),
+    });
+    const j = await r.json();
+    toast('Keepalive ' + (j.keepalive ? 'ON — VRAM stays resident at full speed' : 'OFF'));
+  } catch (err) {
+    toast('Keepalive toggle failed', true);
+  }
+};
+
+/* chat clear (chat only) */
+if ($('btn-chatclear')) $('btn-chatclear').onclick = () => { messages = []; renderAll(); };
