@@ -41,6 +41,7 @@ from core.agent_tools import (
     _ws_changes,
 )
 from core.registry import registry
+from core.grammar import build_tool_call_grammar, envelope_examples
 from core.web_tools import register_web_tools
 from core.skills import skills_prompt_fragment
 from core.plugins import plugins_prompt_fragment, fire_hook
@@ -60,6 +61,8 @@ from core.agent_loop import (
     validate_and_finalize_response,
     safe_parse_and_repair_args,
     _extract_text_tool_calls,
+    estimate_prompt_tokens,
+    compact_messages,
 )
 from core.monitor import (
     _monitor_state,
@@ -91,6 +94,23 @@ class AgentRequest(BaseModel):
 
 
 AGENT_MAX_STEPS = 30
+
+# Grammar-constrained tool calls for the executor lane (small-model reliability).
+# Auto-disabled for the process lifetime if the llama-server build rejects the
+# grammar or the envelope can't be verified. Kill switch: config.json
+# router.executor_grammar: false.
+_executor_grammar_disabled = False
+
+
+def _executor_grammar(tools_for_lane: list) -> Optional[str]:
+    """GBNF grammar constraining the executor's tool-call JSON (or None)."""
+    global _executor_grammar_disabled
+    if _executor_grammar_disabled or not APP_CONFIG.get("router", {}).get("executor_grammar", True):
+        return None
+    g = build_tool_call_grammar(tools_for_lane)
+    if g is None:
+        _executor_grammar_disabled = True
+    return g
 
 # ---------------- shell permission flow ----------------
 # pending shell permission requests: req_id -> {cmd, event, result}
@@ -203,6 +223,9 @@ async def agent_run(req: AgentRequest):
     for frag in (skills_prompt_fragment(), plugins_prompt_fragment()):
         if frag:
             sys_prompt += "\n" + frag
+    # executor lanes get the tool-call format few-shot (aligned with the GBNF grammar)
+    if ex_inst.available and (req.mode != "main" or not main_ready):
+        sys_prompt += envelope_examples()
     if req.plan:
         sys_prompt += PLAN_MODE_PROMPT
     # point the plan tools at this session; in Build mode, inject the tracked plan
@@ -300,6 +323,8 @@ async def agent_run(req: AgentRequest):
         actions_taken = []
         final_content = ""
         final_reasoning = ""
+        attempt_sigs: set = set()
+        repeat_streak = 0
         try:
             for step in range(steps):
                 yield f"event: step\ndata: {json.dumps({'step': step + 1, 'total': steps})}\n\n"
@@ -336,7 +361,10 @@ async def agent_run(req: AgentRequest):
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                         continue
 
-                lane_name = "main" if req.mode == "main" or not use_executor else "executor"
+                executor_stuck = repeat_streak >= 2
+                lane_name = "main" if req.mode == "main" or not use_executor or executor_stuck else "executor"
+                if executor_stuck:
+                    print("[server_manager] executor repeating identical tool calls - escalating to main model", file=sys.stderr)
                 if lane_name == "executor":
                     try:
                         await ex_inst.ensure_loaded()
@@ -374,11 +402,20 @@ async def agent_run(req: AgentRequest):
                     else:
                         tools_for_lane = all_tools()
 
+                # executor lane: compact history into the 16k window + constrain tool-call JSON
+                step_grammar = None
+                if lane_name == "executor":
+                    ex_ctx = int(ex_inst.cfg.get("ctx") or 16384)
+                    # in-place slice assignment: must NOT rebind `msgs` here, or it
+                    # becomes a local of sse() and earlier reads raise UnboundLocalError
+                    msgs[:] = compact_messages(msgs, int(ex_ctx * 0.7))
+                    step_grammar = _executor_grammar(tools_for_lane)
+
                 step_rid = monitor_begin(f"agent/{lane_name}", True, json.dumps({"messages": msgs}).encode(), model=model_info.get("model"))
                 res_dict = None
                 streamed_content = []
                 try:
-                    async for ev, val in _llm_chat_stream(active_client, msgs, tools_for_lane, req.temperature, req.max_tokens, rid=step_rid):
+                    async for ev, val in _llm_chat_stream(active_client, msgs, tools_for_lane, req.temperature, req.max_tokens, rid=step_rid, grammar=step_grammar):
                         if ev == "thought_delta":
                             yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
                         elif ev == "content_delta":
@@ -426,8 +463,8 @@ async def agent_run(req: AgentRequest):
                     and main_ready
                     and (
                         is_loop
-                        or (wants_creation and step == 0 and (refused or not tool_calls))
-                        or (wants_action and step == 0 and (tutorial_code_emitted or refused))
+                        or (wants_creation and step == 0 and not tool_calls)
+                        or (wants_action and step == 0 and (tutorial_code_emitted or (refused and not tool_calls)))
                         or (step == 0 and not content.strip() and not tool_calls)
                     )
                 )
@@ -518,6 +555,15 @@ async def agent_run(req: AgentRequest):
                     }
                     clean_tool_calls.append(clean_tc)
                     parsed_actions.append((name, tc_id, args))
+
+                # semantic loop detection: identical tool+args attempted again
+                sigs = [(name, json.dumps(args, sort_keys=True, default=str))
+                        for name, _tc_id, args in parsed_actions]
+                if sigs and all(s in attempt_sigs for s in sigs):
+                    repeat_streak += 1
+                else:
+                    repeat_streak = 0
+                attempt_sigs.update(sigs)
 
                 history_content = sanitize_user_facing_content(content)
                 msgs.append({"role": "assistant", "content": history_content, "tool_calls": clean_tool_calls})

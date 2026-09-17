@@ -4,16 +4,16 @@
   "common_dir": "E:/AI/common",
   "small_models": {
     "executor": {
-      "model": "Spark-X2.5-4B-Q4_K_M.gguf",
+      "model": "orchestrator/Spark-X2.5-4B-Q4_K_M.gguf",
       "port": 8091,
-      "gpu": 1,
-      "ctx": 16384
+      "gpu": 0,
+      "ctx": 32000
     },
     "vision": {
       "model": "orchestrator/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
       "mmproj": "orchestrator/mmproj-model-f16.gguf",
       "port": 8092,
-      "gpu": 1,
+      "gpu": 0,
       "ctx": 24576
     },
     "embedder": {
@@ -25,7 +25,8 @@
   "router": {
     "enabled": true,
     "confidence_threshold": 0.75,
-    "engine": "cactus_needle"
+    "engine": "cactus_needle",
+    "executor_grammar": true
   },
   "agent": {
     "exec_timeout_s": 0,

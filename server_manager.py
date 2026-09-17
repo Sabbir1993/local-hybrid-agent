@@ -42,6 +42,7 @@ from core.registry import bootstrap_builtin_tools
 from core.shell_tools import register_shell_tools
 from core.skills import register_skill_tools
 from core.small_model import small_models
+from core.memory import memory_background_task
 from core.state import keepalive_loop, state
 from core.web_tools import register_web_tools
 from core.file_tools import register_file_tools
@@ -102,9 +103,10 @@ async def lifespan(app: FastAPI):
     state.watchdog_task = asyncio.create_task(state.watchdog())
     state.keepalive_task = asyncio.create_task(keepalive_loop())
     small_models.start_reaper()
+    memory_task = asyncio.create_task(memory_background_task())
     yield
     # Fast, cancellable: stop background loops first
-    for task in (state.watchdog_task, state.keepalive_task, small_models.reaper_task):
+    for task in (state.watchdog_task, state.keepalive_task, small_models.reaper_task, memory_task):
         if task:
             task.cancel()
     # Blocking process teardown runs off the loop thread

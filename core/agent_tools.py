@@ -365,28 +365,24 @@ async def tool_analyze_image(args: dict) -> str:
     return await describe_image_file(p, args.get("question", "Describe this image in detail for a coding agent."))
 
 
-def tool_search_memory(args: dict) -> str:
+async def tool_search_memory(args: dict) -> str:
     query = args.get("query", "")
     if not query:
         raise ValueError("query required")
-    results = []
-    ws = active_workspace()
-    import re as _re
-    words = [w for w in _re.findall(r"\w{3,}", query)][:6]
-    for f in ws.rglob("*"):
-        if not f.is_file() or f.stat().st_size > 2_000_000:
-            continue
-        try:
-            text = f.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-        score = sum(text.lower().count(w.lower()) for w in words)
-        if score > 0:
-            results.append((score, str(f.relative_to(ws))))
-    results.sort(reverse=True)
+    try:
+        from .memory import ensure_indexed, search_memory_hybrid
+        await ensure_indexed(max_age_s=900)
+        results = await search_memory_hybrid(query, k=8)
+    except Exception as e:
+        return f"error: memory search unavailable: {type(e).__name__}: {e}"
     if not results:
-        return "(no matches in project memory)"
-    return "\n".join(f"{r} (score {s})" for s, r in results[:10])
+        return "(no matches in project memory - the index may still be building)"
+    lines = []
+    for r in results:
+        where = r["path"] if r["source"] == "workspace" else f"{r['path']} (past session)"
+        snippet = " ".join(str(r["text"]).split())[:220]
+        lines.append(f"[{where}] score {r['score']:.2f}\n  {snippet}")
+    return "\n".join(lines)
 
 
 # ---------------- structured plan tracking ----------------
@@ -592,7 +588,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_memory",
-            "description": "Search workspace memory and past session titles",
+            "description": "Hybrid semantic + keyword search over workspace files and past sessions. Use for 'where did we...', 'how did we...', and finding relevant code by meaning.",
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},

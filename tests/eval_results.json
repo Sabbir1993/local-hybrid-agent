@@ -1,0 +1,31 @@
+{
+  "ts": 1789577683.4950938,
+  "offline": [
+    {
+      "name": "grammar",
+      "status": "PASS",
+      "note": "grammar ok (13 tools, 16 rules, 808-char few-shot)"
+    },
+    {
+      "name": "compaction",
+      "status": "PASS",
+      "note": "compaction ok (26385 -> 5917 tokens)"
+    },
+    {
+      "name": "loop_detection",
+      "status": "PASS",
+      "note": "loop detection ok"
+    },
+    {
+      "name": "json_repair",
+      "status": "PASS",
+      "note": "JSON repair ok"
+    },
+    {
+      "name": "needle_router",
+      "status": "PASS",
+      "note": "needle ok (route: list_files)"
+    }
+  ],
+  "live": []
+}

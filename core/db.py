@@ -333,6 +333,29 @@ def db_delete_project(pid: int) -> None:
     _projects_db.commit()
 
 
+def db_session_docs(limit: int = 60) -> list:
+    """Recent sessions as (path, text, version) docs for memory indexing.
+
+    Each doc is `session:<id>` -> title + first user message, versioned by the
+    session creation timestamp so unchanged sessions are never re-embedded.
+    """
+    out = []
+    try:
+        rows = _projects_db.execute(
+            "SELECT s.id, s.title, s.created_at, "
+            "(SELECT m.content FROM messages m WHERE m.session_id = s.id AND m.role = 'user' "
+            " ORDER BY m.id LIMIT 1) AS first_user "
+            "FROM sessions s ORDER BY s.created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        for r in rows:
+            first = str(r["first_user"] or "").strip()[:500]
+            out.append((f"session:{r['id']}", f"{r['title']}\n{first}", float(r["created_at"])))
+    except Exception as e:
+        print(f"[db] session docs failed: {e}", file=sys.stderr)
+    return out
+
+
 def db_list_sessions(pid: Optional[int]) -> list:
     if pid is None or pid == 0:
         rows = _projects_db.execute(

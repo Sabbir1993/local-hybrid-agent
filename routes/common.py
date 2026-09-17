@@ -3,6 +3,7 @@ routes/common.py - Shared state and LLM streaming utilities across routes.
 """
 
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -138,7 +139,7 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
 
 
 
-async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None):
+async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None):
     payload = {
         "messages": msgs,
         "temperature": temperature,
@@ -151,11 +152,25 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
         payload["max_tokens"] = -1
     if tools:
         payload["tools"] = tools
+    if grammar:
+        payload["grammar"] = grammar
 
     async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=None) as response:
         if response.status_code != 200:
             err_text = await response.aread()
             err_msg = err_text.decode("utf-8", "replace")[:300]
+            if grammar:
+                # This llama-server build rejected the grammar (unsupported field
+                # or invalid GBNF). Retry once unconstrained so the lane survives.
+                print(f"[common] grammar-constrained request rejected ({response.status_code}: {err_msg[:120]}) - retrying without grammar", file=sys.stderr)
+                payload.pop("grammar", None)
+                async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=None) as rg:
+                    if rg.status_code != 200:
+                        rg_err = await rg.aread()
+                        raise RuntimeError(f"upstream {rg.status_code}: {rg_err.decode('utf-8', 'replace')[:200]}")
+                    async for item in _process_sse_stream(rg, rid=rid):
+                        yield item
+                return
             if response.status_code == 500 and "Failed to parse tool call arguments as JSON" in err_msg:
                 sanitized_msgs = []
                 for m in msgs:

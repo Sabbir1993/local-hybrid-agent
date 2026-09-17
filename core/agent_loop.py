@@ -329,6 +329,94 @@ def safe_parse_and_repair_args(raw: Union[str, dict], tool_name: str = "", query
     return out
 
 
+def estimate_prompt_tokens(msgs: list) -> int:
+    """Rough prompt-size estimate (chars/4 + tool-call overhead). Good enough
+    for compaction decisions - not a substitute for real tokenization."""
+    total = 0
+    for m in msgs:
+        total += len(str(m.get("content") or "")) // 4
+        for tc in (m.get("tool_calls") or []):
+            try:
+                total += len(json.dumps(tc)) // 4 + 8
+            except Exception:
+                total += 64
+        total += 6  # role/framing overhead
+    return total
+
+
+def _digest_message(m: dict) -> str:
+    role = str(m.get("role") or "?")
+    content = str(m.get("content") or "").strip()
+    if role == "user":
+        return "user: " + content[:240] + ("..." if len(content) > 240 else "")
+    if role == "assistant":
+        names = [str((tc.get("function") or {}).get("name") or "?")
+                 for tc in (m.get("tool_calls") or [])]
+        head = content[:160] + ("..." if len(content) > 160 else "")
+        return "assistant: " + head + (f" [tools: {', '.join(names)}]" if names else "")
+    if role == "tool":
+        return f"tool[{m.get('tool_call_id', '')}]: " + content[:160] + ("..." if len(content) > 160 else "")
+    return f"{role}: {content[:200]}"
+
+
+def compact_messages(msgs: list, budget_tokens: int) -> list:
+    """Mechanical context compaction for the executor lane.
+
+    Keeps the system prompt and the most recent ~60% of the token budget
+    verbatim (preserving assistant/tool_call/tool pairing), and rolls older
+    turns into a compact deterministic digest message. No extra LLM call is
+    made, so compaction adds no latency and cannot hallucinate.
+    """
+    if budget_tokens <= 0 or len(msgs) < 6:
+        return msgs
+    if estimate_prompt_tokens(msgs) <= budget_tokens:
+        return msgs
+
+    # group into units: (assistant + its tool replies) or a single message
+    units = []
+    i = len(msgs) - 1
+    while i >= 1:
+        if msgs[i].get("role") == "tool":
+            j = i
+            while j >= 1 and msgs[j].get("role") == "tool":
+                j -= 1
+            if j >= 1 and msgs[j].get("role") == "assistant":
+                units.append((j, i))
+                i = j - 1
+            else:
+                units.append((i, i))
+                i -= 1
+        else:
+            units.append((i, i))
+            i -= 1
+    units.reverse()
+
+    tail_budget = int(budget_tokens * 0.6)
+    tail_start = len(msgs)
+    acc = 0
+    for start, end in reversed(units):
+        u_tok = estimate_prompt_tokens(msgs[start:end + 1])
+        if acc + u_tok > tail_budget and tail_start != len(msgs):
+            break
+        acc += u_tok
+        tail_start = start
+    if tail_start <= 1:
+        return msgs  # tail alone exceeds budget; nothing safe to drop
+
+    digest_lines = []
+    for start, end in units:
+        if start >= tail_start:
+            break
+        for m in msgs[start:end + 1]:
+            digest_lines.append(_digest_message(m))
+    digest = ("[CONVERSATION DIGEST - earlier steps were compacted to fit the "
+              "context window. Tool results are summarized; call read_file / "
+              "list_files again if you need exact content.]\n" + "\n".join(digest_lines))
+    if len(digest) > 6000:
+        digest = digest[:6000] + "\n..."
+    return [msgs[0], {"role": "system", "content": digest}] + msgs[tail_start:]
+
+
 def _extract_text_tool_calls(text: str) -> list:
     if not text:
         return []

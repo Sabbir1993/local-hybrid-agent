@@ -15,6 +15,7 @@ UI_FILE = BASE_DIR / "ui.html"
 STATIC_DIR = BASE_DIR / "static"
 USAGE_DB_FILE = BASE_DIR / "usage.db"
 PROJECTS_DB_FILE = BASE_DIR / "projects.db"
+MEMORY_DB_FILE = BASE_DIR / "memory.db"
 MODEL_CONFIGS_FILE = BASE_DIR / "model_configs.json"
 PROFILES_DIR = BASE_DIR / "profiles"
 
