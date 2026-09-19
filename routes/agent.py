@@ -763,6 +763,19 @@ async def agent_run(req: AgentRequest):
                     if name in ("create_plan", "update_plan_item", "get_plan") and req.session_id:
                         yield f"event: plan\ndata: {json.dumps({'items': db_get_plan_items(req.session_id)})}\n\n"
 
+                # re-assert the plan-tracking reminder every step (not just once at
+                # turn start) so a long tool-call run doesn't drift away from calling
+                # update_plan_item once the initial system-prompt nudge scrolls out of focus
+                if req.session_id and not req.plan:
+                    plan_items_now = db_get_plan_items(req.session_id)
+                    if plan_items_now and any(i["status"] == "pending" for i in plan_items_now):
+                        done_n = sum(1 for i in plan_items_now if i["status"] == "done")
+                        fail_n = sum(1 for i in plan_items_now if i["status"] == "failed")
+                        msgs.append({"role": "user", "content": (
+                            f"[plan reminder] {done_n}/{len(plan_items_now)} steps done, {fail_n} failed. "
+                            "If a step you just performed matches a pending plan item, call "
+                            "update_plan_item(item=N, status='done' or 'failed') now before continuing.")})
+
             val_text, was_synth, note = validate_and_finalize_response(
                 last_query, final_content, final_reasoning, actions_taken)
             if was_synth or not final_content.strip():

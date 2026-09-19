@@ -129,7 +129,12 @@ async function runAgentSSE(text) {
           const ev = evM[1], d = JSON.parse(dtM[1]);
           const L = last();
           if (ev === 'step') L.acts.push({ type: 'step', ...d });
-          else if (ev === 'lane') L.acts.push({ type: 'lane', ...d });
+          else if (ev === 'lane') {
+            L.acts.push({ type: 'lane', ...d });
+            L.modelDisplay = d.display || d.model;
+            L.modelSource = d.source;
+            L.modelProvider = d.provider;
+          }
           else if (ev === 'thought') L.acts.push({ type: 'thought', ...d });
           else if (ev === 'thought_delta') {
             L.reasoning = (L.reasoning || '') + (d.delta || '');
@@ -186,7 +191,14 @@ async function runAgentSSE(text) {
       const ntok = Math.max(1, Math.round(fullLen / 3.5));
       last().tps = ntok / dt; last().ntok = ntok; last().secs = dt;
       if (ntok > 1) $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
-      persistMsg('assistant', last().content, { tps: last().tps, ntok, secs: dt, reasoning: last().reasoning || undefined, acts: last().acts });
+      persistMsg('assistant', last().content, {
+        tps: last().tps, ntok, secs: dt,
+        reasoning: last().reasoning || undefined,
+        acts: last().acts,
+        modelDisplay: last().modelDisplay || undefined,
+        modelSource: last().modelSource || undefined,
+        modelProvider: last().modelProvider || undefined,
+      });
     } catch (e) {
       if (e.name !== 'AbortError') {
         last().content += (last().content ? '\n\n' : '') + '⚠️ ' + e.message;
