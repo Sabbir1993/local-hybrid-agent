@@ -68,6 +68,24 @@ def _load_app_config() -> dict:
         },
         "router": {"enabled": True, "confidence_threshold": 0.7},
         "agent": {"exec_timeout_s": 120, "max_steps": 30, "idle_unload_s": 120},
+        "roles": {
+            "planner": {
+                "lane": "main", "max_steps": 6,
+                "tools": ["list_files", "read_file", "grep", "search_memory", "list_skills",
+                          "read_skill", "web_fetch", "web_search"],
+                "system_prompt": "You are a planning sub-agent. Investigate read-only, then return a concrete numbered plan. Do not write or edit files.",
+            },
+            "coder": {
+                "lane": "executor", "max_steps": 10,
+                "tools": ["write_file", "read_file", "edit_file", "list_files", "grep", "run_python"],
+                "system_prompt": "You are a focused implementation sub-agent. Make the exact edits described in your task, then report what changed.",
+            },
+            "reviewer": {
+                "lane": "main", "max_steps": 6,
+                "tools": ["list_files", "read_file", "grep"],
+                "system_prompt": "You are a code-review sub-agent. Read the referenced files/diff and report concrete issues found -- do not modify anything.",
+            },
+        },
         # cloud providers / lane bindings: kept here so /control/models can report
         # them without importing the UI-managed providers.json directly
         # (core.cloud is the authority; providers.json overrides config.json)
@@ -89,7 +107,7 @@ def _load_app_config() -> dict:
             for k, sub in base["small_models"].items():
                 if isinstance(d.get("small_models", {}).get(k), dict):
                     sub.update(d["small_models"][k])
-            for k in ("router", "agent", "capabilities", "provider", "cloud"):
+            for k in ("router", "agent", "capabilities", "provider", "cloud", "roles"):
                 if isinstance(d.get(k), dict):
                     sub = base[k]
                     if isinstance(sub, dict):

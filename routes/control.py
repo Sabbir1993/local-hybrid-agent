@@ -264,6 +264,10 @@ async def status():
 
     cm_main = cloud.cloud_lane("main")
     cm_exec = cloud.cloud_lane("executor")
+    # cloud main lane has no local /slots to query -- fall back to its
+    # configured ctx so the UI doesn't show the local-server default (32768)
+    if cm_main and not (state.process and state.process.poll() is None):
+        ctx_info = {"n_ctx": cm_main.ctx, "n_past": 0, "n_prompt": 0, "pct": 0.0}
     return {
         "profile": state.profile.get("name") if state.profile else None,
         "model": state.profile.get("model_path") if state.profile else None,

@@ -40,6 +40,26 @@
     "max_steps": 30,
     "idle_unload_s": 0
   },
+  "roles": {
+    "planner": {
+      "lane": "main",
+      "max_steps": 6,
+      "tools": ["list_files", "read_file", "grep", "search_memory", "list_skills", "read_skill", "web_fetch", "web_search"],
+      "system_prompt": "You are a planning sub-agent. Investigate read-only, then return a concrete numbered plan. Do not write or edit files."
+    },
+    "coder": {
+      "lane": "executor",
+      "max_steps": 10,
+      "tools": ["write_file", "read_file", "edit_file", "list_files", "grep", "run_python"],
+      "system_prompt": "You are a focused implementation sub-agent. Make the exact edits described in your task, then report what changed."
+    },
+    "reviewer": {
+      "lane": "main",
+      "max_steps": 6,
+      "tools": ["list_files", "read_file", "grep"],
+      "system_prompt": "You are a code-review sub-agent. Read the referenced files/diff and report concrete issues found -- do not modify anything."
+    }
+  },
   "preflight": {
     "mode": "block",
     "headroom_gb": 1.0

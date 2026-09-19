@@ -50,7 +50,7 @@ CONFIG_DEFAULTS = {
 
 # Key -> (min, max) for integer launch params; 0 = "omit, use llama default"
 CONFIG_INT_FIELDS = {
-    "context_size": (512, 262144),
+    "context_size": (512, 1048576),
     "n_gpu_layers": (0, 999),
     "threads": (0, 64),
     "threads_batch": (0, 64),

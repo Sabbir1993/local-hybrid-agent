@@ -690,3 +690,10 @@ TOOL_IMPLS = {
     "update_plan_item": tool_update_plan_item,
     "get_plan": tool_get_plan,
 }
+
+# Registered last, after AGENT_TOOLS/TOOL_IMPLS/active_workspace exist: core.subagent
+# imports back from this module and from core.agent_loop, so wiring it in here (rather
+# than at the top of the file) avoids a circular import during startup.
+from .subagent import SPAWN_AGENT_SCHEMA, tool_spawn_agent  # noqa: E402
+AGENT_TOOLS.append(SPAWN_AGENT_SCHEMA)
+TOOL_IMPLS["spawn_agent"] = tool_spawn_agent

@@ -186,7 +186,7 @@
       <div class="cfg-grid">
         <div class="cfg-item" title="Context size in tokens (n_ctx). Maximum prompt + completion memory allocated in VRAM">
           <label for="cfg-ctx">Context size <span class="info" title="Maximum token context window size (e.g. 32768, 65536)">ⓘ</span></label>
-          <input type="number" id="cfg-ctx" step="8" min="512" max="262144" value="32768" title="Context size (n_ctx) in tokens (512–262144)">
+          <input type="number" id="cfg-ctx" step="8" min="512" max="1048576" value="32768" title="Context size (n_ctx) in tokens (512–1048576)">
         </div>
         <div class="cfg-item" title="Number of model layers offloaded to GPUs (n_gpu_layers). 999 offloads all layers to VRAM">
           <label for="cfg-ngl">GPU layers <span class="info" title="999 = offload all layers to GPU VRAM">ⓘ</span></label>

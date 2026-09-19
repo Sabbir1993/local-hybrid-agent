@@ -14,6 +14,7 @@ function toolIcon(name) {
     case 'create_plan': return '📋';
     case 'update_plan_item': return '✔️';
     case 'get_plan': return '🗒️';
+    case 'spawn_agent': return '🤖';
     default: return '🛠️';
   }
 }
@@ -120,6 +121,7 @@ function toolMeta(name) {
     case 'list_files': return { icon: '📁', label: 'list_files', verb: 'Listed', cls: 'list' };
     case 'grep': return { icon: '🔍', label: 'grep', verb: 'Searched', cls: 'grep' };
     case 'revert': return { icon: '↩️', label: 'revert', verb: 'Reverted', cls: 'revert' };
+    case 'spawn_agent': return { icon: '🤖', label: 'spawn_agent', verb: 'Delegated', cls: 'subagent' };
     default: return { icon: '🛠️', label: name, verb: 'Done', cls: 'default' };
   }
 }
@@ -304,6 +306,11 @@ function agentActsHtml(acts) {
       iconClass = 'file';
       iconSymbol = '🔗';
       label = esc(t.args.url || 'web page');
+    } else if (t.name === 'spawn_agent') {
+      verb = 'Delegated';
+      iconClass = 'subagent';
+      iconSymbol = '🤖';
+      label = esc((t.args.role ? `${t.args.role} sub-agent: ` : 'sub-agent: ') + (t.args.task || '').slice(0, 50));
     }
 
     const isRunning = t.result === null;

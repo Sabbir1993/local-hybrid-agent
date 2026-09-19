@@ -255,7 +255,7 @@ $('btn-apply').onclick = async () => {
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-    // reflect server-side clamping (e.g. context 200K -> 262144 max) in the form
+    // reflect server-side clamping (e.g. context 2M -> 1048576 max) in the form
     if (j.config) fillConfigForm(j.config);
   } catch (e) {
     toast('Config save failed: ' + e.message, true);
