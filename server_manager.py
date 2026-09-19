@@ -51,6 +51,7 @@ from routes import (
     agent_router,
     capabilities_router,
     chat_router,
+    cloud_router,
     control_router,
     projects_router,
     proxy_router,
@@ -141,6 +142,7 @@ async def ui_root():
 app.include_router(control_router)
 app.include_router(projects_router)
 app.include_router(capabilities_router)
+app.include_router(cloud_router)
 app.include_router(chat_router)
 app.include_router(agent_router)
 # Reverse proxy catch-all must be mounted last

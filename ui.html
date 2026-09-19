@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -10,7 +10,7 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=2.3">
+<link rel="stylesheet" href="/static/css/style.css?v=3.0">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
@@ -92,9 +92,11 @@
               <option value="plan">📋 Plan</option>
             </select>
             <span class="comp-hint" id="attach-info">Enter to send · Shift+Enter for newline</span>
-            <select id="agent-engine" style="display:none;" class="comp-select" title="Agent orchestration engine">
-              <option value="main" selected>🧠 Main LLM</option>
-              <option value="tiered">⚡ Orchestrator</option>
+            <select id="agent-engine" style="display:none;" class="comp-select" title="Agent orchestration engine - which model serves each lane">
+              <option value="all-local" selected>🖥 All Local (GPU)</option>
+              <option value="main-local-rest-cloud">⚡ Main Local - Rest Cloud</option>
+              <option value="main-cloud-rest-local">☁ Main Cloud - Rest Local</option>
+              <option value="all-cloud">☁ All Cloud</option>
             </select>
             <button id="btn-send" class="comp-btn" title="Send prompt (Enter)">➤</button>
             <button id="btn-abort" class="comp-btn" style="display:none" title="Cancel active generation">■</button>
@@ -247,6 +249,12 @@
       </div>
       <div class="cfg-note" title="Configuration note">Saved per-model into model_configs.json. Unload the model, then load it again to apply changes.</div>
       <button id="btn-apply" class="btn accent" style="margin-top:6px" title="Save configuration for this model. If the model is loaded, you will be asked to unload & reload to apply.">💾 Save Config</button>
+    </details>
+
+    <details class="card fold" id="sec-cloud">
+      <summary title="Cloud (OpenAI-compatible) providers: API keys, models, and which lane each one serves">☁️ Cloud Models</summary>
+      <div id="cloud-content"><div class="mon-empty">Loading…</div></div>
+      <div class="cfg-note" title="Where cloud settings live">Providers and lane bindings are saved to <b>providers.json</b> (kept out of git, so API keys are never committed). Selecting a cloud model in the top dropdown sets the <b>Main lane</b> — who answers you — and nothing is loaded into VRAM.</div>
     </details>
 
     <details class="card fold" id="sec-chat">
@@ -554,21 +562,23 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/theme.js?v=2.5"></script>
 <script src="/static/js/utils.js?v=2.5"></script>
 <script src="/static/js/preview.js?v=2.5"></script>
-<script src="/static/js/gpu-status.js?v=2.5"></script>
-<script src="/static/js/chat.js?v=2.8"></script>
-<script src="/static/js/controls.js?v=2.5"></script>
-<script src="/static/js/monitor.js?v=2.5"></script>
+<script src="/static/js/gpu-status.js?v=3.0"></script>
+<script src="/static/js/chat.js?v=3.0"></script>
+<script src="/static/js/controls.js?v=3.0"></script>
+<script src="/static/js/monitor.js?v=3.0"></script>
 <script src="/static/js/capabilities.js?v=2.5"></script>
 <script src="/static/js/usage-report.js?v=2.5"></script>
-<script src="/static/js/config.js?v=2.5"></script>
+<script src="/static/js/config.js?v=3.0"></script>
+<script src="/static/js/cloud.js?v=3.0"></script>
 <script src="/static/js/attachments.js?v=2.5"></script>
 <script src="/static/js/workspace.js?v=2.5"></script>
 <script src="/static/js/agent-cmd.js?v=2.8"></script>
-<script src="/static/js/projects.js?v=2.9"></script>
+<script src="/static/js/projects.js?v=3.1"></script>
 <script src="/static/js/agent-acts.js?v=2.5"></script>
-<script src="/static/js/agent-run.js?v=2.8"></script>
+<script src="/static/js/agent-run.js?v=3.0"></script>
 <script src="/static/js/compact.js?v=2.8"></script>
-<script src="/static/js/main.js?v=2.8"></script>
+<script src="/static/js/export.js?v=1.0"></script>
+<script src="/static/js/main.js?v=3.0"></script>
 
 </body>
 </html>

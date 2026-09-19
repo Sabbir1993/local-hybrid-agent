@@ -201,7 +201,10 @@ try {
   const savedEngine = localStorage.getItem('agent_engine');
   const engineSel = $('agent-engine');
   if (savedEngine && engineSel) {
-    engineSel.value = savedEngine;
+    // legacy values from before the 4 cloud modes: main -> all-local, tiered -> main-local-rest-cloud
+    const legacy = { main: 'all-local', tiered: 'main-local-rest-cloud', agent: 'all-local' };
+    engineSel.value = legacy[savedEngine] || savedEngine;
+    if (!engineSel.value) engineSel.value = 'all-local';
   }
   if (engineSel) {
     engineSel.addEventListener('change', () => {

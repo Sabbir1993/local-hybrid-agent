@@ -68,6 +68,11 @@ def _load_app_config() -> dict:
         },
         "router": {"enabled": True, "confidence_threshold": 0.7},
         "agent": {"exec_timeout_s": 120, "max_steps": 30, "idle_unload_s": 120},
+        # cloud providers / lane bindings: kept here so /control/models can report
+        # them without importing the UI-managed providers.json directly
+        # (core.cloud is the authority; providers.json overrides config.json)
+        "provider": {},
+        "cloud": {},
         "capabilities": {
             "web": True, "web_search_api_key": "", "skills": True,
             "mcp": True, "mcp_servers": {}, "plugins": True,
@@ -84,9 +89,13 @@ def _load_app_config() -> dict:
             for k, sub in base["small_models"].items():
                 if isinstance(d.get("small_models", {}).get(k), dict):
                     sub.update(d["small_models"][k])
-            for k in ("router", "agent", "capabilities"):
+            for k in ("router", "agent", "capabilities", "provider", "cloud"):
                 if isinstance(d.get(k), dict):
-                    base[k].update(d[k])
+                    sub = base[k]
+                    if isinstance(sub, dict):
+                        sub.update(d[k])
+                    else:
+                        base[k] = dict(d[k])
     except Exception as e:
         print(f"[server_manager] config.json unreadable: {e}", file=sys.stderr)
     return base
@@ -287,17 +296,13 @@ class SmallModelManager:
 small_models = SmallModelManager()
 
 
-# ---------------- vision (SmolVLM, on-demand) ----------------
+# ---------------- vision (SmolVLM locally, or a cloud VLM) ----------------
 async def describe_image_file(p: Path, question: str = "Describe this image in detail.") -> str:
-    """Send one image through SmolVLM (auto-loads instance on demand)."""
-    inst = small_models.instances["vision"]
-    if not inst.available:
-        return "error: vision model not configured in config.json (small_models.vision)"
-    await inst.ensure_loaded()
+    """Send one image through the vision lane (cloud when bound, else local)."""
     b64 = base64.b64encode(p.read_bytes()).decode()
     mime = "image/png" if p.suffix.lower() == ".png" else (
         "image/webp" if p.suffix.lower() == ".webp" else "image/jpeg")
-    r = await inst.client.post("/v1/chat/completions", json={
+    payload = {
         "messages": [{
             "role": "user",
             "content": [
@@ -307,7 +312,22 @@ async def describe_image_file(p: Path, question: str = "Describe this image in d
         }],
         "max_tokens": 400,
         "temperature": 0.1,
-    }, timeout=None)
+    }
+    from . import cloud
+    cm = cloud.cloud_lane("vision")
+    if cm:
+        try:
+            r = await cloud.CloudClient(cm).post("/v1/chat/completions", json=payload, timeout=None)
+            data = r.json()
+            return ((data.get("choices") or [{}])[0].get("message", {}).get("content")
+                    or "(cloud vision model returned no text)")
+        except Exception as e:
+            print(f"[vision] cloud lane failed ({cm.key}): {e}")
+    inst = small_models.instances["vision"]
+    if not inst.available:
+        return "error: vision model not configured in config.json (small_models.vision)"
+    await inst.ensure_loaded()
+    r = await inst.client.post("/v1/chat/completions", json=payload, timeout=None)
     inst.last_used = time.time()
     data = r.json()
     return (data.get("choices") or [{}])[0].get("message", {}).get("content") or "(vision model returned no text)"

@@ -35,6 +35,7 @@ from core.monitor import (
     MONITOR_RECENT_MAX,
 )
 from core.state import state
+from core import cloud
 from core import vram
 from . import common
 
@@ -163,6 +164,21 @@ def _standalone_profile(target: str) -> Optional[dict]:
 
 @router.get("/control/config")
 async def get_config(model: Optional[str] = None):
+    # Cloud model selected in the dropdown: llama-server launch params don't
+    # apply, so report a cloud-shaped config (the drawer disables the fields).
+    if model and str(model).startswith("cloud:"):
+        cm = cloud.get_cloud(model)
+        if cm:
+            return {"cloud": True, "provider": cm.provider_name, "model": cm.model_id,
+                    "display": cm.display, "ctx": cm.ctx, "context_size": cm.ctx,
+                    "endpoint": cm.endpoint()}
+    # No ?model= given: if the main lane itself is cloud-bound, report that
+    if not model:
+        cm_bound = cloud.cloud_lane("main")
+        if cm_bound:
+            return {"cloud": True, "provider": cm_bound.provider_name, "model": cm_bound.model_id,
+                    "display": cm_bound.display, "ctx": cm_bound.ctx,
+                    "context_size": cm_bound.ctx, "endpoint": cm_bound.endpoint()}
     # The ?model= target wins when it names a different model than the one
     # loaded — the drawer edits the dropdown-selected model, not what's in VRAM.
     if state.profile is not None:
@@ -246,6 +262,8 @@ async def status():
         except Exception:
             pass
 
+    cm_main = cloud.cloud_lane("main")
+    cm_exec = cloud.cloud_lane("executor")
     return {
         "profile": state.profile.get("name") if state.profile else None,
         "model": state.profile.get("model_path") if state.profile else None,
@@ -260,6 +278,15 @@ async def status():
         "mtp_enabled": bool(state.profile.get("mtp_enabled")) if state.profile else False,
         "mtp_draft_path": state.profile.get("mtp_draft_path") if state.profile else None,
         "context": ctx_info,
+        # cloud lanes: the UI shows a ☁️ pill instead of "Model unloaded"
+        "main_source": "cloud" if cm_main else "local",
+        "executor_source": "cloud" if cm_exec else "local",
+        "cloud_main": ({"key": cm_main.key, "model": cm_main.model_id,
+                        "display": cm_main.display, "provider": cm_main.provider_name}
+                       if cm_main else None),
+        "cloud_executor": ({"key": cm_exec.key, "model": cm_exec.model_id,
+                            "display": cm_exec.display, "provider": cm_exec.provider_name}
+                           if cm_exec else None),
     }
 
 
@@ -329,7 +356,19 @@ async def profiles():
                     "family": family,
                 })
 
-    return {"models": models_out, "profiles": profiles_out}
+    return {"models": models_out, "profiles": profiles_out,
+            "cloud": [{
+                "type": "cloud",
+                "provider": cm.provider,
+                "provider_name": cm.provider_name,
+                "key": cm.key,
+                "value": f"cloud:{cm.key}",
+                "model": cm.model_id,
+                "name": cm.display,
+                "display": cm.display,
+                "size_gb": None,
+                "ctx": cm.ctx,
+            } for cm in cloud.cloud_models()]}
 
 
 @router.post("/control/stop")
@@ -409,11 +448,28 @@ async def switch(req: SwitchRequest):
     target = req.target or req.profile
     if not target:
         return JSONResponse({"error": "No profile or model target specified"}, status_code=400)
-    
+
+    # Cloud model: bind the MAIN lane to it and never spawn llama-server. The
+    # local model, if any, is left untouched (selection is who answers you).
+    if str(target).startswith("cloud:"):
+        cm = cloud.get_cloud(target)
+        if cm is None:
+            return JSONResponse({"error": f"cloud model not configured: {target[6:]}"}, status_code=404)
+        cloud.set_lanes({"main": cm.key})
+        common.curStatus_model_hint = target
+        print(f"[server_manager] main lane -> cloud {cm.key} ({cm.provider_name}); "
+              f"local llama-server not started")
+        return {"ok": True, "cloud": True, "model": cm.key, "display": cm.display,
+                "provider": cm.provider_name, "endpoint": cm.endpoint()}
+
     path = Path(target)
     if not path.exists():
         return JSONResponse({"error": f"Target file not found: {target}"}, status_code=404)
-        
+
+    # Selecting a local model releases the main lane from the cloud (if bound)
+    if cloud.cloud_bindings().get("main"):
+        cloud.set_lanes({"main": None})
+        print("[server_manager] main lane -> local (cloud binding cleared)")
     try:
         await state.load_profile(path)
     except Exception as e:
@@ -458,7 +514,8 @@ async def monitor():
     for r in _monitor_state["recent"]:
         info = {k: r.get(k) for k in ("id", "endpoint", "model", "stream", "status",
                                        "prompt_tokens", "completion_tokens",
-                                       "tps", "duration_s", "prompt_tps", "gen_tps")}
+                                       "tps", "duration_s", "prompt_tps", "gen_tps",
+                                       "source", "provider")}
         info["ago_s"] = round(now - r["end"], 1)
         info["ended_at"] = r["end"]
         recent.append(info)

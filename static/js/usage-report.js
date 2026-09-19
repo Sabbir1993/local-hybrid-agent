@@ -53,9 +53,11 @@ async function loadReport(days) {
           ? `<span class="badge-orch" title="Orchestrator sub-model">⚡ Orch</span>`
           : `<span class="badge-main" title="Main model">Main</span>`;
         const rawName = (m.model || 'unknown').split('\\').pop().split('/').pop();
+        const isCloud = m.source === 'cloud';
+        const nameTitle = isCloud && m.provider ? `${m.model || ''} via ${m.provider} (cloud)` : (m.model || '');
         html += `
           <tr>
-            <td title="${esc(m.model || '')}">${esc(rawName)}</td>
+            <td title="${esc(nameTitle)}">${isCloud ? '☁ ' : ''}${esc(rawName)}</td>
             <td>${roleBadge}</td>
             <td>${fmt(m.requests)}</td>
             <td>${fmt(m.prompt_tokens)}</td>

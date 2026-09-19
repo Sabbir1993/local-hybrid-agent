@@ -10,7 +10,8 @@ _monitor_state = {
 MONITOR_RECENT_MAX = 60
 
 
-def monitor_begin(endpoint: str, stream: bool, body_bytes: bytes, model: Optional[str] = None) -> int:
+def monitor_begin(endpoint: str, stream: bool, body_bytes: bytes, model: Optional[str] = None,
+                  source: Optional[str] = None, provider: Optional[str] = None) -> int:
     _monitor_state["seq"] += 1
     rid = _monitor_state["seq"]
     prompt_tok = None
@@ -30,6 +31,8 @@ def monitor_begin(endpoint: str, stream: bool, body_bytes: bytes, model: Optiona
         "id": rid,
         "endpoint": endpoint,
         "model": req_model,
+        "source": source or "local",
+        "provider": provider,
         "stream": stream,
         "start": time.time(),
         "first_token_s": None,
@@ -67,7 +70,7 @@ def monitor_token(rid: int, n: int = 1) -> None:
         req["gen_tps"] = ema * 0.5 + gen_rate * 0.5
 
 
-def monitor_end(rid: int, status: int, prompt_tokens=None, completion_tokens=None, tps=None, duration=None, prompt_tps=None, model=None, prompt_cached=None, completion_cached=None) -> None:
+def monitor_end(rid: int, status: int, prompt_tokens=None, completion_tokens=None, tps=None, duration=None, prompt_tps=None, model=None, prompt_cached=None, completion_cached=None, source=None, provider=None) -> None:
     req = _monitor_state["active"].pop(rid, None)
     if req is None:
         return
@@ -77,6 +80,8 @@ def monitor_end(rid: int, status: int, prompt_tokens=None, completion_tokens=Non
         "tps": tps, "duration_s": duration or (time.time() - req["start"]),
         "prompt_tps": prompt_tps,
         "model": model or req.get("model"),
+        "source": source or req.get("source") or "local",
+        "provider": provider or req.get("provider"),
         "prompt_cached": prompt_cached or req.get("prompt_cached", 0),
         "completion_cached": completion_cached or req.get("completion_cached", 0),
         "end": time.time(),

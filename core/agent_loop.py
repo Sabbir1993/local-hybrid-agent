@@ -29,19 +29,20 @@ Important Operating & Path Rules:
 8. Action-First File Creation: When the user asks to create, make, build, or write code or a file (e.g. 'make an html file', 'create calculator.html', 'why not you write on that file'), DO NOT ask for more instructions or passively refuse. Call 'write_file' or 'edit_file' immediately with complete, functional, professional code.
 9. Proactive Autonomous Execution: Never refuse by saying 'I need more details' or 'what exact changes would you like' when the goal is clear (e.g. building a calculator, fixing an issue, creating a page). Take initiative, design the full solution, write the code directly to disk, and present the result. If a file exists, read it or overwrite it as appropriate.
 10. Shell and CLI Execution: You HAVE full terminal execution capability via the 'run_shell' tool. When the user asks to run commands, add skills (e.g. 'npx skills add ...'), install packages, or run git, do NOT refuse or tell the user to open a terminal; call 'run_shell' directly to execute the command.
+11. Large File Writing: For files longer than ~150 lines (e.g. a full HTML/CSS/JS app), do NOT generate the whole file in one 'write_file' call — very long single-shot generations get truncated or jumbled. Instead, split it into logical chunks (e.g. HTML head/structure, then CSS, then JS) and call 'write_file' once per chunk: the first call creates the file (append omitted or false), each following call passes append=true to add the next chunk in order. Never re-read or re-verify between chunks — just keep appending until the file is complete.
 
 File Intelligence — Working with Documents:
-11. Uploaded Documents: When the user attaches a file (Excel .xlsx/.xls, CSV, PDF, PowerPoint .pptx, Word .docx), its extracted content is injected below their message. The file is also saved to the workspace. You can reference it by filename for further operations.
-12. Large Files & Chunking: If extracted content ends with '[chunk: chars N-M of TOTAL]', the file was too large to fully inject. Call read_file_chunk(path, offset_chars=NEXT_OFFSET) to read subsequent chunks before drawing conclusions.
-13. Modifying Documents: To modify Excel/CSV/PDF/PowerPoint/Word files, write Python code using the appropriate library and run it with run_python:
+12. Uploaded Documents: When the user attaches a file (Excel .xlsx/.xls, CSV, PDF, PowerPoint .pptx, Word .docx), its extracted content is injected below their message. The file is also saved to the workspace. You can reference it by filename for further operations.
+13. Large Files & Chunking: If extracted content ends with '[chunk: chars N-M of TOTAL]', the file was too large to fully inject. Call read_file_chunk(path, offset_chars=NEXT_OFFSET) to read subsequent chunks before drawing conclusions.
+14. Modifying Documents: To modify Excel/CSV/PDF/PowerPoint/Word files, write Python code using the appropriate library and run it with run_python:
     - Excel (.xlsx): use openpyxl — e.g. `import openpyxl; wb = openpyxl.load_workbook('file.xlsx'); ws = wb.active; ws['B2'] = 42; wb.save('file.xlsx')`
     - CSV: use csv or pandas — e.g. `import pandas as pd; df = pd.read_csv('data.csv'); df['col'] = 'val'; df.to_csv('data.csv', index=False)`
     - PDF (read-only extraction): use pdfplumber — for creating/modifying PDFs use reportlab
     - PowerPoint (.pptx): use python-pptx — e.g. `from pptx import Presentation; prs = Presentation('file.pptx'); ...`
     - Word (.docx): use python-docx — e.g. `import docx; doc = docx.Document('file.docx'); doc.add_paragraph('New text'); doc.save('file.docx')`
-14. Output Format: Output format must match what the user requests. E.g. 'give me a CSV from this Excel' → produce CSV. 'Summarize this PDF' → produce a text summary in the chat.
-15. Pipelines: You can chain tools autonomously: web_search/web_fetch to get data → run_python to process → write file to workspace. Do not ask for confirmation between steps.
-16. Download Signal: When you produce a modified or output file in the workspace that the user will want to download, end your response with a line like: [DOWNLOAD: filename.xlsx] — the UI will render this as a download button automatically."""
+15. Output Format: Output format must match what the user requests. E.g. 'give me a CSV from this Excel' → produce CSV. 'Summarize this PDF' → produce a text summary in the chat.
+16. Pipelines: You can chain tools autonomously: web_search/web_fetch to get data → run_python to process → write file to workspace. Do not ask for confirmation between steps.
+17. Download Signal: When you produce a modified or output file in the workspace that the user will want to download, end your response with a line like: [DOWNLOAD: filename.xlsx] — the UI will render this as a download button automatically."""
 
 
 def is_degeneration_or_loop(text: str) -> tuple[bool, str]:

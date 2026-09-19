@@ -29,6 +29,7 @@ from core.small_model import (
     needle_available,
 )
 from core.state import state
+from core import cloud
 from core.agent_tools import (
     AGENT_TOOLS,
     AGENT_CORE_TOOLS,
@@ -175,18 +176,45 @@ Never attempt file modifications in plan mode; mutating tools are unavailable.""
 async def agent_run(req: AgentRequest):
     # route through the registry so web/skills/mcp/plugin/shell tools are visible
     ex_inst = small_models.instances["executor"]
+
+    # --- lane resolution -------------------------------------------------
+    # mode is one of: all-local | main-local-rest-cloud | main-cloud-rest-local
+    #                 | all-cloud (legacy: "main" == all-local, "tiered" ==
+    #                 main-local-rest-cloud).
+    # A lane is served by the cloud when its binding resolves in core.cloud;
+    # otherwise it stays local (llama-server), and the mode decides whether the
+    # client is forced local even when a cloud binding exists.
+    mode = (req.mode or "all-local").strip().lower()
+    if mode in ("main", ""):
+        mode = "all-local"
+    elif mode == "tiered":
+        mode = "main-local-rest-cloud"
+    elif mode == "agent":
+        mode = "all-local"
+    cloud_main = cloud.cloud_lane("main")
+    cloud_exec = cloud.cloud_lane("executor")
+    if mode == "main-cloud-rest-local":
+        cloud_exec = None       # executor stays local in this mode
+    use_cloud_main = bool(cloud_main)
+    if not use_cloud_main and mode == "main-cloud-rest-local":
+        print("[agent] mode=main-cloud-rest-local but no cloud main lane is configured "
+              "- falling back to the local main model")
+
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
-    if not main_ready and req.mode == "main":
+    if not main_ready and not use_cloud_main and mode != "main-local-rest-cloud":
         target = state.profile_path or state.profile or common.initial_profile_path
         if target:
             try:
-                print(f"[server_manager] agent/run (mode=main): model not running — auto-starting on demand...")
+                print(f"[server_manager] agent/run: model not running — auto-starting on demand...")
                 await state.load_profile(target)
                 main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
             except Exception as e:
                 print(f"[server_manager] auto-start main model failed: {e}", file=sys.stderr)
-    if not main_ready and not ex_inst.available:
+    if not main_ready and not use_cloud_main and not ex_inst.available:
         return JSONResponse({"error": "No model loaded. Please load or start a model from the top toolbar first."}, status_code=400)
+
+    print(f"[agent] lanes: main={'cloud:' + cloud_main.key if use_cloud_main else 'local'} "
+          f"executor={'cloud:' + cloud_exec.key if cloud_exec else 'local'} mode={mode}")
 
     steps = max(1, min(req.max_steps, APP_CONFIG["agent"].get("max_steps", AGENT_MAX_STEPS)))
     msgs = [dict(m) for m in req.messages]
@@ -224,7 +252,7 @@ async def agent_run(req: AgentRequest):
         if frag:
             sys_prompt += "\n" + frag
     # executor lanes get the tool-call format few-shot (aligned with the GBNF grammar)
-    if ex_inst.available and (req.mode != "main" or not main_ready):
+    if (cloud_exec or ex_inst.available) and (mode != "all-local" or not main_ready):
         sys_prompt += envelope_examples()
     if req.plan:
         sys_prompt += PLAN_MODE_PROMPT
@@ -254,7 +282,43 @@ async def agent_run(req: AgentRequest):
     if not has_sys:
         msgs.insert(0, {"role": "system", "content": sys_prompt})
 
-    use_executor = ex_inst.available and (req.mode != "main" or not main_ready)
+    use_executor = bool(cloud_exec) or (ex_inst.available and (mode != "all-local" or not main_ready))
+    main_client = cloud.CloudClient(cloud_main) if use_cloud_main else state.client
+
+    # --- cloud fallback --------------------------------------------------
+    # providers.json -> cloud.fallback_local: when a cloud lane dies before
+    # producing content, retry that request on the local lane instead of failing
+    # the whole step. Local models may need loading first (that's the point).
+    fb_enabled = bool(cloud.cloud_bindings().get("fallback_local", True))
+
+    def _local_model_info(lane: str) -> dict:
+        if lane == "executor":
+            nm = (ex_inst.model_path.name if ex_inst.model_path else "executor").replace(".gguf", "")
+            return {"lane": "executor", "model": nm, "display": f"\u26A1 {nm}",
+                    "device": "Arc A770 #1 (Vulkan1)", "role": "Executor Model", "source": "local"}
+        nm = Path((state.profile or {}).get("model_path", "")).name if state.profile else "Main LLM"
+        nm = (nm or "Main LLM").replace(".gguf", "")
+        return {"lane": "main", "model": nm, "display": f"\U0001F9E0 {nm}",
+                "device": "Dual Intel Arc A770 (Vulkan)", "role": "Main Autonomous LLM",
+                "source": "local"}
+
+    async def _local_fallback(lane: str):
+        """Client for the local lane, loading it on demand. None if unavailable/disabled."""
+        if not fb_enabled:
+            return None
+        try:
+            if lane == "executor" and ex_inst.available:
+                await ex_inst.ensure_loaded()
+                return ex_inst.client
+            if lane == "main":
+                target = state.profile_path or state.profile or common.initial_profile_path
+                if target:
+                    if state.process is None or state.process.poll() is not None:
+                        await state.load_profile(target)
+                    return state.client
+        except Exception as e:
+            print(f"[agent] local fallback for {lane} unavailable: {e}", file=sys.stderr)
+        return None
     last_query = ""
     for m in reversed(msgs):
         if m.get("role") == "user":
@@ -262,6 +326,11 @@ async def agent_run(req: AgentRequest):
             break
 
     def get_model_info(lane: str) -> dict:
+        # cloud-bound lanes report ☁️ + provider so the UI badge is truthful
+        if lane == "main" and use_cloud_main:
+            return cloud_main.info("main")
+        if lane == "executor" and cloud_exec:
+            return cloud_exec.info("executor")
         if lane == "main":
             m_name = state.profile.get("model_path", "") if state.profile else ""
             m_base = Path(m_name).name if m_name else "Main LLM"
@@ -271,7 +340,8 @@ async def agent_run(req: AgentRequest):
                 "model": clean_name,
                 "display": f"🧠 {clean_name}",
                 "device": "Dual Intel Arc A770 (Vulkan)",
-                "role": "Main Autonomous LLM"
+                "role": "Main Autonomous LLM",
+                "source": "local",
             }
         elif lane == "executor":
             m_name = ex_inst.model_path.name if ex_inst.model_path else "Qwen2.5-VL-3B"
@@ -281,7 +351,8 @@ async def agent_run(req: AgentRequest):
                 "model": clean_name,
                 "display": f"⚡ {clean_name}",
                 "device": "Arc A770 #1 (Vulkan1)",
-                "role": "Executor Model"
+                "role": "Executor Model",
+                "source": "local",
             }
         elif lane == "needle":
             return {
@@ -289,23 +360,39 @@ async def agent_run(req: AgentRequest):
                 "model": "Needle Router",
                 "display": "⚡ Needle Router",
                 "device": "CPU Router",
-                "role": "Fast Router"
+                "role": "Fast Router",
+                "source": "local",
             }
-        return {"lane": lane, "model": lane, "display": lane, "device": "Dual Intel Arc A770", "role": "Agent"}
+        return {"lane": lane, "model": lane, "display": lane, "device": "Dual Intel Arc A770", "role": "Agent", "source": "local"}
 
     simple_greetings = {"hi", "hello", "hey", "help", "who are you", "what can you do", "good morning", "good evening", "how are you", "test", "hi there"}
     clean_q = last_query.strip().lower()
     if clean_q in simple_greetings or (len(clean_q) <= 3 and not clean_q.startswith("/")):
         async def direct_chat():
-            model_info = get_model_info("main" if main_ready else "executor")
+            model_info = get_model_info("main" if (use_cloud_main or main_ready) else "executor")
             yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
-            active_client = state.client if main_ready else ex_inst.client
-            if not main_ready and ex_inst.available:
+            if use_cloud_main or main_ready:
+                active_client = main_client
+            elif cloud_exec:
+                active_client = cloud.CloudClient(cloud_exec)
+            else:
                 await ex_inst.ensure_loaded()
                 active_client = ex_inst.client
-            chat_rid = monitor_begin("agent/direct", True, json.dumps({"messages": msgs}).encode(), model=model_info.get("model"))
+            chat_rid = monitor_begin("agent/direct", True, json.dumps({"messages": msgs}).encode(),
+                                     model=model_info.get("model"), source=model_info.get("source"),
+                                     provider=model_info.get("provider_name"))
             try:
-                async for ev, val in _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens, rid=chat_rid):
+                if getattr(active_client, "is_cloud", False):
+                    fb_client = await _local_fallback("main" if (use_cloud_main or main_ready) else "executor")
+                    direct_stream = common._llm_chat_stream_with_fallback(
+                        active_client, fb_client, msgs, None, req.temperature,
+                        req.max_tokens, rid=chat_rid, lane="direct")
+                else:
+                    direct_stream = _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens, rid=chat_rid)
+                async for ev, val in direct_stream:
+                    if ev == "fallback":
+                        yield f"event: lane\ndata: {json.dumps(_local_model_info('main' if (use_cloud_main or main_ready) else 'executor'))}\n\n"
+                        continue
                     if ev == "thought_delta":
                         yield f"event: thought_delta\ndata: {json.dumps({'step': 1, 'delta': val, 'model': model_info['display']})}\n\n"
                     elif ev == "content_delta":
@@ -315,7 +402,8 @@ async def agent_run(req: AgentRequest):
                 toks = req_mon.get("gen_tokens") if req_mon else None
                 dt = (time.time() - req_mon["start"]) if req_mon else None
                 tps = (toks / dt) if (toks and dt and dt > 0) else None
-                monitor_end(chat_rid, 200, completion_tokens=toks, tps=tps, duration=dt)
+                monitor_end(chat_rid, 200, completion_tokens=toks, tps=tps, duration=dt,
+                           source=model_info.get("source"), provider=model_info.get("provider_name"))
             yield f"event: done\ndata: {{}}\n\n"
         return StreamingResponse(direct_chat(), media_type="text/event-stream")
 
@@ -333,7 +421,7 @@ async def agent_run(req: AgentRequest):
                 reasoning = ""
 
                 is_creation_or_code = any(w in last_query.lower() for w in ("make", "create", "generate", "write", "build", "code", "add", "fix", "html", "script", "page"))
-                if (not req.plan) and step == 0 and req.mode != "main" and not is_creation_or_code and needle_available() and not any(
+                if (not req.plan) and step == 0 and mode != "all-local" and not cloud_exec and not is_creation_or_code and needle_available() and not any(
                         m.get("role") in ("tool", "assistant") for m in msgs[1:]):
                     nr = await asyncio.get_event_loop().run_in_executor(
                         None, needle_route, last_query, all_tools())
@@ -353,7 +441,8 @@ async def agent_run(req: AgentRequest):
                         needle_c = max(1, (len(nr.get("reasoning", "")) + len(json.dumps(nr.get("args", {})))) // 4)
                         db_record_request("agent/needle", model_info.get("model") or "orchestrator/needle",
                                           needle_p, needle_c, 35.0, 0.1, None, False, 200,
-                                          prompt_cached_tokens=0, completion_cached_tokens=0, is_orchestrator=True)
+                                          prompt_cached_tokens=0, completion_cached_tokens=0, is_orchestrator=True,
+                                          source=model_info.get("source"), provider=model_info.get("provider_name"))
                         msgs.append({"role": "assistant", "content": "",
                                      "tool_calls": [{"id": tc_id, "type": "function",
                                                      "function": {"name": nr["name"],
@@ -362,23 +451,30 @@ async def agent_run(req: AgentRequest):
                         continue
 
                 executor_stuck = repeat_streak >= 2
-                lane_name = "main" if req.mode == "main" or not use_executor or executor_stuck else "executor"
+                lane_name = "main" if mode == "all-local" or not use_executor or executor_stuck else "executor"
                 if executor_stuck:
                     print("[server_manager] executor repeating identical tool calls - escalating to main model", file=sys.stderr)
                 if lane_name == "executor":
-                    try:
-                        await ex_inst.ensure_loaded()
-                        active_client = ex_inst.client
-                    except Exception as e:
-                        print(f"[server_manager] executor unavailable: {e}; routing to main model", file=sys.stderr)
-                        lane_name = "main"
-                        active_client = state.client
+                    if cloud_exec:
+                        # cloud executor: no local process to warm up
+                        active_client = cloud.CloudClient(cloud_exec)
+                    else:
+                        try:
+                            await ex_inst.ensure_loaded()
+                            active_client = ex_inst.client
+                        except Exception as e:
+                            print(f"[server_manager] executor unavailable: {e}; routing to main model", file=sys.stderr)
+                            lane_name = "main"
+                            active_client = main_client
                 else:
-                    if not state.client or state.process is None:
-                        target = state.profile_path or state.profile or common.initial_profile_path
-                        if target:
-                            await state.load_profile(target)
-                    active_client = state.client
+                    if not use_cloud_main:
+                        if not state.client or state.process is None:
+                            target = state.profile_path or state.profile or common.initial_profile_path
+                            if target:
+                                await state.load_profile(target)
+                        active_client = state.client
+                    else:
+                        active_client = main_client
 
                 if active_client is None:
                     raise RuntimeError(f"Model engine '{lane_name}' is not ready or failed to connect.")
@@ -407,7 +503,9 @@ async def agent_run(req: AgentRequest):
                 # turns into a digest). Report it to the UI when it fires.
                 step_grammar = None
                 if lane_name == "executor":
-                    ex_ctx = int(ex_inst.cfg.get("ctx") or 16384)
+                    # cloud executors are OpenAI-compatible: no GBNF grammar, and
+                    # their window comes from the provider config (model ctx)
+                    ex_ctx = int(cloud_exec.ctx if cloud_exec else (ex_inst.cfg.get("ctx") or 16384))
                     pre_tokens = estimate_prompt_tokens(msgs)
                     # in-place slice assignment: must NOT rebind `msgs` here, or it
                     # becomes a local of sse() and earlier reads raise UnboundLocalError
@@ -417,13 +515,27 @@ async def agent_run(req: AgentRequest):
                         yield (f"event: ctx\ndata: "
                                + json.dumps({'lane': lane_name, 'before_tokens': pre_tokens,
                                              'after_tokens': post_tokens}) + "\n\n")
-                    step_grammar = _executor_grammar(tools_for_lane)
+                    if not cloud_exec:
+                        step_grammar = _executor_grammar(tools_for_lane)
 
-                step_rid = monitor_begin(f"agent/{lane_name}", True, json.dumps({"messages": msgs}).encode(), model=model_info.get("model"))
+                step_rid = monitor_begin(f"agent/{lane_name}", True, json.dumps({"messages": msgs}).encode(),
+                                         model=model_info.get("model"), source=model_info.get("source"),
+                                         provider=model_info.get("provider_name"))
                 res_dict = None
                 streamed_content = []
                 try:
-                    async for ev, val in _llm_chat_stream(active_client, msgs, tools_for_lane, req.temperature, req.max_tokens, rid=step_rid, grammar=step_grammar):
+                    if getattr(active_client, "is_cloud", False):
+                        fb_client = await _local_fallback(lane_name)
+                        lane_stream = common._llm_chat_stream_with_fallback(
+                            active_client, fb_client, msgs, tools_for_lane, req.temperature,
+                            req.max_tokens, rid=step_rid, grammar=step_grammar, lane=lane_name)
+                    else:
+                        lane_stream = _llm_chat_stream(active_client, msgs, tools_for_lane, req.temperature, req.max_tokens, rid=step_rid, grammar=step_grammar)
+                    async for ev, val in lane_stream:
+                        if ev == "fallback":
+                            model_info = _local_model_info(lane_name)
+                            yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
+                            continue
                         if ev == "thought_delta":
                             yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
                         elif ev == "content_delta":
@@ -445,9 +557,11 @@ async def agent_run(req: AgentRequest):
                     ctoks = u.get("completion_tokens") or toks
                     is_orch = (lane_name == "executor" or "orchestrator" in (model_info.get("model") or "").lower())
                     monitor_end(step_rid, 200, prompt_tokens=ptoks, completion_tokens=ctoks, tps=tps, duration=dt,
-                                model=model_info.get("model"), prompt_cached=pcached, completion_cached=ccached)
+                                model=model_info.get("model"), prompt_cached=pcached, completion_cached=ccached,
+                                source=model_info.get("source"), provider=model_info.get("provider_name"))
                     db_record_request(f"agent/{lane_name}", model_info.get("model"), ptoks, ctoks, tps, dt, None, True, 200,
-                                      prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=is_orch)
+                                      prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=is_orch,
+                                      source=model_info.get("source"), provider=model_info.get("provider_name"))
 
                 content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                 reasoning = res_dict.get("reasoning", "") if res_dict else ""
@@ -468,7 +582,7 @@ async def agent_run(req: AgentRequest):
                 wants_creation = any(w in last_query.lower() for w in ("make", "create", "generate", "write", "build", "code", "add", "fix", "html", "script", "page"))
                 should_escalate = (
                     lane_name == "executor"
-                    and main_ready
+                    and (use_cloud_main or main_ready)
                     and (
                         is_loop
                         or (wants_creation and step == 0 and not tool_calls)
@@ -483,14 +597,26 @@ async def agent_run(req: AgentRequest):
                     lane_name = "main"
                     model_info = get_model_info("main")
                     yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
-                    esc_rid = monitor_begin("agent/main-escalated", True, json.dumps({"messages": msgs}).encode(), model=model_info.get("model"))
+                    esc_rid = monitor_begin("agent/main-escalated", True, json.dumps({"messages": msgs}).encode(),
+                                            model=model_info.get("model"), source=model_info.get("source"),
+                                            provider=model_info.get("provider_name"))
                     esc_tools = ([t for t in all_tools()
                                   if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
                                  if req.plan else all_tools())
                     res_dict = None
                     streamed_content = []
                     try:
-                        async for ev, val in _llm_chat_stream(state.client, msgs, esc_tools, req.temperature, req.max_tokens, rid=esc_rid):
+                        if getattr(main_client, "is_cloud", False):
+                            fb_main = await _local_fallback("main")
+                            esc_stream = common._llm_chat_stream_with_fallback(
+                                main_client, fb_main, msgs, esc_tools, req.temperature,
+                                req.max_tokens, rid=esc_rid, lane="main")
+                        else:
+                            esc_stream = _llm_chat_stream(main_client, msgs, esc_tools, req.temperature, req.max_tokens, rid=esc_rid)
+                        async for ev, val in esc_stream:
+                            if ev == "fallback":
+                                yield f"event: lane\ndata: {json.dumps(_local_model_info('main'))}\n\n"
+                                continue
                             if ev == "thought_delta":
                                 yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
                             elif ev == "content_delta":
@@ -511,9 +637,11 @@ async def agent_run(req: AgentRequest):
                             pcached = sum(len(m.get("content", "")) for m in msgs[:-1]) // 4
                         ctoks = u.get("completion_tokens") or toks
                         monitor_end(esc_rid, 200, prompt_tokens=ptoks, completion_tokens=ctoks, tps=tps, duration=dt,
-                                    model=model_info.get("model"), prompt_cached=pcached, completion_cached=ccached)
+                                    model=model_info.get("model"), prompt_cached=pcached, completion_cached=ccached,
+                                    source=model_info.get("source"), provider=model_info.get("provider_name"))
                         db_record_request("agent/main-escalated", model_info.get("model"), ptoks, ctoks, tps, dt, None, True, 200,
-                                          prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=False)
+                                          prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=False,
+                                          source=model_info.get("source"), provider=model_info.get("provider_name"))
                     content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                     reasoning = res_dict.get("reasoning", "") if res_dict else ""
                     tool_calls = res_dict.get("tool_calls", []) if res_dict else []
@@ -1052,26 +1180,63 @@ class VisionReq(BaseModel):
 
 @router.post("/agent/vision")
 async def agent_vision(req: VisionReq):
+    payload = {
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": req.question},
+                {"type": "image_url", "image_url": {"url": f"data:{req.mime};base64,{req.image_b64}"}},
+            ],
+        }],
+        "max_tokens": 400,
+        "temperature": 0.1,
+    }
+    body_bytes = json.dumps({"messages": [req.question]}).encode()
+    cm = cloud.cloud_lane("vision")
+    if cm:
+        rid = monitor_begin("agent/vision", False, body_bytes, model=cm.model_id, source="cloud", provider=cm.provider_name)
+        t0 = time.time()
+        try:
+            r = await cloud.CloudClient(cm).post("/v1/chat/completions", json=payload, timeout=None)
+            data = r.json()
+            usage = data.get("usage") or {}
+            ptoks, ctoks = usage.get("prompt_tokens"), usage.get("completion_tokens")
+            dt = time.time() - t0
+            monitor_end(rid, 200, prompt_tokens=ptoks, completion_tokens=ctoks,
+                        tps=(ctoks / dt if ctoks and dt > 0 else None), duration=dt,
+                        model=cm.model_id, source="cloud", provider=cm.provider_name)
+            db_record_request("agent/vision", cm.model_id, ptoks, ctoks,
+                               (ctoks / dt if ctoks and dt > 0 else None), dt, None, False, 200,
+                               is_orchestrator=True, source="cloud", provider=cm.provider_name)
+            return {"description": (data.get("choices") or [{}])[0].get("message", {}).get("content") or "",
+                    "lane": "cloud", "model": cm.display, "provider": cm.provider_name}
+        except Exception as e:
+            monitor_end(rid, 502, duration=time.time() - t0, source="cloud", provider=cm.provider_name)
+            return JSONResponse({"error": f"cloud vision lane failed ({cm.key}): {e}"}, status_code=502)
     inst = small_models.instances["vision"]
     if not inst.available:
         return JSONResponse({"error": "vision model not configured (config.json small_models.vision.model/mmproj)"}, status_code=400)
+    model_name = inst.model_path.name if inst.model_path else "vision"
+    rid = monitor_begin("agent/vision", False, body_bytes, model=model_name, source="local")
+    t0 = time.time()
     try:
         await inst.ensure_loaded()
-        r = await inst.client.post("/v1/chat/completions", json={
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": req.question},
-                    {"type": "image_url", "image_url": {"url": f"data:{req.mime};base64,{req.image_b64}"}},
-                ],
-            }],
-            "max_tokens": 400,
-            "temperature": 0.1,
-        }, timeout=None)
+        r = await inst.client.post("/v1/chat/completions", json=payload, timeout=None)
         inst.last_used = time.time()
         data = r.json()
-        return {"description": (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""}
+        usage = data.get("usage") or {}
+        ptoks, ctoks = usage.get("prompt_tokens"), usage.get("completion_tokens")
+        dt = time.time() - t0
+        monitor_end(rid, 200, prompt_tokens=ptoks, completion_tokens=ctoks,
+                    tps=(ctoks / dt if ctoks and dt > 0 else None), duration=dt,
+                    model=model_name, source="local")
+        db_record_request("agent/vision", model_name, ptoks, ctoks,
+                           (ctoks / dt if ctoks and dt > 0 else None), dt, None, False, 200,
+                           is_orchestrator=True, source="local")
+        return {"description": (data.get("choices") or [{}])[0].get("message", {}).get("content") or "",
+                "lane": "local", "model": model_name}
     except Exception as e:
+        monitor_end(rid, 500, duration=time.time() - t0, source="local")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

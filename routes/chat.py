@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
 from core.small_model import APP_CONFIG, small_models
+from core import cloud
 from core.state import state
 from core.registry import registry
 from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch
@@ -51,8 +52,9 @@ class ChatRunRequest(BaseModel):
 
 @router.post("/chat/run")
 async def chat_run(req: ChatRunRequest):
+    cloud_main = cloud.cloud_lane("main")
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
-    if not main_ready:
+    if not main_ready and not cloud_main:
         target = state.profile_path or state.profile or common.initial_profile_path
         if target:
             try:
@@ -61,8 +63,9 @@ async def chat_run(req: ChatRunRequest):
                 main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
             except Exception as e:
                 print(f"[server_manager] auto-start main model failed: {e}", file=sys.stderr)
-    if not main_ready:
+    if not main_ready and not cloud_main:
         return JSONResponse({"error": "No model loaded. Please load or start a model from the top toolbar first."}, status_code=400)
+    main_client = cloud.CloudClient(cloud_main) if cloud_main else state.client
 
     web_cap_enabled = APP_CONFIG.get("capabilities", {}).get("web", False)
     use_web = req.web_search and web_cap_enabled
@@ -132,11 +135,28 @@ async def chat_run(req: ChatRunRequest):
         if not has_sys:
             msgs.insert(0, {"role": "system", "content": combined_sys})
 
-    m_name = state.profile.get("model_path", "") if state.profile else ""
-    clean_model_name = Path(m_name).name.replace(".gguf", "") if m_name else "Main LLM"
+    # Report the model actually answering: cloud model when the main lane is
+    # cloud-bound, else the loaded local gguf (fallback label matches the old
+    # "Main LLM" placeholder for a lane with nothing loaded yet).
+    if cloud_main:
+        clean_model_name = cloud_main.model_id
+        model_display = cloud_main.display
+        model_source = "cloud"
+        model_provider = cloud_main.provider_name
+    else:
+        m_name = state.profile.get("model_path", "") if state.profile else ""
+        clean_model_name = Path(m_name).name.replace(".gguf", "") if m_name else "Main LLM"
+        model_display = f"\U0001F9E0 {clean_model_name}"
+        model_source = "local"
+        model_provider = None
 
     async def sse():
-        chat_rid = monitor_begin("chat/run", True, json.dumps({"messages": msgs}).encode(), model=clean_model_name)
+        nonlocal clean_model_name, model_display, model_source, model_provider
+        lane_info = {"lane": "main", "model": clean_model_name, "display": model_display,
+                     "source": model_source, "provider": model_provider}
+        yield f"event: lane\ndata: {json.dumps(lane_info)}\n\n"
+        chat_rid = monitor_begin("chat/run", True, json.dumps({"messages": msgs}).encode(),
+                                 model=clean_model_name, source=model_source, provider=model_provider)
         t0 = time.time()
         max_turns = 4 if chat_tools else 1
         written_files = []
@@ -167,7 +187,31 @@ async def chat_run(req: ChatRunRequest):
                 res_dict = None
                 streamed_content = []
 
-                async for ev, val in _llm_chat_stream(state.client, msgs, tools=chat_tools, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid):
+                if cloud_main and cloud.cloud_bindings().get("fallback_local", True):
+                    fb_local = None
+                    target = state.profile_path or state.profile or common.initial_profile_path
+                    if target:
+                        try:
+                            if state.process is None or state.process.poll() is not None:
+                                await state.load_profile(target)
+                            fb_local = state.client
+                        except Exception as e:
+                            print(f"[chat] local fallback unavailable: {e}", file=sys.stderr)
+                    chat_stream = common._llm_chat_stream_with_fallback(
+                        main_client, fb_local, msgs, chat_tools, req.temperature,
+                        req.max_tokens, rid=chat_rid, lane="main")
+                else:
+                    chat_stream = _llm_chat_stream(main_client, msgs, tools=chat_tools, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid)
+                async for ev, val in chat_stream:
+                    if ev == "fallback":
+                        fb_name = state.profile.get("model_path", "") if state.profile else ""
+                        clean_model_name = Path(fb_name).name.replace(".gguf", "") if fb_name else "Main LLM"
+                        model_display = f"\U0001F9E0 {clean_model_name}"
+                        model_source, model_provider = "local", None
+                        fb_lane_info = {"lane": "main", "model": clean_model_name, "display": model_display,
+                                        "source": model_source, "provider": model_provider}
+                        yield f"event: lane\ndata: {json.dumps(fb_lane_info)}\n\n"
+                        continue
                     if ev == "thought_delta":
                         yield f"event: thought_delta\ndata: {json.dumps({'delta': val})}\n\n"
                     elif ev == "content_delta":
@@ -488,9 +532,11 @@ async def chat_run(req: ChatRunRequest):
             ptoks = sum(len(m.get("content", "")) for m in msgs) // 4
             pcached = (sum(len(m.get("content", "")) for m in msgs[:-1]) // 4) if len(msgs) > 1 else 0
             monitor_end(chat_rid, 200, prompt_tokens=ptoks, completion_tokens=toks, tps=tps, duration=dt,
-                        model=clean_model_name, prompt_cached=pcached, completion_cached=0)
+                        model=clean_model_name, prompt_cached=pcached, completion_cached=0,
+                        source=model_source, provider=model_provider)
             db_record_request("chat/run", clean_model_name, ptoks, toks, tps, dt, None, True, 200,
-                              prompt_cached_tokens=pcached, completion_cached_tokens=0, is_orchestrator=False)
+                              prompt_cached_tokens=pcached, completion_cached_tokens=0, is_orchestrator=False,
+                              source=model_source, provider=model_provider)
 
     return StreamingResponse(sse(), media_type="text/event-stream")
 
@@ -553,17 +599,26 @@ async def _summarize_history(convo: list, instructions: Optional[str], use_execu
 
     main_ready = (state.process is not None and state.process.poll() is None
                   and state.client is not None)
+    cloud_exec = cloud.cloud_lane("executor")
+    cloud_main = cloud.cloud_lane("main")
     if use_executor or not main_ready:
-        inst = small_models.instances.get("executor")
-        if not inst or not inst.available:
-            raise RuntimeError("no model available for compaction "
-                               "(main model not running, executor not configured)")
-        await inst.ensure_loaded()
-        r = await inst.client.post("/v1/chat/completions", json=payload, timeout=None)
-        source = f"executor:{inst.model_path.name if inst.model_path else '?'}"
+        if cloud_exec:
+            # cloud executor: no local process / no VRAM (llama.cpp-only fields
+            # are stripped by CloudClient, e.g. -1 max_tokens)
+            r = await cloud.CloudClient(cloud_exec).post("/v1/chat/completions", json=payload, timeout=None)
+            source = f"cloud-executor:{cloud_exec.display}"
+        else:
+            inst = small_models.instances.get("executor")
+            if not inst or not inst.available:
+                raise RuntimeError("no model available for compaction "
+                                   "(main model not running, executor not configured)")
+            await inst.ensure_loaded()
+            r = await inst.client.post("/v1/chat/completions", json=payload, timeout=None)
+            source = f"executor:{inst.model_path.name if inst.model_path else '?'}"
     else:
-        r = await state.client.post("/v1/chat/completions", json=payload, timeout=None)
-        source = "main"
+        r = await (cloud.CloudClient(cloud_main) if cloud_main else state.client).post(
+            "/v1/chat/completions", json=payload, timeout=None)
+        source = f"cloud-main:{cloud_main.display}" if cloud_main else "main"
     r.raise_for_status()
     data = r.json()
     summary = ""

@@ -22,6 +22,9 @@ function compactMapMessages(rawMsgs) {
       compactAfter: meta.after_tokens,
       reductionPct: meta.reduction_pct,
       compactKept: meta.kept_messages,
+      modelDisplay: meta.modelDisplay || undefined,
+      modelSource: meta.modelSource || undefined,
+      modelProvider: meta.modelProvider || undefined,
     };
   });
 }

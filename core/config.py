@@ -17,7 +17,13 @@ USAGE_DB_FILE = BASE_DIR / "usage.db"
 PROJECTS_DB_FILE = BASE_DIR / "projects.db"
 MEMORY_DB_FILE = BASE_DIR / "memory.db"
 MODEL_CONFIGS_FILE = BASE_DIR / "model_configs.json"
+PROVIDERS_FILE = BASE_DIR / "providers.json"   # cloud providers + lane bindings (UI-managed, gitignored)
 PROFILES_DIR = BASE_DIR / "profiles"
+
+# Cloud (OpenAI-compatible) lanes
+CLOUD_LANES = ("main", "executor", "vision")
+CLOUD_TIMEOUT_S = 300.0    # streaming completions can be long
+CLOUD_PROBE_TIMEOUT_S = 45.0
 
 KEEPALIVE_INTERVAL_S = 25   # 1-token ping while idle; WDDM demotes VRAM ~70s after idle
 GPU_QUERY_INTERVAL_S = 4.0  # perf-counter queries are slow; cache results

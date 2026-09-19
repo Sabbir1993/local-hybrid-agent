@@ -16,6 +16,7 @@ from core.small_model import (
     small_models,
     needle_available,
 )
+from core import cloud
 from core.state import state
 from core.agent_tools import get_active_project
 from core.registry import registry
@@ -32,13 +33,34 @@ router = APIRouter(tags=["capabilities"])
 
 @router.get("/control/models")
 async def models_status():
+    cm_main = cloud.cloud_lane("main")
+    cm_exec = cloud.cloud_lane("executor")
+    cm_vision = cloud.cloud_lane("vision")
+    local_exec = small_models.status()
     s = {
         "main": {
             "loaded": state.process is not None and state.process.poll() is None,
             "model": state.profile.get("model_path") if state.profile else None,
             "pid": state.process.pid if state.process and state.process.poll() is None else None,
+            "source": "cloud" if cm_main else "local",
+            "cloud": cm_main.key if cm_main else None,
         },
-        "small": small_models.status(),
+        "small": local_exec,
+        "lanes": {
+            "main": cm_main.info("main") if cm_main else {"lane": "main", "source": "local",
+                                                          "model": (state.profile or {}).get("model_path")},
+            "executor": cm_exec.info("executor") if cm_exec else {
+                "lane": "executor", "source": "local",
+                "model": (local_exec.get("executor") or {}).get("model")},
+            "vision": cm_vision.info("vision") if cm_vision else {
+                "lane": "vision", "source": "local",
+                "model": (local_exec.get("vision") or {}).get("model")},
+        },
+        "cloud": {
+            "bindings": cloud.cloud_bindings(),
+            "providers": len(cloud.providers()),
+            "models": len(cloud.cloud_models()),
+        },
         "router": {
             "enabled": bool(APP_CONFIG["router"].get("enabled", True)),
             "available": needle_available(),

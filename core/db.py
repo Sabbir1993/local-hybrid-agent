@@ -25,7 +25,9 @@ def _init_usage_db() -> sqlite3.Connection:
         status INTEGER,
         prompt_cached_tokens INTEGER DEFAULT 0,
         completion_cached_tokens INTEGER DEFAULT 0,
-        is_orchestrator INTEGER DEFAULT 0
+        is_orchestrator INTEGER DEFAULT 0,
+        source TEXT,
+        provider TEXT
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts)")
     # Schema migration for existing DB
@@ -36,6 +38,13 @@ def _init_usage_db() -> sqlite3.Connection:
         conn.execute("ALTER TABLE requests ADD COLUMN completion_cached_tokens INTEGER DEFAULT 0")
     if "is_orchestrator" not in cols:
         conn.execute("ALTER TABLE requests ADD COLUMN is_orchestrator INTEGER DEFAULT 0")
+    if "source" not in cols:
+        conn.execute("ALTER TABLE requests ADD COLUMN source TEXT")
+    if "provider" not in cols:
+        conn.execute("ALTER TABLE requests ADD COLUMN provider TEXT")
+    # Backfill source for older records logged before cloud lanes existed
+    conn.execute("UPDATE requests SET source = 'cloud' WHERE source IS NULL AND model LIKE 'cloud:%'")
+    conn.execute("UPDATE requests SET source = 'local' WHERE source IS NULL")
     # Backfill is_orchestrator for older records
     conn.execute("UPDATE requests SET is_orchestrator = 1 WHERE is_orchestrator = 0 AND (LOWER(COALESCE(model,'')) LIKE '%orchestrator%' OR LOWER(endpoint) LIKE 'agent/%')")
     conn.commit()
@@ -51,7 +60,9 @@ def db_record_request(endpoint: str, model: Optional[str], prompt_tokens: Option
                       stream: bool, status: int,
                       prompt_cached_tokens: Optional[int] = 0,
                       completion_cached_tokens: Optional[int] = 0,
-                      is_orchestrator: bool = False) -> None:
+                      is_orchestrator: bool = False,
+                      source: Optional[str] = None,
+                      provider: Optional[str] = None) -> None:
     """Persist one completed request with input/output cache and orchestrator attribution."""
     try:
         m_lower = (model or "").lower()
@@ -61,12 +72,13 @@ def db_record_request(endpoint: str, model: Optional[str], prompt_tokens: Option
                 is_orchestrator = True
 
         _usage_db.execute(
-            "INSERT INTO requests (ts, endpoint, model, prompt_tokens, completion_tokens, total_tokens, tps, duration_s, prompt_tps, stream, status, prompt_cached_tokens, completion_cached_tokens, is_orchestrator) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO requests (ts, endpoint, model, prompt_tokens, completion_tokens, total_tokens, tps, duration_s, prompt_tps, stream, status, prompt_cached_tokens, completion_cached_tokens, is_orchestrator, source, provider) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (time.time(), endpoint, model, prompt_tokens or 0, completion_tokens or 0,
              (prompt_tokens or 0) + (completion_tokens or 0), tps, duration_s,
              prompt_tps, 1 if stream else 0, status,
-             prompt_cached_tokens or 0, completion_cached_tokens or 0, 1 if is_orchestrator else 0),
+             prompt_cached_tokens or 0, completion_cached_tokens or 0, 1 if is_orchestrator else 0,
+             source or "local", provider),
         )
         _usage_db.commit()
     except Exception as e:
@@ -120,7 +132,9 @@ def db_report(days: int = 30, model: Optional[str] = None) -> dict:
             COALESCE(SUM(prompt_cached_tokens), 0),
             COALESCE(SUM(completion_tokens), 0),
             COALESCE(SUM(completion_cached_tokens), 0),
-            COALESCE(SUM(total_tokens), 0)
+            COALESCE(SUM(total_tokens), 0),
+            MAX(source) as source,
+            MAX(provider) as provider
         FROM requests
         WHERE ts >= ?
         GROUP BY model
@@ -170,8 +184,10 @@ def db_report(days: int = 30, model: Optional[str] = None) -> dict:
                 "completion_cached_tokens": gc,
                 "total_tokens": t,
                 "total_cached_tokens": pc + gc,
+                "source": src or "local",
+                "provider": prov,
             }
-            for m, is_orch, c, p, pc, g, gc, t in by_model_rows
+            for m, is_orch, c, p, pc, g, gc, t, src, prov in by_model_rows
         ],
         "by_day": [
             {

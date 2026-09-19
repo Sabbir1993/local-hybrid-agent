@@ -10,18 +10,14 @@ async function loadProfiles() {
     const sel = $('profile');
     sel.innerHTML = '';
 
-    // Group GGUF models by family (text before first '-')
-    const groups = {};
-    (d.models || []).forEach(m => {
-      const fam = (m.family || 'Other').trim() || 'Other';
-      (groups[fam] = groups[fam] || []).push(m);
-    });
-    const famNames = Object.keys(groups).sort();
-
-    famNames.forEach(fam => {
+    // Local GGUFs live in one chunk: "Local models (this machine)".
+    // (Cloud models below are already clustered per provider with ☁️ groups.)
+    const locals = (d.models || []).slice().sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || '')));
+    if (locals.length) {
       const g = document.createElement('optgroup');
-      g.label = '❒ ' + fam;
-      groups[fam].forEach(m => {
+      g.label = '🖥️ Local models (this machine)';
+      locals.forEach(m => {
         const o = document.createElement('option');
         o.value = m.path;
         const name = (m.name || '').trim();
@@ -35,7 +31,7 @@ async function loadProfiles() {
         g.appendChild(o);
       });
       sel.appendChild(g);
-    });
+    }
 
     if (!sel.options.length) {
       const o = document.createElement('option');
@@ -44,13 +40,39 @@ async function loadProfiles() {
       sel.appendChild(o);
     }
 
-    // restore last selection across page refreshes
-    try {
-      const saved = localStorage.getItem('app_model');
-      if (saved && [...sel.options].some(o => o.value === saved)) {
-        sel.value = saved;
-      }
-    } catch (e) {}
+    // ---- cloud models: one cluster per provider (from /control/profiles) ----
+    const byProv = {};
+    (d.cloud || []).forEach(m => {
+      const pn = m.provider_name || m.provider;
+      (byProv[pn] = byProv[pn] || []).push(m);
+    });
+    Object.keys(byProv).sort().forEach(pn => {
+      const g = document.createElement('optgroup');
+      g.label = '\u2601 ' + pn;
+      byProv[pn].forEach(m => {
+        const o = document.createElement('option');
+        o.value = m.value;                       // "cloud:<provider>/<model>"
+        o.textContent = m.display;
+        o.title = `${m.model} via ${pn} (cloud, no VRAM)`;
+        o.dataset.kind = 'cloud';
+        o.dataset.provider = m.provider;
+        o.dataset.model = m.model;
+        o.dataset.ctx = m.ctx || '';
+        g.appendChild(o);
+      });
+      sel.appendChild(g);
+    });
+
+    // Main-lane truth: a cloud binding wins over the last local selection
+    // (picker a cloud model = "this is who answers me").
+    const bound = (d.bindings && d.bindings.main) ? ('cloud:' + d.bindings.main) : null;
+    let restored = null;
+    try { restored = localStorage.getItem('app_model'); } catch (e) {}
+    const has = v => !!v && [...sel.options].some(o => o.value === v);
+    if (has(bound)) sel.value = bound;
+    else if (!bound && has(restored)) sel.value = restored;
+    else if (bound && !has(bound) && sel.options.length) sel.value = sel.options[0].value;
+
     loadConfig();   // dropdown is ready — fetch its saved config
   } catch (e) {}
 }
@@ -58,6 +80,31 @@ async function loadProfiles() {
 $('profile').onchange = e => {
   e.target._user = true;
   try { localStorage.setItem('app_model', e.target.value); } catch (err) {}
+  // Picking a cloud model means "this is my main lane": nudge the agent engine to
+  // a mode that keeps the local model out of the way (the executor stays local
+  // unless it is bound to the cloud in the Cloud Models card).
+  if (typeof isCloudValue === 'function' && isCloudValue(e.target.value)) {
+    const eng = $('agent-engine');
+    if (eng && (eng.value === 'all-local' || eng.value === 'main-local-rest-cloud')) {
+      eng.value = 'main-cloud-rest-local';
+      try { localStorage.setItem('agent_engine', eng.value); } catch (err) {}
+      toast('\u2601 Cloud main lane — engine set to "Main Cloud · Rest Local"');
+    }
+    // Cloud models cost nothing to "load" (no VRAM involved) - bind the main
+    // lane immediately instead of making the user press the Load button too.
+    if (typeof loadSelectedModel === 'function') loadSelectedModel();
+  } else if (typeof curStatus !== 'undefined' && curStatus && curStatus.cloud_main) {
+    // Switching back to a local model: release the cloud main-lane binding
+    // right away so status/chat immediately show local (🖥) instead of the
+    // stale cloud (☁) badge until the user also presses ▶ Load.
+    fetch('/control/cloud/lanes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear: ['main'] }),
+    }).then(() => {
+      if (typeof pollStatus === 'function') pollStatus();
+      if (typeof loadCloudCard === 'function') loadCloudCard();
+    }).catch(() => {});
+  }
   loadConfig();   // show the newly selected model's saved config
 };
 
@@ -78,8 +125,50 @@ async function loadConfig() {
     if (target) url += '?model=' + encodeURIComponent(target);
     const c = await (await fetch(url)).json();
     if (c.error) return;
+    if (c.cloud) { applyCloudConfigUI(c); return; }
+    clearCloudConfigUI();
     fillConfigForm(c);
   } catch (e) {}
+}
+
+/* Cloud model selected: llama-server launch params are meaningless -> banner + disabled */
+function isCloudValue(v) {
+  return String(v || '').startsWith('cloud:');
+}
+
+function applyCloudConfigUI(c) {
+  const card = $('sec-cfg');
+  if (!card) return;
+  let note = $('cfg-cloud-note');
+  if (!note) {
+    note = document.createElement('div');
+    note.id = 'cfg-cloud-note';
+    note.className = 'cfg-note';
+    const sum = card.querySelector('summary');
+    if (sum && sum.nextSibling) card.insertBefore(note, sum.nextSibling);
+    else card.appendChild(note);
+  }
+  note.innerHTML = `\u2601 <b>${esc(c.display || c.model || '')}</b> is served by
+    <b>${esc(c.provider || '')}</b> (cloud) — llama-server launch options don't apply.
+    Use the <b>Cloud Models</b> card below to bind lanes; endpoints are deleted from
+    <code>providers.json</code>, never added to git.`;
+  card.querySelectorAll('.cfg-grid input, .cfg-grid select, .cfg-grid button').forEach(el => {
+    el.disabled = true; el.style.opacity = '0.45';
+  });
+  if (c.context_size) { curCtxMax = c.context_size; updateContextChip(); }
+  const dl = $('btn-load-header');
+  if (dl) dl.title = 'Cloud model — nothing to load into VRAM';
+}
+
+function clearCloudConfigUI() {
+  const card = $('sec-cfg');
+  if (!card) return;
+  const note = $('cfg-cloud-note');
+  if (note) note.remove();
+  card.querySelectorAll('.cfg-grid input, .cfg-grid select, .cfg-grid button').forEach(el => {
+    el.disabled = false; el.style.opacity = '';
+  });
+  if (typeof updateGpuDependentFields === 'function') updateGpuDependentFields();
 }
 
 function fillConfigForm(c) {

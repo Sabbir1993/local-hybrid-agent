@@ -171,7 +171,13 @@ def tool_write_file(args: dict) -> str:
     content = args.get("content", "")
     if len(content) > MAX_EDIT_BYTES:
         raise ValueError("content too large")
+    append = bool(args.get("append"))
     existed = p.exists()
+    if append and existed:
+        with p.open("a", encoding="utf-8") as f:
+            f.write(content)
+        _snapshot_change(p)
+        return f"appended {len(content)} chars to {path_arg} (total {p.stat().st_size} bytes)"
     p.write_text(content, encoding="utf-8")
     _snapshot_change(p)
     return f"wrote {len(content)} chars to {path_arg} ({'overwrote' if existed else 'created'})"
@@ -507,12 +513,13 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Create or overwrite a file in the workspace",
+            "description": "Create or overwrite a file in the workspace. For large files (roughly 150+ lines), write it in several shorter calls: first call with append=false (or omitted) to create the file with the first chunk, then further calls with append=true to add the rest in order — this avoids output truncation/corruption on very long single-shot generations.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
                     "content": {"type": "string"},
+                    "append": {"type": "boolean", "description": "If true, append content to the end of the existing file instead of overwriting it. Use this to build a large file across multiple calls."},
                 },
                 "required": ["path", "content"],
             },

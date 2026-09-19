@@ -13,6 +13,26 @@ async function loadSelectedModel() {
   const sel = $('profile');
   const target = sel.value;
   if (!target) { toast('Please select a model from the dropdown first', true); return; }
+
+  // Cloud model: nothing to load. Selecting it binds the MAIN lane (who answers
+  // you) and leaves the local llama-server / VRAM untouched.
+  if (typeof isCloudValue === 'function' && isCloudValue(target)) {
+    try {
+      const r = await fetch('/control/switch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: target })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      toast('\u2601 Main lane \u2192 ' + (j.display || target) + ' (' + (j.provider || '') + ') — no VRAM used');
+      pollStatus(); loadConfig();
+      if (typeof loadCloudCard === 'function') loadCloudCard();
+    } catch (e) {
+      toast('Cloud switch failed: ' + e.message, true);
+    }
+    return;
+  }
+
   if (curStatus && curStatus.pid) {  // loaded -> unload
     if (ctrl) ctrl.abort();
     try { await fetch('/control/stop', { method: 'POST' }); } catch (e) {}
@@ -62,7 +82,10 @@ $('btn-load-header').onclick = loadSelectedModel;
 function setLoadBtn(mode) {
   const b = $('btn-load-header');
   b.classList.remove('unload', 'loading');
-  if (mode === 'on') {
+  if (mode === 'cloud') {
+    b.innerHTML = '<span>\u2601</span>';
+    b.title = 'Cloud model — nothing to load into VRAM. Pick a local GGUF to use the GPUs again.';
+  } else if (mode === 'on') {
     b.innerHTML = '<span>■</span>';
     b.classList.add('unload');
     b.title = 'Unload model — terminate llama-server and free VRAM/DRAM';

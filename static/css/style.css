@@ -288,6 +288,25 @@ details.card.fold[open] > summary {
 .session-row:hover .s-del, .project-row:hover .p-del { opacity: .65; }
 .session-row .s-del:hover, .project-row .p-del:hover { opacity: 1 !important; background: rgba(248,113,113,.18); color: var(--red); }
 
+.session-row { position: relative; }
+.session-row .s-menu-wrap { position: relative; display: flex; align-items: center; }
+.session-row .s-menu { opacity: 0; transition: opacity .15s; padding: 2px 6px; border-radius: 4px; font-size: 13px; color: var(--dim); line-height: 1; }
+.session-row:hover .s-menu { opacity: .75; }
+.session-row .s-menu:hover, .session-row .s-menu.open { opacity: 1 !important; background: var(--panel2); color: var(--text); }
+.s-menu-pop {
+  position: fixed; z-index: 400;
+  background: var(--panel); border: 1px solid var(--border-subtle); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35); min-width: 140px; padding: 4px; display: flex; flex-direction: column;
+}
+.s-menu-pop button {
+  all: unset; box-sizing: border-box; width: 100%; padding: 7px 9px; border-radius: 6px;
+  font-size: 12px; line-height: 16px; color: var(--text); cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+}
+.s-menu-pop button .mi { flex: 0 0 16px; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; }
+.s-menu-pop button:hover { background: var(--panel2); }
+.s-menu-pop button.danger:hover { background: rgba(248,113,113,.15); color: var(--red); }
+
 .project-row {
   padding: 8px 10px;
   margin-bottom: 2px;
@@ -386,13 +405,17 @@ header {
 .pill {
   display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 500;
   padding: 4px 10px; border-radius: 16px; background: var(--panel2); border: 1px solid var(--border);
-  white-space: nowrap; color: var(--dim);
+  white-space: nowrap; color: var(--dim); min-height: 15px; box-sizing: content-box;
 }
 .pill i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 .pill.on i { background: var(--green); box-shadow: 0 0 8px rgba(72,187,120,0.6); }
 .pill.off i { background: var(--amber); }
 .pill.loading i { background: var(--accent); }
 .pill.offline i { background: var(--red); }
+/* cloud main lane: active, but served remotely (no local llama-server) */
+.pill.cloud i { background: var(--green); box-shadow: 0 0 8px rgba(72,187,120,0.6); }
+.pill.cloud { color: var(--text); }
+.pill.cloud #pill-text { opacity: 0.95; }
 
 .chip {
   font-size: 11px; color: var(--dim); background: var(--panel2); padding: 4px 9px;

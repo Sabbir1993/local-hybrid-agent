@@ -28,6 +28,13 @@
     "engine": "cactus_needle",
     "executor_grammar": true
   },
+  "provider": {},
+  "cloud": {
+    "main": null,
+    "executor": null,
+    "vision": null,
+    "fallback_local": true
+  },
   "agent": {
     "exec_timeout_s": 0,
     "max_steps": 30,

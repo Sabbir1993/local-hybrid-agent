@@ -32,7 +32,9 @@ function renderMonitorRecent(list) {
   rl.innerHTML = list.map(r => {
     let mTag = '';
     if (r.model) {
-      mTag = `<span class="mon-model-tag" title="${esc(r.model)}">${esc(r.model)}</span>`;
+      const cloudTag = r.source === 'cloud' ? '☁ ' : '';
+      const title = r.source === 'cloud' && r.provider ? `${r.model} via ${r.provider} (cloud)` : r.model;
+      mTag = `<span class="mon-model-tag" title="${esc(title)}">${cloudTag}${esc(r.model)}</span>`;
     } else if (r.endpoint && r.endpoint.includes('executor')) {
       mTag = `<span class="mon-model-tag" title="Qwen2.5-VL-3B">Qwen2.5-VL-3B</span>`;
     }
@@ -104,5 +106,6 @@ function setSettings(open) {
   if (isOpen) {
     loadConfig();   // refresh config panel from server on open
     loadCapabilities();
+    loadCloudCard();
   }
 }

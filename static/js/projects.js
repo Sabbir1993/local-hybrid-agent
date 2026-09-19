@@ -127,9 +127,14 @@ async function loadSessions(autoRestore = false) {
       const row = document.createElement('div');
       row.className = 'session-row' + (curSession && curSession.id === s.id ? ' cur' : '');
       const icon = agentMode ? '🤖' : '💬';
-      row.innerHTML = `<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(s.title)}">${icon} ${esc(s.title)}</span><span class="s-del" title="Delete session">✕</span>`;
+      row.innerHTML = `<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(s.title)}">${icon} ${esc(s.title)}</span>` +
+        `<span class="s-menu-wrap"><span class="s-menu" title="Session options">⋮</span></span>`;
       row.onclick = e => {
-        if (e.target.classList.contains('s-del')) { deleteSession(s.id); return; }
+        if (e.target.classList.contains('s-menu')) {
+          e.stopPropagation();
+          toggleSessionMenu(e.target, s);
+          return;
+        }
         openSession(s);
       };
       list.appendChild(row);
@@ -183,6 +188,9 @@ async function openSession(s) {
         compactAfter: meta.after_tokens,
         reductionPct: meta.reduction_pct,
         compactKept: meta.kept_messages,
+        modelDisplay: meta.modelDisplay || undefined,
+        modelSource: meta.modelSource || undefined,
+        modelProvider: meta.modelProvider || undefined,
       };
     });
     curSession = s;
@@ -192,6 +200,45 @@ async function openSession(s) {
     renderAll();
     loadSessions();
   } catch (e) { toast('Failed to load session', true); }
+}
+
+function closeSessionMenu() {
+  const open = document.querySelector('.s-menu-pop');
+  if (open) open.remove();
+  document.querySelectorAll('.s-menu.open').forEach(m => m.classList.remove('open'));
+}
+document.addEventListener('click', closeSessionMenu);
+
+function toggleSessionMenu(btn, s) {
+  const already = btn.classList.contains('open');
+  closeSessionMenu();
+  if (already) return;
+  btn.classList.add('open');
+  const pop = document.createElement('div');
+  pop.className = 's-menu-pop';
+  pop.innerHTML = `
+    <button type="button" data-act="export"><span class="mi">📄</span>Export .md</button>
+    <button type="button" data-act="delete" class="danger"><span class="mi">🗑</span>Delete</button>`;
+  pop.onclick = e => {
+    e.stopPropagation();
+    const act = e.target.closest('button')?.dataset.act;
+    if (act === 'export') {
+      if (typeof exportSessionMarkdownById === 'function') exportSessionMarkdownById(s.id, s.title);
+      closeSessionMenu();
+    } else if (act === 'delete') {
+      deleteSession(s.id);
+      closeSessionMenu();
+    }
+  };
+  document.body.appendChild(pop);
+  const br = btn.getBoundingClientRect();
+  const pr = pop.getBoundingClientRect();
+  let left = br.right - pr.width;
+  left = Math.max(6, Math.min(left, window.innerWidth - pr.width - 6));
+  let top = br.bottom + 4;
+  if (top + pr.height > window.innerHeight - 6) top = br.top - pr.height - 4;
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
 }
 
 async function deleteSession(sid) {

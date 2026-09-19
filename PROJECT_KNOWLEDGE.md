@@ -41,6 +41,8 @@ confusion:
 | **Capability** | A tool *source*: builtin, web, skill, mcp, plugin, shell. Toggleable wholesale from the UI. |
 | **Lane escalation** | Automatically discarding a weak executor response and re-running that step on the main model. |
 | **Delta reset** | SSE event telling the UI to throw away already-streamed text (used before escalation / validation rewrite). |
+| **Cloud lane** | A lane served by a remote OpenAI-compatible provider instead of a local `llama-server`. Bindings live in `providers.json` (`core/cloud.py`). |
+| **providers.json** | Untracked file holding cloud providers (base URLs + API keys) and lane bindings. Written only by the Settings → ☁️ Cloud Models card. |
 
 ---
 
@@ -189,6 +191,45 @@ sequence.
 | GPU telemetry | `core/gpu.py` (`_gpu_cache`, 4s TTL) |
 | Current workspace / file-change snapshots | `core/agent_tools.py` (`_active_project`, `_ws_changes`) |
 | Pending shell permission prompts | `server_manager.py` (`_perm_pending`) |
+| Cloud providers + lane bindings | `core/cloud.py` (reads `providers.json`, falling back to `config.json → provider`) |
+
+### Cloud lanes (`core/cloud.py`, `routes/cloud.py`)
+
+A lane (`main` / `executor` / `vision`) is served **locally** unless its binding in
+`providers.json → cloud.<lane>` resolves to a configured provider/model. One helper
+decides this everywhere: `cloud.cloud_lane(lane)` → `None` means local.
+
+```jsonc
+// providers.json (created/updated only by the UI; gitignored, holds API keys)
+{
+  "provider": {
+    "open router": {
+      "npm": "@ai-sdk/openai-compatible",          // stored verbatim, unused at runtime
+      "name": "open router",                        // cluster label in the dropdown
+      "options": { "baseURL": "https://openrouter.ai/api/v1", "apiKey": "sk-or-v1-…" },
+      "models": { "stealth/union-alpha": { "name": "union-alpha", "ctx": 131072 } }
+    }
+  },
+  "cloud": { "main": "open router/stealth/union-alpha", "executor": null,
+             "vision": null, "fallback_local": true }
+}
+```
+
+- **`CloudClient`** (`core/cloud.py`) duck-types `httpx.AsyncClient` (`.stream()`, `.post()`),
+  so `_llm_chat_stream` and the `/chat/compact` summarizer work unchanged. It injects
+  `model`, `Authorization: Bearer`, and strips llama.cpp-only fields
+  (`repeat_penalty`, `grammar`, `min_p`, …) plus `max_tokens: -1`.
+- **Endpoint derivation** — `baseURL` ending in `/v1` gets `/chat/completions` appended;
+  anything else gets `/v1/chat/completions` (covers `…/openai` style bases).
+- **Modes** (`req.mode` from `#agent-engine`): `all-local`, `main-local-rest-cloud`,
+  `main-cloud-rest-local`, `all-cloud`. Legacy `main`/`tiered` still accepted.
+- **VRAM** — a cloud main lane never starts `:8090`; a cloud executor never warms up the
+  local executor. All-cloud runs with **zero** local engines.
+- **Truthfulness** — `get_model_info(lane)` returns `source: "cloud"`, `device: "<Provider> (cloud)"`
+  and a ☁️ `display`; `/control/status` reports `main_source` / `cloud_main` so the pill
+  shows `☁️ Cloud · …` instead of a false "Model unloaded".
+- **UI ownership** — the top model dropdown sets the **main** lane (picking a cloud model
+  binds it; picking a GGUF clears the binding). Executor/vision are set in the card.
 
 ### The proxy (`proxy()`, server_manager.py:1781)
 
@@ -626,15 +667,26 @@ and `revert`. **Not persisted** — cleared by `set_active_project()` and lost o
 |---|---|---|
 | GET | `/` | serves `ui.html` (no-store) |
 | GET | `/static/{path}` | `ui.html`'s css/js (path-escape guarded) |
-| GET | `/control/status` | profile, model, pid, uptime, restart_count, keepalive, ctx usage (from llama-server `/slots`) |
+| GET | `/control/status` | profile, model, pid, uptime, restart_count, keepalive, ctx usage (from llama-server `/slots`), plus `main_source`/`cloud_main`/`executor_source` |
 | GET | `/control/gpu` | cached adapters + per-pid compute % |
-| GET | `/control/profiles` | `{models[], profiles[]}`; flags `model_exists`, `mtp_available`, `size_gb` |
-| GET/POST | `/control/config` | read / update launch config (clamp + persist + optional relaunch) |
+| GET | `/control/profiles` | `{models[], profiles[], cloud[]}`; flags `model_exists`, `mtp_available`, `size_gb`; cloud entries carry `value: "cloud:<provider>/<model>"` |
+| GET/POST | `/control/config` | read / update launch config (clamp + persist + optional relaunch); returns a cloud-shaped payload (`{cloud:true, provider, model, ctx}`) when the target is a cloud model |
 | POST | `/control/start` `/control/stop` `/control/restart` | process lifecycle |
 | POST | `/control/keepalive` | `{enabled}` toggle |
-| POST | `/control/switch` | `{profile\|target}` hot-swap model |
-| GET | `/control/models` | small-model (executor/vision/embedder) status |
+| POST | `/control/switch` | `{profile\|target}` hot-swap model; `target: "cloud:<provider>/<model>"` binds the main lane instead of loading anything |
+| GET | `/control/models` | per-lane status: `lanes.{main,executor,vision}` with `source`/`device`, small-model status, cloud binding counts |
 | POST | `/agent/unload_small_models` | free their VRAM |
+
+### Cloud providers / lanes
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/control/cloud` | providers (keys **masked**), flattened cloud models, lane bindings, local lane inventory |
+| GET | `/control/cloud/key?provider=` | explicit API-key reveal (👁 button) |
+| POST | `/control/cloud/provider` | add/update a provider (base URL, key, models) → writes `providers.json`, applies live |
+| DELETE | `/control/cloud/provider?name=` | remove a provider and unbind lanes that used it |
+| POST | `/control/cloud/lanes` | bind executor/vision (`{"clear":["main"]}` unbinds); `fallback_local` |
+| POST | `/control/cloud/test` | 1-token probe → `{ok, ms, sample}` or `{ok:false, error}` |
 
 ### Capabilities / shell
 
@@ -932,6 +984,13 @@ databases and read `config.json` as import-time side effects.
 | watchdog restart backoff | `core/config.py` `WATCHDOG_INTERVAL_S`, `MAX_RESTART_BACKOFF_S`, `HEALTH_TIMEOUT_S` |
 | ports | `core/config.py` (`PROXY_PORT` 8000, `LLAMA_SERVER_PORT` 8090, small models 8091-8093) |
 | what skills/plugins/Capabilities see in the UI | `static/js/app.js::loadCapabilities` |
+| cloud provider registry / lane routing | `core/cloud.py` (`cloud_lane`, `CloudClient`, `save_provider`, `set_lanes`) |
+| cloud REST surface | `routes/cloud.py` |
+| cloud optgroups in the model dropdown | `static/js/config.js::loadProfiles` |
+| Cloud Models settings card | `static/js/cloud.js::loadCloudCard` |
+| agent lane selection per mode | `routes/agent.py` (`agent_run` ← "lane resolution") |
+| the 4 engine modes (`#agent-engine`) | `ui.html` + `routes/agent.py` (`mode` normalization) |
+| ☁️ status pill / empty-state text | `static/js/gpu-status.js` (`setPill`, `mainLaneReady`) |
 
 ---
 

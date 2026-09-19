@@ -6,7 +6,7 @@ async function runAgentSSE(text) {
     else toast('Please select a project first', true);
     return;
   }
-  if (!curStatus || !curStatus.pid) {
+  if (!mainLaneReady()) {
     const sel = $('profile');
     if (!sel || !sel.value) {
       toast('Please select a model from the top dropdown first', true);
@@ -16,7 +16,7 @@ async function runAgentSSE(text) {
     toast(`⏳ Loading ${mName} into GPU VRAM before running task...`);
     await loadSelectedModel();
     await pollStatus();
-    if (!curStatus || !curStatus.pid) {
+    if (!mainLaneReady()) {
       toast('Model loading failed or still in progress. Please wait a moment and try again.', true);
       return;
     }
@@ -89,7 +89,7 @@ async function runAgentSSE(text) {
     const t0 = performance.now();
     try {
       const hist = messages.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
-      const engineMode = $('agent-engine') ? $('agent-engine').value : 'tiered';
+      const engineMode = $('agent-engine') ? $('agent-engine').value : 'all-local';
       // Collect doc attachments that were server-uploaded for context injection
       const docAttachments = sentAttachments
         .filter(a => a.isDoc && a.serverPath)

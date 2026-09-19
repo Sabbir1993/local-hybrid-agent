@@ -1,7 +1,7 @@
 /* ---------------- chat ---------------- */
 function renderAll() {
   const inner = $('chat-inner');
-  const isLoaded = curStatus && curStatus.pid;
+  const isLoaded = (typeof mainLaneReady === 'function') ? mainLaneReady() : (curStatus && curStatus.pid);
   inner.innerHTML = messages.length ? messages.map(bubbleHtml).join('') :
     `<div id="empty">
       <div class="big">⚡</div>
@@ -188,7 +188,12 @@ function bubbleHtml(m, idx) {
   if (body) {
     inner += `<div class="bubble">${body}${generating && isLast && hasText ? '<span class="cursor">▍</span>' : ''}</div>`;
   }
-  if (m.tps) inner += `<div class="meta">${m.ntok} tok · ${m.tps.toFixed(1)} t/s · ${m.secs.toFixed(1)}s</div>`;
+  if (m.tps) {
+    const modelTag = m.modelDisplay
+      ? `${m.modelSource === 'cloud' ? '☁ ' : ''}${esc(m.modelDisplay)} · `
+      : '';
+    inner += `<div class="meta">${modelTag}${m.ntok} tok · ${m.tps.toFixed(1)} t/s · ${m.secs.toFixed(1)}s</div>`;
+  }
   return `<div class="msg bot">${inner}</div>`;
 }
 
@@ -387,7 +392,7 @@ async function send(inputText) {
   const text = (inputText !== undefined ? inputText : (input ? input.value : '')).trim();
   const hasFiles = attachments && attachments.some(a => a.content != null || (a.isImage && a.b64));
   if ((!text && !hasFiles) || generating) return;
-  if (!curStatus || !curStatus.pid) {
+  if (!mainLaneReady()) {
     const sel = $('profile');
     if (!sel || !sel.value) {
       toast('Please select a model from the top dropdown first', true);
@@ -397,7 +402,7 @@ async function send(inputText) {
     toast(`⏳ Loading ${mName} into GPU VRAM before sending...`);
     await loadSelectedModel();
     await pollStatus();
-    if (!curStatus || !curStatus.pid) {
+    if (!mainLaneReady()) {
       toast('Model loading failed or still in progress. Please wait a moment and try again.', true);
       return;
     }
@@ -496,7 +501,11 @@ async function send(inputText) {
         let d = {};
         try { d = JSON.parse(dtM[1]); } catch (e) {}
         const L = last();
-        if (ev === 'delta') {
+        if (ev === 'lane') {
+          L.modelDisplay = d.display || d.model;
+          L.modelSource = d.source;
+          L.modelProvider = d.provider;
+        } else if (ev === 'delta') {
           L.content += (d.text || '');
         } else if (ev === 'thought_delta') {
           L.reasoning = (L.reasoning || '') + (d.delta || '');
@@ -554,7 +563,10 @@ async function send(inputText) {
     ntok,
     secs: dt,
     reasoning: last().reasoning || undefined,
-    acts: (last().acts && last().acts.length) ? last().acts : undefined
+    acts: (last().acts && last().acts.length) ? last().acts : undefined,
+    modelDisplay: last().modelDisplay || undefined,
+    modelSource: last().modelSource || undefined,
+    modelProvider: last().modelProvider || undefined,
   });
   ctrl = null;
   setGenUI(false);

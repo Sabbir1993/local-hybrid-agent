@@ -7,6 +7,7 @@ from .projects import router as projects_router
 from .capabilities import router as capabilities_router
 from .chat import router as chat_router
 from .agent import router as agent_router
+from .cloud import router as cloud_router
 from .proxy import router as proxy_router
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "capabilities_router",
     "chat_router",
     "agent_router",
+    "cloud_router",
     "proxy_router",
 ]

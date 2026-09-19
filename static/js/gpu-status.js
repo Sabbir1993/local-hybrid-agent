@@ -4,6 +4,7 @@ function setPill(mode, s) {
   p.className = 'pill ' + mode;
   if (typeof setLoadBtn === 'function') setLoadBtn(mode);
   if (mode === 'on') txt.textContent = 'Loaded · ' + fmtUptime(s.uptime_s);
+  else if (mode === 'cloud') txt.textContent = '';  // just the green dot below
   else if (mode === 'loading') txt.textContent = 'Loading model…';
   else if (mode === 'offline') txt.textContent = 'Manager offline';
   else txt.textContent = 'Model unloaded';
@@ -17,7 +18,9 @@ async function pollStatus() {
     const s = await res.json();
     pollFailures = 0;
     curStatus = s;
-    setPill(s.pid ? 'on' : 'off', s);
+    const cloudMain = s.cloud_main || null;
+    // cloud main lane: report ☁️ instead of a misleading "Model unloaded"
+    setPill(cloudMain ? 'cloud' : (s.pid ? 'on' : 'off'), s);
     const ka = $('ka');
     if (!ka._user) ka.checked = !!s.keepalive;
 
@@ -25,7 +28,14 @@ async function pollStatus() {
     const selName = (sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'Model';
     const m = s.model ? s.model.split('\\').pop().split('/').pop() : selName;
 
-    if (s.model && s.pid) {
+    if (cloudMain) {
+      $('empty-model').textContent =
+        `${cloudMain.display}  ·  via ${cloudMain.provider}  ·  cloud (no VRAM)`;
+      const ec = document.querySelector('.empty-card');
+      if (ec) {
+        ec.innerHTML = `<p><b>${cloudMain.display} is ready!</b></p><p class="dim" style="margin-top:6px;">Main lane is served by <b>${cloudMain.provider}</b> in the cloud — both Arc A770s stay free. Type your message below and press Enter.</p>`;
+      }
+    } else if (s.model && s.pid) {
       $('empty-model').textContent =
         `${m}  ·  split ${s.tensor_split || 'auto'}  ·  bench ${Number(s.measured_tg_tokens_per_sec || 0).toFixed(1)} t/s`;
       const ec = document.querySelector('.empty-card');
@@ -40,8 +50,10 @@ async function pollStatus() {
       }
     }
 
-    // keep profile dropdown in sync if switched elsewhere
-    if (s.profile && sel.value && !sel._user) {
+    // keep profile dropdown in sync if switched elsewhere (never for a cloud
+    // selection — that one is owned by the main-lane binding, not by s.profile)
+    const cloudSel = (typeof isCloudValue === 'function') && isCloudValue(sel && sel.value);
+    if (!cloudSel && s.profile && sel.value && !sel._user) {
       const opt = [...sel.options].find(o => o.value === s.profile || o.textContent.includes(s.profile));
       if (opt && sel.value !== opt.value) sel.value = opt.value;
     }
@@ -89,6 +101,12 @@ async function pollGpu() {
 }
 
 let curCtxMax = 32768;
+
+/* True when the MAIN lane can answer right now: a local llama-server is up, or
+   the main lane is bound to a cloud model (nothing to load into VRAM). */
+function mainLaneReady() {
+  return !!(curStatus && (curStatus.pid || curStatus.cloud_main));
+}
 
 function getMsgTokens(m) {
   if (!m) return 0;
