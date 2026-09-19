@@ -3,6 +3,7 @@ __pycache__/
 *.db
 usage.db
 projects.db
+compacts/
 node_modules/
 .venv/
 venv/

@@ -1,9 +1,48 @@
 /* ---------------- input handling & boot ---------------- */
 function submitPrompt() {
+  if (generating) return;
   const input = $('input');
   const text = input ? input.value.trim() : '';
   const hasFiles = attachments && attachments.some(a => a.content != null || (a.isImage && a.b64));
-  if ((!text && !hasFiles) || generating) return;
+
+  // Check if a slash command is armed (e.g. <compact>)
+  if (window.getArmedCmd && window.getArmedCmd()) {
+    const cmd = window.getArmedCmd();
+    if (cmd.name === 'compact') {
+      if (input) input.value = '';
+      window.runArmedCmd(cmd, text);
+      return;
+    }
+    if (!text && !hasFiles) return;
+    if (input) input.value = '';
+    window.runArmedCmd(cmd, text);
+    return;
+  }
+
+  if (!text && !hasFiles) return;
+
+  // /compact [extra instructions] — context compaction (both chat & agent mode)
+  if (/^\/compact(\s|$)/i.test(text)) {
+    if (input) input.value = '';
+    doCompact(text.replace(/^\/compact\s*/i, '').trim());
+    return;
+  }
+
+  // /plan and /build typed directly — Plan/Build mode switches (agent mode)
+  if (/^\/(plan|build)(\s|$)/i.test(text)) {
+    if (agentMode && (!curProject || !curProject.id)) { flashProjectsCard(); return; }
+    if (window._setPlanMode) window._setPlanMode(/^\/plan/i.test(text));
+    if (input) input.value = '';
+    toast(/^\/plan/i.test(text) ? '📋 Plan mode — explore & propose changes' : '🔨 Build mode — execute changes');
+    return;
+  }
+
+  // Project gate: In agent mode, require an active project before sending any prompt!
+  if (agentMode && (!curProject || !curProject.id)) {
+    flashProjectsCard();
+    return;
+  }
+
   if (agentMode) runAgentSSE(text); else send(text);
 }
 $('input').addEventListener('keydown', e => {

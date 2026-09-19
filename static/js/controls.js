@@ -22,6 +22,22 @@ async function loadSelectedModel() {
   }
   setPill('loading');
   toast('Loading model into Arc A770 VRAM (~10–60s)…');
+  // Preflight VRAM check: show suggestions before the manager refuses to load
+  try {
+    const pr = await fetch('/control/preflight?target=' + encodeURIComponent(target));
+    if (pr.ok) {
+      const plan = await pr.json();
+      if (plan.status === 'nofit') {
+        const sugs = (plan.suggestions || []).slice(0, 3).map(s => s.desc).join(' | ');
+        setPill('off');
+        toast('VRAM check: it won\u2019t fit. ' + (sugs || plan.message || 'Reduce GPU offload.'), true);
+        return;
+      }
+      if (plan.status === 'tight') {
+        toast('VRAM check: tight fit — loading anyway (watch the GPU panel).');
+      }
+    }
+  } catch (e) { /* preflight is advisory only */ }
   try {
     const r = await fetch('/control/switch', {
       method: 'POST',

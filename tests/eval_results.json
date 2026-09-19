@@ -1,5 +1,5 @@
 {
-  "ts": 1789577683.4950938,
+  "ts": 1789800818.3881135,
   "offline": [
     {
       "name": "grammar",
@@ -25,6 +25,11 @@
       "name": "needle_router",
       "status": "PASS",
       "note": "needle ok (route: list_files)"
+    },
+    {
+      "name": "compact_endpoint",
+      "status": "PASS",
+      "note": "compact endpoint ok (2283 -> 795 tokens)"
     }
   ],
   "live": []

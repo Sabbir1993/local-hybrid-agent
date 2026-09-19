@@ -1,6 +1,129 @@
 /* ---------------- @ file tagging & / commands (agent mode) ---------------- */
 let cmdMenu = { open: false, kind: null, items: [], sel: 0, tokenStart: -1 };
 
+/* ---- armed slash command: rendered as a <name> chip instead of literal text ---- */
+let armedCmd = null;
+
+const CMD_HINTS = {
+  compact: {
+    icon: '🧹',
+    ph: 'Optional: extra instructions for the summary (e.g. focus on the database schema) — Enter to compact',
+    title: '/compact — compress the conversation into a summary and keep going',
+    hint: 'Enter to compact',
+  },
+  plan: {
+    icon: '📋',
+    ph: 'Describe what to plan (read-only, will not make changes) — Enter to propose',
+    title: '/plan — Plan mode (explores & proposes changes)',
+    hint: 'Enter to plan',
+  },
+  build: {
+    icon: '🔨',
+    ph: 'Describe what to build or fix (executes changes in workspace) — Enter to execute',
+    title: '/build — Build mode (executes changes)',
+    hint: 'Enter to build',
+  },
+};
+
+/* Default composer placeholder for the current mode (mirrors setAppMode). */
+function defaultInputPlaceholder() {
+  const sel = $('profile');
+  const mName = (sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'model';
+  return agentMode
+    ? 'Describe a coding task (e.g. "Find and fix bug in main.py", "Refactor the database queries")...'
+    : `Message ${mName}... (Enter to send, Shift+Enter for newline)`;
+}
+
+/* While a command is armed the placeholder becomes that command's argument hint. */
+function refreshInputPlaceholder() {
+  const input = $('input');
+  if (!input) return;
+  if (armedCmd) {
+    const h = CMD_HINTS[armedCmd.name] || {};
+    input.placeholder = h.ph || (armedCmd.desc ? `${armedCmd.desc} — Enter to run` : `Instructions for /${armedCmd.name} — Enter to run`);
+  } else {
+    input.placeholder = defaultInputPlaceholder();
+  }
+}
+
+function cmdChipRender() {
+  const bar = $('cmd-chip-bar');
+  if (!bar) return;
+  if (!armedCmd) { bar.innerHTML = ''; return; }
+  const h = CMD_HINTS[armedCmd.name] || {};
+  bar.innerHTML =
+    `<div class="cmd-chip" title="${esc(h.title || armedCmd.desc || ('/' + armedCmd.name))}">
+       <span class="cmd-chip-icon">${esc(armedCmd.icon || '')}</span>
+       <span class="cmd-chip-name">&lt;${esc(armedCmd.name)}&gt;</span>
+       <span class="cmd-chip-hint">${esc(h.hint || 'Enter to run')}</span>
+       <span class="cmd-chip-x" data-x="1" title="Remove command (or press Backspace on an empty box)">✕</span>
+     </div>`;
+  const x = bar.querySelector('[data-x]');
+  if (x) x.onclick = () => { disarmCmd(); const i = $('input'); if (i) i.focus(); };
+}
+
+/* Arm a slash command: the composer is cleared, the chip shows <name>, and the
+   placeholder turns into the command's argument hint (like Claude Code). */
+function armCmd(name, opts = {}) {
+  const input = $('input');
+  if (!input) return;
+  const h = CMD_HINTS[name] || {};
+  armedCmd = {
+    name,
+    icon: opts.icon || h.icon || '⌘',
+    desc: opts.desc || '',
+    isSkill: !!opts.isSkill
+  };
+  input.value = '';
+  refreshInputPlaceholder();
+  cmdChipRender();
+  input.focus();
+}
+
+function disarmCmd() {
+  const input = $('input');
+  armedCmd = null;
+  cmdChipRender();
+  refreshInputPlaceholder();
+}
+
+/* Run an armed command, with whatever is typed in the composer as its argument. */
+function runArmedCmd(cmd, text) {
+  if (!cmd) return;
+  const arg = (text || '').trim();
+  if (cmd.name === 'compact') {
+    disarmCmd();
+    if (typeof doCompact === 'function') doCompact(arg);
+    return;
+  }
+  if (cmd.name === 'plan') {
+    disarmCmd();
+    if (window._setPlanMode) window._setPlanMode(true);
+    if (arg) {
+      if (agentMode) runAgentSSE(arg); else send(arg);
+    }
+    return;
+  }
+  if (cmd.name === 'build') {
+    disarmCmd();
+    if (window._setPlanMode) window._setPlanMode(false);
+    if (arg) {
+      if (agentMode) runAgentSSE(arg); else send(arg);
+    }
+    return;
+  }
+  const line = arg ? ('/' + cmd.name + ' ' + arg).trim() : ('/' + cmd.name);
+  disarmCmd();
+  if (agentMode) runAgentSSE(line); else send(line);
+}
+
+window.armCmd = armCmd;
+window.disarmCmd = disarmCmd;
+window.runArmedCmd = runArmedCmd;
+window.getArmedCmd = () => armedCmd;
+window.defaultInputPlaceholder = defaultInputPlaceholder;
+window.refreshInputPlaceholder = refreshInputPlaceholder;
+
 function cmdMenuClose() {
   cmdMenu.open = false; cmdMenu.kind = null; cmdMenu.items = []; cmdMenu.sel = 0; cmdMenu.tokenStart = -1;
   const m = $('cmd-menu');
@@ -18,7 +141,14 @@ function cmdMenuRender() {
     </div>`).join('');
   m.style.display = 'block';
   m.querySelectorAll('.cmd-item').forEach(el => {
-    el.onclick = () => cmdMenuPick(parseInt(el.dataset.i));
+    el.onmousedown = (e) => {
+      e.preventDefault();
+    };
+    el.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cmdMenuPick(parseInt(el.dataset.i));
+    };
   });
 }
 
@@ -36,9 +166,14 @@ async function cmdMenuOpen(kind, query) {
         .map(f => ({ icon: wsFileIcon(f.path), name: f.path, desc: `${(f.size / 1024).toFixed(1)} KB`, value: f.path }));
     } catch (e) { cmdMenuClose(); return; }
   } else if (kind === 'slash') {
-    const all = [
+    // /plan and /build are agent-mode only; /compact works in both (agent mode
+    // requires an active project — enforced by doCompact and the backend).
+    const all = agentMode ? [
       { icon: '📋', name: 'plan', desc: 'switch to Plan mode (read-only, propose)' },
       { icon: '🔨', name: 'build', desc: 'switch to Build mode (execute)' },
+      { icon: '🧹', name: 'compact', desc: 'compress conversation history (needs an active project)' },
+    ] : [
+      { icon: '🧹', name: 'compact', desc: 'compress conversation history' },
     ];
     try {
       const d = await (await fetch('/control/capabilities')).json();
@@ -57,21 +192,25 @@ function cmdMenuPick(i) {
   const it = cmdMenu.items[i];
   if (!it) return;
   const input = $('input');
-  const before = input.value.slice(0, cmdMenu.tokenStart);
-  const afterStart = cmdMenu.tokenStart + currentToken(input).length;
-  const after = input.value.slice(afterStart);
-  if (cmdMenu.kind === 'files') {
-    input.value = before + '@' + it.value + ' ' + after.replace(/^\s?/, '');
-  } else if (cmdMenu.kind === 'slash') {
-    if (it.name === 'plan') { window._setPlanMode && window._setPlanMode(true); }
-    else if (it.name === 'build') { window._setPlanMode && window._setPlanMode(false); }
-    else if (it.isSkill) {
-      input.value = before + '/' + it.name + ' ' + after;
-    }
-    else { input.value = before + '/' + it.name + ' ' + after; }
-  }
+  const kind = cmdMenu.kind;
+  const tok = currentToken(input);
+  const tokLen = tok ? (tok.text.length + 1) : 0;
+  const startIdx = cmdMenu.tokenStart >= 0 ? cmdMenu.tokenStart : 0;
+  const before = input.value.slice(0, startIdx);
+  const after = input.value.slice(startIdx + tokLen);
   cmdMenuClose();
-  input.focus();
+
+  if (kind === 'files') {
+    input.value = before + '@' + it.value + ' ' + after.replace(/^\s?/, '');
+    input.focus();
+  } else if (kind === 'slash') {
+    if (it.name === 'plan') {
+      if (window._setPlanMode) window._setPlanMode(true);
+    } else if (it.name === 'build') {
+      if (window._setPlanMode) window._setPlanMode(false);
+    }
+    armCmd(it.name, it);
+  }
 }
 
 function currentToken(input) {
@@ -86,9 +225,15 @@ function currentToken(input) {
   const input = $('input');
   if (!input) return;
   input.addEventListener('input', () => {
-    if (!agentMode) { cmdMenuClose(); return; }
+    // If user typed '/compact ' directly, auto-arm it
+    if (input.value.trim().toLowerCase() === '/compact' && input.value.endsWith(' ')) {
+      cmdMenuClose();
+      armCmd('compact');
+      return;
+    }
+    // slash menu works in chat mode too (/compact); @ file tags stay agent-only
     const tok = currentToken(input);
-    if (tok && tok.ch === '@') {
+    if (tok && tok.ch === '@' && agentMode) {
       if (!cmdMenu.open || cmdMenu.kind !== 'files') cmdMenu.tokenStart = tok.start;
       cmdMenuOpen('files', tok.text);
     } else if (tok && tok.ch === '/' && tok.start === 0) {
@@ -99,6 +244,11 @@ function currentToken(input) {
     }
   });
   input.addEventListener('keydown', e => {
+    if (e.key === 'Backspace' && !input.value && armedCmd) {
+      e.preventDefault();
+      disarmCmd();
+      return;
+    }
     if (!cmdMenu.open || !cmdMenu.items.length) return;
     if (e.key === 'ArrowDown') { e.preventDefault(); cmdMenu.sel = (cmdMenu.sel + 1) % cmdMenu.items.length; cmdMenuRender(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); cmdMenu.sel = (cmdMenu.sel - 1 + cmdMenu.items.length) % cmdMenu.items.length; cmdMenuRender(); }
@@ -159,11 +309,10 @@ function setAppMode(isAgent, isUserSwitch = false) {
   }
   const sel = $('profile');
   const mName = (sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'model';
+  refreshInputPlaceholder();
   if (agentMode) {
-    $('input').placeholder = 'Describe a coding task (e.g. "Find and fix bug in main.py", "Refactor the database queries")...';
-    if (isUserSwitch) toast(curProject ? `Agent Task mode active (workspace: ${curProject.name || curProject})` : 'Agent Task mode active');
+    if (isUserSwitch) toast(curProject ? `Agent Task mode active (workspace: ${curProject.name || curProject})` : 'Agent Task mode active — please select a project');
   } else {
-    $('input').placeholder = `Message ${mName}... (Enter to send, Shift+Enter for newline)`;
     if (isUserSwitch) toast('Chat mode active — direct conversation with LLM');
   }
 

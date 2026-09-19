@@ -178,6 +178,11 @@ async function openSession(s) {
         tps: meta.tps,
         ntok: tok,
         secs: meta.secs,
+        compact: meta.compact || undefined,
+        compactBefore: meta.before_tokens,
+        compactAfter: meta.after_tokens,
+        reductionPct: meta.reduction_pct,
+        compactKept: meta.kept_messages,
       };
     });
     curSession = s;
@@ -231,6 +236,10 @@ function ensureSession(promptText) {
       }).then(() => loadSessions()).catch(() => {});
     }
     return Promise.resolve(curSession);
+  }
+  if (agentMode && (!curProject || !curProject.id)) {
+    toast('Please select a project first', true);
+    return Promise.resolve(null);
   }
   const pid = (agentMode && curProject) ? curProject.id : 0;
   return fetch(`/control/projects/${pid}/sessions`, {
@@ -521,3 +530,18 @@ async function setNoProject() {
   if (wsPanelOpen) setWsPanel(false);   // no project -> no workspace to show
   updateWsRail();
 }
+
+/* Draw attention to the Projects card when agent mode needs a project
+   (used by the /compact gate and the agent-run project gate). */
+function flashProjectsCard() {
+  const card = $('projects-card');
+  if (card) {
+    card.classList.remove('flash');
+    void card.offsetWidth;              // restart the CSS animation
+    card.classList.add('flash');
+    setTimeout(() => card.classList.remove('flash'), 2200);
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  if (typeof toast === 'function') toast('Please select a project first — pick or create one above', true);
+}
+window.flashProjectsCard = flashProjectsCard;

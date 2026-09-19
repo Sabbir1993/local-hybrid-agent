@@ -1,5 +1,11 @@
 /* ---------------- agent SSE runner ---------------- */
 async function runAgentSSE(text) {
+  // Agent tasks are project-scoped (like Claude Code): no project -> refuse.
+  if (agentMode && (!curProject || !curProject.id)) {
+    if (typeof flashProjectsCard === 'function') flashProjectsCard();
+    else toast('Please select a project first', true);
+    return;
+  }
   if (!curStatus || !curStatus.pid) {
     const sel = $('profile');
     if (!sel || !sel.value) {
@@ -22,6 +28,13 @@ async function runAgentSSE(text) {
   const nFiles = sentAttachments.filter(a => a.content != null).length;
   if (input) input.value = '';
   clearAttachments();
+
+  // Auto-compact when the context window is nearly full — agent mode with an
+  // active project only (see autoCompactIfNeeded). Runs before the new turn so
+  // the streaming placeholder below is preserved. Never blocks the run.
+  if (typeof autoCompactIfNeeded === 'function') {
+    await autoCompactIfNeeded(messages.map(m => ({ role: m.role, content: m.content })));
+  }
 
   const userMsg = {
     role: 'user',
@@ -149,6 +162,11 @@ async function runAgentSSE(text) {
             L.content = '';
           }
           else if (ev === 'validated') L.acts.push({ type: 'validated', ...d });
+          else if (ev === 'ctx') {
+            // Smart context truncation fired on the backend — surface it
+            const kb = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+            toast(`🧹 Context truncated to fit the window: ${kb(d.before_tokens)} → ${kb(d.after_tokens)} tokens`);
+          }
           else if (ev === 'plan') {
             // structured plan checklist — keep only the latest snapshot in acts
             if (!L.acts) L.acts = [];

@@ -402,13 +402,21 @@ async def agent_run(req: AgentRequest):
                     else:
                         tools_for_lane = all_tools()
 
-                # executor lane: compact history into the 16k window + constrain tool-call JSON
+                # Smart context truncation: mechanically compact history into the
+                # lane's window (keeps system prompt + recent tail, rolls older
+                # turns into a digest). Report it to the UI when it fires.
                 step_grammar = None
                 if lane_name == "executor":
                     ex_ctx = int(ex_inst.cfg.get("ctx") or 16384)
+                    pre_tokens = estimate_prompt_tokens(msgs)
                     # in-place slice assignment: must NOT rebind `msgs` here, or it
                     # becomes a local of sse() and earlier reads raise UnboundLocalError
                     msgs[:] = compact_messages(msgs, int(ex_ctx * 0.7))
+                    post_tokens = estimate_prompt_tokens(msgs)
+                    if post_tokens < pre_tokens:
+                        yield (f"event: ctx\ndata: "
+                               + json.dumps({'lane': lane_name, 'before_tokens': pre_tokens,
+                                             'after_tokens': post_tokens}) + "\n\n")
                     step_grammar = _executor_grammar(tools_for_lane)
 
                 step_rid = monitor_begin(f"agent/{lane_name}", True, json.dumps({"messages": msgs}).encode(), model=model_info.get("model"))

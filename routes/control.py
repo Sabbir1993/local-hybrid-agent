@@ -2,6 +2,7 @@
 routes/control.py - Server management, configuration, profiling, and monitoring endpoints.
 """
 
+import asyncio
 import json
 import sys
 import time
@@ -23,6 +24,7 @@ from core.db import db_report
 from core.gpu import get_gpu_stats
 from core.profiles import (
     MODELS_DIR,
+    build_dynamic_profile,
     find_mtp_draft,
     save_model_config,
     load_model_configs,
@@ -33,6 +35,7 @@ from core.monitor import (
     MONITOR_RECENT_MAX,
 )
 from core.state import state
+from core import vram
 from . import common
 
 router = APIRouter(tags=["control"])
@@ -333,6 +336,43 @@ async def profiles():
 async def stop_server():
     await state.stop()
     return {"ok": True, "stopped": True}
+
+
+@router.get("/control/preflight")
+async def preflight(target: Optional[str] = None):
+    """VRAM fit projection for a model/profile without loading it.
+    ?target=<gguf or profile json path> - defaults to the currently selected profile."""
+    try:
+        if target:
+            p = Path(target)
+            if p.suffix == ".json" and p.exists():
+                profile = json.loads(p.read_text())
+            elif p.exists():
+                profile = build_dynamic_profile(p)
+            else:
+                return JSONResponse({"error": f"target not found: {target}"}, status_code=404)
+        elif state.profile is not None:
+            profile = state.profile
+        else:
+            return JSONResponse({"error": "no model/profile selected"}, status_code=400)
+        loop = asyncio.get_event_loop()
+        plan = await loop.run_in_executor(None, vram.plan_launch, profile)
+        return plan
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/control/vram")
+async def vram_devices():
+    """Raw per-Vulkan-device free/total VRAM (VK_EXT memory budget)."""
+    loop = asyncio.get_event_loop()
+    devs = await loop.run_in_executor(None, vram.query_devices, None, True)
+    return {"devices": [
+        {"index": d["index"], "name": d["name"],
+         "total_gb": round(d["total_b"] / (1024 ** 3), 2),
+         "free_gb": round(d["free_b"] / (1024 ** 3), 2),
+         "used_gb": round(d["used_b"] / (1024 ** 3), 2)}
+        for d in devs]}
 
 
 @router.post("/control/start")

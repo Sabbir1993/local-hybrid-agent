@@ -115,12 +115,93 @@ def check_needle() -> tuple:
     return True, f"needle ok (route: {nr['name'] if nr else 'no confident match'})"
 
 
+def check_compact_endpoint() -> tuple:
+    """POST /chat/compact via TestClient: project gate in agent mode, short-history
+    refusal, and a mocked-summarizer run that rewrites the DB session on disk."""
+    from fastapi import FastAPI
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")          # httpx2 deprecation notice
+        from starlette.testclient import TestClient
+    from routes import chat as chat_routes
+    from core import db
+
+    app = FastAPI()
+    app.include_router(chat_routes.router)
+    client = TestClient(app)
+
+    # 1) agent mode without an active project must be refused (project gate)
+    r = client.post("/chat/compact", json={
+        "messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}],
+        "agent_mode": True})
+    assert r.status_code == 400, f"agent mode without project must 400, got {r.status_code}"
+    assert "project" in r.json().get("error", "").lower(), "gate error message unclear"
+
+    # 2) too-short history is refused
+    r = client.post("/chat/compact", json={"messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 400, "single message must not compact"
+
+    proj = db.db_create_project("__eval_compact__")
+    sid = db.db_create_session(proj["id"], "eval compact")["id"]
+    archive = None
+    orig = chat_routes._summarize_history
+    seen = []
+
+    async def fake_summary(convo, instructions, use_executor):
+        assert convo and convo[0]["role"] == "user", "conversation not passed to summarizer"
+        seen.append(instructions)
+        return "## 1. Primary Requests\nbuild the thing\n\n## 5. Next Steps\ncontinue"
+
+    chat_routes._summarize_history = fake_summary
+    try:
+        db.db_append_message(sid, "user", "please build the thing")
+        db.db_append_message(sid, "assistant", "ok " + "y" * 6000, {"ntok": 1500})
+        db.db_append_message(sid, "user", "now the schema")
+        db.db_append_message(sid, "assistant", "here " + "z" * 3000, {"ntok": 800})
+        r = client.post("/chat/compact", json={
+            "session_id": sid, "instructions": "focus on the schema",
+            "agent_mode": True, "project_id": proj["id"], "keep_last": 2})
+        assert r.status_code == 200, f"compact failed: {r.status_code} {r.text[:200]}"
+        j = r.json()
+        assert j["summary"].startswith("## 1."), "summary not returned"
+        assert j["after_tokens"] < j["before_tokens"], "compaction did not shrink context"
+        assert j["archive_path"] and Path(j["archive_path"]).exists(), "transcript not archived"
+        archive = j["archive_path"]
+        head = j["messages"][0]
+        assert head["role"] == "system" and "[COMPACTED CONTEXT SUMMARY]" in head["content"]
+        assert head["meta"]["compact"] is True and head["meta"]["before_tokens"] == j["before_tokens"]
+        assert len(j["messages"]) == 3, f"expected summary + 2 kept, got {len(j['messages'])}"
+        stored = db.db_load_messages(sid)
+        assert len(stored) == 3 and stored[0]["role"] == "system", "DB history not replaced"
+        assert stored[-1]["meta"] and stored[-1]["meta"].get("ntok") == 800, \
+            "message meta lost on rewrite"
+
+        # 3) message-fallback path (no session) -- no archive, still compacts
+        r2 = client.post("/chat/compact", json={"messages": [
+            {"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]})
+        assert r2.status_code == 200, "message-fallback compaction failed"
+        assert r2.json()["archive_path"] is None, "no session must mean no archive"
+        assert seen[0] == "focus on the schema", "extra instructions dropped"
+        assert len(seen) == 2, f"summarizer called {len(seen)}x, expected 2"
+    finally:
+        chat_routes._summarize_history = orig
+        db.db_delete_session(sid)
+        db.db_delete_project(proj["id"])
+        if archive:
+            try:
+                Path(archive).unlink()
+            except OSError:
+                pass
+    return True, f"compact endpoint ok ({j['before_tokens']} -> {j['after_tokens']} tokens)"
+
+
 OFFLINE_CHECKS = [
     ("grammar", check_grammar),
     ("compaction", check_compaction),
     ("loop_detection", check_loop_detection),
     ("json_repair", check_repair),
     ("needle_router", check_needle),
+    ("compact_endpoint", check_compact_endpoint),
 ]
 
 

@@ -11,6 +11,7 @@ import httpx
 from .config import HEALTH_TIMEOUT_S, KEEPALIVE_INTERVAL_S, LLAMA_SERVER_PORT, MAX_RESTART_BACKOFF_S, WATCHDOG_INTERVAL_S
 from .process import build_launch_command
 from .profiles import build_dynamic_profile
+from . import vram
 
 
 class ProxyState:
@@ -48,6 +49,10 @@ class ProxyState:
                 raise ValueError("Invalid profile target")
 
             cmd = build_launch_command(self.profile)
+            # Preflight: refuse to spawn llama-server if the VRAM math says it
+            # won't fit (a WDDM OOM spill hangs the whole desktop on Arc).
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, vram.check_or_raise, self.profile)
             print(f"[server_manager] launching: {' '.join(cmd)}")
             self.process = subprocess.Popen(
                 cmd,
@@ -81,6 +86,18 @@ class ProxyState:
 
     async def _wait_healthy(self):
         deadline = time.time() + HEALTH_TIMEOUT_S
+        # VRAM wall watch: if free VRAM on a target card collapses while the
+        # model is still loading, kill the process *before* WDDM starts
+        # spilling into shared RAM and hanging the desktop.
+        target_idx: set = set()
+        try:
+            if self.profile:
+                target_idx = set(vram.effective_params(self.profile)["gpu_devices"])
+        except Exception:
+            pass
+        monitor_on = bool(target_idx) and vram.preflight_mode() != "off"
+        wall_hits = 0
+        last_vram_poll = 0.0
         while time.time() < deadline:
             if self.process.poll() is not None:
                 raise RuntimeError(
@@ -96,8 +113,33 @@ class ProxyState:
                     return
             except httpx.HTTPError:
                 pass
+            if monitor_on and time.time() - last_vram_poll >= 2.0:
+                last_vram_poll = time.time()
+                loop = asyncio.get_event_loop()
+                devs = await loop.run_in_executor(
+                    None, lambda: vram.query_devices(force=True))
+                hit = vram.wall_check(target_idx, devs)
+                wall_hits = wall_hits + 1 if hit else 0
+                if wall_hits >= 2:
+                    self._kill_loading_process(hit)
+                    raise RuntimeError(
+                        f"VRAM exhausted on Vulkan{hit} while the model was loading - "
+                        f"aborted llama-server to prevent a system hang. Reduce GPU "
+                        f"layers (-ngl) / tensor-split / context size, or unload "
+                        f"other models first, then load again.")
             await asyncio.sleep(1.0)
         raise RuntimeError(f"llama-server didn't become healthy within {HEALTH_TIMEOUT_S}s")
+
+    def _kill_loading_process(self, vram_idx=None) -> None:
+        if self.process and self.process.poll() is None:
+            print(f"[server_manager] VRAM wall hit on Vulkan{vram_idx} "
+                  f"- killing the loading llama-server")
+            try:
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
+                               capture_output=True, timeout=15)
+            except Exception:
+                pass
+        self.process = None
 
     def _stop_process_locked(self):
         if self.process and self.process.poll() is None:

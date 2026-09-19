@@ -11,6 +11,7 @@ import httpx
 
 from .config import BASE_DIR, LLAMA_SERVER_PORT
 from .process import find_llama_server
+from . import vram
 
 
 def _load_workspace_root() -> Path:
@@ -148,6 +149,15 @@ class SmallModelInstance:
                 raise RuntimeError(f"{self.role} model not configured or files missing: {self.model_path}")
             bin_dir = "E:\\AI\\llama-vulkan"
             server_bin = find_llama_server(bin_dir)
+            # Preflight: refuse to spawn if this small model wouldn't fit on
+            # its target Vulkan device (prevents the WDDM OOM desktop hang).
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: vram.check_small_model_or_raise(
+                    self.role, self.model_path, self.ctx, self.gpu,
+                    mmproj_path=self.mmproj_path),
+            )
             cmd = [
                 str(server_bin),
                 "-m", str(self.model_path),

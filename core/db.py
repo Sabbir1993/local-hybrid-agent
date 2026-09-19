@@ -411,6 +411,47 @@ def db_append_message(sid: int, role: str, content: str, meta: dict = None) -> i
     return cur.lastrowid
 
 
+def db_replace_messages(sid: int, msgs: list) -> None:
+    """Atomically replace a session's message history (used by /compact)."""
+    try:
+        _projects_db.execute("BEGIN")
+        _projects_db.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
+        for m in msgs:
+            meta = m.get("meta")
+            _projects_db.execute(
+                "INSERT INTO messages (session_id, role, content, meta, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (sid, m.get("role"), m.get("content"),
+                 json.dumps(meta) if meta else None, time.time()))
+        _projects_db.commit()
+    except Exception:
+        _projects_db.rollback()
+        raise
+
+
+def db_archive_messages(sid: int) -> Optional[str]:
+    """Dump the full transcript of a session to a markdown file before /compact
+    rewrites it. Returns the archive path, or None when there is nothing to save."""
+    msgs = db_load_messages(sid)
+    if not msgs:
+        return None
+    archive_dir = PROJECTS_DB_FILE.parent / "compacts"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    path = archive_dir / f"session-{sid}-{int(time.time())}.md"
+    lines = [f"# Transcript archive — session {sid}", ""]
+    for m in msgs:
+        role = (m.get("role") or "?").upper()
+        lines.append(f"## {role}")
+        lines.append(str(m.get("content") or ""))
+        lines.append("")
+    try:
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return str(path)
+    except OSError as e:
+        print(f"[db] transcript archive failed: {e}", file=sys.stderr)
+        return None
+
+
 # ---------------- structured plan tracking ----------------
 _VALID_PLAN_STATUS = ("pending", "in_progress", "done", "failed")
 

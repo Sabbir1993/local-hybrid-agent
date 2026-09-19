@@ -107,6 +107,40 @@ function bubbleHtml(m, idx) {
     }
     return `<div class="msg user"><div class="bubble">${imgs}${md(displayText || '(attachment)')}${filesTag}</div></div>`;
   }
+  // pending compaction indicator
+  if (m.compactPending) {
+    const bTok = m.beforeToks || 0;
+    const bTokStr = bTok ? ` (~${bTok >= 1000 ? (bTok / 1000).toFixed(1) + 'k' : bTok} tokens)` : '';
+    return `<div class="msg bot"><div class="bubble" style="border:1px dashed var(--accent, #6366f1); background:rgba(99,102,241,0.06); padding:12px 14px;">`
+      + `<div style="display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; color:var(--accent, #6366f1); margin-bottom:4px;">`
+      + `<span>🧹</span> <span>Compacting conversation${bTokStr}…</span> <span class="cursor">▍</span></div>`
+      + `<div class="dim" style="font-size:11px; line-height:1.4;">Distilling conversation context, key decisions, files, and next steps into a concise summary (~70–85% reduction expected).`
+      + (m.content ? `<br><span style="color:var(--text); font-style:italic;">${esc(m.content)}</span>` : '')
+      + `</div></div></div>`;
+  }
+  // compacted-context summary bubble (from /compact)
+  if (m.compact) {
+    const bTok = m.compactBefore || 0;
+    const aTok = m.compactAfter || m.ntok || 0;
+    const pct = (typeof m.reductionPct === 'number' && m.reductionPct > 0)
+      ? m.reductionPct
+      : ((bTok > 0 && aTok > 0 && bTok > aTok) ? Math.round((1 - aTok / bTok) * 100) : 0);
+    const wasTok = bTok ? ` · was ${bTok >= 1000 ? (bTok / 1000).toFixed(1) + 'k' : bTok} tok` : '';
+    const nowTok = aTok ? ` → now ${aTok >= 1000 ? (aTok / 1000).toFixed(1) + 'k' : aTok} tok` : '';
+    const keptInfo = m.compactKept ? ` (${m.compactKept} recent preserved)` : '';
+    const pctBadge = pct > 0
+      ? `<span style="background:rgba(34,197,94,0.15); color:#4ade80; border:1px solid rgba(34,197,94,0.35); border-radius:999px; padding:1px 8px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:3px;">-${pct}% reduction</span>`
+      : '';
+    return `<div class="msg bot"><div class="bubble" style="border:1px dashed rgba(99,102,241,0.45); background:rgba(99,102,241,0.04); padding:12px 14px;">`
+      + `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:6px; flex-wrap:wrap; gap:6px;">`
+      + `  <div style="font-size:12px; font-weight:700; color:var(--accent, #6366f1); display:flex; align-items:center; gap:8px;">`
+      + `    <span>🧹 Compacted Context Summary</span>`
+      + `    ${pctBadge}`
+      + `  </div>`
+      + `  <div class="mono dim" style="font-size:10.5px;">${wasTok}${nowTok}${keptInfo}</div>`
+      + `</div>`
+      + `${md((m.content || '').replace(/^\[COMPACTED CONTEXT SUMMARY\]\n?/, ''))}</div></div>`;
+  }
   let inner = '';
   
   // Structured plan checklist (create_plan / update_plan_item tracking)

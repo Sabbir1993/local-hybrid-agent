@@ -33,6 +33,10 @@
     "max_steps": 30,
     "idle_unload_s": 0
   },
+  "preflight": {
+    "mode": "block",
+    "headroom_gb": 1.0
+  },
   "capabilities": {
     "web": true,
     "web_search_api_key": "",

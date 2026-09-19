@@ -14,7 +14,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
-from core.small_model import APP_CONFIG
+from core.small_model import APP_CONFIG, small_models
 from core.state import state
 from core.registry import registry
 from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch
@@ -23,13 +23,19 @@ from core.agent_loop import (
     run_tool,
     safe_parse_and_repair_args,
     _extract_text_tool_calls,
+    estimate_prompt_tokens,
 )
 from core.monitor import (
     _monitor_state,
     monitor_begin,
     monitor_end,
 )
-from core.db import db_record_request
+from core.db import (
+    db_record_request,
+    db_load_messages,
+    db_replace_messages,
+    db_archive_messages,
+)
 from . import common
 from .common import _llm_chat_stream
 
@@ -487,6 +493,149 @@ async def chat_run(req: ChatRunRequest):
                               prompt_cached_tokens=pcached, completion_cached_tokens=0, is_orchestrator=False)
 
     return StreamingResponse(sse(), media_type="text/event-stream")
+
+
+# ---------------- /compact — Claude-Code-style context compaction ----------------
+
+class CompactRequest(BaseModel):
+    messages: Optional[list] = None       # fallback when no session_id
+    session_id: Optional[int] = None
+    instructions: Optional[str] = None    # extra user instructions, e.g. "focus on the DB schema"
+    keep_last: int = 2                    # recent messages kept verbatim after the summary
+    use_executor: bool = False            # force the small executor model for the summary
+    agent_mode: bool = False              # agent mode: requires an active project (project_id)
+    project_id: Optional[int] = None
+
+
+_COMPACT_SYSTEM_PROMPT = (
+    "You are a conversation summarizer. Your task is to create a detailed summary of the "
+    "conversation so far, written so that a successor assistant can seamlessly continue the "
+    "work with full context. Produce a structured markdown summary with these sections:\n"
+    "1. **Primary Requests and Intent** — what the user asked for across the conversation, "
+    "including verbatim key phrases of the original asks.\n"
+    "2. **Key Technical Concepts & Details** — files, paths, function names, schemas, "
+    "commands, configuration values, and any errors encountered (with how they were resolved).\n"
+    "3. **Actions Taken & Results** — tools that were called, what succeeded or failed.\n"
+    "4. **Decisions & Open Questions** — choices made and their rationale; anything unresolved.\n"
+    "5. **Next Steps** — explicit, actionable continuation points.\n"
+    "Rules: be dense and factual; preserve exact names/paths/numbers; do not omit constraints "
+    "the user stated; do not add commentary or greet anyone; output ONLY the summary."
+)
+
+
+def _strip_think(text: str) -> str:
+    m = re.search(r"<think>[\s\S]*?</think>", text or "")
+    return (m.group(0)[7:-8] if m else (text or "")).strip()
+
+async def _summarize_history(convo: list, instructions: Optional[str], use_executor: bool) -> str:
+    """One non-streaming LLM call that writes the conversation summary.
+    Main model when running, else the on-demand executor small model."""
+    transcript_lines = []
+    for m in convo:
+        c = str(m.get("content") or "").strip()
+        if len(c) > 4000:
+            c = c[:4000] + "\n... (truncated)"
+        transcript_lines.append(f"[{m.get('role', '?').upper()}]\n{c}")
+    user_payload = (
+        "Summarize the conversation below.\n\n"
+        + (f"Extra instructions from the user (honor these): {instructions}\n\n" if instructions else "")
+        + "CONVERSATION:\n" + "\n\n".join(transcript_lines)
+    )
+    payload = {
+        "messages": [
+            {"role": "system", "content": _COMPACT_SYSTEM_PROMPT},
+            {"role": "user", "content": user_payload},
+        ],
+        "max_tokens": 2048,
+        "temperature": 0.1,
+        "stream": False,
+    }
+
+    main_ready = (state.process is not None and state.process.poll() is None
+                  and state.client is not None)
+    if use_executor or not main_ready:
+        inst = small_models.instances.get("executor")
+        if not inst or not inst.available:
+            raise RuntimeError("no model available for compaction "
+                               "(main model not running, executor not configured)")
+        await inst.ensure_loaded()
+        r = await inst.client.post("/v1/chat/completions", json=payload, timeout=None)
+        source = f"executor:{inst.model_path.name if inst.model_path else '?'}"
+    else:
+        r = await state.client.post("/v1/chat/completions", json=payload, timeout=None)
+        source = "main"
+    r.raise_for_status()
+    data = r.json()
+    summary = ""
+    try:
+        summary = str(data["choices"][0]["message"]["content"] or "")
+    except (KeyError, IndexError, TypeError):
+        pass
+    summary = _strip_think(summary)
+    if not summary.strip():
+        raise RuntimeError(f"summarizer returned an empty response ({source})")
+    print(f"[chat/compact] summarized {len(convo)} messages via {source} "
+          f"({len(summary)} chars summary)")
+    return summary
+
+@router.post("/chat/compact")
+async def chat_compact(req: CompactRequest):
+    # Project gate: in agent mode /compact only works with an active project
+    # (mirrors the frontend curProject gate — defense in depth).
+    if req.agent_mode and not req.project_id:
+        return JSONResponse(
+            {"error": "Select a project first — /compact in agent mode requires an active project"},
+            status_code=400)
+
+    # Source of truth: the DB session (preserves acts/reasoning meta); fallback
+    # to the posted messages for sessions that were never persisted.
+    if req.session_id:
+        src = db_load_messages(req.session_id)
+    else:
+        src = [dict(m) for m in (req.messages or [])]
+    convo = [m for m in src
+             if m.get("role") in ("user", "assistant")
+             and str(m.get("content") or "").strip()]
+    if len(convo) < 2:
+        return JSONResponse({"error": "Nothing to compact yet — send a few messages first"},
+                            status_code=400)
+
+    before_tokens = estimate_prompt_tokens(convo)
+    try:
+        summary = await _summarize_history(convo, req.instructions, req.use_executor)
+    except Exception as e:
+        return JSONResponse({"error": f"compact failed: {e}"}, status_code=500)
+
+    keep_n = max(0, min(int(req.keep_last or 0), len(convo) - 1))
+    kept = convo[-keep_n:] if keep_n else []
+
+    new_msgs = [{
+        "role": "system",
+        "content": "[COMPACTED CONTEXT SUMMARY]\n" + summary,
+        "meta": {"compact": True, "before_tokens": before_tokens,
+                 "kept_messages": keep_n},
+    }]
+    for m in kept:
+        new_msgs.append({"role": m.get("role"), "content": m.get("content"),
+                         "meta": m.get("meta")})
+    after_tokens = estimate_prompt_tokens(new_msgs)
+    reduction_pct = max(0, round((1 - after_tokens / before_tokens) * 100)) if before_tokens > 0 else 0
+    new_msgs[0]["meta"]["after_tokens"] = after_tokens
+    new_msgs[0]["meta"]["reduction_pct"] = reduction_pct
+
+    archive_path = None
+    if req.session_id:
+        archive_path = db_archive_messages(req.session_id)
+        db_replace_messages(req.session_id, new_msgs)
+
+    return {
+        "summary": summary,
+        "messages": new_msgs,
+        "before_tokens": before_tokens,
+        "after_tokens": after_tokens,
+        "reduction_pct": reduction_pct,
+        "archive_path": archive_path,
+    }
 
 
 
