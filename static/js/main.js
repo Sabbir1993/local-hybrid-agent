@@ -2,8 +2,17 @@
 function submitPrompt() {
   if (generating) return;
   const input = $('input');
-  const text = input ? input.value.trim() : '';
+  let text = input ? input.value.trim() : '';
   const hasFiles = attachments && attachments.some(a => a.content != null || (a.isImage && a.b64));
+
+  // Prepend any armed skills (multiple can be attached at once) as leading
+  // /skillname tokens, then clear them — they don't block the rest of send.
+  const skills = window.getArmedSkills ? window.getArmedSkills() : [];
+  if (skills.length) {
+    const prefix = skills.map(s => '/' + s.name).join(' ');
+    text = (prefix + (text ? ' ' + text : '')).trim();
+    window.clearArmedSkills();
+  }
 
   // Check if a slash command is armed (e.g. <compact>)
   if (window.getArmedCmd && window.getArmedCmd()) {

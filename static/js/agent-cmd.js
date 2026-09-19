@@ -3,6 +3,8 @@ let cmdMenu = { open: false, kind: null, items: [], sel: 0, tokenStart: -1 };
 
 /* ---- armed slash command: rendered as a <name> chip instead of literal text ---- */
 let armedCmd = null;
+/* ---- armed skills: multiple can be attached at once, each its own chip ---- */
+let armedSkills = [];
 
 const CMD_HINTS = {
   compact: {
@@ -49,17 +51,30 @@ function refreshInputPlaceholder() {
 function cmdChipRender() {
   const bar = $('cmd-chip-bar');
   if (!bar) return;
-  if (!armedCmd) { bar.innerHTML = ''; return; }
-  const h = CMD_HINTS[armedCmd.name] || {};
-  bar.innerHTML =
-    `<div class="cmd-chip" title="${esc(h.title || armedCmd.desc || ('/' + armedCmd.name))}">
-       <span class="cmd-chip-icon">${esc(armedCmd.icon || '')}</span>
-       <span class="cmd-chip-name">&lt;${esc(armedCmd.name)}&gt;</span>
-       <span class="cmd-chip-hint">${esc(h.hint || 'Enter to run')}</span>
-       <span class="cmd-chip-x" data-x="1" title="Remove command (or press Backspace on an empty box)">✕</span>
-     </div>`;
+  if (!armedCmd && !armedSkills.length) { bar.innerHTML = ''; return; }
+  const skillChips = armedSkills.map(s => `
+     <div class="cmd-chip" title="${esc(s.desc || ('/' + s.name))}">
+       <span class="cmd-chip-icon">${esc(s.icon || '🎯')}</span>
+       <span class="cmd-chip-name">&lt;${esc(s.name)}&gt;</span>
+       <span class="cmd-chip-x" data-skill="${esc(s.name)}" title="Remove skill (or press Backspace on an empty box)">✕</span>
+     </div>`).join('');
+  let cmdChip = '';
+  if (armedCmd) {
+    const h = CMD_HINTS[armedCmd.name] || {};
+    cmdChip =
+      `<div class="cmd-chip" title="${esc(h.title || armedCmd.desc || ('/' + armedCmd.name))}">
+         <span class="cmd-chip-icon">${esc(armedCmd.icon || '')}</span>
+         <span class="cmd-chip-name">&lt;${esc(armedCmd.name)}&gt;</span>
+         <span class="cmd-chip-hint">${esc(h.hint || 'Enter to run')}</span>
+         <span class="cmd-chip-x" data-x="1" title="Remove command (or press Backspace on an empty box)">✕</span>
+       </div>`;
+  }
+  bar.innerHTML = skillChips + cmdChip;
   const x = bar.querySelector('[data-x]');
   if (x) x.onclick = () => { disarmCmd(); const i = $('input'); if (i) i.focus(); };
+  bar.querySelectorAll('[data-skill]').forEach(el => {
+    el.onclick = () => { removeSkill(el.dataset.skill); const i = $('input'); if (i) i.focus(); };
+  });
 }
 
 /* Arm a slash command: the composer is cleared, the chip shows <name>, and the
@@ -74,7 +89,7 @@ function armCmd(name, opts = {}) {
     desc: opts.desc || '',
     isSkill: !!opts.isSkill
   };
-  input.value = '';
+  input.value = opts.keepText || '';
   refreshInputPlaceholder();
   cmdChipRender();
   input.focus();
@@ -83,6 +98,33 @@ function armCmd(name, opts = {}) {
 function disarmCmd() {
   const input = $('input');
   armedCmd = null;
+  cmdChipRender();
+  refreshInputPlaceholder();
+}
+
+/* Arm a skill: unlike armCmd, multiple skills can be armed at once. Only the
+   "/skillname" token typed is removed from the composer — everything else
+   the user already typed is kept. */
+function armSkill(it, keepText) {
+  const input = $('input');
+  if (!input) return;
+  if (!armedSkills.some(s => s.name === it.name)) {
+    armedSkills.push({ name: it.name, icon: it.icon || '🎯', desc: it.desc || '' });
+  }
+  input.value = keepText != null ? keepText : input.value;
+  refreshInputPlaceholder();
+  cmdChipRender();
+  input.focus();
+}
+
+function removeSkill(name) {
+  armedSkills = armedSkills.filter(s => s.name !== name);
+  cmdChipRender();
+  refreshInputPlaceholder();
+}
+
+function clearArmedSkills() {
+  armedSkills = [];
   cmdChipRender();
   refreshInputPlaceholder();
 }
@@ -121,6 +163,10 @@ window.armCmd = armCmd;
 window.disarmCmd = disarmCmd;
 window.runArmedCmd = runArmedCmd;
 window.getArmedCmd = () => armedCmd;
+window.armSkill = armSkill;
+window.removeSkill = removeSkill;
+window.clearArmedSkills = clearArmedSkills;
+window.getArmedSkills = () => armedSkills.slice();
 window.defaultInputPlaceholder = defaultInputPlaceholder;
 window.refreshInputPlaceholder = refreshInputPlaceholder;
 
@@ -204,12 +250,17 @@ function cmdMenuPick(i) {
     input.value = before + '@' + it.value + ' ' + after.replace(/^\s?/, '');
     input.focus();
   } else if (kind === 'slash') {
+    const keepText = (before + after).replace(/^\s+/, '');
+    if (it.isSkill) {
+      armSkill(it, keepText);
+      return;
+    }
     if (it.name === 'plan') {
       if (window._setPlanMode) window._setPlanMode(true);
     } else if (it.name === 'build') {
       if (window._setPlanMode) window._setPlanMode(false);
     }
-    armCmd(it.name, it);
+    armCmd(it.name, { ...it, keepText });
   }
 }
 
@@ -244,9 +295,10 @@ function currentToken(input) {
     }
   });
   input.addEventListener('keydown', e => {
-    if (e.key === 'Backspace' && !input.value && armedCmd) {
+    if (e.key === 'Backspace' && !input.value && (armedCmd || armedSkills.length)) {
       e.preventDefault();
-      disarmCmd();
+      if (armedSkills.length) removeSkill(armedSkills[armedSkills.length - 1].name);
+      else disarmCmd();
       return;
     }
     if (!cmdMenu.open || !cmdMenu.items.length) return;
