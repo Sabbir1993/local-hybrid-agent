@@ -55,6 +55,25 @@ tuned MoE config live. If one card is starved while the other overflows,
 the escape hatch is `--override-tensor` for manual per-tensor placement
 (not automated here — ask if you hit this and want it scripted).
 
+## What this actually is today
+
+What started as a CLI autotune/proxy pair has grown into a small local
+control-center app: a FastAPI backend (`server_manager.py` + `routes/`)
+serving a single-page web UI (`ui.html` + `static/js/`) with:
+
+- **Chat mode** — direct conversation with the loaded model.
+- **Agent mode** (Plan / Build) — an autonomous coding loop with file
+  read/write/edit, shell (permission-gated), web search/fetch, skills, and
+  MCP tool access against a project workspace.
+- **Three lanes**: `main` (your big local model, e.g. Qwen3.8-27B),
+  `executor` (a small fast local model for routine tool calls), and
+  `vision`/`embedder` helpers — each can be served locally via
+  `llama-server` or bound to a cloud OpenAI-compatible provider, in any mix
+  (`all-local`, `main-local-rest-cloud`, `main-cloud-rest-local`,
+  `all-cloud`), with automatic local fallback if a cloud lane fails.
+- Projects/sessions persisted in SQLite (`projects.db`, `usage.db`,
+  `memory.db`), a live request monitor, and a token-usage report.
+
 ## Setup (Windows)
 
 1. **Update Arc drivers** to the latest from Intel (Arc Control or the
@@ -71,18 +90,36 @@ the escape hatch is `--override-tensor` for manual per-tensor placement
    your PCIe 3.0 card doesn't show up as device 0, that's fine, just note
    which index is which (cross-check against Task Manager's GPU tab, or
    `vulkaninfo` if installed).
-4. **Install Python 3.10+** and the orchestration deps:
+4. **Install Python 3.10+** and the app's dependencies:
    ```
    pip install -r requirements.txt
    ```
-5. **Edit `profiles/*.json`**: set `llama_bin_dir` to your unzipped folder,
-   and `model_path` to your downloaded GGUF for each model (get GGUFs from
-   Hugging Face — search `Qwen3.8-27B GGUF` / `Qwen3.8-Flash-Next GGUF`;
-   Unsloth's quants are a solid default).
+5. **Configure `config/app.json`** (copy/edit the checked-in one):
+   - `models_dir` — folder containing your GGUFs.
+   - `workspace_dir` / `common_dir` — where Agent mode reads/writes project
+     files.
+   - `small_models.executor` / `.vision` / `.embedder` — model paths
+     (relative to `models_dir`), ports, GPU index, and context size for the
+     small local helper models. Leave a model's `"model"` field `null` to
+     disable that lane.
+   - `agent`, `router`, `roles`, `capabilities` (web search, skills, MCP
+     servers, plugins, shell allow-patterns) — tune as needed; sensible
+     defaults are already checked in.
+6. **Configure `profiles/*.json`** for your main model(s): set
+   `llama_bin_dir` to your unzipped llama.cpp folder and `model_path` to
+   your downloaded GGUF (get GGUFs from Hugging Face — search
+   `Qwen3.8-27B GGUF` / `Qwen3.8-Flash-Next GGUF`; Unsloth's quants are a
+   solid default).
+7. **(Optional) Cloud providers** — for hybrid/cloud lanes, add provider
+   credentials and per-model `ctx` values either through the Settings panel
+   in the UI, or directly in `config/providers.json` (git-ignored, since it
+   holds API keys — see `[PLACEHOLDER]` note below). Never commit real API
+   keys; use `[PLACEHOLDER]` in anything you share or paste elsewhere.
 
 ## Usage
 
-**1. Auto-tune (run once per model, and again if you change quant/context):**
+**1. Auto-tune each local model once** (and again if you change
+quant/context):
 
 ```
 python autotune.py --profile profiles/qwen3.8-27b.json
@@ -94,46 +131,77 @@ dense model; `--n-cpu-moe` steps for the MoE model), prints a results table,
 and writes the best-found flags back into `tuned` in the profile JSON. Each
 sweep takes a few minutes — it's real benchmarking, not a guess.
 
-**2. Run the server:**
+**2. Start the app:**
 
 ```
-python server_manager.py --profile profiles/qwen3.8-27b.json
+python server_manager.py --profile profiles/qwen3.8-27b.json --port 8000
 ```
 
-This launches `llama-server` with the tuned flags, exposes an
-OpenAI-compatible API on `http://localhost:8000/v1/...` (proxied, with
-request logging and measured tokens/sec per request), and restarts the
-underlying process if it crashes. Switch models without restarting your
-client:
+`--profile` is optional (you can load a model from the UI instead), and
+`--port` defaults to 8000. This launches the FastAPI app, which:
+health-checks/restarts the underlying `llama-server` process, hot-swaps
+profiles without restarting your client, and serves both the web UI and an
+OpenAI-compatible proxy.
 
+**3. Open the control center** at `http://localhost:8000/` — pick a model
+from the header dropdown, click **▶ Load**, and start chatting or switch to
+**🤖 Agent Task** mode for autonomous file edits.
+
+**4. Or drive it as a plain API** — `http://localhost:8000/v1/chat/completions`
+is OpenAI-compatible (works with the OpenAI Python SDK, LM Studio-style
+clients, etc.), and `/agent/run` streams the autonomous coding loop over SSE
+for programmatic use. Switch the loaded profile without a UI:
 ```
 curl -X POST http://localhost:8000/control/switch -d '{"profile":"profiles/qwen3.8-flash-next.json"}'
 ```
-
-**3. Talk to it** exactly like any OpenAI-compatible endpoint (works with
-the OpenAI Python SDK, LM Studio-style clients, etc.) at
-`http://localhost:8000/v1/chat/completions`.
 
 ## Files
 
 - `autotune.py` — sweeps GPU-split / MoE-offload settings via `llama-bench`,
   writes tuned config into the profile.
-- `server_manager.py` — FastAPI process manager + proxy: launches
-  `llama-server`, health-checks/restarts it, logs per-request tokens/sec,
-  supports live profile switching.
+- `server_manager.py` — FastAPI bootstrap: mounts the UI, wires up
+  `routes/*`, and manages process lifespan (llama-server, MCP, plugins,
+  keepalive, background memory tasks).
+- `routes/` — HTTP surface: `control` (lifecycle/profiles/GPU/config),
+  `agent` (autonomous coding loop, permissions, vision), `chat` (direct
+  completions), `projects` (sessions/workspace browsing), `capabilities`
+  (skills/MCP/plugins/shell settings), `cloud` (provider/lane bindings),
+  `proxy` (OpenAI-compatible passthrough to `llama-server`).
+- `core/` — orchestration internals: `config.py` (paths/defaults),
+  `small_model.py` (small-model lane manager + `APP_CONFIG`), `cloud.py`
+  (cloud provider/lane resolution), `agent_loop.py`/`agent_tools.py` (tool
+  execution, sandboxing, plan tracking), `vram.py` (preflight VRAM checks),
+  `roles.py` (named sub-agent presets).
+- `config/app.json` — main app config (models dir, small-model lanes,
+  agent/router settings, roles, capabilities). `config/providers.json` —
+  UI-managed cloud provider/lane bindings (git-ignored; holds API keys, so
+  never commit real values there or in `config/model_configs.json`).
 - `profiles/qwen3.8-27b.json` — dense-model profile (tensor-split sweep only,
   no MoE offload — it's not an MoE model).
 - `profiles/qwen3.8-flash-next.json` — MoE-model profile (tensor-split +
   `--n-cpu-moe` sweep, larger context default given its 262K native window).
+- `ui.html` + `static/js/*` — the single-page web control center (chat,
+  agent mode, settings, monitor, usage report).
 - `scripts/list_devices.ps1` — quick Vulkan device check.
 - `scripts/start.ps1` — convenience wrapper around `server_manager.py`.
+
+## Security note (payment-adjacent environments)
+
+If you deploy this alongside anything that touches cardholder or payment
+data, keep it network-isolated from that scope: this app runs a local shell
+tool (permission-gated but still powerful) and stores API keys in
+`config/providers.json` in plaintext on disk. Don't point `workspace_dir` /
+`common_dir` at directories containing real payment credentials, PANs, or
+tokens, and treat `config/providers.json` and `usage.db` as sensitive —
+they aren't encrypted at rest.
 
 ## Honesty check
 
 I don't have Arc hardware in the environment this was written in, so none
-of this has been run against real A770s — it's built strictly from current
-llama.cpp flag documentation and the specific bug reports linked above, not
-guessed. Treat the first `autotune.py` run as the real verification step:
-if a flag has changed name in a newer llama.cpp release, `llama-bench
---help` will tell you immediately, and the fix is a one-line change in
-`autotune.py`'s `FLAG_*` constants at the top of the file.
+of the autotune/runtime flag behavior has been run against real A770s —
+it's built strictly from current llama.cpp flag documentation and the
+specific bug reports linked above, not guessed. Treat the first
+`autotune.py` run as the real verification step: if a flag has changed name
+in a newer llama.cpp release, `llama-bench --help` will tell you
+immediately, and the fix is a one-line change in `autotune.py`'s `FLAG_*`
+constants at the top of the file.

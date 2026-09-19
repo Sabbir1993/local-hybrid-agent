@@ -166,7 +166,7 @@ async def tool_web_search(args: dict) -> str:
     except httpx.HTTPError as e:
         return f"error: search failed: {type(e).__name__}: {e}"
     except RuntimeError as e:
-        return f"error: {e} — search may be rate-limited; add capabilities.web_search_api_key in config.json"
+        return f"error: {e} — search may be rate-limited; add capabilities.web_search_api_key in config/app.json"
     if not results:
         return f"(no results for: {query})"
     out = [f"Web results for: {query}", ""]

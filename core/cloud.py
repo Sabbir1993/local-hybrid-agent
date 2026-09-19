@@ -3,7 +3,7 @@ core/cloud.py - Cloud (OpenAI-compatible) provider registry and lane routing.
 
 Two sources are merged, UI-managed providers winning:
 
-  config.json    -> "provider": { "<name>": { npm, name, options{baseURL, apiKey},
+  config/app.json -> "provider": { "<name>": { npm, name, options{baseURL, apiKey},
                                    models{<id>: {name}} } }
                     "cloud":    { "main": "<provider>/<model-id>|null", ...,
                                   "routing_mode": "auto|custom",
@@ -27,10 +27,10 @@ from typing import Optional
 import httpx
 
 from .config import (
-    BASE_DIR,
     CLOUD_LANES,
     CLOUD_PROBE_TIMEOUT_S,
     CLOUD_TIMEOUT_S,
+    CONFIG_FILE,
     PROVIDERS_FILE,
 )
 
@@ -80,13 +80,13 @@ def _merge_sections(base_cfg: dict, override_cfg: dict) -> dict:
 def _merged() -> dict:
     global _CACHE
     if _CACHE is None:
-        _CACHE = _merge_sections(_read_json(BASE_DIR / "config.json"),
+        _CACHE = _merge_sections(_read_json(CONFIG_FILE),
                                  _read_json(PROVIDERS_FILE))
     return _CACHE
 
 
 def reload() -> None:
-    """Drop caches after providers.json / config.json changed on disk."""
+    """Drop caches after config/providers.json / config/app.json changed on disk."""
     global _CACHE
     _CACHE = None
     _WARNED.clear()

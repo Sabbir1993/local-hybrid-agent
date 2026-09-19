@@ -18,7 +18,7 @@ How it measures:
     kv-type bytes-per-element; a small fixed compute-buffer estimate and a
     per-GPU headroom reserve are added on top.
 
-Failure policy comes from config.json:
+Failure policy comes from config/app.json:
     "preflight": {"mode": "block" | "warn" | "off", "headroom_gb": 1.0}
   block = refuse to launch when it won't fit (default)
   warn  = log the projection, launch anyway
@@ -37,7 +37,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import BASE_DIR, CONFIG_DEFAULTS
+from .config import BASE_DIR, CONFIG_DEFAULTS, CONFIG_FILE
 
 GB = 1024 ** 3
 MIB = 1024 * 1024
@@ -73,7 +73,7 @@ class PreflightError(RuntimeError):
 def _preflight_cfg() -> dict:
     cfg = {"mode": "block", "headroom_gb": _DEFAULT_HEADROOM_GB}
     try:
-        d = json.loads((BASE_DIR / "config.json").read_text(encoding="utf-8"))
+        d = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         p = d.get("preflight", {})
         if isinstance(p, dict):
             if p.get("mode") in _PREFLIGHT_MODES:

@@ -130,15 +130,22 @@ function cmdMenuClose() {
   if (m) { m.style.display = 'none'; m.innerHTML = ''; }
 }
 
+const CMD_GROUP_LABELS = { mode: 'Mode', utility: 'Utility', skills: 'Skills' };
+
 function cmdMenuRender() {
   const m = $('cmd-menu');
   if (!m || !cmdMenu.open || !cmdMenu.items.length) { cmdMenuClose(); return; }
-  m.innerHTML = cmdMenu.items.map((it, i) => `
+  m.innerHTML = cmdMenu.items.map((it, i) => {
+    const prevCat = i > 0 ? cmdMenu.items[i - 1].category : null;
+    const label = it.category && it.category !== prevCat
+      ? `<div class="cmd-group-label">${esc(CMD_GROUP_LABELS[it.category] || it.category)}</div>` : '';
+    return `${label}
     <div class="cmd-item ${i === cmdMenu.sel ? 'sel' : ''}" data-i="${i}">
       <span class="cmd-icon">${it.icon || ''}</span>
       <span class="cmd-name">${esc(it.name)}</span>
       ${it.desc ? `<span class="cmd-desc">${esc(it.desc)}</span>` : ''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
   m.style.display = 'block';
   m.querySelectorAll('.cmd-item').forEach(el => {
     el.onmousedown = (e) => {
@@ -169,16 +176,18 @@ async function cmdMenuOpen(kind, query) {
     // /plan and /build are agent-mode only; /compact works in both (agent mode
     // requires an active project — enforced by doCompact and the backend).
     const all = agentMode ? [
-      { icon: '📋', name: 'plan', desc: 'switch to Plan mode (read-only, propose)' },
-      { icon: '🔨', name: 'build', desc: 'switch to Build mode (execute)' },
-      { icon: '🧹', name: 'compact', desc: 'compress conversation history (needs an active project)' },
+      { icon: '📋', name: 'plan', desc: 'switch to Plan mode (read-only, propose)', category: 'mode' },
+      { icon: '🔨', name: 'build', desc: 'switch to Build mode (execute)', category: 'mode' },
+      { icon: '🧹', name: 'compact', desc: 'compress conversation history (needs an active project)', category: 'utility' },
+      { icon: '🤖', name: 'subagent', desc: 'delegate a sub-task to a focused sub-agent', category: 'utility', template: true },
     ] : [
-      { icon: '🧹', name: 'compact', desc: 'compress conversation history' },
+      { icon: '🧹', name: 'compact', desc: 'compress conversation history', category: 'utility' },
+      { icon: '🤖', name: 'subagent', desc: 'delegate a sub-task to a focused sub-agent', category: 'utility', template: true },
     ];
     try {
       const d = await (await fetch('/control/capabilities')).json();
       (d.skills && d.skills.items || []).forEach(s => {
-        all.push({ icon: '🎯', name: s.name, desc: s.description || '', isSkill: true });
+        all.push({ icon: '🎯', name: s.name, desc: s.description || '', isSkill: true, category: 'skills' });
       });
     } catch (e) {}
     const q = query.toLowerCase();
@@ -203,6 +212,14 @@ function cmdMenuPick(i) {
   if (kind === 'files') {
     input.value = before + '@' + it.value + ' ' + after.replace(/^\s?/, '');
     input.focus();
+  } else if (kind === 'slash' && it.template) {
+    // Structured-arg commands (e.g. subagent) don't fit the arm-and-type-argument
+    // pattern, so insert an editable prompt skeleton instead of arming a chip.
+    const skeleton = 'Please delegate the following to a sub-agent: ';
+    input.value = before + skeleton + after.replace(/^\s?/, '');
+    input.focus();
+    const pos = before.length + skeleton.length;
+    input.setSelectionRange(pos, pos);
   } else if (kind === 'slash') {
     if (it.name === 'plan') {
       if (window._setPlanMode) window._setPlanMode(true);

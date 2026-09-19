@@ -10,12 +10,13 @@ from .config import (
     MODEL_CONFIGS_FILE,
     PROFILES_DIR,
     BASE_DIR,
+    CONFIG_FILE,
 )
 
 
 def _load_models_dir_config() -> Path:
-    """Models directory: config.json 'models_dir' > E:/AI/Models > ./models"""
-    cfg = BASE_DIR / "config.json"
+    """Models directory: config/app.json 'models_dir' > E:/AI/Models > ./models"""
+    cfg = CONFIG_FILE
     candidates = []
     try:
         if cfg.exists():

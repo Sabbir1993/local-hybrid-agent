@@ -98,7 +98,7 @@ AGENT_MAX_STEPS = 30
 
 # Grammar-constrained tool calls for the executor lane (small-model reliability).
 # Auto-disabled for the process lifetime if the llama-server build rejects the
-# grammar or the envelope can't be verified. Kill switch: config.json
+# grammar or the envelope can't be verified. Kill switch: config/app.json
 # router.executor_grammar: false.
 _executor_grammar_disabled = False
 
@@ -286,7 +286,7 @@ async def agent_run(req: AgentRequest):
     main_client = cloud.CloudClient(cloud_main) if use_cloud_main else state.client
 
     # --- cloud fallback --------------------------------------------------
-    # providers.json -> cloud.fallback_local: when a cloud lane dies before
+    # config/providers.json -> cloud.fallback_local: when a cloud lane dies before
     # producing content, retry that request on the local lane instead of failing
     # the whole step. Local models may need loading first (that's the point).
     fb_enabled = bool(cloud.cloud_bindings().get("fallback_local", True))
@@ -1228,7 +1228,7 @@ async def agent_vision(req: VisionReq):
             return JSONResponse({"error": f"cloud vision lane failed ({cm.key}): {e}"}, status_code=502)
     inst = small_models.instances["vision"]
     if not inst.available:
-        return JSONResponse({"error": "vision model not configured (config.json small_models.vision.model/mmproj)"}, status_code=400)
+        return JSONResponse({"error": "vision model not configured (config/app.json small_models.vision.model/mmproj)"}, status_code=400)
     model_name = inst.model_path.name if inst.model_path else "vision"
     rid = monitor_begin("agent/vision", False, body_bytes, model=model_name, source="local")
     t0 = time.time()

@@ -1,8 +1,9 @@
 """Named sub-agent roles: lane + tool subset + system-prompt fragment presets.
 
-Roles live in config.json's "roles" section (loaded via core.small_model.APP_CONFIG,
-same hot-reload convention as "router"/"agent"/"capabilities") so adding or tuning a
-role needs no code change or restart.
+Roles live in config/roles.json (loaded via core.small_model.APP_CONFIG, same
+hot-reload convention as "router"/"agent"/"capabilities"; a legacy "roles" block
+still inside config/app.json overrides it) so adding or tuning a role needs no
+code change or restart.
 """
 
 from typing import Optional

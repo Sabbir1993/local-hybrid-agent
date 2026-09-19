@@ -1,6 +1,6 @@
 """Shell execution tool with a permission gate.
 
-Policy (config.json -> capabilities.shell):
+Policy (config/app.json -> capabilities.shell):
   enabled        — tool registered at all
   ask_first      — pause and ask the user unless the command matches an allow pattern
   allow_patterns — fnmatch wildcard list, e.g. "git *", "npx *", or "*" to allow everything
@@ -57,7 +57,7 @@ async def tool_run_shell(args: dict) -> str:
         raise ValueError("command required")
     cfg = shell_cfg()
     if not cfg.get("enabled", False):
-        return "error: shell execution is disabled in capabilities (config.json -> capabilities.shell.enabled)"
+        return "error: shell execution is disabled in capabilities (config/app.json -> capabilities.shell.enabled)"
 
     err = _sanity(cmd)
     if err:
@@ -138,13 +138,13 @@ async def tool_run_shell(args: dict) -> str:
 
 
 def add_allow_pattern(pattern: str) -> None:
-    """Persist a new allow pattern (from 'Always allow') into config.json."""
+    """Persist a new allow pattern (from 'Always allow') into config/app.json."""
     import json
-    from .config import BASE_DIR
+    from .config import CONFIG_FILE
     pattern = pattern.strip()
     if not pattern:
         return
-    cfg_path = BASE_DIR / "config.json"
+    cfg_path = CONFIG_FILE
     try:
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         shell = cfg.setdefault("capabilities", {}).setdefault("shell", {})

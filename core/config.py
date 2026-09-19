@@ -16,8 +16,11 @@ STATIC_DIR = BASE_DIR / "static"
 USAGE_DB_FILE = BASE_DIR / "usage.db"
 PROJECTS_DB_FILE = BASE_DIR / "projects.db"
 MEMORY_DB_FILE = BASE_DIR / "memory.db"
-MODEL_CONFIGS_FILE = BASE_DIR / "model_configs.json"
-PROVIDERS_FILE = BASE_DIR / "providers.json"   # cloud providers + lane bindings (UI-managed, gitignored)
+CONFIG_DIR = BASE_DIR / "config"
+CONFIG_FILE = CONFIG_DIR / "app.json"          # main app config (models_dir, lanes, capabilities, ...)
+ROLES_FILE = CONFIG_DIR / "roles.json"         # multiagent role definitions (planner/coder/reviewer)
+MODEL_CONFIGS_FILE = CONFIG_DIR / "model_configs.json"
+PROVIDERS_FILE = CONFIG_DIR / "providers.json"   # cloud providers + lane bindings (UI-managed, gitignored)
 PROFILES_DIR = BASE_DIR / "profiles"
 
 # Cloud (OpenAI-compatible) lanes

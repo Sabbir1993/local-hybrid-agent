@@ -9,13 +9,13 @@ from typing import Optional, Union
 
 import httpx
 
-from .config import BASE_DIR, LLAMA_SERVER_PORT
+from .config import BASE_DIR, LLAMA_SERVER_PORT, CONFIG_FILE, ROLES_FILE
 from .process import find_llama_server
 from . import vram
 
 
 def _load_workspace_root() -> Path:
-    cfg = BASE_DIR / "config.json"
+    cfg = CONFIG_FILE
     try:
         if cfg.exists():
             d = json.loads(cfg.read_text())
@@ -35,7 +35,7 @@ WORKSPACE_ROOT = _load_workspace_root()
 
 
 def _load_common_root() -> Path:
-    cfg = BASE_DIR / "config.json"
+    cfg = CONFIG_FILE
     try:
         if cfg.exists():
             d = json.loads(cfg.read_text())
@@ -56,8 +56,29 @@ def _load_common_root() -> Path:
 COMMON_ROOT = _load_common_root()
 
 
+# Fallback role definitions, used when config/roles.json is missing entirely.
+_DEFAULT_ROLES = {
+    "planner": {
+        "lane": "main", "max_steps": 6,
+        "tools": ["list_files", "read_file", "grep", "search_memory", "list_skills",
+                  "read_skill", "web_fetch", "web_search"],
+        "system_prompt": "You are a planning sub-agent. Investigate read-only, then return a concrete numbered plan. Do not write or edit files.",
+    },
+    "coder": {
+        "lane": "executor", "max_steps": 10,
+        "tools": ["write_file", "read_file", "edit_file", "list_files", "grep", "run_python"],
+        "system_prompt": "You are a focused implementation sub-agent. Make the exact edits described in your task, then report what changed.",
+    },
+    "reviewer": {
+        "lane": "main", "max_steps": 6,
+        "tools": ["list_files", "read_file", "grep"],
+        "system_prompt": "You are a code-review sub-agent. Read the referenced files/diff and report concrete issues found -- do not modify anything.",
+    },
+}
+
+
 def _load_app_config() -> dict:
-    cfg = BASE_DIR / "config.json"
+    cfg = CONFIG_FILE
     base = {
         "models_dir": None,
         "workspace_dir": None,
@@ -68,27 +89,10 @@ def _load_app_config() -> dict:
         },
         "router": {"enabled": True, "confidence_threshold": 0.7},
         "agent": {"exec_timeout_s": 120, "max_steps": 30, "idle_unload_s": 120},
-        "roles": {
-            "planner": {
-                "lane": "main", "max_steps": 6,
-                "tools": ["list_files", "read_file", "grep", "search_memory", "list_skills",
-                          "read_skill", "web_fetch", "web_search"],
-                "system_prompt": "You are a planning sub-agent. Investigate read-only, then return a concrete numbered plan. Do not write or edit files.",
-            },
-            "coder": {
-                "lane": "executor", "max_steps": 10,
-                "tools": ["write_file", "read_file", "edit_file", "list_files", "grep", "run_python"],
-                "system_prompt": "You are a focused implementation sub-agent. Make the exact edits described in your task, then report what changed.",
-            },
-            "reviewer": {
-                "lane": "main", "max_steps": 6,
-                "tools": ["list_files", "read_file", "grep"],
-                "system_prompt": "You are a code-review sub-agent. Read the referenced files/diff and report concrete issues found -- do not modify anything.",
-            },
-        },
+        "roles": dict(_DEFAULT_ROLES),
         # cloud providers / lane bindings: kept here so /control/models can report
         # them without importing the UI-managed providers.json directly
-        # (core.cloud is the authority; providers.json overrides config.json)
+        # (core.cloud is the authority; config/providers.json overrides config/app.json)
         "provider": {},
         "cloud": {},
         "capabilities": {
@@ -98,6 +102,16 @@ def _load_app_config() -> dict:
                       "allow_patterns": ["git *", "npx *", "npm *", "pip *", "python *"]},
         },
     }
+    # Multiagent role definitions live in their own file so they're easy to find
+    # and edit independently of the general app config.
+    try:
+        if ROLES_FILE.exists():
+            roles_d = json.loads(ROLES_FILE.read_text())
+            if isinstance(roles_d, dict):
+                base["roles"].update(roles_d)
+    except Exception as e:
+        print(f"[server_manager] roles.json unreadable: {e}", file=sys.stderr)
+
     try:
         if cfg.exists():
             d = json.loads(cfg.read_text())
@@ -107,6 +121,8 @@ def _load_app_config() -> dict:
             for k, sub in base["small_models"].items():
                 if isinstance(d.get("small_models", {}).get(k), dict):
                     sub.update(d["small_models"][k])
+            # "roles" is included here as a legacy override: an un-migrated
+            # app.json that still has a "roles" block wins over config/roles.json.
             for k in ("router", "agent", "capabilities", "provider", "cloud", "roles"):
                 if isinstance(d.get(k), dict):
                     sub = base[k]
@@ -116,6 +132,7 @@ def _load_app_config() -> dict:
                         base[k] = dict(d[k])
     except Exception as e:
         print(f"[server_manager] config.json unreadable: {e}", file=sys.stderr)
+
     return base
 
 

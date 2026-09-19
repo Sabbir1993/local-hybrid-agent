@@ -1,6 +1,6 @@
 """MCP (Model Context Protocol) client: stdio + streamable-HTTP transports.
 
-Config (config.json -> capabilities.mcp_servers):
+Config (config/app.json -> capabilities.mcp_servers):
   "mcp_servers": {
     "name": {
       "transport": "stdio" | "http",

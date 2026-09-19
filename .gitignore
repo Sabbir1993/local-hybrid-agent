@@ -8,4 +8,4 @@ node_modules/
 .venv/
 venv/
 scratch/
-providers.json
+config/providers.json

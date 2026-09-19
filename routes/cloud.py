@@ -2,7 +2,7 @@
 routes/cloud.py - Cloud (OpenAI-compatible) provider + lane configuration API.
 
 Everything here is UI-managed: providers (including API keys) and lane bindings
-are persisted to providers.json (untracked by git), then applied live.
+are persisted to config/providers.json (untracked by git), then applied live.
 API keys are only ever returned masked, except on an explicit reveal request.
 """
 

@@ -166,7 +166,8 @@ def fast_sandbox_check(tool_name: str, args: dict) -> tuple[bool, str]:
         return False, "missing target path"
     target_clean = target.lower().replace("\\", "/")
     forbidden_files = {
-        "server_manager.py", "autotune.py", "config.json", "model_configs.json",
+        "server_manager.py", "autotune.py", "app.json", "model_configs.json",
+        "providers.json", "roles.json",
         "projects.db", "usage.db", "requirements.txt", "testing_log.md"
     }
     for fb in forbidden_files:

@@ -10,7 +10,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from core.config import BASE_DIR
+from core.config import CONFIG_FILE
 from core.small_model import (
     APP_CONFIG,
     small_models,
@@ -117,13 +117,13 @@ async def capabilities_status():
 
 @router.post("/control/shell_settings")
 async def shell_settings(req: ShellSettingsReq):
-    """Edit shell permission settings; persists to config.json."""
+    """Edit shell permission settings; persists to config/app.json."""
     import json as _json
-    cfg_path = BASE_DIR / "config.json"
+    cfg_path = CONFIG_FILE
     try:
         cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
     except Exception as e:
-        return JSONResponse({"error": f"config.json unreadable: {e}"}, status_code=500)
+        return JSONResponse({"error": f"config/app.json unreadable: {e}"}, status_code=500)
     shell = cfg.setdefault("capabilities", {}).setdefault("shell", {})
     if req.ask_first is not None:
         shell["ask_first"] = bool(req.ask_first)
@@ -134,7 +134,7 @@ async def shell_settings(req: ShellSettingsReq):
     try:
         cfg_path.write_text(_json.dumps(cfg, indent=2), encoding="utf-8")
     except Exception as e:
-        return JSONResponse({"error": f"config.json write failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
     # live update
     APP_CONFIG["capabilities"]["shell"] = shell
     return {"ok": True, "shell": shell}
@@ -142,18 +142,18 @@ async def shell_settings(req: ShellSettingsReq):
 
 @router.post("/control/capabilities")
 async def capabilities_toggle(req: CapToggleReq):
-    """Toggle a capability section on/off; persists to config.json."""
-    cfg_path = BASE_DIR / "config.json"
+    """Toggle a capability section on/off; persists to config/app.json."""
+    cfg_path = CONFIG_FILE
     try:
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     except Exception as e:
-        return JSONResponse({"error": f"config.json unreadable: {e}"}, status_code=500)
+        return JSONResponse({"error": f"config/app.json unreadable: {e}"}, status_code=500)
     caps = cfg.setdefault("capabilities", {})
     caps[req.section] = req.enabled
     try:
         cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     except Exception as e:
-        return JSONResponse({"error": f"config.json write failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
     # apply live
     caps_live = APP_CONFIG.setdefault("capabilities", {})
     if req.section == "shell":

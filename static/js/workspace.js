@@ -81,11 +81,11 @@ async function wsLoadTree(dirPath, targetEl, indent) {
       const caret = n.dir ? '<span class="caret">▶</span>' : '<span class="caret" style="visibility:hidden;">▶</span>';
       const sizeTag = sizeStr ? `<span class="ws-size">${sizeStr}</span>` : '';
       row.innerHTML = `${caret}<span>${n.dir ? '📁' : wsFileIcon(n.name)}</span><span class="nm">${esc(n.name)}</span>${sizeTag}`;
+      let kids;
       if (n.dir) {
-        const kids = document.createElement('div');
+        kids = document.createElement('div');
         kids.className = 'ws-children';
         kids.style.display = 'none';
-        row.appendChild(kids);
         row.onclick = () => {
           const open = kids.style.display === 'none';
           kids.style.display = open ? 'block' : 'none';
@@ -102,6 +102,7 @@ async function wsLoadTree(dirPath, targetEl, indent) {
         row.onclick = () => wsShowFile(n.path);
       }
       wrap.appendChild(row);
+      if (n.dir) wrap.appendChild(kids);
       if (n.dir && wsExpandedDirs.has(n.path)) {
         row.click();
       }

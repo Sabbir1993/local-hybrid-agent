@@ -15,7 +15,7 @@ GBNF grammar removes that failure class at the sampler level:
 The envelope matches the ASCII "<tool_call>{...}</tool_call>" format that the
 text-fallback parser (_extract_text_tool_calls) already understands, so even if
 llama-server's native --jinja extraction misses it, the calls are still
-recovered. Disable at runtime via config.json -> router.executor_grammar: false.
+recovered. Disable at runtime via config/app.json -> router.executor_grammar: false.
 """
 
 import json

@@ -30,7 +30,7 @@ async def _proxy_cloud(cm, path: str, request: Request, body: bytes):
     """Forward a chat-completions request straight to a cloud-bound main lane.
 
     Raises on failure so the caller can decide whether to fall back to the
-    local lane (per providers.json -> cloud.fallback_local).
+    local lane (per config/providers.json -> cloud.fallback_local).
     """
     import json as _json
     client = cloud.CloudClient(cm)

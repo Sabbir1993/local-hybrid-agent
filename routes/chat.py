@@ -34,8 +34,7 @@ from core.monitor import (
 from core.db import (
     db_record_request,
     db_load_messages,
-    db_replace_messages,
-    db_archive_messages,
+    db_append_message,
 )
 from . import common
 from .common import _llm_chat_stream

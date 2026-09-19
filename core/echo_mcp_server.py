@@ -1,7 +1,7 @@
 """Minimal stdio MCP server for testing: echoes text, adds numbers.
 
 Speaks newline-delimited JSON-RPC 2.0 on stdin/stdout per the MCP stdio transport.
-Run from config.json:
+Run from config/app.json:
   "mcp_servers": {"echo": {"transport": "stdio", "command": "python",
                            "args": ["core/echo_mcp_server.py"]}}
 """
