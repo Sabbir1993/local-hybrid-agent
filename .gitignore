@@ -9,3 +9,4 @@ node_modules/
 venv/
 scratch/
 config/providers.json
+/.agents
