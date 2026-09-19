@@ -198,7 +198,7 @@ function cmdMenuRender() {
   });
 }
 
-async function cmdMenuOpen(kind, query) {
+async function cmdMenuOpen(kind, query, atStart = true) {
   cmdMenu.open = true; cmdMenu.kind = kind; cmdMenu.sel = 0;
   const m = $('cmd-menu');
   if (kind === 'files') {
@@ -212,18 +212,23 @@ async function cmdMenuOpen(kind, query) {
         .map(f => ({ icon: wsFileIcon(f.path), name: f.path, desc: `${(f.size / 1024).toFixed(1)} KB`, value: f.path }));
     } catch (e) { cmdMenuClose(); return; }
   } else if (kind === 'slash') {
-    // /plan and /build are agent-mode only; /compact works in both (agent mode
-    // requires an active project — enforced by doCompact and the backend).
-    const all = agentMode ? [
-      { icon: '📋', name: 'plan', desc: 'switch to Plan mode (read-only, propose)' },
-      { icon: '🔨', name: 'build', desc: 'switch to Build mode (execute)' },
-      { icon: '🧹', name: 'compact', desc: 'compress conversation history (needs an active project)' },
-    ] : [
-      { icon: '🧹', name: 'compact', desc: 'compress conversation history' },
-    ];
+    // /plan, /build, /compact are single-shot mode switches that only make
+    // sense as the very first token of a message; once the composer already
+    // has a command/skill armed (or text before the '/'), only skills are
+    // offered so more than one skill can be attached to the same prompt.
+    const all = atStart
+      ? (agentMode ? [
+          { icon: '📋', name: 'plan', desc: 'switch to Plan mode (read-only, propose)' },
+          { icon: '🔨', name: 'build', desc: 'switch to Build mode (execute)' },
+          { icon: '🧹', name: 'compact', desc: 'compress conversation history (needs an active project)' },
+        ] : [
+          { icon: '🧹', name: 'compact', desc: 'compress conversation history' },
+        ])
+      : [];
     try {
       const d = await (await fetch('/control/capabilities')).json();
       (d.skills && d.skills.items || []).forEach(s => {
+        if (armedSkills.some(a => a.name === s.name)) return;   // already attached
         all.push({ icon: '🎯', name: s.name, desc: s.description || '', isSkill: true });
       });
     } catch (e) {}
@@ -287,9 +292,12 @@ function currentToken(input) {
     if (tok && tok.ch === '@' && agentMode) {
       if (!cmdMenu.open || cmdMenu.kind !== 'files') cmdMenu.tokenStart = tok.start;
       cmdMenuOpen('files', tok.text);
-    } else if (tok && tok.ch === '/' && tok.start === 0) {
+    } else if (tok && tok.ch === '/' && (tok.start === 0 || armedSkills.length || armedCmd)) {
+      // A leading '/' can start /plan, /build, /compact or a skill. Once
+      // something is already armed, only skills make sense mid-message (so
+      // more than one skill can be attached to the same prompt).
       if (!cmdMenu.open || cmdMenu.kind !== 'slash') cmdMenu.tokenStart = tok.start;
-      cmdMenuOpen('slash', tok.text);
+      cmdMenuOpen('slash', tok.text, tok.start === 0);
     } else {
       cmdMenuClose();
     }
