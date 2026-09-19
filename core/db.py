@@ -427,24 +427,6 @@ def db_append_message(sid: int, role: str, content: str, meta: dict = None) -> i
     return cur.lastrowid
 
 
-def db_replace_messages(sid: int, msgs: list) -> None:
-    """Atomically replace a session's message history (used by /compact)."""
-    try:
-        _projects_db.execute("BEGIN")
-        _projects_db.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
-        for m in msgs:
-            meta = m.get("meta")
-            _projects_db.execute(
-                "INSERT INTO messages (session_id, role, content, meta, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (sid, m.get("role"), m.get("content"),
-                 json.dumps(meta) if meta else None, time.time()))
-        _projects_db.commit()
-    except Exception:
-        _projects_db.rollback()
-        raise
-
-
 def db_archive_messages(sid: int) -> Optional[str]:
     """Dump the full transcript of a session to a markdown file before /compact
     rewrites it. Returns the archive path, or None when there is nothing to save."""

@@ -663,32 +663,34 @@ async def chat_compact(req: CompactRequest):
     keep_n = max(0, min(int(req.keep_last or 0), len(convo) - 1))
     kept = convo[-keep_n:] if keep_n else []
 
-    new_msgs = [{
+    compact_message = {
         "role": "system",
         "content": "[COMPACTED CONTEXT SUMMARY]\n" + summary,
         "meta": {"compact": True, "before_tokens": before_tokens,
                  "kept_messages": keep_n},
-    }]
-    for m in kept:
-        new_msgs.append({"role": m.get("role"), "content": m.get("content"),
-                         "meta": m.get("meta")})
-    after_tokens = estimate_prompt_tokens(new_msgs)
+    }
+    # after_tokens reflects what future turns will actually send: the summary
+    # plus the verbatim kept tail (the tail isn't duplicated in storage — it
+    # already exists in its original position; this is only for the badge).
+    after_tokens = estimate_prompt_tokens([compact_message] + kept)
     reduction_pct = max(0, round((1 - after_tokens / before_tokens) * 100)) if before_tokens > 0 else 0
-    new_msgs[0]["meta"]["after_tokens"] = after_tokens
-    new_msgs[0]["meta"]["reduction_pct"] = reduction_pct
+    compact_message["meta"]["after_tokens"] = after_tokens
+    compact_message["meta"]["reduction_pct"] = reduction_pct
 
-    archive_path = None
     if req.session_id:
-        archive_path = db_archive_messages(req.session_id)
-        db_replace_messages(req.session_id, new_msgs)
+        # Append-only: the compact marker is a new row, nothing is deleted, so
+        # the full transcript stays visible/reloadable. See buildContextMessages()
+        # in static/js/compact.js for how future turns pick up only the marker
+        # forward instead of the full history.
+        db_append_message(req.session_id, compact_message["role"],
+                           compact_message["content"], compact_message["meta"])
 
     return {
         "summary": summary,
-        "messages": new_msgs,
+        "compact_message": compact_message,
         "before_tokens": before_tokens,
         "after_tokens": after_tokens,
         "reduction_pct": reduction_pct,
-        "archive_path": archive_path,
     }
 
 

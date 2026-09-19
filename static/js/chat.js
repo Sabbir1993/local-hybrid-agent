@@ -139,7 +139,9 @@ function bubbleHtml(m, idx) {
       + `  </div>`
       + `  <div class="mono dim" style="font-size:10.5px;">${wasTok}${nowTok}${keptInfo}</div>`
       + `</div>`
-      + `${md((m.content || '').replace(/^\[COMPACTED CONTEXT SUMMARY\]\n?/, ''))}</div></div>`;
+      + `${md((m.content || '').replace(/^\[COMPACTED CONTEXT SUMMARY\]\n?/, ''))}`
+      + `<div class="dim" style="font-size:10.5px; margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.08);">Earlier messages are still saved above — only replies from here on use this summary as context.</div>`
+      + `</div></div>`;
   }
   let inner = '';
   
@@ -463,7 +465,8 @@ async function send(inputText) {
   const sys = $('sysprompt').value.trim();
   const msgs = [];
   if (sys) msgs.push({ role: 'system', content: sys });
-  for (const m of messages.slice(0, -1)) msgs.push({ role: m.role, content: m.content });
+  const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : messages;
+  for (const m of ctxMsgs.slice(0, -1)) msgs.push({ role: m.role, content: m.content });
   const t0 = performance.now();
   const last = () => messages[messages.length - 1];
   try {

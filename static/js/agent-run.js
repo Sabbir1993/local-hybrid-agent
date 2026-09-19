@@ -33,7 +33,8 @@ async function runAgentSSE(text) {
   // active project only (see autoCompactIfNeeded). Runs before the new turn so
   // the streaming placeholder below is preserved. Never blocks the run.
   if (typeof autoCompactIfNeeded === 'function') {
-    await autoCompactIfNeeded(messages.map(m => ({ role: m.role, content: m.content })));
+    const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : messages;
+    await autoCompactIfNeeded(ctxMsgs.map(m => ({ role: m.role, content: m.content })));
   }
 
   const userMsg = {
@@ -88,7 +89,8 @@ async function runAgentSSE(text) {
     let usage = null;
     const t0 = performance.now();
     try {
-      const hist = messages.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
+      const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : messages;
+      const hist = ctxMsgs.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
       const engineMode = $('agent-engine') ? $('agent-engine').value : 'all-local';
       // Collect doc attachments that were server-uploaded for context injection
       const docAttachments = sentAttachments

@@ -42,7 +42,10 @@ File Intelligence — Working with Documents:
     - Word (.docx): use python-docx — e.g. `import docx; doc = docx.Document('file.docx'); doc.add_paragraph('New text'); doc.save('file.docx')`
 15. Output Format: Output format must match what the user requests. E.g. 'give me a CSV from this Excel' → produce CSV. 'Summarize this PDF' → produce a text summary in the chat.
 16. Pipelines: You can chain tools autonomously: web_search/web_fetch to get data → run_python to process → write file to workspace. Do not ask for confirmation between steps.
-17. Download Signal: When you produce a modified or output file in the workspace that the user will want to download, end your response with a line like: [DOWNLOAD: filename.xlsx] — the UI will render this as a download button automatically."""
+17. Download Signal: When you produce a modified or output file in the workspace that the user will want to download, end your response with a line like: [DOWNLOAD: filename.xlsx] — the UI will render this as a download button automatically.
+
+Multi-Agent Orchestration — 'spawn_agent':
+18. You can delegate to multiple focused sub-agents within a single user request by calling 'spawn_agent' more than once (each call is a separate step; they run one at a time, in the order you call them, and each returns its result before you decide the next call). Use this for requests that name multiple roles or phases (e.g. 'plan it, then implement it, then review it') or for large tasks that benefit from role separation — for example role='planner' to outline an approach, then role='coder' to implement it (pass the planner's output back to it in the task text), then role='reviewer' to check the diff. Do not ask the user whether to do this — if their prompt describes multiple phases or roles, chain the spawn_agent calls yourself and synthesize a final summary. Each sub-agent is isolated (no shared history) and cannot itself delegate further, so include everything it needs directly in the 'task' argument, including relevant output from earlier sub-agents in the chain."""
 
 
 def is_degeneration_or_loop(text: str) -> tuple[bool, str]:

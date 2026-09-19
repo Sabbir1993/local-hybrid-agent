@@ -79,7 +79,9 @@ async def tool_run_shell(args: dict) -> str:
     timeout = int(raw_t) if raw_t and int(raw_t) > 0 else None
     from .agent_tools import active_workspace
     from .config import BASE_DIR
-    # Skill management commands operate in global application root
+    # Skill management commands operate in global application root; installers
+    # (e.g. `npx skills add`) drop skills into .agents/skills, which is the
+    # directory core/skills.py reads from directly.
     if "skills " in cmd.lower() or "npx skills" in cmd.lower():
         target_cwd = str(BASE_DIR)
     else:
@@ -103,29 +105,6 @@ async def tool_run_shell(args: dict) -> str:
                                    shell=True, timeout=timeout, cwd=target_cwd))
     except subprocess.TimeoutExpired:
         return f"error: command timed out after {timeout}s"
-
-    # If an external installer (e.g. npx skills) created a .agents folder,
-    # consolidate all skills into the single application skills/ directory and clean up .agents
-    agents_skills = BASE_DIR / ".agents" / "skills"
-    if agents_skills.is_dir():
-        import shutil
-        app_skills = BASE_DIR / "skills"
-        app_skills.mkdir(parents=True, exist_ok=True)
-        try:
-            for item in agents_skills.iterdir():
-                dest = app_skills / item.name
-                if dest.exists():
-                    if dest.is_dir():
-                        shutil.rmtree(dest)
-                    else:
-                        dest.unlink()
-                shutil.move(str(item), str(dest))
-            shutil.rmtree(str(BASE_DIR / ".agents"), ignore_errors=True)
-            lock_file = BASE_DIR / "skills-lock.json"
-            if lock_file.exists():
-                lock_file.unlink(missing_ok=True)
-        except Exception as e:
-            print(f"[skills] consolidation error: {e}", file=sys.stderr)
 
     out = (proc.stdout or "")[-MAX_OUTPUT_CHARS:]
     err_out = (proc.stderr or "")[-4000:]

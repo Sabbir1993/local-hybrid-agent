@@ -1,4 +1,4 @@
-"""Skills capability: skills/<name>/SKILL.md convention.
+"""Skills capability: .agents/skills/<name>/SKILL.md convention.
 
 Frontmatter (--- delimited, simple key: value lines): name, description, triggers.
 Body: markdown instructions. Skill names + one-liners are injected into the
@@ -13,7 +13,7 @@ from typing import Optional
 from .config import BASE_DIR
 from .registry import registry
 
-SKILLS_DIR = BASE_DIR / "skills"
+SKILLS_DIR = BASE_DIR / ".agents" / "skills"
 MAX_SKILL_BODY_CHARS = 12000   # safety cap for read_skill output
 
 
@@ -59,7 +59,7 @@ def parse_skill_md(path: Path) -> Optional[dict]:
 
 def load_skills() -> dict:
     """All discovered skills: {dir_name: skill_dict}.
-    Stored globally for the entire application in the runtime skills/ directory.
+    Stored globally for the entire application in the runtime .agents/skills/ directory.
     """
     out = {}
     if not SKILLS_DIR.is_dir():
@@ -96,7 +96,7 @@ def skills_prompt_fragment() -> str:
 def tool_list_skills(args: dict) -> str:
     skills = load_skills()
     if not skills:
-        return "(no skills found in skills/ directory)"
+        return "(no skills found in .agents/skills/ directory)"
     return "\n".join(f"- {s['name']}: {s['description']}" for s in skills.values())
 
 
@@ -123,7 +123,7 @@ def register_skill_tools() -> None:
         "list_skills", tool_list_skills,
         {"type": "function", "function": {
             "name": "list_skills",
-            "description": "List available skills (reusable instruction packs in skills/).",
+            "description": "List available skills (reusable instruction packs in .agents/skills/).",
             "parameters": {"type": "object", "properties": {}},
         }},
         source="skill", meta={"label": "List skills"}, replace=True)

@@ -180,9 +180,9 @@ async function cmdMenuOpen(kind, query) {
       { icon: '🔨', name: 'build', desc: 'switch to Build mode (execute)', category: 'mode' },
       { icon: '🧹', name: 'compact', desc: 'compress conversation history (needs an active project)', category: 'utility' },
       { icon: '🤖', name: 'subagent', desc: 'delegate a sub-task to a focused sub-agent', category: 'utility', template: true },
+      { icon: '🧑‍🤝‍🧑', name: 'multiagent', desc: 'delegate multiple roles (planner/coder/reviewer) in one prompt', category: 'utility', template: true },
     ] : [
       { icon: '🧹', name: 'compact', desc: 'compress conversation history', category: 'utility' },
-      { icon: '🤖', name: 'subagent', desc: 'delegate a sub-task to a focused sub-agent', category: 'utility', template: true },
     ];
     try {
       const d = await (await fetch('/control/capabilities')).json();
@@ -213,9 +213,11 @@ function cmdMenuPick(i) {
     input.value = before + '@' + it.value + ' ' + after.replace(/^\s?/, '');
     input.focus();
   } else if (kind === 'slash' && it.template) {
-    // Structured-arg commands (e.g. subagent) don't fit the arm-and-type-argument
+    // Structured-arg commands (e.g. subagent/multiagent) don't fit the arm-and-type-argument
     // pattern, so insert an editable prompt skeleton instead of arming a chip.
-    const skeleton = 'Please delegate the following to a sub-agent: ';
+    const skeleton = it.name === 'multiagent'
+      ? 'Please delegate this task to multiple sub-agents in order:\n1. planner: \n2. coder: \n3. reviewer: '
+      : 'Please delegate the following to a sub-agent: ';
     input.value = before + skeleton + after.replace(/^\s?/, '');
     input.focus();
     const pos = before.length + skeleton.length;

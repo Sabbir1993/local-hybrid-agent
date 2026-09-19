@@ -69,13 +69,13 @@ async function doCompact(extraInstructions) {
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-    messages = compactMapMessages(j.messages);
+    messages = messages.filter(m => !m.compactPending);
+    messages.push(compactMapMessages([j.compact_message])[0]);
     renderAll();
     updateContextChip();
     const kb = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
     const pct = j.before_tokens > 0 ? Math.max(0, Math.round((1 - j.after_tokens / j.before_tokens) * 100)) : 0;
-    toast(`🧹 Compacted: ${kb(j.before_tokens)} → ${kb(j.after_tokens)} tokens (${pct}% reduction)` +
-      (j.archive_path ? ' (transcript archived)' : ''));
+    toast(`🧹 Compacted: ${kb(j.before_tokens)} → ${kb(j.after_tokens)} tokens (${pct}% reduction)`);
   } catch (e) {
     messages = messages.filter(m => !m.compactPending);
     renderAll();
@@ -103,7 +103,7 @@ async function autoCompactIfNeeded(hist) {
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-    messages = compactMapMessages(j.messages);
+    messages.push(compactMapMessages([j.compact_message])[0]);
     renderAll();
     const kb = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
     toast(`🧹 Auto-compacted near the context limit: ${kb(j.before_tokens)} → ${kb(j.after_tokens)} tokens`);
@@ -114,5 +114,22 @@ async function autoCompactIfNeeded(hist) {
   }
 }
 
+/* Context sent to the model: from the latest compact marker forward (plus the
+   verbatim tail it preserved), not the full visible transcript. Falls back to
+   full history when the session has never been compacted. */
+function buildContextMessages() {
+  let idx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].compact) { idx = i; break; }
+  }
+  if (idx === -1) return messages.slice();
+  const marker = messages[idx];
+  const keptCount = marker.compactKept || 0;
+  const keptTail = messages.slice(Math.max(0, idx - keptCount), idx);
+  const after = messages.slice(idx + 1);
+  return [marker, ...keptTail, ...after];
+}
+
 window.doCompact = doCompact;
 window.autoCompactIfNeeded = autoCompactIfNeeded;
+window.buildContextMessages = buildContextMessages;
