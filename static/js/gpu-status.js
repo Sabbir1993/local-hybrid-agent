@@ -33,14 +33,14 @@ async function pollStatus() {
         `${cloudMain.display}  ·  via ${cloudMain.provider}  ·  cloud (no VRAM)`;
       const ec = document.querySelector('.empty-card');
       if (ec) {
-        ec.innerHTML = `<p><b>${cloudMain.display} is ready!</b></p><p class="dim" style="margin-top:6px;">Main lane is served by <b>${cloudMain.provider}</b> in the cloud — both Arc A770s stay free. Type your message below and press Enter.</p>`;
+        ec.innerHTML = `<p><b>${cloudMain.display} is ready!</b></p><p class="dim" style="margin-top:6px;">Main lane is served by <b>${cloudMain.provider}</b> in the cloud — your local GPU(s) stay free. Type your message below and press Enter.</p>`;
       }
     } else if (s.model && s.pid) {
       $('empty-model').textContent =
         `${m}  ·  split ${s.tensor_split || 'auto'}  ·  bench ${Number(s.measured_tg_tokens_per_sec || 0).toFixed(1)} t/s`;
       const ec = document.querySelector('.empty-card');
       if (ec) {
-        ec.innerHTML = `<p><b>${m} is ready!</b></p><p class="dim" style="margin-top:6px;">Dual Intel Arc A770 GPUs loaded. Type your message below and press Enter to chat.</p>`;
+        ec.innerHTML = `<p><b>${m} is ready!</b></p><p class="dim" style="margin-top:6px;">GPU(s) loaded. Type your message below and press Enter to chat.</p>`;
       }
     } else {
       $('empty-model').textContent = 'Model unloaded';
@@ -86,14 +86,16 @@ async function pollGpu() {
       }
     });
     const ads = Object.values(unique).sort((a, b) => b.gb - a.gb);
+    const totals = d.vram_totals_gb || [];  // sorted largest-first, positional match to `ads`
 
     $('gpu-list').innerHTML = ads.map((a, idx) => {
-      const name = LUID_NAMES[a.luid] || (`Arc A770 #${idx + 1} (${a.luid})`);
-      const pct = Math.min(100, a.gb / 16 * 100);
+      const name = LUID_NAMES[a.luid] || (`GPU #${idx + 1} (${a.luid})`);
+      const cap = totals[idx] || 16;  // fall back to 16GB if capacity is unknown
+      const pct = Math.min(100, a.gb / cap * 100);
       const cp = Math.min(100, Math.round(comp[a.luid] || 0));
       return `<div class="gpu" title="${name}: ${a.gb.toFixed(1)} GB dedicated VRAM used, ${cp}% compute utilization">
-        <div class="g-top"><b>${name}</b><span class="mono">${a.gb.toFixed(1)} / 16 GB</span></div>
-        <div class="bar"><div class="fill${a.gb > 14.5 ? ' warn' : ''}" style="width:${pct}%"></div></div>
+        <div class="g-top"><b>${name}</b><span class="mono">${a.gb.toFixed(1)} / ${cap.toFixed(0)} GB</span></div>
+        <div class="bar"><div class="fill${a.gb > cap - 1.5 ? ' warn' : ''}" style="width:${pct}%"></div></div>
         <div class="g-bot"><span>compute engine</span><span class="mono ${cp > 5 ? 'hot' : ''}">${cp}%</span></div>
       </div>`;
     }).join('') || '<div class="dim" style="font-size:12px">No discrete GPU data</div>';

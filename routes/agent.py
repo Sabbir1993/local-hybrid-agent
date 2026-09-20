@@ -14,7 +14,8 @@ from fastapi import APIRouter, UploadFile, File as FastAPIFile
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 
-from core.config import BASE_DIR
+from core.backend import device_prefix
+from core.config import BASE_DIR, CONFIG_DEFAULTS
 from core.file_tools import extract_file_content, MIME_MAP
 from core.db import (
     db_record_request,
@@ -73,6 +74,27 @@ from core.monitor import (
 )
 from . import common
 from .common import _process_sse_stream, _llm_chat_stream
+
+
+def _gpu_device_label(gpu_devices: list) -> str:
+    """UI device badge for a set of local GPU indices, e.g. '2x GPU (Vulkan)'.
+    Vendor-neutral: works for any backend/GPU count instead of assuming
+    'Intel Arc A770'."""
+    backend = (state.profile or {}).get("backend", CONFIG_DEFAULTS["backend"])
+    prefix = device_prefix(backend)
+    n = len(gpu_devices) if gpu_devices else 1
+    return f"{n}x GPU ({prefix})" if n > 1 else f"GPU ({prefix})"
+
+
+def _main_device_label() -> str:
+    gpu_devices = (state.profile or {}).get("gpu_devices") or CONFIG_DEFAULTS["gpu_devices"]
+    return _gpu_device_label(gpu_devices)
+
+
+def _executor_device_label(gpu: "int | None" = None) -> str:
+    backend = (state.profile or {}).get("backend", CONFIG_DEFAULTS["backend"])
+    prefix = device_prefix(backend)
+    return f"GPU #{gpu} ({prefix}{gpu})" if gpu is not None else f"GPU ({prefix})"
 
 router = APIRouter(tags=["agent"])
 
@@ -295,11 +317,11 @@ async def agent_run(req: AgentRequest):
         if lane == "executor":
             nm = (ex_inst.model_path.name if ex_inst.model_path else "executor").replace(".gguf", "")
             return {"lane": "executor", "model": nm, "display": f"\u26A1 {nm}",
-                    "device": "Arc A770 #1 (Vulkan1)", "role": "Executor Model", "source": "local"}
+                    "device": _executor_device_label(ex_inst.gpu), "role": "Executor Model", "source": "local"}
         nm = Path((state.profile or {}).get("model_path", "")).name if state.profile else "Main LLM"
         nm = (nm or "Main LLM").replace(".gguf", "")
         return {"lane": "main", "model": nm, "display": f"\U0001F9E0 {nm}",
-                "device": "Dual Intel Arc A770 (Vulkan)", "role": "Main Autonomous LLM",
+                "device": _main_device_label(), "role": "Main Autonomous LLM",
                 "source": "local"}
 
     async def _local_fallback(lane: str):
@@ -339,7 +361,7 @@ async def agent_run(req: AgentRequest):
                 "lane": "main",
                 "model": clean_name,
                 "display": f"🧠 {clean_name}",
-                "device": "Dual Intel Arc A770 (Vulkan)",
+                "device": _main_device_label(),
                 "role": "Main Autonomous LLM",
                 "source": "local",
             }
@@ -350,7 +372,7 @@ async def agent_run(req: AgentRequest):
                 "lane": "executor",
                 "model": clean_name,
                 "display": f"⚡ {clean_name}",
-                "device": "Arc A770 #1 (Vulkan1)",
+                "device": _executor_device_label(ex_inst.gpu),
                 "role": "Executor Model",
                 "source": "local",
             }
@@ -363,7 +385,7 @@ async def agent_run(req: AgentRequest):
                 "role": "Fast Router",
                 "source": "local",
             }
-        return {"lane": lane, "model": lane, "display": lane, "device": "Dual Intel Arc A770", "role": "Agent", "source": "local"}
+        return {"lane": lane, "model": lane, "display": lane, "device": _main_device_label(), "role": "Agent", "source": "local"}
 
     simple_greetings = {"hi", "hello", "hey", "help", "who are you", "what can you do", "good morning", "good evening", "how are you", "test", "hi there"}
     clean_q = last_query.strip().lower()

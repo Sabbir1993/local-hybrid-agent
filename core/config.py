@@ -21,7 +21,6 @@ CONFIG_FILE = CONFIG_DIR / "app.json"          # main app config (models_dir, la
 ROLES_FILE = CONFIG_DIR / "roles.json"         # multiagent role definitions (planner/coder/reviewer)
 MODEL_CONFIGS_FILE = CONFIG_DIR / "model_configs.json"
 PROVIDERS_FILE = CONFIG_DIR / "providers.json"   # cloud providers + lane bindings (UI-managed, gitignored)
-PROFILES_DIR = BASE_DIR / "profiles"
 
 # Cloud (OpenAI-compatible) lanes
 CLOUD_LANES = ("main", "executor", "vision")
@@ -49,6 +48,7 @@ CONFIG_DEFAULTS = {
     "keepalive_interval_s": 25,
     "gpu_devices": [1, 2],
     "llama_bin_dir": "E:\\AI\\llama-vulkan",
+    "backend": "vulkan",  # "vulkan" or "cuda" - selects -dev prefix + visible-devices env var
 }
 
 # Key -> (min, max) for integer launch params; 0 = "omit, use llama default"

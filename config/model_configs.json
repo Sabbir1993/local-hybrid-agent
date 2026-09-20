@@ -1,13 +1,13 @@
 {
   "qwen3.8-27b-q4_k_m.gguf": {
     "context_size": 131072,
-    "n_gpu_layers": 999,
+    "n_gpu_layers": 48,
     "threads": 10,
     "threads_batch": 0,
     "batch_size": 2048,
     "ubatch_size": 512,
     "n_slots": 1,
-    "tensor_split": "11,9",
+    "tensor_split": "10,10",
     "split_mode": "layer",
     "flash_attn": "auto",
     "kv_cache_type": "q8_0",

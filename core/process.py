@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from .backend import device_prefix
 from .config import CONFIG_DEFAULTS, LLAMA_SERVER_PORT
 
 
@@ -42,6 +43,8 @@ def build_launch_command(profile: dict) -> list[str]:
     n_gpu_layers = tuned.get("n_gpu_layers") if tuned.get("n_gpu_layers") is not None else profile.get("n_gpu_layers", CONFIG_DEFAULTS["n_gpu_layers"])
     split_mode = profile.get("split_mode", CONFIG_DEFAULTS["split_mode"])
     gpu_devices = profile.get("gpu_devices", CONFIG_DEFAULTS["gpu_devices"])
+    backend = profile.get("backend", CONFIG_DEFAULTS["backend"])
+    prefix = device_prefix(backend)
 
     # Zero-share segments disable that GPU: "0,1" -> only GPU #2 runs, "1,0" -> only GPU #1
     shares = [s.strip() for s in str(tensor_split).split(",")]
@@ -54,7 +57,7 @@ def build_launch_command(profile: dict) -> list[str]:
         "-m", profile["model_path"],
         "-c", str(profile.get("context_size", CONFIG_DEFAULTS["context_size"])),
         "-ngl", str(n_gpu_layers),
-        "-dev", ",".join(f"Vulkan{d}" for d in gpu_devices),
+        "-dev", ",".join(f"{prefix}{d}" for d in gpu_devices),
         "-fa", profile.get("flash_attn", CONFIG_DEFAULTS["flash_attn"]),
         "--port", str(LLAMA_SERVER_PORT),
         "--host", "127.0.0.1",

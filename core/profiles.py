@@ -8,7 +8,6 @@ from .config import (
     CONFIG_TARGETS,
     MODEL_CONFIG_KEYS,
     MODEL_CONFIGS_FILE,
-    PROFILES_DIR,
     BASE_DIR,
     CONFIG_FILE,
 )
@@ -58,33 +57,6 @@ def load_model_configs() -> dict:
                         store[k.lower()] = v
     except Exception as e:
         print(f"[server_manager] model_configs.json unreadable: {e}", file=sys.stderr)
-
-    # One-time migration: import settings from existing profiles/*.json if present
-    if PROFILES_DIR.is_dir():
-        for f in sorted(PROFILES_DIR.glob("*.json")):
-            try:
-                d = json.loads(f.read_text(encoding="utf-8"))
-                mp = d.get("model_path") or d.get("name")
-                if mp:
-                    mkey = _model_key(mp)
-                    if mkey not in store:
-                        extracted = {}
-                        for k in MODEL_CONFIG_KEYS:
-                            if k in d:
-                                extracted[k] = d[k]
-                        t = d.get("tuned", {})
-                        if t.get("tensor_split"):
-                            extracted["tensor_split"] = t["tensor_split"]
-                        if t.get("n_gpu_layers") is not None:
-                            extracted["n_gpu_layers"] = t["n_gpu_layers"]
-                        a = d.get("autotune", {})
-                        if a.get("split_mode"):
-                            extracted["split_mode"] = a["split_mode"]
-                        if extracted:
-                            store[mkey] = extracted
-                            migrated = True
-            except Exception:
-                continue
 
     if migrated:
         try:

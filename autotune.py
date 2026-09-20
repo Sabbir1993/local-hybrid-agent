@@ -32,6 +32,9 @@ import sys
 import time
 from pathlib import Path
 
+from core.backend import visible_devices_env
+from core import vram
+
 # Known-good as of the llama.cpp docs/issues consulted when this was written
 # (docs/multi-gpu.md, docs/build.md, llama-bench manpage). If your build's
 # `llama-bench --help` differs, edit these - they're the only place CLI
@@ -63,13 +66,15 @@ OOM_MARKERS = (
 
 
 def build_gpu_env(profile: dict) -> dict:
-    # Restrict the Vulkan backend to the devices in profile["gpu_devices"]
-    # (physical Vulkan indices as printed by `llama-bench --list-devices`),
-    # so an iGPU (e.g. UHD 770) doesn't get folded into the tensor split.
+    # Restrict the backend to the devices in profile["gpu_devices"] (physical
+    # device indices as printed by `llama-bench --list-devices`), so an iGPU
+    # (e.g. UHD 770) doesn't get folded into the tensor split. The env var
+    # name depends on the backend (Vulkan vs CUDA build of llama.cpp).
     env = dict(os.environ)
     devs = profile.get("gpu_devices")
     if devs:
-        env["GGML_VK_VISIBLE_DEVICES"] = ",".join(str(d) for d in devs)
+        env_var = visible_devices_env(profile.get("backend", "vulkan"))
+        env[env_var] = ",".join(str(d) for d in devs)
     return env
 
 
@@ -161,12 +166,39 @@ def run_bench(bench_path: Path, model_path: str, *, ngl: int, split_mode: str,
     return {"ok": True, "pp_ts": pp_ts, "tg_ts": tg_ts, "raw": data}
 
 
+def default_tensor_split_candidates(profile) -> list[str]:
+    """Algorithmic candidates for any GPU count, used when the profile has no
+    (or an empty) "tensor_split_candidates" list. Seeds from a VRAM-proportional
+    split (core.vram.compute_tensor_split) and adds a small neighborhood of
+    +/-1 perturbations per device so the sweep still explores nearby ratios,
+    the way the old hand-authored 2-GPU lists did."""
+    gpu_devices = profile.get("gpu_devices") or []
+    if len(gpu_devices) <= 1:
+        return ["1"]
+    devs = vram.query_devices(profile.get("llama_bin_dir"))
+    by_idx = {d["index"]: d for d in devs}
+    target_devs = [by_idx[i] for i in gpu_devices if i in by_idx]
+    if len(target_devs) != len(gpu_devices):
+        # device list unavailable (e.g. bench not run yet) - fall back to equal split
+        target_devs = [{"free_b": 1} for _ in gpu_devices]
+    seed = vram.compute_tensor_split(target_devs)
+    seed_vals = [int(v) for v in seed.split(",")]
+    candidates = {seed}
+    for i in range(len(seed_vals)):
+        for delta in (-1, 1):
+            v = list(seed_vals)
+            v[i] = max(1, v[i] + delta)
+            candidates.add(",".join(str(x) for x in v))
+    return sorted(candidates)
+
+
 def sweep_tensor_split(bench_path, profile, n_cpu_moe_for_sweep):
     auto = profile["autotune"]
     env = build_gpu_env(profile)
     results = []
+    ts_candidates = auto.get("tensor_split_candidates") or default_tensor_split_candidates(profile)
     print("\n=== Stage 1: tensor-split sweep ===")
-    for ts in auto["tensor_split_candidates"]:
+    for ts in ts_candidates:
         print(f"\n-- tensor-split {ts} --")
         r = run_bench(
             bench_path, profile["model_path"],

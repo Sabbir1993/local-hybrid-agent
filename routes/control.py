@@ -301,34 +301,11 @@ async def gpu():
 
 @router.get("/control/profiles")
 async def profiles():
-    pdir = Path(__file__).resolve().parent.parent / "profiles"
     models_out = []
-    profiles_out = []
-    if pdir.is_dir():
-        for f in sorted(pdir.glob("*.json")):
-            try:
-                d = json.loads(f.read_text())
-                m_path_str = d.get("model_path", "")
-                m_path = Path(m_path_str) if m_path_str else None
-                profiles_out.append({
-                    "type": "profile",
-                    "name": d.get("name", f.stem),
-                    "path": str(f),
-                    "model_path": m_path_str,
-                    "model_exists": m_path.exists() if m_path else False,
-                })
-            except Exception:
-                continue
 
     search_dirs = [MODELS_DIR]
     if common.models_dir and common.models_dir.exists() and common.models_dir != MODELS_DIR:
         search_dirs.insert(0, common.models_dir)
-
-    for p in profiles_out:
-        if p.get("model_path"):
-            parent = Path(p["model_path"]).parent
-            if parent.exists() and parent.name.lower() != "orchestrator" and parent not in search_dirs:
-                search_dirs.append(parent)
 
     seen_paths = set()
     for sdir in search_dirs:
@@ -360,7 +337,7 @@ async def profiles():
                     "family": family,
                 })
 
-    return {"models": models_out, "profiles": profiles_out,
+    return {"models": models_out, "profiles": [],
             "cloud": [{
                 "type": "cloud",
                 "provider": cm.provider,

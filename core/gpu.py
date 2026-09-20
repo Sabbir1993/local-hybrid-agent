@@ -5,6 +5,7 @@ import sys
 import time
 
 from .config import GPU_QUERY_INTERVAL_S, IGNORED_IGPU_LUIDS
+from . import vram
 
 PS_GPU_SCRIPT = r"""
 $ErrorActionPreference = 'SilentlyContinue'
@@ -73,12 +74,31 @@ def _query_gpu_sync() -> dict:
     return {"adapters": [], "compute": []}
 
 
+def _discrete_vram_totals_gb() -> list:
+    """Total VRAM (GB) of each discrete GPU, sorted largest-first, from
+    `llama-bench --list-devices`. Used by the UI to scale the VRAM bar
+    instead of a hardcoded card size - works for any GPU model/count.
+    Best-effort match: zipped positionally against adapters (also sorted
+    largest-first) since the perf-counter LUID and the Vulkan/CUDA device
+    index aren't directly correlated anywhere in this codebase.
+    """
+    try:
+        devs = vram.query_devices()
+        totals = [d["total_b"] / vram.GB for d in devs if d["total_b"] > 2 * vram.GB]
+        return sorted(totals, reverse=True)
+    except Exception:
+        return []
+
+
 async def get_gpu_stats() -> dict:
     async with _gpu_query_lock:
         if time.time() - _gpu_cache["ts"] < GPU_QUERY_INTERVAL_S and _gpu_cache["data"]["adapters"]:
-            return _gpu_cache["data"]
+            data = dict(_gpu_cache["data"])
+            data["vram_totals_gb"] = _discrete_vram_totals_gb()
+            return data
         loop = asyncio.get_event_loop()
         data = await loop.run_in_executor(None, _query_gpu_sync)
+        data["vram_totals_gb"] = await loop.run_in_executor(None, _discrete_vram_totals_gb)
         _gpu_cache["ts"] = time.time()
         _gpu_cache["data"] = data
         return data

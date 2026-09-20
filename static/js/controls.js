@@ -41,7 +41,7 @@ async function loadSelectedModel() {
     return;
   }
   setPill('loading');
-  toast('Loading model into Arc A770 VRAM (~10–60s)…');
+  toast('Loading model into GPU VRAM (~10–60s)…');
   // Preflight VRAM check: show suggestions before the manager refuses to load
   try {
     const pr = await fetch('/control/preflight?target=' + encodeURIComponent(target));

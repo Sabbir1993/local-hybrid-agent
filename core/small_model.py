@@ -9,7 +9,8 @@ from typing import Optional, Union
 
 import httpx
 
-from .config import BASE_DIR, LLAMA_SERVER_PORT, CONFIG_FILE, ROLES_FILE
+from .backend import device_prefix
+from .config import BASE_DIR, LLAMA_SERVER_PORT, CONFIG_FILE, ROLES_FILE, CONFIG_DEFAULTS
 from .process import find_llama_server
 from . import vram
 
@@ -82,6 +83,8 @@ def _load_app_config() -> dict:
     base = {
         "models_dir": None,
         "workspace_dir": None,
+        "llama_bin_dir": CONFIG_DEFAULTS["llama_bin_dir"],
+        "backend": CONFIG_DEFAULTS["backend"],
         "small_models": {
             "executor": {"model": None, "port": 8091, "gpu": 1, "ctx": 8192},
             "vision": {"model": None, "mmproj": None, "port": 8092, "gpu": 1, "ctx": 4096},
@@ -115,7 +118,7 @@ def _load_app_config() -> dict:
     try:
         if cfg.exists():
             d = json.loads(cfg.read_text())
-            for k in ("models_dir", "workspace_dir"):
+            for k in ("models_dir", "workspace_dir", "llama_bin_dir", "backend"):
                 if d.get(k):
                     base[k] = d[k]
             for k, sub in base["small_models"].items():
@@ -191,7 +194,9 @@ class SmallModelInstance:
                 return
             if not self.available:
                 raise RuntimeError(f"{self.role} model not configured or files missing: {self.model_path}")
-            bin_dir = "E:\\AI\\llama-vulkan"
+            bin_dir = APP_CONFIG.get("llama_bin_dir") or CONFIG_DEFAULTS["llama_bin_dir"]
+            backend = APP_CONFIG.get("backend") or CONFIG_DEFAULTS["backend"]
+            prefix = device_prefix(backend)
             server_bin = find_llama_server(bin_dir)
             # Preflight: refuse to spawn if this small model wouldn't fit on
             # its target Vulkan device (prevents the WDDM OOM desktop hang).
@@ -207,7 +212,7 @@ class SmallModelInstance:
                 "-m", str(self.model_path),
                 "-c", str(self.ctx),
                 "-ngl", "999",
-                "-dev", f"Vulkan{self.gpu}",
+                "-dev", f"{prefix}{self.gpu}",
                 "--port", str(self.port),
                 "--host", "127.0.0.1",
                 "-np", "1",
@@ -219,7 +224,7 @@ class SmallModelInstance:
             if self.role == "embedder":
                 cmd += ["--embedding"]
 
-            print(f"[{self.role}] auto-loading on Vulkan{self.gpu} (port {self.port})...")
+            print(f"[{self.role}] auto-loading on {prefix}{self.gpu} (port {self.port})...")
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,

@@ -37,6 +37,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .backend import DEVICE_PREFIX
 from .config import BASE_DIR, CONFIG_DEFAULTS, CONFIG_FILE
 
 GB = 1024 ** 3
@@ -92,8 +93,9 @@ def _preflight_cfg() -> dict:
 # Per-device free/total VRAM (llama-bench --list-devices -> VK_EXT memory budget)
 # --------------------------------------------------------------------------
 
+_DEV_PREFIXES = "|".join(DEVICE_PREFIX.values())  # Vulkan, CUDA, ...
 _LIST_DEV_RE = re.compile(
-    r"^\s*Vulkan(\d+):\s*(.+?)\s*\(\s*([\d.]+)\s*(MiB|GiB)"
+    rf"^\s*(?:{_DEV_PREFIXES})(\d+):\s*(.+?)\s*\(\s*([\d.]+)\s*(MiB|GiB)"
     r"(?:\s*,\s*([\d.]+)\s*(MiB|GiB)\s+free)?\s*\)\s*$")
 
 
@@ -421,12 +423,23 @@ def _shares_for(target_devs: list, tensor_split: str) -> list:
 
 def _eval_fit(target_devs: list, s_norm: list, weights_b: int, units: int,
               ngl: int, kv_total_b: int, compute_b: int, headroom_b: int):
-    """Per-GPU need and margin (free - need) for a given ngl/kv/split."""
+    """Per-GPU need and margin (free - need) for a given ngl/kv/split.
+
+    Only the layers actually offloaded to GPU (off_frac of `units`) keep
+    their KV cache in VRAM - the rest run on CPU with their KV cache in
+    system RAM, same as their weights. kv_total_b (from estimate_footprint)
+    is the FULL model's KV size at full offload, so it must be scaled by
+    off_frac too, not just the weights - otherwise a partial-offload fit
+    check assumes the whole KV cache sits in VRAM regardless of ngl, which
+    drastically overstates the VRAM need and forces -ngl far lower than
+    what actually fits.
+    """
     off_frac = min(max(0, int(ngl)), units) / max(1, units)
     off_b = weights_b * off_frac
+    kv_off_b = kv_total_b * off_frac
     needs, margins = [], []
     for d, s in zip(target_devs, s_norm):
-        need = off_b * s + kv_total_b * s + compute_b + headroom_b
+        need = off_b * s + kv_off_b * s + compute_b + headroom_b
         needs.append(need)
         margins.append(d["free_b"] - need)
     return needs, margins
@@ -444,6 +457,25 @@ def _shares_str(s_norm: list, scale: int = 20) -> str:
     idx = ints.index(max(ints))
     ints[idx] = max(1, ints[idx] + (scale - sum(ints)))
     return ",".join(map(str, ints))
+
+
+def compute_tensor_split(devices: list) -> "str | None":
+    """Tensor-split string for N GPUs, proportional to each device's free
+    VRAM. `devices` is a list like query_devices() returns (or any dict with
+    a "free_b" key). Generalizes the old fixed "9,11"/"9,9,11" pattern to any
+    device count:
+      - 0 or 1 device -> None (no --tensor-split flag needed)
+      - N devices -> shares proportional to free VRAM, normalized to small
+        integers (equal VRAM cards land close to an even split; a card with
+        less free VRAM gets a smaller share automatically)
+    """
+    n = len(devices)
+    if n <= 1:
+        return None
+    free = [max(1, int(d.get("free_b", d.get("total_b", 1)))) for d in devices]
+    tot = float(sum(free))
+    s_norm = [f / tot for f in free]
+    return _shares_str(s_norm)
 
 # --------------------------------------------------------------------------
 # Suggestions
