@@ -932,6 +932,21 @@ async def agent_download(path: str, space: Optional[str] = None):
             pass
 
     if p is None or not p.is_file():
+        # Last-resort recovery: models occasionally echo back the right
+        # filename with the wrong extension (e.g. referencing "<name>.docx"
+        # when the file was actually saved as "<name>.xlsx"). If exactly one
+        # file in common storage shares the requested stem, serve that
+        # instead of a hard 404.
+        try:
+            stem = Path(path).stem
+            if stem:
+                matches = [f for f in common_workspace().glob(f"{stem}.*") if f.is_file()]
+                if len(matches) == 1:
+                    p = matches[0]
+        except Exception:
+            pass
+
+    if p is None or not p.is_file():
         return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
 
 
@@ -1056,6 +1071,16 @@ async def agent_raw(path: str, space: Optional[str] = None):
         except Exception as _e:
             pass
 
+
+    if p is None or not p.is_file():
+        try:
+            stem = Path(path).stem
+            if stem:
+                matches = [f for f in common_workspace().glob(f"{stem}.*") if f.is_file()]
+                if len(matches) == 1:
+                    p = matches[0]
+        except Exception:
+            pass
 
     if p is None or not p.is_file():
         return JSONResponse({"error": f"file not found: {path}"}, status_code=404)

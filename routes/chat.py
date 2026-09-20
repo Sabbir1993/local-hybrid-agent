@@ -41,6 +41,14 @@ from .common import _llm_chat_stream
 
 router = APIRouter(tags=["chat"])
 
+
+def _saved_filename(res_str: str, fallback: str) -> str:
+    """tool_write_file_common() renames every file with a unique suffix; pull
+    the real on-disk name back out of its result string (via the [DOWNLOAD: ..]
+    tag it always includes) so callers don't keep referencing the pre-write name."""
+    m = re.search(r"\[DOWNLOAD:\s*([^\]]+)\]", res_str or "")
+    return m.group(1).strip() if m else fallback
+
 class ChatRunRequest(BaseModel):
     messages: list
     web_search: bool = True
@@ -100,10 +108,10 @@ async def chat_run(req: ChatRunRequest):
         "1. When the user asks to create, fill, write, generate, or share a file (e.g. 'fill data on that excel file and share with me', 'create data.csv', 'make a script'):\n"
         "   - NEVER refuse by saying 'I don't have the ability to directly edit or open local files on your computer'.\n"
         "   - Call `write_file(path=..., content=...)` immediately with the full content or data rows.\n"
-        "2. For Excel spreadsheets (.xlsx) or CSV files, provide the tabular data rows in `content` with the desired filename (e.g. path='route_sample_file_2026_09_10.xlsx'). It will automatically be created as a real, valid spreadsheet workbook.\n"
+        "2. For Excel spreadsheets (.xlsx) or CSV files, provide the tabular data rows in `content` with a filename that describes the actual content (e.g. path='<topic>_<date>.xlsx', not a placeholder). It will automatically be created as a real, valid spreadsheet workbook.\n"
         "3. When you generate or write a file, you MUST include a download link in your final response using this exact syntax:\n"
         "   [DOWNLOAD: filename]\n"
-        "   For example: `[DOWNLOAD: route_sample_file_2026_09_10.xlsx]`\n"
+        "   CRITICAL: `filename` here MUST be byte-for-byte identical (same name, same extension) to the `path` you just passed to `write_file` - never invent, abbreviate, or change the extension of a filename you already wrote.\n"
         "   The user interface will automatically convert `[DOWNLOAD: filename]` into a clickable download button."
     )
     sys_parts.append(file_prompt)
@@ -350,8 +358,8 @@ async def chat_run(req: ChatRunRequest):
                                 cand_code = "ID,Name,Category,Status,Created\n1,Alpha,System,Active,2026-09-16\n2,Beta,Worker,Ready,2026-09-16\n3,Gamma,Orchestrator,Complete,2026-09-16"
                         
                         if cand_code:
-                            tool_write_file_common({"path": clean_fname, "content": cand_code})
-                            written_files.append(clean_fname)
+                            res_str = tool_write_file_common({"path": clean_fname, "content": cand_code})
+                            written_files.append(_saved_filename(res_str, clean_fname))
 
 
                 if (is_file_refusal or is_file_intent) and turn == 0 and not tool_calls:
@@ -373,25 +381,22 @@ async def chat_run(req: ChatRunRequest):
                         if f_matches:
                             fname_cand = f_matches[0]
                         if not fname_cand:
-                            for m in msgs:
-                                m_cnt = str(m.get("content", ""))
-                                att_m = _re.findall(r'--- FILE:\s*([\w\-.]+\.(?:xlsx|xls|csv|json|py|html|txt|md))\s*---', m_cnt, _re.IGNORECASE)
-                                if att_m:
-                                    fname_cand = att_m[0]
-                                    break
-                        if not fname_cand:
                             c_matches = _re.findall(r'[\w\-.]+\.(?:xlsx|xls|csv|json|py|html|txt|md)', content, _re.IGNORECASE)
                             if c_matches:
                                 fname_cand = c_matches[0]
                         if not fname_cand:
                             fname_cand = "data.xlsx" if ("excel" in last_query.lower() or "excel" in content.lower()) else "data.csv"
 
+                        # tool_write_file_common() always concatenates a unique id onto
+                        # this base name before saving, so every generation lands on its
+                        # own file - the name picked here is only a human-readable stem.
                         target_filename = Path(fname_cand).name
                         tc_id = "recov_write_0"
                         yield "event: delta_reset\ndata: {}\n\n"
                         yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': 'write_file', 'args': {'path': target_filename, 'content': data_to_save}})}\n\n"
                         res_str = tool_write_file_common({"path": target_filename, "content": data_to_save})
                         ok = not res_str.startswith("error:")
+                        target_filename = _saved_filename(res_str, target_filename)
                         yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': 'write_file', 'ok': ok, 'result': res_str})}\n\n"
                         written_files.append(target_filename)
 
@@ -470,7 +475,14 @@ async def chat_run(req: ChatRunRequest):
                             res_str = tool_write_file_common(args)
                             p_name = args.get("path") or args.get("file") or args.get("filename")
                             if p_name:
-                                written_files.append(Path(p_name).name)
+                                real_name = _saved_filename(res_str, Path(p_name).name)
+                                written_files.append(real_name)
+                                # The model's own reply (written before this tool result
+                                # exists) may still reference the pre-write name it chose;
+                                # rewrite the model's arguments in place so any later
+                                # transcript scraping (or DOWNLOAD-tag echoing) downstream
+                                # picks up the real on-disk filename instead.
+                                args["path"] = real_name
                         else:
                             res_str = await run_tool(t_name, args)
                         ok = not (isinstance(res_str, str) and (res_str.startswith("error:") or res_str.startswith("File not found")))

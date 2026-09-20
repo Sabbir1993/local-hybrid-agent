@@ -188,8 +188,10 @@ def _parse_tabular_text(content: str) -> list[list[str]]:
     if not lines:
         return []
 
-    # Check if markdown table or pipe-separated
-    if any("|" in l for l in lines):
+    # Check if markdown table or pipe-separated (require a header row followed
+    # by a separator row like |---|---| so a stray "|" inside a cell's text,
+    # e.g. "Male|Female", doesn't misfire this branch on ordinary CSV/tab data).
+    if len(lines) >= 2 and "|" in lines[0] and re.match(r"^\|?[\s\-:|]+\|?$", lines[1]):
         rows = []
         for l in lines:
             if re.match(r"^\|?[\s\-:|]+\|?$", l):
@@ -204,16 +206,23 @@ def _parse_tabular_text(content: str) -> list[list[str]]:
         if rows:
             return rows
 
-    # Check if CSV
+    # Sniff the delimiter (comma, tab, semicolon, or pipe) rather than
+    # assuming comma - models frequently emit tab- or semicolon-separated
+    # rows, which a comma-only csv.reader collapses into a single column.
     import csv
     import io
-    try:
-        reader = csv.reader(io.StringIO(content))
-        rows = [[c.strip() for c in row] for row in reader if any(c.strip() for c in row)]
-        if rows and len(rows[0]) > 1:
-            return rows
-    except Exception:
-        pass
+    header = lines[0]
+    candidates = [",", "\t", ";", "|"]
+    counts = {d: header.count(d) for d in candidates}
+    best = max(counts, key=counts.get)
+    if counts[best] > 0:
+        try:
+            reader = csv.reader(io.StringIO(content), delimiter=best)
+            rows = [[c.strip() for c in row] for row in reader if any(c.strip() for c in row)]
+            if rows and len(rows[0]) > 1:
+                return rows
+        except Exception:
+            pass
 
     return [[l] for l in lines]
 
@@ -263,7 +272,18 @@ def tool_write_file_common(args: dict) -> str:
             path_arg = "output.txt"
     if not path_arg:
         raise ValueError("path required")
-    p = _common_resolve(path_arg)
+
+    # The chat module always generates a fresh file - it never overwrites a
+    # previous one in place, regardless of what filename the model picked
+    # (models frequently reuse the same/example name across turns). A short
+    # unique id is concatenated onto the stem so every generation lands on
+    # its own file; explicit in-place edits go through edit_file, not this tool.
+    import uuid
+    stem = Path(path_arg).stem
+    suffix = Path(path_arg).suffix
+    unique_path_arg = f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
+
+    p = _common_resolve(unique_path_arg)
     p.parent.mkdir(parents=True, exist_ok=True)
     content = args.get("content", "")
     if len(content) > MAX_EDIT_BYTES:
@@ -662,7 +682,7 @@ CHAT_WRITE_FILE_SCHEMA = {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Filename or path (e.g. route_sample_file.xlsx, data.csv, script.py, output.txt)"
+                    "description": "A filename that describes THIS file's actual content, with the correct extension for the format requested (e.g. quarterly_sales.xlsx, user_report.csv, fetch_data.py) - never reuse a name or extension from an earlier example or an earlier file in this conversation unless the user explicitly asked to edit that exact file."
                 },
                 "content": {
                     "type": "string",
