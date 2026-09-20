@@ -49,6 +49,11 @@ class ToolRegistry:
         if t:
             t.enabled = enabled
 
+    def unregister_source(self, source: str) -> None:
+        """Drop every tool from one source (e.g. all tools from a disconnected MCP server)."""
+        for name in [n for n, t in self._tools.items() if t.source == source]:
+            self._tools.pop(name, None)
+
     def set_source_enabled(self, source: str, enabled: bool) -> None:
         """Toggle every tool from one source (e.g. all 'web' tools)."""
         for t in self._tools.values():

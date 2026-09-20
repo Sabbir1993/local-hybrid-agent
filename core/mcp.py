@@ -57,11 +57,29 @@ class McpServer:
         env = None
         if self.cfg.get("env"):
             env = {**os.environ, **{str(k): str(v) for k, v in self.cfg["env"].items()}}
+        if self.cfg.get("credential_ref") == "keyring":
+            env = self._inject_keyring_token(env)
         # Windows: pipes without shell; text mode utf-8
         self._proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, encoding="utf-8",
             errors="replace", env=env, bufsize=1)
+
+    def _inject_keyring_token(self, env: Optional[dict]) -> Optional[dict]:
+        """For servers authorized via the connector catalog's device-flow, pull the token
+        out of the OS keychain and inject it under the catalog's env_key. Never touches
+        config/app.json - see core/credentials.py and core/mcp_catalog.py."""
+        from . import credentials, mcp_catalog
+        entry = mcp_catalog.get_entry(self.name)
+        token = credentials.get_token(self.name)
+        if not entry or not token:
+            return env
+        env_key = (entry.get("auth") or {}).get("env_key")
+        if not env_key:
+            return env
+        base = env if env is not None else dict(os.environ)
+        base[env_key] = token
+        return base
 
     async def _stdio_rpc(self, method: str, params: Optional[dict], notify: bool = False) -> Optional[dict]:
         """One JSON-RPC round-trip over stdio (newline-delimited JSON)."""
@@ -305,6 +323,40 @@ async def connect_all_mcp() -> dict:
 
 def mcp_status() -> list:
     return [s.status_info() for s in _servers.values()]
+
+
+def is_ready(name: str) -> bool:
+    s = _servers.get(name)
+    return bool(s and s.status == "ready")
+
+
+async def connect_one(name: str, cfg: dict) -> dict:
+    """(Re)connect a single server and register its tools - used by the connector-catalog
+    authorize flow so a newly-authorized server comes online without a full app restart."""
+    existing = _servers.pop(name, None)
+    if existing:
+        existing.stop()
+    srv = McpServer(name, cfg)
+    _servers[name] = srv
+    tools = await srv.connect()
+    for t in tools:
+        tname = t.get("name")
+        if not tname:
+            continue
+        registry.register(
+            f"mcp__{name}__{tname}",
+            _tool_bridge(srv, tname),
+            _bridge_schema(name, t),
+            source=f"mcp:{name}",
+            meta={"label": f"{name}/{tname}"}, replace=True)
+    return srv.status_info()
+
+
+def disconnect_one(name: str) -> None:
+    srv = _servers.pop(name, None)
+    if srv:
+        srv.stop()
+    registry.unregister_source(f"mcp:{name}")
 
 
 def stop_all_mcp() -> None:

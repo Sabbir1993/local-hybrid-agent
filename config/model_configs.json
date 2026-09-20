@@ -88,5 +88,25 @@
       1,
       2
     ]
+  },
+  "bonsai-2-27b-ptq1_0-crack.gguf": {
+    "context_size": 132768,
+    "n_gpu_layers": 45,
+    "threads": 10,
+    "threads_batch": 0,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "n_slots": 1,
+    "tensor_split": "10,10",
+    "split_mode": "layer",
+    "flash_attn": "auto",
+    "kv_cache_type": "q8_0",
+    "mtp_enabled": true,
+    "mtp_draft_n_max": 3,
+    "keepalive_interval_s": 25,
+    "gpu_devices": [
+      1,
+      2
+    ]
   }
 }

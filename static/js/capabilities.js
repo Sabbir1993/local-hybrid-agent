@@ -26,7 +26,8 @@ async function loadCapabilities() {
             ${(s.tools || []).map(t => `<div class="dim" style="font-size:10px; padding-left:14px;">↳ ${esc(t.name)} — ${esc(t.description || '')}</div>`).join('')}
           </div>`).join('')
       : '<div class="cap-item dim">no servers configured (config.json → capabilities.mcp_servers)</div>';
-    h += capSection('mcp', '🔌 MCP Servers', d.mcp.enabled, mcpInner,
+    h += capSection('mcp', '🔌 MCP Servers', d.mcp.enabled,
+      '<div id="mcp-connectors"><div class="dim" style="font-size:10.5px;">Loading connectors…</div></div>' + mcpInner,
       'External tool servers via Model Context Protocol (stdio / http)');
 
     // Plugins
@@ -65,6 +66,7 @@ async function loadCapabilities() {
       'run_shell tool — agent runs commands like "npx skills add …" in the workspace');
 
     box.innerHTML = h;
+    loadMcpConnectors(box);
     box.querySelectorAll('.cap-toggle').forEach(t => {
       t.onclick = async () => {
         const section = t.dataset.section;
@@ -137,6 +139,79 @@ function capSection(id, title, enabled, innerHtml, note) {
     </div>
     <div class="cap-body" style="${enabled ? '' : 'opacity:0.45;'}">${innerHtml || ''}${note ? `<div class="dim" style="font-size:9.5px; margin-top:4px;">${esc(note)}</div>` : ''}</div>
   </div>`;
+}
+
+/* ---------------- MCP connector catalog (click-to-authorize) ---------------- */
+let _mcpPollTimer = null;
+
+async function loadMcpConnectors(box) {
+  const mount = box.querySelector('#mcp-connectors');
+  if (!mount) return;
+  try {
+    const d = await (await fetch('/mcp/catalog')).json();
+    mount.innerHTML = (d.connectors || []).map(c => `
+      <div class="cap-item mcp-connector" data-id="${esc(c.id)}" style="border:1px solid var(--border); border-radius:6px; padding:6px 8px; margin-bottom:4px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+          <span><span class="cap-dot ${c.connected ? 'on' : ''}"></span><b>${esc(c.name)}</b> <span class="dim">${esc(c.description || '')}</span></span>
+          ${c.connected
+            ? '<button class="btn ghost mcp-disconnect" style="width:auto; margin:0; padding:2px 10px; font-size:10.5px; color:var(--red);">Disconnect</button>'
+            : (c.configured
+                ? '<button class="btn accent mcp-connect" style="width:auto; margin:0; padding:2px 10px; font-size:10.5px;">Connect</button>'
+                : '<span class="dim" style="font-size:10px;" title="Add a client_id under capabilities.mcp_catalog_overrides in config/app.json">not configured</span>')}
+        </div>
+        <div class="mcp-connector-status dim" style="font-size:10px; margin-top:3px;"></div>
+      </div>`).join('') || '<div class="dim" style="font-size:10.5px;">no known connectors</div>';
+
+    mount.querySelectorAll('.mcp-connect').forEach(btn => {
+      btn.onclick = () => startMcpAuthorize(btn.closest('.mcp-connector'));
+    });
+    mount.querySelectorAll('.mcp-disconnect').forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.closest('.mcp-connector').dataset.id;
+        try {
+          const r = await fetch(`/mcp/${id}/disable`, { method: 'POST' });
+          if (!r.ok) throw new Error((await r.json()).error || r.status);
+          toast(`${id} disconnected`);
+          loadCapabilities();
+        } catch (e) { toast('Disconnect failed: ' + e.message, true); }
+      };
+    });
+  } catch (e) {
+    mount.innerHTML = '<div class="dim" style="font-size:10.5px;">connector list failed: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function startMcpAuthorize(card) {
+  const id = card.dataset.id;
+  const statusEl = card.querySelector('.mcp-connector-status');
+  try {
+    const r = await fetch(`/mcp/${id}/authorize/start`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    statusEl.innerHTML = `Go to <a href="${esc(d.verification_uri)}" target="_blank" rel="noopener">${esc(d.verification_uri)}</a> and enter code <b class="mono">${esc(d.user_code)}</b> — waiting for approval…`;
+    if (_mcpPollTimer) clearInterval(_mcpPollTimer);
+    const deadline = Date.now() + d.expires_in * 1000;
+    _mcpPollTimer = setInterval(async () => {
+      if (Date.now() > deadline) {
+        clearInterval(_mcpPollTimer);
+        statusEl.textContent = 'Authorization expired — try again.';
+        return;
+      }
+      try {
+        const pr = await (await fetch(`/mcp/${id}/authorize/poll?session=${encodeURIComponent(d.session)}`)).json();
+        if (pr.status === 'success') {
+          clearInterval(_mcpPollTimer);
+          toast(`${id} connected ✓`);
+          loadCapabilities();
+        } else if (pr.status === 'expired' || pr.status === 'denied' || pr.status === 'error') {
+          clearInterval(_mcpPollTimer);
+          statusEl.textContent = `Authorization ${pr.status}${pr.error ? ': ' + pr.error : ''}.`;
+        }
+      } catch { /* transient network hiccup, keep polling */ }
+    }, (d.interval || 5) * 1000);
+  } catch (e) {
+    statusEl.textContent = 'Failed to start: ' + e.message;
+  }
 }
 
 $('btn-theme').onclick = () => cycleTheme();

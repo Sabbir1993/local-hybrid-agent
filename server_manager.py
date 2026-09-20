@@ -53,6 +53,8 @@ from routes import (
     chat_router,
     cloud_router,
     control_router,
+    git_router,
+    mcp_manager_router,
     projects_router,
     proxy_router,
 )
@@ -145,6 +147,8 @@ app.include_router(capabilities_router)
 app.include_router(cloud_router)
 app.include_router(chat_router)
 app.include_router(agent_router)
+app.include_router(git_router)
+app.include_router(mcp_manager_router)
 # Reverse proxy catch-all must be mounted last
 app.include_router(proxy_router)
 

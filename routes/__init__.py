@@ -8,6 +8,8 @@ from .capabilities import router as capabilities_router
 from .chat import router as chat_router
 from .agent import router as agent_router
 from .cloud import router as cloud_router
+from .git import router as git_router
+from .mcp_manager import router as mcp_manager_router
 from .proxy import router as proxy_router
 
 __all__ = [
@@ -17,5 +19,7 @@ __all__ = [
     "chat_router",
     "agent_router",
     "cloud_router",
+    "git_router",
+    "mcp_manager_router",
     "proxy_router",
 ]

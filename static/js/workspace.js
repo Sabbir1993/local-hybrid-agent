@@ -230,6 +230,7 @@ function updateWsRail() {
   if (!rail) return;
   // workspace panel only makes sense with an active project workspace
   rail.style.display = (agentMode && curProject && !wsPanelOpen) ? 'block' : 'none';
+  updateGitIconVisibility();
 }
 
 function setWsPanel(open) {

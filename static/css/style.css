@@ -1247,14 +1247,14 @@ body.ws-resizing #ws-grip::after { background: var(--accent); }
 }
 
 /* Modals */
-#modal-bg, #report-modal, #docs-modal, #proj-modal, #dir-picker-modal {
+#modal-bg, #report-modal, #docs-modal, #proj-modal, #dir-picker-modal, #git-modal {
   position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 70;
   display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);
 }
-#modal-bg[hidden], #report-modal[hidden], #docs-modal[hidden], #proj-modal[hidden], #dir-picker-modal[hidden] {
+#modal-bg[hidden], #report-modal[hidden], #docs-modal[hidden], #proj-modal[hidden], #dir-picker-modal[hidden], #git-modal[hidden] {
   display: none !important;
 }
-#modal, #report-box, #docs-box, #proj-box, #dir-picker-box {
+#modal, #report-box, #docs-box, #proj-box, #dir-picker-box, #git-box {
   background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
   padding: 22px; width: 500px; max-width: 94vw; max-height: 88vh; overflow-y: auto; box-shadow: 0 20px 48px rgba(0,0,0,0.6);
 }
@@ -1583,6 +1583,10 @@ body.ws-resizing #ws-grip::after { background: var(--accent); }
 }
 #proj-box h2 {
   font-size: 15px; margin-bottom: 12px; display: flex; align-items: center;
+  justify-content: space-between; font-weight: 700;
+}
+#git-box h2 {
+  font-size: 15px; margin-bottom: 4px; display: flex; align-items: center;
   justify-content: space-between; font-weight: 700;
 }
 #dir-picker-modal {

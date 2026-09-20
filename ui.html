@@ -92,6 +92,9 @@
               <option value="plan">📋 Plan</option>
             </select>
             <span class="comp-hint" id="attach-info">Enter to send · Shift+Enter for newline</span>
+            <button id="btn-git-icon" class="comp-tool" type="button" title="Source Control — the active project has a git repository" style="display:none;">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0c-4.42 0-8 3.58-8 8a8.013 8.013 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path></svg>
+            </button>
             <select id="agent-engine" style="display:none;" class="comp-select" title="Agent orchestration engine - which model serves each lane">
               <option value="all-local" selected>🖥 All Local (GPU)</option>
               <option value="main-local-rest-cloud">⚡ Main Local - Rest Cloud</option>
@@ -309,20 +312,34 @@
   </div>
 </div>
 
+<div id="git-modal" hidden>
+  <div id="git-box">
+    <h2>
+      <span style="display:flex; align-items:center; gap:6px;">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0c-4.42 0-8 3.58-8 8a8.013 8.013 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path></svg>
+        <span>Source Control</span>
+      </span>
+      <button class="rep-close" id="git-modal-close">✕</button>
+    </h2>
+    <div class="cfg-note" style="margin:4px 0 10px;">Operates on the active project's workspace directory. Push and PR creation are side-effecting — you'll be asked to confirm. PR creation needs GitHub connected under Settings → Capabilities → MCP Servers.</div>
+    <div id="git-content"><div class="mon-empty">Loading…</div></div>
+  </div>
+</div>
+
 <div id="proj-modal" hidden>
   <div id="proj-box">
     <h2>📁 Create New Project <button class="rep-close" id="proj-modal-close">✕</button></h2>
     <div style="display:flex; flex-direction:column; gap:12px; margin-top:14px;">
       <div>
         <label style="display:block; font-size:11px; color:var(--dim); font-weight:700; margin-bottom:5px; text-transform:uppercase; letter-spacing:1px;">Project Name *</label>
-        <input type="text" id="new-proj-name" placeholder="e.g. backend-api, my-agent-app" style="width:100%; background:#15171d; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; font-family:inherit;">
+        <input type="text" id="new-proj-name" placeholder="e.g. backend-api, my-agent-app" style="width:100%; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; font-family:inherit;">
       </div>
       <div>
         <label style="display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--dim); font-weight:700; margin-bottom:5px; text-transform:uppercase; letter-spacing:1px;">
           <span>Local Workspace Directory <span style="font-weight:normal; text-transform:none; color:var(--accent);">(Optional)</span></span>
         </label>
         <div style="display:flex; gap:8px; align-items:stretch;">
-          <input type="text" id="new-proj-dir" placeholder="e.g. E:\AI\my-code or C:\Users\..." style="flex:1; min-width:0; background:#15171d; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; font-family:inherit;">
+          <input type="text" id="new-proj-dir" placeholder="e.g. E:\AI\my-code or C:\Users\..." style="flex:1; min-width:0; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; font-family:inherit;">
           <button type="button" class="btn blue" id="btn-browse-dir" title="Choose local directory on this machine" style="width:auto; margin:0; padding:0 14px; white-space:nowrap; display:inline-flex; align-items:center; gap:6px; font-weight:600; font-size:11.5px; cursor:pointer;">
             <span id="btn-browse-dir-icon">📁</span> <span id="btn-browse-dir-text">Browse…</span>
           </button>
@@ -363,18 +380,18 @@
       <div id="dir-picker-drives" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
     </div>
 
-    <div style="display:flex; align-items:center; gap:6px; background:#10141f; border:1px solid var(--border); border-radius:6px; padding:6px 10px; margin-bottom:10px;">
+    <div style="display:flex; align-items:center; gap:6px; background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:6px 10px; margin-bottom:10px;">
       <button class="btn ghost" id="btn-dir-picker-up" title="Up to parent folder" style="width:auto; margin:0; padding:2px 8px; font-size:11px;">⬆ Up</button>
       <div id="dir-picker-path" class="mono" style="font-size:11.5px; color:var(--text); word-break:break-all; flex:1;"></div>
     </div>
 
-    <div id="dir-picker-list" style="max-height:260px; min-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; background:#0d111a; padding:6px; display:flex; flex-direction:column; gap:2px;">
+    <div id="dir-picker-list" style="max-height:260px; min-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; background:var(--panel2); padding:6px; display:flex; flex-direction:column; gap:2px;">
       <div style="color:var(--dim); font-size:11px; padding:10px; text-align:center;">Loading directories...</div>
     </div>
 
     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; gap:8px; flex-wrap:wrap;">
       <div style="display:flex; gap:6px; align-items:center;">
-        <input type="text" id="dir-picker-new-name" placeholder="New folder name" style="width:130px; background:#15171d; color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11px;">
+        <input type="text" id="dir-picker-new-name" placeholder="New folder name" style="width:130px; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11px;">
         <button class="btn ghost" id="btn-dir-picker-mkdir" style="width:auto; margin:0; padding:5px 10px; font-size:11px;">+ New</button>
       </div>
       <div style="display:flex; gap:6px;">
@@ -567,6 +584,7 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/controls.js?v=3.0"></script>
 <script src="/static/js/monitor.js?v=3.0"></script>
 <script src="/static/js/capabilities.js?v=2.5"></script>
+<script src="/static/js/git.js?v=1.0"></script>
 <script src="/static/js/usage-report.js?v=2.5"></script>
 <script src="/static/js/config.js?v=3.0"></script>
 <script src="/static/js/cloud.js?v=3.0"></script>
