@@ -1,8 +1,9 @@
 /* ---------------- status / gpu polling ---------------- */
 function setPill(mode, s) {
-  const p = $('pill'), txt = $('pill-text');
-  p.className = 'pill ' + mode;
   if (typeof setLoadBtn === 'function') setLoadBtn(mode);
+  const p = $('pill'), txt = $('pill-text');
+  if (!p || !txt) return;
+  p.className = 'pill ' + mode;
   if (mode === 'on') txt.textContent = 'Loaded · ' + fmtUptime(s.uptime_s);
   else if (mode === 'cloud') txt.textContent = '';  // just the green dot below
   else if (mode === 'loading') txt.textContent = 'Loading model…';
@@ -22,11 +23,12 @@ async function pollStatus() {
     // cloud main lane: report ☁️ instead of a misleading "Model unloaded"
     setPill(cloudMain ? 'cloud' : (s.pid ? 'on' : 'off'), s);
     const ka = $('ka');
-    if (!ka._user) ka.checked = !!s.keepalive;
+    if (ka && !ka._user) ka.checked = !!s.keepalive;
 
     const sel = $('profile');
     const selName = (sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'Model';
     const m = s.model ? s.model.split('\\').pop().split('/').pop() : selName;
+    if (!$('empty-model')) return;
 
     if (cloudMain) {
       $('empty-model').textContent =
@@ -57,6 +59,7 @@ async function pollStatus() {
       const opt = [...sel.options].find(o => o.value === s.profile || o.textContent.includes(s.profile));
       if (opt && sel.value !== opt.value) sel.value = opt.value;
     }
+    if (typeof renderModelPicker === 'function') renderModelPicker();
 
     // update context consumption chip
     if (s.context && s.context.n_ctx) {

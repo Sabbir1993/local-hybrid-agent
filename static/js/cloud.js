@@ -258,7 +258,7 @@ function wireCloudCard() {
   box.querySelectorAll('.cloud-del').forEach(b => {
     b.onclick = async () => {
       const prov = b.dataset.prov;
-      if (!confirm('Remove provider "' + prov + '"?\nLanes bound to it go back to local, and its key is deleted from providers.json.')) return;
+      if (!confirm('Remove provider "' + prov + '"?\nLanes bound to it go back to local, and its key is deleted from your provider config.')) return;
       try {
         const r = await fetch('/control/cloud/provider?name=' + encodeURIComponent(prov), { method: 'DELETE' });
         const j = await r.json().catch(() => ({}));

@@ -77,10 +77,11 @@ async function loadSelectedModel() {
   toast('Model loaded ✅');
 }
 
-$('btn-load-header').onclick = loadSelectedModel;
+if ($('btn-load-header')) $('btn-load-header').onclick = loadSelectedModel;
 
 function setLoadBtn(mode) {
   const b = $('btn-load-header');
+  if (!b) return;
   b.classList.remove('unload', 'loading');
   if (mode === 'cloud') {
     b.innerHTML = '<span>\u2601</span>';
@@ -100,9 +101,9 @@ function setLoadBtn(mode) {
 }
 
 /* clear everything */
-$('m-cancel').onclick = () => { $('modal-bg').hidden = true; };
-$('modal-bg').onclick = e => { if (e.target.id === 'modal-bg') $('modal-bg').hidden = true; };
-$('m-ok').onclick = async () => {
+if ($('m-cancel')) $('m-cancel').onclick = () => { $('modal-bg').hidden = true; };
+if ($('modal-bg')) $('modal-bg').onclick = e => { if (e.target.id === 'modal-bg') $('modal-bg').hidden = true; };
+if ($('m-ok')) $('m-ok').onclick = async () => {
   $('modal-bg').hidden = true;
   if (ctrl) ctrl.abort();
   try { await fetch('/control/stop', { method: 'POST' }); } catch (e) {}
@@ -112,8 +113,8 @@ $('m-ok').onclick = async () => {
   toast('Cleared — model unloaded, VRAM freed, chat reset');
 };
 
-/* keepalive toggle (Model Config card) */
-$('ka').onchange = async e => {
+/* keepalive toggle (Runtime card) */
+if ($('ka')) $('ka').onchange = async e => {
   const on = e.target.checked;
   e.target._user = true;
   try {

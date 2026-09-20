@@ -18,6 +18,11 @@
   <aside>
     <div class="logo" title="Dual Intel Arc A770 Vulkan Runtime Manager">⬡ A770 <span>RUNTIME</span><small>DUAL GPU · VULKAN</small></div>
 
+    <div class="mode-switch full" title="Switch between direct LLM conversation and Autonomous Coding Agent">
+      <button id="mode-chat" class="mode-btn active" type="button" title="Direct, fast conversation with the loaded LLM">💬 Chat</button>
+      <button id="mode-agent" class="mode-btn" type="button" title="Autonomous coding agent that reads/writes files in the active project workspace">🤖 Agent Task</button>
+    </div>
+
     <button id="btn-newchat" class="btn blue" style="padding:9px 12px; font-size:12px; font-weight:700; margin-bottom:2px;" title="Start a fresh chat">＋ New Chat</button>
 
     <section id="projects-card" class="card" style="padding:10px 8px; display:none; max-height:220px; flex-direction:column;">
@@ -41,23 +46,23 @@
 
   <main>
     <header>
-      <div class="model-group" title="Pick a model, then load or unload it">
-        <select id="profile" title="Select a GGUF model (grouped by family)"></select>
-        <button id="btn-load-header" title="Load the selected model into GPU VRAM"><span>▶</span></button>
+      <div class="model-group" title="Currently available model. Local loading &amp; launch config live in Settings — this picks which cloud model answers you (or switches back to local)">
+        <select id="profile" title="Available models (cloud models are switchable here; local loading happens in Settings)" style="display:none;"></select>
+        <button type="button" id="model-picker-btn" class="model-picker-btn">
+          <span id="model-picker-icon">🖥</span>
+          <span id="model-picker-label">No model</span>
+          <span class="model-picker-caret">▾</span>
+        </button>
+        <div id="model-picker-dropdown" class="model-picker-dropdown"></div>
       </div>
-      <span id="pill" class="pill off" title="Current llama-server status &amp; uptime"><i></i><span id="pill-text">Model unloaded</span></span>
-      <span class="chip mono" id="chip-ts" title="Generation throughput speed in tokens per second">⚡ — t/s</span>
       <span class="chip mono" id="chip-ctx" title="Current KV-cache context window consumption in tokens" style="cursor:help;">🧠 0 / 32k (0%)</span>
-      <div class="mode-switch" title="Switch between direct LLM conversation and Autonomous Coding Agent">
-        <button id="mode-chat" class="mode-btn active" type="button" title="Direct, fast conversation with the loaded LLM">💬 Chat</button>
-        <button id="mode-agent" class="mode-btn" type="button" title="Autonomous coding agent that reads/writes files in the active project workspace">🤖 Agent Task</button>
-      </div>
       <div class="spacer"></div>
       <button id="btn-theme" class="btn ghost icon-btn" title="Quick cycle color theme">🎨 Theme</button>
-      <button id="btn-settings" class="btn ghost icon-btn" title="Hardware status (GPUs), color theme, model launch parameters & sampling settings">⚙️ Settings</button>
+      <button id="btn-settings" class="btn ghost icon-btn" title="Hardware status (GPUs), model launch parameters, cloud providers, capabilities, users &amp; knowledge base, sampling &amp; runtime">⚙️ Settings</button>
       <button id="btn-monitor" class="btn ghost icon-btn" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">📡 Monitor</button>
-      <button id="btn-report" class="btn ghost icon-btn" title="Token usage report: prompts vs completions, per-model and per-day totals">📊 Report</button>
+      <button id="btn-report" class="btn ghost icon-btn" data-perm="usage.report.view" title="Token usage report: prompts vs completions, per-model and per-day totals">📊 Report</button>
       <button id="btn-docs" class="btn ghost icon-btn" title="Step-by-step guide: connect any OpenAI-compatible agent to this runtime">📖 Docs</button>
+      <button id="btn-user-menu" class="btn ghost icon-btn" title="Account">👤</button>
     </header>
 
     <div id="chat"><div id="chat-inner">
@@ -157,158 +162,6 @@
       <h4>Recent requests</h4>
       <div id="mon-recent-list" style="display:flex; flex-direction:column; gap:4px;"><div class="mon-empty">Waiting…</div></div>
     </div>
-  </div>
-</div>
-
-<div id="settings-drawer">
-  <div class="drawer-head">
-    <span>⚙️ Settings &amp; Hardware</span>
-    <button class="btn ghost" id="settings-close" style="width:auto; margin:0; padding:4px 10px;">✕</button>
-  </div>
-  <div class="drawer-body">
-    <details class="card fold" id="sec-theme">
-      <summary title="Select color palette and interface theme">🎨 Appearance &amp; Themes</summary>
-      <div class="theme-grid">
-        <button type="button" class="theme-opt" data-t="slate" onclick="setTheme('slate')"><span class="theme-swatch" style="background:#79c0ff"></span> Slate &amp; Indigo</button>
-        <button type="button" class="theme-opt" data-t="claude" onclick="setTheme('claude')"><span class="theme-swatch" style="background:#d97757"></span> Claude Warm</button>
-        <button type="button" class="theme-opt" data-t="tokyonight" onclick="setTheme('tokyonight')"><span class="theme-swatch" style="background:#7aa2f7"></span> Tokyo Night</button>
-        <button type="button" class="theme-opt" data-t="nord" onclick="setTheme('nord')"><span class="theme-swatch" style="background:#88c0d0"></span> Nord Arctic</button>
-        <button type="button" class="theme-opt" data-t="classic" onclick="setTheme('classic')"><span class="theme-swatch" style="background:#6c8cff"></span> Classic Dark</button>
-        <button type="button" class="theme-opt" data-t="oled" onclick="setTheme('oled')"><span class="theme-swatch" style="background:#3b82f6"></span> OLED Black</button>
-        <button type="button" class="theme-opt" data-t="light" onclick="setTheme('light')" style="grid-column: span 2;"><span class="theme-swatch" style="background:#2563eb; border:1px solid #94a3b8;"></span> ☀️ Pure Light (Modern Crisp)</button>
-      </div>
-    </details>
-
-    <details class="card fold" id="sec-gpus">
-      <summary title="Dedicated VRAM usage & compute engine utilization for both Arc A770 GPUs">GPUs (2x Arc A770)</summary>
-      <div id="gpu-list"><div class="dim" style="font-size:12px">querying…</div></div>
-    </details>
-
-    <details class="card fold" id="sec-cfg">
-      <summary title="Adjust llama-server launch parameters and persist them to profile JSON">Model Config · Restart to Apply</summary>
-      <div class="cfg-grid">
-        <div class="cfg-item" title="Context size in tokens (n_ctx). Maximum prompt + completion memory allocated in VRAM">
-          <label for="cfg-ctx">Context size <span class="info" title="Maximum token context window size (e.g. 32768, 65536)">ⓘ</span></label>
-          <input type="number" id="cfg-ctx" step="8" min="512" max="1048576" value="32768" title="Context size (n_ctx) in tokens (512–1048576)">
-        </div>
-        <div class="cfg-item" title="Number of model layers offloaded to GPUs (n_gpu_layers). 999 offloads all layers to VRAM">
-          <label for="cfg-ngl">GPU layers <span class="info" title="999 = offload all layers to GPU VRAM">ⓘ</span></label>
-          <input type="number" id="cfg-ngl" min="0" max="999" value="999" title="Number of GPU layers (n_gpu_layers)">
-        </div>
-        <div class="cfg-item" title="Number of CPU threads for prompt computation (threads). 0 = auto-detect">
-          <label for="cfg-threads">CPU threads <span class="info" title="0 = auto-detect optimal CPU thread count">ⓘ</span></label>
-          <input type="number" id="cfg-threads" min="0" max="64" value="0" title="CPU threads (0 = auto)">
-        </div>
-        <div class="cfg-item" title="Number of CPU threads for batch evaluation (threads_batch). 0 = same as CPU threads">
-          <label for="cfg-tb">Batch threads <span class="info" title="0 = same thread count as CPU threads">ⓘ</span></label>
-          <input type="number" id="cfg-tb" min="0" max="64" value="0" title="Batch threads (0 = default)">
-        </div>
-        <div class="cfg-item" title="Logical batch size for prompt ingest (batch_size). Default 2048">
-          <label for="cfg-batch">Batch size <span class="info" title="Logical prompt evaluation batch size (0 = default 2048)">ⓘ</span></label>
-          <input type="number" id="cfg-batch" min="0" max="8192" value="0" title="Batch size (0 = default 2048)">
-        </div>
-        <div class="cfg-item" title="Physical micro-batch size (ubatch_size). Default 512. Lower values reduce peak VRAM spikes">
-          <label for="cfg-ubatch">Ubatch size <span class="info" title="Physical micro-batch size. Lower reduces VRAM spikes during long prompt ingest">ⓘ</span></label>
-          <input type="number" id="cfg-ubatch" min="0" max="4096" value="0" title="Physical micro-batch size (ubatch_size)">
-        </div>
-        <div class="cfg-item" title="Number of parallel sequence processing slots (n_slots / n_parallel)">
-          <label for="cfg-np">Parallel slots <span class="info" title="Number of simultaneous sequence processing slots (default 1)">ⓘ</span></label>
-          <input type="number" id="cfg-np" min="0" max="64" value="0" title="Parallel slots (0 = default 1)">
-        </div>
-        <div class="cfg-item" title="Seconds between background ping queries when idle (default 25s)">
-          <label for="cfg-kai">Keepalive (s) <span class="info" title="Idle interval (seconds) before sending 1-token keepalive ping">ⓘ</span></label>
-          <input type="number" id="cfg-kai" min="5" max="600" value="25" title="Keepalive ping interval in seconds">
-        </div>
-        <div class="cfg-item cfg-full" title="GPU shares. 9,11 = both GPUs (~45%/55% split) · 0,1 = GPU 2 only · 1,0 = GPU 1 only">
-          <label for="cfg-ts">Tensor split <span class="info" title="Comma-separated shares per GPU. 0,1 = only GPU 2 works · 1,0 = only GPU 1 works · 9,11 = balanced dual-GPU split">ⓘ</span></label>
-          <input type="text" id="cfg-ts" value="9,11" title="GPU share: 0,1 = GPU 2 only · 1,0 = GPU 1 only · 9,11 = both GPUs">
-          <small style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;">0,1 → GPU 2 only · 1,0 → GPU 1 only · 9,11 → dual</small>
-        </div>
-        <div class="cfg-item" title="GPU split strategy: 'layer' splits transformer layers; 'row' splits tensor matrices">
-          <label for="cfg-sm">Split mode <span class="info" title="'layer' (pipeline split) is recommended for Arc GPUs">ⓘ</span></label>
-          <select id="cfg-sm" title="GPU split mode (layer recommended)"><option value="layer">layer</option><option value="row">row</option></select>
-        </div>
-        <div class="cfg-item" title="Enable FlashAttention (on/off/auto). Speeds up context processing and saves VRAM">
-          <label for="cfg-fa">Flash attention <span class="info" title="Accelerates Vulkan context evaluation & saves VRAM">ⓘ</span></label>
-          <select id="cfg-fa" title="Flash attention setting"><option value="on">on</option><option value="off">off</option><option value="auto">auto</option></select>
-        </div>
-        <div class="cfg-item cfg-full" title="Data type for KV cache. 'f16' is default; 'q8_0' cuts KV memory footprint in half">
-          <label for="cfg-ct">KV cache type <span class="info" title="q8_0 cuts KV memory usage by 50% with negligible loss">ⓘ</span></label>
-          <select id="cfg-ct" title="KV cache quantization type"><option value="f16">f16</option><option value="q8_0">q8_0 (½ KV RAM)</option><option value="q5_0">q5_0</option><option value="q4_0">q4_0</option><option value="bf16">bf16</option><option value="f32">f32</option></select>
-        </div>
-        <div class="cfg-item cfg-full" id="mtp-row" style="display:none" title="MTP speculative decoding: a small draft model proposes token chains the target model verifies in one pass — typically 1.5-2x tokens/sec on Vulkan">
-          <label for="cfg-mtp">⚡ MTP draft <span class="info" title="Enables speculative decoding with the auto-detected MTP draft file">ⓘ</span></label>
-          <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
-            <label class="switch"><input type="checkbox" id="cfg-mtp"><span class="slider"></span></label>
-            <div style="flex:1"><b id="mtp-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">speculative decoding available</small></div>
-          </div>
-          <label for="mtp-nmax" style="margin-top:6px">Draft tokens (n-max) <span class="info" title="Tokens drafted per step (default 3)">ⓘ</span></label>
-          <input type="number" id="mtp-nmax" min="1" max="16" value="3" title="Max draft tokens per speculative step">
-        </div>
-      </div>
-      <div class="keep-row" title="Windows demotes GPU VRAM to system RAM ~70s after idle, causing throughput drop (14.4 → 7.7 t/s). A 1-token ping every 25s while idle keeps VRAM resident.">
-        <label class="switch" title="Toggle keepalive background pings"><input type="checkbox" id="ka"><span class="slider"></span></label>
-        <div><b title="Keep VRAM resident in Arc GPUs">Keepalive</b><small>1-token ping while idle — keeps A770s at full speed</small></div>
-      </div>
-      <div class="cfg-note" title="Configuration note">Saved per-model into config/model_configs.json. Unload the model, then load it again to apply changes.</div>
-      <button id="btn-apply" class="btn accent" style="margin-top:6px" title="Save configuration for this model. If the model is loaded, you will be asked to unload & reload to apply.">💾 Save Config</button>
-    </details>
-
-    <details class="card fold" id="sec-cloud">
-      <summary title="Cloud (OpenAI-compatible) providers: API keys, models, and which lane each one serves">☁️ Cloud Models</summary>
-      <div id="cloud-content"><div class="mon-empty">Loading…</div></div>
-      <div class="cfg-note" title="Where cloud settings live">Providers and lane bindings are saved to <b>config/providers.json</b> (kept out of git, so API keys are never committed). Selecting a cloud model in the top dropdown sets the <b>Main lane</b> — who answers you — and nothing is loaded into VRAM.</div>
-    </details>
-
-    <details class="card fold" id="sec-chat">
-      <summary title="Configure system prompt and sampling hyperparameters">Chat &amp; Sampling</summary>
-      <label for="sysprompt" title="System prompt instructions given to the LLM">System prompt <span class="info" title="Global instructions guiding model behavior and tone">ⓘ</span></label>
-      <textarea id="sysprompt" rows="3" placeholder="You are a helpful assistant." title="System prompt text"></textarea>
-
-      <div class="smp-grid">
-        <div class="smp-row" title="Controls randomness of output (temperature)">
-          <label for="temp">Temperature <span class="info" title="Higher = creative, lower = deterministic">ⓘ</span></label>
-          <input type="range" id="temp" min="0" max="2" step="0.05" value="1.0" title="Temperature slider (0.0 to 2.0)">
-          <span class="mono smp-val" id="tempv">1.00</span>
-        </div>
-        <div class="smp-row" title="Nucleus sampling threshold (top_p)">
-          <label for="topp">Top P <span class="info" title="Considers top tokens with cumulative probability up to P">ⓘ</span></label>
-          <input type="range" id="topp" min="0" max="1" step="0.01" value="0.95" title="Top P slider (0.0 to 1.0)">
-          <span class="mono smp-val" id="toppv">0.95</span>
-        </div>
-        <div class="smp-row" title="Minimum token probability threshold relative to top candidate (min_p)">
-          <label for="minp">Min P <span class="info" title="Filters out low-probability tail tokens">ⓘ</span></label>
-          <input type="range" id="minp" min="0" max="0.3" step="0.005" value="0" title="Min P slider (0.0 to 0.3)">
-          <span class="mono smp-val" id="minpv">0.000</span>
-        </div>
-        <div class="smp-row" title="Penalizes repeated tokens (repeat_penalty)">
-          <label for="rep">Repeat penalty <span class="info" title="Higher values reduce text repetition; 1.0 = off">ⓘ</span></label>
-          <input type="range" id="rep" min="1" max="2" step="0.01" value="1.0" title="Repeat penalty slider (1.0 to 2.0)">
-          <span class="mono smp-val" id="repv">1.00</span>
-        </div>
-        <div class="smp-row" title="Penalizes tokens that have appeared at all in the context (presence_penalty)">
-          <label for="presence">Presence penalty <span class="info" title="Positive values push the model toward new topics; 0.0 = off">ⓘ</span></label>
-          <input type="range" id="presence" min="-2" max="2" step="0.05" value="0" title="Presence penalty slider (-2.0 to 2.0)">
-          <span class="mono smp-val" id="presencev">0.00</span>
-        </div>
-        <div class="smp-row" title="Limits candidate pool to K highest probability tokens (0 = off)">
-          <label for="topk">Top K <span class="dim">(0 = off)</span> <span class="info" title="Limits pool to K highest probability tokens">ⓘ</span></label>
-          <input type="number" id="topk" value="20" min="0" max="200" title="Top K candidate count (0 = disabled)">
-          <span class="mono smp-val"></span>
-        </div>
-        <div class="smp-row" title="Maximum tokens to generate per response. Tip: set -1 for unlimited generation (only stopped by stop strings/EOS or manual Stop)">
-          <label for="maxtok">Max tokens <span class="info" title="Set -1 = no output limit: the model generates until EOS or you press Stop. Higher values need more KV cache (context_size). Leave 512 for chat; use -1 for long-form writing">ⓘ</span></label>
-          <input type="number" id="maxtok" value="-1" min="-1" max="262144" title="Maximum generation tokens (-1 = unlimited)">
-          <span class="mono smp-val"></span>
-        </div>
-      </div>
-    </details>
-
-    <details class="card fold" id="sec-caps">
-      <summary title="Agent extensions: web browsing, skills, MCP servers, plugins">🧩 Capabilities</summary>
-      <div id="caps-content"><div class="mon-empty">Loading…</div></div>
-      <div class="cfg-note" title="Capability note">Toggles persist to config/app.json. MCP servers connect at startup; new config needs a restart for MCP.</div>
-    </details>
   </div>
 </div>
 
@@ -573,11 +426,13 @@ Full instructions the agent reads via read_skill.</pre>
   </div>
 </div>
 
+<script src="/static/js/session.js?v=1.0"></script>
 <script src="/static/js/highlight.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="/static/js/theme.js?v=2.5"></script>
 <script src="/static/js/utils.js?v=2.5"></script>
+<script src="/static/js/sampling.js?v=1.0"></script>
 <script src="/static/js/preview.js?v=2.5"></script>
 <script src="/static/js/gpu-status.js?v=3.0"></script>
 <script src="/static/js/chat.js?v=3.1"></script>

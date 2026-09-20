@@ -1,20 +1,33 @@
 """
 core/cloud.py - Cloud (OpenAI-compatible) provider registry and lane routing.
 
-Two sources are merged, UI-managed providers winning:
+Cloud providers are managed per-user (each signed-in user configures their own
+API keys/models/lane bindings -- there is no shared team-wide cloud config, by
+design: "keep cloud in the user's hand"). Two sources are merged per user:
 
-  config/app.json -> "provider": { "<name>": { npm, name, options{baseURL, apiKey},
-                                   models{<id>: {name}} } }
-                    "cloud":    { "main": "<provider>/<model-id>|null", ...,
-                                  "routing_mode": "auto|custom",
-                                  "fallback_local": true }
-                    (tracked by git: non-secret defaults + copy-paste portability)
-  providers.json -> same shape, written by the UI; untracked so keys never get
-                    committed.
+  config/app.json         -> "provider": {...}, "cloud": {...}
+                              (tracked by git: non-secret defaults + copy-paste
+                              portability; a shared *starting point*, not a
+                              shared runtime config)
+  config/providers/user_<id>.json
+                           -> same shape, written by that user's own UI
+                              actions; untracked so keys never get committed,
+                              and never readable by any other user.
 
 A lane (main / executor / vision) is served by the cloud when its binding
-resolves to a configured model; otherwise the lane stays local (llama-server).
-`lane_kind()` / `lane_client()` are the single place that decision is made.
+resolves to a configured model; otherwise the lane stays local (llama-server,
+which *is* shared hardware -- unlike cloud credentials, one GPU rig has one
+loaded model for everyone).  `lane_kind()` / `lane_client()` are the single
+place that decision is made.
+
+Whose config is "current" when a function is called without an explicit
+user_id: request-scoped call sites (routes/cloud.py, routes/control.py,
+routes/chat.py, routes/agent.py) always pass user.id explicitly. A few deeper,
+harder-to-thread call sites (git commit-message generation, vision describe,
+the raw reverse proxy) fall back to core.request_context.get_current_user_id()
+-- the same per-request global already used for per-user memory-search
+isolation -- so they still resolve to whoever's request is in flight instead
+of a hardcoded shared file.
 """
 
 import json
@@ -31,16 +44,25 @@ from .config import (
     CLOUD_PROBE_TIMEOUT_S,
     CLOUD_TIMEOUT_S,
     CONFIG_FILE,
-    PROVIDERS_FILE,
+    PROVIDERS_DIR,
 )
+from .request_context import get_current_user_id
 
 # Keys llama.cpp accepts but OpenAI-compatible clouds reject or handle oddly
 _LLAMA_ONLY_KEYS = ("repeat_penalty", "grammar", "min_p", "top_k", "typical_p",
                     "xtc_probability", "xtc_threshold", "n_keep", "cache_prompt")
 
-_CACHE: Optional[dict] = None
+_CACHE: dict = {}   # resolved user_id (int) or "_shared" -> merged {provider, cloud} dict
 _CLIENTS: dict = {}
 _WARNED: set = set()
+
+
+def _resolve_user(user_id: Optional[int]) -> Optional[int]:
+    return user_id if user_id is not None else get_current_user_id()
+
+
+def _provider_file(user_id: int) -> Path:
+    return PROVIDERS_DIR / f"user_{user_id}.json"
 
 
 def _read_json(p: Path) -> dict:
@@ -77,18 +99,23 @@ def _merge_sections(base_cfg: dict, override_cfg: dict) -> dict:
     return out
 
 
-def _merged() -> dict:
-    global _CACHE
-    if _CACHE is None:
-        _CACHE = _merge_sections(_read_json(CONFIG_FILE),
-                                 _read_json(PROVIDERS_FILE))
-    return _CACHE
+def _merged(user_id: Optional[int] = None) -> dict:
+    uid = _resolve_user(user_id)
+    cache_key = uid if uid is not None else "_shared"
+    if cache_key not in _CACHE:
+        override = _read_json(_provider_file(uid)) if uid is not None else {}
+        _CACHE[cache_key] = _merge_sections(_read_json(CONFIG_FILE), override)
+    return _CACHE[cache_key]
 
 
-def reload() -> None:
-    """Drop caches after config/providers.json / config/app.json changed on disk."""
+def reload(user_id: Optional[int] = None) -> None:
+    """Drop cached config after a user's providers file / config/app.json changed
+    on disk. No user_id clears every cached user (startup / config/app.json edits)."""
     global _CACHE
-    _CACHE = None
+    if user_id is None:
+        _CACHE = {}
+    else:
+        _CACHE.pop(user_id, None)
     _WARNED.clear()
     _CLIENTS.clear()
 
@@ -172,12 +199,12 @@ class CloudModel:
         return f"<CloudModel {self.key} @ {self.base_url}>"
 
 
-def providers() -> dict:
-    return _merged()["provider"]
+def providers(user_id: Optional[int] = None) -> dict:
+    return _merged(user_id)["provider"]
 
 
-def cloud_bindings() -> dict:
-    cl = _merged()["cloud"]
+def cloud_bindings(user_id: Optional[int] = None) -> dict:
+    cl = _merged(user_id)["cloud"]
     out = {lane: (str(cl.get(lane) or "").strip() or None) for lane in CLOUD_LANES}
     out["fallback_local"] = bool(cl.get("fallback_local", True))
     mode = str(cl.get("routing_mode") or "auto").strip().lower()
@@ -185,9 +212,9 @@ def cloud_bindings() -> dict:
     return out
 
 
-def cloud_models() -> list:
+def cloud_models(user_id: Optional[int] = None) -> list:
     out = []
-    for name, cfg in providers().items():
+    for name, cfg in providers(user_id).items():
         if not isinstance(cfg, dict):
             continue
         models = cfg.get("models")
@@ -200,21 +227,23 @@ def cloud_models() -> list:
     return out
 
 
-def get_cloud(key: Optional[str]) -> Optional[CloudModel]:
-    """Resolve "<provider>/<model-id>" (provider names may contain spaces)."""
+def get_cloud(key: Optional[str], user_id: Optional[int] = None) -> Optional[CloudModel]:
+    """Resolve "<provider>/<model-id>" (provider names may contain spaces)
+    among the given user's own configured providers. user_id defaults to the
+    current request's user (core.request_context) when not given explicitly."""
     if not key:
         return None
     key = str(key).strip()
     if key.startswith("cloud:"):
         key = key[6:]
-    for cm in cloud_models():
+    for cm in cloud_models(user_id):
         if cm.key == key:
             return cm
     return None
 
 
-def cloud_lane(lane: str) -> Optional[CloudModel]:
-    b = cloud_bindings()
+def cloud_lane(lane: str, user_id: Optional[int] = None) -> Optional[CloudModel]:
+    b = cloud_bindings(user_id)
     # Auto routing: executor/vision follow whatever the main lane is bound to
     # (cloud model -> same cloud model; local -> local). Custom lets each lane
     # be bound independently, as before.
@@ -224,20 +253,20 @@ def cloud_lane(lane: str) -> Optional[CloudModel]:
         key = b.get(lane)
     if not key:
         return None
-    cm = get_cloud(key)
+    cm = get_cloud(key, user_id)
     if cm is None and key not in _WARNED:
         _WARNED.add(key)
         print(f"[cloud] lane '{lane}' points at '{key}' which is not configured - using local")
     return cm
 
 
-def lane_kind(lane: str) -> str:
-    return "cloud" if cloud_lane(lane) else "local"
+def lane_kind(lane: str, user_id: Optional[int] = None) -> str:
+    return "cloud" if cloud_lane(lane, user_id) else "local"
 
 
-def lane_client(lane: str):
+def lane_client(lane: str, user_id: Optional[int] = None):
     """CloudClient for a cloud-bound lane, else None (caller uses the local lane)."""
-    cm = cloud_lane(lane)
+    cm = cloud_lane(lane, user_id)
     return CloudClient(cm) if cm else None
 
 
@@ -250,9 +279,9 @@ def mask_key(k: Optional[str]) -> str:
     return f"{k[:6]}{'*' * 10}{k[-4:]}"
 
 
-def providers_public() -> list:
+def providers_public(user_id: Optional[int] = None) -> list:
     out = []
-    for name, cfg in providers().items():
+    for name, cfg in providers(user_id).items():
         if not isinstance(cfg, dict):
             continue
         opts = cfg.get("options") or {}
@@ -357,18 +386,22 @@ class CloudClient:
         return f"<CloudClient {self.cm.key}>"
 
 
-# ---------------- persistence (providers.json, UI-managed) ----------------
+# ---------------- persistence (per-user providers/user_<id>.json) ----------------
+# Mutations always take an explicit user_id -- a write must never fall back to
+# an ambient "current user" guess, unlike the read-side lane/model lookups.
 
-def _write_providers(cfg: dict) -> None:
-    PROVIDERS_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+def _write_providers(user_id: int, cfg: dict) -> None:
+    PROVIDERS_DIR.mkdir(parents=True, exist_ok=True)
+    _provider_file(user_id).write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
-def save_provider(name: str, data: dict) -> dict:
-    """Create/update one provider (API key included). Persists + reloads caches."""
+def save_provider(user_id: int, name: str, data: dict) -> dict:
+    """Create/update one provider (API key included) in this user's own config.
+    Persists + reloads that user's cache."""
     name = str(name or "").strip()
     if not name:
         raise ValueError("provider name is required")
-    cfg = _read_json(PROVIDERS_FILE)
+    cfg = _read_json(_provider_file(user_id))
     entry = (cfg.setdefault("provider", {})).setdefault(name, {})
     if data.get("npm") is not None:
         entry["npm"] = data["npm"]
@@ -400,17 +433,17 @@ def save_provider(name: str, data: dict) -> dict:
                 pass
             models[mid] = mc
         entry["models"] = {**(entry.get("models") or {}), **models}
-    _write_providers(cfg)
-    reload()
+    _write_providers(user_id, cfg)
+    reload(user_id)
     return entry
 
 
-def delete_model(provider: str, model_id: str) -> dict:
+def delete_model(user_id: int, provider: str, model_id: str) -> dict:
     """Remove one model from a provider and unbind any lane pointing at it."""
     provider = str(provider or "").strip()
     model_id = str(model_id or "").strip()
     key = f"{provider}/{model_id}"
-    cfg = _read_json(PROVIDERS_FILE)
+    cfg = _read_json(_provider_file(user_id))
     entry = (cfg.get("provider") or {}).get(provider)
     if not isinstance(entry, dict):
         raise ValueError(f"provider not found: {provider}")
@@ -422,29 +455,29 @@ def delete_model(provider: str, model_id: str) -> dict:
     for lane in CLOUD_LANES:
         if cl.get(lane) == key:
             cl[lane] = None
-    _write_providers(cfg)
-    reload()
+    _write_providers(user_id, cfg)
+    reload(user_id)
     return entry
 
 
-def delete_provider(name: str) -> dict:
+def delete_provider(user_id: int, name: str) -> dict:
     """Remove a provider and unbind any lane that pointed at one of its models."""
     name = str(name or "").strip()
-    cfg = _read_json(PROVIDERS_FILE)
+    cfg = _read_json(_provider_file(user_id))
     (cfg.get("provider") or {}).pop(name, None)
     cl = cfg.setdefault("cloud", {})
     for lane in CLOUD_LANES:
         v = cl.get(lane)
         if v and str(v).split("/")[0] == name:
             cl[lane] = None
-    _write_providers(cfg)
-    reload()
+    _write_providers(user_id, cfg)
+    reload(user_id)
     return cfg
 
 
-def set_lanes(updates: dict) -> dict:
+def set_lanes(user_id: int, updates: dict) -> dict:
     """Bind lanes to '<provider>/<model>' (None / 'local' unbinds)."""
-    cfg = _read_json(PROVIDERS_FILE)
+    cfg = _read_json(_provider_file(user_id))
     cl = cfg.setdefault("cloud", {})
     for lane in CLOUD_LANES:
         if lane in updates:
@@ -455,8 +488,8 @@ def set_lanes(updates: dict) -> dict:
     if "routing_mode" in updates:
         mode = str(updates["routing_mode"] or "auto").strip().lower()
         cl["routing_mode"] = mode if mode in ("auto", "custom") else "auto"
-    _write_providers(cfg)
-    reload()
+    _write_providers(user_id, cfg)
+    reload(user_id)
     return cl
 
 

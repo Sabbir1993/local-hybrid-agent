@@ -262,6 +262,41 @@ async def index_sessions(force: bool = False) -> int:
     return len(rows)
 
 
+async def index_knowledge_source(source_id: int, text: str, version: Optional[float] = None) -> int:
+    """(Re)index one knowledge-base source's extracted text. Replaces any
+    existing chunks for it. Returns the number of chunks stored."""
+    path = f"kb:{source_id}"
+    version = version if version is not None else time.time()
+    _db().execute("DELETE FROM chunks WHERE source='knowledge' AND path=?", (path,))
+    _db().commit()
+    rows = [("knowledge", path, idx, part, version) for idx, part in enumerate(_chunk_text(text))]
+    if rows:
+        vecs = await _embed_texts([r[3] for r in rows])
+        _store_vecs(rows, vecs)
+    return len(rows)
+
+
+def delete_knowledge_chunks(source_id: int) -> None:
+    _db().execute("DELETE FROM chunks WHERE source='knowledge' AND path=?", (f"kb:{source_id}",))
+    _db().commit()
+
+
+def clear_chat_history_chunks() -> None:
+    """Danger-zone: drop indexed chat/workspace memory (not the org knowledge
+    base -- that's a separate, deliberately-curated source)."""
+    _db().execute("DELETE FROM chunks WHERE source IN ('workspace', 'session')")
+    _db().commit()
+
+
+def _knowledge_id_from_path(path: str) -> Optional[int]:
+    if path.startswith("kb:"):
+        try:
+            return int(path.split(":", 1)[1])
+        except ValueError:
+            return None
+    return None
+
+
 def _load_entries() -> list:
     out = []
     for source, path, text, vec in _db().execute(
@@ -289,9 +324,53 @@ def _norm(vals: list) -> list:
     return [(v - lo) / (hi - lo) for v in vals]
 
 
-async def search_memory_hybrid(query: str, k: int = 8) -> list:
-    """Hybrid recall: 0.5*cosine + 0.5*lexical (lexical-only without embedder)."""
+def _session_id_from_path(path: str) -> Optional[int]:
+    if path.startswith("session:"):
+        try:
+            return int(path.split(":", 1)[1])
+        except ValueError:
+            return None
+    return None
+
+
+async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optional[int] = None,
+                                allowed_knowledge_source_ids: Optional[set] = None) -> list:
+    """Hybrid recall: 0.5*cosine + 0.5*lexical (lexical-only without embedder).
+
+    Strict per-user isolation: "session"-sourced chunks (past chat titles/first
+    messages) are filtered to the requesting user's own sessions only -- other
+    users' chat history must never surface via memory search, even indirectly.
+    Workspace chunks are unaffected (shared project context).
+
+    "knowledge"-sourced chunks (org knowledge base) are filtered to
+    allowed_knowledge_source_ids *before* scoring -- an unpermitted caller's
+    query never sees a restricted document as a retrieval candidate at all,
+    which is what makes silence (no hit) safe instead of a leaky special case.
+    When allowed_knowledge_source_ids is None, all knowledge chunks are
+    excluded (callers must pass an explicit set, even if empty, to opt in).
+    """
     entries = _load_entries()
+    if not entries:
+        return []
+    if requesting_user_id is not None or allowed_knowledge_source_ids is not None:
+        from .db import db_session_owner
+        filtered = []
+        for source, path, text, v in entries:
+            if source == "session" and requesting_user_id is not None:
+                sid = _session_id_from_path(path)
+                owner = db_session_owner(sid) if sid is not None else None
+                if owner is not None and owner != requesting_user_id:
+                    continue
+            if source == "knowledge":
+                if not allowed_knowledge_source_ids:
+                    continue
+                kid = _knowledge_id_from_path(path)
+                if kid is None or kid not in allowed_knowledge_source_ids:
+                    continue
+            filtered.append((source, path, text, v))
+        entries = filtered
+    else:
+        entries = [e for e in entries if e[0] != "knowledge"]
     if not entries:
         return []
     qv = await _embed_texts([query])

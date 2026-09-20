@@ -250,8 +250,64 @@ def _init_projects_db() -> sqlite3.Connection:
         conn.execute("ALTER TABLE projects ADD COLUMN workspace_dir TEXT")
     if "allow_patterns" not in cols:
         conn.execute("ALTER TABLE projects ADD COLUMN allow_patterns TEXT DEFAULT '[]'")
+    if "user_id" not in cols:
+        # nullable only for legacy pre-auth rows; every new row always sets it.
+        # No cross-file FK to auth.db -- ownership is enforced at the app layer
+        # in every db_* function below (mandatory owner_user_id parameter).
+        conn.execute("ALTER TABLE projects ADD COLUMN user_id INTEGER")
+    session_cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)")]
+    if "user_id" not in session_cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
+
+    # migration: the original schema had a *global* UNIQUE(name), which blocks
+    # two different users from ever having a same-named project. SQLite can't
+    # ALTER a column constraint, so rebuild the table with UNIQUE(name, user_id)
+    # if the old single-column unique index is still present. Idempotent.
+    name_only_unique = any(
+        [r["name"] for r in conn.execute(f"PRAGMA index_info('{idx['name']}')")] == ["name"]
+        for idx in conn.execute("PRAGMA index_list('projects')") if idx["unique"]
+    )
+    if name_only_unique:
+        conn.executescript("""
+            ALTER TABLE projects RENAME TO projects_old;
+            CREATE TABLE projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                workspace_dir TEXT,
+                allow_patterns TEXT DEFAULT '[]',
+                user_id INTEGER,
+                UNIQUE(name, user_id)
+            );
+            INSERT INTO projects (id, name, created_at, workspace_dir, allow_patterns, user_id)
+                SELECT id, name, created_at, workspace_dir, allow_patterns, user_id FROM projects_old;
+            DROP TABLE projects_old;
+        """)
     conn.commit()
     return conn
+
+
+def db_clear_all_projects_data() -> dict:
+    """Danger-zone: wipe every project/session/message/plan-item for every
+    user. Used only by the super-admin 'Clear All Data' settings action."""
+    counts = {}
+    for table in ("plan_items", "messages", "sessions", "projects"):
+        counts[table] = _projects_db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    _projects_db.execute("DELETE FROM plan_items")
+    _projects_db.execute("DELETE FROM messages")
+    _projects_db.execute("DELETE FROM sessions")
+    _projects_db.execute("DELETE FROM projects")
+    _projects_db.commit()
+    return counts
+
+
+def backfill_legacy_owner(user_id: int) -> None:
+    """One-time migration hook: attribute pre-auth rows (user_id IS NULL) to
+    the bootstrap super-admin so nothing is left ownerless. Safe to call every
+    boot -- it's a no-op once every row has an owner."""
+    _projects_db.execute("UPDATE projects SET user_id = ? WHERE user_id IS NULL", (user_id,))
+    _projects_db.execute("UPDATE sessions SET user_id = ? WHERE user_id IS NULL", (user_id,))
+    _projects_db.commit()
 
 
 _projects_db = _init_projects_db()
@@ -269,8 +325,20 @@ def _proj_row(r) -> dict:
             "workspace_dir": r["workspace_dir"], "allow_patterns": pats}
 
 
-def db_list_projects() -> list:
-    return [_proj_row(r) for r in _projects_db.execute("SELECT * FROM projects ORDER BY name")]
+def db_list_projects(owner_user_id: int) -> list:
+    """Strict per-user isolation: only the caller's own projects, ever."""
+    return [_proj_row(r) for r in _projects_db.execute(
+        "SELECT * FROM projects WHERE user_id = ? ORDER BY name", (owner_user_id,))]
+
+
+def db_project_owner(pid: int) -> Optional[int]:
+    row = _projects_db.execute("SELECT user_id FROM projects WHERE id = ?", (pid,)).fetchone()
+    return row["user_id"] if row else None
+
+
+def db_session_owner(sid: int) -> Optional[int]:
+    row = _projects_db.execute("SELECT user_id FROM sessions WHERE id = ?", (sid,)).fetchone()
+    return row["user_id"] if row else None
 
 
 def db_get_project_allow_patterns(name_or_id) -> list:
@@ -308,7 +376,10 @@ def db_add_project_allow_pattern(name_or_id, pattern: str) -> list:
     return pats
 
 
-def db_create_project(name: str, workspace_dir: str = None, workspace_root: Path = None) -> dict:
+def db_create_project(name: str, workspace_dir: str = None, workspace_root: Path = None,
+                       owner_user_id: int = None) -> dict:
+    if owner_user_id is None:
+        raise ValueError("owner_user_id required")
     name = (name or "").strip()
     if not name:
         raise ValueError("project name required")
@@ -321,21 +392,27 @@ def db_create_project(name: str, workspace_dir: str = None, workspace_root: Path
             raise ValueError("workspace_dir must be an absolute path")
         p.mkdir(parents=True, exist_ok=True)
         ws = str(p.resolve())
+    elif workspace_root:
+        # No explicit path chosen -- default to a per-user subtree on the
+        # server's storage, keyed by the logged-in user's own id, so two
+        # users' same-named projects never collide or share files on disk.
+        p = workspace_root / f"user_{owner_user_id}" / name
+        p.mkdir(parents=True, exist_ok=True)
+        ws = str(p.resolve())
     now = time.time()
     try:
         cur = _projects_db.execute(
-            "INSERT INTO projects (name, created_at, workspace_dir) VALUES (?, ?, ?)",
-            (name, now, ws))
+            "INSERT INTO projects (name, created_at, workspace_dir, user_id) VALUES (?, ?, ?, ?)",
+            (name, now, ws, owner_user_id))
         _projects_db.commit()
     except sqlite3.IntegrityError:
         raise ValueError(f"project '{name}' already exists")
-    if not ws and workspace_root:
-        d = workspace_root / name
-        d.mkdir(parents=True, exist_ok=True)
     return {"id": cur.lastrowid, "name": name, "created_at": now, "workspace_dir": ws}
 
 
-def db_delete_project(pid: int) -> None:
+def db_delete_project(pid: int, owner_user_id: int) -> None:
+    if db_project_owner(pid) != owner_user_id:
+        raise PermissionError("not your project")
     _projects_db.execute(
         "DELETE FROM plan_items WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
         (pid,)
@@ -372,14 +449,18 @@ def db_session_docs(limit: int = 60) -> list:
     return out
 
 
-def db_list_sessions(pid: Optional[int]) -> list:
+def db_list_sessions(pid: Optional[int], owner_user_id: int) -> list:
     if pid is None or pid == 0:
         rows = _projects_db.execute(
-            "SELECT * FROM sessions WHERE project_id IS NULL ORDER BY id DESC"
+            "SELECT * FROM sessions WHERE project_id IS NULL AND user_id = ? ORDER BY id DESC",
+            (owner_user_id,),
         )
     else:
+        if db_project_owner(pid) != owner_user_id:
+            raise PermissionError("not your project")
         rows = _projects_db.execute(
-            "SELECT * FROM sessions WHERE project_id = ? ORDER BY id DESC", (pid,)
+            "SELECT * FROM sessions WHERE project_id = ? AND user_id = ? ORDER BY id DESC",
+            (pid, owner_user_id),
         )
     return [
         {"id": r["id"], "title": r["title"], "created_at": r["created_at"]}
@@ -387,31 +468,41 @@ def db_list_sessions(pid: Optional[int]) -> list:
     ]
 
 
-def db_create_session(pid: Optional[int], title: str = None) -> dict:
+def db_create_session(pid: Optional[int], title: str = None, owner_user_id: int = None) -> dict:
+    if owner_user_id is None:
+        raise ValueError("owner_user_id required")
     now = time.time()
     title = (title or "New session").strip()[:80]
     actual_pid = None if (pid is None or pid == 0) else pid
+    if actual_pid is not None and db_project_owner(actual_pid) != owner_user_id:
+        raise PermissionError("not your project")
     cur = _projects_db.execute(
-        "INSERT INTO sessions (project_id, title, created_at) VALUES (?, ?, ?)",
-        (actual_pid, title, now))
+        "INSERT INTO sessions (project_id, title, created_at, user_id) VALUES (?, ?, ?, ?)",
+        (actual_pid, title, now, owner_user_id))
     _projects_db.commit()
     return {"id": cur.lastrowid, "title": title, "created_at": now}
 
 
-def db_update_session_title(sid: int, title: str) -> None:
+def db_update_session_title(sid: int, title: str, owner_user_id: int) -> None:
+    if db_session_owner(sid) != owner_user_id:
+        raise PermissionError("not your session")
     title = (title or "New session").strip()[:80]
     _projects_db.execute("UPDATE sessions SET title = ? WHERE id = ?", (title, sid))
     _projects_db.commit()
 
 
-def db_delete_session(sid: int) -> None:
+def db_delete_session(sid: int, owner_user_id: int) -> None:
+    if db_session_owner(sid) != owner_user_id:
+        raise PermissionError("not your session")
     _projects_db.execute("DELETE FROM plan_items WHERE session_id = ?", (sid,))
     _projects_db.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
     _projects_db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
     _projects_db.commit()
 
 
-def db_load_messages(sid: int) -> list:
+def db_load_messages(sid: int, owner_user_id: int) -> list:
+    if db_session_owner(sid) != owner_user_id:
+        raise PermissionError("not your session")
     return [
         {"role": r["role"], "content": r["content"], "meta": json.loads(r["meta"]) if r["meta"] else None}
         for r in _projects_db.execute(
@@ -419,7 +510,9 @@ def db_load_messages(sid: int) -> list:
     ]
 
 
-def db_append_message(sid: int, role: str, content: str, meta: dict = None) -> int:
+def db_append_message(sid: int, role: str, content: str, meta: dict = None, owner_user_id: int = None) -> int:
+    if owner_user_id is None or db_session_owner(sid) != owner_user_id:
+        raise PermissionError("not your session")
     cur = _projects_db.execute(
         "INSERT INTO messages (session_id, role, content, meta, created_at) VALUES (?, ?, ?, ?, ?)",
         (sid, role, content, json.dumps(meta) if meta else None, time.time()))

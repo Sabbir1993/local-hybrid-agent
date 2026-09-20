@@ -4,9 +4,12 @@ __pycache__/
 usage.db
 projects.db
 compacts/
+knowledge_uploads/
 node_modules/
 .venv/
 venv/
 scratch/
 config/providers.json
+config/providers.json.migrated
+config/providers/
 /.agents

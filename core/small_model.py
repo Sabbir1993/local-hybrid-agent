@@ -95,7 +95,7 @@ def _load_app_config() -> dict:
         "roles": dict(_DEFAULT_ROLES),
         # cloud providers / lane bindings: kept here so /control/models can report
         # them without importing the UI-managed providers.json directly
-        # (core.cloud is the authority; config/providers.json overrides config/app.json)
+        # (core.cloud is the authority; each user's config/providers/user_<id>.json overrides config/app.json)
         "provider": {},
         "cloud": {},
         "capabilities": {

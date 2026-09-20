@@ -7,10 +7,12 @@ import sys
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from core.state import state
+from core.auth import Principal
+from core.deps import get_current_user
 from core.monitor import (
     _monitor_state,
     monitor_begin,
@@ -30,7 +32,7 @@ async def _proxy_cloud(cm, path: str, request: Request, body: bytes):
     """Forward a chat-completions request straight to a cloud-bound main lane.
 
     Raises on failure so the caller can decide whether to fall back to the
-    local lane (per config/providers.json -> cloud.fallback_local).
+    local lane (per the user's cloud.fallback_local binding).
     """
     import json as _json
     client = cloud.CloudClient(cm)
@@ -104,7 +106,7 @@ async def _proxy_cloud_inner(client, cm, path, payload, is_streaming, rid, t0):
 
 
 @router.api_route("/{path:path}", methods=["GET", "POST"])
-async def proxy(path: str, request: Request):
+async def proxy(path: str, request: Request, user: Principal = Depends(get_current_user)):
     if path in ("favicon.ico", "index.html"):
         return JSONResponse({"error": "not found"}, status_code=404)
 
@@ -112,13 +114,13 @@ async def proxy(path: str, request: Request):
     # instead of silently auto-starting a local llama-server. Other
     # llama.cpp-only endpoints (/slots, /metrics, ...) have no cloud
     # equivalent and still need the local process.
-    cloud_main = cloud.cloud_lane("main") if path.lower() in _CHAT_PATHS else None
+    cloud_main = cloud.cloud_lane("main", user.id) if path.lower() in _CHAT_PATHS else None
     if cloud_main is not None:
         body = await request.body()
         try:
             return await _proxy_cloud(cloud_main, path, request, body)
         except Exception as e:
-            fb_enabled = bool(cloud.cloud_bindings().get("fallback_local", True))
+            fb_enabled = bool(cloud.cloud_bindings(user.id).get("fallback_local", True))
             if not fb_enabled:
                 return JSONResponse({
                     "error": {"message": f"Cloud request failed: {e}", "type": "cloud_request_failed"}

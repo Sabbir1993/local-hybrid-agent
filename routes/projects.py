@@ -10,10 +10,12 @@ import sys
 from pathlib import Path
 from typing import Optional, Union
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from core.auth import Principal
+from core.deps import get_current_user
 from core.small_model import WORKSPACE_ROOT
 from core.db import (
     db_list_projects,
@@ -135,7 +137,7 @@ except Exception:
 
 
 @router.post("/control/browse_folder")
-async def browse_folder(req: Optional[BrowseFolderReq] = None):
+async def browse_folder(req: Optional[BrowseFolderReq] = None, user: Principal = Depends(get_current_user)):
     init_dir = req.initial_dir if req else ""
     try:
         selected_path = await asyncio.to_thread(_ask_directory_native, init_dir)
@@ -149,7 +151,7 @@ async def browse_folder(req: Optional[BrowseFolderReq] = None):
 
 
 @router.get("/control/fs/browse")
-async def fs_browse(path: Optional[str] = ""):
+async def fs_browse(path: Optional[str] = "", user: Principal = Depends(get_current_user)):
     drives = _get_drives()
     raw_path = (path or "").strip()
     if not raw_path:
@@ -199,7 +201,7 @@ async def fs_browse(path: Optional[str] = ""):
 
 
 @router.post("/control/fs/mkdir")
-async def fs_mkdir(req: MkdirReq):
+async def fs_mkdir(req: MkdirReq, user: Principal = Depends(get_current_user)):
     try:
         base = Path(req.path).expanduser().resolve()
         name = req.name.strip()
@@ -219,8 +221,8 @@ class MessageReq(BaseModel):
 
 
 @router.get("/control/projects")
-async def list_projects():
-    projs = db_list_projects()
+async def list_projects(user: Principal = Depends(get_current_user)):
+    projs = db_list_projects(owner_user_id=user.id)
     active_p = None
     curr_proj = get_active_project()
     if curr_proj:
@@ -238,36 +240,39 @@ async def list_projects():
 
 
 @router.post("/control/projects")
-async def create_project(req: ProjectReq):
+async def create_project(req: ProjectReq, user: Principal = Depends(get_current_user)):
     try:
-        p = db_create_project(req.name, req.workspace_dir, WORKSPACE_ROOT)
+        p = db_create_project(req.name, req.workspace_dir, WORKSPACE_ROOT, owner_user_id=user.id)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True, "project": p}
 
 
 @router.delete("/control/projects/{pid}")
-async def delete_project(pid: int):
+async def delete_project(pid: int, user: Principal = Depends(get_current_user)):
     pname = None
-    for p in db_list_projects():
+    for p in db_list_projects(owner_user_id=user.id):
         if p["id"] == pid:
             pname = p["name"]
             break
-    db_delete_project(pid)
+    try:
+        db_delete_project(pid, owner_user_id=user.id)
+    except PermissionError:
+        return JSONResponse({"error": "project not found"}, status_code=404)
     curr_proj = get_active_project()
     if curr_proj:
-        projs = db_list_projects()
+        projs = db_list_projects(owner_user_id=user.id)
         if not any(p["name"] == curr_proj for p in projs):
             set_active_project(None)
     return {"ok": True, "deleted_id": pid, "deleted_name": pname}
 
 
 @router.post("/control/projects/{pid}/activate")
-async def activate_project(pid: int):
+async def activate_project(pid: int, user: Principal = Depends(get_current_user)):
     if pid == 0:
         set_active_project(None)
         return {"ok": True, "active": None, "workspace": str(active_workspace())}
-    for p in db_list_projects():
+    for p in db_list_projects(owner_user_id=user.id):
         if p["id"] == pid:
             set_active_project(p["name"])
             return {"ok": True, "active": p["name"], "project": p, "workspace": str(active_workspace())}
@@ -275,43 +280,58 @@ async def activate_project(pid: int):
 
 
 @router.get("/control/projects/{pid}/sessions")
-async def list_sessions(pid: int):
-    return {"sessions": db_list_sessions(pid)}
+async def list_sessions(pid: int, user: Principal = Depends(get_current_user)):
+    try:
+        return {"sessions": db_list_sessions(pid, owner_user_id=user.id)}
+    except PermissionError:
+        return JSONResponse({"error": "project not found"}, status_code=404)
 
 
 @router.post("/control/projects/{pid}/sessions")
-async def create_session(pid: int, req: SessionReq):
+async def create_session(pid: int, req: SessionReq, user: Principal = Depends(get_current_user)):
     try:
-        s = db_create_session(pid, req.title)
+        s = db_create_session(pid, req.title, owner_user_id=user.id)
+    except PermissionError:
+        return JSONResponse({"error": "project not found"}, status_code=404)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True, "session": s}
 
 
 @router.patch("/control/sessions/{sid}")
-async def update_session(sid: int, req: SessionReq):
+async def update_session(sid: int, req: SessionReq, user: Principal = Depends(get_current_user)):
     try:
-        db_update_session_title(sid, req.title)
+        db_update_session_title(sid, req.title, owner_user_id=user.id)
+    except PermissionError:
+        return JSONResponse({"error": "session not found"}, status_code=404)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True}
 
 
 @router.delete("/control/sessions/{sid}")
-async def delete_session(sid: int):
-    db_delete_session(sid)
+async def delete_session(sid: int, user: Principal = Depends(get_current_user)):
+    try:
+        db_delete_session(sid, owner_user_id=user.id)
+    except PermissionError:
+        return JSONResponse({"error": "session not found"}, status_code=404)
     return {"ok": True}
 
 
 @router.get("/control/sessions/{sid}/messages")
-async def get_messages(sid: int):
-    return {"messages": db_load_messages(sid)}
+async def get_messages(sid: int, user: Principal = Depends(get_current_user)):
+    try:
+        return {"messages": db_load_messages(sid, owner_user_id=user.id)}
+    except PermissionError:
+        return JSONResponse({"error": "session not found"}, status_code=404)
 
 
 @router.post("/control/sessions/{sid}/messages")
-async def post_message(sid: int, req: MessageReq):
+async def post_message(sid: int, req: MessageReq, user: Principal = Depends(get_current_user)):
     try:
-        mid = db_append_message(sid, req.role, req.content, req.meta)
+        mid = db_append_message(sid, req.role, req.content, req.meta, owner_user_id=user.id)
+    except PermissionError:
+        return JSONResponse({"error": "session not found"}, status_code=404)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True, "id": mid}

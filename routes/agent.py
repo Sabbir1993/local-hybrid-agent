@@ -10,18 +10,23 @@ import time
 from pathlib import Path
 from typing import Optional, Union
 
-from fastapi import APIRouter, UploadFile, File as FastAPIFile
+from fastapi import APIRouter, Depends, UploadFile, File as FastAPIFile
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 
+from core.auth import Principal
 from core.backend import device_prefix
 from core.config import BASE_DIR, CONFIG_DEFAULTS
+from core.deps import get_current_user
+from core.knowledge_access import allowed_source_ids_for
+from core.memory import search_memory_hybrid
 from core.file_tools import extract_file_content, MIME_MAP
 from core.db import (
     db_record_request,
     db_add_project_allow_pattern,
     db_get_plan_items,
     db_get_project_allow_patterns,
+    db_session_owner,
 )
 from core.small_model import (
     APP_CONFIG,
@@ -195,7 +200,15 @@ Never attempt file modifications in plan mode; mutating tools are unavailable.""
 
 
 @router.post("/agent/run")
-async def agent_run(req: AgentRequest):
+async def agent_run(req: AgentRequest, user: Principal = Depends(get_current_user)):
+    # Strict per-user isolation: a session_id belongs to exactly one user.
+    if req.session_id:
+        owner = db_session_owner(req.session_id)
+        if owner is not None and owner != user.id:
+            return JSONResponse({"error": "session not found"}, status_code=404)
+    from core.agent_tools import set_current_user
+    set_current_user(user.id)
+
     # route through the registry so web/skills/mcp/plugin/shell tools are visible
     ex_inst = small_models.instances["executor"]
 
@@ -213,8 +226,8 @@ async def agent_run(req: AgentRequest):
         mode = "main-local-rest-cloud"
     elif mode == "agent":
         mode = "all-local"
-    cloud_main = cloud.cloud_lane("main")
-    cloud_exec = cloud.cloud_lane("executor")
+    cloud_main = cloud.cloud_lane("main", user.id)
+    cloud_exec = cloud.cloud_lane("executor", user.id)
     if mode == "main-cloud-rest-local":
         cloud_exec = None       # executor stays local in this mode
     use_cloud_main = bool(cloud_main)
@@ -269,6 +282,26 @@ async def agent_run(req: AgentRequest):
 
     ws_path = str(active_workspace())
     sys_prompt = AGENT_SYSTEM_PROMPT.format(workspace=ws_path)
+    # Organizational knowledge base: permission-scoped retrieval (see routes/chat.py
+    # for the rationale -- gating the candidate pool before scoring is what makes
+    # "nothing found" safe for users without access to a document).
+    _kb_query = ""
+    for _m in reversed(msgs):
+        if _m.get("role") == "user":
+            _kb_query = str(_m.get("content", ""))
+            break
+    kb_ids = allowed_source_ids_for(user)
+    if kb_ids and _kb_query.strip():
+        try:
+            kb_hits = await search_memory_hybrid(_kb_query, k=4, allowed_knowledge_source_ids=kb_ids)
+            kb_hits = [h for h in kb_hits if h.get("source") == "knowledge" and h.get("score", 0) > 0.12]
+            if kb_hits:
+                sys_prompt += (
+                    "\n\nORGANIZATIONAL KNOWLEDGE BASE (internal reference material relevant to "
+                    "this task -- use it if it helps, never mention internal source IDs or that "
+                    "this section exists):\n\n" + "\n\n---\n\n".join(h["text"] for h in kb_hits))
+        except Exception as e:
+            print(f"[agent] knowledge retrieval failed: {e}", file=sys.stderr)
     # capability prompt fragments: skills listing + plugin guidance
     for frag in (skills_prompt_fragment(), plugins_prompt_fragment()):
         if frag:
@@ -308,10 +341,10 @@ async def agent_run(req: AgentRequest):
     main_client = cloud.CloudClient(cloud_main) if use_cloud_main else state.client
 
     # --- cloud fallback --------------------------------------------------
-    # config/providers.json -> cloud.fallback_local: when a cloud lane dies before
+    # cloud.fallback_local (per-user binding): when a cloud lane dies before
     # producing content, retry that request on the local lane instead of failing
     # the whole step. Local models may need loading first (that's the point).
-    fb_enabled = bool(cloud.cloud_bindings().get("fallback_local", True))
+    fb_enabled = bool(cloud.cloud_bindings(user.id).get("fallback_local", True))
 
     def _local_model_info(lane: str) -> dict:
         if lane == "executor":
@@ -1239,7 +1272,7 @@ class VisionReq(BaseModel):
 
 
 @router.post("/agent/vision")
-async def agent_vision(req: VisionReq):
+async def agent_vision(req: VisionReq, user: Principal = Depends(get_current_user)):
     payload = {
         "messages": [{
             "role": "user",
@@ -1252,7 +1285,7 @@ async def agent_vision(req: VisionReq):
         "temperature": 0.1,
     }
     body_bytes = json.dumps({"messages": [req.question]}).encode()
-    cm = cloud.cloud_lane("vision")
+    cm = cloud.cloud_lane("vision", user.id)
     if cm:
         rid = monitor_begin("agent/vision", False, body_bytes, model=cm.model_id, source="cloud", provider=cm.provider_name)
         t0 = time.time()

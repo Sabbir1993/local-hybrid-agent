@@ -10,10 +10,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
+from core.auth import Principal
+from core.deps import get_current_user
 from core.small_model import APP_CONFIG, small_models
 from core import cloud
 from core.state import state
@@ -31,6 +33,8 @@ from core.monitor import (
     monitor_begin,
     monitor_end,
 )
+from core.knowledge_access import allowed_source_ids_for
+from core.memory import search_memory_hybrid
 from core.db import (
     db_record_request,
     db_load_messages,
@@ -58,8 +62,10 @@ class ChatRunRequest(BaseModel):
 
 
 @router.post("/chat/run")
-async def chat_run(req: ChatRunRequest):
-    cloud_main = cloud.cloud_lane("main")
+async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_user)):
+    from core.agent_tools import set_current_user
+    set_current_user(user.id)
+    cloud_main = cloud.cloud_lane("main", user.id)
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
     if not main_ready and not cloud_main:
         target = state.profile_path or state.profile or common.initial_profile_path
@@ -99,6 +105,24 @@ async def chat_run(req: ChatRunRequest):
     sys_parts = []
     if req.system_prompt and req.system_prompt.strip():
         sys_parts.append(req.system_prompt.strip())
+
+    # Organizational knowledge base: permission-scoped retrieval BEFORE scoring
+    # (allowed_source_ids_for gates the candidate pool itself), so a user with
+    # no access to a document never gets a hint it exists -- "nothing found"
+    # falls out naturally instead of being a special case to get wrong.
+    kb_ids = allowed_source_ids_for(user)
+    if kb_ids and last_query.strip():
+        try:
+            kb_hits = await search_memory_hybrid(last_query, k=4, allowed_knowledge_source_ids=kb_ids)
+            kb_hits = [h for h in kb_hits if h.get("source") == "knowledge" and h.get("score", 0) > 0.12]
+            if kb_hits:
+                kb_text = "\n\n---\n\n".join(h["text"] for h in kb_hits)
+                sys_parts.append(
+                    "ORGANIZATIONAL KNOWLEDGE BASE (internal reference material relevant to this "
+                    "query -- use it if it helps answer, cite naturally, never mention internal "
+                    "source IDs or that this section exists):\n\n" + kb_text)
+        except Exception as e:
+            print(f"[chat] knowledge retrieval failed: {e}", file=sys.stderr)
 
     file_prompt = (
         "FILE CREATION & DOWNLOAD SYSTEM (COMMON STORAGE):\n"
@@ -194,7 +218,7 @@ async def chat_run(req: ChatRunRequest):
                 res_dict = None
                 streamed_content = []
 
-                if cloud_main and cloud.cloud_bindings().get("fallback_local", True):
+                if cloud_main and cloud.cloud_bindings(user.id).get("fallback_local", True):
                     fb_local = None
                     target = state.profile_path or state.profile or common.initial_profile_path
                     if target:
@@ -584,7 +608,8 @@ def _strip_think(text: str) -> str:
     m = re.search(r"<think>[\s\S]*?</think>", text or "")
     return (m.group(0)[7:-8] if m else (text or "")).strip()
 
-async def _summarize_history(convo: list, instructions: Optional[str], use_executor: bool) -> str:
+async def _summarize_history(convo: list, instructions: Optional[str], use_executor: bool,
+                              user_id: Optional[int] = None) -> str:
     """One non-streaming LLM call that writes the conversation summary.
     Main model when running, else the on-demand executor small model."""
     transcript_lines = []
@@ -610,8 +635,8 @@ async def _summarize_history(convo: list, instructions: Optional[str], use_execu
 
     main_ready = (state.process is not None and state.process.poll() is None
                   and state.client is not None)
-    cloud_exec = cloud.cloud_lane("executor")
-    cloud_main = cloud.cloud_lane("main")
+    cloud_exec = cloud.cloud_lane("executor", user_id)
+    cloud_main = cloud.cloud_lane("main", user_id)
     if use_executor or not main_ready:
         if cloud_exec:
             # cloud executor: no local process / no VRAM (llama.cpp-only fields
@@ -645,7 +670,7 @@ async def _summarize_history(convo: list, instructions: Optional[str], use_execu
     return summary
 
 @router.post("/chat/compact")
-async def chat_compact(req: CompactRequest):
+async def chat_compact(req: CompactRequest, user: Principal = Depends(get_current_user)):
     # Project gate: in agent mode /compact only works with an active project
     # (mirrors the frontend curProject gate — defense in depth).
     if req.agent_mode and not req.project_id:
@@ -656,7 +681,10 @@ async def chat_compact(req: CompactRequest):
     # Source of truth: the DB session (preserves acts/reasoning meta); fallback
     # to the posted messages for sessions that were never persisted.
     if req.session_id:
-        src = db_load_messages(req.session_id)
+        try:
+            src = db_load_messages(req.session_id, owner_user_id=user.id)
+        except PermissionError:
+            return JSONResponse({"error": "session not found"}, status_code=404)
     else:
         src = [dict(m) for m in (req.messages or [])]
     convo = [m for m in src
@@ -668,7 +696,7 @@ async def chat_compact(req: CompactRequest):
 
     before_tokens = estimate_prompt_tokens(convo)
     try:
-        summary = await _summarize_history(convo, req.instructions, req.use_executor)
+        summary = await _summarize_history(convo, req.instructions, req.use_executor, user.id)
     except Exception as e:
         return JSONResponse({"error": f"compact failed: {e}"}, status_code=500)
 
@@ -695,7 +723,8 @@ async def chat_compact(req: CompactRequest):
         # in static/js/compact.js for how future turns pick up only the marker
         # forward instead of the full history.
         db_append_message(req.session_id, compact_message["role"],
-                           compact_message["content"], compact_message["meta"])
+                           compact_message["content"], compact_message["meta"],
+                           owner_user_id=user.id)
 
     return {
         "summary": summary,

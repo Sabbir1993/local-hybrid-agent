@@ -10,39 +10,47 @@ from typing import Optional
 
 from .db import _projects_db
 from .small_model import APP_CONFIG, WORKSPACE_ROOT, COMMON_ROOT, describe_image_file
+from .request_context import set_current_user, get_current_user_id  # noqa: F401 (re-exported)
 
 MAX_TOOL_OUTPUT = 20000   # chars per tool result fed back to the model
 MAX_EDIT_BYTES = 512 * 1024
-_active_project: Optional[str] = None  # current project name (set via UI)
-_ws_changes: dict = {}                 # path -> {"before": str|None, "after": str|None}
+# Both keyed by user_id (via request_context) rather than a single bare
+# global -- this is a shared multi-user server, so "the active project" and
+# "the tracked edits" must never leak across two users' concurrent requests.
+_active_project: dict = {}   # user_id -> project name (set via UI)
+_ws_changes: dict = {}       # user_id -> {path: {"before": str|None, "after": str|None}}
 
 
 def get_active_project() -> Optional[str]:
-    return _active_project
+    return _active_project.get(get_current_user_id())
 
 
 def set_active_project(name: Optional[str]) -> None:
-    global _active_project
-    _active_project = name
-    _ws_changes.clear()
+    _active_project[get_current_user_id()] = name
+    _ws_changes.pop(get_current_user_id(), None)
 
 
-def project_workspace_dir(name: str) -> Optional[Path]:
-    for r in _projects_db.execute("SELECT workspace_dir FROM projects WHERE name = ?", (name,)):
-        ws = r["workspace_dir"]
-        if ws:
-            p = Path(ws).resolve()
-            p.mkdir(parents=True, exist_ok=True)
-            return p
+def project_workspace_dir(name: str, owner_user_id: Optional[int] = None) -> Optional[Path]:
+    uid = owner_user_id if owner_user_id is not None else get_current_user_id()
+    row = _projects_db.execute(
+        "SELECT workspace_dir FROM projects WHERE name = ? AND user_id = ?", (name, uid)
+    ).fetchone()
+    if row and row["workspace_dir"]:
+        p = Path(row["workspace_dir"]).resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
     return None
 
 
 def active_workspace() -> Path:
-    if _active_project:
-        custom = project_workspace_dir(_active_project)
+    uid = get_current_user_id()
+    proj = _active_project.get(uid)
+    if proj:
+        custom = project_workspace_dir(proj, uid)
         if custom:
             return custom.resolve()
-        p = (WORKSPACE_ROOT / _active_project).resolve()
+        base = (WORKSPACE_ROOT / f"user_{uid}") if uid is not None else WORKSPACE_ROOT
+        p = (base / proj).resolve()
         p.mkdir(parents=True, exist_ok=True)
         return p
     return WORKSPACE_ROOT.resolve()
@@ -349,8 +357,9 @@ def tool_run_python(args: dict) -> str:
 
 
 def _snapshot_change(p: Path) -> None:
+    changes = _ws_changes.setdefault(get_current_user_id(), {})
     key = str(p)
-    rec = _ws_changes.setdefault(key, {})
+    rec = changes.setdefault(key, {})
     if "before" not in rec:
         try:
             rec["before"] = p.read_text(encoding="utf-8", errors="replace") if p.exists() else None
@@ -360,10 +369,11 @@ def _snapshot_change(p: Path) -> None:
 
 
 def tool_list_diff(args: dict) -> str:
-    if not _ws_changes:
+    changes = _ws_changes.get(get_current_user_id()) or {}
+    if not changes:
         return "(no tracked changes in this session)"
     out = []
-    for path, rec in _ws_changes.items():
+    for path, rec in changes.items():
         rel = Path(path).name
         status = "created" if rec.get("before") is None else "modified"
         out.append(f"{rel}: {status}")
@@ -372,14 +382,15 @@ def tool_list_diff(args: dict) -> str:
 
 def tool_revert(args: dict) -> str:
     target = args.get("path", "")
-    for path, rec in _ws_changes.items():
+    changes = _ws_changes.get(get_current_user_id()) or {}
+    for path, rec in changes.items():
         if Path(path).name == target or path.endswith(target):
             before = rec.get("before")
             if before is None:
                 Path(path).unlink(missing_ok=True)
             else:
                 Path(path).write_text(before, encoding="utf-8")
-            del _ws_changes[path]
+            del changes[path]
             return f"reverted {target}"
     return f"error: no tracked change for {target}"
 
@@ -398,7 +409,7 @@ async def tool_search_memory(args: dict) -> str:
     try:
         from .memory import ensure_indexed, search_memory_hybrid
         await ensure_indexed(max_age_s=900)
-        results = await search_memory_hybrid(query, k=8)
+        results = await search_memory_hybrid(query, k=8, requesting_user_id=get_current_user_id())
     except Exception as e:
         return f"error: memory search unavailable: {type(e).__name__}: {e}"
     if not results:

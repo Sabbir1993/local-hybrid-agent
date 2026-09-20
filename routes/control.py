@@ -9,9 +9,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from core.audit import audit_log
+from core.auth import Principal, user_has_permission
+from core.deps import get_current_user, require_permission
 
 from core.config import (
     CONFIG_DEFAULTS,
@@ -163,18 +167,18 @@ def _standalone_profile(target: str) -> Optional[dict]:
 
 
 @router.get("/control/config")
-async def get_config(model: Optional[str] = None):
+async def get_config(model: Optional[str] = None, user: Principal = Depends(get_current_user)):
     # Cloud model selected in the dropdown: llama-server launch params don't
     # apply, so report a cloud-shaped config (the drawer disables the fields).
     if model and str(model).startswith("cloud:"):
-        cm = cloud.get_cloud(model)
+        cm = cloud.get_cloud(model, user.id)
         if cm:
             return {"cloud": True, "provider": cm.provider_name, "model": cm.model_id,
                     "display": cm.display, "ctx": cm.ctx, "context_size": cm.ctx,
                     "endpoint": cm.endpoint()}
     # No ?model= given: if the main lane itself is cloud-bound, report that
     if not model:
-        cm_bound = cloud.cloud_lane("main")
+        cm_bound = cloud.cloud_lane("main", user.id)
         if cm_bound:
             return {"cloud": True, "provider": cm_bound.provider_name, "model": cm_bound.model_id,
                     "display": cm_bound.display, "ctx": cm_bound.ctx,
@@ -196,7 +200,8 @@ async def get_config(model: Optional[str] = None):
 
 
 @router.post("/control/config")
-async def set_config(req: ConfigRequest, model: Optional[str] = None):
+async def set_config(req: ConfigRequest, model: Optional[str] = None,
+                      user: Principal = Depends(require_permission("model.local.configure"))):
     # global common.curStatus_model_hint
     # validate + persist against the live profile when it matches the request
     # target (or no target); otherwise against a temp profile built from the
@@ -239,7 +244,7 @@ async def set_config(req: ConfigRequest, model: Optional[str] = None):
 
 
 @router.get("/control/status")
-async def status():
+async def status(user: Principal = Depends(get_current_user)):
     ctx_info = {"n_ctx": 32768, "n_past": 0, "n_prompt": 0, "pct": 0.0}
     if state.process and state.process.poll() is None:
         try:
@@ -262,8 +267,8 @@ async def status():
         except Exception:
             pass
 
-    cm_main = cloud.cloud_lane("main")
-    cm_exec = cloud.cloud_lane("executor")
+    cm_main = cloud.cloud_lane("main", user.id)
+    cm_exec = cloud.cloud_lane("executor", user.id)
     # cloud main lane has no local /slots to query -- fall back to its
     # configured ctx so the UI doesn't show the local-server default (32768)
     if cm_main and not (state.process and state.process.poll() is None):
@@ -295,12 +300,12 @@ async def status():
 
 
 @router.get("/control/gpu")
-async def gpu():
+async def gpu(user: Principal = Depends(require_permission("settings.runtime.view"))):
     return await get_gpu_stats()
 
 
 @router.get("/control/profiles")
-async def profiles():
+async def profiles(user: Principal = Depends(get_current_user)):
     models_out = []
 
     search_dirs = [MODELS_DIR]
@@ -349,12 +354,29 @@ async def profiles():
                 "display": cm.display,
                 "size_gb": None,
                 "ctx": cm.ctx,
-            } for cm in cloud.cloud_models()]}
+            } for cm in cloud.cloud_models(user.id)]}
+
+
+@router.get("/control/available_models")
+async def available_models(user: Principal = Depends(get_current_user)):
+    """Read-only trimmed model list for the nav bar: no launch params, no VRAM
+    controls, just what's already loaded (local, shared) plus this user's own
+    configured cloud models."""
+    loaded_name = state.profile.get("name") if state.profile else None
+    is_running = state.process is not None and state.process.poll() is None
+    out = []
+    if loaded_name:
+        out.append({"id": loaded_name, "display": loaded_name, "currently_loaded": is_running})
+    for cm in cloud.cloud_models(user.id):
+        out.append({"id": f"cloud:{cm.key}", "display": cm.display, "currently_loaded": False})
+    return {"models": out}
 
 
 @router.post("/control/stop")
-async def stop_server():
+async def stop_server(user: Principal = Depends(require_permission("model.local.load"))):
+    was = state.profile.get("name") if state.profile else None
     await state.stop()
+    audit_log(user, action="model.stop", resource=was, result="allow")
     return {"ok": True, "stopped": True}
 
 
@@ -396,27 +418,31 @@ async def vram_devices():
 
 
 @router.post("/control/start")
-async def start_server():
+async def start_server(user: Principal = Depends(require_permission("model.local.load"))):
     if state.profile is None and state.profile_path is None:
         return JSONResponse({"error": "No model or profile selected. Select a model/profile first."}, status_code=400)
     try:
         await state.start()
     except Exception as e:
+        audit_log(user, action="model.start", result="error", detail={"error": str(e)})
         return JSONResponse({"error": str(e)}, status_code=500)
+    audit_log(user, action="model.start", resource=state.profile.get("name") if state.profile else None, result="allow")
     return {"ok": True, "pid": state.process.pid if state.process else None}
 
 
 @router.post("/control/restart")
-async def restart_server():
+async def restart_server(user: Principal = Depends(require_permission("model.local.load"))):
     try:
         await state.start()
     except Exception as e:
+        audit_log(user, action="model.restart", result="error", detail={"error": str(e)})
         return JSONResponse({"error": str(e)}, status_code=500)
+    audit_log(user, action="model.restart", resource=state.profile.get("name") if state.profile else None, result="allow")
     return {"ok": True, "pid": state.process.pid if state.process else None}
 
 
 @router.post("/control/keepalive")
-async def set_keepalive(req: KeepaliveRequest):
+async def set_keepalive(req: KeepaliveRequest, user: Principal = Depends(require_permission("settings.runtime.view"))):
     state.keepalive_enabled = req.enabled
     state.last_activity = time.time()
     print(f"[server_manager] keepalive {'enabled' if req.enabled else 'disabled'}")
@@ -424,7 +450,7 @@ async def set_keepalive(req: KeepaliveRequest):
 
 
 @router.post("/control/switch")
-async def switch(req: SwitchRequest):
+async def switch(req: SwitchRequest, user: Principal = Depends(get_current_user)):
     # global common.curStatus_model_hint
     target = req.target or req.profile
     if not target:
@@ -432,30 +458,39 @@ async def switch(req: SwitchRequest):
 
     # Cloud model: bind the MAIN lane to it and never spawn llama-server. The
     # local model, if any, is left untouched (selection is who answers you).
+    # Cloud provider/model choice is fully user-managed -- no permission gate.
     if str(target).startswith("cloud:"):
-        cm = cloud.get_cloud(target)
+        cm = cloud.get_cloud(target, user.id)
         if cm is None:
             return JSONResponse({"error": f"cloud model not configured: {target[6:]}"}, status_code=404)
-        cloud.set_lanes({"main": cm.key})
+        cloud.set_lanes(user.id, {"main": cm.key})
         common.curStatus_model_hint = target
         print(f"[server_manager] main lane -> cloud {cm.key} ({cm.provider_name}); "
               f"local llama-server not started")
+        audit_log(user, action="model.load", resource=cm.key, detail={"cloud": True}, result="allow")
         return {"ok": True, "cloud": True, "model": cm.key, "display": cm.display,
                 "provider": cm.provider_name, "endpoint": cm.endpoint()}
+
+    # Local GGUF: launching a process on the shared GPU rig stays privileged.
+    if not user_has_permission(user, "model.local.load"):
+        audit_log(user, action="model.local.load", permission_key="model.local.load", result="deny")
+        return JSONResponse({"error": "missing permission: model.local.load"}, status_code=403)
 
     path = Path(target)
     if not path.exists():
         return JSONResponse({"error": f"Target file not found: {target}"}, status_code=404)
 
     # Selecting a local model releases the main lane from the cloud (if bound)
-    if cloud.cloud_bindings().get("main"):
-        cloud.set_lanes({"main": None})
+    if cloud.cloud_bindings(user.id).get("main"):
+        cloud.set_lanes(user.id, {"main": None})
         print("[server_manager] main lane -> local (cloud binding cleared)")
     try:
         await state.load_profile(path)
     except Exception as e:
+        audit_log(user, action="model.load", resource=str(path), result="error", detail={"error": str(e)})
         return JSONResponse({"error": str(e)}, status_code=500)
     common.curStatus_model_hint = state.profile.get("model_path") if state.profile else None
+    audit_log(user, action="model.load", resource=state.profile.get("name", path.stem), result="allow")
     return {"ok": True, "profile": state.profile.get("name", path.stem)}
 
 
@@ -510,7 +545,8 @@ async def monitor():
 
 
 @router.get("/control/report")
-async def report(days: int = 30, model: Optional[str] = None):
+async def report(days: int = 30, model: Optional[str] = None,
+                  user: Principal = Depends(require_permission("usage.report.view"))):
     try:
         days = max(1, min(365, int(days)))
     except ValueError:

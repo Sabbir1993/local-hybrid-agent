@@ -378,6 +378,40 @@ header {
   display: flex; align-items: center; gap: 10px; padding: 0 18px;
 }
 
+.user-menu { position: relative; display: inline-flex; }
+.user-menu-dropdown {
+  position: absolute; top: calc(100% + 6px); right: 0; min-width: 240px; z-index: 500;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 10px; display: none;
+}
+.user-menu-dropdown.open { display: block; }
+.user-menu-email {
+  font-size: 12px; color: var(--text); font-family: var(--mono, monospace);
+  padding: 4px 6px 8px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 6px;
+  word-break: break-all;
+}
+.user-menu-badge {
+  display: inline-block; margin-top: 4px; font-size: 10px; padding: 1px 6px;
+  border-radius: 10px; background: var(--accent-bg); color: var(--accent);
+}
+.user-menu-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: transparent; border: none; color: var(--text); font-size: 12px;
+  padding: 8px 6px; border-radius: 6px; cursor: pointer; font-family: inherit;
+}
+.user-menu-item:hover { background: var(--panel2); }
+.user-menu-item.danger { color: var(--red); }
+.user-menu-pwd-form { padding: 6px; display: flex; flex-direction: column; gap: 6px; }
+.user-menu-pwd-form input {
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); padding: 6px 8px; font-size: 12px; font-family: inherit;
+}
+.user-menu-pwd-form .row { display: flex; gap: 6px; }
+.user-menu-pwd-form .row button { flex: 1; }
+.user-menu-msg { font-size: 11px; padding: 2px 6px; min-height: 14px; }
+.user-menu-msg.err { color: var(--red); }
+.user-menu-msg.ok { color: var(--green); }
+
 .model-group {
   display: flex; align-items: stretch; height: 32px;
   border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
@@ -390,6 +424,37 @@ header {
   cursor: pointer; text-overflow: ellipsis;
 }
 .model-group select option, .model-group select optgroup { background: var(--panel); color: var(--text); }
+
+.model-picker-btn {
+  display: flex; align-items: center; gap: 7px; height: 100%; flex: 1; min-width: 190px; max-width: 280px;
+  background: transparent; border: none; color: var(--text); font-size: 12px; font-family: inherit;
+  padding: 0 10px; cursor: pointer; text-align: left;
+}
+.model-picker-btn:hover { background: rgba(255,255,255,0.04); }
+.model-picker-icon { font-size: 12px; flex: none; }
+.model-picker-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-picker-caret { flex: none; color: var(--dim); font-size: 10px; }
+
+.model-picker-dropdown {
+  position: fixed; min-width: 300px; max-width: 380px; z-index: 500;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 6px; display: none;
+  max-height: 360px; overflow-y: auto;
+}
+.model-picker-dropdown.open { display: block; }
+.model-picker-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: transparent; border: none; color: var(--text); font-size: 12px;
+  padding: 8px 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+}
+.model-picker-item:hover { background: var(--panel2); }
+.model-picker-item.active { background: var(--accent-bg); color: var(--accent); }
+.mpi-icon { flex: none; font-size: 12px; }
+.mpi-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mpi-badge {
+  flex: none; font-size: 9.5px; padding: 1px 6px; border-radius: 10px;
+  background: rgba(52,211,153,.15); color: var(--green);
+}
 
 #btn-load-header {
   width: 32px; min-width: 32px; margin: 0; border: none; border-left: 1px solid var(--border);
@@ -428,6 +493,8 @@ header {
   display: inline-flex; align-items: center; background: var(--panel2);
   border: 1px solid var(--border); border-radius: 8px; padding: 2px; gap: 2px;
 }
+.mode-switch.full { display: flex; width: 100%; margin-bottom: 8px; }
+.mode-switch.full .mode-btn { flex: 1; text-align: center; }
 .mode-btn {
   border: none; background: transparent; color: var(--dim); font-size: 11.5px;
   font-weight: 600; padding: 5px 12px; border-radius: 6px; cursor: pointer;
@@ -1043,6 +1110,35 @@ body.ws-resizing #ws-grip::after { background: var(--accent); }
 .cap-toggle.on { background: rgba(74,222,128,0.15); color: var(--green); border-color: rgba(74,222,128,0.4); }
 .cap-toggle:hover { border-color: var(--accent); }
 .cap-body { padding: 8px 12px; display: flex; flex-direction: column; gap: 5px; }
+.tagpicker { position: relative; }
+.tagpicker-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.tagpicker-chip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px;
+  background: var(--accent-bg); color: var(--accent); border-radius: 10px; padding: 2px 4px 2px 8px;
+}
+.tagpicker-x {
+  background: transparent; border: none; color: inherit; cursor: pointer; font-size: 12px;
+  line-height: 1; padding: 0 3px; opacity: .75;
+}
+.tagpicker-x:hover { opacity: 1; }
+.tagpicker-add-wrap { position: relative; display: inline-block; }
+.tagpicker-add-btn {
+  background: var(--panel2); border: 1px dashed var(--border); color: var(--dim);
+  border-radius: 10px; padding: 2px 8px; font-size: 10.5px; cursor: pointer; font-family: inherit;
+}
+.tagpicker-add-btn:hover { color: var(--text); border-color: var(--accent); }
+.tagpicker-dropdown {
+  display: none; position: absolute; top: calc(100% + 4px); left: 0; min-width: 140px; z-index: 400;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.3); padding: 4px; max-height: 200px; overflow-y: auto;
+}
+.tagpicker-dropdown.open { display: block; }
+.tagpicker-opt {
+  display: block; width: 100%; text-align: left; background: transparent; border: none;
+  color: var(--text); font-size: 11px; padding: 5px 8px; border-radius: 5px; cursor: pointer; font-family: inherit;
+}
+.tagpicker-opt:hover { background: var(--panel2); }
+
 .cap-item { font-size: 11px; line-height: 1.45; padding: 3px 0; }
 .cap-item b { color: var(--text); }
 .cap-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; background: var(--dim); }

@@ -5,73 +5,71 @@ const CFG_DEFAULTS = {
 };
 
 async function loadProfiles() {
+  const sel = $('profile');
+  if (!sel) return;
+
+  // Nav bar (ui.html, no Load button there anymore): a trimmed, read-only-ish
+  // list -- just what's already loaded/available, no local file browsing or
+  // launch controls. The full picker below is settings.html's Model Config card.
+  if (!$('btn-load-header')) {
+    try {
+      const d = await (await fetch('/control/available_models')).json();
+      sel.innerHTML = '';
+      (d.models || []).forEach(m => {
+        const o = document.createElement('option');
+        o.value = m.id;
+        const isCloud = String(m.id).startsWith('cloud:');
+        o.textContent = m.display + (isCloud ? '' : (m.currently_loaded ? ' (loaded)' : ' (not loaded)'));
+        o.dataset.kind = isCloud ? 'cloud' : 'local';
+        sel.appendChild(o);
+      });
+      if (!sel.options.length) {
+        const o = document.createElement('option');
+        o.value = ''; o.textContent = 'No model available'; sel.appendChild(o);
+      }
+      let restored = null;
+      try { restored = localStorage.getItem('app_model'); } catch (e) {}
+      if (restored && [...sel.options].some(o => o.value === restored)) sel.value = restored;
+    } catch (e) {}
+    renderModelPicker();
+    return;
+  }
+
   try {
     const d = await (await fetch('/control/profiles')).json();
-    const sel = $('profile');
     sel.innerHTML = '';
 
-    // Local GGUFs live in one chunk: "Local models (this machine)".
-    // (Cloud models below are already clustered per provider with ☁️ groups.)
+    // Local GGUFs only -- this card edits llama-server launch parameters,
+    // which are meaningless for cloud models (managed separately in the
+    // ☁️ Cloud Models card below).
     const locals = (d.models || []).slice().sort((a, b) =>
       String(a.name || '').localeCompare(String(b.name || '')));
-    if (locals.length) {
-      const g = document.createElement('optgroup');
-      g.label = '🖥️ Local models (this machine)';
-      locals.forEach(m => {
-        const o = document.createElement('option');
-        o.value = m.path;
-        const name = (m.name || '').trim();
-        const shortName = name.length > 20 ? (name.slice(0, 20) + '...') : name;
-        const size = m.size_gb != null ? ` · ${m.size_gb}GB` : '';
-        const mtp = m.mtp_available ? ' ⚡MTP' : '';
-        o.textContent = `${shortName}${size}${mtp}`;
-        o.title = `${m.name}${size}${mtp}`;
-        o.dataset.mtp = m.mtp_available ? '1' : '';
-        o.dataset.mtpPath = m.mtp_draft_path || '';
-        g.appendChild(o);
-      });
-      sel.appendChild(g);
-    }
+    locals.forEach(m => {
+      const o = document.createElement('option');
+      o.value = m.path;
+      const name = (m.name || '').trim();
+      const shortName = name.length > 20 ? (name.slice(0, 20) + '...') : name;
+      const size = m.size_gb != null ? ` · ${m.size_gb}GB` : '';
+      const mtp = m.mtp_available ? ' ⚡MTP' : '';
+      o.textContent = `${shortName}${size}${mtp}`;
+      o.title = `${m.name}${size}${mtp}`;
+      o.dataset.mtp = m.mtp_available ? '1' : '';
+      o.dataset.mtpPath = m.mtp_draft_path || '';
+      sel.appendChild(o);
+    });
 
     if (!sel.options.length) {
       const o = document.createElement('option');
       o.value = '';
-      o.textContent = 'No models found';
+      o.textContent = 'No local models found';
       sel.appendChild(o);
     }
 
-    // ---- cloud models: one cluster per provider (from /control/profiles) ----
-    const byProv = {};
-    (d.cloud || []).forEach(m => {
-      const pn = m.provider_name || m.provider;
-      (byProv[pn] = byProv[pn] || []).push(m);
-    });
-    Object.keys(byProv).sort().forEach(pn => {
-      const g = document.createElement('optgroup');
-      g.label = '\u2601 ' + pn;
-      byProv[pn].forEach(m => {
-        const o = document.createElement('option');
-        o.value = m.value;                       // "cloud:<provider>/<model>"
-        o.textContent = m.display;
-        o.title = `${m.model} via ${pn} (cloud, no VRAM)`;
-        o.dataset.kind = 'cloud';
-        o.dataset.provider = m.provider;
-        o.dataset.model = m.model;
-        o.dataset.ctx = m.ctx || '';
-        g.appendChild(o);
-      });
-      sel.appendChild(g);
-    });
-
-    // Main-lane truth: a cloud binding wins over the last local selection
-    // (picker a cloud model = "this is who answers me").
-    const bound = (d.bindings && d.bindings.main) ? ('cloud:' + d.bindings.main) : null;
     let restored = null;
     try { restored = localStorage.getItem('app_model'); } catch (e) {}
     const has = v => !!v && [...sel.options].some(o => o.value === v);
-    if (has(bound)) sel.value = bound;
-    else if (!bound && has(restored)) sel.value = restored;
-    else if (bound && !has(bound) && sel.options.length) sel.value = sel.options[0].value;
+    if (has(restored)) sel.value = restored;
+    else if (sel.options.length) sel.value = sel.options[0].value;
 
     loadConfig();   // dropdown is ready — fetch its saved config
   } catch (e) {}
@@ -106,7 +104,94 @@ $('profile').onchange = e => {
     }).catch(() => {});
   }
   loadConfig();   // show the newly selected model's saved config
+  renderModelPicker();
 };
+
+/* ---------------- custom model picker (ui.html header only) ----------------
+ * The native <select id="profile"> stays in the DOM (hidden) as the single
+ * source of truth -- everything that reads/writes sel.value/.options keeps
+ * working unchanged. This just renders a themed, iconed, truncating replica
+ * on top of it and forwards clicks back onto the real select + 'change'.
+ */
+function _mpShorten(s, n = 26) {
+  s = String(s || '');
+  return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s;
+}
+
+function _mpCleanLabel(text) {
+  return String(text || '').replace(/\s*\((?:loaded|not loaded)\)\s*$/, '');
+}
+
+function renderModelPicker() {
+  const sel = $('profile');
+  const btn = $('model-picker-btn');
+  const dd = $('model-picker-dropdown');
+  if (!sel || !btn || !dd) return;   // settings.html has no custom picker
+
+  const icon = $('model-picker-icon');
+  const label = $('model-picker-label');
+
+  dd.innerHTML = '';
+  [...sel.options].forEach(o => {
+    const isCloud = o.dataset.kind === 'cloud';
+    const isLoaded = /\(loaded\)/.test(o.textContent);
+    const raw = _mpCleanLabel(o.textContent);
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'model-picker-item' + (o.value === sel.value ? ' active' : '');
+    item.title = raw;
+    item.innerHTML = `<span class="mpi-icon">${isCloud ? '☁️' : '🖥'}</span>` +
+      `<span class="mpi-label">${_mpShorten(raw, 34)}</span>` +
+      (isLoaded ? '<span class="mpi-badge">loaded</span>' : '');
+    item.onclick = () => {
+      if (sel.value !== o.value) {
+        sel.value = o.value;
+        sel._user = true;
+        sel.dispatchEvent(new Event('change'));
+      }
+      dd.classList.remove('open');
+    };
+    dd.appendChild(item);
+  });
+
+  const cur = sel.options[sel.selectedIndex];
+  if (cur) {
+    const isCloud = cur.dataset.kind === 'cloud';
+    icon.textContent = isCloud ? '☁️' : '🖥';
+    const raw = _mpCleanLabel(cur.textContent);
+    label.textContent = _mpShorten(raw, 22);
+    label.title = raw;
+  } else {
+    icon.textContent = '🖥';
+    label.textContent = 'No model';
+    label.title = '';
+  }
+}
+
+(function initModelPickerToggle() {
+  const btn = document.getElementById('model-picker-btn');
+  const dd = document.getElementById('model-picker-dropdown');
+  if (!btn || !dd) return;
+
+  const position = () => {
+    const r = btn.getBoundingClientRect();
+    dd.style.top = (r.bottom + 6) + 'px';
+    dd.style.left = r.left + 'px';
+  };
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (dd.classList.contains('open')) { dd.classList.remove('open'); return; }
+    position();
+    dd.classList.add('open');
+  });
+  document.addEventListener('click', (e) => {
+    if (dd.classList.contains('open') && !dd.contains(e.target) && e.target !== btn) {
+      dd.classList.remove('open');
+    }
+  });
+  window.addEventListener('resize', () => { if (dd.classList.contains('open')) position(); });
+})();
 
 /* ---------------- launch config ---------------- */
 function restoreDefault(id, val) {
@@ -220,7 +305,7 @@ function updateGpuDependentFields() {
 
 if ($('cfg-ts')) $('cfg-ts').addEventListener('input', updateGpuDependentFields);
 
-$('btn-apply').onclick = async () => {
+if ($('btn-apply')) $('btn-apply').onclick = async () => {
   // restore defaults for any field the user cleared
   restoreDefault('cfg-ctx', CFG_DEFAULTS.ctx);
   restoreDefault('cfg-ts', CFG_DEFAULTS.ts);

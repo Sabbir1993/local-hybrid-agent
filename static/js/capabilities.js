@@ -214,6 +214,3 @@ async function startMcpAuthorize(card) {
   }
 }
 
-$('btn-theme').onclick = () => cycleTheme();
-$('btn-settings').onclick = () => setSettings();
-$('settings-close').onclick = () => setSettings(false);

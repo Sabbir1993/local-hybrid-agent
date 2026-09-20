@@ -462,7 +462,8 @@ async function send(inputText) {
   };
   ensureSession(text ? text.slice(0, 60) : (sentFiles ? `📎 ${sentFiles}` : 'Files session')).then(() => persistMsg('user', fullPrompt, userMeta));
 
-  const sys = $('sysprompt').value.trim();
+  const samplingCfg = getSamplingConfig();
+  const sys = (samplingCfg.sysprompt || '').trim();
   const msgs = [];
   if (sys) msgs.push({ role: 'system', content: sys });
   const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : messages;
@@ -477,8 +478,8 @@ async function send(inputText) {
         messages: msgs,
         web_search: !!chatWebSearch,
         system_prompt: sys || undefined,
-        temperature: parseFloat($('temp').value),
-        max_tokens: (isNaN(parseInt($('maxtok').value)) || parseInt($('maxtok').value) <= 0) ? -1 : parseInt($('maxtok').value),
+        temperature: samplingCfg.temp,
+        max_tokens: (isNaN(samplingCfg.maxtok) || samplingCfg.maxtok <= 0) ? -1 : samplingCfg.maxtok,
       }),
       signal: ctrl.signal,
     });
@@ -560,7 +561,7 @@ async function send(inputText) {
   const fullLen = (last().content || '').length + (last().reasoning || '').length;
   const ntok = last().ntok || Math.max(1, Math.round(fullLen / 3.5));
   last().tps = ntok / dt; last().ntok = ntok; last().secs = dt;
-  if (ntok > 1) $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
+  if (ntok > 1 && $('chip-ts')) $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
   persistMsg('assistant', last().content, {
     tps: last().tps,
     ntok,

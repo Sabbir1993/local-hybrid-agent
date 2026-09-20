@@ -58,6 +58,7 @@ const CFG_INPUT_DEFAULTS = {
   'cfg-ts': () => CFG_DEFAULTS.ts,
 };
 Object.keys(CFG_INPUT_DEFAULTS).forEach(id => {
+  if (!$(id)) return;
   $(id).addEventListener('blur', () => {
     if ($(id).value.trim() === '') $(id).value = CFG_INPUT_DEFAULTS[id]();
   });
@@ -74,12 +75,6 @@ if (btnWebToggle) {
   };
   updateWebToggleUI();
 }
-$('temp').oninput = e => { $('tempv').textContent = parseFloat(e.target.value).toFixed(2); };
-$('topp').oninput = e => { $('toppv').textContent = parseFloat(e.target.value).toFixed(2); };
-$('minp').oninput = e => { $('minpv').textContent = parseFloat(e.target.value).toFixed(3); };
-$('rep').oninput = e => { $('repv').textContent = parseFloat(e.target.value).toFixed(2); };
-$('presence').oninput = e => { $('presencev').textContent = parseFloat(e.target.value).toFixed(2); };
-
 /* image preview lightbox modal */
 function openImageModal(src, title = 'Image attachment') {
   const m = $('img-modal');
@@ -185,6 +180,12 @@ window.addEventListener('keydown', e => {
     if (mb) mb.hidden = true;
   }
 });
+
+/* header buttons */
+if ($('btn-theme')) $('btn-theme').onclick = () => cycleTheme();
+if ($('btn-chat-cfg')) $('btn-chat-cfg').onclick = () => setSettings();
+if ($('settings-close')) $('settings-close').onclick = () => setSettings(false);
+if ($('btn-settings')) $('btn-settings').onclick = () => { location.href = '/settings'; };
 
 /* boot */
 loadProfiles();   // loadConfig() runs inside once the dropdown is ready

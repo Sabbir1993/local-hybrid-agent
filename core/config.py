@@ -16,11 +16,14 @@ STATIC_DIR = BASE_DIR / "static"
 USAGE_DB_FILE = BASE_DIR / "usage.db"
 PROJECTS_DB_FILE = BASE_DIR / "projects.db"
 MEMORY_DB_FILE = BASE_DIR / "memory.db"
+AUTH_DB_FILE = BASE_DIR / "auth.db"       # users, roles, permissions, sessions, audit log
+KNOWLEDGE_UPLOADS_DIR = BASE_DIR / "knowledge_uploads"  # uploaded org knowledge-base files
 CONFIG_DIR = BASE_DIR / "config"
 CONFIG_FILE = CONFIG_DIR / "app.json"          # main app config (models_dir, lanes, capabilities, ...)
 ROLES_FILE = CONFIG_DIR / "roles.json"         # multiagent role definitions (planner/coder/reviewer)
 MODEL_CONFIGS_FILE = CONFIG_DIR / "model_configs.json"
-PROVIDERS_FILE = CONFIG_DIR / "providers.json"   # cloud providers + lane bindings (UI-managed, gitignored)
+PROVIDERS_FILE = CONFIG_DIR / "providers.json"   # legacy shared file -- migrated into PROVIDERS_DIR on first boot
+PROVIDERS_DIR = CONFIG_DIR / "providers"         # per-user cloud providers + lane bindings: providers/user_<id>.json
 
 # Cloud (OpenAI-compatible) lanes
 CLOUD_LANES = ("main", "executor", "vision")

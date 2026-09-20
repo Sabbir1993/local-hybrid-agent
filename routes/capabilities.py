@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -17,6 +17,8 @@ from core.small_model import (
     needle_available,
 )
 from core import cloud
+from core.auth import Principal
+from core.deps import get_current_user
 from core.state import state
 from core.agent_tools import get_active_project
 from core.registry import registry
@@ -32,10 +34,10 @@ from core.shell_tools import (
 router = APIRouter(tags=["capabilities"])
 
 @router.get("/control/models")
-async def models_status():
-    cm_main = cloud.cloud_lane("main")
-    cm_exec = cloud.cloud_lane("executor")
-    cm_vision = cloud.cloud_lane("vision")
+async def models_status(user: Principal = Depends(get_current_user)):
+    cm_main = cloud.cloud_lane("main", user.id)
+    cm_exec = cloud.cloud_lane("executor", user.id)
+    cm_vision = cloud.cloud_lane("vision", user.id)
     local_exec = small_models.status()
     s = {
         "main": {
@@ -57,9 +59,9 @@ async def models_status():
                 "model": (local_exec.get("vision") or {}).get("model")},
         },
         "cloud": {
-            "bindings": cloud.cloud_bindings(),
-            "providers": len(cloud.providers()),
-            "models": len(cloud.cloud_models()),
+            "bindings": cloud.cloud_bindings(user.id),
+            "providers": len(cloud.providers(user.id)),
+            "models": len(cloud.cloud_models(user.id)),
         },
         "router": {
             "enabled": bool(APP_CONFIG["router"].get("enabled", True)),

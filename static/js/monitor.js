@@ -103,9 +103,4 @@ function setSettings(open) {
   const isOpen = (open === undefined) ? !d.classList.contains('open') : !!open;
   d.classList.toggle('open', isOpen);
   if (isOpen && monOpen) setMonitor(false);
-  if (isOpen) {
-    loadConfig();   // refresh config panel from server on open
-    loadCapabilities();
-    loadCloudCard();
-  }
 }

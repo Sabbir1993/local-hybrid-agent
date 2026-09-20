@@ -104,8 +104,8 @@ async function runAgentSSE(text) {
           mode: engineMode,
           plan: planMode,
           session_id: (curSession && curSession.id) ? curSession.id : null,
-          temperature: parseFloat($('temp').value),
-          max_tokens: (isNaN(parseInt($('maxtok').value)) || parseInt($('maxtok').value) <= 0) ? -1 : parseInt($('maxtok').value),
+          temperature: getSamplingConfig().temp,
+          max_tokens: (() => { const mt = getSamplingConfig().maxtok; return (isNaN(mt) || mt <= 0) ? -1 : mt; })(),
           attachments: docAttachments,
         }),
         signal: ctrl.signal,
@@ -192,7 +192,7 @@ async function runAgentSSE(text) {
       const fullLen = (last().content || '').length + (last().reasoning || '').length;
       const ntok = Math.max(1, Math.round(fullLen / 3.5));
       last().tps = ntok / dt; last().ntok = ntok; last().secs = dt;
-      if (ntok > 1) $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
+      if (ntok > 1 && $('chip-ts')) $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
       persistMsg('assistant', last().content, {
         tps: last().tps, ntok, secs: dt,
         reasoning: last().reasoning || undefined,

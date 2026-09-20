@@ -5,13 +5,15 @@ project workspace, plus PR creation via a connected GitHub MCP server (routes/mc
 
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from core import git_tools
 from core import git_ai
 from core import mcp as mcp_core
+from core.auth import Principal
+from core.deps import get_current_user
 from core.registry import registry
 
 router = APIRouter(prefix="/git", tags=["git"])
@@ -87,7 +89,7 @@ async def push(req: PushReq):
 
 
 @router.post("/suggest_commit_message")
-async def suggest_commit_message():
+async def suggest_commit_message(user: Principal = Depends(get_current_user)):
     staged = git_tools.git_diff(staged=True)
     diff_text = staged.get("diff", "")
     if not diff_text.strip():
@@ -98,7 +100,7 @@ async def suggest_commit_message():
     if not diff_text.strip():
         return JSONResponse({"error": "no changes to summarize"}, status_code=400)
     try:
-        message = await git_ai.generate_commit_message(diff_text)
+        message = await git_ai.generate_commit_message(diff_text, user.id)
     except Exception as e:
         return JSONResponse({"error": f"generation failed: {e}"}, status_code=502)
     return {"message": message}
@@ -109,7 +111,7 @@ class SuggestPrReq(BaseModel):
 
 
 @router.post("/suggest_pr")
-async def suggest_pr(req: SuggestPrReq):
+async def suggest_pr(req: SuggestPrReq, user: Principal = Depends(get_current_user)):
     result = git_tools.git_diff_range(req.base)
     if "error" in result:
         return JSONResponse(result, status_code=400)
@@ -117,7 +119,7 @@ async def suggest_pr(req: SuggestPrReq):
     if not diff_text.strip():
         return JSONResponse({"error": f"no diff against '{req.base}' to summarize"}, status_code=400)
     try:
-        summary = await git_ai.generate_pr_summary(diff_text)
+        summary = await git_ai.generate_pr_summary(diff_text, user.id)
     except Exception as e:
         return JSONResponse({"error": f"generation failed: {e}"}, status_code=502)
     return summary

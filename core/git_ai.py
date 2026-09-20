@@ -36,7 +36,7 @@ def _strip_think(text: str) -> str:
     return (text[m.end():] if m else (text or "")).strip()
 
 
-async def _complete(system_prompt: str, diff_text: str) -> str:
+async def _complete(system_prompt: str, diff_text: str, user_id: Optional[int] = None) -> str:
     if not diff_text.strip():
         raise ValueError("no diff content to summarize")
     if len(diff_text) > MAX_DIFF_CHARS:
@@ -55,7 +55,7 @@ async def _complete(system_prompt: str, diff_text: str) -> str:
         "stream": False,
     }
 
-    cloud_exec = cloud.cloud_lane("executor")
+    cloud_exec = cloud.cloud_lane("executor", user_id)
     if cloud_exec:
         r = await cloud.CloudClient(cloud_exec).post("/v1/chat/completions", json=payload, timeout=None)
     else:
@@ -77,12 +77,12 @@ async def _complete(system_prompt: str, diff_text: str) -> str:
     return _strip_think(text)
 
 
-async def generate_commit_message(diff_text: str) -> str:
-    return await _complete(_COMMIT_SYSTEM_PROMPT, diff_text)
+async def generate_commit_message(diff_text: str, user_id: Optional[int] = None) -> str:
+    return await _complete(_COMMIT_SYSTEM_PROMPT, diff_text, user_id)
 
 
-async def generate_pr_summary(diff_text: str) -> dict:
-    text = await _complete(_PR_SYSTEM_PROMPT, diff_text)
+async def generate_pr_summary(diff_text: str, user_id: Optional[int] = None) -> dict:
+    text = await _complete(_PR_SYSTEM_PROMPT, diff_text, user_id)
     title, body = "", ""
     for line in text.splitlines():
         if line.upper().startswith("TITLE:"):
