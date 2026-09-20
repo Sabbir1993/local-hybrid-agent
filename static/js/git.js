@@ -4,6 +4,7 @@ let _gitDiffTarget = null; // {path, staged}
 async function updateGitIconVisibility() {
   const btn = $('btn-git-icon');
   if (!btn) return;
+  if (!agentMode || !curProject) { btn.style.display = 'none'; return; }
   try {
     const d = await (await fetch('/git/status')).json();
     btn.style.display = d.error ? 'none' : '';

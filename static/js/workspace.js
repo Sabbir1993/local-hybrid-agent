@@ -100,6 +100,12 @@ async function wsLoadTree(dirPath, targetEl, indent) {
         };
       } else {
         row.onclick = () => wsShowFile(n.path);
+        row.draggable = true;
+        row.addEventListener('dragstart', e => {
+          e.dataTransfer.setData('application/x-agent-file', n.path);
+          e.dataTransfer.setData('text/plain', '@' + n.path);
+          e.dataTransfer.effectAllowed = 'copy';
+        });
       }
       wrap.appendChild(row);
       if (n.dir) wrap.appendChild(kids);
@@ -157,11 +163,14 @@ if ($('ws-changes-toggle')) {
 
 if ($('ws-refresh')) $('ws-refresh').onclick = () => wsRefreshTree();
 
+let wsCurrentFile = null;   // { path, content } of the file currently shown in the viewer
+
 async function wsShowFile(path) {
   try {
     const r = await fetch('/agent/ws/file?path=' + encodeURIComponent(path));
     const d = await r.json();
     if (!r.ok || d.error) { toast('File view failed: ' + (d.error || r.status), true); return; }
+    wsCurrentFile = { path, content: d.content || '' };
     $('ws-tree-view').style.display = 'none';
     const fv = $('ws-file-view');
     fv.style.display = 'flex';
@@ -205,6 +214,33 @@ async function wsShowFile(path) {
       pre.scrollLeft += e.deltaY;
     }
   }, { passive: false });
+})();
+
+/* drag a selected code snippet out of the file viewer into the chat composer */
+(function initWsCodeDrag() {
+  const pre = $('ws-file-code');
+  if (!pre) return;
+  pre.addEventListener('dragstart', e => {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString() : '';
+    if (!wsCurrentFile || !text || sel.isCollapsed) { e.preventDefault(); return; }
+    const range = sel.getRangeAt(0);
+
+    const lineOf = (node, offset) => {
+      const r = document.createRange();
+      r.selectNodeContents(pre);
+      r.setEnd(node, offset);
+      return (r.toString().match(/\n/g) || []).length + 1;
+    };
+    const startLine = lineOf(range.startContainer, range.startOffset);
+    const endLine = lineOf(range.endContainer, range.endOffset);
+
+    e.dataTransfer.setData('application/x-agent-code', JSON.stringify({
+      path: wsCurrentFile.path, text, startLine, endLine,
+    }));
+    e.dataTransfer.setData('text/plain', text);
+    e.dataTransfer.effectAllowed = 'copy';
+  });
 })();
 
 function wsShowTree() {

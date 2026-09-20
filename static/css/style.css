@@ -736,6 +736,12 @@ footer {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
+.composer.drag-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
 
 /* Attachments preview strip */
 .attach-preview-bar {
