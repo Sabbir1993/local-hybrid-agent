@@ -127,8 +127,13 @@ function updateContextChip() {
   let compToks = 0;
   let totalToks = 0;
 
-  if (Array.isArray(messages) && messages.length > 0) {
-    for (const m of messages) {
+  // Use the same reduced set actually sent to the model (marker + kept tail +
+  // everything after) so the chip reflects real usage post-/compact, not the
+  // full append-only visible transcript.
+  const ctxMsgs = (typeof buildContextMessages === 'function') ? buildContextMessages() : messages;
+
+  if (Array.isArray(ctxMsgs) && ctxMsgs.length > 0) {
+    for (const m of ctxMsgs) {
       const tok = getMsgTokens(m);
       if (m.role === 'assistant') {
         compToks += tok;
@@ -144,7 +149,7 @@ function updateContextChip() {
   const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
 
   cChip.textContent = `🧠 ${fmtK(totalToks)} / ${fmtK(nCtx)} (${pct}%)`;
-  cChip.title = `Session Tokens: ${totalToks.toLocaleString()} / ${nCtx.toLocaleString()} tokens used (${pct}%) · Prompt: ${promptToks.toLocaleString()} · Completion: ${compToks.toLocaleString()} · ${messages.length} messages`;
+  cChip.title = `Session Tokens: ${totalToks.toLocaleString()} / ${nCtx.toLocaleString()} tokens used (${pct}%) · Prompt: ${promptToks.toLocaleString()} · Completion: ${compToks.toLocaleString()} · ${ctxMsgs.length} messages`;
 
   if (pct > 85) cChip.style.color = 'var(--red)';
   else if (pct > 70) cChip.style.color = 'var(--amber)';
