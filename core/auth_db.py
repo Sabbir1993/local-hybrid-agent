@@ -30,6 +30,7 @@ PERMISSIONS = {
     "roles.manage": "Create roles and edit role permission grants",
     "audit.view": "Read the audit log",
     "chat.use": "Use chat / agent features",
+    "settings.shell.configure": "Edit the global shell command allowlist (capabilities.shell)",
 }
 
 # Permissions granted to the default 'user' role so regular accounts
@@ -138,6 +139,14 @@ def _init_auth_db() -> sqlite3.Connection:
         granted_by INTEGER REFERENCES users(id),
         PRIMARY KEY (source_id, role_id)
     );
+
+    CREATE TABLE IF NOT EXISTS user_allow_patterns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        pattern TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        UNIQUE(user_id, pattern)
+    );
     """)
     conn.commit()
     _seed_defaults(conn)
@@ -245,6 +254,32 @@ def get_user_permission_keys(user_id: int) -> set:
         (user_id,),
     ).fetchall()
     return {r["key"] for r in rows}
+
+
+# ---------------- per-user shell allow patterns ----------------
+def get_user_allow_patterns(user_id: int) -> list:
+    rows = db().execute(
+        "SELECT pattern FROM user_allow_patterns WHERE user_id = ? ORDER BY id", (user_id,)
+    ).fetchall()
+    return [r["pattern"] for r in rows]
+
+
+def add_user_allow_pattern(user_id: int, pattern: str) -> None:
+    pattern = pattern.strip()
+    if not pattern:
+        return
+    db().execute(
+        "INSERT OR IGNORE INTO user_allow_patterns (user_id, pattern, created_at) VALUES (?, ?, ?)",
+        (user_id, pattern, time.time()),
+    )
+    db().commit()
+
+
+def remove_user_allow_pattern(user_id: int, pattern: str) -> None:
+    db().execute(
+        "DELETE FROM user_allow_patterns WHERE user_id = ? AND pattern = ?", (user_id, pattern.strip())
+    )
+    db().commit()
 
 
 # ---------------- knowledge sources ----------------

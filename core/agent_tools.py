@@ -11,6 +11,7 @@ from typing import Optional
 from .db import _projects_db
 from .small_model import APP_CONFIG, WORKSPACE_ROOT, COMMON_ROOT, describe_image_file
 from .request_context import set_current_user, get_current_user_id  # noqa: F401 (re-exported)
+from . import companion_bridge
 
 MAX_TOOL_OUTPUT = 20000   # chars per tool result fed back to the model
 MAX_EDIT_BYTES = 512 * 1024
@@ -36,6 +37,10 @@ def project_workspace_dir(name: str, owner_user_id: Optional[int] = None) -> Opt
         "SELECT workspace_dir FROM projects WHERE name = ? AND user_id = ?", (name, uid)
     ).fetchone()
     if row and row["workspace_dir"]:
+        if companion_bridge.is_connected(uid):
+            # Path lives on the user's machine, not this server -- mkdir (and
+            # any further resolution) happens there, via the companion.
+            return Path(row["workspace_dir"])
         p = Path(row["workspace_dir"]).resolve()
         p.mkdir(parents=True, exist_ok=True)
         return p
@@ -54,6 +59,23 @@ def active_workspace() -> Path:
         p.mkdir(parents=True, exist_ok=True)
         return p
     return WORKSPACE_ROOT.resolve()
+
+
+def _remote_uid() -> Optional[int]:
+    """user_id if a companion is connected for the calling user, else None.
+
+    Only project workspaces with an explicit custom workspace_dir (picked via
+    the companion-aware folder browser) are treated as remote -- the
+    fallback WORKSPACE_ROOT/user_{uid}/proj path is always a server-local
+    directory and stays server-local even when a companion is connected.
+    """
+    uid = get_current_user_id()
+    if uid is None or not companion_bridge.is_connected(uid):
+        return None
+    proj = _active_project.get(uid)
+    if proj and project_workspace_dir(proj, uid) is not None:
+        return uid
+    return None
 
 
 def common_workspace() -> Path:
@@ -116,9 +138,13 @@ def _ws_resolve(rel: str) -> Path:
     return p
 
 
-def tool_list_files(args: dict) -> str:
+async def tool_list_files(args: dict) -> str:
     ws = active_workspace()
     pat = (args.get("pattern") or "").strip() or "**/*"
+    uid = _remote_uid()
+    if uid is not None:
+        data = await companion_bridge.call(uid, "fs.list", {"root": str(ws), "pattern": pat})
+        return "\n".join(data.get("files") or []) or "(no files matched)"
     hits = ws.glob(pat)
     out = []
     for h in sorted(hits)[:200]:
@@ -127,11 +153,20 @@ def tool_list_files(args: dict) -> str:
     return "\n".join(out) or "(no files matched)"
 
 
-def tool_read_file(args: dict) -> str:
+async def tool_read_file(args: dict) -> str:
     path_arg = args.get("path") or args.get("file") or args.get("filename")
     if not path_arg:
         raise ValueError("path required")
     p = _ws_resolve(path_arg)
+    uid = _remote_uid()
+    if uid is not None:
+        data = await companion_bridge.call(uid, "fs.read", {"path": str(p)})
+        data_text = data.get("content")
+        if data_text is None:
+            return f"error: File not found: '{path_arg}'. It does not exist yet. Use 'write_file' to create it."
+        if len(data_text) > MAX_TOOL_OUTPUT:
+            return data_text[:MAX_TOOL_OUTPUT] + f"\n... (truncated, {len(data_text)} chars total)"
+        return data_text
     if not p.is_file():
         return f"error: File not found: '{path_arg}'. It does not exist yet. Use 'write_file' to create it."
     data = p.read_text(encoding="utf-8", errors="replace")
@@ -140,13 +175,17 @@ def tool_read_file(args: dict) -> str:
     return data
 
 
-def tool_grep(args: dict) -> str:
+async def tool_grep(args: dict) -> str:
     import re as _re
     pat = (args.get("pattern") or args.get("query") or "").strip()
     if not pat:
         raise ValueError("pattern required")
     rx = _re.compile(pat, _re.IGNORECASE)
     ws = active_workspace()
+    uid = _remote_uid()
+    if uid is not None:
+        data = await companion_bridge.call(uid, "fs.grep", {"root": str(ws), "pattern": pat})
+        return "\n".join(data.get("hits") or []) or "(no matches)"
     hits = []
     for f in ws.rglob("*"):
         if not f.is_file() or f.stat().st_size > 2_000_000:
@@ -164,7 +203,7 @@ def tool_grep(args: dict) -> str:
     return "\n".join(hits) or "(no matches)"
 
 
-def tool_write_file(args: dict) -> str:
+async def tool_write_file(args: dict) -> str:
     path_arg = args.get("path") or args.get("file") or args.get("filename")
     if not path_arg and args.get("content"):
         c_low = args["content"][:300].lower()
@@ -175,11 +214,21 @@ def tool_write_file(args: dict) -> str:
     if not path_arg:
         raise ValueError("path required")
     p = _ws_resolve(path_arg)
-    p.parent.mkdir(parents=True, exist_ok=True)
     content = args.get("content", "")
     if len(content) > MAX_EDIT_BYTES:
         raise ValueError("content too large")
     append = bool(args.get("append"))
+
+    uid = _remote_uid()
+    if uid is not None:
+        data = await companion_bridge.call(
+            uid, "fs.write", {"path": str(p), "content": content, "append": append})
+        _snapshot_change_remote(p)
+        existed = bool(data.get("existed"))
+        verb = "appended" if append and existed else "wrote"
+        return f"{verb} {len(content)} chars to {path_arg} ({'overwrote' if existed and not append else 'created' if not existed else 'appended'})"
+
+    p.parent.mkdir(parents=True, exist_ok=True)
     existed = p.exists()
     if append and existed:
         with p.open("a", encoding="utf-8") as f:
@@ -308,23 +357,33 @@ def tool_write_file_common(args: dict) -> str:
     return f"Wrote {len(content)} chars to common space: {p.name} ({'overwrote' if existed else 'created'}). [DOWNLOAD: {p.name}]"
 
 
-def tool_edit_file(args: dict) -> str:
+async def tool_edit_file(args: dict) -> str:
     path_arg = args.get("path") or args.get("file") or args.get("filename")
     if not path_arg:
         raise ValueError("path required")
     p = _ws_resolve(path_arg)
-    if not p.is_file():
-        raise FileNotFoundError(f"File not found: {path_arg}")
-    text = p.read_text(encoding="utf-8", errors="replace")
     old, new = args.get("old_string", ""), args.get("new_string", "")
     if not old:
         raise ValueError("old_string required")
+    replace_all = bool(args.get("replace_all"))
+
+    uid = _remote_uid()
+    if uid is not None:
+        data = await companion_bridge.call(
+            uid, "fs.edit", {"path": str(p), "old_string": old, "new_string": new, "replace_all": replace_all})
+        n = int(data.get("count") or 0)
+        _snapshot_change_remote(p)
+        return f"edited {path_arg} ({n} replacement(s))"
+
+    if not p.is_file():
+        raise FileNotFoundError(f"File not found: {path_arg}")
+    text = p.read_text(encoding="utf-8", errors="replace")
     n = text.count(old)
     if n == 0:
         raise FileNotFoundError(f"old_string not found in file: {path_arg}")
-    if n > 1 and not args.get("replace_all"):
+    if n > 1 and not replace_all:
         raise ValueError(f"old_string appears {n}x - add replace_all or more context")
-    text = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
+    text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
     p.write_text(text, encoding="utf-8")
     _snapshot_change(p)
     return f"edited {path_arg} ({n} replacement(s))"
@@ -365,6 +424,15 @@ def _snapshot_change(p: Path) -> None:
             rec["before"] = p.read_text(encoding="utf-8", errors="replace") if p.exists() else None
         except Exception:
             rec["before"] = None
+    rec["after"] = "written"
+
+
+def _snapshot_change_remote(p: Path) -> None:
+    """Like _snapshot_change, but the file lives on the companion machine --
+    there is no local 'before' content to read, so just mark it touched."""
+    changes = _ws_changes.setdefault(get_current_user_id(), {})
+    rec = changes.setdefault(str(p), {})
+    rec.setdefault("before", None)
     rec["after"] = "written"
 
 

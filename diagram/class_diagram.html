@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>A770 Dual Runtime — class diagram</title>
+</head>
+<body style="font-family:sans-serif; background:#ffffff;">
+<h2 style="position:absolute; left:-9999px;">Class diagram of the core Python modules: ToolRegistry holds many RegisteredTool entries contributed by PluginAPI and McpServer, ProxyState coordinates SmallModelManager which owns many SmallModelInstance objects, and CloudClient wraps a CloudModel, while Principal wraps a UserRecord for RBAC checks.</h2>
+<div class="mermaid">
+classDiagram
+  class ToolRegistry {
+    +register()
+    +unregister()
+    +set_source_enabled()
+    +get(name)
+    +schemas()
+  }
+  class RegisteredTool {
+    +name
+    +fn
+    +schema
+    +source
+    +enabled
+  }
+  class PluginAPI {
+    +add_tool()
+    +add_system_prompt()
+    +on_event(hook)
+  }
+  class McpServer {
+    +name
+    +status_info()
+  }
+  class ProxyState {
+    +load_profile()
+    +watchdog()
+    +keepalive_loop()
+  }
+  class SmallModelManager {
+    +start_reaper()
+    +unload_all()
+    +status()
+  }
+  class SmallModelInstance {
+    +role
+    +available()
+    +is_up()
+  }
+  class CloudClient {
+    +stream()
+    +headers()
+  }
+  class CloudModel {
+    +provider_name()
+    +display()
+    +endpoint()
+  }
+  class Principal {
+    +user_has_permission(key)
+  }
+  class UserRecord {
+    +id
+    +password_hash
+  }
+
+  ToolRegistry "1" o-- "many" RegisteredTool : holds
+  PluginAPI ..> ToolRegistry : registers into
+  McpServer ..> ToolRegistry : registers into
+  ProxyState --> SmallModelManager : coordinates lanes
+  SmallModelManager "1" o-- "many" SmallModelInstance : owns
+  CloudClient --> CloudModel : wraps
+  Principal --> UserRecord : resolved from
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+mermaid.initialize({ startOnLoad: true, theme: 'base', themeVariables: { primaryColor: '#E6F1FB', primaryTextColor: '#042C53', primaryBorderColor: '#185FA5', lineColor: '#888780', tertiaryColor: '#F1EFE8' } });
+</script>
+</body>
+</html>

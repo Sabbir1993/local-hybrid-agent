@@ -1,0 +1,35 @@
+{
+  "name": "a770-companion",
+  "version": "0.1.0",
+  "description": "Local companion for A770 Dual Runtime — runs file/shell operations on your own machine on the server's behalf.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build-icon": "node build-icon.js",
+    "dist": "node build-icon.js && electron-builder"
+  },
+  "author": "SSLWIRELESS",
+  "build": {
+    "appId": "com.a770.companion",
+    "productName": "A770 Companion",
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "SERVER_URL/companion-updates/"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.1.7",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3"
+  }
+}

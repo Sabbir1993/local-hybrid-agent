@@ -190,6 +190,7 @@
       <div>
         <label style="display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--dim); font-weight:700; margin-bottom:5px; text-transform:uppercase; letter-spacing:1px;">
           <span>Local Workspace Directory <span style="font-weight:normal; text-transform:none; color:var(--accent);">(Optional)</span></span>
+          <span id="companion-status" style="font-weight:normal; text-transform:none; letter-spacing:normal; font-size:10.5px;"></span>
         </label>
         <div style="display:flex; gap:8px; align-items:stretch;">
           <input type="text" id="new-proj-dir" placeholder="e.g. E:\AI\my-code or C:\Users\..." style="flex:1; min-width:0; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; font-family:inherit;">
@@ -373,6 +374,7 @@ Full instructions the agent reads via read_skill.</pre>
       <button class="btn ghost" id="perm-deny" style="width:auto; margin:0; padding:7px 14px;">✕ Deny</button>
       <button class="btn accent" id="perm-allow" style="width:auto; margin:0; padding:7px 15px; font-weight:600;">▶ Just once</button>
       <button class="btn ghost" id="perm-project" style="width:auto; margin:0; padding:7px 14px; color:var(--amber); border-color:var(--amber);">📁 For this project</button>
+      <button class="btn ghost" id="perm-user" style="width:auto; margin:0; padding:7px 14px; color:var(--blue); border-color:var(--blue);">👤 Always allow for me</button>
       <button class="btn ghost" id="perm-always" style="width:auto; margin:0; padding:7px 14px; color:var(--green); border-color:var(--green);">✓ Always (globally)</button>
     </div>
   </div>

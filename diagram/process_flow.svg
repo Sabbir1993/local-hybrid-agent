@@ -1,0 +1,73 @@
+<svg width="680" height="690" viewBox="0 0 680 690" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" role="img">
+<title>Agent step process flow in the A770 Dual Runtime</title>
+<desc>Each agent step picks a model lane, streams a response, and either finalizes the answer or executes tool calls; after tools run, the loop either escalates a weak executor response to the main model, continues to the next step, or emits a done event at the step limit.</desc>
+<style>
+.box{fill:#F1EFE8;stroke:#B4B2A9;stroke-width:0.5}
+.c-gray rect{fill:#F1EFE8;stroke:#5F5E5A;stroke-width:0.5} .c-gray text{fill:#2C2C2A}
+.c-coral rect{fill:#FAECE7;stroke:#993C1D;stroke-width:0.5} .c-coral text{fill:#4A1B0C}
+.c-teal rect{fill:#E1F5EE;stroke:#0F6E56;stroke-width:0.5} .c-teal text{fill:#04342C}
+.c-pink rect{fill:#FBEAF0;stroke:#993556;stroke-width:0.5} .c-pink text{fill:#4B1528}
+.arr{stroke:#5F5E5A;stroke-width:1.5;fill:none}
+.ts{font-size:12px;fill:#5F5E5A} .th{font-size:14px;font-weight:500;fill:#2C2C2A}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+<line x1="280" y1="80" x2="280" y2="110" class="arr" marker-end="url(#arrow)"/>
+<line x1="280" y1="164" x2="280" y2="194" class="arr" marker-end="url(#arrow)"/>
+<line x1="280" y1="248" x2="280" y2="278" class="arr" marker-end="url(#arrow)"/>
+<line x1="380" y1="318" x2="430" y2="318" class="arr" marker-end="url(#arrow)"/>
+<line x1="280" y1="358" x2="280" y2="378" class="arr" marker-end="url(#arrow)"/>
+<line x1="280" y1="432" x2="280" y2="452" class="arr" marker-end="url(#arrow)"/>
+<line x1="280" y1="506" x2="280" y2="536" class="arr" marker-end="url(#arrow)"/>
+<line x1="505" y1="318" x2="505" y2="365" class="arr" marker-end="url(#arrow)"/>
+<line x1="180" y1="576" x2="160" y2="576" class="arr" marker-end="url(#arrow)"/>
+<path d="M90,549 L90,221 L170,221" fill="none" class="arr" marker-end="url(#arrow)"/>
+<line x1="380" y1="576" x2="430" y2="576" class="arr" marker-end="url(#arrow)"/>
+<path d="M280,616 L280,650 L645,650 L645,137 L390,137" fill="none" class="arr" marker-end="url(#arrow)"/>
+
+<text x="405" y="308" class="ts">no</text>
+<text x="285" y="372" class="ts">yes</text>
+
+<g class="c-gray"><rect x="210" y="40" width="140" height="40" rx="20"/>
+<text x="280" y="65" class="th" text-anchor="middle">New step</text></g>
+
+<g class="c-coral"><rect x="170" y="110" width="220" height="54" rx="4"/>
+<text x="280" y="132" class="th" text-anchor="middle">Pick lane</text>
+<text x="280" y="150" class="ts" text-anchor="middle">Main or executor</text></g>
+
+<g class="c-teal"><rect x="170" y="194" width="220" height="54" rx="4"/>
+<text x="280" y="216" class="th" text-anchor="middle">Stream response</text>
+<text x="280" y="234" class="ts" text-anchor="middle">Thought &amp; delta events</text></g>
+
+<polygon points="280,278 380,318 280,358 180,318" class="box"/>
+<text x="280" y="316" class="th" text-anchor="middle">Tool calls?</text>
+
+<g class="c-coral"><rect x="430" y="291" width="150" height="54" rx="4"/>
+<text x="505" y="313" class="th" text-anchor="middle">Finalize answer</text>
+<text x="505" y="330" class="ts" text-anchor="middle">May rewrite response</text></g>
+<g class="c-gray"><rect x="430" y="365" width="150" height="40" rx="20"/>
+<text x="505" y="390" class="th" text-anchor="middle">Emit done</text></g>
+
+<g class="c-pink"><rect x="170" y="378" width="220" height="54" rx="4"/>
+<text x="280" y="400" class="th" text-anchor="middle">Execute tools</text>
+<text x="280" y="417" class="ts" text-anchor="middle">Sandbox + permission gate</text></g>
+
+<g class="c-pink"><rect x="170" y="452" width="220" height="54" rx="4"/>
+<text x="280" y="474" class="th" text-anchor="middle">Append results</text>
+<text x="280" y="491" class="ts" text-anchor="middle">Adds tool message to history</text></g>
+
+<polygon points="280,536 380,576 280,616 180,576" class="box"/>
+<text x="280" y="580" class="th" text-anchor="middle">Next action?</text>
+
+<g class="c-coral"><rect x="20" y="549" width="140" height="54" rx="4"/>
+<text x="90" y="571" class="th" text-anchor="middle">Rerun on main</text>
+<text x="90" y="588" class="ts" text-anchor="middle">Discard executor output</text></g>
+
+<g class="c-gray"><rect x="430" y="549" width="150" height="40" rx="20"/>
+<text x="505" y="574" class="th" text-anchor="middle">Emit done</text></g>
+
+<rect x="44" y="628" width="10" height="10" fill="#B4B2A9"/><text x="60" y="637" class="ts">Start / end</text>
+<rect x="150" y="628" width="10" height="10" fill="#D85A30"/><text x="166" y="637" class="ts">Lane decision</text>
+<rect x="280" y="628" width="10" height="10" fill="#1D9E75"/><text x="296" y="637" class="ts">Model streaming</text>
+<rect x="430" y="628" width="10" height="10" fill="#D4537E"/><text x="446" y="637" class="ts">Tool execution</text>
+</svg>

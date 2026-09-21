@@ -297,7 +297,8 @@ function showPermModal(reqId, cmd) {
   $('perm-note').innerHTML = `Permission scopes for <code>${esc(firstWord)}</code>:<br>` +
     `• <b>Just once:</b> Run this command now without saving.<br>` +
     `• <b>For this project:</b> Automatically permit in <i>${esc(projName)}</i>.<br>` +
-    `• <b>Always:</b> Allow globally across all projects in <code>config.json</code>.`;
+    `• <b>Always allow for me:</b> Permit for your account, across all your projects.<br>` +
+    `• <b>Always:</b> Allow globally for every user (admin-visible setting).`;
   m.dataset.pattern = firstWord;
   m.hidden = false;
 }
@@ -307,7 +308,7 @@ async function answerPermission(decision) {
   const reqId = m.dataset.reqId;
   m.hidden = true;
   if (!reqId) return;
-  const pattern = (decision === 'always' || decision === 'project') ? m.dataset.pattern : null;
+  const pattern = (decision === 'always' || decision === 'project' || decision === 'user') ? m.dataset.pattern : null;
   const projectId = (curProject && curProject.id) ? curProject.id : null;
   try {
     await fetch('/agent/permission', {
@@ -326,6 +327,8 @@ async function answerPermission(decision) {
   } else if (decision === 'project') {
     const pName = curProject ? curProject.name : 'project';
     toast(`✓ Pattern "${m.dataset.pattern}" allowed for ${pName}`);
+  } else if (decision === 'user') {
+    toast(`✓ Pattern "${m.dataset.pattern}" always allowed for your account`);
   } else if (decision === 'allow') {
     toast('▶ Shell command approved once');
   } else if (decision === 'deny') {
@@ -335,6 +338,7 @@ async function answerPermission(decision) {
 
 if ($('perm-allow')) $('perm-allow').onclick = () => answerPermission('allow');
 if ($('perm-project')) $('perm-project').onclick = () => answerPermission('project');
+if ($('perm-user')) $('perm-user').onclick = () => answerPermission('user');
 if ($('perm-always')) $('perm-always').onclick = () => answerPermission('always');
 if ($('perm-deny')) $('perm-deny').onclick = () => answerPermission('deny');
 if ($('perm-close-x')) $('perm-close-x').onclick = () => answerPermission('deny');

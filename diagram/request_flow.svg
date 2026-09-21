@@ -1,0 +1,65 @@
+<svg width="680" height="460" viewBox="0 0 680 460" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" role="img">
+<title>Backend request flow of the A770 Dual Runtime</title>
+<desc>The browser talks to server_manager.py, which proxies to a local main model lane, local small model lanes, or a cloud provider, records usage to SQLite, and dispatches agent tool calls through a single tool registry to core tools, MCP servers, and plugins.</desc>
+<style>
+.c-gray rect{fill:#F1EFE8;stroke:#5F5E5A;stroke-width:0.5} .c-gray text{fill:#2C2C2A}
+.c-coral rect{fill:#FAECE7;stroke:#993C1D;stroke-width:0.5} .c-coral text{fill:#4A1B0C}
+.c-teal rect{fill:#E1F5EE;stroke:#0F6E56;stroke-width:0.5} .c-teal text{fill:#04342C}
+.c-purple rect{fill:#EEEDFE;stroke:#534AB7;stroke-width:0.5} .c-purple text{fill:#26215C}
+.c-pink rect{fill:#FBEAF0;stroke:#993556;stroke-width:0.5} .c-pink text{fill:#4B1528}
+.arr{stroke:#5F5E5A;stroke-width:1.5;fill:none}
+.ts{font-size:12px} .th{font-size:14px;font-weight:500}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+<line x1="415" y1="110" x2="305" y2="150" class="arr" marker-end="url(#arrow)"/>
+<line x1="415" y1="205" x2="415" y2="177" class="arr"/>
+<line x1="415" y1="177" x2="440" y2="177" class="arr" marker-end="url(#arrow)"/>
+<line x1="305" y1="205" x2="115" y2="245" class="arr" marker-end="url(#arrow)"/>
+<line x1="305" y1="205" x2="265" y2="245" class="arr" marker-end="url(#arrow)"/>
+<line x1="305" y1="205" x2="415" y2="245" class="arr" marker-end="url(#arrow)"/>
+<line x1="305" y1="205" x2="565" y2="245" class="arr" marker-end="url(#arrow)"/>
+<line x1="565" y1="305" x2="140" y2="345" class="arr" marker-end="url(#arrow)"/>
+<line x1="565" y1="305" x2="340" y2="345" class="arr" marker-end="url(#arrow)"/>
+<line x1="565" y1="305" x2="540" y2="345" class="arr" marker-end="url(#arrow)"/>
+
+<g class="c-gray"><rect x="340" y="60" width="150" height="50" rx="4"/>
+<text x="415" y="82" class="th" text-anchor="middle">Browser UI</text>
+<text x="415" y="100" class="ts" text-anchor="middle">Chat &amp; Agent</text></g>
+
+<g class="c-coral"><rect x="195" y="150" width="220" height="55" rx="4"/>
+<text x="305" y="172" class="th" text-anchor="middle">server_manager.py</text>
+<text x="305" y="190" class="ts" text-anchor="middle">Proxy + agent SSE loop</text></g>
+
+<g class="c-gray"><rect x="440" y="150" width="190" height="55" rx="4"/>
+<text x="535" y="172" class="th" text-anchor="middle">Databases</text>
+<text x="535" y="190" class="ts" text-anchor="middle">projects.db, usage.db</text></g>
+
+<g class="c-teal"><rect x="50" y="245" width="130" height="60" rx="4"/>
+<text x="115" y="268" class="th" text-anchor="middle">Main lane</text>
+<text x="115" y="286" class="ts" text-anchor="middle">Dual GPU · 8090</text></g>
+<g class="c-teal"><rect x="200" y="245" width="130" height="60" rx="4"/>
+<text x="265" y="268" class="th" text-anchor="middle">Small lanes</text>
+<text x="265" y="286" class="ts" text-anchor="middle">Executor/vision</text></g>
+<g class="c-purple"><rect x="350" y="245" width="130" height="60" rx="4"/>
+<text x="415" y="268" class="th" text-anchor="middle">Cloud provider</text>
+<text x="415" y="286" class="ts" text-anchor="middle">Remote API</text></g>
+<g class="c-pink"><rect x="500" y="245" width="130" height="60" rx="4"/>
+<text x="565" y="268" class="th" text-anchor="middle">Tool registry</text>
+<text x="565" y="286" class="ts" text-anchor="middle">Unified surface</text></g>
+
+<g class="c-gray"><rect x="50" y="345" width="180" height="60" rx="4"/>
+<text x="140" y="368" class="th" text-anchor="middle">Core tools</text>
+<text x="140" y="386" class="ts" text-anchor="middle">Files, web, shell</text></g>
+<g class="c-gray"><rect x="250" y="345" width="180" height="60" rx="4"/>
+<text x="340" y="368" class="th" text-anchor="middle">MCP servers</text>
+<text x="340" y="386" class="ts" text-anchor="middle">External tool servers</text></g>
+<g class="c-gray"><rect x="450" y="345" width="180" height="60" rx="4"/>
+<text x="540" y="368" class="th" text-anchor="middle">Plugins</text>
+<text x="540" y="386" class="ts" text-anchor="middle">Drop-in capabilities</text></g>
+
+<rect x="56" y="428" width="10" height="10" fill="#D85A30"/><text x="72" y="437" class="ts">Orchestrator</text>
+<rect x="176" y="428" width="10" height="10" fill="#1D9E75"/><text x="192" y="437" class="ts">Local GPU model</text>
+<rect x="316" y="428" width="10" height="10" fill="#7F77DD"/><text x="332" y="437" class="ts">Cloud model</text>
+<rect x="430" y="428" width="10" height="10" fill="#D4537E"/><text x="446" y="437" class="ts">Tool system</text>
+</svg>

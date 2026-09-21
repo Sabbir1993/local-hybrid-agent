@@ -1,0 +1,69 @@
+<svg width="680" height="460" viewBox="0 0 680 460" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" role="img">
+<title>HTTP routing map of the A770 Dual Runtime FastAPI app</title>
+<desc>The FastAPI app applies CSRF middleware, exposes public login routes, gates all other routers behind an RBAC dependency, and falls back to a catch-all proxy route for anything unmatched such as v1 chat completions. Two additional gated routers, /mcp and /admin, are not drawn as separate boxes.</desc>
+<style>
+.c-gray rect{fill:#F1EFE8;stroke:#5F5E5A;stroke-width:0.5} .c-gray text{fill:#2C2C2A}
+.c-teal rect{fill:#E1F5EE;stroke:#0F6E56;stroke-width:0.5} .c-teal text{fill:#04342C}
+.c-pink rect{fill:#FBEAF0;stroke:#993556;stroke-width:0.5} .c-pink text{fill:#4B1528}
+.c-purple rect{fill:#EEEDFE;stroke:#534AB7;stroke-width:0.5} .c-purple text{fill:#26215C}
+.c-coral rect{fill:#FAECE7;stroke:#993C1D;stroke-width:0.5} .c-coral text{fill:#4A1B0C}
+.arr{stroke:#5F5E5A;stroke-width:1.5;fill:none}
+.ts{font-size:12px} .th{font-size:14px;font-weight:500}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+<line x1="340" y1="90" x2="220" y2="130" class="arr" marker-end="url(#arrow)"/>
+<line x1="340" y1="90" x2="460" y2="130" class="arr" marker-end="url(#arrow)"/>
+<line x1="460" y1="180" x2="140" y2="220" class="arr" marker-end="url(#arrow)"/>
+<line x1="460" y1="180" x2="340" y2="220" class="arr" marker-end="url(#arrow)"/>
+<line x1="460" y1="180" x2="540" y2="220" class="arr" marker-end="url(#arrow)"/>
+<line x1="460" y1="180" x2="100" y2="290" class="arr" marker-end="url(#arrow)"/>
+<line x1="460" y1="180" x2="240" y2="290" class="arr" marker-end="url(#arrow)"/>
+<line x1="460" y1="180" x2="380" y2="290" class="arr" marker-end="url(#arrow)"/>
+<line x1="460" y1="180" x2="520" y2="290" class="arr" marker-end="url(#arrow)"/>
+<line x1="340" y1="90" x2="340" y2="370" class="arr" marker-end="url(#arrow)"/>
+
+<g class="c-gray"><rect x="270" y="60" width="140" height="45" rx="4"/>
+<text x="340" y="80" class="th" text-anchor="middle">FastAPI app</text>
+<text x="340" y="97" class="ts" text-anchor="middle">server_manager.py</text></g>
+
+<g class="c-teal"><rect x="150" y="130" width="140" height="50" rx="4"/>
+<text x="220" y="152" class="th" text-anchor="middle">/auth</text>
+<text x="220" y="169" class="ts" text-anchor="middle">Public — login, me</text></g>
+<g class="c-pink"><rect x="390" y="130" width="140" height="50" rx="4"/>
+<text x="460" y="152" class="th" text-anchor="middle">RBAC gate</text>
+<text x="460" y="169" class="ts" text-anchor="middle">dependencies=_authed</text></g>
+
+<g class="c-purple"><rect x="70" y="220" width="140" height="55" rx="4"/>
+<text x="140" y="243" class="th" text-anchor="middle">Control</text>
+<text x="140" y="260" class="ts" text-anchor="middle">Status, config, switch</text></g>
+<g class="c-purple"><rect x="270" y="220" width="140" height="55" rx="4"/>
+<text x="340" y="243" class="th" text-anchor="middle">Agent &amp; chat</text>
+<text x="340" y="260" class="ts" text-anchor="middle">SSE run, direct chat</text></g>
+<g class="c-purple"><rect x="470" y="220" width="140" height="55" rx="4"/>
+<text x="540" y="243" class="th" text-anchor="middle">Cloud</text>
+<text x="540" y="260" class="ts" text-anchor="middle">Providers, lanes</text></g>
+
+<g class="c-coral"><rect x="40" y="290" width="120" height="55" rx="4"/>
+<text x="100" y="312" class="th" text-anchor="middle">Projects</text>
+<text x="100" y="329" class="ts" text-anchor="middle">Sessions, folders</text></g>
+<g class="c-coral"><rect x="180" y="290" width="120" height="55" rx="4"/>
+<text x="240" y="312" class="th" text-anchor="middle">Capabilities</text>
+<text x="240" y="329" class="ts" text-anchor="middle">Toggle sources, shell</text></g>
+<g class="c-coral"><rect x="320" y="290" width="120" height="55" rx="4"/>
+<text x="380" y="312" class="th" text-anchor="middle">Git</text>
+<text x="380" y="329" class="ts" text-anchor="middle">Diff, commit, PR</text></g>
+<g class="c-coral"><rect x="460" y="290" width="120" height="55" rx="4"/>
+<text x="520" y="312" class="th" text-anchor="middle">Knowledge</text>
+<text x="520" y="329" class="ts" text-anchor="middle">Upload, reindex</text></g>
+
+<g class="c-gray"><rect x="140" y="370" width="400" height="50" rx="4"/>
+<text x="340" y="392" class="th" text-anchor="middle">Catch-all proxy</text>
+<text x="340" y="409" class="ts" text-anchor="middle">Unmatched paths, e.g. /v1/chat/completions</text></g>
+
+<rect x="56" y="435" width="10" height="10" fill="#5DCAA5"/><text x="72" y="444" class="ts">Public</text>
+<rect x="140" y="435" width="10" height="10" fill="#D4537E"/><text x="156" y="444" class="ts">RBAC gate</text>
+<rect x="250" y="435" width="10" height="10" fill="#7F77DD"/><text x="266" y="444" class="ts">Model &amp; agent</text>
+<rect x="400" y="435" width="10" height="10" fill="#D85A30"/><text x="416" y="444" class="ts">Workspace &amp; ops</text>
+<rect x="540" y="435" width="10" height="10" fill="#B4B2A9"/><text x="556" y="444" class="ts">Fallback</text>
+</svg>

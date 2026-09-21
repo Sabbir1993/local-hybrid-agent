@@ -28,6 +28,7 @@ from core.db import (
     db_get_project_allow_patterns,
     db_session_owner,
 )
+from core import auth_db
 from core.small_model import (
     APP_CONFIG,
     small_models,
@@ -147,13 +148,13 @@ _perm_pending: dict[str, dict] = {}
 
 class PermissionAnswerReq(BaseModel):
     req_id: str
-    decision: str            # allow | project | always | deny
+    decision: str            # allow | project | user | always | deny
     pattern: Optional[str] = None
     project_id: Optional[Union[int, str]] = None
 
 
 @router.post("/agent/permission")
-async def agent_permission_answer(req: PermissionAnswerReq):
+async def agent_permission_answer(req: PermissionAnswerReq, user: Principal = Depends(get_current_user)):
     """UI answers a permission_request emitted on the agent SSE stream."""
     rec = _perm_pending.get(req.req_id)
     if rec is None:
@@ -165,8 +166,11 @@ async def agent_permission_answer(req: PermissionAnswerReq):
         target_proj = req.project_id or get_active_project()
         if target_proj:
             db_add_project_allow_pattern(target_proj, req.pattern)
+    elif req.decision == "user" and req.pattern:
+        # Save to this user's own allow list -- never affects other users
+        auth_db.add_user_allow_pattern(user.id, req.pattern)
     rec["result"] = {"allow": req.decision != "deny",
-                     "note": f"pattern allowed for {req.decision}" if req.decision in ("always", "project") else ""}
+                     "note": f"pattern allowed for {req.decision}" if req.decision in ("always", "project", "user") else ""}
     rec["event"].set()
     return {"ok": True, "decision": req.decision}
 
@@ -791,6 +795,9 @@ async def agent_run(req: AgentRequest, user: Principal = Depends(get_current_use
                         if cur_proj:
                             proj_pats = [str(p).strip().lower() for p in db_get_project_allow_patterns(cur_proj)]
                             pats.extend(proj_pats)
+                        # plus this user's own additional allows (independent of project)
+                        user_pats = [str(p).strip().lower() for p in auth_db.get_user_allow_patterns(user.id)]
+                        pats.extend(user_pats)
                         if cfg.get("ask_first", True) and not any(
                                 _fn.fnmatch(cmd.strip().lower(), p) for p in pats):
                             import uuid as _uuid

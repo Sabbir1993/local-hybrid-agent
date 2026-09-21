@@ -49,6 +49,7 @@ from core.plugins import load_plugins
 from core.process import kill_orphan_llama_servers
 from core.registry import bootstrap_builtin_tools
 from core.shell_tools import register_shell_tools
+from core.companion_bridge import router as companion_router
 from core.skills import register_skill_tools
 from core.small_model import small_models
 from core.memory import memory_background_task
@@ -264,6 +265,9 @@ app.include_router(admin_rbac_router, dependencies=_authed)
 app.include_router(knowledge_router, dependencies=_authed)
 # Reverse proxy catch-all must be mounted last
 app.include_router(proxy_router, dependencies=_authed)
+# Own auth handling (session cookie checked inside the socket handler) since
+# Depends() on a websocket route doesn't compose with the HTTP auth flow above.
+app.include_router(companion_router)
 
 
 def main():

@@ -18,7 +18,7 @@ from core.small_model import (
 )
 from core import cloud
 from core.auth import Principal
-from core.deps import get_current_user
+from core.deps import get_current_user, require_permission
 from core.state import state
 from core.agent_tools import get_active_project
 from core.registry import registry
@@ -118,8 +118,14 @@ async def capabilities_status():
 
 
 @router.post("/control/shell_settings")
-async def shell_settings(req: ShellSettingsReq):
-    """Edit shell permission settings; persists to config/app.json."""
+async def shell_settings(req: ShellSettingsReq,
+                          user: Principal = Depends(require_permission("settings.shell.configure"))):
+    """Edit the GLOBAL shell permission settings; persists to config/app.json.
+
+    Admin-only: this is the org-wide allowlist. Per-user additions go through
+    the permission modal ("Always allow for me") -> core/auth_db.py
+    user_allow_patterns, not this endpoint.
+    """
     import json as _json
     cfg_path = CONFIG_FILE
     try:

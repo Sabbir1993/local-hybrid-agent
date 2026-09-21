@@ -40,27 +40,30 @@ async function loadCapabilities() {
 
     // Shell
     const sh = d.shell || {};
+    const canConfigureGlobal = !!(window.hasPerm && window.hasPerm('settings.shell.configure'));
     const shellInner = `
       <div class="cap-item">
-        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
-          <input type="checkbox" id="shell-ask" ${sh.ask_first ? 'checked' : ''} style="accent-color:var(--green);">
-          <b>Ask before running</b> <span class="dim">(permission modal; matched patterns skip asking)</span>
+        <label style="display:flex; align-items:center; gap:6px; cursor:${canConfigureGlobal ? 'pointer' : 'default'};">
+          <input type="checkbox" id="shell-ask" ${sh.ask_first ? 'checked' : ''} ${canConfigureGlobal ? '' : 'disabled'} style="accent-color:var(--green);">
+          <b>Ask before running</b> <span class="dim">(permission modal; matched patterns skip asking${canConfigureGlobal ? '' : ' — admin-only setting'})</span>
         </label>
       </div>
       <div class="cap-item">
-        <b>Allowed patterns</b> <span class="dim">(wildcards ok, <code>*</code> = allow all)</span>
+        <b>Global allowed patterns</b> <span class="dim">(wildcards ok, <code>*</code> = allow all — admin-managed, applies to every user)</span>
         <div id="shell-pats" style="display:flex; flex-direction:column; gap:3px; margin-top:4px;">
           ${(sh.allow_patterns || []).map((p, i) => `
             <div style="display:flex; gap:5px; align-items:center;">
-              <input type="text" class="shell-pat" data-i="${i}" value="${esc(p)}" style="flex:1; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;">
-              <button class="btn ghost shell-pat-del" data-i="${i}" style="width:auto; margin:0; padding:2px 7px; font-size:10px; color:var(--red);">✕</button>
-            </div>`).join('')}
+              <input type="text" class="shell-pat" data-i="${i}" value="${esc(p)}" ${canConfigureGlobal ? '' : 'disabled'} style="flex:1; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;">
+              ${canConfigureGlobal ? `<button class="btn ghost shell-pat-del" data-i="${i}" style="width:auto; margin:0; padding:2px 7px; font-size:10px; color:var(--red);">✕</button>` : ''}
+            </div>`).join('') || '<div class="dim" style="font-size:10.5px;">(none)</div>'}
         </div>
+        ${canConfigureGlobal ? `
         <div style="display:flex; gap:5px; margin-top:5px;">
           <input type="text" id="shell-pat-new" placeholder="e.g. git * or npx skills * or *" style="flex:1; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;">
           <button class="btn ghost" id="shell-pat-add" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">+ Add</button>
         </div>
         <button class="btn accent" id="shell-pats-save" style="width:auto; margin:6px 0 0; padding:4px 12px; font-size:10.5px;">💾 Save patterns</button>
+        ` : `<p class="dim" style="font-size:10px; margin:5px 0 0;">Only an admin can edit the global list. Use the shell permission prompt's "Always allow for me" to add your own.</p>`}
       </div>`;
     h += capSection('shell', '⌨️ Shell Execution', sh.enabled, shellInner,
       'run_shell tool — agent runs commands like "npx skills add …" in the workspace');

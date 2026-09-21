@@ -335,7 +335,23 @@ $('btn-newproject').onclick = () => {
   $('new-proj-dir').value = '';
   $('proj-modal').hidden = false;
   setTimeout(() => $('new-proj-name').focus(), 50);
+  refreshCompanionStatus();
 };
+
+async function refreshCompanionStatus() {
+  const el = $('companion-status');
+  if (!el) return;
+  try {
+    const d = await (await fetch('/control/companion/status')).json();
+    if (d.connected) {
+      el.textContent = `🟢 Connected to ${d.hostname || 'your device'} — browsing runs on your machine`;
+      el.style.color = 'var(--green)';
+    } else {
+      el.textContent = '⚪ No companion connected — folder browsing/writes run on the server';
+      el.style.color = 'var(--dim)';
+    }
+  } catch (e) { el.textContent = ''; }
+}
 
 const closeProjModal = () => { $('proj-modal').hidden = true; };
 $('btn-proj-cancel').onclick = closeProjModal;

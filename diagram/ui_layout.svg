@@ -1,0 +1,86 @@
+<svg width="680" height="670" viewBox="0 0 680 670" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" role="img">
+<title>UI layout of the A770 Dual Runtime single-page app</title>
+<desc>ui.html renders a sidebar for projects and sessions, a main panel with header, chat feed and composer, a workspace file panel, and four on-demand modals opened from the header: Settings, Monitor, Report and Docs.</desc>
+<style>
+.box{fill:#F1EFE8;stroke:#B4B2A9;stroke-width:0.5}
+.c-purple rect{fill:#EEEDFE;stroke:#534AB7;stroke-width:0.5}
+.c-purple text{fill:#26215C}
+.c-coral rect{fill:#FAECE7;stroke:#993C1D;stroke-width:0.5}
+.c-coral text{fill:#4A1B0C}
+.c-teal rect{fill:#E1F5EE;stroke:#0F6E56;stroke-width:0.5}
+.c-teal text{fill:#04342C}
+.c-gray rect{fill:#F1EFE8;stroke:#5F5E5A;stroke-width:0.5}
+.c-gray text{fill:#2C2C2A}
+.t{font-size:14px;fill:#2C2C2A}
+.ts{font-size:12px;fill:#5F5E5A}
+.th{font-size:14px;font-weight:500;fill:#2C2C2A}
+text{font-family:sans-serif}
+</style>
+
+<rect x="40" y="60" width="600" height="470" rx="8" fill="none" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="4 3"/>
+<text x="56" y="80" class="ts">ui.html — single page app</text>
+
+<g class="c-purple">
+<rect x="56" y="100" width="96" height="410" rx="4"/>
+<text x="104" y="295" class="th" text-anchor="middle">Sidebar</text>
+<text x="104" y="315" class="ts" text-anchor="middle">Projects</text>
+<text x="104" y="331" class="ts" text-anchor="middle">&amp; sessions</text>
+</g>
+
+<g class="c-coral">
+<rect x="172" y="100" width="336" height="50" rx="4"/>
+<text x="340" y="122" class="th" text-anchor="middle">Header bar</text>
+<text x="340" y="140" class="ts" text-anchor="middle">Model, settings, monitor, docs</text>
+</g>
+
+<g class="c-teal">
+<rect x="172" y="155" width="336" height="245" rx="4"/>
+<text x="340" y="270" class="th" text-anchor="middle">Chat feed</text>
+<text x="340" y="290" class="ts" text-anchor="middle">Bubbles, tool calls, plan list</text>
+</g>
+
+<g class="c-coral">
+<rect x="172" y="405" width="336" height="105" rx="4"/>
+<text x="340" y="452" class="th" text-anchor="middle">Composer</text>
+<text x="340" y="470" class="ts" text-anchor="middle">Input, attachments, send</text>
+</g>
+
+<g class="c-gray">
+<rect x="528" y="100" width="96" height="410" rx="4"/>
+<text x="576" y="295" class="th" text-anchor="middle">Files</text>
+<text x="576" y="315" class="ts" text-anchor="middle">Workspace</text>
+<text x="576" y="331" class="ts" text-anchor="middle">tree view</text>
+</g>
+
+<text x="56" y="550" class="ts">Overlay modals — opened from header buttons</text>
+
+<g class="c-gray">
+<rect x="70" y="560" width="120" height="55" rx="4"/>
+<text x="130" y="580" class="th" text-anchor="middle">Settings</text>
+<text x="130" y="597" class="ts" text-anchor="middle">Model &amp; cloud</text>
+</g>
+<g class="c-gray">
+<rect x="210" y="560" width="120" height="55" rx="4"/>
+<text x="270" y="580" class="th" text-anchor="middle">Monitor</text>
+<text x="270" y="597" class="ts" text-anchor="middle">Live requests</text>
+</g>
+<g class="c-gray">
+<rect x="350" y="560" width="120" height="55" rx="4"/>
+<text x="410" y="580" class="th" text-anchor="middle">Report</text>
+<text x="410" y="597" class="ts" text-anchor="middle">Usage stats</text>
+</g>
+<g class="c-gray">
+<rect x="490" y="560" width="120" height="55" rx="4"/>
+<text x="550" y="580" class="th" text-anchor="middle">Docs</text>
+<text x="550" y="597" class="ts" text-anchor="middle">Connect guide</text>
+</g>
+
+<rect x="56" y="632" width="10" height="10" fill="#AFA9EC"/>
+<text x="72" y="641" class="ts">Navigation</text>
+<rect x="176" y="632" width="10" height="10" fill="#F0997B"/>
+<text x="192" y="641" class="ts">Controls</text>
+<rect x="280" y="632" width="10" height="10" fill="#5DCAA5"/>
+<text x="296" y="641" class="ts">Conversation</text>
+<rect x="410" y="632" width="10" height="10" fill="#B4B2A9"/>
+<text x="426" y="641" class="ts">Secondary / overlay</text>
+</svg>

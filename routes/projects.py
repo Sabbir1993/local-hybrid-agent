@@ -33,8 +33,15 @@ from core.agent_tools import (
     get_active_project,
     set_active_project,
 )
+from core import companion_bridge
 
 router = APIRouter(tags=["projects"])
+
+
+@router.get("/control/companion/status")
+async def companion_status(user: Principal = Depends(get_current_user)):
+    info = companion_bridge.connection_info(user.id)
+    return {"connected": info is not None, **(info or {})}
 
 class ProjectReq(BaseModel):
     name: str
@@ -139,6 +146,12 @@ except Exception:
 @router.post("/control/browse_folder")
 async def browse_folder(req: Optional[BrowseFolderReq] = None, user: Principal = Depends(get_current_user)):
     init_dir = req.initial_dir if req else ""
+    if companion_bridge.is_connected(user.id):
+        try:
+            data = await companion_bridge.call(user.id, "fs.browse_folder", {"initial_dir": init_dir})
+            return {"ok": True, "path": data.get("path") or "", "cancelled": not bool(data.get("path"))}
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"companion: {e}"}, status_code=502)
     try:
         selected_path = await asyncio.to_thread(_ask_directory_native, init_dir)
         return {
@@ -152,6 +165,13 @@ async def browse_folder(req: Optional[BrowseFolderReq] = None, user: Principal =
 
 @router.get("/control/fs/browse")
 async def fs_browse(path: Optional[str] = "", user: Principal = Depends(get_current_user)):
+    if companion_bridge.is_connected(user.id):
+        try:
+            data = await companion_bridge.call(user.id, "fs.browse", {"path": path or ""})
+            return {"ok": True, **data}
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"companion: {e}"}, status_code=502)
+
     drives = _get_drives()
     raw_path = (path or "").strip()
     if not raw_path:
@@ -202,6 +222,12 @@ async def fs_browse(path: Optional[str] = "", user: Principal = Depends(get_curr
 
 @router.post("/control/fs/mkdir")
 async def fs_mkdir(req: MkdirReq, user: Principal = Depends(get_current_user)):
+    if companion_bridge.is_connected(user.id):
+        try:
+            data = await companion_bridge.call(user.id, "fs.mkdir", {"path": req.path, "name": req.name})
+            return {"ok": True, **data}
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"companion: {e}"}, status_code=502)
     try:
         base = Path(req.path).expanduser().resolve()
         name = req.name.strip()

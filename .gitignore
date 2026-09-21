@@ -9,6 +9,7 @@ node_modules/
 .venv/
 venv/
 scratch/
+companion/dist/
 config/providers.json
 config/providers.json.migrated
 config/providers/
