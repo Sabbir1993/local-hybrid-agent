@@ -35,8 +35,8 @@
     const codeRaw = e.dataTransfer.getData('application/x-agent-code');
     if (codeRaw) {
       try {
-        const { path, text, startLine, endLine } = JSON.parse(codeRaw);
-        insertAtCaret(`--- CODE from ${path} (lines ${startLine}-${endLine}) ---\n${text}\n--- END ---\n@${path} `);
+        const { path, startLine, endLine } = JSON.parse(codeRaw);
+        insertAtCaret(`CODE from @${path} (lines ${startLine}-${endLine}) `);
       } catch (err) { /* malformed payload, ignore */ }
       return;
     }

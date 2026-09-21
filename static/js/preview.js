@@ -456,7 +456,25 @@ function renderPdfPreview(url, container, controls) {
   controls.innerHTML = `
     <span style="font-size:11px; color:var(--dim);">Native browser PDF reader</span>
   `;
-  container.innerHTML = `<iframe class="preview-frame" src="${url}#toolbar=1" style="width:100%; height:100%; border:none; background:#525659;"></iframe>`;
+  container.innerHTML = `<div style="padding:40px 24px; text-align:center; color:var(--dim); font-size:12px;">Loading PDF…</div>`;
+
+  fetch(url).then(async res => {
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/pdf')) {
+      container.innerHTML = `<iframe class="preview-frame" src="${url}#toolbar=1" style="width:100%; height:100%; border:none; background:#525659;"></iframe>`;
+    } else {
+      const errJson = await res.json().catch(() => ({}));
+      container.innerHTML = `
+        <div style="padding:40px 24px; text-align:center; color:var(--dim); font-size:12px; display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%;">
+          <span style="font-size:32px; margin-bottom:12px;">📁</span>
+          <div style="font-weight:600; color:var(--text); font-size:14px; margin-bottom:6px;">File Not Found On Disk</div>
+          <div style="max-width:440px; margin-bottom:16px; line-height:1.5;">${esc(errJson.error || 'The requested file could not be located in workspace or storage.')}</div>
+          <div class="dim" style="font-size:11px;">If this was generated in a previous chat turn, ask the assistant to write or export it again.</div>
+        </div>`;
+    }
+  }).catch(err => {
+    container.innerHTML = `<div style="padding:24px; color:var(--red); font-size:12px;">Failed to load PDF: ${esc(err.message)}</div>`;
+  });
 }
 
 // 6. Markdown Modal Preview
