@@ -111,11 +111,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # no access to a document never gets a hint it exists -- "nothing found"
     # falls out naturally instead of being a special case to get wrong.
     kb_ids = allowed_source_ids_for(user)
+    kb_used = False
     if kb_ids and last_query.strip():
         try:
             kb_hits = await search_memory_hybrid(last_query, k=4, allowed_knowledge_source_ids=kb_ids)
             kb_hits = [h for h in kb_hits if h.get("source") == "knowledge" and h.get("score", 0) > 0.12]
             if kb_hits:
+                kb_used = True
                 kb_text = "\n\n---\n\n".join(h["text"] for h in kb_hits)
                 sys_parts.append(
                     "ORGANIZATIONAL KNOWLEDGE BASE (internal reference material relevant to this "
@@ -302,11 +304,17 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     "cannot save files to your computer",
                     "as an ai, i cannot create files",
                 ))
-                is_file_intent = any(w in last_query.lower() for w in (
-                    "fill", "write", "save", "create", "generate", "make", "export", "share with me"
-                )) and any(w in last_query.lower() for w in (
-                    "file", "excel", ".xlsx", ".csv", ".json", ".py", ".html", ".txt"
-                ))
+                # Require an actual file-creation verb close to an actual file-format
+                # noun (not just "file" on its own, which co-occurs with ordinary
+                # questions like "what's wrong in this csv"), and never fire on a
+                # turn that only answered from the knowledge base - that's a Q&A
+                # reply citing KB text, not a file-creation request.
+                _file_verb_re = r'(fill|write|save|create|generate|make|export|download|share)\w*'
+                _file_noun_re = r'(excel|spreadsheet|workbook|csv|\.xlsx|\.xls|\.csv|\.json|\.py|\.html|\.txt|\.docx|\.pptx)\b'
+                is_file_intent = (not kb_used) and bool(
+                    _re.search(_file_verb_re + r'.{0,25}' + _file_noun_re, last_query, _re.IGNORECASE)
+                    or _re.search(_file_noun_re + r'.{0,25}' + _file_verb_re, last_query, _re.IGNORECASE)
+                )
 
                 # Check if model output contains [DOWNLOAD: ...] or code blocks intended as files
                 dl_tags = _re.findall(r'\[DOWNLOAD:\s*([^\]]+)\]', content)
@@ -330,6 +338,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             html_tag_m = _re.search(r'(<!DOCTYPE\s+html[\s\S]*?</html>|<html[\s\S]*?</html>|<svg[\s\S]*?</svg>)', content, _re.IGNORECASE)
                             if html_tag_m:
                                 cand_code = html_tag_m.group(1).strip()
+                        if not cand_code and ext in {'xlsx', 'xls', 'csv'}:
+                            # The model may have described the data as a markdown table
+                            # instead of a fenced block - pull that out before falling
+                            # back to placeholder rows.
+                            tbl_m = _re.search(r'(\|.+?\|\n\|[\s\-:|]+\|\n(?:\|.+?\|\n?)+)', content)
+                            if tbl_m:
+                                cand_code = tbl_m.group(1).strip()
                         if not cand_code:
                             # Model mentioned [DOWNLOAD: filename] but forgot to output the code block
                             # Generate a complete standalone HTML/document file based on the topic
@@ -378,9 +393,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 <script>mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});</script>
 </body>
 </html>"""
-                            elif ext == 'csv':
+                            elif ext in ('csv', 'xlsx', 'xls'):
                                 cand_code = "ID,Name,Category,Status,Created\n1,Alpha,System,Active,2026-09-16\n2,Beta,Worker,Ready,2026-09-16\n3,Gamma,Orchestrator,Complete,2026-09-16"
-                        
+
                         if cand_code:
                             res_str = tool_write_file_common({"path": clean_fname, "content": cand_code})
                             written_files.append(_saved_filename(res_str, clean_fname))

@@ -1,14 +1,15 @@
 // companion/main.js — Electron main process: local companion for the
-// A770 Dual Runtime server. Shows the server's own web app in a native
+// Local Agent server. Shows the server's own web app in a native
 // window (login included — "/" redirects to "/login" server-side when
 // unauthenticated), and holds a WebSocket to core/companion_bridge.py to
 // execute fs/shell RPCs from fsops.js / shellops.js on this machine.
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, session: electronSession } = require("electron");
+const { app, BrowserWindow, Tray, Menu, nativeImage, session: electronSession, dialog, ipcMain } = require("electron");
 const WebSocket = require("ws");
 const os = require("os");
 const path = require("path");
 const { autoUpdater } = require("electron-updater");
+
 
 const { SERVER_URL } = require("./config");
 const fsops = require("./fsops");
@@ -55,8 +56,38 @@ function setTrayStatus(text, connectedNow) {
 }
 
 async function getSessionCookie() {
-  const cookies = await electronSession.defaultSession.cookies.get({ name: SESSION_COOKIE_NAME });
-  return cookies.length ? cookies[0].value : null;
+  const ses = (mainWindow && mainWindow.webContents && mainWindow.webContents.session) || electronSession.defaultSession;
+  let currentUrl = (mainWindow && mainWindow.webContents && mainWindow.webContents.getURL()) || SERVER_URL;
+  if (!currentUrl || currentUrl === "about:blank") currentUrl = SERVER_URL;
+
+  try {
+    const cookies = await ses.cookies.get({ url: currentUrl, name: SESSION_COOKIE_NAME });
+    if (cookies && cookies.length) return cookies[0].value;
+  } catch (_) {}
+
+  try {
+    const cookies = await ses.cookies.get({ name: SESSION_COOKIE_NAME });
+    if (cookies && cookies.length) return cookies[0].value;
+  } catch (_) {}
+
+  try {
+    const cookies = await electronSession.defaultSession.cookies.get({ url: currentUrl, name: SESSION_COOKIE_NAME });
+    if (cookies && cookies.length) return cookies[0].value;
+  } catch (_) {}
+
+  try {
+    const cookies = await electronSession.defaultSession.cookies.get({ name: SESSION_COOKIE_NAME });
+    if (cookies && cookies.length) return cookies[0].value;
+  } catch (_) {}
+
+  try {
+    const all = await ses.cookies.get({ url: currentUrl });
+    for (const c of all) {
+      if (c.name === SESSION_COOKIE_NAME || c.name.includes("session")) return c.value;
+    }
+  } catch (_) {}
+
+  return null;
 }
 
 function showMainWindow() {
@@ -69,18 +100,31 @@ function createMainWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
-    title: "A770 Dual Runtime",
+    title: "Local Agent",
     icon: appIcon,
-    webPreferences: { contextIsolation: true },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.resolve(__dirname, "preload.js"),
+    },
   });
 
-  win.webContents.on("did-fail-load", (e, code, desc, url) =>
-    console.error("[main window] did-fail-load", code, desc, url)
-  );
+  try {
+    const customUa = win.webContents.getUserAgent() + " A770NativeApp";
+    win.webContents.setUserAgent(customUa);
+  } catch (_) {}
+
+  win.webContents.on("did-fail-load", (e, code, desc, url) => {
+    console.error("[main window] did-fail-load", code, desc, url);
+    if (url && url.startsWith("https://") && !url.includes("127.0.0.1") && !url.includes("localhost")) {
+      console.log("[main window] Remote failed, trying local server http://127.0.0.1:8000/...");
+      win.loadURL("http://127.0.0.1:8000/");
+    }
+  });
 
   const checkLoggedIn = async () => {
     const token = await getSessionCookie();
-    if (token && token !== lastToken) {
+    if (token && (!ws || ws.readyState !== WebSocket.OPEN || token !== lastToken)) {
       lastToken = token;
       connectWebSocket(token);
     }
@@ -88,6 +132,7 @@ function createMainWindow() {
   win.webContents.on("did-navigate", checkLoggedIn);
   win.webContents.on("did-navigate-in-page", checkLoggedIn);
   win.webContents.on("did-finish-load", checkLoggedIn);
+  setInterval(checkLoggedIn, 3000);
 
   win.on("close", (e) => {
     if (!isQuitting) {
@@ -99,6 +144,34 @@ function createMainWindow() {
   win.loadURL(SERVER_URL + "/");
   return win;
 }
+
+// Register IPC handlers for direct native folder browsing from the web app
+ipcMain.handle("dialog:browseFolder", async (event, initialDir) => {
+  try {
+    return (await fsops.browseFolder({ initial_dir: initialDir })).path || "";
+  } catch (e) {
+    console.error("[ipcMain dialog:browseFolder] error:", e);
+    return "";
+  }
+});
+
+ipcMain.handle("fs:browse", async (event, targetPath) => {
+  try {
+    return fsops.browse({ path: targetPath });
+  } catch (e) {
+    console.error("[ipcMain fs:browse] error:", e);
+    return { ok: false, error: String(e) };
+  }
+});
+
+ipcMain.handle("fs:mkdir", async (event, args) => {
+  try {
+    return fsops.mkdir(args || {});
+  } catch (e) {
+    console.error("[ipcMain fs:mkdir] error:", e);
+    return { ok: false, error: String(e) };
+  }
+});
 
 function scheduleReconnect() {
   if (reconnectTimer) return;
@@ -119,6 +192,7 @@ const OPS = {
   "fs.edit": fsops.edit,
   "fs.list": fsops.list,
   "fs.grep": fsops.grep,
+  "fs.tree": fsops.tree,
   "shell.run": shellops.run,
 };
 
@@ -140,20 +214,42 @@ function connectWebSocket(sessionToken) {
     try {
       ws.terminate();
     } catch {}
+    ws = null;
   }
-  const wsUrl = SERVER_URL.replace(/^http/, "ws") + "/ws/companion";
+  let effectiveServer = SERVER_URL;
+  if (mainWindow && mainWindow.webContents) {
+    try {
+      const pageUrl = mainWindow.webContents.getURL();
+      if (pageUrl && pageUrl.startsWith("http")) {
+        const u = new URL(pageUrl);
+        effectiveServer = `${u.protocol}//${u.host}`;
+      }
+    } catch (_) {}
+  }
+  const wsBase = effectiveServer.replace(/^http/, "ws") + "/ws/companion";
+  const sep = wsBase.includes("?") ? "&" : "?";
+  const wsUrl = `${wsBase}${sep}token=${encodeURIComponent(sessionToken)}`;
   console.log("[connectWebSocket] connecting to", wsUrl);
-  ws = new WebSocket(wsUrl, { headers: { Cookie: `${SESSION_COOKIE_NAME}=${sessionToken}` } });
+  ws = new WebSocket(wsUrl, {
+    headers: {
+      Cookie: `${SESSION_COOKIE_NAME}=${sessionToken}`,
+      Authorization: `Bearer ${sessionToken}`,
+      "ngrok-skip-browser-warning": "true",
+      "User-Agent": "A770Companion A770NativeApp"
+    }
+  });
 
   ws.on("unexpected-response", (req, res) => {
     console.error("[connectWebSocket] unexpected-response", res.statusCode);
+    setTrayStatus("connection error — retrying…", false);
+    scheduleReconnect();
   });
 
   ws.on("open", () => {
     console.log("[connectWebSocket] open");
     reconnectDelay = RECONNECT_BASE_MS;
     ws.send(JSON.stringify({ type: "hello", hostname: os.hostname() }));
-    setTrayStatus(`connected to ${SERVER_URL}`, true);
+    setTrayStatus(`connected to ${effectiveServer}`, true);
   });
 
   ws.on("message", async (raw) => {

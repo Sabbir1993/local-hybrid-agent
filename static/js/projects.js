@@ -1,33 +1,226 @@
 /* ---------------- projects & sessions ---------------- */
 let curProject = null;      // {id, name}
 let curSession = null;      // {id, title}
+try {
+  Object.defineProperty(window, 'curProject', {
+    get() { return curProject; },
+    set(v) { curProject = v; },
+    configurable: true
+  });
+  Object.defineProperty(window, 'curSession', {
+    get() { return curSession; },
+    set(v) { curSession = v; },
+    configurable: true
+  });
+} catch (_) {}
+
+/* ---------------- client device helper ---------------- */
+function getClientDeviceId() {
+  let devId = localStorage.getItem('antigravity_device_id');
+  if (!devId) {
+    devId = 'dev_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+    try { localStorage.setItem('antigravity_device_id', devId); } catch (_) {}
+  }
+  return devId;
+}
+
+function getClientDeviceName() {
+  let devName = localStorage.getItem('antigravity_device_name');
+  if (!devName) {
+    const ua = navigator.userAgent || '';
+    if (ua.includes('Windows')) devName = 'Windows PC';
+    else if (ua.includes('Macintosh') || ua.includes('Mac OS')) devName = 'Mac';
+    else if (ua.includes('Linux')) devName = 'Linux PC';
+    else if (ua.includes('Android')) devName = 'Android';
+    else if (ua.includes('iPhone') || ua.includes('iPad')) devName = 'iOS Device';
+    else devName = 'My Device';
+    try { localStorage.setItem('antigravity_device_name', devName); } catch (_) {}
+  }
+  return devName;
+}
+
+function getClientDeviceShortId() {
+  // Returns a short readable suffix from the device ID (e.g. "ABC12DEF3456")
+  const devId = getClientDeviceId();
+  return devId.replace(/^dev_/, '').replace(/_/g, '').slice(0, 12).toUpperCase();
+}
+
+function getDeviceDisplayLabel() {
+  // Returns "Windows PC-ABC12DEF3456" style label
+  return `${getClientDeviceName()}-${getClientDeviceShortId()}`;
+}
+
+function setClientDeviceName(name) {
+  if (!name || !name.trim()) return;
+  try {
+    localStorage.setItem('antigravity_device_name', name.trim());
+  } catch (_) {}
+  updateDeviceUI();
+  loadProjects();
+}
+
+function getDeviceHeaders() {
+  return {
+    'X-Device-Id': getClientDeviceId(),
+    'X-Device-Name': getClientDeviceName()
+  };
+}
+
+function updateDeviceUI() {
+  const label = $('device-label-text');
+  if (label) {
+    label.textContent = `💻 ${getDeviceDisplayLabel()}`;
+    label.title = `Current device: ${getClientDeviceName()} (ID: ${getClientDeviceId()})`;
+  }
+}
+
+async function renameClientDevice() {
+  const cur = getClientDeviceName();
+  // Prompt user to update only the name part (device ID suffix stays fixed)
+  const next = prompt(`Rename this device:\n(Device ID suffix will remain: -${getClientDeviceShortId()})`, cur);
+  if (!next || !next.trim() || next.trim() === cur) return;
+
+  const newName = next.trim();
+  try {
+    localStorage.setItem('antigravity_device_name', newName);
+  } catch (_) {}
+
+  updateDeviceUI();
+
+  try {
+    const resp = await fetch('/control/device/rename', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getDeviceHeaders(),
+      },
+      body: JSON.stringify({
+        old_name: cur,
+        new_name: newName,
+        device_id: getClientDeviceId(),
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      console.warn('Backend rename failed:', data.error || resp.status);
+    }
+  } catch (e) {
+    console.warn('Backend rename failed:', e);
+  }
+
+  toast(`Device renamed to "${newName}-${getClientDeviceShortId()}"`);
+  await loadProjects();
+}
+
+// Wire up device rename handlers
+document.addEventListener('DOMContentLoaded', () => {
+  setupDeviceUIHandlers();
+});
+setTimeout(setupDeviceUIHandlers, 50);
+
+function setupDeviceUIHandlers() {
+  const btnRenameDev = $('btn-rename-device');
+  if (btnRenameDev && !btnRenameDev._bound) {
+    btnRenameDev._bound = true;
+    btnRenameDev.onclick = renameClientDevice;
+  }
+  const label = $('device-label-text');
+  if (label && !label._bound) {
+    label._bound = true;
+    label.onclick = renameClientDevice;
+    label.style.cursor = 'pointer';
+  }
+}
+
+async function promptFixProjectPath(pid, pname, oldPath) {
+  const currentDev = getClientDeviceName();
+  const newPath = prompt(
+    `Update workspace directory for project "${pname}" on this device (${currentDev}):\n(Current path: ${oldPath})`,
+    oldPath
+  );
+  if (!newPath || !newPath.trim() || newPath.trim() === oldPath) return;
+
+  try {
+    const r = await fetch(`/control/projects/${pid}/workspace`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getDeviceHeaders(),
+      },
+      body: JSON.stringify({
+        workspace_dir: newPath.trim(),
+        device_id: getClientDeviceId(),
+        device_name: currentDev,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    toast(`Workspace path updated for ${currentDev}`);
+    await loadProjects();
+  } catch (e) {
+    toast('Failed to update workspace path: ' + e.message, true);
+  }
+}
 
 async function loadProjects(autoRestoreSessions = false) {
+  const list = $('projects-list');
+  updateDeviceUI();
   try {
-    const d = await (await fetch('/control/projects')).json();
-    const list = $('projects-list');
-    if (d.active) {
+    const q = '?device=current';
+    const d = await (await fetch('/control/projects' + q, {
+      headers: { ...getDeviceHeaders() }
+    })).json();
+    const savedProjId = localStorage.getItem('active_project_id');
+    const savedProjName = localStorage.getItem('active_project_name');
+
+    if (d.active && d.active !== 'scratch' && d.active !== 'default') {
       const p = (d.projects || []).find(x => x.name === d.active);
       if (p) curProject = p;
-    } else curProject = null;
+    } else if (savedProjId || savedProjName) {
+      const p = (d.projects || []).find(x => String(x.id) === String(savedProjId) || (savedProjName && x.name === savedProjName));
+      if (p) {
+        curProject = p;
+        // Keep backend active project state in sync
+        fetch(`/control/projects/${p.id}/activate`, {
+          method: 'POST',
+          headers: { ...getDeviceHeaders() },
+        }).catch(() => {});
+      } else {
+        curProject = null;
+      }
+    } else {
+      curProject = null;
+    }
+
+    if (curProject) {
+      try {
+        localStorage.setItem('active_project_id', String(curProject.id));
+        localStorage.setItem('active_project_name', curProject.name);
+      } catch (_) {}
+    }
 
     if (list) {
       list.innerHTML = '';
       const userProjects = (d.projects || []).filter(p => p.id !== 0 && p.name !== 'scratch' && p.name !== 'default');
 
       if (!userProjects.length) {
+        const emptyMsg = `No projects on this device (${getClientDeviceName()})`;
         list.innerHTML = `
           <div class="project-empty-state">
-            <span style="font-size:11px; color:var(--dim);">No custom projects yet</span>
+            <span style="font-size:11px; color:var(--dim);">${emptyMsg}</span>
             <button class="btn ghost" style="font-size:10.5px; padding:3px 8px; margin-top:4px;" onclick="$('btn-newproject').click()">+ Create Project</button>
           </div>`;
       } else {
         userProjects.forEach(p => {
-          const ws = p.workspace_dir || `${d.workspace_root || 'E:\\AI\\workspace'}\\${p.name}`;
+          const ws = p.workspace_dir || `(server workspace)/${p.name}`;
           const isCur = curProject && curProject.id === p.id;
+          const isMyDev = !!p.is_current_device;
+          const pathValid = p.path_valid_on_device !== false;
+          const devLabel = p.device_name || (p.device_id ? (p.device_id === getClientDeviceId() ? getClientDeviceName() : p.device_id.slice(0, 8)) : 'Default');
+
           const row = document.createElement('div');
-          row.className = 'project-row' + (isCur ? ' cur' : '');
-          row.title = `Project: ${p.name}\nDirectory: ${ws}`;
+          row.className = 'project-row' + (isCur ? ' cur' : '') + (!pathValid ? ' path-invalid' : '');
+          row.title = `Project: ${p.name}\nDirectory: ${ws}\nDevice: ${devLabel}${!pathValid ? '\n[Warning: Path does not exist on this machine]' : ''}`;
           row.innerHTML = `
             <div class="proj-icon-wrapper">
               <svg class="proj-dir-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -35,8 +228,16 @@ async function loadProjects(autoRestoreSessions = false) {
               </svg>
             </div>
             <div class="proj-meta">
-              <div class="proj-name">${esc(p.name)}</div>
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:4px;">
+                <div class="proj-name">${esc(p.name)}</div>
+                <span class="proj-dev-badge ${isMyDev ? 'this-dev' : 'other-dev'}" title="Device: ${esc(devLabel)}">${esc(devLabel)}</span>
+              </div>
               <div class="proj-path" title="${esc(ws)}">${esc(ws)}</div>
+              ${!pathValid ? `
+                <div class="proj-path-warn">
+                  <span>⚠️ Path not found</span>
+                  <button type="button" class="btn-fix-path" data-pid="${p.id}" data-pname="${esc(p.name)}" data-curpath="${esc(ws)}">Map Path</button>
+                </div>` : ''}
             </div>
             <span class="p-del" title="Remove project registration (files preserved)">✕</span>
           `;
@@ -44,6 +245,11 @@ async function loadProjects(autoRestoreSessions = false) {
             if (e.target.classList.contains('p-del')) {
               e.stopPropagation();
               deleteProject(p.id, p.name);
+              return;
+            }
+            if (e.target.classList.contains('btn-fix-path')) {
+              e.stopPropagation();
+              promptFixProjectPath(p.id, p.name, ws);
               return;
             }
             activateProject(p.id);
@@ -61,12 +267,17 @@ async function loadProjects(autoRestoreSessions = false) {
       } else {
         mList.innerHTML = '';
         d.projects.forEach(p => {
-          const ws = p.workspace_dir || `${d.workspace_root || 'E:\\AI\\workspace'}\\${p.name}`;
+          const ws = p.workspace_dir || `(server workspace)/${p.name}`;
+          const isMyDev = !!p.is_current_device;
+          const devLabel = p.device_name || (p.device_id ? (p.device_id === getClientDeviceId() ? getClientDeviceName() : p.device_id.slice(0, 8)) : 'Default');
           const item = document.createElement('div');
           item.style.cssText = 'display:flex; align-items:center; justify-content:space-between; background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:5px 8px; font-size:11.5px;';
           item.innerHTML = `
             <div style="min-width:0; flex:1; margin-right:8px;">
-              <div style="font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">📁 ${esc(p.name)}</div>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <div style="font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">📁 ${esc(p.name)}</div>
+                <span class="proj-dev-badge ${isMyDev ? 'this-dev' : 'other-dev'}">${esc(devLabel)}</span>
+              </div>
               <div style="font-size:9.5px; color:var(--dim); font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(ws)}">${esc(ws)}</div>
             </div>
             <button class="btn ghost btn-del-proj-row" style="width:auto; margin:0; padding:2px 7px; font-size:10px; color:var(--red); border-color:rgba(239,68,68,0.3);" title="Remove project from agent (files on disk are NOT deleted)">🗑️ Remove</button>
@@ -87,13 +298,20 @@ async function deleteProject(pid, pname) {
     return;
   }
   try {
-    const r = await fetch(`/control/projects/${pid}`, { method: 'DELETE' });
+    const r = await fetch(`/control/projects/${pid}`, {
+      method: 'DELETE',
+      headers: { ...getDeviceHeaders() }
+    });
     const d = await r.json();
     if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
     toast(`Project "${pname}" removed from agent (disk files preserved)`);
     if (curProject && curProject.id === pid) {
       curProject = null;
       curSession = null;
+      try {
+        localStorage.removeItem('active_project_id');
+        localStorage.removeItem('active_project_name');
+      } catch (_) {}
       messages = [];
       renderAll();
     }
@@ -114,7 +332,7 @@ async function loadSessions(autoRestore = false) {
     return;
   }
   try {
-    const d = await (await fetch(url)).json();
+    const d = await (await fetch(url, { headers: { ...getDeviceHeaders() } })).json();
     if (!d.sessions || !d.sessions.length) {
       const emptyMsg = agentMode
         ? 'No task sessions in this project.<br>Type a prompt to start an agent task.'
@@ -126,8 +344,12 @@ async function loadSessions(autoRestore = false) {
     d.sessions.forEach(s => {
       const row = document.createElement('div');
       row.className = 'session-row' + (curSession && curSession.id === s.id ? ' cur' : '');
+      row.setAttribute('data-sid', String(s.id));
       const icon = agentMode ? '🤖' : '💬';
+      const isRunning = window.bgJobs && window.bgJobs.has(String(s.id));
+      const bgBadge = isRunning ? '<span class="bg-session-indicator" title="Executing in background..."><span class="bg-pulse-dot"></span>⚡</span>' : '';
       row.innerHTML = `<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(s.title)}">${icon} ${esc(s.title)}</span>` +
+        bgBadge +
         `<span class="s-menu-wrap"><span class="s-menu" title="Session options">⋮</span></span>`;
       row.onclick = e => {
         if (e.target.classList.contains('s-menu')) {
@@ -139,6 +361,8 @@ async function loadSessions(autoRestore = false) {
       };
       list.appendChild(row);
     });
+
+    if (typeof updateBgIndicators === 'function') updateBgIndicators();
 
     // Auto-restore active session on initial load / refresh if saved
     if (autoRestore && !curSession && d.sessions && d.sessions.length) {
@@ -153,6 +377,23 @@ async function loadSessions(autoRestore = false) {
 
 async function openSession(s) {
   try {
+    if (curSession && String(curSession.id) === String(s.id)) return;
+
+    // If target session is currently running in background, attach directly to live job state
+    if (window.bgJobs && window.bgJobs.has(String(s.id))) {
+      const job = window.bgJobs.get(String(s.id));
+      curSession = s;
+      messages = job.messages;
+      try {
+        localStorage.setItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id', String(s.id));
+      } catch (e) {}
+      renderAll();
+      setGenUI(true);
+      loadSessions();
+      if (typeof updateBgIndicators === 'function') updateBgIndicators();
+      return;
+    }
+
     // Fetch messages and config in parallel so curCtxMax is ready before rendering.
     const sel = $('profile');
     const modelTarget = (sel && sel.value) ? sel.value : (curStatus && curStatus.model);
@@ -197,10 +438,30 @@ async function openSession(s) {
     try {
       localStorage.setItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id', String(s.id));
     } catch (e) {}
+    setGenUI(false);
     renderAll();
     loadSessions();
+    if (typeof updateBgIndicators === 'function') updateBgIndicators();
   } catch (e) { toast('Failed to load session', true); }
 }
+
+async function openSessionById(sid) {
+  const sidStr = String(sid);
+  // Check if session exists in current list
+  const row = document.querySelector(`#session-list .session-row[data-sid="${sidStr}"]`);
+  if (row) {
+    row.click();
+    return;
+  }
+  // Otherwise fetch session details
+  try {
+    const s = { id: sid, title: 'Session ' + sid };
+    await openSession(s);
+  } catch (e) {
+    toast('Could not switch to session ' + sid, true);
+  }
+}
+window.openSessionById = openSessionById;
 
 function closeSessionMenu() {
   const open = document.querySelector('.s-menu-pop');
@@ -242,7 +503,7 @@ function toggleSessionMenu(btn, s) {
 }
 
 async function deleteSession(sid) {
-  try { await fetch(`/control/sessions/${sid}`, { method: 'DELETE' }); } catch (e) {}
+  try { await fetch(`/control/sessions/${sid}`, { method: 'DELETE', headers: { ...getDeviceHeaders() } }); } catch (e) {}
   if (curSession && curSession.id === sid) {
     curSession = null;
     messages = [];
@@ -254,12 +515,18 @@ async function deleteSession(sid) {
   loadSessions(false);
 }
 
-function persistMsg(role, content, meta) {
-  if (!curSession) return;
-  fetch(`/control/sessions/${curSession.id}/messages`, {
+function persistMsgForSession(sid, role, content, meta) {
+  if (!sid) return Promise.resolve();
+  return fetch(`/control/sessions/${sid}/messages`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ role, content, meta }),
   }).catch(() => {});
+}
+window.persistMsgForSession = persistMsgForSession;
+
+function persistMsg(role, content, meta) {
+  if (!curSession) return;
+  persistMsgForSession(curSession.id, role, content, meta);
 }
 
 function formatSessionTitleFromPrompt(text) {
@@ -290,7 +557,11 @@ function ensureSession(promptText) {
   }
   const pid = (agentMode && curProject) ? curProject.id : 0;
   return fetch(`/control/projects/${pid}/sessions`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getDeviceHeaders(),
+    },
     body: JSON.stringify({ title: desiredTitle }),
   })
     .then(r => r.json())
@@ -308,20 +579,26 @@ function ensureSession(promptText) {
 }
 
 $('btn-newchat').onclick = () => {
-  if (generating) { toast('Generation in progress', true); return; }
+  const isCurRunning = curSession && window.bgJobs && window.bgJobs.has(String(curSession.id));
   curSession = null;
   messages = [];
   try {
     localStorage.removeItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
   } catch (e) {}
+  setGenUI(false);
   renderAll();
   loadSessions(false);
+  if (typeof updateBgIndicators === 'function') updateBgIndicators();
   if ($('input')) {
     $('input').value = '';
     $('input').focus();
   }
   clearAttachments();
-  toast(agentMode ? 'New agent task started' : 'New chat started');
+  if (isCurRunning) {
+    toast('Previous task is continuing in background ⚡');
+  } else {
+    toast(agentMode ? 'New agent task started' : 'New chat started');
+  }
 };
 
 const btnNewSession = $('btn-newsession');
@@ -340,9 +617,20 @@ $('btn-newproject').onclick = () => {
 
 async function refreshCompanionStatus() {
   const el = $('companion-status');
-  if (!el) return;
+  if (window.electronAPI && window.electronAPI.isNativeApp) {
+    if (el) {
+      el.textContent = `🟢 Native App — browsing runs directly on your machine`;
+      el.style.color = 'var(--green)';
+    }
+    updateAgentModeAvailability(true, 'Native App');
+    return;
+  }
   try {
-    const d = await (await fetch('/control/companion/status')).json();
+    const d = await (await fetch('/control/companion/status', {
+      headers: { ...getDeviceHeaders() }
+    })).json();
+    updateAgentModeAvailability(d.connected, d.hostname);
+    if (!el) return;
     if (d.connected) {
       el.textContent = `🟢 Connected to ${d.hostname || 'your device'} — browsing runs on your machine`;
       el.style.color = 'var(--green)';
@@ -350,7 +638,7 @@ async function refreshCompanionStatus() {
       el.textContent = '⚪ No companion connected — folder browsing/writes run on the server';
       el.style.color = 'var(--dim)';
     }
-  } catch (e) { el.textContent = ''; }
+  } catch (e) { if (el) el.textContent = ''; }
 }
 
 const closeProjModal = () => { $('proj-modal').hidden = true; };
@@ -366,12 +654,23 @@ async function submitNewProject() {
   try {
     const r = await fetch('/control/projects', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, workspace_dir }),
+      headers: {
+        'Content-Type': 'application/json',
+        ...getDeviceHeaders(),
+      },
+      body: JSON.stringify({
+        name,
+        workspace_dir,
+        device_id: getClientDeviceId(),
+        device_name: getClientDeviceName(),
+      }),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     closeProjModal();
+    if (!agentMode && typeof setAppMode === 'function') {
+      setAppMode(true, true);
+    }
     await loadProjects();
     await activateProject(j.project.id);
     toast(`Project "${j.project.name}" created & activated`);
@@ -395,23 +694,52 @@ $('btn-browse-dir').onclick = async () => {
   btn.disabled = true;
   try {
     const curVal = $('new-proj-dir').value.trim();
+
+    // 1. Direct native app dialog (Electron IPC) on installed machine
+    if (window.electronAPI && typeof window.electronAPI.browseFolder === 'function') {
+      const selected = await window.electronAPI.browseFolder(curVal);
+      if (selected) {
+        $('new-proj-dir').value = selected;
+        const nameInput = $('new-proj-name');
+        if (!nameInput.value.trim()) {
+          const parts = selected.replace(/\\/g, '/').split('/').filter(Boolean);
+          if (parts.length) nameInput.value = parts[parts.length - 1];
+        }
+        toast(`Selected: ${selected}`);
+      }
+      return;
+    }
+
+    // 2. Modern browser File System Access API (runs on user's machine)
+    if (window.showDirectoryPicker && !window.electronAPI) {
+      try {
+        const dirHandle = await window.showDirectoryPicker();
+        if (dirHandle && dirHandle.name) {
+          const nameInput = $('new-proj-name');
+          if (!nameInput.value.trim()) nameInput.value = dirHandle.name;
+          // Prompt user to enter or confirm full path on their local OS
+          const entered = prompt(`Selected folder: "${dirHandle.name}"\nEnter the full local path on this machine for agent tasks:`, curVal || '');
+          if (entered && entered.trim()) {
+            $('new-proj-dir').value = entered.trim();
+            toast(`Selected: ${entered.trim()}`);
+          } else {
+            toast(`Project name set to "${dirHandle.name}"`);
+          }
+          return;
+        }
+      } catch (pickerErr) {
+        if (pickerErr.name === 'AbortError') return; // User cancelled
+      }
+    }
+
+    // 3. Server route (bridges to companion if connected)
     const r = await fetch('/control/browse_folder', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getDeviceHeaders() },
       body: JSON.stringify({ initial_dir: curVal }),
     });
-    if (!r.ok) {
-      let errDetail = `HTTP ${r.status}`;
-      try {
-        const errJson = await r.json();
-        errDetail = (errJson && (errJson.error || errJson.detail)) || errDetail;
-        if (typeof errDetail === 'object') errDetail = JSON.stringify(errDetail);
-      } catch (_) {}
-      if (r.status === 404) errDetail += ' (Please restart server_manager.py to activate folder picker)';
-      throw new Error(errDetail);
-    }
-    const d = await r.json();
-    if (d.ok && d.path) {
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.ok && d.path) {
       $('new-proj-dir').value = d.path;
       const nameInput = $('new-proj-name');
       if (!nameInput.value.trim()) {
@@ -419,8 +747,19 @@ $('btn-browse-dir').onclick = async () => {
         if (parts.length) nameInput.value = parts[parts.length - 1];
       }
       toast(`Selected: ${d.path}`);
-    } else if (d.cancelled) {
-      // User cancelled dialog
+      return;
+    }
+
+    // 4. Remote client without companion: prompt for local path directly on user's device
+    const entered = prompt('Enter your local workspace directory path on this machine (e.g. C:\\Users\\... or /home/...):', curVal || '');
+    if (entered && entered.trim()) {
+      $('new-proj-dir').value = entered.trim();
+      const nameInput = $('new-proj-name');
+      if (!nameInput.value.trim()) {
+        const parts = entered.trim().replace(/\\/g, '/').split('/').filter(Boolean);
+        if (parts.length) nameInput.value = parts[parts.length - 1];
+      }
+      toast(`Selected: ${entered.trim()}`);
     }
   } catch (e) {
     toast('Directory chooser error: ' + (e.message || String(e)), true);
@@ -455,15 +794,22 @@ async function navigateDirPicker(path) {
   const listEl = $('dir-picker-list');
   listEl.innerHTML = '<div style="color:var(--dim); font-size:11px; padding:12px; text-align:center;">Loading directories…</div>';
   try {
-    const q = path ? `?path=${encodeURIComponent(path)}` : '';
-    const r = await fetch(`/control/fs/browse${q}`);
     let d = null;
-    try { d = await r.json(); } catch (_) {}
-    if (!r.ok || !d || !d.ok) {
-      let errStr = (d && (d.error || d.detail)) || `HTTP ${r.status}`;
-      if (typeof errStr === 'object') errStr = JSON.stringify(errStr);
-      if (r.status === 404) errStr += ' (Please restart server_manager.py to activate file browser)';
-      throw new Error(errStr);
+    if (window.electronAPI && typeof window.electronAPI.browseDir === 'function') {
+      const nativeRes = await window.electronAPI.browseDir(path);
+      d = { ok: true, ...nativeRes };
+    } else {
+      const q = path ? `?path=${encodeURIComponent(path)}` : '';
+      const r = await fetch(`/control/fs/browse${q}`, {
+        headers: { ...getDeviceHeaders() }
+      });
+      try { d = await r.json(); } catch (_) {}
+      if (!r.ok || !d || !d.ok) {
+        let errStr = (d && (d.error || d.detail)) || `HTTP ${r.status}`;
+        if (typeof errStr === 'object') errStr = JSON.stringify(errStr);
+        if (r.status === 404) errStr += ' (Please restart server_manager.py to activate file browser)';
+        throw new Error(errStr);
+      }
     }
     pickerCurrentPath = d.current;
     pickerSelectedPath = d.current;
@@ -538,12 +884,18 @@ $('btn-dir-picker-mkdir').onclick = async () => {
   const name = $('dir-picker-new-name').value.trim();
   if (!name) return;
   try {
-    const r = await fetch('/control/fs/mkdir', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: pickerCurrentPath, name }),
-    });
-    const d = await r.json();
+    let d = null;
+    if (window.electronAPI && typeof window.electronAPI.mkdir === 'function') {
+      const res = await window.electronAPI.mkdir(pickerCurrentPath, name);
+      d = { ok: true, ...res };
+    } else {
+      const r = await fetch('/control/fs/mkdir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getDeviceHeaders() },
+        body: JSON.stringify({ path: pickerCurrentPath, name }),
+      });
+      d = await r.json();
+    }
     if (d.ok) {
       $('dir-picker-new-name').value = '';
       await navigateDirPicker(pickerCurrentPath);
@@ -558,9 +910,21 @@ $('btn-dir-picker-mkdir').onclick = async () => {
 
 async function activateProject(pid) {
   try {
-    const r = await fetch(`/control/projects/${pid}/activate`, { method: 'POST' });
+    const r = await fetch(`/control/projects/${pid}/activate`, {
+      method: 'POST',
+      headers: { ...getDeviceHeaders() },
+    });
     const d = await r.json();
     curProject = d.project || null;
+    try {
+      if (curProject) {
+        localStorage.setItem('active_project_id', String(curProject.id));
+        localStorage.setItem('active_project_name', curProject.name);
+      } else {
+        localStorage.removeItem('active_project_id');
+        localStorage.removeItem('active_project_name');
+      }
+    } catch (_) {}
     curSession = null;
     messages = [];
     renderAll();
@@ -585,7 +949,16 @@ if ($('project-sel')) {
 }
 
 async function setNoProject() {
-  try { await fetch('/control/projects/0/activate', { method: 'POST' }); } catch (e) {}
+  try {
+    await fetch('/control/projects/0/activate', {
+      method: 'POST',
+      headers: { ...getDeviceHeaders() },
+    });
+  } catch (e) {}
+  try {
+    localStorage.removeItem('active_project_id');
+    localStorage.removeItem('active_project_name');
+  } catch (_) {}
   curProject = null; curSession = null;
   messages = [];
   renderAll();

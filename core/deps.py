@@ -10,6 +10,7 @@ from fastapi import Depends, HTTPException, Request
 
 from .audit import audit_log
 from .auth import SESSION_COOKIE, Principal, user_has_permission, verify_session
+from .request_context import set_current_user, set_current_device
 
 
 async def get_current_user(request: Request) -> Principal:
@@ -18,6 +19,11 @@ async def get_current_user(request: Request) -> Principal:
     if not principal:
         raise HTTPException(status_code=401, detail="not authenticated")
     request.state.principal = principal
+    set_current_user(principal.id)
+    dev_id = request.headers.get("x-device-id") or request.headers.get("X-Device-Id")
+    dev_name = request.headers.get("x-device-name") or request.headers.get("X-Device-Name")
+    if dev_id:
+        set_current_device(dev_id, dev_name)
     return principal
 
 

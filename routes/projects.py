@@ -10,16 +10,18 @@ import sys
 from pathlib import Path
 from typing import Optional, Union
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from core.auth import Principal
 from core.deps import get_current_user
 from core.small_model import WORKSPACE_ROOT
+from core.request_context import set_current_device, get_current_device_id
 from core.db import (
     db_list_projects,
     db_create_project,
+    db_update_project_workspace,
     db_delete_project,
     db_list_sessions,
     db_create_session,
@@ -27,6 +29,7 @@ from core.db import (
     db_delete_session,
     db_load_messages,
     db_append_message,
+    db_rename_device,
 )
 from core.agent_tools import (
     active_workspace,
@@ -46,6 +49,14 @@ async def companion_status(user: Principal = Depends(get_current_user)):
 class ProjectReq(BaseModel):
     name: str
     workspace_dir: Optional[str] = None
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+
+
+class UpdateWorkspaceReq(BaseModel):
+    workspace_dir: str
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
 
 
 class SessionReq(BaseModel):
@@ -144,7 +155,9 @@ except Exception:
 
 
 @router.post("/control/browse_folder")
-async def browse_folder(req: Optional[BrowseFolderReq] = None, user: Principal = Depends(get_current_user)):
+async def browse_folder(request: Request,
+                        req: Optional[BrowseFolderReq] = None,
+                        user: Principal = Depends(get_current_user)):
     init_dir = req.initial_dir if req else ""
     if companion_bridge.is_connected(user.id):
         try:
@@ -152,6 +165,18 @@ async def browse_folder(req: Optional[BrowseFolderReq] = None, user: Principal =
             return {"ok": True, "path": data.get("path") or "", "cancelled": not bool(data.get("path"))}
         except Exception as e:
             return JSONResponse({"ok": False, "error": f"companion: {e}"}, status_code=502)
+
+    # If companion is not connected, check if client is physically on localhost.
+    # NEVER open a server-side GUI dialog for remote users!
+    client_ip = request.client.host if (request and request.client) else ""
+    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost", "testclient")
+    if not is_localhost:
+        return JSONResponse({
+            "ok": False,
+            "error": "No companion connected on your machine. Please type or paste your local folder path directly.",
+            "is_remote": True,
+        }, status_code=400)
+
     try:
         selected_path = await asyncio.to_thread(_ask_directory_native, init_dir)
         return {
@@ -164,13 +189,22 @@ async def browse_folder(req: Optional[BrowseFolderReq] = None, user: Principal =
 
 
 @router.get("/control/fs/browse")
-async def fs_browse(path: Optional[str] = "", user: Principal = Depends(get_current_user)):
+async def fs_browse(request: Request, path: Optional[str] = "", user: Principal = Depends(get_current_user)):
     if companion_bridge.is_connected(user.id):
         try:
             data = await companion_bridge.call(user.id, "fs.browse", {"path": path or ""})
             return {"ok": True, **data}
         except Exception as e:
             return JSONResponse({"ok": False, "error": f"companion: {e}"}, status_code=502)
+
+    client_ip = request.client.host if (request and request.client) else ""
+    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost", "testclient")
+    if not is_localhost:
+        return JSONResponse({
+            "ok": False,
+            "error": "In-app filesystem browsing requires the local companion app on your machine.",
+            "is_remote": True,
+        }, status_code=400)
 
     drives = _get_drives()
     raw_path = (path or "").strip()
@@ -246,36 +280,105 @@ class MessageReq(BaseModel):
     meta: Optional[dict] = None
 
 
+class RenameDeviceReq(BaseModel):
+    new_name: str
+    old_name: Optional[str] = None
+    device_id: Optional[str] = None
+
+
+@router.post("/control/device/rename")
+async def rename_device(req: RenameDeviceReq,
+                        user: Principal = Depends(get_current_user),
+                        x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
+    new_name = req.new_name.strip()
+    if not new_name:
+        return JSONResponse({"error": "Device name cannot be empty"}, status_code=400)
+    dev_id = req.device_id or x_device_id
+    db_rename_device(owner_user_id=user.id, new_name=new_name, device_id=dev_id, old_name=req.old_name)
+    set_current_device(dev_id or "default", new_name)
+    return {"ok": True, "device_name": new_name}
+
+
 @router.get("/control/projects")
-async def list_projects(user: Principal = Depends(get_current_user)):
-    projs = db_list_projects(owner_user_id=user.id)
+async def list_projects(user: Principal = Depends(get_current_user),
+                        device: Optional[str] = "current",
+                        device_id: Optional[str] = None,
+                        x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+                        x_device_name: Optional[str] = Header(None, alias="X-Device-Name")):
+    cur_dev_id = device_id or x_device_id or "default"
+    set_current_device(cur_dev_id, x_device_name)
+
+    # Filter by current device and device name.
+    # NOTE: do NOT fall back to "all projects for user" if the device filter matches 0 —
+    # that would leak projects registered on other machines (e.g. office PC) onto this device.
+    filter_dev_id = cur_dev_id if (device != "all" and cur_dev_id != "default") else None
+    filter_dev_name = x_device_name if (device != "all") else None
+    projs = db_list_projects(owner_user_id=user.id, device_id=filter_dev_id, device_name=filter_dev_name)
+
+    curr_proj = get_active_project(user.id, cur_dev_id)
     active_p = None
-    curr_proj = get_active_project()
-    if curr_proj:
-        for p in projs:
-            if p["name"] == curr_proj:
-                active_p = p
-                break
+
+    for p in projs:
+        p_dev = p.get("device_id")
+        p["is_current_device"] = bool(p_dev == cur_dev_id or p_dev in ("default", None) or cur_dev_id == "default")
+        ws_dir = p.get("workspace_dir")
+        p["path_valid_on_device"] = True
+        if ws_dir:
+            try:
+                p["path_valid_on_device"] = Path(ws_dir).exists()
+            except Exception:
+                p["path_valid_on_device"] = False
+
+        if curr_proj and p["name"] == curr_proj:
+            active_p = p
+
     return {
         "projects": projs,
         "active": curr_proj,
         "active_project": active_p,
         "workspace": str(active_workspace()),
-        "workspace_root": str(WORKSPACE_ROOT),
+        "current_device_id": cur_dev_id,
+        "current_device_name": x_device_name or "Default Device",
     }
 
 
 @router.post("/control/projects")
-async def create_project(req: ProjectReq, user: Principal = Depends(get_current_user)):
+async def create_project(req: ProjectReq,
+                         user: Principal = Depends(get_current_user),
+                         x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+                         x_device_name: Optional[str] = Header(None, alias="X-Device-Name")):
+    dev_id = req.device_id or x_device_id or "default"
+    dev_name = req.device_name or x_device_name or "Default Device"
+    set_current_device(dev_id, dev_name)
     try:
-        p = db_create_project(req.name, req.workspace_dir, WORKSPACE_ROOT, owner_user_id=user.id)
+        p = db_create_project(req.name, req.workspace_dir, WORKSPACE_ROOT, owner_user_id=user.id,
+                              device_id=dev_id, device_name=dev_name)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True, "project": p}
 
 
+@router.patch("/control/projects/{pid}/workspace")
+async def update_project_workspace(pid: int, req: UpdateWorkspaceReq,
+                                  user: Principal = Depends(get_current_user),
+                                  x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+                                  x_device_name: Optional[str] = Header(None, alias="X-Device-Name")):
+    dev_id = req.device_id or x_device_id or "default"
+    dev_name = req.device_name or x_device_name or "Default Device"
+    set_current_device(dev_id, dev_name)
+    try:
+        p = db_update_project_workspace(pid, req.workspace_dir, user.id, dev_id, dev_name)
+        return {"ok": True, "project": p}
+    except PermissionError:
+        return JSONResponse({"error": "project not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
 @router.delete("/control/projects/{pid}")
-async def delete_project(pid: int, user: Principal = Depends(get_current_user)):
+async def delete_project(pid: int, user: Principal = Depends(get_current_user),
+                         x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
+    dev_id = x_device_id or "default"
     pname = None
     for p in db_list_projects(owner_user_id=user.id):
         if p["id"] == pid:
@@ -285,22 +388,26 @@ async def delete_project(pid: int, user: Principal = Depends(get_current_user)):
         db_delete_project(pid, owner_user_id=user.id)
     except PermissionError:
         return JSONResponse({"error": "project not found"}, status_code=404)
-    curr_proj = get_active_project()
+    curr_proj = get_active_project(user.id, dev_id)
     if curr_proj:
         projs = db_list_projects(owner_user_id=user.id)
         if not any(p["name"] == curr_proj for p in projs):
-            set_active_project(None)
+            set_active_project(None, user.id, dev_id)
     return {"ok": True, "deleted_id": pid, "deleted_name": pname}
 
 
 @router.post("/control/projects/{pid}/activate")
-async def activate_project(pid: int, user: Principal = Depends(get_current_user)):
+async def activate_project(pid: int, user: Principal = Depends(get_current_user),
+                           x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+                           x_device_name: Optional[str] = Header(None, alias="X-Device-Name")):
+    dev_id = x_device_id or "default"
+    set_current_device(dev_id, x_device_name)
     if pid == 0:
-        set_active_project(None)
+        set_active_project(None, user.id, dev_id)
         return {"ok": True, "active": None, "workspace": str(active_workspace())}
     for p in db_list_projects(owner_user_id=user.id):
         if p["id"] == pid:
-            set_active_project(p["name"])
+            set_active_project(p["name"], user.id, dev_id)
             return {"ok": True, "active": p["name"], "project": p, "workspace": str(active_workspace())}
     return JSONResponse({"error": "project not found"}, status_code=404)
 

@@ -1,4 +1,4 @@
-# Agent Gap Analysis — A770-Dual Runtime
+# Agent Gap Analysis — Local Agent
 
 > **What this document is:** an evidence-based review of the codebase answering
 > three questions — (1) how close is this to being a real AI *agent* today,

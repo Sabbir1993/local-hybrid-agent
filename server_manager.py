@@ -200,7 +200,7 @@ async def lifespan(app: FastAPI):
         _shutdown_cleanup()
 
 
-app = FastAPI(title="A770-Dual Runtime", lifespan=lifespan)
+app = FastAPI(title="Local Agent", lifespan=lifespan)
 app.add_middleware(CSRFMiddleware)
 
 # --- Static assets (unauthenticated: CSS/JS carry no sensitive data) ---

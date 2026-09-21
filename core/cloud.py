@@ -338,8 +338,8 @@ class CloudClient:
         # a referer with 401 "unauthorized_client" / "UNAUTHENTICATED". Default
         # both headers unconditionally so users only need URL + key; a value
         # set in the provider's Extra request headers field always wins.
-        h.setdefault("HTTP-Referer", "https://localhost/a770-dual-runtime")
-        h.setdefault("X-Title", "a770-dual-runtime")
+        h.setdefault("HTTP-Referer", "https://localhost/local-agent")
+        h.setdefault("X-Title", "Local Agent")
         return h
 
     def _prepare(self, payload):

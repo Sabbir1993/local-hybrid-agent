@@ -124,7 +124,7 @@ async def extract_url(url: str) -> str:
     if _is_private_host(parsed.hostname or ""):
         raise ValueError("refusing to fetch a private/loopback address")
     async with httpx.AsyncClient(timeout=URL_TIMEOUT_S, follow_redirects=True) as client:
-        resp = await client.get(url, headers={"User-Agent": "a770-dual-runtime-kb/1.0"})
+        resp = await client.get(url, headers={"User-Agent": "local-agent-kb/1.0"})
         resp.raise_for_status()
         body = resp.content[:MAX_URL_BYTES]
     html = body.decode(resp.encoding or "utf-8", errors="ignore")

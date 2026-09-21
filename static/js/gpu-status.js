@@ -11,6 +11,13 @@ function setPill(mode, s) {
   else txt.textContent = 'Model unloaded';
 }
 
+function updateHardwareTag(tag) {
+  const el = $('logo-hw-tag');
+  if (el && tag && el.textContent !== tag) {
+    el.textContent = tag;
+  }
+}
+
 let pollFailures = 0;
 async function pollStatus() {
   try {
@@ -19,6 +26,7 @@ async function pollStatus() {
     const s = await res.json();
     pollFailures = 0;
     curStatus = s;
+    if (s.hardware_tag) updateHardwareTag(s.hardware_tag);
     const cloudMain = s.cloud_main || null;
     // cloud main lane: report ☁️ instead of a misleading "Model unloaded"
     setPill(cloudMain ? 'cloud' : (s.pid ? 'on' : 'off'), s);
@@ -80,7 +88,7 @@ async function pollGpu() {
     const comp = {};
     (d.compute || []).forEach(c => { comp[c.luid] = (comp[c.luid] || 0) + c.pct; });
     
-    // Deduplicate & filter to show strictly the 2 physical Arc A770 GPUs
+    // Deduplicate & filter to show strictly the physical discrete GPUs
     let rawAds = (d.adapters || []).filter(a => !IGNORED_LUIDS.has(a.luid) && a.gb >= 1.0);
     const unique = {};
     rawAds.forEach(a => {
@@ -90,6 +98,18 @@ async function pollGpu() {
     });
     const ads = Object.values(unique).sort((a, b) => b.gb - a.gb);
     const totals = d.vram_totals_gb || [];  // sorted largest-first, positional match to `ads`
+
+    if (d.hardware_tag) {
+      updateHardwareTag(d.hardware_tag);
+    } else {
+      const count = ads.length;
+      let gpuLabel = 'CPU';
+      if (count === 2) gpuLabel = 'DUAL GPU';
+      else if (count === 1) gpuLabel = 'SINGLE GPU';
+      else if (count > 2) gpuLabel = `${count}x GPU`;
+      const eng = (d.engine || 'VULKAN').toUpperCase();
+      updateHardwareTag(`${gpuLabel} · ${eng}`);
+    }
 
     $('gpu-list').innerHTML = ads.map((a, idx) => {
       const name = LUID_NAMES[a.luid] || (`GPU #${idx + 1} (${a.luid})`);

@@ -1,11 +1,47 @@
-/* ---------------- chat ---------------- */
+let chatUserScrolledUp = false;
+
+function initChatScrollTracking() {
+  const chat = $('chat');
+  if (!chat || chat._scrollTrackingActive) return;
+  chat._scrollTrackingActive = true;
+
+  chat.addEventListener('scroll', () => {
+    const dist = chat.scrollHeight - chat.scrollTop - chat.clientHeight;
+    if (dist < 40) {
+      chatUserScrolledUp = false;
+      updateScrollBottomBtn(false);
+    } else if (dist > 80) {
+      chatUserScrolledUp = true;
+      if (generating) {
+        updateScrollBottomBtn(true);
+      }
+    }
+  }, { passive: true });
+}
+
+function updateScrollBottomBtn(show) {
+  const btn = $('btn-scroll-bottom');
+  if (!btn) return;
+  btn.style.display = show ? 'flex' : 'none';
+}
+
+function scrollToBottom() {
+  const chat = $('chat');
+  if (chat) {
+    chatUserScrolledUp = false;
+    chat.scrollTo({ top: chat.scrollHeight, behavior: 'smooth' });
+    updateScrollBottomBtn(false);
+  }
+}
+window.scrollToBottom = scrollToBottom;
+
 function renderAll() {
   const inner = $('chat-inner');
   const isLoaded = (typeof mainLaneReady === 'function') ? mainLaneReady() : (curStatus && curStatus.pid);
   inner.innerHTML = messages.length ? messages.map(bubbleHtml).join('') :
     `<div id="empty">
       <div class="big">⚡</div>
-      <h2>A770 Dual Runtime</h2>
+      <h2>Local Agent</h2>
       <p id="empty-model" class="mono">${isLoaded && curStatus.model ? curStatus.model.split('\\').pop().split('/').pop() : 'Model unloaded'}</p>
       ${!isLoaded ? `<div class="empty-card">
         <p><b>No model is currently loaded in GPU VRAM.</b></p>
@@ -13,7 +49,12 @@ function renderAll() {
       </div>` : `<p class="dim" style="margin-top: 10px;">Type a message below to start chatting, or configure parameters in the sidebar.</p>`}
     </div>`;
   const chat = $('chat');
-  chat.scrollTop = chat.scrollHeight;
+  if (chat) {
+    chatUserScrolledUp = false;
+    chat.scrollTop = chat.scrollHeight;
+    initChatScrollTracking();
+    updateScrollBottomBtn(false);
+  }
   updateContextChip();
   if (typeof renderInlineMermaid === 'function') {
     renderInlineMermaid(inner);
@@ -46,6 +87,10 @@ function renderLast() {
 
   const lastEl = inner.lastElementChild;
   const m = messages[lastIdx];
+  const chat = $('chat');
+  initChatScrollTracking();
+
+  const chatWasAtBottom = chat ? (chat.scrollHeight - chat.scrollTop - chat.clientHeight < 50) : true;
 
   // Preserve existing details state and scroll position if user interacted with it
   const prevThink = lastEl.querySelector('details.think');
@@ -58,34 +103,60 @@ function renderLast() {
     const prevDiv = prevThink.querySelector('.think-content, div');
     if (prevDiv) {
       thinkScrollTop = prevDiv.scrollTop;
-      thinkWasAtBottom = (prevDiv.scrollHeight - prevDiv.scrollTop - prevDiv.clientHeight) < 40;
+      thinkWasAtBottom = (prevDiv.scrollHeight - prevDiv.scrollTop - prevDiv.clientHeight) < 15;
     }
   }
 
-  // Generate new HTML for the last message
-  const temp = document.createElement('div');
-  temp.innerHTML = bubbleHtml(m, lastIdx);
-  const newEl = temp.firstElementChild;
-  if (newEl) {
-    inner.replaceChild(newEl, lastEl);
+  // Fast in-place update for streaming reasoning without replacing DOM
+  const existingThink = lastEl.querySelector('details.think');
+  const existingThinkDiv = existingThink ? existingThink.querySelector('.think-content') : null;
+  const isOnlyStreamingReasoning = generating && m.reasoning && !m.content && (!m.acts || !m.acts.length) && existingThinkDiv;
 
-    // Auto-scroll thinking container to keep up with stream
-    const newThink = newEl.querySelector('details.think');
-    const newThinkDiv = newThink ? newThink.querySelector('.think-content, div') : null;
-    if (newThinkDiv) {
-      if (generating && !m.content && thinkWasAtBottom) {
-        newThinkDiv.scrollTop = newThinkDiv.scrollHeight;
-      } else if (thinkScrollTop >= 0) {
-        newThinkDiv.scrollTop = thinkScrollTop;
+  if (isOnlyStreamingReasoning) {
+    const thinkBody = esc(m.reasoning).replace(/\n/g, '<br>') + '<span class="cursor">▍</span>';
+    existingThinkDiv.innerHTML = thinkBody;
+    if (thinkWasAtBottom && !m._thinkUserScrolled) {
+      existingThinkDiv.scrollTop = existingThinkDiv.scrollHeight;
+    } else if (thinkScrollTop >= 0) {
+      existingThinkDiv.scrollTop = thinkScrollTop;
+    }
+  } else {
+    // Generate new HTML for the last message
+    const temp = document.createElement('div');
+    temp.innerHTML = bubbleHtml(m, lastIdx);
+    const newEl = temp.firstElementChild;
+    if (newEl) {
+      inner.replaceChild(newEl, lastEl);
+
+      // Auto-scroll thinking container to keep up with stream
+      const newThink = newEl.querySelector('details.think');
+      const newThinkDiv = newThink ? newThink.querySelector('.think-content, div') : null;
+      if (newThinkDiv) {
+        newThinkDiv.addEventListener('scroll', () => {
+          const d = newThinkDiv.scrollHeight - newThinkDiv.scrollTop - newThinkDiv.clientHeight;
+          m._thinkUserScrolled = d > 15;
+        }, { passive: true });
+
+        if (generating && !m.content && thinkWasAtBottom && !m._thinkUserScrolled) {
+          newThinkDiv.scrollTop = newThinkDiv.scrollHeight;
+        } else if (thinkScrollTop >= 0) {
+          newThinkDiv.scrollTop = thinkScrollTop;
+        }
       }
     }
   }
 
-  const chat = $('chat');
-  if (chat) chat.scrollTop = chat.scrollHeight;
+  // Only auto-scroll the main chat container if user has NOT scrolled up and was at the bottom
+  if (chat && !chatUserScrolledUp && chatWasAtBottom) {
+    chat.scrollTop = chat.scrollHeight;
+    updateScrollBottomBtn(false);
+  } else if (generating && chatUserScrolledUp) {
+    updateScrollBottomBtn(true);
+  }
+
   updateContextChip();
-  if (newEl && !generating && typeof renderInlineMermaid === 'function') {
-    renderInlineMermaid(newEl);
+  if (inner.lastElementChild && !generating && typeof renderInlineMermaid === 'function') {
+    renderInlineMermaid(inner.lastElementChild);
   }
 }
 
@@ -460,7 +531,24 @@ async function send(inputText) {
     files: sentFiles || undefined,
     displayContent: text || undefined
   };
-  ensureSession(text ? text.slice(0, 60) : (sentFiles ? `📎 ${sentFiles}` : 'Files session')).then(() => persistMsg('user', fullPrompt, userMeta));
+  const session = await ensureSession(text ? text.slice(0, 60) : (sentFiles ? `📎 ${sentFiles}` : 'Files session'));
+  const sessionId = session ? session.id : (curSession ? curSession.id : 0);
+  const sessionTitle = session ? session.title : (curSession ? curSession.title : (text || 'Chat').slice(0, 40));
+  persistMsgForSession(sessionId, 'user', fullPrompt, userMeta);
+
+  // Register into background jobs
+  const jobCtrl = ctrl;
+  const job = {
+    id: sessionId,
+    title: sessionTitle,
+    mode: 'chat',
+    ctrl: jobCtrl,
+    messages: messages,
+    assistantMsg: assistantMsg,
+    t0: performance.now(),
+  };
+  window.bgJobs.set(String(sessionId), job);
+  if (typeof updateBgIndicators === 'function') updateBgIndicators();
 
   const samplingCfg = getSamplingConfig();
   const sys = (samplingCfg.sysprompt || '').trim();
@@ -469,7 +557,8 @@ async function send(inputText) {
   const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : messages;
   for (const m of ctxMsgs.slice(0, -1)) msgs.push({ role: m.role, content: m.content });
   const t0 = performance.now();
-  const last = () => messages[messages.length - 1];
+  const getJobAssistant = () => job.assistantMsg;
+
   try {
     const res = await fetch('/chat/run', {
       method: 'POST',
@@ -481,7 +570,7 @@ async function send(inputText) {
         temperature: samplingCfg.temp,
         max_tokens: (isNaN(samplingCfg.maxtok) || samplingCfg.maxtok <= 0) ? -1 : samplingCfg.maxtok,
       }),
-      signal: ctrl.signal,
+      signal: jobCtrl.signal,
     });
     if (!res.ok) {
       const e = await res.json().catch(() => ({}));
@@ -504,7 +593,7 @@ async function send(inputText) {
         const ev = evM[1];
         let d = {};
         try { d = JSON.parse(dtM[1]); } catch (e) {}
-        const L = last();
+        const L = getJobAssistant();
         if (ev === 'lane') {
           L.modelDisplay = d.display || d.model;
           L.modelSource = d.source;
@@ -533,8 +622,8 @@ async function send(inputText) {
         } else if (ev === 'done') {
           if (d && (d.completion_tokens || d.total_tokens)) {
             if (d.completion_tokens) L.ntok = d.completion_tokens;
-            if (d.prompt_tokens && messages.length >= 2) {
-              const uMsg = messages[messages.length - 2];
+            if (d.prompt_tokens && job.messages.length >= 2) {
+              const uMsg = job.messages[job.messages.length - 2];
               if (uMsg && uMsg.role === 'user') {
                 uMsg.ntok = d.prompt_tokens;
               }
@@ -543,37 +632,50 @@ async function send(inputText) {
         } else if (ev === 'error') {
           throw new Error(d.error || 'Chat execution error');
         }
-        renderLast();
+        if (curSession && String(curSession.id) === String(sessionId)) {
+          renderLast();
+        }
       }
     }
   } catch (e) {
     if (e.name !== 'AbortError') {
-      last().content += (last().content ? '\n\n' : '') + '⚠️ ' + e.message;
+      const L = getJobAssistant();
+      L.content += (L.content ? '\n\n' : '') + '⚠️ ' + e.message;
     }
   }
-  
-  const m = last().content.match(/^\s*<think>([\s\S]*?)<\/think>/);
+
+  const targetAssistant = getJobAssistant();
+  const m = targetAssistant.content.match(/^\s*<think>([\s\S]*?)<\/think>/);
   if (m) {
-    last().reasoning = (last().reasoning || '') + m[1];
-    last().content = last().content.slice(m[0].length).trim();
+    targetAssistant.reasoning = (targetAssistant.reasoning || '') + m[1];
+    targetAssistant.content = targetAssistant.content.slice(m[0].length).trim();
   }
   const dt = (performance.now() - t0) / 1000;
-  const fullLen = (last().content || '').length + (last().reasoning || '').length;
-  const ntok = last().ntok || Math.max(1, Math.round(fullLen / 3.5));
-  last().tps = ntok / dt; last().ntok = ntok; last().secs = dt;
+  const fullLen = (targetAssistant.content || '').length + (targetAssistant.reasoning || '').length;
+  const ntok = targetAssistant.ntok || Math.max(1, Math.round(fullLen / 3.5));
+  targetAssistant.tps = ntok / dt; targetAssistant.ntok = ntok; targetAssistant.secs = dt;
   if (ntok > 1 && $('chip-ts')) $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
-  persistMsg('assistant', last().content, {
-    tps: last().tps,
+
+  persistMsgForSession(sessionId, 'assistant', targetAssistant.content, {
+    tps: targetAssistant.tps,
     ntok,
     secs: dt,
-    reasoning: last().reasoning || undefined,
-    acts: (last().acts && last().acts.length) ? last().acts : undefined,
-    modelDisplay: last().modelDisplay || undefined,
-    modelSource: last().modelSource || undefined,
-    modelProvider: last().modelProvider || undefined,
+    reasoning: targetAssistant.reasoning || undefined,
+    acts: (targetAssistant.acts && targetAssistant.acts.length) ? targetAssistant.acts : undefined,
+    modelDisplay: targetAssistant.modelDisplay || undefined,
+    modelSource: targetAssistant.modelSource || undefined,
+    modelProvider: targetAssistant.modelProvider || undefined,
   });
-  ctrl = null;
-  setGenUI(false);
-  renderLast();
-  updateContextChip();
+
+  window.bgJobs.delete(String(sessionId));
+  if (ctrl === jobCtrl) ctrl = null;
+
+  if (curSession && String(curSession.id) === String(sessionId)) {
+    setGenUI(false);
+    renderLast();
+    updateContextChip();
+  } else {
+    toast(`⚡ Chat "${job.title}" finished generating`);
+  }
+  if (typeof updateBgIndicators === 'function') updateBgIndicators();
 }

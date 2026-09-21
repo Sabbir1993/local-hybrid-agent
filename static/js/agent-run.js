@@ -82,14 +82,32 @@ async function runAgentSSE(text) {
     displayContent: text || undefined
   };
   // await session creation so the structured-plan tools receive a real session_id
-  await ensureSession((text || (sentFiles ? `📎 ${sentFiles}` : 'Agent task')).slice(0, 60));
-  persistMsg('user', fullPrompt, userMeta);
-  const last = () => messages[messages.length - 1];
+  const session = await ensureSession((text || (sentFiles ? `📎 ${sentFiles}` : 'Agent task')).slice(0, 60));
+  const sessionId = session ? session.id : (curSession ? curSession.id : 0);
+  const sessionTitle = session ? session.title : (curSession ? curSession.title : (text || 'Agent task').slice(0, 40));
+  persistMsgForSession(sessionId, 'user', fullPrompt, userMeta);
+
+  // Register into background jobs
+  const jobCtrl = ctrl;
+  const job = {
+    id: sessionId,
+    title: sessionTitle,
+    mode: 'agent',
+    ctrl: jobCtrl,
+    messages: messages,
+    assistantMsg: assistantMsg,
+    t0: performance.now(),
+  };
+  window.bgJobs.set(String(sessionId), job);
+  if (typeof updateBgIndicators === 'function') updateBgIndicators();
+
+  const getJobAssistant = () => job.assistantMsg;
+
   (async () => {
     let usage = null;
     const t0 = performance.now();
     try {
-      const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : messages;
+      const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : job.messages;
       const hist = ctxMsgs.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
       const engineMode = $('agent-engine') ? $('agent-engine').value : 'all-local';
       // Collect doc attachments that were server-uploaded for context injection
@@ -103,12 +121,12 @@ async function runAgentSSE(text) {
           messages: hist,
           mode: engineMode,
           plan: planMode,
-          session_id: (curSession && curSession.id) ? curSession.id : null,
+          session_id: sessionId || null,
           temperature: getSamplingConfig().temp,
           max_tokens: (() => { const mt = getSamplingConfig().maxtok; return (isNaN(mt) || mt <= 0) ? -1 : mt; })(),
           attachments: docAttachments,
         }),
-        signal: ctrl.signal,
+        signal: jobCtrl.signal,
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
@@ -129,7 +147,7 @@ async function runAgentSSE(text) {
           const dtM = raw.match(/^data: (.+)$/m);
           if (!evM || !dtM) continue;
           const ev = evM[1], d = JSON.parse(dtM[1]);
-          const L = last();
+          const L = getJobAssistant();
           if (ev === 'step') L.acts.push({ type: 'step', ...d });
           else if (ev === 'lane') {
             L.acts.push({ type: 'lane', ...d });
@@ -152,9 +170,11 @@ async function runAgentSSE(text) {
           }
           else if (ev === 'tool_result') {
             L.acts.push({ type: 'tool_result', ...d });
-            // agent changed a file -> refresh the workspace side panel
+            // agent changed a file -> refresh the workspace side panel if active
             if (wsPanelOpen && (d.name === 'write_file' || d.name === 'edit_file' || d.name === 'revert')) {
-              wsRefreshTree();
+              if (curSession && String(curSession.id) === String(sessionId)) {
+                wsRefreshTree();
+              }
             }
           }
           else if (ev === 'verify') L.acts.push({ type: 'verify', ...d });
@@ -182,34 +202,49 @@ async function runAgentSSE(text) {
             if (pi >= 0) L.acts[pi] = planAct; else L.acts.push(planAct);
           }
           else if (ev === 'error') throw new Error(d.error);
-          renderLast();
+
+          if (curSession && String(curSession.id) === String(sessionId)) {
+            renderLast();
+          }
         }
       }
-      if (!last().content && last().acts && last().acts.length > 0) {
-        last().content = 'Task completed. See tool operations above for details.';
+      const targetAssistant = getJobAssistant();
+      if (!targetAssistant.content && targetAssistant.acts && targetAssistant.acts.length > 0) {
+        targetAssistant.content = 'Task completed. See tool operations above for details.';
       }
       const dt = (performance.now() - t0) / 1000;
-      const fullLen = (last().content || '').length + (last().reasoning || '').length;
+      const fullLen = (targetAssistant.content || '').length + (targetAssistant.reasoning || '').length;
       const ntok = Math.max(1, Math.round(fullLen / 3.5));
-      last().tps = ntok / dt; last().ntok = ntok; last().secs = dt;
-      if (ntok > 1 && $('chip-ts')) $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
-      persistMsg('assistant', last().content, {
-        tps: last().tps, ntok, secs: dt,
-        reasoning: last().reasoning || undefined,
-        acts: last().acts,
-        modelDisplay: last().modelDisplay || undefined,
-        modelSource: last().modelSource || undefined,
-        modelProvider: last().modelProvider || undefined,
+      targetAssistant.tps = ntok / dt; targetAssistant.ntok = ntok; targetAssistant.secs = dt;
+      if (ntok > 1 && $('chip-ts') && curSession && String(curSession.id) === String(sessionId)) {
+        $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
+      }
+      persistMsgForSession(sessionId, 'assistant', targetAssistant.content, {
+        tps: targetAssistant.tps, ntok, secs: dt,
+        reasoning: targetAssistant.reasoning || undefined,
+        acts: targetAssistant.acts,
+        modelDisplay: targetAssistant.modelDisplay || undefined,
+        modelSource: targetAssistant.modelSource || undefined,
+        modelProvider: targetAssistant.modelProvider || undefined,
       });
     } catch (e) {
       if (e.name !== 'AbortError') {
-        last().content += (last().content ? '\n\n' : '') + '⚠️ ' + e.message;
+        const L = getJobAssistant();
+        L.content += (L.content ? '\n\n' : '') + '⚠️ ' + e.message;
       }
     }
-    ctrl = null;
-    setGenUI(false);
-    renderLast();
-    updateContextChip();
-    if (wsPanelOpen) wsRefreshTree();   // final state of workspace after the task
+
+    window.bgJobs.delete(String(sessionId));
+    if (ctrl === jobCtrl) ctrl = null;
+
+    if (curSession && String(curSession.id) === String(sessionId)) {
+      setGenUI(false);
+      renderLast();
+      updateContextChip();
+      if (wsPanelOpen) wsRefreshTree(); // final state of workspace after the task
+    } else {
+      toast(`⚡ Agent task "${job.title}" finished`);
+    }
+    if (typeof updateBgIndicators === 'function') updateBgIndicators();
   })();
 }

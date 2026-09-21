@@ -1,5 +1,5 @@
 <svg width="680" height="460" viewBox="0 0 680 460" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" role="img">
-<title>HTTP routing map of the A770 Dual Runtime FastAPI app</title>
+<title>HTTP routing map of the Local Agent FastAPI app</title>
 <desc>The FastAPI app applies CSRF middleware, exposes public login routes, gates all other routers behind an RBAC dependency, and falls back to a catch-all proxy route for anything unmatched such as v1 chat completions. Two additional gated routers, /mcp and /admin, are not drawn as separate boxes.</desc>
 <style>
 .c-gray rect{fill:#F1EFE8;stroke:#5F5E5A;stroke-width:0.5} .c-gray text{fill:#2C2C2A}

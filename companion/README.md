@@ -1,6 +1,6 @@
 # A770 Companion
 
-Local Electron app that lets the A770 Dual Runtime server run file and shell
+Local Electron app that lets the Local Agent server run file and shell
 operations on *your* machine instead of the server's. See the server-side
 half of this in `core/companion_bridge.py`.
 

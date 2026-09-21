@@ -1,5 +1,5 @@
 <svg width="680" height="690" viewBox="0 0 680 690" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" role="img">
-<title>Agent step process flow in the A770 Dual Runtime</title>
+<title>Agent step process flow in the Local Agent</title>
 <desc>Each agent step picks a model lane, streams a response, and either finalizes the answer or executes tool calls; after tools run, the loop either escalates a weak executor response to the main model, continues to the next step, or emits a done event at the step limit.</desc>
 <style>
 .box{fill:#F1EFE8;stroke:#B4B2A9;stroke-width:0.5}

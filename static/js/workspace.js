@@ -52,11 +52,36 @@ function renderWsChanges(changes) {
   }
 }
 
+function getActiveProject() {
+  try {
+    if (typeof curProject !== 'undefined' && curProject) return curProject;
+    if (window.curProject) return window.curProject;
+  } catch (_) {}
+  return null;
+}
+
+function hasValidActiveProject() {
+  const p = getActiveProject();
+  return Boolean(
+    p &&
+    p.id &&
+    p.id !== 0 &&
+    p.name &&
+    p.name !== 'scratch' &&
+    p.name !== 'default'
+  );
+}
+
 async function wsLoadTree(dirPath, targetEl, indent) {
   try {
-    const r = await fetch('/agent/ws/tree?path=' + encodeURIComponent(dirPath || ''));
+    if (!hasValidActiveProject()) {
+      targetEl.innerHTML = '<div class="ws-empty" style="padding:12px; text-align:center;">Please select a project to view workspace files.</div>';
+      return;
+    }
+    const hdrs = (typeof getDeviceHeaders === 'function') ? getDeviceHeaders() : {};
+    const r = await fetch('/agent/ws/tree?path=' + encodeURIComponent(dirPath || ''), { headers: hdrs });
     const d = await r.json();
-    if (!r.ok || d.error) { targetEl.innerHTML = `<div class="ws-empty">${esc(d.error || 'failed')}</div>`; return; }
+    if (!r.ok || d.error || !d.root) { targetEl.innerHTML = `<div class="ws-empty">${esc(d.error || 'No project workspace active')}</div>`; return; }
     if (!indent) {
       const rp = $('ws-root-path');
       if (rp) rp.textContent = '📁 ' + (d.root || '');
@@ -167,7 +192,8 @@ let wsCurrentFile = null;   // { path, content } of the file currently shown in 
 
 async function wsShowFile(path) {
   try {
-    const r = await fetch('/agent/ws/file?path=' + encodeURIComponent(path));
+    const hdrs = (typeof getDeviceHeaders === 'function') ? getDeviceHeaders() : {};
+    const r = await fetch('/agent/ws/file?path=' + encodeURIComponent(path), { headers: hdrs });
     const d = await r.json();
     if (!r.ok || d.error) { toast('File view failed: ' + (d.error || r.status), true); return; }
     wsCurrentFile = { path, content: d.content || '' };
@@ -264,16 +290,30 @@ function wsRefreshTree() {
 function updateWsRail() {
   const rail = $('ws-rail');
   if (!rail) return;
-  // workspace panel only makes sense with an active project workspace
-  rail.style.display = (agentMode && curProject && !wsPanelOpen) ? 'block' : 'none';
-  updateGitIconVisibility();
+  // workspace panel only makes sense with a real, active user project workspace
+  const hasValidProject = hasValidActiveProject();
+  rail.style.display = (agentMode && hasValidProject && !wsPanelOpen) ? 'block' : 'none';
+  if ((!agentMode || !hasValidProject) && wsPanelOpen) {
+    setWsPanel(false);
+  }
+  if (typeof updateGitIconVisibility === 'function') updateGitIconVisibility();
 }
 
 function setWsPanel(open) {
+  const hasValidProject = hasValidActiveProject();
+  if (open && (!agentMode || !hasValidProject)) {
+    wsPanelOpen = false;
+    const panel = $('ws-panel');
+    if (panel) panel.classList.remove('open');
+    updateWsRail();
+    return;
+  }
   wsPanelOpen = open;
   const panel = $('ws-panel');
-  panel.style.right = '';
-  panel.classList.toggle('open', open);
+  if (panel) {
+    panel.style.right = '';
+    panel.classList.toggle('open', open);
+  }
   updateWsRail();
   if (open) wsRefreshTree();
 }
@@ -285,6 +325,10 @@ window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && wsPanelOpen) setWsPanel(false);
 });
 
+// Run on script load to guarantee rail is hidden if no project
+updateWsRail();
+document.addEventListener('DOMContentLoaded', updateWsRail);
+
 /* ---------------- shell permission modal ---------------- */
 function showPermModal(reqId, cmd) {
   const m = $('perm-modal');
@@ -293,7 +337,8 @@ function showPermModal(reqId, cmd) {
   $('perm-cmd').textContent = cmd;
   // suggest the leading command word as an allow pattern, * for everything
   const firstWord = (cmd.trim().split(/\s+/)[0] || '*') + ' *';
-  const projName = curProject ? (curProject.name || 'this project') : 'active project';
+  const p = getActiveProject();
+  const projName = p ? (p.name || 'this project') : 'active project';
   $('perm-note').innerHTML = `Permission scopes for <code>${esc(firstWord)}</code>:<br>` +
     `• <b>Just once:</b> Run this command now without saving.<br>` +
     `• <b>For this project:</b> Automatically permit in <i>${esc(projName)}</i>.<br>` +
@@ -309,7 +354,8 @@ async function answerPermission(decision) {
   m.hidden = true;
   if (!reqId) return;
   const pattern = (decision === 'always' || decision === 'project' || decision === 'user') ? m.dataset.pattern : null;
-  const projectId = (curProject && curProject.id) ? curProject.id : null;
+  const p = getActiveProject();
+  const projectId = (p && p.id) ? p.id : null;
   try {
     await fetch('/agent/permission', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -325,7 +371,7 @@ async function answerPermission(decision) {
   if (decision === 'always') {
     toast(`✓ Pattern "${m.dataset.pattern}" allow-listed globally`);
   } else if (decision === 'project') {
-    const pName = curProject ? curProject.name : 'project';
+    const pName = p ? p.name : 'project';
     toast(`✓ Pattern "${m.dataset.pattern}" allowed for ${pName}`);
   } else if (decision === 'user') {
     toast(`✓ Pattern "${m.dataset.pattern}" always allowed for your account`);
@@ -351,30 +397,87 @@ if ($('perm-close-x')) $('perm-close-x').onclick = () => answerPermission('deny'
 
   // restore persisted width
   try {
-    const saved = parseInt(localStorage.getItem('ws_panel_w'));
-    if (saved >= 280) panel.style.width = saved + 'px';
+    const saved = parseInt(localStorage.getItem('ws_panel_w'), 10);
+    if (saved >= 220 && saved <= window.innerWidth * 0.95) {
+      panel.style.width = saved + 'px';
+      panel.style.maxWidth = 'none';
+    }
   } catch (e) {}
 
-  let dragging = false;
-  grip.addEventListener('mousedown', e => {
-    dragging = true;
-    grip.classList.add('dragging');
-    document.body.classList.add('ws-resizing');
-    e.preventDefault();
-  });
-  window.addEventListener('mousemove', e => {
-    if (!dragging) return;
+  let isDragging = false;
+  let activePointerId = null;
+
+  function applyWidth(clientX) {
     const vw = window.innerWidth;
-    const w = Math.min(Math.max(280, vw - e.clientX), Math.floor(vw * 0.9));
+    const w = Math.min(Math.max(220, vw - clientX), Math.floor(vw * 0.92));
     panel.style.width = w + 'px';
-    panel.style.maxWidth = 'none';   // allow drag beyond the 92vw default cap
-  });
-  window.addEventListener('mouseup', () => {
-    if (!dragging) return;
-    dragging = false;
+    panel.style.maxWidth = 'none';
+  }
+
+  function onMove(e) {
+    if (!isDragging) return;
+    applyWidth(e.clientX);
+  }
+
+  function endDrag(e) {
+    if (!isDragging) return;
+    isDragging = false;
     grip.classList.remove('dragging');
     document.body.classList.remove('ws-resizing');
-    try { localStorage.setItem('ws_panel_w', parseInt(panel.style.width) || 360); } catch (e) {}
+    panel.style.transition = '';
+
+    if (activePointerId != null) {
+      try {
+        if (grip.hasPointerCapture && grip.hasPointerCapture(activePointerId)) {
+          grip.releasePointerCapture(activePointerId);
+        }
+      } catch (_) {}
+      activePointerId = null;
+    }
+
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', endDrag);
+    window.removeEventListener('pointercancel', endDrag);
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', endDrag);
+
+    try {
+      const finalW = parseInt(panel.style.width, 10);
+      if (finalW >= 220) {
+        localStorage.setItem('ws_panel_w', finalW);
+      }
+    } catch (e) {}
+  }
+
+  function startDrag(e) {
+    if (e.button != null && e.button !== 0) return;
+    e.preventDefault();
+    isDragging = true;
+    activePointerId = e.pointerId ?? null;
+
+    grip.classList.add('dragging');
+    document.body.classList.add('ws-resizing');
+    panel.style.transition = 'none';
+
+    if (activePointerId != null) {
+      try { grip.setPointerCapture(activePointerId); } catch (_) {}
+    }
+
+    applyWidth(e.clientX);
+
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+    window.addEventListener('mousemove', onMove, { passive: true });
+    window.addEventListener('mouseup', endDrag);
+  }
+
+  grip.addEventListener('pointerdown', startDrag);
+  grip.addEventListener('mousedown', startDrag);
+  grip.addEventListener('dragstart', e => e.preventDefault());
+  grip.addEventListener('dblclick', () => {
+    panel.style.width = '360px';
+    try { localStorage.setItem('ws_panel_w', 360); } catch (e) {}
   });
 })();
 

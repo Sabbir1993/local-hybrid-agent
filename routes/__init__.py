@@ -1,5 +1,5 @@
 """
-routes package - Modularized API route handlers for A770-Dual Runtime.
+routes package - Modularized API route handlers for Local Agent.
 """
 
 from .auth import router as auth_router

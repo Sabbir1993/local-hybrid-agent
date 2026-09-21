@@ -25,7 +25,7 @@ from core.config import (
     MODEL_CONFIG_KEYS,
 )
 from core.db import db_report
-from core.gpu import get_gpu_stats
+from core.gpu import get_gpu_stats, get_hardware_engine_summary
 from core.profiles import (
     MODELS_DIR,
     build_dynamic_profile,
@@ -273,7 +273,11 @@ async def status(user: Principal = Depends(get_current_user)):
     # configured ctx so the UI doesn't show the local-server default (32768)
     if cm_main and not (state.process and state.process.poll() is None):
         ctx_info = {"n_ctx": cm_main.ctx, "n_past": 0, "n_prompt": 0, "pct": 0.0}
+    hw_info = get_hardware_engine_summary()
     return {
+        "hardware_tag": hw_info.get("hardware_tag"),
+        "discrete_gpus": hw_info.get("discrete_gpus"),
+        "engine": hw_info.get("engine"),
         "profile": state.profile.get("name") if state.profile else None,
         "model": state.profile.get("model_path") if state.profile else None,
         "tensor_split": (state.profile.get("tuned", {}).get("tensor_split")

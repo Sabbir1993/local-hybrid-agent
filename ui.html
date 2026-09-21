@@ -1,22 +1,22 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>A770 Runtime — Control Center</title>
+<title>Local Agent — Control Center</title>
 <script>
   (function() {
     var t = localStorage.getItem('a770_theme') || 'claude';
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=3.0">
+<link rel="stylesheet" href="/static/css/style.css?v=3.2">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
 <div id="app">
   <aside>
-    <div class="logo" title="Dual Intel Arc A770 Vulkan Runtime Manager">⬡ A770 <span>RUNTIME</span><small>DUAL GPU · VULKAN</small></div>
+    <div class="logo" title="Local Agent — Control Center"><span class="logo-title">⬡ LOCAL <span>AGENT</span></span><small id="logo-hw-tag">DUAL GPU · VULKAN</small></div>
 
     <div class="mode-switch full" title="Switch between direct LLM conversation and Autonomous Coding Agent">
       <button id="mode-chat" class="mode-btn active" type="button" title="Direct, fast conversation with the loaded LLM">💬 Chat</button>
@@ -25,12 +25,18 @@
 
     <button id="btn-newchat" class="btn blue" style="padding:9px 12px; font-size:12px; font-weight:700; margin-bottom:2px;" title="Start a fresh chat">＋ New Chat</button>
 
-    <section id="projects-card" class="card" style="padding:10px 8px; display:none; max-height:220px; flex-direction:column;">
+    <section id="projects-card" class="card" style="padding:10px 8px; display:none; max-height:280px; flex-direction:column;">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding:0 4px;">
         <span style="font-size:9.5px; color:var(--dim); letter-spacing:1.8px; font-weight:700; text-transform:uppercase;">Projects</span>
-        <button id="btn-newproject" class="btn ghost" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;" title="Create project with optional custom local directory">＋ New</button>
+        <div style="display:flex; align-items:center; gap:4px;">
+          <button id="btn-newproject" class="btn ghost" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;" title="Create project with optional custom local directory">＋ New</button>
+        </div>
       </div>
-      <div id="projects-list" style="overflow-y:auto; display:flex; flex-direction:column; gap:3px; max-height:160px; padding-right:2px;">
+      <div id="device-bar" style="display:flex; align-items:center; justify-content:space-between; padding:2px 4px 6px; font-size:10px; color:var(--dim); border-bottom:1px solid var(--border); margin-bottom:4px;">
+        <span id="device-label-text" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px;" title="Current device">💻 This Device</span>
+        <button type="button" class="btn ghost" id="btn-rename-device" style="width:auto; margin:0; padding:1px 6px; font-size:9.5px;" title="Rename this device">✎ rename</button>
+      </div>
+      <div id="projects-list" style="overflow-y:auto; display:flex; flex-direction:column; gap:3px; max-height:190px; padding-right:2px;">
       </div>
     </section>
 
@@ -56,10 +62,13 @@
         <div id="model-picker-dropdown" class="model-picker-dropdown"></div>
       </div>
       <span class="chip mono" id="chip-ctx" title="Current KV-cache context window consumption in tokens" style="cursor:help;">🧠 0 / 32k (0%)</span>
+      <span class="chip bg-chip" id="chip-bg-indicator" style="display:none;" title="Active background tasks">
+        <span class="bg-pulse-dot"></span>⚡ <span id="chip-bg-count">1</span> in BG
+      </span>
       <div class="spacer"></div>
       <button id="btn-theme" class="btn ghost icon-btn" title="Quick cycle color theme">🎨 Theme</button>
       <button id="btn-settings" class="btn ghost icon-btn" title="Hardware status (GPUs), model launch parameters, cloud providers, capabilities, users &amp; knowledge base, sampling &amp; runtime">⚙️ Settings</button>
-      <button id="btn-monitor" class="btn ghost icon-btn" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">📡 Monitor</button>
+      <button id="btn-monitor" class="btn ghost icon-btn" data-perm="monitor.view" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">📡 Monitor</button>
       <button id="btn-report" class="btn ghost icon-btn" data-perm="usage.report.view" title="Token usage report: prompts vs completions, per-model and per-day totals">📊 Report</button>
       <button id="btn-docs" class="btn ghost icon-btn" title="Step-by-step guide: connect any OpenAI-compatible agent to this runtime">📖 Docs</button>
       <button id="btn-user-menu" class="btn ghost icon-btn" title="Account">👤</button>
@@ -68,7 +77,7 @@
     <div id="chat"><div id="chat-inner">
       <div id="empty">
         <div class="big">⚡</div>
-        <h2>A770 Dual Runtime</h2>
+        <h2>Local Agent</h2>
         <p id="empty-model" class="mono">Model unloaded</p>
         <div class="empty-card">
           <p><b>No model is currently loaded in GPU VRAM.</b></p>
@@ -76,6 +85,8 @@
         </div>
       </div>
     </div></div>
+
+    <button id="btn-scroll-bottom" class="chat-scroll-btn" style="display:none;" onclick="scrollToBottom()" title="Jump to bottom">⬇ Jump to bottom</button>
 
     <footer>
       <div id="f-inner">
@@ -193,16 +204,11 @@
           <span id="companion-status" style="font-weight:normal; text-transform:none; letter-spacing:normal; font-size:10.5px;"></span>
         </label>
         <div style="display:flex; gap:8px; align-items:stretch;">
-          <input type="text" id="new-proj-dir" placeholder="e.g. E:\AI\my-code or C:\Users\..." style="flex:1; min-width:0; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; font-family:inherit;">
+          <input type="text" id="new-proj-dir" placeholder="e.g. C:\Users\...\my-code or /home/..." style="flex:1; min-width:0; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; font-family:inherit;">
+          <button type="button" class="btn ghost" id="btn-open-dir-picker" title="Browse filesystem" style="width:auto; margin:0; padding:0 10px; font-size:13px; cursor:pointer;">📂</button>
           <button type="button" class="btn blue" id="btn-browse-dir" title="Choose local directory on this machine" style="width:auto; margin:0; padding:0 14px; white-space:nowrap; display:inline-flex; align-items:center; gap:6px; font-weight:600; font-size:11.5px; cursor:pointer;">
             <span id="btn-browse-dir-icon">📁</span> <span id="btn-browse-dir-text">Browse…</span>
           </button>
-        </div>
-        <div style="display:flex; gap:6px; margin-top:7px; flex-wrap:wrap; align-items:center;">
-          <span style="font-size:10px; color:var(--dim);">Quick:</span>
-          <button type="button" class="btn ghost btn-quick-dir" data-dir="E:\AI" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;">E:\AI</button>
-          <button type="button" class="btn ghost btn-quick-dir" data-dir="E:\AI\vulkan-arc" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;">vulkan-arc</button>
-          <button type="button" class="btn ghost" id="btn-open-dir-picker" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px; color:var(--accent); border-color:rgba(99,102,241,0.4);">📂 In-App Browser</button>
         </div>
         <small style="color:var(--dim); font-size:10px; line-height:1.4; display:block; margin-top:6px;">
           Anchor the project sandbox to an existing local folder. Agent tools (read, write, edit, python) will operate inside this directory. Leave blank to use default workspace sandbox.
@@ -428,6 +434,21 @@ Full instructions the agent reads via read_skill.</pre>
   </div>
 </div>
 
+<div id="settings-modal" hidden style="display:none;">
+  <div id="settings-modal-box">
+    <div id="settings-modal-head">
+      <span style="font-weight:700; font-size:13px; letter-spacing:0.5px; display:flex; align-items:center; gap:6px;">⚙️ Settings &amp; Configuration</span>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <a href="/settings" target="_blank" rel="noopener" class="btn ghost icon-btn" style="text-decoration:none; font-size:11px; padding:3px 10px;" title="Open Settings in a separate tab">↗ Open in new tab</a>
+        <button id="settings-modal-close" class="rep-close" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <div id="settings-modal-body">
+      <iframe id="settings-frame" src="about:blank" title="Settings" style="width:100%; height:100%; border:none; border-radius:0 0 10px 10px; background:var(--bg);"></iframe>
+    </div>
+  </div>
+</div>
+
 <script src="/static/js/session.js?v=1.0"></script>
 <script src="/static/js/highlight.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
@@ -446,15 +467,15 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/config.js?v=3.0"></script>
 <script src="/static/js/cloud.js?v=3.0"></script>
 <script src="/static/js/attachments.js?v=2.5"></script>
-<script src="/static/js/workspace.js?v=2.5"></script>
+<script src="/static/js/projects.js?v=3.4"></script>
+<script src="/static/js/workspace.js?v=2.7"></script>
 <script src="/static/js/dnd.js?v=1.0"></script>
-<script src="/static/js/agent-cmd.js?v=3.0"></script>
-<script src="/static/js/projects.js?v=3.1"></script>
+<script src="/static/js/agent-cmd.js?v=3.1"></script>
 <script src="/static/js/agent-acts.js?v=2.5"></script>
 <script src="/static/js/agent-run.js?v=3.1"></script>
 <script src="/static/js/compact.js?v=2.9"></script>
 <script src="/static/js/export.js?v=1.0"></script>
-<script src="/static/js/main.js?v=3.0"></script>
+<script src="/static/js/main.js?v=3.1"></script>
 
 </body>
 </html>

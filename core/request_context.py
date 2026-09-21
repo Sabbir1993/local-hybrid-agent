@@ -18,6 +18,8 @@ the fallback for the deeper, harder-to-thread call sites.
 from typing import Optional
 
 _current_user_id: Optional[int] = None
+_current_device_id: Optional[str] = None
+_current_device_name: Optional[str] = None
 
 
 def set_current_user(user_id: Optional[int]) -> None:
@@ -27,3 +29,18 @@ def set_current_user(user_id: Optional[int]) -> None:
 
 def get_current_user_id() -> Optional[int]:
     return _current_user_id
+
+
+def set_current_device(device_id: Optional[str], device_name: Optional[str] = None) -> None:
+    global _current_device_id, _current_device_name
+    _current_device_id = device_id
+    if device_name is not None:
+        _current_device_name = device_name
+
+
+def get_current_device_id() -> Optional[str]:
+    return _current_device_id or "default"
+
+
+def get_current_device_name() -> Optional[str]:
+    return _current_device_name or "Default Device"

@@ -1,5 +1,5 @@
 """
-core/memory.py - Real semantic memory for the A770 runtime.
+core/memory.py - Real semantic memory for Local Agent.
 
 Wires the nomic-embed embedder (configured on port 8093, previously never
 called) into a persistent sqlite vector store, and backs the `search_memory`

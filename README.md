@@ -1,4 +1,4 @@
-# A770-Dual Runtime
+# Local Agent
 
 A local LLM orchestration layer built on top of `llama.cpp`, originally tuned
 for **2x Intel Arc A770 (16GB each, one on PCIe 3.0)** via the Vulkan

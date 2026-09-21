@@ -268,7 +268,10 @@ def _init_projects_db() -> sqlite3.Connection:
         for idx in conn.execute("PRAGMA index_list('projects')") if idx["unique"]
     )
     if name_only_unique:
-        conn.executescript("""
+        old_cols = [r[1] for r in conn.execute("PRAGMA table_info(projects)")]
+        has_dev_id = "device_id" in old_cols
+        has_dev_name = "device_name" in old_cols
+        conn.executescript(f"""
             ALTER TABLE projects RENAME TO projects_old;
             CREATE TABLE projects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -277,12 +280,24 @@ def _init_projects_db() -> sqlite3.Connection:
                 workspace_dir TEXT,
                 allow_patterns TEXT DEFAULT '[]',
                 user_id INTEGER,
+                device_id TEXT DEFAULT 'default',
+                device_name TEXT DEFAULT 'Default Device',
                 UNIQUE(name, user_id)
             );
-            INSERT INTO projects (id, name, created_at, workspace_dir, allow_patterns, user_id)
-                SELECT id, name, created_at, workspace_dir, allow_patterns, user_id FROM projects_old;
+            INSERT INTO projects (id, name, created_at, workspace_dir, allow_patterns, user_id, device_id, device_name)
+                SELECT id, name, created_at, workspace_dir, allow_patterns, user_id,
+                       {'device_id' if has_dev_id else "'default'"},
+                       {'device_name' if has_dev_name else "'Default Device'"}
+                FROM projects_old;
             DROP TABLE projects_old;
         """)
+
+    # Ensure device columns exist on projects
+    cur_cols = [r[1] for r in conn.execute("PRAGMA table_info(projects)")]
+    if "device_id" not in cur_cols:
+        conn.execute("ALTER TABLE projects ADD COLUMN device_id TEXT DEFAULT 'default'")
+    if "device_name" not in cur_cols:
+        conn.execute("ALTER TABLE projects ADD COLUMN device_name TEXT DEFAULT 'Default Device'")
     conn.commit()
     return conn
 
@@ -321,14 +336,35 @@ def _proj_row(r) -> dict:
             pats = _json.loads(r["allow_patterns"])
     except Exception:
         pats = []
-    return {"id": r["id"], "name": r["name"], "created_at": r["created_at"],
-            "workspace_dir": r["workspace_dir"], "allow_patterns": pats}
+    dev_id = r["device_id"] if "device_id" in r.keys() else "default"
+    dev_name = r["device_name"] if "device_name" in r.keys() else "Default Device"
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "created_at": r["created_at"],
+        "workspace_dir": r["workspace_dir"],
+        "allow_patterns": pats,
+        "device_id": dev_id or "default",
+        "device_name": dev_name or "Default Device",
+    }
 
 
-def db_list_projects(owner_user_id: int) -> list:
-    """Strict per-user isolation: only the caller's own projects, ever."""
-    return [_proj_row(r) for r in _projects_db.execute(
-        "SELECT * FROM projects WHERE user_id = ? ORDER BY name", (owner_user_id,))]
+def db_list_projects(owner_user_id: int, device_id: Optional[str] = None, device_name: Optional[str] = None) -> list:
+    """Strict per-user, per-device isolation. device_id is mandatory when provided — no fallback to NULL/default rows."""
+    if device_id:
+        rows = _projects_db.execute(
+            """SELECT * FROM projects
+               WHERE user_id = ?
+               AND device_id IS NOT NULL
+               AND device_id = ?
+               ORDER BY name""",
+            (owner_user_id, device_id)
+        ).fetchall()
+    else:
+        rows = _projects_db.execute(
+            "SELECT * FROM projects WHERE user_id = ? ORDER BY name", (owner_user_id,)
+        ).fetchall()
+    return [_proj_row(r) for r in rows]
 
 
 def db_project_owner(pid: int) -> Optional[int]:
@@ -377,7 +413,7 @@ def db_add_project_allow_pattern(name_or_id, pattern: str) -> list:
 
 
 def db_create_project(name: str, workspace_dir: str = None, workspace_root: Path = None,
-                       owner_user_id: int = None) -> dict:
+                       owner_user_id: int = None, device_id: str = "default", device_name: str = "Default Device") -> dict:
     if owner_user_id is None:
         raise ValueError("owner_user_id required")
     name = (name or "").strip()
@@ -402,12 +438,68 @@ def db_create_project(name: str, workspace_dir: str = None, workspace_root: Path
     now = time.time()
     try:
         cur = _projects_db.execute(
-            "INSERT INTO projects (name, created_at, workspace_dir, user_id) VALUES (?, ?, ?, ?)",
-            (name, now, ws, owner_user_id))
+            "INSERT INTO projects (name, created_at, workspace_dir, user_id, device_id, device_name) VALUES (?, ?, ?, ?, ?, ?)",
+            (name, now, ws, owner_user_id, device_id or "default", device_name or "Default Device"))
         _projects_db.commit()
     except sqlite3.IntegrityError:
         raise ValueError(f"project '{name}' already exists")
-    return {"id": cur.lastrowid, "name": name, "created_at": now, "workspace_dir": ws}
+    return {"id": cur.lastrowid, "name": name, "created_at": now, "workspace_dir": ws,
+            "device_id": device_id or "default", "device_name": device_name or "Default Device"}
+
+
+def db_update_project_workspace(pid: int, workspace_dir: str, owner_user_id: int,
+                                device_id: Optional[str] = None, device_name: Optional[str] = None) -> dict:
+    if db_project_owner(pid) != owner_user_id:
+        raise PermissionError("not your project")
+    ws = None
+    if workspace_dir and workspace_dir.strip():
+        p = Path(workspace_dir.strip()).expanduser()
+        if not p.is_absolute():
+            raise ValueError("workspace_dir must be an absolute path")
+        p.mkdir(parents=True, exist_ok=True)
+        ws = str(p.resolve())
+    
+    updates = ["workspace_dir = ?"]
+    params = [ws]
+    if device_id:
+        updates.append("device_id = ?")
+        params.append(device_id)
+    if device_name:
+        updates.append("device_name = ?")
+        params.append(device_name)
+    params.extend([pid, owner_user_id])
+    
+    _projects_db.execute(
+        f"UPDATE projects SET {', '.join(updates)} WHERE id = ? AND user_id = ?",
+        params
+    )
+    _projects_db.commit()
+    row = _projects_db.execute("SELECT * FROM projects WHERE id = ?", (pid,)).fetchone()
+    return _proj_row(row) if row else {}
+
+
+def db_rename_device(owner_user_id: int, new_name: str, device_id: Optional[str] = None, old_name: Optional[str] = None) -> int:
+    """Update device_name for all projects matching device_id or old_name."""
+    new_name = (new_name or "").strip()
+    if not new_name:
+        return 0
+    if device_id:
+        cur = _projects_db.execute(
+            "UPDATE projects SET device_name = ? WHERE user_id = ? AND (device_id = ? OR device_id IS NULL OR device_id = 'default')",
+            (new_name, owner_user_id, device_id)
+        )
+    elif old_name:
+        cur = _projects_db.execute(
+            "UPDATE projects SET device_name = ? WHERE user_id = ? AND device_name = ?",
+            (new_name, owner_user_id, old_name)
+        )
+    else:
+        cur = _projects_db.execute(
+            "UPDATE projects SET device_name = ? WHERE user_id = ?",
+            (new_name, owner_user_id)
+        )
+    _projects_db.commit()
+    return cur.rowcount
 
 
 def db_delete_project(pid: int, owner_user_id: int) -> None:

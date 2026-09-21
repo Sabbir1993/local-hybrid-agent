@@ -6,7 +6,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { dialog } = require("electron");
+const { dialog, BrowserWindow } = require("electron");
 
 const SKIP_DIR_NAMES = new Set([".git", "node_modules", "__pycache__", ".venv", "venv"]);
 
@@ -65,11 +65,13 @@ function getDrives() {
 
 async function browseFolder({ initial_dir }) {
   const defaultPath = initial_dir && fs.existsSync(initial_dir) ? initial_dir : os.homedir();
-  const res = await dialog.showOpenDialog({
+  const focusedWin = BrowserWindow.getFocusedWindow() || (BrowserWindow.getAllWindows && BrowserWindow.getAllWindows()[0]) || null;
+  const opts = {
     title: "Select Local Workspace Directory",
     defaultPath,
     properties: ["openDirectory", "createDirectory"],
-  });
+  };
+  const res = focusedWin ? await dialog.showOpenDialog(focusedWin, opts) : await dialog.showOpenDialog(opts);
   return { path: res.canceled ? "" : res.filePaths[0] || "" };
 }
 
@@ -148,6 +150,41 @@ function list({ root, pattern }) {
   return { files: files.slice(0, 200) };
 }
 
+function tree({ root, rel }) {
+  const ignored = new Set([".git", "__pycache__", "node_modules", ".venv", "venv"]);
+  const rootResolved = path.resolve(root);
+  const base = rel ? path.resolve(rootResolved, rel) : rootResolved;
+  const baseLower = base.toLowerCase();
+  const rootLower = rootResolved.toLowerCase();
+  if (baseLower !== rootLower && !baseLower.startsWith(rootLower + path.sep)) {
+    return { nodes: [] };
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(base, { withFileTypes: true });
+  } catch {
+    return { nodes: [] };
+  }
+  entries = entries.filter((e) => !ignored.has(e.name));
+  entries.sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  });
+  const nodes = entries.map((e) => {
+    const full = path.join(base, e.name);
+    const rel = path.relative(rootResolved, full).replace(/\\/g, "/");
+    if (e.isDirectory()) {
+      return { name: e.name, path: rel, dir: true, children: null };
+    }
+    let size = 0;
+    try {
+      size = fs.statSync(full).size;
+    } catch {}
+    return { name: e.name, path: rel, dir: false, size };
+  });
+  return { nodes };
+}
+
 function grep({ root, pattern }) {
   const rx = new RegExp(pattern, "i");
   const hits = [];
@@ -166,4 +203,4 @@ function grep({ root, pattern }) {
   return { hits };
 }
 
-module.exports = { browseFolder, browse, mkdir, read, write, edit, list, grep };
+module.exports = { browseFolder, browse, mkdir, read, write, edit, list, grep, tree };

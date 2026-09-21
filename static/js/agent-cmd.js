@@ -297,7 +297,57 @@ async function expandAtTags(text) {
 }
 
 /* mode switcher: Chat vs Agent */
+let companionConnected = false;
+
+function updateAgentModeAvailability(connected, hostname) {
+  companionConnected = !!connected;
+  const isNative = typeof isNativeAppClient === 'function' ? isNativeAppClient() : (
+    (typeof window !== 'undefined' && window.electronAPI && window.electronAPI.isNativeApp) ||
+    (typeof navigator !== 'undefined' && (navigator.userAgent.includes("A770NativeApp") || navigator.userAgent.includes("Electron")))
+  );
+  const btnAgent = $('mode-agent');
+  const btnChat = $('mode-chat');
+
+  if (btnChat) {
+    btnChat.disabled = false;
+  }
+
+  if (btnAgent) {
+    if (isNative) {
+      // For native app: both Chat and Agent Task are enabled
+      btnAgent.disabled = false;
+      btnAgent.classList.remove('disabled');
+      if (companionConnected) {
+        btnAgent.title = `Agent Task mode (🟢 Connected to ${hostname || 'your device'} — operations run on your machine)`;
+      } else {
+        btnAgent.title = 'Agent Task mode (🖥️ Native app — local workspace operations active)';
+      }
+    } else {
+      // For web: only chat will be enabled, agent task is disabled
+      btnAgent.disabled = true;
+      btnAgent.classList.add('disabled');
+      btnAgent.title = 'Agent Task mode is only enabled in the desktop native app. In web browser, only Chat is enabled.';
+      if (agentMode) {
+        setAppMode(false, false);
+      }
+    }
+  }
+}
+
 function setAppMode(isAgent, isUserSwitch = false) {
+  const isNative = typeof isNativeAppClient === 'function' ? isNativeAppClient() : (
+    (typeof window !== 'undefined' && window.electronAPI && window.electronAPI.isNativeApp) ||
+    (typeof navigator !== 'undefined' && (navigator.userAgent.includes("A770NativeApp") || navigator.userAgent.includes("Electron")))
+  );
+
+  // In web browser, only chat is permitted
+  if (isAgent && !isNative) {
+    if (isUserSwitch) {
+      toast('Agent Task mode is only enabled in the desktop native app. In web browser, only Chat is enabled.');
+    }
+    isAgent = false;
+  }
+
   const prevMode = agentMode;
   agentMode = !!isAgent;
   try { localStorage.setItem('app_mode', agentMode ? 'agent' : 'chat'); } catch (e) {}
@@ -337,27 +387,38 @@ function setAppMode(isAgent, isUserSwitch = false) {
 
   // Switching between modes opens a new fresh chat window and loads relevant session list
   if (isUserSwitch && prevMode !== agentMode) {
-    if (ctrl) {
-      try { ctrl.abort(); } catch (e) {}
-      ctrl = null;
-      setGenUI(false);
-    }
     curSession = null;
     messages = [];
     try {
       localStorage.removeItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
     } catch (e) {}
+    setGenUI(false);
     renderAll();
     loadSessions(false);
+    if (typeof updateBgIndicators === 'function') updateBgIndicators();
     if ($('input')) {
       $('input').value = '';
       $('input').focus();
     }
     clearAttachments();
-  } else {
+  } else if (isUserSwitch) {
     loadSessions(true);
   }
 }
 
-$('mode-chat').onclick = () => setAppMode(false, true);
-$('mode-agent').onclick = () => setAppMode(true, true);
+if ($('mode-chat')) {
+  $('mode-chat').onclick = () => setAppMode(false, true);
+}
+if ($('mode-agent')) {
+  $('mode-agent').onclick = () => {
+    const isNative = typeof isNativeAppClient === 'function' ? isNativeAppClient() : false;
+    if (!isNative) {
+      toast('Agent Task mode is only enabled in the desktop native app. In web browser, only Chat is enabled.');
+      return;
+    }
+    setAppMode(true, true);
+  };
+}
+
+// Initial availability update on load
+updateAgentModeAvailability(false, null);

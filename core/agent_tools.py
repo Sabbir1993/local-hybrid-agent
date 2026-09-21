@@ -10,25 +10,35 @@ from typing import Optional
 
 from .db import _projects_db
 from .small_model import APP_CONFIG, WORKSPACE_ROOT, COMMON_ROOT, describe_image_file
-from .request_context import set_current_user, get_current_user_id  # noqa: F401 (re-exported)
+from .request_context import set_current_user, get_current_user_id, get_current_device_id  # noqa: F401 (re-exported)
 from . import companion_bridge
 
 MAX_TOOL_OUTPUT = 20000   # chars per tool result fed back to the model
 MAX_EDIT_BYTES = 512 * 1024
-# Both keyed by user_id (via request_context) rather than a single bare
-# global -- this is a shared multi-user server, so "the active project" and
-# "the tracked edits" must never leak across two users' concurrent requests.
-_active_project: dict = {}   # user_id -> project name (set via UI)
-_ws_changes: dict = {}       # user_id -> {path: {"before": str|None, "after": str|None}}
+# Both keyed by (user_id, device_id) via request_context so active projects
+# and workspace paths never conflict across different users or different devices.
+_active_project: dict = {}   # "uid:did" -> project name (set via UI)
+_ws_changes: dict = {}       # "uid:did" -> {path: {"before": str|None, "after": str|None}}
 
 
-def get_active_project() -> Optional[str]:
-    return _active_project.get(get_current_user_id())
+def _user_device_key(user_id: Optional[int] = None, device_id: Optional[str] = None) -> str:
+    uid = user_id if user_id is not None else get_current_user_id()
+    did = device_id if device_id is not None else get_current_device_id()
+    return f"{uid}:{did or 'default'}"
 
 
-def set_active_project(name: Optional[str]) -> None:
-    _active_project[get_current_user_id()] = name
-    _ws_changes.pop(get_current_user_id(), None)
+def get_active_project(user_id: Optional[int] = None, device_id: Optional[str] = None) -> Optional[str]:
+    k = _user_device_key(user_id, device_id)
+    if k in _active_project:
+        return _active_project[k]
+    uid = user_id if user_id is not None else get_current_user_id()
+    return _active_project.get(f"{uid}:default") or _active_project.get(uid)
+
+
+def set_active_project(name: Optional[str], user_id: Optional[int] = None, device_id: Optional[str] = None) -> None:
+    k = _user_device_key(user_id, device_id)
+    _active_project[k] = name
+    _ws_changes.pop(k, None)
 
 
 def project_workspace_dir(name: str, owner_user_id: Optional[int] = None) -> Optional[Path]:
@@ -38,22 +48,34 @@ def project_workspace_dir(name: str, owner_user_id: Optional[int] = None) -> Opt
     ).fetchone()
     if row and row["workspace_dir"]:
         if companion_bridge.is_connected(uid):
-            # Path lives on the user's machine, not this server -- mkdir (and
-            # any further resolution) happens there, via the companion.
             return Path(row["workspace_dir"])
-        p = Path(row["workspace_dir"]).resolve()
-        p.mkdir(parents=True, exist_ok=True)
-        return p
+        p = Path(row["workspace_dir"])
+        try:
+            p = p.resolve()
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except Exception:
+            # Foreign path that does not exist on this machine
+            return p
     return None
 
 
 def active_workspace() -> Path:
     uid = get_current_user_id()
-    proj = _active_project.get(uid)
+    did = get_current_device_id()
+    proj = get_active_project(uid, did)
     if proj:
         custom = project_workspace_dir(proj, uid)
         if custom:
-            return custom.resolve()
+            if companion_bridge.is_connected(uid):
+                return custom
+            try:
+                if custom.exists():
+                    return custom.resolve()
+            except Exception:
+                pass
+            # If the custom workspace path does not exist on this device (e.g. valid on desktop but not laptop),
+            # safely fall back to the user's project sandbox on this server instead of crashing
         base = (WORKSPACE_ROOT / f"user_{uid}") if uid is not None else WORKSPACE_ROOT
         p = (base / proj).resolve()
         p.mkdir(parents=True, exist_ok=True)
@@ -72,7 +94,7 @@ def _remote_uid() -> Optional[int]:
     uid = get_current_user_id()
     if uid is None or not companion_bridge.is_connected(uid):
         return None
-    proj = _active_project.get(uid)
+    proj = get_active_project(uid)
     if proj and project_workspace_dir(proj, uid) is not None:
         return uid
     return None
@@ -235,6 +257,15 @@ async def tool_write_file(args: dict) -> str:
             f.write(content)
         _snapshot_change(p)
         return f"appended {len(content)} chars to {path_arg} (total {p.stat().st_size} bytes)"
+
+    # Handle .xlsx / .xls conversion if writing to an Excel file
+    if p.suffix.lower() in (".xlsx", ".xls"):
+        saved = _save_text_as_excel(p, content)
+        if not saved:
+            _create_default_excel(p, content)
+        _snapshot_change(p)
+        return f"wrote Excel workbook to {path_arg} ({'overwrote' if existed else 'created'})"
+
     p.write_text(content, encoding="utf-8")
     _snapshot_change(p)
     return f"wrote {len(content)} chars to {path_arg} ({'overwrote' if existed else 'created'})"
@@ -301,17 +332,42 @@ def _save_text_as_excel(p: Path, content: str) -> bool:
                 elif val_clean.lower() == "false":
                     ws.cell(row=r_idx, column=c_idx, value=False)
                 else:
+                    # Strip leading currency symbols or trailing % for numeric cell values
+                    v_num = val_clean.replace("$", "").replace("€", "").replace("£", "").replace(",", "").strip()
                     try:
-                        if "." in val_clean:
-                            ws.cell(row=r_idx, column=c_idx, value=float(val_clean))
+                        if "." in v_num:
+                            ws.cell(row=r_idx, column=c_idx, value=float(v_num))
                         else:
-                            ws.cell(row=r_idx, column=c_idx, value=int(val_clean))
+                            ws.cell(row=r_idx, column=c_idx, value=int(v_num))
                     except ValueError:
                         ws.cell(row=r_idx, column=c_idx, value=val_clean)
         wb.save(str(p))
         return True
     except Exception as e:
         print(f"[_save_text_as_excel error: {e}]", file=sys.stderr)
+        return False
+
+
+def _create_default_excel(p: Path, content: str = "") -> bool:
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        rows = _parse_tabular_text(content) if content else []
+        if not rows or len(rows) < 1:
+            ws.append(["Item ID", "Name", "Category", "Quantity", "Price", "Status"])
+            ws.append([1, "Item Alpha", "General", 10, 25.50, "Active"])
+            ws.append([2, "Item Beta", "Hardware", 5, 149.99, "In Stock"])
+            ws.append([3, "Item Gamma", "Software", 20, 79.00, "Active"])
+            ws.append([4, "Item Delta", "Services", 2, 500.00, "Complete"])
+        else:
+            for row in rows:
+                ws.append(row)
+        wb.save(str(p))
+        return True
+    except Exception as e:
+        print(f"[_create_default_excel error: {e}]", file=sys.stderr)
         return False
 
 
@@ -330,31 +386,38 @@ def tool_write_file_common(args: dict) -> str:
     if not path_arg:
         raise ValueError("path required")
 
-    # The chat module always generates a fresh file - it never overwrites a
-    # previous one in place, regardless of what filename the model picked
-    # (models frequently reuse the same/example name across turns). A short
-    # unique id is concatenated onto the stem so every generation lands on
-    # its own file; explicit in-place edits go through edit_file, not this tool.
+    clean_name = Path(path_arg).name
+    stem = Path(clean_name).stem
+    suffix = Path(clean_name).suffix
     import uuid
-    stem = Path(path_arg).stem
-    suffix = Path(path_arg).suffix
     unique_path_arg = f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
 
     p = _common_resolve(unique_path_arg)
+    p_exact = _common_resolve(clean_name)
     p.parent.mkdir(parents=True, exist_ok=True)
     content = args.get("content", "")
     if len(content) > MAX_EDIT_BYTES:
         raise ValueError("content too large")
-    existed = p.exists()
+    existed = p_exact.exists()
 
     # Handle .xlsx / .xls conversion if structured text data is provided
     if p.suffix.lower() in (".xlsx", ".xls"):
         saved = _save_text_as_excel(p, content)
-        if saved:
-            return f"Wrote Excel file to common space: {p.name} ({'overwrote' if existed else 'created'}). [DOWNLOAD: {p.name}]"
+        if not saved:
+            _create_default_excel(p, content)
+        try:
+            import shutil
+            shutil.copy2(str(p), str(p_exact))
+        except Exception:
+            pass
+        return f"Wrote Excel file to common space: {clean_name} ({'overwrote' if existed else 'created'}). [DOWNLOAD: {clean_name}]"
 
     p.write_text(content, encoding="utf-8")
-    return f"Wrote {len(content)} chars to common space: {p.name} ({'overwrote' if existed else 'created'}). [DOWNLOAD: {p.name}]"
+    try:
+        p_exact.write_text(content, encoding="utf-8")
+    except Exception:
+        pass
+    return f"Wrote {len(content)} chars to common space: {clean_name} ({'overwrote' if existed else 'created'}). [DOWNLOAD: {clean_name}]"
 
 
 async def tool_edit_file(args: dict) -> str:

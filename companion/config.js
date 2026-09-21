@@ -1,4 +1,10 @@
 // Edit before packaging, or override via the A770_SERVER_URL env var at runtime.
+const path = require("path");
+try {
+  require("dotenv").config({ path: path.join(__dirname, ".env") });
+} catch (_) {}
+
 module.exports = {
-  SERVER_URL: process.env.A770_SERVER_URL || "http://127.0.0.1:8000",
+  SERVER_URL: process.env.A770_SERVER_URL || "https://ocelot-tidy-merely.ngrok-free.app",
 };
+

@@ -165,14 +165,24 @@ function renderKnowledgePanel(box, sources) {
       const id = btn.dataset.id;
       const picker = box.querySelector(`.kb-roles-picker[data-id="${id}"]`);
       const roles = picker && picker._getSelected ? picker._getSelected() : [];
+      const title = (sources.find(s => String(s.id) === String(id)) || {}).title || `source #${id}`;
       try {
         const r = await fetch(`/knowledge/${id}/access`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ roles }),
         });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        toast('Access updated ✓');
-      } catch (e) { toast('Update failed: ' + e.message, true); }
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ('HTTP ' + r.status));
+        // Re-sync the picker's chips from what the server actually persisted, rather than
+        // trusting the client's in-memory selection -- makes a row-mismatch click visible
+        // immediately instead of silently saving to the wrong source.
+        const savedRoles = (j.source && j.source.roles) || [];
+        if (picker) {
+          picker.dataset.roles = JSON.stringify(savedRoles);
+          initTagPicker(picker, _kbAllRoles, savedRoles);
+        }
+        toast(`Access updated for '${title}' ✓ (${savedRoles.join(', ') || 'all users'})`);
+      } catch (e) { toast(`Update failed for '${title}': ` + e.message, true); }
     };
   });
 }

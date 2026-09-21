@@ -1,5 +1,5 @@
 <svg width="680" height="670" viewBox="0 0 680 670" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" role="img">
-<title>UI layout of the A770 Dual Runtime single-page app</title>
+<title>UI layout of the Local Agent single-page app</title>
 <desc>ui.html renders a sidebar for projects and sessions, a main panel with header, chat feed and composer, a workspace file panel, and four on-demand modals opened from the header: Settings, Monitor, Report and Docs.</desc>
 <style>
 .box{fill:#F1EFE8;stroke:#B4B2A9;stroke-width:0.5}

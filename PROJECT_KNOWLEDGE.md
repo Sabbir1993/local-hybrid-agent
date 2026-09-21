@@ -1,4 +1,4 @@
-# PROJECT KNOWLEDGE — A770 Dual Runtime
+# PROJECT KNOWLEDGE — Local Agent
 
 > Internal architecture & maintenance reference. Written from a full read of the
 > codebase (commit `c334c28` + working-tree changes). This is the *why* and the

@@ -4,7 +4,7 @@ import subprocess
 import sys
 import time
 
-from .config import GPU_QUERY_INTERVAL_S, IGNORED_IGPU_LUIDS
+from .config import GPU_QUERY_INTERVAL_S, IGNORED_IGPU_LUIDS, CONFIG_FILE, CONFIG_DEFAULTS
 from . import vram
 
 PS_GPU_SCRIPT = r"""
@@ -74,31 +74,72 @@ def _query_gpu_sync() -> dict:
     return {"adapters": [], "compute": []}
 
 
+def get_hardware_engine_summary() -> dict:
+    """Calculate discrete GPU count and runtime engine (e.g. DUAL GPU · VULKAN)."""
+    try:
+        devs = vram.query_devices()
+        igpu_kw = ("uhd", "hd graphics", "iris", "integrated", "radeon(tm) graphics")
+        discrete = [d for d in devs if not any(k in d.get("name", "").lower() for k in igpu_kw)]
+        count = len(discrete)
+    except Exception:
+        count = 0
+
+    app_cfg = {}
+    if CONFIG_FILE.exists():
+        try:
+            app_cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    backend = str(app_cfg.get("backend") or CONFIG_DEFAULTS.get("backend", "vulkan")).upper()
+
+    if count == 2:
+        gpu_label = "DUAL GPU"
+    elif count == 1:
+        gpu_label = "SINGLE GPU"
+    elif count > 2:
+        gpu_label = f"{count}x GPU"
+    elif count == 0:
+        gpu_label = "CPU"
+    else:
+        gpu_label = f"{count} GPU"
+
+    tag = f"{gpu_label} · {backend}"
+    return {
+        "discrete_gpus": count,
+        "engine": backend,
+        "hardware_tag": tag,
+    }
+
+
 def _discrete_vram_totals_gb() -> list:
     """Total VRAM (GB) of each discrete GPU, sorted largest-first, from
-    `llama-bench --list-devices`. Used by the UI to scale the VRAM bar
-    instead of a hardcoded card size - works for any GPU model/count.
-    Best-effort match: zipped positionally against adapters (also sorted
-    largest-first) since the perf-counter LUID and the Vulkan/CUDA device
-    index aren't directly correlated anywhere in this codebase.
+    `llama-bench --list-devices`. Filters out iGPUs.
     """
     try:
         devs = vram.query_devices()
-        totals = [d["total_b"] / vram.GB for d in devs if d["total_b"] > 2 * vram.GB]
+        igpu_kw = ("uhd", "hd graphics", "iris", "integrated", "radeon(tm) graphics")
+        totals = [
+            d["total_b"] / vram.GB for d in devs
+            if not any(k in d.get("name", "").lower() for k in igpu_kw)
+        ]
         return sorted(totals, reverse=True)
     except Exception:
         return []
 
 
 async def get_gpu_stats() -> dict:
+    hw_info = get_hardware_engine_summary()
     async with _gpu_query_lock:
         if time.time() - _gpu_cache["ts"] < GPU_QUERY_INTERVAL_S and _gpu_cache["data"]["adapters"]:
             data = dict(_gpu_cache["data"])
             data["vram_totals_gb"] = _discrete_vram_totals_gb()
+            data.update(hw_info)
             return data
         loop = asyncio.get_event_loop()
         data = await loop.run_in_executor(None, _query_gpu_sync)
         data["vram_totals_gb"] = await loop.run_in_executor(None, _discrete_vram_totals_gb)
+        data.update(hw_info)
         _gpu_cache["ts"] = time.time()
         _gpu_cache["data"] = data
         return data

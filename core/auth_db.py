@@ -25,6 +25,7 @@ PERMISSIONS = {
     "settings.orchestration.configure": "Change the multi-agent orchestration engine mode",
     "settings.runtime.view": "View/edit sampling defaults, runtime keepalive, and GPU status in Settings",
     "usage.report.view": "View token usage / cost reports",
+    "monitor.view": "View the real-time request monitor panel",
     "knowledge.manage": "Create/delete/edit organizational knowledge sources and their role access",
     "users.manage": "Create/deactivate users and assign roles",
     "roles.manage": "Create roles and edit role permission grants",
@@ -338,15 +339,23 @@ def set_source_role_access(source_id: int, role_names: list, granted_by: Optiona
 
 
 def allowed_knowledge_source_ids_for_roles(role_names: list) -> set:
-    if not role_names:
-        return set()
-    placeholders = ",".join("?" * len(role_names))
-    rows = db().execute(
-        f"SELECT DISTINCT ksra.source_id FROM knowledge_source_role_access ksra "
-        f"JOIN roles r ON r.id = ksra.role_id WHERE r.name IN ({placeholders})",
-        role_names,
+    # A source with zero rows in knowledge_source_role_access has no roles
+    # assigned - the admin UI treats leaving the role picker empty as "allow
+    # all users", so such sources are public rather than accessible to no one.
+    public_rows = db().execute(
+        "SELECT s.id FROM knowledge_sources s WHERE NOT EXISTS "
+        "(SELECT 1 FROM knowledge_source_role_access ksra WHERE ksra.source_id = s.id)"
     ).fetchall()
-    return {r["source_id"] for r in rows}
+    ids = {r["id"] for r in public_rows}
+    if role_names:
+        placeholders = ",".join("?" * len(role_names))
+        rows = db().execute(
+            f"SELECT DISTINCT ksra.source_id FROM knowledge_source_role_access ksra "
+            f"JOIN roles r ON r.id = ksra.role_id WHERE r.name IN ({placeholders})",
+            role_names,
+        ).fetchall()
+        ids |= {r["source_id"] for r in rows}
+    return ids
 
 
 def assign_role(user_id: int, role_name: str, assigned_by: Optional[int] = None) -> None:

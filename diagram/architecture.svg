@@ -1,5 +1,5 @@
 <svg width="680" height="520" viewBox="0 0 680 520" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" role="img">
-<title>Layered architecture of the A770 Dual Runtime</title>
+<title>Layered architecture of the Local Agent</title>
 <desc>Clients talk through a CSRF and RBAC security layer to FastAPI routers, which call core services (tool registry, model state, cloud client, knowledge and audit), which in turn reach local dual-GPU llama-server, cloud LLM APIs, and SQLite/config storage.</desc>
 <style>
 .c-gray rect{fill:#F1EFE8;stroke:#5F5E5A;stroke-width:0.5} .c-gray text{fill:#2C2C2A}

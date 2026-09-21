@@ -1,5 +1,5 @@
 /* ---------------- helpers ---------------- */
-function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
 function md(s) {
   // split fences BEFORE escaping: hlCode() escapes internally

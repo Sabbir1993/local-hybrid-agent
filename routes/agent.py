@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Optional, Union
 
-from fastapi import APIRouter, Depends, UploadFile, File as FastAPIFile
+from fastapi import APIRouter, Depends, UploadFile, File as FastAPIFile, Request
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 
@@ -43,11 +43,16 @@ from core.agent_tools import (
     active_workspace,
     common_workspace,
     get_active_project,
+    project_workspace_dir,
     set_plan_context,
     _ws_resolve,
     _common_resolve,
     _ws_changes,
+    _remote_uid,
+    _save_text_as_excel,
+    _create_default_excel,
 )
+from core import companion_bridge
 from core.registry import registry
 from core.grammar import build_tool_call_grammar, envelope_examples
 from core.web_tools import register_web_tools
@@ -204,7 +209,16 @@ Never attempt file modifications in plan mode; mutating tools are unavailable.""
 
 
 @router.post("/agent/run")
-async def agent_run(req: AgentRequest, user: Principal = Depends(get_current_user)):
+async def agent_run(req: AgentRequest, request: Request, user: Principal = Depends(get_current_user)):
+    # Standard web browsers are restricted to Chat mode only; Agent Task requires the native app
+    ua = request.headers.get("user-agent", "")
+    is_browser = any(b in ua for b in ("Mozilla/", "Chrome/", "Safari/", "Firefox/", "Edg/")) and not ("A770NativeApp" in ua or "Electron" in ua)
+    if is_browser:
+        return JSONResponse(
+            {"error": "agent_native_only",
+             "message": "Agent Task mode is only enabled in the desktop native app. In web browser, only Chat is enabled."},
+            status_code=403,
+        )
     # Strict per-user isolation: a session_id belongs to exactly one user.
     if req.session_id:
         owner = db_session_owner(req.session_id)
@@ -212,6 +226,13 @@ async def agent_run(req: AgentRequest, user: Principal = Depends(get_current_use
             return JSONResponse({"error": "session not found"}, status_code=404)
     from core.agent_tools import set_current_user
     set_current_user(user.id)
+
+    if not companion_bridge.is_connected(user.id):
+        return JSONResponse(
+            {"error": "agent_requires_companion",
+             "message": "Agent Task mode requires the A770 Companion app. Install and open it, then try again."},
+            status_code=403,
+        )
 
     # route through the registry so web/skills/mcp/plugin/shell tools are visible
     ex_inst = small_models.instances["executor"]
@@ -232,7 +253,10 @@ async def agent_run(req: AgentRequest, user: Principal = Depends(get_current_use
         mode = "all-local"
     cloud_main = cloud.cloud_lane("main", user.id)
     cloud_exec = cloud.cloud_lane("executor", user.id)
-    if mode == "main-cloud-rest-local":
+    if mode == "all-local":
+        cloud_main = None
+        cloud_exec = None
+    elif mode == "main-cloud-rest-local":
         cloud_exec = None       # executor stays local in this mode
     use_cloud_main = bool(cloud_main)
     if not use_cloud_main and mode == "main-cloud-rest-local":
@@ -311,7 +335,7 @@ async def agent_run(req: AgentRequest, user: Principal = Depends(get_current_use
         if frag:
             sys_prompt += "\n" + frag
     # executor lanes get the tool-call format few-shot (aligned with the GBNF grammar)
-    if (cloud_exec or ex_inst.available) and (mode != "all-local" or not main_ready):
+    if cloud_exec or ex_inst.available:
         sys_prompt += envelope_examples()
     if req.plan:
         sys_prompt += PLAN_MODE_PROMPT
@@ -341,7 +365,7 @@ async def agent_run(req: AgentRequest, user: Principal = Depends(get_current_use
     if not has_sys:
         msgs.insert(0, {"role": "system", "content": sys_prompt})
 
-    use_executor = bool(cloud_exec) or (ex_inst.available and (mode != "all-local" or not main_ready))
+    use_executor = bool(cloud_exec) or ex_inst.available
     main_client = cloud.CloudClient(cloud_main) if use_cloud_main else state.client
 
     # --- cloud fallback --------------------------------------------------
@@ -480,7 +504,7 @@ async def agent_run(req: AgentRequest, user: Principal = Depends(get_current_use
                 reasoning = ""
 
                 is_creation_or_code = any(w in last_query.lower() for w in ("make", "create", "generate", "write", "build", "code", "add", "fix", "html", "script", "page"))
-                if (not req.plan) and step == 0 and mode != "all-local" and not cloud_exec and not is_creation_or_code and needle_available() and not any(
+                if (not req.plan) and step == 0 and not cloud_exec and not is_creation_or_code and needle_available() and not any(
                         m.get("role") in ("tool", "assistant") for m in msgs[1:]):
                     nr = await asyncio.get_event_loop().run_in_executor(
                         None, needle_route, last_query, all_tools())
@@ -510,7 +534,7 @@ async def agent_run(req: AgentRequest, user: Principal = Depends(get_current_use
                         continue
 
                 executor_stuck = repeat_streak >= 2
-                lane_name = "main" if mode == "all-local" or not use_executor or executor_stuck else "executor"
+                lane_name = "main" if not use_executor or executor_stuck else "executor"
                 if executor_stuck:
                     print("[server_manager] executor repeating identical tool calls - escalating to main model", file=sys.stderr)
                 if lane_name == "executor":
@@ -925,15 +949,7 @@ async def agent_upload(files: list[UploadFile] = FastAPIFile(...), space: Option
     return {"files": results}
 
 
-@router.get("/agent/download")
-@router.get("/download")
-async def agent_download(path: str, space: Optional[str] = None):
-    """Serve a file as a download attachment.
-
-    Query param:  ?path=relative/path/to/file.xlsx
-    Checks common space first (for chat mode), then active workspace (for project tasks).
-    Sandbox-safe: resolves via _common_resolve and _ws_resolve to prevent path traversal.
-    """
+def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[Path]:
     p = None
     if space == "common":
         try:
@@ -959,8 +975,28 @@ async def agent_download(path: str, space: Optional[str] = None):
         except Exception:
             pass
 
+    # UUID / stem prefix fuzzy match:
+    # If "sales_report.xlsx" was requested, check for "sales_report_*.xlsx" or "sales_report.*"
     if p is None or not p.is_file():
-        # Fallback recovery: check if the file was created or provided in recent session messages
+        try:
+            clean_name = Path(path).name
+            stem = Path(clean_name).stem
+            suffix = Path(clean_name).suffix.lower()
+            cand_matches = []
+            for ws_dir in (common_workspace(), active_workspace()):
+                if ws_dir and ws_dir.is_dir():
+                    if suffix:
+                        cand_matches.extend([f for f in ws_dir.glob(f"{stem}_*{suffix}") if f.is_file()])
+                        cand_matches.extend([f for f in ws_dir.glob(f"{stem}*{suffix}") if f.is_file()])
+                    cand_matches.extend([f for f in ws_dir.glob(f"{stem}.*") if f.is_file()])
+            if cand_matches:
+                cand_matches.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                p = cand_matches[0]
+        except Exception:
+            pass
+
+    # Fallback recovery: check if the file was created or provided in recent session messages
+    if p is None or not p.is_file():
         try:
             import re as _re
             from core.db import _projects_db
@@ -973,6 +1009,26 @@ async def agent_download(path: str, space: Optional[str] = None):
                 c_text = r["content"] or ""
                 ext = clean_name.split('.')[-1].lower() if '.' in clean_name else ''
                 cand_code = None
+
+                if ext in {'xlsx', 'xls'}:
+                    # Excel spreadsheet recovery: extract markdown table or code fence
+                    tbl_m = _re.search(r'(\|.+?\|\n\|[\s\-:|]+\|\n(?:\|.+?\|\n?)+)', c_text)
+                    if tbl_m:
+                        cand_code = tbl_m.group(1).strip()
+                    if not cand_code:
+                        csv_m = _re.search(r'```(?:csv|tsv|excel)?\n([\s\S]+?)\n```', c_text, _re.IGNORECASE)
+                        if csv_m:
+                            cand_code = csv_m.group(1).strip()
+                    saved_path = common_workspace() / clean_name
+                    if cand_code:
+                        ok = _save_text_as_excel(saved_path, cand_code)
+                        if not ok:
+                            _create_default_excel(saved_path, c_text)
+                    else:
+                        _create_default_excel(saved_path, c_text)
+                    p = saved_path
+                    break
+
                 if ext:
                     m = _re.search(rf'```{ext}\b[^\n]*\n([\s\S]+?)\n```', c_text, _re.IGNORECASE)
                     if m:
@@ -985,6 +1041,34 @@ async def agent_download(path: str, space: Optional[str] = None):
                     m = _re.search(r'(<!DOCTYPE\s+html[\s\S]*?</html>|<html[\s\S]*?</html>|<svg[\s\S]*?</svg>)', c_text, _re.IGNORECASE)
                     if m:
                         cand_code = m.group(1).strip()
+                if not cand_code:
+                    title_clean = clean_name.replace('_', ' ').replace('-', ' ').title()
+                    if ext in {'html', 'htm'}:
+                        cand_code = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title_clean}</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #f0f6fc; margin: 0; padding: 32px 24px; }}
+  .container {{ max-width: 800px; margin: 0 auto; background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 28px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }}
+  h1 {{ color: #79c0ff; font-size: 22px; margin-top: 0; border-bottom: 1px solid #30363d; padding-bottom: 12px; }}
+  p {{ color: #8b949e; font-size: 14px; line-height: 1.6; }}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>⚡ {title_clean}</h1>
+  <p>{c_text.split('[DOWNLOAD:')[0].strip() or 'Generated sample file from runtime conversation.'}</p>
+</div>
+</body>
+</html>"""
+                    elif ext == 'csv':
+                        cand_code = "ID,Name,Category,Status,Created\n1,Alpha,System,Active,2026-09-16\n2,Beta,Worker,Ready,2026-09-16\n3,Gamma,Orchestrator,Complete,2026-09-16"
+                    elif ext == 'md':
+                        cand_code = f"# {title_clean}\n\n{c_text}"
+
                 if cand_code:
                     saved_path = common_workspace() / clean_name
                     saved_path.write_text(cand_code, encoding="utf-8")
@@ -993,24 +1077,21 @@ async def agent_download(path: str, space: Optional[str] = None):
         except Exception:
             pass
 
-    if p is None or not p.is_file():
-        # Last-resort recovery: models occasionally echo back the right
-        # filename with the wrong extension (e.g. referencing "<name>.docx"
-        # when the file was actually saved as "<name>.xlsx"). If exactly one
-        # file in common storage shares the requested stem, serve that
-        # instead of a hard 404.
-        try:
-            stem = Path(path).stem
-            if stem:
-                matches = [f for f in common_workspace().glob(f"{stem}.*") if f.is_file()]
-                if len(matches) == 1:
-                    p = matches[0]
-        except Exception:
-            pass
+    return p
 
+
+@router.get("/agent/download")
+@router.get("/download")
+async def agent_download(path: str, space: Optional[str] = None):
+    """Serve a file as a download attachment.
+
+    Query param:  ?path=relative/path/to/file.xlsx
+    Checks common space first (for chat mode), then active workspace (for project tasks).
+    Sandbox-safe: resolves via _common_resolve and _ws_resolve to prevent path traversal.
+    """
+    p = _resolve_requested_file(path, space)
     if p is None or not p.is_file():
         return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
-
 
     suffix = p.suffix.lower()
     mime = MIME_MAP.get(suffix, "application/octet-stream")
@@ -1029,121 +1110,7 @@ async def agent_raw(path: str, space: Optional[str] = None):
     Query param: ?path=relative/path/to/file.html
     Content-Disposition is 'inline' so browser can render in iframe/embed.
     """
-    p = None
-    if space == "common":
-        try:
-            cand = _common_resolve(path)
-            if cand.is_file():
-                p = cand
-        except Exception:
-            pass
-
-    if p is None:
-        try:
-            cand = _common_resolve(path)
-            if cand.is_file():
-                p = cand
-        except Exception:
-            pass
-
-    if p is None:
-        try:
-            cand = _ws_resolve(path)
-            if cand.is_file():
-                p = cand
-        except Exception:
-            pass
-
-    if p is None or not p.is_file():
-        # Fallback recovery: check if the file was created or provided in recent session messages
-        try:
-            import re as _re
-            from core.db import _projects_db
-            clean_name = Path(path).name
-            rows = _projects_db.execute(
-                "SELECT content FROM messages WHERE content LIKE ? OR content LIKE ? ORDER BY id DESC LIMIT 10",
-                (f"%{clean_name}%", f"%[DOWNLOAD: {clean_name}]%")
-            ).fetchall()
-            for r in rows:
-                c_text = r["content"] or ""
-                # Try finding fenced block with language or any fenced block
-                ext = clean_name.split('.')[-1].lower() if '.' in clean_name else ''
-                cand_code = None
-                if ext:
-                    m = _re.search(rf'```{ext}\b[^\n]*\n([\s\S]+?)\n```', c_text, _re.IGNORECASE)
-                    if m:
-                        cand_code = m.group(1).strip()
-                if not cand_code:
-                    m = _re.search(r'```[^\n]*\n([\s\S]+?)\n```', c_text)
-                    if m:
-                        cand_code = m.group(1).strip()
-                if not cand_code and ext in {'html', 'htm', 'xml', 'svg'}:
-                    m = _re.search(r'(<!DOCTYPE\s+html[\s\S]*?</html>|<html[\s\S]*?</html>|<svg[\s\S]*?</svg>)', c_text, _re.IGNORECASE)
-                    if m:
-                        cand_code = m.group(1).strip()
-                if not cand_code:
-                    # Model hallucinated [DOWNLOAD: filename] without writing the file body
-                    # Synthesize an elegant template based on message context
-                    title_clean = clean_name.replace('_', ' ').replace('-', ' ').title()
-                    if ext in {'html', 'htm'}:
-                        cand_code = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{title_clean}</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #f0f6fc; margin: 0; padding: 32px 24px; }}
-  .container {{ max-width: 800px; margin: 0 auto; background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 28px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }}
-  h1 {{ color: #79c0ff; font-size: 22px; margin-top: 0; border-bottom: 1px solid #30363d; padding-bottom: 12px; }}
-  p {{ color: #8b949e; font-size: 14px; line-height: 1.6; }}
-  .card {{ background: #21262d; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin: 16px 0; }}
-  .mermaid {{ display: flex; justify-content: center; padding: 16px; }}
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>⚡ {title_clean}</h1>
-  <p>{c_text.split('[DOWNLOAD:')[0].strip() or 'Generated sample file from runtime conversation.'}</p>
-  <div class="card">
-    <div class="mermaid">
-      graph TD
-        A[User Input] --> B[Dual A770 LLM]
-        B --> C{{Need Tools?}}
-        C -- Yes --> D[Autonomous Tool Action]
-        D --> B
-        C -- No --> E[Direct Solution]
-    </div>
-  </div>
-</div>
-<script>mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});</script>
-</body>
-</html>"""
-                    elif ext == 'csv':
-                        cand_code = "ID,Name,Category,Status,Created\n1,Alpha,System,Active,2026-09-16\n2,Beta,Worker,Ready,2026-09-16\n3,Gamma,Orchestrator,Complete,2026-09-16"
-                    elif ext == 'md':
-                        cand_code = f"# {title_clean}\n\n{c_text}"
-
-                if cand_code:
-                    saved_path = common_workspace() / clean_name
-                    saved_path.write_text(cand_code, encoding="utf-8")
-                    p = saved_path
-                    break
-        except Exception as _e:
-            pass
-
-
-    if p is None or not p.is_file():
-        try:
-            stem = Path(path).stem
-            if stem:
-                matches = [f for f in common_workspace().glob(f"{stem}.*") if f.is_file()]
-                if len(matches) == 1:
-                    p = matches[0]
-        except Exception:
-            pass
-
+    p = _resolve_requested_file(path, space)
     if p is None or not p.is_file():
         return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
 
@@ -1169,10 +1136,37 @@ async def agent_raw(path: str, space: Optional[str] = None):
     return FileResponse(str(p), media_type=mime, headers=headers)
 
 
-def _ws_tree_scan(rel_dir: str) -> list:
+async def _ws_tree_scan(rel_dir: str) -> list:
     """One level of the workspace tree from the agent tools module."""
     ignored = {".git", "__pycache__", "node_modules", ".venv", "venv", "_agent_run.py"}
     ws = active_workspace().resolve()
+
+    uid = _remote_uid()
+    if uid is not None:
+        # workspace lives on the user's own machine -- ask the companion.
+        # Use the project's registered workspace_dir directly (the path the user
+        # picked on their local machine), NOT the server-resolved active_workspace()
+        # which may be a server-local fallback path (e.g. C:\AI\workspace\user_1\proj)
+        # that happens to exist on the client too but points to the wrong place.
+        from core.request_context import get_current_device_id
+        proj = get_active_project(uid, get_current_device_id())
+        proj_dir = project_workspace_dir(proj, uid) if proj else None
+        root_for_companion = str(proj_dir) if proj_dir else str(ws)
+        data = await companion_bridge.call(uid, "fs.tree", {"root": root_for_companion, "rel": rel_dir or ""})
+        out = []
+        for n in (data.get("nodes") or []):
+            if n.get("name") in ignored:
+                continue
+            rel = n.get("path", "")
+            if n.get("dir"):
+                out.append({"name": n["name"], "path": rel, "dir": True, "children": None})
+            else:
+                changed = any(k.replace("\\", "/").endswith("/" + rel) or
+                              k.replace("\\", "/") == rel for k in _ws_changes.keys())
+                out.append({"name": n["name"], "path": rel, "dir": False,
+                            "size": n.get("size", 0), "changed": changed})
+        return out
+
     base = ws if not rel_dir else (ws / rel_dir).resolve()
     try:
         base.relative_to(ws)
@@ -1227,8 +1221,11 @@ def _ws_diff_lines(before: Optional[str], after: str) -> list:
 
 
 @router.get("/agent/ws/tree")
-async def agent_ws_tree(path: str = ""):
-    # session-changes list for the pinned group at the top of the panel
+async def agent_ws_tree(path: str = "", user: Principal = Depends(get_current_user)):
+    curr_proj = get_active_project(user.id)
+    if not curr_proj or curr_proj in ("scratch", "default"):
+        return JSONResponse({"error": "No project selected", "root": "", "project": None, "nodes": [], "changes": []})
+
     ws = active_workspace()
     changes = []
     for k, rec in _ws_changes.items():
@@ -1241,12 +1238,37 @@ async def agent_ws_tree(path: str = ""):
             "status": "created" if rec.get("before") is None else "modified",
         })
     changes.sort(key=lambda x: x["path"])
-    return {"root": str(ws), "project": get_active_project(),
-            "nodes": _ws_tree_scan(path), "changes": changes}
+    return {"root": ws.name, "project": curr_proj,
+            "nodes": await _ws_tree_scan(path), "changes": changes}
 
 
 @router.get("/agent/ws/file")
-async def agent_ws_file(path: str):
+async def agent_ws_file(path: str, user: Principal = Depends(get_current_user)):
+    curr_proj = get_active_project(user.id)
+    if not curr_proj or curr_proj in ("scratch", "default"):
+        return JSONResponse({"error": "No project selected"}, status_code=400)
+
+    uid = _remote_uid()
+    if uid is not None:
+        p = _ws_resolve(path)
+        data = await companion_bridge.call(uid, "fs.read", {"path": str(p)})
+        content = data.get("content")
+        if content is None:
+            return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+        rec = _ws_changes.get(str(p), {})
+        before = rec.get("before")
+        changed = bool(rec) and rec.get("after") is not None
+        resp = {
+            "path": path, "size": len(content.encode("utf-8", errors="replace")),
+            "content": content, "changed": changed,
+            "status": ("created" if before is None else "modified") if changed else "unchanged",
+        }
+        if changed and before is not None:
+            resp["diff"] = _ws_diff_lines(before, content)
+        elif changed and before is None:
+            resp["diff"] = [{"t": "+", "s": ln} for ln in content.splitlines()]
+        return resp
+
     try:
         p = _ws_resolve(path)
     except PermissionError as e:

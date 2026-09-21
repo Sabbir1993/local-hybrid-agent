@@ -69,10 +69,12 @@ async def call(user_id: int, op: str, params: dict, timeout: float = DEFAULT_TIM
 
 
 async def _authenticate(ws: WebSocket) -> Optional[int]:
-    """Session cookie is the only source of truth for identity -- a client-
-    supplied user_id in the hello frame is never trusted (see hello handling
-    below)."""
-    token = ws.cookies.get(SESSION_COOKIE)
+    """Session cookie, query param, or Bearer auth header is used for identity."""
+    token = ws.cookies.get(SESSION_COOKIE) or ws.query_params.get("token")
+    if not token:
+        auth_hdr = ws.headers.get("authorization") or ""
+        if auth_hdr.lower().startswith("bearer "):
+            token = auth_hdr[7:].strip()
     principal = verify_session(token)
     return principal.id if principal else None
 

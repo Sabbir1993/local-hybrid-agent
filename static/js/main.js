@@ -1,6 +1,10 @@
 /* ---------------- input handling & boot ---------------- */
 function submitPrompt() {
-  if (generating) return;
+  const isCurBusy = curSession ? (window.bgJobs && window.bgJobs.has(String(curSession.id))) : generating;
+  if (isCurBusy) {
+    toast('Current session is already generating (stop it with ■ or switch to another chat)', true);
+    return;
+  }
   const input = $('input');
   const text = input ? input.value.trim() : '';
   const hasFiles = attachments && attachments.some(a => a.content != null || (a.isImage && a.b64));
@@ -64,7 +68,13 @@ Object.keys(CFG_INPUT_DEFAULTS).forEach(id => {
   });
 });
 $('btn-send').onclick = submitPrompt;
-$('btn-abort').onclick = () => { if (ctrl) ctrl.abort(); };
+$('btn-abort').onclick = () => {
+  if (curSession && window.bgJobs && window.bgJobs.has(String(curSession.id))) {
+    abortSessionJob(curSession.id);
+  } else if (ctrl) {
+    ctrl.abort();
+  }
+};
 const btnWebToggle = $('btn-web-toggle');
 if (btnWebToggle) {
   btnWebToggle.onclick = () => {
@@ -176,44 +186,91 @@ window.addEventListener('keydown', e => {
     if (rm) rm.hidden = true;
     const dm = $('docs-modal');
     if (dm) dm.hidden = true;
+    const sm = $('settings-modal');
+    if (sm) closeSettingsModal();
     const mb = $('modal-bg');
     if (mb) mb.hidden = true;
   }
 });
 
+/* settings in-page modal to keep background tasks alive without page reload */
+function openSettingsModal() {
+  const m = $('settings-modal');
+  const frame = $('settings-frame');
+  if (m) {
+    m.hidden = false;
+    m.removeAttribute('hidden');
+    m.style.display = 'flex';
+    if (frame && (!frame.src || frame.src === 'about:blank' || frame.src.endsWith('/'))) {
+      frame.src = '/settings';
+    }
+  } else {
+    location.href = '/settings';
+  }
+}
+
+function closeSettingsModal() {
+  const m = $('settings-modal');
+  if (m) {
+    m.hidden = true;
+    m.setAttribute('hidden', '');
+    m.style.display = 'none';
+    if (typeof loadConfig === 'function') loadConfig();
+    if (typeof loadProfiles === 'function') loadProfiles();
+  }
+}
+window.openSettingsModal = openSettingsModal;
+window.closeSettingsModal = closeSettingsModal;
+
 /* header buttons */
 if ($('btn-theme')) $('btn-theme').onclick = () => cycleTheme();
 if ($('btn-chat-cfg')) $('btn-chat-cfg').onclick = () => setSettings();
 if ($('settings-close')) $('settings-close').onclick = () => setSettings(false);
-if ($('btn-settings')) $('btn-settings').onclick = () => { location.href = '/settings'; };
+if ($('btn-settings')) $('btn-settings').onclick = () => openSettingsModal();
+if ($('settings-modal-close')) $('settings-modal-close').onclick = () => closeSettingsModal();
 
 /* boot */
+try {
+  const isNative = typeof isNativeAppClient === 'function' ? isNativeAppClient() : false;
+  const savedMode = localStorage.getItem('app_mode');
+  setAppMode(isNative && savedMode === 'agent', false);
+} catch (_) {}
 loadProfiles();   // loadConfig() runs inside once the dropdown is ready
 loadProjects(true);
 
-// Restore saved mode and agent engine preference across page refreshes
-try {
-  const savedMode = localStorage.getItem('app_mode');
-  if (savedMode === 'agent') {
-    setAppMode(true, false);
-  } else {
-    setAppMode(false, false);
-  }
-  const savedEngine = localStorage.getItem('agent_engine');
-  const engineSel = $('agent-engine');
-  if (savedEngine && engineSel) {
-    // legacy values from before the 4 cloud modes: main -> all-local, tiered -> main-local-rest-cloud
-    const legacy = { main: 'all-local', tiered: 'main-local-rest-cloud', agent: 'all-local' };
-    engineSel.value = legacy[savedEngine] || savedEngine;
-    if (!engineSel.value) engineSel.value = 'all-local';
-  }
-  if (engineSel) {
-    engineSel.addEventListener('change', () => {
-      try { localStorage.setItem('agent_engine', engineSel.value); } catch (e) {}
-    });
-  }
-} catch (e) {}
+async function checkCompanionStatus() {
+  let connected = false, hostname = null;
+  try {
+    const d = await (await fetch('/control/companion/status')).json();
+    connected = !!d.connected;
+    hostname = d.hostname;
+  } catch (e) {}
+  updateAgentModeAvailability(connected, hostname);
+  return connected;
+}
 
+(async () => {
+  await checkCompanionStatus();
+
+  // Restore saved agent engine preference across page refreshes
+  try {
+    const savedEngine = localStorage.getItem('agent_engine');
+    const engineSel = $('agent-engine');
+    if (savedEngine && engineSel) {
+      // legacy values from before the 4 cloud modes: main -> all-local, tiered -> main-local-rest-cloud
+      const legacy = { main: 'all-local', tiered: 'main-local-rest-cloud', agent: 'all-local' };
+      engineSel.value = legacy[savedEngine] || savedEngine;
+      if (!engineSel.value) engineSel.value = 'all-local';
+    }
+    if (engineSel) {
+      engineSel.addEventListener('change', () => {
+        try { localStorage.setItem('agent_engine', engineSel.value); } catch (e) {}
+      });
+    }
+  } catch (e) {}
+})();
+
+setInterval(checkCompanionStatus, 5000);
 pollStatus();
 pollGpu();
 setInterval(pollStatus, 4000);
