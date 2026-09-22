@@ -519,6 +519,317 @@ header {
   flex: none; font-size: 9.5px; padding: 1px 6px; border-radius: 10px;
   background: rgba(52,211,153,.15); color: var(--green);
 }
+.model-picker-group {
+  margin-bottom: 8px;
+}
+.model-picker-group:last-child {
+  margin-bottom: 0;
+}
+.model-picker-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--dim);
+  padding: 5px 8px 3px 8px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  margin-bottom: 3px;
+  user-select: none;
+}
+.model-picker-group-title .mpg-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.model-picker-group-title .mpg-count {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--panel2);
+  color: var(--dim);
+}
+.model-picker-empty {
+  font-size: 11px;
+  color: var(--dim);
+  font-style: italic;
+  padding: 6px 10px 8px;
+}
+
+/* ================= INPUT SANITIZER ================= */
+.guard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  margin-bottom: 12px;
+}
+.guard-rule {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  transition: border-color .15s ease;
+}
+.guard-rule:hover {
+  border-color: var(--border-subtle, rgba(255,255,255,0.2));
+}
+.guard-top-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.guard-input,
+.guard-rule input[type="text"],
+.guard-rule textarea,
+.guard-rule select {
+  background: var(--bg-input, var(--panel2)) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 6px !important;
+  padding: 6px 10px !important;
+  font-size: 12px !important;
+  font-family: inherit !important;
+  box-sizing: border-box !important;
+  transition: border-color .15s ease, box-shadow .15s ease !important;
+}
+.guard-input:focus,
+.guard-rule input[type="text"]:focus,
+.guard-rule textarea:focus,
+.guard-rule select:focus {
+  outline: none !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-bg) !important;
+}
+.guard-rule textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  font-size: 11.5px !important;
+  line-height: 1.4 !important;
+  resize: vertical !important;
+  min-height: 54px !important;
+}
+.guard-del-btn {
+  width: 30px !important;
+  min-width: 30px !important;
+  max-width: 30px !important;
+  height: 30px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 6px !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+  flex: none !important;
+  background: rgba(248,113,113,.12) !important;
+  color: var(--red) !important;
+  border: 1px solid rgba(248,113,113,.25) !important;
+  cursor: pointer !important;
+  transition: all .15s ease !important;
+}
+.guard-del-btn:hover {
+  background: rgba(248,113,113,.28) !important;
+  color: #fff !important;
+  transform: scale(1.05);
+}
+.guard-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.guard-badge.cloud {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+.guard-badge.block {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.guard-footer-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--dim);
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+}
+
+/* Multi-Select & Tabs for Sanitizer */
+.guard-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel2);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  margin-bottom: 12px;
+  width: fit-content;
+}
+.guard-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.guard-tab-btn:hover {
+  color: var(--text);
+}
+.guard-tab-btn.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+.guard-ms-wrap {
+  position: relative;
+  width: 100%;
+}
+.guard-ms-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--bg-input, var(--panel2)) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  font-size: 11.5px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .15s ease;
+  box-sizing: border-box;
+}
+.guard-ms-btn:hover {
+  border-color: var(--accent) !important;
+}
+.guard-ms-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+}
+.guard-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--accent-bg);
+  color: var(--accent);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.guard-chip-x {
+  cursor: pointer;
+  font-size: 9px;
+  opacity: 0.7;
+}
+.guard-chip-x:hover {
+  opacity: 1;
+}
+.guard-ms-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 100%;
+  min-width: 200px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  z-index: 500;
+  padding: 6px;
+  display: none;
+}
+.guard-ms-popover.open {
+  display: block;
+}
+.guard-ms-search {
+  width: 100%;
+  padding: 4px 7px;
+  font-size: 11px;
+  border-radius: 4px;
+  background: var(--bg-input, var(--panel2));
+  border: 1px solid var(--border);
+  color: var(--text);
+  margin-bottom: 6px;
+  box-sizing: border-box;
+}
+.guard-ms-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.guard-ms-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  margin-bottom: 4px;
+  font-size: 10px;
+}
+.guard-ms-actions a {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.guard-ms-actions a:hover {
+  text-decoration: underline;
+}
+.guard-ms-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.guard-ms-item:hover {
+  background: var(--panel2);
+}
+.guard-ms-item input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
 
 #btn-load-header {
   width: 32px; min-width: 32px; margin: 0; border: none; border-left: 1px solid var(--border);

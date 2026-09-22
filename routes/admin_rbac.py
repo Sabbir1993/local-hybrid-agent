@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from core import auth_db
 from core.audit import audit_log
-from core.auth import Principal
+from core.auth import Principal, user_has_permission
 from core.auth_provider import hash_password
 from core.deps import get_current_user, require_permission
 from core.db import db_clear_all_projects_data
@@ -114,11 +114,21 @@ async def delete_user(user_id: int, user: Principal = Depends(require_permission
 
 
 @router.get("/role_names")
-async def list_role_names(user: Principal = Depends(require_permission("knowledge.manage"))):
-    """Bare role-name list for the knowledge-base role-access picker -- lighter
-    than /roles (which needs roles.manage and returns full permission grants)."""
+async def list_role_names(user: Principal = Depends(get_current_user)):
+    """Bare role-name list for knowledge-base and sanitizer role-access pickers."""
+    if not (user_has_permission(user, "knowledge.manage") or user_has_permission(user, "settings.input_guard") or user_has_permission(user, "roles.manage")):
+        raise HTTPException(status_code=403, detail="missing permission: settings.input_guard")
     rows = auth_db.db().execute("SELECT name FROM roles ORDER BY name").fetchall()
     return {"roles": [r["name"] for r in rows]}
+
+
+@router.get("/user_names")
+async def list_user_names(user: Principal = Depends(get_current_user)):
+    """Bare username list from users table for sanitizer and targeting pickers."""
+    if not (user_has_permission(user, "settings.input_guard") or user_has_permission(user, "users.manage")):
+        raise HTTPException(status_code=403, detail="missing permission: settings.input_guard")
+    rows = auth_db.db().execute("SELECT id, username, display_name FROM users WHERE is_active = 1 ORDER BY username").fetchall()
+    return {"users": [{"id": r["id"], "username": r["username"], "display_name": r["display_name"] or r["username"]} for r in rows]}
 
 
 @router.get("/roles")

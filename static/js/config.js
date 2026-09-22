@@ -18,9 +18,12 @@ async function loadProfiles() {
       (d.models || []).forEach(m => {
         const o = document.createElement('option');
         o.value = m.id;
-        const isCloud = String(m.id).startsWith('cloud:');
+        const isCloud = String(m.id).startsWith('cloud:') || m.kind === 'cloud';
         o.textContent = m.display + (isCloud ? '' : (m.currently_loaded ? ' (loaded)' : ' (not loaded)'));
         o.dataset.kind = isCloud ? 'cloud' : 'local';
+        o.dataset.provider = m.provider_name || (isCloud ? 'Cloud' : 'Local');
+        o.dataset.providerKey = m.provider || (isCloud ? 'cloud' : 'local');
+        o.dataset.loaded = m.currently_loaded ? '1' : '0';
         sel.appendChild(o);
       });
       if (!sel.options.length) {
@@ -55,6 +58,8 @@ async function loadProfiles() {
       o.title = `${m.name}${size}${mtp}`;
       o.dataset.mtp = m.mtp_available ? '1' : '';
       o.dataset.mtpPath = m.mtp_draft_path || '';
+      o.dataset.kind = 'local';
+      o.dataset.provider = 'Local';
       sel.appendChild(o);
     });
 
@@ -122,6 +127,28 @@ function _mpCleanLabel(text) {
   return String(text || '').replace(/\s*\((?:loaded|not loaded)\)\s*$/, '');
 }
 
+function _createPickerItem(o, sel, dd) {
+  const isCloud = o.dataset.kind === 'cloud';
+  const isLoaded = o.dataset.loaded === '1' || /\(loaded\)/.test(o.textContent);
+  const raw = _mpCleanLabel(o.textContent);
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = 'model-picker-item' + (o.value === sel.value ? ' active' : '');
+  item.title = raw + (o.dataset.provider ? ` (${o.dataset.provider})` : '');
+  item.innerHTML = `<span class="mpi-icon">${isCloud ? '☁️' : '🖥'}</span>` +
+    `<span class="mpi-label">${_mpShorten(raw, 34)}</span>` +
+    (isLoaded ? '<span class="mpi-badge">loaded</span>' : '');
+  item.onclick = () => {
+    if (sel.value !== o.value) {
+      sel.value = o.value;
+      sel._user = true;
+      sel.dispatchEvent(new Event('change'));
+    }
+    dd.classList.remove('open');
+  };
+  return item;
+}
+
 function renderModelPicker() {
   const sel = $('profile');
   const btn = $('model-picker-btn');
@@ -132,35 +159,62 @@ function renderModelPicker() {
   const label = $('model-picker-label');
 
   dd.innerHTML = '';
-  [...sel.options].forEach(o => {
-    const isCloud = o.dataset.kind === 'cloud';
-    const isLoaded = /\(loaded\)/.test(o.textContent);
-    const raw = _mpCleanLabel(o.textContent);
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'model-picker-item' + (o.value === sel.value ? ' active' : '');
-    item.title = raw;
-    item.innerHTML = `<span class="mpi-icon">${isCloud ? '☁️' : '🖥'}</span>` +
-      `<span class="mpi-label">${_mpShorten(raw, 34)}</span>` +
-      (isLoaded ? '<span class="mpi-badge">loaded</span>' : '');
-    item.onclick = () => {
-      if (sel.value !== o.value) {
-        sel.value = o.value;
-        sel._user = true;
-        sel.dispatchEvent(new Event('change'));
-      }
-      dd.classList.remove('open');
-    };
-    dd.appendChild(item);
+
+  const opts = [...sel.options].filter(o => o.value !== '');
+  const localOpts = opts.filter(o => o.dataset.kind !== 'cloud');
+  const cloudOpts = opts.filter(o => o.dataset.kind === 'cloud');
+
+  // 1. LOCAL SECTION (Only displayed when admin has loaded a model into VRAM)
+  if (localOpts.length > 0) {
+    const localGroup = document.createElement('div');
+    localGroup.className = 'model-picker-group';
+
+    const localTitle = document.createElement('div');
+    localTitle.className = 'model-picker-group-title';
+    localTitle.innerHTML = `<span class="mpg-name">🖥 Local</span>` +
+      `<span class="mpg-count">${localOpts.length}</span>`;
+    localGroup.appendChild(localTitle);
+
+    localOpts.forEach(o => {
+      localGroup.appendChild(_createPickerItem(o, sel, dd));
+    });
+    dd.appendChild(localGroup);
+  }
+
+  // 2. PROVIDER-WISE CLUSTERS
+  const providerGroups = new Map();
+  cloudOpts.forEach(o => {
+    const provName = o.dataset.provider || 'Cloud';
+    if (!providerGroups.has(provName)) {
+      providerGroups.set(provName, []);
+    }
+    providerGroups.get(provName).push(o);
+  });
+
+  providerGroups.forEach((provOpts, provName) => {
+    const group = document.createElement('div');
+    group.className = 'model-picker-group';
+
+    const title = document.createElement('div');
+    title.className = 'model-picker-group-title';
+    title.innerHTML = `<span class="mpg-name">☁️ ${typeof esc === 'function' ? esc(provName) : provName}</span>` +
+      `<span class="mpg-count">${provOpts.length}</span>`;
+    group.appendChild(title);
+
+    provOpts.forEach(o => {
+      group.appendChild(_createPickerItem(o, sel, dd));
+    });
+
+    dd.appendChild(group);
   });
 
   const cur = sel.options[sel.selectedIndex];
-  if (cur) {
+  if (cur && cur.value) {
     const isCloud = cur.dataset.kind === 'cloud';
     icon.textContent = isCloud ? '☁️' : '🖥';
     const raw = _mpCleanLabel(cur.textContent);
     label.textContent = _mpShorten(raw, 22);
-    label.title = raw;
+    label.title = raw + (cur.dataset.provider ? ` (${cur.dataset.provider})` : '');
   } else {
     icon.textContent = '🖥';
     label.textContent = 'No model';

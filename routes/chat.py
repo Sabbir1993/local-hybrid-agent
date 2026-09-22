@@ -16,6 +16,9 @@ from pydantic import BaseModel
 
 from core.auth import Principal
 from core.deps import get_current_user
+from core.audit import audit_log
+from core import input_guard
+from core import output_guard
 from core.small_model import APP_CONFIG, small_models
 from core import cloud
 from core.state import state
@@ -89,6 +92,19 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if m.get("role") == "user":
             last_query = str(m.get("content", ""))
             break
+
+    # --- Input sanitizer (core/input_guard.py) -----------------------------
+    # cloud_only rules only fire when the main lane is a cloud model; local
+    # models are allowed. block_all rules fire regardless. Human-readable
+    # rule message is surfaced to the UI's existing error bubble.
+    _hit = await input_guard.check_async(
+        [str(m.get("content", "")) for m in msgs if m.get("role") == "user"],
+        user, any_cloud_lane=cloud_main is not None)
+    if _hit:
+        audit_log(user, action="input_guard.block", resource=_hit.get("name"),
+                  detail={"scope": _hit.get("scope"), "endpoint": "chat/run",
+                          "pattern": _hit.get("_matched_pattern")}, result="deny")
+        return JSONResponse({"error": _hit.get("message")}, status_code=403)
 
     import re as _re
     url_matches = _re.findall(r'https?://[^\s<>")\]]+', last_query)
@@ -193,6 +209,20 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         t0 = time.time()
         max_turns = 4 if chat_tools else 1
         written_files = []
+        # --- Output sanitizer: redact model deltas before they reach the
+        # client (cloud_only rules only fire while the lane is cloud; the
+        # fallback event recreates the redactor for the local lane).
+        redactor = output_guard.OutputRedactor(user, model_source == "cloud")
+        guard_event_sent = False
+
+        def _guard_notice():
+            nonlocal guard_event_sent
+            if redactor.matched and not guard_event_sent:
+                guard_event_sent = True
+                return (f"event: guard\ndata: "
+                        + json.dumps({"rule": redactor.matched.get("name"),
+                                      "message": redactor.matched.get("message")}) + "\n\n")
+            return ""
 
         try:
             for turn in range(max_turns):
@@ -244,14 +274,56 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         fb_lane_info = {"lane": "main", "model": clean_model_name, "display": model_display,
                                         "source": model_source, "provider": model_provider}
                         yield f"event: lane\ndata: {json.dumps(fb_lane_info)}\n\n"
+                        # lane switched cloud -> local: drain the old redactor's
+                        # holdback and rebuild with the local flag
+                        _tail = redactor.flush()
+                        if _tail:
+                            streamed_content.append(_tail)
+                            yield f"event: delta\ndata: {json.dumps({'text': _tail})}\n\n"
+                        redactor = output_guard.OutputRedactor(user, False)
                         continue
                     if ev == "thought_delta":
                         yield f"event: thought_delta\ndata: {json.dumps({'delta': val})}\n\n"
                     elif ev == "content_delta":
-                        streamed_content.append(val)
-                        yield f"event: delta\ndata: {json.dumps({'text': val})}\n\n"
+                        _safe = redactor.feed(val)
+                        streamed_content.append(_safe)
+                        if _safe:
+                            yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
+                        _n = _guard_notice()
+                        if _n:
+                            yield _n
                     elif ev == "result":
                         res_dict = val
+
+                # end of this turn's stream: release the redactor holdback so
+                # the final chars of the answer are shown too
+                _tail = redactor.flush()
+                if _tail:
+                    streamed_content.append(_tail)
+                    yield f"event: delta\ndata: {json.dumps({'text': _tail})}\n\n"
+                _n = _guard_notice()
+                if _n:
+                    yield _n
+
+                # Semantic (natural-language) output rules: evaluated on the
+                # completed turn. On match, replace the whole answer with the
+                # rule's human-readable message (streamed text can't be unsent,
+                # but delta_reset makes the UI drop it from the visible reply).
+                _sem = await output_guard.semantic_check(
+                    res_dict.get("content", "") if res_dict else "".join(streamed_content),
+                    user, model_source == "cloud")
+                if _sem:
+                    if streamed_content:
+                        redactor.reset()
+                        yield "event: delta_reset\ndata: {}\n\n"
+                    _msg = _sem.get("message") or "Response filtered by policy."
+                    yield f"event: delta\ndata: {json.dumps({'text': _msg})}\n\n"
+                    yield f"event: guard\ndata: {json.dumps({'rule': _sem.get('name'), 'message': _msg})}\n\n"
+                    audit_log(user, action="output_guard.redact", resource=_sem.get("name"),
+                              detail={"endpoint": "chat/run", "scope": _sem.get("scope"),
+                                      "semantic": True}, result="deny")
+                    yield f"event: done\ndata: {{}}\n\n"
+                    return
 
                 content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                 reasoning = res_dict.get("reasoning", "") if res_dict else ""
@@ -270,6 +342,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     "as an ai, i cannot access", "as an ai, i can't access", "i can't fetch the exact current content"
                 ))
                 if is_refusal and turn == 0 and chat_tools:
+                    redactor.reset()
                     yield "event: delta_reset\ndata: {}\n\n"
                     if url_matches:
                         target_url = url_matches[0]
@@ -431,6 +504,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         # own file - the name picked here is only a human-readable stem.
                         target_filename = Path(fname_cand).name
                         tc_id = "recov_write_0"
+                        redactor.reset()
                         yield "event: delta_reset\ndata: {}\n\n"
                         yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': 'write_file', 'args': {'path': target_filename, 'content': data_to_save}})}\n\n"
                         res_str = tool_write_file_common({"path": target_filename, "content": data_to_save})
@@ -488,6 +562,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                 # Reset any pre-tool preamble streamed to the user
                 if streamed_content:
+                    redactor.reset()
                     yield f"event: delta_reset\ndata: {{}}\n\n"
 
                 clean_tool_calls = []
@@ -575,6 +650,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             yield f"event: delta\ndata: {json.dumps({'text': f'⚠️ Chat error: {e}'})}\n\n"
             yield f"event: done\ndata: {{}}\n\n"
         finally:
+            if redactor.matched:
+                audit_log(user, action="output_guard.redact", resource=redactor.matched.get("name"),
+                          detail={"endpoint": "chat/run", "scope": redactor.matched.get("scope"),
+                                  "hits": redactor.hits}, result="deny")
             dt = time.time() - t0
             req_mon = _monitor_state["active"].get(chat_rid)
             toks = req_mon.get("gen_tokens") if req_mon else None
@@ -678,6 +757,9 @@ async def _summarize_history(convo: list, instructions: Optional[str], use_execu
     except (KeyError, IndexError, TypeError):
         pass
     summary = _strip_think(summary)
+    # Output sanitizer: summaries are user-facing and may replay earlier chat
+    # content. user=None means role-targeted rules don't apply (global rules do).
+    summary, _og = output_guard.redact_full(summary, None, source.startswith("cloud"))
     if not summary.strip():
         raise RuntimeError(f"summarizer returned an empty response ({source})")
     print(f"[chat/compact] summarized {len(convo)} messages via {source} "

@@ -201,6 +201,12 @@ async function runAgentSSE(text) {
             const pi = L.acts.findIndex(a => a.type === 'plan');
             if (pi >= 0) L.acts[pi] = planAct; else L.acts.push(planAct);
           }
+          else if (ev === 'guard') {
+            // Output sanitizer redacted part of the response
+            if (!L.acts) L.acts = [];
+            L.acts.push({ type: 'guard', rule: d.rule, message: d.message });
+            toast('🧼 ' + (d.message || ('Response filtered by policy: ' + (d.rule || ''))));
+          }
           else if (ev === 'error') throw new Error(d.error);
 
           if (curSession && String(curSession.id) === String(sessionId)) {

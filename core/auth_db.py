@@ -31,6 +31,7 @@ PERMISSIONS = {
     "roles.manage": "Create roles and edit role permission grants",
     "audit.view": "Read the audit log",
     "chat.use": "Use chat / agent features",
+    "settings.input_guard": "Configure the input sanitizer (cloud-block patterns, prohibited prompt types, role restrictions)",
     "settings.shell.configure": "Edit the global shell command allowlist (capabilities.shell)",
 }
 

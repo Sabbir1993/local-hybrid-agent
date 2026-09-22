@@ -18,6 +18,8 @@ from core.auth import Principal
 from core.backend import device_prefix
 from core.config import BASE_DIR, CONFIG_DEFAULTS
 from core.deps import get_current_user
+from core.audit import audit_log
+from core import input_guard
 from core.knowledge_access import allowed_source_ids_for
 from core.memory import search_memory_hybrid
 from core.file_tools import extract_file_content, MIME_MAP
@@ -37,6 +39,7 @@ from core.small_model import (
 )
 from core.state import state
 from core import cloud
+from core import output_guard
 from core.agent_tools import (
     AGENT_TOOLS,
     AGENT_CORE_TOOLS,
@@ -128,6 +131,29 @@ class AgentRequest(BaseModel):
 
 
 AGENT_MAX_STEPS = 30
+
+
+# ---------------- output sanitizer helpers ----------------
+def _guard_flush_events(redactor, streamed_content) -> list:
+    """Flush the output-guard holdback at end of a lane stream. Returns SSE
+    chunks the caller must yield (tail delta + one-time guard notice)."""
+    chunks = []
+    _tail = redactor.flush()
+    if _tail:
+        streamed_content.append(_tail)
+        chunks.append(f"event: delta\ndata: {json.dumps({'text': _tail})}\n\n")
+    if redactor.matched:
+        chunks.append(f"event: guard\ndata: "
+                      + json.dumps({"rule": redactor.matched.get("name"),
+                                    "message": redactor.matched.get("message")}) + "\n\n")
+    return chunks
+
+
+def _guard_audit(redactor, user, endpoint: str) -> None:
+    if redactor.matched:
+        audit_log(user, action="output_guard.redact", resource=redactor.matched.get("name"),
+                  detail={"endpoint": endpoint, "scope": redactor.matched.get("scope"),
+                          "hits": redactor.hits}, result="deny")
 
 # Grammar-constrained tool calls for the executor lane (small-model reliability).
 # Auto-disabled for the process lifetime if the llama-server build rejects the
@@ -281,6 +307,21 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
 
     steps = max(1, min(req.max_steps, APP_CONFIG["agent"].get("max_steps", AGENT_MAX_STEPS)))
     msgs = [dict(m) for m in req.messages]
+
+    # --- Input sanitizer (core/input_guard.py) -----------------------------
+    # Runs after mode/lane resolution, so 'all-local' never trips cloud_only
+    # rules. Scans all user messages plus attachment names/previews (a pasted
+    # invoice is caught even when the regex only exists inside the file text).
+    # NOTE: must stay AFTER the `msgs = ...` assignment above (it reads msgs).
+    _any_cloud = bool(cloud_main) or bool(cloud_exec)
+    _scan_texts = [str(m.get("content", "")) for m in msgs if m.get("role") == "user"]
+    _scan_texts += [f"{att.name} {att.preview or ''}" for att in req.attachments]
+    _hit = await input_guard.check_async(_scan_texts, user, any_cloud_lane=_any_cloud)
+    if _hit:
+        audit_log(user, action="input_guard.block", resource=_hit.get("name"),
+                  detail={"scope": _hit.get("scope"), "endpoint": "agent/run",
+                          "pattern": _hit.get("_matched_pattern")}, result="deny")
+        return JSONResponse({"error": _hit.get("message")}, status_code=403)
 
     # --- Inject attached file content into the last user message ---
     if req.attachments:
@@ -472,14 +513,21 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         req.max_tokens, rid=chat_rid, lane="direct")
                 else:
                     direct_stream = _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens, rid=chat_rid)
+                _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
                 async for ev, val in direct_stream:
                     if ev == "fallback":
                         yield f"event: lane\ndata: {json.dumps(_local_model_info('main' if (use_cloud_main or main_ready) else 'executor'))}\n\n"
+                        _red = output_guard.OutputRedactor(user, False)   # lane now local
                         continue
                     if ev == "thought_delta":
                         yield f"event: thought_delta\ndata: {json.dumps({'step': 1, 'delta': val, 'model': model_info['display']})}\n\n"
                     elif ev == "content_delta":
-                        yield f"event: delta\ndata: {json.dumps({'text': val})}\n\n"
+                        _safe = _red.feed(val)
+                        if _safe:
+                            yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
+                for _c in _guard_flush_events(_red, []):
+                    yield _c
+                _guard_audit(_red, user, "agent/direct")
             finally:
                 req_mon = _monitor_state["active"].get(chat_rid)
                 toks = req_mon.get("gen_tokens") if req_mon else None
@@ -614,18 +662,27 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             req.max_tokens, rid=step_rid, grammar=step_grammar, lane=lane_name)
                     else:
                         lane_stream = _llm_chat_stream(active_client, msgs, tools_for_lane, req.temperature, req.max_tokens, rid=step_rid, grammar=step_grammar)
+                    _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
+                    _cloud_out = bool(getattr(active_client, "is_cloud", False))
                     async for ev, val in lane_stream:
                         if ev == "fallback":
                             model_info = _local_model_info(lane_name)
                             yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
+                            _red = output_guard.OutputRedactor(user, False)   # lane now local
+                            _cloud_out = False
                             continue
                         if ev == "thought_delta":
                             yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
                         elif ev == "content_delta":
-                            streamed_content.append(val)
-                            yield f"event: delta\ndata: {json.dumps({'text': val})}\n\n"
+                            _safe = _red.feed(val)
+                            streamed_content.append(_safe)
+                            if _safe:
+                                yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
                         elif ev == "result":
                             res_dict = val
+                    for _c in _guard_flush_events(_red, streamed_content):
+                        yield _c
+                    _guard_audit(_red, user, f"agent/{lane_name}")
                 finally:
                     req_mon = _monitor_state["active"].get(step_rid)
                     toks = req_mon.get("gen_tokens") if req_mon else len(streamed_content)
@@ -676,6 +733,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
 
                 if should_escalate:
                     print(f"[server_manager] Executor failed/tutorialized on step {step+1}; auto-escalating to Main Model.", file=sys.stderr)
+                    _red.reset()
                     yield "event: delta_reset\ndata: {}\n\n"
                     lane_name = "main"
                     model_info = get_model_info("main")
@@ -696,17 +754,26 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                 req.max_tokens, rid=esc_rid, lane="main")
                         else:
                             esc_stream = _llm_chat_stream(main_client, msgs, esc_tools, req.temperature, req.max_tokens, rid=esc_rid)
+                        _red = output_guard.OutputRedactor(user, getattr(main_client, "is_cloud", False))
+                        _cloud_out = bool(getattr(main_client, "is_cloud", False))
                         async for ev, val in esc_stream:
                             if ev == "fallback":
                                 yield f"event: lane\ndata: {json.dumps(_local_model_info('main'))}\n\n"
+                                _red = output_guard.OutputRedactor(user, False)   # lane now local
+                                _cloud_out = False
                                 continue
                             if ev == "thought_delta":
                                 yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
                             elif ev == "content_delta":
-                                streamed_content.append(val)
-                                yield f"event: delta\ndata: {json.dumps({'text': val})}\n\n"
+                                _safe = _red.feed(val)
+                                streamed_content.append(_safe)
+                                if _safe:
+                                    yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
                             elif ev == "result":
                                 res_dict = val
+                        for _c in _guard_flush_events(_red, streamed_content):
+                            yield _c
+                        _guard_audit(_red, user, "agent/main-escalated")
                     finally:
                         req_mon = _monitor_state["active"].get(esc_rid)
                         toks = req_mon.get("gen_tokens") if req_mon else len(streamed_content)
@@ -737,9 +804,27 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 final_reasoning = reasoning
 
                 if not tool_calls:
+                    # Semantic (natural-language) output rules on the final
+                    # answer: on match, replace it entirely with the policy
+                    # message before anything else is finalized.
+                    _sem = await output_guard.semantic_check(final_content, user, _cloud_out)
+                    if _sem:
+                        _msg = _sem.get("message") or "Response filtered by policy."
+                        _red.reset()
+                        if final_content.strip():
+                            yield "event: delta_reset\ndata: {}\n\n"
+                        yield f"event: delta\ndata: {json.dumps({'text': _msg})}\n\n"
+                        yield f"event: guard\ndata: {json.dumps({'rule': _sem.get('name'), 'message': _msg})}\n\n"
+                        audit_log(user, action="output_guard.redact", resource=_sem.get("name"),
+                                  detail={"endpoint": "agent/run", "scope": _sem.get("scope"),
+                                          "semantic": True}, result="deny")
+                        yield f"event: validated\ndata: {{}}\n\n"
+                        yield "event: done\ndata: {}\n\n"
+                        return
                     val_text, was_synth, note = validate_and_finalize_response(
                         last_query, final_content, final_reasoning, actions_taken)
                     if was_synth and val_text != final_content:
+                        _red.reset()
                         if not final_content.strip():
                             yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
                         else:
@@ -862,6 +947,18 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             "If a step you just performed matches a pending plan item, call "
                             "update_plan_item(item=N, status='done' or 'failed') now before continuing.")})
 
+            _sem = await output_guard.semantic_check(final_content, user, _cloud_out)
+            if _sem:
+                _msg = _sem.get("message") or "Response filtered by policy."
+                yield "event: delta_reset\ndata: {}\n\n"
+                yield f"event: delta\ndata: {json.dumps({'text': _msg})}\n\n"
+                yield f"event: guard\ndata: {json.dumps({'rule': _sem.get('name'), 'message': _msg})}\n\n"
+                audit_log(user, action="output_guard.redact", resource=_sem.get("name"),
+                          detail={"endpoint": "agent/run", "scope": _sem.get("scope"),
+                                  "semantic": True}, result="deny")
+                yield f"event: validated\ndata: {{}}\n\n"
+                yield f"event: done\ndata: {json.dumps({'note': 'response filtered by policy', 'text': ''})}\n\n"
+                return
             val_text, was_synth, note = validate_and_finalize_response(
                 last_query, final_content, final_reasoning, actions_taken)
             if was_synth or not final_content.strip():

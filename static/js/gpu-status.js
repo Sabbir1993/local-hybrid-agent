@@ -19,6 +19,7 @@ function updateHardwareTag(tag) {
 }
 
 let pollFailures = 0;
+let _lastLocalPid = null;
 async function pollStatus() {
   try {
     const res = await fetch('/control/status');
@@ -32,6 +33,13 @@ async function pollStatus() {
     setPill(cloudMain ? 'cloud' : (s.pid ? 'on' : 'off'), s);
     const ka = $('ka');
     if (ka && !ka._user) ka.checked = !!s.keepalive;
+
+    // Refresh model picker whenever local process load/unload state transitions
+    const hasPid = !!s.pid;
+    if (_lastLocalPid !== null && _lastLocalPid !== hasPid) {
+      if (typeof loadProfiles === 'function') loadProfiles();
+    }
+    _lastLocalPid = hasPid;
 
     const sel = $('profile');
     const selName = (sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'Model';

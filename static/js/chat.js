@@ -629,6 +629,9 @@ async function send(inputText) {
               }
             }
           }
+        } else if (ev === 'guard') {
+          // Output sanitizer redacted part of the response
+          toast('🧼 ' + (d.message || ('Response filtered by policy: ' + (d.rule || ''))));
         } else if (ev === 'error') {
           throw new Error(d.error || 'Chat execution error');
         }

@@ -195,6 +195,16 @@
     <div id="knowledge-content"><div class="mon-empty">Loading…</div></div>
   </details>
 
+  <details class="card fold" id="sec-guard" data-perm="settings.input_guard">
+    <summary title="Admin-defined input &amp; output policies: cloud-block patterns, prohibited prompt types, model response redactions, and role/user restrictions">🛡️ Input &amp; Output Sanitizer</summary>
+    <div id="guard-content"><div class="mon-empty">Loading…</div></div>
+  </details>
+
+  <details class="card fold" id="sec-oguard" data-perm="settings.input_guard">
+    <summary title="Admin-defined output policies: redact sensitive patterns from model responses (cloud-only or always, optionally role-restricted)">🧼 Output Sanitizer</summary>
+    <div id="oguard-content"><div class="mon-empty">Loading…</div></div>
+  </details>
+
   <details class="card fold" id="sec-audit" data-perm="audit.view">
     <summary title="Who did what — model loads, cloud provider changes, permission denials">🧾 Audit Log</summary>
     <div id="audit-content"><div class="mon-empty">Loading…</div></div>
@@ -228,6 +238,7 @@
 <script src="/static/js/cloud.js?v=3.0"></script>
 <script src="/static/js/rbac.js?v=1.0"></script>
 <script src="/static/js/knowledge.js?v=1.0"></script>
+<script src="/static/js/input-guard.js?v=1.0"></script>
 <script>
 window.__sessionReady.then((data) => {
   if (!data) return;   // not authenticated -- fetch() 401 handler already redirects to /login
@@ -241,6 +252,8 @@ window.__sessionReady.then((data) => {
   if (document.getElementById('cloud-content')) loadCloudCard();
   if (document.getElementById('sec-users')) loadUsersPanel();
   if (document.getElementById('sec-knowledge')) loadKnowledgePanel();
+  if (document.getElementById('sec-guard')) loadInputGuardPanel();
+  if (document.getElementById('sec-oguard')) loadOutputGuardPanel();
   if (document.getElementById('sec-audit')) loadAuditPanel();
   const clearBtn = document.getElementById('btn-clear-all-data');
   if (clearBtn) {

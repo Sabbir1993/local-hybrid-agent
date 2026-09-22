@@ -37,6 +37,7 @@ async function loadSelectedModel() {
     if (ctrl) ctrl.abort();
     try { await fetch('/control/stop', { method: 'POST' }); } catch (e) {}
     pollStatus(); pollGpu();
+    if (typeof loadProfiles === 'function') loadProfiles();
     toast('Model unloaded — VRAM freed on both A770s');
     return;
   }

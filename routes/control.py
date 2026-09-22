@@ -363,23 +363,43 @@ async def profiles(user: Principal = Depends(get_current_user)):
 
 @router.get("/control/available_models")
 async def available_models(user: Principal = Depends(get_current_user)):
-    """Read-only trimmed model list for the nav bar: no launch params, no VRAM
-    controls, just what's already loaded (local, shared) plus this user's own
-    configured cloud models."""
-    loaded_name = state.profile.get("name") if state.profile else None
+    """Read-only trimmed model list for the nav bar: shows the currently loaded local model
+    (only when an admin has loaded one into GPU VRAM AND it is actively running), followed by cloud models clustered by provider."""
     is_running = state.process is not None and state.process.poll() is None
-    out = []
-    if loaded_name:
-        out.append({"id": loaded_name, "display": loaded_name, "currently_loaded": is_running})
+    loaded_name = state.profile.get("name") if (state.profile and is_running) else None
+    loaded_path = (state.profile.get("model_path") or state.profile.get("path") or loaded_name) if (state.profile and is_running) else None
+
+    local_models = []
+    # Local model only shows when an admin has loaded one into GPU VRAM and it is actively running
+    if loaded_name and is_running:
+        local_models.append({
+            "id": loaded_path or loaded_name,
+            "display": loaded_name,
+            "currently_loaded": True,
+            "kind": "local",
+            "provider": "local",
+            "provider_name": "Local",
+        })
+
+    cloud_models = []
     for cm in cloud.cloud_models(user.id):
-        out.append({"id": f"cloud:{cm.key}", "display": cm.display, "currently_loaded": False})
-    return {"models": out}
+        cloud_models.append({
+            "id": f"cloud:{cm.key}",
+            "display": cm.display,
+            "currently_loaded": False,
+            "kind": "cloud",
+            "provider": cm.provider,
+            "provider_name": cm.provider_name,
+        })
+
+    return {"models": local_models + cloud_models}
 
 
 @router.post("/control/stop")
 async def stop_server(user: Principal = Depends(require_permission("model.local.load"))):
     was = state.profile.get("name") if state.profile else None
     await state.stop()
+    state.profile = None
     audit_log(user, action="model.stop", resource=was, result="allow")
     return {"ok": True, "stopped": True}
 
