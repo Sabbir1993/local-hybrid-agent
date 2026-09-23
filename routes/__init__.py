@@ -15,6 +15,7 @@ from .mcp_manager import router as mcp_manager_router
 from .knowledge import router as knowledge_router
 from .proxy import router as proxy_router
 from .input_guard import router as input_guard_router
+from .db_explorer import router as db_explorer_router
 
 __all__ = [
     "auth_router",
@@ -30,4 +31,5 @@ __all__ = [
     "knowledge_router",
     "proxy_router",
     "input_guard_router",
+    "db_explorer_router",
 ]

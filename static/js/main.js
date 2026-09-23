@@ -249,6 +249,33 @@ async function checkCompanionStatus() {
   return connected;
 }
 
+/* Populate + manage the secondary cloud model selector (#cloud-model-sel).
+   Shown when the engine mode needs a cloud executor lane (e.g. Main Local · Rest Cloud). */
+async function _populateCloudModelSel() {
+  const sel = $('cloud-model-sel');
+  if (!sel) return;
+  try {
+    const res = await fetch('/control/profiles');
+    if (!res.ok) return;
+    const data = await res.json();
+    const models = (data.cloud || []);
+    const prev = sel.value || localStorage.getItem('cloud_model_override') || '';
+    sel.innerHTML = '<option value="">☁ Pick cloud model…</option>' +
+      models.map(m => `<option value="${m.key}">${m.display || m.name} (${m.provider_name || m.provider || ''})</option>`).join('');
+    if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  } catch (e) {}
+}
+
+function _updateCloudModelSelVisibility() {
+  const engineSel = $('agent-engine');
+  const cloudSel = $('cloud-model-sel');
+  if (!engineSel || !cloudSel) return;
+  const mode = engineSel.value;
+  // Show the cloud model picker when there is a cloud executor lane
+  const needsCloudExec = (mode === 'main-local-rest-cloud');
+  cloudSel.style.display = (needsCloudExec && agentMode) ? 'inline-block' : 'none';
+}
+
 (async () => {
   await checkCompanionStatus();
 
@@ -257,20 +284,51 @@ async function checkCompanionStatus() {
     const savedEngine = localStorage.getItem('agent_engine');
     const engineSel = $('agent-engine');
     if (savedEngine && engineSel) {
-      // legacy values from before the 4 cloud modes: main -> all-local, tiered -> main-local-rest-cloud
-      const legacy = { main: 'all-local', tiered: 'main-local-rest-cloud', agent: 'all-local' };
+      // legacy values: main -> all-local, tiered -> main-local-rest-cloud, all-cloud -> no-orchestration
+      const legacy = {
+        main: 'all-local',
+        tiered: 'main-local-rest-cloud',
+        agent: 'all-local',
+        'all-cloud': 'no-orchestration',
+      };
       engineSel.value = legacy[savedEngine] || savedEngine;
       if (!engineSel.value) engineSel.value = 'all-local';
     }
     if (engineSel) {
       engineSel.addEventListener('change', () => {
         try { localStorage.setItem('agent_engine', engineSel.value); } catch (e) {}
+        _updateCloudModelSelVisibility();
       });
     }
   } catch (e) {}
+
+  // Cloud model selector
+  const cloudSel = $('cloud-model-sel');
+  if (cloudSel) {
+    try {
+      const savedOverride = localStorage.getItem('cloud_model_override');
+      if (savedOverride) cloudSel.value = savedOverride;
+    } catch (e) {}
+    cloudSel.addEventListener('change', () => {
+      const val = cloudSel.value;
+      try { localStorage.setItem('cloud_model_override', val); } catch (e) {}
+      if (val) {
+        // Also persist to backend user lane bindings so executor & vision lanes use this cloud model
+        fetch('/control/cloud/lanes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            set: { executor: val, vision: val },
+            routing_mode: 'custom'
+          })
+        }).catch(() => {});
+      }
+    });
+    await _populateCloudModelSel();
+    _updateCloudModelSelVisibility();
+  }
 })();
 
-setInterval(checkCompanionStatus, 5000);
 pollStatus();
 pollGpu();
 setInterval(pollStatus, 4000);

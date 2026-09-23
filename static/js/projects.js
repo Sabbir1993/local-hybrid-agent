@@ -16,12 +16,31 @@ try {
 
 /* ---------------- client device helper ---------------- */
 function getClientDeviceId() {
+  if (window.electronAPI && window.electronAPI.deviceId) {
+    try { localStorage.setItem('antigravity_device_id', window.electronAPI.deviceId); } catch (_) {}
+    return window.electronAPI.deviceId;
+  }
   let devId = localStorage.getItem('antigravity_device_id');
   if (!devId) {
     devId = 'dev_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
     try { localStorage.setItem('antigravity_device_id', devId); } catch (_) {}
   }
   return devId;
+}
+
+// Background sync if electronAPI resolves asynchronously
+if (typeof window !== 'undefined') {
+  setTimeout(() => {
+    if (window.electronAPI && typeof window.electronAPI.getDeviceId === 'function') {
+      window.electronAPI.getDeviceId().then(id => {
+        if (id && id !== localStorage.getItem('antigravity_device_id')) {
+          try { localStorage.setItem('antigravity_device_id', id); } catch (_) {}
+          updateDeviceUI();
+          if (typeof loadProjects === 'function') loadProjects();
+        }
+      }).catch(() => {});
+    }
+  }, 100);
 }
 
 function getClientDeviceName() {
@@ -70,17 +89,48 @@ function updateDeviceUI() {
   const label = $('device-label-text');
   if (label) {
     label.textContent = `💻 ${getDeviceDisplayLabel()}`;
-    label.title = `Current device: ${getClientDeviceName()} (ID: ${getClientDeviceId()})`;
+    label.title = `Current device: ${getClientDeviceName()} (ID: ${getClientDeviceId()})\nClick to rename or switch profile`;
   }
 }
 
 async function renameClientDevice() {
   const cur = getClientDeviceName();
-  // Prompt user to update only the name part (device ID suffix stays fixed)
-  const next = prompt(`Rename this device:\n(Device ID suffix will remain: -${getClientDeviceShortId()})`, cur);
-  if (!next || !next.trim() || next.trim() === cur) return;
+  let devList = [];
+  try {
+    const res = await (await fetch('/control/user/devices', { headers: { ...getDeviceHeaders() } })).json();
+    if (res.ok && Array.isArray(res.devices)) {
+      devList = res.devices;
+    }
+  } catch (_) {}
 
-  const newName = next.trim();
+  let promptMsg = `Device: ${cur} (ID: ${getClientDeviceShortId()})\n\nEnter a new name to rename this device:`;
+  if (devList.length > 1) {
+    const otherDevs = devList.map((d, i) => `  [#${i+1}] ${d.device_name || 'Device'} (${d.device_id.replace(/^dev_/, '').slice(0, 10)})`).join('\n');
+    promptMsg += `\n\nOr type #<num> to switch to a registered device:\n${otherDevs}`;
+  }
+
+  const next = prompt(promptMsg, cur);
+  if (!next || !next.trim()) return;
+  const input = next.trim();
+
+  // If user typed #<number> to reconnect to an existing device profile
+  if (input.startsWith('#') && devList.length) {
+    const idx = parseInt(input.slice(1), 10) - 1;
+    if (idx >= 0 && idx < devList.length) {
+      const target = devList[idx];
+      try {
+        localStorage.setItem('antigravity_device_id', target.device_id);
+        localStorage.setItem('antigravity_device_name', target.device_name || 'My Device');
+      } catch (_) {}
+      updateDeviceUI();
+      toast(`Switched active device to "${target.device_name || 'Device'}"`);
+      await loadProjects();
+      return;
+    }
+  }
+
+  if (input === cur) return;
+  const newName = input;
   try {
     localStorage.setItem('antigravity_device_name', newName);
   } catch (_) {}
@@ -119,11 +169,6 @@ document.addEventListener('DOMContentLoaded', () => {
 setTimeout(setupDeviceUIHandlers, 50);
 
 function setupDeviceUIHandlers() {
-  const btnRenameDev = $('btn-rename-device');
-  if (btnRenameDev && !btnRenameDev._bound) {
-    btnRenameDev._bound = true;
-    btnRenameDev.onclick = renameClientDevice;
-  }
   const label = $('device-label-text');
   if (label && !label._bound) {
     label._bound = true;
@@ -173,11 +218,13 @@ async function loadProjects(autoRestoreSessions = false) {
     const savedProjId = localStorage.getItem('active_project_id');
     const savedProjName = localStorage.getItem('active_project_name');
 
-    if (d.active && d.active !== 'scratch' && d.active !== 'default') {
+    if (d.active_project) {
+      curProject = d.active_project;
+    } else if (d.active && d.active !== 'scratch' && d.active !== 'default') {
       const p = (d.projects || []).find(x => x.name === d.active);
       if (p) curProject = p;
-    } else if (savedProjId || savedProjName) {
-      const p = (d.projects || []).find(x => String(x.id) === String(savedProjId) || (savedProjName && x.name === savedProjName));
+    } else if (savedProjId) {
+      const p = (d.projects || []).find(x => String(x.id) === String(savedProjId));
       if (p) {
         curProject = p;
         // Keep backend active project state in sync

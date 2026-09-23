@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 import time
+import re
 from pathlib import Path
 from typing import Optional, Union
 
@@ -83,6 +84,7 @@ def _load_app_config() -> dict:
     base = {
         "models_dir": None,
         "workspace_dir": None,
+        "common_dir": None,
         "llama_bin_dir": CONFIG_DEFAULTS["llama_bin_dir"],
         "backend": CONFIG_DEFAULTS["backend"],
         "small_models": {
@@ -90,7 +92,18 @@ def _load_app_config() -> dict:
             "vision": {"model": None, "mmproj": None, "port": 8092, "gpu": 1, "ctx": 4096},
             "embedder": {"model": None, "port": 8093, "gpu": 1},
         },
-        "router": {"enabled": True, "confidence_threshold": 0.7},
+        "router": {
+            "enabled": True,
+            "confidence_threshold": 0.7,
+            "engine": "cactus_needle",
+            "executor_grammar": True,
+            "laya": {
+                "checkpoint": "convaiinnovations/laya",
+                "subfolder": None,
+                "device": "cpu",
+                "preload": False,
+            },
+        },
         "agent": {"exec_timeout_s": 120, "max_steps": 30, "idle_unload_s": 120},
         "roles": dict(_DEFAULT_ROLES),
         # cloud providers / lane bindings: kept here so /control/models can report
@@ -103,6 +116,14 @@ def _load_app_config() -> dict:
             "mcp": True, "mcp_servers": {}, "plugins": True,
             "shell": {"enabled": True, "ask_first": True, "timeout_s": 60,
                       "allow_patterns": ["git *", "npx *", "npm *", "pip *", "python *"]},
+        },
+        "input_guard": {
+            "enabled": False,
+            "rules": [],
+        },
+        "output_guard": {
+            "enabled": False,
+            "rules": [],
         },
     }
     # Multiagent role definitions live in their own file so they're easy to find
@@ -118,7 +139,7 @@ def _load_app_config() -> dict:
     try:
         if cfg.exists():
             d = json.loads(cfg.read_text())
-            for k in ("models_dir", "workspace_dir", "llama_bin_dir", "backend"):
+            for k in ("models_dir", "workspace_dir", "common_dir", "llama_bin_dir", "backend"):
                 if d.get(k):
                     base[k] = d[k]
             for k, sub in base["small_models"].items():
@@ -126,13 +147,18 @@ def _load_app_config() -> dict:
                     sub.update(d["small_models"][k])
             # "roles" is included here as a legacy override: an un-migrated
             # app.json that still has a "roles" block wins over config/roles.json.
-            for k in ("router", "agent", "capabilities", "provider", "cloud", "roles"):
+            for k in ("router", "agent", "capabilities", "provider", "cloud", "roles",
+                      "input_guard", "output_guard", "preflight"):
                 if isinstance(d.get(k), dict):
-                    sub = base[k]
+                    sub = base.get(k)
                     if isinstance(sub, dict):
                         sub.update(d[k])
                     else:
                         base[k] = dict(d[k])
+            # Preserve any other top-level keys present in app.json
+            for k, v in d.items():
+                if k not in base:
+                    base[k] = v
     except Exception as e:
         print(f"[server_manager] config.json unreadable: {e}", file=sys.stderr)
 
@@ -353,6 +379,20 @@ async def describe_image_file(p: Path, question: str = "Describe this image in d
         "max_tokens": 400,
         "temperature": 0.1,
     }
+    # 1. Main model if vision-capable
+    try:
+        from .state import state
+        main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
+        if main_ready and bool((state.profile or {}).get("vision_capable")):
+            r = await state.client.post("/v1/chat/completions", json=payload, timeout=None)
+            state.last_activity = time.time()
+            data = r.json()
+            return ((data.get("choices") or [{}])[0].get("message", {}).get("content")
+                    or "(main vision model returned no text)")
+    except Exception as e:
+        print(f"[vision] main model vision failed: {e} - falling back to vision lane/model")
+
+    # 2. Cloud vision lane if configured
     from . import cloud
     cm = cloud.cloud_lane("vision")
     if cm:
@@ -363,6 +403,7 @@ async def describe_image_file(p: Path, question: str = "Describe this image in d
                     or "(cloud vision model returned no text)")
         except Exception as e:
             print(f"[vision] cloud lane failed ({cm.key}): {e}")
+
     inst = small_models.instances["vision"]
     if not inst.available:
         return "error: vision model not configured in config.json (small_models.vision)"
@@ -373,20 +414,31 @@ async def describe_image_file(p: Path, question: str = "Describe this image in d
     return (data.get("choices") or [{}])[0].get("message", {}).get("content") or "(vision model returned no text)"
 
 
-# ---------------- Needle CPU router (fast lane, 0 VRAM) ----------------
+# ---------------- Dual CPU Routers: Needle-2 & Laya (0 VRAM) ----------------
 _needle_agent = None
 _needle_tools_names = None
 _needle_failed = False
 
+_laya_router = None
+_laya_failed = False
+
+
+def router_engine_name() -> str:
+    """Active router engine configured in app.json: 'cactus_needle' or 'laya'."""
+    eng = str(APP_CONFIG.get("router", {}).get("engine", "cactus_needle")).strip().lower()
+    if "laya" in eng:
+        return "laya"
+    return "cactus_needle"
+
 
 def needle_available() -> bool:
     global _needle_failed
-    if _needle_failed or not APP_CONFIG["router"].get("enabled", True):
+    if _needle_failed or not APP_CONFIG.get("router", {}).get("enabled", True):
         return False
     if _needle_agent is not None:
         return True
     try:
-        import needle
+        import needle  # noqa: F401
     except ImportError:
         _needle_failed = True
         return False
@@ -408,7 +460,7 @@ def needle_route(query: str, tools: list) -> Optional[dict]:
         if resp.get("type") != "call" or not resp.get("function_calls"):
             return None
         conf = float(resp.get("confidence") or 0.0)
-        threshold = float(APP_CONFIG["router"].get("confidence_threshold", 0.7))
+        threshold = float(APP_CONFIG.get("router", {}).get("confidence_threshold", 0.7))
         if conf < threshold:
             return None
         fc = resp["function_calls"][0]
@@ -418,4 +470,144 @@ def needle_route(query: str, tools: list) -> Optional[dict]:
         print(f"[server_manager] needle route failed: {e}", file=sys.stderr)
         _needle_failed = True
         return None
+
+
+def laya_available() -> bool:
+    global _laya_failed
+    if _laya_failed or not APP_CONFIG.get("router", {}).get("enabled", True):
+        return False
+    if _laya_router is not None:
+        return True
+    try:
+        import laya  # noqa: F401
+    except ImportError:
+        _laya_failed = True
+        return False
+    return True
+
+
+def _extract_simple_args(tool_name: str, query: str) -> dict:
+    """Extract common parameters from query deterministically for non-generative routers like Laya."""
+    q_clean = query.strip()
+    if tool_name == "list_files":
+        m_pat = re.search(r'(\*\.[\w]+|\*\*[\w/.*]+|\*\w+)', q_clean)
+        if m_pat:
+            return {"pattern": m_pat.group(1)}
+        return {}
+    elif tool_name == "read_file":
+        m_path = re.search(r'[\'"`]([^\'"`]+)[\'"`]', q_clean)
+        if m_path:
+            return {"path": m_path.group(1)}
+        m_file = re.search(r'([A-Za-z0-9_\-\\/]+\.[A-Za-z0-9]{1,6})', q_clean)
+        if m_file:
+            return {"path": m_file.group(1)}
+        return {}
+    elif tool_name == "grep":
+        m_q = re.search(r'[\'"`]([^\'"`]+)[\'"`]', q_clean)
+        if m_q:
+            return {"pattern": m_q.group(1)}
+        m_word = re.search(r'(?:grep(?:\s+for)?|search\s+for|find)\s+([^\s]+)', q_clean, re.IGNORECASE)
+        if m_word:
+            return {"pattern": m_word.group(1)}
+        return {"pattern": q_clean}
+    return {}
+
+
+def laya_route(query: str, tools: list) -> Optional[dict]:
+    """Route query using Laya System 1 decision engine strictly on CPU (0 VRAM)."""
+    if not laya_available():
+        return None
+    global _laya_router, _laya_failed
+    try:
+        laya_cfg = APP_CONFIG.get("router", {}).get("laya", {})
+        # Enforce CPU execution to ensure zero VRAM impact on Arc A770
+        target_device = "cpu"
+        
+        if _laya_router is None:
+            import laya
+            ckpt = laya_cfg.get("checkpoint", "convaiinnovations/laya")
+            subfolder = laya_cfg.get("subfolder")
+            preload = bool(laya_cfg.get("preload", False))
+            
+            try:
+                if hasattr(laya, "Router"):
+                    _laya_router = laya.Router(preload=preload, device=target_device)
+                else:
+                    _laya_router = laya.load(ckpt, subfolder=subfolder, device=target_device)
+            except Exception:
+                _laya_router = laya.load(ckpt, subfolder=subfolder, device=target_device)
+
+        plain = [t["function"] for t in tools if isinstance(t, dict) and "function" in t]
+        if not plain:
+            return None
+
+        # Build criteria for Laya question
+        criteria = {}
+        for t in plain:
+            name = t.get("name")
+            desc = t.get("description", name)
+            if name:
+                criteria[name] = desc[:150]
+        criteria["none"] = "None of the above tools apply or the user wants general conversational assistance"
+
+        questions = {
+            "selected_tool": {
+                "type": "choice",
+                "instructions": "Which tool should be invoked to satisfy the user's immediate request?",
+                "criteria": criteria
+            }
+        }
+        state_input = {"query": query, "body": query}
+
+        if hasattr(_laya_router, "predict"):
+            pred = _laya_router.predict(state_input, questions)
+        else:
+            pred = _laya_router(state_input, questions)
+
+        ans = pred.get("answers", {}).get("selected_tool", {})
+        chosen = ans.get("choice") or ans.get("answer")
+        conf = float(ans.get("confidence") or ans.get("probability") or 0.0)
+
+        threshold = float(APP_CONFIG.get("router", {}).get("confidence_threshold", 0.75))
+        if not chosen or chosen == "none" or chosen not in criteria or conf < threshold:
+            return None
+
+        args = _extract_simple_args(chosen, query)
+        reasoning = f"Laya CPU classified request to {chosen} (confidence: {conf:.2f})"
+        return {
+            "name": chosen,
+            "args": args,
+            "confidence": conf,
+            "reasoning": reasoning
+        }
+    except Exception as e:
+        print(f"[server_manager] laya route failed: {e}", file=sys.stderr)
+        _laya_failed = True
+        return None
+
+
+def router_available() -> bool:
+    """Check if the currently active router engine is available."""
+    eng = router_engine_name()
+    if eng == "laya":
+        return laya_available() or needle_available()
+    return needle_available() or laya_available()
+
+
+def router_route(query: str, tools: list) -> Optional[dict]:
+    """Unified route dispatcher according to app.json router.engine with fallback."""
+    eng = router_engine_name()
+    if eng == "laya":
+        res = laya_route(query, tools)
+        if res is not None:
+            return res
+        if _laya_failed and needle_available():
+            return needle_route(query, tools)
+        return None
+    res = needle_route(query, tools)
+    if res is not None:
+        return res
+    if needle_available() and laya_available():
+        return laya_route(query, tools)
+    return None
 

@@ -65,6 +65,7 @@ from routes import (
     chat_router,
     cloud_router,
     control_router,
+    db_explorer_router,
     git_router,
     input_guard_router,
     knowledge_router,
@@ -265,6 +266,7 @@ app.include_router(mcp_manager_router, dependencies=_authed)
 app.include_router(admin_rbac_router, dependencies=_authed)
 app.include_router(knowledge_router, dependencies=_authed)
 app.include_router(input_guard_router, dependencies=_authed)
+app.include_router(db_explorer_router, dependencies=_authed)
 # Reverse proxy catch-all must be mounted last
 app.include_router(proxy_router, dependencies=_authed)
 # Own auth handling (session cookie checked inside the socket handler) since

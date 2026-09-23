@@ -15,6 +15,8 @@ from core.small_model import (
     APP_CONFIG,
     small_models,
     needle_available,
+    router_available,
+    router_engine_name,
 )
 from core import cloud
 from core.auth import Principal
@@ -65,7 +67,8 @@ async def models_status(user: Principal = Depends(get_current_user)):
         },
         "router": {
             "enabled": bool(APP_CONFIG["router"].get("enabled", True)),
-            "available": needle_available(),
+            "engine": router_engine_name(),
+            "available": router_available(),
             "confidence_threshold": APP_CONFIG["router"].get("confidence_threshold", 0.7),
         },
         "project": get_active_project(),

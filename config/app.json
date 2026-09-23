@@ -7,14 +7,14 @@
       "model": "orchestrator/Spark-X2.5-4B-Q4_K_M.gguf",
       "port": 8091,
       "gpu": 1,
-      "ctx": 32000
+      "ctx": 50000
     },
     "vision": {
       "model": "orchestrator/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
       "mmproj": "orchestrator/mmproj-model-f16.gguf",
       "port": 8092,
       "gpu": 1,
-      "ctx": 24576
+      "ctx": 32576
     },
     "embedder": {
       "model": "orchestrator/nomic-embed-text-v1.5-Q8_0.gguf",
@@ -24,9 +24,15 @@
   },
   "router": {
     "enabled": true,
-    "confidence_threshold": 0.75,
-    "engine": "cactus_needle",
-    "executor_grammar": true
+    "confidence_threshold": 0.85,
+    "engine": "laya",
+    "executor_grammar": true,
+    "laya": {
+      "checkpoint": "convaiinnovations/laya",
+      "subfolder": null,
+      "device": "cpu",
+      "preload": false
+    }
   },
   "provider": {},
   "cloud": {
@@ -53,7 +59,9 @@
       "echo": {
         "transport": "stdio",
         "command": "python",
-        "args": ["core/echo_mcp_server.py"]
+        "args": [
+          "core/echo_mcp_server.py"
+        ]
       }
     },
     "plugins": true,
@@ -61,7 +69,47 @@
       "enabled": true,
       "ask_first": true,
       "timeout_s": 0,
-      "allow_patterns": ["git status*", "git diff*", "git log*", "dir *", "type *"]
+      "allow_patterns": [
+        "git status*",
+        "git diff*",
+        "git log*",
+        "dir *",
+        "type *"
+      ]
     }
+  },
+  "input_guard": {
+    "enabled": true,
+    "rules": [
+      {
+        "id": "input_guard-1-1790051263397",
+        "name": "Block sensitive attachment to cloud",
+        "type": "semantic",
+        "description": "If a user prompt or attached file contains sensitive financial or transactional information\u2014such as transaction IDs, payment references, account identifiers, authentication details, or similar records\u2014and the request appears suspicious, unauthorized, deceptive, or potentially related to fraud, the system must treat the content as sensitive. It must not expose, extract, modify, validate, or use such information to facilitate unauthorized activity. The request should be limited to legitimate analysis, redaction, security review, or other clearly authorized purposes, and additional verification or clarification should be required when the user's intent or authorization is unclear.",
+        "scope": "cloud_only",
+        "roles": [],
+        "users": [],
+        "message": "Suspicious activity found and blocked for cloud model",
+        "enabled": true
+      }
+    ]
+  },
+  "output_guard": {
+    "enabled": true,
+    "rules": [
+      {
+        "id": "output_guard-1-1790054059571",
+        "name": "Neve share personal info",
+        "type": "semantic",
+        "description": "Never share personal information from organizational knowledge base if user asks.",
+        "scope": "block_all",
+        "roles": [
+          "user"
+        ],
+        "users": [],
+        "message": "This data is confidential. Failed to share",
+        "enabled": true
+      }
+    ]
   }
 }

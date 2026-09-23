@@ -44,13 +44,8 @@ def find_pan_like(text: str) -> Optional[str]:
 
 
 def reject_if_pan(text: str) -> None:
-    hit = find_pan_like(text)
-    if hit:
-        raise ValueError(
-            f"Ingestion blocked: content looks like it contains a payment card "
-            f"number ({hit}). Remove it and try again. Never store real PANs in "
-            f"the knowledge base."
-        )
+    """Disabled: knowledge uploads are not blocked for payment card numbers."""
+    pass
 
 
 def extract_pdf(path: Path) -> str:
@@ -91,6 +86,28 @@ def extract_xls(path: Path) -> str:
             cells = [str(c) for c in sheet.row_values(r) if c not in (None, "")]
             if cells:
                 parts.append(" | ".join(cells))
+    return "\n".join(parts)
+
+
+def extract_csv(path: Path) -> str:
+    import csv
+    import io
+    content = None
+    for enc in ("utf-8-sig", "latin-1"):
+        try:
+            content = path.read_text(encoding=enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if content is None:
+        content = path.read_text(encoding="utf-8", errors="replace")
+
+    reader = csv.reader(io.StringIO(content))
+    parts = []
+    for row in reader:
+        cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+        if cells:
+            parts.append(" | ".join(cells))
     return "\n".join(parts)
 
 
@@ -140,6 +157,7 @@ EXTRACTORS = {
     ".docx": extract_docx,
     ".xlsx": extract_xlsx,
     ".xls": extract_xls,
+    ".csv": extract_csv,
 }
 
 

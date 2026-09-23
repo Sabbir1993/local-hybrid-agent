@@ -93,5 +93,5 @@ MODEL_CONFIG_KEYS = (
     "context_size", "n_gpu_layers", "threads", "threads_batch",
     "batch_size", "ubatch_size", "n_slots", "tensor_split", "split_mode",
     "flash_attn", "kv_cache_type", "mtp_enabled", "mtp_draft_n_max",
-    "keepalive_interval_s", "gpu_devices",
+    "keepalive_interval_s", "gpu_devices", "vision_capable",
 )

@@ -36,6 +36,9 @@ from core.small_model import (
     small_models,
     needle_route,
     needle_available,
+    router_route,
+    router_available,
+    router_engine_name,
 )
 from core.state import state
 from core import cloud
@@ -54,6 +57,8 @@ from core.agent_tools import (
     _remote_uid,
     _save_text_as_excel,
     _create_default_excel,
+    generate_fresh_dashboard_html,
+    tool_write_file_common,
 )
 from core import companion_bridge
 from core.registry import registry
@@ -128,6 +133,7 @@ class AgentRequest(BaseModel):
     plan: bool = False
     session_id: Optional[int] = None
     attachments: list[AttachedFile] = []
+    cloud_model_override: Optional[str] = None   # key of cloud model for executor/vision lanes
 
 
 AGENT_MAX_STEPS = 30
@@ -279,11 +285,23 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         mode = "all-local"
     cloud_main = cloud.cloud_lane("main", user.id)
     cloud_exec = cloud.cloud_lane("executor", user.id)
-    if mode == "all-local":
+    if mode in ("no-orchestration", "all-cloud", "direct"):
+        # No Orchestration mode: run every request directly on the selected model.
+        # Bypass executor tiered routing and router completely.
+        cloud_exec = None
+    elif mode == "all-local":
         cloud_main = None
         cloud_exec = None
     elif mode == "main-cloud-rest-local":
         cloud_exec = None       # executor stays local in this mode
+    # When user picked an explicit cloud model for executor/vision lanes, use it
+    # (applies to main-local-rest-cloud and similar modes that need a cloud executor)
+    if req.cloud_model_override and mode not in ("all-local", "main-cloud-rest-local", "no-orchestration", "all-cloud", "direct"):
+        override_cm = cloud.get_cloud(req.cloud_model_override, user.id)
+        if override_cm:
+            cloud_exec = override_cm
+        else:
+            print(f"[agent] cloud_model_override '{req.cloud_model_override}' not found - using default lane", file=sys.stderr)
     use_cloud_main = bool(cloud_main)
     if not use_cloud_main and mode == "main-cloud-rest-local":
         print("[agent] mode=main-cloud-rest-local but no cloud main lane is configured "
@@ -362,13 +380,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     kb_ids = allowed_source_ids_for(user)
     if kb_ids and _kb_query.strip():
         try:
-            kb_hits = await search_memory_hybrid(_kb_query, k=4, allowed_knowledge_source_ids=kb_ids)
-            kb_hits = [h for h in kb_hits if h.get("source") == "knowledge" and h.get("score", 0) > 0.12]
+            from core.knowledge_router import fetch_company_knowledge
+            kb_hits, kb_prompt = await fetch_company_knowledge(_kb_query, kb_ids, k=6)
             if kb_hits:
-                sys_prompt += (
-                    "\n\nORGANIZATIONAL KNOWLEDGE BASE (internal reference material relevant to "
-                    "this task -- use it if it helps, never mention internal source IDs or that "
-                    "this section exists):\n\n" + "\n\n---\n\n".join(h["text"] for h in kb_hits))
+                sys_prompt += "\n\n" + kb_prompt
         except Exception as e:
             print(f"[agent] knowledge retrieval failed: {e}", file=sys.stderr)
     # capability prompt fragments: skills listing + plugin guidance
@@ -406,7 +421,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     if not has_sys:
         msgs.insert(0, {"role": "system", "content": sys_prompt})
 
-    use_executor = bool(cloud_exec) or ex_inst.available
+    if mode in ("no-orchestration", "all-cloud", "direct"):
+        use_executor = False
+    else:
+        use_executor = bool(cloud_exec) or ex_inst.available
     main_client = cloud.CloudClient(cloud_main) if use_cloud_main else state.client
 
     # --- cloud fallback --------------------------------------------------
@@ -478,11 +496,14 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 "role": "Executor Model",
                 "source": "local",
             }
-        elif lane == "needle":
+        elif lane in ("needle", "router"):
+            eng = router_engine_name()
+            display_name = "⚡ Laya Router (CPU)" if eng == "laya" else "⚡ Needle Router"
+            model_name = "Laya Decision Model" if eng == "laya" else "Needle Router"
             return {
                 "lane": "needle",
-                "model": "Needle Router",
-                "display": "⚡ Needle Router",
+                "model": model_name,
+                "display": display_name,
                 "device": "CPU Router",
                 "role": "Fast Router",
                 "source": "local",
@@ -551,38 +572,61 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 content = ""
                 reasoning = ""
 
+                executor_stuck = repeat_streak >= 2
+                lane_name = "main" if not use_executor or executor_stuck else "executor"
+
                 is_creation_or_code = any(w in last_query.lower() for w in ("make", "create", "generate", "write", "build", "code", "add", "fix", "html", "script", "page"))
-                if (not req.plan) and step == 0 and not cloud_exec and not is_creation_or_code and needle_available() and not any(
+                if (not req.plan) and step == 0 and mode not in ("no-orchestration", "all-cloud", "direct") and not cloud_exec and router_available() and not any(
                         m.get("role") in ("tool", "assistant") for m in msgs[1:]):
-                    nr = await asyncio.get_event_loop().run_in_executor(
-                        None, needle_route, last_query, all_tools())
+                    r_model_info = get_model_info("needle")
+                    r_model_name = r_model_info.get("model", "Router")
+                    r_start = time.time()
+                    r_p_toks = max(1, len(last_query) // 4)
+                    r_rid = monitor_begin("agent/router", False, json.dumps({"query": last_query}).encode(),
+                                          model=r_model_name, source="local")
+
+                    nr = None
+                    if not is_creation_or_code:
+                        try:
+                            nr = await asyncio.get_event_loop().run_in_executor(
+                                None, router_route, last_query, all_tools())
+                        except Exception as e:
+                            print(f"[agent] router error: {e}", file=sys.stderr)
+
+                    r_duration = max(0.001, time.time() - r_start)
                     if nr:
-                        model_info = get_model_info("needle")
-                        yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
+                        r_c_toks = max(1, (len(nr.get("reasoning", "")) + len(json.dumps(nr.get("args", {})))) // 4)
+                        r_tps = round(r_c_toks / r_duration, 1) if r_duration > 0 else 50.0
+                        monitor_end(r_rid, 200, prompt_tokens=r_p_toks, completion_tokens=r_c_toks,
+                                    duration=r_duration, tps=r_tps, model=r_model_name, source="local")
+
+                        yield f"event: lane\ndata: {json.dumps(r_model_info)}\n\n"
                         if nr.get("reasoning"):
-                            yield f"event: thought\ndata: {json.dumps({'step': step + 1, 'text': nr['reasoning'], 'model': model_info['display']})}\n\n"
+                            yield f"event: thought\ndata: {json.dumps({'step': step + 1, 'text': nr['reasoning'], 'model': r_model_info['display']})}\n\n"
                         tc_id = "n0"
-                        yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': nr['name'], 'args': nr['args'], 'model': model_info['display'], 'device': model_info['device']})}\n\n"
+                        yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': nr['name'], 'args': nr['args'], 'model': r_model_info['display'], 'device': r_model_info['device']})}\n\n"
                         result = await run_tool(nr["name"], nr["args"])
                         ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
-                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': nr['name'], 'ok': ok, 'result': result, 'model': model_info['display']})}\n\n"
+                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': nr['name'], 'ok': ok, 'result': result, 'model': r_model_info['display']})}\n\n"
                         actions_taken.append({"name": nr["name"], "args": nr["args"], "ok": ok, "result": result})
-                        # Record needle request in usage.db
-                        needle_p = max(1, len(last_query) // 4)
-                        needle_c = max(1, (len(nr.get("reasoning", "")) + len(json.dumps(nr.get("args", {})))) // 4)
-                        db_record_request("agent/needle", model_info.get("model") or "orchestrator/needle",
-                                          needle_p, needle_c, 35.0, 0.1, None, False, 200,
+                        # Record in usage.db
+                        db_record_request("agent/router", r_model_name,
+                                          r_p_toks, r_c_toks, r_tps, r_duration, None, False, 200,
                                           prompt_cached_tokens=0, completion_cached_tokens=0, is_orchestrator=True,
-                                          source=model_info.get("source"), provider=model_info.get("provider_name"))
+                                          source=r_model_info.get("source"), provider=r_model_info.get("provider_name"))
                         msgs.append({"role": "assistant", "content": "",
                                      "tool_calls": [{"id": tc_id, "type": "function",
                                                      "function": {"name": nr["name"],
                                                                   "arguments": json.dumps(nr["args"])}}]})
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                         continue
-
-                executor_stuck = repeat_streak >= 2
-                lane_name = "main" if not use_executor or executor_stuck else "executor"
+                    else:
+                        # Router evaluated and chose fallback / passed to executor
+                        monitor_end(r_rid, 204, prompt_tokens=r_p_toks, completion_tokens=0,
+                                    duration=r_duration, tps=0.0, model=r_model_name, source="local")
+                        route_note = "creative/code query bypassed direct routing" if is_creation_or_code else "query requires general reasoning"
+                        r_disp = r_model_info.get("display", "Router")
+                        yield f"event: thought\ndata: {json.dumps({'step': step + 1, 'text': f'{r_disp}: {route_note} → handing off to {lane_name}', 'model': r_disp})}\n\n"
                 if executor_stuck:
                     print("[server_manager] executor repeating identical tool calls - escalating to main model", file=sys.stderr)
                 if lane_name == "executor":
@@ -648,6 +692,22 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                              'after_tokens': post_tokens}) + "\n\n")
                     if not cloud_exec:
                         step_grammar = _executor_grammar(tools_for_lane)
+                else:
+                    # Main lane context compaction: protect against context window explosion / VRAM demotion
+                    main_ctx = 32768
+                    if cloud_main:
+                        main_ctx = getattr(cloud_main, "ctx", 32768) or 32768
+                    elif state.profile_data and isinstance(state.profile_data, dict):
+                        main_ctx = state.profile_data.get("context_size", 32768)
+                    pre_tokens = estimate_prompt_tokens(msgs)
+                    budget = min(int(main_ctx * 0.7), 16384)
+                    if pre_tokens > budget:
+                        msgs[:] = compact_messages(msgs, budget)
+                        post_tokens = estimate_prompt_tokens(msgs)
+                        if post_tokens < pre_tokens:
+                            yield (f"event: ctx\ndata: "
+                                   + json.dumps({'lane': lane_name, 'before_tokens': pre_tokens,
+                                                 'after_tokens': post_tokens}) + "\n\n")
 
                 step_rid = monitor_begin(f"agent/{lane_name}", True, json.dumps({"messages": msgs}).encode(),
                                          model=model_info.get("model"), source=model_info.get("source"),
@@ -823,6 +883,23 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         return
                     val_text, was_synth, note = validate_and_finalize_response(
                         last_query, final_content, final_reasoning, actions_taken)
+
+                    # Ensure any file written or created during the agent session has a [DOWNLOAD: ...] badge
+                    created_files = []
+                    for act in actions_taken:
+                        if act.get("name") in ("write_file", "edit_file") and act.get("ok"):
+                            a_args = act.get("args") or {}
+                            f_path = a_args.get("path") or a_args.get("file") or a_args.get("filename")
+                            if f_path:
+                                c_name = Path(f_path).name
+                                if c_name not in created_files:
+                                    created_files.append(c_name)
+
+                    dl_badges = [f"[DOWNLOAD: {cf}]" for cf in created_files if f"[DOWNLOAD: {cf}]" not in val_text and f"download?path={cf}" not in val_text.lower()]
+                    if dl_badges:
+                        val_text = val_text.rstrip() + "\n\n" + "\n".join(dl_badges)
+                        was_synth = True
+
                     if was_synth and val_text != final_content:
                         _red.reset()
                         if not final_content.strip():
@@ -848,7 +925,20 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     if not val_err:
                         args = repaired_args
                     
-                    clean_args_str = json.dumps(args)
+                    # For history retention in msgs, prune large payloads to lightweight stubs
+                    # so future turns do not re-ingest tens of thousands of raw code characters
+                    hist_args = dict(args)
+                    if name in ("write_file", "edit_file"):
+                        if "content" in hist_args and len(str(hist_args["content"])) > 400:
+                            f_path = hist_args.get("path") or hist_args.get("file") or "file"
+                            c_len = len(str(hist_args["content"]))
+                            hist_args["content"] = f"<{c_len} chars written to {f_path}>"
+                        if "new_string" in hist_args and len(str(hist_args["new_string"])) > 400:
+                            f_path = hist_args.get("path") or hist_args.get("file") or "file"
+                            ns_len = len(str(hist_args["new_string"]))
+                            hist_args["new_string"] = f"<{ns_len} chars replaced in {f_path}>"
+
+                    clean_args_str = json.dumps(hist_args)
                     clean_tc = {
                         "id": tc_id,
                         "type": "function",
@@ -961,6 +1051,21 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 return
             val_text, was_synth, note = validate_and_finalize_response(
                 last_query, final_content, final_reasoning, actions_taken)
+            created_files = []
+            for act in actions_taken:
+                if act.get("name") in ("write_file", "edit_file") and act.get("ok"):
+                    a_args = act.get("args") or {}
+                    f_path = a_args.get("path") or a_args.get("file") or a_args.get("filename")
+                    if f_path:
+                        c_name = Path(f_path).name
+                        if c_name not in created_files:
+                            created_files.append(c_name)
+
+            dl_badges = [f"[DOWNLOAD: {cf}]" for cf in created_files if f"[DOWNLOAD: {cf}]" not in val_text and f"download?path={cf}" not in val_text.lower()]
+            if dl_badges:
+                val_text = val_text.rstrip() + "\n\n" + "\n".join(dl_badges)
+                was_synth = True
+
             if was_synth or not final_content.strip():
                 yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
             yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
@@ -1047,7 +1152,15 @@ async def agent_upload(files: list[UploadFile] = FastAPIFile(...), space: Option
 
 
 def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[Path]:
+    import re as _re
     p = None
+    clean_name = Path(path).name
+    raw_stem = Path(clean_name).stem
+    suffix = Path(clean_name).suffix.lower()
+    has_uuid = bool(_re.search(r'[-_][0-9a-fA-F]{8}$', raw_stem))
+    clean_stem = _re.sub(r'([-_][0-9a-fA-F]{8})+$', '', raw_stem)
+
+    # 1. If explicit space requested or specific revision uuid requested, try direct resolution first
     if space == "common":
         try:
             cand = _common_resolve(path)
@@ -1056,48 +1169,53 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
         except Exception:
             pass
 
-    if p is None:
+    if p is None and has_uuid:
         try:
             cand = _common_resolve(path)
             if cand.is_file():
                 p = cand
         except Exception:
             pass
+        if p is None:
+            try:
+                cand = _ws_resolve(path)
+                if cand.is_file():
+                    p = cand
+            except Exception:
+                pass
 
-    if p is None:
-        try:
-            cand = _ws_resolve(path)
-            if cand.is_file():
-                p = cand
-        except Exception:
-            pass
-
-    # UUID / stem prefix fuzzy match:
-    # If "sales_report.xlsx" was requested, check for "sales_report_*.xlsx" or "sales_report.*"
+    # 2. Candidate match: if unversioned or not found, find all candidate revisions
+    # and sort newest-first by modification time (so freshly generated files always take precedence over stale ones)
     if p is None or not p.is_file():
         try:
-            clean_name = Path(path).name
-            stem = Path(clean_name).stem
-            suffix = Path(clean_name).suffix.lower()
             cand_matches = []
             for ws_dir in (common_workspace(), active_workspace()):
                 if ws_dir and ws_dir.is_dir():
                     if suffix:
-                        cand_matches.extend([f for f in ws_dir.glob(f"{stem}_*{suffix}") if f.is_file()])
-                        cand_matches.extend([f for f in ws_dir.glob(f"{stem}*{suffix}") if f.is_file()])
-                    cand_matches.extend([f for f in ws_dir.glob(f"{stem}.*") if f.is_file()])
+                        cand_matches.extend([f for f in ws_dir.glob(f"{clean_stem}-*{suffix}") if f.is_file()])
+                        cand_matches.extend([f for f in ws_dir.glob(f"{clean_stem}_*{suffix}") if f.is_file()])
+                        exact_cand = ws_dir / f"{clean_stem}{suffix}"
+                        if exact_cand.is_file():
+                            cand_matches.append(exact_cand)
+                        cand_matches.extend([f for f in ws_dir.glob(f"{clean_stem}*{suffix}") if f.is_file()])
+                    cand_matches.extend([f for f in ws_dir.glob(f"{clean_stem}.*") if f.is_file()])
             if cand_matches:
-                cand_matches.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-                p = cand_matches[0]
+                seen_paths = set()
+                unique_cands = []
+                for c in sorted(cand_matches, key=lambda f: f.stat().st_mtime, reverse=True):
+                    resolved_c = str(c.resolve())
+                    if resolved_c not in seen_paths:
+                        seen_paths.add(resolved_c)
+                        unique_cands.append(c)
+                if unique_cands:
+                    p = unique_cands[0]
         except Exception:
             pass
 
-    # Fallback recovery: check if the file was created or provided in recent session messages
+    # 3. Fallback recovery: check if the file was created or provided in recent session messages
     if p is None or not p.is_file():
         try:
-            import re as _re
             from core.db import _projects_db
-            clean_name = Path(path).name
             rows = _projects_db.execute(
                 "SELECT content FROM messages WHERE content LIKE ? OR content LIKE ? ORDER BY id DESC LIMIT 10",
                 (f"%{clean_name}%", f"%[DOWNLOAD: {clean_name}]%")
@@ -1116,14 +1234,10 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
                         csv_m = _re.search(r'```(?:csv|tsv|excel)?\n([\s\S]+?)\n```', c_text, _re.IGNORECASE)
                         if csv_m:
                             cand_code = csv_m.group(1).strip()
-                    saved_path = common_workspace() / clean_name
-                    if cand_code:
-                        ok = _save_text_as_excel(saved_path, cand_code)
-                        if not ok:
-                            _create_default_excel(saved_path, c_text)
-                    else:
-                        _create_default_excel(saved_path, c_text)
-                    p = saved_path
+                    res_str = tool_write_file_common({"path": clean_name, "content": cand_code or c_text})
+                    m = _re.search(r"\[DOWNLOAD:\s*([^\]]+)\]", res_str or "")
+                    real_saved = m.group(1).strip() if m else clean_name
+                    p = common_workspace() / real_saved
                     break
 
                 if ext:
@@ -1139,37 +1253,24 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
                     if m:
                         cand_code = m.group(1).strip()
                 if not cand_code:
-                    title_clean = clean_name.replace('_', ' ').replace('-', ' ').title()
+                    title_clean = clean_stem.replace('_', ' ').replace('-', ' ').title()
                     if ext in {'html', 'htm'}:
-                        cand_code = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{title_clean}</title>
-<style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #f0f6fc; margin: 0; padding: 32px 24px; }}
-  .container {{ max-width: 800px; margin: 0 auto; background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 28px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }}
-  h1 {{ color: #79c0ff; font-size: 22px; margin-top: 0; border-bottom: 1px solid #30363d; padding-bottom: 12px; }}
-  p {{ color: #8b949e; font-size: 14px; line-height: 1.6; }}
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>⚡ {title_clean}</h1>
-  <p>{c_text.split('[DOWNLOAD:')[0].strip() or 'Generated sample file from runtime conversation.'}</p>
-</div>
-</body>
-</html>"""
+                        cand_code = generate_fresh_dashboard_html(title_clean, c_text.split('[DOWNLOAD:')[0].strip())
                     elif ext == 'csv':
                         cand_code = "ID,Name,Category,Status,Created\n1,Alpha,System,Active,2026-09-16\n2,Beta,Worker,Ready,2026-09-16\n3,Gamma,Orchestrator,Complete,2026-09-16"
                     elif ext == 'md':
                         cand_code = f"# {title_clean}\n\n{c_text}"
 
                 if cand_code:
-                    saved_path = common_workspace() / clean_name
-                    saved_path.write_text(cand_code, encoding="utf-8")
-                    p = saved_path
+                    res_str = tool_write_file_common({"path": clean_name, "content": cand_code})
+                    m = _re.search(r"\[DOWNLOAD:\s*([^\]]+)\]", res_str or "")
+                    real_saved = m.group(1).strip() if m else clean_name
+                    p = common_workspace() / real_saved
+                    # Also write unversioned copy as alias
+                    try:
+                        (common_workspace() / clean_name).write_text(cand_code, encoding="utf-8")
+                    except Exception:
+                        pass
                     break
         except Exception:
             pass
@@ -1395,6 +1496,7 @@ class VisionReq(BaseModel):
     image_b64: str
     mime: str = "image/png"
     question: str = "Describe this image in detail for a coding agent."
+    cloud_model_override: Optional[str] = None
 
 
 @router.post("/agent/vision")
@@ -1411,7 +1513,42 @@ async def agent_vision(req: VisionReq, user: Principal = Depends(get_current_use
         "temperature": 0.1,
     }
     body_bytes = json.dumps({"messages": [req.question]}).encode()
-    cm = cloud.cloud_lane("vision", user.id)
+
+    # ── Priority 1: Main Model if capable of vision ───────────────────────
+    # If the main model (local with --mmproj) is running and vision-capable,
+    # use it directly for vision tasks without spawning a secondary model.
+    main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
+    main_vision = main_ready and bool((state.profile or {}).get("vision_capable"))
+    if main_vision:
+        model_name = Path((state.profile or {}).get("model_path", "")).name or "Main LLM (vision)"
+        model_name = model_name.replace(".gguf", "")
+        rid = monitor_begin("agent/vision", False, body_bytes, model=model_name, source="local")
+        t0 = time.time()
+        try:
+            r = await state.client.post("/v1/chat/completions", json=payload, timeout=None)
+            state.last_activity = time.time()
+            data = r.json()
+            usage = data.get("usage") or {}
+            ptoks, ctoks = usage.get("prompt_tokens"), usage.get("completion_tokens")
+            dt = time.time() - t0
+            monitor_end(rid, 200, prompt_tokens=ptoks, completion_tokens=ctoks,
+                        tps=(ctoks / dt if ctoks and dt > 0 else None), duration=dt,
+                        model=model_name, source="local")
+            db_record_request("agent/vision", model_name, ptoks, ctoks,
+                               (ctoks / dt if ctoks and dt > 0 else None), dt, None, False, 200,
+                               is_orchestrator=True, source="local")
+            return {"description": (data.get("choices") or [{}])[0].get("message", {}).get("content") or "",
+                    "lane": "main", "model": model_name}
+        except Exception as e:
+            monitor_end(rid, 500, duration=time.time() - t0, source="local")
+            print(f"[agent/vision] main model vision failed ({model_name}): {e} - falling back to vision model", file=sys.stderr)
+
+    # ── Priority 2: Cloud Vision Lane (or override) ───────────────────────
+    cm = None
+    if req.cloud_model_override:
+        cm = cloud.get_cloud(req.cloud_model_override, user.id)
+    if not cm:
+        cm = cloud.cloud_lane("vision", user.id)
     if cm:
         rid = monitor_begin("agent/vision", False, body_bytes, model=cm.model_id, source="cloud", provider=cm.provider_name)
         t0 = time.time()
@@ -1431,7 +1568,9 @@ async def agent_vision(req: VisionReq, user: Principal = Depends(get_current_use
                     "lane": "cloud", "model": cm.display, "provider": cm.provider_name}
         except Exception as e:
             monitor_end(rid, 502, duration=time.time() - t0, source="cloud", provider=cm.provider_name)
-            return JSONResponse({"error": f"cloud vision lane failed ({cm.key}): {e}"}, status_code=502)
+            print(f"[agent/vision] cloud vision lane failed ({cm.key}): {e} - falling back to small vision model", file=sys.stderr)
+
+    # ── Priority 3: Dedicated small vision model ───────────────────────────
     inst = small_models.instances["vision"]
     if not inst.available:
         return JSONResponse({"error": "vision model not configured (config/app.json small_models.vision.model/mmproj)"}, status_code=400)

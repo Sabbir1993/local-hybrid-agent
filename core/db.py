@@ -68,7 +68,7 @@ def db_record_request(endpoint: str, model: Optional[str], prompt_tokens: Option
         m_lower = (model or "").lower()
         ep_lower = (endpoint or "").lower()
         if not is_orchestrator:
-            if "orchestrator" in m_lower or "orchestrator" in ep_lower or ep_lower.startswith("agent/executor") or ep_lower.startswith("agent/needle"):
+            if "orchestrator" in m_lower or "orchestrator" in ep_lower or ep_lower.startswith("agent/executor") or ep_lower.startswith("agent/needle") or ep_lower.startswith("agent/router"):
                 is_orchestrator = True
 
         _usage_db.execute(
@@ -213,9 +213,14 @@ def _init_projects_db() -> sqlite3.Connection:
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
         created_at REAL NOT NULL,
-        workspace_dir TEXT
+        workspace_dir TEXT,
+        allow_patterns TEXT DEFAULT '[]',
+        user_id INTEGER,
+        device_id TEXT DEFAULT 'default',
+        device_name TEXT DEFAULT 'Default Device',
+        UNIQUE(name, user_id, device_id)
     );
     CREATE TABLE IF NOT EXISTS sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,26 +256,33 @@ def _init_projects_db() -> sqlite3.Connection:
     if "allow_patterns" not in cols:
         conn.execute("ALTER TABLE projects ADD COLUMN allow_patterns TEXT DEFAULT '[]'")
     if "user_id" not in cols:
-        # nullable only for legacy pre-auth rows; every new row always sets it.
-        # No cross-file FK to auth.db -- ownership is enforced at the app layer
-        # in every db_* function below (mandatory owner_user_id parameter).
         conn.execute("ALTER TABLE projects ADD COLUMN user_id INTEGER")
+    if "device_id" not in cols:
+        conn.execute("ALTER TABLE projects ADD COLUMN device_id TEXT DEFAULT 'default'")
+    if "device_name" not in cols:
+        conn.execute("ALTER TABLE projects ADD COLUMN device_name TEXT DEFAULT 'Default Device'")
     session_cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)")]
     if "user_id" not in session_cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
 
-    # migration: the original schema had a *global* UNIQUE(name), which blocks
-    # two different users from ever having a same-named project. SQLite can't
-    # ALTER a column constraint, so rebuild the table with UNIQUE(name, user_id)
-    # if the old single-column unique index is still present. Idempotent.
-    name_only_unique = any(
-        [r["name"] for r in conn.execute(f"PRAGMA index_info('{idx['name']}')")] == ["name"]
-        for idx in conn.execute("PRAGMA index_list('projects')") if idx["unique"]
-    )
-    if name_only_unique:
+    # migration: check if UNIQUE(name, user_id, device_id) is present.
+    # If the unique index is missing, or is only UNIQUE(name) or UNIQUE(name, user_id),
+    # rebuild the table with UNIQUE(name, user_id, device_id).
+    has_user_dev_unique = False
+    for idx in conn.execute("PRAGMA index_list('projects')"):
+        if idx["unique"]:
+            idx_cols = sorted([r["name"] for r in conn.execute(f"PRAGMA index_info('{idx['name']}')")])
+            if idx_cols == ["device_id", "name", "user_id"]:
+                has_user_dev_unique = True
+                break
+
+    if not has_user_dev_unique:
         old_cols = [r[1] for r in conn.execute("PRAGMA table_info(projects)")]
         has_dev_id = "device_id" in old_cols
         has_dev_name = "device_name" in old_cols
+        has_allow_pats = "allow_patterns" in old_cols
+        has_uid = "user_id" in old_cols
+        conn.execute("PRAGMA foreign_keys = OFF;")
         conn.executescript(f"""
             ALTER TABLE projects RENAME TO projects_old;
             CREATE TABLE projects (
@@ -282,22 +294,19 @@ def _init_projects_db() -> sqlite3.Connection:
                 user_id INTEGER,
                 device_id TEXT DEFAULT 'default',
                 device_name TEXT DEFAULT 'Default Device',
-                UNIQUE(name, user_id)
+                UNIQUE(name, user_id, device_id)
             );
             INSERT INTO projects (id, name, created_at, workspace_dir, allow_patterns, user_id, device_id, device_name)
-                SELECT id, name, created_at, workspace_dir, allow_patterns, user_id,
-                       {'device_id' if has_dev_id else "'default'"},
-                       {'device_name' if has_dev_name else "'Default Device'"}
+                SELECT id, name, created_at, workspace_dir,
+                       {'allow_patterns' if has_allow_pats else "'[]'"},
+                       {'user_id' if has_uid else 'NULL'},
+                       {'COALESCE(device_id, "default")' if has_dev_id else "'default'"},
+                       {'COALESCE(device_name, "Default Device")' if has_dev_name else "'Default Device'"}
                 FROM projects_old;
             DROP TABLE projects_old;
         """)
+        conn.execute("PRAGMA foreign_keys = ON;")
 
-    # Ensure device columns exist on projects
-    cur_cols = [r[1] for r in conn.execute("PRAGMA table_info(projects)")]
-    if "device_id" not in cur_cols:
-        conn.execute("ALTER TABLE projects ADD COLUMN device_id TEXT DEFAULT 'default'")
-    if "device_name" not in cur_cols:
-        conn.execute("ALTER TABLE projects ADD COLUMN device_name TEXT DEFAULT 'Default Device'")
     conn.commit()
     return conn
 
@@ -442,7 +451,7 @@ def db_create_project(name: str, workspace_dir: str = None, workspace_root: Path
             (name, now, ws, owner_user_id, device_id or "default", device_name or "Default Device"))
         _projects_db.commit()
     except sqlite3.IntegrityError:
-        raise ValueError(f"project '{name}' already exists")
+        raise ValueError(f"project '{name}' already exists on this device")
     return {"id": cur.lastrowid, "name": name, "created_at": now, "workspace_dir": ws,
             "device_id": device_id or "default", "device_name": device_name or "Default Device"}
 
@@ -500,6 +509,18 @@ def db_rename_device(owner_user_id: int, new_name: str, device_id: Optional[str]
         )
     _projects_db.commit()
     return cur.rowcount
+
+
+def db_list_user_devices(owner_user_id: int) -> list:
+    """Return distinct devices registered across this user's projects."""
+    rows = _projects_db.execute(
+        """SELECT DISTINCT device_id, device_name
+           FROM projects
+           WHERE user_id = ? AND device_id IS NOT NULL AND device_id != ''
+           ORDER BY device_name""",
+        (owner_user_id,)
+    ).fetchall()
+    return [{"device_id": r["device_id"], "device_name": r["device_name"]} for r in rows]
 
 
 def db_delete_project(pid: int, owner_user_id: int) -> None:

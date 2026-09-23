@@ -26,7 +26,17 @@ class InputGuardSaveReq(BaseModel):
 
 
 def _public(cfg_key: str) -> dict:
-    cfg = dict(APP_CONFIG.get(cfg_key) or {}) if isinstance(APP_CONFIG.get(cfg_key), dict) else {}
+    cfg = APP_CONFIG.get(cfg_key)
+    if not isinstance(cfg, dict):
+        try:
+            if CONFIG_FILE.exists():
+                file_cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+                if isinstance(file_cfg.get(cfg_key), dict):
+                    cfg = file_cfg[cfg_key]
+                    APP_CONFIG[cfg_key] = cfg
+        except Exception:
+            pass
+    cfg = dict(cfg or {}) if isinstance(cfg, dict) else {}
     return {
         "enabled": bool(cfg.get("enabled", False)),
         "rules": cfg.get("rules") or [],

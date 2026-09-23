@@ -35,6 +35,10 @@ function renderMonitorRecent(list) {
       const cloudTag = r.source === 'cloud' ? '☁ ' : '';
       const title = r.source === 'cloud' && r.provider ? `${r.model} via ${r.provider} (cloud)` : r.model;
       mTag = `<span class="mon-model-tag" title="${esc(title)}">${cloudTag}${esc(r.model)}</span>`;
+      if (r.endpoint === 'agent/router') {
+        const routeStatus = r.status === 200 ? '⚡ routed' : 'pass-through';
+        mTag += ` <span class="mon-model-tag" title="Router decision">${routeStatus}</span>`;
+      }
     } else if (r.endpoint && r.endpoint.includes('executor')) {
       mTag = `<span class="mon-model-tag" title="Qwen2.5-VL-3B">Qwen2.5-VL-3B</span>`;
     }

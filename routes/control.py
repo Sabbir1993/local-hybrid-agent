@@ -23,6 +23,7 @@ from core.config import (
     CONFIG_CHOICE_FIELDS,
     CONFIG_TARGETS,
     MODEL_CONFIG_KEYS,
+    CLOUD_TIMEOUT_S,
 )
 from core.db import db_report
 from core.gpu import get_gpu_stats, get_hardware_engine_summary
@@ -30,6 +31,7 @@ from core.profiles import (
     MODELS_DIR,
     build_dynamic_profile,
     find_mtp_draft,
+    find_mmproj,
     save_model_config,
     load_model_configs,
     _model_key,
@@ -77,6 +79,11 @@ def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
         if isinstance(value, str):
             value = value.strip().lower() in ("true", "1", "on", "yes")
         profile["mtp_enabled"] = bool(value)
+        return None
+    if key == "vision_capable":
+        if isinstance(value, str):
+            value = value.strip().lower() in ("true", "1", "on", "yes")
+        profile["vision_capable"] = bool(value)
         return None
     if key in CONFIG_INT_FIELDS:
         lo, hi = CONFIG_INT_FIELDS[key]
@@ -136,11 +143,14 @@ def _config_for_profile(p: dict) -> dict:
         "mtp_draft_path": p.get("mtp_draft_path"),
         "mtp_enabled": bool(p.get("mtp_enabled", False)) if not p.get("mtp_draft_path") else bool(p.get("mtp_enabled", True)),
         "mtp_draft_n_max": p.get("mtp_draft_n_max", 3),
+        "mmproj_available": bool(p.get("mmproj_path")),
+        "mmproj_path": p.get("mmproj_path"),
+        "vision_capable": bool(p.get("vision_capable", False)) if not p.get("mmproj_path") else bool(p.get("vision_capable", True)),
     }
 
 
 def _standalone_profile(target: str) -> Optional[dict]:
-    """Profile dict for a selected-but-unloaded model: saved config + MTP detection.
+    """Profile dict for a selected-but-unloaded model: saved config + MTP & MMProj detection.
 
     Same merge logic build_dynamic_profile() uses at load time, so values shown
     and saved in the drawer match what the model will actually launch with.
@@ -162,7 +172,14 @@ def _standalone_profile(target: str) -> Optional[dict]:
         prof["tuned"]["n_gpu_layers"] = saved["n_gpu_layers"]
     if "tensor_split" in saved:
         prof["tuned"]["tensor_split"] = saved["tensor_split"]
-    prof["mtp_draft_path"] = str(find_mtp_draft(str(p)))
+    mtp = find_mtp_draft(str(p))
+    mmproj = find_mmproj(str(p))
+    prof["mtp_draft_path"] = str(mtp) if mtp else None
+    prof["mmproj_path"] = str(mmproj) if mmproj else None
+    if prof.get("mtp_draft_path"):
+        prof.setdefault("mtp_enabled", True)
+    if prof.get("mmproj_path"):
+        prof.setdefault("vision_capable", True)
     return prof
 
 
@@ -290,6 +307,8 @@ async def status(user: Principal = Depends(get_current_user)):
         "keepalive": state.keepalive_enabled,
         "mtp_enabled": bool(state.profile.get("mtp_enabled")) if state.profile else False,
         "mtp_draft_path": state.profile.get("mtp_draft_path") if state.profile else None,
+        "vision_capable": bool(state.profile.get("vision_capable")) if state.profile else False,
+        "mmproj_path": state.profile.get("mmproj_path") if state.profile else None,
         "context": ctx_info,
         # cloud lanes: the UI shows a ☁️ pill instead of "Model unloaded"
         "main_source": "cloud" if cm_main else "local",
@@ -329,6 +348,7 @@ async def profiles(user: Principal = Depends(get_current_user)):
                     continue
                 seen_paths.add(resolved_str)
                 mtp = find_mtp_draft(str(gfile))
+                mmproj = find_mmproj(str(gfile))
                 try:
                     size_gb = round(gfile.stat().st_size / (1024**3), 1)
                 except OSError:
@@ -342,6 +362,8 @@ async def profiles(user: Principal = Depends(get_current_user)):
                     "model_exists": True,
                     "mtp_available": bool(mtp),
                     "mtp_draft_path": str(mtp) if mtp else None,
+                    "mmproj_available": bool(mmproj),
+                    "mmproj_path": str(mmproj) if mmproj else None,
                     "size_gb": size_gb,
                     "family": family,
                 })
@@ -521,17 +543,19 @@ async def switch(req: SwitchRequest, user: Principal = Depends(get_current_user)
 @router.get("/control/monitor")
 async def monitor():
     now = time.time()
-    STALE_S = 120
-    for rid in list(_monitor_state["active"].keys()):
-        req = _monitor_state["active"][rid]
-        if now - req["last_token_s"] > STALE_S:
-            _monitor_state["active"].pop(rid, None)
-            req.update({
-                "status": 499, "completion_tokens": req.get("gen_tokens"),
-                "duration_s": round(now - req["start"], 2), "tps": None,
-                "prompt_tps": None, "end": now, "stale": True,
-            })
-            _monitor_state["recent"].append(req)
+    # Stale watchdog: -1 disables the timeout so long generations/summaries are never reaped as 499
+    STALE_S = -1
+    if STALE_S > 0:
+        for rid in list(_monitor_state["active"].keys()):
+            req = _monitor_state["active"][rid]
+            if now - req["last_token_s"] > STALE_S:
+                _monitor_state["active"].pop(rid, None)
+                req.update({
+                    "status": 499, "completion_tokens": req.get("gen_tokens"),
+                    "duration_s": round(now - req["start"], 2), "tps": None,
+                    "prompt_tps": None, "end": now, "stale": True,
+                })
+                _monitor_state["recent"].append(req)
     if len(_monitor_state["recent"]) > MONITOR_RECENT_MAX:
         _monitor_state["recent"] = _monitor_state["recent"][-MONITOR_RECENT_MAX:]
     active = []

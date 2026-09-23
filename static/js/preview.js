@@ -119,6 +119,8 @@ async function openFilePreview(filePath, title = '', directContent = null) {
       renderExcelPreview(buf, contentEl, controlsEl);
     } else if (ext === 'pdf') {
       renderPdfPreview(rawUrl, contentEl, controlsEl);
+    } else if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'ico'].includes(ext) || (filePath && filePath.startsWith('http') && !filePath.includes('.pdf') && !filePath.includes('.csv'))) {
+      renderImagePreview(filePath && filePath.startsWith('http') ? filePath : rawUrl, contentEl, controlsEl);
     } else if (ext === 'md') {
       let text = directContent;
       if (!text && filePath) {
@@ -475,6 +477,32 @@ function renderPdfPreview(url, container, controls) {
   }).catch(err => {
     container.innerHTML = `<div style="padding:24px; color:var(--red); font-size:12px;">Failed to load PDF: ${esc(err.message)}</div>`;
   });
+}
+
+// 5b. Image Viewer
+function renderImagePreview(url, container, controls) {
+  controls.innerHTML = `
+    <button class="btn ghost device-toggle-btn" id="btn-img-zoom-in" title="Zoom In">🔍＋</button>
+    <button class="btn ghost device-toggle-btn" id="btn-img-zoom-out" title="Zoom Out">🔍－</button>
+    <button class="btn ghost device-toggle-btn" id="btn-img-zoom-reset" title="Reset Zoom">100%</button>
+    <a class="btn ghost device-toggle-btn" href="${url}" target="_blank" rel="noopener">↗ Open Full</a>
+  `;
+  container.innerHTML = `
+    <div id="modal-img-viewport" style="flex:1; overflow:auto; display:flex; align-items:center; justify-content:center; padding:24px; background:var(--bg); user-select:none;">
+      <img src="${url}" style="max-width:100%; max-height:100%; object-fit:contain; border-radius:8px; box-shadow:0 8px 30px rgba(0,0,0,0.5); transition:transform 0.15s ease;" />
+    </div>
+  `;
+  const imgEl = container.querySelector('img');
+  let currentZoom = 1.0;
+  function applyZoom() {
+    if (imgEl) imgEl.style.transform = `scale(${currentZoom})`;
+  }
+  const inBtn = controls.querySelector('#btn-img-zoom-in');
+  const outBtn = controls.querySelector('#btn-img-zoom-out');
+  const resetBtn = controls.querySelector('#btn-img-zoom-reset');
+  if (inBtn) inBtn.onclick = () => { currentZoom = Math.min(4.0, currentZoom + 0.25); applyZoom(); };
+  if (outBtn) outBtn.onclick = () => { currentZoom = Math.max(0.25, currentZoom - 0.25); applyZoom(); };
+  if (resetBtn) resetBtn.onclick = () => { currentZoom = 1.0; applyZoom(); };
 }
 
 // 6. Markdown Modal Preview

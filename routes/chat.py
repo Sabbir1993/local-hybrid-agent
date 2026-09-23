@@ -23,8 +23,8 @@ from core.small_model import APP_CONFIG, small_models
 from core import cloud
 from core.state import state
 from core.registry import registry
-from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch
-from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA
+from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch, tool_web_search_images
+from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA, generate_fresh_dashboard_html
 from core.agent_loop import (
     run_tool,
     safe_parse_and_repair_args,
@@ -111,9 +111,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     # Tools for Chat Mode: Always equip write_file (saves to shared common space)
     chat_tools = [CHAT_WRITE_FILE_SCHEMA]
+    from core.agent_tools import AGENT_TOOLS
+    skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
+    if skb:
+        chat_tools.append(skb)
     if use_web:
         register_web_tools()
-        for t_name in ("web_search", "web_fetch"):
+        for t_name in ("web_search", "web_fetch", "web_search_images"):
             rt = registry.get(t_name)
             if rt and rt.schema:
                 chat_tools.append(rt.schema)
@@ -122,23 +126,18 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if req.system_prompt and req.system_prompt.strip():
         sys_parts.append(req.system_prompt.strip())
 
-    # Organizational knowledge base: permission-scoped retrieval BEFORE scoring
-    # (allowed_source_ids_for gates the candidate pool itself), so a user with
-    # no access to a document never gets a hint it exists -- "nothing found"
-    # falls out naturally instead of being a special case to get wrong.
+    # Organizational knowledge base: permission-scoped routing & retrieval
     kb_ids = allowed_source_ids_for(user)
     kb_used = False
+    kb_hits = []
     if kb_ids and last_query.strip():
         try:
-            kb_hits = await search_memory_hybrid(last_query, k=4, allowed_knowledge_source_ids=kb_ids)
-            kb_hits = [h for h in kb_hits if h.get("source") == "knowledge" and h.get("score", 0) > 0.12]
+            from core.knowledge_router import is_company_or_kb_query, fetch_company_knowledge
+            is_company = is_company_or_kb_query(last_query, kb_ids)
+            kb_hits, kb_prompt_block = await fetch_company_knowledge(last_query, kb_ids, k=6)
             if kb_hits:
                 kb_used = True
-                kb_text = "\n\n---\n\n".join(h["text"] for h in kb_hits)
-                sys_parts.append(
-                    "ORGANIZATIONAL KNOWLEDGE BASE (internal reference material relevant to this "
-                    "query -- use it if it helps answer, cite naturally, never mention internal "
-                    "source IDs or that this section exists):\n\n" + kb_text)
+                sys_parts.append(kb_prompt_block)
         except Exception as e:
             print(f"[chat] knowledge retrieval failed: {e}", file=sys.stderr)
 
@@ -147,14 +146,21 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         "You have the capability to create, write, generate, or fill files using the `write_file(path, content)` tool.\n"
         "All files you write are automatically saved to the shared common storage space and made available as direct download links.\n\n"
         "RULES FOR FILES:\n"
-        "1. When the user asks to create, fill, write, generate, or share a file (e.g. 'fill data on that excel file and share with me', 'create data.csv', 'make a script'):\n"
+        "1. When the user asks to create, fill, write, generate, or share a file (e.g. 'fill data on that excel file and share with me', 'create data.csv', 'make a script', 'create resume.pdf', 'make a presentation', 'create an HTML dashboard'):\n"
         "   - NEVER refuse by saying 'I don't have the ability to directly edit or open local files on your computer'.\n"
-        "   - Call `write_file(path=..., content=...)` immediately with the full content or data rows.\n"
-        "2. For Excel spreadsheets (.xlsx) or CSV files, provide the tabular data rows in `content` with a filename that describes the actual content (e.g. path='<topic>_<date>.xlsx', not a placeholder). It will automatically be created as a real, valid spreadsheet workbook.\n"
-        "3. When you generate or write a file, you MUST include a download link in your final response using this exact syntax:\n"
+        "   - Call `write_file(path=..., content=...)` immediately with the complete content, code, or data rows.\n"
+        "   - If not calling `write_file`, you MUST provide the complete, rich, runnable code inside a markdown code block (e.g. ```html ... ```). NEVER output `[DOWNLOAD: filename]` alone without either calling `write_file` or outputting the complete code block.\n"
+        "2. For Excel spreadsheets (.xlsx) or CSV files, provide the tabular data rows in `content` with a descriptive filename. It will automatically be created as a real, valid spreadsheet workbook.\n"
+        "3. For PDF files (.pdf) and presentations (.pptx), provide clean, well-structured document or presentation content using `write_file(path='filename.pdf', content=...)`. It will automatically be compiled into a publication-ready PDF or presentation. CRITICAL: NEVER mention, display, or acknowledge to the user that any intermediate HTML generation or conversion is happening under the hood. Present it strictly as direct PDF or presentation creation.\n"
+        "4. All files generated in common storage automatically append a unique revision ID to ensure media and documents are never duplicated or overwritten.\n"
+        "5. When you generate or write a file, you MUST include a download link in your final response using this exact syntax:\n"
         "   [DOWNLOAD: filename]\n"
-        "   CRITICAL: `filename` here MUST be byte-for-byte identical (same name, same extension) to the `path` you just passed to `write_file` - never invent, abbreviate, or change the extension of a filename you already wrote.\n"
-        "   The user interface will automatically convert `[DOWNLOAD: filename]` into a clickable download button."
+        "   The user interface will automatically convert `[DOWNLOAD: filename]` into a clickable download and preview button.\n"
+        "6. ANTI-HALLUCINATION POLICY FOR COMPANY & INTERNAL DATA:\n"
+        "   When the user asks questions about the company, employee records, internal policies, or company knowledge base, "
+        "NEVER invent fake employee names, placeholder records, or fictional datasets. NEVER call `write_file` to create "
+        "sample or dummy CSV/Excel spreadsheets unless the user explicitly requested a file export (e.g. 'export this to CSV' or 'save as Excel file'). "
+        "Answer with the authentic internal company knowledge base data provided in the prompt."
     )
     sys_parts.append(file_prompt)
 
@@ -162,14 +168,16 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         web_prompt = (
             "You are a helpful, knowledgeable, and accurate AI assistant equipped with LIVE REAL-TIME INTERNET BROWSING & SEARCH.\n"
             "You have access to web tools:\n"
-            "- `web_search(query)`: Search the live web (DuckDuckGo) to retrieve up-to-date facts, current news, documentation, releases, or any information you are uncertain about or do not know.\n"
+            "- `web_search(query)`: Search the live web to retrieve up-to-date facts, current news, documentation, releases, or any information you are uncertain about or do not know.\n"
+            "- `web_search_images(query)`: Search the live web specifically for photos, pictures, portraits, logos, diagrams, and images. Returns image URLs and thumbnails.\n"
             "- `web_fetch(url)`: Fetch and read the full readable text content of any website or page URL.\n\n"
             "CRITICAL OPERATING RULES:\n"
             "1. YOU HAVE ACTIVE REAL-TIME INTERNET ACCESS. NEVER say 'I cannot browse the live internet' or 'I don't have internet access'.\n"
             "2. When the user provides a URL or asks to inspect, read, browse, or summarize a website (e.g. 'summarise https://...'), call `web_fetch(url=...)` immediately.\n"
             "3. When the user asks about recent events, real-time facts, current versions, weather, or anything outside your certain knowledge, call `web_search(query=...)` immediately.\n"
-            "4. If you are confident in your knowledge (e.g. general explanations, basic math, creative writing, common programming concepts), answer directly without calling tools.\n"
-            "5. When answering based on web search or fetch results, synthesize a clear, helpful response and provide citations or links using markdown [Title](URL)."
+            "4. When the user asks for a photo, picture, image, or portrait (e.g. 'Can you give his photo?', 'show a picture of...'), call `web_search_images(query=...)` immediately, and in your final answer include the image links using markdown image syntax `![Description](URL)`.\n"
+            "5. If you are confident in your knowledge (e.g. general explanations, basic math, creative writing, common programming concepts), answer directly without calling tools.\n"
+            "6. When answering based on web search or fetch results, synthesize a clear, helpful response and provide citations or links using markdown [Title](URL) or `![Title](URL)` for images."
         )
         sys_parts.append(web_prompt)
 
@@ -207,7 +215,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         chat_rid = monitor_begin("chat/run", True, json.dumps({"messages": msgs}).encode(),
                                  model=clean_model_name, source=model_source, provider=model_provider)
         t0 = time.time()
-        max_turns = 4 if chat_tools else 1
+        max_turns = 6 if chat_tools else 1
         written_files = []
         # --- Output sanitizer: redact model deltas before they reach the
         # client (cloud_only rules only fire while the lane is cloud; the
@@ -247,8 +255,19 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": res_str})
                         continue
 
+                # Turn 0 proactive Knowledge Base routing: if user query routed to company knowledge base
+                if turn == 0 and kb_used and kb_hits:
+                    tc_id = "kb_fetch_0"
+                    source_names = ", ".join(sorted(set(h.get("title", "") for h in kb_hits)))
+                    yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': 'search_knowledge_base', 'args': {'query': last_query}})}\n\n"
+                    yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': 'search_knowledge_base', 'ok': True, 'result': f'Retrieved {len(kb_hits)} records from company knowledge base ({source_names})'})}\n\n"
+
                 res_dict = None
                 streamed_content = []
+
+                # On the final allowed turn, if tools were run previously, force tools=None
+                # so the model is forced to formulate the final answer to the user.
+                current_tools = None if (turn == max_turns - 1 and msgs and msgs[-1].get("role") == "tool") else chat_tools
 
                 if cloud_main and cloud.cloud_bindings(user.id).get("fallback_local", True):
                     fb_local = None
@@ -261,10 +280,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         except Exception as e:
                             print(f"[chat] local fallback unavailable: {e}", file=sys.stderr)
                     chat_stream = common._llm_chat_stream_with_fallback(
-                        main_client, fb_local, msgs, chat_tools, req.temperature,
+                        main_client, fb_local, msgs, current_tools, req.temperature,
                         req.max_tokens, rid=chat_rid, lane="main")
                 else:
-                    chat_stream = _llm_chat_stream(main_client, msgs, tools=chat_tools, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid)
+                    chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid)
                 async for ev, val in chat_stream:
                     if ev == "fallback":
                         fb_name = state.profile.get("model_path", "") if state.profile else ""
@@ -383,7 +402,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 # turn that only answered from the knowledge base - that's a Q&A
                 # reply citing KB text, not a file-creation request.
                 _file_verb_re = r'(fill|write|save|create|generate|make|export|download|share)\w*'
-                _file_noun_re = r'(excel|spreadsheet|workbook|csv|\.xlsx|\.xls|\.csv|\.json|\.py|\.html|\.txt|\.docx|\.pptx)\b'
+                _file_noun_re = r'(excel|spreadsheet|workbook|csv|\.xlsx|\.xls|\.csv|\.json|\.py|\.html|\.txt|\.docx|\.pptx|\.ppt|\.pdf|pdf|presentation|slides|deck)\b'
                 is_file_intent = (not kb_used) and bool(
                     _re.search(_file_verb_re + r'.{0,25}' + _file_noun_re, last_query, _re.IGNORECASE)
                     or _re.search(_file_noun_re + r'.{0,25}' + _file_verb_re, last_query, _re.IGNORECASE)
@@ -418,60 +437,29 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             tbl_m = _re.search(r'(\|.+?\|\n\|[\s\-:|]+\|\n(?:\|.+?\|\n?)+)', content)
                             if tbl_m:
                                 cand_code = tbl_m.group(1).strip()
+                        if not cand_code and ext in {'pdf', 'pptx', 'ppt'}:
+                            # Extract the text or markdown prior to the download tag for the PDF/presentation
+                            cand_code = content.split('[DOWNLOAD:')[0].strip()
                         if not cand_code:
                             # Model mentioned [DOWNLOAD: filename] but forgot to output the code block
                             # Generate a complete standalone HTML/document file based on the topic
                             title_clean = clean_fname.replace('_', ' ').replace('-', ' ').title()
                             if ext in {'html', 'htm'}:
-                                cand_code = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{title_clean}</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #f0f6fc; margin: 0; padding: 32px 24px; }}
-  .container {{ max-width: 820px; margin: 0 auto; background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 32px; box-shadow: 0 12px 32px rgba(0,0,0,0.6); }}
-  h1 {{ color: #79c0ff; font-size: 24px; margin-top: 0; border-bottom: 1px solid #30363d; padding-bottom: 14px; display: flex; align-items: center; gap: 10px; }}
-  p {{ color: #8b949e; font-size: 14.5px; line-height: 1.65; }}
-  .card {{ background: #21262d; border: 1px solid #30363d; border-radius: 10px; padding: 20px; margin: 20px 0; }}
-  .mermaid {{ display: flex; justify-content: center; padding: 16px; background: rgba(0,0,0,0.25); border-radius: 8px; }}
-  .steps {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 18px; }}
-  .step {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }}
-  .step b {{ color: #79c0ff; display: block; margin-bottom: 6px; }}
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>⚡ {title_clean}</h1>
-  <p>{content.split('[DOWNLOAD:')[0].strip() or 'Autonomous coding agent loop visualization with interactive components.'}</p>
-  <div class="card">
-    <div class="mermaid">
-      graph TD
-        User[User Request] --> Agent[Dual A770 Orchestrator]
-        Agent --> Plan{{Needs Tool Action?}}
-        Plan -- Yes --> Tools[Execute Tool / Python / Web]
-        Tools --> Inspect[Inspect Result & Verify]
-        Inspect --> Agent
-        Plan -- No --> Solved[Final Verified Answer]
-    </div>
-  </div>
-  <div class="steps">
-    <div class="step"><b>1. Model Input</b><p style="margin:0; font-size:12.5px;">Prompt reasoning with KV-cache awareness.</p></div>
-    <div class="step"><b>2. Tool Action</b><p style="margin:0; font-size:12.5px;">Real-time file writing and sandbox executions.</p></div>
-    <div class="step"><b>3. Continuous Loop</b><p style="margin:0; font-size:12.5px;">Self-correcting verification of results.</p></div>
-  </div>
-</div>
-<script>mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});</script>
-</body>
-</html>"""
+                                cand_code = generate_fresh_dashboard_html(title_clean, content.split('[DOWNLOAD:')[0].strip())
                             elif ext in ('csv', 'xlsx', 'xls'):
                                 cand_code = "ID,Name,Category,Status,Created\n1,Alpha,System,Active,2026-09-16\n2,Beta,Worker,Ready,2026-09-16\n3,Gamma,Orchestrator,Complete,2026-09-16"
+                            elif ext in ('pptx', 'ppt'):
+                                cand_code = f"# {title_clean}\n---\n## Agenda\n- Executive Summary\n- Key Metrics & Analysis\n- Next Steps"
+                            elif ext == 'pdf':
+                                cand_code = f"# {title_clean}\n\n{content.split('[DOWNLOAD:')[0].strip() or 'Document compilation.'}"
 
                         if cand_code:
                             res_str = tool_write_file_common({"path": clean_fname, "content": cand_code})
-                            written_files.append(_saved_filename(res_str, clean_fname))
+                            real_saved = _saved_filename(res_str, clean_fname)
+                            written_files.append(real_saved)
+                            if real_saved != clean_fname and content:
+                                content = _re.sub(rf'\[DOWNLOAD:\s*{_re.escape(clean_fname)}\]', f'[DOWNLOAD: {real_saved}]', content)
+                                yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
 
                 if (is_file_refusal or is_file_intent) and turn == 0 and not tool_calls:
@@ -489,15 +477,24 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                     if data_to_save:
                         fname_cand = None
-                        f_matches = _re.findall(r'[\w\-.]+\.(?:xlsx|xls|csv|json|py|html|txt|md)', last_query, _re.IGNORECASE)
+                        f_matches = _re.findall(r'[\w\-.]+\.(?:xlsx|xls|csv|json|py|html|txt|md|pdf|pptx|ppt)', last_query, _re.IGNORECASE)
                         if f_matches:
                             fname_cand = f_matches[0]
                         if not fname_cand:
-                            c_matches = _re.findall(r'[\w\-.]+\.(?:xlsx|xls|csv|json|py|html|txt|md)', content, _re.IGNORECASE)
+                            c_matches = _re.findall(r'[\w\-.]+\.(?:xlsx|xls|csv|json|py|html|txt|md|pdf|pptx|ppt)', content, _re.IGNORECASE)
                             if c_matches:
                                 fname_cand = c_matches[0]
                         if not fname_cand:
-                            fname_cand = "data.xlsx" if ("excel" in last_query.lower() or "excel" in content.lower()) else "data.csv"
+                            lq_low = last_query.lower()
+                            c_low = content.lower()
+                            if "pdf" in lq_low or "pdf" in c_low:
+                                fname_cand = "document.pdf"
+                            elif "ppt" in lq_low or "slide" in lq_low or "presentation" in lq_low:
+                                fname_cand = "presentation.pptx"
+                            elif "excel" in lq_low or "excel" in c_low:
+                                fname_cand = "data.xlsx"
+                            else:
+                                fname_cand = "data.csv"
 
                         # tool_write_file_common() always concatenates a unique id onto
                         # this base name before saving, so every generation lands on its
@@ -532,6 +529,28 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         return
 
                 if not tool_calls or not chat_tools:
+                    # Guard against empty/blank assistant response:
+                    if not (content and content.strip()):
+                        if reasoning and len(reasoning.strip()) > 15:
+                            content = reasoning.strip()
+                            yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+                        else:
+                            last_tool_results = [m.get("content", "") for m in msgs if m.get("role") == "tool"]
+                            if last_tool_results:
+                                summary_lines = []
+                                for tr in last_tool_results[-3:]:
+                                    cleaned_tr = str(tr).strip()
+                                    if not cleaned_tr.startswith("error:"):
+                                        summary_lines.append(cleaned_tr[:500])
+                                if summary_parts := summary_lines:
+                                    content = "I searched for information on your query:\n\n" + "\n\n---\n\n".join(summary_parts)
+                                else:
+                                    content = "Search completed, but no relevant details were returned."
+                                yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+                            else:
+                                content = "I have processed your request."
+                                yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+
                     if written_files:
                         for wf in written_files:
                             if f"[DOWNLOAD: {wf}]" not in (content or "") and f"download?path={wf}" not in (content or "").lower():
@@ -582,6 +601,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         if t_name == "web_search":
                             q = args.get("query") or args.get("q") or ""
                             res_str = await tool_web_search({"query": q})
+                        elif t_name == "web_search_images":
+                            q = args.get("query") or args.get("q") or ""
+                            res_str = await tool_web_search_images({"query": q})
                         elif t_name == "web_fetch":
                             u = args.get("url") or ""
                             res_str = await tool_web_fetch({"url": u})
@@ -597,6 +619,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                 # transcript scraping (or DOWNLOAD-tag echoing) downstream
                                 # picks up the real on-disk filename instead.
                                 args["path"] = real_name
+                                orig_clean = Path(p_name).name
+                                if orig_clean != real_name and content:
+                                    content = _re.sub(rf'\[DOWNLOAD:\s*{_re.escape(orig_clean)}\]', f'[DOWNLOAD: {real_name}]', content)
+                                    yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
                         else:
                             res_str = await run_tool(t_name, args)
                         ok = not (isinstance(res_str, str) and (res_str.startswith("error:") or res_str.startswith("File not found")))
@@ -606,16 +632,86 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                     yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': t_name, 'ok': ok, 'result': res_str})}\n\n"
 
+                    hist_args = dict(args)
+                    if t_name in ("write_file", "edit_file"):
+                        if "content" in hist_args and len(str(hist_args["content"])) > 400:
+                            f_path = hist_args.get("path") or hist_args.get("file") or "file"
+                            c_len = len(str(hist_args["content"]))
+                            hist_args["content"] = f"<{c_len} chars written to {f_path}>"
+
                     clean_tool_calls.append({
                         "id": tc_id,
                         "type": "function",
-                        "function": {"name": t_name, "arguments": json.dumps(args)}
+                        "function": {"name": t_name, "arguments": json.dumps(hist_args)}
                     })
                     tool_results_list.append((tc_id, res_str))
 
                 msgs.append({"role": "assistant", "content": content or "", "tool_calls": clean_tool_calls})
                 for tid, r_out in tool_results_list:
                     msgs.append({"role": "tool", "tool_call_id": tid, "content": r_out})
+
+            # Guaranteed synthesis pass: if the turn loop finished and the last message in msgs is a tool response,
+            # the model executed tools but hasn't yet synthesized the final text answer for the user.
+            # Call the model with tools=None to force it to formulate a comprehensive final answer!
+            if msgs and msgs[-1].get("role") == "tool":
+                streamed_content = []
+                res_dict = None
+                if cloud_main and cloud.cloud_bindings(user.id).get("fallback_local", True):
+                    fb_local = None
+                    target = state.profile_path or state.profile or common.initial_profile_path
+                    if target:
+                        try:
+                            if state.process is None or state.process.poll() is not None:
+                                await state.load_profile(target)
+                            fb_local = state.client
+                        except Exception:
+                            pass
+                    final_stream = common._llm_chat_stream_with_fallback(
+                        main_client, fb_local, msgs, None, req.temperature,
+                        req.max_tokens, rid=chat_rid, lane="main")
+                else:
+                    final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid)
+
+                async for ev, val in final_stream:
+                    if ev == "thought_delta":
+                        yield f"event: thought_delta\ndata: {json.dumps({'delta': val})}\n\n"
+                    elif ev == "content_delta":
+                        _safe = redactor.feed(val)
+                        streamed_content.append(_safe)
+                        if _safe:
+                            yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
+                        _n = _guard_notice()
+                        if _n:
+                            yield _n
+                    elif ev == "result":
+                        res_dict = val
+
+                _tail = redactor.flush()
+                if _tail:
+                    streamed_content.append(_tail)
+                    yield f"event: delta\ndata: {json.dumps({'text': _tail})}\n\n"
+                content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
+                if res_dict and res_dict.get("reasoning"):
+                    reasoning = res_dict["reasoning"]
+
+            # Robust fallback: if content is still empty, never terminate silently without output
+            if not (content and content.strip()):
+                if reasoning and len(reasoning.strip()) > 15:
+                    content = reasoning.strip()
+                    yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+                else:
+                    last_tool_results = [m.get("content", "") for m in msgs if m.get("role") == "tool"]
+                    if last_tool_results:
+                        summary_lines = ["I searched for information on your query:\n"]
+                        for tr in last_tool_results[-3:]:
+                            cleaned_tr = str(tr).strip()[:500]
+                            if not cleaned_tr.startswith("error:"):
+                                summary_lines.append(cleaned_tr)
+                        content = "\n\n---\n\n".join(summary_lines)
+                        yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+                    else:
+                        content = "I have processed your request."
+                        yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
 
             if written_files:
                 for wf in written_files:

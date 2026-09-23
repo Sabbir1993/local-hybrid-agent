@@ -106,13 +106,14 @@ def check_repair() -> tuple:
 
 
 def check_needle() -> tuple:
-    from core.small_model import needle_available, needle_route
+    from core.small_model import router_available, router_route, router_engine_name
     from core.agent_tools import AGENT_TOOLS
-    if not needle_available():
-        return None, "needle not installed - skipped"
-    nr = needle_route("list all files in directory", AGENT_TOOLS)
-    assert nr is None or isinstance(nr, dict), "needle_route returned garbage"
-    return True, f"needle ok (route: {nr['name'] if nr else 'no confident match'})"
+    eng = router_engine_name()
+    if not router_available():
+        return None, f"router ({eng}) not installed or unavailable - skipped"
+    nr = router_route("list all files in directory", AGENT_TOOLS)
+    assert nr is None or isinstance(nr, dict), "router_route returned garbage"
+    return True, f"router ({eng}) ok (route: {nr['name'] if nr else 'no confident match'})"
 
 
 def check_compact_endpoint() -> tuple:

@@ -1,10 +1,10 @@
 {
-  "ts": 1789800818.3881135,
+  "ts": 1790052147.9557452,
   "offline": [
     {
       "name": "grammar",
       "status": "PASS",
-      "note": "grammar ok (13 tools, 16 rules, 808-char few-shot)"
+      "note": "grammar ok (14 tools, 16 rules, 808-char few-shot)"
     },
     {
       "name": "compaction",
@@ -24,12 +24,12 @@
     {
       "name": "needle_router",
       "status": "PASS",
-      "note": "needle ok (route: list_files)"
+      "note": "router (cactus_needle) ok (route: list_files)"
     },
     {
       "name": "compact_endpoint",
-      "status": "PASS",
-      "note": "compact endpoint ok (2283 -> 795 tokens)"
+      "status": "FAIL",
+      "note": "agent mode without project must 400, got 401"
     }
   ],
   "live": []

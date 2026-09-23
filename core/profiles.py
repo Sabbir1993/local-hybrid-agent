@@ -113,14 +113,47 @@ def find_mtp_draft(model_path: str) -> Optional[Path]:
     return None
 
 
+def find_mmproj(model_path: str) -> Optional[Path]:
+    """Locate a multimodal projector (mmproj) for a given main GGUF.
+
+    Searches for ``*mmproj*.gguf`` files in the model's directory and in
+    MODELS_DIR, requiring that the projector filename matches the model family
+    or stem, exactly like MTP draft detection.
+    """
+    target = Path(model_path)
+    if not target.exists():
+        return None
+    search_dirs = {target.parent, MODELS_DIR}
+    # 1. Exact sibling matches: mmproj-<target.stem>.gguf or <target.stem>-mmproj.gguf
+    for d in search_dirs:
+        for name in (f"mmproj-{target.stem}.gguf", f"{target.stem}-mmproj.gguf"):
+            exact = d / name
+            if exact.exists():
+                return exact
+    # 2. Family match: e.g. "ornith" in mmproj-Ornith-..., "qwen3.5" in mmproj-Qwen3.5-...
+    family = target.stem.split("-")[0].lower()
+    candidates: list = []
+    for d in search_dirs:
+        if d.is_dir():
+            candidates.extend(d.glob("*mmproj*.gguf"))
+    candidates = list(dict.fromkeys(candidates))
+    family_hits = sorted(c for c in candidates if family in c.stem.lower())
+    if family_hits:
+        return family_hits[0]
+    return None
+
+
 def build_dynamic_profile(p: Path) -> dict:
     """Profile dict for a raw GGUF picked from the models directory."""
+    mtp = find_mtp_draft(str(p))
+    mmproj = find_mmproj(str(p))
     prof = {
         "name": p.stem,
         "description": f"Dynamic GGUF model ({p.name})",
         "model_type": "dense",
         "model_path": str(p),
-        "mtp_draft_path": str(find_mtp_draft(str(p))),
+        "mtp_draft_path": str(mtp) if mtp else None,
+        "mmproj_path": str(mmproj) if mmproj else None,
     }
     for k, v in CONFIG_DEFAULTS.items():
         prof.setdefault(k, v)
@@ -133,7 +166,8 @@ def build_dynamic_profile(p: Path) -> dict:
         if k in saved:
             prof[k] = saved[k]
 
-    prof["mtp_draft_path"] = str(find_mtp_draft(str(p)))
-    if prof["mtp_draft_path"]:
+    if prof.get("mtp_draft_path"):
         prof.setdefault("mtp_enabled", True)
+    if prof.get("mmproj_path"):
+        prof.setdefault("vision_capable", True)
     return prof

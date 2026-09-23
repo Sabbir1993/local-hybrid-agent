@@ -91,5 +91,13 @@ def build_launch_command(profile: dict) -> list[str]:
             ]
         else:
             print(f"[server_manager] WARNING: MTP draft not found: {draft} - launching without MTP")
+    # Multimodal projector: launch main model with vision support when mmproj exists
+    if profile.get("vision_capable") and profile.get("mmproj_path"):
+        mmproj = Path(profile["mmproj_path"])
+        if mmproj.exists():
+            cmd += ["--mmproj", str(mmproj)]
+            print(f"[server_manager] vision_capable: loading main model with mmproj={mmproj.name}")
+        else:
+            print(f"[server_manager] WARNING: mmproj not found: {mmproj} - launching without vision support")
     cmd += profile.get("server_extra_args", [])
     return cmd

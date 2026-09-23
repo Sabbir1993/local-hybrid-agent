@@ -32,6 +32,7 @@ PERMISSIONS = {
     "audit.view": "Read the audit log",
     "chat.use": "Use chat / agent features",
     "settings.input_guard": "Configure the input sanitizer (cloud-block patterns, prohibited prompt types, role restrictions)",
+    "database.manage": "Inspect system & workspace SQLite databases and execute SQL queries",
     "settings.shell.configure": "Edit the global shell command allowlist (capabilities.shell)",
 }
 

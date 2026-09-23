@@ -173,6 +173,64 @@ ipcMain.handle("fs:mkdir", async (event, args) => {
   }
 });
 
+function getMachineId() {
+  try {
+    if (process.platform === "win32") {
+      const { execSync } = require("child_process");
+      const out = execSync("reg query HKLM\\SOFTWARE\\Microsoft\\Cryptography /v MachineGuid", {
+        encoding: "utf8",
+        timeout: 5000,
+        windowsHide: true,
+      });
+      const match = out.match(/MachineGuid\s+REG_SZ\s+(\S+)/i);
+      if (match && match[1]) {
+        const clean = match[1].replace(/[^a-zA-Z0-9]/g, "").slice(0, 16).toLowerCase();
+        return `dev_win_${clean}`;
+      }
+    } else if (process.platform === "linux") {
+      const fs = require("fs");
+      const idPath = fs.existsSync("/etc/machine-id") ? "/etc/machine-id" : "/var/lib/dbus/machine-id";
+      if (fs.existsSync(idPath)) {
+        const id = fs.readFileSync(idPath, "utf8").trim().replace(/[^a-zA-Z0-9]/g, "").slice(0, 16).toLowerCase();
+        if (id) return `dev_lnx_${id}`;
+      }
+    } else if (process.platform === "darwin") {
+      const { execSync } = require("child_process");
+      const out = execSync("ioreg -rd1 -c IOPlatformExpertDevice", { encoding: "utf8", timeout: 5000 });
+      const match = out.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
+      if (match && match[1]) {
+        const clean = match[1].replace(/[^a-zA-Z0-9]/g, "").slice(0, 16).toLowerCase();
+        return `dev_mac_${clean}`;
+      }
+    }
+  } catch (e) {
+    console.error("[getMachineId] Failed to read OS machine ID:", e);
+  }
+
+  // Persistent fallback in user home folder (survives app reinstall)
+  try {
+    const fs = require("fs");
+    const idPath = path.join(os.homedir(), ".antigravity_device_id");
+    if (fs.existsSync(idPath)) {
+      const saved = fs.readFileSync(idPath, "utf8").trim();
+      if (saved) return saved;
+    }
+    const newId = "dev_" + Math.random().toString(36).substring(2, 10) + "_" + Date.now().toString(36);
+    fs.writeFileSync(idPath, newId, "utf8");
+    return newId;
+  } catch (_) {
+    return "dev_default";
+  }
+}
+
+ipcMain.on("system:getDeviceIdSync", (event) => {
+  event.returnValue = getMachineId();
+});
+
+ipcMain.handle("system:getDeviceId", () => {
+  return getMachineId();
+});
+
 function scheduleReconnect() {
   if (reconnectTimer) return;
   reconnectTimer = setTimeout(async () => {

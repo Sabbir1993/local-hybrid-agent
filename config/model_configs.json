@@ -36,7 +36,7 @@
     "threads_batch": 0,
     "batch_size": 2048,
     "ubatch_size": 512,
-    "n_slots": 2,
+    "n_slots": 1,
     "tensor_split": "9,11",
     "split_mode": "layer",
     "flash_attn": "on",
@@ -108,5 +108,46 @@
       1,
       2
     ]
+  },
+  "ornith-1.5-9b-q4_k_m.gguf": {
+    "context_size": 132768,
+    "n_gpu_layers": 999,
+    "threads": 0,
+    "threads_batch": 0,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "n_slots": 1,
+    "tensor_split": "9,11",
+    "split_mode": "layer",
+    "flash_attn": "auto",
+    "kv_cache_type": "q8_0",
+    "mtp_enabled": true,
+    "mtp_draft_n_max": 3,
+    "keepalive_interval_s": 25,
+    "gpu_devices": [
+      1,
+      2
+    ]
+  },
+  "qwen2.5-coder-14b-instruct-q4_k_m.gguf": {
+    "context_size": 128000,
+    "n_gpu_layers": 999,
+    "threads": 0,
+    "threads_batch": 0,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "n_slots": 1,
+    "tensor_split": "9,11",
+    "split_mode": "layer",
+    "flash_attn": "auto",
+    "kv_cache_type": "q8_0",
+    "mtp_enabled": false,
+    "mtp_draft_n_max": 3,
+    "keepalive_interval_s": 25,
+    "gpu_devices": [
+      1,
+      2
+    ],
+    "vision_capable": false
   }
 }

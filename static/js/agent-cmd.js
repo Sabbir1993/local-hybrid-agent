@@ -365,6 +365,8 @@ function setAppMode(isAgent, isUserSwitch = false) {
   if (planSel) planSel.style.display = agentMode ? 'inline-block' : 'none';
   const eng = $('agent-engine');
   if (eng) eng.style.display = agentMode ? 'inline-block' : 'none';
+  // cloud model picker: visible in agent mode when mode needs a cloud executor
+  if (typeof _updateCloudModelSelVisibility === 'function') _updateCloudModelSelVisibility();
   const webToggle = $('btn-web-toggle');
   if (webToggle) webToggle.style.display = agentMode ? 'none' : 'flex';
   if (agentMode && window._setPlanMode) window._setPlanMode(planMode);   // refresh placeholder

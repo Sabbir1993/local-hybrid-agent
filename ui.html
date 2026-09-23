@@ -10,7 +10,7 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=3.2">
+<link rel="stylesheet" href="/static/css/style.css?v=3.3">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
@@ -32,9 +32,8 @@
           <button id="btn-newproject" class="btn ghost" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;" title="Create project with optional custom local directory">＋ New</button>
         </div>
       </div>
-      <div id="device-bar" style="display:flex; align-items:center; justify-content:space-between; padding:2px 4px 6px; font-size:10px; color:var(--dim); border-bottom:1px solid var(--border); margin-bottom:4px;">
-        <span id="device-label-text" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px;" title="Current device">💻 This Device</span>
-        <button type="button" class="btn ghost" id="btn-rename-device" style="width:auto; margin:0; padding:1px 6px; font-size:9.5px;" title="Rename this device">✎ rename</button>
+      <div id="device-bar" style="display:flex; align-items:center; padding:2px 4px 6px; font-size:10px; color:var(--dim); border-bottom:1px solid var(--border); margin-bottom:4px;">
+        <span id="device-label-text" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; width:100%;" title="Current device">💻 This Device</span>
       </div>
       <div id="projects-list" style="overflow-y:auto; display:flex; flex-direction:column; gap:3px; max-height:190px; padding-right:2px;">
       </div>
@@ -70,6 +69,7 @@
       <button id="btn-settings" class="btn ghost icon-btn" title="Hardware status (GPUs), model launch parameters, cloud providers, capabilities, users &amp; knowledge base, sampling &amp; runtime">⚙️ Settings</button>
       <button id="btn-monitor" class="btn ghost icon-btn" data-perm="monitor.view" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">📡 Monitor</button>
       <button id="btn-report" class="btn ghost icon-btn" data-perm="usage.report.view" title="Token usage report: prompts vs completions, per-model and per-day totals">📊 Report</button>
+      <button id="btn-db" class="btn ghost icon-btn" data-perm="database.manage" title="Database Explorer &amp; SQL Query Console: inspect tables, schema, and execute SQL">🗄️ Database</button>
       <button id="btn-docs" class="btn ghost icon-btn" title="Step-by-step guide: connect any OpenAI-compatible agent to this runtime">📖 Docs</button>
       <button id="btn-user-menu" class="btn ghost icon-btn" title="Account">👤</button>
     </header>
@@ -113,9 +113,12 @@
             </button>
             <select id="agent-engine" style="display:none;" class="comp-select" title="Agent orchestration engine - which model serves each lane">
               <option value="all-local" selected>🖥 All Local (GPU)</option>
-              <option value="main-local-rest-cloud">⚡ Main Local - Rest Cloud</option>
-              <option value="main-cloud-rest-local">☁ Main Cloud - Rest Local</option>
-              <option value="all-cloud">☁ All Cloud</option>
+              <option value="main-local-rest-cloud">⚡ Main Local · Rest Cloud</option>
+              <option value="main-cloud-rest-local">☁ Main Cloud · Rest Local</option>
+              <option value="no-orchestration">⚡ No Orchestration</option>
+            </select>
+            <select id="cloud-model-sel" style="display:none;" class="comp-select" title="Cloud model for rest lanes (executor & vision)">
+              <option value="">☁ Pick cloud model…</option>
             </select>
             <button id="btn-send" class="comp-btn" title="Send prompt (Enter)">➤</button>
             <button id="btn-abort" class="comp-btn" style="display:none" title="Cancel active generation">■</button>
@@ -274,6 +277,95 @@
     <div id="rep-content"><div class="mon-empty">Loading…</div></div>
   </div>
 </div>
+
+<div id="db-modal" hidden>
+  <div id="db-box">
+    <div class="db-modal-header">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:16px;">🗄️</span>
+        <h2 style="margin:0; font-size:14.5px; font-weight:700; letter-spacing:0.3px;">Database Explorer &amp; SQL Console</h2>
+      </div>
+      <button class="rep-close" id="db-modal-close" title="Close (Esc)">✕</button>
+    </div>
+
+    <!-- Top control bar: database selector & info badge -->
+    <div class="db-top-bar">
+      <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:240px;">
+        <label for="db-select" style="font-size:11px; font-weight:700; color:var(--dim); text-transform:uppercase; letter-spacing:0.8px;">Database:</label>
+        <select id="db-select" class="db-select-el"></select>
+      </div>
+      <div id="db-info-badge" class="db-info-badge"></div>
+    </div>
+
+    <!-- Main split pane -->
+    <div class="db-split-body">
+      <!-- Left sidebar: table list -->
+      <div class="db-sidebar">
+        <div class="db-sidebar-head">
+          <span style="font-size:10px; font-weight:700; color:var(--dim); text-transform:uppercase; letter-spacing:1px;">Tables &amp; Views</span>
+          <input type="text" id="db-table-filter" placeholder="Filter tables…" class="db-filter-input">
+        </div>
+        <div id="db-table-list" class="db-table-list">
+          <div class="dim" style="padding:10px; font-size:11px; text-align:center;">Loading tables…</div>
+        </div>
+      </div>
+
+      <!-- Right main area: editor & results / schema tabs -->
+      <div class="db-main-pane">
+        <!-- Editor section -->
+        <div class="db-editor-box">
+          <div class="db-editor-toolbar">
+            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+              <button id="db-btn-run" class="btn accent" style="width:auto; margin:0; padding:5px 14px; font-weight:700; font-size:11.5px;" title="Execute SQL query (Ctrl+Enter)">▶ Run</button>
+              <button id="db-btn-clear" class="btn ghost" style="width:auto; margin:0; padding:5px 10px; font-size:11.5px;" title="Clear query editor">✕ Clear</button>
+              <select id="db-preset-select" class="db-tool-select" title="Insert query snippet">
+                <option value="">⚡ Snippets / Presets…</option>
+                <option value="select_50">SELECT * (First 50)</option>
+                <option value="count">Count total rows</option>
+                <option value="columns">Inspect columns (PRAGMA)</option>
+                <option value="tables">List all tables (sqlite_master)</option>
+                <option value="recent_requests">Recent 20 API requests (usage.db)</option>
+                <option value="users_roles">Users &amp; Assigned Roles (auth.db)</option>
+              </select>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+              <select id="db-history-select" class="db-tool-select" title="Recall recent query">
+                <option value="">📜 Recent Queries</option>
+              </select>
+              <button id="db-btn-export" class="btn ghost" style="width:auto; margin:0; padding:5px 10px; font-size:11.5px;" disabled title="Export query result table to CSV">📥 CSV</button>
+            </div>
+          </div>
+          <textarea id="db-sql-input" class="db-sql-textarea mono" rows="4" placeholder="Enter SQL query here… (e.g. SELECT * FROM users;) · Press Ctrl+Enter to execute" spellcheck="false"></textarea>
+          <div class="db-editor-footer">
+            <div id="db-status-bar" class="db-status-bar">Ready · Press Ctrl+Enter to execute</div>
+            <span class="dim" style="font-size:10px;">Max 500 rows returned · Mutating queries auto-commit</span>
+          </div>
+        </div>
+
+        <!-- Output tabs -->
+        <div class="db-tabs-bar">
+          <button id="db-tab-results" class="db-tab-btn active" type="button">📊 Query Results</button>
+          <button id="db-tab-schema" class="db-tab-btn" type="button">📐 Table Schema &amp; DDL</button>
+        </div>
+
+        <!-- Results view -->
+        <div id="db-view-results" class="db-tab-view active">
+          <div id="db-results-container" class="db-results-container">
+            <div class="dim" style="padding:24px; text-align:center; font-size:12px;">Query output will appear here. Select a table on the left to preview it.</div>
+          </div>
+        </div>
+
+        <!-- Schema view -->
+        <div id="db-view-schema" class="db-tab-view" style="display:none;">
+          <div id="db-schema-details" class="db-schema-details">
+            <div class="dim" style="padding:24px; text-align:center; font-size:12px;">Select a table on the left to inspect its schema columns and DDL definition.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="docs-modal" hidden>
   <div id="docs-box">
     <h2>📖 Connect an Agent <button class="rep-close" id="docs-close">✕</button></h2>
@@ -368,6 +460,28 @@ Full instructions the agent reads via read_skill.</pre>
         <p class="doc-note"><b>See everything registered:</b> Settings → 🧩 Capabilities shows every tool from every source with status and toggles — or open <code>http://localhost:8000/control/capabilities</code> in a browser for the full JSON listing (web tools, skills, MCP servers + their tools, plugins, total count).</p>
       </div>
     </div>
+    <div class="doc-step">
+      <div class="doc-num">7</div>
+      <div>
+        <b>Fast CPU Router: Switch between Needle-2 and Laya (0 VRAM)</b>
+        <p>The agent uses a CPU router for instant sub-step tool routing without touching GPU VRAM. You can switch engines anytime in <code>config/app.json</code>:</p>
+        <pre class="doc-code">"router": {
+  "enabled": true,
+  "confidence_threshold": 0.75,
+  "engine": "cactus_needle",  // change to "laya" to switch
+  "executor_grammar": true,
+  "laya": {
+    "checkpoint": "convaiinnovations/laya",
+    "subfolder": null,
+    "device": "cpu",
+    "preload": false
+  }
+}</pre>
+        <p><b>🌵 Cactus Needle-2</b> (<code>"engine": "cactus_needle"</code>): 45M compact model (~14MB binary). Grammar-constrained tool and argument extraction. Requires <code>pip install needle</code>.</p>
+        <p><b>⚡ Convai Laya</b> (<code>"engine": "laya"</code>): 421M ModernBERT System 1 decision engine on CPU (<code>device="cpu"</code>). High-accuracy semantic routing and calibrated probabilities. Requires <code>pip install laya</code>.</p>
+        <p class="doc-note">Both engines operate completely on CPU (0 MB VRAM), preserving 100% of Arc A770 GPU memory for your primary models.</p>
+      </div>
+    </div>
   </div>
 </div>
 <div id="perm-modal" hidden>
@@ -458,21 +572,22 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/sampling.js?v=1.0"></script>
 <script src="/static/js/preview.js?v=2.5"></script>
 <script src="/static/js/gpu-status.js?v=3.0"></script>
-<script src="/static/js/chat.js?v=3.1"></script>
+<script src="/static/js/chat.js?v=3.2"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
 <script src="/static/js/monitor.js?v=3.0"></script>
 <script src="/static/js/capabilities.js?v=2.5"></script>
 <script src="/static/js/git.js?v=1.0"></script>
 <script src="/static/js/usage-report.js?v=2.5"></script>
+<script src="/static/js/db-explorer.js?v=1.0"></script>
 <script src="/static/js/config.js?v=3.0"></script>
 <script src="/static/js/cloud.js?v=3.0"></script>
 <script src="/static/js/attachments.js?v=2.5"></script>
-<script src="/static/js/projects.js?v=3.4"></script>
+<script src="/static/js/projects.js?v=3.5"></script>
 <script src="/static/js/workspace.js?v=2.7"></script>
 <script src="/static/js/dnd.js?v=1.0"></script>
 <script src="/static/js/agent-cmd.js?v=3.1"></script>
 <script src="/static/js/agent-acts.js?v=2.5"></script>
-<script src="/static/js/agent-run.js?v=3.1"></script>
+<script src="/static/js/agent-run.js?v=3.2"></script>
 <script src="/static/js/compact.js?v=2.9"></script>
 <script src="/static/js/export.js?v=1.0"></script>
 <script src="/static/js/main.js?v=3.1"></script>

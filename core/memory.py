@@ -334,7 +334,8 @@ def _session_id_from_path(path: str) -> Optional[int]:
 
 
 async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optional[int] = None,
-                                allowed_knowledge_source_ids: Optional[set] = None) -> list:
+                                allowed_knowledge_source_ids: Optional[set] = None,
+                                sources: Optional[set] = None) -> list:
     """Hybrid recall: 0.5*cosine + 0.5*lexical (lexical-only without embedder).
 
     Strict per-user isolation: "session"-sourced chunks (past chat titles/first
@@ -348,10 +349,19 @@ async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optio
     which is what makes silence (no hit) safe instead of a leaky special case.
     When allowed_knowledge_source_ids is None, all knowledge chunks are
     excluded (callers must pass an explicit set, even if empty, to opt in).
+
+    If `sources` is given (e.g. {'knowledge'}), entries are pre-filtered to
+    only those sources before scoring and top-k truncation.
     """
     entries = _load_entries()
     if not entries:
         return []
+
+    if sources is not None:
+        entries = [e for e in entries if e[0] in sources]
+        if not entries:
+            return []
+
     if requesting_user_id is not None or allowed_knowledge_source_ids is not None:
         from .db import db_session_owner
         filtered = []
@@ -403,6 +413,115 @@ async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optio
         results.append({"source": source, "path": path, "text": text, "score": score})
     results.sort(key=lambda r: r["score"], reverse=True)
     return results[:max(1, k)]
+
+
+async def search_knowledge_hybrid(query: str, k: int = 6,
+                                  allowed_knowledge_source_ids: Optional[set] = None) -> list:
+    """Dedicated knowledge base retrieval scoped exclusively to allowed knowledge sources.
+
+    Includes title-aware boosting from auth_db so broad company inquiries (e.g.
+    'I want data from company knowledge base' or 'show employee base') reliably surface
+    the relevant source chunks rather than starving out.
+    """
+    if not allowed_knowledge_source_ids:
+        return []
+
+    # Check titles of allowed knowledge sources from auth_db
+    source_titles = {}
+    try:
+        from .auth_db import list_knowledge_sources
+        for ks in list_knowledge_sources():
+            if ks["id"] in allowed_knowledge_source_ids and ks["status"] == "ready":
+                source_titles[ks["id"]] = ks["title"]
+    except Exception as e:
+        print(f"[memory] failed reading knowledge source titles: {e}", file=sys.stderr)
+
+    entries = [e for e in _load_entries() if e[0] == "knowledge"]
+    if not entries:
+        return []
+
+    # Pre-filter by allowed source IDs
+    filtered = []
+    for source, path, text, v in entries:
+        kid = _knowledge_id_from_path(path)
+        if kid is not None and kid in allowed_knowledge_source_ids:
+            filtered.append((source, path, text, v, kid))
+    entries = filtered
+    if not entries:
+        return []
+
+    qv = await _embed_texts([query])
+    qvec = qv[0] if qv else None
+
+    q_lower = query.lower()
+    words = [w.lower() for w in re.findall(r"\w{3,}", query)][:10]
+
+    # Detect if query explicitly matches source titles or is a broad company inquiry
+    matched_title_kids = set()
+    for kid, title in source_titles.items():
+        t_words = [tw.lower() for tw in re.findall(r"\w{3,}", title)]
+        if any(tw in q_lower for tw in t_words) or any(tw in words for tw in t_words):
+            matched_title_kids.add(kid)
+
+    is_broad_kb = any(phrase in q_lower for phrase in (
+        "company knowledge base", "knowledge base", "company info", "company data",
+        "our company", "all data", "show data", "employee base", "emplyee base",
+        "employee data", "what data", "internal data", "company documents"
+    ))
+
+    lex_raw, cos_raw, title_boost = [], [], []
+    for _source, _path, text, v, kid in entries:
+        tl = text.lower()
+        lex = float(sum(tl.count(w) for w in words))
+        # Extra lexical boost if source title words appear in text
+        if kid in source_titles:
+            s_title = source_titles[kid].lower()
+            lex += float(sum(tl.count(tw) for tw in re.findall(r"\w{3,}", s_title)))
+        lex_raw.append(lex)
+
+        if qvec is not None and v is not None:
+            if _np is not None:
+                a = _np.asarray(qvec, dtype=_np.float32)
+                b = _np.asarray(v, dtype=_np.float32)
+                denom = float(_np.linalg.norm(a) * _np.linalg.norm(b))
+                cos_val = float(_np.dot(a, b) / denom) if denom > 1e-9 else 0.0
+            else:
+                dot = sum(x * y for x, y in zip(qvec, v))
+                na = sum(x * x for x in qvec) ** 0.5
+                nb = sum(y * y for y in v) ** 0.5
+                cos_val = dot / (na * nb) if na * nb > 1e-9 else 0.0
+            cos_raw.append(cos_val)
+        else:
+            cos_raw.append(0.0)
+
+        # Title / broad boost
+        boost = 0.0
+        if kid in matched_title_kids:
+            boost += 0.35
+        elif is_broad_kb:
+            boost += 0.20
+        title_boost.append(boost)
+
+    lex_n = _norm(lex_raw)
+    cos_n = _norm(cos_raw) if qvec is not None else [0.0] * len(entries)
+
+    results = []
+    for i, (source, path, text, _v, kid) in enumerate(entries):
+        base_score = (0.5 * cos_n[i] + 0.5 * lex_n[i]) if qvec is not None else lex_n[i]
+        final_score = min(1.0, base_score + title_boost[i])
+        title = source_titles.get(kid, f"Knowledge Source #{kid}")
+        results.append({
+            "source": source,
+            "path": path,
+            "source_id": kid,
+            "title": title,
+            "text": text,
+            "score": final_score
+        })
+
+    results.sort(key=lambda r: r["score"], reverse=True)
+    return results[:max(1, k)]
+
 
 
 async def ensure_indexed(max_age_s: float = 900) -> None:

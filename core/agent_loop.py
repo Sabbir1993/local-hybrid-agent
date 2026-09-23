@@ -26,10 +26,13 @@ Important Operating & Path Rules:
 5. If a tool reports an error, read the message carefully, fix the arguments, and try again.
 6. Provide concise, direct final answers without repeating sentences.
 7. High Efficiency & No Redundant Reads: Never call 'read_file' on a file you just created or edited with 'write_file' or 'edit_file'. Once 'write_file' reports success, the file is saved and ready. Conclude your response immediately without redundant read-backs.
-8. Action-First File Creation: When the user asks to create, make, build, or write code or a file (e.g. 'make an html file', 'create calculator.html', 'why not you write on that file'), DO NOT ask for more instructions or passively refuse. Call 'write_file' or 'edit_file' immediately with complete, functional, professional code.
-9. Proactive Autonomous Execution: Never refuse by saying 'I need more details' or 'what exact changes would you like' when the goal is clear (e.g. building a calculator, fixing an issue, creating a page). Take initiative, design the full solution, write the code directly to disk, and present the result. If a file exists, read it or overwrite it as appropriate.
-10. Shell and CLI Execution: You HAVE full terminal execution capability via the 'run_shell' tool. When the user asks to run commands, add skills (e.g. 'npx skills add ...'), install packages, or run git, do NOT refuse or tell the user to open a terminal; call 'run_shell' directly to execute the command.
-11. Large File Writing: For files longer than ~150 lines (e.g. a full HTML/CSS/JS app), do NOT generate the whole file in one 'write_file' call — very long single-shot generations get truncated or jumbled. Instead, split it into logical chunks (e.g. HTML head/structure, then CSS, then JS) and call 'write_file' once per chunk: the first call creates the file (append omitted or false), each following call passes append=true to add the next chunk in order. Never re-read or re-verify between chunks — just keep appending until the file is complete.
+8. One-and-Done File Completion: Once a file has been written successfully with 'write_file' or python, DO NOT redundantly rewrite the entire file under an alternative name (e.g. '..._final.html') unless specifically fixing a verified runtime error. Conclude immediately and present the result.
+9. Action-First File Creation: When the user asks to create, make, build, or write code or a file (e.g. 'make an html file', 'create calculator.html', 'why not you write on that file'), DO NOT ask for more instructions or passively refuse. Call 'write_file' or 'edit_file' immediately with complete, functional, professional code.
+10. Proactive Autonomous Execution: Never refuse by saying 'I need more details' or 'what exact changes would you like' when the goal is clear (e.g. building a calculator, fixing an issue, creating a page). Take initiative, design the full solution, write the code directly to disk, and present the result. If a file exists, read it or overwrite it as appropriate.
+11. Shell and CLI Execution: You HAVE full terminal execution capability via the 'run_shell' tool. When the user asks to run commands, add skills (e.g. 'npx skills add ...'), install packages, or run git, do NOT refuse or tell the user to open a terminal; call 'run_shell' directly to execute the command.
+12. Large File & Dashboard Writing:
+    - For large dashboards, board decks, spreadsheets, or multi-page documents: you can write a concise Python script using 'run_python' to assemble the HTML/CSV/XLSX and write it directly to disk. Script execution runs in milliseconds, bypasses LLM output token limits, and produces 100% syntactically valid files.
+    - If generating directly via 'write_file' for files longer than ~150 lines: split it into logical chunks (e.g. HTML head/structure, then CSS, then JS) and pass append=true to add subsequent chunks in order. Never re-read between chunks — just keep appending until the file is complete.
 
 File Intelligence — Working with Documents:
 12. Uploaded Documents: When the user attaches a file (Excel .xlsx/.xls, CSV, PDF, PowerPoint .pptx, Word .docx), its extracted content is injected below their message. The file is also saved to the workspace. You can reference it by filename for further operations.
@@ -189,6 +192,7 @@ def validate_and_finalize_response(last_query: str, content: str, reasoning: str
     python_runs = []
     read_files = []
 
+    web_results = []
     for act in actions_taken:
         name = act.get("name")
         ok = act.get("ok", False)
@@ -203,6 +207,10 @@ def validate_and_finalize_response(last_query: str, content: str, reasoning: str
                 python_runs.append(act.get("result", ""))
             elif name == "read_file":
                 read_files.append(p)
+            elif name in ("web_search", "web_search_images", "web_fetch"):
+                r_text = str(act.get("result", "")).strip()
+                if r_text and not r_text.startswith("error:"):
+                    web_results.append(r_text)
 
     if not clean_content:
         if successful_writes or successful_edits:
@@ -220,15 +228,20 @@ def validate_and_finalize_response(last_query: str, content: str, reasoning: str
                 lines.append("\n**Execution Output:**\n```\n" + python_runs[-1].strip() + "\n```")
             return "\n".join(lines), True, "synthesized response from successful tool actions"
 
+        if web_results:
+            summary = "\n\n---\n\n".join(w[:600] for w in web_results[-2:])
+            return f"🔍 **Information gathered from web search:**\n\n{summary}", True, "synthesized web search results"
+
         if python_runs:
             return f"✅ **Script executed successfully.**\n\n```\n{python_runs[-1].strip()}\n```", True, "synthesized execution output"
 
-        if reasoning and len(reasoning.strip()) > 30:
+        if reasoning and len(reasoning.strip()) > 15:
             r_paras = [p.strip() for p in reasoning.split("\n\n") if p.strip()]
             if r_paras:
                 cand = r_paras[-1]
-                if len(cand) > 15:
+                if len(cand) > 10:
                     return cand, True, "extracted answer from model reasoning"
+            return reasoning.strip(), True, "extracted full model reasoning"
 
         return "Task completed. All requested operations have been processed in the workspace.", True, "fallback confirmation"
 
@@ -330,6 +343,18 @@ def safe_parse_and_repair_args(raw: Union[str, dict], tool_name: str = "", query
                 out["path"] = "index.html"
             elif "def " in c_low or "import " in c_low:
                 out["path"] = "main.py"
+
+    if out.get("content") and isinstance(out["content"], str):
+        c_text = out["content"]
+        c_low = c_text.lower()
+        if "<!doctype html" in c_low or "<html" in c_low:
+            if "<script" in c_low and "</script>" not in c_low.split("<script")[-1]:
+                c_text += "\n</script>"
+            if "</body>" not in c_low:
+                c_text += "\n</body>"
+            if "</html>" not in c_low:
+                c_text += "\n</html>"
+            out["content"] = c_text
 
     return out
 

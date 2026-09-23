@@ -238,7 +238,10 @@ async function buildPromptText(text, attList = null, signal = null) {
           body: JSON.stringify({
             image_b64: a.b64,
             mime: a.mime || 'image/png',
-            question: 'Describe this image in detail for a coding agent. Include any visible text, errors, or UI elements.'
+            question: 'Describe this image in detail for a coding agent. Include any visible text, errors, or UI elements.',
+            cloud_model_override: (typeof $ === 'function' && $('cloud-model-sel') && $('cloud-model-sel').value)
+              ? $('cloud-model-sel').value
+              : (localStorage.getItem('cloud_model_override') || undefined)
           }),
           signal: signal || undefined
         });

@@ -113,6 +113,12 @@ function renderLast() {
   const isOnlyStreamingReasoning = generating && m.reasoning && !m.content && (!m.acts || !m.acts.length) && existingThinkDiv;
 
   if (isOnlyStreamingReasoning) {
+    const job = (curSession && window.bgJobs) ? window.bgJobs.get(String(curSession.id)) : null;
+    const t0 = (job && job.t0) ? job.t0 : _genStartTime;
+    const elapsedSec = Math.max(1, Math.floor((performance.now() - t0) / 1000));
+    const thinkSummary = existingThink.querySelector('summary');
+    if (thinkSummary) thinkSummary.textContent = `💭 Thinking (${elapsedSec}s)...`;
+
     const thinkBody = esc(m.reasoning).replace(/\n/g, '<br>') + '<span class="cursor">▍</span>';
     existingThinkDiv.innerHTML = thinkBody;
     if (thinkWasAtBottom && !m._thinkUserScrolled) {
@@ -157,6 +163,164 @@ function renderLast() {
   updateContextChip();
   if (inner.lastElementChild && !generating && typeof renderInlineMermaid === 'function') {
     renderInlineMermaid(inner.lastElementChild);
+  }
+}
+
+/* ---------------- Claude-Style Dynamic Working State ---------------- */
+function formatToolStatus(name, args) {
+  args = args || {};
+  let p = args.path || args.file || args.filename || '';
+  if (typeof p === 'string' && p) {
+    p = p.split('\\').pop().split('/').pop();
+  }
+  switch (name) {
+    case 'read_file':
+      return p ? `Reading ${p}...` : 'Reading file...';
+    case 'write_file':
+      return p ? `Writing ${p}...` : 'Writing file...';
+    case 'edit_file':
+      return p ? `Editing ${p}...` : 'Editing file...';
+    case 'run_python':
+      return 'Running Python script...';
+    case 'grep': {
+      const q = args.query || args.pattern || '';
+      return q ? `Searching for "${q.length > 25 ? q.slice(0, 25) + '…' : q}"...` : 'Searching workspace...';
+    }
+    case 'list_files':
+      return p ? `Scanning ${p}...` : 'Listing workspace files...';
+    case 'web_search': {
+      const q = args.query || '';
+      return q ? `Searching web for "${q.length > 25 ? q.slice(0, 25) + '…' : q}"...` : 'Searching the web...';
+    }
+    case 'web_fetch':
+      return 'Fetching webpage content...';
+    case 'search_memory':
+      return 'Searching past memory...';
+    case 'search_knowledge_base':
+      return 'Searching knowledge base...';
+    case 'analyze_image':
+      return 'Analyzing image with vision model...';
+    case 'create_plan':
+      return 'Formulating execution plan...';
+    case 'update_plan_item':
+      return 'Updating task plan...';
+    case 'list_diff':
+      return 'Reviewing workspace changes...';
+    case 'revert':
+      return p ? `Reverting ${p}...` : 'Reverting file...';
+    default:
+      return `Executing ${name}...`;
+  }
+}
+window.formatToolStatus = formatToolStatus;
+
+const CLAUDE_WORKING_PHRASES = [
+  'Working...',
+  'Crunching...',
+  'Thinking...',
+  'Connecting the dots...',
+  'Synthesizing ideas...',
+  'Pondering...',
+  'Formulating response...',
+  'Brewing thoughts...',
+  'Analyzing context...',
+  'Piecing it together...',
+  'Ruminating...',
+  'Drafting response...',
+  'Weaving insights...',
+  'Polishing thoughts...',
+  'Simmering...'
+];
+
+function getClaudeWorkingPhrase(m, elapsedSec) {
+  if (m && m.statusText) {
+    return m.statusText;
+  }
+  const isAgent = (m && m.acts && m.acts.length > 0) || (typeof agentMode !== 'undefined' && agentMode);
+  if (isAgent) {
+    const AGENT_PHRASES = [
+      'Working on task...',
+      'Crunching...',
+      'Planning next action...',
+      'Analyzing workspace...',
+      'Connecting the dots...',
+      'Synthesizing findings...',
+      'Drafting response...',
+      'Refining solution...',
+      'Polishing output...',
+      'Almost there...'
+    ];
+    const idx = Math.floor(elapsedSec / 2.5) % AGENT_PHRASES.length;
+    return AGENT_PHRASES[idx];
+  }
+  const idx = Math.floor(elapsedSec / 2.5) % CLAUDE_WORKING_PHRASES.length;
+  return CLAUDE_WORKING_PHRASES[idx];
+}
+
+function renderClaudeWorkingStateHtml(msg, elapsedSec) {
+  return `<div class="claude-working-box">`
+    + `<span class="claude-sparkle-icon">✦</span>`
+    + `<span class="claude-working-text">${esc(msg)}</span>`
+    + `<span class="claude-bouncing-dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>`
+    + `<span class="claude-working-timer mono">${elapsedSec}s</span>`
+    + `</div>`;
+}
+
+let _genTicker = null;
+let _genStartTime = 0;
+
+function startClaudeWorkingTicker(t0) {
+  _genStartTime = t0 || performance.now();
+  if (_genTicker) clearInterval(_genTicker);
+  _genTicker = setInterval(onClaudeWorkingTick, 500);
+}
+
+function stopClaudeWorkingTicker() {
+  if (_genTicker) {
+    clearInterval(_genTicker);
+    _genTicker = null;
+  }
+}
+
+function onClaudeWorkingTick() {
+  if (!generating || !messages || !messages.length) {
+    stopClaudeWorkingTicker();
+    return;
+  }
+  const lastIdx = messages.length - 1;
+  const m = messages[lastIdx];
+  if (!m || m.role !== 'assistant') return;
+
+  const job = (curSession && window.bgJobs) ? window.bgJobs.get(String(curSession.id)) : null;
+  const t0 = (job && job.t0) ? job.t0 : _genStartTime;
+  const elapsedSec = Math.max(1, Math.floor((performance.now() - t0) / 1000));
+  const hasText = !!(m.content && m.content.trim());
+
+  const inner = $('chat-inner');
+  if (!inner) return;
+  const lastEl = inner.lastElementChild;
+  if (!lastEl) return;
+
+  // 1. Update think summary timer if model is actively thinking
+  const isGeneratingThis = generating && (lastIdx === messages.length - 1);
+  const isActivelyThinking = isGeneratingThis && !hasText;
+  const thinkSummary = lastEl.querySelector('details.think > summary');
+  if (thinkSummary && isActivelyThinking) {
+    thinkSummary.textContent = `💭 Thinking (${elapsedSec}s)...`;
+  }
+
+  // 2. If content text hasn't streamed in yet, update or create the working pill
+  if (!hasText) {
+    const workingBox = lastEl.querySelector('.claude-working-box');
+    const msg = getClaudeWorkingPhrase(m, elapsedSec);
+    if (workingBox) {
+      const textEl = workingBox.querySelector('.claude-working-text');
+      const timerEl = workingBox.querySelector('.claude-working-timer');
+      if (textEl && textEl.textContent !== msg) textEl.textContent = msg;
+      if (timerEl) timerEl.textContent = `${elapsedSec}s`;
+    } else {
+      renderLast();
+    }
   }
 }
 
@@ -232,9 +396,12 @@ function bubbleHtml(m, idx) {
   if (m.reasoning) {
     const isGeneratingThis = generating && isLast;
     const isActivelyThinking = isGeneratingThis && !hasText;
+    const job = (curSession && window.bgJobs) ? window.bgJobs.get(String(curSession.id)) : null;
+    const t0 = (job && job.t0) ? job.t0 : _genStartTime;
+    const elapsedSec = isActivelyThinking ? Math.max(1, Math.floor((performance.now() - t0) / 1000)) : 0;
     // Auto-expand while thinking if user hasn't explicitly toggled it
     const isOpen = m._thinkOpen !== undefined ? m._thinkOpen : isActivelyThinking;
-    const statusLabel = isActivelyThinking ? '💭 Thinking...' : '💭 Thinking';
+    const statusLabel = isActivelyThinking ? `💭 Thinking (${elapsedSec}s)...` : '💭 Thinking';
     const thinkBody = esc(m.reasoning).replace(/\n/g, '<br>') + (isActivelyThinking ? '<span class="cursor">▍</span>' : '');
     inner += `<details class="think" ${isOpen ? 'open' : ''} ontoggle="onToggleThink(${idx}, this.open)"><summary onclick="onThinkSummaryClick(${idx}, event)">${statusLabel}</summary><div class="think-content">${thinkBody}</div></details>`;
   }
@@ -242,12 +409,15 @@ function bubbleHtml(m, idx) {
   let body = '';
   if (hasText) {
     body = md(m.content);
+  } else if (!generating && m.reasoning && m.reasoning.trim()) {
+    // If generation completed and content was empty, render reasoning so user is never left with a blank message
+    body = md(m.reasoning);
   } else if (generating && isLast) {
-    if (m.statusText) {
-      body = `<span class="dim" style="font-size:12px; font-style:italic;">${esc(m.statusText)}</span> <span class="cursor">▍</span>`;
-    } else if (!m.reasoning) {
-      body = '<span class="cursor">▍</span>';
-    }
+    const job = (curSession && window.bgJobs) ? window.bgJobs.get(String(curSession.id)) : null;
+    const t0 = (job && job.t0) ? job.t0 : _genStartTime;
+    const elapsedSec = Math.max(1, Math.floor((performance.now() - t0) / 1000));
+    const msg = getClaudeWorkingPhrase(m, elapsedSec);
+    body = renderClaudeWorkingStateHtml(msg, elapsedSec);
   }
   
   // Render interactive grill-me / ask_question choice cards if options or question frontiers are present
@@ -258,8 +428,18 @@ function bubbleHtml(m, idx) {
     }
   }
 
+  // Render dedicated media preview section for images and videos found in assistant response
+  if (hasText && typeof renderMediaPreviewSection === 'function') {
+    const mediaPreview = renderMediaPreviewSection(m.content);
+    if (mediaPreview) {
+      body += mediaPreview;
+    }
+  }
+
   if (body) {
-    inner += `<div class="bubble">${body}${generating && isLast && hasText ? '<span class="cursor">▍</span>' : ''}</div>`;
+    const isWorkingPill = generating && isLast && !hasText;
+    const bubbleClass = isWorkingPill ? 'bubble claude-working-container' : 'bubble';
+    inner += `<div class="${bubbleClass}">${body}${generating && isLast && hasText ? '<span class="cursor">▍</span>' : ''}</div>`;
   }
   if (m.tps) {
     const modelTag = m.modelDisplay
@@ -457,6 +637,12 @@ function setGenUI(on) {
   generating = on;
   $('btn-send').style.display = on ? 'none' : '';
   $('btn-abort').style.display = on ? '' : 'none';
+  if (on) {
+    const job = (curSession && window.bgJobs) ? window.bgJobs.get(String(curSession.id)) : null;
+    startClaudeWorkingTicker(job ? job.t0 : performance.now());
+  } else {
+    stopClaudeWorkingTicker();
+  }
   $('input').focus();
 }
 
@@ -523,7 +709,7 @@ async function send(inputText) {
     }
     console.warn('Chat prompt build warning:', err);
   }
-  assistantMsg.statusText = '';
+  if (chatWebSearch) assistantMsg.statusText = '🌐 Searching web & analyzing...';
   renderLast();
 
   const userMeta = {
@@ -600,10 +786,14 @@ async function send(inputText) {
           L.modelProvider = d.provider;
         } else if (ev === 'delta') {
           L.content += (d.text || '');
+          L.statusText = '';
         } else if (ev === 'thought_delta') {
           L.reasoning = (L.reasoning || '') + (d.delta || '');
         } else if (ev === 'thought') {
           L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + (d.text || '');
+        } else if (ev === 'delta_replace') {
+          L.content = (d.text || '');
+          L.statusText = '';
         } else if (ev === 'delta_reset') {
           if (L.content && L.content.trim()) {
             L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + L.content.trim();
@@ -612,6 +802,7 @@ async function send(inputText) {
         } else if (ev === 'tool_call') {
           if (!L.acts) L.acts = [];
           L.acts.push({ type: 'tool_call', ...d });
+          L.statusText = formatToolStatus(d.name, d.args);
           if (L.content && L.content.trim()) {
             L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + L.content.trim();
             L.content = '';
@@ -619,7 +810,9 @@ async function send(inputText) {
         } else if (ev === 'tool_result') {
           if (!L.acts) L.acts = [];
           L.acts.push({ type: 'tool_result', ...d });
+          L.statusText = 'Crunching tool results...';
         } else if (ev === 'done') {
+          L.statusText = '';
           if (d && (d.completion_tokens || d.total_tokens)) {
             if (d.completion_tokens) L.ntok = d.completion_tokens;
             if (d.prompt_tokens && job.messages.length >= 2) {
@@ -652,6 +845,19 @@ async function send(inputText) {
   if (m) {
     targetAssistant.reasoning = (targetAssistant.reasoning || '') + m[1];
     targetAssistant.content = targetAssistant.content.slice(m[0].length).trim();
+  }
+  // Recovery: if content is empty, promote reasoning or latest tool result so message never terminates blank
+  if (!targetAssistant.content.trim()) {
+    if (targetAssistant.reasoning && targetAssistant.reasoning.trim()) {
+      targetAssistant.content = targetAssistant.reasoning.trim();
+    } else if (targetAssistant.acts && targetAssistant.acts.length) {
+      const lastRes = targetAssistant.acts.slice().reverse().find(a => a.type === 'tool_result' && a.result);
+      if (lastRes && typeof lastRes.result === 'string' && lastRes.result.trim()) {
+        targetAssistant.content = `I found the following information:\n\n${lastRes.result.trim().slice(0, 1000)}`;
+      } else {
+        targetAssistant.content = 'Task completed successfully.';
+      }
+    }
   }
   const dt = (performance.now() - t0) / 1000;
   const fullLen = (targetAssistant.content || '').length + (targetAssistant.reasoning || '').length;

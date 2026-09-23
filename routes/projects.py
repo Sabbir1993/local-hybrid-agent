@@ -30,6 +30,7 @@ from core.db import (
     db_load_messages,
     db_append_message,
     db_rename_device,
+    db_list_user_devices,
 )
 from core.agent_tools import (
     active_workspace,
@@ -299,6 +300,11 @@ async def rename_device(req: RenameDeviceReq,
     return {"ok": True, "device_name": new_name}
 
 
+@router.get("/control/user/devices")
+async def list_user_devices(user: Principal = Depends(get_current_user)):
+    return {"ok": True, "devices": db_list_user_devices(user.id)}
+
+
 @router.get("/control/projects")
 async def list_projects(user: Principal = Depends(get_current_user),
                         device: Optional[str] = "current",
@@ -329,7 +335,7 @@ async def list_projects(user: Principal = Depends(get_current_user),
             except Exception:
                 p["path_valid_on_device"] = False
 
-        if curr_proj and p["name"] == curr_proj:
+        if curr_proj and p["name"] == curr_proj and (p_dev == cur_dev_id or cur_dev_id == "default" or p_dev in ("default", None)):
             active_p = p
 
     return {

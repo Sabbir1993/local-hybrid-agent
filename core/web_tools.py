@@ -5,6 +5,7 @@ future Brave/Tavily swap-in when DDG rate-limits.
 """
 
 import asyncio
+import json
 import re
 import sys
 from html.parser import HTMLParser
@@ -154,30 +155,170 @@ def _ddg_search_sync(query: str, api_key: str) -> list:
     return results
 
 
-async def tool_web_search(args: dict) -> str:
-    query = (args.get("query") or args.get("q") or "").strip()
+def _bing_search_sync(query: str, count: int = 8) -> list:
+    """Bing organic web search results fallback."""
+    import base64
+    url = "https://www.bing.com/search?q=" + quote_plus(query)
+    with httpx.Client(follow_redirects=True, timeout=SEARCH_TIMEOUT_S,
+                      headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"}) as c:
+        r = c.get(url)
+    if r.status_code != 200:
+        raise RuntimeError(f"Bing search returned HTTP {r.status_code}")
+    results = []
+    rx_tag = re.compile(r"<[^>]+>")
+    for m in re.finditer(r'<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>([\s\S]*?)</li>', r.text):
+        li = m.group(1)
+        h2 = re.search(r'<h2[^>]*>([\s\S]*?)</h2>', li)
+        if not h2:
+            continue
+        a = re.search(r'<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>', h2.group(1))
+        if not a:
+            continue
+        href = a.group(1).replace("&amp;", "&")
+        raw_title = a.group(2)
+        title = rx_tag.sub("", raw_title).strip()
+
+        # Decode Bing tracking URL: u=a1<base64>
+        m_u = re.search(r"[?&]u=a1([a-zA-Z0-9_-]+)", href)
+        if m_u:
+            try:
+                b64 = m_u.group(1).replace("-", "+").replace("_", "/")
+                padded = b64 + "=" * (-len(b64) % 4)
+                decoded = base64.b64decode(padded).decode("utf-8", errors="ignore")
+                if decoded.startswith("http"):
+                    href = decoded
+            except Exception:
+                pass
+
+        p = re.search(r'<p[^>]*>([\s\S]*?)</p>', li)
+        snip = rx_tag.sub("", p.group(1)).strip() if p else ""
+        results.append({"title": title, "url": href, "snippet": " ".join(snip.split())[:250]})
+        if len(results) >= count:
+            break
+    return results
+
+
+def _bing_images_search_sync(query: str, count: int = 8) -> list:
+    """Bing image search results."""
+    url = "https://www.bing.com/images/search?q=" + quote_plus(query)
+    with httpx.Client(follow_redirects=True, timeout=SEARCH_TIMEOUT_S,
+                      headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"}) as c:
+        r = c.get(url)
+    if r.status_code != 200:
+        raise RuntimeError(f"Bing images search returned HTTP {r.status_code}")
+    results = []
+    matches = re.findall(r'class="iusc"[^>]*m="([^"]+)"', r.text)
+    for m_str in matches:
+        unescaped = m_str.replace('&quot;', '"')
+        try:
+            data = json.loads(unescaped)
+            murl = data.get("murl")
+            if not murl:
+                continue
+            turl = data.get("turl", "")
+            title = data.get("t", "")
+            purl = data.get("purl", "")
+            results.append({
+                "title": title or query,
+                "image_url": murl,
+                "thumbnail_url": turl,
+                "source_url": purl,
+            })
+            if len(results) >= count:
+                break
+        except Exception:
+            continue
+    return results
+
+
+async def tool_web_search(args) -> str:
+    if isinstance(args, str):
+        query = args.strip()
+    elif isinstance(args, dict):
+        query = (args.get("query") or args.get("q") or "").strip()
+    else:
+        query = str(args or "").strip()
     if not query:
         raise ValueError("query required")
     cfg = APP_CONFIG.get("capabilities", {})
     api_key = cfg.get("web_search_api_key", "")
+    results = []
+    used_engine = "DuckDuckGo"
+
+    # Attempt DuckDuckGo first
     try:
         results = await asyncio.get_event_loop().run_in_executor(
             None, _ddg_search_sync, query, api_key)
-    except httpx.HTTPError as e:
-        return f"error: search failed: {type(e).__name__}: {e}"
-    except RuntimeError as e:
-        return f"error: {e} — search may be rate-limited; add capabilities.web_search_api_key in config/app.json"
+    except Exception as e:
+        # DDG failed (rate-limit, bot check, HTTP 202, or network) - fall back to Bing
+        try:
+            results = await asyncio.get_event_loop().run_in_executor(
+                None, _bing_search_sync, query, MAX_SEARCH_RESULTS)
+            used_engine = "Bing"
+        except Exception as e_bing:
+            return f"error: search failed: DDG ({e}), Bing fallback ({e_bing})"
+
+    if not results:
+        # If DDG yielded 0 results, try Bing before giving up
+        if used_engine == "DuckDuckGo":
+            try:
+                results = await asyncio.get_event_loop().run_in_executor(
+                    None, _bing_search_sync, query, MAX_SEARCH_RESULTS)
+                if results:
+                    used_engine = "Bing"
+            except Exception:
+                pass
+
     if not results:
         return f"(no results for: {query})"
-    out = [f"Web results for: {query}", ""]
+
+    out = [f"Web results for: {query} (via {used_engine})", ""]
     for i, r in enumerate(results, 1):
         out.append(f"{i}. {r['title']}\n   {r['url']}")
-        if r["snippet"]:
+        if r.get("snippet"):
             out.append(f"   {r['snippet']}")
+
+    # If query specifically asks for a photo/image, also append top image suggestions
+    lower_q = query.lower()
+    if any(w in lower_q for w in ("photo", "picture", "image", "portrait", "look like")):
+        try:
+            img_results = await asyncio.get_event_loop().run_in_executor(
+                None, _bing_images_search_sync, query, 3)
+            if img_results:
+                out.append("\nImage Results:")
+                for img in img_results:
+                    out.append(f"- ![{img['title']}]({img['image_url']}) (Source: {img['source_url']})")
+        except Exception:
+            pass
+
     text = "\n".join(out)
     if len(text) > MAX_RESULTS_CHARS:
         text = text[:MAX_RESULTS_CHARS] + "\n... (truncated)"
     return text
+
+
+async def tool_web_search_images(args) -> str:
+    if isinstance(args, str):
+        query = args.strip()
+    elif isinstance(args, dict):
+        query = (args.get("query") or args.get("q") or "").strip()
+    else:
+        query = str(args or "").strip()
+    if not query:
+        raise ValueError("query required")
+    try:
+        results = await asyncio.get_event_loop().run_in_executor(
+            None, _bing_images_search_sync, query, 6)
+    except Exception as e:
+        return f"error: image search failed: {e}"
+
+    if not results:
+        return f"(no images found for: {query})"
+
+    out = [f"Found {len(results)} image(s) for: {query}\n"]
+    for i, r in enumerate(results, 1):
+        out.append(f"{i}. **{r['title']}**\n   - Image URL: {r['image_url']}\n   - Thumbnail: {r['thumbnail_url']}\n   - Source: {r['source_url']}\n   - Markdown: ![{r['title']}]({r['image_url']})")
+    return "\n".join(out)
 
 
 def register_web_tools() -> None:
@@ -199,9 +340,19 @@ def register_web_tools() -> None:
         "web_search", tool_web_search,
         {"type": "function", "function": {
             "name": "web_search",
-            "description": "Search the web (DuckDuckGo) and return top result titles, URLs and snippets.",
+            "description": "Search the web and return top result titles, URLs and snippets.",
             "parameters": {"type": "object",
                            "properties": {"query": {"type": "string", "description": "search query"}},
                            "required": ["query"]},
         }},
         source="web", meta={"label": "Web search"}, replace=True)
+    registry.register(
+        "web_search_images", tool_web_search_images,
+        {"type": "function", "function": {
+            "name": "web_search_images",
+            "description": "Search the web for photos, portraits, pictures, diagrams, and images. Returns direct image URLs, thumbnails, and markdown image embed links.",
+            "parameters": {"type": "object",
+                           "properties": {"query": {"type": "string", "description": "image search query"}},
+                           "required": ["query"]},
+        }},
+        source="web", meta={"label": "Web image search"}, replace=True)

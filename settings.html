@@ -99,8 +99,11 @@
   </details>
 
   <details class="card fold" id="sec-gpus" data-perm="settings.runtime.view">
-    <summary title="Dedicated VRAM usage & compute engine utilization for both Arc A770 GPUs">GPUs (2x Arc A770)</summary>
-    <div id="gpu-list"><div class="dim" style="font-size:12px">querying…</div></div>
+    <summary style="display:flex; align-items:center; justify-content:space-between;" title="Dedicated VRAM usage & compute engine utilization for discrete Arc A770 GPUs">
+      <span>GPUs (Discrete)</span>
+      <button type="button" id="btn-refresh-gpu" class="btn" style="width:auto; flex:none; margin:0 0 0 auto; padding:2px 8px; font-size:10.5px; height:22px; border-radius:5px; white-space:nowrap;" title="Query discrete GPU status on-demand">⚡ Check GPU</button>
+    </summary>
+    <div id="gpu-list" style="margin-top:8px;"><div class="dim" style="font-size:12px">Click "⚡ Check GPU" or expand to query status…</div></div>
   </details>
 
   <details class="card fold" id="sec-cfg" data-perm="model.local.configure">
@@ -168,6 +171,13 @@
         <label for="mtp-nmax" style="margin-top:6px">Draft tokens (n-max) <span class="info" title="Tokens drafted per step (default 3)">ⓘ</span></label>
         <input type="number" id="mtp-nmax" min="1" max="16" value="3" title="Max draft tokens per speculative step">
       </div>
+      <div class="cfg-item cfg-full" id="vision-row" style="display:none" title="Multimodal vision projector: enables the main model to understand images directly without needing a separate vision model">
+        <label for="cfg-vision">🧿 Multimodal vision <span class="info" title="Enables vision support with the auto-detected mmproj projector file">ⓘ</span></label>
+        <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
+          <label class="switch"><input type="checkbox" id="cfg-vision"><span class="slider"></span></label>
+          <div style="flex:1"><b id="vision-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">multimodal projector detected</small></div>
+        </div>
+      </div>
     </div>
     <div class="cfg-note" title="Configuration note">Saved per-model into config/model_configs.json. Unload the model, then load it again to apply changes.</div>
     <button id="btn-apply" class="btn accent" style="margin-top:6px" title="Save configuration for this model. If the model is loaded, you will be asked to unload & reload to apply.">💾 Save Config</button>
@@ -200,14 +210,22 @@
     <div id="guard-content"><div class="mon-empty">Loading…</div></div>
   </details>
 
-  <details class="card fold" id="sec-oguard" data-perm="settings.input_guard">
-    <summary title="Admin-defined output policies: redact sensitive patterns from model responses (cloud-only or always, optionally role-restricted)">🧼 Output Sanitizer</summary>
-    <div id="oguard-content"><div class="mon-empty">Loading…</div></div>
-  </details>
-
   <details class="card fold" id="sec-audit" data-perm="audit.view">
     <summary title="Who did what — model loads, cloud provider changes, permission denials">🧾 Audit Log</summary>
     <div id="audit-content"><div class="mon-empty">Loading…</div></div>
+  </details>
+
+  <details class="card fold" id="sec-db" data-perm="database.manage">
+    <summary title="Direct Database Explorer &amp; SQL Console">🗄️ Database Explorer</summary>
+    <div style="padding:10px 4px;">
+      <p class="dim" style="font-size:12px; line-height:1.5; margin-bottom:12px;">
+        Inspect database schemas, browse tables, and execute raw SQL queries across system and workspace SQLite databases.
+      </p>
+      <div id="settings-db-summary" style="display:flex; flex-direction:column; gap:6px; margin-bottom:12px;">
+        <div class="dim" style="font-size:11px;">Loading databases…</div>
+      </div>
+      <a href="/#db" class="btn accent" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; width:auto; padding:6px 14px; font-size:12px;" onclick="localStorage.setItem('a770_open_db', '1')">🗄️ Open Database Explorer Console</a>
+    </div>
   </details>
 
   <details class="card fold" id="sec-danger" data-perm="system.danger_zone">
@@ -253,8 +271,26 @@ window.__sessionReady.then((data) => {
   if (document.getElementById('sec-users')) loadUsersPanel();
   if (document.getElementById('sec-knowledge')) loadKnowledgePanel();
   if (document.getElementById('sec-guard')) loadInputGuardPanel();
-  if (document.getElementById('sec-oguard')) loadOutputGuardPanel();
   if (document.getElementById('sec-audit')) loadAuditPanel();
+  if (document.getElementById('sec-db')) {
+    fetch('/db/list').then(r => r.json()).then(d => {
+      const box = document.getElementById('settings-db-summary');
+      if (!box) return;
+      const dbs = d.databases || [];
+      box.innerHTML = dbs.map(db => `
+        <div class="cap-item" style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <b>${db.name}</b> <span class="dim">(${db.title})</span>
+            <div class="dim" style="font-size:10.5px;">${db.description}</div>
+          </div>
+          <span class="mono dim" style="font-size:11px;">${db.table_count} tables · ${(db.size_bytes / 1024).toFixed(1)} KB</span>
+        </div>
+      `).join('') || '<div class="dim" style="font-size:11px;">No databases found.</div>';
+    }).catch(e => {
+      const box = document.getElementById('settings-db-summary');
+      if (box) box.innerHTML = `<div class="dim" style="color:var(--red); font-size:11px;">${e.message}</div>`;
+    });
+  }
   const clearBtn = document.getElementById('btn-clear-all-data');
   if (clearBtn) {
     clearBtn.onclick = async () => {
@@ -280,9 +316,43 @@ window.__sessionReady.then((data) => {
       }
     };
   }
+
+  const secGpu = document.getElementById('sec-gpus');
+  const btnRefreshGpu = document.getElementById('btn-refresh-gpu');
+  async function triggerGpuQuery() {
+    if (!secGpu || !document.getElementById('gpu-list')) return;
+    const glist = document.getElementById('gpu-list');
+    if (btnRefreshGpu) {
+      btnRefreshGpu.disabled = true;
+      btnRefreshGpu.textContent = 'Querying…';
+    }
+    if (glist && !glist.querySelector('.gpu')) {
+      glist.innerHTML = '<div class="dim" style="font-size:12px">querying discrete GPUs…</div>';
+    }
+    try {
+      await pollGpu();
+    } finally {
+      if (btnRefreshGpu) {
+        btnRefreshGpu.disabled = false;
+        btnRefreshGpu.textContent = '⚡ Check GPU';
+      }
+    }
+  }
+
+  if (btnRefreshGpu) {
+    btnRefreshGpu.onclick = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      triggerGpuQuery();
+    };
+  }
+  if (secGpu) {
+    secGpu.addEventListener('toggle', () => {
+      if (secGpu.open) triggerGpuQuery();
+    });
+  }
 });
 pollStatus();
-pollGpu();
 </script>
 </body>
 </html>

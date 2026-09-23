@@ -1,6 +1,6 @@
 {
   "name": "local-agent",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Local companion for Local Agent — runs file/shell operations on your own machine on the server's behalf.",
   "main": "main.js",
   "scripts": {

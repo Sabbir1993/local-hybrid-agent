@@ -51,7 +51,7 @@ async function runAgentSSE(text) {
     content: '',
     reasoning: '',
     acts: [],
-    statusText: sentImages.length ? '🔍 Analyzing image...' : ''
+    statusText: sentImages.length ? '🔍 Analyzing image...' : (nFiles ? '📄 Loading attached files...' : '')
   };
   messages.push(assistantMsg);
 
@@ -73,7 +73,7 @@ async function runAgentSSE(text) {
     }
     console.warn('Agent prompt build warning:', err);
   }
-  assistantMsg.statusText = '';
+  if (!assistantMsg.statusText) assistantMsg.statusText = 'Starting agent workflow...';
   renderLast();
 
   const userMeta = {
@@ -110,6 +110,10 @@ async function runAgentSSE(text) {
       const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : job.messages;
       const hist = ctxMsgs.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
       const engineMode = $('agent-engine') ? $('agent-engine').value : 'all-local';
+      const cloudModelOverride = (() => {
+        const sel = $('cloud-model-sel');
+        return (sel && sel.value) ? sel.value : (localStorage.getItem('cloud_model_override') || null);
+      })();
       // Collect doc attachments that were server-uploaded for context injection
       const docAttachments = sentAttachments
         .filter(a => a.isDoc && a.serverPath)
@@ -125,6 +129,7 @@ async function runAgentSSE(text) {
           temperature: getSamplingConfig().temp,
           max_tokens: (() => { const mt = getSamplingConfig().maxtok; return (isNaN(mt) || mt <= 0) ? -1 : mt; })(),
           attachments: docAttachments,
+          cloud_model_override: cloudModelOverride || undefined,
         }),
         signal: jobCtrl.signal,
       });
@@ -148,20 +153,27 @@ async function runAgentSSE(text) {
           if (!evM || !dtM) continue;
           const ev = evM[1], d = JSON.parse(dtM[1]);
           const L = getJobAssistant();
-          if (ev === 'step') L.acts.push({ type: 'step', ...d });
+          if (ev === 'step') {
+            L.acts.push({ type: 'step', ...d });
+            L.statusText = d.step ? `Planning step ${d.step}...` : 'Planning next step...';
+          }
           else if (ev === 'lane') {
             L.acts.push({ type: 'lane', ...d });
             L.modelDisplay = d.display || d.model;
             L.modelSource = d.source;
             L.modelProvider = d.provider;
           }
-          else if (ev === 'thought') L.acts.push({ type: 'thought', ...d });
+          else if (ev === 'thought') {
+            L.acts.push({ type: 'thought', ...d });
+            L.statusText = 'Synthesizing strategy...';
+          }
           else if (ev === 'thought_delta') {
             L.reasoning = (L.reasoning || '') + (d.delta || '');
           }
           else if (ev === 'tool_call') {
             // If the model was streaming its preamble before calling a tool, keep it as thought/reasoning or preamble
             L.acts.push({ type: 'tool_call', ...d });
+            L.statusText = (typeof formatToolStatus === 'function') ? formatToolStatus(d.name, d.args) : (`Running ${d.name}...`);
             if (L.content && L.content.trim()) {
               if (!L.reasoning) L.reasoning = L.content.trim();
               else L.reasoning += '\n\n' + L.content.trim();
@@ -170,6 +182,7 @@ async function runAgentSSE(text) {
           }
           else if (ev === 'tool_result') {
             L.acts.push({ type: 'tool_result', ...d });
+            L.statusText = 'Crunching tool results...';
             // agent changed a file -> refresh the workspace side panel if active
             if (wsPanelOpen && (d.name === 'write_file' || d.name === 'edit_file' || d.name === 'revert')) {
               if (curSession && String(curSession.id) === String(sessionId)) {
@@ -177,9 +190,19 @@ async function runAgentSSE(text) {
               }
             }
           }
-          else if (ev === 'verify') L.acts.push({ type: 'verify', ...d });
+          else if (ev === 'verify') {
+            L.acts.push({ type: 'verify', ...d });
+            L.statusText = 'Verifying tool changes...';
+          }
           else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd);
-          else if (ev === 'delta') L.content += (d.text || '');
+          else if (ev === 'delta') {
+            L.content += (d.text || '');
+            L.statusText = '';
+          }
+          else if (ev === 'delta_replace') {
+            L.content = (d.text || '');
+            L.statusText = '';
+          }
           else if (ev === 'delta_reset') {
             // If replacing content with synthesized final answer, preserve any prior streamed text as reasoning so it doesn't vanish
             if (L.content && L.content.trim()) {
@@ -188,7 +211,10 @@ async function runAgentSSE(text) {
             }
             L.content = '';
           }
-          else if (ev === 'validated') L.acts.push({ type: 'validated', ...d });
+          else if (ev === 'validated') {
+            L.acts.push({ type: 'validated', ...d });
+            L.statusText = 'Validating solution...';
+          }
           else if (ev === 'ctx') {
             // Smart context truncation fired on the backend — surface it
             const kb = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
@@ -218,6 +244,7 @@ async function runAgentSSE(text) {
       if (!targetAssistant.content && targetAssistant.acts && targetAssistant.acts.length > 0) {
         targetAssistant.content = 'Task completed. See tool operations above for details.';
       }
+      targetAssistant.statusText = '';
       const dt = (performance.now() - t0) / 1000;
       const fullLen = (targetAssistant.content || '').length + (targetAssistant.reasoning || '').length;
       const ntok = Math.max(1, Math.round(fullLen / 3.5));

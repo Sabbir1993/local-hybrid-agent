@@ -74,6 +74,29 @@ serving a single-page web UI (`ui.html` + `static/js/`) with:
   automatic local fallback if a cloud lane fails.
 - Projects/sessions persisted in SQLite (`projects.db`, `usage.db`,
   `memory.db`), a live request monitor, and a token-usage report.
+- **Fast CPU Routing Layer (0 MB VRAM)**: Optional sub-step router on CPU for zero-VRAM tool dispatch. Supports both **Cactus Needle-2** and **Convai Laya**, switchable via `config/app.json` (`"engine": "cactus_needle"` or `"engine": "laya"`).
+
+### Fast CPU Routing Layer: Switching Needle-2 and Laya
+
+In `config/app.json`:
+```json
+"router": {
+  "enabled": true,
+  "confidence_threshold": 0.75,
+  "engine": "cactus_needle",
+  "executor_grammar": true,
+  "laya": {
+    "checkpoint": "convaiinnovations/laya",
+    "subfolder": null,
+    "device": "cpu",
+    "preload": false
+  }
+}
+```
+- **Needle-2 (`"engine": "cactus_needle"`)**: 45M Simple Attention Network (~14MB binary, ~28MB RAM). Autoregressively fills tool arguments via grammar. Installed via `pip install needle`.
+- **Laya (`"engine": "laya"`)**: 421M ModernBERT non-autoregressive decision model running strictly on CPU (`device="cpu"`). High-accuracy semantic routing with calibrated probabilities. Installed via `pip install laya`.
+
+Both engines execute strictly on CPU with **0 MB GPU VRAM usage**, preserving all VRAM for your primary models.
 
 ## Portability: any GPU count, any machine
 

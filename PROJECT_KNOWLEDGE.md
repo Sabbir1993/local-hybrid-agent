@@ -35,7 +35,7 @@ confusion:
 | **Lane** | Which model serves a given agent step: `main`, `executor`, `needle`, `vision`. |
 | **Main** | The big model (Qwen3.8-27B) on both A770s, port 8090. |
 | **Executor** | Small fast model (Qwen2.5-VL-3B) on a single A770, port 8091. Handles simple/early steps. |
-| **Needle** | Optional CPU-only tool router (the `needle` PyPI package). Zero VRAM. Falls back silently if not installed. |
+| **Needle / Laya** | Optional CPU-only fast routers (`needle` or `laya` package). Zero VRAM. Configurable in `config/app.json` (`engine: "cactus_needle"` or `"laya"`). Falls back silently if not installed. |
 | **Small models** | `executor` / `vision` / `embedder` — on-demand `llama-server` children with an idle reaper. |
 | **Tuned block** | The `"tuned"` object inside a profile; written by `autotune.py`. Holds `tensor_split`, `n_gpu_layers`, `n_cpu_moe`. |
 | **Capability** | A tool *source*: builtin, web, skill, mcp, plugin, shell. Toggleable wholesale from the UI. |
@@ -867,7 +867,7 @@ Verified by reading the working tree at `c334c28` + uncommitted changes.
 9. `README.md` is stale twice over: it documents only `autotune.py` + `server_manager.py` (nothing about the agent platform), and its "Honesty check" claims the code has never run on real A770s — `TESTING_LOG.md` shows extensive verified runs since.
 10. `core/agent_tools.AGENT_CORE_TOOLS` is now unused by the agent loop (the executor lane filters the registry instead). Kept only as a fallback path.
 11. `proxy()` evaluates `r.json()` twice in the final `JSONResponse` expression. Harmless, slightly wasteful on non-JSON responses.
-12. `requirements.txt` omits `needle` (optional CPU router) — intentional, but it means `needle_available()` returns `False` silently on a clean install.
+12. `requirements.txt` omits `needle` and `laya` (optional CPU routers) — intentional, but it means `router_available()` returns `False` silently on a clean install unless installed via `pip install needle` or `pip install laya`.
 13. `.claude/skills/frontend-design/` is an empty directory that triggers git warnings (`could not open directory ... No such file or directory`); the real skill is `skills/frontend-design/`.
 14. `config.json` sets `agent.idle_unload_s: 0`, which **disables** the small-model idle reaper (`unload_if_idle` returns early when `<= 0`). Intentional — keeps small models resident so they don't pay demotion costs — but easy to misread, since the code default is `120`.
 

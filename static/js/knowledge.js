@@ -50,6 +50,69 @@ async function loadKnowledgePanel() {
   }
 }
 
+const KB_CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB per chunk (safely bypasses 15MB proxy limits)
+
+async function uploadFileChunked(file, title, onProgress) {
+  const totalChunks = Math.max(1, Math.ceil(file.size / KB_CHUNK_SIZE));
+  const uploadId = 'up_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * KB_CHUNK_SIZE;
+    const end = Math.min(file.size, start + KB_CHUNK_SIZE);
+    const chunkBlob = file.slice(start, end);
+
+    if (onProgress) {
+      const pct = Math.round((i / totalChunks) * 100);
+      const mbUploaded = (start / (1024 * 1024)).toFixed(1);
+      const mbTotal = (file.size / (1024 * 1024)).toFixed(1);
+      onProgress({
+        phase: 'uploading',
+        percent: pct,
+        statusText: `Uploading: chunk ${i + 1}/${totalChunks} (${mbUploaded} / ${mbTotal} MB · ${pct}%)`
+      });
+    }
+
+    const fd = new FormData();
+    fd.append('upload_id', uploadId);
+    fd.append('chunk_index', i);
+    fd.append('total_chunks', totalChunks);
+    fd.append('file', chunkBlob, file.name);
+
+    const chunkRes = await fetch('/knowledge/upload/chunk', {
+      method: 'POST',
+      body: fd,
+    });
+    const chunkJson = await chunkRes.json().catch(() => ({}));
+    if (!chunkRes.ok || chunkJson.ok === false) {
+      throw new Error(chunkJson.error || `Chunk ${i + 1}/${totalChunks} upload failed`);
+    }
+  }
+
+  if (onProgress) {
+    onProgress({
+      phase: 'processing',
+      percent: 100,
+      statusText: 'Processing & indexing knowledge document... (extracting text & generating embeddings)'
+    });
+  }
+
+  const completeRes = await fetch('/knowledge/upload/complete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      upload_id: uploadId,
+      filename: file.name,
+      total_chunks: totalChunks,
+      title: title || file.name,
+    }),
+  });
+  const completeJson = await completeRes.json().catch(() => ({}));
+  if (!completeRes.ok || completeJson.ok === false) {
+    throw new Error(completeJson.error || completeJson.detail || 'Finalizing upload failed');
+  }
+  return completeJson;
+}
+
 function renderKnowledgePanel(box, sources) {
   box.innerHTML = `
     <div class="cap-item" style="margin-bottom:10px;">
@@ -70,7 +133,16 @@ function renderKnowledgePanel(box, sources) {
           <button class="btn accent" id="kb-add-submit" style="width:auto; margin:0; padding:5px 12px; font-size:11.5px;">+ Add</button>
         </div>
       </div>
-      <div class="cfg-note" style="margin-top:6px;">Content is scanned for payment-card-shaped numbers at ingestion and rejected if found — never paste real card data here.</div>
+      <div id="kb-upload-progress" style="display:none; margin-top:8px; padding:8px 10px; background:var(--panel2); border-radius:6px; border:1px solid var(--border);">
+        <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:6px;">
+          <span id="kb-progress-status" style="font-weight:500; color:var(--text);">Uploading...</span>
+          <span id="kb-progress-pct" class="dim" style="font-family:monospace; font-size:11px;">0%</span>
+        </div>
+        <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
+          <div id="kb-progress-bar" style="width:0%; height:100%; background:var(--accent); transition:width 0.2s;"></div>
+        </div>
+      </div>
+      <div class="cfg-note" style="margin-top:6px;">Large files are uploaded in 5 MB chunks to safely bypass server size limits. Ingestion is not blocked.</div>
     </div>
     <div id="kb-list" style="display:flex; flex-direction:column; gap:4px;">
       ${sources.map(s => sourceRow(s)).join('') || '<div class="dim" style="font-size:11px;">No knowledge sources yet.</div>'}
@@ -84,40 +156,67 @@ function renderKnowledgePanel(box, sources) {
     } else if (kindSel.value === 'url') {
       bodyBox.innerHTML = '<input type="text" id="kb-add-url" placeholder="https://…" style="width:100%; box-sizing:border-box; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:6px 8px; font-size:11.5px;">';
     } else {
-      bodyBox.innerHTML = '<input type="file" id="kb-add-file" accept=".pdf,.docx,.xlsx,.xls" style="font-size:11.5px;">';
+      bodyBox.innerHTML = '<input type="file" id="kb-add-file" accept=".pdf,.docx,.xlsx,.xls,.csv" style="font-size:11.5px;">';
     }
   };
   renderBody();
   kindSel.onchange = renderBody;
   initTagPicker($('kb-add-roles'), _kbAllRoles, []);
 
-  $('kb-add-submit').onclick = async () => {
+  const submitBtn = $('kb-add-submit');
+  const progressBox = $('kb-upload-progress');
+  const progressStatus = $('kb-progress-status');
+  const progressPct = $('kb-progress-pct');
+  const progressBar = $('kb-progress-bar');
+
+  const updateProgress = ({ percent, statusText }) => {
+    if (!progressBox) return;
+    progressBox.style.display = 'block';
+    if (progressStatus && statusText) progressStatus.textContent = statusText;
+    if (progressPct) progressPct.textContent = `${percent}%`;
+    if (progressBar) progressBar.style.width = `${percent}%`;
+  };
+
+  const hideProgress = () => {
+    if (progressBox) progressBox.style.display = 'none';
+    if (progressBar) progressBar.style.width = '0%';
+    if (progressPct) progressPct.textContent = '0%';
+  };
+
+  submitBtn.onclick = async () => {
     const title = $('kb-add-title').value.trim();
     const roles = $('kb-add-roles')._getSelected ? $('kb-add-roles')._getSelected() : [];
     if (!title) { toast('Title required', true); return; }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Processing...';
+
     try {
-      let res, source;
+      let j = {};
       if (kindSel.value === 'text') {
         const text = $('kb-add-text').value;
         if (!text.trim()) { toast('Paste some text first', true); return; }
-        res = await fetch('/knowledge/text?' + new URLSearchParams({ title, text }), { method: 'POST' });
+        updateProgress({ percent: 100, statusText: 'Processing & indexing knowledge...' });
+        const res = await fetch('/knowledge/text?' + new URLSearchParams({ title, text }), { method: 'POST' });
+        j = await res.json().catch(() => ({}));
+        if (!res.ok || j.ok === false) throw new Error(j.error || j.detail || ('HTTP ' + res.status));
       } else if (kindSel.value === 'url') {
         const url = $('kb-add-url').value.trim();
         if (!url) { toast('URL required', true); return; }
-        res = await fetch('/knowledge/url', {
+        updateProgress({ percent: 100, statusText: 'Fetching URL & indexing knowledge...' });
+        const res = await fetch('/knowledge/url', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title, url }),
         });
+        j = await res.json().catch(() => ({}));
+        if (!res.ok || j.ok === false) throw new Error(j.error || j.detail || ('HTTP ' + res.status));
       } else {
         const f = $('kb-add-file').files[0];
         if (!f) { toast('Choose a file first', true); return; }
-        const fd = new FormData();
-        fd.append('file', f);
-        res = await fetch('/knowledge/upload?' + new URLSearchParams({ title }), { method: 'POST', body: fd });
+        j = await uploadFileChunked(f, title, updateProgress);
       }
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.ok === false) throw new Error(j.error || j.detail || ('HTTP ' + res.status));
-      source = j.source;
+
+      const source = j.source;
       if (roles.length && source) {
         await fetch(`/knowledge/${source.id}/access`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -128,6 +227,10 @@ function renderKnowledgePanel(box, sources) {
       loadKnowledgePanel();
     } catch (e) {
       toast('Add failed: ' + e.message, true);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '+ Add';
+      hideProgress();
     }
   };
 
@@ -188,7 +291,7 @@ function renderKnowledgePanel(box, sources) {
 }
 
 function sourceRow(s) {
-  const statusColor = s.status === 'ready' ? 'var(--green)' : (s.status === 'error' ? 'var(--red)' : 'var(--dim)');
+  const statusColor = s.status === 'ready' ? 'var(--green)' : (s.status === 'error' ? 'var(--red)' : (s.status === 'processing' ? 'var(--accent)' : 'var(--dim)'));
   return `<div class="cap-item">
     <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
       <span><b>${esc(s.title)}</b> <span class="dim">(${esc(s.kind)})</span>

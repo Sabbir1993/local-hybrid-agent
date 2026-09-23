@@ -27,6 +27,17 @@ _MAX_PENDING = 50_000    # safety valve for pathologically long pending matches
 def guard_cfg() -> dict:
     from .small_model import APP_CONFIG
     cfg = APP_CONFIG.get("output_guard")
+    if not isinstance(cfg, dict):
+        from .config import CONFIG_FILE
+        try:
+            if CONFIG_FILE.exists():
+                import json
+                file_cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+                if isinstance(file_cfg.get("output_guard"), dict):
+                    cfg = file_cfg["output_guard"]
+                    APP_CONFIG["output_guard"] = cfg
+        except Exception:
+            pass
     return cfg if isinstance(cfg, dict) else {}
 
 

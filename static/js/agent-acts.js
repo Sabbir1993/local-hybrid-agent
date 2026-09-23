@@ -11,10 +11,12 @@ function toolIcon(name) {
     case 'revert': return '↩️';
     case 'analyze_image': return '🖼️';
     case 'search_memory': return '🧠';
+    case 'search_knowledge_base': return '🏢';
     case 'create_plan': return '📋';
     case 'update_plan_item': return '✔️';
     case 'get_plan': return '🗒️';
     case 'spawn_agent': return '🤖';
+    case 'web_search_images': return '🖼️';
     default: return '🛠️';
   }
 }
@@ -201,9 +203,9 @@ function agentActsHtml(acts) {
 
   // Count files & searches for header summary like: "Exploring 14 files, 3 searches"
   const fileOps = allTools.filter(t => ['read_file', 'write_file', 'edit_file'].includes(t.name));
-  const webOps = allTools.filter(t => ['web_search', 'web_fetch'].includes(t.name));
-  const searchOps = allTools.filter(t => ['grep', 'list_files'].includes(t.name));
-  const otherOps = allTools.filter(t => !['read_file', 'write_file', 'edit_file', 'grep', 'list_files', 'web_search', 'web_fetch'].includes(t.name));
+  const webOps = allTools.filter(t => ['web_search', 'web_fetch', 'web_search_images'].includes(t.name));
+  const searchOps = allTools.filter(t => ['grep', 'list_files', 'search_memory', 'search_knowledge_base'].includes(t.name));
+  const otherOps = allTools.filter(t => !['read_file', 'write_file', 'edit_file', 'grep', 'list_files', 'web_search', 'web_fetch', 'web_search_images', 'search_memory', 'search_knowledge_base'].includes(t.name));
 
   const summaryParts = [];
   if (webOps.length > 0) summaryParts.push(`${webOps.length} web search${webOps.length !== 1 ? 'es' : ''}`);
@@ -267,6 +269,16 @@ function agentActsHtml(acts) {
         const matches = (t.result.match(/\\n/g) || []).length + 1;
         extra = `<span class="agy-step-count">${matches} result${matches !== 1 ? 's' : ''}</span>`;
       }
+    } else if (t.name === 'search_knowledge_base') {
+      verb = 'Searched KB';
+      iconClass = 'search';
+      iconSymbol = '🏢';
+      label = esc(t.args.query || 'company knowledge');
+    } else if (t.name === 'search_memory') {
+      verb = 'Searched memory';
+      iconClass = 'search';
+      iconSymbol = '🧠';
+      label = esc(t.args.query || 'memory');
     } else if (t.name === 'list_files') {
       verb = 'Listed';
       iconClass = 'file';
@@ -300,6 +312,15 @@ function agentActsHtml(acts) {
       if (t.result) {
         const matches = (t.result.match(/https?:\/\//g) || []).length;
         if (matches > 0) extra = `<span class="agy-step-count">${matches} source${matches !== 1 ? 's' : ''}</span>`;
+      }
+    } else if (t.name === 'web_search_images') {
+      verb = 'Searched images';
+      iconClass = 'file';
+      iconSymbol = '🖼️';
+      label = esc(t.args.query || t.args.q || 'image query');
+      if (t.result) {
+        const matches = (t.result.match(/https?:\/\//g) || []).length;
+        if (matches > 0) extra = `<span class="agy-step-count">${matches} image${matches !== 1 ? 's' : ''}</span>`;
       }
     } else if (t.name === 'web_fetch') {
       verb = 'Fetched page';

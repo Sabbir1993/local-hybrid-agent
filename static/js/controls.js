@@ -36,7 +36,7 @@ async function loadSelectedModel() {
   if (curStatus && curStatus.pid) {  // loaded -> unload
     if (ctrl) ctrl.abort();
     try { await fetch('/control/stop', { method: 'POST' }); } catch (e) {}
-    pollStatus(); pollGpu();
+    pollStatus();
     if (typeof loadProfiles === 'function') loadProfiles();
     toast('Model unloaded — VRAM freed on both A770s');
     return;
@@ -110,7 +110,7 @@ if ($('m-ok')) $('m-ok').onclick = async () => {
   try { await fetch('/control/stop', { method: 'POST' }); } catch (e) {}
   messages = [];
   renderAll();
-  pollStatus(); pollGpu();
+  pollStatus();
   toast('Cleared — model unloaded, VRAM freed, chat reset');
 };
 

@@ -54,10 +54,13 @@ async function loadProfiles() {
       const shortName = name.length > 20 ? (name.slice(0, 20) + '...') : name;
       const size = m.size_gb != null ? ` · ${m.size_gb}GB` : '';
       const mtp = m.mtp_available ? ' ⚡MTP' : '';
-      o.textContent = `${shortName}${size}${mtp}`;
-      o.title = `${m.name}${size}${mtp}`;
+      const vision = m.mmproj_available ? ' 🧿' : '';
+      o.textContent = `${shortName}${size}${mtp}${vision}`;
+      o.title = `${m.name}${size}${mtp}${vision}`;
       o.dataset.mtp = m.mtp_available ? '1' : '';
       o.dataset.mtpPath = m.mtp_draft_path || '';
+      o.dataset.vision = m.mmproj_available ? '1' : '';
+      o.dataset.mmproj = m.mmproj_path || '';
       o.dataset.kind = 'local';
       o.dataset.provider = 'Local';
       sel.appendChild(o);
@@ -338,6 +341,15 @@ function fillConfigForm(c) {
     }
     if ($('cfg-mtp')) $('cfg-mtp').checked = !!c.mtp_enabled;
     if ($('mtp-nmax')) $('mtp-nmax').value = c.mtp_draft_n_max ?? 3;
+
+    // Vision section (multimodal projector)
+    const visAvail = !!c.mmproj_available;
+    const visRow = $('vision-row');
+    if (visRow) {
+      visRow.style.display = visAvail ? '' : 'none';
+      $('vision-file').textContent = visAvail && c.mmproj_path ? c.mmproj_path.split('\\').pop().split('/').pop() : '';
+    }
+    if ($('cfg-vision')) $('cfg-vision').checked = !!c.vision_capable;
 }
 
 /* Tensor split drives GPU selection: 0,1 = GPU 2 only, 1,0 = GPU 1 only, 9,11 = dual */
@@ -378,6 +390,7 @@ if ($('btn-apply')) $('btn-apply').onclick = async () => {
     kv_cache_type: $('cfg-ct').value,
     mtp_enabled: $('cfg-mtp') && $('cfg-mtp').checked,
     mtp_draft_n_max: parseInt($('mtp-nmax') && $('mtp-nmax').value) || 3,
+    vision_capable: $('cfg-vision') && $('cfg-vision').checked,
   };
   const wasLoaded = !!(curStatus && curStatus.pid);
   toast('Saving config…');

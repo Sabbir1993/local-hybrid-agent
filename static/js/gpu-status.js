@@ -54,11 +54,12 @@ async function pollStatus() {
         ec.innerHTML = `<p><b>${cloudMain.display} is ready!</b></p><p class="dim" style="margin-top:6px;">Main lane is served by <b>${cloudMain.provider}</b> in the cloud — your local GPU(s) stay free. Type your message below and press Enter.</p>`;
       }
     } else if (s.model && s.pid) {
+      const visionTag = s.vision_capable ? '  ·  🧿 vision' : '';
       $('empty-model').textContent =
-        `${m}  ·  split ${s.tensor_split || 'auto'}  ·  bench ${Number(s.measured_tg_tokens_per_sec || 0).toFixed(1)} t/s`;
+        `${m}${visionTag}  ·  split ${s.tensor_split || 'auto'}  ·  bench ${Number(s.measured_tg_tokens_per_sec || 0).toFixed(1)} t/s`;
       const ec = document.querySelector('.empty-card');
       if (ec) {
-        ec.innerHTML = `<p><b>${m} is ready!</b></p><p class="dim" style="margin-top:6px;">GPU(s) loaded. Type your message below and press Enter to chat.</p>`;
+        ec.innerHTML = `<p><b>${m} is ready!</b></p><p class="dim" style="margin-top:6px;">GPU(s) loaded${s.vision_capable ? ' with <b>vision support</b> (mmproj)' : ''}. Type your message below and press Enter to chat.</p>`;
       }
     } else {
       $('empty-model').textContent = 'Model unloaded';
@@ -119,17 +120,21 @@ async function pollGpu() {
       updateHardwareTag(`${gpuLabel} · ${eng}`);
     }
 
-    $('gpu-list').innerHTML = ads.map((a, idx) => {
-      const name = LUID_NAMES[a.luid] || (`GPU #${idx + 1} (${a.luid})`);
-      const cap = totals[idx] || 16;  // fall back to 16GB if capacity is unknown
-      const pct = Math.min(100, a.gb / cap * 100);
-      const cp = Math.min(100, Math.round(comp[a.luid] || 0));
-      return `<div class="gpu" title="${name}: ${a.gb.toFixed(1)} GB dedicated VRAM used, ${cp}% compute utilization">
-        <div class="g-top"><b>${name}</b><span class="mono">${a.gb.toFixed(1)} / ${cap.toFixed(0)} GB</span></div>
-        <div class="bar"><div class="fill${a.gb > cap - 1.5 ? ' warn' : ''}" style="width:${pct}%"></div></div>
-        <div class="g-bot"><span>compute engine</span><span class="mono ${cp > 5 ? 'hot' : ''}">${cp}%</span></div>
-      </div>`;
-    }).join('') || '<div class="dim" style="font-size:12px">No discrete GPU data</div>';
+    const glist = $('gpu-list');
+    if (glist) {
+      glist.innerHTML = ads.map((a, idx) => {
+        const name = LUID_NAMES[a.luid] || (`GPU #${idx + 1} (${a.luid})`);
+        const cap = totals[idx] || 16;  // fall back to 16GB if capacity is unknown
+        const pct = Math.min(100, a.gb / cap * 100);
+        const cp = Math.min(100, Math.round(comp[a.luid] || 0));
+        return `<div class="gpu" title="${name}: ${a.gb.toFixed(1)} GB dedicated VRAM used, ${cp}% compute utilization">
+          <div class="g-top"><b>${name}</b><span class="mono">${a.gb.toFixed(1)} / ${cap.toFixed(0)} GB</span></div>
+          <div class="bar"><div class="fill${a.gb > cap - 1.5 ? ' warn' : ''}" style="width:${pct}%"></div></div>
+          <div class="g-bot"><span>compute engine</span><span class="mono ${cp > 5 ? 'hot' : ''}">${cp}%</span></div>
+        </div>`;
+      }).join('') || '<div class="dim" style="font-size:12px">No discrete GPU data</div>';
+    }
+    return d;
   } catch (e) { /* manager restarting */ }
 }
 

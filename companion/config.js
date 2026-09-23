@@ -5,6 +5,6 @@ try {
 } catch (_) {}
 
 module.exports = {
-  SERVER_URL: process.env.A770_SERVER_URL || "https://ocelot-tidy-merely.ngrok-free.app",
+  SERVER_URL: process.env.A770_SERVER_URL || "https://petite-inflation-happen-baseball.trycloudflare.com",
 };
 
