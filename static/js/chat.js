@@ -450,64 +450,118 @@ function bubbleHtml(m, idx) {
   return `<div class="msg bot">${inner}</div>`;
 }
 
-// Global state for multi-select question answers: { [msgIdx]: { [qId]: Set(options) } }
+// Interactive question cards (Claude/Codex-style): one option per line, radio for
+// single-choice, checkbox for multi-select, plus an "Other" row with free text.
+// Handlers are wired by event delegation off data-* indexes — never interpolate
+// option text into inline JS (apostrophes in options used to break onclick).
+// State: _grillMeta[msgIdx] = parsed questions; _grillSelected[msgIdx][qi] = Set(optIdx | 'other');
+// _grillCustom[msgIdx][qi] = "Other" text (survives re-renders).
+window._grillMeta = window._grillMeta || {};
 window._grillSelected = window._grillSelected || {};
-
-function toggleGrillOption(idx, qId, val, isMulti) {
-  window._grillSelected[idx] = window._grillSelected[idx] || {};
-  if (!isMulti) {
-    window._grillSelected[idx][qId] = new Set([val]);
-  } else {
-    window._grillSelected[idx][qId] = window._grillSelected[idx][qId] || new Set();
-    if (window._grillSelected[idx][qId].has(val)) {
-      window._grillSelected[idx][qId].delete(val);
-    } else {
-      window._grillSelected[idx][qId].add(val);
-    }
-  }
-  // Update DOM classes for selected pills
-  const container = $(`grill-q-${idx}-${qId}`);
-  if (container) {
-    container.querySelectorAll('.grill-pill').forEach(pill => {
-      const pVal = pill.getAttribute('data-val');
-      const isSel = window._grillSelected[idx][qId].has(pVal);
-      pill.classList.toggle('active', isSel);
-    });
-  }
-}
-
+window._grillCustom = window._grillCustom || {};
 // Track submitted question cards so previous rounds show submitted status and do not get re-submitted
 window._grillSubmitted = window._grillSubmitted || new Set();
 
+function _grillSel(idx, qi) {
+  window._grillSelected[idx] = window._grillSelected[idx] || {};
+  window._grillSelected[idx][qi] = window._grillSelected[idx][qi] || new Set();
+  return window._grillSelected[idx][qi];
+}
+
+function _grillSyncDom(idx, qi) {
+  const block = $(`grill-q-${idx}-${qi}`);
+  if (!block) return;
+  const sel = _grillSel(idx, qi);
+  block.querySelectorAll('.grill-opt').forEach(row => {
+    const key = row.dataset.opt === 'other' ? 'other' : Number(row.dataset.opt);
+    const on = sel.has(key);
+    row.classList.toggle('active', on);
+    row.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+}
+
+function toggleGrillOption(idx, qi, key) {
+  if (window._grillSubmitted.has(idx)) return;
+  const q = (window._grillMeta[idx] || [])[qi];
+  if (!q) return;
+  const sel = _grillSel(idx, qi);
+  if (q.multi) {
+    if (sel.has(key)) sel.delete(key); else sel.add(key);
+  } else {
+    sel.clear();
+    sel.add(key);
+  }
+  _grillSyncDom(idx, qi);
+  if (key === 'other' && sel.has('other')) {
+    const inp = $(`grill-custom-${idx}-${qi}`);
+    if (inp) inp.focus();
+  }
+}
+
+function _grillRowFromEvent(e) {
+  const row = e.target.closest && e.target.closest('.grill-opt');
+  if (!row) return null;
+  const card = row.closest('.grill-interactive-box');
+  const block = row.closest('.grill-q-block');
+  if (!card || !block) return null;
+  return {
+    row,
+    idx: Number(card.dataset.idx),
+    qi: Number(block.dataset.qi),
+    key: row.dataset.opt === 'other' ? 'other' : Number(row.dataset.opt),
+  };
+}
+
+document.addEventListener('click', (e) => {
+  const hit = _grillRowFromEvent(e);
+  if (!hit) return;
+  // Clicking into the "Other" text box selects it but never toggles it off
+  if (e.target.closest('.grill-custom-input')) {
+    if (!_grillSel(hit.idx, hit.qi).has('other')) toggleGrillOption(hit.idx, hit.qi, 'other');
+    return;
+  }
+  toggleGrillOption(hit.idx, hit.qi, hit.key);
+});
+
+document.addEventListener('keydown', (e) => {
+  const inp = e.target.closest && e.target.closest('.grill-custom-input');
+  if (inp) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitGrillAnswers(Number(inp.closest('.grill-interactive-box').dataset.idx));
+    }
+    return;
+  }
+  const hit = _grillRowFromEvent(e);
+  if (hit && (e.key === ' ' || e.key === 'Enter')) {
+    e.preventDefault();
+    toggleGrillOption(hit.idx, hit.qi, hit.key);
+  }
+});
+
+document.addEventListener('input', (e) => {
+  const inp = e.target.closest && e.target.closest('.grill-custom-input');
+  if (!inp) return;
+  const idx = Number(inp.closest('.grill-interactive-box').dataset.idx);
+  const qi = Number(inp.closest('.grill-q-block').dataset.qi);
+  window._grillCustom[idx] = window._grillCustom[idx] || {};
+  window._grillCustom[idx][qi] = inp.value;
+  // Typing in "Other" selects it (and deselects others for single-choice)
+  if (inp.value.trim() && !_grillSel(idx, qi).has('other')) toggleGrillOption(idx, qi, 'other');
+});
+
 function submitGrillAnswers(idx) {
   if (window._grillSubmitted.has(idx)) return;
-  const qState = window._grillSelected[idx] || {};
+  const meta = window._grillMeta[idx] || [];
   const lines = [];
-  
-  // Collect from pills
-  for (const [qId, setVals] of Object.entries(qState)) {
-    const chosen = Array.from(setVals);
-    const customInp = $(`grill-custom-${idx}-${qId}`);
-    if (customInp && customInp.value.trim()) {
-      chosen.push(customInp.value.trim());
-    }
-    if (chosen.length > 0) {
-      lines.push(`${qId}: ${chosen.join(', ')}`);
-    }
-  }
-  
-  // Check any standalone inputs where no pill was clicked
-  const card = $(`grill-card-${idx}`);
-  if (card) {
-    card.querySelectorAll('.grill-custom-input').forEach(inp => {
-      const qId = inp.getAttribute('data-qid');
-      if (!qState[qId] || qState[qId].size === 0) {
-        if (inp.value.trim()) {
-          lines.push(`${qId}: ${inp.value.trim()}`);
-        }
-      }
-    });
-  }
+
+  meta.forEach((q, qi) => {
+    const sel = _grillSel(idx, qi);
+    const custom = ((window._grillCustom[idx] || {})[qi] || '').trim();
+    const chosen = q.options.filter((_, oi) => sel.has(oi));
+    if (custom && sel.has('other')) chosen.push(custom);
+    if (chosen.length > 0) lines.push(`${q.qId}: ${chosen.join(', ')}`);
+  });
 
   if (lines.length === 0) {
     toast('Please select an option or write an answer first', true);
@@ -516,12 +570,20 @@ function submitGrillAnswers(idx) {
 
   // Mark as submitted
   window._grillSubmitted.add(idx);
-  const btn = card ? card.querySelector('.grill-submit-btn') : null;
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = '✓ Answer Submitted';
+  const card = $(`grill-card-${idx}`);
+  if (card) {
+    card.classList.add('submitted');
+    card.querySelectorAll('.grill-opt').forEach(r => { r.setAttribute('aria-disabled', 'true'); r.tabIndex = -1; });
+    card.querySelectorAll('.grill-custom-input').forEach(i => { i.disabled = true; });
+    const sub = card.querySelector('.grill-box-sub');
+    if (sub) sub.textContent = 'Answers submitted';
+    const btn = card.querySelector('.grill-submit-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '✓ Answer Submitted';
+    }
   }
-  
+
   const text = lines.join('\n');
   if (agentMode) {
     runAgentSSE(text);
@@ -530,10 +592,13 @@ function submitGrillAnswers(idx) {
   }
 }
 
+const _GRILL_MULTI_RE = /\b(?:select|choose|pick|check|tick)\s+(?:all|any|one or more|multiple|several)\b|\ball that apply\b|\bmulti-?select\b|\bmultiple (?:choices|answers|options)\b/i;
+const _GRILL_OTHER_RE = /^(?:other|something else|none of (?:the )?above|custom(?: answer)?)\b/i;
+
 function renderInteractiveQuestions(rawText, idx) {
   // Check if text matches grill-me format or question frontiers
   // Look for ❓, Q1/Q2, Question 1, or ➡️ / recommended markers
-  const hasTrigger = rawText.includes('❓') || 
+  const hasTrigger = rawText.includes('❓') ||
                      /\b(?:Q[0-9]+|Question\s+[0-9]+)\b/i.test(rawText) ||
                      rawText.includes('➡️') ||
                      /(?:^|\n)\s*(?:[-*•]|\([a-zA-Z0-9]+\)|[0-9]+\))\s*\[[ x]\]/i.test(rawText);
@@ -566,20 +631,25 @@ function renderInteractiveQuestions(rawText, idx) {
 
     // Look for options like: - [ ] Option or - Option A or (A) Option or A) Option
     const options = [];
+    let sawCheckbox = false;
     const lines = block.split('\n');
     for (const line of lines) {
-      const optMatch = line.match(/^\s*(?:[-*•]|\([a-zA-Z0-9]+\)|[a-zA-Z0-9]+[.)])\s*(?:\[[ x]\]\s*)?([^\n]+)/);
-      if (optMatch) {
-        let optText = optMatch[1].replace(/[*_]/g, '').trim();
-        if (!optText.startsWith('❓') && !optText.startsWith('➡️') && !optText.toLowerCase().startsWith('recommend') && optText.length > 1 && optText.length < 150) {
-          if (/^(?:\(Recommended\)|\(Rec\)|\bRecommended:?\b)/i.test(optText)) {
-            optText = optText.replace(/^(?:\(Recommended\)|\(Rec\)|\bRecommended:?\b)/i, '').trim();
-            if (!recommendation) recommendation = optText;
-          }
-          if (optText && !options.includes(optText)) {
-            options.push(optText);
-          }
-        }
+      const optMatch = line.match(/^\s*(?:[-*•]|\([a-zA-Z0-9]+\)|[a-zA-Z0-9]+[.)])\s*(\[[ x]\]\s*)?([^\n]+)/i);
+      if (!optMatch) continue;
+      let optText = optMatch[2].replace(/[*_`]/g, '').trim();
+      if (optText.startsWith('❓') || optText.startsWith('➡️') || optText.toLowerCase().startsWith('recommend')) continue;
+      if (optText.length <= 1 || optText.length >= 200) continue;
+      // Lead-in lines ("However, here are a few things I can do:") are headers, not choices
+      if (/:\s*$/.test(optText)) continue;
+      if (optMatch[1]) sawCheckbox = true;
+      if (/^(?:\(Recommended\)|\(Rec\)|\bRecommended:?\b)/i.test(optText)) {
+        optText = optText.replace(/^(?:\(Recommended\)|\(Rec\)|\bRecommended:?\b)/i, '').trim();
+        if (!recommendation) recommendation = optText;
+      }
+      // The card always renders its own "Other" row
+      if (_GRILL_OTHER_RE.test(optText)) continue;
+      if (optText && !options.includes(optText)) {
+        options.push(optText);
       }
     }
 
@@ -591,39 +661,51 @@ function renderInteractiveQuestions(rawText, idx) {
     }
 
     if (options.length > 0 || recommendation) {
-      parsedQuestions.push({ qId, qTitle, recommendation, options });
+      const multi = sawCheckbox || _GRILL_MULTI_RE.test(block);
+      parsedQuestions.push({ qId, qTitle, recommendation, options, multi });
     }
   }
 
   if (parsedQuestions.length === 0) return '';
 
+  window._grillMeta[idx] = parsedQuestions;
   const isSubmitted = window._grillSubmitted.has(idx);
-  let html = `<div class="grill-interactive-box" id="grill-card-${idx}">`;
-  html += `<div class="grill-box-header"><span>🎯 Decision Options</span><span class="grill-box-sub">${isSubmitted ? 'Answers submitted' : 'Click an option or type custom input'}</span></div>`;
+  const customState = window._grillCustom[idx] || {};
+  const tab = isSubmitted ? '-1' : '0';
+  const disabledAttr = isSubmitted ? ' aria-disabled="true"' : '';
+  let html = `<div class="grill-interactive-box${isSubmitted ? ' submitted' : ''}" id="grill-card-${idx}" data-idx="${idx}">`;
+  html += `<div class="grill-box-header"><span>🎯 Decision Options</span><span class="grill-box-sub">${isSubmitted ? 'Answers submitted' : 'Select an option or write your own'}</span></div>`;
 
-  for (const q of parsedQuestions) {
-    html += `<div class="grill-q-block" id="grill-q-${idx}-${q.qId}">`;
-    html += `<div class="grill-q-label"><strong>${esc(q.qId)}</strong>: ${esc(q.qTitle)}</div>`;
-    html += `<div class="grill-options-grid">`;
+  parsedQuestions.forEach((q, qi) => {
+    const sel = _grillSel(idx, qi);
+    const role = q.multi ? 'checkbox' : 'radio';
+    const kind = q.multi ? 'multi' : 'single';
+    html += `<div class="grill-q-block" id="grill-q-${idx}-${qi}" data-qi="${qi}">`;
+    html += `<div class="grill-q-label"><strong>${esc(q.qId)}</strong> ${esc(q.qTitle)}`;
+    html += `<span class="grill-q-mode">${q.multi ? 'Select all that apply' : 'Select one'}</span></div>`;
+    html += `<div class="grill-options-list" role="${q.multi ? 'group' : 'radiogroup'}">`;
 
-    for (const opt of q.options) {
+    q.options.forEach((opt, oi) => {
       const isRec = q.recommendation && (opt === q.recommendation || opt.includes(q.recommendation) || q.recommendation.includes(opt));
-      const cleanVal = opt.replace(/^(?:\(Recommended\)|\(Rec\)|\bRecommended:?\b)/i, '').trim();
-      const isSelected = window._grillSelected[idx] && window._grillSelected[idx][q.qId] && window._grillSelected[idx][q.qId].has(cleanVal);
-      html += `<button type="button" class="grill-pill ${isRec ? 'recommended' : ''} ${isSelected ? 'active' : ''}" data-val="${esc(cleanVal)}" ${isSubmitted ? 'disabled' : ''} onclick="toggleGrillOption(${idx}, '${esc(q.qId)}', '${esc(cleanVal).replace(/'/g, "\\'")}', true)">`;
+      const on = sel.has(oi);
+      html += `<div class="grill-opt ${kind}${isRec ? ' recommended' : ''}${on ? ' active' : ''}" role="${role}" tabindex="${tab}" aria-checked="${on}"${disabledAttr} data-opt="${oi}">`;
+      html += `<span class="grill-opt-mark" aria-hidden="true"></span>`;
+      html += `<span class="grill-opt-num">${oi + 1}.</span>`;
+      html += `<span class="grill-opt-text">${esc(opt)}</span>`;
       if (isRec) html += `<span class="grill-pill-badge">★ Recommended</span>`;
-      html += `<span>${esc(cleanVal)}</span>`;
-      html += `</button>`;
-    }
-
-    html += `</div>`;
-    if (!isSubmitted) {
-      html += `<div class="grill-custom-row">`;
-      html += `<input type="text" id="grill-custom-${idx}-${q.qId}" data-qid="${esc(q.qId)}" class="grill-custom-input" placeholder="Or write custom answer for ${esc(q.qId)}..." onkeydown="if(event.key==='Enter'){event.preventDefault(); submitGrillAnswers(${idx});}">`;
       html += `</div>`;
-    }
+    });
+
+    // "Other" row: free-text answer
+    const otherOn = sel.has('other');
+    html += `<div class="grill-opt other ${kind}${otherOn ? ' active' : ''}" role="${role}" tabindex="${tab}" aria-checked="${otherOn}"${disabledAttr} data-opt="other">`;
+    html += `<span class="grill-opt-mark" aria-hidden="true"></span>`;
+    html += `<span class="grill-opt-num">${q.options.length + 1}.</span>`;
+    html += `<input type="text" id="grill-custom-${idx}-${qi}" class="grill-custom-input" value="${esc(customState[qi] || '')}" placeholder="Other — type your own answer…" ${isSubmitted ? 'disabled' : ''}>`;
     html += `</div>`;
-  }
+
+    html += `</div></div>`;
+  });
 
   html += `<div class="grill-footer">`;
   html += `<button type="button" class="btn primary grill-submit-btn" ${isSubmitted ? 'disabled' : ''} onclick="submitGrillAnswers(${idx})">${isSubmitted ? '✓ Answer Submitted' : '✓ Submit Decisions'}</button>`;

@@ -983,6 +983,7 @@ async function activateProject(pid) {
       toast('No active project');
     }
     updateWsRail();
+    if (window.refreshProjectInitHint) window.refreshProjectInitHint();   // AGENTS.md loaded / offer /init
     if (wsPanelOpen) wsRefreshTree();   // tree now shows the new project's files
   } catch (e) { toast('Activate failed', true); }
 }
@@ -1012,6 +1013,7 @@ async function setNoProject() {
   loadProjects();
   if (wsPanelOpen) setWsPanel(false);   // no project -> no workspace to show
   updateWsRail();
+  if (window.refreshProjectInitHint) window.refreshProjectInitHint();
 }
 
 /* Draw attention to the Projects card when agent mode needs a project

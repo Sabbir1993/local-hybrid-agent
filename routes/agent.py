@@ -20,6 +20,7 @@ from core.config import BASE_DIR, CONFIG_DEFAULTS
 from core.deps import get_current_user, require_permission
 from core.audit import audit_log
 from core import input_guard
+from core.project_context import load_project_instructions, prompt_block as project_prompt_block, INIT_PROMPT
 from core.knowledge_access import allowed_source_ids_for, kb_local_only, set_kb_cloud_blocked
 from core.memory import search_memory_hybrid
 from core.file_tools import extract_file_content, MIME_MAP
@@ -386,6 +387,16 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
 
     ws_path = str(active_workspace())
     sys_prompt = AGENT_SYSTEM_PROMPT.format(workspace=ws_path)
+    # project instructions (AGENTS.md written by /init) -- already PAN/secret
+    # masked by the loader; admin output-guard rules applied on top because the
+    # text can reach a cloud lane
+    try:
+        _pi = await load_project_instructions()
+        if _pi:
+            _pi_text, _ = output_guard.redact_full(_pi[1], user, _any_cloud)
+            sys_prompt += project_prompt_block((_pi[0], _pi_text))
+    except Exception as e:
+        print(f"[agent] project instructions load failed: {e}", file=sys.stderr)
     # Organizational knowledge base: permission-scoped retrieval (see routes/chat.py
     # for the rationale -- gating the candidate pool before scoring is what makes
     # "nothing found" safe for users without access to a document).
@@ -1140,6 +1151,21 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             yield "event: done\ndata: {}\n\n"
 
     return StreamingResponse(sse(), media_type="text/event-stream")
+
+
+@router.get("/agent/project_instructions")
+async def agent_project_instructions(user: Principal = Depends(get_current_user)):
+    """Whether the active project has an AGENTS.md (drives the /init hint)."""
+    proj = get_active_project()
+    if not proj:
+        return {"project": None, "exists": False, "filename": None, "size": 0, "init_prompt": INIT_PROMPT}
+    pi = None
+    try:
+        pi = await load_project_instructions()
+    except Exception as e:
+        print(f"[agent] project instructions status failed: {e}", file=sys.stderr)
+    return {"project": proj, "exists": bool(pi), "filename": pi[0] if pi else None,
+            "size": len(pi[1]) if pi else 0, "init_prompt": INIT_PROMPT}
 
 
 @router.get("/agent/workspace")

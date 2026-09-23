@@ -1947,6 +1947,13 @@ body.ws-resizing #ws-grip::after { background: var(--accent); opacity: 1; }
 }
 .cmd-chip-x:hover { color: var(--red); }
 
+/* ---------- project instructions hint (AGENTS.md loaded / run /init) ---------- */
+.proj-init-bar {
+  align-items: center; gap: 8px; padding: 0 0 8px; font-size: 11.5px; color: var(--dim);
+}
+.proj-init-ok { color: var(--text); }
+.proj-init-btn { width: auto; margin: 0; padding: 2px 10px; font-size: 11px; }
+
 /* attention pulse for the projects card when agent mode needs a project */
 @keyframes flashPulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(210, 153, 34, 0); border-color: var(--border); }
@@ -2496,47 +2503,89 @@ body.ws-resizing #ws-grip::after { background: var(--accent); opacity: 1; }
   margin-bottom: 6px;
   line-height: 1.35;
 }
-.grill-options-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-bottom: 6px;
+.grill-q-mode {
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--dim);
+  opacity: 0.85;
 }
-.grill-pill {
-  display: inline-flex;
+.grill-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.grill-opt {
+  display: flex;
   align-items: center;
-  gap: 5px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  color: var(--text);
-  padding: 3px 9px;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
   cursor: pointer;
   user-select: none;
-  transition: all 0.12s ease;
-  text-align: left;
-  line-height: 1.3;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
-.grill-pill:hover {
+.grill-opt:hover,
+.grill-opt:focus-visible {
   background: var(--accent-bg);
+  outline: none;
+}
+.grill-opt:focus-visible {
   border-color: var(--accent);
 }
-.grill-pill.active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-  box-shadow: 0 0 6px var(--accent-glow);
-}
-.grill-pill.recommended {
+.grill-opt.active {
+  background: var(--accent-bg);
   border-color: rgba(217, 119, 87, 0.45);
-  background: rgba(217, 119, 87, 0.05);
 }
-.grill-pill.recommended:not(.active):hover {
-  background: rgba(217, 119, 87, 0.15);
-  border-color: var(--accent);
+.grill-opt-mark {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--dim);
+  background: var(--panel);
+  position: relative;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.grill-opt.single .grill-opt-mark { border-radius: 50%; }
+.grill-opt.multi .grill-opt-mark { border-radius: 3px; }
+.grill-opt.active .grill-opt-mark { border-color: var(--accent); }
+.grill-opt.single.active .grill-opt-mark::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.grill-opt.multi.active .grill-opt-mark { background: var(--accent); }
+.grill-opt.multi.active .grill-opt-mark::after {
+  content: '';
+  position: absolute;
+  left: 3.5px;
+  top: 0.5px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.grill-opt-num {
+  flex: 0 0 auto;
+  min-width: 16px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.grill-opt-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .grill-pill-badge {
+  flex: 0 0 auto;
   font-size: 9px;
   letter-spacing: 0.02em;
   font-weight: 600;
@@ -2546,13 +2595,9 @@ body.ws-resizing #ws-grip::after { background: var(--accent); opacity: 1; }
   color: var(--accent);
   border: 1px solid rgba(217, 119, 87, 0.35);
 }
-.grill-pill.active .grill-pill-badge {
-  background: rgba(255, 255, 255, 0.25);
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.4);
-}
-.grill-custom-row {
-  margin-top: 4px;
+.grill-opt.other .grill-custom-input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .grill-custom-input {
   width: 100%;
@@ -2560,13 +2605,25 @@ body.ws-resizing #ws-grip::after { background: var(--accent); opacity: 1; }
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 8px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text);
   outline: none;
   transition: border-color 0.15s ease;
 }
 .grill-custom-input:focus {
   border-color: var(--accent);
+}
+.grill-interactive-box.submitted .grill-opt {
+  cursor: default;
+}
+.grill-interactive-box.submitted .grill-opt:not(.active) {
+  opacity: 0.5;
+}
+.grill-interactive-box.submitted .grill-opt:hover {
+  background: transparent;
+}
+.grill-interactive-box.submitted .grill-opt.active:hover {
+  background: var(--accent-bg);
 }
 .grill-footer {
   display: flex;

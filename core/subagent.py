@@ -139,6 +139,12 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
     sys_prompt = SUBAGENT_SYSTEM_PROMPT.format(workspace=str(active_workspace()))
     if role_cfg.get("system_prompt"):
         sys_prompt += "\n\n" + role_cfg["system_prompt"]
+    # project instructions (AGENTS.md from /init), PAN/secret masked by the loader
+    try:
+        from .project_context import load_project_instructions, prompt_block
+        sys_prompt += prompt_block(await load_project_instructions())
+    except Exception:
+        pass
 
     msgs = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": task}]
 

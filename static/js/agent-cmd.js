@@ -17,6 +17,12 @@ const CMD_HINTS = {
     title: '/plan — Plan mode (explores & proposes changes)',
     hint: 'Enter to plan',
   },
+  init: {
+    icon: '🧭',
+    ph: 'Optional: what to focus on (e.g. the payment module) — Enter to scan the project and write AGENTS.md',
+    title: '/init — scan the project and write AGENTS.md (auto-loaded into every agent task)',
+    hint: 'Enter to initialize',
+  },
   build: {
     icon: '🔨',
     ph: 'Describe what to build or fix (executes changes in workspace) — Enter to execute',
@@ -112,11 +118,70 @@ function runArmedCmd(cmd, text) {
     }
     return;
   }
+  if (cmd.name === 'init') {
+    disarmCmd();
+    runInit(arg);
+    return;
+  }
   const line = arg ? ('/' + cmd.name + ' ' + arg).trim() : ('/' + cmd.name);
   disarmCmd();
   if (agentMode) runAgentSSE(line); else send(line);
 }
 
+/* ---- /init: scan the project and write AGENTS.md (like Claude Code / Codex) ----
+   The backend injects AGENTS.md into every agent / sub-agent prompt for the
+   active project (core/project_context.py); this just runs the init task. */
+async function fetchProjectInstructions() {
+  try {
+    const r = await fetch('/agent/project_instructions', { headers: { ...getDeviceHeaders() } });
+    return r.ok ? await r.json() : null;
+  } catch (e) { return null; }
+}
+
+async function runInit(extra) {
+  if (!agentMode) { toast('/init works in Agent Task mode', true); return; }
+  if (!curProject || !curProject.id) { flashProjectsCard(); return; }
+  const d = await fetchProjectInstructions();
+  if (!d || !d.init_prompt) { toast('Could not load the /init prompt from the server', true); return; }
+  if (window._setPlanMode) window._setPlanMode(false);   // /init writes a file -> Build mode
+  let prompt = d.init_prompt;
+  if (extra) prompt += `
+
+Extra focus from the user: ${extra}`;
+  await runAgentSSE(prompt);
+  refreshProjectInitHint();
+}
+
+/* Composer hint after a project is selected: AGENTS.md loaded, or offer /init. */
+async function refreshProjectInitHint() {
+  const bar = $('proj-init-bar');
+  if (!bar) return;
+  if (!agentMode || !curProject || !curProject.id) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  const pid = curProject.id;
+  const d = await fetchProjectInstructions();
+  if (!curProject || curProject.id !== pid) return;            // project changed meanwhile
+  if (!d) { bar.style.display = 'none'; return; }
+  const dismissKey = `init_hint_dismissed_${pid}`;
+  if (d.exists) {
+    bar.innerHTML = `<span class="proj-init-ok" title="Injected into every agent task for this project">📘 ${esc(d.filename)} loaded</span>`;
+  } else {
+    let dismissed = false;
+    try { dismissed = localStorage.getItem(dismissKey) === '1'; } catch (e) {}
+    if (dismissed) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+    bar.innerHTML = `<span>🧭 No AGENTS.md in this project — run <b>/init</b> so the agent learns its commands and structure.</span>
+      <button class="btn ghost proj-init-btn" data-init>Run /init</button>
+      <span class="cmd-chip-x" data-x title="Dismiss for this project">✕</span>`;
+    bar.querySelector('[data-init]').onclick = () => armCmd('init');
+    bar.querySelector('[data-x]').onclick = () => {
+      try { localStorage.setItem(dismissKey, '1'); } catch (e) {}
+      bar.style.display = 'none'; bar.innerHTML = '';
+    };
+  }
+  bar.style.display = 'flex';
+}
+
+window.runInit = runInit;
+window.refreshProjectInitHint = refreshProjectInitHint;
 window.armCmd = armCmd;
 window.disarmCmd = disarmCmd;
 window.runArmedCmd = runArmedCmd;
@@ -178,6 +243,7 @@ async function cmdMenuOpen(kind, query) {
     const all = agentMode ? [
       { icon: '📋', name: 'plan', desc: 'switch to Plan mode (read-only, propose)', category: 'mode' },
       { icon: '🔨', name: 'build', desc: 'switch to Build mode (execute)', category: 'mode' },
+      { icon: '🧭', name: 'init', desc: 'scan the project and write AGENTS.md (auto-loaded into agent tasks)', category: 'utility' },
       { icon: '🧹', name: 'compact', desc: 'compress conversation history (needs an active project)', category: 'utility' },
       { icon: '🤖', name: 'subagent', desc: 'delegate a sub-task to a focused sub-agent', category: 'utility', template: true },
       { icon: '🧑‍🤝‍🧑', name: 'multiagent', desc: 'delegate multiple roles (planner/coder/reviewer) in one prompt', category: 'utility', template: true },
@@ -373,6 +439,7 @@ function setAppMode(isAgent, isUserSwitch = false) {
   // workspace side panel needs agent mode + an active project
   if (!agentMode && wsPanelOpen) setWsPanel(false);
   updateWsRail();
+  refreshProjectInitHint();
   const sTitle = $('session-title');
   if (sTitle) {
     sTitle.textContent = agentMode ? 'Project Tasks' : 'Recent Chats';

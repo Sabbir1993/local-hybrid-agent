@@ -32,6 +32,13 @@ function submitPrompt() {
     return;
   }
 
+  // /init [focus] — scan the project and write AGENTS.md (agent mode)
+  if (/^\/init(\s|$)/i.test(text)) {
+    if (input) input.value = '';
+    if (window.runInit) window.runInit(text.replace(/^\/init\s*/i, '').trim());
+    return;
+  }
+
   // /plan and /build typed directly — Plan/Build mode switches (agent mode)
   if (/^\/(plan|build)(\s|$)/i.test(text)) {
     if (agentMode && (!curProject || !curProject.id)) { flashProjectsCard(); return; }
