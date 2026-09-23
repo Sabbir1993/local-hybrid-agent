@@ -34,6 +34,23 @@ def find_llama_server(bin_dir: str) -> Path:
     sys.exit(f"llama-server(.exe) not found in {bin_dir} - check 'llama_bin_dir' in the profile.")
 
 
+def per_slot_cap(profile: dict) -> int:
+    """--kv-unified-per-slot value to launch with, or 0 to omit it.
+
+    The cap only splits a unified pool between several slots. With one slot
+    (or a cap >= context_size) it would just shrink the only conversation —
+    e.g. -c 131072 -np 1 with a 32768 cap gives a 32K window.
+    """
+    if not profile.get("kv_unified"):
+        return 0
+    cap = int(profile.get("kv_unified_per_slot") or 0)
+    ctx = int(profile.get("context_size") or CONFIG_DEFAULTS["context_size"])
+    n_slots = int(profile.get("n_slots") or 1)
+    if cap <= 0 or n_slots <= 1 or cap >= ctx:
+        return 0
+    return cap
+
+
 def build_launch_command(profile: dict) -> list[str]:
     bin_dir = profile.get("llama_bin_dir", CONFIG_DEFAULTS["llama_bin_dir"])
     server_bin = find_llama_server(bin_dir)
@@ -80,8 +97,8 @@ def build_launch_command(profile: dict) -> list[str]:
     # llama-server only enables the unified KV pool by itself when -np is auto
     if profile.get("kv_unified"):
         cmd += ["-kvu"]
-        if profile.get("kv_unified_per_slot"):
-            cmd += ["--kv-unified-per-slot", str(profile["kv_unified_per_slot"])]
+        if per_slot_cap(profile):
+            cmd += ["--kv-unified-per-slot", str(per_slot_cap(profile))]
     if profile.get("cache_reuse"):
         cmd += ["--cache-reuse", str(profile["cache_reuse"])]
     if profile.get("cache_ram"):

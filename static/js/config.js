@@ -2,6 +2,7 @@
 const CFG_DEFAULTS = {
   ctx: 32768, ngl: 999, threads: 0, tb: 0, batch: 2048, ubatch: 512,
   np: 1, kai: 25, ts: '9,11', sm: 'layer', fa: 'auto', ct: 'f16',
+  kvps: 0, cru: 256, cram: 0,
 };
 
 async function loadProfiles() {
@@ -451,6 +452,10 @@ function fillConfigForm(c) {
     $('cfg-sm').value = c.split_mode || CFG_DEFAULTS.sm;
     $('cfg-fa').value = c.flash_attn || CFG_DEFAULTS.fa;
     $('cfg-ct').value = c.kv_cache_type || CFG_DEFAULTS.ct;
+    if ($('cfg-kvu')) $('cfg-kvu').checked = !!c.kv_unified;
+    if ($('cfg-kvps')) $('cfg-kvps').value = c.kv_unified_per_slot ?? CFG_DEFAULTS.kvps;
+    if ($('cfg-cru')) $('cfg-cru').value = c.cache_reuse ?? CFG_DEFAULTS.cru;
+    if ($('cfg-cram')) $('cfg-cram').value = c.cache_ram ?? CFG_DEFAULTS.cram;
     // MTP section
     const mtpAvail = !!c.mtp_available;
     const mtpRow = $('mtp-row');
@@ -518,6 +523,10 @@ if ($('btn-apply')) $('btn-apply').onclick = async () => {
     split_mode: $('cfg-sm').value,
     flash_attn: $('cfg-fa').value,
     kv_cache_type: $('cfg-ct').value,
+    kv_unified: !!($('cfg-kvu') && $('cfg-kvu').checked),
+    kv_unified_per_slot: parseInt($('cfg-kvps') && $('cfg-kvps').value) || 0,
+    cache_reuse: parseInt($('cfg-cru') && $('cfg-cru').value) || 0,
+    cache_ram: parseInt($('cfg-cram') && $('cfg-cram').value) || 0,
     mtp_enabled: $('cfg-mtp') && $('cfg-mtp').checked,
     mtp_draft_n_max: parseInt($('mtp-nmax') && $('mtp-nmax').value) || 3,
     vision_capable: $('cfg-vision') && $('cfg-vision').checked,

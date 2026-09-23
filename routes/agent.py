@@ -18,6 +18,7 @@ from core.auth import Principal, user_has_permission
 from core.backend import device_prefix
 from core.config import BASE_DIR, CONFIG_DEFAULTS
 from core.deps import get_current_user, require_permission
+from core.process import per_slot_cap
 from core.audit import audit_log
 from core import input_guard
 from core.project_context import load_project_instructions, prompt_block as project_prompt_block, INIT_PROMPT
@@ -757,7 +758,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         # is unified (then --kv-unified-per-slot, if set, is the cap)
                         n_slots = int(state.profile.get("n_slots") or 1)
                         if state.profile.get("kv_unified"):
-                            main_ctx = int(state.profile.get("kv_unified_per_slot") or main_ctx)
+                            main_ctx = per_slot_cap(state.profile) or main_ctx
                         elif n_slots > 1:
                             main_ctx //= n_slots
                     pre_tokens = estimate_prompt_tokens(msgs)

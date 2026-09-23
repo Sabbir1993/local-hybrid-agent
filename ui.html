@@ -10,7 +10,7 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=3.5">
+<link rel="stylesheet" href="/static/css/style.css?v=3.7">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
@@ -69,6 +69,7 @@
       <button id="btn-settings" class="btn ghost icon-btn" title="Hardware status (GPUs), model launch parameters, cloud providers, capabilities, users &amp; knowledge base, sampling &amp; runtime">⚙️ Settings</button>
       <button id="btn-monitor" class="btn ghost icon-btn" data-perm="monitor.view" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">📡 Monitor</button>
       <button id="btn-report" class="btn ghost icon-btn" data-perm="usage.report.view" title="Token usage report: prompts vs completions, per-model and per-day totals">📊 Report</button>
+      <button id="btn-audit" class="btn ghost icon-btn" data-perm="audit.view" title="Audit log: who did what — model loads, provider changes, user/role edits, permission denials">🧾 Audit</button>
       <button id="btn-db" class="btn ghost icon-btn" data-perm="database.manage" title="Database Explorer &amp; SQL Query Console: inspect tables, schema, and execute SQL">🗄️ Database</button>
       <button id="btn-docs" class="btn ghost icon-btn" title="Step-by-step guide: connect any OpenAI-compatible agent to this runtime">📖 Docs</button>
       <button id="btn-user-menu" class="btn ghost icon-btn" title="Account">👤</button>
@@ -276,6 +277,70 @@
       <button class="btn ghost rep-day" data-days="365" style="width:auto; margin:0; padding:4px 10px;">All</button>
     </div>
     <div id="rep-content"><div class="mon-empty">Loading…</div></div>
+  </div>
+</div>
+
+<div id="audit-modal" hidden>
+  <div id="audit-box" role="dialog" aria-labelledby="audit-title">
+    <h2><span id="audit-title">🧾 Audit Log</span> <button class="rep-close" id="audit-close" title="Close (Esc)">✕</button></h2>
+    <form id="audit-filters" class="audit-filters" autocomplete="off">
+      <div class="af-item">
+        <label for="af-range">Time</label>
+        <select id="af-range">
+          <option value="all">All time</option>
+          <option value="1">Last 24 hours</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="custom">Custom range…</option>
+        </select>
+      </div>
+      <div class="af-item af-custom" hidden>
+        <label for="af-from">From</label>
+        <input type="datetime-local" id="af-from">
+      </div>
+      <div class="af-item af-custom" hidden>
+        <label for="af-to">To</label>
+        <input type="datetime-local" id="af-to">
+      </div>
+      <div class="af-item">
+        <label for="af-user">User</label>
+        <select id="af-user"><option value="">All users</option></select>
+      </div>
+      <div class="af-item">
+        <label for="af-action">Action</label>
+        <select id="af-action"><option value="">All actions</option></select>
+      </div>
+      <div class="af-item">
+        <label for="af-result">Result</label>
+        <select id="af-result"><option value="">Any result</option></select>
+      </div>
+      <div class="af-item">
+        <label for="af-ip">IP</label>
+        <input type="text" id="af-ip" placeholder="e.g. 10.0." maxlength="64">
+      </div>
+      <div class="af-item af-grow">
+        <label for="af-q">Search</label>
+        <input type="search" id="af-q" placeholder="Resource, detail, permission, user…" maxlength="200">
+      </div>
+      <div class="af-actions">
+        <button type="button" class="btn ghost" id="af-reset" title="Clear all filters">Reset</button>
+        <button type="button" class="btn ghost" id="af-export" title="Download all rows matching the current filters as CSV (max 50,000)">⬇ CSV</button>
+      </div>
+    </form>
+    <div id="audit-content"><div class="mon-empty">Loading…</div></div>
+    <div class="audit-pager" id="audit-pager">
+      <span id="audit-count" class="dim"></span>
+      <div class="audit-pager-nav">
+        <label for="af-size" class="dim">Rows</label>
+        <select id="af-size"><option>25</option><option selected>50</option><option>100</option><option>200</option></select>
+        <button type="button" class="btn ghost" id="ap-first" title="First page">«</button>
+        <button type="button" class="btn ghost" id="ap-prev" title="Previous page">‹</button>
+        <span id="ap-label" class="mono"></span>
+        <button type="button" class="btn ghost" id="ap-next" title="Next page">›</button>
+        <button type="button" class="btn ghost" id="ap-last" title="Last page">»</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -579,8 +644,9 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/capabilities.js?v=2.5"></script>
 <script src="/static/js/git.js?v=1.0"></script>
 <script src="/static/js/usage-report.js?v=2.5"></script>
+<script src="/static/js/audit-log.js?v=1.0"></script>
 <script src="/static/js/db-explorer.js?v=1.0"></script>
-<script src="/static/js/config.js?v=3.0"></script>
+<script src="/static/js/config.js?v=3.1"></script>
 <script src="/static/js/cloud.js?v=3.0"></script>
 <script src="/static/js/attachments.js?v=2.5"></script>
 <script src="/static/js/projects.js?v=3.6"></script>

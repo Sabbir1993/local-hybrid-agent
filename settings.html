@@ -10,7 +10,7 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=3.4">
+<link rel="stylesheet" href="/static/css/style.css?v=3.7">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 <style>
   html, body { height: auto; min-height: 100%; overflow-y: auto; }
@@ -174,6 +174,27 @@
         <label for="cfg-ct">KV cache type <span class="info" title="q8_0 cuts KV memory usage by 50% with negligible loss">ⓘ</span></label>
         <select id="cfg-ct" title="KV cache quantization type"><option value="f16">f16</option><option value="q8_0">q8_0 (½ KV RAM)</option><option value="q5_0">q5_0</option><option value="q4_0">q4_0</option><option value="bf16">bf16</option><option value="f32">f32</option></select>
       </div>
+      <div class="cfg-item cfg-full" title="Unified KV pool (-kvu): all parallel slots share one context-sized KV pool instead of each getting context ÷ slots">
+        <label for="cfg-kvu">Unified KV pool <span class="info" title="With 2+ slots, each conversation can use up to the full context while idle slots reserve nothing">ⓘ</span></label>
+        <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
+          <label class="switch"><input type="checkbox" id="cfg-kvu"><span class="slider"></span></label>
+          <div style="flex:1"><small style="color:var(--dim); font-size:9px; display:block;">shared KV pool across parallel slots (-kvu)</small></div>
+        </div>
+      </div>
+      <div class="cfg-full cfg-row3">
+        <div class="cfg-item" title="Max tokens one conversation may take from the unified pool (--kv-unified-per-slot). Only applied with 2+ slots and a value below the context size">
+          <label for="cfg-kvps">Per-slot cap <span class="info" title="0 = no cap. Ignored with 1 slot or when ≥ context size">ⓘ</span></label>
+          <input type="number" id="cfg-kvps" min="0" max="1048576" step="1024" value="0" title="Per-slot context cap in tokens (0 = no cap)">
+        </div>
+        <div class="cfg-item" title="Minimum chunk size reused from the KV cache via shifting (--cache-reuse). 0 = off">
+          <label for="cfg-cru">Cache reuse <span class="info" title="Min tokens per reused chunk (0 = off, default 256)">ⓘ</span></label>
+          <input type="number" id="cfg-cru" min="0" max="4096" value="256" title="Cache reuse chunk size (0 = off)">
+        </div>
+        <div class="cfg-item" title="Host-RAM prompt cache in MiB (-cram). 0 = llama default (8192)">
+          <label for="cfg-cram">Prompt RAM (MiB) <span class="info" title="Host-RAM prompt cache. 0 = llama default 8192 MiB">ⓘ</span></label>
+          <input type="number" id="cfg-cram" min="0" max="49152" step="1024" value="0" title="Host-RAM prompt cache in MiB (0 = default)">
+        </div>
+      </div>
       <div class="cfg-item cfg-full" id="mtp-row" style="display:none" title="MTP speculative decoding: a small draft model proposes token chains the target model verifies in one pass — typically 1.5-2x tokens/sec on Vulkan">
         <label for="cfg-mtp"><span class="cfg-cap-icon mtp"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5h6L9.5 22l9-12h-6.5L13 2z"/></svg></span> MTP draft <span class="info" title="Enables speculative decoding with the auto-detected MTP draft file">ⓘ</span></label>
         <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
@@ -222,11 +243,6 @@
     <div id="guard-content"><div class="mon-empty">Loading…</div></div>
   </details>
 
-  <details class="card fold" id="sec-audit" data-perm="audit.view">
-    <summary title="Who did what — model loads, cloud provider changes, permission denials">🧾 Audit Log</summary>
-    <div id="audit-content"><div class="mon-empty">Loading…</div></div>
-  </details>
-
   <details class="card fold" id="sec-db" data-perm="database.manage">
     <summary title="Direct Database Explorer &amp; SQL Console">🗄️ Database Explorer</summary>
     <div style="padding:10px 4px;">
@@ -262,11 +278,11 @@
 <script src="/static/js/utils.js?v=2.5"></script>
 <script src="/static/js/sampling.js?v=1.0"></script>
 <script src="/static/js/gpu-status.js?v=3.0"></script>
-<script src="/static/js/config.js?v=3.0"></script>
+<script src="/static/js/config.js?v=3.1"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
 <script src="/static/js/capabilities.js?v=2.5"></script>
 <script src="/static/js/cloud.js?v=3.0"></script>
-<script src="/static/js/rbac.js?v=1.0"></script>
+<script src="/static/js/rbac.js?v=1.1"></script>
 <script src="/static/js/knowledge.js?v=1.0"></script>
 <script src="/static/js/input-guard.js?v=1.0"></script>
 <script>
@@ -283,7 +299,6 @@ window.__sessionReady.then((data) => {
   if (document.getElementById('sec-users')) loadUsersPanel();
   if (document.getElementById('sec-knowledge')) loadKnowledgePanel();
   if (document.getElementById('sec-guard')) loadInputGuardPanel();
-  if (document.getElementById('sec-audit')) loadAuditPanel();
   if (document.getElementById('sec-db')) {
     fetch('/db/list').then(r => r.json()).then(d => {
       const box = document.getElementById('settings-db-summary');

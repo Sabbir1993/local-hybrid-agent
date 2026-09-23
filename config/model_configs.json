@@ -116,7 +116,7 @@
     "threads_batch": 0,
     "batch_size": 2048,
     "ubatch_size": 512,
-    "n_slots": 5,
+    "n_slots": 1,
     "tensor_split": "9,11",
     "split_mode": "layer",
     "flash_attn": "on",

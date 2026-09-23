@@ -2062,6 +2062,9 @@ body.ws-resizing #ws-grip::after { background: var(--accent); opacity: 1; }
 .cfg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
 .cfg-grid .cfg-item label { margin: 6px 0 3px; font-size: 10.5px; color: var(--dim); font-weight: 600; }
 .cfg-full { grid-column: 1 / -1; }
+.cfg-row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 10px; }
+.cfg-row3 .cfg-item label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cfg-row3 input { width: 100%; min-width: 0; }
 .cfg-note { font-size: 10px; color: var(--dim); margin-top: 6px; line-height: 1.4; }
 
 /* Sampling controls: one control per row (label | input | value) */
@@ -2237,6 +2240,68 @@ body.ws-resizing #ws-grip::after { background: var(--accent); opacity: 1; }
   max-width: 140px;
 }
 .mon-recent .num { color: var(--dim); white-space: nowrap; font-size: 10px; }
+
+/* ---------------- AUDIT LOG MODAL ---------------- */
+#audit-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 75;
+  display: flex; align-items: center; justify-content: center; backdrop-filter: blur(5px);
+}
+#audit-modal[hidden] { display: none !important; }
+#audit-box {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  padding: 18px 20px 14px; width: 1180px; max-width: 96vw; height: 88vh;
+  display: flex; flex-direction: column; box-shadow: 0 20px 48px rgba(0,0,0,0.6);
+}
+#audit-box h2 {
+  font-size: 15px; margin-bottom: 12px; display: flex; align-items: center;
+  justify-content: space-between; font-weight: 700;
+}
+.audit-filters {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--border); margin-bottom: 8px;
+}
+.af-item { display: flex; flex-direction: column; gap: 3px; min-width: 120px; }
+.af-item[hidden] { display: none; }
+.af-item.af-grow { flex: 1 1 200px; }
+.af-item label { font-size: 10px; color: var(--dim); font-weight: 600; letter-spacing: 0.3px; margin: 0; }
+.af-item input, .af-item select { font-size: 11.5px; padding: 5px 7px; margin: 0; }
+.af-item select { max-width: 220px; }
+.af-actions { display: flex; gap: 6px; }
+.af-actions .btn, .audit-pager .btn { width: auto; margin: 0; padding: 5px 10px; font-size: 11px; }
+#audit-content { flex: 1; overflow: auto; min-height: 0; transition: opacity 0.12s ease; }
+#audit-content.loading { opacity: 0.55; }
+.audit-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.audit-table th {
+  position: sticky; top: 0; z-index: 1; background: var(--panel2); text-align: left;
+  font-size: 10px; color: var(--dim); font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+  padding: 6px 8px; border-bottom: 1px solid var(--border);
+}
+.audit-table td { padding: 5px 8px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+.audit-table .nowrap { white-space: nowrap; }
+.audit-table td.mono { font-size: 10.5px; }
+.audit-table .audit-trunc { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-row:hover td { background: var(--accent-bg); }
+.audit-row.has-detail { cursor: pointer; }
+.audit-row.open td { background: var(--accent-bg); }
+.audit-detail td { background: var(--panel2); }
+.audit-detail pre {
+  margin: 0; font-size: 10.5px; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto;
+}
+.audit-res {
+  display: inline-block; padding: 0 6px; border-radius: 10px; font-size: 10px; font-weight: 600;
+  border: 1px solid var(--border);
+}
+.audit-res.allow { color: #34d399; border-color: rgba(52, 211, 153, 0.35); background: rgba(52, 211, 153, 0.08); }
+.audit-res.deny { color: var(--red); border-color: rgba(248, 81, 73, 0.4); background: rgba(248, 81, 73, 0.1); }
+.audit-res.other { color: var(--dim); }
+.audit-pager {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding-top: 10px; margin-top: 6px; border-top: 1px solid var(--border); font-size: 11px;
+}
+.audit-pager-nav { display: flex; align-items: center; gap: 6px; }
+.audit-pager-nav select { width: auto; margin: 0 6px 0 0; padding: 3px 6px; font-size: 11px; }
+.audit-pager .btn:disabled { opacity: 0.4; cursor: default; }
+#ap-label { min-width: 90px; text-align: center; }
 
 /* ---------------- REPORT MODAL ---------------- */
 #report-modal {

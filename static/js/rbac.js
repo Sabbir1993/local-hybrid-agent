@@ -158,22 +158,3 @@ function roleBlock(role) {
   </div>`;
 }
 
-async function loadAuditPanel() {
-  const box = $('audit-content');
-  if (!box) return;
-  box.innerHTML = '<div class="mon-empty">Loading…</div>';
-  try {
-    const r = await fetch('/admin/audit_log?since=0');
-    if (!r.ok) { box.innerHTML = '<div class="mon-empty">You do not have access to the audit log.</div>'; return; }
-    const entries = (await r.json()).entries || [];
-    box.innerHTML = entries.slice(-200).reverse().map(e => `
-      <div class="cap-item" style="font-size:10.5px;">
-        <span class="dim">${new Date((e.ts || 0) * 1000).toLocaleString()}</span>
-        · <b>${esc(e.username || 'system')}</b> · ${esc(e.action)}
-        ${e.resource ? '→ ' + esc(e.resource) : ''}
-        <span style="color:${e.result === 'deny' ? 'var(--red)' : 'var(--dim)'}">${esc(e.result)}</span>
-      </div>`).join('') || '<div class="dim" style="font-size:11px;">No entries yet.</div>';
-  } catch (e) {
-    box.innerHTML = '<div class="mon-empty">Failed to load: ' + esc(e.message) + '</div>';
-  }
-}
