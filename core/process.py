@@ -77,6 +77,15 @@ def build_launch_command(profile: dict) -> list[str]:
         cmd += ["-ub", str(profile["ubatch_size"])]
     if profile.get("n_slots"):
         cmd += ["-np", str(profile["n_slots"])]
+    # llama-server only enables the unified KV pool by itself when -np is auto
+    if profile.get("kv_unified"):
+        cmd += ["-kvu"]
+        if profile.get("kv_unified_per_slot"):
+            cmd += ["--kv-unified-per-slot", str(profile["kv_unified_per_slot"])]
+    if profile.get("cache_reuse"):
+        cmd += ["--cache-reuse", str(profile["cache_reuse"])]
+    if profile.get("cache_ram"):
+        cmd += ["-cram", str(profile["cache_ram"])]
     if profile.get("model_type") == "moe" and tuned.get("n_cpu_moe") is not None:
         cmd += ["-ncmoe", str(tuned["n_cpu_moe"])]
     cmd += ["--jinja"]

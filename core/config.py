@@ -48,6 +48,10 @@ CONFIG_DEFAULTS = {
     "split_mode": "layer",
     "flash_attn": "auto",
     "kv_cache_type": "f16",
+    "kv_unified": False,       # -kvu: one KV pool shared by all slots (idle slots reserve nothing)
+    "kv_unified_per_slot": 0,  # cap one conversation's share of the unified pool (0 = no cap)
+    "cache_reuse": 256,        # --cache-reuse: min chunk to reuse from cache via KV shifting
+    "cache_ram": 0,            # -cram MiB host-RAM prompt cache (0 = llama default 8192)
     "keepalive_interval_s": 25,
     "gpu_devices": [1, 2],
     "llama_bin_dir": "E:\\AI\\llama-vulkan",
@@ -64,12 +68,15 @@ CONFIG_INT_FIELDS = {
     "ubatch_size": (0, 4096),
     "n_slots": (0, 64),
     "mtp_draft_n_max": (1, 16),
+    "kv_unified_per_slot": (0, 1048576),
+    "cache_reuse": (0, 4096),
+    "cache_ram": (0, 49152),
 }
 
 CONFIG_CHOICE_FIELDS = {
     "flash_attn": ("on", "off", "auto"),
     "kv_cache_type": ("f16", "bf16", "q8_0", "q5_0", "q4_0", "f32"),
-    "split_mode": ("layer", "row"),
+    "split_mode": ("layer", "row", "tensor", "none"),
 }
 
 # Where each key lives inside the profile JSON
@@ -86,6 +93,9 @@ CONFIG_TARGETS = {
     "flash_attn": (None, "flash_attn"),
     "kv_cache_type": (None, "kv_cache_type"),
     "mtp_draft_n_max": (None, "mtp_draft_n_max"),
+    "kv_unified_per_slot": (None, "kv_unified_per_slot"),
+    "cache_reuse": (None, "cache_reuse"),
+    "cache_ram": (None, "cache_ram"),
 }
 
 # Persisted per-model overrides
@@ -94,4 +104,5 @@ MODEL_CONFIG_KEYS = (
     "batch_size", "ubatch_size", "n_slots", "tensor_split", "split_mode",
     "flash_attn", "kv_cache_type", "mtp_enabled", "mtp_draft_n_max",
     "keepalive_interval_s", "gpu_devices", "vision_capable",
+    "kv_unified", "kv_unified_per_slot", "cache_reuse", "cache_ram",
 )

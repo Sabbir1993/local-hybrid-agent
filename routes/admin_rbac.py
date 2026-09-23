@@ -29,6 +29,7 @@ class UpdateUserBody(BaseModel):
     is_active: bool | None = None
     roles: list[str] | None = None
     is_super_admin: bool | None = None
+    unlock: bool | None = None       # clear a failed-login lockout
 
 
 class CreateRoleBody(BaseModel):
@@ -48,6 +49,7 @@ def _user_public(row) -> dict:
         "is_super_admin": bool(row["is_super_admin"]), "auth_provider": row["auth_provider"],
         "roles": auth_db.get_user_role_names(row["id"]),
         "last_login_at": row["last_login_at"],
+        "locked": auth_db.is_locked(row),
     }
 
 
@@ -89,6 +91,9 @@ async def update_user(user_id: int, body: UpdateUserBody,
                               (1 if body.is_active else 0, time.time(), user_id))
         if not body.is_active:
             auth_db.revoke_all_sessions_for_user(user_id)
+
+    if body.unlock:
+        auth_db.unlock_user(user_id)
 
     if body.roles is not None:
         auth_db.db().execute("DELETE FROM user_roles WHERE user_id = ?", (user_id,))

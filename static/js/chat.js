@@ -784,6 +784,9 @@ async function send(inputText) {
           L.modelDisplay = d.display || d.model;
           L.modelSource = d.source;
           L.modelProvider = d.provider;
+        } else if (ev === 'queued') {
+          // all local model slots busy: routes/common.py admission gate
+          L.statusText = '⏳ Waiting for a free model slot' + (d.position ? ` (#${d.position} in queue)` : '') + '...';
         } else if (ev === 'delta') {
           L.content += (d.text || '');
           L.statusText = '';

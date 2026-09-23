@@ -26,12 +26,12 @@ from core.config import (
     CLOUD_TIMEOUT_S,
 )
 from core.db import db_report
-from core.gpu import get_gpu_stats, get_hardware_engine_summary
+from core.gpu import get_gpu_stats, get_hardware_engine_summary, refresh_hw_async
 from core.profiles import (
-    MODELS_DIR,
     build_dynamic_profile,
-    find_mtp_draft,
-    find_mmproj,
+    companions,
+    discover_models,
+    in_models_dir,
     save_model_config,
     load_model_configs,
     _model_key,
@@ -80,6 +80,11 @@ def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
             value = value.strip().lower() in ("true", "1", "on", "yes")
         profile["mtp_enabled"] = bool(value)
         return None
+    if key == "kv_unified":
+        if isinstance(value, str):
+            value = value.strip().lower() in ("true", "1", "on", "yes")
+        profile["kv_unified"] = bool(value)
+        return None
     if key == "vision_capable":
         if isinstance(value, str):
             value = value.strip().lower() in ("true", "1", "on", "yes")
@@ -122,12 +127,30 @@ def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
     return f"unknown config field: {key}"
 
 
+def check_tool_calling(filename: str) -> bool:
+    nl = str(filename or "").lower()
+    tool_keywords = [
+        "instruct", "coder", "chat", "hermes", "tool", "function", 
+        "agent", "qwen", "llama-3", "mistral", "mixtral", "command-r",
+        "deepseek", "phi-3", "phi-4", "gemma-2", "heretic"
+    ]
+    return any(k in nl for k in tool_keywords)
+
+
+def check_reasoning(filename: str) -> bool:
+    nl = str(filename or "").lower()
+    reasoning_keywords = [
+        "r1", "qwq", "reason", "reasoning", "deepseek-r1", "marco",
+        "thinking", "distill", "heretic", "sky-t1"
+    ]
+    return any(k in nl for k in reasoning_keywords)
+
+
 def _config_for_profile(p: dict) -> dict:
-    t = p.get("tuned", {})
     return {
         "context_size": p.get("context_size", CONFIG_DEFAULTS["context_size"]),
-        "n_gpu_layers": t.get("n_gpu_layers", p.get("n_gpu_layers", CONFIG_DEFAULTS["n_gpu_layers"])),
-        "tensor_split": t.get("tensor_split", p.get("tensor_split", CONFIG_DEFAULTS["tensor_split"])),
+        "n_gpu_layers": p.get("tuned", {}).get("n_gpu_layers", p.get("n_gpu_layers", CONFIG_DEFAULTS["n_gpu_layers"])),
+        "tensor_split": p.get("tuned", {}).get("tensor_split", p.get("tensor_split", CONFIG_DEFAULTS["tensor_split"])),
         "split_mode": p.get("split_mode", CONFIG_DEFAULTS["split_mode"]),
         "threads": p.get("threads", CONFIG_DEFAULTS["threads"]),
         "threads_batch": p.get("threads_batch", CONFIG_DEFAULTS["threads_batch"]),
@@ -136,6 +159,10 @@ def _config_for_profile(p: dict) -> dict:
         "n_slots": p.get("n_slots", CONFIG_DEFAULTS["n_slots"]),
         "flash_attn": p.get("flash_attn", CONFIG_DEFAULTS["flash_attn"]),
         "kv_cache_type": p.get("kv_cache_type", CONFIG_DEFAULTS["kv_cache_type"]),
+        "kv_unified": bool(p.get("kv_unified", CONFIG_DEFAULTS["kv_unified"])),
+        "kv_unified_per_slot": p.get("kv_unified_per_slot", CONFIG_DEFAULTS["kv_unified_per_slot"]),
+        "cache_reuse": p.get("cache_reuse", CONFIG_DEFAULTS["cache_reuse"]),
+        "cache_ram": p.get("cache_ram", CONFIG_DEFAULTS["cache_ram"]),
         "keepalive_interval_s": state.keepalive_interval_s,
         "llama_bin_dir": p.get("llama_bin_dir", CONFIG_DEFAULTS["llama_bin_dir"]),
         "gpu_devices": p.get("gpu_devices", CONFIG_DEFAULTS["gpu_devices"]),
@@ -146,6 +173,10 @@ def _config_for_profile(p: dict) -> dict:
         "mmproj_available": bool(p.get("mmproj_path")),
         "mmproj_path": p.get("mmproj_path"),
         "vision_capable": bool(p.get("vision_capable", False)) if not p.get("mmproj_path") else bool(p.get("vision_capable", True)),
+        "mtp_note": p.get("mtp_note", ""),
+        "mmproj_note": p.get("mmproj_note", ""),
+        "tools_available": check_tool_calling(str(p.get("name") or p.get("model_path") or "")),
+        "reasoning_available": check_reasoning(str(p.get("name") or p.get("model_path") or "")),
     }
 
 
@@ -172,10 +203,11 @@ def _standalone_profile(target: str) -> Optional[dict]:
         prof["tuned"]["n_gpu_layers"] = saved["n_gpu_layers"]
     if "tensor_split" in saved:
         prof["tuned"]["tensor_split"] = saved["tensor_split"]
-    mtp = find_mtp_draft(str(p))
-    mmproj = find_mmproj(str(p))
+    comp = companions(p)
+    mtp, mmproj = comp["mtp"], comp["mmproj"]
     prof["mtp_draft_path"] = str(mtp) if mtp else None
     prof["mmproj_path"] = str(mmproj) if mmproj else None
+    prof["mtp_note"], prof["mmproj_note"] = comp["mtp_note"], comp["mmproj_note"]
     if prof.get("mtp_draft_path"):
         prof.setdefault("mtp_enabled", True)
     if prof.get("mmproj_path"):
@@ -192,14 +224,20 @@ async def get_config(model: Optional[str] = None, user: Principal = Depends(get_
         if cm:
             return {"cloud": True, "provider": cm.provider_name, "model": cm.model_id,
                     "display": cm.display, "ctx": cm.ctx, "context_size": cm.ctx,
-                    "endpoint": cm.endpoint()}
+                    "endpoint": cm.endpoint(),
+                    "tools_available": True,
+                    "reasoning_available": check_reasoning(cm.model_id or cm.display or ""),
+                    "vision_capable": any(k in (cm.model_id or "").lower() for k in ["vision", "4o", "gemini", "claude-3", "vl"])}
     # No ?model= given: if the main lane itself is cloud-bound, report that
     if not model:
         cm_bound = cloud.cloud_lane("main", user.id)
         if cm_bound:
             return {"cloud": True, "provider": cm_bound.provider_name, "model": cm_bound.model_id,
                     "display": cm_bound.display, "ctx": cm_bound.ctx,
-                    "context_size": cm_bound.ctx, "endpoint": cm_bound.endpoint()}
+                    "context_size": cm_bound.ctx, "endpoint": cm_bound.endpoint(),
+                    "tools_available": True,
+                    "reasoning_available": check_reasoning(cm_bound.model_id or cm_bound.display or ""),
+                    "vision_capable": any(k in (cm_bound.model_id or "").lower() for k in ["vision", "4o", "gemini", "claude-3", "vl"])}
     # The ?model= target wins when it names a different model than the one
     # loaded — the drawer edits the dropdown-selected model, not what's in VRAM.
     if state.profile is not None:
@@ -269,7 +307,8 @@ async def status(user: Principal = Depends(get_current_user)):
             if resp.status_code == 200:
                 slots = resp.json()
                 if slots and isinstance(slots, list):
-                    s0 = slots[0]
+                    # show the caller's own slot (routes/common.py slot affinity)
+                    s0 = slots[user.id % len(slots)] if user and user.id is not None else slots[0]
                     n_ctx = s0.get("n_ctx") or 32768
                     n_prompt = s0.get("n_prompt_tokens") or 0
                     n_decoded = (s0.get("next_token") or [{}])[0].get("n_decoded") or 0
@@ -290,6 +329,7 @@ async def status(user: Principal = Depends(get_current_user)):
     # configured ctx so the UI doesn't show the local-server default (32768)
     if cm_main and not (state.process and state.process.poll() is None):
         ctx_info = {"n_ctx": cm_main.ctx, "n_past": 0, "n_prompt": 0, "pct": 0.0}
+    await refresh_hw_async()
     hw_info = get_hardware_engine_summary()
     return {
         "hardware_tag": hw_info.get("hardware_tag"),
@@ -329,44 +369,40 @@ async def gpu(user: Principal = Depends(require_permission("settings.runtime.vie
 
 @router.get("/control/profiles")
 async def profiles(user: Principal = Depends(get_current_user)):
-    models_out = []
+    # Models/<model name>/*.gguf (one folder per model) plus legacy flat files;
+    # companions are header-checked (core/profiles.py companions())
+    def _scan():
+        out = []
+        for gfile, folder in discover_models():
+            comp = companions(gfile)
+            mtp, mmproj = comp["mtp"], comp["mmproj"]
+            try:
+                size_gb = round(gfile.stat().st_size / (1024**3), 1)
+            except OSError:
+                size_gb = None
+            out.append({
+                "type": "model",
+                "name": gfile.name,
+                "folder": folder,
+                "display": folder or gfile.stem,
+                "path": str(gfile),
+                "model_path": str(gfile),
+                "model_exists": True,
+                "mtp_available": bool(mtp),
+                "mtp_draft_path": str(mtp) if mtp else None,
+                "mtp_note": comp["mtp_note"],
+                "mmproj_available": bool(mmproj),
+                "mmproj_path": str(mmproj) if mmproj else None,
+                "mmproj_note": comp["mmproj_note"],
+                "tools_available": check_tool_calling(gfile.name),
+                "reasoning_available": check_reasoning(gfile.name),
+                "size_gb": size_gb,
+                "family": folder or gfile.stem.split("-")[0],
+            })
+        return out
 
-    search_dirs = [MODELS_DIR]
-    if common.models_dir and common.models_dir.exists() and common.models_dir != MODELS_DIR:
-        search_dirs.insert(0, common.models_dir)
-
-    seen_paths = set()
-    for sdir in search_dirs:
-        if sdir.exists() and sdir.is_dir():
-            for gfile in sorted(sdir.glob("*.gguf")):
-                if gfile.stem.lower().startswith(("mtp-", "mmproj-")):
-                    continue
-                if "orchestrator" in [part.lower() for part in gfile.parts]:
-                    continue
-                resolved_str = str(gfile.resolve())
-                if resolved_str in seen_paths:
-                    continue
-                seen_paths.add(resolved_str)
-                mtp = find_mtp_draft(str(gfile))
-                mmproj = find_mmproj(str(gfile))
-                try:
-                    size_gb = round(gfile.stat().st_size / (1024**3), 1)
-                except OSError:
-                    size_gb = None
-                family = gfile.stem.split("-")[0]
-                models_out.append({
-                    "type": "model",
-                    "name": gfile.name,
-                    "path": str(gfile),
-                    "model_path": str(gfile),
-                    "model_exists": True,
-                    "mtp_available": bool(mtp),
-                    "mtp_draft_path": str(mtp) if mtp else None,
-                    "mmproj_available": bool(mmproj),
-                    "mmproj_path": str(mmproj) if mmproj else None,
-                    "size_gb": size_gb,
-                    "family": family,
-                })
+    # header reads touch every model file: keep them off the event loop
+    models_out = await asyncio.to_thread(_scan)
 
     return {"models": models_out, "profiles": [],
             "cloud": [{
@@ -380,6 +416,9 @@ async def profiles(user: Principal = Depends(get_current_user)):
                 "display": cm.display,
                 "size_gb": None,
                 "ctx": cm.ctx,
+                "tools_available": True,
+                "reasoning_available": check_reasoning(cm.model_id or cm.display or ""),
+                "vision_capable": any(k in (cm.model_id or "").lower() for k in ["vision", "4o", "gemini", "claude-3", "vl"]),
             } for cm in cloud.cloud_models(user.id)]}
 
 
@@ -427,12 +466,16 @@ async def stop_server(user: Principal = Depends(require_permission("model.local.
 
 
 @router.get("/control/preflight")
-async def preflight(target: Optional[str] = None):
+async def preflight(target: Optional[str] = None,
+                    user: Principal = Depends(require_permission("model.local.load"))):
     """VRAM fit projection for a model/profile without loading it.
     ?target=<gguf or profile json path> - defaults to the currently selected profile."""
     try:
         if target:
             p = Path(target)
+            # only model files under the models directory -- never an arbitrary server path
+            if not in_models_dir(p):
+                return JSONResponse({"error": "target must be inside the models directory"}, status_code=400)
             if p.suffix == ".json" and p.exists():
                 profile = json.loads(p.read_text())
             elif p.exists():
@@ -451,7 +494,7 @@ async def preflight(target: Optional[str] = None):
 
 
 @router.get("/control/vram")
-async def vram_devices():
+async def vram_devices(user: Principal = Depends(require_permission("settings.runtime.view"))):
     """Raw per-Vulkan-device free/total VRAM (VK_EXT memory budget)."""
     loop = asyncio.get_event_loop()
     devs = await loop.run_in_executor(None, vram.query_devices, None, True)
@@ -523,6 +566,9 @@ async def switch(req: SwitchRequest, user: Principal = Depends(get_current_user)
         return JSONResponse({"error": "missing permission: model.local.load"}, status_code=403)
 
     path = Path(target)
+    # only GGUFs under the models directory: this path is handed to llama-server
+    if not in_models_dir(path) or path.suffix.lower() != ".gguf":
+        return JSONResponse({"error": "target must be a .gguf inside the models directory"}, status_code=400)
     if not path.exists():
         return JSONResponse({"error": f"Target file not found: {target}"}, status_code=404)
 
@@ -541,7 +587,7 @@ async def switch(req: SwitchRequest, user: Principal = Depends(get_current_user)
 
 
 @router.get("/control/monitor")
-async def monitor():
+async def monitor(user: Principal = Depends(require_permission("monitor.view"))):
     now = time.time()
     # Stale watchdog: -1 disables the timeout so long generations/summaries are never reaped as 499
     STALE_S = -1

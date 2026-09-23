@@ -36,7 +36,7 @@ from core.monitor import (
     monitor_begin,
     monitor_end,
 )
-from core.knowledge_access import allowed_source_ids_for
+from core.knowledge_access import allowed_source_ids_for, kb_local_only, set_kb_cloud_blocked
 from core.memory import search_memory_hybrid
 from core.db import (
     db_record_request,
@@ -75,7 +75,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if target:
             try:
                 print(f"[server_manager] chat/run: model not running — auto-starting...")
-                await state.load_profile(target)
+                await state.ensure_running(target)
                 main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
             except Exception as e:
                 print(f"[server_manager] auto-start main model failed: {e}", file=sys.stderr)
@@ -130,16 +130,42 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     kb_ids = allowed_source_ids_for(user)
     kb_used = False
     kb_hits = []
+    kb_prompt_block = ""
     if kb_ids and last_query.strip():
         try:
-            from core.knowledge_router import is_company_or_kb_query, fetch_company_knowledge
-            is_company = is_company_or_kb_query(last_query, kb_ids)
+            from core.knowledge_router import fetch_company_knowledge
             kb_hits, kb_prompt_block = await fetch_company_knowledge(last_query, kb_ids, k=6)
             if kb_hits:
                 kb_used = True
                 sys_parts.append(kb_prompt_block)
         except Exception as e:
             print(f"[chat] knowledge retrieval failed: {e}", file=sys.stderr)
+
+    # Data residency (core/knowledge_access.py): internal knowledge never goes
+    # to a cloud provider. A KB question from a cloud-bound user is answered by
+    # the local model instead; if none can run, the KB context is withheld.
+    if cloud_main and kb_local_only():
+        if kb_hits:
+            target = state.profile_path or state.profile or common.initial_profile_path
+            try:
+                if target:
+                    await state.ensure_running(target)
+            except Exception as e:
+                print(f"[chat] local model for knowledge query unavailable: {e}", file=sys.stderr)
+            if state.is_running():
+                cloud_main = None
+                main_client = state.client
+                audit_log(user, action="knowledge.local_only", resource="chat/run",
+                          detail={"reason": "kb hits on a cloud-bound main lane", "hits": len(kb_hits)})
+            else:
+                sys_parts.remove(kb_prompt_block)
+                kb_hits, kb_used = [], False
+                sys_parts.append("NOTE: The company knowledge base is restricted to local models and no "
+                                 "local model is loaded, so internal company data is not available for "
+                                 "this answer. Tell the user this instead of guessing.")
+        if cloud_main and skb in chat_tools:
+            chat_tools.remove(skb)
+    set_kb_cloud_blocked(cloud_main is not None)
 
     file_prompt = (
         "FILE CREATION & DOWNLOAD SYSTEM (COMMON STORAGE):\n"
@@ -275,7 +301,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if target:
                         try:
                             if state.process is None or state.process.poll() is not None:
-                                await state.load_profile(target)
+                                await state.ensure_running(target)
                             fb_local = state.client
                         except Exception as e:
                             print(f"[chat] local fallback unavailable: {e}", file=sys.stderr)
@@ -285,6 +311,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 else:
                     chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid)
                 async for ev, val in chat_stream:
+                    if ev == "queued":
+                        yield f"event: queued\ndata: {json.dumps(val)}\n\n"
+                        continue
                     if ev == "fallback":
                         fb_name = state.profile.get("model_path", "") if state.profile else ""
                         clean_model_name = Path(fb_name).name.replace(".gguf", "") if fb_name else "Main LLM"
@@ -444,10 +473,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             # Model mentioned [DOWNLOAD: filename] but forgot to output the code block
                             # Generate a complete standalone HTML/document file based on the topic
                             title_clean = clean_fname.replace('_', ' ').replace('-', ' ').title()
+                            # (no invented placeholder rows for csv/xlsx: a data file the
+                            # model never produced must not be filled with fabricated data)
                             if ext in {'html', 'htm'}:
                                 cand_code = generate_fresh_dashboard_html(title_clean, content.split('[DOWNLOAD:')[0].strip())
-                            elif ext in ('csv', 'xlsx', 'xls'):
-                                cand_code = "ID,Name,Category,Status,Created\n1,Alpha,System,Active,2026-09-16\n2,Beta,Worker,Ready,2026-09-16\n3,Gamma,Orchestrator,Complete,2026-09-16"
                             elif ext in ('pptx', 'ppt'):
                                 cand_code = f"# {title_clean}\n---\n## Agenda\n- Executive Summary\n- Key Metrics & Analysis\n- Next Steps"
                             elif ext == 'pdf':
@@ -662,7 +691,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if target:
                         try:
                             if state.process is None or state.process.poll() is not None:
-                                await state.load_profile(target)
+                                await state.ensure_running(target)
                             fb_local = state.client
                         except Exception:
                             pass
@@ -673,6 +702,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid)
 
                 async for ev, val in final_stream:
+                    if ev == "queued":
+                        yield f"event: queued\ndata: {json.dumps(val)}\n\n"
+                        continue
                     if ev == "thought_delta":
                         yield f"event: thought_delta\ndata: {json.dumps({'delta': val})}\n\n"
                     elif ev == "content_delta":

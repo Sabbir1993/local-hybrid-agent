@@ -2,6 +2,7 @@
 routes/common.py - Shared state and LLM streaming utilities across routes.
 """
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -9,6 +10,9 @@ from typing import Optional
 
 from core.monitor import monitor_token
 from core.agent_loop import safe_parse_and_repair_args
+from core.request_context import get_current_user_id
+from core.small_model import APP_CONFIG
+from core.state import state
 
 # Global CLI runtime overrides
 initial_profile_path: Optional[Path] = None
@@ -165,13 +169,98 @@ async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=No
         yield item
 
 
+def _main_slot_fields() -> dict:
+    """Slot affinity for the local main llama-server: pin each user to one slot
+    so their conversation prefix stays cached there between turns (instead of
+    landing on whichever slot is free and re-prefilling from token 0)."""
+    fields = {"cache_prompt": True}
+    n_slots = int((state.profile or {}).get("n_slots") or 1)
+    uid = get_current_user_id()
+    if n_slots > 1 and uid is not None and (APP_CONFIG.get("serving") or {}).get("slot_affinity", True):
+        fields["id_slot"] = int(uid) % n_slots
+    return fields
+
+
+class _Admission:
+    """Fair-share gate in front of the local main llama-server.
+
+    - global: at most n_slots generations in flight (one per llama-server slot),
+      so extra requests wait here -- where the UI can be told -- instead of
+      silently inside llama-server;
+    - per user: at most `max_inflight_per_user` (default 1), so one person's
+      agent loop / second tab can't occupy every slot while others wait.
+    Configured under app.json "serving"."""
+
+    def __init__(self):
+        self._global: Optional[asyncio.Semaphore] = None
+        self._global_n = 0
+        self._users: dict = {}
+        self._users_n = 0
+        self.waiting = 0
+
+    def _cfg(self) -> dict:
+        return APP_CONFIG.get("serving") or {}
+
+    def enabled(self) -> bool:
+        return bool(self._cfg().get("queue_enabled", True))
+
+    def _sems(self, uid):
+        n = max(1, int((state.profile or {}).get("n_slots") or 1))
+        if self._global is None or n != self._global_n:
+            # resized on model (re)load; holders of the old one release it harmlessly
+            self._global, self._global_n = asyncio.Semaphore(n), n
+        per_user = max(1, int(self._cfg().get("max_inflight_per_user", 1)))
+        if per_user != self._users_n:
+            self._users, self._users_n = {}, per_user
+        us = self._users.get(uid)
+        if us is None:
+            us = self._users[uid] = asyncio.Semaphore(per_user)
+        return self._global, us
+
+
+admission = _Admission()
+
+
 async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None):
+    """Stream one completion. Requests to the local main llama-server first pass
+    the fair-share admission gate; a ("queued", {"position": n}) item is yielded
+    when the caller has to wait for a slot."""
+    if client_or_state is not state.client or not admission.enabled():
+        async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
+                                               repeat_penalty, rid, grammar):
+            yield item
+        return
+    glob, mine = admission._sems(get_current_user_id())
+    if glob.locked() or mine.locked():
+        yield ("queued", {"position": admission.waiting + 1})
+    admission.waiting += 1
+    try:
+        await mine.acquire()
+        try:
+            await glob.acquire()
+        except BaseException:
+            mine.release()
+            raise
+    finally:
+        admission.waiting -= 1
+    try:
+        async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
+                                               repeat_penalty, rid, grammar):
+            yield item
+    finally:
+        glob.release()
+        mine.release()
+
+
+async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None):
     payload = {
         "messages": msgs,
         "temperature": temperature,
         "repeat_penalty": repeat_penalty,
         "stream": True,
     }
+    if client_or_state is state.client:
+        payload.update(_main_slot_fields())
     if max_tokens is not None and int(max_tokens) > 0:
         payload["max_tokens"] = int(max_tokens)
     else:

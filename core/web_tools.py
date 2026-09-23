@@ -15,6 +15,7 @@ from urllib.parse import urlparse, urljoin, quote_plus, unquote
 import httpx
 
 from .agent_tools import MAX_TOOL_OUTPUT
+from .net_guard import BlockedURLError, guarded_get
 from .registry import registry
 from .small_model import APP_CONFIG
 
@@ -81,10 +82,15 @@ class _TextExtractor(HTMLParser):
         return " ".join("".join(self._title).split())
 
 
-def _fetch_sync(url: str, timeout: float) -> httpx.Response:
-    with httpx.Client(follow_redirects=True, timeout=timeout,
-                      headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"}) as c:
-        return c.get(url)
+FETCH_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _fetch_sync(url: str, timeout: float):
+    # SSRF-guarded (core/net_guard.py): the URL comes from the model, so every
+    # redirect hop must resolve to a public address; body capped at 5 MB.
+    return guarded_get(url, timeout,
+                       headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
+                       max_bytes=FETCH_MAX_BYTES)
 
 
 async def tool_web_fetch(args: dict) -> str:
@@ -99,6 +105,8 @@ async def tool_web_fetch(args: dict) -> str:
     try:
         r = await asyncio.get_event_loop().run_in_executor(
             None, _fetch_sync, url, FETCH_TIMEOUT_S)
+    except BlockedURLError as e:
+        return f"error: {e}"
     except httpx.HTTPError as e:
         return f"error: fetch failed: {type(e).__name__}: {e}"
     if r.status_code >= 400:

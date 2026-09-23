@@ -69,8 +69,9 @@ async def call(user_id: int, op: str, params: dict, timeout: float = DEFAULT_TIM
 
 
 async def _authenticate(ws: WebSocket) -> Optional[int]:
-    """Session cookie, query param, or Bearer auth header is used for identity."""
-    token = ws.cookies.get(SESSION_COOKIE) or ws.query_params.get("token")
+    """Session cookie or Bearer auth header is used for identity. Never a query
+    parameter: URLs (and so tokens in them) land in proxy / access logs."""
+    token = ws.cookies.get(SESSION_COOKIE)
     if not token:
         auth_hdr = ws.headers.get("authorization") or ""
         if auth_hdr.lower().startswith("bearer "):

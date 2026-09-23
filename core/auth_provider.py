@@ -58,8 +58,13 @@ class LocalAuthProvider:
             return None
         if row["auth_provider"] != "local":
             return None
+        if auth_db.is_locked(row):
+            return None             # same generic failure: don't reveal the lock
         if not verify_password(password, row["password_hash"]):
-            auth_db.record_failed_login(row["id"])
+            if auth_db.record_failed_login(row["id"]):
+                from .audit import audit_log
+                audit_log(None, action="login.locked", resource=row["username"], result="deny",
+                          detail={"lockout_s": auth_db.LOCKOUT_S})
             return None
         auth_db.touch_login(row["id"])
         return UserRecord(

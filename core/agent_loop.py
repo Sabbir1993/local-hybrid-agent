@@ -12,6 +12,7 @@ from .agent_tools import (
     active_workspace,
 )
 from .registry import registry, bootstrap_builtin_tools
+from .request_context import run_in_executor_ctx
 
 AGENT_SYSTEM_PROMPT = """You are an autonomous AI coding agent and orchestrator.
 Your goal is to solve the user's task step-by-step using your available tools.
@@ -515,7 +516,7 @@ async def run_tool(name: str, args: dict) -> str:
         args = repaired
         if inspect.iscoroutinefunction(impl):
             return await impl(args)
-        return await asyncio.get_event_loop().run_in_executor(None, impl, args)
+        return await run_in_executor_ctx(impl, args)
     except Exception as e:
         return f"error: {type(e).__name__}: {e}"
 

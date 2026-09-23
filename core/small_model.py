@@ -193,6 +193,10 @@ class SmallModelInstance:
         self.port = int(cfg.get("port", 8091))
         self.gpu = int(cfg.get("gpu", 1))
         self.ctx = int(cfg.get("ctx", 4096))
+        # parallel slots share one unified KV pool of -c tokens (-kvu), so
+        # several users' agent steps / embeddings run concurrently
+        self.n_slots = max(1, int(cfg.get("np", 1)))
+        self.kv_cache_type = str(cfg.get("kv_cache_type") or "")
         self.process: Optional[subprocess.Popen] = None
         self.client = httpx.AsyncClient(base_url=f"http://127.0.0.1:{self.port}", timeout=None)
         self.last_used = 0.0
@@ -241,10 +245,14 @@ class SmallModelInstance:
                 "-dev", f"{prefix}{self.gpu}",
                 "--port", str(self.port),
                 "--host", "127.0.0.1",
-                "-np", "1",
+                "-np", str(self.n_slots),
                 "-fa", "on",
                 "--jinja",
             ]
+            if self.n_slots > 1:
+                cmd += ["-kvu"]
+            if self.kv_cache_type:
+                cmd += ["-ctk", self.kv_cache_type, "-ctv", self.kv_cache_type]
             if self.mmproj_path and self.mmproj_path.exists():
                 cmd += ["--mmproj", str(self.mmproj_path)]
             if self.role == "embedder":

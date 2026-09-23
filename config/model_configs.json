@@ -110,16 +110,20 @@
     ]
   },
   "ornith-1.5-9b-q4_k_m.gguf": {
-    "context_size": 132768,
+    "context_size": 81920,
     "n_gpu_layers": 999,
     "threads": 0,
     "threads_batch": 0,
     "batch_size": 2048,
     "ubatch_size": 512,
-    "n_slots": 1,
-    "tensor_split": "9,11",
+    "n_slots": 5,
+    "kv_unified": true,
+    "kv_unified_per_slot": 32768,
+    "cache_reuse": 256,
+    "cache_ram": 16384,
+    "tensor_split": "0,1",
     "split_mode": "layer",
-    "flash_attn": "auto",
+    "flash_attn": "on",
     "kv_cache_type": "q8_0",
     "mtp_enabled": true,
     "mtp_draft_n_max": 3,
@@ -149,5 +153,30 @@
       2
     ],
     "vision_capable": false
+  },
+  "qwen3.8-9b-distill-heretic_nvfp4_q4_k_m.gguf": {
+    "context_size": 132768,
+    "n_gpu_layers": 999,
+    "threads": 0,
+    "threads_batch": 0,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "n_slots": 1,
+    "tensor_split": "9,11",
+    "split_mode": "layer",
+    "flash_attn": "auto",
+    "kv_cache_type": "q8_0",
+    "mtp_enabled": true,
+    "mtp_draft_n_max": 3,
+    "keepalive_interval_s": 25,
+    "gpu_devices": [
+      1,
+      2
+    ],
+    "vision_capable": true,
+    "kv_unified": false,
+    "kv_unified_per_slot": 0,
+    "cache_reuse": 256,
+    "cache_ram": 0
   }
 }

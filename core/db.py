@@ -381,6 +381,22 @@ def db_project_owner(pid: int) -> Optional[int]:
     return row["user_id"] if row else None
 
 
+def db_owned_project_id(name_or_id, owner_user_id: int) -> Optional[int]:
+    """id of the project referenced by id or name *and owned by* owner_user_id
+    (project names are only unique per user), else None."""
+    if name_or_id is None or owner_user_id is None:
+        return None
+    ref = str(name_or_id).strip()
+    if ref.isdigit():
+        row = _projects_db.execute("SELECT id FROM projects WHERE id = ? AND user_id = ?",
+                                   (int(ref), owner_user_id)).fetchone()
+        if row:
+            return row["id"]
+    row = _projects_db.execute("SELECT id FROM projects WHERE name = ? AND user_id = ?",
+                               (ref, owner_user_id)).fetchone()
+    return row["id"] if row else None
+
+
 def db_session_owner(sid: int) -> Optional[int]:
     row = _projects_db.execute("SELECT user_id FROM sessions WHERE id = ?", (sid,)).fetchone()
     return row["user_id"] if row else None

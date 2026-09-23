@@ -13,7 +13,7 @@ from core import git_tools
 from core import git_ai
 from core import mcp as mcp_core
 from core.auth import Principal
-from core.deps import get_current_user
+from core.deps import get_current_user, require_permission
 from core.registry import registry
 
 router = APIRouter(prefix="/git", tags=["git"])
@@ -81,7 +81,7 @@ class PushReq(BaseModel):
 
 
 @router.post("/push")
-async def push(req: PushReq):
+async def push(req: PushReq, user: Principal = Depends(require_permission("git.push"))):
     result = git_tools.git_push(req.remote, req.branch)
     if "error" in result:
         return JSONResponse(result, status_code=400)
@@ -133,7 +133,7 @@ class PrReq(BaseModel):
 
 
 @router.post("/pr")
-async def create_pr(req: PrReq):
+async def create_pr(req: PrReq, user: Principal = Depends(require_permission("git.push"))):
     if not mcp_core.is_ready("github"):
         return JSONResponse({
             "error": "GitHub is not connected. Open Settings -> Capabilities -> MCP Servers "

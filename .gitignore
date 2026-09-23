@@ -14,3 +14,5 @@ config/providers.json
 config/providers.json.migrated
 config/providers/
 /.agents
+# companion runtime config (server URL) - keep out of git
+companion/.env

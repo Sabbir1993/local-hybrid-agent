@@ -8,13 +8,10 @@ text before it reaches the caller -- ingestion fails closed (rejected, not
 silently scrubbed) so the uploading admin sees exactly what to fix.
 """
 
-import ipaddress
 import re
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
 
-import httpx
 
 _PAN_CANDIDATE = re.compile(r"(?:\d[ -]?){13,19}")
 MAX_URL_BYTES = 2 * 1024 * 1024
@@ -115,36 +112,18 @@ def extract_pasted_text(text: str) -> str:
     return text.strip()
 
 
-_BLOCKED_HOST_SUFFIXES = ("localhost",)
-
-
-def _is_private_host(host: str) -> bool:
-    if not host:
-        return True
-    h = host.lower()
-    if any(h == s or h.endswith("." + s) for s in _BLOCKED_HOST_SUFFIXES):
-        return True
-    try:
-        ip = ipaddress.ip_address(h)
-        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-    except ValueError:
-        return False  # a hostname, not a literal IP -- DNS resolution isn't checked here
-
-
 async def extract_url(url: str) -> str:
-    """Fetch a URL and strip it down to plain text. Basic SSRF guard: refuses
-    localhost / loopback / private-range literals up front (best-effort --
-    this app has no outbound network policy layer to fully close DNS-rebinding)."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError("only http/https URLs are supported")
-    if _is_private_host(parsed.hostname or ""):
-        raise ValueError("refusing to fetch a private/loopback address")
-    async with httpx.AsyncClient(timeout=URL_TIMEOUT_S, follow_redirects=True) as client:
-        resp = await client.get(url, headers={"User-Agent": "local-agent-kb/1.0"})
-        resp.raise_for_status()
-        body = resp.content[:MAX_URL_BYTES]
-    html = body.decode(resp.encoding or "utf-8", errors="ignore")
+    """Fetch a URL and strip it down to plain text. SSRF-guarded by
+    core/net_guard.py (DNS-resolved public addresses only, on every redirect)."""
+    import asyncio
+    from .net_guard import guarded_get
+    # every redirect hop is re-validated and DNS-resolved (core/net_guard.py);
+    # the old follow_redirects=True let a public URL bounce to 127.0.0.1
+    resp = await asyncio.to_thread(guarded_get, url, URL_TIMEOUT_S,
+                                   {"User-Agent": "local-agent-kb/1.0"}, MAX_URL_BYTES)
+    if resp.status_code >= 400:
+        raise ValueError(f"HTTP {resp.status_code} fetching {url}")
+    html = resp.content.decode(resp.encoding or "utf-8", errors="ignore")
     text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     text = re.sub(r"&nbsp;", " ", text)

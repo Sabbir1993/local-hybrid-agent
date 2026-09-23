@@ -34,6 +34,7 @@ PERMISSIONS = {
     "settings.input_guard": "Configure the input sanitizer (cloud-block patterns, prohibited prompt types, role restrictions)",
     "database.manage": "Inspect system & workspace SQLite databases and execute SQL queries",
     "settings.shell.configure": "Edit the global shell command allowlist (capabilities.shell)",
+    "git.push": "Push to git remotes / open pull requests (uses the server's git & GitHub credentials)",
 }
 
 # Permissions granted to the default 'user' role so regular accounts
@@ -229,15 +230,41 @@ def create_user(username: str, password_hash: Optional[str], is_super_admin: boo
     return cur.lastrowid
 
 
+# PCI DSS 8.3.4: lock the account after at most 10 invalid attempts, for at
+# least 30 minutes (or until an administrator unlocks it).
+MAX_FAILED_LOGINS = 10
+LOCKOUT_S = 30 * 60
+
+
 def touch_login(user_id: int) -> None:
-    db().execute("UPDATE users SET last_login_at = ?, failed_login_count = 0 WHERE id = ?",
-                 (time.time(), user_id))
+    db().execute("UPDATE users SET last_login_at = ?, failed_login_count = 0, locked_until = NULL "
+                 "WHERE id = ?", (time.time(), user_id))
     db().commit()
 
 
-def record_failed_login(user_id: int) -> None:
+def record_failed_login(user_id: int) -> bool:
+    """Count a bad password; returns True when this attempt locked the account."""
     db().execute("UPDATE users SET failed_login_count = failed_login_count + 1 WHERE id = ?", (user_id,))
+    row = db().execute("SELECT failed_login_count FROM users WHERE id = ?", (user_id,)).fetchone()
+    locked = bool(row and row["failed_login_count"] >= MAX_FAILED_LOGINS)
+    if locked:
+        db().execute("UPDATE users SET locked_until = ?, failed_login_count = 0 WHERE id = ?",
+                     (time.time() + LOCKOUT_S, user_id))
     db().commit()
+    return locked
+
+
+def unlock_user(user_id: int) -> None:
+    db().execute("UPDATE users SET locked_until = NULL, failed_login_count = 0 WHERE id = ?", (user_id,))
+    db().commit()
+
+
+def is_locked(row) -> bool:
+    try:
+        until = row["locked_until"]
+    except (IndexError, KeyError):
+        return False
+    return bool(until) and float(until) > time.time()
 
 
 def get_user_role_names(user_id: int) -> list:

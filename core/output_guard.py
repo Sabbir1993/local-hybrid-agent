@@ -22,6 +22,7 @@ from . import input_guard
 DEFAULT_REPLACEMENT = "█████"
 _MAX_HOLD = 400          # never hold back more than this many chars
 _MAX_PENDING = 50_000    # safety valve for pathologically long pending matches
+_TRAILING_NUM_RX = re.compile(r"[\d -]{1,40}$")
 
 
 def guard_cfg() -> dict:
@@ -64,6 +65,13 @@ def _active_rules(user, any_cloud_lane: bool) -> list:
         if pats:
             out.append({"name": rule.get("name") or scope, "scope": scope,
                         "message": rule.get("message") or "", "patterns": pats})
+    from . import pan
+    if pan.enabled("pan_output"):
+        # Built-in PCI rule, independent of admin rules; last so an admin rule
+        # with its own replacement wins. "builtin" marks it for the streaming
+        # holdback (only a trailing run of digits needs holding).
+        out.append({"name": pan.RULE_NAME, "scope": "block_all", "message": "",
+                    "builtin": "pan", "patterns": [(pan.PAN_RX, pan.mask_match)]})
     return out
 
 
@@ -116,8 +124,10 @@ class OutputRedactor:
 
     def __init__(self, user, any_cloud_lane: bool):
         self.rules = _active_rules(user, any_cloud_lane)
-        if self.rules:
-            longest = max(len(rx.pattern) for r in self.rules for rx, _ in r["patterns"])
+        admin = [r for r in self.rules if not r.get("builtin")]
+        self.pan = any(r.get("builtin") == "pan" for r in self.rules)
+        if admin:
+            longest = max(len(rx.pattern) for r in admin for rx, _ in r["patterns"])
             # matches can be longer than the pattern text (\d{13,19} matches 19
             # chars); 3x + 16 covers bounded quantifiers and common literals
             self.hold = min(longest * 3 + 16, _MAX_HOLD)
@@ -149,7 +159,12 @@ class OutputRedactor:
 
     def _safe_upto(self) -> int:
         """How many leading chars of buf are certainly settled."""
-        limit = len(self.buf) - self.hold
+        hold = self.hold
+        if self.pan:
+            # a PAN can only still be growing inside the trailing digit run
+            m = _TRAILING_NUM_RX.search(self.buf)
+            hold = max(hold, len(m.group(0)) if m else 0)
+        limit = len(self.buf) - hold
         if limit <= 0:
             return 0
         if limit > _MAX_PENDING:      # safety valve: never buffer unbounded

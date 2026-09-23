@@ -29,41 +29,60 @@ class ProxyState:
         self.last_activity = time.time()
         self.client = httpx.AsyncClient(base_url=f"http://127.0.0.1:{LLAMA_SERVER_PORT}", timeout=None)
 
-    async def load_profile(self, target: Union[Path, dict, str]):
-        async with self.lock:
-            self._stop_process_locked()
-            if isinstance(target, (Path, str)):
-                p = Path(target)
-                if p.suffix == ".json" and p.exists():
-                    self.profile_path = p
-                    self.profile = json.loads(p.read_text())
-                elif p.suffix == ".gguf" or p.exists():
-                    self.profile_path = None
-                    self.profile = build_dynamic_profile(p)
-                else:
-                    raise FileNotFoundError(f"Target file not found: {target}")
-            elif isinstance(target, dict):
-                self.profile_path = None
-                self.profile = target
-            else:
-                raise ValueError("Invalid profile target")
+    def is_running(self) -> bool:
+        return self.process is not None and self.process.poll() is None
 
-            cmd = build_launch_command(self.profile)
-            # Preflight: refuse to spawn llama-server if the VRAM math says it
-            # won't fit (a WDDM OOM spill hangs the whole desktop on Arc).
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, vram.check_or_raise, self.profile)
-            print(f"[server_manager] launching: {' '.join(cmd)}")
-            self.process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            self.started_at = time.time()
-            asyncio.create_task(self._pump_logs(self.process))
-            await self._wait_healthy()
+    async def ensure_running(self, target: Union[Path, dict, str]):
+        """Auto-start for request paths: a no-op when llama-server is already
+        up. Re-checked under the lock, so N concurrent requests that all find
+        the model down trigger exactly one launch (the rest wait for it)
+        instead of each killing and relaunching the previous one."""
+        if self.is_running():
+            return
+        async with self.lock:
+            if self.is_running():
+                return
+            await self._load_locked(target)
+
+    async def load_profile(self, target: Union[Path, dict, str]):
+        """Explicit (re)load: always stops the current process first."""
+        async with self.lock:
+            await self._load_locked(target)
+
+    async def _load_locked(self, target: Union[Path, dict, str]):
+        self._stop_process_locked()
+        if isinstance(target, (Path, str)):
+            p = Path(target)
+            if p.suffix == ".json" and p.exists():
+                self.profile_path = p
+                self.profile = json.loads(p.read_text())
+            elif p.suffix == ".gguf" or p.exists():
+                self.profile_path = None
+                self.profile = build_dynamic_profile(p)
+            else:
+                raise FileNotFoundError(f"Target file not found: {target}")
+        elif isinstance(target, dict):
+            self.profile_path = None
+            self.profile = target
+        else:
+            raise ValueError("Invalid profile target")
+
+        cmd = build_launch_command(self.profile)
+        # Preflight: refuse to spawn llama-server if the VRAM math says it
+        # won't fit (a WDDM OOM spill hangs the whole desktop on Arc).
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, vram.check_or_raise, self.profile)
+        print(f"[server_manager] launching: {' '.join(cmd)}")
+        self.process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        self.started_at = time.time()
+        asyncio.create_task(self._pump_logs(self.process))
+        await self._wait_healthy()
 
     async def stop(self):
         async with self.lock:
@@ -189,10 +208,15 @@ async def keepalive_loop():
         if time.time() - state.last_activity < state.keepalive_interval_s:
             continue
         try:
-            await state.client.post("/v1/chat/completions", json={
-                "messages": [{"role": "user", "content": "ping"}],
-                "max_tokens": 1,
-                "temperature": 0.1,
+            # Pin the ping to the last slot so, with -np > 1, it doesn't land on
+            # (and overwrite) whichever slot holds the most recent user's cached
+            # conversation prefix. With -np 1 there is no spare slot to use.
+            n_slots = int((state.profile or {}).get("n_slots") or 1)
+            await state.client.post("/completion", json={
+                "prompt": "ping",
+                "n_predict": 1,
+                "cache_prompt": False,
+                "id_slot": max(0, n_slots - 1),
             }, timeout=60.0)
             state.last_activity = time.time()
             print("[server_manager] keepalive ping (1 tok) - VRAM kept resident")

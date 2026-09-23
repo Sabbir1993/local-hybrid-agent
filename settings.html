@@ -10,7 +10,7 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=3.0">
+<link rel="stylesheet" href="/static/css/style.css?v=3.4">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 <style>
   html, body { height: auto; min-height: 100%; overflow-y: auto; }
@@ -18,8 +18,9 @@
   #settings-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
   #settings-topbar h1 { font-size: 15px; margin: 0; letter-spacing: 0.5px; }
   .settings-hidden-note { color: var(--dim); font-size: 11px; padding: 10px; text-align: center; }
-  #sec-cfg .model-group { width: 100%; }
+  #sec-cfg .model-group { width: 100%; position: relative; overflow: visible; }
   #sec-cfg .model-group select { max-width: none; }
+  #sec-cfg .model-picker-btn { max-width: none; flex: 1; }
 </style>
 </head>
 <body>
@@ -108,9 +109,20 @@
 
   <details class="card fold" id="sec-cfg" data-perm="model.local.configure">
     <summary title="Adjust llama-server launch parameters and persist them to profile JSON">Model Config · Restart to Apply</summary>
-    <div class="model-group" style="margin-bottom:10px;" title="Pick which local/cloud model this config panel edits">
-      <select id="profile" title="Select a GGUF model (grouped by family)"></select>
+    <div class="model-group" style="margin-bottom:6px; position:relative;" title="Pick which local/cloud model this config panel edits">
+      <select id="profile" title="Select a GGUF model (grouped by family)" style="display:none;"></select>
+      <button type="button" id="model-picker-btn" class="model-picker-btn" style="flex:1; max-width:none;">
+        <span id="model-picker-icon" class="model-picker-icon">🖥</span>
+        <span id="model-picker-label" class="model-picker-label">Select a model…</span>
+        <span id="model-picker-caps" class="mpi-caps"></span>
+        <span class="model-picker-caret">▾</span>
+      </button>
       <button id="btn-load-header" title="Load the selected model into GPU VRAM"><span>▶</span></button>
+      <div id="model-picker-dropdown" class="model-picker-dropdown"></div>
+    </div>
+    <div id="model-caps-row" class="model-caps-row">
+      <span class="caps-label">CAPABILITIES</span>
+      <div id="caps-pills" class="caps-pills"></div>
     </div>
     <div class="cfg-grid">
       <div class="cfg-item" title="Context size in tokens (n_ctx). Maximum prompt + completion memory allocated in VRAM">
@@ -163,19 +175,19 @@
         <select id="cfg-ct" title="KV cache quantization type"><option value="f16">f16</option><option value="q8_0">q8_0 (½ KV RAM)</option><option value="q5_0">q5_0</option><option value="q4_0">q4_0</option><option value="bf16">bf16</option><option value="f32">f32</option></select>
       </div>
       <div class="cfg-item cfg-full" id="mtp-row" style="display:none" title="MTP speculative decoding: a small draft model proposes token chains the target model verifies in one pass — typically 1.5-2x tokens/sec on Vulkan">
-        <label for="cfg-mtp">⚡ MTP draft <span class="info" title="Enables speculative decoding with the auto-detected MTP draft file">ⓘ</span></label>
+        <label for="cfg-mtp"><span class="cfg-cap-icon mtp"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5h6L9.5 22l9-12h-6.5L13 2z"/></svg></span> MTP draft <span class="info" title="Enables speculative decoding with the auto-detected MTP draft file">ⓘ</span></label>
         <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
           <label class="switch"><input type="checkbox" id="cfg-mtp"><span class="slider"></span></label>
-          <div style="flex:1"><b id="mtp-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">speculative decoding available</small></div>
+          <div style="flex:1"><b id="mtp-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">speculative decoding available</small><small id="mtp-note" style="color:var(--amber, #d29922); font-size:9px; display:none;"></small></div>
         </div>
         <label for="mtp-nmax" style="margin-top:6px">Draft tokens (n-max) <span class="info" title="Tokens drafted per step (default 3)">ⓘ</span></label>
         <input type="number" id="mtp-nmax" min="1" max="16" value="3" title="Max draft tokens per speculative step">
       </div>
       <div class="cfg-item cfg-full" id="vision-row" style="display:none" title="Multimodal vision projector: enables the main model to understand images directly without needing a separate vision model">
-        <label for="cfg-vision">🧿 Multimodal vision <span class="info" title="Enables vision support with the auto-detected mmproj projector file">ⓘ</span></label>
+        <label for="cfg-vision"><span class="cfg-cap-icon vision"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg></span> Multimodal vision <span class="info" title="Enables vision support with the auto-detected mmproj projector file">ⓘ</span></label>
         <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
           <label class="switch"><input type="checkbox" id="cfg-vision"><span class="slider"></span></label>
-          <div style="flex:1"><b id="vision-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">multimodal projector detected</small></div>
+          <div style="flex:1"><b id="vision-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">multimodal projector detected</small><small id="vision-note" style="color:var(--amber, #d29922); font-size:9px; display:none;"></small></div>
         </div>
       </div>
     </div>

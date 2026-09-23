@@ -188,7 +188,14 @@ def check(texts: list, user, any_cloud_lane: bool) -> Optional[dict]:
     Returns the matched rule dict (with .get("message") for the human-readable
     error) or None when allowed.
     """
-    if not enabled() or not texts:
+    if not texts:
+        return None
+    # Built-in PCI rule: runs even when the admin rule set is disabled.
+    from . import pan
+    if pan.enabled("pan_input") and any(pan.contains_pan(t) for t in texts):
+        return {"name": pan.RULE_NAME, "scope": "block_all",
+                "message": pan.BLOCK_MESSAGE, "_matched_pattern": "builtin:pan"}
+    if not enabled():
         return None
     for rule in guard_cfg().get("rules") or []:
         if not isinstance(rule, dict) or not rule.get("enabled", True):

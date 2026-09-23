@@ -285,6 +285,8 @@ def main():
         common.initial_profile_path = Path(args.profile)
     if args.models_dir:
         common.models_dir = Path(args.models_dir)
+        from core.profiles import register_models_root
+        register_models_root(common.models_dir)
 
     uvicorn.run(app, host=PROXY_HOST, port=args.port)
 

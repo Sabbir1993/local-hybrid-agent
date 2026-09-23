@@ -44,12 +44,33 @@ def _set_auth_cookies(response: Response, raw_session: str, csrf: str, secure: b
     )
 
 
+# Per-IP throttle on top of per-account lockout, so one client can't spray a
+# password across many usernames. In-memory: resets on restart, single process.
+_IP_WINDOW_S = 15 * 60
+_IP_MAX_FAILURES = 30
+_ip_failures: dict = {}
+
+
+def _ip_blocked(ip) -> bool:
+    now = time.time()
+    hits = [t for t in _ip_failures.get(ip, ()) if now - t < _IP_WINDOW_S]
+    if hits:
+        _ip_failures[ip] = hits
+    else:
+        _ip_failures.pop(ip, None)
+    return len(hits) >= _IP_MAX_FAILURES
+
+
 @router.post("/login")
 async def login(body: LoginBody, request: Request, response: Response):
     provider = get_auth_provider()
     ip = request.client.host if request.client else None
+    if _ip_blocked(ip):
+        audit_log(None, action="login.throttled", resource=body.username, result="deny", ip=ip)
+        raise HTTPException(status_code=429, detail="too many failed logins - try again later")
     user = provider.verify_credentials(body.username, body.password)
     if not user:
+        _ip_failures.setdefault(ip, []).append(time.time())
         audit_log(None, action="login.failed", resource=body.username, result="deny", ip=ip)
         raise HTTPException(status_code=401, detail="invalid username or password")
 

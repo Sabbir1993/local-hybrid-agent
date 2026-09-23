@@ -22,6 +22,8 @@ class FakePrincipal:
 def set_rules(rules, enabled=True):
     from core import small_model
     small_model.APP_CONFIG["output_guard"] = {"enabled": enabled, "rules": rules}
+    # these tests exercise admin rules; the built-in PAN rule has its own tests
+    small_model.APP_CONFIG["pci"] = {"pan_output": "off"}
     input_guard._compile_cache.clear()
     input_guard._cache_ts = 0.0
 

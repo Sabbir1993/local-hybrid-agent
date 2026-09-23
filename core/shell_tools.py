@@ -3,7 +3,10 @@
 Policy (config/app.json -> capabilities.shell):
   enabled        — tool registered at all
   ask_first      — pause and ask the user unless the command matches an allow pattern
-  allow_patterns — fnmatch wildcard list, e.g. "git *", "npx *", or "*" to allow everything
+  allow_patterns — fnmatch wildcard list, e.g. "git *", "npx *", or "*" to allow everything.
+                   A pattern only ever auto-approves a *single* command: anything
+                   containing shell operators (& | < > ^ ; ` newline, $( ) ...)
+                   needs the literal "*" pattern or an explicit per-command OK.
   timeout_s      — hard kill after N seconds
 
 The agent SSE loop installs `permission_callback` before running tasks; when
@@ -12,6 +15,7 @@ after the user answers the modal. Callbacks are async.
 """
 
 import asyncio
+import contextvars
 import fnmatch
 import os
 import re
@@ -36,12 +40,37 @@ def shell_cfg() -> dict:
     return caps.get("shell") or {"enabled": False}
 
 
-def _is_allowed(cmd: str, patterns: list) -> bool:
-    c = cmd.strip().lower()
-    for pat in patterns:
-        if fnmatch.fnmatch(c, str(pat).strip().lower()):
-            return True
-    return False
+# cmd.exe / PowerShell operators that chain, redirect, pipe or substitute:
+# "git *" must not auto-approve "git status & del /q ..." or "git log > x.bat".
+_SHELL_META_RE = re.compile(r"[&|<>^;`\r\n]|\$\(|%[^%\s]+%")
+
+# The exact command line the agent loop approved (allow-list or permission
+# modal) for this request. A contextvar -- not a tool argument -- so a model
+# can't mark its own call pre-approved by emitting {"_pre_approved": true}.
+_approved_cmd: contextvars.ContextVar = contextvars.ContextVar("shell_approved_cmd", default=None)
+
+
+def is_compound(cmd: str) -> bool:
+    return bool(_SHELL_META_RE.search(cmd or ""))
+
+
+def command_allowed(cmd: str, patterns: list) -> bool:
+    """True when `cmd` is auto-approved by one of the allow patterns."""
+    c = (cmd or "").strip().lower()
+    pats = [str(p).strip().lower() for p in patterns or [] if str(p).strip()]
+    if "*" in pats:
+        return True             # user explicitly allowed everything
+    if not c or is_compound(c):
+        return False
+    return any(fnmatch.fnmatch(c, p) for p in pats)
+
+
+_is_allowed = command_allowed   # backwards-compatible name
+
+
+def mark_approved(cmd: str) -> None:
+    """Agent loop: the user/allow-list approved exactly this command line."""
+    _approved_cmd.set((cmd or "").strip())
 
 
 def _sanity(cmd: str) -> Optional[str]:
@@ -64,10 +93,13 @@ async def tool_run_shell(args: dict) -> str:
     if err:
         return f"error: {err}"
 
-    # The agent SSE loop pre-approves via the permission modal; this gate is a
-    # fallback for direct/other callers.
-    if not args.get("_pre_approved"):
-        allowed_by_pattern = _is_allowed(cmd, cfg.get("allow_patterns", []) or [])
+    # The agent SSE loop pre-approves via the permission modal (mark_approved);
+    # this gate is a fallback for direct/other callers.
+    approved = _approved_cmd.get()
+    if approved is not None:
+        _approved_cmd.set(None)          # single use
+    if approved != cmd:
+        allowed_by_pattern = command_allowed(cmd, cfg.get("allow_patterns", []) or [])
         if cfg.get("ask_first", True) and not allowed_by_pattern:
             if permission_callback is not None:
                 allowed, note = await permission_callback(cmd)

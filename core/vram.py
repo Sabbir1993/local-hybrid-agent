@@ -333,6 +333,57 @@ def parse_gguf_info(model_path) -> "dict | None":
         _gguf_cache[str(p)] = ((st.st_mtime_ns, st.st_size), info)
     return info
 
+def read_gguf_scalars(model_path, keys) -> dict:
+    """Read selected scalar/string metadata keys from a GGUF header (companion
+    checks: clip.vision.projection_dim, <arch>.embedding_length, ...). Stops
+    once every key was seen; arrays are skipped. Never raises: {} on error."""
+    want = set(keys)
+    out: dict = {}
+    try:
+        with open(model_path, "rb") as fh:
+            cur = _Cursor(fh, chunk=1 * MIB)
+            if cur.read(4) != b"GGUF":
+                return {}
+            if struct.unpack("<I", cur.read(4))[0] < 2:
+                return {}
+            cur.read(8)
+            kv_count = struct.unpack("<Q", cur.read(8))[0]
+            if kv_count > 100_000:
+                return {}
+            for _ in range(kv_count):
+                klen = struct.unpack("<Q", cur.read(8))[0]
+                key = cur.read(klen).decode("utf-8", "replace")
+                vtype = struct.unpack("<I", cur.read(4))[0]
+                if vtype == 8:
+                    ln = struct.unpack("<Q", cur.read(8))[0]
+                    if key in want:
+                        out[key] = cur.read(ln).decode("utf-8", "replace")
+                    else:
+                        cur.skip(ln)
+                elif vtype == 9:
+                    et = struct.unpack("<I", cur.read(4))[0]
+                    cnt = struct.unpack("<Q", cur.read(8))[0]
+                    if et == 8:
+                        for _ in range(cnt):
+                            cur.skip(struct.unpack("<Q", cur.read(8))[0])
+                    elif et in _GGUF_FMT:
+                        cur.skip(_GGUF_FMT[et][1] * cnt)
+                    else:
+                        return out
+                elif vtype in _GGUF_FMT:
+                    fmt, sz = _GGUF_FMT[vtype]
+                    v = struct.unpack(fmt, cur.read(sz))[0]
+                    if key in want:
+                        out[key] = v
+                else:
+                    return out
+                if want.issubset(out):
+                    break
+    except Exception:
+        pass
+    return out
+
+
 # --------------------------------------------------------------------------
 # Footprint estimation + effective launch params
 # --------------------------------------------------------------------------
@@ -396,14 +447,16 @@ def effective_params(profile: dict, overrides: dict | None = None) -> dict:
             gpu_devices = [d for d, _ in pairs]
             tensor_split = ",".join(str(s) for _, s in pairs)
 
+    # extra weights loaded next to the model: MTP draft and vision projector
     draft_b = 0
-    if profile.get("mtp_enabled") and profile.get("mtp_draft_path"):
-        dp = Path(str(profile["mtp_draft_path"]))
-        if dp.exists():
-            try:
-                draft_b = dp.stat().st_size
-            except OSError:
-                pass
+    for flag, key in (("mtp_enabled", "mtp_draft_path"), ("vision_capable", "mmproj_path")):
+        if profile.get(flag) and profile.get(key):
+            dp = Path(str(profile[key]))
+            if dp.exists():
+                try:
+                    draft_b += dp.stat().st_size
+                except OSError:
+                    pass
 
     return {"n_gpu_layers": n_gpu_layers, "tensor_split": tensor_split,
             "context_size": context_size, "kv_cache_type": kv_cache_type,

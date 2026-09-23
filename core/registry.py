@@ -9,6 +9,8 @@ import asyncio
 import inspect
 from typing import Callable, Optional
 
+from .request_context import run_in_executor_ctx
+
 
 class RegisteredTool:
     __slots__ = ("name", "fn", "schema", "source", "meta", "enabled")
@@ -94,7 +96,7 @@ class ToolRegistry:
         try:
             if inspect.iscoroutinefunction(t.fn):
                 return await t.fn(args)
-            return await asyncio.get_event_loop().run_in_executor(None, t.fn, args)
+            return await run_in_executor_ctx(t.fn, args)
         except Exception as e:
             return f"error: {type(e).__name__}: {e}"
 

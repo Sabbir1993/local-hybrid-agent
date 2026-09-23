@@ -14,6 +14,7 @@ const { autoUpdater } = require("electron-updater");
 const { SERVER_URL } = require("./config");
 const fsops = require("./fsops");
 const shellops = require("./shellops");
+const policy = require("./policy");
 
 const APP_ICON_PATH = path.join(__dirname, "build", "icon.png");
 const appIcon = nativeImage.createFromPath(APP_ICON_PATH);
@@ -65,8 +66,10 @@ async function getSessionCookie() {
     if (cookies && cookies.length) return cookies[0].value;
   } catch (_) {}
 
+  // Lookups are always scoped to this app's server: a name-only lookup could
+  // return a same-named cookie set by some other site.
   try {
-    const cookies = await ses.cookies.get({ name: SESSION_COOKIE_NAME });
+    const cookies = await ses.cookies.get({ url: SERVER_URL, name: SESSION_COOKIE_NAME });
     if (cookies && cookies.length) return cookies[0].value;
   } catch (_) {}
 
@@ -76,14 +79,14 @@ async function getSessionCookie() {
   } catch (_) {}
 
   try {
-    const cookies = await electronSession.defaultSession.cookies.get({ name: SESSION_COOKIE_NAME });
+    const cookies = await electronSession.defaultSession.cookies.get({ url: SERVER_URL, name: SESSION_COOKIE_NAME });
     if (cookies && cookies.length) return cookies[0].value;
   } catch (_) {}
 
   try {
     const all = await ses.cookies.get({ url: currentUrl });
     for (const c of all) {
-      if (c.name === SESSION_COOKIE_NAME || c.name.includes("session")) return c.value;
+      if (c.name === SESSION_COOKIE_NAME) return c.value;
     }
   } catch (_) {}
 
@@ -148,7 +151,9 @@ function createMainWindow() {
 // Register IPC handlers for direct native folder browsing from the web app
 ipcMain.handle("dialog:browseFolder", async (event, initialDir) => {
   try {
-    return (await fsops.browseFolder({ initial_dir: initialDir })).path || "";
+    const picked = (await fsops.browseFolder({ initial_dir: initialDir })).path || "";
+    if (picked) policy.approveRoot(picked);   // the user chose it in a native dialog
+    return picked;
   } catch (e) {
     console.error("[ipcMain dialog:browseFolder] error:", e);
     return "";
@@ -241,17 +246,23 @@ function scheduleReconnect() {
   reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
 }
 
+// Every server-initiated op passes the local policy (companion/policy.js):
+// file access only inside user-approved folders, shell commands confirmed here.
 const OPS = {
-  "fs.browse_folder": fsops.browseFolder,
-  "fs.browse": fsops.browse,
-  "fs.mkdir": fsops.mkdir,
-  "fs.read": fsops.read,
-  "fs.write": fsops.write,
-  "fs.edit": fsops.edit,
-  "fs.list": fsops.list,
-  "fs.grep": fsops.grep,
-  "fs.tree": fsops.tree,
-  "shell.run": shellops.run,
+  "fs.browse_folder": async (p) => {
+    const r = await fsops.browseFolder(p);
+    if (r.path) policy.approveRoot(r.path);   // picked by the user in a native dialog
+    return r;
+  },
+  "fs.browse": fsops.browse,                  // folder names only (workspace picker)
+  "fs.mkdir": async (p) => { await policy.ensurePath(p.path, "create a folder in"); return fsops.mkdir(p); },
+  "fs.read": async (p) => { await policy.ensurePath(p.path, "read"); return fsops.read(p); },
+  "fs.write": async (p) => { await policy.ensurePath(p.path, "write"); return fsops.write(p); },
+  "fs.edit": async (p) => { await policy.ensurePath(p.path, "edit"); return fsops.edit(p); },
+  "fs.list": async (p) => { await policy.ensurePath(p.root, "list files in"); return fsops.list(p); },
+  "fs.grep": async (p) => { await policy.ensurePath(p.root, "search files in"); return fsops.grep(p); },
+  "fs.tree": async (p) => { await policy.ensurePath(p.root, "browse"); return fsops.tree(p); },
+  "shell.run": async (p) => { await policy.confirmShell(p.command, p.cwd); return shellops.run(p); },
 };
 
 async function handleCall(frame) {
@@ -284,9 +295,9 @@ function connectWebSocket(sessionToken) {
       }
     } catch (_) {}
   }
-  const wsBase = effectiveServer.replace(/^http/, "ws") + "/ws/companion";
-  const sep = wsBase.includes("?") ? "&" : "?";
-  const wsUrl = `${wsBase}${sep}token=${encodeURIComponent(sessionToken)}`;
+  // The session token travels only in headers: a ?token= query string ends up
+  // in proxy / tunnel / access logs.
+  const wsUrl = effectiveServer.replace(/^http/, "ws") + "/ws/companion";
   console.log("[connectWebSocket] connecting to", wsUrl);
   ws = new WebSocket(wsUrl, {
     headers: {
@@ -346,7 +357,7 @@ app.whenReady().then(() => {
 
   getSessionCookie()
     .then((token) => {
-      console.log("[whenReady] getSessionCookie resolved:", token);
+      console.log("[whenReady] session cookie", token ? "found" : "not found");
       if (token) {
         lastToken = token;
         connectWebSocket(token);

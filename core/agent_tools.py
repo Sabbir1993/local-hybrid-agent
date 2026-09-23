@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import inspect
 import json
 import os
@@ -132,11 +133,8 @@ def _common_resolve(rel: str) -> Path:
         return common
 
     p = (common / clean).resolve()
-    try:
-        p.relative_to(common)
-    except ValueError:
-        if not str(p).lower().startswith(str(common).lower()):
-            raise PermissionError(f"path escapes common space: {rel}")
+    if not _within(p, common.resolve()):
+        raise PermissionError(f"path escapes common space: {rel}")
     return p
 
 
@@ -159,12 +157,23 @@ def _ws_resolve(rel: str) -> Path:
         return ws
 
     p = (ws / clean).resolve()
-    try:
-        p.relative_to(ws)
-    except ValueError:
-        if not str(p).lower().startswith(str(ws).lower()):
-            raise PermissionError(f"path escapes workspace: {rel}")
+    if not _within(p, ws):
+        raise PermissionError(f"path escapes workspace: {rel}")
     return p
+
+
+def _within(p: Path, root: Path) -> bool:
+    """p is root or inside it. Case-insensitive on Windows, and compared on a
+    path-separator boundary so a sibling like ".../proj2" never passes as
+    being inside ".../proj" (a plain string startswith() would let it)."""
+    try:
+        p.relative_to(root)
+        return True
+    except ValueError:
+        pass
+    rp = os.path.normcase(os.path.normpath(str(p)))
+    rr = os.path.normcase(os.path.normpath(str(root)))
+    return rp == rr or rp.startswith(rr.rstrip("/" + os.sep) + os.sep)
 
 
 async def tool_list_files(args: dict) -> str:
@@ -1602,6 +1611,9 @@ async def tool_search_knowledge_base(args: dict) -> str:
     query = args.get("query", "")
     if not query:
         raise ValueError("query required")
+    from .knowledge_access import KB_CLOUD_BLOCKED_MSG, kb_cloud_blocked
+    if kb_cloud_blocked():
+        return KB_CLOUD_BLOCKED_MSG
     uid = get_current_user_id()
     from .auth import _to_principal
     from .knowledge_access import allowed_source_ids_for
@@ -1621,22 +1633,23 @@ async def tool_search_knowledge_base(args: dict) -> str:
 
 
 # ---------------- structured plan tracking ----------------
-_plan_session_id: Optional[int] = None  # set per /agent/run via set_plan_context()
+# per-request (contextvar) so concurrent /agent/run calls never share a plan
+_plan_session_var: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "plan_session_id", default=None)
 
 _PLAN_STATUS_MARKS = {"pending": "☐", "in_progress": "⏳", "done": "✅", "failed": "❌"}
 
 
 def set_plan_context(session_id) -> None:
     """Point the plan tools at the current agent session (called from routes/agent.py)."""
-    global _plan_session_id
     try:
-        _plan_session_id = int(session_id) if session_id is not None else None
+        _plan_session_var.set(int(session_id) if session_id is not None else None)
     except (TypeError, ValueError):
-        _plan_session_id = None
+        _plan_session_var.set(None)
 
 
 def get_plan_context() -> Optional[int]:
-    return _plan_session_id
+    return _plan_session_var.get()
 
 
 def _format_plan(items: list) -> str:
@@ -1654,7 +1667,7 @@ def _format_plan(items: list) -> str:
 
 def tool_create_plan(args: dict) -> str:
     from .db import db_get_plan_items, db_set_plan_items
-    if _plan_session_id is None:
+    if get_plan_context() is None:
         raise ValueError("no active session for plan tracking (session_id missing from /agent/run)")
     raw = args.get("items")
     if isinstance(raw, str):
@@ -1668,15 +1681,15 @@ def tool_create_plan(args: dict) -> str:
             texts.append(t)
     if not texts:
         raise ValueError("plan contained no usable step text")
-    db_set_plan_items(_plan_session_id, texts)
-    return f"Plan created with {len(texts)} steps:\n" + _format_plan(db_get_plan_items(_plan_session_id))
+    db_set_plan_items(get_plan_context(), texts)
+    return f"Plan created with {len(texts)} steps:\n" + _format_plan(db_get_plan_items(get_plan_context()))
 
 
 def tool_update_plan_item(args: dict) -> str:
     from .db import db_get_plan_items, db_set_plan_item_status
-    if _plan_session_id is None:
+    if get_plan_context() is None:
         raise ValueError("no active session for plan tracking (session_id missing from /agent/run)")
-    items = db_get_plan_items(_plan_session_id)
+    items = db_get_plan_items(get_plan_context())
     if not items:
         raise ValueError("no plan exists yet — call create_plan first")
     try:
@@ -1688,15 +1701,15 @@ def tool_update_plan_item(args: dict) -> str:
         raise ValueError("status must be one of: pending, in_progress, done, failed")
     if not 1 <= no <= len(items):
         raise ValueError(f"item {no} out of range (plan has {len(items)} steps)")
-    db_set_plan_item_status(_plan_session_id, no, status, str(args.get("note") or "").strip() or None)
-    return f"Step {no} marked {status} {_PLAN_STATUS_MARKS[status]}.\n" + _format_plan(db_get_plan_items(_plan_session_id))
+    db_set_plan_item_status(get_plan_context(), no, status, str(args.get("note") or "").strip() or None)
+    return f"Step {no} marked {status} {_PLAN_STATUS_MARKS[status]}.\n" + _format_plan(db_get_plan_items(get_plan_context()))
 
 
 def tool_get_plan(args: dict) -> str:
     from .db import db_get_plan_items
-    if _plan_session_id is None:
+    if get_plan_context() is None:
         raise ValueError("no active session for plan tracking (session_id missing from /agent/run)")
-    return _format_plan(db_get_plan_items(_plan_session_id))
+    return _format_plan(db_get_plan_items(get_plan_context()))
 
 
 AGENT_TOOLS = [

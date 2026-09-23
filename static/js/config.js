@@ -46,21 +46,33 @@ async function loadProfiles() {
     // which are meaningless for cloud models (managed separately in the
     // ☁️ Cloud Models card below).
     const locals = (d.models || []).slice().sort((a, b) =>
-      String(a.name || '').localeCompare(String(b.name || '')));
+      String(a.display || a.name || '').localeCompare(String(b.display || b.name || '')));
+    // folders holding several quants show "<folder> · <file>" so they stay distinct
+    const perFolder = {};
+    locals.forEach(m => { if (m.folder) perFolder[m.folder] = (perFolder[m.folder] || 0) + 1; });
     locals.forEach(m => {
       const o = document.createElement('option');
       o.value = m.path;
-      const name = (m.name || '').trim();
-      const shortName = name.length > 20 ? (name.slice(0, 20) + '...') : name;
+      const base = (m.folder || m.name || '').trim();
+      const name = m.folder && perFolder[m.folder] > 1 ? `${base} · ${m.name}` : base;
+      const shortName = name.length > 28 ? (name.slice(0, 28) + '...') : name;
       const size = m.size_gb != null ? ` · ${m.size_gb}GB` : '';
-      const mtp = m.mtp_available ? ' ⚡MTP' : '';
-      const vision = m.mmproj_available ? ' 🧿' : '';
-      o.textContent = `${shortName}${size}${mtp}${vision}`;
-      o.title = `${m.name}${size}${mtp}${vision}`;
+      const tags = [];
+      if (m.mmproj_available) tags.push('👁 Vision');
+      if (m.tools_available) tags.push('🔨 Tools');
+      if (m.mtp_available) tags.push('⚡ MTP');
+      if (m.reasoning_available) tags.push('◵ Reasoning');
+      const tagStr = tags.length ? (' · ' + tags.join(' ')) : '';
+      o.textContent = `${shortName}${size}${tagStr}`;
+      const notes = [m.mtp_note, m.mmproj_note].filter(Boolean);
+      o.title = `${m.folder ? m.folder + '/' : ''}${m.name}${size}${tagStr}` +
+        (notes.length ? `\n⚠ Not attached: ${notes.join('; ')}` : '');
       o.dataset.mtp = m.mtp_available ? '1' : '';
       o.dataset.mtpPath = m.mtp_draft_path || '';
       o.dataset.vision = m.mmproj_available ? '1' : '';
       o.dataset.mmproj = m.mmproj_path || '';
+      o.dataset.tools = m.tools_available ? '1' : '';
+      o.dataset.reasoning = m.reasoning_available ? '1' : '';
       o.dataset.kind = 'local';
       o.dataset.provider = 'Local';
       sel.appendChild(o);
@@ -80,12 +92,67 @@ async function loadProfiles() {
     else if (sel.options.length) sel.value = sel.options[0].value;
 
     loadConfig();   // dropdown is ready — fetch its saved config
+    updateModelCapabilitiesBar();
+    renderModelPicker();
   } catch (e) {}
+}
+
+function updateModelCapabilitiesBar(caps) {
+  const row = $('model-caps-row');
+  const container = $('caps-pills');
+  if (!row || !container) return;
+
+  const sel = $('profile');
+  const opt = (sel && sel.selectedIndex >= 0) ? sel.options[sel.selectedIndex] : null;
+
+  let hasVision = false;
+  let hasTools = false;
+  let hasMtp = false;
+  let hasReasoning = false;
+
+  if (caps) {
+    hasVision = !!(caps.vision_capable || caps.mmproj_available);
+    hasTools = !!caps.tools_available;
+    hasMtp = !!(caps.mtp_available || caps.mtp_draft_path);
+    hasReasoning = !!caps.reasoning_available;
+  } else if (opt) {
+    hasVision = opt.dataset.vision === '1';
+    hasTools = opt.dataset.tools === '1';
+    hasMtp = opt.dataset.mtp === '1';
+    hasReasoning = opt.dataset.reasoning === '1';
+  }
+
+  const visionSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>`;
+  const toolsSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M19.7 4.3a2.5 2.5 0 0 0-3.5 0l-2.1 2.1 3.5 3.5 2.1-2.1a2.5 2.5 0 0 0 0-3.5zM13 7.4 4.7 15.7a1 1 0 0 0 0 1.4l2.2 2.2a1 1 0 0 0 1.4 0L16.6 11 13 7.4z"/></svg>`;
+  const mtpSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5h6L9.5 22l9-12h-6.5L13 2z"/></svg>`;
+  const reasoningSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="3" x2="12" y2="21"/></svg>`;
+
+  let html = '';
+  if (hasVision) {
+    html += `<span class="cap-pill vision" title="Vision Capable (Multimodal Projector)">${visionSvg} Vision</span>`;
+  }
+  if (hasTools) {
+    html += `<span class="cap-pill tools" title="Tool Calling / Function Calling Supported">${toolsSvg} Tool Use</span>`;
+  }
+  if (hasMtp) {
+    html += `<span class="cap-pill mtp" title="MTP Speculative Decoding Draft Detected">${mtpSvg} MTP</span>`;
+  }
+  if (hasReasoning) {
+    html += `<span class="cap-pill reasoning" title="Reasoning / Chain-of-Thought Model">${reasoningSvg} Reasoning</span>`;
+  }
+
+  if (!html) {
+    html = `<span style="font-size:11px; color:var(--dim); font-style:italic;">None detected</span>`;
+  }
+
+  container.innerHTML = html;
+  row.style.display = 'flex';
 }
 
 $('profile').onchange = e => {
   e.target._user = true;
   try { localStorage.setItem('app_model', e.target.value); } catch (err) {}
+  updateModelCapabilitiesBar();
   // Picking a cloud model means "this is my main lane": nudge the agent engine to
   // a mode that keeps the local model out of the way (the executor stays local
   // unless it is bound to the cloud in the Cloud Models card).
@@ -133,13 +200,28 @@ function _mpCleanLabel(text) {
 function _createPickerItem(o, sel, dd) {
   const isCloud = o.dataset.kind === 'cloud';
   const isLoaded = o.dataset.loaded === '1' || /\(loaded\)/.test(o.textContent);
-  const raw = _mpCleanLabel(o.textContent);
+  let raw = _mpCleanLabel(o.textContent);
+  raw = raw.replace(/\s*·\s*(?:[👁🔨⚡◵].*)$/, '').trim();
   const item = document.createElement('button');
   item.type = 'button';
   item.className = 'model-picker-item' + (o.value === sel.value ? ' active' : '');
   item.title = raw + (o.dataset.provider ? ` (${o.dataset.provider})` : '');
+
+  const visionSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>`;
+  const toolsSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M19.7 4.3a2.5 2.5 0 0 0-3.5 0l-2.1 2.1 3.5 3.5 2.1-2.1a2.5 2.5 0 0 0 0-3.5zM13 7.4 4.7 15.7a1 1 0 0 0 0 1.4l2.2 2.2a1 1 0 0 0 1.4 0L16.6 11 13 7.4z"/></svg>`;
+  const mtpSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5h6L9.5 22l9-12h-6.5L13 2z"/></svg>`;
+  const reasoningSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="3" x2="12" y2="21"/></svg>`;
+
+  let caps = '';
+  if (o.dataset.vision === '1') caps += `<span class="cap-pill vision" title="Vision">${visionSvg} Vision</span>`;
+  if (o.dataset.tools === '1') caps += `<span class="cap-pill tools" title="Tool Use">${toolsSvg} Tool Use</span>`;
+  if (o.dataset.mtp === '1') caps += `<span class="cap-pill mtp" title="MTP">${mtpSvg} MTP</span>`;
+  if (o.dataset.reasoning === '1') caps += `<span class="cap-pill reasoning" title="Reasoning">${reasoningSvg} Reasoning</span>`;
+  const capsWrap = caps ? `<div class="mpi-caps">${caps}</div>` : '';
+
   item.innerHTML = `<span class="mpi-icon">${isCloud ? '☁️' : '🖥'}</span>` +
-    `<span class="mpi-label">${_mpShorten(raw, 34)}</span>` +
+    `<span class="mpi-label">${_mpShorten(raw, 32)}</span>` +
+    capsWrap +
     (isLoaded ? '<span class="mpi-badge">loaded</span>' : '');
   item.onclick = () => {
     if (sel.value !== o.value) {
@@ -156,7 +238,9 @@ function renderModelPicker() {
   const sel = $('profile');
   const btn = $('model-picker-btn');
   const dd = $('model-picker-dropdown');
-  if (!sel || !btn || !dd) return;   // settings.html has no custom picker
+  if (!sel || !btn || !dd) return;
+
+  initModelPickerToggle();
 
   const icon = $('model-picker-icon');
   const label = $('model-picker-label');
@@ -167,7 +251,7 @@ function renderModelPicker() {
   const localOpts = opts.filter(o => o.dataset.kind !== 'cloud');
   const cloudOpts = opts.filter(o => o.dataset.kind === 'cloud');
 
-  // 1. LOCAL SECTION (Only displayed when admin has loaded a model into VRAM)
+  // 1. LOCAL SECTION
   if (localOpts.length > 0) {
     const localGroup = document.createElement('div');
     localGroup.className = 'model-picker-group';
@@ -214,26 +298,53 @@ function renderModelPicker() {
   const cur = sel.options[sel.selectedIndex];
   if (cur && cur.value) {
     const isCloud = cur.dataset.kind === 'cloud';
-    icon.textContent = isCloud ? '☁️' : '🖥';
-    const raw = _mpCleanLabel(cur.textContent);
-    label.textContent = _mpShorten(raw, 22);
-    label.title = raw + (cur.dataset.provider ? ` (${cur.dataset.provider})` : '');
+    if (icon) icon.textContent = isCloud ? '☁️' : '🖥';
+    let raw = _mpCleanLabel(cur.textContent);
+    raw = raw.replace(/\s*·\s*(?:[👁🔨⚡◵].*)$/, '').trim();
+    if (label) {
+      label.textContent = _mpShorten(raw, 26);
+      label.title = raw + (cur.dataset.provider ? ` (${cur.dataset.provider})` : '');
+    }
+
+    const capsEl = $('model-picker-caps');
+    if (capsEl) {
+      const visionSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>`;
+      const toolsSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M19.7 4.3a2.5 2.5 0 0 0-3.5 0l-2.1 2.1 3.5 3.5 2.1-2.1a2.5 2.5 0 0 0 0-3.5zM13 7.4 4.7 15.7a1 1 0 0 0 0 1.4l2.2 2.2a1 1 0 0 0 1.4 0L16.6 11 13 7.4z"/></svg>`;
+      const mtpSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5h6L9.5 22l9-12h-6.5L13 2z"/></svg>`;
+      const reasoningSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="3" x2="12" y2="21"/></svg>`;
+
+      let b = '';
+      if (cur.dataset.vision === '1') b += `<span class="cap-pill vision">${visionSvg} Vision</span>`;
+      if (cur.dataset.tools === '1') b += `<span class="cap-pill tools">${toolsSvg} Tool Use</span>`;
+      if (cur.dataset.mtp === '1') b += `<span class="cap-pill mtp">${mtpSvg} MTP</span>`;
+      if (cur.dataset.reasoning === '1') b += `<span class="cap-pill reasoning">${reasoningSvg} Reasoning</span>`;
+      capsEl.innerHTML = b;
+    }
   } else {
-    icon.textContent = '🖥';
-    label.textContent = 'No model';
-    label.title = '';
+    if (icon) icon.textContent = '🖥';
+    if (label) {
+      label.textContent = 'Select a model…';
+      label.title = '';
+    }
+    const capsEl = $('model-picker-caps');
+    if (capsEl) capsEl.innerHTML = '';
   }
 }
 
-(function initModelPickerToggle() {
+function initModelPickerToggle() {
   const btn = document.getElementById('model-picker-btn');
   const dd = document.getElementById('model-picker-dropdown');
   if (!btn || !dd) return;
+  if (btn._pickerBound) return;
+  btn._pickerBound = true;
 
   const position = () => {
     const r = btn.getBoundingClientRect();
     dd.style.top = (r.bottom + 6) + 'px';
-    dd.style.left = r.left + 'px';
+    const targetW = Math.max(360, Math.min(r.width, 540));
+    dd.style.width = targetW + 'px';
+    const left = Math.min(r.left, window.innerWidth - targetW - 16);
+    dd.style.left = Math.max(8, left) + 'px';
   };
 
   btn.addEventListener('click', (e) => {
@@ -248,7 +359,10 @@ function renderModelPicker() {
     }
   });
   window.addEventListener('resize', () => { if (dd.classList.contains('open')) position(); });
-})();
+}
+
+// Run init on initial script load
+initModelPickerToggle();
 
 /* ---------------- launch config ---------------- */
 function restoreDefault(id, val) {
@@ -267,9 +381,14 @@ async function loadConfig() {
     if (target) url += '?model=' + encodeURIComponent(target);
     const c = await (await fetch(url)).json();
     if (c.error) return;
-    if (c.cloud) { applyCloudConfigUI(c); return; }
+    if (c.cloud) {
+      applyCloudConfigUI(c);
+      updateModelCapabilitiesBar(c);
+      return;
+    }
     clearCloudConfigUI();
     fillConfigForm(c);
+    updateModelCapabilitiesBar(c);
   } catch (e) {}
 }
 
@@ -336,20 +455,31 @@ function fillConfigForm(c) {
     const mtpAvail = !!c.mtp_available;
     const mtpRow = $('mtp-row');
     if (mtpRow) {
-      mtpRow.style.display = mtpAvail ? '' : 'none';
+      // a rejected draft (wrong model) still shows the row, switched off, with the reason
+      mtpRow.style.display = (mtpAvail || c.mtp_note) ? '' : 'none';
       $('mtp-file').textContent = mtpAvail && c.mtp_draft_path ? c.mtp_draft_path.split('\\').pop().split('/').pop() : '';
+      showCompanionNote('mtp-note', mtpAvail ? '' : c.mtp_note);
     }
-    if ($('cfg-mtp')) $('cfg-mtp').checked = !!c.mtp_enabled;
+    if ($('cfg-mtp')) { $('cfg-mtp').checked = mtpAvail && !!c.mtp_enabled; $('cfg-mtp').disabled = !mtpAvail; }
     if ($('mtp-nmax')) $('mtp-nmax').value = c.mtp_draft_n_max ?? 3;
 
     // Vision section (multimodal projector)
     const visAvail = !!c.mmproj_available;
     const visRow = $('vision-row');
     if (visRow) {
-      visRow.style.display = visAvail ? '' : 'none';
+      visRow.style.display = (visAvail || c.mmproj_note) ? '' : 'none';
       $('vision-file').textContent = visAvail && c.mmproj_path ? c.mmproj_path.split('\\').pop().split('/').pop() : '';
+      showCompanionNote('vision-note', visAvail ? '' : c.mmproj_note);
     }
-    if ($('cfg-vision')) $('cfg-vision').checked = !!c.vision_capable;
+    if ($('cfg-vision')) { $('cfg-vision').checked = visAvail && !!c.vision_capable; $('cfg-vision').disabled = !visAvail; }
+}
+
+/* Companion file found in the model folder but rejected by the header check */
+function showCompanionNote(id, note) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = note ? `⚠ Not attached: ${note}` : '';
+  el.style.display = note ? 'block' : 'none';
 }
 
 /* Tensor split drives GPU selection: 0,1 = GPU 2 only, 1,0 = GPU 1 only, 9,11 = dual */

@@ -7,19 +7,24 @@
       "model": "orchestrator/Spark-X2.5-4B-Q4_K_M.gguf",
       "port": 8091,
       "gpu": 1,
-      "ctx": 50000
+      "ctx": 24576,
+      "np": 3,
+      "kv_cache_type": "q8_0"
     },
     "vision": {
       "model": "orchestrator/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
       "mmproj": "orchestrator/mmproj-model-f16.gguf",
       "port": 8092,
       "gpu": 1,
-      "ctx": 32576
+      "ctx": 32576,
+      "np": 1
     },
     "embedder": {
       "model": "orchestrator/nomic-embed-text-v1.5-Q8_0.gguf",
       "port": 8093,
-      "gpu": 1
+      "gpu": 1,
+      "ctx": 8192,
+      "np": 4
     }
   },
   "router": {
@@ -85,7 +90,7 @@
         "id": "input_guard-1-1790051263397",
         "name": "Block sensitive attachment to cloud",
         "type": "semantic",
-        "description": "If a user prompt or attached file contains sensitive financial or transactional information\u2014such as transaction IDs, payment references, account identifiers, authentication details, or similar records\u2014and the request appears suspicious, unauthorized, deceptive, or potentially related to fraud, the system must treat the content as sensitive. It must not expose, extract, modify, validate, or use such information to facilitate unauthorized activity. The request should be limited to legitimate analysis, redaction, security review, or other clearly authorized purposes, and additional verification or clarification should be required when the user's intent or authorization is unclear.",
+        "description": "If a user prompt or attached file contains sensitive financial or transactional information—such as transaction IDs, payment references, account identifiers, authentication details, or similar records—and the request appears suspicious, unauthorized, deceptive, or potentially related to fraud, the system must treat the content as sensitive. It must not expose, extract, modify, validate, or use such information to facilitate unauthorized activity. The request should be limited to legitimate analysis, redaction, security review, or other clearly authorized purposes, and additional verification or clarification should be required when the user's intent or authorization is unclear.",
         "scope": "cloud_only",
         "roles": [],
         "users": [],
@@ -111,5 +116,18 @@
         "enabled": true
       }
     ]
+  },
+  "serving": {
+    "slot_affinity": true,
+    "queue_enabled": true,
+    "max_inflight_per_user": 1
+  },
+  "knowledge": {
+    "cloud_policy": "local_only"
+  },
+  "pci": {
+    "pan_input": "block",
+    "pan_output": "mask",
+    "pan_cloud_egress": "mask"
   }
 }

@@ -495,12 +495,14 @@ header {
   padding: 0 10px; cursor: pointer; text-align: left;
 }
 .model-picker-btn:hover { background: rgba(255,255,255,0.04); }
-.model-picker-icon { font-size: 12px; flex: none; }
-.model-picker-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-picker-caret { flex: none; color: var(--dim); font-size: 10px; }
+.model-picker-icon, #model-picker-icon { font-size: 12px; flex: none; }
+.model-picker-label, #model-picker-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-picker-caret { flex: none; color: var(--dim); font-size: 10px; margin-left: auto; }
+.model-picker-btn .mpi-caps { margin-left: auto; }
+.model-picker-btn .mpi-caps:not(:empty) + .model-picker-caret { margin-left: 6px; }
 
 .model-picker-dropdown {
-  position: fixed; min-width: 300px; max-width: 380px; z-index: 500;
+  position: fixed; min-width: 320px; max-width: 560px; z-index: 9999;
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 6px; display: none;
   max-height: 360px; overflow-y: auto;
@@ -509,12 +511,14 @@ header {
 .model-picker-item {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
   background: transparent; border: none; color: var(--text); font-size: 12px;
-  padding: 8px 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+  padding: 6px 10px; border-radius: 6px; cursor: pointer; font-family: inherit;
 }
 .model-picker-item:hover { background: var(--panel2); }
 .model-picker-item.active { background: var(--accent-bg); color: var(--accent); }
 .mpi-icon { flex: none; font-size: 12px; }
 .mpi-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mpi-caps { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; }
+.mpi-caps .cap-pill { font-size: 9.5px; padding: 1px 6px; border-radius: 9999px; line-height: 1.3; }
 .mpi-badge {
   flex: none; font-size: 9.5px; padding: 1px 6px; border-radius: 10px;
   background: rgba(52,211,153,.15); color: var(--green);
@@ -556,8 +560,114 @@ header {
   font-size: 11px;
   color: var(--dim);
   font-style: italic;
-  padding: 6px 10px 8px;
+  }
+
+/* ================= MODEL CAPABILITIES (LM Studio Style) ================= */
+.model-caps-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 12px 0;
+  padding: 3px 2px;
+  flex-wrap: wrap;
+  min-height: 26px;
 }
+.model-caps-row.hidden {
+  display: none;
+}
+.caps-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--dim, #8c92a4);
+  user-select: none;
+  margin-right: 2px;
+}
+.caps-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cap-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5.5px;
+  padding: 2.5px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+.cap-pill svg {
+  flex-shrink: 0;
+}
+
+/* Vision Pill: Warm Amber / Gold */
+.cap-pill.vision {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  color: #f59e0b;
+}
+[data-theme="light"] .cap-pill.vision {
+  background: #fef3c7;
+  border-color: #fde68a;
+  color: #b45309;
+}
+
+/* Tool Use Pill: Cool Indigo / Blue */
+.cap-pill.tools {
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.28);
+  color: #818cf8;
+}
+[data-theme="light"] .cap-pill.tools {
+  background: #ede9fe;
+  border-color: #ddd6fe;
+  color: #4f46e5;
+}
+
+/* Reasoning Pill: Green / Emerald */
+.cap-pill.reasoning {
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  color: #4ade80;
+}
+[data-theme="light"] .cap-pill.reasoning {
+  background: #dcfce7;
+  border-color: #bbf7d0;
+  color: #15803d;
+}
+
+/* MTP Pill: Cyan / Teal */
+.cap-pill.mtp {
+  background: rgba(20, 184, 166, 0.12);
+  border: 1px solid rgba(20, 184, 166, 0.28);
+  color: #2dd4bf;
+}
+[data-theme="light"] .cap-pill.mtp {
+  background: #ccfbf1;
+  border-color: #99f6e4;
+  color: #0f766e;
+}
+
+/* Inline capability icon in cfg-item labels */
+.cfg-cap-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: -1px;
+  margin-right: 4px;
+}
+.cfg-cap-icon.vision { color: #f59e0b; }
+[data-theme="light"] .cfg-cap-icon.vision { color: #b45309; }
+.cfg-cap-icon.mtp { color: #2dd4bf; }
+[data-theme="light"] .cfg-cap-icon.mtp { color: #0f766e; }
+.cfg-cap-icon.tools { color: #818cf8; }
+[data-theme="light"] .cfg-cap-icon.tools { color: #4f46e5; }
 
 /* ================= INPUT SANITIZER ================= */
 .guard-header {
@@ -1641,6 +1751,141 @@ body.ws-resizing #ws-grip::after { background: var(--accent); opacity: 1; }
 .cap-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; background: var(--dim); }
 .cap-dot.on { background: var(--green); box-shadow: 0 0 4px var(--green); }
 .cap-dot.err { background: var(--red); box-shadow: 0 0 4px var(--red); }
+
+/* Tool Badge Styling in Capabilities Panel */
+.cap-tool-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+  font-size: 11px;
+}
+.cap-tool-entry:hover {
+  background: var(--panel2);
+}
+.cap-tool-entry.sub {
+  margin-left: 14px;
+  padding: 2.5px 6px;
+}
+
+.cap-tool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, monospace;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  line-height: 1.4;
+  white-space: nowrap;
+  flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+.cap-tool-badge code {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  padding: 0;
+  border: none;
+}
+.cap-tool-badge .tool-badge-ico {
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Color tints matching capability types */
+.cap-tool-badge.web {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.28);
+  color: #60a5fa;
+}
+[data-theme="light"] .cap-tool-badge.web {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.cap-tool-badge.skill {
+  background: rgba(168, 85, 247, 0.1);
+  border-color: rgba(168, 85, 247, 0.28);
+  color: #c084fc;
+}
+[data-theme="light"] .cap-tool-badge.skill {
+  background: #faf5ff;
+  border-color: #e9d5ff;
+  color: #7e22ce;
+}
+
+.cap-tool-badge.mcp {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.28);
+  color: #818cf8;
+}
+[data-theme="light"] .cap-tool-badge.mcp {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #4338ca;
+}
+
+.cap-tool-badge.plugin {
+  background: rgba(234, 179, 8, 0.1);
+  border-color: rgba(234, 179, 8, 0.28);
+  color: #facc15;
+}
+[data-theme="light"] .cap-tool-badge.plugin {
+  background: #fefce8;
+  border-color: #fef08a;
+  color: #a16207;
+}
+
+.cap-tool-badge.shell {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.28);
+  color: #4ade80;
+}
+[data-theme="light"] .cap-tool-badge.shell {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #15803d;
+}
+
+.cap-tool-desc {
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Custom Model Picker Capability Mini-Badges */
+.mpi-caps {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  margin-right: 4px;
+}
+.mpi-cap {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  line-height: 1.3;
+  flex-shrink: 0;
+  user-select: none;
+}
+.mpi-cap.vision { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.25); }
+.mpi-cap.tools { background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.25); }
+.mpi-cap.mtp { background: rgba(20, 184, 166, 0.15); color: #2dd4bf; border: 1px solid rgba(20, 184, 166, 0.25); }
+.mpi-cap.reasoning { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.25); }
 
 /* ---------- composer selects (plan/build, engine) ---------- */
 .comp-select {

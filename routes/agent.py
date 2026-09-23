@@ -14,13 +14,13 @@ from fastapi import APIRouter, Depends, UploadFile, File as FastAPIFile, Request
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 
-from core.auth import Principal
+from core.auth import Principal, user_has_permission
 from core.backend import device_prefix
 from core.config import BASE_DIR, CONFIG_DEFAULTS
-from core.deps import get_current_user
+from core.deps import get_current_user, require_permission
 from core.audit import audit_log
 from core import input_guard
-from core.knowledge_access import allowed_source_ids_for
+from core.knowledge_access import allowed_source_ids_for, kb_local_only, set_kb_cloud_blocked
 from core.memory import search_memory_hybrid
 from core.file_tools import extract_file_content, MIME_MAP
 from core.db import (
@@ -28,6 +28,7 @@ from core.db import (
     db_add_project_allow_pattern,
     db_get_plan_items,
     db_get_project_allow_patterns,
+    db_owned_project_id,
     db_session_owner,
 )
 from core import auth_db
@@ -41,6 +42,7 @@ from core.small_model import (
     router_engine_name,
 )
 from core.state import state
+from core.request_context import get_current_user_id
 from core import cloud
 from core import output_guard
 from core.agent_tools import (
@@ -68,6 +70,8 @@ from core.skills import skills_prompt_fragment
 from core.plugins import plugins_prompt_fragment, fire_hook
 from core.shell_tools import (
     add_allow_pattern,
+    command_allowed,
+    mark_approved,
     shell_cfg,
     permission_callback,
 )
@@ -194,15 +198,28 @@ class PermissionAnswerReq(BaseModel):
 async def agent_permission_answer(req: PermissionAnswerReq, user: Principal = Depends(get_current_user)):
     """UI answers a permission_request emitted on the agent SSE stream."""
     rec = _perm_pending.get(req.req_id)
-    if rec is None:
+    # only the user whose agent run raised the request may answer it
+    if rec is None or rec.get("user_id") != user.id:
         return JSONResponse({"error": "unknown or expired permission request"}, status_code=404)
     if req.decision == "always" and req.pattern:
+        # "always" edits the global allowlist for every user -- same permission
+        # as the Settings shell card (routes/capabilities.py)
+        if not user_has_permission(user, "settings.shell.configure"):
+            audit_log(user, action="settings.shell.configure", permission_key="settings.shell.configure",
+                      result="deny", detail={"pattern": req.pattern, "via": "agent/permission"})
+            return JSONResponse({"error": "missing permission: settings.shell.configure "
+                                          "(choose 'allow for me' instead)"}, status_code=403)
         add_allow_pattern(req.pattern)
+        audit_log(user, action="shell.allow_pattern.add", resource=req.pattern,
+                  permission_key="settings.shell.configure", detail={"scope": "global"})
     elif req.decision == "project" and req.pattern:
-        # Save to project-specific allowed patterns
+        # Save to project-specific allowed patterns -- caller's own project only
         target_proj = req.project_id or get_active_project()
         if target_proj:
-            db_add_project_allow_pattern(target_proj, req.pattern)
+            pid = db_owned_project_id(target_proj, user.id)
+            if pid is None:
+                return JSONResponse({"error": "project not found"}, status_code=404)
+            db_add_project_allow_pattern(pid, req.pattern)
     elif req.decision == "user" and req.pattern:
         # Save to this user's own allow list -- never affects other users
         auth_db.add_user_allow_pattern(user.id, req.pattern)
@@ -313,7 +330,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         if target:
             try:
                 print(f"[server_manager] agent/run: model not running — auto-starting on demand...")
-                await state.load_profile(target)
+                await state.ensure_running(target)
                 main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
             except Exception as e:
                 print(f"[server_manager] auto-start main model failed: {e}", file=sys.stderr)
@@ -378,14 +395,37 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             _kb_query = str(_m.get("content", ""))
             break
     kb_ids = allowed_source_ids_for(user)
+    kb_hits = []
     if kb_ids and _kb_query.strip():
         try:
             from core.knowledge_router import fetch_company_knowledge
             kb_hits, kb_prompt = await fetch_company_knowledge(_kb_query, kb_ids, k=6)
-            if kb_hits:
-                sys_prompt += "\n\n" + kb_prompt
         except Exception as e:
             print(f"[agent] knowledge retrieval failed: {e}", file=sys.stderr)
+    # Data residency (core/knowledge_access.py): internal knowledge never goes
+    # to a cloud provider. A run whose question hits the KB is moved onto the
+    # local lanes; if the local main model can't run, the KB context is withheld.
+    if kb_hits and (use_cloud_main or cloud_exec) and kb_local_only():
+        target = state.profile_path or state.profile or common.initial_profile_path
+        try:
+            if target:
+                await state.ensure_running(target)
+        except Exception as e:
+            print(f"[agent] local model for knowledge query unavailable: {e}", file=sys.stderr)
+        if state.is_running():
+            cloud_main, cloud_exec, use_cloud_main, main_ready = None, None, False, True
+            audit_log(user, action="knowledge.local_only", resource="agent/run",
+                      detail={"reason": "kb hits on a cloud lane", "hits": len(kb_hits)})
+        else:
+            kb_hits = []
+            sys_prompt += ("\n\nNOTE: The company knowledge base is restricted to local models and no "
+                           "local model is loaded, so internal company data is not available for this "
+                           "answer. Tell the user this instead of guessing.")
+    if kb_hits:
+        sys_prompt += "\n\n" + kb_prompt
+    # the search_knowledge_base tool refuses while any cloud lane is in play
+    # (its results would land in history that a cloud lane later reads)
+    set_kb_cloud_blocked(bool(use_cloud_main or cloud_exec))
     # capability prompt fragments: skills listing + plugin guidance
     for frag in (skills_prompt_fragment(), plugins_prompt_fragment()):
         if frag:
@@ -456,7 +496,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 target = state.profile_path or state.profile or common.initial_profile_path
                 if target:
                     if state.process is None or state.process.poll() is not None:
-                        await state.load_profile(target)
+                        await state.ensure_running(target)
                     return state.client
         except Exception as e:
             print(f"[agent] local fallback for {lane} unavailable: {e}", file=sys.stderr)
@@ -536,6 +576,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     direct_stream = _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens, rid=chat_rid)
                 _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
                 async for ev, val in direct_stream:
+                    if ev == "queued":
+                        yield f"event: queued\ndata: {json.dumps(val)}\n\n"
+                        continue
                     if ev == "fallback":
                         yield f"event: lane\ndata: {json.dumps(_local_model_info('main' if (use_cloud_main or main_ready) else 'executor'))}\n\n"
                         _red = output_guard.OutputRedactor(user, False)   # lane now local
@@ -646,7 +689,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         if not state.client or state.process is None:
                             target = state.profile_path or state.profile or common.initial_profile_path
                             if target:
-                                await state.load_profile(target)
+                                await state.ensure_running(target)
                         active_client = state.client
                     else:
                         active_client = main_client
@@ -697,10 +740,17 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     main_ctx = 32768
                     if cloud_main:
                         main_ctx = getattr(cloud_main, "ctx", 32768) or 32768
-                    elif state.profile_data and isinstance(state.profile_data, dict):
-                        main_ctx = state.profile_data.get("context_size", 32768)
+                    elif isinstance(state.profile, dict):
+                        main_ctx = int(state.profile.get("context_size") or 32768)
+                        # llama-server divides -c across -np slots unless the KV pool
+                        # is unified (then --kv-unified-per-slot, if set, is the cap)
+                        n_slots = int(state.profile.get("n_slots") or 1)
+                        if state.profile.get("kv_unified"):
+                            main_ctx = int(state.profile.get("kv_unified_per_slot") or main_ctx)
+                        elif n_slots > 1:
+                            main_ctx //= n_slots
                     pre_tokens = estimate_prompt_tokens(msgs)
-                    budget = min(int(main_ctx * 0.7), 16384)
+                    budget = int(main_ctx * 0.7)
                     if pre_tokens > budget:
                         msgs[:] = compact_messages(msgs, budget)
                         post_tokens = estimate_prompt_tokens(msgs)
@@ -725,6 +775,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
                     _cloud_out = bool(getattr(active_client, "is_cloud", False))
                     async for ev, val in lane_stream:
+                        if ev == "queued":
+                            yield f"event: queued\ndata: {json.dumps(val)}\n\n"
+                            continue
                         if ev == "fallback":
                             model_info = _local_model_info(lane_name)
                             yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
@@ -817,6 +870,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         _red = output_guard.OutputRedactor(user, getattr(main_client, "is_cloud", False))
                         _cloud_out = bool(getattr(main_client, "is_cloud", False))
                         async for ev, val in esc_stream:
+                            if ev == "queued":
+                                yield f"event: queued\ndata: {json.dumps(val)}\n\n"
+                                continue
                             if ev == "fallback":
                                 yield f"event: lane\ndata: {json.dumps(_local_model_info('main'))}\n\n"
                                 _red = output_guard.OutputRedactor(user, False)   # lane now local
@@ -985,24 +1041,23 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     # shell commands: ask permission here (not inside the tool)
                     # so the SSE stream can emit the modal event while we wait
                     if name == "run_shell" and "command" in str(args or {}):
-                        cmd = str(args.get("command") or args.get("cmd") or "")
+                        cmd = str(args.get("command") or args.get("cmd") or "").strip()
                         cfg = shell_cfg()
-                        import fnmatch as _fn
                         pats = [str(p).strip().lower() for p in (cfg.get("allow_patterns") or [])]
                         # check active project patterns as well
-                        cur_proj = get_active_project()
+                        cur_proj = db_owned_project_id(get_active_project(), user.id)
                         if cur_proj:
                             proj_pats = [str(p).strip().lower() for p in db_get_project_allow_patterns(cur_proj)]
                             pats.extend(proj_pats)
                         # plus this user's own additional allows (independent of project)
                         user_pats = [str(p).strip().lower() for p in auth_db.get_user_allow_patterns(user.id)]
                         pats.extend(user_pats)
-                        if cfg.get("ask_first", True) and not any(
-                                _fn.fnmatch(cmd.strip().lower(), p) for p in pats):
+                        if cfg.get("ask_first", True) and not command_allowed(cmd, pats):
                             import uuid as _uuid
                             preq_id = _uuid.uuid4().hex[:12]
                             ev = asyncio.Event()
-                            _perm_pending[preq_id] = {"cmd": cmd, "event": ev, "result": None}
+                            _perm_pending[preq_id] = {"cmd": cmd, "event": ev, "result": None,
+                                                      "user_id": user.id}
                             yield f"event: permission_request\ndata: {json.dumps({'req_id': preq_id, 'cmd': cmd})}\n\n"
                             allowed, pnote = await _await_permission(preq_id, ev)
                             if not allowed:
@@ -1011,8 +1066,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                 actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                                 msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                                 continue
-                        # approved via pattern or modal: tool skips its own gate
-                        args = {**args, "_pre_approved": True}
+                        # approved via pattern or modal: tool skips its own gate for
+                        # exactly this command line (a model-supplied flag can't)
+                        mark_approved(cmd)
 
                     result = await run_tool(name, args)
                     await fire_hook("after_tool", name, args, result)
@@ -1212,13 +1268,17 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
         except Exception:
             pass
 
-    # 3. Fallback recovery: check if the file was created or provided in recent session messages
-    if p is None or not p.is_file():
+    # 3. Fallback recovery: check if the file was created or provided in the
+    # requesting user's own recent session messages (never other users')
+    uid = get_current_user_id()
+    if (p is None or not p.is_file()) and uid is not None:
         try:
             from core.db import _projects_db
             rows = _projects_db.execute(
-                "SELECT content FROM messages WHERE content LIKE ? OR content LIKE ? ORDER BY id DESC LIMIT 10",
-                (f"%{clean_name}%", f"%[DOWNLOAD: {clean_name}]%")
+                "SELECT m.content FROM messages m JOIN sessions s ON s.id = m.session_id "
+                "WHERE s.user_id = ? AND (m.content LIKE ? OR m.content LIKE ?) "
+                "ORDER BY m.id DESC LIMIT 10",
+                (uid, f"%{clean_name}%", f"%[DOWNLOAD: {clean_name}]%")
             ).fetchall()
             for r in rows:
                 c_text = r["content"] or ""
@@ -1254,10 +1314,10 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
                         cand_code = m.group(1).strip()
                 if not cand_code:
                     title_clean = clean_stem.replace('_', ' ').replace('-', ' ').title()
+                    # (no invented placeholder rows for CSV: a missing file stays a 404
+                    # rather than being replaced by fabricated data)
                     if ext in {'html', 'htm'}:
                         cand_code = generate_fresh_dashboard_html(title_clean, c_text.split('[DOWNLOAD:')[0].strip())
-                    elif ext == 'csv':
-                        cand_code = "ID,Name,Category,Status,Created\n1,Alpha,System,Active,2026-09-16\n2,Beta,Worker,Ready,2026-09-16\n3,Gamma,Orchestrator,Complete,2026-09-16"
                     elif ext == 'md':
                         cand_code = f"# {title_clean}\n\n{c_text}"
 
@@ -1330,7 +1390,12 @@ async def agent_raw(path: str, space: Optional[str] = None):
     headers = {
         "Content-Disposition": f'inline; filename="{p.name}"',
         "Cache-Control": "no-cache, must-revalidate",
+        "X-Content-Type-Options": "nosniff",
     }
+    if suffix in {".html", ".htm", ".svg", ".xml"}:
+        # Generated documents run in an opaque origin even when opened directly
+        # in a tab: scripts work (charts), but never with this app's cookies/API.
+        headers["Content-Security-Policy"] = "sandbox allow-scripts allow-forms allow-popups allow-modals"
     return FileResponse(str(p), media_type=mime, headers=headers)
 
 
@@ -1599,7 +1664,7 @@ async def agent_vision(req: VisionReq, user: Principal = Depends(get_current_use
 
 
 @router.post("/agent/unload_small_models")
-async def unload_small_models_endpoint():
+async def unload_small_models_endpoint(user: Principal = Depends(require_permission("model.local.load"))):
     small_models.unload_all()
     return {"ok": True, "unloaded": True}
 

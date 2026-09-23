@@ -74,7 +74,45 @@ def _query_gpu_sync() -> dict:
     return {"adapters": [], "compute": []}
 
 
+# GPU count / total VRAM / backend don't change while the manager runs, but
+# computing them spawns `llama-bench --list-devices` -- far too slow to do on the
+# event loop for every /control/status poll. Cache them for _HW_TTL_S.
+_HW_TTL_S = 300.0
+_hw_cache = {"ts": 0.0, "summary": None, "totals": None}
+
+
+def _hw_fresh() -> bool:
+    return _hw_cache["summary"] is not None and time.time() - _hw_cache["ts"] < _HW_TTL_S
+
+
+def _refresh_hw_sync() -> None:
+    _hw_cache["summary"] = _compute_hardware_engine_summary()
+    _hw_cache["totals"] = _compute_discrete_vram_totals_gb()
+    _hw_cache["ts"] = time.time()
+
+
+async def refresh_hw_async() -> None:
+    """Refresh the hardware cache off the event loop (no-op while fresh)."""
+    if not _hw_fresh():
+        await asyncio.get_running_loop().run_in_executor(None, _refresh_hw_sync)
+
+
 def get_hardware_engine_summary() -> dict:
+    """Cached discrete GPU count and runtime engine (e.g. DUAL GPU · VULKAN).
+    Async callers should `await refresh_hw_async()` first so a cold cache is
+    filled in a worker thread rather than on the event loop."""
+    if not _hw_fresh():
+        _refresh_hw_sync()
+    return dict(_hw_cache["summary"])
+
+
+def _discrete_vram_totals_gb() -> list:
+    if not _hw_fresh():
+        _refresh_hw_sync()
+    return list(_hw_cache["totals"])
+
+
+def _compute_hardware_engine_summary() -> dict:
     """Calculate discrete GPU count and runtime engine (e.g. DUAL GPU · VULKAN)."""
     try:
         devs = vram.query_devices()
@@ -112,7 +150,7 @@ def get_hardware_engine_summary() -> dict:
     }
 
 
-def _discrete_vram_totals_gb() -> list:
+def _compute_discrete_vram_totals_gb() -> list:
     """Total VRAM (GB) of each discrete GPU, sorted largest-first, from
     `llama-bench --list-devices`. Filters out iGPUs.
     """
@@ -129,6 +167,7 @@ def _discrete_vram_totals_gb() -> list:
 
 
 async def get_gpu_stats() -> dict:
+    await refresh_hw_async()
     hw_info = get_hardware_engine_summary()
     async with _gpu_query_lock:
         if time.time() - _gpu_cache["ts"] < GPU_QUERY_INTERVAL_S and _gpu_cache["data"]["adapters"]:
@@ -138,7 +177,7 @@ async def get_gpu_stats() -> dict:
             return data
         loop = asyncio.get_event_loop()
         data = await loop.run_in_executor(None, _query_gpu_sync)
-        data["vram_totals_gb"] = await loop.run_in_executor(None, _discrete_vram_totals_gb)
+        data["vram_totals_gb"] = _discrete_vram_totals_gb()
         data.update(hw_info)
         _gpu_cache["ts"] = time.time()
         _gpu_cache["data"] = data

@@ -32,6 +32,7 @@ of a hardcoded shared file.
 
 import json
 import re
+import sys
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -359,6 +360,16 @@ class CloudClient:
             p.setdefault("stream_options", {"include_usage": True})
         for k, v in self.cm.extra_body.items():
             p.setdefault(k, v)
+        # PCI: card numbers never leave for a cloud provider, whatever their
+        # source (history, tool results, KB context). Copy first: the caller's
+        # message list must stay unchanged for local lanes.
+        from . import pan
+        if pan.enabled("pan_cloud_egress") and isinstance(p.get("messages"), list):
+            p["messages"] = deepcopy(p["messages"])
+            n = pan.mask_messages(p["messages"])
+            if n:
+                print(f"[cloud] masked {n} card number(s) before sending to {self.cm.key}",
+                      file=sys.stderr)
         return p
 
     def _timeout(self, timeout):

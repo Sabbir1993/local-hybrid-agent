@@ -156,7 +156,9 @@ function renderHtmlPreview(url, content, container, controls) {
   
   const iframe = document.createElement('iframe');
   iframe.className = 'preview-frame';
-  iframe.sandbox = 'allow-scripts allow-forms allow-same-origin allow-popups allow-modals';
+  // No allow-same-origin: combined with allow-scripts it would let model-generated
+  // HTML run as this app (read the CSRF cookie, call the API as the user).
+  iframe.sandbox = 'allow-scripts allow-forms allow-popups allow-modals';
   iframe.style.cssText = 'width:100%; height:100%; border:none; background:#ffffff; transition:max-width 0.2s ease;';
   
   if (content) {

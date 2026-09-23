@@ -54,7 +54,7 @@ async function pollStatus() {
         ec.innerHTML = `<p><b>${cloudMain.display} is ready!</b></p><p class="dim" style="margin-top:6px;">Main lane is served by <b>${cloudMain.provider}</b> in the cloud — your local GPU(s) stay free. Type your message below and press Enter.</p>`;
       }
     } else if (s.model && s.pid) {
-      const visionTag = s.vision_capable ? '  ·  🧿 vision' : '';
+      const visionTag = s.vision_capable ? '  ·  👁 vision' : '';
       $('empty-model').textContent =
         `${m}${visionTag}  ·  split ${s.tensor_split || 'auto'}  ·  bench ${Number(s.measured_tg_tokens_per_sec || 0).toFixed(1)} t/s`;
       const ec = document.querySelector('.empty-card');

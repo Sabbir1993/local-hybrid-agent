@@ -19,6 +19,7 @@ from core.small_model import (
     router_engine_name,
 )
 from core import cloud
+from core.audit import audit_log
 from core.auth import Principal
 from core.deps import get_current_user, require_permission
 from core.state import state
@@ -152,8 +153,10 @@ async def shell_settings(req: ShellSettingsReq,
 
 
 @router.post("/control/capabilities")
-async def capabilities_toggle(req: CapToggleReq):
-    """Toggle a capability section on/off; persists to config/app.json."""
+async def capabilities_toggle(req: CapToggleReq,
+                              user: Principal = Depends(require_permission("settings.orchestration.configure"))):
+    """Toggle a capability section on/off; persists to config/app.json.
+    Global for every user (e.g. enables the shell tool), hence the permission."""
     cfg_path = CONFIG_FILE
     try:
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
@@ -166,6 +169,8 @@ async def capabilities_toggle(req: CapToggleReq):
     except Exception as e:
         return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
     # apply live
+    audit_log(user, action="capabilities.toggle", resource=req.section,
+              permission_key="settings.orchestration.configure", detail={"enabled": req.enabled})
     caps_live = APP_CONFIG.setdefault("capabilities", {})
     if req.section == "shell":
         caps_live.setdefault("shell", {})["enabled"] = req.enabled

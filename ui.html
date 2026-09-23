@@ -10,7 +10,7 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=3.3">
+<link rel="stylesheet" href="/static/css/style.css?v=3.4">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
@@ -54,8 +54,8 @@
       <div class="model-group" title="Currently available model. Local loading &amp; launch config live in Settings — this picks which cloud model answers you (or switches back to local)">
         <select id="profile" title="Available models (cloud models are switchable here; local loading happens in Settings)" style="display:none;"></select>
         <button type="button" id="model-picker-btn" class="model-picker-btn">
-          <span id="model-picker-icon">🖥</span>
-          <span id="model-picker-label">No model</span>
+          <span id="model-picker-icon" class="model-picker-icon">🖥</span>
+          <span id="model-picker-label" class="model-picker-label">No model</span>
           <span class="model-picker-caret">▾</span>
         </button>
         <div id="model-picker-dropdown" class="model-picker-dropdown"></div>

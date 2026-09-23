@@ -8,24 +8,38 @@ async function loadCapabilities() {
     let h = `<div class="rep-cell" style="display:flex; align-items:center; justify-content:space-between;"><span><b>${d.total_tools}</b> tools registered</span></div>`;
     // Web
     h += capSection('web', '🌐 Web Browsing', d.web.enabled,
-      (d.web.tools || []).map(t => `<div class="cap-item">🔗 <b>${esc(t.name)}</b> — ${esc(t.description || '')}</div>`).join(''),
+      (d.web.tools || []).map(t => `
+        <div class="cap-tool-entry">
+          <span class="cap-tool-badge web"><span class="tool-badge-ico">🌐</span><code>${esc(t.name)}</code></span>
+          <span class="cap-tool-desc">${esc(t.description || '')}</span>
+        </div>`).join(''),
       'web_fetch pulls page text; web_search queries DuckDuckGo (keyless)');
 
     // Skills
     h += capSection('skills', '🎯 Skills', d.skills.enabled,
-      (d.skills.items || []).map(s => `<div class="cap-item">📘 <b>${esc(s.name)}</b> — ${esc(s.description || '')}</div>`).join('') || '<div class="cap-item dim">none in skills/ yet</div>',
+      (d.skills.items || []).map(s => `
+        <div class="cap-tool-entry">
+          <span class="cap-tool-badge skill"><span class="tool-badge-ico">🎯</span><code>${esc(s.name)}</code></span>
+          <span class="cap-tool-desc">${esc(s.description || '')}</span>
+        </div>`).join('') || '<div class="cap-item dim" style="padding:4px 6px;">none in skills/ yet</div>',
       'Reusable instruction packs loaded from skills/*/SKILL.md');
 
     // MCP
     const mcpInner = (d.mcp.servers || []).length
       ? d.mcp.servers.map(s => `
-          <div class="cap-item">
-            <span class="cap-dot ${s.status === 'ready' ? 'on' : (s.status === 'error' ? 'err' : '')}" title="${esc(s.status)}"></span>
-            <b>${esc(s.name)}</b> <span class="dim">(${esc(s.transport)}) · ${s.tools.length} tool(s)</span>
-            ${s.error ? `<div class="dim" style="font-size:10px; color:var(--red);">${esc(s.error)}</div>` : ''}
-            ${(s.tools || []).map(t => `<div class="dim" style="font-size:10px; padding-left:14px;">↳ ${esc(t.name)} — ${esc(t.description || '')}</div>`).join('')}
+          <div class="cap-item" style="margin-bottom:6px;">
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+              <span class="cap-dot ${s.status === 'ready' ? 'on' : (s.status === 'error' ? 'err' : '')}" title="${esc(s.status)}"></span>
+              <b>${esc(s.name)}</b> <span class="dim">(${esc(s.transport)}) · ${s.tools.length} tool(s)</span>
+            </div>
+            ${s.error ? `<div class="dim" style="font-size:10px; color:var(--red); margin-bottom:4px;">${esc(s.error)}</div>` : ''}
+            ${(s.tools || []).map(t => `
+              <div class="cap-tool-entry sub">
+                <span class="cap-tool-badge mcp"><span class="tool-badge-ico">🔌</span><code>${esc(t.name)}</code></span>
+                ${t.description ? `<span class="cap-tool-desc">${esc(t.description)}</span>` : ''}
+              </div>`).join('')}
           </div>`).join('')
-      : '<div class="cap-item dim">no servers configured (config.json → capabilities.mcp_servers)</div>';
+      : '<div class="cap-item dim" style="padding:4px 6px;">no servers configured (config.json → capabilities.mcp_servers)</div>';
     h += capSection('mcp', '🔌 MCP Servers', d.mcp.enabled,
       '<div id="mcp-connectors"><div class="dim" style="font-size:10.5px;">Loading connectors…</div></div>' + mcpInner,
       'External tool servers via Model Context Protocol (stdio / http)');
@@ -33,15 +47,25 @@ async function loadCapabilities() {
     // Plugins
     h += capSection('plugins', '🧩 Plugins', d.plugins.enabled,
       (d.plugins.items || []).map(p => `
-        <div class="cap-item">⚡ <b>${esc(p.name)}</b> <span class="dim">· ${p.tools.length} tool(s), ${p.prompt_fragments} prompt frag(s)</span>
-          ${(p.tools || []).map(t => `<div class="dim" style="font-size:10px; padding-left:14px;">↳ ${esc(t.split('__').pop())}</div>`).join('')}
-        </div>`).join('') || '<div class="cap-item dim">none in plugins/ yet</div>',
+        <div class="cap-item" style="margin-bottom:6px;">
+          <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+            <span class="tool-badge-ico">⚡</span> <b>${esc(p.name)}</b> <span class="dim">· ${p.tools.length} tool(s), ${p.prompt_fragments} prompt frag(s)</span>
+          </div>
+          ${(p.tools || []).map(t => `
+            <div class="cap-tool-entry sub">
+              <span class="cap-tool-badge plugin"><span class="tool-badge-ico">⚡</span><code>${esc(t.split('__').pop())}</code></span>
+            </div>`).join('')}
+        </div>`).join('') || '<div class="cap-item dim" style="padding:4px 6px;">none in plugins/ yet</div>',
       'Python modules loaded from plugins/*/plugin.py');
 
     // Shell
     const sh = d.shell || {};
     const canConfigureGlobal = !!(window.hasPerm && window.hasPerm('settings.shell.configure'));
     const shellInner = `
+      <div class="cap-tool-entry" style="margin-bottom:6px;">
+        <span class="cap-tool-badge shell"><span class="tool-badge-ico">⌨️</span><code>run_shell</code></span>
+        <span class="cap-tool-desc">Workspace shell command execution</span>
+      </div>
       <div class="cap-item">
         <label style="display:flex; align-items:center; gap:6px; cursor:${canConfigureGlobal ? 'pointer' : 'default'};">
           <input type="checkbox" id="shell-ask" ${sh.ask_first ? 'checked' : ''} ${canConfigureGlobal ? '' : 'disabled'} style="accent-color:var(--green);">

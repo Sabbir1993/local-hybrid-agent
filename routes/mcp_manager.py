@@ -8,7 +8,7 @@ marker are persisted there. See core/mcp_catalog.py for the connector list.
 import json
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -16,6 +16,11 @@ from core.config import CONFIG_FILE
 from core.small_model import APP_CONFIG
 from core import credentials, mcp_catalog
 from core import mcp as mcp_core
+from core.auth import Principal
+from core.deps import require_permission
+
+# MCP servers and their OAuth tokens are shared by every user of this instance
+_manage = require_permission("settings.orchestration.configure")
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
@@ -53,7 +58,7 @@ async def registry_search(q: Optional[str] = None):
 
 
 @router.post("/{server_id}/authorize/start")
-async def authorize_start(server_id: str):
+async def authorize_start(server_id: str, user: Principal = Depends(_manage)):
     entry = mcp_catalog.get_entry(server_id)
     if not entry:
         return JSONResponse({"error": f"unknown connector '{server_id}'"}, status_code=404)
@@ -84,7 +89,7 @@ async def authorize_start(server_id: str):
 
 
 @router.get("/{server_id}/authorize/poll")
-async def authorize_poll(server_id: str, session: str):
+async def authorize_poll(server_id: str, session: str, user: Principal = Depends(_manage)):
     from core import oauth_device_flow as device_flow
 
     sess = device_flow.get_session(session)
@@ -108,7 +113,7 @@ async def authorize_poll(server_id: str, session: str):
 
 
 @router.post("/{server_id}/disable")
-async def disable(server_id: str):
+async def disable(server_id: str, user: Principal = Depends(_manage)):
     entry = mcp_catalog.get_entry(server_id)
     if not entry:
         return JSONResponse({"error": f"unknown connector '{server_id}'"}, status_code=404)
