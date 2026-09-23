@@ -61,13 +61,18 @@
     "split_mode": "layer",
     "flash_attn": "auto",
     "kv_cache_type": "q8_0",
-    "mtp_enabled": true,
+    "mtp_enabled": false,
     "mtp_draft_n_max": 3,
     "keepalive_interval_s": 25,
     "gpu_devices": [
       1,
       2
-    ]
+    ],
+    "vision_capable": false,
+    "kv_unified": false,
+    "kv_unified_per_slot": 131072,
+    "cache_reuse": 256,
+    "cache_ram": 0
   },
   "spark-x2.5-4b-q4_k_m.gguf": {
     "context_size": 231072,
@@ -130,7 +135,7 @@
     ],
     "vision_capable": true,
     "kv_unified": true,
-    "kv_unified_per_slot": 32768,
+    "kv_unified_per_slot": 131920,
     "cache_reuse": 256,
     "cache_ram": 16384
   },

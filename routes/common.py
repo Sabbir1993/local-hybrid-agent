@@ -5,6 +5,7 @@ routes/common.py - Shared state and LLM streaming utilities across routes.
 import asyncio
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +20,30 @@ initial_profile_path: Optional[Path] = None
 models_dir: Optional[Path] = None
 curStatus_model_hint: Optional[str] = None
 
+def current_date_prompt() -> str:
+    """System-prompt line anchoring "now". Without it a local model assumes its
+    training-cutoff year and searches the web for stale years."""
+    now = datetime.now().astimezone()
+    return (f"CURRENT DATE: {now:%Y-%m-%d} ({now:%A}). Treat this as 'now' - your training data ends "
+            f"earlier. For recent or current data, search with {now.year} (and {now.year - 1} for the "
+            f"latest full year); never assume your training-cutoff year is the current year.")
+
+
+def main_ctx_tokens(cloud_main=None) -> int:
+    """Context window of one main-lane conversation. llama-server divides -c
+    across -np slots unless the KV pool is unified (then --kv-unified-per-slot,
+    if set, is the cap)."""
+    from core.process import per_slot_cap
+    if cloud_main:
+        return getattr(cloud_main, "ctx", 32768) or 32768
+    p = state.profile if isinstance(state.profile, dict) else {}
+    ctx = int(p.get("context_size") or 32768)
+    n_slots = int(p.get("n_slots") or 1)
+    if p.get("kv_unified"):
+        return per_slot_cap(p) or ctx
+    return ctx // n_slots if n_slots > 1 else ctx
+
+
 async def _process_sse_stream(response, rid: Optional[int] = None):
     content_acc = []
     reasoning_acc = []
@@ -27,6 +52,7 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
 
     last_usage = None
     last_timings = None
+    finish_reason = None
     async for line in response.aiter_lines():
         line = line.strip()
         if not line or not line.startswith("data: "):
@@ -47,6 +73,8 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
         choices = data.get("choices") or []
         if not choices:
             continue
+        if choices[0].get("finish_reason"):
+            finish_reason = choices[0]["finish_reason"]
         delta = choices[0].get("delta") or {}
 
         r_chunk = delta.get("reasoning_content")
@@ -138,6 +166,7 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
         "tool_calls": tool_calls,
         "usage": last_usage,
         "timings": last_timings,
+        "finish_reason": finish_reason,
     })
 
 
@@ -145,7 +174,8 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
 
 async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=None, temperature=0.4,
                                         max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None,
-                                        grammar: Optional[str] = None, lane: str = "cloud"):
+                                        grammar: Optional[str] = None, lane: str = "cloud",
+                                        extra: Optional[dict] = None):
     """Stream from `primary` (usually a CloudClient); if it fails before emitting any
     content, retry the same request on `fallback` (the local lane) instead of failing
     the whole agent step. Yields ("fallback", reason) once before switching so callers
@@ -153,7 +183,7 @@ async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=No
     produced = False
     try:
         async for item in _llm_chat_stream(primary, msgs, tools, temperature, max_tokens,
-                                           repeat_penalty, rid, grammar):
+                                           repeat_penalty, rid, grammar, extra=extra):
             produced = True
             yield item
         return
@@ -165,7 +195,7 @@ async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=No
               file=sys.stderr)
         yield ("fallback", reason)
     async for item in _llm_chat_stream(fallback, msgs, tools, temperature, max_tokens,
-                                       repeat_penalty, rid, grammar):
+                                       repeat_penalty, rid, grammar, extra=extra):
         yield item
 
 
@@ -221,13 +251,13 @@ class _Admission:
 admission = _Admission()
 
 
-async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None):
+async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None):
     """Stream one completion. Requests to the local main llama-server first pass
     the fair-share admission gate; a ("queued", {"position": n}) item is yielded
     when the caller has to wait for a slot."""
     if client_or_state is not state.client or not admission.enabled():
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
-                                               repeat_penalty, rid, grammar):
+                                               repeat_penalty, rid, grammar, extra=extra):
             yield item
         return
     glob, mine = admission._sems(get_current_user_id())
@@ -245,14 +275,14 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
         admission.waiting -= 1
     try:
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
-                                               repeat_penalty, rid, grammar):
+                                               repeat_penalty, rid, grammar, extra=extra):
             yield item
     finally:
         glob.release()
         mine.release()
 
 
-async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None):
+async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None):
     payload = {
         "messages": msgs,
         "temperature": temperature,
@@ -261,6 +291,10 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
     }
     if client_or_state is state.client:
         payload.update(_main_slot_fields())
+        # llama-server-only fields (e.g. chat_template_kwargs); never sent to
+        # cloud providers, which may reject unknown keys
+        if extra:
+            payload.update(extra)
     if max_tokens is not None and int(max_tokens) > 0:
         payload["max_tokens"] = int(max_tokens)
     else:

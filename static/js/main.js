@@ -12,7 +12,9 @@ function submitPrompt() {
   // Check if a slash command is armed (e.g. <compact>)
   if (window.getArmedCmd && window.getArmedCmd()) {
     const cmd = window.getArmedCmd();
-    if (cmd.name === 'compact') {
+    // commands whose argument is optional run on a bare Enter
+    // (/init scans the whole project; /plan and /build just switch mode)
+    if (['compact', 'init', 'plan', 'build'].includes(cmd.name)) {
       if (input) input.value = '';
       window.runArmedCmd(cmd, text);
       return;
@@ -91,6 +93,16 @@ if (btnWebToggle) {
     toast(chatWebSearch ? '🌐 Web search enabled for chat' : '🌐 Web search disabled (offline mode)');
   };
   updateWebToggleUI();
+}
+const btnDeepToggle = $('btn-deep-toggle');
+if (btnDeepToggle) {
+  btnDeepToggle.onclick = () => {
+    chatDeepMode = !chatDeepMode;
+    try { localStorage.setItem('chat_deep_mode', chatDeepMode ? '1' : '0'); } catch (e) {}
+    updateDeepToggleUI();
+    toast(chatDeepMode ? '💭 Deep mode on — more research & reasoning (slower)' : '💭 Deep mode off');
+  };
+  updateDeepToggleUI();
 }
 /* image preview lightbox modal */
 function openImageModal(src, title = 'Image attachment') {
@@ -336,7 +348,8 @@ function _updateCloudModelSelVisibility() {
   }
 })();
 
+// The chat page has no GPU panel: the logo's hardware tag comes from
+// /control/status. /control/gpu needs settings.runtime.view, so polling it here
+// 403'd every 5s for other users and flooded the audit log with denials.
 pollStatus();
-pollGpu();
 setInterval(pollStatus, 4000);
-setInterval(pollGpu, 5000);

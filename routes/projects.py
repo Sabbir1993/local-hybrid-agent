@@ -16,7 +16,6 @@ from pydantic import BaseModel
 
 from core.auth import Principal
 from core.deps import get_current_user
-from core.small_model import WORKSPACE_ROOT
 from core.request_context import set_current_device, get_current_device_id
 from core.db import (
     db_list_projects,
@@ -33,7 +32,7 @@ from core.db import (
     db_list_user_devices,
 )
 from core.agent_tools import (
-    active_workspace,
+    workspace_label,
     get_active_project,
     set_active_project,
 )
@@ -97,8 +96,6 @@ def _ask_directory_native(initial_dir: str = "") -> str:
     if not init_dir or not os.path.isdir(init_dir):
         if os.path.isdir("E:\\AI"):
             init_dir = "E:\\AI"
-        elif WORKSPACE_ROOT and os.path.isdir(str(WORKSPACE_ROOT)):
-            init_dir = str(WORKSPACE_ROOT)
         else:
             init_dir = os.path.expanduser("~")
 
@@ -212,8 +209,6 @@ async def fs_browse(request: Request, path: Optional[str] = "", user: Principal 
     if not raw_path:
         if os.path.isdir("E:\\AI"):
             target_path = Path("E:\\AI")
-        elif WORKSPACE_ROOT and os.path.isdir(str(WORKSPACE_ROOT)):
-            target_path = Path(WORKSPACE_ROOT)
         elif drives:
             target_path = Path(drives[0])
         else:
@@ -225,7 +220,7 @@ async def fs_browse(request: Request, path: Optional[str] = "", user: Principal 
         if target_path.parent.exists() and target_path.parent.is_dir():
             target_path = target_path.parent
         else:
-            target_path = Path("E:\\AI") if os.path.isdir("E:\\AI") else Path(str(WORKSPACE_ROOT))
+            target_path = Path("E:\\AI") if os.path.isdir("E:\\AI") else Path(os.path.expanduser("~"))
 
     subdirs = []
     try:
@@ -327,13 +322,9 @@ async def list_projects(user: Principal = Depends(get_current_user),
     for p in projs:
         p_dev = p.get("device_id")
         p["is_current_device"] = bool(p_dev == cur_dev_id or p_dev in ("default", None) or cur_dev_id == "default")
-        ws_dir = p.get("workspace_dir")
+        # the folder lives on the user's machine; probing it on the server's
+        # disk would be both wrong and a server filesystem oracle
         p["path_valid_on_device"] = True
-        if ws_dir:
-            try:
-                p["path_valid_on_device"] = Path(ws_dir).exists()
-            except Exception:
-                p["path_valid_on_device"] = False
 
         if curr_proj and p["name"] == curr_proj and (p_dev == cur_dev_id or cur_dev_id == "default" or p_dev in ("default", None)):
             active_p = p
@@ -342,7 +333,7 @@ async def list_projects(user: Principal = Depends(get_current_user),
         "projects": projs,
         "active": curr_proj,
         "active_project": active_p,
-        "workspace": str(active_workspace()),
+        "workspace": workspace_label(),
         "current_device_id": cur_dev_id,
         "current_device_name": x_device_name or "Default Device",
     }
@@ -357,7 +348,7 @@ async def create_project(req: ProjectReq,
     dev_name = req.device_name or x_device_name or "Default Device"
     set_current_device(dev_id, dev_name)
     try:
-        p = db_create_project(req.name, req.workspace_dir, WORKSPACE_ROOT, owner_user_id=user.id,
+        p = db_create_project(req.name, req.workspace_dir, owner_user_id=user.id,
                               device_id=dev_id, device_name=dev_name)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
@@ -410,11 +401,11 @@ async def activate_project(pid: int, user: Principal = Depends(get_current_user)
     set_current_device(dev_id, x_device_name)
     if pid == 0:
         set_active_project(None, user.id, dev_id)
-        return {"ok": True, "active": None, "workspace": str(active_workspace())}
+        return {"ok": True, "active": None, "workspace": workspace_label()}
     for p in db_list_projects(owner_user_id=user.id):
         if p["id"] == pid:
             set_active_project(p["name"], user.id, dev_id)
-            return {"ok": True, "active": p["name"], "project": p, "workspace": str(active_workspace())}
+            return {"ok": True, "active": p["name"], "project": p, "workspace": workspace_label()}
     return JSONResponse({"error": "project not found"}, status_code=404)
 
 

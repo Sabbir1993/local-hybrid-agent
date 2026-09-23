@@ -17,9 +17,11 @@ import io
 import json
 import os
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
-from .agent_tools import MAX_TOOL_OUTPUT, _ws_resolve
+from . import companion_bridge
+from .agent_tools import (MAX_TOOL_OUTPUT, WorkspaceAccessDenied, _common_resolve, _ws_resolve,
+                          require_device_workspace)
 
 # ------------------------------------------------------------------
 # Extension -> MIME type map (for /agent/download responses)
@@ -247,27 +249,57 @@ def extract_file_content(path, max_chars: int = DEFAULT_MAX_CHARS):
 # Agent tool: read_file_chunk
 # ------------------------------------------------------------------
 
-def tool_read_file_chunk(args: dict) -> str:
-    """Agent tool: page through large file content in chunks."""
+_BINARY_DOCS = (".xlsx", ".xls", ".pdf", ".pptx", ".ppt", ".docx", ".doc")
+
+
+async def _read_project_text(path_arg: str) -> tuple[str, Optional[str]]:
+    """("ok", text) for a project text file read via the companion, otherwise
+    ("missing" | "binary" | "error: ...", None). No project on this device
+    counts as missing."""
+    try:
+        uid, _ws = require_device_workspace()
+        p = _ws_resolve(path_arg)
+    except WorkspaceAccessDenied:
+        return "missing", None
+    except PermissionError as e:
+        return f"error: {e}", None
+    if p.suffix.lower() in _BINARY_DOCS:
+        return "binary", None
+    data = await companion_bridge.call(uid, "fs.read", {"path": str(p)})
+    content = data.get("content")
+    return ("ok", content) if content is not None else ("missing", None)
+
+
+async def tool_read_file_chunk(args: dict) -> str:
+    """Agent tool: page through large file content in chunks.
+
+    Project files live on the user's machine and are read through the companion
+    -- never from the server's disk at the same path. Anything not in the
+    project falls back to uploaded attachments in the server's common space.
+    """
     path_arg = args.get("path") or args.get("file")
     if not path_arg:
         raise ValueError("path required")
-    try:
-        p = _ws_resolve(path_arg)
-    except PermissionError as e:
-        return f"error: {e}"
-    if not p.is_file():
-        return f"error: File not found: '{path_arg}'"
-
     offset = int(args.get("offset_chars", 0))
     chunk = int(args.get("max_chars", CHUNK_SIZE))
 
-    suffix = p.suffix.lower()
-    # For binary document types, extract full content first then slice by char offset
-    if suffix in (".xlsx", ".xls", ".csv", ".pdf", ".pptx", ".ppt", ".docx", ".doc"):
-        full_text, _ = extract_file_content(p, max_chars=999_999_999)  # extract all
-    else:
-        full_text = p.read_text(encoding="utf-8", errors="replace")
+    status, full_text = await _read_project_text(path_arg)
+    if full_text is None:
+        try:
+            up = _common_resolve(path_arg)
+        except PermissionError:
+            up = None
+        if up is None or not up.is_file():
+            if status == "binary":
+                return (f"error: {path_arg} is a binary document on your machine; read it with "
+                        "run_python (e.g. openpyxl / pdfplumber / python-docx) instead")
+            if status.startswith("error:"):
+                return status
+            return f"error: File not found: '{path_arg}'"
+        if up.suffix.lower() in _BINARY_DOCS or up.suffix.lower() == ".csv":
+            full_text, _ = extract_file_content(up, max_chars=999_999_999)  # extract all
+        else:
+            full_text = up.read_text(encoding="utf-8", errors="replace")
 
     total = len(full_text)
     if offset >= total:

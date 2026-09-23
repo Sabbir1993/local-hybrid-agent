@@ -10,20 +10,40 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=3.7">
+<link rel="stylesheet" href="/static/css/style.css?v=4.3">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
 <div id="app">
   <aside>
-    <div class="logo" title="Local Agent — Control Center"><span class="logo-title">⬡ LOCAL <span>AGENT</span></span><small id="logo-hw-tag">DUAL GPU · VULKAN</small></div>
-
-    <div class="mode-switch full" title="Switch between direct LLM conversation and Autonomous Coding Agent">
-      <button id="mode-chat" class="mode-btn active" type="button" title="Direct, fast conversation with the loaded LLM">💬 Chat</button>
-      <button id="mode-agent" class="mode-btn" type="button" title="Autonomous coding agent that reads/writes files in the active project workspace">🤖 Agent Task</button>
+    <div class="logo" title="Local Agent — Control Center">
+      <span class="logo-title">
+        <svg class="logo-mark" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 2 2 7l10 5 10-5-10-5Z"/>
+          <path d="m2 17 10 5 10-5"/>
+          <path d="m2 12 10 5 10-5"/>
+        </svg>
+        <span>LOCAL <span>AGENT</span></span>
+      </span>
+      <small id="logo-hw-tag">DUAL GPU · VULKAN</small>
     </div>
 
-    <button id="btn-newchat" class="btn blue" style="padding:9px 12px; font-size:12px; font-weight:700; margin-bottom:2px;" title="Start a fresh chat">＋ New Chat</button>
+    <div class="mode-switch full" title="Switch between direct LLM conversation and Autonomous Coding Agent">
+      <button id="mode-chat" class="mode-btn active" type="button" title="Direct, fast conversation with the loaded LLM">
+        <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>Chat</span>
+      </button>
+      <button id="mode-agent" class="mode-btn" type="button" title="Autonomous coding agent that reads/writes files in the active project workspace">
+        <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M12 8V4H8"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+        <span>Agent Task</span>
+      </button>
+    </div>
+
+    <button id="btn-newchat" class="btn blue newchat-btn" title="Start a fresh chat (Ctrl+K)">
+      <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+      <span>New Chat</span>
+      <kbd class="kbd-hint">Ctrl K</kbd>
+    </button>
 
     <section id="projects-card" class="card" style="padding:10px 8px; display:none; max-height:280px; flex-direction:column;">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding:0 4px;">
@@ -51,28 +71,70 @@
 
   <main>
     <header>
+      <button id="btn-sidebar-toggle" class="btn ghost icon-btn icon-only" title="Toggle Sidebar (Ctrl+B)" aria-label="Toggle Sidebar">
+        <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+      </button>
+
       <div class="model-group" title="Currently available model. Local loading &amp; launch config live in Settings — this picks which cloud model answers you (or switches back to local)">
         <select id="profile" title="Available models (cloud models are switchable here; local loading happens in Settings)" style="display:none;"></select>
         <button type="button" id="model-picker-btn" class="model-picker-btn">
-          <span id="model-picker-icon" class="model-picker-icon">🖥</span>
+          <span id="model-picker-icon" class="model-picker-icon">
+            <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="5" y="5" rx="2"/><path d="M9 2v3"/><path d="M15 2v3"/><path d="M9 19v3"/><path d="M15 19v3"/><path d="M2 9h3"/><path d="M2 15h3"/><path d="M19 9h3"/><path d="M19 15h3"/></svg>
+          </span>
           <span id="model-picker-label" class="model-picker-label">No model</span>
           <span class="model-picker-caret">▾</span>
         </button>
         <div id="model-picker-dropdown" class="model-picker-dropdown"></div>
       </div>
-      <span class="chip mono" id="chip-ctx" title="Current KV-cache context window consumption in tokens" style="cursor:help;">🧠 0 / 32k (0%)</span>
+      <span class="chip mono" id="chip-ctx" title="Current KV-cache context window consumption in tokens" style="cursor:help;">
+        <svg class="ui-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04Z"/></svg>
+        <span>0 / 32k (0%)</span>
+      </span>
       <span class="chip bg-chip" id="chip-bg-indicator" style="display:none;" title="Active background tasks">
         <span class="bg-pulse-dot"></span>⚡ <span id="chip-bg-count">1</span> in BG
       </span>
       <div class="spacer"></div>
-      <button id="btn-theme" class="btn ghost icon-btn" title="Quick cycle color theme">🎨 Theme</button>
-      <button id="btn-settings" class="btn ghost icon-btn" title="Hardware status (GPUs), model launch parameters, cloud providers, capabilities, users &amp; knowledge base, sampling &amp; runtime">⚙️ Settings</button>
-      <button id="btn-monitor" class="btn ghost icon-btn" data-perm="monitor.view" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">📡 Monitor</button>
-      <button id="btn-report" class="btn ghost icon-btn" data-perm="usage.report.view" title="Token usage report: prompts vs completions, per-model and per-day totals">📊 Report</button>
-      <button id="btn-audit" class="btn ghost icon-btn" data-perm="audit.view" title="Audit log: who did what — model loads, provider changes, user/role edits, permission denials">🧾 Audit</button>
-      <button id="btn-db" class="btn ghost icon-btn" data-perm="database.manage" title="Database Explorer &amp; SQL Query Console: inspect tables, schema, and execute SQL">🗄️ Database</button>
-      <button id="btn-docs" class="btn ghost icon-btn" title="Step-by-step guide: connect any OpenAI-compatible agent to this runtime">📖 Docs</button>
-      <button id="btn-user-menu" class="btn ghost icon-btn" title="Account">👤</button>
+
+      <!-- Dev & System Tools Cluster -->
+      <div class="header-tool-cluster" id="header-dev-cluster">
+        <button id="btn-monitor" class="btn ghost icon-btn" data-perm="monitor.view" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">
+          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          <span class="btn-label">Monitor</span>
+        </button>
+        <button id="btn-report" class="btn ghost icon-btn" data-perm="usage.report.view" title="Token usage report: prompts vs completions, per-model and per-day totals">
+          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+          <span class="btn-label">Report</span>
+        </button>
+        <button id="btn-audit" class="btn ghost icon-btn" data-perm="audit.view" title="Audit log: who did what — model loads, provider changes, user/role edits, permission denials">
+          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m9 15 2 2 4-4"/></svg>
+          <span class="btn-label">Audit</span>
+        </button>
+        <button id="btn-db" class="btn ghost icon-btn" data-perm="database.manage" title="Database Explorer &amp; SQL Query Console: inspect tables, schema, and execute SQL">
+          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
+          <span class="btn-label">Database</span>
+        </button>
+      </div>
+
+      <div class="header-divider"></div>
+
+      <!-- Action Tools Cluster -->
+      <div class="header-actions-cluster">
+        <button id="btn-theme" class="btn ghost icon-btn" title="Quick cycle color theme">
+          <svg class="ui-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.563-2.512 5.563-5.563C22 6.5 17.5 2 12 2z"/></svg>
+          <span class="btn-label">Theme</span>
+        </button>
+        <button id="btn-docs" class="btn ghost icon-btn" title="Step-by-step guide: connect any OpenAI-compatible agent to this runtime">
+          <svg class="ui-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M6 6h10"/><path d="M6 10h10"/></svg>
+          <span class="btn-label">Docs</span>
+        </button>
+        <button id="btn-settings" class="btn ghost icon-btn" title="Hardware status (GPUs), model launch parameters, cloud providers, capabilities, users &amp; knowledge base, sampling &amp; runtime">
+          <svg class="ui-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span class="btn-label">Settings</span>
+        </button>
+        <button id="btn-user-menu" class="btn ghost icon-btn icon-only user-avatar-btn" title="Account" aria-label="Account">
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        </button>
+      </div>
     </header>
 
     <div id="chat"><div id="chat-inner">
@@ -100,18 +162,27 @@
             <div id="cmd-menu" style="display:none;"></div>
           </div>
           <div class="comp-actions">
-            <button id="btn-attach" class="comp-tool" title="Attach files — images, text/code, or documents (Excel, PDF, PowerPoint, Word, CSV)">📎</button>
+            <button id="btn-attach" class="comp-tool" title="Attach files — images, documents, code" aria-label="Attach files">
+              <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
             <input type="file" id="file-input" multiple accept=".txt,.md,.py,.js,.ts,.json,.c,.cpp,.h,.cs,.java,.rs,.go,.html,.css,.xml,.yml,.yaml,.toml,.ini,.cfg,.log,.csv,.sql,.sh,.ps1,.bat,.png,.jpg,.jpeg,.webp,.gif,.xlsx,.xls,.pdf,.pptx,.ppt,.docx,.doc" style="display:none">
-            <button id="btn-web-toggle" class="comp-tool comp-web-btn active" type="button" title="Web Search: ON (click to disable)">
-              <span class="web-icon">🌐</span>
+            <button id="btn-web-toggle" class="comp-tool comp-web-btn active" type="button" title="Web Search: ON (click to disable)" aria-label="Toggle web search">
+              <span class="web-icon">
+                <svg class="ui-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+              </span>
+              <span class="comp-tool-text">Web</span>
+            </button>
+            <button id="btn-deep-toggle" class="comp-tool comp-deep-btn" type="button" title="Deep mode: OFF (click to enable)" aria-label="Toggle deep reasoning">
+              <svg class="ui-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1.1 1.3 1.1 2.2h5c0-.9.5-1.7 1.1-2.2A6 6 0 0 0 12 3z"/><path d="M12 7v3l2 1.5"/></svg>
+              <span class="comp-tool-text">Deep</span>
             </button>
             <select id="agent-plan-sel" style="display:none;" class="comp-select" title="Plan explores &amp; proposes changes; Build executes them">
               <option value="build" selected>🔨 Build</option>
               <option value="plan">📋 Plan</option>
             </select>
-            <span class="comp-hint" id="attach-info">Enter to send · Shift+Enter for newline</span>
+            <span class="comp-hint" id="attach-info">Shift + ↵ for newline</span>
             <button id="btn-git-icon" class="comp-tool" type="button" title="Source Control — the active project has a git repository" style="display:none;">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0c-4.42 0-8 3.58-8 8a8.013 8.013 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path></svg>
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0c-4.42 0-8 3.58-8 8a8.013 8.013 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path></svg>
             </button>
             <select id="agent-engine" style="display:none;" class="comp-select" title="Agent orchestration engine - which model serves each lane">
               <option value="all-local" selected>🖥 All Local (GPU)</option>
@@ -122,8 +193,12 @@
             <select id="cloud-model-sel" style="display:none;" class="comp-select" title="Cloud model for rest lanes (executor & vision)">
               <option value="">☁ Pick cloud model…</option>
             </select>
-            <button id="btn-send" class="comp-btn" title="Send prompt (Enter)">➤</button>
-            <button id="btn-abort" class="comp-btn" style="display:none" title="Cancel active generation">■</button>
+            <button id="btn-send" class="comp-btn comp-send-btn" title="Send prompt (Enter)" aria-label="Send prompt">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+            </button>
+            <button id="btn-abort" class="comp-btn comp-abort-btn" style="display:none" title="Cancel active generation" aria-label="Cancel generation">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect width="14" height="14" x="5" y="5" rx="2"/></svg>
+            </button>
           </div>
         </div>
       </div>
@@ -205,7 +280,7 @@
       </div>
       <div>
         <label style="display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--dim); font-weight:700; margin-bottom:5px; text-transform:uppercase; letter-spacing:1px;">
-          <span>Local Workspace Directory <span style="font-weight:normal; text-transform:none; color:var(--accent);">(Optional)</span></span>
+          <span>Folder on Your Machine *</span>
           <span id="companion-status" style="font-weight:normal; text-transform:none; letter-spacing:normal; font-size:10.5px;"></span>
         </label>
         <div style="display:flex; gap:8px; align-items:stretch;">
@@ -216,7 +291,7 @@
           </button>
         </div>
         <small style="color:var(--dim); font-size:10px; line-height:1.4; display:block; margin-top:6px;">
-          Anchor the project sandbox to an existing local folder. Agent tools (read, write, edit, python) will operate inside this directory. Leave blank to use default workspace sandbox.
+          Required. Agent tools (read, write, edit, shell, python) run only inside this folder on your machine, through the Companion app — never on the server.
         </small>
       </div>
       <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
@@ -633,15 +708,15 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/highlight.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="/static/js/theme.js?v=2.5"></script>
+<script src="/static/js/theme.js?v=2.7"></script>
 <script src="/static/js/utils.js?v=2.5"></script>
-<script src="/static/js/sampling.js?v=1.0"></script>
+<script src="/static/js/sampling.js?v=1.1"></script>
 <script src="/static/js/preview.js?v=2.5"></script>
-<script src="/static/js/gpu-status.js?v=3.0"></script>
-<script src="/static/js/chat.js?v=3.3"></script>
+<script src="/static/js/gpu-status.js?v=3.2"></script>
+<script src="/static/js/chat.js?v=3.5"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
 <script src="/static/js/monitor.js?v=3.0"></script>
-<script src="/static/js/capabilities.js?v=2.5"></script>
+<script src="/static/js/capabilities.js?v=2.6"></script>
 <script src="/static/js/git.js?v=1.0"></script>
 <script src="/static/js/usage-report.js?v=2.5"></script>
 <script src="/static/js/audit-log.js?v=1.0"></script>
@@ -649,15 +724,15 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/config.js?v=3.1"></script>
 <script src="/static/js/cloud.js?v=3.0"></script>
 <script src="/static/js/attachments.js?v=2.5"></script>
-<script src="/static/js/projects.js?v=3.6"></script>
-<script src="/static/js/workspace.js?v=2.7"></script>
+<script src="/static/js/projects.js?v=4.0"></script>
+<script src="/static/js/workspace.js?v=2.8"></script>
 <script src="/static/js/dnd.js?v=1.0"></script>
-<script src="/static/js/agent-cmd.js?v=3.2"></script>
-<script src="/static/js/agent-acts.js?v=2.5"></script>
-<script src="/static/js/agent-run.js?v=3.2"></script>
+<script src="/static/js/agent-cmd.js?v=3.5"></script>
+<script src="/static/js/agent-acts.js?v=2.6"></script>
+<script src="/static/js/agent-run.js?v=3.4"></script>
 <script src="/static/js/compact.js?v=2.9"></script>
 <script src="/static/js/export.js?v=1.0"></script>
-<script src="/static/js/main.js?v=3.2"></script>
+<script src="/static/js/main.js?v=3.5"></script>
 
 </body>
 </html>

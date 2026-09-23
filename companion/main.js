@@ -23,6 +23,9 @@ const trayIconImage = appIcon.resize({ width: 32, height: 32 });
 const SESSION_COOKIE_NAME = "a770_session";
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
+const KEEPALIVE_MS = 25000;        // client ping; a link with no pong by the next tick is dead
+const CLOSE_REPLACED = 4409;       // server: another companion signed in as this user took over
+const CLOSE_UNAUTHORIZED = 4401;   // server: session cookie invalid / expired
 
 process.on("uncaughtException", (e) => console.error("[uncaughtException]", e));
 process.on("unhandledRejection", (e) => console.error("[unhandledRejection]", e));
@@ -35,6 +38,8 @@ let reconnectTimer = null;
 let connected = false;
 let isQuitting = false;
 let lastToken = null;
+let keepaliveTimer = null;
+let parkedToken = null;   // token we stopped reconnecting with (4401 / 4409) until it changes
 
 function setTrayStatus(text, connectedNow) {
   connected = connectedNow;
@@ -44,6 +49,7 @@ function setTrayStatus(text, connectedNow) {
     Menu.buildFromTemplate([
       { label: connectedNow ? "🟢 Connected" : "🔴 Not connected", enabled: false },
       { label: "Show App", click: showMainWindow },
+      { label: "Reconnect", click: reconnectNow, enabled: !connectedNow },
       { type: "separator" },
       {
         label: "Quit",
@@ -125,9 +131,16 @@ function createMainWindow() {
     }
   });
 
+  // Only (re)connect when there is no live socket, or the user signed in again.
+  // A socket that is still CONNECTING must be left alone: replacing it here used
+  // to feed an endless terminate/reconnect loop that dropped in-flight tool calls.
   const checkLoggedIn = async () => {
     const token = await getSessionCookie();
-    if (token && (!ws || ws.readyState !== WebSocket.OPEN || token !== lastToken)) {
+    if (!token) return;
+    const changed = token !== lastToken;
+    if (!changed && token === parkedToken) return;
+    const idle = !ws || ws.readyState === WebSocket.CLOSED;
+    if (changed || (idle && !reconnectTimer)) {
       lastToken = token;
       connectWebSocket(token);
     }
@@ -278,13 +291,36 @@ async function handleCall(frame) {
   }
 }
 
-function connectWebSocket(sessionToken) {
-  if (ws) {
-    try {
-      ws.terminate();
-    } catch {}
-    ws = null;
+async function reconnectNow() {
+  parkedToken = null;
+  reconnectDelay = RECONNECT_BASE_MS;
+  const token = await getSessionCookie();
+  if (token) {
+    lastToken = token;
+    connectWebSocket(token);
   }
+}
+
+// Retire the current socket without letting its close handler schedule another
+// reconnect (that handler used to kill the *new* healthy socket a moment later).
+function dropSocket() {
+  clearInterval(keepaliveTimer);
+  keepaliveTimer = null;
+  const old = ws;
+  ws = null;
+  if (!old) return;
+  old.removeAllListeners();
+  old.on("error", () => {});
+  try {
+    old.terminate();
+  } catch {}
+}
+
+function connectWebSocket(sessionToken) {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  parkedToken = null;
+  dropSocket();
   let effectiveServer = SERVER_URL;
   if (mainWindow && mainWindow.webContents) {
     try {
@@ -299,7 +335,7 @@ function connectWebSocket(sessionToken) {
   // in proxy / tunnel / access logs.
   const wsUrl = effectiveServer.replace(/^http/, "ws") + "/ws/companion";
   console.log("[connectWebSocket] connecting to", wsUrl);
-  ws = new WebSocket(wsUrl, {
+  const sock = new WebSocket(wsUrl, {
     headers: {
       Cookie: `${SESSION_COOKIE_NAME}=${sessionToken}`,
       Authorization: `Bearer ${sessionToken}`,
@@ -307,21 +343,40 @@ function connectWebSocket(sessionToken) {
       "User-Agent": "A770Companion A770NativeApp"
     }
   });
+  ws = sock;
+  // Every handler ignores events from a socket that is no longer the current one.
+  const current = () => sock === ws;
 
-  ws.on("unexpected-response", (req, res) => {
+  sock.on("unexpected-response", (req, res) => {
+    if (!current()) return;
     console.error("[connectWebSocket] unexpected-response", res.statusCode);
     setTrayStatus("connection error — retrying…", false);
+    dropSocket();
     scheduleReconnect();
   });
 
-  ws.on("open", () => {
+  sock.on("open", () => {
+    if (!current()) return;
     console.log("[connectWebSocket] open");
     reconnectDelay = RECONNECT_BASE_MS;
-    ws.send(JSON.stringify({ type: "hello", hostname: os.hostname() }));
+    sock.send(JSON.stringify({ type: "hello", hostname: os.hostname() }));
     setTrayStatus(`connected to ${effectiveServer}`, true);
+    let alive = true;
+    sock.on("pong", () => { alive = true; });
+    keepaliveTimer = setInterval(() => {
+      if (!current()) return;
+      if (!alive) {
+        console.warn("[connectWebSocket] no pong — reconnecting");
+        dropSocket();
+        scheduleReconnect();
+        return;
+      }
+      alive = false;
+      try { sock.ping(); } catch {}
+    }, KEEPALIVE_MS);
   });
 
-  ws.on("message", async (raw) => {
+  sock.on("message", async (raw) => {
     let frame;
     try {
       frame = JSON.parse(raw.toString());
@@ -330,20 +385,38 @@ function connectWebSocket(sessionToken) {
     }
     if (frame.type === "call") {
       const result = await handleCall(frame);
-      ws.send(JSON.stringify(result));
+      if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(result));
     }
   });
 
-  ws.on("close", (code, reason) => {
+  sock.on("close", (code, reason) => {
+    if (!current()) return;
     console.log("[connectWebSocket] closed", code, reason.toString());
+    dropSocket();
+    if (code === CLOSE_REPLACED || code === CLOSE_UNAUTHORIZED) {
+      // don't fight another companion for the connection / retry a bad session;
+      // resume when the user signs in again or clicks "Reconnect" in the tray
+      parkedToken = sessionToken;
+      setTrayStatus(code === CLOSE_REPLACED ? "in use by another companion" : "sign in required", false);
+      return;
+    }
     setTrayStatus("disconnected — retrying…", false);
     scheduleReconnect();
   });
 
-  ws.on("error", (err) => {
+  sock.on("error", (err) => {
+    if (!current()) return;
     console.error("[connectWebSocket] error", err.message);
     setTrayStatus("connection error — retrying…", false);
   });
+}
+
+// One companion per machine: a second copy would keep taking the server
+// connection away from the first (4409) and back again.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", showMainWindow);
 }
 
 app.whenReady().then(() => {

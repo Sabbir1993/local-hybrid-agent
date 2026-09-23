@@ -6,6 +6,7 @@ Run: python -m unittest tests.test_shell_gate -v
 import asyncio
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -43,9 +44,23 @@ class ApprovalTokenTests(unittest.TestCase):
         self._cb = st.permission_callback
         st.permission_callback = None      # no modal channel -> deny unless approved
 
+        # approved commands run on the user's machine via the companion -- never the server
+        async def fake_call(uid, op, params, timeout=None):
+            assert op == "shell.run"
+            return {"exit_code": 0, "stdout": params["command"].replace("echo ", "") + "\n"}
+        self._patches = [
+            mock.patch("core.agent_tools.require_device_workspace",
+                       lambda: (7, Path(r"C:\Users\[PLACEHOLDER]\proj"))),
+            mock.patch.object(st.companion_bridge, "call", fake_call),
+        ]
+        for p in self._patches:
+            p.start()
+
     def tearDown(self):
         st.APP_CONFIG["capabilities"] = self._cfg
         st.permission_callback = self._cb
+        for p in self._patches:
+            p.stop()
 
     def test_model_supplied_flag_is_ignored(self):
         out = asyncio.run(st.tool_run_shell({"command": "whoami", "_pre_approved": True}))

@@ -25,12 +25,18 @@ async function loadCapabilities() {
       'Reusable instruction packs loaded from skills/*/SKILL.md');
 
     // MCP
+    const canManageMcp = !!(window.hasPerm && window.hasPerm('settings.orchestration.configure'));
     const mcpInner = (d.mcp.servers || []).length
       ? d.mcp.servers.map(s => `
           <div class="cap-item" style="margin-bottom:6px;">
             <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
               <span class="cap-dot ${s.status === 'ready' ? 'on' : (s.status === 'error' ? 'err' : '')}" title="${esc(s.status)}"></span>
-              <b>${esc(s.name)}</b> <span class="dim">(${esc(s.transport)}) · ${s.tools.length} tool(s)</span>
+              <b>${esc(s.name)}</b> <span class="dim">(${esc(s.transport)}) · ${s.status === 'ready' ? s.tools.length + ' tool(s)' : esc(s.status)}</span>
+              ${canManageMcp ? `<span style="margin-left:auto; display:flex; gap:4px;">
+                <button class="btn ghost mcp-srv-reconnect" data-name="${esc(s.name)}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;" title="Reconnect (e.g. after finishing an OAuth login)">↻</button>
+                <button class="btn ghost mcp-srv-edit" data-name="${esc(s.name)}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">Edit</button>
+                <button class="btn ghost mcp-srv-del" data-name="${esc(s.name)}" style="width:auto; margin:0; padding:1px 8px; font-size:10px; color:var(--red);">✕</button>
+              </span>` : ''}
             </div>
             ${s.error ? `<div class="dim" style="font-size:10px; color:var(--red); margin-bottom:4px;">${esc(s.error)}</div>` : ''}
             ${(s.tools || []).map(t => `
@@ -39,24 +45,18 @@ async function loadCapabilities() {
                 ${t.description ? `<span class="cap-tool-desc">${esc(t.description)}</span>` : ''}
               </div>`).join('')}
           </div>`).join('')
-      : '<div class="cap-item dim" style="padding:4px 6px;">no servers configured (config.json → capabilities.mcp_servers)</div>';
+      : '<div class="cap-item dim" style="padding:4px 6px;">no servers configured yet</div>';
     h += capSection('mcp', '🔌 MCP Servers', d.mcp.enabled,
-      '<div id="mcp-connectors"><div class="dim" style="font-size:10.5px;">Loading connectors…</div></div>' + mcpInner,
+      mcpInner + (canManageMcp ? mcpEditorHtml() : ''),
       'External tool servers via Model Context Protocol (stdio / http)');
 
     // Plugins
+    const canManagePlugins = canManageMcp;
     h += capSection('plugins', '🧩 Plugins', d.plugins.enabled,
-      (d.plugins.items || []).map(p => `
-        <div class="cap-item" style="margin-bottom:6px;">
-          <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-            <span class="tool-badge-ico">⚡</span> <b>${esc(p.name)}</b> <span class="dim">· ${p.tools.length} tool(s), ${p.prompt_fragments} prompt frag(s)</span>
-          </div>
-          ${(p.tools || []).map(t => `
-            <div class="cap-tool-entry sub">
-              <span class="cap-tool-badge plugin"><span class="tool-badge-ico">⚡</span><code>${esc(t.split('__').pop())}</code></span>
-            </div>`).join('')}
-        </div>`).join('') || '<div class="cap-item dim" style="padding:4px 6px;">none in plugins/ yet</div>',
-      'Python modules loaded from plugins/*/plugin.py');
+      ((d.plugins.items || []).map(p => pluginRowHtml(p, canManagePlugins)).join('')
+        || '<div class="cap-item dim" style="padding:4px 6px;">no plugins installed yet</div>')
+        + (canManagePlugins ? pluginBrowserHtml() : ''),
+      'Python modules loaded from plugins/*/plugin.py · catalog = reviewed bundles in plugin_catalog/');
 
     // Shell
     const sh = d.shell || {};
@@ -93,7 +93,9 @@ async function loadCapabilities() {
       'run_shell tool — agent runs commands like "npx skills add …" in the workspace');
 
     box.innerHTML = h;
-    loadMcpConnectors(box);
+    if (canManageMcp) wireMcpEditor(box);
+    if (canManagePlugins) wirePlugins(box);
+    scheduleMcpStatusPoll(d.mcp.servers || []);
     box.querySelectorAll('.cap-toggle').forEach(t => {
       t.onclick = async () => {
         const section = t.dataset.section;
@@ -166,6 +168,366 @@ function capSection(id, title, enabled, innerHtml, note) {
     </div>
     <div class="cap-body" style="${enabled ? '' : 'opacity:0.45;'}">${innerHtml || ''}${note ? `<div class="dim" style="font-size:9.5px; margin-top:4px;">${esc(note)}</div>` : ''}</div>
   </div>`;
+}
+
+/* ---------------- MCP custom servers: add / edit / remove / paste JSON ---------------- */
+const MCP_INP = 'background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;';
+let _mcpStatusTimer = null;
+let _mcpConfigs = {};   // name -> public config from /mcp/servers (no secret values)
+
+function mcpEditorHtml() {
+  return `
+    <div style="display:flex; gap:5px; margin-top:6px;">
+      <button class="btn ghost" id="mcp-add-open" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">+ Add MCP server</button>
+      <button class="btn ghost" id="mcp-import-open" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">Paste JSON</button>
+    </div>
+    <div id="mcp-import" class="cap-item" hidden style="border:1px solid var(--border); border-radius:6px; padding:6px 8px; margin-top:5px;">
+      <div class="dim" style="font-size:10px; margin-bottom:4px;">Claude-Desktop format: <code>{"mcpServers": {"name": {"command": "npx", "args": [...]}}}</code></div>
+      <textarea id="mcp-import-json" rows="7" style="${MCP_INP} width:100%; box-sizing:border-box;" placeholder='{"mcpServers": {"my-server": {"command": "npx", "args": ["-y", "mcp-remote", "https://example.com/mcp"]}}}'></textarea>
+      <div style="display:flex; gap:5px; margin-top:5px;">
+        <button class="btn accent" id="mcp-import-save" style="width:auto; margin:0; padding:3px 12px; font-size:10.5px;">Import &amp; connect</button>
+        <button class="btn ghost" id="mcp-import-cancel" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">Cancel</button>
+      </div>
+      <div id="mcp-import-result" class="dim" style="font-size:10px; margin-top:4px;"></div>
+    </div>
+    <div id="mcp-form" class="cap-item" hidden style="border:1px solid var(--border); border-radius:6px; padding:6px 8px; margin-top:5px;">
+     <div style="display:flex; flex-direction:column; gap:5px;">
+      <b id="mcp-form-title">Add MCP server</b>
+      <label style="display:flex; gap:6px; align-items:center;"><span style="width:70px;">Name</span>
+        <input type="text" id="mcp-f-name" placeholder="e.g. sslcommerz" style="${MCP_INP} flex:1;"></label>
+      <label style="display:flex; gap:6px; align-items:center;"><span style="width:70px;">Transport</span>
+        <select id="mcp-f-transport" style="${MCP_INP} flex:1;">
+          <option value="stdio">stdio (local command, e.g. npx mcp-remote)</option>
+          <option value="http">http (streamable-HTTP URL)</option>
+        </select></label>
+      <div id="mcp-f-stdio" style="display:flex; flex-direction:column; gap:5px;">
+        <label style="display:flex; gap:6px; align-items:center;"><span style="width:70px;">Command</span>
+          <input type="text" id="mcp-f-command" placeholder="npx" style="${MCP_INP} flex:1;"></label>
+        <label style="display:flex; gap:6px; align-items:flex-start;"><span style="width:70px;">Args</span>
+          <textarea id="mcp-f-args" rows="3" placeholder="one per line, e.g.&#10;-y&#10;mcp-remote&#10;https://example.com/mcp" style="${MCP_INP} flex:1;"></textarea></label>
+        <div id="mcp-f-allowed" class="dim" style="font-size:9.5px; margin-left:76px;"></div>
+      </div>
+      <label id="mcp-f-http" style="display:none; gap:6px; align-items:center;"><span style="width:70px;">URL</span>
+        <input type="text" id="mcp-f-url" placeholder="https://example.com/mcp" style="${MCP_INP} flex:1;"></label>
+      <div>
+        <div style="display:flex; align-items:center; gap:6px;"><span style="width:70px;">Env vars</span>
+          <button class="btn ghost" id="mcp-f-env-add" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">+ var</button>
+          <span class="dim" style="font-size:9.5px;">secret values go to the OS keychain, never config/app.json</span></div>
+        <div id="mcp-f-env" style="display:flex; flex-direction:column; gap:3px; margin-top:3px;"></div>
+      </div>
+      <label style="display:flex; gap:6px; align-items:center; cursor:pointer;">
+        <input type="checkbox" id="mcp-f-disabled" style="accent-color:var(--green);"> Disabled (saved, not started)</label>
+      <div style="display:flex; gap:5px;">
+        <button class="btn accent" id="mcp-f-save" style="width:auto; margin:0; padding:3px 12px; font-size:10.5px;">💾 Save &amp; connect</button>
+        <button class="btn ghost" id="mcp-f-cancel" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">Cancel</button>
+      </div>
+     </div>
+    </div>`;
+}
+
+function mcpEnvRow(key = '', value = '', secret = false, stored = false) {
+  const row = document.createElement('div');
+  row.className = 'mcp-env-row';
+  row.style.cssText = 'display:flex; gap:4px; align-items:center;';
+  row.innerHTML = `
+    <input type="text" class="mcp-env-key" value="${esc(key)}" placeholder="KEY" style="${MCP_INP} width:130px;">
+    <input type="${secret ? 'password' : 'text'}" class="mcp-env-val" value="${esc(value)}" autocomplete="new-password"
+      placeholder="${stored ? '•••• stored — leave blank to keep' : 'value'}" style="${MCP_INP} flex:1;">
+    <label class="dim" style="font-size:10px; display:flex; gap:3px; align-items:center; cursor:pointer;">
+      <input type="checkbox" class="mcp-env-secret" ${secret ? 'checked' : ''} ${stored ? 'disabled' : ''}> secret</label>
+    <button class="btn ghost mcp-env-del" style="width:auto; margin:0; padding:1px 7px; font-size:10px; color:var(--red);">✕</button>`;
+  row.querySelector('.mcp-env-secret').onchange = e => {
+    row.querySelector('.mcp-env-val').type = e.target.checked ? 'password' : 'text';
+  };
+  row.querySelector('.mcp-env-del').onclick = () => row.remove();
+  return row;
+}
+
+function wireMcpEditor(box) {
+  const form = box.querySelector('#mcp-form');
+  const imp = box.querySelector('#mcp-import');
+  const $f = id => box.querySelector('#mcp-f-' + id);
+  let editing = null;
+
+  fetch('/mcp/servers').then(r => r.json()).then(d => {
+    _mcpConfigs = {};
+    (d.servers || []).forEach(s => { _mcpConfigs[s.name] = s; });
+    $f('allowed').textContent = 'allowed commands: ' + (d.allowed_commands || []).join(', ');
+  }).catch(() => {});
+
+  const syncTransport = () => {
+    const http = $f('transport').value === 'http';
+    $f('stdio').style.display = http ? 'none' : 'flex';
+    $f('http').style.display = http ? 'flex' : 'none';
+  };
+  $f('transport').onchange = syncTransport;
+  $f('env-add').onclick = () => $f('env').appendChild(mcpEnvRow());
+
+  const openForm = cfg => {
+    editing = cfg ? cfg.name : null;
+    imp.hidden = true;
+    box.querySelector('#mcp-form-title').textContent = cfg ? `Edit MCP server: ${cfg.name}` : 'Add MCP server';
+    $f('name').value = cfg ? cfg.name : '';
+    $f('name').disabled = !!cfg;
+    $f('transport').value = cfg ? cfg.transport : 'stdio';
+    $f('command').value = cfg ? (cfg.command || '') : 'npx';
+    $f('args').value = cfg ? (cfg.args || []).join('\n') : '';
+    $f('url').value = cfg ? (cfg.url || '') : '';
+    $f('disabled').checked = !!(cfg && cfg.disabled);
+    $f('env').innerHTML = '';
+    if (cfg) {
+      Object.entries(cfg.env || {}).forEach(([k, v]) => $f('env').appendChild(mcpEnvRow(k, v, false)));
+      (cfg.secret_env_keys || []).forEach(k => $f('env').appendChild(mcpEnvRow(k, '', true, true)));
+    }
+    syncTransport();
+    form.hidden = false;
+    $f('name').focus();
+  };
+
+  box.querySelector('#mcp-add-open').onclick = () => openForm(null);
+  $f('cancel').onclick = () => { form.hidden = true; };
+  box.querySelector('#mcp-import-open').onclick = () => { form.hidden = true; imp.hidden = !imp.hidden; };
+  box.querySelector('#mcp-import-cancel').onclick = () => { imp.hidden = true; };
+
+  $f('save').onclick = async () => {
+    const env = {}, secret_env = {};
+    for (const row of $f('env').querySelectorAll('.mcp-env-row')) {
+      const k = row.querySelector('.mcp-env-key').value.trim();
+      if (!k) continue;
+      const v = row.querySelector('.mcp-env-val').value;
+      if (row.querySelector('.mcp-env-secret').checked) secret_env[k] = v; else env[k] = v;
+    }
+    const body = {
+      name: $f('name').value.trim(),
+      transport: $f('transport').value,
+      command: $f('command').value.trim(),
+      args: $f('args').value.split('\n').map(a => a.trim()).filter(Boolean),
+      url: $f('url').value.trim(),
+      env, secret_env,
+      disabled: $f('disabled').checked,
+    };
+    try {
+      const r = await fetch(editing ? `/mcp/servers/${encodeURIComponent(editing)}` : '/mcp/servers', {
+        method: editing ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || j.detail || r.status);
+      toast(`MCP server '${body.name}' saved — ${j.status.status}…`);
+      loadCapabilities();
+    } catch (e) { toast('Save failed: ' + e.message, true); }
+  };
+
+  box.querySelector('#mcp-import-save').onclick = async () => {
+    const out = box.querySelector('#mcp-import-result');
+    let config;
+    try { config = JSON.parse(box.querySelector('#mcp-import-json').value); }
+    catch (e) { out.textContent = 'Invalid JSON: ' + e.message; return; }
+    try {
+      const r = await fetch('/mcp/import', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || j.detail || r.status);
+      const bad = j.results.filter(x => x.error);
+      const ok = j.results.length - bad.length;
+      if (bad.length) {
+        out.innerHTML = bad.map(x => `<div style="color:var(--red);">${esc(x.name)}: ${esc(x.error)}</div>`).join('');
+        toast(`Imported ${ok}, ${bad.length} failed`, true);
+        if (ok) setTimeout(loadCapabilities, 1500);
+      } else {
+        toast(`Imported ${ok} MCP server(s) — connecting…`);
+        loadCapabilities();
+      }
+    } catch (e) { out.textContent = 'Import failed: ' + e.message; }
+  };
+
+  box.querySelectorAll('.mcp-srv-edit').forEach(btn => {
+    btn.onclick = () => {
+      const cfg = _mcpConfigs[btn.dataset.name];
+      if (!cfg) { toast('Config not loaded yet — try again', true); return; }
+      if (cfg.managed) { toast('Catalog connector — use Connect / Disconnect above', true); return; }
+      openForm(cfg);
+    };
+  });
+  box.querySelectorAll('.mcp-srv-reconnect').forEach(btn => {
+    btn.onclick = async () => {
+      try {
+        const r = await fetch(`/mcp/servers/${encodeURIComponent(btn.dataset.name)}/reconnect`, { method: 'POST' });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || j.detail || r.status);
+        toast(`Reconnecting ${btn.dataset.name}…`);
+        loadCapabilities();
+      } catch (e) { toast('Reconnect failed: ' + e.message, true); }
+    };
+  });
+  box.querySelectorAll('.mcp-srv-del').forEach(btn => {
+    btn.onclick = async () => {
+      const name = btn.dataset.name;
+      if (!confirm(`Remove MCP server '${name}'? Its tools disappear for every user.`)) return;
+      try {
+        const r = await fetch(`/mcp/servers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || j.detail || r.status);
+        toast(`MCP server '${name}' removed`);
+        loadCapabilities();
+      } catch (e) { toast('Remove failed: ' + e.message, true); }
+    };
+  });
+}
+
+// servers connect in the background (npx download / OAuth) - refresh until none is 'connecting',
+// but never while the user has the add/import form open (a reload would wipe their input)
+function scheduleMcpStatusPoll(servers) {
+  if (_mcpStatusTimer) clearTimeout(_mcpStatusTimer);
+  if (!servers.some(s => s.status === 'connecting' || s.status === 'idle')) return;
+  _mcpStatusTimer = setTimeout(() => {
+    const box = $('caps-content');
+    const busy = box && [...box.querySelectorAll('#mcp-form, #mcp-import')].some(el => !el.hidden);
+    if (busy) { scheduleMcpStatusPoll(servers); return; }
+    loadCapabilities();
+  }, 3000);
+}
+
+/* ---------------- Plugins: installed list + browsable catalog ---------------- */
+const PLUGIN_BTN = 'width:auto; margin:0; padding:1px 8px; font-size:10px;';
+let _pluginCatalog = [];
+let _pluginCategory = 'all';
+
+function pluginRowHtml(p, canManage) {
+  const state = p.error ? 'err' : (p.loaded ? 'on' : '');
+  const why = p.error ? 'failed to load' : (p.loaded ? 'loaded' : (p.enabled ? 'not loaded' : 'disabled'));
+  return `
+    <div class="cap-item" style="margin-bottom:6px;">
+      <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+        <span class="cap-dot ${state}" title="${why}"></span>
+        <b>${esc(p.name)}</b>
+        <span class="dim">· ${p.tools.length} tool(s), ${p.prompt_fragments} prompt frag(s)${p.enabled ? '' : ' · disabled'}${p.modified ? ' · locally modified' : ''}</span>
+        ${canManage ? `<span style="margin-left:auto; display:flex; gap:4px;">
+          <button class="btn ghost plugin-enable" data-name="${esc(p.name)}" data-enabled="${p.enabled ? '1' : ''}" style="${PLUGIN_BTN}">${p.enabled ? 'Disable' : 'Enable'}</button>
+          ${p.from_catalog && !p.modified ? `<button class="btn ghost plugin-uninstall" data-name="${esc(p.name)}" style="${PLUGIN_BTN} color:var(--red);" title="Remove from plugins/ (can be reinstalled from the catalog)">✕</button>` : ''}
+        </span>` : ''}
+      </div>
+      ${p.error ? `<div class="dim" style="font-size:10px; color:var(--red); margin-bottom:4px;">${esc(p.error)}</div>` : ''}
+      ${(p.tools || []).map(t => `
+        <div class="cap-tool-entry sub">
+          <span class="cap-tool-badge plugin"><span class="tool-badge-ico">⚡</span><code>${esc(t.split('__').pop())}</code></span>
+        </div>`).join('')}
+    </div>`;
+}
+
+function pluginBrowserHtml() {
+  return `
+    <div style="display:flex; gap:5px; margin-top:6px;">
+      <button class="btn ghost" id="plugin-browse-open" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">+ Browse plugins</button>
+      <button class="btn ghost" id="plugin-reload" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;" title="Re-import every enabled plugin (picks up edits to plugins/*/plugin.py)">↻ Reload</button>
+    </div>
+    <div id="plugin-browser" class="cap-item" hidden style="border:1px solid var(--border); border-radius:6px; padding:6px 8px; margin-top:5px;">
+      <div style="display:flex; gap:5px; align-items:center; margin-bottom:5px;">
+        <input type="text" id="plugin-search" placeholder="Search plugins…" style="${MCP_INP} flex:1;">
+        <button class="btn ghost" id="plugin-browse-close" style="${PLUGIN_BTN}">Close</button>
+      </div>
+      <div id="plugin-cats" style="display:flex; gap:4px; flex-wrap:wrap; margin-bottom:5px;"></div>
+      <div id="plugin-cards" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:6px;"></div>
+      <div class="dim" style="font-size:9.5px; margin-top:5px;">Only reviewed plugins from <code>plugin_catalog/</code> can be installed here — plugins run inside the server as Python, so nothing is downloaded from the internet.</div>
+    </div>`;
+}
+
+function renderPluginCatalog(box) {
+  const q = (box.querySelector('#plugin-search')?.value || '').trim().toLowerCase();
+  const cats = ['all', ...new Set(_pluginCatalog.map(p => p.category))];
+  box.querySelector('#plugin-cats').innerHTML = cats.map(c => `
+    <button class="btn ${c === _pluginCategory ? 'accent' : 'ghost'} plugin-cat" data-cat="${esc(c)}" style="${PLUGIN_BTN}">${esc(c)}</button>`).join('');
+  const list = _pluginCatalog.filter(p =>
+    (_pluginCategory === 'all' || p.category === _pluginCategory)
+    && (!q || [p.name, p.title, p.description, ...(p.tools || [])].join(' ').toLowerCase().includes(q)));
+  box.querySelector('#plugin-cards').innerHTML = list.map(p => `
+    <div class="plugin-card" style="border:1px solid var(--border); border-radius:6px; padding:6px 8px; display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <span class="tool-badge-ico">⚡</span><b>${esc(p.title)}</b>
+        <span class="dim" style="font-size:9.5px;">${esc(p.version ? 'v' + p.version : '')}</span>
+        <span style="margin-left:auto;">${p.installed
+          ? `<span class="dim" style="font-size:10px;">${p.modified ? 'installed (modified)' : 'installed ✓'}</span>`
+          : `<button class="btn accent plugin-install" data-name="${esc(p.name)}" style="${PLUGIN_BTN}">Install</button>`}</span>
+      </div>
+      <div class="dim" style="font-size:10px;">${esc(p.description)}</div>
+      <div style="display:flex; gap:3px; flex-wrap:wrap;">${(p.tools || []).map(t => `<code style="font-size:9.5px;">${esc(t)}</code>`).join('')}</div>
+      <div class="dim" style="font-size:9px;">${esc(p.category)}${p.author ? ' · ' + esc(p.author) : ''}${p.sha256 ? ` · <span title="sha256 of plugin.py: ${esc(p.sha256)}">sha256 ${esc(p.sha256.slice(0, 12))}…</span>` : ''}</div>
+    </div>`).join('') || '<div class="dim" style="font-size:10.5px;">no matching plugins</div>';
+
+  box.querySelectorAll('.plugin-cat').forEach(b => {
+    b.onclick = () => { _pluginCategory = b.dataset.cat; renderPluginCatalog(box); };
+  });
+  box.querySelectorAll('.plugin-install').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = 'Installing…';
+      try {
+        const r = await fetch(`/plugins/${encodeURIComponent(b.dataset.name)}/install`, { method: 'POST' });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || r.status);
+        toast(`Plugin '${b.dataset.name}' installed ✓` + (j.plugin && j.plugin.error ? ' — but failed to load' : ''), !!(j.plugin && j.plugin.error));
+        await loadCapabilities();
+        openPluginBrowser($('caps-content'));
+      } catch (e) { toast('Install failed: ' + e.message, true); b.disabled = false; b.textContent = 'Install'; }
+    };
+  });
+}
+
+async function openPluginBrowser(box) {
+  const panel = box.querySelector('#plugin-browser');
+  if (!panel) return;
+  panel.hidden = false;
+  try {
+    const d = await (await fetch('/plugins/catalog')).json();
+    _pluginCatalog = d.plugins || [];
+    renderPluginCatalog(box);
+  } catch (e) {
+    box.querySelector('#plugin-cards').innerHTML = '<div class="dim" style="font-size:10.5px;">catalog failed: ' + esc(e.message) + '</div>';
+  }
+}
+
+function wirePlugins(box) {
+  const open = box.querySelector('#plugin-browse-open');
+  if (open) open.onclick = () => openPluginBrowser(box);
+  const close = box.querySelector('#plugin-browse-close');
+  if (close) close.onclick = () => { box.querySelector('#plugin-browser').hidden = true; };
+  const search = box.querySelector('#plugin-search');
+  if (search) search.oninput = () => renderPluginCatalog(box);
+  const reload = box.querySelector('#plugin-reload');
+  if (reload) reload.onclick = async () => {
+    try {
+      const r = await fetch('/plugins/reload', { method: 'POST' });
+      if (!r.ok) throw new Error((await r.json()).error || r.status);
+      toast('Plugins reloaded ✓');
+      loadCapabilities();
+    } catch (e) { toast('Reload failed: ' + e.message, true); }
+  };
+  box.querySelectorAll('.plugin-enable').forEach(b => {
+    b.onclick = async () => {
+      const enable = !b.dataset.enabled;
+      try {
+        const r = await fetch(`/plugins/${encodeURIComponent(b.dataset.name)}/enable`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: enable }),
+        });
+        if (!r.ok) throw new Error((await r.json()).error || r.status);
+        toast(`Plugin '${b.dataset.name}' ${enable ? 'enabled' : 'disabled'}`);
+        loadCapabilities();
+      } catch (e) { toast('Update failed: ' + e.message, true); }
+    };
+  });
+  box.querySelectorAll('.plugin-uninstall').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm(`Uninstall plugin '${b.dataset.name}'? Its tools are removed immediately; you can reinstall it from the catalog.`)) return;
+      try {
+        const r = await fetch(`/plugins/${encodeURIComponent(b.dataset.name)}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error((await r.json()).error || r.status);
+        toast(`Plugin '${b.dataset.name}' uninstalled`);
+        loadCapabilities();
+      } catch (e) { toast('Uninstall failed: ' + e.message, true); }
+    };
+  });
 }
 
 /* ---------------- MCP connector catalog (click-to-authorize) ---------------- */

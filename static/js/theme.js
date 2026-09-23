@@ -30,6 +30,9 @@ try {
   const savedWeb = localStorage.getItem('chat_web_search');
   if (savedWeb !== null) chatWebSearch = savedWeb === '1';
 } catch (e) {}
+// Deep mode: larger tool/web budget + planning + model reasoning (slower)
+let chatDeepMode = false;
+try { chatDeepMode = localStorage.getItem('chat_deep_mode') === '1'; } catch (e) {}
 
 const bgProcessEnabled = true;
 window.bgJobs = window.bgJobs || new Map();
@@ -101,6 +104,15 @@ function updateBgIndicators() {
   });
 }
 
+function updateDeepToggleUI() {
+  const btn = $('btn-deep-toggle');
+  if (!btn) return;
+  btn.classList.toggle('active', !!chatDeepMode);
+  btn.title = chatDeepMode
+    ? 'Deep mode is ON (plans, researches more, reasons longer — slower) — Click to turn OFF'
+    : 'Deep mode is OFF (normal research budget) — Click to turn ON';
+}
+
 function updateWebToggleUI() {
   const btn = $('btn-web-toggle');
   if (!btn) return;
@@ -112,7 +124,7 @@ function updateWebToggleUI() {
 
 /* ---------------- theme management ---------------- */
 const THEME_KEY = 'a770_theme';
-const THEMES = ['slate', 'claude', 'tokyonight', 'oled', 'nord', 'classic', 'light'];
+const THEMES = ['slate', 'claude', 'tokyonight', 'oled', 'nord', 'classic', 'ssl', 'ssl-light', 'light'];
 const THEME_NAMES = {
   slate: 'Slate & Indigo',
   claude: 'Claude Warm',
@@ -120,6 +132,8 @@ const THEME_NAMES = {
   oled: 'OLED Black',
   nord: 'Nord Arctic',
   classic: 'Classic Dark',
+  ssl: 'SSL Wireless (Navy)',
+  'ssl-light': 'SSL Wireless (Light) ☀️',
   light: 'Pure Light ☀️',
 };
 
@@ -154,3 +168,31 @@ applyTheme(getSavedTheme());
 if ($('btn-theme')) {
   $('btn-theme').onclick = cycleTheme;
 }
+
+/* ---------------- sidebar collapse toggle ---------------- */
+function toggleSidebar() {
+  document.body.classList.toggle('sidebar-collapsed');
+  const isCollapsed = document.body.classList.contains('sidebar-collapsed');
+  try { localStorage.setItem('a770_sidebar_collapsed', isCollapsed ? '1' : '0'); } catch (e) {}
+}
+window.toggleSidebar = toggleSidebar;
+
+try {
+  if (localStorage.getItem('a770_sidebar_collapsed') === '1') {
+    document.body.classList.add('sidebar-collapsed');
+  }
+} catch (e) {}
+
+if ($('btn-sidebar-toggle')) {
+  $('btn-sidebar-toggle').onclick = toggleSidebar;
+}
+
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b' && !e.shiftKey && !e.altKey) {
+    const activeTag = document.activeElement ? document.activeElement.tagName : '';
+    if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA') {
+      e.preventDefault();
+      toggleSidebar();
+    }
+  }
+});

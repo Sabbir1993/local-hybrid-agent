@@ -4,6 +4,7 @@ routes/agent.py - Autonomous multi-turn coding agent, shell permissions, vision,
 
 import asyncio
 import json
+import re
 import os
 import sys
 import time
@@ -18,7 +19,6 @@ from core.auth import Principal, user_has_permission
 from core.backend import device_prefix
 from core.config import BASE_DIR, CONFIG_DEFAULTS
 from core.deps import get_current_user, require_permission
-from core.process import per_slot_cap
 from core.audit import audit_log
 from core import input_guard
 from core.project_context import load_project_instructions, prompt_block as project_prompt_block, INIT_PROMPT
@@ -53,7 +53,8 @@ from core.agent_tools import (
     active_workspace,
     common_workspace,
     get_active_project,
-    project_workspace_dir,
+    require_device_workspace,
+    WorkspaceAccessDenied,
     set_plan_context,
     _ws_resolve,
     _common_resolve,
@@ -61,8 +62,8 @@ from core.agent_tools import (
     _remote_uid,
     _save_text_as_excel,
     _create_default_excel,
-    generate_fresh_dashboard_html,
     tool_write_file_common,
+    pop_file_diff,
 )
 from core import companion_bridge
 from core.registry import registry
@@ -188,6 +189,27 @@ def _executor_grammar(tools_for_lane: list) -> Optional[str]:
 # pending shell permission requests: req_id -> {cmd, event, result}
 _perm_pending: dict[str, dict] = {}
 
+_DOWNLOAD_MARKER_RE = re.compile(r"[ \t]*\[DOWNLOAD:[^\]]*\][ \t]*\n?")
+
+
+def _strip_download_markers(text: str, was_synth: bool) -> tuple[str, bool]:
+    """Agent files are written straight into the user's project, so the chat-mode
+    [DOWNLOAD: x] preview/download badges don't apply (they only serve server
+    common space). Returns (text, was_synth)."""
+    cleaned = _DOWNLOAD_MARKER_RE.sub("", text or "").rstrip()
+    if cleaned != (text or "").rstrip():
+        return cleaned, True
+    return text, was_synth
+
+
+def _with_diff(payload: dict, args) -> dict:
+    """Attach the per-call diff of a successful write_file/edit_file to its tool_result."""
+    if payload.get("ok") and payload.get("name") in ("write_file", "edit_file"):
+        d = pop_file_diff(args if isinstance(args, dict) else {})
+        if d:
+            payload["diff"] = d
+    return payload
+
 
 class PermissionAnswerReq(BaseModel):
     req_id: str
@@ -284,6 +306,15 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
              "message": "Agent Task mode requires the A770 Companion app. Install and open it, then try again."},
             status_code=403,
         )
+    # Agent tools only ever touch the user's own machine: resolve this device's
+    # project folder up front (strict user+device match, no server fallback).
+    try:
+        require_device_workspace()
+    except WorkspaceAccessDenied as e:
+        audit_log(user, action="agent.workspace", resource=get_active_project(), result="deny",
+                  detail={"reason": str(e)}, ip=request.client.host if request.client else None)
+        return JSONResponse({"error": "agent_workspace_unavailable", "message": f"Agent task refused: {e}"},
+                            status_code=403)
 
     # route through the registry so web/skills/mcp/plugin/shell tools are visible
     ex_inst = small_models.instances["executor"]
@@ -388,6 +419,11 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
 
     ws_path = str(active_workspace())
     sys_prompt = AGENT_SYSTEM_PROMPT.format(workspace=ws_path)
+    if APP_CONFIG.get("capabilities", {}).get("mcp", False):
+        from core.mcp import chat_prompt as _mcp_prompt
+        _mp = _mcp_prompt()
+        if _mp:
+            sys_prompt += "\n\n" + _mp
     # project instructions (AGENTS.md written by /init) -- already PAN/secret
     # masked by the loader; admin output-guard rules applied on top because the
     # text can reach a cloud lane
@@ -408,10 +444,11 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             break
     kb_ids = allowed_source_ids_for(user)
     kb_hits = []
+    kb_blocked_reason = ""
     if kb_ids and _kb_query.strip():
         try:
-            from core.knowledge_router import fetch_company_knowledge
-            kb_hits, kb_prompt = await fetch_company_knowledge(_kb_query, kb_ids, k=6)
+            from core.knowledge_router import fetch_company_knowledge, kb_routing_query
+            kb_hits, kb_prompt = await fetch_company_knowledge(kb_routing_query(msgs, _kb_query), kb_ids, k=6)
         except Exception as e:
             print(f"[agent] knowledge retrieval failed: {e}", file=sys.stderr)
     # Data residency (core/knowledge_access.py): internal knowledge never goes
@@ -419,10 +456,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     # local lanes; if the local main model can't run, the KB context is withheld.
     if kb_hits and (use_cloud_main or cloud_exec) and kb_local_only():
         target = state.profile_path or state.profile or common.initial_profile_path
+        local_err = "" if target else "no local model profile is configured"
         try:
             if target:
                 await state.ensure_running(target)
         except Exception as e:
+            local_err = str(e).strip().splitlines()[0][:160] if str(e).strip() else type(e).__name__
             print(f"[agent] local model for knowledge query unavailable: {e}", file=sys.stderr)
         if state.is_running():
             cloud_main, cloud_exec, use_cloud_main, main_ready = None, None, False, True
@@ -430,6 +469,11 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                       detail={"reason": "kb hits on a cloud lane", "hits": len(kb_hits)})
         else:
             kb_hits = []
+            kb_blocked_reason = ("Company knowledge base is local-only and this run uses a cloud model. "
+                                 f"The local model could not start ({local_err or 'unknown error'}). "
+                                 "Start a local model or switch the lanes to local, then ask again.")
+            audit_log(user, action="knowledge.blocked_cloud", resource="agent/run",
+                      detail={"reason": local_err or "local model not running"}, result="deny")
             sys_prompt += ("\n\nNOTE: The company knowledge base is restricted to local models and no "
                            "local model is loaded, so internal company data is not available for this "
                            "answer. Tell the user this instead of guessing.")
@@ -464,6 +508,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     for i in plan_items)
                 + f"\n({done_n}/{len(plan_items)} done, {fail_n} failed)"
             )
+    sys_prompt = common.current_date_prompt() + "\n\n" + sys_prompt
     has_sys = False
     for m in msgs:
         if m.get("role") == "system":
@@ -568,6 +613,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         async def direct_chat():
             model_info = get_model_info("main" if (use_cloud_main or main_ready) else "executor")
             yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
+            if kb_blocked_reason:
+                yield f"event: kb_blocked\ndata: {json.dumps({'message': kb_blocked_reason})}\n\n"
             if use_cloud_main or main_ready:
                 active_client = main_client
             elif cloud_exec:
@@ -620,6 +667,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         final_reasoning = ""
         attempt_sigs: set = set()
         repeat_streak = 0
+        if kb_blocked_reason:
+            yield f"event: kb_blocked\ndata: {json.dumps({'message': kb_blocked_reason})}\n\n"
         try:
             for step in range(steps):
                 yield f"event: step\ndata: {json.dumps({'step': step + 1, 'total': steps})}\n\n"
@@ -662,7 +711,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': nr['name'], 'args': nr['args'], 'model': r_model_info['display'], 'device': r_model_info['device']})}\n\n"
                         result = await run_tool(nr["name"], nr["args"])
                         ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
-                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': nr['name'], 'ok': ok, 'result': result, 'model': r_model_info['display']})}\n\n"
+                        yield f"event: tool_result\ndata: {json.dumps(_with_diff({'id': tc_id, 'name': nr['name'], 'ok': ok, 'result': result, 'model': r_model_info['display']}, nr['args']))}\n\n"
                         actions_taken.append({"name": nr["name"], "args": nr["args"], "ok": ok, "result": result})
                         # Record in usage.db
                         db_record_request("agent/router", r_model_name,
@@ -721,10 +770,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     if lane_name == "executor":
                         # core tools plus shell, skills and plan tracking so the
                         # executor can install packages, run commands, and tick plan items
+                        # (+ connected MCP tools: the system prompt tells every lane about them)
                         tools_for_lane = [t for t in all_tools()
                                          if t.get("function", {}).get("name") in
                                          ("write_file", "read_file", "edit_file", "list_files", "run_python", "run_shell", "read_skill", "list_skills",
-                                          "create_plan", "update_plan_item", "get_plan")]
+                                          "create_plan", "update_plan_item", "get_plan")
+                                         or t.get("function", {}).get("name", "").startswith("mcp__")]
                     else:
                         tools_for_lane = all_tools()
 
@@ -749,18 +800,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         step_grammar = _executor_grammar(tools_for_lane)
                 else:
                     # Main lane context compaction: protect against context window explosion / VRAM demotion
-                    main_ctx = 32768
-                    if cloud_main:
-                        main_ctx = getattr(cloud_main, "ctx", 32768) or 32768
-                    elif isinstance(state.profile, dict):
-                        main_ctx = int(state.profile.get("context_size") or 32768)
-                        # llama-server divides -c across -np slots unless the KV pool
-                        # is unified (then --kv-unified-per-slot, if set, is the cap)
-                        n_slots = int(state.profile.get("n_slots") or 1)
-                        if state.profile.get("kv_unified"):
-                            main_ctx = per_slot_cap(state.profile) or main_ctx
-                        elif n_slots > 1:
-                            main_ctx //= n_slots
+                    main_ctx = common.main_ctx_tokens(cloud_main)
                     pre_tokens = estimate_prompt_tokens(msgs)
                     budget = int(main_ctx * 0.7)
                     if pre_tokens > budget:
@@ -951,22 +991,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         return
                     val_text, was_synth, note = validate_and_finalize_response(
                         last_query, final_content, final_reasoning, actions_taken)
-
-                    # Ensure any file written or created during the agent session has a [DOWNLOAD: ...] badge
-                    created_files = []
-                    for act in actions_taken:
-                        if act.get("name") in ("write_file", "edit_file") and act.get("ok"):
-                            a_args = act.get("args") or {}
-                            f_path = a_args.get("path") or a_args.get("file") or a_args.get("filename")
-                            if f_path:
-                                c_name = Path(f_path).name
-                                if c_name not in created_files:
-                                    created_files.append(c_name)
-
-                    dl_badges = [f"[DOWNLOAD: {cf}]" for cf in created_files if f"[DOWNLOAD: {cf}]" not in val_text and f"download?path={cf}" not in val_text.lower()]
-                    if dl_badges:
-                        val_text = val_text.rstrip() + "\n\n" + "\n".join(dl_badges)
-                        was_synth = True
+                    val_text, was_synth = _strip_download_markers(val_text, was_synth)
 
                     if was_synth and val_text != final_content:
                         _red.reset()
@@ -1085,7 +1110,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     result = await run_tool(name, args)
                     await fire_hook("after_tool", name, args, result)
                     ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
-                    yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': name, 'ok': ok, 'result': result})}\n\n"
+                    yield f"event: tool_result\ndata: {json.dumps(_with_diff({'id': tc_id, 'name': name, 'ok': ok, 'result': result}, args))}\n\n"
                     actions_taken.append({"name": name, "args": args, "ok": ok, "result": result})
                     msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                     # structured plan state → UI checklist
@@ -1119,22 +1144,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 return
             val_text, was_synth, note = validate_and_finalize_response(
                 last_query, final_content, final_reasoning, actions_taken)
-            created_files = []
-            for act in actions_taken:
-                if act.get("name") in ("write_file", "edit_file") and act.get("ok"):
-                    a_args = act.get("args") or {}
-                    f_path = a_args.get("path") or a_args.get("file") or a_args.get("filename")
-                    if f_path:
-                        c_name = Path(f_path).name
-                        if c_name not in created_files:
-                            created_files.append(c_name)
+            val_text, was_synth = _strip_download_markers(val_text, was_synth)
 
-            dl_badges = [f"[DOWNLOAD: {cf}]" for cf in created_files if f"[DOWNLOAD: {cf}]" not in val_text and f"download?path={cf}" not in val_text.lower()]
-            if dl_badges:
-                val_text = val_text.rstrip() + "\n\n" + "\n".join(dl_badges)
-                was_synth = True
-
-            if was_synth or not final_content.strip():
+            if not final_content.strip():
+                yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
+            elif was_synth and val_text != final_content:
+                yield "event: delta_reset\ndata: {}\n\n"
                 yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
             yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
             plan_note = "max steps reached"
@@ -1171,15 +1186,10 @@ async def agent_project_instructions(user: Principal = Depends(get_current_user)
 
 @router.get("/agent/workspace")
 async def agent_workspace():
-    ws = active_workspace()
-    files = []
-    for f in ws.rglob("*"):
-        if f.is_file():
-            files.append({
-                "path": str(f.relative_to(ws)),
-                "size": f.stat().st_size,
-            })
-    files.sort(key=lambda x: x["path"])
+    # flat file list for @-tagging, read from the user's machine via the companion
+    uid, ws = require_device_workspace()
+    data = await companion_bridge.call(uid, "fs.list", {"root": str(ws), "pattern": "**/*"})
+    files = [{"path": f} for f in sorted(data.get("files") or []) if isinstance(f, str)]
     return {"root": str(ws), "project": get_active_project(), "files": files[:500]}
 
 
@@ -1187,13 +1197,11 @@ async def agent_workspace():
 async def agent_upload(files: list[UploadFile] = FastAPIFile(...), space: Optional[str] = None):
     """Upload one or more document files.
     
-    If space == 'common' or no project is active (chat mode), saves to common space.
-    If space == 'workspace' or a project is active, saves to the active project workspace.
+    Always saved to the server-side common upload space. The project workspace
+    lives on the user's machine; writing active_workspace() here would write to
+    that path on the SERVER's disk. (`space` is accepted for compatibility.)
     """
-    if space == "common" or (not get_active_project() and space != "workspace"):
-        target_dir = common_workspace()
-    else:
-        target_dir = active_workspace()
+    target_dir = common_workspace()
     target_dir.mkdir(parents=True, exist_ok=True)
 
     results = []
@@ -1252,6 +1260,9 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
         except Exception:
             pass
 
+    # Only the server-side common space is served from local disk. Workspace
+    # paths belong to the user's machine -- resolving them locally would serve
+    # the server's own file at that path.
     if p is None and has_uuid:
         try:
             cand = _common_resolve(path)
@@ -1259,20 +1270,13 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
                 p = cand
         except Exception:
             pass
-        if p is None:
-            try:
-                cand = _ws_resolve(path)
-                if cand.is_file():
-                    p = cand
-            except Exception:
-                pass
 
     # 2. Candidate match: if unversioned or not found, find all candidate revisions
     # and sort newest-first by modification time (so freshly generated files always take precedence over stale ones)
     if p is None or not p.is_file():
         try:
             cand_matches = []
-            for ws_dir in (common_workspace(), active_workspace()):
+            for ws_dir in (common_workspace(),):
                 if ws_dir and ws_dir.is_dir():
                     if suffix:
                         cand_matches.extend([f for f in ws_dir.glob(f"{clean_stem}-*{suffix}") if f.is_file()])
@@ -1341,11 +1345,9 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
                         cand_code = m.group(1).strip()
                 if not cand_code:
                     title_clean = clean_stem.replace('_', ' ').replace('-', ' ').title()
-                    # (no invented placeholder rows for CSV: a missing file stays a 404
-                    # rather than being replaced by fabricated data)
-                    if ext in {'html', 'htm'}:
-                        cand_code = generate_fresh_dashboard_html(title_clean, c_text.split('[DOWNLOAD:')[0].strip())
-                    elif ext == 'md':
+                    # (no invented placeholder rows for CSV or canned HTML dashboards:
+                    # a missing file stays a 404 rather than being replaced by fabricated data)
+                    if ext == 'md':
                         cand_code = f"# {title_clean}\n\n{c_text}"
 
                 if cand_code:
@@ -1371,8 +1373,8 @@ async def agent_download(path: str, space: Optional[str] = None):
     """Serve a file as a download attachment.
 
     Query param:  ?path=relative/path/to/file.xlsx
-    Checks common space first (for chat mode), then active workspace (for project tasks).
-    Sandbox-safe: resolves via _common_resolve and _ws_resolve to prevent path traversal.
+    Serves only the server-side common space (generated files and uploads);
+    project workspaces live on users' machines. Resolved via _common_resolve.
     """
     p = _resolve_requested_file(path, space)
     if p is None or not p.is_file():
@@ -1429,60 +1431,21 @@ async def agent_raw(path: str, space: Optional[str] = None):
 async def _ws_tree_scan(rel_dir: str) -> list:
     """One level of the workspace tree from the agent tools module."""
     ignored = {".git", "__pycache__", "node_modules", ".venv", "venv", "_agent_run.py"}
-    ws = active_workspace().resolve()
-
-    uid = _remote_uid()
-    if uid is not None:
-        # workspace lives on the user's own machine -- ask the companion.
-        # Use the project's registered workspace_dir directly (the path the user
-        # picked on their local machine), NOT the server-resolved active_workspace()
-        # which may be a server-local fallback path (e.g. C:\AI\workspace\user_1\proj)
-        # that happens to exist on the client too but points to the wrong place.
-        from core.request_context import get_current_device_id
-        proj = get_active_project(uid, get_current_device_id())
-        proj_dir = project_workspace_dir(proj, uid) if proj else None
-        root_for_companion = str(proj_dir) if proj_dir else str(ws)
-        data = await companion_bridge.call(uid, "fs.tree", {"root": root_for_companion, "rel": rel_dir or ""})
-        out = []
-        for n in (data.get("nodes") or []):
-            if n.get("name") in ignored:
-                continue
-            rel = n.get("path", "")
-            if n.get("dir"):
-                out.append({"name": n["name"], "path": rel, "dir": True, "children": None})
-            else:
-                changed = any(k.replace("\\", "/").endswith("/" + rel) or
-                              k.replace("\\", "/") == rel for k in _ws_changes.keys())
-                out.append({"name": n["name"], "path": rel, "dir": False,
-                            "size": n.get("size", 0), "changed": changed})
-        return out
-
-    base = ws if not rel_dir else (ws / rel_dir).resolve()
-    try:
-        base.relative_to(ws)
-    except ValueError:
-        return []
+    # the workspace lives on the user's own machine -- always ask the companion
+    uid, ws = require_device_workspace()
+    data = await companion_bridge.call(uid, "fs.tree", {"root": str(ws), "rel": rel_dir or ""})
+    changed_keys = [k.replace("\\", "/") for k in (_ws_changes.get(uid) or {})]
     out = []
-    try:
-        entries = sorted(os.scandir(str(base)), key=lambda e: (not e.is_dir(), e.name.lower()))
-    except (PermissionError, OSError):
-        return out
-    for e in entries:
-        if e.name in ignored:
+    for n in (data.get("nodes") or []):
+        if n.get("name") in ignored:
             continue
-        rel = str(Path(e.path).relative_to(ws)).replace("\\", "/")
-        if e.is_dir(follow_symlinks=False):
-            out.append({"name": e.name, "path": rel, "dir": True,
-                       "children": None})   # loaded lazily on expand
+        rel = n.get("path", "")
+        if n.get("dir"):
+            out.append({"name": n["name"], "path": rel, "dir": True, "children": None})
         else:
-            try:
-                sz = e.stat().st_size
-            except OSError:
-                sz = 0
-            changed = any(k.replace("\\", "/").endswith("/" + rel) or
-                          k.replace("\\", "/") == rel for k in _ws_changes.keys())
-            out.append({"name": e.name, "path": rel, "dir": False,
-                        "size": sz, "changed": changed})
+            changed = any(k.endswith("/" + rel) or k == rel for k in changed_keys)
+            out.append({"name": n["name"], "path": rel, "dir": False,
+                        "size": n.get("size", 0), "changed": changed})
     return out
 
 
@@ -1518,7 +1481,7 @@ async def agent_ws_tree(path: str = "", user: Principal = Depends(get_current_us
 
     ws = active_workspace()
     changes = []
-    for k, rec in _ws_changes.items():
+    for k, rec in (_ws_changes.get(user.id) or {}).items():
         try:
             rel = str(Path(k).relative_to(ws)).replace("\\", "/")
         except ValueError:
@@ -1528,8 +1491,11 @@ async def agent_ws_tree(path: str = "", user: Principal = Depends(get_current_us
             "status": "created" if rec.get("before") is None else "modified",
         })
     changes.sort(key=lambda x: x["path"])
-    return {"root": ws.name, "project": curr_proj,
-            "nodes": await _ws_tree_scan(path), "changes": changes}
+    try:
+        nodes = await _ws_tree_scan(path)
+    except (ConnectionError, TimeoutError, RuntimeError) as e:
+        return JSONResponse({"error": f"Companion app: {e}"}, status_code=502)
+    return {"root": ws.name, "project": curr_proj, "nodes": nodes, "changes": changes}
 
 
 @router.get("/agent/ws/file")
@@ -1538,38 +1504,22 @@ async def agent_ws_file(path: str, user: Principal = Depends(get_current_user)):
     if not curr_proj or curr_proj in ("scratch", "default"):
         return JSONResponse({"error": "No project selected"}, status_code=400)
 
+    # read from the user's machine via the companion (never the server's disk)
     uid = _remote_uid()
-    if uid is not None:
-        p = _ws_resolve(path)
-        data = await companion_bridge.call(uid, "fs.read", {"path": str(p)})
-        content = data.get("content")
-        if content is None:
-            return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
-        rec = _ws_changes.get(str(p), {})
-        before = rec.get("before")
-        changed = bool(rec) and rec.get("after") is not None
-        resp = {
-            "path": path, "size": len(content.encode("utf-8", errors="replace")),
-            "content": content, "changed": changed,
-            "status": ("created" if before is None else "modified") if changed else "unchanged",
-        }
-        if changed and before is not None:
-            resp["diff"] = _ws_diff_lines(before, content)
-        elif changed and before is None:
-            resp["diff"] = [{"t": "+", "s": ln} for ln in content.splitlines()]
-        return resp
-
     try:
         p = _ws_resolve(path)
+    except WorkspaceAccessDenied:
+        raise
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
-    if not p.is_file():
-        return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
     try:
-        content = p.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-    rec = _ws_changes.get(str(p), {})
+        data = await companion_bridge.call(uid, "fs.read", {"path": str(p)})
+    except (ConnectionError, TimeoutError, RuntimeError) as e:
+        return JSONResponse({"error": f"Companion app: {e}"}, status_code=502)
+    content = data.get("content")
+    if content is None:
+        return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+    rec = (_ws_changes.get(uid) or {}).get(str(p), {})
     before = rec.get("before")
     changed = bool(rec) and rec.get("after") is not None
     resp = {

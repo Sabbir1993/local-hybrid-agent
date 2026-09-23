@@ -212,6 +212,20 @@ function cmdMenuRender() {
     </div>`;
   }).join('');
   m.style.display = 'block';
+  // keep the keyboard selection visible when arrowing past the menu's max-height
+  const selEl = m.querySelector('.cmd-item.sel');
+  if (selEl) {
+    if (cmdMenu.sel === 0) {
+      m.scrollTop = 0;   // also reveal the first group label
+    } else if (selEl.offsetTop < m.scrollTop) {
+      // scrolling up onto a group's first item: show its label too
+      const prev = selEl.previousElementSibling;
+      const top = prev && prev.classList.contains('cmd-group-label') ? prev.offsetTop : selEl.offsetTop;
+      m.scrollTop = top;
+    } else if (selEl.offsetTop + selEl.offsetHeight > m.scrollTop + m.clientHeight) {
+      m.scrollTop = selEl.offsetTop + selEl.offsetHeight - m.clientHeight;
+    }
+  }
   m.querySelectorAll('.cmd-item').forEach(el => {
     el.onmousedown = (e) => {
       e.preventDefault();
@@ -235,7 +249,8 @@ async function cmdMenuOpen(kind, query) {
       cmdMenu.items = (d.files || [])
         .filter(f => !q || f.path.toLowerCase().includes(q))
         .slice(0, 12)
-        .map(f => ({ icon: wsFileIcon(f.path), name: f.path, desc: `${(f.size / 1024).toFixed(1)} KB`, value: f.path }));
+        .map(f => ({ icon: wsFileIcon(f.path), name: f.path,
+                     desc: typeof f.size === 'number' ? `${(f.size / 1024).toFixed(1)} KB` : '', value: f.path }));
     } catch (e) { cmdMenuClose(); return; }
   } else if (kind === 'slash') {
     // /plan and /build are agent-mode only; /compact works in both (agent mode
@@ -435,6 +450,8 @@ function setAppMode(isAgent, isUserSwitch = false) {
   if (typeof _updateCloudModelSelVisibility === 'function') _updateCloudModelSelVisibility();
   const webToggle = $('btn-web-toggle');
   if (webToggle) webToggle.style.display = agentMode ? 'none' : 'flex';
+  const deepToggle = $('btn-deep-toggle');
+  if (deepToggle) deepToggle.style.display = agentMode ? 'none' : 'flex';
   if (agentMode && window._setPlanMode) window._setPlanMode(planMode);   // refresh placeholder
   // workspace side panel needs agent mode + an active project
   if (!agentMode && wsPanelOpen) setWsPanel(false);

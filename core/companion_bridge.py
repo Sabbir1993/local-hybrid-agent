@@ -29,11 +29,36 @@ _pending: dict[int, dict[str, asyncio.Future]] = {}
 # user_id -> {"hostname": str, "connected_at": float}
 _meta: dict[int, dict] = {}
 
+# user_id -> time the last companion socket closed (for the reconnect grace window)
+_last_seen: dict[int, float] = {}
+
 DEFAULT_TIMEOUT_S = 60
+RECONNECT_GRACE_S = 10    # a companion that dropped this recently is expected back
+CONNECT_WAIT_S = 5        # how long call() waits for a (re)connection before failing
+# ops that are safe to repeat after a dropped connection; writes and shell are not
+READ_ONLY_OPS = {"fs.read", "fs.list", "fs.grep", "fs.tree", "fs.browse"}
 
 
 def is_connected(user_id: Optional[int]) -> bool:
     return user_id is not None and user_id in _connections
+
+
+def is_available(user_id: Optional[int], grace: float = RECONNECT_GRACE_S) -> bool:
+    """Connected, or disconnected so recently that a reconnect is expected --
+    lets a tool ride out the companion's brief reconnect instead of failing."""
+    if is_connected(user_id):
+        return True
+    t = _last_seen.get(user_id) if user_id is not None else None
+    return t is not None and time.time() - t < grace
+
+
+async def _wait_connected(user_id: int, wait_s: float) -> Optional[WebSocket]:
+    deadline = time.monotonic() + wait_s
+    while True:
+        ws = _connections.get(user_id)
+        if ws is not None or time.monotonic() >= deadline:
+            return ws
+        await asyncio.sleep(0.25)
 
 
 def connection_info(user_id: Optional[int]) -> Optional[dict]:
@@ -45,12 +70,24 @@ def connection_info(user_id: Optional[int]) -> Optional[dict]:
 async def call(user_id: int, op: str, params: dict, timeout: float = DEFAULT_TIMEOUT_S) -> dict:
     """Send an RPC frame to the user's companion and await its result frame.
 
-    Raises ConnectionError if no companion is connected, or the frame's own
-    "error" on failure (caller renders that as the tool's error string).
+    Waits briefly for a reconnecting companion, and repeats a read-only op once
+    if the connection drops mid-call. Raises ConnectionError if no companion
+    comes back, or the frame's own "error" on failure (caller renders that as
+    the tool's error string).
     """
-    ws = _connections.get(user_id)
+    try:
+        return await _call_once(user_id, op, params, timeout)
+    except ConnectionError:
+        if op not in READ_ONLY_OPS:
+            raise
+        return await _call_once(user_id, op, params, timeout)
+
+
+async def _call_once(user_id: int, op: str, params: dict, timeout: float) -> dict:
+    ws = await _wait_connected(user_id, CONNECT_WAIT_S)
     if ws is None:
-        raise ConnectionError("no companion connected for this user")
+        raise ConnectionError("companion connection was interrupted and did not come back - "
+                              "check the A770 Companion app on your machine, then retry the same call")
 
     req_id = uuid.uuid4().hex[:16]
     fut: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -97,6 +134,12 @@ async def companion_socket(ws: WebSocket):
             await old.close(code=4409)
         except Exception:
             pass
+        # calls in flight were sent on the old socket; the new one will never
+        # answer them -- fail them now (read-only ops get retried by call())
+        for fut in _pending.pop(user_id, {}).values():
+            if not fut.done():
+                fut.set_exception(ConnectionError(
+                    "companion connection was interrupted - retry the same call"))
 
     _connections[user_id] = ws
     _pending.setdefault(user_id, {})
@@ -127,6 +170,8 @@ async def companion_socket(ws: WebSocket):
         if _connections.get(user_id) is ws:
             _connections.pop(user_id, None)
             _meta.pop(user_id, None)
+            _last_seen[user_id] = time.time()
             for fut in _pending.pop(user_id, {}).values():
                 if not fut.done():
-                    fut.set_exception(ConnectionError("companion disconnected"))
+                    fut.set_exception(ConnectionError(
+                        "companion connection was interrupted - retry the same call"))

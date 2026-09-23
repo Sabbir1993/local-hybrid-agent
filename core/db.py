@@ -2,7 +2,7 @@ import json
 import sqlite3
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Optional
 
 from .config import USAGE_DB_FILE, PROJECTS_DB_FILE
@@ -437,7 +437,24 @@ def db_add_project_allow_pattern(name_or_id, pattern: str) -> list:
     return pats
 
 
-def db_create_project(name: str, workspace_dir: str = None, workspace_root: Path = None,
+def _client_workspace_path(workspace_dir: Optional[str]) -> str:
+    """Validate a project folder path that lives on the USER's machine.
+
+    Stored as text only: no mkdir/resolve/exists on the server, which would
+    create or probe that path on the server's own disk. Accepts absolute
+    Windows (C:\\..., \\\\server\\share) or POSIX (/home/...) paths.
+    """
+    raw = (workspace_dir or "").strip()
+    if not raw:
+        raise ValueError("pick a folder on your machine for this project")
+    if not (PureWindowsPath(raw).is_absolute() or PurePosixPath(raw).is_absolute()):
+        raise ValueError("workspace_dir must be an absolute path on your machine")
+    if ".." in PureWindowsPath(raw).parts or ".." in PurePosixPath(raw).parts:
+        raise ValueError("workspace_dir must not contain '..'")
+    return raw
+
+
+def db_create_project(name: str, workspace_dir: str = None,
                        owner_user_id: int = None, device_id: str = "default", device_name: str = "Default Device") -> dict:
     if owner_user_id is None:
         raise ValueError("owner_user_id required")
@@ -446,20 +463,8 @@ def db_create_project(name: str, workspace_dir: str = None, workspace_root: Path
         raise ValueError("project name required")
     if any(c in name for c in '<>:"/\\|?*'):
         raise ValueError("project name contains invalid path characters")
-    ws = None
-    if workspace_dir and workspace_dir.strip():
-        p = Path(workspace_dir.strip()).expanduser()
-        if not p.is_absolute():
-            raise ValueError("workspace_dir must be an absolute path")
-        p.mkdir(parents=True, exist_ok=True)
-        ws = str(p.resolve())
-    elif workspace_root:
-        # No explicit path chosen -- default to a per-user subtree on the
-        # server's storage, keyed by the logged-in user's own id, so two
-        # users' same-named projects never collide or share files on disk.
-        p = workspace_root / f"user_{owner_user_id}" / name
-        p.mkdir(parents=True, exist_ok=True)
-        ws = str(p.resolve())
+    # no server-side sandbox fallback: every project is a folder on the user's machine
+    ws = _client_workspace_path(workspace_dir)
     now = time.time()
     try:
         cur = _projects_db.execute(
@@ -476,14 +481,8 @@ def db_update_project_workspace(pid: int, workspace_dir: str, owner_user_id: int
                                 device_id: Optional[str] = None, device_name: Optional[str] = None) -> dict:
     if db_project_owner(pid) != owner_user_id:
         raise PermissionError("not your project")
-    ws = None
-    if workspace_dir and workspace_dir.strip():
-        p = Path(workspace_dir.strip()).expanduser()
-        if not p.is_absolute():
-            raise ValueError("workspace_dir must be an absolute path")
-        p.mkdir(parents=True, exist_ok=True)
-        ws = str(p.resolve())
-    
+    ws = _client_workspace_path(workspace_dir)
+
     updates = ["workspace_dir = ?"]
     params = [ws]
     if device_id:

@@ -348,7 +348,7 @@ def register_web_tools() -> None:
         "web_search", tool_web_search,
         {"type": "function", "function": {
             "name": "web_search",
-            "description": "Search the web and return top result titles, URLs and snippets.",
+            "description": "Search the web and return top result titles, URLs and snippets. For recent or current data, include the current year (from the CURRENT DATE in the system prompt) in the query - not your training-cutoff year.",
             "parameters": {"type": "object",
                            "properties": {"query": {"type": "string", "description": "search query"}},
                            "required": ["query"]},

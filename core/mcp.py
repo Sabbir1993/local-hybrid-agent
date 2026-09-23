@@ -6,18 +6,26 @@ Config (config/app.json -> capabilities.mcp_servers):
       "transport": "stdio" | "http",
       "command": "python", "args": ["-m", "some_mcp_server"],   # stdio
       "env": {"KEY": "val"},
-      "url": "http://127.0.0.1:9000/mcp"                          # http
+      "secret_env_keys": ["API_KEY"],     # values live in the OS keychain (core/credentials.py)
+      "url": "http://127.0.0.1:9000/mcp",                         # http
+      "disabled": false, "init_timeout": 120
     }
   }
+
+A top-level Claude-Desktop style "mcpServers" block in app.json is merged in too
+(capabilities.mcp_servers wins on a name clash).
 
 Bridged tools appear as mcp__<server>__<tool> in the registry.
 """
 
 import asyncio
+import collections
 import json
 import os
+import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -30,6 +38,7 @@ from .agent_tools import MAX_TOOL_OUTPUT
 MCP_PROTOCOL_VERSION = "2025-03-26"
 RPC_TIMEOUT_S = 30
 INIT_TIMEOUT_S = 20
+NPX_INIT_TIMEOUT_S = 120    # first npx run downloads the package / may wait on an OAuth browser login
 
 
 class McpServer:
@@ -49,21 +58,54 @@ class McpServer:
         self._rpc_id = 0
         self._lock = asyncio.Lock()
         self._session_header: Optional[str] = None   # streamable-http session id
+        self._stderr_tail: collections.deque = collections.deque(maxlen=50)
 
     # ---------------- stdio plumbing ----------------
 
     def _spawn_stdio(self) -> None:
-        cmd = [str(self.cfg["command"])] + [str(a) for a in (self.cfg.get("args") or [])]
+        command = str(self.cfg["command"])
+        # Windows: npx/uvx are .cmd shims that Popen can't find without a shell; which() applies PATHEXT
+        resolved = shutil.which(command)
+        if not resolved:
+            raise RuntimeError(f"command '{command}' not found on PATH")
+        cmd = [resolved] + [str(a) for a in (self.cfg.get("args") or [])]
         env = None
         if self.cfg.get("env"):
             env = {**os.environ, **{str(k): str(v) for k, v in self.cfg["env"].items()}}
         if self.cfg.get("credential_ref") == "keyring":
             env = self._inject_keyring_token(env)
-        # Windows: pipes without shell; text mode utf-8
+        if self.cfg.get("secret_env_keys"):
+            env = self._inject_secret_env(env)
+        self._stderr_tail.clear()
         self._proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, encoding="utf-8",
-            errors="replace", env=env, bufsize=1)
+            errors="replace", env=env, bufsize=1,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        # drain stderr, else a chatty server (mcp-remote) fills the pipe and blocks
+        threading.Thread(target=self._drain_stderr, args=(self._proc,), daemon=True).start()
+
+    def _drain_stderr(self, proc: subprocess.Popen) -> None:
+        try:
+            for line in proc.stderr:
+                line = line.rstrip()
+                if line:
+                    self._stderr_tail.append(line[:300])
+        except Exception:
+            pass
+
+    def _stderr_summary(self, n: int = 6) -> str:
+        return " | ".join(list(self._stderr_tail)[-n:])
+
+    def _inject_secret_env(self, env: Optional[dict]) -> Optional[dict]:
+        """Secret env vars added via the Settings UI: values in the OS keychain, only key names in app.json."""
+        from . import credentials
+        base = env if env is not None else dict(os.environ)
+        for key in self.cfg.get("secret_env_keys") or []:
+            val = credentials.get_token(secret_env_ref(self.name, key))
+            if val:
+                base[str(key)] = val
+        return base
 
     def _inject_keyring_token(self, env: Optional[dict]) -> Optional[dict]:
         """For servers authorized via the connector catalog's device-flow, pull the token
@@ -81,7 +123,8 @@ class McpServer:
         base[env_key] = token
         return base
 
-    async def _stdio_rpc(self, method: str, params: Optional[dict], notify: bool = False) -> Optional[dict]:
+    async def _stdio_rpc(self, method: str, params: Optional[dict], notify: bool = False,
+                         timeout: float = RPC_TIMEOUT_S) -> Optional[dict]:
         """One JSON-RPC round-trip over stdio (newline-delimited JSON)."""
         assert self._proc and self._proc.stdin and self._proc.stdout
         self._rpc_id += 1
@@ -97,9 +140,14 @@ class McpServer:
             return None
         # read lines until our id comes back (skip notifications)
         loop = asyncio.get_event_loop()
-        deadline = time.time() + RPC_TIMEOUT_S
+        deadline = time.time() + timeout
         while time.time() < deadline:
-            line = await loop.run_in_executor(None, self._proc.stdout.readline)
+            try:
+                line = await asyncio.wait_for(
+                    loop.run_in_executor(None, self._proc.stdout.readline),
+                    timeout=max(0.1, deadline - time.time()))
+            except asyncio.TimeoutError:
+                break
             if not line:
                 raise RuntimeError(f"mcp server '{self.name}' closed stdout")
             line = line.strip()
@@ -117,7 +165,8 @@ class McpServer:
 
     # ---------------- streamable-http plumbing ----------------
 
-    async def _http_rpc(self, method: str, params: Optional[dict], notify: bool = False) -> Optional[dict]:
+    async def _http_rpc(self, method: str, params: Optional[dict], notify: bool = False,
+                        timeout: float = RPC_TIMEOUT_S) -> Optional[dict]:
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=RPC_TIMEOUT_S)
         self._rpc_id += 1
@@ -133,7 +182,7 @@ class McpServer:
         }
         if self._session_header:
             headers["Mcp-Session-Id"] = self._session_header
-        r = await self._http.post(self.cfg["url"], json=msg, headers=headers)
+        r = await self._http.post(self.cfg["url"], json=msg, headers=headers, timeout=timeout)
         if r.status_code >= 400:
             raise RuntimeError(f"mcp http {r.status_code}: {r.text[:200]}")
         sid = r.headers.get("mcp-session-id")
@@ -163,10 +212,17 @@ class McpServer:
 
     # ---------------- shared lifecycle ----------------
 
-    async def _rpc(self, method: str, params: Optional[dict] = None, notify: bool = False) -> Optional[dict]:
+    async def _rpc(self, method: str, params: Optional[dict] = None, notify: bool = False,
+                   timeout: float = RPC_TIMEOUT_S) -> Optional[dict]:
         if self.transport == "stdio":
-            return await self._stdio_rpc(method, params, notify)
-        return await self._http_rpc(method, params, notify)
+            return await self._stdio_rpc(method, params, notify, timeout)
+        return await self._http_rpc(method, params, notify, timeout)
+
+    def _init_timeout(self) -> float:
+        if self.cfg.get("init_timeout"):
+            return float(self.cfg["init_timeout"])
+        cmd = Path(str(self.cfg.get("command") or "")).stem.lower()
+        return NPX_INIT_TIMEOUT_S if cmd in ("npx", "uvx") else INIT_TIMEOUT_S
 
     async def connect(self) -> list:
         """initialize handshake + tools/list. Returns tool list; sets .status."""
@@ -182,7 +238,7 @@ class McpServer:
                     "protocolVersion": MCP_PROTOCOL_VERSION,
                     "capabilities": {},
                     "clientInfo": {"name": "a770-runtime", "version": "1.0"},
-                })
+                }, timeout=self._init_timeout())
                 if not result:
                     raise RuntimeError("no initialize result")
                 await self._rpc("notifications/initialized", notify=True)
@@ -193,7 +249,10 @@ class McpServer:
                 return self.tools
             except Exception as e:
                 self.status = "error"
-                self.error = str(e)
+                self.error = str(e) or type(e).__name__
+                tail = self._stderr_summary()
+                if tail:
+                    self.error += f" - stderr: {tail}"
                 self._cleanup()
                 print(f"[mcp] server '{self.name}' failed: {e}", file=sys.stderr)
                 return []
@@ -216,11 +275,18 @@ class McpServer:
 
     def _cleanup(self) -> None:
         if self._proc:
+            proc, self._proc = self._proc, None
             try:
-                self._proc.kill()
+                proc.kill()
+                proc.wait(timeout=2)
             except Exception:
                 pass
-            self._proc = None
+            for pipe in (proc.stdin, proc.stdout, proc.stderr):
+                try:
+                    if pipe:
+                        pipe.close()
+                except Exception:
+                    pass
         if self._http:
             try:
                 asyncio.get_event_loop().create_task(self._http.aclose())
@@ -268,7 +334,25 @@ def _stringify_content(result) -> str:
         out = json.dumps(result)
     if len(out) > MAX_TOOL_OUTPUT:
         out = out[:MAX_TOOL_OUTPUT] + f"\n... (truncated, {len(out)} chars total)"
+    # PCI-DSS: external tool output (e.g. payment-gateway lookups) must not put raw PANs in model context
+    from . import pan
+    out, _ = pan.mask_pans(out)
     return out or "(empty result)"
+
+
+def secret_env_ref(server_name: str, key: str) -> str:
+    """Keychain id for a secret env var of a UI-added server."""
+    return f"{server_name}:env:{key}"
+
+
+def configured_servers(app_config: dict) -> dict:
+    """capabilities.mcp_servers merged over a top-level Claude-Desktop style mcpServers block."""
+    merged = {}
+    for name, scfg in (app_config.get("mcpServers") or {}).items():
+        if isinstance(scfg, dict):
+            merged[name] = scfg
+    merged.update(app_config.get("capabilities", {}).get("mcp_servers", {}) or {})
+    return merged
 
 
 # ---------------- manager ----------------
@@ -301,24 +385,43 @@ async def connect_all_mcp() -> dict:
     cfg = APP_CONFIG.get("capabilities", {})
     if not cfg.get("mcp", False):
         return {}
-    servers_cfg = cfg.get("mcp_servers", {}) or {}
-    results = {}
-    for name, scfg in servers_cfg.items():
-        srv = McpServer(name, scfg)
-        _servers[name] = srv
-        tools = await srv.connect()
-        for t in tools:
-            tname = t.get("name")
-            if not tname:
-                continue
-            registry.register(
-                f"mcp__{name}__{tname}",
-                _tool_bridge(srv, tname),
-                _bridge_schema(name, t),
-                source=f"mcp:{name}",
-                meta={"label": f"{name}/{tname}"}, replace=True)
-        results[name] = srv.status_info()
-    return results
+    # concurrently: one slow npx/mcp-remote start must not hold up the others
+    servers = configured_servers(APP_CONFIG)
+    infos = await asyncio.gather(*(connect_one(n, s) for n, s in servers.items()))
+    return {info["name"]: info for info in infos}
+
+
+def ready_tool_schemas() -> list:
+    """Schemas of every tool on a connected (ready) MCP server - for Chat mode's tool list."""
+    out = []
+    for t in registry.list():
+        if t.source.startswith("mcp:") and is_ready(t.source[4:]):
+            out.append(t.schema)
+    return out
+
+
+def chat_prompt() -> str:
+    """Tells the model which MCP servers are connected and what they cover, so a short
+    server name like 'isms' isn't guessed from general knowledge (e.g. as an ISO 27001 ISMS)."""
+    lines = []
+    for s in _servers.values():
+        if s.status != "ready" or not s.tools:
+            continue
+        descs = "; ".join((t.get("description") or t.get("name", ""))[:110] for t in s.tools[:3])
+        names = ", ".join(f"`mcp__{s.name}__{t.get('name')}`" for t in s.tools[:12])
+        lines.append(f"- `{s.name}`: {descs}\n  tools: {names}")
+    if not lines:
+        return ""
+    return (
+        "CONNECTED MCP SERVERS (authoritative, organization-provided tools):\n"
+        + "\n".join(lines) + "\n\n"
+        "RULES:\n"
+        "1. When the user mentions one of these server names or the product/API it covers, it refers to THAT "
+        "product - never reinterpret the name from general knowledge.\n"
+        "2. For such questions call the server's tools FIRST (listing/spec/checklist/ask tools) and base the "
+        "answer on their results instead of answering from memory or a web search.\n"
+        "3. Never invent endpoints, parameters or credentials; use [PLACEHOLDER] for keys and secrets in code."
+    )
 
 
 def mcp_status() -> list:
@@ -336,9 +439,17 @@ async def connect_one(name: str, cfg: dict) -> dict:
     existing = _servers.pop(name, None)
     if existing:
         existing.stop()
+    registry.unregister_source(f"mcp:{name}")
     srv = McpServer(name, cfg)
     _servers[name] = srv
+    if cfg.get("disabled"):
+        srv.status = "disabled"
+        return srv.status_info()
     tools = await srv.connect()
+    if _servers.get(name) is not srv:
+        # removed or re-saved from the UI while this connect was in flight
+        srv.stop()
+        return srv.status_info()
     for t in tools:
         tname = t.get("name")
         if not tname:

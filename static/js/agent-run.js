@@ -120,7 +120,8 @@ async function runAgentSSE(text) {
         .map(a => ({ name: a.name, path: a.serverPath, preview: a.preview || '', truncated: a.truncated || false }));
       const res = await fetch('/agent/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // device identity selects this machine's project; without it the server refuses the run
+        headers: { 'Content-Type': 'application/json', ...getDeviceHeaders() },
         body: JSON.stringify({
           messages: hist,
           mode: engineMode,
@@ -135,7 +136,7 @@ async function runAgentSSE(text) {
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
-        throw new Error(e.error || ('HTTP ' + res.status));
+        throw new Error(e.message || e.error || ('HTTP ' + res.status));
       }
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -196,6 +197,15 @@ async function runAgentSSE(text) {
           }
           else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd);
           else if (ev === 'delta') {
+            if (L._resetPrev != null) {
+              // after a delta_reset: keep the earlier text as reasoning only when the
+              // replacement is genuinely different (a cleaned-up copy would duplicate it)
+              const prev = L._resetPrev;
+              L._resetPrev = null;
+              if (!(d.text || '').includes(prev.slice(0, 160))) {
+                L.reasoning = L.reasoning ? L.reasoning + '\n\n' + prev : prev;
+              }
+            }
             L.content += (d.text || '');
             L.statusText = '';
           }
@@ -204,11 +214,9 @@ async function runAgentSSE(text) {
             L.statusText = '';
           }
           else if (ev === 'delta_reset') {
-            // If replacing content with synthesized final answer, preserve any prior streamed text as reasoning so it doesn't vanish
-            if (L.content && L.content.trim()) {
-              if (!L.reasoning) L.reasoning = L.content.trim();
-              else L.reasoning += '\n\n' + L.content.trim();
-            }
+            // Replacing content with a synthesized final answer: decide on the next
+            // delta whether the prior streamed text is worth keeping as reasoning
+            if (L.content && L.content.trim()) L._resetPrev = L.content.trim();
             L.content = '';
           }
           else if (ev === 'validated') {
@@ -227,6 +235,13 @@ async function runAgentSSE(text) {
             const pi = L.acts.findIndex(a => a.type === 'plan');
             if (pi >= 0) L.acts[pi] = planAct; else L.acts.push(planAct);
           }
+          else if (ev === 'kb_blocked') {
+            // Data residency: KB withheld from the cloud lane; show it as a failed KB step
+            if (!L.acts) L.acts = [];
+            L.acts.push({ type: 'tool_call', id: 'kb_blocked', name: 'search_knowledge_base', args: {} });
+            L.acts.push({ type: 'tool_result', id: 'kb_blocked', name: 'search_knowledge_base', ok: false, result: d.message || '' });
+            if (typeof toast === 'function') toast('🔒 Company knowledge base is local-only — start a local model to use it');
+          }
           else if (ev === 'guard') {
             // Output sanitizer redacted part of the response
             if (!L.acts) L.acts = [];
@@ -241,6 +256,11 @@ async function runAgentSSE(text) {
         }
       }
       const targetAssistant = getJobAssistant();
+      if (targetAssistant._resetPrev != null) {
+        // delta_reset with no replacement text: keep what was streamed
+        if (!targetAssistant.content) targetAssistant.content = targetAssistant._resetPrev;
+        targetAssistant._resetPrev = null;
+      }
       if (!targetAssistant.content && targetAssistant.acts && targetAssistant.acts.length > 0) {
         targetAssistant.content = 'Task completed. See tool operations above for details.';
       }

@@ -92,8 +92,13 @@ async function pollStatus() {
 }
 
 async function pollGpu() {
+  // don't call an endpoint we know will 403 (each denial is audit-logged)
+  if (window.__perms && !(window.__user && window.__user.is_super_admin)
+      && !window.__perms.has('settings.runtime.view')) return;
   try {
-    const d = await (await fetch('/control/gpu')).json();
+    const r = await fetch('/control/gpu');
+    if (!r.ok) return;
+    const d = await r.json();
     const comp = {};
     (d.compute || []).forEach(c => { comp[c.luid] = (comp[c.luid] || 0) + c.pct; });
     
@@ -186,7 +191,7 @@ function updateContextChip() {
   const pct = Math.min(100, Number(((totalToks / Math.max(1, nCtx)) * 100).toFixed(1)));
   const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
 
-  cChip.textContent = `🧠 ${fmtK(totalToks)} / ${fmtK(nCtx)} (${pct}%)`;
+  cChip.innerHTML = `<svg class="ui-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04Z"/></svg> <span>${fmtK(totalToks)} / ${fmtK(nCtx)} (${pct}%)</span>`;
   cChip.title = `Session Tokens: ${totalToks.toLocaleString()} / ${nCtx.toLocaleString()} tokens used (${pct}%) · Prompt: ${promptToks.toLocaleString()} · Completion: ${compToks.toLocaleString()} · ${ctxMsgs.length} messages`;
 
   if (pct > 85) cChip.style.color = 'var(--red)';

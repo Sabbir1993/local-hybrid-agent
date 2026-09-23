@@ -18,18 +18,20 @@ from core.auth import Principal
 from core.deps import get_current_user
 from core.audit import audit_log
 from core import input_guard
+from core import mcp as mcp_core
 from core import output_guard
 from core.small_model import APP_CONFIG, small_models
 from core import cloud
 from core.state import state
 from core.registry import registry
 from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch, tool_web_search_images
-from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA, generate_fresh_dashboard_html
+from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA
 from core.agent_loop import (
     run_tool,
     safe_parse_and_repair_args,
     _extract_text_tool_calls,
     estimate_prompt_tokens,
+    compact_messages,
 )
 from core.monitor import (
     _monitor_state,
@@ -56,9 +58,56 @@ def _saved_filename(res_str: str, fallback: str) -> str:
     m = re.search(r"\[DOWNLOAD:\s*([^\]]+)\]", res_str or "")
     return m.group(1).strip() if m else fallback
 
+WEB_TOOL_NAMES = ("web_search", "web_fetch", "web_search_images")
+
+# A deliverable request: a creation verb near a file-format / artifact noun.
+_FILE_VERB_RE = r'(fill|write|save|create|generate|make|export|download|share|prepare|build|draft|compile)\w*'
+_FILE_NOUN_RE = (r'(excel|spreadsheet|workbook|csv|\.xlsx|\.xls|\.csv|\.json|\.py|\.html|html|\.txt|\.docx'
+                 r'|\.pptx|\.ppt|\.pdf|pdf|presentation|slides|deck|dashboard|web ?page)\b')
+
+# "Let me compile the HTML now:" - the model announced work it then didn't do.
+_ANNOUNCE_RE = re.compile(
+    r"\b(let me|i will|i'll|i am going to|i'm going to|now i(?:'ll| will)?)\s+(?:now\s+)?"
+    r"(compile|create|generate|write|prepare|build|put together|draft|make|produce)\b",
+    re.IGNORECASE)
+
+
+def wants_file_output(query: str) -> bool:
+    return bool(re.search(_FILE_VERB_RE + r'.{0,40}' + _FILE_NOUN_RE, query or "", re.IGNORECASE)
+                or re.search(_FILE_NOUN_RE + r'.{0,25}' + _FILE_VERB_RE, query or "", re.IGNORECASE))
+
+
+def looks_undelivered(content: str, wants_file: bool, delivered: bool) -> bool:
+    """True when a text-only reply promised a deliverable but contains none."""
+    if delivered:
+        return False
+    c = (content or "").strip()
+    if "```" in c or "<html" in c.lower():
+        return False
+    if wants_file:
+        return True
+    return c.endswith(":") or bool(_ANNOUNCE_RE.search(c[-300:]))
+
+
+def shrink_old_tool_results(msgs: list, budget_tokens: int, keep_last: int = 2, head_chars: int = 800) -> None:
+    """Research loops pile up 6-20 KB web results per call. Once the prompt
+    passes the budget, cut older tool results down to their head (the latest
+    `keep_last` stay whole), then fall back to digest compaction."""
+    if estimate_prompt_tokens(msgs) <= budget_tokens:
+        return
+    tool_idx = [i for i, m in enumerate(msgs) if m.get("role") == "tool"]
+    for i in tool_idx[:-keep_last] if keep_last else tool_idx:
+        c = str(msgs[i].get("content") or "")
+        if len(c) > head_chars:
+            msgs[i]["content"] = c[:head_chars] + f"\n...[{len(c) - head_chars} chars trimmed to fit context]"
+    if estimate_prompt_tokens(msgs) > budget_tokens:
+        msgs[:] = compact_messages(msgs, budget_tokens)
+
+
 class ChatRunRequest(BaseModel):
     messages: list
     web_search: bool = True
+    deep_mode: bool = False
     temperature: float = 0.7
     max_tokens: int = -1
     system_prompt: Optional[str] = None
@@ -121,20 +170,38 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             rt = registry.get(t_name)
             if rt and rt.schema:
                 chat_tools.append(rt.schema)
+    # connected MCP servers (Settings -> Capabilities -> MCP); dispatched via run_tool -> registry
+    mcp_prompt = ""
+    if APP_CONFIG.get("capabilities", {}).get("mcp", False):
+        chat_tools.extend(mcp_core.ready_tool_schemas())
+        mcp_prompt = mcp_core.chat_prompt()
 
-    sys_parts = []
+    sys_parts = [common.current_date_prompt()]
     if req.system_prompt and req.system_prompt.strip():
         sys_parts.append(req.system_prompt.strip())
+    if mcp_prompt:
+        sys_parts.append(mcp_prompt)
 
-    # Organizational knowledge base: permission-scoped routing & retrieval
+    # Organizational knowledge base: permission-scoped routing & retrieval.
+    # Injected only for company-directed queries or strongly matching chunks -
+    # otherwise unrelated KB text gets mixed into general answers. The model
+    # can still call search_knowledge_base explicitly.
     kb_ids = allowed_source_ids_for(user)
     kb_used = False
     kb_hits = []
     kb_prompt_block = ""
-    if kb_ids and last_query.strip():
+    kb_blocked_reason = ""
+    from core.knowledge_router import kb_routing_query
+    kb_query = kb_routing_query(msgs, last_query)
+    if kb_ids and kb_query.strip():
         try:
-            from core.knowledge_router import fetch_company_knowledge
-            kb_hits, kb_prompt_block = await fetch_company_knowledge(last_query, kb_ids, k=6)
+            from core.knowledge_router import fetch_company_knowledge, is_company_or_kb_query
+            kb_hits, kb_prompt_block = await fetch_company_knowledge(kb_query, kb_ids, k=6)
+            if kb_hits:
+                auto_cos = float((APP_CONFIG.get("knowledge") or {}).get("auto_inject_cos", 0.55))
+                top_cos = max(float(h.get("cos") or 0.0) for h in kb_hits)
+                if not (is_company_or_kb_query(kb_query, kb_ids) or top_cos >= auto_cos):
+                    kb_hits, kb_prompt_block = [], ""
             if kb_hits:
                 kb_used = True
                 sys_parts.append(kb_prompt_block)
@@ -147,10 +214,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if cloud_main and kb_local_only():
         if kb_hits:
             target = state.profile_path or state.profile or common.initial_profile_path
+            local_err = "" if target else "no local model profile is configured"
             try:
                 if target:
                     await state.ensure_running(target)
             except Exception as e:
+                local_err = str(e).strip().splitlines()[0][:160] if str(e).strip() else type(e).__name__
                 print(f"[chat] local model for knowledge query unavailable: {e}", file=sys.stderr)
             if state.is_running():
                 cloud_main = None
@@ -160,6 +229,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             else:
                 sys_parts.remove(kb_prompt_block)
                 kb_hits, kb_used = [], False
+                kb_blocked_reason = ("Company knowledge base is local-only and this chat uses a cloud model. "
+                                     f"The local model could not start ({local_err or 'unknown error'}). "
+                                     "Start a local model or switch the main lane to local, then ask again.")
+                audit_log(user, action="knowledge.blocked_cloud", resource="chat/run",
+                          detail={"reason": local_err or "local model not running"}, result="deny")
                 sys_parts.append("NOTE: The company knowledge base is restricted to local models and no "
                                  "local model is loaded, so internal company data is not available for "
                                  "this answer. Tell the user this instead of guessing.")
@@ -207,6 +281,23 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         )
         sys_parts.append(web_prompt)
 
+    # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat"
+    chat_cfg = APP_CONFIG.get("chat") or {}
+    deep = bool(req.deep_mode)
+    max_turns = int(chat_cfg.get("deep_max_tool_rounds" if deep else "max_tool_rounds", 25 if deep else 15)) if chat_tools else 1
+    max_web_calls = int(chat_cfg.get("deep_max_web_calls" if deep else "max_web_calls", 16 if deep else 8))
+    wants_file = wants_file_output(last_query)
+    if deep:
+        sys_parts.append(
+            "DEEP RESEARCH MODE:\n"
+            "1. First, briefly list the sub-questions you need answered to fully satisfy the request.\n"
+            f"2. Research each one with targeted web searches (use the current year; you have up to {max_web_calls} web calls).\n"
+            "3. Stop searching as soon as you have enough data, then write the complete deliverable in one go. "
+            "Cite sources, and label any figure you could not verify as an estimate.")
+    # llama-server only: turn the model's reasoning on in deep mode (ignored by
+    # chat templates without an enable_thinking switch)
+    llm_extra = {"chat_template_kwargs": {"enable_thinking": True}} if deep else None
+
     combined_sys = "\n\n".join(sys_parts).strip()
     if combined_sys:
         has_sys = False
@@ -238,11 +329,18 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         lane_info = {"lane": "main", "model": clean_model_name, "display": model_display,
                      "source": model_source, "provider": model_provider}
         yield f"event: lane\ndata: {json.dumps(lane_info)}\n\n"
+        if kb_blocked_reason:
+            yield f"event: kb_blocked\ndata: {json.dumps({'message': kb_blocked_reason})}\n\n"
         chat_rid = monitor_begin("chat/run", True, json.dumps({"messages": msgs}).encode(),
                                  model=clean_model_name, source=model_source, provider=model_provider)
         t0 = time.time()
-        max_turns = 6 if chat_tools else 1
+        turn_limit = max_turns       # grows by one if a continuation nudge needs it
+        web_calls = 0
+        research_nudged = False
+        continued = False
+        finish_reason = None
         written_files = []
+        ctx_budget = int(common.main_ctx_tokens(cloud_main) * 0.7)
         # --- Output sanitizer: redact model deltas before they reach the
         # client (cloud_only rules only fire while the lane is cloud; the
         # fallback event recreates the redactor for the local lane).
@@ -259,7 +357,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             return ""
 
         try:
-            for turn in range(max_turns):
+            turn = -1
+            while True:
+                turn += 1
+                if turn >= turn_limit:
+                    break
                 # Turn 0 proactive URL fetch: if user specifically asks to summarize or inspect a URL
                 if turn == 0 and use_web and chat_tools and url_matches:
                     is_fetch_intent = any(w in last_query.lower() for w in (
@@ -291,9 +393,28 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 res_dict = None
                 streamed_content = []
 
-                # On the final allowed turn, if tools were run previously, force tools=None
-                # so the model is forced to formulate the final answer to the user.
-                current_tools = None if (turn == max_turns - 1 and msgs and msgs[-1].get("role") == "tool") else chat_tools
+                # Research budget: once web calls are used up (or only the last two
+                # turns remain) drop the web tools but keep write_file, so the
+                # remaining turns go to producing the answer instead of more searches.
+                research_over = use_web and web_calls > 0 and (
+                    web_calls >= max_web_calls or turn >= turn_limit - 2)
+                if turn == turn_limit - 1 and msgs and msgs[-1].get("role") == "tool":
+                    # final turn: must answer now; a requested file can still be written
+                    current_tools = [CHAT_WRITE_FILE_SCHEMA] if wants_file else None
+                elif research_over:
+                    current_tools = [t for t in chat_tools
+                                     if t.get("function", {}).get("name") not in WEB_TOOL_NAMES]
+                else:
+                    current_tools = chat_tools
+                if research_over and not research_nudged:
+                    research_nudged = True
+                    msgs.append({"role": "user", "content": (
+                        "[system note] The research phase is over - do not search any more. Using the "
+                        "results above, produce the complete answer now"
+                        + (" and call write_file with the full file content." if wants_file else ".")
+                        + " Do not announce what you will do; just do it.")})
+
+                shrink_old_tool_results(msgs, ctx_budget)
 
                 if cloud_main and cloud.cloud_bindings(user.id).get("fallback_local", True):
                     fb_local = None
@@ -307,9 +428,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             print(f"[chat] local fallback unavailable: {e}", file=sys.stderr)
                     chat_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, current_tools, req.temperature,
-                        req.max_tokens, rid=chat_rid, lane="main")
+                        req.max_tokens, rid=chat_rid, lane="main", extra=llm_extra)
                 else:
-                    chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid)
+                    chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid, extra=llm_extra)
                 async for ev, val in chat_stream:
                     if ev == "queued":
                         yield f"event: queued\ndata: {json.dumps(val)}\n\n"
@@ -376,10 +497,18 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                 reasoning = res_dict.get("reasoning", "") if res_dict else ""
                 tool_calls = res_dict.get("tool_calls", []) if res_dict else []
+                finish_reason = res_dict.get("finish_reason") if res_dict else None
+                if finish_reason == "length":
+                    print(f"[chat] turn {turn}: generation hit the token/context limit "
+                          f"(max_tokens={req.max_tokens}, ctx_budget={ctx_budget})", file=sys.stderr)
 
-                # Fallback: check if text tool calls were emitted
+                # Fallback: check if text tool calls were emitted - in the reply, or
+                # inside the reasoning when the model wrote the call while "thinking"
+                # and only a preamble ("Let me compile...") reached the content
                 if not tool_calls:
-                    parsed_tc = _extract_text_tool_calls(content or reasoning)
+                    parsed_tc = _extract_text_tool_calls(content) if content else []
+                    if not parsed_tc and reasoning:
+                        parsed_tc = _extract_text_tool_calls(reasoning)
                     if parsed_tc:
                         tool_calls = parsed_tc
 
@@ -439,6 +568,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                 # Check if model output contains [DOWNLOAD: ...] or code blocks intended as files
                 dl_tags = _re.findall(r'\[DOWNLOAD:\s*([^\]]+)\]', content)
+                missing_dl = []   # tags the model wrote without producing any content
                 for dl_f in dl_tags:
                     clean_fname = Path(dl_f.strip()).name
                     if clean_fname not in written_files:
@@ -475,8 +605,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             title_clean = clean_fname.replace('_', ' ').replace('-', ' ').title()
                             # (no invented placeholder rows for csv/xlsx: a data file the
                             # model never produced must not be filled with fabricated data)
+                            # (html: never fall back to a canned dashboard - it carried
+                            # invented figures; ask the model to continue instead)
                             if ext in {'html', 'htm'}:
-                                cand_code = generate_fresh_dashboard_html(title_clean, content.split('[DOWNLOAD:')[0].strip())
+                                missing_dl.append(clean_fname)
                             elif ext in ('pptx', 'ppt'):
                                 cand_code = f"# {title_clean}\n---\n## Agenda\n- Executive Summary\n- Key Metrics & Analysis\n- Next Steps"
                             elif ext == 'pdf':
@@ -557,6 +689,35 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
                         return
 
+                # Announced-but-not-delivered: "Let me compile the HTML now:" and
+                # stop. Nudge once to actually produce it (granting one extra turn
+                # if the budget is spent) instead of accepting the preamble.
+                if (not tool_calls and chat_tools and not continued
+                        and (missing_dl or looks_undelivered(content, wants_file, bool(written_files)))):
+                    continued = True
+                    if turn >= turn_limit - 1:
+                        turn_limit += 1
+                    if streamed_content:
+                        redactor.reset()
+                        yield "event: delta_reset\ndata: {}\n\n"
+                    msgs.append({"role": "assistant", "content": content or ""})
+                    msgs.append({"role": "user", "content": (
+                        "[system note] You announced the deliverable but did not produce it. Output it now, "
+                        "complete, with no preamble: "
+                        + ("call write_file with the full file content (for HTML: a complete standalone "
+                           "document), then give the [DOWNLOAD: filename] link."
+                           if (wants_file or missing_dl) else "write the full answer.")
+                        + " Use only data from the conversation and tool results; mark unverified figures as estimates.")})
+                    continue
+
+                if missing_dl:
+                    # continuation already used: drop the dead link rather than
+                    # serving a fabricated file
+                    for mf in missing_dl:
+                        content = _re.sub(rf'\[DOWNLOAD:\s*{_re.escape(mf)}\]',
+                                          f'*(file `{mf}` was not generated - please ask again)*', content)
+                    yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+
                 if not tool_calls or not chat_tools:
                     # Guard against empty/blank assistant response:
                     if not (content and content.strip()):
@@ -627,7 +788,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': t_name, 'args': args})}\n\n"
 
                     try:
-                        if t_name == "web_search":
+                        if t_name in WEB_TOOL_NAMES and web_calls >= max_web_calls:
+                            # text-emitted calls bypass the tools list; enforce the budget here too
+                            res_str = ("error: web research budget used up - do not search again. "
+                                       "Produce the final answer from the results you already have.")
+                        elif t_name == "web_search":
                             q = args.get("query") or args.get("q") or ""
                             res_str = await tool_web_search({"query": q})
                         elif t_name == "web_search_images":
@@ -659,6 +824,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         res_str = f"error: {e}"
                         ok = False
 
+                    if t_name in WEB_TOOL_NAMES:
+                        web_calls += 1
                     yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': t_name, 'ok': ok, 'result': res_str})}\n\n"
 
                     hist_args = dict(args)
@@ -697,9 +864,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             pass
                     final_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, None, req.temperature,
-                        req.max_tokens, rid=chat_rid, lane="main")
+                        req.max_tokens, rid=chat_rid, lane="main", extra=llm_extra)
                 else:
-                    final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid)
+                    final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid, extra=llm_extra)
 
                 async for ev, val in final_stream:
                     if ev == "queued":

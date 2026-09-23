@@ -8,9 +8,19 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from .agent_tools import active_workspace, MAX_TOOL_OUTPUT
+from .agent_tools import WorkspaceAccessDenied, MAX_TOOL_OUTPUT
 
 GIT_TIMEOUT_S = 30
+
+
+def _cwd() -> Path:
+    """Refuse: these helpers run `git` as a server-side subprocess, and project
+    folders live on users' machines. Running it here would operate on the
+    server's disk whenever the same path exists on the server, so the Git
+    panel stays disabled until it is routed through the companion app."""
+    raise WorkspaceAccessDenied(
+        "the Git panel is unavailable: git would run on the server, and project folders "
+        "live on your machine - use git on your machine (or ask the agent to run it) instead")
 
 
 def _run(args: list, cwd: Path) -> tuple[int, str, str]:
@@ -32,7 +42,7 @@ def _is_repo(cwd: Path) -> bool:
 
 
 def git_status() -> dict:
-    cwd = active_workspace()
+    cwd = _cwd()
     if not _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     code, out, err = _run(["status", "--porcelain=v1", "-b"], cwd)
@@ -66,7 +76,7 @@ def git_status() -> dict:
 
 
 def git_diff(path: Optional[str] = None, staged: bool = False) -> dict:
-    cwd = active_workspace()
+    cwd = _cwd()
     if not _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     args = ["diff"]
@@ -83,7 +93,7 @@ def git_diff(path: Optional[str] = None, staged: bool = False) -> dict:
 
 
 def git_stage(paths: list) -> dict:
-    cwd = active_workspace()
+    cwd = _cwd()
     if not _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     if not paths:
@@ -95,7 +105,7 @@ def git_stage(paths: list) -> dict:
 
 
 def git_unstage(paths: list) -> dict:
-    cwd = active_workspace()
+    cwd = _cwd()
     if not _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     if not paths:
@@ -107,7 +117,7 @@ def git_unstage(paths: list) -> dict:
 
 
 def git_commit(message: str) -> dict:
-    cwd = active_workspace()
+    cwd = _cwd()
     if not _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     if not message or not message.strip():
@@ -119,7 +129,7 @@ def git_commit(message: str) -> dict:
 
 
 def git_push(remote: str = "origin", branch: Optional[str] = None) -> dict:
-    cwd = active_workspace()
+    cwd = _cwd()
     if not _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     args = ["push", remote]
@@ -134,7 +144,7 @@ def git_push(remote: str = "origin", branch: Optional[str] = None) -> dict:
 def git_branches() -> dict:
     """Local branch names for the PR-base picker, with the repo's default branch
     (origin/HEAD, if known) flagged so the UI can preselect it."""
-    cwd = active_workspace()
+    cwd = _cwd()
     if not _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     code, out, err = _run(["for-each-ref", "--format=%(refname:short)", "refs/heads/"], cwd)
@@ -157,7 +167,7 @@ def git_branches() -> dict:
 def git_diff_range(base: str) -> dict:
     """Diff of everything the current branch has that `base` doesn't - i.e. what a PR
     against `base` would contain. Used to auto-generate a PR title/description."""
-    cwd = active_workspace()
+    cwd = _cwd()
     if not _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     if not base or not base.strip():
@@ -171,7 +181,7 @@ def git_diff_range(base: str) -> dict:
 
 
 def git_remote_url(remote: str = "origin") -> Optional[str]:
-    cwd = active_workspace()
+    cwd = _cwd()
     if not _is_repo(cwd):
         return None
     code, out, _ = _run(["remote", "get-url", remote], cwd)

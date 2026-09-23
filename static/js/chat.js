@@ -436,10 +436,11 @@ function bubbleHtml(m, idx) {
     }
   }
 
-  if (body) {
-    const isWorkingPill = generating && isLast && !hasText;
+  if (body || m.errorAlert) {
+    const isWorkingPill = generating && isLast && !hasText && !m.errorAlert;
     const bubbleClass = isWorkingPill ? 'bubble claude-working-container' : 'bubble';
-    inner += `<div class="${bubbleClass}">${body}${generating && isLast && hasText ? '<span class="cursor">▍</span>' : ''}</div>`;
+    const alertHtml = m.errorAlert ? `<div class="chat-alert-box error"><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; margin-top:2px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><div><strong>Service Notice</strong><div style="font-size:12px; margin-top:2px; opacity:0.9;">${esc(m.errorAlert)}</div></div></div>` : '';
+    inner += `<div class="${bubbleClass}">${body}${alertHtml}${generating && isLast && hasText ? '<span class="cursor">▍</span>' : ''}</div>`;
   }
   if (m.tps) {
     const modelTag = m.modelDisplay
@@ -728,6 +729,18 @@ function setGenUI(on) {
   $('input').focus();
 }
 
+// Previous answers' large code blocks (e.g. a whole HTML report) are resent on
+// every follow-up and pull the model back to stale content; replace them with
+// a short stub. [DOWNLOAD: ...] tags stay so the model knows the file exists.
+function omitBulkyCode(text, maxChars = 1500) {
+  if (!text || text.indexOf('```') === -1) return text;
+  return text.replace(/```([\w+-]*)[^\n]*\n([\s\S]*?)```/g, (whole, lang, body) => {
+    if (whole.length <= maxChars) return whole;
+    const lines = body.split('\n').length;
+    return `[previous ${lang || 'code'} block, ${lines} lines — omitted]`;
+  });
+}
+
 async function send(inputText) {
   const input = $('input');
   const text = (inputText !== undefined ? inputText : (input ? input.value : '')).trim();
@@ -820,10 +833,13 @@ async function send(inputText) {
 
   const samplingCfg = getSamplingConfig();
   const sys = (samplingCfg.sysprompt || '').trim();
+  // The system prompt goes only via `system_prompt`; the server composes the
+  // system message (pushing it here too sent it twice).
   const msgs = [];
-  if (sys) msgs.push({ role: 'system', content: sys });
   const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : messages;
-  for (const m of ctxMsgs.slice(0, -1)) msgs.push({ role: m.role, content: m.content });
+  for (const m of ctxMsgs.slice(0, -1)) {
+    msgs.push({ role: m.role, content: m.role === 'assistant' ? omitBulkyCode(m.content) : m.content });
+  }
   const t0 = performance.now();
   const getJobAssistant = () => job.assistantMsg;
 
@@ -834,6 +850,7 @@ async function send(inputText) {
       body: JSON.stringify({
         messages: msgs,
         web_search: !!chatWebSearch,
+        deep_mode: !!chatDeepMode,
         system_prompt: sys || undefined,
         temperature: samplingCfg.temp,
         max_tokens: (isNaN(samplingCfg.maxtok) || samplingCfg.maxtok <= 0) ? -1 : samplingCfg.maxtok,
@@ -907,6 +924,12 @@ async function send(inputText) {
               }
             }
           }
+        } else if (ev === 'kb_blocked') {
+          // Data residency: KB withheld from the cloud lane; show it as a failed KB step
+          if (!L.acts) L.acts = [];
+          L.acts.push({ type: 'tool_call', id: 'kb_blocked', name: 'search_knowledge_base', args: {} });
+          L.acts.push({ type: 'tool_result', id: 'kb_blocked', name: 'search_knowledge_base', ok: false, result: d.message || '' });
+          toast('🔒 Company knowledge base is local-only — start a local model to use it');
         } else if (ev === 'guard') {
           // Output sanitizer redacted part of the response
           toast('🧼 ' + (d.message || ('Response filtered by policy: ' + (d.rule || ''))));
@@ -921,7 +944,20 @@ async function send(inputText) {
   } catch (e) {
     if (e.name !== 'AbortError') {
       const L = getJobAssistant();
-      L.content += (L.content ? '\n\n' : '') + '⚠️ ' + e.message;
+      let errText = e.message || 'Request failed';
+      try {
+        const jsonMatch = errText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.error && parsed.error.message) {
+            errText = parsed.error.message;
+          } else if (parsed.message) {
+            errText = parsed.message;
+          }
+        }
+      } catch (_) {}
+      const cleanMsg = errText.replace(/^Chat error\s*/i, '').replace(/^upstream\s+\d+:\s*/i, '');
+      L.errorAlert = cleanMsg;
     }
   }
 
@@ -931,8 +967,8 @@ async function send(inputText) {
     targetAssistant.reasoning = (targetAssistant.reasoning || '') + m[1];
     targetAssistant.content = targetAssistant.content.slice(m[0].length).trim();
   }
-  // Recovery: if content is empty, promote reasoning or latest tool result so message never terminates blank
-  if (!targetAssistant.content.trim()) {
+  // Recovery: if content is empty and no error alert, promote reasoning or latest tool result so message never terminates blank
+  if (!targetAssistant.content.trim() && !targetAssistant.errorAlert) {
     if (targetAssistant.reasoning && targetAssistant.reasoning.trim()) {
       targetAssistant.content = targetAssistant.reasoning.trim();
     } else if (targetAssistant.acts && targetAssistant.acts.length) {

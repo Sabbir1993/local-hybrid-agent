@@ -10,7 +10,7 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=3.7">
+<link rel="stylesheet" href="/static/css/style.css?v=4.3">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 <style>
   html, body { height: auto; min-height: 100%; overflow-y: auto; }
@@ -42,6 +42,8 @@
       <button type="button" class="theme-opt" data-t="nord" onclick="setTheme('nord')"><span class="theme-swatch" style="background:#88c0d0"></span> Nord Arctic</button>
       <button type="button" class="theme-opt" data-t="classic" onclick="setTheme('classic')"><span class="theme-swatch" style="background:#6c8cff"></span> Classic Dark</button>
       <button type="button" class="theme-opt" data-t="oled" onclick="setTheme('oled')"><span class="theme-swatch" style="background:#3b82f6"></span> OLED Black</button>
+      <button type="button" class="theme-opt" data-t="ssl" onclick="setTheme('ssl')"><span class="theme-swatch" style="background: linear-gradient(135deg, #2d489a 50%, #eb3439 50%);"></span> SSL Wireless (Navy)</button>
+      <button type="button" class="theme-opt" data-t="ssl-light" onclick="setTheme('ssl-light')"><span class="theme-swatch" style="background: linear-gradient(135deg, #2d489a 50%, #eb3439 50%); border: 1px solid #94a3b8;"></span> SSL Wireless (Light)</button>
       <button type="button" class="theme-opt" data-t="light" onclick="setTheme('light')" style="grid-column: span 2;"><span class="theme-swatch" style="background:#2563eb; border:1px solid #94a3b8;"></span> ☀️ Pure Light (Modern Crisp)</button>
     </div>
   </details>
@@ -225,7 +227,7 @@
   <details class="card fold" id="sec-caps" data-perm="settings.orchestration.configure">
     <summary title="Agent extensions: web browsing, skills, MCP servers, plugins">🧩 Capabilities</summary>
     <div id="caps-content"><div class="mon-empty">Loading…</div></div>
-    <div class="cfg-note" title="Capability note">Toggles persist to config/app.json. MCP servers connect at startup; new config needs a restart for MCP.</div>
+    <div class="cfg-note" title="Capability note">Toggles persist to config/app.json. MCP servers added or edited here connect live (no restart); first npx start may take a minute.</div>
   </details>
 
   <details class="card fold" id="sec-users" data-perm="users.manage">
@@ -274,13 +276,13 @@
 <div id="toast"></div>
 
 <script src="/static/js/session.js?v=1.0"></script>
-<script src="/static/js/theme.js?v=2.5"></script>
+<script src="/static/js/theme.js?v=2.7"></script>
 <script src="/static/js/utils.js?v=2.5"></script>
 <script src="/static/js/sampling.js?v=1.0"></script>
-<script src="/static/js/gpu-status.js?v=3.0"></script>
+<script src="/static/js/gpu-status.js?v=3.2"></script>
 <script src="/static/js/config.js?v=3.1"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
-<script src="/static/js/capabilities.js?v=2.5"></script>
+<script src="/static/js/capabilities.js?v=2.6"></script>
 <script src="/static/js/cloud.js?v=3.0"></script>
 <script src="/static/js/rbac.js?v=1.1"></script>
 <script src="/static/js/knowledge.js?v=1.0"></script>

@@ -85,6 +85,26 @@ function getDeviceHeaders() {
   };
 }
 
+/* Every same-origin API call carries this device's identity. The server keys
+   the active project by (user, device); a request without it resolves as the
+   "default" device and gets refused. Individual call sites forgot the headers
+   before (e.g. /agent/run), so it is applied once here instead. */
+(function attachDeviceHeaders() {
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const sameOrigin = (url.startsWith('/') && !url.startsWith('//')) || url.startsWith(location.origin + '/');
+    if (!sameOrigin) return nativeFetch(input, init);
+    const headers = new Headers((init && init.headers) || (input instanceof Request ? input.headers : undefined));
+    const dev = getDeviceHeaders();
+    for (const k of Object.keys(dev)) {
+      // header values must be ISO-8859-1; skip a device name that isn't
+      try { if (!headers.has(k)) headers.set(k, dev[k]); } catch (_) {}
+    }
+    return nativeFetch(input, { ...(init || {}), headers });
+  };
+})();
+
 function updateDeviceUI() {
   const label = $('device-label-text');
   if (label) {
@@ -259,7 +279,7 @@ async function loadProjects(autoRestoreSessions = false) {
           </div>`;
       } else {
         userProjects.forEach(p => {
-          const ws = p.workspace_dir || `(server workspace)/${p.name}`;
+          const ws = p.workspace_dir || '(no folder set)';
           const isCur = curProject && curProject.id === p.id;
           const isMyDev = !!p.is_current_device;
           const pathValid = p.path_valid_on_device !== false;
@@ -314,7 +334,7 @@ async function loadProjects(autoRestoreSessions = false) {
       } else {
         mList.innerHTML = '';
         d.projects.forEach(p => {
-          const ws = p.workspace_dir || `(server workspace)/${p.name}`;
+          const ws = p.workspace_dir || '(no folder set)';
           const isMyDev = !!p.is_current_device;
           const devLabel = p.device_name || (p.device_id ? (p.device_id === getClientDeviceId() ? getClientDeviceName() : p.device_id.slice(0, 8)) : 'Default');
           const item = document.createElement('div');
@@ -392,10 +412,12 @@ async function loadSessions(autoRestore = false) {
       const row = document.createElement('div');
       row.className = 'session-row' + (curSession && curSession.id === s.id ? ' cur' : '');
       row.setAttribute('data-sid', String(s.id));
-      const icon = agentMode ? '🤖' : '💬';
+      const icon = agentMode
+        ? '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.75;"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>'
+        : '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.75;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
       const isRunning = window.bgJobs && window.bgJobs.has(String(s.id));
       const bgBadge = isRunning ? '<span class="bg-session-indicator" title="Executing in background..."><span class="bg-pulse-dot"></span>⚡</span>' : '';
-      row.innerHTML = `<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(s.title)}">${icon} ${esc(s.title)}</span>` +
+      row.innerHTML = `<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; align-items:center;" title="${esc(s.title)}">${icon}<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(s.title)}</span></span>` +
         bgBadge +
         `<span class="s-menu-wrap"><span class="s-menu" title="Session options">⋮</span></span>`;
       row.onclick = e => {
@@ -653,6 +675,20 @@ if (btnNewSession) {
   btnNewSession.onclick = () => $('btn-newchat').click();
 }
 
+// Global shortcut Ctrl+K / Cmd+K to start a fresh chat / agent task
+window.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyK' || (e.key && e.key.toLowerCase() === 'k')) && !e.shiftKey && !e.altKey) {
+    const pm = $('proj-modal');
+    const sm = $('settings-modal');
+    const dpm = $('dir-picker-modal');
+    const rm = $('report-modal');
+    if ((pm && !pm.hidden) || (sm && !sm.hidden) || (dpm && !dpm.hidden) || (rm && !rm.hidden)) return;
+    e.preventDefault();
+    const btn = $('btn-newchat');
+    if (btn) btn.click();
+  }
+});
+
 // Project modal handling
 $('btn-newproject').onclick = () => {
   $('new-proj-name').value = '';
@@ -682,7 +718,7 @@ async function refreshCompanionStatus() {
       el.textContent = `🟢 Connected to ${d.hostname || 'your device'} — browsing runs on your machine`;
       el.style.color = 'var(--green)';
     } else {
-      el.textContent = '⚪ No companion connected — folder browsing/writes run on the server';
+      el.textContent = '⚪ Companion not connected — open it on your machine to pick a folder';
       el.style.color = 'var(--dim)';
     }
   } catch (e) { if (el) el.textContent = ''; }
@@ -696,8 +732,10 @@ if ($('btn-delproject-icon')) $('btn-delproject-icon').onclick = () => { if (cur
 
 async function submitNewProject() {
   const name = $('new-proj-name').value.trim();
-  const workspace_dir = $('new-proj-dir').value.trim() || null;
+  const workspace_dir = $('new-proj-dir').value.trim();
   if (!name) { toast('Project name is required', true); return; }
+  // every project is a folder on the user's machine -- there is no server workspace
+  if (!workspace_dir) { toast('Pick a folder on your machine for this project', true); return; }
   try {
     const r = await fetch('/control/projects', {
       method: 'POST',

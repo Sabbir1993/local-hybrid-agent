@@ -46,15 +46,33 @@ def _get_active_source_titles(allowed_source_ids: Optional[Set[int]] = None) -> 
     return out
 
 
+def kb_routing_query(msgs: list, last_query: str) -> str:
+    """Query used for KB routing. A short follow-up ("yes", "go ahead") carries
+    no intent of its own, so it is routed together with the previous user turn."""
+    if len(last_query.split()) > 3:
+        return last_query
+    users = [str(m.get("content", "")) for m in msgs if m.get("role") == "user"]
+    if len(users) >= 2 and users[-2].strip():
+        return f"{users[-2].strip()} {last_query}".strip()
+    return last_query
+
+
 def is_company_or_kb_query(query: str, allowed_source_ids: Optional[Set[int]] = None) -> bool:
     """Check if query is directed at company info, internal docs, or the knowledge base."""
     if not query or not query.strip():
         return False
     q_lower = query.lower()
+    q_words = set(re.findall(r"\w+", q_lower))
+
+    def _has(phrase: str) -> bool:
+        # whole-word match: plain substrings let "hr" hit "through", "emp" hit "temperature"
+        if " " in phrase or not phrase.isalnum():
+            return re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", q_lower) is not None
+        return phrase in q_words
 
     # Check for direct company keywords/phrases
     for kw in COMPANY_KEYWORDS:
-        if kw in q_lower:
+        if _has(kw):
             return True
 
     # Check against titles of active knowledge sources
@@ -65,7 +83,7 @@ def is_company_or_kb_query(query: str, allowed_source_ids: Optional[Set[int]] = 
             return True
         # Check individual substantive words in title (e.g. "Platinum", "Club", "Facility")
         t_words = [w for w in re.findall(r"\w{3,}", t_lower) if w not in {"the", "and", "for", "with"}]
-        if t_words and any(tw in q_lower for tw in t_words):
+        if t_words and any(tw in q_words for tw in t_words):
             return True
 
     return False
@@ -95,7 +113,10 @@ async def fetch_company_knowledge(query: str, allowed_source_ids: Set[int], k: i
 
     await ensure_knowledge_vectors()
 
-    hits = await search_knowledge_hybrid(query, k=k, allowed_knowledge_source_ids=allowed_source_ids)
+    from .small_model import APP_CONFIG
+    min_cos = float((APP_CONFIG.get("knowledge") or {}).get("min_cos", 0.45))
+    hits = await search_knowledge_hybrid(query, k=k, allowed_knowledge_source_ids=allowed_source_ids,
+                                         min_cos=min_cos)
     if not hits:
         return [], ""
 
@@ -117,7 +138,8 @@ async def fetch_company_knowledge(query: str, allowed_source_ids: Set[int], k: i
         "The following material is retrieved directly from our company's internal knowledge base:\n\n"
         f"{knowledge_text}\n\n"
         "CRITICAL OPERATING RULES FOR COMPANY DATA:\n"
-        "1. You MUST answer the user's inquiry strictly and accurately using the authentic internal knowledge base data above.\n"
+        "1. When the user's question concerns the company or its internal data, answer strictly and accurately using the authentic internal knowledge base data above. "
+        "If the question is about an unrelated topic (general knowledge, public market research, coding, etc.), IGNORE this knowledge base block entirely and do not mix it into the answer.\n"
         "2. NEVER hallucinate, invent, fabricate, or generate dummy employee names, fake records, or placeholder datasets.\n"
         "3. NEVER call `write_file` to create sample or dummy CSV/Excel spreadsheets with fictional data when asked for company data. "
         "Provide the real data directly in your text answer.\n"

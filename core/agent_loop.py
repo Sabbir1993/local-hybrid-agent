@@ -9,7 +9,6 @@ from .agent_tools import (
     AGENT_CORE_TOOLS,
     AGENT_TOOLS,
     TOOL_IMPLS,
-    active_workspace,
 )
 from .registry import registry, bootstrap_builtin_tools
 from .request_context import run_in_executor_ctx
@@ -46,7 +45,7 @@ File Intelligence — Working with Documents:
     - Word (.docx): use python-docx — e.g. `import docx; doc = docx.Document('file.docx'); doc.add_paragraph('New text'); doc.save('file.docx')`
 15. Output Format: Output format must match what the user requests. E.g. 'give me a CSV from this Excel' → produce CSV. 'Summarize this PDF' → produce a text summary in the chat.
 16. Pipelines: You can chain tools autonomously: web_search/web_fetch to get data → run_python to process → write file to workspace. Do not ask for confirmation between steps.
-17. Download Signal: When you produce a modified or output file in the workspace that the user will want to download, end your response with a line like: [DOWNLOAD: filename.xlsx] — the UI will render this as a download button automatically.
+17. Files Land in the Project: Files you write or edit are saved directly in the user's project folder and shown in the activity feed with their diff. Refer to them by relative path (e.g. `src/app.js`); do not emit download markers, download links, or preview links.
 
 Multi-Agent Orchestration — 'spawn_agent':
 18. You can delegate to multiple focused sub-agents within a single user request by calling 'spawn_agent' more than once (each call is a separate step; they run one at a time, in the order you call them, and each returns its result before you decide the next call). Use this for requests that name multiple roles or phases (e.g. 'plan it, then implement it, then review it') or for large tasks that benefit from role separation — for example role='planner' to outline an approach, then role='coder' to implement it (pass the planner's output back to it in the task text), then role='reviewer' to check the diff. Do not ask the user whether to do this — if their prompt describes multiple phases or roles, chain the spawn_agent calls yourself and synthesize a final summary. Each sub-agent is isolated (no shared history) and cannot itself delegate further, so include everything it needs directly in the 'task' argument, including relevant output from earlier sub-agents in the chain."""
@@ -216,12 +215,10 @@ def validate_and_finalize_response(last_query: str, content: str, reasoning: str
     if not clean_content:
         if successful_writes or successful_edits:
             lines = ["✅ **Task completed successfully.**\n"]
-            ws_root = active_workspace()
+            # files live on the user's machine: don't stat() the path on the server's disk
             if successful_writes:
                 for w in successful_writes:
-                    ws_f = ws_root / w
-                    sz = ws_f.stat().st_size if ws_f.exists() else 0
-                    lines.append(f"- **Created/Updated:** `{w}` ({sz:,} bytes)")
+                    lines.append(f"- **Created/Updated:** `{w}`")
             if successful_edits:
                 for ed in successful_edits:
                     lines.append(f"- **Edited:** `{ed}`")

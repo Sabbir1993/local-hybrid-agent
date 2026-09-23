@@ -16,24 +16,9 @@ from .process import find_llama_server
 from . import vram
 
 
-def _load_workspace_root() -> Path:
-    cfg = CONFIG_FILE
-    try:
-        if cfg.exists():
-            d = json.loads(cfg.read_text())
-            v = d.get("workspace_dir")
-            if v:
-                p = Path(v)
-                p.mkdir(parents=True, exist_ok=True)
-                return p.resolve()
-    except Exception:
-        pass
-    p = Path("E:\\AI\\workspace")
-    p.mkdir(parents=True, exist_ok=True)
-    return p.resolve()
-
-
-WORKSPACE_ROOT = _load_workspace_root()
+# No server-side workspace root: project folders live on users' machines and
+# are reached only through the companion app (core/agent_tools.py
+# require_device_workspace). The old WORKSPACE_ROOT (E:\AI\workspace) is gone.
 
 
 def _load_common_root() -> Path:

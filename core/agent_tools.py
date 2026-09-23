@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from .db import _projects_db
-from .small_model import APP_CONFIG, WORKSPACE_ROOT, COMMON_ROOT, describe_image_file
+from .small_model import APP_CONFIG, COMMON_ROOT, describe_image_file
 from .request_context import set_current_user, get_current_user_id, get_current_device_id  # noqa: F401 (re-exported)
 from . import companion_bridge
 
@@ -19,7 +19,7 @@ MAX_EDIT_BYTES = 512 * 1024
 # Both keyed by (user_id, device_id) via request_context so active projects
 # and workspace paths never conflict across different users or different devices.
 _active_project: dict = {}   # "uid:did" -> project name (set via UI)
-_ws_changes: dict = {}       # "uid:did" -> {path: {"before": str|None, "after": str|None}}
+_ws_changes: dict = {}       # uid -> {path: {"before": str|None, "after": str|None}}
 
 
 def _user_device_key(user_id: Optional[int] = None, device_id: Optional[str] = None) -> str:
@@ -39,73 +39,60 @@ def get_active_project(user_id: Optional[int] = None, device_id: Optional[str] =
 def set_active_project(name: Optional[str], user_id: Optional[int] = None, device_id: Optional[str] = None) -> None:
     k = _user_device_key(user_id, device_id)
     _active_project[k] = name
-    _ws_changes.pop(k, None)
+    _ws_changes.pop(user_id if user_id is not None else get_current_user_id(), None)
 
 
-def project_workspace_dir(name: str, owner_user_id: Optional[int] = None, device_id: Optional[str] = None) -> Optional[Path]:
-    uid = owner_user_id if owner_user_id is not None else get_current_user_id()
-    did = device_id if device_id is not None else get_current_device_id()
-    row = None
-    if did:
-        row = _projects_db.execute(
-            "SELECT workspace_dir FROM projects WHERE name = ? AND user_id = ? AND device_id = ?", (name, uid, did)
-        ).fetchone()
-    if not row:
-        row = _projects_db.execute(
-            "SELECT workspace_dir FROM projects WHERE name = ? AND user_id = ?", (name, uid)
-        ).fetchone()
-    if row and row["workspace_dir"]:
-        if companion_bridge.is_connected(uid):
-            return Path(row["workspace_dir"])
-        p = Path(row["workspace_dir"])
-        try:
-            p = p.resolve()
-            p.mkdir(parents=True, exist_ok=True)
-            return p
-        except Exception:
-            # Foreign path that does not exist on this machine
-            return p
-    return None
+class WorkspaceAccessDenied(PermissionError):
+    """Agent workspace access refused: the server's own disk is never a workspace."""
+
+
+def require_device_workspace() -> tuple[int, Path]:
+    """(user_id, project folder on the user's machine) for the calling request.
+
+    Policy: agent file/exec tools operate ONLY on the user's own device, via
+    the companion app. There is deliberately no fallback to WORKSPACE_ROOT or a
+    server sandbox -- every missing piece (no device header, no project on this
+    device, no local folder, companion offline) raises instead. Lookups are
+    strict on (user, device): no cross-device or "default" fallbacks, so a
+    request that lost its X-Device-Id header can't resolve another path.
+    """
+    uid = get_current_user_id()
+    did = get_current_device_id()
+    if uid is None:
+        raise WorkspaceAccessDenied("not signed in")
+    proj = _active_project.get(_user_device_key(uid, did))
+    if not proj:
+        raise WorkspaceAccessDenied(
+            "no project is selected on this device - select a project from your machine first")
+    row = _projects_db.execute(
+        "SELECT workspace_dir FROM projects WHERE name = ? AND user_id = ? AND device_id = ?",
+        (proj, uid, did)).fetchone()
+    if not row or not row["workspace_dir"]:
+        raise WorkspaceAccessDenied(
+            f"project '{proj}' has no folder on your machine - recreate it and pick a local folder")
+    if not companion_bridge.is_available(uid):
+        raise WorkspaceAccessDenied(
+            "the A770 Companion app is not connected - open it on your machine and try again")
+    return uid, Path(row["workspace_dir"])
 
 
 def active_workspace() -> Path:
-    uid = get_current_user_id()
-    did = get_current_device_id()
-    proj = get_active_project(uid, did)
-    if proj:
-        custom = project_workspace_dir(proj, uid, did)
-        if custom:
-            if companion_bridge.is_connected(uid):
-                return custom
-            try:
-                if custom.exists():
-                    return custom.resolve()
-            except Exception:
-                pass
-            # If the custom workspace path does not exist on this device (e.g. valid on desktop but not laptop),
-            # safely fall back to the user's project sandbox on this server instead of crashing
-        base = (WORKSPACE_ROOT / f"user_{uid}") if uid is not None else WORKSPACE_ROOT
-        p = (base / proj).resolve()
-        p.mkdir(parents=True, exist_ok=True)
-        return p
-    return WORKSPACE_ROOT.resolve()
+    """The active project's folder on the user's machine (see require_device_workspace)."""
+    return require_device_workspace()[1]
 
 
-def _remote_uid() -> Optional[int]:
-    """user_id if a companion is connected for the calling user, else None.
-
-    Only project workspaces with an explicit custom workspace_dir (picked via
-    the companion-aware folder browser) are treated as remote -- the
-    fallback WORKSPACE_ROOT/user_{uid}/proj path is always a server-local
-    directory and stays server-local even when a companion is connected.
-    """
-    uid = get_current_user_id()
-    if uid is None or not companion_bridge.is_connected(uid):
+def workspace_label() -> Optional[str]:
+    """Display-only: the device workspace path, or None when unavailable (never raises)."""
+    try:
+        return str(require_device_workspace()[1])
+    except WorkspaceAccessDenied:
         return None
-    proj = get_active_project(uid)
-    if proj and project_workspace_dir(proj, uid) is not None:
-        return uid
-    return None
+
+
+def _remote_uid() -> int:
+    """user_id whose companion executes workspace ops. Always remote: raises
+    WorkspaceAccessDenied rather than letting a caller fall back to server-local IO."""
+    return require_device_workspace()[0]
 
 
 def common_workspace() -> Path:
@@ -259,9 +246,10 @@ async def tool_write_file(args: dict) -> str:
 
     uid = _remote_uid()
     if uid is not None:
+        before = await _remote_read_or_none(uid, p)
         data = await companion_bridge.call(
             uid, "fs.write", {"path": str(p), "content": content, "append": append})
-        _snapshot_change_remote(p)
+        _record_diff(p, before, (before or "") + content if append else content)
         existed = bool(data.get("existed"))
         verb = "appended" if append and existed else "wrote"
         return f"{verb} {len(content)} chars to {path_arg} ({'overwrote' if existed and not append else 'created' if not existed else 'appended'})"
@@ -1486,10 +1474,12 @@ async def tool_edit_file(args: dict) -> str:
 
     uid = _remote_uid()
     if uid is not None:
+        before = await _remote_read_or_none(uid, p)
         data = await companion_bridge.call(
             uid, "fs.edit", {"path": str(p), "old_string": old, "new_string": new, "replace_all": replace_all})
         n = int(data.get("count") or 0)
-        _snapshot_change_remote(p)
+        if before is not None:
+            _record_diff(p, before, before.replace(old, new) if replace_all else before.replace(old, new, 1))
         return f"edited {path_arg} ({n} replacement(s))"
 
     if not p.is_file():
@@ -1506,30 +1496,30 @@ async def tool_edit_file(args: dict) -> str:
     return f"edited {path_arg} ({n} replacement(s))"
 
 
-def tool_run_python(args: dict) -> str:
+async def tool_run_python(args: dict) -> str:
     code = args.get("code", "")
     if not code.strip():
         raise ValueError("code required")
-    ws = active_workspace()
-    ws.mkdir(parents=True, exist_ok=True)
+    # runs on the user's machine via the companion -- never on the server
+    uid, ws = require_device_workspace()
     script = ws / "_agent_run.py"
-    script.write_text(code, encoding="utf-8")
+    await companion_bridge.call(uid, "fs.write", {"path": str(script), "content": code, "append": False})
     raw_t = APP_CONFIG.get("agent", {}).get("exec_timeout_s", 0)
     timeout = int(raw_t) if raw_t and int(raw_t) > 0 else None
     try:
-        proc = subprocess.run(
-            [sys.executable, str(script)],
-            capture_output=True, text=True, timeout=timeout, cwd=str(ws))
-        out = (proc.stdout or "")[-MAX_TOOL_OUTPUT:]
-        err = (proc.stderr or "")[-4000:]
-        result = f"exit code {proc.returncode}"
-        if out:
-            result += f"\n--- stdout ---\n{out}"
-        if err:
-            result += f"\n--- stderr ---\n{err}"
-        return result
-    except subprocess.TimeoutExpired:
+        data = await companion_bridge.call(
+            uid, "shell.run", {"command": 'python "_agent_run.py"', "cwd": str(ws), "timeout": timeout},
+            timeout=(timeout or 60) + 10)
+    except TimeoutError:
         return f"error: timed out after {timeout}s (config agent.exec_timeout_s)"
+    out = (data.get("stdout") or "")[-MAX_TOOL_OUTPUT:]
+    err = (data.get("stderr") or "")[-4000:]
+    result = f"exit code {data.get('exit_code')}"
+    if out:
+        result += f"\n--- stdout ---\n{out}"
+    if err:
+        result += f"\n--- stderr ---\n{err}"
+    return result
 
 
 def _snapshot_change(p: Path) -> None:
@@ -1544,13 +1534,62 @@ def _snapshot_change(p: Path) -> None:
     rec["after"] = "written"
 
 
-def _snapshot_change_remote(p: Path) -> None:
-    """Like _snapshot_change, but the file lives on the companion machine --
-    there is no local 'before' content to read, so just mark it touched."""
-    changes = _ws_changes.setdefault(get_current_user_id(), {})
-    rec = changes.setdefault(str(p), {})
-    rec.setdefault("before", None)
-    rec["after"] = "written"
+_file_diffs: dict = {}       # (uid, path) -> per-call diff summary, popped into the tool_result event
+MAX_DIFF_LINES = 400
+
+
+async def _remote_read_or_none(uid: int, p: Path) -> Optional[str]:
+    """Current content of a file on the companion machine, or None if missing/unreadable."""
+    try:
+        data = await companion_bridge.call(uid, "fs.read", {"path": str(p)})
+    except Exception:
+        return None
+    content = data.get("content")
+    return content if isinstance(content, str) else None
+
+
+def diff_summary(before: Optional[str], after: str) -> dict:
+    """{created, added, removed, hunks, truncated} -- unified diff with 3 lines of context."""
+    import difflib
+    a = (before or "").splitlines()
+    b = (after or "").splitlines()
+    hunks, added, removed = [], 0, 0
+    for ln in list(difflib.unified_diff(a, b, lineterm="", n=3))[2:]:
+        if ln.startswith("@@"):
+            hunks.append({"t": "@", "s": ln})
+        elif ln.startswith("+"):
+            added += 1
+            hunks.append({"t": "+", "s": ln[1:]})
+        elif ln.startswith("-"):
+            removed += 1
+            hunks.append({"t": "-", "s": ln[1:]})
+        else:
+            hunks.append({"t": " ", "s": ln[1:]})
+    return {"created": before is None, "added": added, "removed": removed,
+            "hunks": hunks[:MAX_DIFF_LINES], "truncated": len(hunks) > MAX_DIFF_LINES}
+
+
+def _record_diff(p: Path, before: Optional[str], after: str) -> None:
+    """Track a companion-side write: session baseline for the workspace panel,
+    plus this call's own diff for the activity feed."""
+    uid = get_current_user_id()
+    rec = _ws_changes.setdefault(uid, {}).setdefault(str(p), {})
+    if "before" not in rec:
+        rec["before"] = before
+    rec["after"] = after
+    _file_diffs[(uid, str(p))] = diff_summary(before, after)
+
+
+def pop_file_diff(args: dict) -> Optional[dict]:
+    """The diff recorded by the last write_file/edit_file call on this path (once)."""
+    path_arg = (args or {}).get("path") or (args or {}).get("file") or (args or {}).get("filename")
+    if not path_arg:
+        return None
+    try:
+        p = _ws_resolve(path_arg)
+    except Exception:
+        return None
+    return _file_diffs.pop((get_current_user_id(), str(p)), None)
 
 
 def tool_list_diff(args: dict) -> str:
@@ -1565,16 +1604,18 @@ def tool_list_diff(args: dict) -> str:
     return "\n".join(out)
 
 
-def tool_revert(args: dict) -> str:
+async def tool_revert(args: dict) -> str:
     target = args.get("path", "")
-    changes = _ws_changes.get(get_current_user_id()) or {}
+    # tracked files live on the user's machine -- restore through the companion
+    uid = _remote_uid()
+    changes = _ws_changes.get(uid) or {}
     for path, rec in changes.items():
         if Path(path).name == target or path.endswith(target):
             before = rec.get("before")
             if before is None:
-                Path(path).unlink(missing_ok=True)
-            else:
-                Path(path).write_text(before, encoding="utf-8")
+                return (f"error: {target} was created this session; the companion cannot delete "
+                        "files -- ask the user to remove it")
+            await companion_bridge.call(uid, "fs.write", {"path": path, "content": before, "append": False})
             del changes[path]
             return f"reverted {target}"
     return f"error: no tracked change for {target}"

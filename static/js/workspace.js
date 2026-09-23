@@ -80,7 +80,7 @@ async function wsLoadTree(dirPath, targetEl, indent) {
     }
     const hdrs = (typeof getDeviceHeaders === 'function') ? getDeviceHeaders() : {};
     const r = await fetch('/agent/ws/tree?path=' + encodeURIComponent(dirPath || ''), { headers: hdrs });
-    const d = await r.json();
+    const d = await r.json().catch(() => ({ error: `Could not load project files (server error ${r.status})` }));
     if (!r.ok || d.error || !d.root) { targetEl.innerHTML = `<div class="ws-empty">${esc(d.error || 'No project workspace active')}</div>`; return; }
     if (!indent) {
       const rp = $('ws-root-path');
@@ -194,7 +194,7 @@ async function wsShowFile(path) {
   try {
     const hdrs = (typeof getDeviceHeaders === 'function') ? getDeviceHeaders() : {};
     const r = await fetch('/agent/ws/file?path=' + encodeURIComponent(path), { headers: hdrs });
-    const d = await r.json();
+    const d = await r.json().catch(() => ({ error: `server error ${r.status}` }));
     if (!r.ok || d.error) { toast('File view failed: ' + (d.error || r.status), true); return; }
     wsCurrentFile = { path, content: d.content || '' };
     $('ws-tree-view').style.display = 'none';

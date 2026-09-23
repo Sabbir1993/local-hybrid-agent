@@ -110,60 +110,29 @@ async def tool_run_shell(args: dict) -> str:
 
     raw_t = cfg.get("timeout_s", 0)
     timeout = int(raw_t) if raw_t and int(raw_t) > 0 else None
-    from .agent_tools import active_workspace, _remote_uid
-    from .config import BASE_DIR
-    # Skill management commands operate in global application root; installers
-    # (e.g. `npx skills add`) drop skills into .agents/skills, which is the
-    # directory core/skills.py reads from directly. Always server-local --
-    # skills are an application-level concept, not a per-user workspace one.
-    is_skills_cmd = "skills " in cmd.lower() or "npx skills" in cmd.lower()
-    if is_skills_cmd:
-        target_cwd = str(BASE_DIR)
-    else:
-        target_cwd = str(active_workspace())
+    from .agent_tools import require_device_workspace
+    # Agent shell commands run ONLY on the user's machine via the companion.
+    # (Skill installs used to run server-side in BASE_DIR -- that was agent
+    # code execution on the server, so they now run in the user's project too.)
+    uid, ws = require_device_workspace()
+    target_cwd = str(ws)
 
     # Automatically add -y / --yes for npx / npm commands if not present so skills installation doesn't hang
     exec_cmd = cmd
     if exec_cmd.strip().startswith("npx ") and " -y" not in exec_cmd and " --yes" not in exec_cmd:
         exec_cmd = re.sub(r"^npx\s+", "npx -y ", exec_cmd.strip())
 
-    uid = None if is_skills_cmd else _remote_uid()
-    if uid is not None:
-        try:
-            data = await companion_bridge.call(
-                uid, "shell.run", {"command": exec_cmd, "cwd": target_cwd, "timeout": timeout},
-                timeout=(timeout or 60) + 10)
-        except TimeoutError:
-            return f"error: command timed out after {timeout}s"
-        except Exception as e:
-            return f"error: companion shell exec failed: {e}"
-        out = (data.get("stdout") or "")[-MAX_OUTPUT_CHARS:]
-        err_out = (data.get("stderr") or "")[-4000:]
-        result = f"exit code {data.get('exit_code')}"
-        if out:
-            result += f"\n--- stdout ---\n{out}"
-        if err_out:
-            result += f"\n--- stderr ---\n{err_out}"
-        return result
-
-    # Force non-interactive behavior to prevent CLI commands from freezing on stdin prompts
-    env = os.environ.copy()
-    env["CI"] = "1"
-    env["DEBIAN_FRONTEND"] = "noninteractive"
-    env["PYTHONUNBUFFERED"] = "1"
-
     try:
-        proc = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: subprocess.run(exec_cmd, capture_output=True, text=True,
-                                   stdin=subprocess.DEVNULL, env=env,
-                                   shell=True, timeout=timeout, cwd=target_cwd))
-    except subprocess.TimeoutExpired:
+        data = await companion_bridge.call(
+            uid, "shell.run", {"command": exec_cmd, "cwd": target_cwd, "timeout": timeout},
+            timeout=(timeout or 60) + 10)
+    except TimeoutError:
         return f"error: command timed out after {timeout}s"
-
-    out = (proc.stdout or "")[-MAX_OUTPUT_CHARS:]
-    err_out = (proc.stderr or "")[-4000:]
-    result = f"exit code {proc.returncode}"
+    except Exception as e:
+        return f"error: companion shell exec failed: {e}"
+    out = (data.get("stdout") or "")[-MAX_OUTPUT_CHARS:]
+    err_out = (data.get("stderr") or "")[-4000:]
+    result = f"exit code {data.get('exit_code')}"
     if out:
         result += f"\n--- stdout ---\n{out}"
     if err_out:

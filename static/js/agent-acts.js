@@ -71,13 +71,15 @@ function parseStepsFromActs(acts) {
         if (curTool && (curTool.name === a.name || (a.id && curTool.id === a.id)) && curTool.result === null) {
           curTool.result = a.result;
           curTool.ok = a.ok !== false;
+          if (a.diff) curTool.diff = a.diff;
         } else {
           const match = curStep.tools.slice().reverse().find(t => t.name === a.name && t.result === null);
           if (match) {
             match.result = a.result;
             match.ok = a.ok !== false;
+            if (a.diff) match.diff = a.diff;
           } else {
-            curStep.tools.push({ id: a.id, name: a.name, args: {}, verify: null, result: a.result, ok: a.ok !== false });
+            curStep.tools.push({ id: a.id, name: a.name, args: {}, verify: null, result: a.result, ok: a.ok !== false, diff: a.diff });
           }
         }
       }
@@ -177,6 +179,42 @@ function planPanelHtml(acts) {
   h += '</ol></div>';
   return h;
 }
+
+/* Unified diff for an Agent Task write (Claude Code / Codex style): old/new
+   line numbers, green additions, red removals, dim context. */
+function agentDiffHtml(diff, path) {
+  const lang = (typeof hlLangFor === 'function') ? hlLangFor(path || '') : '';
+  const hl = s => (lang && typeof hlCode === 'function') ? hlCode(s, lang) : esc(s);
+  let oldNo = 0, newNo = 0;
+  let rows = '';
+  (diff.hunks || []).forEach(l => {
+    if (l.t === '@') {
+      const m = /-(\d+)(?:,\d+)? \+(\d+)/.exec(l.s || '');
+      if (m) { oldNo = +m[1]; newNo = +m[2]; }
+      if (rows) rows += '<div class="agy-diff-sep">⋯</div>';
+      return;
+    }
+    let o = '', n = '', cls = 'ctx', sign = ' ';
+    if (l.t === '+') { n = newNo++; cls = 'add'; sign = '+'; }
+    else if (l.t === '-') { o = oldNo++; cls = 'del'; sign = '-'; }
+    else { o = oldNo++; n = newNo++; }
+    rows += `<div class="agy-diff-line ${cls}"><span class="ln">${o}</span><span class="ln">${n}</span><span class="sg">${sign}</span><span class="tx">${hl(l.s || '') || ' '}</span></div>`;
+  });
+  if (!rows) rows = '<div class="agy-diff-line ctx"><span class="tx">(no textual changes)</span></div>';
+  if (diff.truncated) rows += '<div class="agy-diff-sep">… diff truncated — open the file to see everything</div>';
+  return `<div class="agy-diff">${rows}</div>`;
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-ws-open]');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const path = btn.dataset.wsOpen;
+  if (!path) return;
+  if (typeof setWsPanel === 'function') setWsPanel(true);
+  if (typeof wsShowFile === 'function') wsShowFile(path);
+});
 
 function agentActsHtml(acts) {
   if (!acts || !acts.length) return '';
@@ -336,12 +374,23 @@ function agentActsHtml(acts) {
 
     const isRunning = t.result === null;
 
+    // Agent Task writes carry a diff: the file lives in the user's project, so show
+    // +/- stats and open it in the workspace panel instead of a server preview.
+    const diff = (t.diff && (t.name === 'write_file' || t.name === 'edit_file')) ? t.diff : null;
+    if (diff) {
+      verb = diff.created ? 'Created' : 'Edited';
+      extra = `<span class="agy-diff-stat"><span class="add">+${diff.added || 0}</span> <span class="del">-${diff.removed || 0}</span></span>`;
+    }
+
     const isPreviewable = p && /\.(html|htm|csv|xlsx|xls|pdf|md|py|js|ts|json|txt|svg|png|jpg|jpeg|webp)$/i.test(p);
-    const previewBtn = isPreviewable
+    const previewBtn = diff
+      ? `<button type="button" class="btn ghost agy-open-btn" data-ws-open="${esc(p || '')}" title="Open in project panel">↗ Open</button>`
+      : isPreviewable
       ? `<button type="button" class="btn ghost" style="padding:1px 7px; font-size:10px; margin-left:auto; border-radius:4px;" onclick="event.stopPropagation(); openFilePreview('${esc(p).replace(/'/g, "\\'")}', '${esc(p).replace(/'/g, "\\'")}')" title="Preview file">👁️ Preview</button>`
       : '';
+    const openByDefault = diff && !diff.created && (diff.hunks || []).length <= 40;
 
-    h += `<details class="agy-step-detail">
+    h += `<details class="agy-step-detail"${openByDefault ? ' open' : ''}>
       <summary class="agy-step-row">
         <span class="agy-step-verb">${verb}</span>
         <span class="agy-step-icon ${iconClass}">${iconSymbol}</span>
@@ -361,7 +410,9 @@ function agentActsHtml(acts) {
       h += `<div style="font-size:11px; color:var(--dim); margin-bottom:6px; font-style:italic;">💭 ${esc(t.thought)}</div>`;
     }
 
-    if (t.name === 'write_file' && typeof t.args.content === 'string') {
+    if (diff) {
+      h += agentDiffHtml(diff, p);
+    } else if (t.name === 'write_file' && typeof t.args.content === 'string') {
       h += `<pre class="agy-detail-code"><code>${esc(t.args.content)}</code></pre>`;
     } else if (t.name === 'edit_file' && (t.args.old_string || t.args.new_string)) {
       h += `<div class="agy-detail-code">
@@ -372,7 +423,7 @@ function agentActsHtml(acts) {
       h += `<pre class="agy-detail-code"><code>${esc(JSON.stringify(t.args, null, 2))}</code></pre>`;
     }
 
-    if (t.result !== null) {
+    if (t.result !== null && !(diff && t.ok)) {
       h += `<div style="font-size:10px; font-weight:700; color:var(--dim); margin:6px 0 4px; text-transform:uppercase;">Result</div>
       <pre class="agy-detail-code" style="color:${t.ok ? 'var(--dim)' : 'var(--red)'};"><code>${esc(t.result || '(empty)')}</code></pre>`;
     }

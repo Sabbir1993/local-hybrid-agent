@@ -44,6 +44,7 @@ from core import auth_db
 from core.auth_provider import hash_password
 from core.csrf import CSRFMiddleware
 from core.deps import get_current_user
+from core.agent_tools import WorkspaceAccessDenied
 from core.mcp import connect_all_mcp, stop_all_mcp
 from core.plugins import load_plugins
 from core.process import kill_orphan_llama_servers
@@ -70,6 +71,7 @@ from routes import (
     input_guard_router,
     knowledge_router,
     mcp_manager_router,
+    plugins_router,
     projects_router,
     proxy_router,
 )
@@ -205,6 +207,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Local Agent", lifespan=lifespan)
 app.add_middleware(CSRFMiddleware)
 
+
+@app.exception_handler(WorkspaceAccessDenied)
+async def _workspace_denied(request: Request, exc: WorkspaceAccessDenied):
+    # agent workspaces exist only on users' machines (core/agent_tools.py
+    # require_device_workspace); the server's disk is never served instead
+    return JSONResponse({"error": str(exc)}, status_code=403)
+
 # --- Static assets (unauthenticated: CSS/JS carry no sensitive data) ---
 @app.get("/static/{file_path:path}")
 async def serve_static(file_path: str):
@@ -263,6 +272,7 @@ app.include_router(chat_router, dependencies=_authed)
 app.include_router(agent_router, dependencies=_authed)
 app.include_router(git_router, dependencies=_authed)
 app.include_router(mcp_manager_router, dependencies=_authed)
+app.include_router(plugins_router, dependencies=_authed)
 app.include_router(admin_rbac_router, dependencies=_authed)
 app.include_router(knowledge_router, dependencies=_authed)
 app.include_router(input_guard_router, dependencies=_authed)

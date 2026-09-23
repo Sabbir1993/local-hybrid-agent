@@ -1,0 +1,8 @@
+{
+  "title": "Dev Tools",
+  "description": "Workspace file stats (lines/words/chars/modified) and a real clock so the agent never guesses dates.",
+  "version": "1.0.0",
+  "author": "SSL Wireless",
+  "category": "developer",
+  "tools": ["report_file_stats", "timestamp_now"]
+}

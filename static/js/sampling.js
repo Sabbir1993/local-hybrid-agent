@@ -5,7 +5,7 @@
  * saved values from localStorage instead of the DOM.
  */
 const SAMPLING_DEFAULTS = {
-  sysprompt: '', temp: 1.0, topp: 0.95, minp: 0, rep: 1.0,
+  sysprompt: '', temp: 0.6, topp: 0.95, minp: 0, rep: 1.0,
   presence: 0, topk: 20, maxtok: -1,
 };
 

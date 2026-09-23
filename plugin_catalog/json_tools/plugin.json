@@ -1,0 +1,8 @@
+{
+  "title": "JSON Tools",
+  "description": "Validate and pretty-print JSON, and pull values out with a dotted path (e.g. data.items[0].id). Handy for API payloads and webhooks.",
+  "version": "1.0.0",
+  "author": "SSL Wireless",
+  "category": "developer",
+  "tools": ["json_format", "json_get"]
+}

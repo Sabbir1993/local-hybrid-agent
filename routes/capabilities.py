@@ -27,7 +27,7 @@ from core.agent_tools import get_active_project
 from core.registry import registry
 from core.web_tools import register_web_tools
 from core.skills import register_skill_tools, load_skills
-from core.plugins import plugins_status
+from core.plugins import plugins_status, load_plugins, unload_all
 from core.mcp import mcp_status
 from core.shell_tools import (
     register_shell_tools,
@@ -180,6 +180,13 @@ async def capabilities_toggle(req: CapToggleReq,
             registry.set_source_enabled("shell", False)
         return {"ok": True, "section": req.section, "enabled": req.enabled}
     caps_live[req.section] = req.enabled
+    if req.section == "plugins":
+        # plugin tools register as plugin:<name>, so load/unload rather than toggle a source
+        if req.enabled:
+            load_plugins()
+        else:
+            unload_all()
+        return {"ok": True, "section": req.section, "enabled": req.enabled}
     registry.set_source_enabled(req.section, req.enabled)
     if req.section == "web" and req.enabled:
         register_web_tools()

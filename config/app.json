@@ -1,6 +1,5 @@
 {
   "models_dir": "E:/AI/Models",
-  "workspace_dir": "E:/AI/workspace",
   "common_dir": "E:/AI/common",
   "small_models": {
     "executor": {
@@ -46,6 +45,12 @@
     "vision": null,
     "fallback_local": true
   },
+  "chat": {
+    "max_tool_rounds": 15,
+    "max_web_calls": 8,
+    "deep_max_tool_rounds": 25,
+    "deep_max_web_calls": 16
+  },
   "agent": {
     "exec_timeout_s": 0,
     "max_steps": 30,
@@ -66,6 +71,33 @@
         "command": "python",
         "args": [
           "core/echo_mcp_server.py"
+        ]
+      },
+      "sslcommerz": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "mcp-remote",
+          "https://sslcommerz-mcp.sslwireless.com/mcp"
+        ]
+      },
+      "isms": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "mcp-remote",
+          "https://isms-mcp.sslwireless.com/mcp"
+        ]
+      },
+      "vr": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "mcp-remote",
+          "https://vr-mcp.sslwireless.com/sse"
         ]
       }
     },
@@ -90,7 +122,7 @@
         "id": "input_guard-1-1790051263397",
         "name": "Block sensitive attachment to cloud",
         "type": "semantic",
-        "description": "If a user prompt or attached file contains sensitive financial or transactional information—such as transaction IDs, payment references, account identifiers, authentication details, or similar records—and the request appears suspicious, unauthorized, deceptive, or potentially related to fraud, the system must treat the content as sensitive. It must not expose, extract, modify, validate, or use such information to facilitate unauthorized activity. The request should be limited to legitimate analysis, redaction, security review, or other clearly authorized purposes, and additional verification or clarification should be required when the user's intent or authorization is unclear.",
+        "description": "If a user prompt or attached file contains sensitive financial or transactional information\u2014such as transaction IDs, payment references, account identifiers, authentication details, or similar records\u2014and the request appears suspicious, unauthorized, deceptive, or potentially related to fraud, the system must treat the content as sensitive. It must not expose, extract, modify, validate, or use such information to facilitate unauthorized activity. The request should be limited to legitimate analysis, redaction, security review, or other clearly authorized purposes, and additional verification or clarification should be required when the user's intent or authorization is unclear.",
         "scope": "cloud_only",
         "roles": [],
         "users": [],
@@ -123,7 +155,9 @@
     "max_inflight_per_user": 1
   },
   "knowledge": {
-    "cloud_policy": "local_only"
+    "cloud_policy": "local_only",
+    "min_cos": 0.45,
+    "auto_inject_cos": 0.55
   },
   "pci": {
     "pan_input": "block",

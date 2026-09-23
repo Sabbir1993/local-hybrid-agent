@@ -18,24 +18,7 @@ import httpx
 PUBLIC_REGISTRY_URL = "https://registry.modelcontextprotocol.io/v0/servers"
 REGISTRY_TIMEOUT_S = 15
 
-CATALOG = [
-    {
-        "id": "github",
-        "name": "GitHub",
-        "description": "Create pull requests, read repos/issues via the GitHub MCP server.",
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-github"],
-        "auth": {
-            "type": "device_flow",
-            "client_id": "",  # filled in from config/app.json capabilities.mcp_catalog_overrides.github.client_id
-            "device_code_url": "https://github.com/login/device/code",
-            "token_url": "https://github.com/login/oauth/access_token",
-            "scope": "repo",
-            "env_key": "GITHUB_PERSONAL_ACCESS_TOKEN",
-        },
-    },
-]
+CATALOG = []
 
 
 def catalog_with_overrides() -> list:

@@ -167,22 +167,19 @@ def _delete_stale(source: str, seen: set) -> None:
         _db().commit()
 
 
-def _workspace_dir() -> Optional[Path]:
-    try:
-        from .agent_tools import active_workspace
-        return active_workspace()
-    except Exception:
-        try:
-            from .small_model import WORKSPACE_ROOT
-            return WORKSPACE_ROOT
-        except Exception:
-            return None
-
-
 async def index_workspace(ws_path: Optional[Path] = None, force: bool = False) -> dict:
-    """Incrementally index workspace files into the vector store."""
-    ws = Path(ws_path) if ws_path else _workspace_dir()
-    if not ws or not ws.exists():
+    """Incrementally index workspace files into the vector store.
+
+    Only an explicitly passed path is indexed. The implicit default used to be
+    the active workspace, or WORKSPACE_ROOT when there was none -- the
+    background task has no user, so it walked the server's shared workspace
+    (all users' folders). Project files live on users' machines (companion),
+    so there is nothing server-side to index by default.
+    """
+    if ws_path is None:
+        return {"files": 0, "chunks": 0}
+    ws = Path(ws_path)
+    if not ws.exists():
         return {"files": 0, "chunks": 0}
     files = []
     try:
@@ -341,7 +338,9 @@ async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optio
     Strict per-user isolation: "session"-sourced chunks (past chat titles/first
     messages) are filtered to the requesting user's own sessions only -- other
     users' chat history must never surface via memory search, even indirectly.
-    Workspace chunks are unaffected (shared project context).
+    "workspace" chunks are never returned: they were indexed from the server's
+    shared WORKSPACE_ROOT (every user's folders, no owner recorded), so any
+    stored rows are unattributable and must not leak across users.
 
     "knowledge"-sourced chunks (org knowledge base) are filtered to
     allowed_knowledge_source_ids *before* scoring -- an unpermitted caller's
@@ -353,7 +352,7 @@ async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optio
     If `sources` is given (e.g. {'knowledge'}), entries are pre-filtered to
     only those sources before scoring and top-k truncation.
     """
-    entries = _load_entries()
+    entries = [e for e in _load_entries() if e[0] != "workspace"]
     if not entries:
         return []
 
@@ -416,12 +415,18 @@ async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optio
 
 
 async def search_knowledge_hybrid(query: str, k: int = 6,
-                                  allowed_knowledge_source_ids: Optional[set] = None) -> list:
+                                  allowed_knowledge_source_ids: Optional[set] = None,
+                                  min_cos: float = 0.45, min_lex: int = 2) -> list:
     """Dedicated knowledge base retrieval scoped exclusively to allowed knowledge sources.
 
     Includes title-aware boosting from auth_db so broad company inquiries (e.g.
     'I want data from company knowledge base' or 'show employee base') reliably surface
     the relevant source chunks rather than starving out.
+
+    Min-max normalisation always ranks *some* chunk at ~1.0, so an absolute
+    relevance gate runs first: a chunk needs raw cosine >= min_cos (or, without
+    an embedder, >= min_lex raw query-word hits). Title-matched / broad-KB
+    queries skip the gate. Each result carries its raw cosine as "cos".
     """
     if not allowed_knowledge_source_ids:
         return []
@@ -457,10 +462,14 @@ async def search_knowledge_hybrid(query: str, k: int = 6,
     words = [w.lower() for w in re.findall(r"\w{3,}", query)][:10]
 
     # Detect if query explicitly matches source titles or is a broad company inquiry
+    # whole words only: a substring test lets "online" in a title match any
+    # "online ..." query and bypass the relevance gate below
+    q_word_set = set(re.findall(r"\w+", q_lower))
     matched_title_kids = set()
     for kid, title in source_titles.items():
-        t_words = [tw.lower() for tw in re.findall(r"\w{3,}", title)]
-        if any(tw in q_lower for tw in t_words) or any(tw in words for tw in t_words):
+        t_words = [tw.lower() for tw in re.findall(r"\w{3,}", title)
+                   if tw.lower() not in {"the", "and", "for", "with"}]
+        if any(tw in q_word_set for tw in t_words):
             matched_title_kids.add(kid)
 
     is_broad_kb = any(phrase in q_lower for phrase in (
@@ -469,10 +478,11 @@ async def search_knowledge_hybrid(query: str, k: int = 6,
         "employee data", "what data", "internal data", "company documents"
     ))
 
-    lex_raw, cos_raw, title_boost = [], [], []
+    lex_raw, cos_raw, title_boost, query_lex = [], [], [], []
     for _source, _path, text, v, kid in entries:
         tl = text.lower()
         lex = float(sum(tl.count(w) for w in words))
+        query_lex.append(lex)
         # Extra lexical boost if source title words appear in text
         if kid in source_titles:
             s_title = source_titles[kid].lower()
@@ -507,6 +517,11 @@ async def search_knowledge_hybrid(query: str, k: int = 6,
 
     results = []
     for i, (source, path, text, _v, kid) in enumerate(entries):
+        if not title_boost[i]:
+            relevant = (cos_raw[i] >= min_cos) if (qvec is not None and _v is not None) \
+                else (query_lex[i] >= min_lex)
+            if not relevant:
+                continue
         base_score = (0.5 * cos_n[i] + 0.5 * lex_n[i]) if qvec is not None else lex_n[i]
         final_score = min(1.0, base_score + title_boost[i])
         title = source_titles.get(kid, f"Knowledge Source #{kid}")
@@ -516,8 +531,11 @@ async def search_knowledge_hybrid(query: str, k: int = 6,
             "source_id": kid,
             "title": title,
             "text": text,
-            "score": final_score
+            "score": final_score,
+            "cos": cos_raw[i],
         })
+    if not results:
+        return []
 
     results.sort(key=lambda r: r["score"], reverse=True)
     return results[:max(1, k)]
