@@ -95,8 +95,18 @@ def _remote_uid() -> int:
     return require_device_workspace()[0]
 
 
+def user_common_root(uid: int) -> Path:
+    """COMMON_ROOT/user_<uid>: one user's generated files and uploads."""
+    return COMMON_ROOT.resolve() / f"user_{int(uid)}"
+
+
 def common_workspace() -> Path:
-    p = COMMON_ROOT.resolve()
+    """The calling user's private common space. Users never share a folder, so
+    download/preview/edit resolution can't reach another user's files."""
+    uid = get_current_user_id()
+    if uid is None:
+        raise PermissionError("not signed in")
+    p = user_common_root(uid)
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -245,6 +255,10 @@ async def tool_write_file(args: dict) -> str:
     append = bool(args.get("append"))
 
     uid = _remote_uid()
+    if p.suffix.lower() in (".pptx", ".docx", ".xlsx", ".pdf") and not append:
+        # fs.write is UTF-8 text: build the real document and send its bytes instead
+        from .doc_tools import tool_doc_create
+        return await tool_doc_create({"file": path_arg, "content": content})
     if uid is not None:
         before = await _remote_read_or_none(uid, p)
         data = await companion_bridge.call(
@@ -1440,26 +1454,52 @@ def tool_write_file_common(args: dict) -> str:
     if len(content) > MAX_EDIT_BYTES:
         raise ValueError("content too large")
 
+    from . import doc_ops
+    from .doc_ops.base import DocOpError
+    try:
+        doc_ops._check_ops_for_pan([{"op": "write", "content": content}])
+    except DocOpError as e:
+        return f"write refused: {e}"
+    sfx = suffix.lower()
+    spec = None
+
     # Handle .xlsx / .xls conversion if structured text data is provided
-    if suffix.lower() in (".xlsx", ".xls"):
+    if sfx in (".xlsx", ".xls"):
         saved = _save_text_as_excel(p, content)
         if not saved:
             _create_default_excel(p, content)
-        return f"Wrote Excel file to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+        msg = f"Wrote Excel file to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
 
-    # Handle .pptx / .ppt conversion if writing a PowerPoint presentation
-    if suffix.lower() in (".pptx", ".ppt"):
-        saved = _save_text_as_pptx(p, content)
-        if saved:
-            return f"Wrote PowerPoint presentation to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+    # PowerPoint / Word: built on real layouts and styles so doc_edit can later
+    # change one slide or paragraph without regenerating the rest
+    elif sfx in (".pptx", ".ppt", ".docx", ".doc"):
+        if sfx in (".ppt", ".doc"):
+            p = p.with_suffix(sfx + "x")
+            unique_path_arg = p.name
+        try:
+            data, spec = doc_ops.create(p.name, content)
+        except DocOpError as e:
+            return f"doc error: {e}"
+        p.write_bytes(data)
+        kind = "PowerPoint presentation" if p.suffix == ".pptx" else "Word document"
+        msg = f"Wrote {kind} to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
 
     # Handle .pdf conversion if writing to a PDF file (via HTML DOM first)
-    if suffix.lower() == ".pdf":
-        saved = _save_text_or_markdown_as_pdf(p, content)
-        return f"Wrote compiled PDF document to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+    elif sfx == ".pdf":
+        _save_text_or_markdown_as_pdf(p, content)
+        spec = content   # PDF edits patch this markdown and re-render
+        msg = f"Wrote compiled PDF document to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
 
-    p.write_text(content, encoding="utf-8")
-    return f"Wrote {len(content)} chars to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+    else:
+        p.write_text(content, encoding="utf-8")
+        msg = f"Wrote {len(content)} chars to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+
+    if doc_ops.is_doc(p.name) and p.is_file():
+        from . import doc_store
+        from .doc_ops.base import sha256
+        doc_store.register(get_current_user_id(), p.name, p.suffix.lstrip(".").lower(),
+                           source_spec=spec, sha256=sha256(p.read_bytes()))
+    return msg
 
 
 async def tool_edit_file(args: dict) -> str:
@@ -1998,3 +2038,10 @@ TOOL_IMPLS = {
 from .subagent import SPAWN_AGENT_SCHEMA, tool_spawn_agent  # noqa: E402
 AGENT_TOOLS.append(SPAWN_AGENT_SCHEMA)
 TOOL_IMPLS["spawn_agent"] = tool_spawn_agent
+
+# Document tools (doc_inspect / doc_edit / doc_create): same late wiring, since
+# core.doc_tools imports the workspace helpers from this module.
+from .doc_tools import AGENT_IMPLS as _DOC_IMPLS, DOC_SCHEMAS as _DOC_SCHEMAS  # noqa: E402
+AGENT_TOOLS.extend(_DOC_SCHEMAS)
+AGENT_CORE_TOOLS.extend(s for s in _DOC_SCHEMAS if s["function"]["name"] in ("doc_inspect", "doc_edit"))
+TOOL_IMPLS.update(_DOC_IMPLS)

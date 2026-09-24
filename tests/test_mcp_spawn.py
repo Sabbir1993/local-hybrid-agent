@@ -69,6 +69,7 @@ class ConfigTests(unittest.TestCase):
         caps = APP_CONFIG.setdefault("capabilities", {})
         with mock.patch.dict(caps, {"mcp": True, "mcp_servers": {"off": {"command": "npx", "disabled": True}}}), \
              mock.patch.dict(APP_CONFIG, {"mcpServers": {}}), \
+             mock.patch("core.auth_db.list_user_mcp_servers", return_value=[]), \
              mock.patch.object(mcp.McpServer, "connect") as conn:
             res = asyncio.run(mcp.connect_all_mcp())
         conn.assert_not_called()
@@ -105,6 +106,65 @@ class ChatExposureTests(unittest.TestCase):
         self.assertNotIn("mcp__isms_t__list_endpoints",
                          [s["function"]["name"] for s in mcp.ready_tool_schemas()])
         self.assertNotIn("isms_t", mcp.chat_prompt())
+
+
+class PersonalServerTests(unittest.TestCase):
+    """A personal server's tools reach only its owner; a global name wins on a clash."""
+
+    def setUp(self):
+        from core import request_context
+        self.rc = request_context
+        self.tool = {"name": "get_issue", "description": "Get a Jira issue."}
+        self.srv = mcp.McpServer("jira_p", {"command": "uvx"}, owner=5)
+        self.srv.status, self.srv.tools = "ready", [self.tool]
+        mcp._servers[self.srv.key] = self.srv
+        mcp.registry.register("mcp__jira_p__get_issue", mcp._tool_bridge(self.srv, "get_issue"),
+                              mcp._bridge_schema("jira_p", self.tool), source=f"mcp:{self.srv.key}",
+                              meta={}, replace=True, owner=5)
+
+    def tearDown(self):
+        mcp.disconnect_one("jira_p", 5)
+        mcp.disconnect_one("jira_p")
+        self.rc.set_current_user(None)
+
+    def _names(self):
+        return [s["function"]["name"] for s in mcp.ready_tool_schemas()]
+
+    def test_owner_only(self):
+        self.assertEqual(self.srv.key, "jira_p@u5")
+        self.rc.set_current_user(5)
+        self.assertIn("mcp__jira_p__get_issue", self._names())
+        self.assertIsNotNone(mcp.registry.get("mcp__jira_p__get_issue"))
+        self.assertIn("`jira_p`", mcp.chat_prompt())
+        self.rc.set_current_user(6)
+        self.assertNotIn("mcp__jira_p__get_issue", self._names())
+        self.assertIsNone(mcp.registry.get("mcp__jira_p__get_issue"))
+        self.assertNotIn("jira_p", mcp.chat_prompt())
+        self.assertNotIn("mcp__jira_p__get_issue", [t["function"]["name"] for t in mcp.registry.schemas()])
+
+    def test_global_name_wins(self):
+        glob = mcp.McpServer("jira_p", {"command": "npx"})
+        glob.status, glob.tools = "ready", [self.tool]
+        mcp._servers["jira_p"] = glob
+        mcp.registry.register("mcp__jira_p__get_issue", mcp._tool_bridge(glob, "get_issue"),
+                              mcp._bridge_schema("jira_p", self.tool), source="mcp:jira_p", meta={}, replace=True)
+        self.rc.set_current_user(5)
+        self.assertEqual(mcp.registry.get("mcp__jira_p__get_issue").owner, None)
+        self.assertEqual(self._names().count("mcp__jira_p__get_issue"), 1)
+
+    def test_status_scoped(self):
+        self.assertEqual([s["scope"] for s in mcp.mcp_status(5) if s["name"] == "jira_p"], ["user"])
+        self.assertNotIn("jira_p", [s["name"] for s in mcp.mcp_status(6)])
+        self.assertNotIn("jira_p", [s["name"] for s in mcp.mcp_status()])
+
+    def test_secret_ref_per_user(self):
+        self.assertEqual(mcp.secret_env_ref("jira_p", "TOKEN"), "jira_p:env:TOKEN")
+        self.assertEqual(mcp.secret_env_ref("jira_p", "TOKEN", 5), "u5:jira_p:env:TOKEN")
+
+    def test_disconnect_personal_drops_tools(self):
+        mcp.disconnect_one("jira_p", 5)
+        self.rc.set_current_user(5)
+        self.assertIsNone(mcp.registry.get("mcp__jira_p__get_issue"))
 
 
 class PanMaskTests(unittest.TestCase):

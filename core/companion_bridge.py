@@ -36,7 +36,7 @@ DEFAULT_TIMEOUT_S = 60
 RECONNECT_GRACE_S = 10    # a companion that dropped this recently is expected back
 CONNECT_WAIT_S = 5        # how long call() waits for a (re)connection before failing
 # ops that are safe to repeat after a dropped connection; writes and shell are not
-READ_ONLY_OPS = {"fs.read", "fs.list", "fs.grep", "fs.tree", "fs.browse"}
+READ_ONLY_OPS = {"fs.read", "fs.read_b64", "fs.list", "fs.grep", "fs.tree", "fs.browse"}
 
 
 def is_connected(user_id: Optional[int]) -> bool:

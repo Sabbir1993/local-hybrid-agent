@@ -175,7 +175,26 @@ function updateContextChip() {
   // full append-only visible transcript.
   const ctxMsgs = (typeof buildContextMessages === 'function') ? buildContextMessages() : messages;
 
-  if (Array.isArray(ctxMsgs) && ctxMsgs.length > 0) {
+  // Anchor on the latest assistant turn that has a server-reported prompt size:
+  // that figure already covers the system prompt, tools, tool results and all
+  // prior history, so only its completion + later messages are added on top.
+  // Turns in a compacted marker's kept tail predate the compaction — skip them.
+  const minIdx = (ctxMsgs[0] && ctxMsgs[0].compact) ? 1 + (ctxMsgs[0].compactKept || 0) : 0;
+  let anchor = -1;
+  for (let i = ctxMsgs.length - 1; i >= minIdx; i--) {
+    if (ctxMsgs[i].role === 'assistant' && ctxMsgs[i].promptTokens > 0) { anchor = i; break; }
+  }
+  if (anchor >= 0) {
+    promptToks = ctxMsgs[anchor].promptTokens;
+    compToks = getMsgTokens(ctxMsgs[anchor]);
+    totalToks = promptToks + compToks;
+    for (const m of ctxMsgs.slice(anchor + 1)) {
+      const tok = getMsgTokens(m);
+      if (m.role === 'assistant') compToks += tok;
+      else promptToks += tok;
+      totalToks += tok;
+    }
+  } else if (Array.isArray(ctxMsgs) && ctxMsgs.length > 0) {
     for (const m of ctxMsgs) {
       const tok = getMsgTokens(m);
       if (m.role === 'assistant') {

@@ -15,6 +15,10 @@ Config (config/app.json -> capabilities.mcp_servers):
 A top-level Claude-Desktop style "mcpServers" block in app.json is merged in too
 (capabilities.mcp_servers wins on a name clash).
 
+Personal servers (one user only) have the same config shape but live in auth.db
+(user_mcp_servers); they run as their own process keyed "<name>@u<user id>", and
+their tools are registered with an owner so only that user sees them.
+
 Bridged tools appear as mcp__<server>__<tool> in the registry.
 """
 
@@ -44,8 +48,10 @@ NPX_INIT_TIMEOUT_S = 120    # first npx run downloads the package / may wait on 
 class McpServer:
     """One configured MCP server (either transport)."""
 
-    def __init__(self, name: str, cfg: dict):
+    def __init__(self, name: str, cfg: dict, owner: Optional[int] = None):
         self.name = name
+        self.owner = owner          # user id for a personal server, None = global
+        self.key = server_key(name, owner)
         self.cfg = cfg or {}
         self.transport = (cfg.get("transport") or ("stdio" if cfg.get("command") else "http")).lower()
         self.status = "idle"        # idle|connecting|ready|error|stopped
@@ -72,7 +78,7 @@ class McpServer:
         env = None
         if self.cfg.get("env"):
             env = {**os.environ, **{str(k): str(v) for k, v in self.cfg["env"].items()}}
-        if self.cfg.get("credential_ref") == "keyring":
+        if self.cfg.get("credential_ref") == "keyring" and self.owner is None:
             env = self._inject_keyring_token(env)
         if self.cfg.get("secret_env_keys"):
             env = self._inject_secret_env(env)
@@ -102,7 +108,7 @@ class McpServer:
         from . import credentials
         base = env if env is not None else dict(os.environ)
         for key in self.cfg.get("secret_env_keys") or []:
-            val = credentials.get_token(secret_env_ref(self.name, key))
+            val = credentials.get_token(secret_env_ref(self.name, key, self.owner))
             if val:
                 base[str(key)] = val
         return base
@@ -301,6 +307,7 @@ class McpServer:
     def status_info(self) -> dict:
         return {
             "name": self.name,
+            "scope": "global" if self.owner is None else "user",
             "transport": self.transport,
             "status": self.status,
             "error": self.error,
@@ -340,9 +347,22 @@ def _stringify_content(result) -> str:
     return out or "(empty result)"
 
 
-def secret_env_ref(server_name: str, key: str) -> str:
-    """Keychain id for a secret env var of a UI-added server."""
-    return f"{server_name}:env:{key}"
+def secret_env_ref(server_name: str, key: str, owner: Optional[int] = None) -> str:
+    """Keychain id for a secret env var of a UI-added server (personal ones are per user)."""
+    if owner is None:
+        return f"{server_name}:env:{key}"
+    return f"u{owner}:{server_name}:env:{key}"
+
+
+def server_key(name: str, owner: Optional[int] = None) -> str:
+    """Runtime id: a personal server never collides with a global one or another user's."""
+    return name if owner is None else f"{name}@u{owner}"
+
+
+def user_servers(user_id: int) -> dict:
+    """One user's personal servers: name -> config."""
+    from . import auth_db
+    return {name: scfg for _, name, scfg in auth_db.list_user_mcp_servers(user_id)}
 
 
 def configured_servers(app_config: dict) -> dict:
@@ -385,26 +405,38 @@ async def connect_all_mcp() -> dict:
     cfg = APP_CONFIG.get("capabilities", {})
     if not cfg.get("mcp", False):
         return {}
+    from . import auth_db
     # concurrently: one slow npx/mcp-remote start must not hold up the others
-    servers = configured_servers(APP_CONFIG)
-    infos = await asyncio.gather(*(connect_one(n, s) for n, s in servers.items()))
-    return {info["name"]: info for info in infos}
+    targets = [(n, s, None) for n, s in configured_servers(APP_CONFIG).items()]
+    targets += [(n, s, uid) for uid, n, s in auth_db.list_user_mcp_servers()]
+    infos = await asyncio.gather(*(connect_one(n, s, uid) for n, s, uid in targets))
+    return {server_key(n, uid): info for (n, _, uid), info in zip(targets, infos)}
 
 
 def ready_tool_schemas() -> list:
     """Schemas of every tool on a connected (ready) MCP server - for Chat mode's tool list."""
     out = []
     for t in registry.list():
-        if t.source.startswith("mcp:") and is_ready(t.source[4:]):
+        srv = _servers.get(t.source[4:]) if t.source.startswith("mcp:") else None
+        if srv and srv.status == "ready":
             out.append(t.schema)
     return out
+
+
+def _visible_servers() -> list:
+    """Global servers plus the calling user's personal ones (a global name shadows a personal one)."""
+    from .request_context import get_current_user_id
+    uid = get_current_user_id()
+    glob = {s.name for s in _servers.values() if s.owner is None}
+    return [s for s in _servers.values()
+            if s.owner is None or (s.owner == uid and uid is not None and s.name not in glob)]
 
 
 def chat_prompt() -> str:
     """Tells the model which MCP servers are connected and what they cover, so a short
     server name like 'isms' isn't guessed from general knowledge (e.g. as an ISO 27001 ISMS)."""
     lines = []
-    for s in _servers.values():
+    for s in _visible_servers():
         if s.status != "ready" or not s.tools:
             continue
         descs = "; ".join((t.get("description") or t.get("name", ""))[:110] for t in s.tools[:3])
@@ -424,29 +456,32 @@ def chat_prompt() -> str:
     )
 
 
-def mcp_status() -> list:
-    return [s.status_info() for s in _servers.values()]
+def mcp_status(user_id: Optional[int] = None) -> list:
+    """Global servers, plus user_id's personal servers when given."""
+    return [s.status_info() for s in _servers.values()
+            if s.owner is None or (user_id is not None and s.owner == user_id)]
 
 
-def is_ready(name: str) -> bool:
-    s = _servers.get(name)
+def is_ready(name: str, owner: Optional[int] = None) -> bool:
+    s = _servers.get(server_key(name, owner))
     return bool(s and s.status == "ready")
 
 
-async def connect_one(name: str, cfg: dict) -> dict:
+async def connect_one(name: str, cfg: dict, owner: Optional[int] = None) -> dict:
     """(Re)connect a single server and register its tools - used by the connector-catalog
     authorize flow so a newly-authorized server comes online without a full app restart."""
-    existing = _servers.pop(name, None)
+    key = server_key(name, owner)
+    existing = _servers.pop(key, None)
     if existing:
         existing.stop()
-    registry.unregister_source(f"mcp:{name}")
-    srv = McpServer(name, cfg)
-    _servers[name] = srv
+    registry.unregister_source(f"mcp:{key}")
+    srv = McpServer(name, cfg, owner)
+    _servers[key] = srv
     if cfg.get("disabled"):
         srv.status = "disabled"
         return srv.status_info()
     tools = await srv.connect()
-    if _servers.get(name) is not srv:
+    if _servers.get(key) is not srv:
         # removed or re-saved from the UI while this connect was in flight
         srv.stop()
         return srv.status_info()
@@ -458,16 +493,17 @@ async def connect_one(name: str, cfg: dict) -> dict:
             f"mcp__{name}__{tname}",
             _tool_bridge(srv, tname),
             _bridge_schema(name, t),
-            source=f"mcp:{name}",
-            meta={"label": f"{name}/{tname}"}, replace=True)
+            source=f"mcp:{key}",
+            meta={"label": f"{name}/{tname}"}, replace=True, owner=owner)
     return srv.status_info()
 
 
-def disconnect_one(name: str) -> None:
-    srv = _servers.pop(name, None)
+def disconnect_one(name: str, owner: Optional[int] = None) -> None:
+    key = server_key(name, owner)
+    srv = _servers.pop(key, None)
     if srv:
         srv.stop()
-    registry.unregister_source(f"mcp:{name}")
+    registry.unregister_source(f"mcp:{key}")
 
 
 def stop_all_mcp() -> None:

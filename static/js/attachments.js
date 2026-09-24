@@ -120,6 +120,8 @@ async function addAttachmentFile(f, namePrefix = 'screenshot') {
         attachments[idx].preview = fileData.preview || '';
         attachments[idx].truncated = fileData.truncated || false;
         attachments[idx].serverPath = fileData.path || f.name;
+        // the server de-dupes names (deck-2.pptx); later edits must use that name
+        if (fileData.name) attachments[idx].name = fileData.name;
         attachments[idx].content = fileData.preview || ''; // for buildPromptText compat
       }
       toast(`📄 ${f.name} uploaded & extracted`);

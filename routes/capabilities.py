@@ -93,6 +93,7 @@ class AgentLibraryReq(BaseModel):
     default_policy: Optional[str] = None      # "deny" | "allow"
     agents: Optional[LibraryListReq] = None
     commands: Optional[LibraryListReq] = None
+    multi_lanes: Optional[dict] = None         # {"backend": "main"|"executor", "frontend": ...}
 
 
 class ShellSettingsReq(BaseModel):
@@ -102,7 +103,7 @@ class ShellSettingsReq(BaseModel):
 
 
 @router.get("/control/capabilities")
-async def capabilities_status():
+async def capabilities_status(user: Principal = Depends(get_current_user)):
     caps = APP_CONFIG.get("capabilities", {})
     skills = load_skills() if caps.get("skills") else {}
     sh = shell_cfg()
@@ -118,7 +119,7 @@ async def capabilities_status():
         },
         "mcp": {
             "enabled": bool(caps.get("mcp")),
-            "servers": mcp_status(),
+            "servers": mcp_status(user.id),   # global + this user's personal servers
         },
         "agent_library": {
             "enabled": library_enabled(),
@@ -227,6 +228,11 @@ async def agent_library_update(req: AgentLibraryReq,
         if req.default_policy not in ("deny", "allow"):
             return JSONResponse({"error": "default_policy must be 'deny' or 'allow'"}, status_code=400)
         lib["default_policy"] = req.default_policy
+    if req.multi_lanes is not None:
+        ml = {k: v for k, v in req.multi_lanes.items() if k in ("backend", "frontend")}
+        if any(v not in ("main", "executor") for v in ml.values()):
+            return JSONResponse({"error": "multi_lanes values must be 'main' or 'executor'"}, status_code=400)
+        lib["multi_lanes"] = {**(lib.get("multi_lanes") or {}), **ml}
     for kind in ("agents", "commands"):
         upd = getattr(req, kind)
         if upd is None:
@@ -290,4 +296,161 @@ async def capabilities_toggle(req: CapToggleReq,
     return {"ok": True, "section": req.section, "enabled": req.enabled}
 
 
+# ---------------- router rules + usage-based suggestions ----------------
+# Rules live in APP_CONFIG["router"] (core/router_policy.py). The tuner only
+# proposes; every change here is an explicit admin action, audited with the
+# before/after values as change-control evidence.
 
+from core import router_policy, route_log
+from core.router_tuner import run_tuner
+from core.small_model import reset_router_failures
+
+_LIST_KEYS = ("creation_keywords", "action_keywords", "refusal_phrases", "greetings")
+_MAIN_CATEGORIES = tuple(c for c in router_policy.CATEGORIES if c != "greeting")
+
+
+class RouterSettingsReq(BaseModel):
+    creation_keywords: Optional[list] = None
+    action_keywords: Optional[list] = None
+    refusal_phrases: Optional[list] = None
+    greetings: Optional[list] = None
+    repeat_streak_limit: Optional[int] = None
+    start_on_main_categories: Optional[list] = None
+    confidence_threshold: Optional[float] = None
+
+
+def _validate_router_changes(changes: dict):
+    """-> (clean_changes, error_str)."""
+    out = {}
+    for k, v in changes.items():
+        if k in _LIST_KEYS:
+            vals = sorted({str(x).strip().lower() for x in (v or []) if str(x).strip()})
+            if len(vals) > 80 or any(len(x) > 40 for x in vals):
+                return None, f"{k}: at most 80 entries of 40 chars each"
+            out[k] = vals
+        elif k == "repeat_streak_limit":
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                return None, "repeat_streak_limit must be an integer"
+            if not 1 <= n <= 5:
+                return None, "repeat_streak_limit must be between 1 and 5"
+            out[k] = n
+        elif k == "start_on_main_categories":
+            vals = sorted({str(x).strip().lower() for x in (v or [])})
+            bad = [x for x in vals if x not in _MAIN_CATEGORIES]
+            if bad:
+                return None, f"unknown categories: {', '.join(bad)} (allowed: {', '.join(_MAIN_CATEGORIES)})"
+            out[k] = vals
+        elif k == "confidence_threshold":
+            try:
+                t = round(float(v), 2)
+            except (TypeError, ValueError):
+                return None, "confidence_threshold must be a number"
+            if not 0.5 <= t <= 0.99:
+                return None, "confidence_threshold must be between 0.5 and 0.99"
+            out[k] = t
+        else:
+            return None, f"unknown router setting: {k}"
+    return out, ""
+
+
+def _router_settings() -> dict:
+    cur = router_policy.rcfg()
+    settings = {k: cur[k] for k in router_policy.DEFAULTS}
+    settings["confidence_threshold"] = (APP_CONFIG.get("router") or {}).get("confidence_threshold", 0.7)
+    return settings
+
+
+def _write_router(changes: dict):
+    """Persist + live-apply router changes. -> (old_values, error_response|None)."""
+    try:
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        return None, JSONResponse({"error": f"config/app.json unreadable: {e}"}, status_code=500)
+    live = _router_settings()
+    old = {k: live.get(k) for k in changes}
+    cfg.setdefault("router", {}).update(changes)
+    try:
+        CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    except Exception as e:
+        return None, JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
+    APP_CONFIG.setdefault("router", {}).update(changes)
+    reset_router_failures()
+    return old, None
+
+
+def _router_view() -> dict:
+    return {
+        "settings": _router_settings(),
+        "categories": list(router_policy.CATEGORIES),
+        "engine": router_engine_name(),
+        "router_available": router_available(),
+        "stats_7d": route_log.stats(7),
+        "stats_30d": route_log.stats(30),
+        "suggestions": route_log.list_suggestions("pending"),
+        "history": [s for s in route_log.list_suggestions(limit=20) if s["status"] != "pending"],
+    }
+
+
+@router.get("/control/router")
+async def router_get(user: Principal = Depends(require_permission("usage.report.view"))):
+    """Routing rules, per-category/lane usage stats and pending tuner suggestions."""
+    return _router_view()
+
+
+@router.post("/control/router")
+async def router_update(req: RouterSettingsReq,
+                        user: Principal = Depends(require_permission("settings.router.configure"))):
+    changes, err = _validate_router_changes(req.model_dump(exclude_none=True))
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    if not changes:
+        return JSONResponse({"error": "nothing to change"}, status_code=400)
+    old, resp = _write_router(changes)
+    if resp:
+        return resp
+    audit_log(user, action="router.update", resource="router", permission_key="settings.router.configure",
+              detail={"from": old, "to": changes})
+    return {"ok": True, **_router_view()}
+
+
+@router.post("/control/router/tune")
+async def router_tune(user: Principal = Depends(require_permission("settings.router.configure"))):
+    """Run the usage analysis now (it only creates pending suggestions)."""
+    ids = run_tuner()
+    audit_log(user, action="router.tune.run", resource="router", permission_key="settings.router.configure",
+              detail={"suggestions": ids})
+    return {"ok": True, "new_or_updated": ids, **_router_view()}
+
+
+@router.post("/control/router/suggestions/{sid}/{decision}")
+async def router_suggestion_decide(sid: int, decision: str,
+                                   user: Principal = Depends(require_permission("settings.router.configure"))):
+    if decision not in ("apply", "dismiss"):
+        return JSONResponse({"error": "decision must be apply or dismiss"}, status_code=400)
+    sug = route_log.get_suggestion(sid)
+    if not sug or sug["status"] != "pending":
+        return JSONResponse({"error": "suggestion not found or already decided"}, status_code=404)
+    who = getattr(user, "username", None) or str(user.id)
+    if decision == "dismiss":
+        route_log.decide_suggestion(sid, "dismissed", who)
+        audit_log(user, action="router.tune.dismiss", resource=sug["key"], permission_key="settings.router.configure",
+                  detail={"suggestion": sid, "proposed": sug["proposed"]})
+        return {"ok": True, **_router_view()}
+    changes, err = _validate_router_changes({sug["key"]: sug["proposed"]})
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    # stale guard: the setting changed since the tuner looked at it
+    live = _router_settings().get(sug["key"])
+    if json.dumps(live, sort_keys=True) != json.dumps(sug["current"], sort_keys=True):
+        route_log.decide_suggestion(sid, "stale", who)
+        return JSONResponse({"error": "this setting changed since the suggestion was made; run the tuner again"},
+                            status_code=409)
+    old, resp = _write_router(changes)
+    if resp:
+        return resp
+    route_log.decide_suggestion(sid, "applied", who)
+    audit_log(user, action="router.tune.apply", resource=sug["key"], permission_key="settings.router.configure",
+              detail={"suggestion": sid, "from": old, "to": changes, "evidence": sug["evidence"]})
+    return {"ok": True, **_router_view()}

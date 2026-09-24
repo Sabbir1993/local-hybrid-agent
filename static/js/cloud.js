@@ -35,9 +35,9 @@ function renderCloudCard(d) {
   const models = d.models || [];
   const local = d.local || {};
 
-  let h = `<div class="rep-cell" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+  let h = `<div class="rep-bar" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
     <span><b>${provs.length}</b> provider(s) · <b>${models.length}</b> cloud model(s)</span>
-    <button class="btn ghost" id="cloud-add-toggle" style="width:auto; margin:0; padding:4px 10px; font-size:11px;">\uFF0B Add provider</button>
+    <button class="btn ghost" id="cloud-add-toggle" style="width:auto; margin:0; padding:4px 10px; font-size:11px; white-space:nowrap;">\uFF0B Add provider</button>
   </div>`;
 
   if (!provs.length) {

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from .backend import device_prefix
-from .config import CONFIG_DEFAULTS, LLAMA_SERVER_PORT
+from .config import ACTIVE_RUNTIME, CONFIG_DEFAULTS, LLAMA_SERVER_PORT, apply_runtime
 
 
 def kill_orphan_llama_servers() -> int:
@@ -31,7 +31,9 @@ def find_llama_server(bin_dir: str) -> Path:
         p = bin_dir_path / name
         if p.exists():
             return p
-    sys.exit(f"llama-server(.exe) not found in {bin_dir} - check 'llama_bin_dir' in the profile.")
+    raise RuntimeError(
+        f"llama-server(.exe) not found in {bin_dir} (runtime '{ACTIVE_RUNTIME['name']}') - "
+        f"check runtimes.{ACTIVE_RUNTIME['name']}.llama_bin_dir in config/app.json.")
 
 
 def per_slot_cap(profile: dict) -> int:
@@ -52,6 +54,7 @@ def per_slot_cap(profile: dict) -> int:
 
 
 def build_launch_command(profile: dict) -> list[str]:
+    apply_runtime(profile)
     bin_dir = profile.get("llama_bin_dir", CONFIG_DEFAULTS["llama_bin_dir"])
     server_bin = find_llama_server(bin_dir)
     tuned = profile.get("tuned", {})

@@ -13,264 +13,587 @@
 <link rel="stylesheet" href="/static/css/style.css?v=4.6">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 <style>
-  html, body { height: auto; min-height: 100%; overflow-y: auto; }
-  #settings-page { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; display: flex; flex-direction: column; gap: 14px; }
-  #settings-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
-  #settings-topbar h1 { font-size: 15px; margin: 0; letter-spacing: 0.5px; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: var(--bg);
+  }
+  #settings-page {
+    width: 100%;
+    height: 100vh;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+  #settings-layout {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+    background: var(--bg);
+  }
+  #settings-sidebar {
+    width: 240px;
+    flex-shrink: 0;
+    background: var(--panel);
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .settings-search-wrap {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+  #settings-tab-search {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.15s ease;
+  }
+  #settings-tab-search:focus {
+    border-color: var(--accent);
+  }
+  #settings-nav {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .settings-group-label {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--dim);
+    opacity: 0.75;
+    padding: 10px 8px 4px;
+    margin-top: 4px;
+  }
+  .settings-group-label:first-child {
+    margin-top: 0;
+  }
+  .settings-tab-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--dim);
+    text-align: left;
+    border: 1px solid transparent;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    user-select: none;
+  }
+  .settings-tab-btn:hover {
+    background: var(--hover, rgba(255,255,255,0.04));
+    color: var(--text);
+  }
+  .settings-tab-btn.active {
+    background: var(--accent-bg, rgba(56, 189, 248, 0.12));
+    color: var(--accent, #38bdf8);
+    font-weight: 600;
+    border-color: var(--accent-border, rgba(56, 189, 248, 0.25));
+  }
+  .settings-tab-btn.tab-danger:hover {
+    background: rgba(244, 63, 94, 0.12);
+    color: #f43f5e;
+  }
+  .settings-tab-btn.tab-danger.active {
+    background: rgba(244, 63, 94, 0.15);
+    color: #f43f5e;
+    border-color: rgba(244, 63, 94, 0.3);
+  }
+  .tab-icon {
+    font-size: 13.5px;
+    width: 18px;
+    display: inline-flex;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .tab-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #settings-content {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 20px 24px 60px;
+  }
+  .settings-panel {
+    display: none;
+    animation: panelFadeIn 0.15s ease-out;
+  }
+  .settings-panel.active {
+    display: block;
+  }
+  @keyframes panelFadeIn {
+    from { opacity: 0; transform: translateY(3px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .settings-panel-head {
+    margin-bottom: 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .settings-panel-head h2 {
+    font-size: 13.5px;
+    font-weight: 700;
+    margin: 0;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .settings-panel-head p {
+    font-size: 11px;
+    margin: 3px 0 0;
+    color: var(--dim);
+    line-height: 1.4;
+  }
   .settings-hidden-note { color: var(--dim); font-size: 11px; padding: 10px; text-align: center; }
   #sec-cfg .model-group { width: 100%; position: relative; overflow: visible; }
   #sec-cfg .model-group select { max-width: none; }
   #sec-cfg .model-picker-btn { max-width: none; flex: 1; }
+
+  /* Capabilities & MCP collapsible styling */
+  details.cap-group { border: 1px solid var(--border); border-radius: 8px; margin-top: 8px; overflow: hidden; }
+  details.cap-group > summary.cap-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; background: var(--panel2); font-weight: 700; font-size: 12px;
+    cursor: pointer; user-select: none; list-style: none;
+  }
+  details.cap-group > summary.cap-head::-webkit-details-marker { display: none; }
+  details.cap-group > summary.cap-head:hover { background: var(--hover, rgba(255,255,255,0.03)); }
+  .cap-chevron { display: inline-block; font-size: 8.5px; color: var(--dim); transition: transform .15s ease; margin-right: 6px; }
+  details.cap-group[open] > summary.cap-head .cap-chevron { transform: rotate(90deg); }
+
+  details.mcp-server-fold {
+    border: 1px solid var(--border-subtle); border-radius: 6px;
+    background: rgba(255,255,255,0.015); margin-bottom: 6px; overflow: hidden;
+  }
+  details.mcp-server-fold > summary.mcp-server-head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px; cursor: pointer; user-select: none;
+    font-size: 11px; list-style: none; background: transparent; transition: background .12s ease;
+  }
+  details.mcp-server-fold > summary.mcp-server-head::-webkit-details-marker { display: none; }
+  details.mcp-server-fold > summary.mcp-server-head:hover { background: var(--hover, rgba(255,255,255,0.04)); }
+  .mcp-chevron { display: inline-block; font-size: 8px; color: var(--dim); transition: transform .15s ease; margin-right: 4px; }
+  details.mcp-server-fold[open] > summary.mcp-server-head .mcp-chevron { transform: rotate(90deg); }
+  details.mcp-server-fold .mcp-tools-list {
+    padding: 4px 8px 8px 18px; display: flex; flex-direction: column; gap: 3px;
+    border-top: 1px dashed var(--border-subtle);
+  }
+
+  @media (max-width: 768px) {
+    #settings-layout { flex-direction: column; }
+    #settings-sidebar {
+      width: 100%;
+      height: auto;
+      border-right: none;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .settings-search-wrap { display: none; }
+    .settings-group-label { display: none; }
+    #settings-nav {
+      flex-direction: row;
+      overflow-x: auto;
+      flex-wrap: nowrap;
+      padding: 6px;
+      gap: 4px;
+    }
+    .settings-tab-btn {
+      width: auto;
+      flex-shrink: 0;
+      padding: 6px 10px;
+      font-size: 11px;
+    }
+    #settings-content {
+      padding: 14px 14px 40px;
+    }
+  }
 </style>
 </head>
 <body>
 <div id="settings-page">
-  <div id="settings-topbar">
-    <h1>⚙️ Settings</h1>
-    <div style="display:flex; align-items:center; gap:10px;">
-      <a href="/" class="btn ghost" style="width:auto; margin:0; padding:6px 14px; text-decoration:none;">← Back to Chat</a>
-      <button id="btn-user-menu" class="btn ghost" style="width:auto; margin:0; padding:6px 10px;" title="Account">👤</button>
-    </div>
+
+  <div id="settings-layout">
+    <!-- Left Navigation Rail -->
+    <aside id="settings-sidebar">
+      <div class="settings-search-wrap">
+        <input type="text" id="settings-tab-search" placeholder="Search settings…" autocomplete="off">
+      </div>
+      <nav id="settings-nav">
+        <div class="settings-group-label">General</div>
+        <button type="button" class="settings-tab-btn active" data-tab="sec-theme">
+          <span class="tab-icon">🎨</span>
+          <span class="tab-label">Appearance &amp; Themes</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-sampling" data-perm="settings.runtime.view">
+          <span class="tab-icon">🎛️</span>
+          <span class="tab-label">Chat &amp; Sampling</span>
+        </button>
+
+        <div class="settings-group-label">Hardware &amp; Models</div>
+        <button type="button" class="settings-tab-btn" data-tab="sec-gpus" data-perm="settings.runtime.view">
+          <span class="tab-icon">⚡</span>
+          <span class="tab-label">GPUs (Discrete)</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-runtime" data-perm="settings.runtime.view">
+          <span class="tab-icon">🔌</span>
+          <span class="tab-label">Runtime &amp; Keepalive</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-cfg" data-perm="model.local.configure">
+          <span class="tab-icon">⚙️</span>
+          <span class="tab-label">Model Launch Config</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-cloud">
+          <span class="tab-icon">☁️</span>
+          <span class="tab-label">Cloud Models</span>
+        </button>
+
+        <div class="settings-group-label">Agent Capabilities</div>
+        <button type="button" class="settings-tab-btn" data-tab="sec-caps" data-perm="settings.orchestration.configure">
+          <span class="tab-icon">🧩</span>
+          <span class="tab-label">Capabilities</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-knowledge" data-perm="knowledge.manage">
+          <span class="tab-icon">📚</span>
+          <span class="tab-label">Knowledge Base</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-guard" data-perm="settings.input_guard">
+          <span class="tab-icon">🛡️</span>
+          <span class="tab-label">Input/Output Sanitizer</span>
+        </button>
+
+        <div class="settings-group-label">System &amp; Administration</div>
+        <button type="button" class="settings-tab-btn" data-tab="sec-users" data-perm="users.manage">
+          <span class="tab-icon">👤</span>
+          <span class="tab-label">Users &amp; Roles</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-db" data-perm="database.manage">
+          <span class="tab-icon">🗄️</span>
+          <span class="tab-label">Database Explorer</span>
+        </button>
+        <button type="button" class="settings-tab-btn tab-danger" data-tab="sec-danger" data-perm="system.danger_zone">
+          <span class="tab-icon">⚠️</span>
+          <span class="tab-label">Danger Zone</span>
+        </button>
+      </nav>
+    </aside>
+
+    <!-- Right Content Area -->
+    <main id="settings-content">
+      <!-- Section 1: Appearance & Themes -->
+      <div class="card settings-panel active" id="sec-theme">
+        <div class="settings-panel-head">
+          <h2>🎨 Appearance &amp; Themes</h2>
+          <p class="dim">Select color palette and interface theme</p>
+        </div>
+        <div class="theme-grid">
+          <button type="button" class="theme-opt" data-t="slate" onclick="setTheme('slate')"><span class="theme-swatch" style="background:#79c0ff"></span> Slate &amp; Indigo</button>
+          <button type="button" class="theme-opt" data-t="claude" onclick="setTheme('claude')"><span class="theme-swatch" style="background:#d97757"></span> Claude Warm</button>
+          <button type="button" class="theme-opt" data-t="tokyonight" onclick="setTheme('tokyonight')"><span class="theme-swatch" style="background:#7aa2f7"></span> Tokyo Night</button>
+          <button type="button" class="theme-opt" data-t="nord" onclick="setTheme('nord')"><span class="theme-swatch" style="background:#88c0d0"></span> Nord Arctic</button>
+          <button type="button" class="theme-opt" data-t="classic" onclick="setTheme('classic')"><span class="theme-swatch" style="background:#6c8cff"></span> Classic Dark</button>
+          <button type="button" class="theme-opt" data-t="oled" onclick="setTheme('oled')"><span class="theme-swatch" style="background:#3b82f6"></span> OLED Black</button>
+          <button type="button" class="theme-opt" data-t="ssl" onclick="setTheme('ssl')"><span class="theme-swatch" style="background: linear-gradient(135deg, #2d489a 50%, #eb3439 50%);"></span> SSL Wireless (Navy)</button>
+          <button type="button" class="theme-opt" data-t="ssl-light" onclick="setTheme('ssl-light')"><span class="theme-swatch" style="background: linear-gradient(135deg, #2d489a 50%, #eb3439 50%); border: 1px solid #94a3b8;"></span> SSL Wireless (Light)</button>
+          <button type="button" class="theme-opt" data-t="light" onclick="setTheme('light')" style="grid-column: span 2;"><span class="theme-swatch" style="background:#2563eb; border:1px solid #94a3b8;"></span> ☀️ Pure Light (Modern Crisp)</button>
+        </div>
+      </div>
+
+      <!-- Section 2: Chat & Sampling -->
+      <div class="card settings-panel" id="sec-sampling" data-perm="settings.runtime.view">
+        <div class="settings-panel-head">
+          <h2>🎛️ Chat &amp; Sampling</h2>
+          <p class="dim">System prompt and sampling hyperparameters used for every chat/agent request</p>
+        </div>
+        <label for="sysprompt" title="System prompt instructions given to the LLM">System prompt <span class="info" title="Global instructions guiding model behavior and tone">ⓘ</span></label>
+        <textarea id="sysprompt" rows="3" placeholder="You are a helpful assistant." title="System prompt text"></textarea>
+
+        <div class="smp-grid">
+          <div class="smp-row" title="Controls randomness of output (temperature)">
+            <label for="temp">Temperature <span class="info" title="Higher = creative, lower = deterministic">ⓘ</span></label>
+            <input type="range" id="temp" min="0" max="2" step="0.05" value="1.0" title="Temperature slider (0.0 to 2.0)">
+            <span class="mono smp-val" id="tempv">1.00</span>
+          </div>
+          <div class="smp-row" title="Nucleus sampling threshold (top_p)">
+            <label for="topp">Top P <span class="info" title="Considers top tokens with cumulative probability up to P">ⓘ</span></label>
+            <input type="range" id="topp" min="0" max="1" step="0.01" value="0.95" title="Top P slider (0.0 to 1.0)">
+            <span class="mono smp-val" id="toppv">0.95</span>
+          </div>
+          <div class="smp-row" title="Minimum token probability threshold relative to top candidate (min_p)">
+            <label for="minp">Min P <span class="info" title="Filters out low-probability tail tokens">ⓘ</span></label>
+            <input type="range" id="minp" min="0" max="0.3" step="0.005" value="0" title="Min P slider (0.0 to 0.3)">
+            <span class="mono smp-val" id="minpv">0.000</span>
+          </div>
+          <div class="smp-row" title="Penalizes repeated tokens (repeat_penalty)">
+            <label for="rep">Repeat penalty <span class="info" title="Higher values reduce text repetition; 1.0 = off">ⓘ</span></label>
+            <input type="range" id="rep" min="1" max="2" step="0.01" value="1.0" title="Repeat penalty slider (1.0 to 2.0)">
+            <span class="mono smp-val" id="repv">1.00</span>
+          </div>
+          <div class="smp-row" title="Penalizes tokens that have appeared at all in the context (presence_penalty)">
+            <label for="presence">Presence penalty <span class="info" title="Positive values push the model toward new topics; 0.0 = off">ⓘ</span></label>
+            <input type="range" id="presence" min="-2" max="2" step="0.05" value="0" title="Presence penalty slider (-2.0 to 2.0)">
+            <span class="mono smp-val" id="presencev">0.00</span>
+          </div>
+          <div class="smp-row" title="Limits candidate pool to K highest probability tokens (0 = off)">
+            <label for="topk">Top K <span class="dim">(0 = off)</span> <span class="info" title="Limits pool to K highest probability tokens">ⓘ</span></label>
+            <input type="number" id="topk" value="20" min="0" max="200" title="Top K candidate count (0 = disabled)">
+            <span class="mono smp-val"></span>
+          </div>
+          <div class="smp-row" title="Maximum tokens to generate per response. Tip: set -1 for unlimited generation (only stopped by stop strings/EOS or manual Stop)">
+            <label for="maxtok">Max tokens <span class="info" title="Set -1 = no output limit: the model generates until EOS or you press Stop. Higher values need more KV cache (context_size). Leave 512 for chat; use -1 for long-form writing">ⓘ</span></label>
+            <input type="number" id="maxtok" value="-1" min="-1" max="262144" title="Maximum generation tokens (-1 = unlimited)">
+            <span class="mono smp-val"></span>
+          </div>
+        </div>
+        <div class="cfg-note" title="Where these values apply">Saved to your browser and applied to every chat/agent request you send — no need to reopen this page mid-conversation.</div>
+      </div>
+
+      <!-- Section 3: Runtime -->
+      <div class="card settings-panel" id="sec-runtime" data-perm="settings.runtime.view">
+        <div class="settings-panel-head">
+          <h2>🔌 Runtime</h2>
+          <p class="dim">Live runtime behavior for the currently active model</p>
+        </div>
+        <div class="keep-row" title="Windows demotes GPU VRAM to system RAM ~70s after idle, causing throughput drop (14.4 → 7.7 t/s). A 1-token ping every 25s while idle keeps VRAM resident.">
+          <label class="switch" title="Toggle keepalive background pings"><input type="checkbox" id="ka"><span class="slider"></span></label>
+          <div><b title="Keep VRAM resident in Arc GPUs">Keepalive</b><small>1-token ping while idle — keeps A770s at full speed</small></div>
+        </div>
+      </div>
+
+      <!-- Section 4: GPUs (Discrete) -->
+      <div class="card settings-panel" id="sec-gpus" data-perm="settings.runtime.view">
+        <div class="settings-panel-head" style="display:flex; align-items:center; justify-content:space-between;">
+          <div>
+            <h2>⚡ GPUs (Discrete)</h2>
+            <p class="dim">Dedicated VRAM usage &amp; compute engine utilization for discrete Arc A770 GPUs</p>
+          </div>
+          <button type="button" id="btn-refresh-gpu" class="btn" style="width:auto; flex:none; margin:0 0 0 auto; padding:4px 12px; font-size:11px; height:26px; border-radius:6px; white-space:nowrap;" title="Query discrete GPU status on-demand">⚡ Check GPU</button>
+        </div>
+        <div id="gpu-list" style="margin-top:8px;"><div class="dim" style="font-size:12px">Click "⚡ Check GPU" or select tab to query status…</div></div>
+      </div>
+
+      <!-- Section 5: Model Config -->
+      <div class="card settings-panel" id="sec-cfg" data-perm="model.local.configure">
+        <div class="settings-panel-head">
+          <h2>⚙️ Model Config · Restart to Apply</h2>
+          <p class="dim">Adjust llama-server launch parameters and persist them to profile JSON</p>
+        </div>
+        <div class="model-group" style="margin-bottom:6px; position:relative;" title="Pick which local/cloud model this config panel edits">
+          <select id="profile" title="Select a GGUF model (grouped by family)" style="display:none;"></select>
+          <button type="button" id="model-picker-btn" class="model-picker-btn" style="flex:1; max-width:none;">
+            <span id="model-picker-icon" class="model-picker-icon">🖥</span>
+            <span id="model-picker-label" class="model-picker-label">Select a model…</span>
+            <span id="model-picker-caps" class="mpi-caps"></span>
+            <span class="model-picker-caret">▾</span>
+          </button>
+          <button id="btn-load-header" title="Load the selected model into GPU VRAM"><span>▶</span></button>
+          <div id="model-picker-dropdown" class="model-picker-dropdown"></div>
+        </div>
+        <div id="model-caps-row" class="model-caps-row">
+          <span class="caps-label">CAPABILITIES</span>
+          <div id="caps-pills" class="caps-pills"></div>
+        </div>
+        <div class="cfg-grid">
+          <div class="cfg-item" title="Context size in tokens (n_ctx). Maximum prompt + completion memory allocated in VRAM">
+            <label for="cfg-ctx">Context size <span class="info" title="Maximum token context window size (e.g. 32768, 65536)">ⓘ</span></label>
+            <input type="number" id="cfg-ctx" step="8" min="512" max="1048576" value="32768" title="Context size (n_ctx) in tokens (512–1048576)">
+          </div>
+          <div class="cfg-item" title="Number of model layers offloaded to GPUs (n_gpu_layers). 999 offloads all layers to VRAM">
+            <label for="cfg-ngl">GPU layers <span class="info" title="999 = offload all layers to GPU VRAM">ⓘ</span></label>
+            <input type="number" id="cfg-ngl" min="0" max="999" value="999" title="Number of GPU layers (n_gpu_layers)">
+          </div>
+          <div class="cfg-item" title="Number of CPU threads for prompt computation (threads). 0 = auto-detect">
+            <label for="cfg-threads">CPU threads <span class="info" title="0 = auto-detect optimal CPU thread count">ⓘ</span></label>
+            <input type="number" id="cfg-threads" min="0" max="64" value="0" title="CPU threads (0 = auto)">
+          </div>
+          <div class="cfg-item" title="Number of CPU threads for batch evaluation (threads_batch). 0 = same as CPU threads">
+            <label for="cfg-tb">Batch threads <span class="info" title="0 = same thread count as CPU threads">ⓘ</span></label>
+            <input type="number" id="cfg-tb" min="0" max="64" value="0" title="Batch threads (0 = default)">
+          </div>
+          <div class="cfg-item" title="Logical batch size for prompt ingest (batch_size). Default 2048">
+            <label for="cfg-batch">Batch size <span class="info" title="Logical prompt evaluation batch size (0 = default 2048)">ⓘ</span></label>
+            <input type="number" id="cfg-batch" min="0" max="8192" value="0" title="Batch size (0 = default 2048)">
+          </div>
+          <div class="cfg-item" title="Physical micro-batch size (ubatch_size). Default 512. Lower values reduce peak VRAM spikes">
+            <label for="cfg-ubatch">Ubatch size <span class="info" title="Physical micro-batch size. Lower reduces VRAM spikes during long prompt ingest">ⓘ</span></label>
+            <input type="number" id="cfg-ubatch" min="0" max="4096" value="0" title="Physical micro-batch size (ubatch_size)">
+          </div>
+          <div class="cfg-item" title="Number of parallel sequence processing slots (n_slots / n_parallel)">
+            <label for="cfg-np">Parallel slots <span class="info" title="Number of simultaneous sequence processing slots (default 1)">ⓘ</span></label>
+            <input type="number" id="cfg-np" min="0" max="64" value="0" title="Parallel slots (0 = default 1)">
+          </div>
+          <div class="cfg-item" title="Seconds between background ping queries when idle (default 25s)">
+            <label for="cfg-kai">Keepalive (s) <span class="info" title="Idle interval (seconds) before sending 1-token keepalive ping">ⓘ</span></label>
+            <input type="number" id="cfg-kai" min="5" max="600" value="25" title="Keepalive ping interval in seconds">
+          </div>
+          <div class="cfg-item cfg-full" title="GPU shares. 9,11 = both GPUs (~45%/55% split) · 0,1 = GPU 2 only · 1,0 = GPU 1 only">
+            <label for="cfg-ts">Tensor split <span class="info" title="Comma-separated shares per GPU. 0,1 = only GPU 2 works · 1,0 = only GPU 1 works · 9,11 = balanced dual-GPU split">ⓘ</span></label>
+            <input type="text" id="cfg-ts" value="9,11" title="GPU share: 0,1 = GPU 2 only · 1,0 = GPU 1 only · 9,11 = both GPUs">
+            <small style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;">0,1 → GPU 2 only · 1,0 → GPU 1 only · 9,11 → dual</small>
+          </div>
+          <div class="cfg-item" title="GPU split strategy: 'layer' splits transformer layers; 'row' splits tensor matrices">
+            <label for="cfg-sm">Split mode <span class="info" title="'layer' (pipeline split) is recommended for Arc GPUs">ⓘ</span></label>
+            <select id="cfg-sm" title="GPU split mode (layer recommended)"><option value="layer">layer</option><option value="row">row</option></select>
+          </div>
+          <div class="cfg-item" title="Enable FlashAttention (on/off/auto). Speeds up context processing and saves VRAM">
+            <label for="cfg-fa">Flash attention <span class="info" title="Accelerates Vulkan context evaluation &amp; saves VRAM">ⓘ</span></label>
+            <select id="cfg-fa" title="Flash attention setting"><option value="on">on</option><option value="off">off</option><option value="auto">auto</option></select>
+          </div>
+          <div class="cfg-item cfg-full" title="Data type for KV cache. 'f16' is default; 'q8_0' cuts KV memory footprint in half">
+            <label for="cfg-ct">KV cache type <span class="info" title="q8_0 cuts KV memory usage by 50% with negligible loss">ⓘ</span></label>
+            <select id="cfg-ct" title="KV cache quantization type"><option value="f16">f16</option><option value="q8_0">q8_0 (½ KV RAM)</option><option value="q5_0">q5_0</option><option value="q4_0">q4_0</option><option value="bf16">bf16</option><option value="f32">f32</option></select>
+          </div>
+          <div class="cfg-item cfg-full" title="Unified KV pool (-kvu): all parallel slots share one context-sized KV pool instead of each getting context ÷ slots">
+            <label for="cfg-kvu">Unified KV pool <span class="info" title="With 2+ slots, each conversation can use up to the full context while idle slots reserve nothing">ⓘ</span></label>
+            <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
+              <label class="switch"><input type="checkbox" id="cfg-kvu"><span class="slider"></span></label>
+              <div style="flex:1"><small style="color:var(--dim); font-size:9px; display:block;">shared KV pool across parallel slots (-kvu)</small></div>
+            </div>
+          </div>
+          <div class="cfg-full cfg-row3">
+            <div class="cfg-item" title="Max tokens one conversation may take from the unified pool (--kv-unified-per-slot). Only applied with 2+ slots and a value below the context size">
+              <label for="cfg-kvps">Per-slot cap <span class="info" title="0 = no cap. Ignored with 1 slot or when ≥ context size">ⓘ</span></label>
+              <input type="number" id="cfg-kvps" min="0" max="1048576" step="1024" value="0" title="Per-slot context cap in tokens (0 = no cap)">
+            </div>
+            <div class="cfg-item" title="Minimum chunk size reused from the KV cache via shifting (--cache-reuse). 0 = off">
+              <label for="cfg-cru">Cache reuse <span class="info" title="Min tokens per reused chunk (0 = off, default 256)">ⓘ</span></label>
+              <input type="number" id="cfg-cru" min="0" max="4096" value="256" title="Cache reuse chunk size (0 = off)">
+            </div>
+            <div class="cfg-item" title="Host-RAM prompt cache in MiB (-cram). 0 = llama default (8192)">
+              <label for="cfg-cram">Prompt RAM (MiB) <span class="info" title="Host-RAM prompt cache. 0 = llama default 8192 MiB">ⓘ</span></label>
+              <input type="number" id="cfg-cram" min="0" max="49152" step="1024" value="0" title="Host-RAM prompt cache in MiB (0 = default)">
+            </div>
+          </div>
+          <div class="cfg-item cfg-full" id="mtp-row" style="display:none" title="MTP speculative decoding: a small draft model proposes token chains the target model verifies in one pass — typically 1.5-2x tokens/sec on Vulkan">
+            <label for="cfg-mtp"><span class="cfg-cap-icon mtp"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5h6L9.5 22l9-12h-6.5L13 2z"/></svg></span> MTP draft <span class="info" title="Enables speculative decoding with the auto-detected MTP draft file">ⓘ</span></label>
+            <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
+              <label class="switch"><input type="checkbox" id="cfg-mtp"><span class="slider"></span></label>
+              <div style="flex:1"><b id="mtp-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">speculative decoding available</small><small id="mtp-note" style="color:var(--amber, #d29922); font-size:9px; display:none;"></small></div>
+            </div>
+            <label for="mtp-nmax" style="margin-top:6px">Draft tokens (n-max) <span class="info" title="Tokens drafted per step (default 3)">ⓘ</span></label>
+            <input type="number" id="mtp-nmax" min="1" max="16" value="3" title="Max draft tokens per speculative step">
+          </div>
+          <div class="cfg-item cfg-full" id="vision-row" style="display:none" title="Multimodal vision projector: enables the main model to understand images directly without needing a separate vision model">
+            <label for="cfg-vision"><span class="cfg-cap-icon vision"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg></span> Multimodal vision <span class="info" title="Enables vision support with the auto-detected mmproj projector file">ⓘ</span></label>
+            <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
+              <label class="switch"><input type="checkbox" id="cfg-vision"><span class="slider"></span></label>
+              <div style="flex:1"><b id="vision-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">multimodal projector detected</small><small id="vision-note" style="color:var(--amber, #d29922); font-size:9px; display:none;"></small></div>
+            </div>
+          </div>
+        </div>
+        <div class="cfg-note" title="Configuration note">Saved per-model into config/model_configs.json. Unload the model, then load it again to apply changes.</div>
+        <button id="btn-apply" class="btn accent" style="margin-top:6px" title="Save configuration for this model. If the model is loaded, you will be asked to unload &amp; reload to apply.">💾 Save Config</button>
+      </div>
+
+      <!-- Section 6: Cloud Models -->
+      <div class="card settings-panel" id="sec-cloud">
+        <div class="settings-panel-head">
+          <h2>☁️ Cloud Models</h2>
+          <p class="dim">Cloud (OpenAI-compatible) providers: API keys, models, and which lane each one serves</p>
+        </div>
+        <div id="cloud-content"><div class="mon-empty">Loading…</div></div>
+        <div class="cfg-note" title="Where cloud settings live">Providers and lane bindings are saved to your own <b>config/providers/user_&lt;id&gt;.json</b> (kept out of git, so API keys are never committed, and never readable by another user). Every signed-in user manages their own providers, models, and lane bindings — cloud orchestration is fully in your hands.</div>
+      </div>
+
+      <!-- Section 7: Capabilities -->
+      <div class="card settings-panel" id="sec-caps" data-perm="settings.orchestration.configure">
+        <div class="settings-panel-head">
+          <h2>🧩 Capabilities</h2>
+          <p class="dim">Agent extensions: web browsing, skills, MCP servers, plugins</p>
+        </div>
+        <div id="caps-content"><div class="mon-empty">Loading…</div></div>
+        <div class="cfg-note" title="Capability note">Toggles persist to config/app.json. MCP servers added or edited here connect live (no restart); first npx start may take a minute.</div>
+      </div>
+
+      <!-- Section 8: Users & Roles -->
+      <div class="card settings-panel" id="sec-users" data-perm="users.manage">
+        <div class="settings-panel-head">
+          <h2>👤 Users &amp; Roles</h2>
+          <p class="dim">Create users, assign roles, and manage role permissions</p>
+        </div>
+        <div id="users-content"><div class="mon-empty">Loading…</div></div>
+      </div>
+
+      <!-- Section 9: Knowledge Base -->
+      <div class="card settings-panel" id="sec-knowledge" data-perm="knowledge.manage">
+        <div class="settings-panel-head">
+          <h2>📚 Knowledge Base</h2>
+          <p class="dim">Organizational knowledge base: documents, pasted text &amp; URLs, tagged by role</p>
+        </div>
+        <div id="knowledge-content"><div class="mon-empty">Loading…</div></div>
+      </div>
+
+      <!-- Section 10: Input & Output Sanitizer -->
+      <div class="card settings-panel" id="sec-guard" data-perm="settings.input_guard">
+        <div class="settings-panel-head">
+          <h2>🛡️ Input &amp; Output Sanitizer</h2>
+          <p class="dim">Admin-defined input &amp; output policies: cloud-block patterns, prohibited prompt types, model response redactions, and role/user restrictions</p>
+        </div>
+        <div id="guard-content"><div class="mon-empty">Loading…</div></div>
+      </div>
+
+      <!-- Section 11: Database Explorer -->
+      <div class="card settings-panel" id="sec-db" data-perm="database.manage">
+        <div class="settings-panel-head">
+          <h2>🗄️ Database Explorer</h2>
+          <p class="dim">Direct Database Explorer &amp; SQL Console across system and workspace SQLite databases</p>
+        </div>
+        <div style="padding:10px 4px;">
+          <p class="dim" style="font-size:12px; line-height:1.5; margin-bottom:12px;">
+            Inspect database schemas, browse tables, and execute raw SQL queries across system and workspace SQLite databases.
+          </p>
+          <div id="settings-db-summary" style="display:flex; flex-direction:column; gap:6px; margin-bottom:12px;">
+            <div class="dim" style="font-size:11px;">Loading databases…</div>
+          </div>
+          <a href="/#db" class="btn accent" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; width:auto; padding:6px 14px; font-size:12px;" onclick="localStorage.setItem('a770_open_db', '1')">🗄️ Open Database Explorer Console</a>
+        </div>
+      </div>
+
+      <!-- Section 12: Danger Zone -->
+      <div class="card settings-panel" id="sec-danger" data-perm="system.danger_zone">
+        <div class="settings-panel-head" style="border-bottom-color: rgba(244,63,94,0.3);">
+          <h2 style="color:#f43f5e;">⚠️ Danger Zone</h2>
+          <p class="dim">Irreversible: permanently wipes chats, sessions, projects, and indexed memory</p>
+        </div>
+        <div style="padding:10px 4px;">
+          <p class="dim" style="font-size:12px; line-height:1.5;">
+            Permanently deletes <strong>every user's</strong> chat history, sessions, projects, plan
+            items, and indexed chat/workspace memory. Files on disk under the workspace root,
+            the organizational knowledge base, user accounts, and audit log are not affected.
+            This cannot be undone.
+          </p>
+          <button id="btn-clear-all-data" class="btn red" type="button">🗑️ Clear All Chat / Project Data</button>
+          <div id="clear-all-data-result" class="dim mono" style="font-size:11px; margin-top:8px;"></div>
+        </div>
+      </div>
+    </main>
   </div>
-
-  <details class="card fold" id="sec-theme">
-    <summary title="Select color palette and interface theme">🎨 Appearance &amp; Themes</summary>
-    <div class="theme-grid">
-      <button type="button" class="theme-opt" data-t="slate" onclick="setTheme('slate')"><span class="theme-swatch" style="background:#79c0ff"></span> Slate &amp; Indigo</button>
-      <button type="button" class="theme-opt" data-t="claude" onclick="setTheme('claude')"><span class="theme-swatch" style="background:#d97757"></span> Claude Warm</button>
-      <button type="button" class="theme-opt" data-t="tokyonight" onclick="setTheme('tokyonight')"><span class="theme-swatch" style="background:#7aa2f7"></span> Tokyo Night</button>
-      <button type="button" class="theme-opt" data-t="nord" onclick="setTheme('nord')"><span class="theme-swatch" style="background:#88c0d0"></span> Nord Arctic</button>
-      <button type="button" class="theme-opt" data-t="classic" onclick="setTheme('classic')"><span class="theme-swatch" style="background:#6c8cff"></span> Classic Dark</button>
-      <button type="button" class="theme-opt" data-t="oled" onclick="setTheme('oled')"><span class="theme-swatch" style="background:#3b82f6"></span> OLED Black</button>
-      <button type="button" class="theme-opt" data-t="ssl" onclick="setTheme('ssl')"><span class="theme-swatch" style="background: linear-gradient(135deg, #2d489a 50%, #eb3439 50%);"></span> SSL Wireless (Navy)</button>
-      <button type="button" class="theme-opt" data-t="ssl-light" onclick="setTheme('ssl-light')"><span class="theme-swatch" style="background: linear-gradient(135deg, #2d489a 50%, #eb3439 50%); border: 1px solid #94a3b8;"></span> SSL Wireless (Light)</button>
-      <button type="button" class="theme-opt" data-t="light" onclick="setTheme('light')" style="grid-column: span 2;"><span class="theme-swatch" style="background:#2563eb; border:1px solid #94a3b8;"></span> ☀️ Pure Light (Modern Crisp)</button>
-    </div>
-  </details>
-
-  <details class="card fold" id="sec-sampling" data-perm="settings.runtime.view">
-    <summary title="System prompt and sampling hyperparameters used for every chat/agent request">🎛️ Chat &amp; Sampling</summary>
-    <label for="sysprompt" title="System prompt instructions given to the LLM">System prompt <span class="info" title="Global instructions guiding model behavior and tone">ⓘ</span></label>
-    <textarea id="sysprompt" rows="3" placeholder="You are a helpful assistant." title="System prompt text"></textarea>
-
-    <div class="smp-grid">
-      <div class="smp-row" title="Controls randomness of output (temperature)">
-        <label for="temp">Temperature <span class="info" title="Higher = creative, lower = deterministic">ⓘ</span></label>
-        <input type="range" id="temp" min="0" max="2" step="0.05" value="1.0" title="Temperature slider (0.0 to 2.0)">
-        <span class="mono smp-val" id="tempv">1.00</span>
-      </div>
-      <div class="smp-row" title="Nucleus sampling threshold (top_p)">
-        <label for="topp">Top P <span class="info" title="Considers top tokens with cumulative probability up to P">ⓘ</span></label>
-        <input type="range" id="topp" min="0" max="1" step="0.01" value="0.95" title="Top P slider (0.0 to 1.0)">
-        <span class="mono smp-val" id="toppv">0.95</span>
-      </div>
-      <div class="smp-row" title="Minimum token probability threshold relative to top candidate (min_p)">
-        <label for="minp">Min P <span class="info" title="Filters out low-probability tail tokens">ⓘ</span></label>
-        <input type="range" id="minp" min="0" max="0.3" step="0.005" value="0" title="Min P slider (0.0 to 0.3)">
-        <span class="mono smp-val" id="minpv">0.000</span>
-      </div>
-      <div class="smp-row" title="Penalizes repeated tokens (repeat_penalty)">
-        <label for="rep">Repeat penalty <span class="info" title="Higher values reduce text repetition; 1.0 = off">ⓘ</span></label>
-        <input type="range" id="rep" min="1" max="2" step="0.01" value="1.0" title="Repeat penalty slider (1.0 to 2.0)">
-        <span class="mono smp-val" id="repv">1.00</span>
-      </div>
-      <div class="smp-row" title="Penalizes tokens that have appeared at all in the context (presence_penalty)">
-        <label for="presence">Presence penalty <span class="info" title="Positive values push the model toward new topics; 0.0 = off">ⓘ</span></label>
-        <input type="range" id="presence" min="-2" max="2" step="0.05" value="0" title="Presence penalty slider (-2.0 to 2.0)">
-        <span class="mono smp-val" id="presencev">0.00</span>
-      </div>
-      <div class="smp-row" title="Limits candidate pool to K highest probability tokens (0 = off)">
-        <label for="topk">Top K <span class="dim">(0 = off)</span> <span class="info" title="Limits pool to K highest probability tokens">ⓘ</span></label>
-        <input type="number" id="topk" value="20" min="0" max="200" title="Top K candidate count (0 = disabled)">
-        <span class="mono smp-val"></span>
-      </div>
-      <div class="smp-row" title="Maximum tokens to generate per response. Tip: set -1 for unlimited generation (only stopped by stop strings/EOS or manual Stop)">
-        <label for="maxtok">Max tokens <span class="info" title="Set -1 = no output limit: the model generates until EOS or you press Stop. Higher values need more KV cache (context_size). Leave 512 for chat; use -1 for long-form writing">ⓘ</span></label>
-        <input type="number" id="maxtok" value="-1" min="-1" max="262144" title="Maximum generation tokens (-1 = unlimited)">
-        <span class="mono smp-val"></span>
-      </div>
-    </div>
-    <div class="cfg-note" title="Where these values apply">Saved to your browser and applied to every chat/agent request you send — no need to reopen this page mid-conversation.</div>
-  </details>
-
-  <details class="card fold" id="sec-runtime" data-perm="settings.runtime.view">
-    <summary title="Live runtime behavior for the currently active model">🔌 Runtime</summary>
-    <div class="keep-row" title="Windows demotes GPU VRAM to system RAM ~70s after idle, causing throughput drop (14.4 → 7.7 t/s). A 1-token ping every 25s while idle keeps VRAM resident.">
-      <label class="switch" title="Toggle keepalive background pings"><input type="checkbox" id="ka"><span class="slider"></span></label>
-      <div><b title="Keep VRAM resident in Arc GPUs">Keepalive</b><small>1-token ping while idle — keeps A770s at full speed</small></div>
-    </div>
-  </details>
-
-  <details class="card fold" id="sec-gpus" data-perm="settings.runtime.view">
-    <summary style="display:flex; align-items:center; justify-content:space-between;" title="Dedicated VRAM usage & compute engine utilization for discrete Arc A770 GPUs">
-      <span>GPUs (Discrete)</span>
-      <button type="button" id="btn-refresh-gpu" class="btn" style="width:auto; flex:none; margin:0 0 0 auto; padding:2px 8px; font-size:10.5px; height:22px; border-radius:5px; white-space:nowrap;" title="Query discrete GPU status on-demand">⚡ Check GPU</button>
-    </summary>
-    <div id="gpu-list" style="margin-top:8px;"><div class="dim" style="font-size:12px">Click "⚡ Check GPU" or expand to query status…</div></div>
-  </details>
-
-  <details class="card fold" id="sec-cfg" data-perm="model.local.configure">
-    <summary title="Adjust llama-server launch parameters and persist them to profile JSON">Model Config · Restart to Apply</summary>
-    <div class="model-group" style="margin-bottom:6px; position:relative;" title="Pick which local/cloud model this config panel edits">
-      <select id="profile" title="Select a GGUF model (grouped by family)" style="display:none;"></select>
-      <button type="button" id="model-picker-btn" class="model-picker-btn" style="flex:1; max-width:none;">
-        <span id="model-picker-icon" class="model-picker-icon">🖥</span>
-        <span id="model-picker-label" class="model-picker-label">Select a model…</span>
-        <span id="model-picker-caps" class="mpi-caps"></span>
-        <span class="model-picker-caret">▾</span>
-      </button>
-      <button id="btn-load-header" title="Load the selected model into GPU VRAM"><span>▶</span></button>
-      <div id="model-picker-dropdown" class="model-picker-dropdown"></div>
-    </div>
-    <div id="model-caps-row" class="model-caps-row">
-      <span class="caps-label">CAPABILITIES</span>
-      <div id="caps-pills" class="caps-pills"></div>
-    </div>
-    <div class="cfg-grid">
-      <div class="cfg-item" title="Context size in tokens (n_ctx). Maximum prompt + completion memory allocated in VRAM">
-        <label for="cfg-ctx">Context size <span class="info" title="Maximum token context window size (e.g. 32768, 65536)">ⓘ</span></label>
-        <input type="number" id="cfg-ctx" step="8" min="512" max="1048576" value="32768" title="Context size (n_ctx) in tokens (512–1048576)">
-      </div>
-      <div class="cfg-item" title="Number of model layers offloaded to GPUs (n_gpu_layers). 999 offloads all layers to VRAM">
-        <label for="cfg-ngl">GPU layers <span class="info" title="999 = offload all layers to GPU VRAM">ⓘ</span></label>
-        <input type="number" id="cfg-ngl" min="0" max="999" value="999" title="Number of GPU layers (n_gpu_layers)">
-      </div>
-      <div class="cfg-item" title="Number of CPU threads for prompt computation (threads). 0 = auto-detect">
-        <label for="cfg-threads">CPU threads <span class="info" title="0 = auto-detect optimal CPU thread count">ⓘ</span></label>
-        <input type="number" id="cfg-threads" min="0" max="64" value="0" title="CPU threads (0 = auto)">
-      </div>
-      <div class="cfg-item" title="Number of CPU threads for batch evaluation (threads_batch). 0 = same as CPU threads">
-        <label for="cfg-tb">Batch threads <span class="info" title="0 = same thread count as CPU threads">ⓘ</span></label>
-        <input type="number" id="cfg-tb" min="0" max="64" value="0" title="Batch threads (0 = default)">
-      </div>
-      <div class="cfg-item" title="Logical batch size for prompt ingest (batch_size). Default 2048">
-        <label for="cfg-batch">Batch size <span class="info" title="Logical prompt evaluation batch size (0 = default 2048)">ⓘ</span></label>
-        <input type="number" id="cfg-batch" min="0" max="8192" value="0" title="Batch size (0 = default 2048)">
-      </div>
-      <div class="cfg-item" title="Physical micro-batch size (ubatch_size). Default 512. Lower values reduce peak VRAM spikes">
-        <label for="cfg-ubatch">Ubatch size <span class="info" title="Physical micro-batch size. Lower reduces VRAM spikes during long prompt ingest">ⓘ</span></label>
-        <input type="number" id="cfg-ubatch" min="0" max="4096" value="0" title="Physical micro-batch size (ubatch_size)">
-      </div>
-      <div class="cfg-item" title="Number of parallel sequence processing slots (n_slots / n_parallel)">
-        <label for="cfg-np">Parallel slots <span class="info" title="Number of simultaneous sequence processing slots (default 1)">ⓘ</span></label>
-        <input type="number" id="cfg-np" min="0" max="64" value="0" title="Parallel slots (0 = default 1)">
-      </div>
-      <div class="cfg-item" title="Seconds between background ping queries when idle (default 25s)">
-        <label for="cfg-kai">Keepalive (s) <span class="info" title="Idle interval (seconds) before sending 1-token keepalive ping">ⓘ</span></label>
-        <input type="number" id="cfg-kai" min="5" max="600" value="25" title="Keepalive ping interval in seconds">
-      </div>
-      <div class="cfg-item cfg-full" title="GPU shares. 9,11 = both GPUs (~45%/55% split) · 0,1 = GPU 2 only · 1,0 = GPU 1 only">
-        <label for="cfg-ts">Tensor split <span class="info" title="Comma-separated shares per GPU. 0,1 = only GPU 2 works · 1,0 = only GPU 1 works · 9,11 = balanced dual-GPU split">ⓘ</span></label>
-        <input type="text" id="cfg-ts" value="9,11" title="GPU share: 0,1 = GPU 2 only · 1,0 = GPU 1 only · 9,11 = both GPUs">
-        <small style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;">0,1 → GPU 2 only · 1,0 → GPU 1 only · 9,11 → dual</small>
-      </div>
-      <div class="cfg-item" title="GPU split strategy: 'layer' splits transformer layers; 'row' splits tensor matrices">
-        <label for="cfg-sm">Split mode <span class="info" title="'layer' (pipeline split) is recommended for Arc GPUs">ⓘ</span></label>
-        <select id="cfg-sm" title="GPU split mode (layer recommended)"><option value="layer">layer</option><option value="row">row</option></select>
-      </div>
-      <div class="cfg-item" title="Enable FlashAttention (on/off/auto). Speeds up context processing and saves VRAM">
-        <label for="cfg-fa">Flash attention <span class="info" title="Accelerates Vulkan context evaluation & saves VRAM">ⓘ</span></label>
-        <select id="cfg-fa" title="Flash attention setting"><option value="on">on</option><option value="off">off</option><option value="auto">auto</option></select>
-      </div>
-      <div class="cfg-item cfg-full" title="Data type for KV cache. 'f16' is default; 'q8_0' cuts KV memory footprint in half">
-        <label for="cfg-ct">KV cache type <span class="info" title="q8_0 cuts KV memory usage by 50% with negligible loss">ⓘ</span></label>
-        <select id="cfg-ct" title="KV cache quantization type"><option value="f16">f16</option><option value="q8_0">q8_0 (½ KV RAM)</option><option value="q5_0">q5_0</option><option value="q4_0">q4_0</option><option value="bf16">bf16</option><option value="f32">f32</option></select>
-      </div>
-      <div class="cfg-item cfg-full" title="Unified KV pool (-kvu): all parallel slots share one context-sized KV pool instead of each getting context ÷ slots">
-        <label for="cfg-kvu">Unified KV pool <span class="info" title="With 2+ slots, each conversation can use up to the full context while idle slots reserve nothing">ⓘ</span></label>
-        <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
-          <label class="switch"><input type="checkbox" id="cfg-kvu"><span class="slider"></span></label>
-          <div style="flex:1"><small style="color:var(--dim); font-size:9px; display:block;">shared KV pool across parallel slots (-kvu)</small></div>
-        </div>
-      </div>
-      <div class="cfg-full cfg-row3">
-        <div class="cfg-item" title="Max tokens one conversation may take from the unified pool (--kv-unified-per-slot). Only applied with 2+ slots and a value below the context size">
-          <label for="cfg-kvps">Per-slot cap <span class="info" title="0 = no cap. Ignored with 1 slot or when ≥ context size">ⓘ</span></label>
-          <input type="number" id="cfg-kvps" min="0" max="1048576" step="1024" value="0" title="Per-slot context cap in tokens (0 = no cap)">
-        </div>
-        <div class="cfg-item" title="Minimum chunk size reused from the KV cache via shifting (--cache-reuse). 0 = off">
-          <label for="cfg-cru">Cache reuse <span class="info" title="Min tokens per reused chunk (0 = off, default 256)">ⓘ</span></label>
-          <input type="number" id="cfg-cru" min="0" max="4096" value="256" title="Cache reuse chunk size (0 = off)">
-        </div>
-        <div class="cfg-item" title="Host-RAM prompt cache in MiB (-cram). 0 = llama default (8192)">
-          <label for="cfg-cram">Prompt RAM (MiB) <span class="info" title="Host-RAM prompt cache. 0 = llama default 8192 MiB">ⓘ</span></label>
-          <input type="number" id="cfg-cram" min="0" max="49152" step="1024" value="0" title="Host-RAM prompt cache in MiB (0 = default)">
-        </div>
-      </div>
-      <div class="cfg-item cfg-full" id="mtp-row" style="display:none" title="MTP speculative decoding: a small draft model proposes token chains the target model verifies in one pass — typically 1.5-2x tokens/sec on Vulkan">
-        <label for="cfg-mtp"><span class="cfg-cap-icon mtp"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5h6L9.5 22l9-12h-6.5L13 2z"/></svg></span> MTP draft <span class="info" title="Enables speculative decoding with the auto-detected MTP draft file">ⓘ</span></label>
-        <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
-          <label class="switch"><input type="checkbox" id="cfg-mtp"><span class="slider"></span></label>
-          <div style="flex:1"><b id="mtp-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">speculative decoding available</small><small id="mtp-note" style="color:var(--amber, #d29922); font-size:9px; display:none;"></small></div>
-        </div>
-        <label for="mtp-nmax" style="margin-top:6px">Draft tokens (n-max) <span class="info" title="Tokens drafted per step (default 3)">ⓘ</span></label>
-        <input type="number" id="mtp-nmax" min="1" max="16" value="3" title="Max draft tokens per speculative step">
-      </div>
-      <div class="cfg-item cfg-full" id="vision-row" style="display:none" title="Multimodal vision projector: enables the main model to understand images directly without needing a separate vision model">
-        <label for="cfg-vision"><span class="cfg-cap-icon vision"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg></span> Multimodal vision <span class="info" title="Enables vision support with the auto-detected mmproj projector file">ⓘ</span></label>
-        <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
-          <label class="switch"><input type="checkbox" id="cfg-vision"><span class="slider"></span></label>
-          <div style="flex:1"><b id="vision-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">multimodal projector detected</small><small id="vision-note" style="color:var(--amber, #d29922); font-size:9px; display:none;"></small></div>
-        </div>
-      </div>
-    </div>
-    <div class="cfg-note" title="Configuration note">Saved per-model into config/model_configs.json. Unload the model, then load it again to apply changes.</div>
-    <button id="btn-apply" class="btn accent" style="margin-top:6px" title="Save configuration for this model. If the model is loaded, you will be asked to unload & reload to apply.">💾 Save Config</button>
-  </details>
-
-  <details class="card fold" id="sec-cloud">
-    <summary title="Cloud (OpenAI-compatible) providers: API keys, models, and which lane each one serves">☁️ Cloud Models</summary>
-    <div id="cloud-content"><div class="mon-empty">Loading…</div></div>
-    <div class="cfg-note" title="Where cloud settings live">Providers and lane bindings are saved to your own <b>config/providers/user_&lt;id&gt;.json</b> (kept out of git, so API keys are never committed, and never readable by another user). Every signed-in user manages their own providers, models, and lane bindings — cloud orchestration is fully in your hands.</div>
-  </details>
-
-  <details class="card fold" id="sec-caps" data-perm="settings.orchestration.configure">
-    <summary title="Agent extensions: web browsing, skills, MCP servers, plugins">🧩 Capabilities</summary>
-    <div id="caps-content"><div class="mon-empty">Loading…</div></div>
-    <div class="cfg-note" title="Capability note">Toggles persist to config/app.json. MCP servers added or edited here connect live (no restart); first npx start may take a minute.</div>
-  </details>
-
-  <details class="card fold" id="sec-users" data-perm="users.manage">
-    <summary title="Create users, assign roles, and manage role permissions">👤 Users &amp; Roles</summary>
-    <div id="users-content"><div class="mon-empty">Loading…</div></div>
-  </details>
-
-  <details class="card fold" id="sec-knowledge" data-perm="knowledge.manage">
-    <summary title="Organizational knowledge base: documents, pasted text &amp; URLs, tagged by role">📚 Knowledge Base</summary>
-    <div id="knowledge-content"><div class="mon-empty">Loading…</div></div>
-  </details>
-
-  <details class="card fold" id="sec-guard" data-perm="settings.input_guard">
-    <summary title="Admin-defined input &amp; output policies: cloud-block patterns, prohibited prompt types, model response redactions, and role/user restrictions">🛡️ Input &amp; Output Sanitizer</summary>
-    <div id="guard-content"><div class="mon-empty">Loading…</div></div>
-  </details>
-
-  <details class="card fold" id="sec-db" data-perm="database.manage">
-    <summary title="Direct Database Explorer &amp; SQL Console">🗄️ Database Explorer</summary>
-    <div style="padding:10px 4px;">
-      <p class="dim" style="font-size:12px; line-height:1.5; margin-bottom:12px;">
-        Inspect database schemas, browse tables, and execute raw SQL queries across system and workspace SQLite databases.
-      </p>
-      <div id="settings-db-summary" style="display:flex; flex-direction:column; gap:6px; margin-bottom:12px;">
-        <div class="dim" style="font-size:11px;">Loading databases…</div>
-      </div>
-      <a href="/#db" class="btn accent" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; width:auto; padding:6px 14px; font-size:12px;" onclick="localStorage.setItem('a770_open_db', '1')">🗄️ Open Database Explorer Console</a>
-    </div>
-  </details>
-
-  <details class="card fold" id="sec-danger" data-perm="system.danger_zone">
-    <summary title="Irreversible: wipes every user's chats, sessions, and projects">⚠️ Danger Zone</summary>
-    <div style="padding:10px 4px;">
-      <p class="dim" style="font-size:12px; line-height:1.5;">
-        Permanently deletes <strong>every user's</strong> chat history, sessions, projects, plan
-        items, and indexed chat/workspace memory. Files on disk under the workspace root,
-        the organizational knowledge base, user accounts, and audit log are not affected.
-        This cannot be undone.
-      </p>
-      <button id="btn-clear-all-data" class="btn red" type="button">🗑️ Clear All Chat / Project Data</button>
-      <div id="clear-all-data-result" class="dim mono" style="font-size:11px; margin-top:8px;"></div>
-    </div>
-  </details>
 </div>
 
 <div id="toast"></div>
@@ -288,10 +611,135 @@
 <script src="/static/js/knowledge.js?v=1.0"></script>
 <script src="/static/js/input-guard.js?v=1.0"></script>
 <script>
+// --- Tab Navigation & View Management ---
+function switchSettingsTab(tabId, updateHash = true) {
+  if (!tabId) return;
+  const panel = document.getElementById(tabId);
+  const btn = document.querySelector(`.settings-tab-btn[data-tab="${tabId}"]`);
+  if (!panel || !btn) return;
+
+  document.querySelectorAll('.settings-tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.settings-panel').forEach(p => p.classList.remove('active'));
+
+  btn.classList.add('active');
+  panel.classList.add('active');
+
+  localStorage.setItem('a770_active_settings_tab', tabId);
+  if (updateHash) {
+    try {
+      history.replaceState(null, '', '#' + tabId);
+    } catch (_) {}
+  }
+
+  // Trigger special actions
+  if (tabId === 'sec-gpus' && typeof triggerGpuQuery === 'function') {
+    triggerGpuQuery();
+  }
+}
+window.switchSettingsTab = switchSettingsTab;
+
+function cleanupEmptyNavGroups() {
+  document.querySelectorAll('.settings-group-label').forEach(label => {
+    let next = label.nextElementSibling;
+    let hasVisible = false;
+    while (next && !next.classList.contains('settings-group-label')) {
+      if (next.classList.contains('settings-tab-btn') && next.offsetParent !== null && next.style.display !== 'none') {
+        hasVisible = true;
+        break;
+      }
+      next = next.nextElementSibling;
+    }
+    label.style.display = hasVisible ? '' : 'none';
+  });
+}
+
+// Bind tab click events
+document.querySelectorAll('.settings-tab-btn').forEach(btn => {
+  btn.onclick = () => {
+    const tabId = btn.getAttribute('data-tab');
+    switchSettingsTab(tabId);
+  };
+});
+
+// Search filter in tabs
+const searchInput = document.getElementById('settings-tab-search');
+if (searchInput) {
+  searchInput.addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase().trim();
+    document.querySelectorAll('.settings-tab-btn').forEach(b => {
+      const text = b.textContent.toLowerCase();
+      b.style.display = (!q || text.includes(q)) ? 'flex' : 'none';
+    });
+    cleanupEmptyNavGroups();
+  });
+}
+
+// Support browser back/forward and deep hash links
+window.addEventListener('hashchange', () => {
+  const hash = location.hash ? location.hash.replace(/^#/, '') : '';
+  if (hash) {
+    const targetId = hash.startsWith('sec-') ? hash : ('sec-' + hash);
+    if (document.getElementById(targetId)) {
+      switchSettingsTab(targetId, false);
+    }
+  }
+});
+
+
+
+// --- GPU Status Query Logic ---
+const secGpu = document.getElementById('sec-gpus');
+const btnRefreshGpu = document.getElementById('btn-refresh-gpu');
+async function triggerGpuQuery() {
+  if (!secGpu || !document.getElementById('gpu-list')) return;
+  const glist = document.getElementById('gpu-list');
+  if (btnRefreshGpu) {
+    btnRefreshGpu.disabled = true;
+    btnRefreshGpu.textContent = 'Querying…';
+  }
+  if (glist && !glist.querySelector('.gpu')) {
+    glist.innerHTML = '<div class="dim" style="font-size:12px">querying discrete GPUs…</div>';
+  }
+  try {
+    await pollGpu();
+  } finally {
+    if (btnRefreshGpu) {
+      btnRefreshGpu.disabled = false;
+      btnRefreshGpu.textContent = '⚡ Check GPU';
+    }
+  }
+}
+if (btnRefreshGpu) {
+  btnRefreshGpu.onclick = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    triggerGpuQuery();
+  };
+}
+
+// --- Session & Permissions Ready ---
 window.__sessionReady.then((data) => {
   if (!data) return;   // not authenticated -- fetch() 401 handler already redirects to /login
-  // Permission-based section removal already ran globally in session.js
-  // (applyPermGating) before this handler fires.
+
+  // Clean empty category titles after applyPermGating removed unauthorized tabs
+  cleanupEmptyNavGroups();
+
+  // Determine initial tab from hash or localStorage or default to sec-theme
+  let targetTab = location.hash ? location.hash.replace(/^#/, '') : localStorage.getItem('a770_active_settings_tab');
+  if (targetTab && !targetTab.startsWith('sec-') && document.getElementById('sec-' + targetTab)) {
+    targetTab = 'sec-' + targetTab;
+  }
+  const targetBtn = targetTab ? document.querySelector(`.settings-tab-btn[data-tab="${targetTab}"]`) : null;
+  if (targetBtn && document.getElementById(targetTab)) {
+    switchSettingsTab(targetTab, false);
+  } else {
+    const firstVisibleBtn = document.querySelector('.settings-tab-btn');
+    if (firstVisibleBtn) {
+      switchSettingsTab(firstVisibleBtn.getAttribute('data-tab'), false);
+    }
+  }
+
+  // Permission-based panel initializers
   if (document.getElementById('sec-cfg')) {
     loadProfiles();
   }
@@ -344,41 +792,6 @@ window.__sessionReady.then((data) => {
         clearBtn.disabled = false;
       }
     };
-  }
-
-  const secGpu = document.getElementById('sec-gpus');
-  const btnRefreshGpu = document.getElementById('btn-refresh-gpu');
-  async function triggerGpuQuery() {
-    if (!secGpu || !document.getElementById('gpu-list')) return;
-    const glist = document.getElementById('gpu-list');
-    if (btnRefreshGpu) {
-      btnRefreshGpu.disabled = true;
-      btnRefreshGpu.textContent = 'Querying…';
-    }
-    if (glist && !glist.querySelector('.gpu')) {
-      glist.innerHTML = '<div class="dim" style="font-size:12px">querying discrete GPUs…</div>';
-    }
-    try {
-      await pollGpu();
-    } finally {
-      if (btnRefreshGpu) {
-        btnRefreshGpu.disabled = false;
-        btnRefreshGpu.textContent = '⚡ Check GPU';
-      }
-    }
-  }
-
-  if (btnRefreshGpu) {
-    btnRefreshGpu.onclick = (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      triggerGpuQuery();
-    };
-  }
-  if (secGpu) {
-    secGpu.addEventListener('toggle', () => {
-      if (secGpu.open) triggerGpuQuery();
-    });
   }
 });
 pollStatus();

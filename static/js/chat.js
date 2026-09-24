@@ -110,7 +110,7 @@ function renderLast() {
   // Fast in-place update for streaming reasoning without replacing DOM
   const existingThink = lastEl.querySelector('details.think');
   const existingThinkDiv = existingThink ? existingThink.querySelector('.think-content') : null;
-  const isOnlyStreamingReasoning = generating && m.reasoning && !m.content && (!m.acts || !m.acts.length) && existingThinkDiv;
+  const isOnlyStreamingReasoning = generating && m.reasoning && !m.content && existingThinkDiv;
 
   if (isOnlyStreamingReasoning) {
     const job = (curSession && window.bgJobs) ? window.bgJobs.get(String(curSession.id)) : null;
@@ -125,6 +125,15 @@ function renderLast() {
       existingThinkDiv.scrollTop = existingThinkDiv.scrollHeight;
     } else if (thinkScrollTop >= 0) {
       existingThinkDiv.scrollTop = thinkScrollTop;
+    }
+
+    const workingBox = lastEl.querySelector('.claude-working-box');
+    if (workingBox) {
+      const textEl = workingBox.querySelector('.claude-working-text');
+      const timerEl = workingBox.querySelector('.claude-working-timer');
+      const msg = getClaudeWorkingPhrase(m, elapsedSec);
+      if (textEl && textEl.textContent !== msg) textEl.textContent = msg;
+      if (timerEl && timerEl.textContent !== `${elapsedSec}s`) timerEl.textContent = `${elapsedSec}s`;
     }
   } else {
     // Agent step list + tool output blocks are re-created below; remember their scroll
@@ -907,6 +916,24 @@ async function send(inputText) {
           L.statusText = '';
         } else if (ev === 'thought_delta') {
           L.reasoning = (L.reasoning || '') + (d.delta || '');
+          if (typeof window.setLiveHud === 'function') {
+            window.setLiveHud({ phase: 'thinking', text: 'Thinking & analyzing...' });
+          }
+        } else if (ev === 'tool_preparing') {
+          const p = d.path ? d.path.split(/[\\\/]/).pop() : '';
+          const actionVerb = d.name === 'write_file' ? 'Preparing to write' : (d.name === 'edit_file' ? 'Preparing to edit' : `Preparing ${d.name}`);
+          const label = p ? `${actionVerb} ${p}...` : `${actionVerb}...`;
+          L.statusText = label;
+          if (typeof window.setLiveHud === 'function') {
+            const bytesStr = d.bytes ? ` (~${Math.round(d.bytes / 4)} tokens)` : '';
+            window.setLiveHud({
+              phase: 'preparing',
+              name: d.name,
+              path: d.path,
+              text: label,
+              subtext: bytesStr
+            });
+          }
         } else if (ev === 'thought') {
           L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + (d.text || '');
         } else if (ev === 'delta_replace') {
@@ -921,6 +948,15 @@ async function send(inputText) {
           if (!L.acts) L.acts = [];
           L.acts.push({ type: 'tool_call', ...d });
           L.statusText = formatToolStatus(d.name, d.args);
+          const p = (d.args && (d.args.path || d.args.file || d.args.filename)) || '';
+          if (typeof window.setLiveHud === 'function') {
+            window.setLiveHud({
+              phase: (d.name === 'write_file' || d.name === 'edit_file') ? 'writing' : 'running',
+              name: d.name,
+              path: p,
+              text: L.statusText
+            });
+          }
           if (L.content && L.content.trim()) {
             L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + L.content.trim();
             L.content = '';
@@ -929,16 +965,54 @@ async function send(inputText) {
           if (!L.acts) L.acts = [];
           L.acts.push({ type: 'tool_result', ...d });
           L.statusText = 'Crunching tool results...';
+          if (d.name === 'write_file' || d.name === 'edit_file') {
+            const p = (d.args && (d.args.path || d.args.file || d.args.filename)) || '';
+            const filename = p ? p.split(/[\\\/]/).pop() : 'file';
+            const isSuccess = d.ok !== false;
+            const verb = d.name === 'write_file' ? 'Saved' : 'Updated';
+            const actions = [];
+            if (p && isSuccess && typeof openFilePreview === 'function') {
+              actions.push({
+                label: '👁️ Preview',
+                onClick: () => openFilePreview(p, filename)
+              });
+            }
+            if (p && typeof wsShowFile === 'function') {
+              actions.push({
+                label: '📂 Reveal',
+                onClick: () => {
+                  if (typeof setWsPanel === 'function') setWsPanel(true);
+                  if (typeof wsShowFile === 'function') wsShowFile(p);
+                }
+              });
+            }
+            if (typeof toast === 'function') {
+              toast(isSuccess ? `💾 ${verb} ${filename}` : `⚠️ Failed to write ${filename}`, {
+                isErr: !isSuccess,
+                duration: 5000,
+                actions: actions
+              });
+            }
+            if (typeof window.setLiveHud === 'function') {
+              window.setLiveHud({
+                phase: isSuccess ? 'done' : 'error',
+                name: d.name,
+                path: p,
+                text: isSuccess ? `💾 ${verb} ${filename}` : `⚠️ Failed to save ${filename}`,
+                actions: actions
+              });
+            }
+          }
         } else if (ev === 'done') {
           L.statusText = '';
+          if (typeof window.setLiveHud === 'function') {
+            window.setLiveHud({ phase: 'done', text: 'Response complete' });
+          }
           if (d && (d.completion_tokens || d.total_tokens)) {
             if (d.completion_tokens) L.ntok = d.completion_tokens;
-            if (d.prompt_tokens && job.messages.length >= 2) {
-              const uMsg = job.messages[job.messages.length - 2];
-              if (uMsg && uMsg.role === 'user') {
-                uMsg.ntok = d.prompt_tokens;
-              }
-            }
+            // Real prompt size (system prompt + tools + history + tool results);
+            // persisted so the context chip survives a reload.
+            if (d.prompt_tokens) L.promptTokens = d.prompt_tokens;
           }
         } else if (ev === 'kb_blocked') {
           // Data residency: KB withheld from the cloud lane; show it as a failed KB step
@@ -1005,6 +1079,7 @@ async function send(inputText) {
   persistMsgForSession(sessionId, 'assistant', targetAssistant.content, {
     tps: targetAssistant.tps,
     ntok,
+    promptTokens: targetAssistant.promptTokens || undefined,
     secs: dt,
     reasoning: targetAssistant.reasoning || undefined,
     acts: (targetAssistant.acts && targetAssistant.acts.length) ? targetAssistant.acts : undefined,

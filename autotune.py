@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 
 from core.backend import visible_devices_env
+from core.config import apply_runtime
 from core import vram
 
 # Known-good as of the llama.cpp docs/issues consulted when this was written
@@ -260,7 +261,7 @@ def main():
     args = ap.parse_args()
 
     profile_path = Path(args.profile)
-    profile = json.loads(profile_path.read_text())
+    profile = apply_runtime(json.loads(profile_path.read_text()))
     bench_path = find_llama_bench(profile["llama_bin_dir"])
 
     if profile.get("gpu_devices"):

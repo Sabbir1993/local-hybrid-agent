@@ -157,6 +157,7 @@
 
     <footer>
       <div id="f-inner">
+        <div id="live-state-hud" class="live-state-hud" style="display:none;"></div>
         <div class="composer">
           <div id="attach-preview-bar" class="attach-preview-bar"></div>
           <div id="proj-init-bar" class="proj-init-bar" style="display:none;"></div>
@@ -721,10 +722,7 @@ Full instructions the agent reads via read_skill.</pre>
   <div id="settings-modal-box">
     <div id="settings-modal-head">
       <span style="font-weight:700; font-size:13px; letter-spacing:0.5px; display:flex; align-items:center; gap:6px;">⚙️ Settings &amp; Configuration</span>
-      <div style="display:flex; gap:8px; align-items:center;">
-        <a href="/settings" target="_blank" rel="noopener" class="btn ghost icon-btn" style="text-decoration:none; font-size:11px; padding:3px 10px;" title="Open Settings in a separate tab">↗ Open in new tab</a>
-        <button id="settings-modal-close" class="rep-close" title="Close (Esc)">✕</button>
-      </div>
+      <button id="settings-modal-close" class="rep-close" title="Close (Esc)">✕</button>
     </div>
     <div id="settings-modal-body">
       <iframe id="settings-frame" src="about:blank" title="Settings" style="width:100%; height:100%; border:none; border-radius:0 0 10px 10px; background:var(--bg);"></iframe>

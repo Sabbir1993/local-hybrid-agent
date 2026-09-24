@@ -1,10 +1,10 @@
 {
-  "ts": 1790052147.9557452,
+  "ts": 1790244263.1501145,
   "offline": [
     {
       "name": "grammar",
       "status": "PASS",
-      "note": "grammar ok (14 tools, 16 rules, 808-char few-shot)"
+      "note": "grammar ok (15 tools, 16 rules, 808-char few-shot)"
     },
     {
       "name": "compaction",
@@ -17,6 +17,11 @@
       "note": "loop detection ok"
     },
     {
+      "name": "escalation_policy",
+      "status": "FAIL",
+      "note": "classify_query('why is the build slow?') = creation, want question"
+    },
+    {
       "name": "json_repair",
       "status": "PASS",
       "note": "JSON repair ok"
@@ -24,7 +29,7 @@
     {
       "name": "needle_router",
       "status": "PASS",
-      "note": "router (cactus_needle) ok (route: list_files)"
+      "note": "router (laya) ok (route: list_files)"
     },
     {
       "name": "compact_endpoint",

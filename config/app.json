@@ -1,13 +1,33 @@
 {
   "models_dir": "E:/AI/Models",
   "common_dir": "E:/AI/common",
+  "runtime": "vulkan",
+  "runtimes": {
+    "vulkan": {
+      "llama_bin_dir": "E:/AI/vulkan-arc/llama-vulkan",
+      "backend": "vulkan",
+      "gpu_devices": [
+        1,
+        2
+      ],
+      "small_model_gpu": 1
+    },
+    "cuda": {
+      "llama_bin_dir": "E:/AI/vulkan-arc/llama-cuda",
+      "backend": "cuda",
+      "gpu_devices": [
+        0
+      ],
+      "small_model_gpu": 0
+    }
+  },
   "small_models": {
     "executor": {
       "model": "orchestrator/Spark-X2.5-4B-Q4_K_M.gguf",
       "port": 8091,
       "gpu": 1,
-      "ctx": 24576,
-      "np": 3,
+      "ctx": 32576,
+      "np": 1,
       "kv_cache_type": "q8_0"
     },
     "vision": {
@@ -15,15 +35,15 @@
       "mmproj": "orchestrator/mmproj-model-f16.gguf",
       "port": 8092,
       "gpu": 1,
-      "ctx": 32576,
+      "ctx": 16384,
       "np": 1
     },
     "embedder": {
       "model": "orchestrator/nomic-embed-text-v1.5-Q8_0.gguf",
       "port": 8093,
       "gpu": 1,
-      "ctx": 8192,
-      "np": 4
+      "ctx": 16384,
+      "np": 1
     }
   },
   "router": {
@@ -36,7 +56,54 @@
       "subfolder": null,
       "device": "cpu",
       "preload": false
-    }
+    },
+    "creation_keywords": [
+      "make",
+      "create",
+      "generate",
+      "write",
+      "build",
+      "code",
+      "add",
+      "fix",
+      "html",
+      "script",
+      "page"
+    ],
+    "action_keywords": [
+      "run",
+      "install",
+      "test",
+      "check",
+      "exec",
+      "open",
+      "read",
+      "view",
+      "find",
+      "grep"
+    ],
+    "refusal_phrases": [
+      "i cannot",
+      "i can't",
+      "i am unable",
+      "as an ai",
+      "i don't have access"
+    ],
+    "greetings": [
+      "hi",
+      "hello",
+      "hey",
+      "help",
+      "who are you",
+      "what can you do",
+      "good morning",
+      "good evening",
+      "how are you",
+      "test",
+      "hi there"
+    ],
+    "repeat_streak_limit": 2,
+    "start_on_main_categories": []
   },
   "provider": {},
   "cloud": {
@@ -46,10 +113,10 @@
     "fallback_local": true
   },
   "chat": {
-    "max_tool_rounds": 15,
+    "max_tool_rounds": 12,
     "max_web_calls": 8,
-    "deep_max_tool_rounds": 25,
-    "deep_max_web_calls": 16
+    "deep_max_tool_rounds": 20,
+    "deep_max_web_calls": 12
   },
   "agent": {
     "exec_timeout_s": 0,
@@ -95,7 +162,10 @@
         "dir *",
         "type *"
       ]
-    }
+    },
+    "mcp_user_allowed_packages": [
+      "mcp-atlassian"
+    ]
   },
   "input_guard": {
     "enabled": true,
@@ -162,18 +232,11 @@
         "code-simplifier",
         "silent-failure-hunter",
         "refactor-cleaner",
-        "tdd-guide",
         "doc-updater",
         "performance-optimizer",
         "database-reviewer"
       ],
       "deny": [
-        "chief-of-staff",
-        "marketing-agent",
-        "seo-specialist",
-        "loop-operator",
-        "harness-optimizer",
-        "gan-*",
         "opensource-*"
       ]
     },
@@ -185,29 +248,35 @@
         "evolve",
         "fastapi-review",
         "feature-dev",
+        "multi-backend",
+        "multi-execute",
+        "multi-frontend",
+        "multi-plan",
+        "multi-workflow",
+        "orch-add-feature",
+        "orch-change-feature",
+        "orch-fix-defect",
+        "orch-refine-code",
+        "orch-review",
         "python-review",
         "refactor-clean",
+        "santa-loop",
         "test-coverage",
         "update-docs"
       ],
       "deny": [
         "auto-update",
         "epic-*",
-        "gan-*",
         "harness-*",
-        "hookify*",
         "instinct-import",
-        "jira",
-        "loop-*",
-        "marketing-*",
-        "model-route",
-        "multi-*",
-        "orch-*",
         "pr",
         "prp-pr",
-        "santa-loop",
         "security-scan"
       ]
+    },
+    "multi_lanes": {
+      "backend": "main",
+      "frontend": "executor"
     }
   }
 }

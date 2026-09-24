@@ -143,61 +143,20 @@ def _extract_pdf(path: Path) -> str:
     return "\n".join(parts)
 
 
-def _extract_pptx(path: Path) -> str:
-    """Extract text from PowerPoint slides via python-pptx."""
-    parts = []
+def _extract_office(path: Path) -> str:
+    """PowerPoint / Word via core.doc_ops: the same addressed outline doc_edit
+    targets (slides, shapes, notes, tables; paragraphs, tables, headers)."""
+    from . import doc_ops
+    if path.suffix.lower() in (".ppt", ".doc"):
+        return (f"(legacy {path.suffix} format - text cannot be read; open it in Office and save as "
+                f"{path.suffix}x, then attach it again)")
     try:
-        from pptx import Presentation
-        prs = Presentation(str(path))
-        slide_count = len(prs.slides)
-        parts.append(f"(PowerPoint - {slide_count} slide{'s' if slide_count != 1 else ''})")
-        for i, slide in enumerate(prs.slides):
-            parts.append(f"\n--- Slide {i + 1} ---")
-            title_shape = slide.shapes.title
-            if title_shape and title_shape.has_text_frame:
-                title_text = title_shape.text_frame.text.strip()
-                if title_text:
-                    parts.append(f"Title: {title_text}")
-            for shape in slide.shapes:
-                if shape == title_shape:
-                    continue
-                if hasattr(shape, "text_frame") and shape.text_frame:
-                    for para in shape.text_frame.paragraphs:
-                        line = para.text.strip()
-                        if line:
-                            parts.append(line)
-                elif hasattr(shape, "table"):
-                    table = shape.table
-                    for row in table.rows:
-                        row_strs = [cell.text.strip() for cell in row.cells]
-                        parts.append("\t".join(row_strs))
-    except ImportError:
-        parts.append("(python-pptx not installed - install with: pip install python-pptx)")
+        return doc_ops.inspect(path.read_bytes(), path.name, max_chars=10 ** 9)
     except Exception as e:
-        parts.append(f"(error reading PowerPoint: {e})")
-    return "\n".join(parts)
+        return f"(error reading {path.suffix} document: {e})"
 
 
-def _extract_docx(path: Path) -> str:
-    """Extract text from Word documents via python-docx."""
-    parts = []
-    try:
-        import docx as _docx
-        doc = _docx.Document(str(path))
-        # Extract paragraphs
-        for para in doc.paragraphs:
-            if para.text.strip():
-                parts.append(para.text.strip())
-        # Extract tables
-        for table in doc.tables:
-            for row in table.rows:
-                row_strs = [cell.text.strip() for cell in row.cells]
-                parts.append("\t".join(row_strs))
-    except ImportError:
-        parts.append("(python-docx not installed - install with: pip install python-docx)")
-    except Exception as e:
-        parts.append(f"(error reading Word document: {e})")
-    return "\n".join(parts)
+_extract_pptx = _extract_docx = _extract_office
 
 
 def _extract_text(path: Path) -> str:

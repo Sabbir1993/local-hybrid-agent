@@ -406,7 +406,7 @@ function applyCloudConfigUI(c) {
     note = document.createElement('div');
     note.id = 'cfg-cloud-note';
     note.className = 'cfg-note';
-    const sum = card.querySelector('summary');
+    const sum = card.querySelector('summary') || card.querySelector('.settings-panel-head');
     if (sum && sum.nextSibling) card.insertBefore(note, sum.nextSibling);
     else card.appendChild(note);
   }

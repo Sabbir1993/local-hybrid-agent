@@ -155,7 +155,10 @@ async function runAgentSSE(text) {
           if (!evM || !dtM) continue;
           const ev = evM[1], d = JSON.parse(dtM[1]);
           const L = getJobAssistant();
-          if (ev === 'step') {
+          if (ev === 'run') {
+            L.runId = d.run_id;   // routing telemetry id -> thumbs up/down feedback
+          }
+          else if (ev === 'step') {
             L.acts.push({ type: 'step', ...d });
             L.statusText = d.step ? `Planning step ${d.step}...` : 'Planning next step...';
           }
@@ -168,14 +171,46 @@ async function runAgentSSE(text) {
           else if (ev === 'thought') {
             L.acts.push({ type: 'thought', ...d });
             L.statusText = 'Synthesizing strategy...';
+            if (typeof window.setLiveHud === 'function') {
+              window.setLiveHud({ phase: 'thinking', text: 'Synthesizing strategy...' });
+            }
           }
           else if (ev === 'thought_delta') {
             L.reasoning = (L.reasoning || '') + (d.delta || '');
+            if (typeof window.setLiveHud === 'function') {
+              window.setLiveHud({ phase: 'thinking', text: 'Thinking & analyzing...' });
+            }
+          }
+          else if (ev === 'tool_preparing') {
+            const p = d.path ? d.path.split(/[\\/]/).pop() : '';
+            const actionVerb = d.name === 'write_file' ? 'Preparing to write' : (d.name === 'edit_file' ? 'Preparing to edit' : `Preparing ${d.name}`);
+            const label = p ? `${actionVerb} ${p}...` : `${actionVerb}...`;
+            L.statusText = label;
+            if (typeof window.setLiveHud === 'function') {
+              const bytesStr = d.bytes ? ` (~${Math.round(d.bytes / 4)} tokens)` : '';
+              window.setLiveHud({
+                phase: 'preparing',
+                name: d.name,
+                path: d.path,
+                text: label,
+                subtext: bytesStr
+              });
+            }
           }
           else if (ev === 'tool_call') {
             // If the model was streaming its preamble before calling a tool, keep it as thought/reasoning or preamble
             L.acts.push({ type: 'tool_call', ...d });
-            L.statusText = (typeof formatToolStatus === 'function') ? formatToolStatus(d.name, d.args) : (`Running ${d.name}...`);
+            const toolLabel = (typeof formatToolStatus === 'function') ? formatToolStatus(d.name, d.args) : (`Running ${d.name}...`);
+            L.statusText = toolLabel;
+            const p = (d.args && (d.args.path || d.args.file || d.args.filename)) || '';
+            if (typeof window.setLiveHud === 'function') {
+              window.setLiveHud({
+                phase: (d.name === 'write_file' || d.name === 'edit_file') ? 'writing' : 'running',
+                name: d.name,
+                path: p,
+                text: toolLabel
+              });
+            }
             if (L.content && L.content.trim()) {
               if (!L.reasoning) L.reasoning = L.content.trim();
               else L.reasoning += '\n\n' + L.content.trim();
@@ -191,10 +226,51 @@ async function runAgentSSE(text) {
                 wsRefreshTree();
               }
             }
+            if (d.name === 'write_file' || d.name === 'edit_file') {
+              const p = (d.args && (d.args.path || d.args.file || d.args.filename)) || '';
+              const filename = p ? p.split(/[\\/]/).pop() : 'file';
+              const isSuccess = d.ok !== false;
+              const verb = d.name === 'write_file' ? 'Saved' : 'Updated';
+              const actions = [];
+              if (p && isSuccess && typeof openFilePreview === 'function') {
+                actions.push({
+                  label: '👁️ Preview',
+                  onClick: () => openFilePreview(p, filename)
+                });
+              }
+              if (p && typeof wsShowFile === 'function') {
+                actions.push({
+                  label: '📂 Reveal',
+                  onClick: () => {
+                    if (typeof setWsPanel === 'function') setWsPanel(true);
+                    if (typeof wsShowFile === 'function') wsShowFile(p);
+                  }
+                });
+              }
+              if (typeof toast === 'function') {
+                toast(isSuccess ? `💾 ${verb} ${filename}` : `⚠️ Failed to write ${filename}`, {
+                  isErr: !isSuccess,
+                  duration: 5000,
+                  actions: actions
+                });
+              }
+              if (typeof window.setLiveHud === 'function') {
+                window.setLiveHud({
+                  phase: isSuccess ? 'done' : 'error',
+                  name: d.name,
+                  path: p,
+                  text: isSuccess ? `💾 ${verb} ${filename}` : `⚠️ Failed to save ${filename}`,
+                  actions: actions
+                });
+              }
+            }
           }
           else if (ev === 'verify') {
             L.acts.push({ type: 'verify', ...d });
             L.statusText = 'Verifying tool changes...';
+            if (typeof window.setLiveHud === 'function') {
+              window.setLiveHud({ phase: 'running', text: 'Verifying tool changes...' });
+            }
           }
           else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd);
           else if (ev === 'delta') {
@@ -249,6 +325,10 @@ async function runAgentSSE(text) {
             L.acts.push({ type: 'guard', rule: d.rule, message: d.message });
             toast('🧼 ' + (d.message || ('Response filtered by policy: ' + (d.rule || ''))));
           }
+          else if (ev === 'usage') {
+            // per-step prompt size; the last step's is the run's real context use
+            if (d.prompt_tokens) L.promptTokens = d.prompt_tokens;
+          }
           else if (ev === 'done') {
             // run ended early (step cap or loop stop): keep why, so the bubble can offer Continue
             if (d.reason) {
@@ -274,6 +354,9 @@ async function runAgentSSE(text) {
         targetAssistant.content = 'Task completed. See tool operations above for details.';
       }
       targetAssistant.statusText = '';
+      if (typeof window.setLiveHud === 'function') {
+        window.setLiveHud({ phase: 'done', text: 'Task completed' });
+      }
       const dt = (performance.now() - t0) / 1000;
       const fullLen = (targetAssistant.content || '').length + (targetAssistant.reasoning || '').length;
       const ntok = Math.max(1, Math.round(fullLen / 3.5));
@@ -283,11 +366,13 @@ async function runAgentSSE(text) {
       }
       persistMsgForSession(sessionId, 'assistant', targetAssistant.content, {
         tps: targetAssistant.tps, ntok, secs: dt,
+        promptTokens: targetAssistant.promptTokens || undefined,
         reasoning: targetAssistant.reasoning || undefined,
         acts: targetAssistant.acts,
         modelDisplay: targetAssistant.modelDisplay || undefined,
         modelSource: targetAssistant.modelSource || undefined,
         modelProvider: targetAssistant.modelProvider || undefined,
+        runId: targetAssistant.runId || undefined,
       });
     } catch (e) {
       if (e.name !== 'AbortError') {

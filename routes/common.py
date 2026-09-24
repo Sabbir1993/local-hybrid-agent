@@ -4,7 +4,9 @@ routes/common.py - Shared state and LLM streaming utilities across routes.
 
 import asyncio
 import json
+import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -143,20 +145,42 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
                 accumulated_tcs[idx] = {
                     "id": tc.get("id") or f"call_{idx}",
                     "type": "function",
-                    "function": {"name": "", "arguments": ""}
+                    "function": {"name": "", "arguments": ""},
+                    "_stream_meta": {"last_yield": 0, "path": ""}
                 }
             fn = tc.get("function") or {}
-            if fn.get("name"):
-                accumulated_tcs[idx]["function"]["name"] += fn["name"]
+            fn_name_chunk = fn.get("name")
+            if fn_name_chunk:
+                accumulated_tcs[idx]["function"]["name"] += fn_name_chunk
                 if rid:
                     monitor_token(rid, 1)
-            if fn.get("arguments"):
-                accumulated_tcs[idx]["function"]["arguments"] += fn["arguments"]
+            fn_args_chunk = fn.get("arguments")
+            if fn_args_chunk:
+                accumulated_tcs[idx]["function"]["arguments"] += fn_args_chunk
                 if rid:
                     # Estimate generated token count from character chunks
-                    chunk_toks = max(1, len(fn["arguments"]) // 4)
+                    chunk_toks = max(1, len(fn_args_chunk) // 4)
                     monitor_token(rid, chunk_toks)
 
+            cur_fn_name = accumulated_tcs[idx]["function"]["name"]
+            cur_args_str = accumulated_tcs[idx]["function"]["arguments"]
+            tc_meta = accumulated_tcs[idx].setdefault("_stream_meta", {"last_yield": 0, "path": ""})
+            now_t = time.time()
+            if cur_fn_name and (now_t - tc_meta["last_yield"] > 0.35 or not tc_meta["last_yield"]):
+                tc_meta["last_yield"] = now_t
+                if not tc_meta["path"] and cur_args_str:
+                    m_path = re.search(r'"(?:path|file|filename)"\s*:\s*"([^"]+)"', cur_args_str)
+                    if m_path:
+                        tc_meta["path"] = m_path.group(1)
+                yield ("tool_preparing", {
+                    "name": cur_fn_name,
+                    "path": tc_meta["path"],
+                    "bytes": len(cur_args_str),
+                    "id": accumulated_tcs[idx]["id"]
+                })
+
+    for k in accumulated_tcs:
+        accumulated_tcs[k].pop("_stream_meta", None)
     tool_calls = [accumulated_tcs[k] for k in sorted(accumulated_tcs.keys())]
     full_content = "".join(content_acc)
     full_reasoning = "".join(reasoning_acc)

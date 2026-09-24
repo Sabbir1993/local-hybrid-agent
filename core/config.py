@@ -1,3 +1,5 @@
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -54,9 +56,50 @@ CONFIG_DEFAULTS = {
     "cache_ram": 0,            # -cram MiB host-RAM prompt cache (0 = llama default 8192)
     "keepalive_interval_s": 25,
     "gpu_devices": [1, 2],
-    "llama_bin_dir": "E:\\AI\\llama-vulkan",
+    "llama_bin_dir": "E:\\AI\\vulkan-arc\\llama-vulkan",
     "backend": "vulkan",  # "vulkan" or "cuda" - selects -dev prefix + visible-devices env var
 }
+
+# Machine-level llama.cpp runtime. config/app.json holds named presets:
+#   "runtime": "vulkan",
+#   "runtimes": {"vulkan": {"llama_bin_dir": ..., "backend": "vulkan", "gpu_devices": [1, 2]},
+#                "cuda":   {"llama_bin_dir": ..., "backend": "cuda",   "gpu_devices": [0]}}
+# LLAMA_RUNTIME=<name> in the environment overrides "runtime". The active
+# preset replaces the llama_bin_dir/backend/gpu_devices defaults and wins over
+# per-model values, since device numbering is a property of the machine.
+RUNTIME_KEYS = ("llama_bin_dir", "backend", "gpu_devices")
+
+
+def _load_runtime() -> dict:
+    name, preset = CONFIG_DEFAULTS["backend"], {}
+    try:
+        app = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
+    except Exception as e:
+        print(f"[server_manager] app.json unreadable for runtime: {e}", file=sys.stderr)
+        app = {}
+    runtimes = app.get("runtimes") if isinstance(app.get("runtimes"), dict) else {}
+    name = os.environ.get("LLAMA_RUNTIME") or app.get("runtime") or name
+    if name in runtimes and isinstance(runtimes[name], dict):
+        preset = runtimes[name]
+    elif runtimes:
+        print(f"[server_manager] runtime '{name}' not in app.json runtimes "
+              f"({', '.join(runtimes)}); using built-in defaults", file=sys.stderr)
+    for k in RUNTIME_KEYS:
+        if preset.get(k) not in (None, "", []):
+            CONFIG_DEFAULTS[k] = preset[k]
+    return {"name": name, **{k: CONFIG_DEFAULTS[k] for k in RUNTIME_KEYS},
+            "small_model_gpu": preset.get("small_model_gpu")}
+
+
+ACTIVE_RUNTIME = _load_runtime()
+
+
+def apply_runtime(profile: dict) -> dict:
+    """Force the active runtime's bin dir / backend / device list onto a profile."""
+    for k in RUNTIME_KEYS:
+        profile[k] = ACTIVE_RUNTIME[k]
+    return profile
+
 
 # Key -> (min, max) for integer launch params; 0 = "omit, use llama default"
 CONFIG_INT_FIELDS = {

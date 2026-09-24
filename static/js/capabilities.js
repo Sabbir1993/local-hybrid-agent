@@ -5,7 +5,7 @@ async function loadCapabilities() {
   try {
     const d = await (await fetch('/control/capabilities')).json();
     if (d.error) { box.innerHTML = '<div class="mon-empty">' + esc(d.error) + '</div>'; return; }
-    let h = `<div class="rep-cell" style="display:flex; align-items:center; justify-content:space-between;"><span><b>${d.total_tools}</b> tools registered</span></div>`;
+    let h = `<div class="rep-bar" style="display:flex; align-items:center; justify-content:space-between;"><span><b>${d.total_tools}</b> tools registered</span></div>`;
     // Web
     h += capSection('web', '🌐 Web Browsing', d.web.enabled,
       (d.web.tools || []).map(t => `
@@ -25,29 +25,35 @@ async function loadCapabilities() {
       'Reusable instruction packs loaded from .agents/skills/*/SKILL.md');
 
     // MCP
+    // global servers: admin-managed; personal ("just for me") servers: any user, for themselves
     const canManageMcp = !!(window.hasPerm && window.hasPerm('settings.orchestration.configure'));
+    const canAddMcp = canManageMcp || !!(window.hasPerm && window.hasPerm('chat.use'));
     const mcpInner = (d.mcp.servers || []).length
       ? d.mcp.servers.map(s => `
-          <div class="cap-item" style="margin-bottom:6px;">
-            <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+          <details class="mcp-server-fold cap-item" style="margin-bottom:6px;">
+            <summary class="mcp-server-head">
+              <span class="mcp-chevron">▶</span>
               <span class="cap-dot ${s.status === 'ready' ? 'on' : (s.status === 'error' ? 'err' : '')}" title="${esc(s.status)}"></span>
-              <b>${esc(s.name)}</b> <span class="dim">(${esc(s.transport)}) · ${s.status === 'ready' ? s.tools.length + ' tool(s)' : esc(s.status)}</span>
-              ${canManageMcp ? `<span style="margin-left:auto; display:flex; gap:4px;">
-                <button class="btn ghost mcp-srv-reconnect" data-name="${esc(s.name)}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;" title="Reconnect (e.g. after finishing an OAuth login)">↻</button>
-                <button class="btn ghost mcp-srv-edit" data-name="${esc(s.name)}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">Edit</button>
-                <button class="btn ghost mcp-srv-del" data-name="${esc(s.name)}" style="width:auto; margin:0; padding:1px 8px; font-size:10px; color:var(--red);">✕</button>
+              <b>${esc(s.name)}</b> <span class="mcp-scope-badge ${s.scope === 'user' ? 'user' : ''}" title="${s.scope === 'user' ? 'Only you can use this server' : 'Available to every user'}">${s.scope === 'user' ? 'personal' : 'global'}</span>
+              <span class="dim">(${esc(s.transport)}) · ${s.status === 'ready' ? s.tools.length + ' tool(s)' : esc(s.status)}</span>
+              ${(s.scope === 'user' || canManageMcp) ? `<span style="margin-left:auto; display:flex; gap:4px;" onclick="event.stopPropagation()">
+                <button class="btn ghost mcp-srv-reconnect" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;" title="Reconnect (e.g. after finishing an OAuth login)">↻</button>
+                <button class="btn ghost mcp-srv-edit" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">Edit</button>
+                <button class="btn ghost mcp-srv-del" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px; color:var(--red);">✕</button>
               </span>` : ''}
+            </summary>
+            ${s.error ? `<div class="dim" style="font-size:10px; color:var(--red); margin:4px 0 4px 18px;">${esc(s.error)}</div>` : ''}
+            <div class="mcp-tools-list">
+              ${(s.tools || []).map(t => `
+                <div class="cap-tool-entry sub">
+                  <span class="cap-tool-badge mcp"><span class="tool-badge-ico">🔌</span><code>${esc(t.name)}</code></span>
+                  ${t.description ? `<span class="cap-tool-desc">${esc(t.description)}</span>` : ''}
+                </div>`).join('') || '<div class="dim" style="font-size:10px; padding:2px 0;">No tools exposed.</div>'}
             </div>
-            ${s.error ? `<div class="dim" style="font-size:10px; color:var(--red); margin-bottom:4px;">${esc(s.error)}</div>` : ''}
-            ${(s.tools || []).map(t => `
-              <div class="cap-tool-entry sub">
-                <span class="cap-tool-badge mcp"><span class="tool-badge-ico">🔌</span><code>${esc(t.name)}</code></span>
-                ${t.description ? `<span class="cap-tool-desc">${esc(t.description)}</span>` : ''}
-              </div>`).join('')}
-          </div>`).join('')
+          </details>`).join('')
       : '<div class="cap-item dim" style="padding:4px 6px;">no servers configured yet</div>';
     h += capSection('mcp', '🔌 MCP Servers', d.mcp.enabled,
-      mcpInner + (canManageMcp ? mcpEditorHtml() : ''),
+      mcpInner + (canAddMcp ? mcpEditorHtml(canManageMcp) : ''),
       'External tool servers via Model Context Protocol (stdio / http)');
 
     // Plugins
@@ -94,8 +100,13 @@ async function loadCapabilities() {
 
     // Agent Task step cap (no on/off toggle - always bounded)
     const ag = d.agent || {};
-    h += `<div class="cap-group" style="margin-top:10px;">
-      <div class="cap-head"><span>🤖 Agent Task</span></div>
+    h += `<details class="cap-group fold" style="margin-top:10px;">
+      <summary class="cap-head">
+        <span class="cap-head-title" style="display:flex; align-items:center; gap:6px;">
+          <span class="cap-chevron">▶</span>
+          <span>🤖 Agent Task</span>
+        </span>
+      </summary>
       <div class="cap-body">
         <div style="display:flex; align-items:center; gap:6px;">
           <span>Max steps per run</span>
@@ -106,7 +117,7 @@ async function loadCapabilities() {
         </div>
         <div class="dim" style="font-size:9.5px; margin-top:4px;">At the cap a run pauses with a Continue button; runs repeating the same tool calls stop early.</div>
       </div>
-    </div>`;
+    </details>`;
 
     // Agent Library (.agents/agents + .agents/commands), admin-managed allow/deny
     let lib = null;
@@ -114,9 +125,16 @@ async function loadCapabilities() {
     const canManageLib = !!(window.hasPerm && window.hasPerm('settings.agents.configure'));
     if (lib && !lib.error) h += agentLibraryHtml(lib, canManageLib);
 
+    // Router: usage stats + tuner suggestions (needs usage.report.view to see)
+    let rt = null;
+    try { const rr = await fetch('/control/router'); if (rr.ok) rt = await rr.json(); } catch (e) {}
+    const canManageRouter = !!(window.hasPerm && window.hasPerm('settings.router.configure'));
+    if (rt) h += routerHtml(rt, canManageRouter);
+
     box.innerHTML = h;
     if (lib && !lib.error && canManageLib) wireAgentLibrary(box, lib);
-    if (canManageMcp) wireMcpEditor(box);
+    if (rt && canManageRouter) wireRouter(box, rt);
+    if (canAddMcp) wireMcpEditor(box, canManageMcp);
     if (canManagePlugins) wirePlugins(box);
     scheduleMcpStatusPoll(d.mcp.servers || []);
     box.querySelectorAll('.cap-toggle').forEach(t => {
@@ -218,6 +236,7 @@ function agentLibraryHtml(lib, canEdit) {
     return `<div class="cap-tool-entry" style="flex-wrap:wrap;">
         <span class="cap-tool-badge skill"><span class="tool-badge-ico">${kind === 'agents' ? '🤖' : '📚'}</span><code>${esc(it.name)}</code></span>
         <span style="font-size:10px; ${LIB_STATE_STYLE[it.state] || ''}" title="${title}">${esc(it.state)}</span>
+        ${it.source === 'native' ? '<span class="dim" style="font-size:9.5px;" title="app-owned command in config/commands (ported to this app\'s tools and lanes)">native</span>' : ''}
         ${btn}
         <span class="cap-tool-desc" style="flex-basis:100%;">${esc(it.description || '')}</span>
         ${warn}
@@ -243,6 +262,16 @@ function agentLibraryHtml(lib, canEdit) {
         <span class="dim" style="font-size:9.5px;">deny always wins over allow${canEdit ? '' : ' — admin-only setting'}</span>
       </label>
     </div>
+    <div class="cap-item">
+      <label style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+        <b>/multi-* lanes</b>
+        ${['backend', 'frontend'].map(k => `<span>${k}</span>
+          <select class="lib-lane" data-role="${k}" ${canEdit ? '' : 'disabled'} style="${inp}">
+            ${['main', 'executor'].map(l => `<option value="${l}" ${((lib.multi_lanes || {})[k] || (k === 'backend' ? 'main' : 'executor')) === l ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>`).join('')}
+        <span class="dim" style="font-size:9.5px;">which local lane plays each analyst in /multi-plan, /multi-execute…</span>
+      </label>
+    </div>
     <details class="cap-item"><summary><b>🤖 Agent profiles</b> <span class="dim">(${count(lib.agents)}/${(lib.agents || []).length} allowed · spawn_agent roles)</span></summary>
       ${sorted(lib.agents).map(it => row('agents', it)).join('') || '<div class="dim">none in .agents/agents/</div>'}
     </details>
@@ -254,16 +283,20 @@ function agentLibraryHtml(lib, canEdit) {
       <button class="btn accent" id="lib-save" style="width:auto; margin:6px 0 0; padding:4px 12px; font-size:10.5px;">💾 Save lists</button>
     </details>` : ''}`;
   // own toggle class: the generic .cap-toggle handler posts to /control/capabilities
-  return `<div class="cap-group">
-    <div class="cap-head">
-      <span>📚 Agent Library</span>
+  return `<details class="cap-group fold">
+    <summary class="cap-head">
+      <span class="cap-head-title" style="display:flex; align-items:center; gap:6px;">
+        <span class="cap-chevron">▶</span>
+        <span>📚 Agent Library</span>
+      </span>
       <button class="cap-toggle-lib ${lib.enabled ? 'on' : ''}" ${canEdit ? '' : 'disabled'}
+        onclick="event.stopPropagation()"
         title="${canEdit ? 'Enable/disable the Agent Library' : 'Admin-only setting'}">${lib.enabled ? 'ON' : 'OFF'}</button>
-    </div>
+    </summary>
     <div class="cap-body" style="${lib.enabled ? '' : 'opacity:0.45;'}">${inner}
       <div class="dim" style="font-size:9.5px; margin-top:4px;">Agent profiles from .agents/agents and prompt commands from .agents/commands · org-wide, admin-managed · every change is audited</div>
     </div>
-  </div>`;
+  </details>`;
 }
 
 async function saveAgentLibrary(body) {
@@ -285,6 +318,8 @@ function wireAgentLibrary(box, lib) {
   if (tog) tog.onclick = () => run({ enabled: !lib.enabled }, `Agent Library ${lib.enabled ? 'disabled' : 'enabled'} ✓`);
   const pol = box.querySelector('#lib-policy');
   if (pol) pol.onchange = () => run({ default_policy: pol.value }, `Default policy: ${pol.value} ✓`);
+  box.querySelectorAll('.lib-lane').forEach(sel => sel.onchange = () =>
+    run({ multi_lanes: { [sel.dataset.role]: sel.value } }, `/multi-* ${sel.dataset.role} lane: ${sel.value} ✓`));
   box.querySelectorAll('.lib-flip').forEach(b => b.onclick = () => {
     const kind = b.dataset.kind, name = b.dataset.name, lname = name.toLowerCase();
     const cur = lib.config[kind] || { allow: [], deny: [] };
@@ -309,30 +344,157 @@ function wireAgentLibrary(box, lib) {
   };
 }
 
-function capSection(id, title, enabled, innerHtml, note) {
-  return `<div class="cap-group">
-    <div class="cap-head">
-      <span>${title}</span>
-      <button class="cap-toggle ${enabled ? 'on' : ''}" data-section="${id}" title="Enable/disable this capability">${enabled ? 'ON' : 'OFF'}</button>
+/* ---------------- Router: usage stats, tuner suggestions, rules ---------------- */
+function routerHtml(rt, canEdit) {
+  const pct = v => (v == null ? '–' : Math.round(v * 100) + '%');
+  const st = rt.stats_30d || {};
+  const cats = st.categories || {};
+  const rows = Object.keys(cats).sort().map(c => {
+    const x = cats[c];
+    const rated = (x.thumbs_up || 0) + (x.thumbs_down || 0);
+    return `<tr><td><code>${esc(c)}</code></td><td>${x.runs || 0}</td><td>${x.avg_steps || 0}</td>
+      <td>${pct(x.escalation_rate)}</td><td>${pct(x.router_hit_rate)}</td>
+      <td>${rated ? `👍 ${x.thumbs_up || 0} · 👎 ${x.thumbs_down || 0}` : '–'}</td></tr>`;
+  }).join('');
+  const lanes = Object.entries(st.lanes || {}).map(([l, x]) =>
+    `<span style="margin-right:10px;"><code>${esc(l)}</code> ${x.tool_calls} tool calls · ok ${pct(x.tool_ok_rate)}</span>`).join('');
+  const outcomes = Object.entries(st.outcomes || {}).map(([o, n]) => `${esc(o)}: ${n}`).join(' · ');
+  const fmtVal = v => esc(Array.isArray(v) ? (v.length ? v.join(', ') : '(none)') : String(v));
+  const sugg = (rt.suggestions || []).map(sg => `<div class="cap-tool-entry" style="flex-wrap:wrap;">
+      <span class="cap-tool-badge skill"><span class="tool-badge-ico">🧭</span><code>${esc(sg.key)}</code></span>
+      <span style="font-size:10.5px;">${fmtVal(sg.current)} → <b>${fmtVal(sg.proposed)}</b></span>
+      ${canEdit ? `<span style="margin-left:auto; display:flex; gap:4px;">
+        <button class="btn accent rt-decide" data-id="${sg.id}" data-d="apply" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">Apply</button>
+        <button class="btn ghost rt-decide" data-id="${sg.id}" data-d="dismiss" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">Dismiss</button></span>` : ''}
+      <span class="cap-tool-desc" style="flex-basis:100%;">${esc((sg.evidence || {}).why || '')}</span>
+      <details style="flex-basis:100%; font-size:9.5px;"><summary class="dim">evidence</summary><pre class="mono" style="white-space:pre-wrap; margin:2px 0;">${esc(JSON.stringify(sg.evidence, null, 1))}</pre></details>
+    </div>`).join('') || '<div class="dim" style="font-size:10.5px;">No pending suggestions. The tuner runs daily and needs at least 30 samples per rule.</div>';
+  const s = rt.settings || {};
+  const inp = 'background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px;';
+  const dis = canEdit ? '' : 'disabled';
+  const listField = (k, label) => `<div style="margin-top:4px;"><b style="font-size:10.5px;">${label}</b>
+      <input type="text" class="rt-list" data-key="${k}" value="${esc((s[k] || []).join(', '))}" ${dis}
+        style="width:100%; box-sizing:border-box; ${inp} font-family:monospace;"></div>`;
+  const mainCats = (rt.categories || []).filter(c => c !== 'greeting');
+  const hist = (rt.history || []).slice(0, 8).map(h =>
+    `<div class="dim" style="font-size:9.5px;">${esc(h.status)} · <code>${esc(h.key)}</code> → ${fmtVal(h.proposed)} · ${esc(h.decided_by || '')} · ${h.decided_at ? new Date(h.decided_at * 1000).toLocaleString() : ''}</div>`).join('');
+  return `<details class="cap-group fold">
+    <summary class="cap-head">
+      <span class="cap-head-title" style="display:flex; align-items:center; gap:6px;">
+        <span class="cap-chevron">▶</span>
+        <span>🧭 Router (usage-tuned)</span>
+      </span>
+      <span class="dim" style="font-size:10px;">${esc(rt.engine || '')} router ${rt.router_available ? 'ready' : 'unavailable'}</span>
+    </summary>
+    <div class="cap-body">
+      <div class="cap-item"><b>Last 30 days by request type</b>
+        ${rows ? `<table class="rt-table" style="width:100%; font-size:10.5px; border-collapse:collapse; margin-top:3px;">
+          <tr class="dim"><th align="left">type</th><th align="left">runs</th><th align="left">avg steps</th>
+            <th align="left" title="executor first step re-run on main">escalated</th><th align="left" title="CPU router picked the tool directly">router hit</th><th align="left">feedback</th></tr>
+          ${rows}</table>` : '<div class="dim" style="font-size:10.5px;">No agent runs recorded yet.</div>'}
+        ${lanes ? `<div style="font-size:10px; margin-top:4px;">${lanes}</div>` : ''}
+        ${outcomes ? `<div class="dim" style="font-size:9.5px; margin-top:2px;">outcomes: ${outcomes}</div>` : ''}
+      </div>
+      <div class="cap-item"><b>Suggestions</b>
+        ${canEdit ? '<button class="btn ghost" id="rt-tune" style="width:auto; margin:0 0 0 8px; padding:1px 8px; font-size:10px;">↻ Analyze now</button>' : ''}
+        <div style="margin-top:4px;">${sugg}</div>
+        ${hist ? `<details style="margin-top:4px;"><summary class="dim" style="font-size:10px;">decision history</summary>${hist}</details>` : ''}
+      </div>
+      <details class="cap-item"><summary><b>Routing rules</b> <span class="dim">(${canEdit ? 'editable' : 'admin-only'})</span></summary>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:4px; font-size:10.5px;">
+          <label>router confidence ≥ <input type="number" id="rt-thresh" min="0.5" max="0.99" step="0.01" value="${s.confidence_threshold}" ${dis} style="width:58px; ${inp}"></label>
+          <label>escalate after <input type="number" id="rt-streak" min="1" max="5" value="${s.repeat_streak_limit}" ${dis} style="width:44px; ${inp}"> repeats</label>
+        </div>
+        <div style="margin-top:4px; font-size:10.5px;"><b>Start on main (skip executor) for:</b>
+          ${mainCats.map(c => `<label style="margin-right:8px;"><input type="checkbox" class="rt-cat" value="${c}" ${(s.start_on_main_categories || []).includes(c) ? 'checked' : ''} ${dis}> ${c}</label>`).join('')}
+        </div>
+        ${listField('creation_keywords', 'Creation keywords (→ creation type, escalate if no tool call)')}
+        ${listField('action_keywords', 'Action keywords (→ action type)')}
+        ${listField('refusal_phrases', 'Refusal phrases (executor refusal → escalate)')}
+        ${listField('greetings', 'Greetings (answered directly, no tools)')}
+        ${canEdit ? '<button class="btn accent" id="rt-save" style="width:auto; margin:6px 0 0; padding:4px 12px; font-size:10.5px;">💾 Save rules</button>' : ''}
+      </details>
+      <div class="dim" style="font-size:9.5px; margin-top:4px;">Only request types, lanes and tool outcomes are recorded (no prompt text) and kept 90 days. Suggestions never apply themselves; every change is audited.</div>
     </div>
+  </details>`;
+}
+
+function wireRouter(box, rt) {
+  const call = async (url, body, msg) => {
+    try {
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || d.detail || r.status);
+      toast(typeof msg === 'function' ? msg(d) : msg); loadCapabilities();
+    } catch (e) { toast('Router: ' + e.message, true); }
+  };
+  const tune = box.querySelector('#rt-tune');
+  if (tune) tune.onclick = () => call('/control/router/tune', null,
+    d => (d.new_or_updated || []).length ? `${d.new_or_updated.length} suggestion(s) ready for review` : 'No changes suggested yet');
+  box.querySelectorAll('.rt-decide').forEach(b => b.onclick = () =>
+    call(`/control/router/suggestions/${b.dataset.id}/${b.dataset.d}`, null, b.dataset.d === 'apply' ? 'Suggestion applied ✓' : 'Suggestion dismissed'));
+  const save = box.querySelector('#rt-save');
+  if (save) save.onclick = () => {
+    const body = {
+      confidence_threshold: parseFloat(box.querySelector('#rt-thresh').value),
+      repeat_streak_limit: parseInt(box.querySelector('#rt-streak').value, 10),
+      start_on_main_categories: [...box.querySelectorAll('.rt-cat:checked')].map(x => x.value),
+    };
+    box.querySelectorAll('.rt-list').forEach(i => {
+      body[i.dataset.key] = i.value.split(',').map(x => x.trim()).filter(Boolean);
+    });
+    call('/control/router', body, 'Routing rules saved ✓');
+  };
+}
+
+
+function capSection(id, title, enabled, innerHtml, note) {
+  return `<details class="cap-group fold">
+    <summary class="cap-head">
+      <span class="cap-head-title" style="display:flex; align-items:center; gap:6px;">
+        <span class="cap-chevron">▶</span>
+        <span>${title}</span>
+      </span>
+      <button class="cap-toggle ${enabled ? 'on' : ''}" data-section="${id}" title="Enable/disable this capability" onclick="event.stopPropagation()">${enabled ? 'ON' : 'OFF'}</button>
+    </summary>
     <div class="cap-body" style="${enabled ? '' : 'opacity:0.45;'}">${innerHtml || ''}${note ? `<div class="dim" style="font-size:9.5px; margin-top:4px;">${esc(note)}</div>` : ''}</div>
-  </div>`;
+  </details>`;
 }
 
 /* ---------------- MCP custom servers: add / edit / remove / paste JSON ---------------- */
 const MCP_INP = 'background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;';
 let _mcpStatusTimer = null;
-let _mcpConfigs = {};   // name -> public config from /mcp/servers (no secret values)
+let _mcpConfigs = {};   // "scope:name" -> public config from /mcp/servers (no secret values)
 
-function mcpEditorHtml() {
+// admins choose per save whether a server is for every user or just themselves
+function mcpScopePicker(group) {
+  return `
+    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><span style="width:70px;">Available to</span>
+      <label style="display:flex; gap:5px; align-items:center; cursor:pointer; font-size:11px;"><input type="radio" name="${group}" value="global" style="cursor:pointer; accent-color:var(--accent);"> Everyone (global)</label>
+      <label style="display:flex; gap:5px; align-items:center; cursor:pointer; font-size:11px;"><input type="radio" name="${group}" value="user" style="cursor:pointer; accent-color:var(--accent);"> Just me</label>
+    </div>`;
+}
+
+function mcpEditorHtml(canGlobal) {
   return `
     <div style="display:flex; gap:5px; margin-top:6px;">
       <button class="btn ghost" id="mcp-add-open" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">+ Add MCP server</button>
       <button class="btn ghost" id="mcp-import-open" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">Paste JSON</button>
     </div>
+    ${canGlobal ? '' : `<div id="mcp-user-hint" class="dim" style="font-size:9.5px; margin-top:4px;">Servers you add are personal: only you see their tools, and secrets are stored for your account only.</div>`}
+    ${canGlobal ? `
+    <div class="cap-item" style="margin-top:5px;">
+      <div style="display:flex; gap:5px; align-items:center; flex-wrap:wrap;">
+        <span title="Non-admins can add personal stdio servers only with these npx/uvx packages. Approve only packages that call a remote API, never ones that read or write this server's disk.">Packages users may run</span>
+        <input type="text" id="mcp-user-pkgs" placeholder="e.g. mcp-atlassian, @scope/pkg" style="${MCP_INP} flex:1; min-width:160px;">
+        <button class="btn ghost" id="mcp-user-pkgs-save" style="width:auto; margin:0; padding:2px 10px; font-size:10px;">Save</button>
+      </div>
+      <div class="dim" style="font-size:9.5px; margin-top:2px;">Non-admins can add a public https URL, or npx/uvx with one of these packages, as a personal server.</div>
+    </div>` : ''}
     <div id="mcp-import" class="cap-item" hidden style="border:1px solid var(--border); border-radius:6px; padding:6px 8px; margin-top:5px;">
       <div class="dim" style="font-size:10px; margin-bottom:4px;">Claude-Desktop format: <code>{"mcpServers": {"name": {"command": "npx", "args": [...]}}}</code></div>
       <textarea id="mcp-import-json" rows="7" style="${MCP_INP} width:100%; box-sizing:border-box;" placeholder='{"mcpServers": {"my-server": {"command": "npx", "args": ["-y", "mcp-remote", "https://example.com/mcp"]}}}'></textarea>
+      ${canGlobal ? `<div style="margin-top:5px;">${mcpScopePicker('mcp-i-scope')}</div>` : ''}
       <div style="display:flex; gap:5px; margin-top:5px;">
         <button class="btn accent" id="mcp-import-save" style="width:auto; margin:0; padding:3px 12px; font-size:10.5px;">Import &amp; connect</button>
         <button class="btn ghost" id="mcp-import-cancel" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">Cancel</button>
@@ -344,6 +506,7 @@ function mcpEditorHtml() {
       <b id="mcp-form-title">Add MCP server</b>
       <label style="display:flex; gap:6px; align-items:center;"><span style="width:70px;">Name</span>
         <input type="text" id="mcp-f-name" placeholder="e.g. sslcommerz" style="${MCP_INP} flex:1;"></label>
+      ${canGlobal ? `<div id="mcp-f-scope-row">${mcpScopePicker('mcp-f-scope')}</div>` : ''}
       <label style="display:flex; gap:6px; align-items:center;"><span style="width:70px;">Transport</span>
         <select id="mcp-f-transport" style="${MCP_INP} flex:1;">
           <option value="stdio">stdio (local command, e.g. npx mcp-remote)</option>
@@ -392,17 +555,63 @@ function mcpEnvRow(key = '', value = '', secret = false, stored = false) {
   return row;
 }
 
-function wireMcpEditor(box) {
+function wireMcpEditor(box, canGlobal) {
   const form = box.querySelector('#mcp-form');
   const imp = box.querySelector('#mcp-import');
   const $f = id => box.querySelector('#mcp-f-' + id);
-  let editing = null;
+  let editing = null;   // {name, scope} of the server being edited, null = adding
+  const pickedScope = group => {
+    if (!canGlobal) return 'user';   // non-admins can only add personal servers
+    const r = box.querySelector(`input[name="${group}"]:checked`);
+    return r ? r.value : null;
+  };
+  const setScope = (group, scope, locked) => {
+    box.querySelectorAll(`input[name="${group}"]`).forEach(r => {
+      r.checked = r.value === scope;
+      r.disabled = !!locked;
+      r.style.cursor = locked ? 'not-allowed' : 'pointer';
+      if (r.parentElement) {
+        r.parentElement.style.cursor = locked ? 'not-allowed' : 'pointer';
+        r.parentElement.style.opacity = locked ? '0.6' : '1';
+      }
+    });
+  };
+  const scopeQ = scope => `?scope=${encodeURIComponent(scope || 'global')}`;
+
+  box.querySelectorAll('input[name="mcp-f-scope"]').forEach(r => {
+    r.addEventListener('change', () => {
+      if (editing) {
+        const sc = pickedScope('mcp-f-scope') || editing.scope;
+        box.querySelector('#mcp-form-title').textContent =
+          `Edit ${sc === 'user' ? 'personal' : 'global'} MCP server: ${editing.name}`;
+      }
+    });
+  });
 
   fetch('/mcp/servers').then(r => r.json()).then(d => {
     _mcpConfigs = {};
-    (d.servers || []).forEach(s => { _mcpConfigs[s.name] = s; });
-    $f('allowed').textContent = 'allowed commands: ' + (d.allowed_commands || []).join(', ');
+    (d.servers || []).forEach(s => { _mcpConfigs[`${s.scope}:${s.name}`] = s; });
+    const pkgs = d.user_allowed_packages || [];
+    $f('allowed').textContent = canGlobal
+      ? 'allowed commands: ' + (d.allowed_commands || []).join(', ') + ' · personal servers of non-admins: npx/uvx + approved packages'
+      : 'personal stdio servers: npx or uvx with an approved package: ' + (pkgs.join(', ') || '(none yet — ask an admin)');
+    const pkgInp = box.querySelector('#mcp-user-pkgs');
+    if (pkgInp) pkgInp.value = pkgs.join(', ');
   }).catch(() => {});
+
+  const pkgSave = box.querySelector('#mcp-user-pkgs-save');
+  if (pkgSave) pkgSave.onclick = async () => {
+    const packages = box.querySelector('#mcp-user-pkgs').value.split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
+    try {
+      const r = await fetch('/mcp/user-packages', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ packages }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || j.detail || r.status);
+      box.querySelector('#mcp-user-pkgs').value = j.packages.join(', ');
+      toast('Approved packages saved ✓');
+    } catch (e) { toast('Save failed: ' + e.message, true); }
+  };
 
   const syncTransport = () => {
     const http = $f('transport').value === 'http';
@@ -413,11 +622,32 @@ function wireMcpEditor(box) {
   $f('env-add').onclick = () => $f('env').appendChild(mcpEnvRow());
 
   const openForm = cfg => {
-    editing = cfg ? cfg.name : null;
+    editing = cfg ? { name: cfg.name, scope: cfg.scope || 'global' } : null;
     imp.hidden = true;
-    box.querySelector('#mcp-form-title').textContent = cfg ? `Edit MCP server: ${cfg.name}` : 'Add MCP server';
+    box.querySelector('#mcp-form-title').textContent = cfg
+      ? `Edit ${cfg.scope === 'user' ? 'personal' : 'global'} MCP server: ${cfg.name}` : 'Add MCP server';
     $f('name').value = cfg ? cfg.name : '';
     $f('name').disabled = !!cfg;
+    if (cfg) {
+      $f('name').style.opacity = '0.65';
+      $f('name').style.cursor = 'not-allowed';
+      $f('name').title = 'Server name cannot be changed';
+      let lock = box.querySelector('#mcp-f-name-lock');
+      if (!lock) {
+        lock = document.createElement('span');
+        lock.id = 'mcp-f-name-lock';
+        $f('name').parentNode.appendChild(lock);
+      }
+      lock.innerHTML = '🔒 <span class="dim" style="font-size:9.5px;">locked</span>';
+      lock.style.cssText = 'font-size:11px; display:inline-flex; align-items:center; gap:3px; margin-left:6px;';
+    } else {
+      $f('name').style.opacity = '1';
+      $f('name').style.cursor = 'text';
+      $f('name').title = '';
+      box.querySelector('#mcp-f-name-lock')?.remove();
+    }
+    // Keep availability editable: only server name remains locked on edit
+    setScope('mcp-f-scope', cfg ? (cfg.scope || 'global') : null, false);
     $f('transport').value = cfg ? cfg.transport : 'stdio';
     $f('command').value = cfg ? (cfg.command || '') : 'npx';
     $f('args').value = cfg ? (cfg.args || []).join('\n') : '';
@@ -430,15 +660,23 @@ function wireMcpEditor(box) {
     }
     syncTransport();
     form.hidden = false;
-    $f('name').focus();
+    if (!cfg) $f('name').focus();
   };
 
   box.querySelector('#mcp-add-open').onclick = () => openForm(null);
   $f('cancel').onclick = () => { form.hidden = true; };
-  box.querySelector('#mcp-import-open').onclick = () => { form.hidden = true; imp.hidden = !imp.hidden; };
+  box.querySelector('#mcp-import-open').onclick = () => {
+    form.hidden = true;
+    imp.hidden = !imp.hidden;
+    if (!imp.hidden) setScope('mcp-i-scope', null, false);
+  };
   box.querySelector('#mcp-import-cancel').onclick = () => { imp.hidden = true; };
 
   $f('save').onclick = async () => {
+    const scope = pickedScope('mcp-f-scope') || (editing ? editing.scope : null);
+    if (!scope) { toast('Choose who this server is for: everyone (global) or just you', true); return; }
+    const name = $f('name').value.trim();
+    if (!name) { toast('Please enter a server name', true); return; }
     const env = {}, secret_env = {};
     for (const row of $f('env').querySelectorAll('.mcp-env-row')) {
       const k = row.querySelector('.mcp-env-key').value.trim();
@@ -446,8 +684,11 @@ function wireMcpEditor(box) {
       const v = row.querySelector('.mcp-env-val').value;
       if (row.querySelector('.mcp-env-secret').checked) secret_env[k] = v; else env[k] = v;
     }
+    const from_scope = editing ? editing.scope : null;
     const body = {
-      name: $f('name').value.trim(),
+      name,
+      scope,
+      from_scope: from_scope || undefined,
       transport: $f('transport').value,
       command: $f('command').value.trim(),
       args: $f('args').value.split('\n').map(a => a.trim()).filter(Boolean),
@@ -456,26 +697,31 @@ function wireMcpEditor(box) {
       disabled: $f('disabled').checked,
     };
     try {
-      const r = await fetch(editing ? `/mcp/servers/${encodeURIComponent(editing)}` : '/mcp/servers', {
+      const url = editing
+        ? `/mcp/servers/${encodeURIComponent(editing.name)}${from_scope ? `?from_scope=${encodeURIComponent(from_scope)}` : ''}`
+        : '/mcp/servers';
+      const r = await fetch(url, {
         method: editing ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || j.detail || r.status);
-      toast(`MCP server '${body.name}' saved — ${j.status.status}…`);
+      toast(`${scope === 'user' ? 'Personal' : 'Global'} MCP server '${body.name}' saved — ${j.status ? j.status.status : 'saved'}…`);
       loadCapabilities();
     } catch (e) { toast('Save failed: ' + e.message, true); }
   };
 
   box.querySelector('#mcp-import-save').onclick = async () => {
     const out = box.querySelector('#mcp-import-result');
+    const scope = pickedScope('mcp-i-scope');
+    if (!scope) { out.textContent = 'Choose who these servers are for: everyone (global) or just you.'; return; }
     let config;
     try { config = JSON.parse(box.querySelector('#mcp-import-json').value); }
     catch (e) { out.textContent = 'Invalid JSON: ' + e.message; return; }
     try {
       const r = await fetch('/mcp/import', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config }),
+        body: JSON.stringify({ config, scope }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || j.detail || r.status);
@@ -494,7 +740,7 @@ function wireMcpEditor(box) {
 
   box.querySelectorAll('.mcp-srv-edit').forEach(btn => {
     btn.onclick = () => {
-      const cfg = _mcpConfigs[btn.dataset.name];
+      const cfg = _mcpConfigs[`${btn.dataset.scope}:${btn.dataset.name}`];
       if (!cfg) { toast('Config not loaded yet — try again', true); return; }
       if (cfg.managed) { toast('Catalog connector — use Connect / Disconnect above', true); return; }
       openForm(cfg);
@@ -503,7 +749,7 @@ function wireMcpEditor(box) {
   box.querySelectorAll('.mcp-srv-reconnect').forEach(btn => {
     btn.onclick = async () => {
       try {
-        const r = await fetch(`/mcp/servers/${encodeURIComponent(btn.dataset.name)}/reconnect`, { method: 'POST' });
+        const r = await fetch(`/mcp/servers/${encodeURIComponent(btn.dataset.name)}/reconnect${scopeQ(btn.dataset.scope)}`, { method: 'POST' });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || j.detail || r.status);
         toast(`Reconnecting ${btn.dataset.name}…`);
@@ -514,9 +760,11 @@ function wireMcpEditor(box) {
   box.querySelectorAll('.mcp-srv-del').forEach(btn => {
     btn.onclick = async () => {
       const name = btn.dataset.name;
-      if (!confirm(`Remove MCP server '${name}'? Its tools disappear for every user.`)) return;
+      const personal = btn.dataset.scope === 'user';
+      if (!confirm(personal ? `Remove your personal MCP server '${name}'?`
+                            : `Remove MCP server '${name}'? Its tools disappear for every user.`)) return;
       try {
-        const r = await fetch(`/mcp/servers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const r = await fetch(`/mcp/servers/${encodeURIComponent(name)}${scopeQ(btn.dataset.scope)}`, { method: 'DELETE' });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || j.detail || r.status);
         toast(`MCP server '${name}' removed`);
@@ -548,22 +796,25 @@ function pluginRowHtml(p, canManage) {
   const state = p.error ? 'err' : (p.loaded ? 'on' : '');
   const why = p.error ? 'failed to load' : (p.loaded ? 'loaded' : (p.enabled ? 'not loaded' : 'disabled'));
   return `
-    <div class="cap-item" style="margin-bottom:6px;">
-      <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+    <details class="mcp-server-fold cap-item" style="margin-bottom:6px;">
+      <summary class="mcp-server-head">
+        <span class="mcp-chevron">▶</span>
         <span class="cap-dot ${state}" title="${why}"></span>
         <b>${esc(p.name)}</b>
         <span class="dim">· ${p.tools.length} tool(s), ${p.prompt_fragments} prompt frag(s)${p.enabled ? '' : ' · disabled'}${p.modified ? ' · locally modified' : ''}</span>
-        ${canManage ? `<span style="margin-left:auto; display:flex; gap:4px;">
+        ${canManage ? `<span style="margin-left:auto; display:flex; gap:4px;" onclick="event.stopPropagation()">
           <button class="btn ghost plugin-enable" data-name="${esc(p.name)}" data-enabled="${p.enabled ? '1' : ''}" style="${PLUGIN_BTN}">${p.enabled ? 'Disable' : 'Enable'}</button>
           ${p.from_catalog && !p.modified ? `<button class="btn ghost plugin-uninstall" data-name="${esc(p.name)}" style="${PLUGIN_BTN} color:var(--red);" title="Remove from plugins/ (can be reinstalled from the catalog)">✕</button>` : ''}
         </span>` : ''}
+      </summary>
+      ${p.error ? `<div class="dim" style="font-size:10px; color:var(--red); margin:4px 0 4px 18px;">${esc(p.error)}</div>` : ''}
+      <div class="mcp-tools-list">
+        ${(p.tools || []).map(t => `
+          <div class="cap-tool-entry sub">
+            <span class="cap-tool-badge plugin"><span class="tool-badge-ico">⚡</span><code>${esc(t.split('__').pop())}</code></span>
+          </div>`).join('') || '<div class="dim" style="font-size:10px; padding:2px 0;">No tools exposed.</div>'}
       </div>
-      ${p.error ? `<div class="dim" style="font-size:10px; color:var(--red); margin-bottom:4px;">${esc(p.error)}</div>` : ''}
-      ${(p.tools || []).map(t => `
-        <div class="cap-tool-entry sub">
-          <span class="cap-tool-badge plugin"><span class="tool-badge-ico">⚡</span><code>${esc(t.split('__').pop())}</code></span>
-        </div>`).join('')}
-    </div>`;
+    </details>`;
 }
 
 function pluginBrowserHtml() {

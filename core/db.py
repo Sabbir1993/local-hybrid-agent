@@ -248,6 +248,20 @@ def _init_projects_db() -> sqlite3.Connection:
         updated_at REAL NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_plan_items_session ON plan_items(session_id);
+    CREATE TABLE IF NOT EXISTS doc_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        session_id INTEGER,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        location TEXT NOT NULL DEFAULT 'common',
+        parent_id INTEGER REFERENCES doc_files(id),
+        version INTEGER NOT NULL DEFAULT 1,
+        sha256 TEXT,
+        source_spec TEXT,
+        created_at REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_doc_files_user_name ON doc_files(user_id, name);
     """)
     # migration: older DBs lack the workspace_dir column or allow_patterns
     cols = [r[1] for r in conn.execute("PRAGMA table_info(projects)")]

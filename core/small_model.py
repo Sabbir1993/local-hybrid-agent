@@ -11,7 +11,7 @@ from typing import Optional, Union
 import httpx
 
 from .backend import device_prefix
-from .config import BASE_DIR, LLAMA_SERVER_PORT, CONFIG_FILE, ROLES_FILE, CONFIG_DEFAULTS
+from .config import ACTIVE_RUNTIME, BASE_DIR, LLAMA_SERVER_PORT, CONFIG_FILE, ROLES_FILE, CONFIG_DEFAULTS
 from .process import find_llama_server
 from . import vram
 
@@ -70,8 +70,8 @@ def _load_app_config() -> dict:
         "models_dir": None,
         "workspace_dir": None,
         "common_dir": None,
-        "llama_bin_dir": CONFIG_DEFAULTS["llama_bin_dir"],
-        "backend": CONFIG_DEFAULTS["backend"],
+        "llama_bin_dir": ACTIVE_RUNTIME["llama_bin_dir"],
+        "backend": ACTIVE_RUNTIME["backend"],
         "small_models": {
             "executor": {"model": None, "port": 8091, "gpu": 1, "ctx": 8192},
             "vision": {"model": None, "mmproj": None, "port": 8092, "gpu": 1, "ctx": 4096},
@@ -124,7 +124,7 @@ def _load_app_config() -> dict:
     try:
         if cfg.exists():
             d = json.loads(cfg.read_text())
-            for k in ("models_dir", "workspace_dir", "common_dir", "llama_bin_dir", "backend"):
+            for k in ("models_dir", "workspace_dir", "common_dir"):
                 if d.get(k):
                     base[k] = d[k]
             for k, sub in base["small_models"].items():
@@ -177,6 +177,11 @@ class SmallModelInstance:
 
         self.port = int(cfg.get("port", 8091))
         self.gpu = int(cfg.get("gpu", 1))
+        # a GPU index from another machine's numbering (e.g. Vulkan 1 on a
+        # single-GPU CUDA box) falls back to the active runtime's small_model_gpu
+        fallback = ACTIVE_RUNTIME.get("small_model_gpu")
+        if fallback is not None and self.gpu not in ACTIVE_RUNTIME["gpu_devices"]:
+            self.gpu = int(fallback)
         self.ctx = int(cfg.get("ctx", 4096))
         # parallel slots share one unified KV pool of -c tokens (-kvu), so
         # several users' agent steps / embeddings run concurrently
@@ -209,8 +214,8 @@ class SmallModelInstance:
                 return
             if not self.available:
                 raise RuntimeError(f"{self.role} model not configured or files missing: {self.model_path}")
-            bin_dir = APP_CONFIG.get("llama_bin_dir") or CONFIG_DEFAULTS["llama_bin_dir"]
-            backend = APP_CONFIG.get("backend") or CONFIG_DEFAULTS["backend"]
+            bin_dir = ACTIVE_RUNTIME["llama_bin_dir"]
+            backend = ACTIVE_RUNTIME["backend"]
             prefix = device_prefix(backend)
             server_bin = find_llama_server(bin_dir)
             # Preflight: refuse to spawn if this small model wouldn't fit on
@@ -414,6 +419,14 @@ _needle_failed = False
 
 _laya_router = None
 _laya_failed = False
+
+
+def reset_router_failures() -> None:
+    """Re-arm both CPU routers after an admin edits the router config
+    (a failure otherwise disables a router until restart)."""
+    global _needle_failed, _laya_failed
+    _needle_failed = False
+    _laya_failed = False
 
 
 def router_engine_name() -> str:

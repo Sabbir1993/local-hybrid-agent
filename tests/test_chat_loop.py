@@ -15,7 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import memory, knowledge_router
 from routes import common
-from routes.chat import wants_file_output, looks_undelivered, shrink_old_tool_results
+from routes.chat import (wants_file_output, looks_undelivered, shrink_old_tool_results,
+                         session_files, file_followup_intent)
 
 MARKET_Q = ("hi can you prepare of a market analysis html based on web based online gaming "
             "market size? local [BD] along with foreign ?")
@@ -48,6 +49,39 @@ class DeliverableTests(unittest.TestCase):
         self.assertFalse(looks_undelivered("x", wants_file=True, delivered=True))
         self.assertFalse(looks_undelivered("```html\n<html></html>\n```", wants_file=True, delivered=False))
         self.assertFalse(looks_undelivered("Dhaka is the capital.", wants_file=False, delivered=False))
+
+
+    def test_finalize_announcement_is_undelivered(self):
+        pre = ("I'll finalize everything into an actual downloadable file right now - let me generate "
+               "the complete, fully-polished version using write_file so you can grab it directly.")
+        self.assertTrue(looks_undelivered(pre, wants_file=False, delivered=False))
+
+
+class FileFollowupTests(unittest.TestCase):
+    HISTORY = [
+        {"role": "user", "content": MARKET_Q},
+        {"role": "assistant", "content": "Done.\n\n[DOWNLOAD: BD_Report-1d5aafc8.html]"},
+        {"role": "user", "content": "make it nicer"},
+        {"role": "assistant", "content": "Updated.\n\n[DOWNLOAD: BD_Report-419c2cb8.html]"},
+    ]
+
+    def test_session_files_latest_last(self):
+        self.assertEqual(session_files(self.HISTORY), ["BD_Report-1d5aafc8.html", "BD_Report-419c2cb8.html"])
+        self.assertEqual(session_files([{"role": "user", "content": "[DOWNLOAD: x.html]"}]), [])
+
+    def test_where_intent(self):
+        for q in ("where is file ?", "file not shared", "give me the download link", "share the report again"):
+            self.assertEqual(file_followup_intent(q, True), "where", q)
+        self.assertIsNone(file_followup_intent("where is file ?", False))
+
+    def test_edit_intent(self):
+        for q in ("Actually UI is not that good. Please use /frontend-design skill to polish the UI",
+                  "edit the previous file and add a pricing section", "change the colors"):
+            self.assertEqual(file_followup_intent(q, True), "edit", q)
+
+    def test_unrelated_followup_is_not_file(self):
+        self.assertIsNone(file_followup_intent("what is the capital of Bangladesh?", True))
+        self.assertIsNone(file_followup_intent("can you add 2 and 3", True))
 
 
 class ShrinkToolResultsTests(unittest.TestCase):

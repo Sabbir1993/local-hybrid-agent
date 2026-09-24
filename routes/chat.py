@@ -25,7 +25,10 @@ from core import cloud
 from core.state import state
 from core.registry import registry
 from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch, tool_web_search_images
-from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA
+from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA, _common_resolve
+from core.request_context import run_in_executor_ctx
+from core.doc_tools import (DOC_EDIT_SCHEMA, DOC_INSPECT_SCHEMA, tool_doc_edit_common,
+                            tool_doc_inspect_common)
 from core.agent_loop import (
     run_tool,
     safe_parse_and_repair_args,
@@ -67,9 +70,84 @@ _FILE_NOUN_RE = (r'(excel|spreadsheet|workbook|csv|\.xlsx|\.xls|\.csv|\.json|\.p
 
 # "Let me compile the HTML now:" - the model announced work it then didn't do.
 _ANNOUNCE_RE = re.compile(
-    r"\b(let me|i will|i'll|i am going to|i'm going to|now i(?:'ll| will)?)\s+(?:now\s+)?"
-    r"(compile|create|generate|write|prepare|build|put together|draft|make|produce)\b",
+    r"\b(let me|i will|i'll|i am going to|i'm going to|now i(?:'ll| will)?)\s+(?:now\s+)?(?:actually\s+)?"
+    r"(compile|create|generate|write|prepare|build|put together|draft|make|produce"
+    r"|finali[sz]e|rebuild|redesign|polish|update|regenerate|redo|rewrite|call write_file)\b",
     re.IGNORECASE)
+
+# Follow-ups about a file produced earlier in this chat. The frontend only
+# resends assistant text (big code blocks stubbed, tool args never sent), so
+# without help the model can't see the old file and invents a new one.
+_DL_TAG_RE = re.compile(r"\[DOWNLOAD:\s*([^\]]+)\]")
+_FILE_REF_RE = r"(file|report|html|page|dashboard|document|doc|pdf|sheet|excel|csv|deck|slides|presentation|link)"
+_FILE_WHERE_RE = re.compile(
+    r"\b(where(?:'s| is)?|link|download|re-?share|resend|send|give|share)\b.{0,30}\b" + _FILE_REF_RE + r"\b"
+    r"|\b" + _FILE_REF_RE + r"\b.{0,15}\b(where|link|missing|not (?:shared|found|there))\b",
+    re.IGNORECASE)
+_FILE_EDIT_RE = re.compile(
+    r"\b(edit|update|modify|change|improve|polish|fix|redesign|rebuild|redo|rewrite|restyle|revise|refine"
+    r"|add|remove|replace|rename|translate|enhance)\w*\b",
+    re.IGNORECASE)
+_TEXT_FILE_EXTS = {".html", ".htm", ".css", ".js", ".ts", ".json", ".csv", ".md", ".txt", ".py",
+                   ".xml", ".svg", ".sql", ".yaml", ".yml"}
+PRIOR_FILE_MAX_CHARS = 60000
+
+
+_ATTACHED_DOC_RE = re.compile(r"--- FILE:\s*([^\n]+?\.(?:pptx|xlsx|docx|csv|pdf))\s*---", re.IGNORECASE)
+# edited through doc_inspect/doc_edit (in place, by address) rather than rewritten
+_DOC_EDIT_EXTS = {".pptx", ".xlsx", ".docx", ".csv", ".pdf"}
+
+
+def session_files(msgs: list) -> list:
+    """Filenames the server delivered (or the user attached) in this conversation, oldest first."""
+    seen = []
+    for m in msgs:
+        role = m.get("role")
+        text = str(m.get("content") or "")
+        if role == "user":
+            names = _ATTACHED_DOC_RE.findall(text)
+        elif role == "assistant":
+            names = _DL_TAG_RE.findall(text)
+        else:
+            continue
+        for name in names:
+            n = Path(name.strip()).name
+            if n in seen:
+                seen.remove(n)
+            seen.append(n)
+    return seen
+
+
+def file_followup_intent(query: str, has_prior: bool) -> Optional[str]:
+    """'where' = user can't find / wants the existing file again;
+    'edit' = user wants the existing file changed. None otherwise."""
+    q = (query or "").strip()
+    if not has_prior or not q:
+        return None
+    if _FILE_WHERE_RE.search(q) and not _FILE_EDIT_RE.search(q):
+        return "where"
+    if _FILE_EDIT_RE.search(q) and re.search(
+            r"\b" + _FILE_REF_RE + r"\b|\b(it|this|that|previous|last|same|ui|design|style|colou?rs?|layout"
+            r"|section|chart|table|theme|font)\b|/frontend-design", q, re.IGNORECASE):
+        return "edit"
+    return None
+
+
+def load_prior_file(name: str, max_chars: int) -> Optional[str]:
+    """Text content of a common-space file this chat produced, or None
+    (missing, binary format, or too big to fit the context budget)."""
+    from core.agent_tools import _common_resolve
+    try:
+        p = _common_resolve(name)
+    except PermissionError:
+        return None
+    if p.suffix.lower() not in _TEXT_FILE_EXTS or not p.is_file():
+        return None
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return text if len(text) <= max_chars else None
 
 
 def wants_file_output(query: str) -> bool:
@@ -158,8 +236,26 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     import re as _re
     url_matches = _re.findall(r'https?://[^\s<>")\]]+', last_query)
 
+    prior_files = session_files(msgs)
+    file_followup = file_followup_intent(last_query, bool(prior_files))
+    if file_followup == "where":
+        # "where is the file?" - answer with the existing link instead of
+        # asking a slow local model to regenerate (and usually invent) it.
+        latest = prior_files[-1]
+        others = prior_files[:-1][-3:]
+        reply = f"Here is the latest file created in this chat:\n\n[DOWNLOAD: {latest}]"
+        if others:
+            reply += "\n\nEarlier files from this chat:\n\n" + "\n".join(f"[DOWNLOAD: {f}]" for f in reversed(others))
+        reply += ("\n\nIf you asked for changes after this file and they aren't in it, tell me what to "
+                  "change and I'll save an updated version.")
+
+        async def _where_sse():
+            yield f"event: delta\ndata: {json.dumps({'text': reply})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0})}\n\n"
+        return StreamingResponse(_where_sse(), media_type="text/event-stream")
+
     # Tools for Chat Mode: Always equip write_file (saves to shared common space)
-    chat_tools = [CHAT_WRITE_FILE_SCHEMA]
+    chat_tools = [CHAT_WRITE_FILE_SCHEMA, DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
     from core.agent_tools import AGENT_TOOLS
     skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
     if skb:
@@ -193,7 +289,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     kb_blocked_reason = ""
     from core.knowledge_router import kb_routing_query
     kb_query = kb_routing_query(msgs, last_query)
-    if kb_ids and kb_query.strip():
+    if kb_ids and kb_query.strip() and not file_followup:
         try:
             from core.knowledge_router import fetch_company_knowledge, is_company_or_kb_query
             kb_hits, kb_prompt_block = await fetch_company_knowledge(kb_query, kb_ids, k=6)
@@ -260,9 +356,56 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         "   When the user asks questions about the company, employee records, internal policies, or company knowledge base, "
         "NEVER invent fake employee names, placeholder records, or fictional datasets. NEVER call `write_file` to create "
         "sample or dummy CSV/Excel spreadsheets unless the user explicitly requested a file export (e.g. 'export this to CSV' or 'save as Excel file'). "
-        "Answer with the authentic internal company knowledge base data provided in the prompt."
+        "Answer with the authentic internal company knowledge base data provided in the prompt.\n"
+        "7. CHANGING AN EXISTING DOCUMENT (.pptx, .xlsx, .docx, .csv, .pdf - one you created or one the user attached): "
+        "never regenerate it with write_file. Call `doc_inspect(file)` for its outline, then `doc_edit(file, ops)` "
+        "targeting only what the user asked to change; everything else stays exactly as it was, and a new "
+        "version is saved with its own [DOWNLOAD: ...] link."
     )
     sys_parts.append(file_prompt)
+
+    if prior_files:
+        latest = prior_files[-1]
+        prior_block = (
+            "FILES ALREADY CREATED IN THIS CONVERSATION (oldest first): " + ", ".join(prior_files[-5:]) + "\n"
+            f"The most recent file is `{latest}`. If the user asks where a file is, give its "
+            f"[DOWNLOAD: filename] link - do not regenerate it.")
+        if file_followup == "edit" and Path(latest).suffix.lower() in _DOC_EDIT_EXTS:
+            outline = await run_in_executor_ctx(tool_doc_inspect_common, {"file": latest})
+            if cloud_main and await input_guard.check_async([outline], user, any_cloud_lane=True):
+                outline = None
+            if outline and not outline.startswith("doc error"):
+                prior_block += (
+                    f"\n\nThe user wants changes to `{latest}`. Do NOT regenerate it and do NOT call write_file. "
+                    f"Call doc_edit(file='{latest}', ops=[...]) with ops that target ONLY the parts the user "
+                    "asked to change; every other slide, cell, paragraph, style and layout is kept exactly. "
+                    "Its current outline (with the addresses ops use) is below. Then give the user the "
+                    "[DOWNLOAD: ...] link from the doc_edit result and list what changed.\n"
+                    f"----- OUTLINE {latest} -----\n{outline}\n----- END OUTLINE -----")
+            else:
+                prior_block += (f"\n\nThe user wants changes to `{latest}`. Call doc_inspect(file='{latest}') "
+                                "to get its outline, then doc_edit with ops for only the requested changes.")
+        elif file_followup == "edit":
+            ctx_chars = int(common.main_ctx_tokens(cloud_main) * 0.25 * 3.5)
+            prior_text = load_prior_file(latest, min(PRIOR_FILE_MAX_CHARS, ctx_chars))
+            # cloud lane: the file may carry KB-derived data - apply the same
+            # input sanitizer the user's own messages go through before sending
+            if prior_text and cloud_main and await input_guard.check_async([prior_text], user, any_cloud_lane=True):
+                prior_text = None
+            if prior_text:
+                prior_block += (
+                    f"\n\nThe user wants changes to `{latest}`. Its CURRENT content is below. Start from this "
+                    "exact content - keep everything the user did not ask to change - and call "
+                    f"write_file(path='{latest}', content=<the complete updated file>). Never rebuild it from "
+                    "memory and never reply with only a description of the changes.\n"
+                    f"----- BEGIN {latest} -----\n{prior_text}\n----- END {latest} -----")
+            else:
+                prior_block += (
+                    f"\n\nThe user wants changes to `{latest}`, but its content can't be shown here (binary "
+                    "format or too large). Recreate it with the requested changes using what you know from "
+                    "this conversation, call write_file with the complete file, and tell the user it was "
+                    "regenerated.")
+        sys_parts.append(prior_block)
 
     if use_web:
         web_prompt = (
@@ -286,7 +429,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     deep = bool(req.deep_mode)
     max_turns = int(chat_cfg.get("deep_max_tool_rounds" if deep else "max_tool_rounds", 25 if deep else 15)) if chat_tools else 1
     max_web_calls = int(chat_cfg.get("deep_max_web_calls" if deep else "max_web_calls", 16 if deep else 8))
-    wants_file = wants_file_output(last_query)
+    wants_file = wants_file_output(last_query) or file_followup == "edit"
     if deep:
         sys_parts.append(
             "DEEP RESEARCH MODE:\n"
@@ -461,6 +604,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         _n = _guard_notice()
                         if _n:
                             yield _n
+                    elif ev == "tool_preparing":
+                        yield f"event: tool_preparing\ndata: {json.dumps(val)}\n\n"
                     elif ev == "result":
                         res_dict = val
 
@@ -571,7 +716,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 missing_dl = []   # tags the model wrote without producing any content
                 for dl_f in dl_tags:
                     clean_fname = Path(dl_f.strip()).name
-                    if clean_fname not in written_files:
+                    try:
+                        already_saved = _common_resolve(clean_fname).is_file()
+                    except PermissionError:
+                        already_saved = False
+                    # a tag for a file that already exists is a link to it, never a
+                    # cue to regenerate it from the reply text
+                    if clean_fname not in written_files and not already_saved:
                         # Extract matching code fence or full content to save to common storage
                         cand_code = None
                         ext = clean_fname.split('.')[-1].lower() if '.' in clean_fname else ''
@@ -610,7 +761,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             if ext in {'html', 'htm'}:
                                 missing_dl.append(clean_fname)
                             elif ext in ('pptx', 'ppt'):
-                                cand_code = f"# {title_clean}\n---\n## Agenda\n- Executive Summary\n- Key Metrics & Analysis\n- Next Steps"
+                                # (no canned agenda deck: ask the model to continue instead)
+                                missing_dl.append(clean_fname)
                             elif ext == 'pdf':
                                 cand_code = f"# {title_clean}\n\n{content.split('[DOWNLOAD:')[0].strip() or 'Document compilation.'}"
 
@@ -718,6 +870,17 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                           f'*(file `{mf}` was not generated - please ask again)*', content)
                     yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
+                if (not tool_calls and continued and wants_file and not written_files
+                        and looks_undelivered(content, True, False)):
+                    # the one nudge was spent and the model still only promised
+                    # the file - say so instead of leaving a fake "here it comes"
+                    note = ("\n\n*(The file was not generated this time - the model described it but did not "
+                            "save it. Please ask again"
+                            + (f"; your last saved file is still available: [DOWNLOAD: {prior_files[-1]}]"
+                               if prior_files else "") + ")*")
+                    content = (content or "") + note
+                    yield f"event: delta\ndata: {json.dumps({'text': note})}\n\n"
+
                 if not tool_calls or not chat_tools:
                     # Guard against empty/blank assistant response:
                     if not (content and content.strip()):
@@ -801,6 +964,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif t_name == "web_fetch":
                             u = args.get("url") or ""
                             res_str = await tool_web_fetch({"url": u})
+                        elif t_name in ("doc_inspect", "doc_edit"):
+                            impl = tool_doc_inspect_common if t_name == "doc_inspect" else tool_doc_edit_common
+                            res_str = await run_in_executor_ctx(impl, args)
+                            if res_str.startswith("doc error"):
+                                res_str = "error: " + res_str
+                            else:
+                                written_files.extend(_DL_TAG_RE.findall(res_str))
                         elif t_name == "write_file":
                             res_str = tool_write_file_common(args)
                             p_name = args.get("path") or args.get("file") or args.get("filename")

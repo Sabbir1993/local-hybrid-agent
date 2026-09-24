@@ -122,6 +122,28 @@ function write({ path: p, content, append }) {
   return { existed };
 }
 
+// Binary-safe variants for office documents (.pptx/.xlsx/.docx/.pdf); the
+// server edits the bytes in memory and never stores them on its own disk.
+const MAX_B64_BYTES = 10 * 1024 * 1024;
+
+function readB64({ path: p }) {
+  if (!fs.existsSync(p) || !fs.statSync(p).isFile()) {
+    return { data: null };
+  }
+  const size = fs.statSync(p).size;
+  if (size > MAX_B64_BYTES) throw new Error(`File too large for document edit (${size} bytes, max ${MAX_B64_BYTES})`);
+  return { data: fs.readFileSync(p).toString("base64"), size };
+}
+
+function writeB64({ path: p, data }) {
+  const buf = Buffer.from(data || "", "base64");
+  if (buf.length > MAX_B64_BYTES) throw new Error(`Document too large (${buf.length} bytes, max ${MAX_B64_BYTES})`);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const existed = fs.existsSync(p);
+  fs.writeFileSync(p, buf);
+  return { existed, size: buf.length };
+}
+
 function edit({ path: p, old_string, new_string, replace_all }) {
   if (!fs.existsSync(p) || !fs.statSync(p).isFile()) {
     throw new Error(`File not found: ${p}`);
@@ -203,4 +225,4 @@ function grep({ root, pattern }) {
   return { hits };
 }
 
-module.exports = { browseFolder, browse, mkdir, read, write, edit, list, grep, tree };
+module.exports = { browseFolder, browse, mkdir, read, write, readB64, writeB64, edit, list, grep, tree };

@@ -16,6 +16,7 @@ function compactMapMessages(rawMsgs) {
       acts: meta.acts || [],
       tps: meta.tps,
       ntok: tok,
+      promptTokens: meta.promptTokens || undefined,
       secs: meta.secs,
       compact: meta.compact || undefined,
       compactBefore: meta.before_tokens,

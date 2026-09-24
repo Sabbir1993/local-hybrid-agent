@@ -25,6 +25,9 @@ from .config import BASE_DIR
 
 AGENTS_DIR = BASE_DIR / ".agents" / "agents"
 COMMANDS_DIR = BASE_DIR / ".agents" / "commands"
+# app-owned, git-tracked commands (ported to this app's tools/lanes); a native
+# file overrides a library file of the same name
+NATIVE_COMMANDS_DIR = BASE_DIR / "config" / "commands"
 MAX_PROFILE_BODY_CHARS = 6000    # sub-agent system prompt budget (small local models)
 MAX_COMMAND_BODY_CHARS = 10000
 
@@ -42,6 +45,9 @@ TOOL_MAP = {
     "websearch": ["web_search"],
 }
 ALWAYS_TOOLS = ["read_skill", "list_skills"]
+
+# multi-* native commands: which local lane plays the "backend" / "frontend" analyst
+DEFAULT_MULTI_LANES = {"backend": "main", "frontend": "executor"}
 
 # built-in slash commands (static/js/agent-cmd.js) always win over library files
 BUILTIN_COMMANDS = {"plan", "build", "goal", "init", "compact", "subagent", "multiagent"}
@@ -144,6 +150,12 @@ def _skill_names() -> set:
     return {n.lower() for k, s in load_skills().items() for n in (k, s["name"])}
 
 
+def _builtin_roles() -> set:
+    """config/roles.json names (always win over a same-named profile)."""
+    from .small_model import APP_CONFIG
+    return BUILTIN_ROLES | {str(k).lower() for k in (APP_CONFIG.get("roles") or {})}
+
+
 def _match(name: str, patterns) -> bool:
     return any(fnmatch.fnmatch(name.lower(), str(p).lower()) for p in (patterns or []))
 
@@ -153,7 +165,7 @@ def item_state(kind: str, name: str, skill_names: Optional[set] = None) -> str:
     if kind == "commands" and (name.lower() in BUILTIN_COMMANDS
                                or name.lower() in (skill_names if skill_names is not None else _skill_names())):
         return "shadowed"
-    if kind == "agents" and name.lower() in BUILTIN_ROLES:
+    if kind == "agents" and name.lower() in _builtin_roles():
         return "shadowed"
     cfg = library_cfg()
     sect = cfg.get(kind) if isinstance(cfg.get(kind), dict) else {}
@@ -195,7 +207,7 @@ def _load_profile(path: Path) -> Optional[dict]:
     }
 
 
-def _load_command(path: Path) -> Optional[dict]:
+def _load_command(path: Path, source: str = "library") -> Optional[dict]:
     text = _read(path)
     if text is None:
         return None
@@ -209,7 +221,8 @@ def _load_command(path: Path) -> Optional[dict]:
         "argument_hint": meta.get("argument-hint", ""),
         "body": body,
         "path": str(path),
-        "warnings": _compat(text),
+        "source": source,
+        "warnings": _compat(text) if source == "library" else [],
     }
 
 
@@ -225,10 +238,11 @@ def all_agent_profiles() -> dict:
 
 def all_prompt_commands() -> dict:
     out = {}
-    for p in _scan(COMMANDS_DIR):
-        cmd = _load_command(p)
-        if cmd:
-            out[cmd["name"]] = cmd
+    for dir_, source in ((COMMANDS_DIR, "library"), (NATIVE_COMMANDS_DIR, "native")):
+        for p in _scan(dir_):
+            cmd = _load_command(p, source)
+            if cmd:
+                out[cmd["name"]] = cmd
     return out
 
 
@@ -271,6 +285,11 @@ def expand_command(name: str, args: str = "") -> Optional[str]:
         return None
     args = (args or "").strip()
     body = cmd["body"]
+    if cmd.get("source") == "native":
+        cfg_lanes = library_cfg().get("multi_lanes") or {}
+        lanes = {k: (cfg_lanes.get(k) if cfg_lanes.get(k) in ("main", "executor") else v)
+                 for k, v in DEFAULT_MULTI_LANES.items()}
+        body = body.replace("$BACKEND_LANE", lanes["backend"]).replace("$FRONTEND_LANE", lanes["frontend"])
     if "$ARGUMENTS" in body:
         body = body.replace("$ARGUMENTS", args or "(none given)")
     elif args:
@@ -296,7 +315,8 @@ def library_status() -> dict:
 
     def rows(kind, items):
         return [{"name": n, "description": it["description"], "state": item_state(kind, n, skills),
-                 "warnings": it["warnings"]} for n, it in items.items()]
+                 "source": it.get("source", "library"), "warnings": it["warnings"]}
+                for n, it in sorted(items.items())]
 
     return {
         "enabled": library_enabled(),
@@ -304,4 +324,5 @@ def library_status() -> dict:
         "agents": rows("agents", all_agent_profiles()),
         "commands": rows("commands", all_prompt_commands()),
         "config": {k: cfg.get(k, {"allow": [], "deny": []}) for k in ("agents", "commands")},
+        "multi_lanes": {**DEFAULT_MULTI_LANES, **(cfg.get("multi_lanes") or {})},
     }

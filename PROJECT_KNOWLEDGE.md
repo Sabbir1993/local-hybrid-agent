@@ -52,7 +52,7 @@ Verified in `TESTING_LOG.md` — treated as ground truth by the code:
 
 - **GPU:** 2× Intel Arc A770 16GB (driver 32.0.101.8991), one card on **PCIe 3.0**. i5-13500, 64GB RAM, UHD 770 iGPU.
 - **Vulkan indices:** `0` = UHD 770 **iGPU (must be excluded)**, `1` and `2` = the A770s. Therefore **every** profile and `model_configs.json` entry uses `gpu_devices: [1, 2]`.
-- **llama.cpp:** Vulkan backend build `b10840` at `E:\AI\llama-vulkan` (profile `llama_bin_dir`).
+- **llama.cpp:** Vulkan backend build `b10840` at `E:\AI\vulkan-arc\llama-vulkan` (`config/app.json` → `runtimes.vulkan`).
 
 ### Measured performance
 
@@ -265,7 +265,7 @@ profiles/*.json                         (highest — the actual launch truth)
 
 ### `core/config.py` — the schema of the config system
 
-- **`CONFIG_DEFAULTS`** — fallback for every launch field, plus `llama_bin_dir` (`E:\AI\llama-vulkan`) and `gpu_devices` (`[1, 2]`).
+- **`CONFIG_DEFAULTS`** — fallback for every launch field, plus `llama_bin_dir` / `backend` / `gpu_devices`, which the active `config/app.json` runtime preset (`runtime`, or env `LLAMA_RUNTIME`) overwrites at import.
 - **`CONFIG_INT_FIELDS`** — `key -> (min, max)` clamp ranges for integers. `0` means *"omit the flag, use llama.cpp's default"* for `threads`/`threads_batch`/`batch_size`/`ubatch_size`/`n_slots`.
 - **`CONFIG_CHOICE_FIELDS`** — enum whitelists: `flash_attn` ∈ (on/off/auto), `kv_cache_type` ∈ (f16/bf16/q8_0/q5_0/q4_0/f32), `split_mode` ∈ (layer/row).
 - **`CONFIG_TARGETS`** — `key -> (section, field)`; `None` section = top level of the profile.
@@ -423,6 +423,7 @@ Hand-rolled client, no SDK dependency. Protocol version `2025-03-26`.
 - Bridged schemas are converted from MCP `inputSchema` into an OpenAI function schema, description prefixed `[mcp:<server>]`.
 - Results stringified by `_stringify_content()` (joins `content[]` text parts, caps at `MAX_TOOL_OUTPUT`).
 - `core/echo_mcp_server.py` is a deliberately minimal test server (`ping`, `add`), already wired into `config.json`.
+- **Global vs personal servers** (Settings -> Capabilities -> MCP). Global servers live in `capabilities.mcp_servers` and need `settings.orchestration.configure`. When an admin saves one, they must pick "Everyone (global)" or "Just me". Personal servers are stored in `auth.db` (`user_mcp_servers`) with secrets in the OS keychain under `u<id>:<name>:env:<KEY>`. Each runs as its own process keyed `<name>@u<id>`, and its tools are registered with an `owner` in the registry, so only that user's requests see them (resolved via `core/request_context.py`). A global name shadows a personal one. Non-admins may add only a public `https://` URL, or `npx`/`uvx` with a package listed in `capabilities.mcp_user_allowed_packages`, and cannot set loader/registry env vars (`NODE_*`, `UV_*`, `PATH`, …).
 
 ### Skills (`core/skills.py`)
 
@@ -650,6 +651,30 @@ messages(id, session_id → sessions.id, role, content, meta TEXT, created_at)
 - `allow_patterns` is a JSON array of fnmatch command patterns (the "Allow for this project" permission choice).
 - `messages.meta` is a JSON blob of per-message UI metadata (tool calls, timing, lane).
 - Deletes cascade manually (messages → sessions → project). `ON DELETE CASCADE` is declared but SQLite foreign keys are **not** enabled, so the manual deletes matter.
+
+### Common space & documents
+
+- `common_dir` (`COMMON_ROOT`) holds **one folder per user**: `COMMON_ROOT/user_<id>/`.
+  `agent_tools.common_workspace()` resolves the caller's folder from the request
+  context, so chat-generated files, uploads (`/agent/upload`, de-duped as
+  `name-2.ext` instead of overwritten), `/agent/download` and `/agent/raw` never
+  reach another user's files. `COMMON_ROOT/_unowned/` is served by no route.
+  Migrate an old flat folder with `python scripts/migrate_common_per_user.py`
+  (dry run; `--apply` to move, `--default-owner <id>` for untraceable files).
+- `doc_files(id, user_id, session_id, name, kind, location, parent_id, version, sha256, source_spec, created_at)`
+  (`core/doc_store.py`): version chain of generated/edited documents.
+  `location` is `common` (name = file in the user's folder) or `device`
+  (absolute path on the user's machine). `source_spec` is the markdown a PDF
+  was rendered from; PDF edits patch it and re-render.
+- `core/doc_ops/` reads and **surgically edits** .pptx/.xlsx/.docx/.csv (and
+  generated .pdf via `source_spec`): `inspect` returns an outline with stable
+  addresses (`s3/sh5`, `Sheet1!B7`, `p12`, `r3cAmount`, `sec2`); `edit` applies
+  typed ops in memory and rejects the result unless every untargeted element
+  (snapshot by identity) and every untargeted package part (C14N compare) is
+  unchanged. Tools: `doc_inspect` / `doc_edit` / `doc_create`
+  (`core/doc_tools.py`), in chat (common space) and agent mode (device bytes
+  via companion `fs.read_b64` / `fs.write_b64`, 10 MB cap, never on server disk).
+  Edits save `name-vN-<id>.ext`; the previous version is kept.
 
 ### Workspace-change tracking (in-memory only)
 

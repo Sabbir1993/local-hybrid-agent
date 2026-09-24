@@ -62,6 +62,18 @@ def extract_docx(path: Path) -> str:
     return "\n".join(p.text for p in d.paragraphs if p.text.strip())
 
 
+def extract_pptx(path: Path) -> str:
+    """Slide text, tables and speaker notes, one block per slide."""
+    from .doc_ops import pptx_ops
+    out = []
+    for e in pptx_ops.inspect(path.read_bytes())["elements"]:
+        if e["kind"] == "slide":
+            out.append(f"\n\nSlide {e['addr'][1:]}:")
+        elif e["kind"] not in ("picture", "group", "table") and e["text"] and not e["text"].endswith(" paragraphs"):
+            out.append(("Notes: " if e["kind"] == "notes" else "") + e["text"].strip())
+    return "\n".join(out).strip()
+
+
 def extract_xlsx(path: Path) -> str:
     import openpyxl
     wb = openpyxl.load_workbook(str(path), data_only=True, read_only=True)
@@ -134,6 +146,7 @@ async def extract_url(url: str) -> str:
 EXTRACTORS = {
     ".pdf": extract_pdf,
     ".docx": extract_docx,
+    ".pptx": extract_pptx,
     ".xlsx": extract_xlsx,
     ".xls": extract_xls,
     ".csv": extract_csv,

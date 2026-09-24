@@ -124,7 +124,7 @@ for these yet — they live in source/config, not a settings panel):
 
 | What | Where | Why it's not auto |
 |---|---|---|
-| `llama_bin_dir`, `backend`, fallback `gpu_devices` | `core/config.py` → `CONFIG_DEFAULTS` | Global install-level settings, not per-model; no UI field writes these back yet. |
+| `llama_bin_dir`, `backend`, `gpu_devices` | `config/app.json` → `runtimes` + `runtime` (or env `LLAMA_RUNTIME`) | Install-level settings, not per-model; the active runtime overrides per-model device lists. No UI field writes these yet. |
 | GPU display names (e.g. "A770 #1 · display") | `static/js/theme.js` → `LUID_NAMES` | Cosmetic only — labels a Windows adapter LUID with a human name in the GPU panel. Safe to leave as generic `GPU #N` on a new machine. |
 | Integrated-GPU LUIDs to hide from the GPU panel | `core/config.py` → `IGNORED_IGPU_LUIDS` | Windows-perfcounter LUIDs are per-machine; an iGPU you want hidden on one box may not exist on another. |
 | `models_dir`, `workspace_dir`, `common_dir`, small-model lane paths | `config/app.json` | Per-install file paths, meant to be edited (see setup below). |
@@ -159,20 +159,31 @@ This is the actual "clone the repo and go" path.
    cd a770-dual-runtime
    pip install -r requirements.txt
    ```
-4. **Tell it which backend and binary to use** — edit
-   [`core/config.py`](core/config.py)'s `CONFIG_DEFAULTS`:
-   ```python
-   "gpu_devices": [0, 1],              # your llama-bench device indices, or [0] for a single GPU
-   "llama_bin_dir": "C:\\llama-vulkan", # wherever you unzipped it
-   "backend": "vulkan",                 # "vulkan" or "cuda"
+4. **Tell it which backend and binary to use**: add one preset per llama.cpp
+   build under `runtimes` in [`config/app.json`](config/app.json), then pick
+   one with `runtime`:
+   ```json
+   "runtime": "vulkan",
+   "runtimes": {
+     "vulkan": { "llama_bin_dir": "C:/llama-vulkan", "backend": "vulkan", "gpu_devices": [0, 1], "small_model_gpu": 0 },
+     "cuda":   { "llama_bin_dir": "C:/llama-cuda",   "backend": "cuda",   "gpu_devices": [0],    "small_model_gpu": 0 }
+   }
    ```
+   `gpu_devices` are that build's `llama-bench --list-devices` indices.
+   `small_model_gpu` is used when a small model's `gpu` isn't in that list.
+   To switch builds without editing the file, set `LLAMA_RUNTIME=cuda`
+   before starting `server_manager.py`. The startup log prints the active
+   runtime. After switching GPUs, re-run autotune (`tuned` splits are hardware-specific).
    Single-GPU machine: use `"gpu_devices": [0]` — the app automatically
    omits `--tensor-split` and multi-device `-dev` wiring when there's only
    one device.
 5. **Configure [`config/app.json`](config/app.json)** (copy/edit the checked-in one):
    - `models_dir` — folder containing your GGUFs.
    - `workspace_dir` / `common_dir` — where Agent mode reads/writes project
-     files.
+     files. `common_dir` gets one private sub-folder per user
+     (`user_<id>/`) for chat-generated files and uploads; to move an older
+     flat folder, run `python scripts/migrate_common_per_user.py` (dry run
+     first, then `--apply`).
    - `small_models.executor` / `.vision` / `.embedder` — model paths
      (relative to `models_dir`), ports, GPU index, and context size for the
      small local helper models. Leave a model's `"model"` field `null` to

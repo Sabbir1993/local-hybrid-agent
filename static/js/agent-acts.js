@@ -460,3 +460,35 @@ function agentActsHtml(acts) {
   h += `</div></details></div>`;
   return h;
 }
+
+/* Thumbs up/down on agent answers -> POST /agent/feedback. Feeds the usage-based
+   router tuner (Settings -> Router); only the category/lane stats are stored, never text. */
+function runRatingHtml(runId) {
+  if (!runId) return '';
+  const cur = localStorage.getItem('runRating:' + runId) || '';
+  const b = (v, icon, title) =>
+    `<button type="button" class="run-rate-btn${cur === String(v) ? ' on' : ''}" data-run-rate="${esc(runId)}" data-rate="${v}" title="${title}">${icon}</button>`;
+  return ` · <span class="run-rate">${b(1, '👍', 'Good answer')}${b(-1, '👎', 'Bad answer')}</span>`;
+}
+
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest && e.target.closest('[data-run-rate]');
+  if (!btn) return;
+  e.preventDefault();
+  const runId = btn.dataset.runRate;
+  const key = 'runRating:' + runId;
+  // clicking the active thumb again clears the rating
+  const rating = localStorage.getItem(key) === btn.dataset.rate ? 0 : Number(btn.dataset.rate);
+  try {
+    const r = await fetch('/agent/feedback', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_id: runId, rating }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    if (rating) localStorage.setItem(key, String(rating)); else localStorage.removeItem(key);
+    btn.parentElement.querySelectorAll('[data-run-rate]').forEach(x =>
+      x.classList.toggle('on', rating !== 0 && x.dataset.rate === String(rating)));
+  } catch (err) {
+    if (typeof toast === 'function') toast('Feedback not saved: ' + err.message);
+  }
+});

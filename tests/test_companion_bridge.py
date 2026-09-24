@@ -149,9 +149,18 @@ class ReadChunkTests(unittest.TestCase):
         self.assertEqual(project_touched, [], "never stat the project path on the server")
 
     def test_uploaded_attachment_still_served_from_common_space(self):
-        (Path(self.tmp.name) / "notes-1a2b3c4d.txt").write_text("uploaded text", encoding="utf-8")
+        # uploads live in the caller's own folder (COMMON_ROOT/user_<id>)
+        own = Path(self.tmp.name) / "user_7"
+        own.mkdir()
+        (own / "notes-1a2b3c4d.txt").write_text("uploaded text", encoding="utf-8")
+        # another user's file of the same name is never served
+        other = Path(self.tmp.name) / "user_8"
+        other.mkdir()
+        (other / "secret-1a2b3c4d.txt").write_text("not yours", encoding="utf-8")
         out = asyncio.run(file_tools.tool_read_file_chunk({"path": "notes-1a2b3c4d.txt"}))
         self.assertTrue(out.startswith("uploaded text"))
+        out = asyncio.run(file_tools.tool_read_file_chunk({"path": "../user_8/secret-1a2b3c4d.txt"}))
+        self.assertNotIn("not yours", out)
 
     def test_missing_everywhere(self):
         out = asyncio.run(file_tools.tool_read_file_chunk({"path": "nope.js"}))

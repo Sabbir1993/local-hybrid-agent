@@ -492,6 +492,7 @@ async function openSession(s) {
         acts: meta.acts || [],
         tps: meta.tps,
         ntok: tok,
+        promptTokens: meta.promptTokens || undefined,
         secs: meta.secs,
         compact: meta.compact || undefined,
         compactBefore: meta.before_tokens,
@@ -501,6 +502,7 @@ async function openSession(s) {
         modelDisplay: meta.modelDisplay || undefined,
         modelSource: meta.modelSource || undefined,
         modelProvider: meta.modelProvider || undefined,
+        runId: meta.runId || undefined,
       };
     });
     curSession = s;

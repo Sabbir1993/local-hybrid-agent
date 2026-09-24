@@ -156,7 +156,7 @@ function renderKnowledgePanel(box, sources) {
     } else if (kindSel.value === 'url') {
       bodyBox.innerHTML = '<input type="text" id="kb-add-url" placeholder="https://…" style="width:100%; box-sizing:border-box; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:6px 8px; font-size:11.5px;">';
     } else {
-      bodyBox.innerHTML = '<input type="file" id="kb-add-file" accept=".pdf,.docx,.xlsx,.xls,.csv" style="font-size:11.5px;">';
+      bodyBox.innerHTML = '<input type="file" id="kb-add-file" accept=".pdf,.docx,.pptx,.xlsx,.xls,.csv" style="font-size:11.5px;">';
     }
   };
   renderBody();

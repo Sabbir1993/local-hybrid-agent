@@ -71,6 +71,7 @@ from core.grammar import build_tool_call_grammar, envelope_examples
 from core.web_tools import register_web_tools
 from core.skills import skills_prompt_fragment
 from core.agent_library import agent_library_prompt_fragment, load_prompt_commands, expand_command
+from core import router_policy, route_log
 from core.plugins import plugins_prompt_fragment, fire_hook
 from core.shell_tools import (
     add_allow_pattern,
@@ -613,9 +614,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             }
         return {"lane": lane, "model": lane, "display": lane, "device": _main_device_label(), "role": "Agent", "source": "local"}
 
-    simple_greetings = {"hi", "hello", "hey", "help", "who are you", "what can you do", "good morning", "good evening", "how are you", "test", "hi there"}
-    clean_q = last_query.strip().lower()
-    if clean_q in simple_greetings or (len(clean_q) <= 3 and not clean_q.startswith("/")):
+    rpol = router_policy.rcfg()
+    q_category = router_policy.classify_query(last_query, rpol)
+    if q_category == "greeting":
         async def direct_chat():
             model_info = get_model_info("main" if (use_cloud_main or main_ready) else "executor")
             yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
@@ -675,19 +676,31 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         repeat_streak = 0
         plan_nudges = 0
         stop_reason = "max_steps"
+        # routing telemetry (core/route_log.py): category + lane/reason codes only, no text
+        import uuid as _uuid
+        run_id = _uuid.uuid4().hex
+        run_outcome = "error"
+        steps_run = 0
+        route_log.run_start(run_id, user.id, mode, q_category)
+        yield f"event: run\ndata: {json.dumps({'run_id': run_id})}\n\n"
         if kb_blocked_reason:
             yield f"event: kb_blocked\ndata: {json.dumps({'message': kb_blocked_reason})}\n\n"
         try:
             for step in range(steps):
+                steps_run = step + 1
                 yield f"event: step\ndata: {json.dumps({'step': step + 1, 'total': steps})}\n\n"
                 tool_calls = None
                 content = ""
                 reasoning = ""
 
-                executor_stuck = repeat_streak >= 2
-                lane_name = "main" if not use_executor or executor_stuck else "executor"
+                executor_stuck = repeat_streak >= rpol["repeat_streak_limit"]
+                main_first = (step == 0 and use_executor and (use_cloud_main or main_ready)
+                              and router_policy.start_on_main(q_category, rpol))
+                lane_name = "main" if not use_executor or executor_stuck or main_first else "executor"
+                lane_reason = ("no_executor" if not use_executor else "repeat_streak" if executor_stuck
+                               else "start_on_main" if main_first else "executor_default")
 
-                is_creation_or_code = any(w in last_query.lower() for w in ("make", "create", "generate", "write", "build", "code", "add", "fix", "html", "script", "page"))
+                is_creation_or_code = router_policy.is_creation(last_query, rpol)
                 if (not req.plan) and step == 0 and mode not in ("no-orchestration", "all-cloud", "direct") and not cloud_exec and router_available() and not any(
                         m.get("role") in ("tool", "assistant") for m in msgs[1:]):
                     r_model_info = get_model_info("needle")
@@ -721,6 +734,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
                         yield f"event: tool_result\ndata: {json.dumps(_with_diff({'id': tc_id, 'name': nr['name'], 'ok': ok, 'result': result, 'model': r_model_info['display']}, nr['args']))}\n\n"
                         actions_taken.append({"name": nr["name"], "args": nr["args"], "ok": ok, "result": result})
+                        route_log.event(run_id, step, q_category, "router", "router_hit", router_tool=nr["name"],
+                                        router_conf=nr.get("confidence"), duration_s=r_duration)
+                        route_log.event(run_id, step, q_category, "router", "tool", tool_name=nr["name"], tool_ok=ok)
                         # Record in usage.db
                         db_record_request("agent/router", r_model_name,
                                           r_p_toks, r_c_toks, r_tps, r_duration, None, False, 200,
@@ -736,6 +752,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         # Router evaluated and chose fallback / passed to executor
                         monitor_end(r_rid, 204, prompt_tokens=r_p_toks, completion_tokens=0,
                                     duration=r_duration, tps=0.0, model=r_model_name, source="local")
+                        route_log.event(run_id, step, q_category, "router",
+                                        "creation_bypass" if is_creation_or_code else "router_pass",
+                                        duration_s=r_duration)
                         route_note = "creative/code query bypassed direct routing" if is_creation_or_code else "query requires general reasoning"
                         r_disp = r_model_info.get("display", "Router")
                         yield f"event: thought\ndata: {json.dumps({'step': step + 1, 'text': f'{r_disp}: {route_note} → handing off to {lane_name}', 'model': r_disp})}\n\n"
@@ -752,6 +771,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         except Exception as e:
                             print(f"[server_manager] executor unavailable: {e}; routing to main model", file=sys.stderr)
                             lane_name = "main"
+                            lane_reason = "executor_unavailable"
                             active_client = main_client
                 else:
                     if not use_cloud_main:
@@ -851,6 +871,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             streamed_content.append(_safe)
                             if _safe:
                                 yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
+                        elif ev == "tool_preparing":
+                            yield f"event: tool_preparing\ndata: {json.dumps({'step': step + 1, **val})}\n\n"
                         elif ev == "result":
                             res_dict = val
                     for _c in _guard_flush_events(_red, streamed_content):
@@ -875,6 +897,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     db_record_request(f"agent/{lane_name}", model_info.get("model"), ptoks, ctoks, tps, dt, None, True, 200,
                                       prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=is_orch,
                                       source=model_info.get("source"), provider=model_info.get("provider_name"))
+                yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks})}\n\n"
 
                 content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                 reasoning = res_dict.get("reasoning", "") if res_dict else ""
@@ -888,21 +911,14 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 # If the executor lane degraded into an infinite repeat loop, refused,
                 # or outputted markdown tutorial code instead of executing tool calls on step 0,
                 # escalate to the powerful main model immediately.
-                is_loop = is_degeneration_or_loop(content)
-                refused = any(w in content.lower() for w in ("i cannot", "i can't", "i am unable", "as an ai", "i don't have access"))
-                tutorial_code_emitted = ("```" in content and not tool_calls)
-                wants_action = any(w in last_query.lower() for w in ("run", "install", "test", "check", "exec", "open", "read", "view", "find", "grep"))
-                wants_creation = any(w in last_query.lower() for w in ("make", "create", "generate", "write", "build", "code", "add", "fix", "html", "script", "page"))
-                should_escalate = (
-                    lane_name == "executor"
-                    and (use_cloud_main or main_ready)
-                    and (
-                        is_loop
-                        or (wants_creation and step == 0 and not tool_calls)
-                        or (wants_action and step == 0 and (tutorial_code_emitted or (refused and not tool_calls)))
-                        or (step == 0 and not content.strip() and not tool_calls)
-                    )
-                )
+                # (trigger lists live in the "router" config block -- core/router_policy.py)
+                is_loop, _ = is_degeneration_or_loop(content)
+                esc_reason = (router_policy.escalate_reason(step=step, content=content, tool_calls=tool_calls,
+                                                            query=last_query, is_loop=is_loop, cfg=rpol)
+                              if lane_name == "executor" and (use_cloud_main or main_ready) else "")
+                should_escalate = bool(esc_reason)
+                route_log.event(run_id, step, q_category, lane_name, lane_reason, escalated=should_escalate,
+                                escalate_reason=esc_reason, duration_s=dt)
 
                 if should_escalate:
                     print(f"[server_manager] Executor failed/tutorialized on step {step+1}; auto-escalating to Main Model.", file=sys.stderr)
@@ -945,6 +961,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                 streamed_content.append(_safe)
                                 if _safe:
                                     yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
+                            elif ev == "tool_preparing":
+                                yield f"event: tool_preparing\ndata: {json.dumps({'step': step + 1, **val})}\n\n"
                             elif ev == "result":
                                 res_dict = val
                         for _c in _guard_flush_events(_red, streamed_content):
@@ -968,6 +986,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         db_record_request("agent/main-escalated", model_info.get("model"), ptoks, ctoks, tps, dt, None, True, 200,
                                           prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=False,
                                           source=model_info.get("source"), provider=model_info.get("provider_name"))
+                    yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks})}\n\n"
                     content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                     reasoning = res_dict.get("reasoning", "") if res_dict else ""
                     tool_calls = res_dict.get("tool_calls", []) if res_dict else []
@@ -1013,6 +1032,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         audit_log(user, action="output_guard.redact", resource=_sem.get("name"),
                                   detail={"endpoint": "agent/run", "scope": _sem.get("scope"),
                                           "semantic": True}, result="deny")
+                        run_outcome = "filtered"
                         yield f"event: validated\ndata: {{}}\n\n"
                         yield "event: done\ndata: {}\n\n"
                         return
@@ -1027,6 +1047,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         else:
                             yield "event: delta_reset\ndata: {}\n\n"
                             yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
+                    run_outcome = "synthesized" if was_synth else "answered"
                     yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
                     yield "event: done\ndata: {}\n\n"
                     return
@@ -1143,6 +1164,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     result = await run_tool(name, args)
                     await fire_hook("after_tool", name, args, result)
                     ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
+                    route_log.event(run_id, step, q_category, lane_name, "tool", tool_name=name, tool_ok=ok)
                     yield f"event: tool_result\ndata: {json.dumps(_with_diff({'id': tc_id, 'name': name, 'ok': ok, 'result': result}, args))}\n\n"
                     actions_taken.append({"name": name, "args": args, "ok": ok, "result": result})
                     msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
@@ -1172,12 +1194,14 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 audit_log(user, action="output_guard.redact", resource=_sem.get("name"),
                           detail={"endpoint": "agent/run", "scope": _sem.get("scope"),
                                   "semantic": True}, result="deny")
+                run_outcome = "filtered"
                 yield f"event: validated\ndata: {{}}\n\n"
                 yield f"event: done\ndata: {json.dumps({'note': 'response filtered by policy', 'text': ''})}\n\n"
                 return
             val_text, was_synth, note = validate_and_finalize_response(
                 last_query, final_content, final_reasoning, actions_taken)
             val_text, was_synth = _strip_download_markers(val_text, was_synth)
+            run_outcome = stop_reason   # "max_steps" | "loop"
 
             if not final_content.strip():
                 yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
@@ -1199,10 +1223,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             # reason lets the UI offer "Continue" (the next run re-injects the tracked plan)
             yield f"event: done\ndata: {json.dumps({'note': plan_note, 'text': '', 'reason': stop_reason, 'steps': steps, 'pending': plan_pending, 'plan_total': plan_total})}\n\n"
         except asyncio.CancelledError:
-            pass
+            run_outcome = "cancelled"
         except Exception as e:
             yield f"event: delta\ndata: {json.dumps({'text': f'⚠️ Agent loop error: {e}'})}\n\n"
             yield "event: done\ndata: {}\n\n"
+        finally:
+            route_log.run_end(run_id, steps_run, run_outcome)
 
     return StreamingResponse(sse(), media_type="text/event-stream")
 
@@ -1220,6 +1246,21 @@ async def agent_project_instructions(user: Principal = Depends(get_current_user)
         print(f"[agent] project instructions status failed: {e}", file=sys.stderr)
     return {"project": proj, "exists": bool(pi), "filename": pi[0] if pi else None,
             "size": len(pi[1]) if pi else 0, "init_prompt": INIT_PROMPT}
+
+
+class RunFeedbackReq(BaseModel):
+    run_id: str
+    rating: int          # 1 = thumbs up, -1 = thumbs down, 0 = clear
+
+
+@router.post("/agent/feedback")
+async def agent_feedback(req: RunFeedbackReq, user: Principal = Depends(get_current_user)):
+    """Thumbs on an agent answer -- feeds the router tuner (core/router_tuner.py)."""
+    if req.rating not in (-1, 0, 1) or not re.fullmatch(r"[0-9a-f]{32}", req.run_id or ""):
+        return JSONResponse({"error": "invalid feedback"}, status_code=400)
+    if not route_log.rate(req.run_id, user.id, req.rating or None):
+        return JSONResponse({"error": "run not found"}, status_code=404)
+    return {"ok": True}
 
 
 class CommandExpandReq(BaseModel):
@@ -1269,9 +1310,9 @@ async def agent_upload(files: list[UploadFile] = FastAPIFile(...), space: Option
     for uf in files:
         fname = uf.filename or "upload"
         # Sanitize filename
-        safe_name = Path(fname).name
-        dest = target_dir / safe_name
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        safe_name = Path(fname.replace("\\", "/")).name or "upload"
+        dest = _unique_dest(target_dir, safe_name)
+        safe_name = dest.name
         try:
             data = await uf.read()
             dest.write_bytes(data)
@@ -1301,6 +1342,17 @@ async def agent_upload(files: list[UploadFile] = FastAPIFile(...), space: Option
             "truncated": truncated,
         })
     return {"files": results}
+
+
+def _unique_dest(folder: Path, name: str) -> Path:
+    """folder/name, or name-2.ext, name-3.ext ... when taken (never overwrite an upload)."""
+    dest = folder / name
+    stem, suf = Path(name).stem, Path(name).suffix
+    n = 2
+    while dest.exists():
+        dest = folder / f"{stem}-{n}{suf}"
+        n += 1
+    return dest
 
 
 def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[Path]:

@@ -224,13 +224,110 @@ function renderMediaPreviewSection(text) {
   return html;
 }
 
-function toast(msg, isErr) {
+function toast(msg, isErrOrOptions) {
   const t = $('toast');
-  t.textContent = msg;
+  if (!t) return;
+  const isErr = typeof isErrOrOptions === 'boolean' ? isErrOrOptions : !!(isErrOrOptions && isErrOrOptions.isErr);
+  const duration = (isErrOrOptions && typeof isErrOrOptions.duration === 'number') ? isErrOrOptions.duration : 4000;
+  const actions = (isErrOrOptions && Array.isArray(isErrOrOptions.actions)) ? isErrOrOptions.actions : [];
+
+  t.innerHTML = '';
+  const textSpan = document.createElement('span');
+  textSpan.className = 'toast-text';
+  textSpan.innerHTML = typeof msg === 'string' ? msg : '';
+  t.appendChild(textSpan);
+
+  if (actions.length) {
+    const actContainer = document.createElement('span');
+    actContainer.className = 'toast-actions';
+    actions.forEach(a => {
+      const btn = document.createElement('button');
+      btn.className = 'toast-btn';
+      btn.textContent = a.label;
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        if (typeof a.onClick === 'function') a.onClick();
+        if (!a.keepOpen) {
+          clearTimeout(t._h);
+          t.className = '';
+        }
+      };
+      actContainer.appendChild(btn);
+    });
+    t.appendChild(actContainer);
+  }
+
   t.className = 'show' + (isErr ? ' err' : '');
   clearTimeout(t._h);
-  t._h = setTimeout(() => t.className = '', 4000);
+  if (duration > 0) {
+    t._h = setTimeout(() => t.className = '', duration);
+  }
 }
+window.toast = toast;
+
+let _hudFadeTimer = null;
+function setLiveHud(state) {
+  const hud = $('live-state-hud');
+  if (!hud) return;
+  if (!state) {
+    if (hud.style.display !== 'none') {
+      hud.style.opacity = '0';
+      hud.style.transition = 'opacity 0.25s ease';
+      clearTimeout(_hudFadeTimer);
+      _hudFadeTimer = setTimeout(() => {
+        hud.style.display = 'none';
+        hud.innerHTML = '';
+      }, 250);
+    }
+    return;
+  }
+  clearTimeout(_hudFadeTimer);
+  hud.style.display = 'flex';
+  hud.style.opacity = '1';
+
+  let iconHtml = '<div class="hud-spinner"></div>';
+  if (state.phase === 'done') iconHtml = '<span class="hud-icon">✅</span>';
+  else if (state.phase === 'error') iconHtml = '<span class="hud-icon">⚠️</span>';
+  else if (state.phase === 'thinking') iconHtml = '<span class="hud-icon">💭</span>';
+  else if (state.phase === 'preparing') iconHtml = '<div class="hud-spinner" style="border-top-color:#a855f7;"></div>';
+  else if (state.phase === 'writing') iconHtml = '<div class="hud-spinner" style="border-top-color:#22c55e;"></div>';
+
+  let actionsHtml = '';
+  if (Array.isArray(state.actions) && state.actions.length) {
+    actionsHtml = `<div class="hud-actions">`
+      + state.actions.map((a, i) => `<button class="hud-action-btn" data-act="${i}">${esc(a.label)}</button>`).join('')
+      + `<button class="hud-close-btn" title="Dismiss" onclick="setLiveHud(null)">✕</button>`
+      + `</div>`;
+  } else if (state.phase === 'done' || state.phase === 'error') {
+    actionsHtml = `<div class="hud-actions"><button class="hud-close-btn" title="Dismiss" onclick="setLiveHud(null)">✕</button></div>`;
+  }
+
+  hud.innerHTML = `<div class="hud-left">`
+    + iconHtml
+    + `<span class="hud-text">${esc(state.text || '')}</span>`
+    + (state.subtext ? `<span class="hud-subtext">${esc(state.subtext)}</span>` : '')
+    + `</div>`
+    + actionsHtml;
+
+  if (Array.isArray(state.actions) && state.actions.length) {
+    hud.querySelectorAll('.hud-action-btn').forEach(btn => {
+      const idx = parseInt(btn.dataset.act, 10);
+      const act = state.actions[idx];
+      if (act && typeof act.onClick === 'function') {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          act.onClick();
+        };
+      }
+    });
+  }
+
+  if (state.phase === 'done') {
+    clearTimeout(_hudFadeTimer);
+    _hudFadeTimer = setTimeout(() => setLiveHud(null), 6000);
+  }
+}
+window.setLiveHud = setLiveHud;
 
 function fmtUptime(s) {
   if (s == null) return '';

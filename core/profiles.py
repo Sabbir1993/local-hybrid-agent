@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from .config import (
+    apply_runtime,
     CONFIG_DEFAULTS,
     CONFIG_TARGETS,
     MODEL_CONFIG_KEYS,
@@ -312,4 +313,4 @@ def build_dynamic_profile(p: Path) -> dict:
         prof.setdefault("mtp_enabled", True)
     if prof.get("mmproj_path"):
         prof.setdefault("vision_capable", True)
-    return prof
+    return apply_runtime(prof)

@@ -18,6 +18,8 @@ from core.auth import Principal, user_has_permission
 from core.deps import get_current_user, require_permission
 
 from core.config import (
+    ACTIVE_RUNTIME,
+    apply_runtime,
     CONFIG_DEFAULTS,
     CONFIG_INT_FIELDS,
     CONFIG_CHOICE_FIELDS,
@@ -166,6 +168,7 @@ def _config_for_profile(p: dict) -> dict:
         "keepalive_interval_s": state.keepalive_interval_s,
         "llama_bin_dir": p.get("llama_bin_dir", CONFIG_DEFAULTS["llama_bin_dir"]),
         "gpu_devices": p.get("gpu_devices", CONFIG_DEFAULTS["gpu_devices"]),
+        "runtime": ACTIVE_RUNTIME["name"],
         "mtp_available": bool(p.get("mtp_draft_path")),
         "mtp_draft_path": p.get("mtp_draft_path"),
         "mtp_enabled": bool(p.get("mtp_enabled", False)) if not p.get("mtp_draft_path") else bool(p.get("mtp_enabled", True)),
@@ -212,7 +215,7 @@ def _standalone_profile(target: str) -> Optional[dict]:
         prof.setdefault("mtp_enabled", True)
     if prof.get("mmproj_path"):
         prof.setdefault("vision_capable", True)
-    return prof
+    return apply_runtime(prof)
 
 
 @router.get("/control/config")

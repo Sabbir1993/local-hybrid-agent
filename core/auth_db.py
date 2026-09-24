@@ -8,6 +8,7 @@ plain sqlite3, no ORM, CREATE TABLE IF NOT EXISTS + ALTER TABLE migrations
 guarded by PRAGMA table_info.
 """
 
+import json
 import sqlite3
 import sys
 import time
@@ -35,9 +36,13 @@ PERMISSIONS = {
     "database.manage": "Inspect system & workspace SQLite databases and execute SQL queries",
     "settings.shell.configure": "Edit the global shell command allowlist (capabilities.shell)",
     "settings.agents.configure": "Allow/deny Agent Library profiles and prompt commands (agent_library)",
+    "settings.router.configure": "Edit agent routing rules and apply/dismiss usage-based router suggestions (router)",
     "git.push": "Push to git remotes / open pull requests (uses the server's git & GitHub credentials)",
     "capabilities.install": "Install/remove skills, plugins and connectors from the Customize catalog (shared by every user)",
 }
+
+# Keys that used to be in PERMISSIONS; removed from existing databases on start.
+_RETIRED_PERMISSIONS = ("settings.integrations.configure",)
 
 # Permissions granted to the default 'user' role so regular accounts
 # aren't locked out of the app itself.
@@ -153,6 +158,17 @@ def _init_auth_db() -> sqlite3.Connection:
         created_at REAL NOT NULL,
         UNIQUE(user_id, pattern)
     );
+
+    -- personal MCP servers (Settings -> Capabilities -> MCP, "just for me"); config is
+    -- the same secret-free JSON as capabilities.mcp_servers, secrets in the OS keychain
+    CREATE TABLE IF NOT EXISTS user_mcp_servers (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        config TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        PRIMARY KEY (user_id, name)
+    );
     """)
     conn.commit()
     _seed_defaults(conn)
@@ -167,6 +183,10 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
             "ON CONFLICT(key) DO UPDATE SET description = excluded.description",
             (key, desc),
         )
+    for key in _RETIRED_PERMISSIONS:
+        conn.execute("DELETE FROM role_permissions WHERE permission_id IN "
+                     "(SELECT id FROM permissions WHERE key = ?)", (key,))
+        conn.execute("DELETE FROM permissions WHERE key = ?", (key,))
     for name in _BUILTIN_ROLES:
         conn.execute(
             "INSERT OR IGNORE INTO roles (name, description, is_builtin, created_at) VALUES (?, ?, 1, ?)",
@@ -311,6 +331,37 @@ def remove_user_allow_pattern(user_id: int, pattern: str) -> None:
     db().execute(
         "DELETE FROM user_allow_patterns WHERE user_id = ? AND pattern = ?", (user_id, pattern.strip())
     )
+    db().commit()
+
+
+# ---------------- per-user MCP servers ----------------
+def list_user_mcp_servers(user_id: Optional[int] = None) -> list:
+    """[(user_id, name, config_dict)] for one user, or every user when user_id is None."""
+    q, args = "SELECT user_id, name, config FROM user_mcp_servers", []
+    if user_id is not None:
+        q += " WHERE user_id = ?"
+        args.append(user_id)
+    out = []
+    for r in db().execute(q + " ORDER BY user_id, name", args):
+        try:
+            out.append((r["user_id"], r["name"], json.loads(r["config"])))
+        except ValueError:
+            print(f"[auth_db] bad user_mcp_servers config for {r['user_id']}/{r['name']}", file=sys.stderr)
+    return out
+
+
+def upsert_user_mcp_server(user_id: int, name: str, config: dict) -> None:
+    now = time.time()
+    db().execute(
+        "INSERT INTO user_mcp_servers (user_id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(user_id, name) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at",
+        (user_id, name, json.dumps(config), now, now),
+    )
+    db().commit()
+
+
+def delete_user_mcp_server(user_id: int, name: str) -> None:
+    db().execute("DELETE FROM user_mcp_servers WHERE user_id = ? AND name = ?", (user_id, name))
     db().commit()
 
 

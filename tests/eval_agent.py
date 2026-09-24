@@ -196,10 +196,37 @@ def check_compact_endpoint() -> tuple:
     return True, f"compact endpoint ok ({j['before_tokens']} -> {j['after_tokens']} tokens)"
 
 
+def check_escalation_policy() -> tuple:
+    """A good plain executor answer must NOT be escalated to main (regression:
+    routes/agent.py used the (bool, text) tuple from is_degeneration_or_loop as a
+    bool, so every executor step was re-run on main)."""
+    from core.agent_loop import is_degeneration_or_loop
+    from core.router_policy import escalate_reason, classify_query, DEFAULTS
+    cfg = dict(DEFAULTS)
+    answer = "The config loader merges roles.json first, then app.json blocks on top."
+    is_l, _ = is_degeneration_or_loop(answer)
+    assert escalate_reason(step=0, content=answer, tool_calls=[], query="how does config loading work?",
+                           is_loop=is_l, cfg=cfg) == "", "plain executor answer was escalated"
+    assert escalate_reason(step=0, content="", tool_calls=[], query="create a page", is_loop=False,
+                           cfg=cfg) == "creation_no_tool", "creation without a tool call not escalated"
+    assert escalate_reason(step=0, content="```bash\nls\n```", tool_calls=[], query="run the tests",
+                           is_loop=False, cfg=cfg) == "tutorial_code", "tutorial code not escalated"
+    assert escalate_reason(step=2, content="ok", tool_calls=[{"x": 1}], query="create x", is_loop=False,
+                           cfg=cfg) == "", "later step with tool calls escalated"
+    assert escalate_reason(step=3, content="x", tool_calls=[], query="q", is_loop=True, cfg=cfg) == "loop"
+    cases = {"hi": "greeting", "create a login page": "creation", "run the tests": "action",
+             "why is login slow?": "question", "the payment flow": "other"}
+    for q, want in cases.items():
+        got = classify_query(q, cfg)
+        assert got == want, f"classify_query({q!r}) = {got}, want {want}"
+    return True, "escalation policy ok"
+
+
 OFFLINE_CHECKS = [
     ("grammar", check_grammar),
     ("compaction", check_compaction),
     ("loop_detection", check_loop_detection),
+    ("escalation_policy", check_escalation_policy),
     ("json_repair", check_repair),
     ("needle_router", check_needle),
     ("compact_endpoint", check_compact_endpoint),

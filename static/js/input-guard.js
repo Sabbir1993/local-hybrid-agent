@@ -213,7 +213,7 @@ function _ruleRow(r, i, cfgKey) {
 
     <!-- Description Section (semantic rules) -->
     <div class="g-sec-desc" style="display:${r.type === 'semantic' ? 'block' : 'none'};">
-      <div style="font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Policy description (plain English, judged by the local model):</div>
+      <div style="font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Policy description (plain English, judged by local executor model):</div>
       <textarea class="g-description guard-input" rows="3" style="width:100%;"
         placeholder="e.g. Any content containing transactional data (payments, invoices, bank transfers)">${_gesc(r.description || '')}</textarea>
     </div>
@@ -306,7 +306,7 @@ function _ruleRow(r, i, cfgKey) {
       <span>${(!(r.roles || []).length && !(r.users || []).length)
         ? '🌐 No role filter — applies to <strong style="color:var(--text);">everyone</strong>'
         : 'Applies to: <strong style="color:var(--text);">' + _gesc(target) + '</strong>'}</span>
-      ${r.type === 'semantic' ? '<span class="guard-badge block" style="font-size:10px;">🧠 local model judges</span>' : ''}
+      ${r.type === 'semantic' ? '<span class="guard-badge block" style="font-size:10px;" title="Evaluated locally by the executor small model (port 8091 / GPU 1) before sending to the target model">🧠 local executor model judges</span>' : ''}
     </div>
   </div>`;
 }

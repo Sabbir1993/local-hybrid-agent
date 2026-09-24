@@ -32,6 +32,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from core.config import (
+    ACTIVE_RUNTIME,
     BASE_DIR,
     PROVIDERS_DIR,
     PROVIDERS_FILE,
@@ -56,6 +57,7 @@ from core.small_model import small_models
 from core.memory import memory_background_task
 from core.state import keepalive_loop, state
 from core.web_tools import register_web_tools
+from core.router_tuner import tuner_background_task
 from core.file_tools import register_file_tools
 
 from routes import (
@@ -179,6 +181,8 @@ async def lifespan(app: FastAPI):
     register_shell_tools()
     register_file_tools()
     load_plugins()
+    print(f"[server_manager] runtime={ACTIVE_RUNTIME['name']} backend={ACTIVE_RUNTIME['backend']} "
+          f"bin={ACTIVE_RUNTIME['llama_bin_dir']} devices={ACTIVE_RUNTIME['gpu_devices']}")
     await asyncio.get_event_loop().run_in_executor(None, kill_orphan_llama_servers)
     asyncio.create_task(connect_all_mcp())
     if common.initial_profile_path is not None and common.initial_profile_path.exists():
@@ -193,9 +197,10 @@ async def lifespan(app: FastAPI):
     state.keepalive_task = asyncio.create_task(keepalive_loop())
     small_models.start_reaper()
     memory_task = asyncio.create_task(memory_background_task())
+    tuner_task = asyncio.create_task(tuner_background_task())
     yield
     # Fast, cancellable: stop background loops first
-    for task in (state.watchdog_task, state.keepalive_task, small_models.reaper_task, memory_task):
+    for task in (state.watchdog_task, state.keepalive_task, small_models.reaper_task, memory_task, tuner_task):
         if task:
             task.cancel()
     # Blocking process teardown runs off the loop thread
