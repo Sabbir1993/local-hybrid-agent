@@ -177,9 +177,46 @@ function runArmedCmd(cmd, text) {
     runInit(arg);
     return;
   }
+  if (agentMode && isLibraryCommand(cmd.name)) {
+    disarmCmd();
+    runLibraryCommand(cmd.name, arg);
+    return;
+  }
   const line = arg ? ('/' + cmd.name + ' ' + arg).trim() : ('/' + cmd.name);
   disarmCmd();
   if (agentMode) runAgentSSE(line); else send(line);
+}
+
+/* ---- Agent Library prompt commands (.agents/commands, admin-allowed) ----
+   The server expands the command template (fills $ARGUMENTS, maps tool names,
+   masks secrets); the result then runs through the normal agent flow. */
+let libraryCommands = new Set();
+
+async function refreshLibraryCommands() {
+  try {
+    const r = await fetch('/agent/commands');
+    if (!r.ok) return;
+    const d = await r.json();
+    libraryCommands = new Set((d.items || []).map(c => c.name.toLowerCase()));
+  } catch (e) {}
+}
+
+function isLibraryCommand(name) {
+  return libraryCommands.has(String(name || '').toLowerCase());
+}
+
+async function runLibraryCommand(name, arg) {
+  if (!curProject || !curProject.id) { flashProjectsCard(); return; }
+  let d = null;
+  try {
+    const r = await fetch('/agent/command/expand', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, args: arg || '' }),
+    });
+    d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+  } catch (e) { toast(`/${name}: ${e.message}`, true); return; }
+  await runAgentSSE(d.prompt);
 }
 
 /* ---- /init: scan the project and write AGENTS.md (like Claude Code / Codex) ----
@@ -239,6 +276,10 @@ window.refreshProjectInitHint = refreshProjectInitHint;
 window.armCmd = armCmd;
 window.disarmCmd = disarmCmd;
 window.runArmedCmd = runArmedCmd;
+window.isLibraryCommand = isLibraryCommand;
+window.runLibraryCommand = runLibraryCommand;
+window.refreshLibraryCommands = refreshLibraryCommands;
+refreshLibraryCommands();
 window.getArmedCmd = () => armedCmd;
 window.defaultInputPlaceholder = defaultInputPlaceholder;
 window.refreshInputPlaceholder = refreshInputPlaceholder;
@@ -249,7 +290,7 @@ function cmdMenuClose() {
   if (m) { m.style.display = 'none'; m.innerHTML = ''; }
 }
 
-const CMD_GROUP_LABELS = { mode: 'Mode', utility: 'Utility', skills: 'Skills' };
+const CMD_GROUP_LABELS = { mode: 'Mode', utility: 'Utility', skills: 'Skills', library: 'Agent Library' };
 
 function cmdMenuRender() {
   const m = $('cmd-menu');
@@ -328,9 +369,19 @@ async function cmdMenuOpen(kind, query) {
           all.push({ icon: '🎯', name: s.name, desc: s.description || '', isSkill: true, category: 'skills' });
         }
       });
+      // Agent Library prompt commands (admin-allowed); built-ins and skills keep their names
+      if (agentMode) {
+        const lib = (d.agent_library && d.agent_library.commands) || [];
+        libraryCommands = new Set(lib.map(c => c.name.toLowerCase()));
+        lib.forEach(c => {
+          if (!all.some(x => x.name.toLowerCase() === c.name.toLowerCase())) {
+            all.push({ icon: '📚', name: c.name, desc: c.description || '', isLibrary: true, category: 'library' });
+          }
+        });
+      }
     } catch (e) {}
     const q = query.toLowerCase();
-    cmdMenu.items = all.filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 14);
+    cmdMenu.items = all.filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 30);
     if (!cmdMenu.items.length) { cmdMenuClose(); return; }
   }
   cmdMenuRender();

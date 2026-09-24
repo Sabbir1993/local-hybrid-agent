@@ -1,0 +1,8 @@
+{
+  "title": "PCI PAN Scanner",
+  "description": "Scan a workspace file (logs, fixtures, configs) for Luhn-valid card numbers and report masked hits with line numbers. Raw PANs are never returned.",
+  "version": "1.0.0",
+  "author": "SSL Wireless",
+  "category": "compliance",
+  "tools": ["scan_file_for_pans", "mask_pans_in_text"]
+}

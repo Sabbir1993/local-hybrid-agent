@@ -249,6 +249,14 @@ async function runAgentSSE(text) {
             L.acts.push({ type: 'guard', rule: d.rule, message: d.message });
             toast('🧼 ' + (d.message || ('Response filtered by policy: ' + (d.rule || ''))));
           }
+          else if (ev === 'done') {
+            // run ended early (step cap or loop stop): keep why, so the bubble can offer Continue
+            if (d.reason) {
+              if (!L.acts) L.acts = [];
+              L.acts.push({ type: 'stopped', reason: d.reason, note: d.note || '', steps: d.steps,
+                            pending: d.pending || 0, plan_total: d.plan_total || 0 });
+            }
+          }
           else if (ev === 'error') throw new Error(d.error);
 
           if (curSession && String(curSession.id) === String(sessionId)) {

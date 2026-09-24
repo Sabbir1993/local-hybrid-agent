@@ -20,6 +20,105 @@ REGISTRY_TIMEOUT_S = 15
 
 CATALOG = []
 
+# Reviewed connector presets for the Customize page: a fixed transport/command/args
+# template, installed into capabilities.mcp_servers exactly like a server added by hand
+# (same command allowlist + keychain secrets in routes/mcp_manager.py). Only entries here
+# get an Install button - public-registry results are browse-only.
+#   secret_env: env vars the admin types on install; values go to the OS keychain
+#   egress:     True when tool calls leave this host (third-party API) - shown as a warning,
+#               since MCP tool *arguments* are not PAN-masked (only results are, core/mcp.py)
+PRESETS = [
+    {
+        "id": "sequential-thinking",
+        "name": "Sequential Thinking",
+        "description": "Structured step-by-step reasoning scratchpad for long multi-step problems. Runs locally, no network.",
+        "category": "productivity",
+        "author": "Model Context Protocol",
+        "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        "egress": False,
+    },
+    {
+        "id": "time",
+        "name": "Time",
+        "description": "Current time and timezone conversion (e.g. Asia/Dhaka ↔ UTC for settlement cut-offs). Runs locally.",
+        "category": "productivity",
+        "author": "Model Context Protocol",
+        "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/time",
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-time", "--local-timezone=Asia/Dhaka"],
+        "egress": False,
+    },
+    {
+        "id": "fetch",
+        "name": "Fetch",
+        "description": "Fetch a web page and convert it to markdown for the model to read.",
+        "category": "web",
+        "author": "Model Context Protocol",
+        "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-fetch"],
+        "egress": True,
+    },
+    {
+        "id": "github",
+        "name": "GitHub",
+        "description": "Read repositories, issues and pull requests; open PRs. Uses a fine-grained personal access token.",
+        "category": "engineering",
+        "author": "Model Context Protocol",
+        "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/github",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "secret_env": [{"key": "GITHUB_PERSONAL_ACCESS_TOKEN", "label": "Fine-grained personal access token"}],
+        "egress": True,
+    },
+    {
+        "id": "context7",
+        "name": "Context7",
+        "description": "Up-to-date library and framework documentation lookups for coding tasks.",
+        "category": "engineering",
+        "author": "Upstash",
+        "homepage": "https://github.com/upstash/context7",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@upstash/context7-mcp"],
+        "egress": True,
+    },
+    {
+        "id": "atlassian",
+        "name": "Atlassian",
+        "description": "Search and update Jira issues and Confluence pages. Sign-in opens a browser on the server host (OAuth via mcp-remote).",
+        "category": "tickets",
+        "author": "Atlassian",
+        "homepage": "https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"],
+        "egress": True,
+    },
+    {
+        "id": "linear",
+        "name": "Linear",
+        "description": "Manage Linear issues, projects and cycles. Sign-in opens a browser on the server host (OAuth via mcp-remote).",
+        "category": "tickets",
+        "author": "Linear",
+        "homepage": "https://linear.app/docs/mcp",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "mcp-remote", "https://mcp.linear.app/sse"],
+        "egress": True,
+    },
+]
+
+
+def get_preset(preset_id: str) -> Optional[dict]:
+    return next((p for p in PRESETS if p["id"] == preset_id), None)
+
 
 def catalog_with_overrides() -> list:
     """Merge user-supplied overrides (currently just client_id) from config/app.json."""

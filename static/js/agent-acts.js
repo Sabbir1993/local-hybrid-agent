@@ -216,6 +216,28 @@ document.addEventListener('click', (e) => {
   if (typeof wsShowFile === 'function') wsShowFile(path);
 });
 
+/* Run ended early (step cap / repeated calls): explain why and offer Continue.
+   The next run re-injects the tracked plan server-side, so it resumes the open steps. */
+const AGENT_CONTINUE_PROMPT = 'Continue with the remaining plan steps.';
+
+function agentStoppedHtml(acts, canContinue) {
+  const s = [...acts].reverse().find(a => a.type === 'stopped');
+  if (!s) return '';
+  const left = s.plan_total ? ` — ${s.pending} of ${s.plan_total} plan step${s.plan_total !== 1 ? 's' : ''} left` : '';
+  const msg = s.reason === 'loop'
+    ? 'Stopped: the agent kept repeating the same tool calls.'
+    : `Paused after ${s.steps || 'the maximum'} steps${left}.`;
+  const btn = canContinue
+    ? `<button type="button" class="btn accent agy-continue-btn" onclick="agentContinue()">▶ Continue</button>`
+    : '';
+  return `<div class="agy-stopped ${s.reason === 'loop' ? 'loop' : ''}"><span>${esc(msg)}</span>${btn}</div>`;
+}
+
+function agentContinue() {
+  if (typeof generating !== 'undefined' && generating) return;
+  if (typeof send === 'function') send(AGENT_CONTINUE_PROMPT);
+}
+
 function agentActsHtml(acts) {
   if (!acts || !acts.length) return '';
   const steps = parseStepsFromActs(acts);

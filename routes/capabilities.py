@@ -27,6 +27,7 @@ from core.agent_tools import get_active_project
 from core.registry import registry
 from core.web_tools import register_web_tools
 from core.skills import register_skill_tools, load_skills
+from core.agent_library import load_prompt_commands, load_agent_profiles, library_status, library_enabled
 from core.plugins import plugins_status, load_plugins, unload_all
 from core.mcp import mcp_status
 from core.shell_tools import (
@@ -82,6 +83,18 @@ class CapToggleReq(BaseModel):
     enabled: bool
 
 
+class LibraryListReq(BaseModel):
+    allow: Optional[list] = None
+    deny: Optional[list] = None
+
+
+class AgentLibraryReq(BaseModel):
+    enabled: Optional[bool] = None
+    default_policy: Optional[str] = None      # "deny" | "allow"
+    agents: Optional[LibraryListReq] = None
+    commands: Optional[LibraryListReq] = None
+
+
 class ShellSettingsReq(BaseModel):
     ask_first: Optional[bool] = None
     allow_patterns: Optional[list] = None
@@ -107,6 +120,12 @@ async def capabilities_status():
             "enabled": bool(caps.get("mcp")),
             "servers": mcp_status(),
         },
+        "agent_library": {
+            "enabled": library_enabled(),
+            "agents": [{"name": p["name"], "description": p["description"]} for p in load_agent_profiles().values()],
+            "commands": [{"name": c["name"], "description": c["description"],
+                          "argument_hint": c["argument_hint"]} for c in load_prompt_commands().values()],
+        },
         "plugins": {
             "enabled": bool(caps.get("plugins")),
             "items": plugins_status(),
@@ -116,6 +135,10 @@ async def capabilities_status():
             "ask_first": bool(sh.get("ask_first", True)),
             "timeout_s": sh.get("timeout_s", 60),
             "allow_patterns": sh.get("allow_patterns", []),
+        },
+        "agent": {
+            "max_steps": APP_CONFIG.get("agent", {}).get("max_steps", 60),
+            "min": AGENT_STEPS_MIN, "max": AGENT_STEPS_MAX,
         },
         "total_tools": len(registry.schemas()),
     }
@@ -150,6 +173,78 @@ async def shell_settings(req: ShellSettingsReq,
     # live update
     APP_CONFIG["capabilities"]["shell"] = shell
     return {"ok": True, "shell": shell}
+
+
+AGENT_STEPS_MIN, AGENT_STEPS_MAX = 5, 200
+
+
+class AgentSettingsReq(BaseModel):
+    max_steps: int
+
+
+@router.post("/control/agent_settings")
+async def agent_settings(req: AgentSettingsReq,
+                         user: Principal = Depends(require_permission("settings.orchestration.configure"))):
+    """Agent Task step cap (agent.max_steps); persists to config/app.json. Bounded on
+    purpose - an uncapped run can hold the shared GPU indefinitely."""
+    steps = max(AGENT_STEPS_MIN, min(AGENT_STEPS_MAX, int(req.max_steps)))
+    try:
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        return JSONResponse({"error": f"config/app.json unreadable: {e}"}, status_code=500)
+    old = cfg.setdefault("agent", {}).get("max_steps")
+    cfg["agent"]["max_steps"] = steps
+    try:
+        CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    except Exception as e:
+        return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
+    APP_CONFIG.setdefault("agent", {})["max_steps"] = steps
+    audit_log(user, action="agent.settings", resource="agent.max_steps",
+              permission_key="settings.orchestration.configure", detail={"from": old, "to": steps})
+    return {"ok": True, "max_steps": steps}
+
+
+@router.get("/control/agent_library")
+async def agent_library_get(user: Principal = Depends(get_current_user)):
+    """Every Agent Library profile / prompt command with its allow/deny state and
+    compatibility warnings (read-only for everyone; editing needs the permission)."""
+    return library_status()
+
+
+@router.post("/control/agent_library")
+async def agent_library_update(req: AgentLibraryReq,
+                               user: Principal = Depends(require_permission("settings.agents.configure"))):
+    """Edit the org-wide Agent Library allow/deny policy; persists to config/app.json.
+    Same pattern as /control/shell_settings. deny always beats allow."""
+    try:
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        return JSONResponse({"error": f"config/app.json unreadable: {e}"}, status_code=500)
+    lib = cfg.setdefault("agent_library", {})
+    if req.enabled is not None:
+        lib["enabled"] = bool(req.enabled)
+    if req.default_policy is not None:
+        if req.default_policy not in ("deny", "allow"):
+            return JSONResponse({"error": "default_policy must be 'deny' or 'allow'"}, status_code=400)
+        lib["default_policy"] = req.default_policy
+    for kind in ("agents", "commands"):
+        upd = getattr(req, kind)
+        if upd is None:
+            continue
+        sect = lib.setdefault(kind, {"allow": [], "deny": []})
+        for key in ("allow", "deny"):
+            vals = getattr(upd, key)
+            if vals is not None:
+                sect[key] = sorted({str(v).strip() for v in vals if str(v).strip()})
+    try:
+        CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    except Exception as e:
+        return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
+    APP_CONFIG["agent_library"] = lib
+    audit_log(user, action="agent_library.update", resource="agent_library",
+              permission_key="settings.agents.configure",
+              detail=req.model_dump(exclude_none=True))
+    return {"ok": True, **library_status()}
 
 
 @router.post("/control/capabilities")

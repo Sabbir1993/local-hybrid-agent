@@ -89,7 +89,7 @@ def _load_app_config() -> dict:
                 "preload": False,
             },
         },
-        "agent": {"exec_timeout_s": 120, "max_steps": 30, "idle_unload_s": 120},
+        "agent": {"exec_timeout_s": 120, "max_steps": 60, "idle_unload_s": 120},
         "roles": dict(_DEFAULT_ROLES),
         # cloud providers / lane bindings: kept here so /control/models can report
         # them without importing the UI-managed providers.json directly

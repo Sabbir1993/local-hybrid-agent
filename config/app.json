@@ -53,7 +53,7 @@
   },
   "agent": {
     "exec_timeout_s": 0,
-    "max_steps": 30,
+    "max_steps": 60,
     "idle_unload_s": 0
   },
   "preflight": {
@@ -73,15 +73,6 @@
           "core/echo_mcp_server.py"
         ]
       },
-      "sslcommerz": {
-        "transport": "stdio",
-        "command": "npx",
-        "args": [
-          "-y",
-          "mcp-remote",
-          "https://sslcommerz-mcp.sslwireless.com/mcp"
-        ]
-      },
       "isms": {
         "transport": "stdio",
         "command": "npx",
@@ -89,15 +80,6 @@
           "-y",
           "mcp-remote",
           "https://isms-mcp.sslwireless.com/mcp"
-        ]
-      },
-      "vr": {
-        "transport": "stdio",
-        "command": "npx",
-        "args": [
-          "-y",
-          "mcp-remote",
-          "https://vr-mcp.sslwireless.com/sse"
         ]
       }
     },
@@ -163,5 +145,69 @@
     "pan_input": "block",
     "pan_output": "mask",
     "pan_cloud_egress": "mask"
+  },
+  "agent_library": {
+    "enabled": true,
+    "default_policy": "deny",
+    "agents": {
+      "allow": [
+        "architect",
+        "code-reviewer",
+        "security-reviewer",
+        "python-reviewer",
+        "fastapi-reviewer",
+        "typescript-reviewer",
+        "code-explorer",
+        "code-architect",
+        "code-simplifier",
+        "silent-failure-hunter",
+        "refactor-cleaner",
+        "tdd-guide",
+        "doc-updater",
+        "performance-optimizer",
+        "database-reviewer"
+      ],
+      "deny": [
+        "chief-of-staff",
+        "marketing-agent",
+        "seo-specialist",
+        "loop-operator",
+        "harness-optimizer",
+        "gan-*",
+        "opensource-*"
+      ]
+    },
+    "commands": {
+      "allow": [
+        "aside",
+        "build-fix",
+        "checkpoint",
+        "evolve",
+        "fastapi-review",
+        "feature-dev",
+        "python-review",
+        "refactor-clean",
+        "test-coverage",
+        "update-docs"
+      ],
+      "deny": [
+        "auto-update",
+        "epic-*",
+        "gan-*",
+        "harness-*",
+        "hookify*",
+        "instinct-import",
+        "jira",
+        "loop-*",
+        "marketing-*",
+        "model-route",
+        "multi-*",
+        "orch-*",
+        "pr",
+        "prp-pr",
+        "santa-loop",
+        "security-scan"
+      ]
+    }
   }
 }

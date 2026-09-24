@@ -1,0 +1,8 @@
+{
+  "title": "Bangladesh Finance Helpers",
+  "description": "Format BDT amounts with lakh/crore grouping and in words, and validate Bangladeshi mobile numbers (normalize to 8801XXXXXXXXX, detect operator).",
+  "version": "1.0.0",
+  "author": "SSL Wireless",
+  "category": "finance",
+  "tools": ["format_bdt", "validate_bd_mobile"]
+}

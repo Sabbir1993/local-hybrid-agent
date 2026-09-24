@@ -127,12 +127,24 @@ function renderLast() {
       existingThinkDiv.scrollTop = thinkScrollTop;
     }
   } else {
+    // Agent step list + tool output blocks are re-created below; remember their scroll
+    // so the fixed-height panels stay scrollable while the task streams
+    const SCROLLERS = '.agy-steps-list, .agy-detail-code, .agy-diff';
+    const prevScroll = Array.from(lastEl.querySelectorAll(SCROLLERS)).map(el => ({
+      top: el.scrollTop,
+      atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 15,
+    }));
     // Generate new HTML for the last message
     const temp = document.createElement('div');
     temp.innerHTML = bubbleHtml(m, lastIdx);
     const newEl = temp.firstElementChild;
     if (newEl) {
       inner.replaceChild(newEl, lastEl);
+      newEl.querySelectorAll(SCROLLERS).forEach((el, i) => {
+        const p = prevScroll[i];
+        const follow = el.classList.contains('agy-steps-list') && generating && (!p || p.atBottom);
+        el.scrollTop = follow ? el.scrollHeight : (p ? p.top : 0);
+      });
 
       // Auto-scroll thinking container to keep up with stream
       const newThink = newEl.querySelector('details.think');
@@ -391,6 +403,9 @@ function bubbleHtml(m, idx) {
   }
 
   const isLast = idx === messages.length - 1;
+  if (m.acts && m.acts.length && typeof agentStoppedHtml === 'function') {
+    inner += agentStoppedHtml(m.acts, isLast && !generating);
+  }
   const hasText = !!(m.content && m.content.trim());
 
   if (m.reasoning) {

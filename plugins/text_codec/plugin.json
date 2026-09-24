@@ -1,0 +1,8 @@
+{
+  "title": "Text Codec",
+  "description": "Base64, URL and hex encode/decode plus SHA-256 / HMAC-SHA256 digests, for debugging signatures and encoded payloads.",
+  "version": "1.0.0",
+  "author": "SSL Wireless",
+  "category": "developer",
+  "tools": ["encode", "decode", "digest"]
+}

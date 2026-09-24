@@ -10,7 +10,7 @@
     document.documentElement.setAttribute('data-theme', t);
   })();
 </script>
-<link rel="stylesheet" href="/static/css/style.css?v=4.3">
+<link rel="stylesheet" href="/static/css/style.css?v=4.6">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
@@ -97,6 +97,10 @@
 
       <!-- Dev & System Tools Cluster -->
       <div class="header-tool-cluster" id="header-dev-cluster">
+        <button id="btn-customize" class="btn ghost icon-btn" title="Customize: browse and install skills, connectors and plugins">
+          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M17.5 14v7M14 17.5h7"/></svg>
+          <span class="btn-label">Customize</span>
+        </button>
         <button id="btn-monitor" class="btn ghost icon-btn" data-perm="monitor.view" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">
           <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
           <span class="btn-label">Monitor</span>
@@ -420,6 +424,29 @@
   </div>
 </div>
 
+<div id="cz-modal" hidden>
+  <div id="cz-box" role="dialog" aria-labelledby="cz-title">
+    <div class="cz-head">
+      <h2 id="cz-title">Customize</h2>
+      <button class="rep-close" id="cz-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="cz-bar">
+      <div class="cz-tabs" role="tablist">
+        <button class="cz-tab" data-kind="skills" role="tab">Skills</button>
+        <button class="cz-tab" data-kind="connectors" role="tab">Connectors</button>
+        <button class="cz-tab" data-kind="plugins" role="tab">Plugins</button>
+      </div>
+      <span class="cz-sep"></span>
+      <div class="cz-seg">
+        <button class="cz-view" data-view="yours">Yours</button>
+        <button class="cz-view" data-view="discover">Discover</button>
+      </div>
+      <input type="search" id="cz-q" class="cz-search" placeholder="Search…" maxlength="100" autocomplete="off">
+    </div>
+    <div id="cz-body"><div class="mon-empty">Loading…</div></div>
+  </div>
+</div>
+
 <div id="db-modal" hidden>
   <div id="db-box">
     <div class="db-modal-header">
@@ -714,14 +741,15 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/sampling.js?v=1.1"></script>
 <script src="/static/js/preview.js?v=2.5"></script>
 <script src="/static/js/gpu-status.js?v=3.2"></script>
-<script src="/static/js/chat.js?v=3.5"></script>
+<script src="/static/js/chat.js?v=3.7"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
 <script src="/static/js/monitor.js?v=3.0"></script>
-<script src="/static/js/capabilities.js?v=2.6"></script>
+<script src="/static/js/capabilities.js?v=2.8"></script>
 <script src="/static/js/git.js?v=1.0"></script>
 <script src="/static/js/usage-report.js?v=2.5"></script>
 <script src="/static/js/audit-log.js?v=1.0"></script>
 <script src="/static/js/db-explorer.js?v=1.0"></script>
+<script src="/static/js/customize.js?v=1.0"></script>
 <script src="/static/js/config.js?v=3.1"></script>
 <script src="/static/js/cloud.js?v=3.0"></script>
 <script src="/static/js/attachments.js?v=2.5"></script>
@@ -729,8 +757,8 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/workspace.js?v=2.8"></script>
 <script src="/static/js/dnd.js?v=1.0"></script>
 <script src="/static/js/agent-cmd.js?v=3.5"></script>
-<script src="/static/js/agent-acts.js?v=2.6"></script>
-<script src="/static/js/agent-run.js?v=3.4"></script>
+<script src="/static/js/agent-acts.js?v=2.7"></script>
+<script src="/static/js/agent-run.js?v=3.5"></script>
 <script src="/static/js/compact.js?v=2.9"></script>
 <script src="/static/js/export.js?v=1.0"></script>
 <script src="/static/js/main.js?v=3.5"></script>

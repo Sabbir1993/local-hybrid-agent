@@ -63,8 +63,11 @@ SPAWN_AGENT_SCHEMA = {
                 },
                 "role": {
                     "type": "string",
-                    "enum": ["planner", "coder", "reviewer"],
-                    "description": "Optional named role controlling lane/prompt/tools/max_steps. Omit for a generic sub-agent on the executor lane.",
+                    "description": (
+                        "Optional named role controlling prompt/tools/max_steps: planner, coder, reviewer, "
+                        "or an Agent Library profile name listed in your instructions. "
+                        "Omit for a generic sub-agent on the executor lane."
+                    ),
                 },
                 "lane": {
                     "type": "string",
@@ -124,7 +127,10 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
         return "error: spawn_agent requires a non-empty task"
 
     role_cfg = resolve_role(role)
-    lane = lane_override or role_cfg.get("lane") or "executor"
+    if role and not role_cfg:
+        from .roles import known_role_names
+        return f"error: unknown role '{role}'. Available: {', '.join(known_role_names()) or '(none)'}"
+    lane =lane_override or role_cfg.get("lane") or "executor"
     if lane not in ("main", "executor"):
         lane = "executor"
     steps = min(MAX_SUBAGENT_STEPS, max(1, int(max_steps or role_cfg.get("max_steps") or DEFAULT_SUBAGENT_STEPS)))
@@ -222,6 +228,10 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
         else:
             final_content = final_content or "(sub-agent reached its step limit without a final answer)"
 
+    # the child's answer returns as a tool result, bypassing output_guard -- mask
+    # card numbers here so they never reach the parent context in the clear
+    from .pan import mask_pans
+    final_content, _ = mask_pans(final_content)
     header = f"[sub-agent" + (f" · role={role}" if role else "") + f" · {len(msgs) - 2} msgs · lane={lane}]"
     return f"{header}\n{final_content.strip()}"
 

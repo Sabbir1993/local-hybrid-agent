@@ -16,4 +16,17 @@ def resolve_role(name: Optional[str]) -> dict:
     from .small_model import APP_CONFIG
     roles = APP_CONFIG.get("roles", {})
     cfg = roles.get(name)
-    return dict(cfg) if isinstance(cfg, dict) else {}
+    if isinstance(cfg, dict):
+        return dict(cfg)
+    # fall back to an admin-allowed Agent Library profile (.agents/agents/<name>.md)
+    from .agent_library import profile_role
+    return profile_role(name)
+
+
+def known_role_names() -> list:
+    """Built-in roles.json names + allowed Agent Library profiles."""
+    from .small_model import APP_CONFIG
+    from .agent_library import load_agent_profiles
+    names = list(APP_CONFIG.get("roles", {}).keys())
+    names += [n for n in load_agent_profiles() if n not in names]
+    return names

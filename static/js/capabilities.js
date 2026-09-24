@@ -22,7 +22,7 @@ async function loadCapabilities() {
           <span class="cap-tool-badge skill"><span class="tool-badge-ico">🎯</span><code>${esc(s.name)}</code></span>
           <span class="cap-tool-desc">${esc(s.description || '')}</span>
         </div>`).join('') || '<div class="cap-item dim" style="padding:4px 6px;">none in skills/ yet</div>',
-      'Reusable instruction packs loaded from skills/*/SKILL.md');
+      'Reusable instruction packs loaded from .agents/skills/*/SKILL.md');
 
     // MCP
     const canManageMcp = !!(window.hasPerm && window.hasPerm('settings.orchestration.configure'));
@@ -92,7 +92,30 @@ async function loadCapabilities() {
     h += capSection('shell', '⌨️ Shell Execution', sh.enabled, shellInner,
       'run_shell tool — agent runs commands like "npx skills add …" in the workspace');
 
+    // Agent Task step cap (no on/off toggle - always bounded)
+    const ag = d.agent || {};
+    h += `<div class="cap-group" style="margin-top:10px;">
+      <div class="cap-head"><span>🤖 Agent Task</span></div>
+      <div class="cap-body">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span>Max steps per run</span>
+          <input type="number" id="agent-max-steps" min="${ag.min || 5}" max="${ag.max || 200}" value="${ag.max_steps || 60}"
+            ${canManageMcp ? '' : 'disabled'} style="width:64px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:2px 6px; font-size:11px;">
+          ${canManageMcp ? '<button class="btn accent" id="agent-steps-save" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">Save</button>' : ''}
+          <span class="dim" style="font-size:9.5px;">${ag.min || 5}–${ag.max || 200}</span>
+        </div>
+        <div class="dim" style="font-size:9.5px; margin-top:4px;">At the cap a run pauses with a Continue button; runs repeating the same tool calls stop early.</div>
+      </div>
+    </div>`;
+
+    // Agent Library (.agents/agents + .agents/commands), admin-managed allow/deny
+    let lib = null;
+    try { lib = await (await fetch('/control/agent_library')).json(); } catch (e) {}
+    const canManageLib = !!(window.hasPerm && window.hasPerm('settings.agents.configure'));
+    if (lib && !lib.error) h += agentLibraryHtml(lib, canManageLib);
+
     box.innerHTML = h;
+    if (lib && !lib.error && canManageLib) wireAgentLibrary(box, lib);
     if (canManageMcp) wireMcpEditor(box);
     if (canManagePlugins) wirePlugins(box);
     scheduleMcpStatusPoll(d.mcp.servers || []);
@@ -112,6 +135,20 @@ async function loadCapabilities() {
         } catch (e) { toast('Toggle failed: ' + e.message, true); }
       };
     });
+
+    const stepsBtn = box.querySelector('#agent-steps-save');
+    if (stepsBtn) stepsBtn.onclick = async () => {
+      try {
+        const r = await fetch('/control/agent_settings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ max_steps: parseInt(box.querySelector('#agent-max-steps').value, 10) || 60 }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || j.detail || r.status);
+        box.querySelector('#agent-max-steps').value = j.max_steps;
+        toast(`Agent Task cap set to ${j.max_steps} steps ✓`);
+      } catch (e) { toast('Save failed: ' + e.message, true); }
+    };
 
     // shell section controls
     const askEl = box.querySelector('#shell-ask');
@@ -158,6 +195,118 @@ async function loadCapabilities() {
   } catch (e) {
     box.innerHTML = '<div class="mon-empty">Failed: ' + esc(e.message) + '</div>';
   }
+}
+
+/* ---------------- Agent Library: profiles + prompt commands, allow/deny ---------------- */
+const LIB_STATE_STYLE = {
+  allowed: 'color:var(--green);', denied: 'color:var(--red);', shadowed: 'opacity:0.6;',
+};
+
+function libGlob(p) {
+  const rx = String(p).toLowerCase().replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+  return new RegExp('^' + rx + '$');
+}
+
+function agentLibraryHtml(lib, canEdit) {
+  const row = (kind, it) => {
+    const warn = (it.warnings || []).length
+      ? `<div class="dim" style="font-size:9.5px; flex-basis:100%;">⚠ ${esc(it.warnings.join('; '))}</div>` : '';
+    const btn = canEdit && it.state !== 'shadowed'
+      ? `<button class="btn ghost lib-flip" data-kind="${kind}" data-name="${esc(it.name)}" data-state="${it.state}"
+           style="width:auto; margin:0 0 0 auto; padding:1px 8px; font-size:10px;">${it.state === 'allowed' ? 'Deny' : 'Allow'}</button>` : '';
+    const title = it.state === 'shadowed' ? 'a built-in command, skill or role with the same name takes priority' : '';
+    return `<div class="cap-tool-entry" style="flex-wrap:wrap;">
+        <span class="cap-tool-badge skill"><span class="tool-badge-ico">${kind === 'agents' ? '🤖' : '📚'}</span><code>${esc(it.name)}</code></span>
+        <span style="font-size:10px; ${LIB_STATE_STYLE[it.state] || ''}" title="${title}">${esc(it.state)}</span>
+        ${btn}
+        <span class="cap-tool-desc" style="flex-basis:100%;">${esc(it.description || '')}</span>
+        ${warn}
+      </div>`;
+  };
+  const order = { allowed: 0, denied: 1, shadowed: 2 };
+  const sorted = arr => [...(arr || [])].sort((a, b) => (order[a.state] - order[b.state]) || a.name.localeCompare(b.name));
+  const count = arr => (arr || []).filter(x => x.state === 'allowed').length;
+  const inp = 'background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; font-size:10.5px;';
+  const listEd = (kind, key) => `
+    <div style="margin-top:4px;"><b style="font-size:10.5px;">${kind} · ${key}</b> <span class="dim" style="font-size:9.5px;">(names or wildcards, one per line)</span>
+      <textarea class="lib-list" data-kind="${kind}" data-key="${key}" rows="3"
+        style="width:100%; box-sizing:border-box; ${inp} padding:3px 7px; font-family:monospace;">${esc(((lib.config[kind] || {})[key] || []).join('\n'))}</textarea>
+    </div>`;
+  const inner = `
+    <div class="cap-item">
+      <label style="display:flex; align-items:center; gap:6px;">
+        <b>Default for unlisted files</b>
+        <select id="lib-policy" ${canEdit ? '' : 'disabled'} style="${inp}">
+          <option value="deny" ${lib.default_policy !== 'allow' ? 'selected' : ''}>deny</option>
+          <option value="allow" ${lib.default_policy === 'allow' ? 'selected' : ''}>allow</option>
+        </select>
+        <span class="dim" style="font-size:9.5px;">deny always wins over allow${canEdit ? '' : ' — admin-only setting'}</span>
+      </label>
+    </div>
+    <details class="cap-item"><summary><b>🤖 Agent profiles</b> <span class="dim">(${count(lib.agents)}/${(lib.agents || []).length} allowed · spawn_agent roles)</span></summary>
+      ${sorted(lib.agents).map(it => row('agents', it)).join('') || '<div class="dim">none in .agents/agents/</div>'}
+    </details>
+    <details class="cap-item"><summary><b>📚 Prompt commands</b> <span class="dim">(${count(lib.commands)}/${(lib.commands || []).length} allowed · /slash in Agent mode)</span></summary>
+      ${sorted(lib.commands).map(it => row('commands', it)).join('') || '<div class="dim">none in .agents/commands/</div>'}
+    </details>
+    ${canEdit ? `<details class="cap-item"><summary><b>Edit allow / deny lists</b></summary>
+      ${listEd('agents', 'allow')}${listEd('agents', 'deny')}${listEd('commands', 'allow')}${listEd('commands', 'deny')}
+      <button class="btn accent" id="lib-save" style="width:auto; margin:6px 0 0; padding:4px 12px; font-size:10.5px;">💾 Save lists</button>
+    </details>` : ''}`;
+  // own toggle class: the generic .cap-toggle handler posts to /control/capabilities
+  return `<div class="cap-group">
+    <div class="cap-head">
+      <span>📚 Agent Library</span>
+      <button class="cap-toggle-lib ${lib.enabled ? 'on' : ''}" ${canEdit ? '' : 'disabled'}
+        title="${canEdit ? 'Enable/disable the Agent Library' : 'Admin-only setting'}">${lib.enabled ? 'ON' : 'OFF'}</button>
+    </div>
+    <div class="cap-body" style="${lib.enabled ? '' : 'opacity:0.45;'}">${inner}
+      <div class="dim" style="font-size:9.5px; margin-top:4px;">Agent profiles from .agents/agents and prompt commands from .agents/commands · org-wide, admin-managed · every change is audited</div>
+    </div>
+  </div>`;
+}
+
+async function saveAgentLibrary(body) {
+  const r = await fetch('/control/agent_library', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || j.detail || r.status);
+  if (window.refreshLibraryCommands) window.refreshLibraryCommands();
+  return j;
+}
+
+function wireAgentLibrary(box, lib) {
+  const run = async (body, msg) => {
+    try { await saveAgentLibrary(body); toast(msg); loadCapabilities(); }
+    catch (e) { toast('Save failed: ' + e.message, true); }
+  };
+  const tog = box.querySelector('.cap-toggle-lib');
+  if (tog) tog.onclick = () => run({ enabled: !lib.enabled }, `Agent Library ${lib.enabled ? 'disabled' : 'enabled'} ✓`);
+  const pol = box.querySelector('#lib-policy');
+  if (pol) pol.onchange = () => run({ default_policy: pol.value }, `Default policy: ${pol.value} ✓`);
+  box.querySelectorAll('.lib-flip').forEach(b => b.onclick = () => {
+    const kind = b.dataset.kind, name = b.dataset.name, lname = name.toLowerCase();
+    const cur = lib.config[kind] || { allow: [], deny: [] };
+    const allow = (cur.allow || []).filter(p => String(p).toLowerCase() !== lname);
+    const deny = (cur.deny || []).filter(p => String(p).toLowerCase() !== lname);
+    if (b.dataset.state === 'allowed') {
+      deny.push(name);
+    } else {
+      const blocker = deny.find(p => libGlob(p).test(lname));
+      if (blocker) { toast(`'${name}' is blocked by the deny pattern '${blocker}' — edit the deny list`, true); return; }
+      allow.push(name);
+    }
+    run({ [kind]: { allow, deny } }, `${name}: ${b.dataset.state === 'allowed' ? 'denied' : 'allowed'} ✓`);
+  });
+  const save = box.querySelector('#lib-save');
+  if (save) save.onclick = () => {
+    const body = { agents: {}, commands: {} };
+    box.querySelectorAll('.lib-list').forEach(t => {
+      body[t.dataset.kind][t.dataset.key] = t.value.split(/[\n,]/).map(x => x.trim()).filter(Boolean);
+    });
+    run(body, 'Agent Library lists saved ✓');
+  };
 }
 
 function capSection(id, title, enabled, innerHtml, note) {

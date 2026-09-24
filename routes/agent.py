@@ -70,6 +70,7 @@ from core.registry import registry
 from core.grammar import build_tool_call_grammar, envelope_examples
 from core.web_tools import register_web_tools
 from core.skills import skills_prompt_fragment
+from core.agent_library import agent_library_prompt_fragment, load_prompt_commands, expand_command
 from core.plugins import plugins_prompt_fragment, fire_hook
 from core.shell_tools import (
     add_allow_pattern,
@@ -132,7 +133,7 @@ class AttachedFile(BaseModel):
 
 class AgentRequest(BaseModel):
     messages: list
-    max_steps: int = 12
+    max_steps: Optional[int] = None   # None -> agent.max_steps from config/app.json
     temperature: float = 0.4
     max_tokens: int = -1
     large_model: Optional[str] = None
@@ -143,7 +144,11 @@ class AgentRequest(BaseModel):
     cloud_model_override: Optional[str] = None   # key of cloud model for executor/vision lanes
 
 
-AGENT_MAX_STEPS = 30
+AGENT_MAX_STEPS = 60
+# identical-tool-call rounds after which a run is stopped (the executor escalates at 2)
+LOOP_STOP_STREAK = 3
+# times a run may be sent back to work when it answers with plan steps still pending
+MAX_PLAN_NUDGES = 3
 
 
 # ---------------- output sanitizer helpers ----------------
@@ -373,7 +378,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     print(f"[agent] lanes: main={'cloud:' + cloud_main.key if use_cloud_main else 'local'} "
           f"executor={'cloud:' + cloud_exec.key if cloud_exec else 'local'} mode={mode}")
 
-    steps = max(1, min(req.max_steps, APP_CONFIG["agent"].get("max_steps", AGENT_MAX_STEPS)))
+    cfg_steps = APP_CONFIG["agent"].get("max_steps", AGENT_MAX_STEPS)
+    steps = max(1, min(req.max_steps or cfg_steps, cfg_steps))
     msgs = [dict(m) for m in req.messages]
 
     # --- Input sanitizer (core/input_guard.py) -----------------------------
@@ -483,7 +489,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     # (its results would land in history that a cloud lane later reads)
     set_kb_cloud_blocked(bool(use_cloud_main or cloud_exec))
     # capability prompt fragments: skills listing + plugin guidance
-    for frag in (skills_prompt_fragment(), plugins_prompt_fragment()):
+    for frag in (skills_prompt_fragment(), agent_library_prompt_fragment(), plugins_prompt_fragment()):
         if frag:
             sys_prompt += "\n" + frag
     # executor lanes get the tool-call format few-shot (aligned with the GBNF grammar)
@@ -667,6 +673,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         final_reasoning = ""
         attempt_sigs: set = set()
         repeat_streak = 0
+        plan_nudges = 0
+        stop_reason = "max_steps"
         if kb_blocked_reason:
             yield f"event: kb_blocked\ndata: {json.dumps({'message': kb_blocked_reason})}\n\n"
         try:
@@ -971,6 +979,25 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 final_content = content
                 final_reasoning = reasoning
 
+                # The model stopped calling tools but its own tracked plan still has
+                # pending steps: push it back to work instead of finalizing a half-done
+                # task. Bounded so a model that can't progress still ends normally.
+                if not tool_calls and req.session_id and not req.plan \
+                        and plan_nudges < MAX_PLAN_NUDGES and step < steps - 1:
+                    pending = [i for i in db_get_plan_items(req.session_id) if i["status"] in ("pending", "in_progress")]
+                    if pending:
+                        plan_nudges += 1
+                        if content.strip():
+                            msgs.append({"role": "assistant", "content": content})
+                        msgs.append({"role": "user", "content": (
+                            f"[plan incomplete] {len(pending)} plan step(s) are still unfinished: "
+                            + "; ".join(f"#{i['ord']} {i['text']}" for i in pending[:6])
+                            + ". Do not stop yet — continue with the next pending step using tools. "
+                            "Mark each step with update_plan_item as you finish it. If a step truly cannot "
+                            "be done, mark it status='failed' with a note explaining why, then continue.")})
+                        yield f"event: delta\ndata: {json.dumps({'text': chr(10) + chr(10)})}\n\n"
+                        continue
+
                 if not tool_calls:
                     # Semantic (natural-language) output rules on the final
                     # answer: on match, replace it entirely with the policy
@@ -1051,6 +1078,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 else:
                     repeat_streak = 0
                 attempt_sigs.update(sigs)
+                if repeat_streak >= LOOP_STOP_STREAK:
+                    # escalating to the main model didn't help either: end the run instead of
+                    # holding the shared GPU on the same calls until the step cap
+                    print("[agent] identical tool calls repeated - stopping run", file=sys.stderr)
+                    stop_reason = "loop"
+                    break
 
                 history_content = sanitize_user_facing_content(content)
                 msgs.append({"role": "assistant", "content": history_content, "tool_calls": clean_tool_calls})
@@ -1122,7 +1155,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 # update_plan_item once the initial system-prompt nudge scrolls out of focus
                 if req.session_id and not req.plan:
                     plan_items_now = db_get_plan_items(req.session_id)
-                    if plan_items_now and any(i["status"] == "pending" for i in plan_items_now):
+                    if plan_items_now and any(i["status"] in ("pending", "in_progress") for i in plan_items_now):
                         done_n = sum(1 for i in plan_items_now if i["status"] == "done")
                         fail_n = sum(1 for i in plan_items_now if i["status"] == "failed")
                         msgs.append({"role": "user", "content": (
@@ -1152,14 +1185,19 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 yield "event: delta_reset\ndata: {}\n\n"
                 yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
             yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
-            plan_note = "max steps reached"
+            plan_note = ("stopped: repeating the same tool calls" if stop_reason == "loop"
+                         else f"max steps reached ({steps})")
+            plan_total = plan_pending = 0
             if req.session_id:
                 pi = db_get_plan_items(req.session_id)
                 if pi:
                     pd = sum(1 for i in pi if i["status"] == "done")
                     pf = sum(1 for i in pi if i["status"] == "failed")
+                    plan_total = len(pi)
+                    plan_pending = sum(1 for i in pi if i["status"] in ("pending", "in_progress"))
                     plan_note += f" — plan progress: {pd}/{len(pi)} done, {pf} failed"
-            yield f"event: done\ndata: {json.dumps({'note': plan_note, 'text': ''})}\n\n"
+            # reason lets the UI offer "Continue" (the next run re-injects the tracked plan)
+            yield f"event: done\ndata: {json.dumps({'note': plan_note, 'text': '', 'reason': stop_reason, 'steps': steps, 'pending': plan_pending, 'plan_total': plan_total})}\n\n"
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -1182,6 +1220,29 @@ async def agent_project_instructions(user: Principal = Depends(get_current_user)
         print(f"[agent] project instructions status failed: {e}", file=sys.stderr)
     return {"project": proj, "exists": bool(pi), "filename": pi[0] if pi else None,
             "size": len(pi[1]) if pi else 0, "init_prompt": INIT_PROMPT}
+
+
+class CommandExpandReq(BaseModel):
+    name: str
+    args: str = ""
+
+
+@router.get("/agent/commands")
+async def agent_commands(user: Principal = Depends(get_current_user)):
+    """Admin-allowed prompt commands (.agents/commands) for the slash menu."""
+    return {"items": [{"name": c["name"], "description": c["description"],
+                       "argument_hint": c["argument_hint"]} for c in load_prompt_commands().values()]}
+
+
+@router.post("/agent/command/expand")
+async def agent_command_expand(req: CommandExpandReq, user: Principal = Depends(get_current_user)):
+    """Prompt command -> agent prompt. The client runs it via /agent/run as a normal task."""
+    prompt = expand_command(req.name, req.args)
+    if prompt is None:
+        audit_log(user, action="agent.command", resource=req.name, result="deny")
+        return JSONResponse({"error": f"prompt command '{req.name}' is not available"}, status_code=404)
+    audit_log(user, action="agent.command", resource=req.name)
+    return {"name": req.name, "prompt": prompt}
 
 
 @router.get("/agent/workspace")

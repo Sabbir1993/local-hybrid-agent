@@ -56,6 +56,15 @@ function submitPrompt() {
     }
   }
 
+  // /<library-command> [args] — Agent Library prompt command (agent mode)
+  const libM = agentMode && text.match(/^\/([a-zA-Z0-9_\-]+)(?:\s+([\s\S]*))?$/);
+  if (libM && window.isLibraryCommand && window.isLibraryCommand(libM[1])) {
+    if (input) input.value = '';
+    if (window.renderInputHighlights) window.renderInputHighlights();
+    window.runLibraryCommand(libM[1], (libM[2] || '').trim());
+    return;
+  }
+
   // Project gate: In agent mode, require an active project before sending any prompt!
   if (agentMode && (!curProject || !curProject.id)) {
     flashProjectsCard();

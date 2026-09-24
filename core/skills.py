@@ -3,9 +3,16 @@
 Frontmatter (--- delimited, simple key: value lines): name, description, triggers.
 Body: markdown instructions. Skill names + one-liners are injected into the
 agent system prompt (token-cheap); the model pulls full bodies via read_skill.
+
+Catalog: skill_catalog/<name>/SKILL.md is the curated, in-repo (reviewed) set the
+Customize page can browse and install. Installing copies the folder into
+.agents/skills/<name>/. A skill body becomes agent instructions, so - like plugins -
+nothing is downloaded from the internet; new skills enter the catalog via code review.
 """
 
+import hashlib
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -14,7 +21,10 @@ from .config import BASE_DIR
 from .registry import registry
 
 SKILLS_DIR = BASE_DIR / ".agents" / "skills"
+CATALOG_DIR = BASE_DIR / "skill_catalog"
 MAX_SKILL_BODY_CHARS = 12000   # safety cap for read_skill output
+
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
 
 
 def parse_skill_md(path: Path) -> Optional[dict]:
@@ -26,6 +36,7 @@ def parse_skill_md(path: Path) -> Optional[dict]:
     name = path.parent.name
     description = ""
     triggers = []
+    meta = {}
     body = text
 
     m = re.match(r"^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$", text)
@@ -42,6 +53,8 @@ def parse_skill_md(path: Path) -> Optional[dict]:
                 description = val
             elif key == "triggers":
                 triggers = [t.strip() for t in re.split(r"[,;]", val) if t.strip()]
+            elif key in ("category", "author", "version", "title"):
+                meta[key] = val
     if not description:
         # first non-empty body line as fallback description
         for ln in body.splitlines():
@@ -54,6 +67,10 @@ def parse_skill_md(path: Path) -> Optional[dict]:
         "triggers": triggers,
         "body": body,
         "path": str(path),
+        "title": meta.get("title", "")[:80],
+        "category": (meta.get("category") or "general")[:40],
+        "author": meta.get("author", "")[:80],
+        "version": meta.get("version", "")[:20],
     }
 
 
@@ -115,6 +132,92 @@ def tool_read_skill(args: dict) -> str:
             return f"# Skill: {sk['name']}\n\n{body}"
     available = ", ".join(s["name"] for s in skills.values()) or "(none)"
     return f"error: skill '{args.get('name')}' not found. Available: {available}"
+
+
+# ---------------- catalog ----------------
+
+def valid_name(name: str) -> bool:
+    return bool(name) and bool(NAME_RE.match(name))
+
+
+def _tree_hash(d: Path) -> Optional[str]:
+    """sha256 over every file (relative path + bytes) so extra reference files count too."""
+    if not d.is_dir():
+        return None
+    h = hashlib.sha256()
+    try:
+        for p in sorted(d.rglob("*")):
+            if p.is_file() and "__pycache__" not in p.parts:
+                h.update(p.relative_to(d).as_posix().encode())
+                h.update(p.read_bytes())
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
+def _catalog_dir(name: str) -> Optional[Path]:
+    d = CATALOG_DIR / name
+    return d if valid_name(name) and (d / "SKILL.md").is_file() else None
+
+
+def catalog_entries() -> list:
+    """Curated skills shipped in skill_catalog/ (only dirs with SKILL.md)."""
+    out = []
+    if not CATALOG_DIR.is_dir():
+        return out
+    for d in sorted(CATALOG_DIR.iterdir()):
+        if not _catalog_dir(d.name):
+            continue
+        sk = parse_skill_md(d / "SKILL.md")
+        if not sk:
+            continue
+        out.append({
+            "name": d.name,
+            "title": sk["title"] or sk["name"],
+            "description": sk["description"],
+            "category": sk["category"],
+            "author": sk["author"],
+            "version": sk["version"],
+            "triggers": sk["triggers"][:10],
+            "sha256": _tree_hash(d),
+        })
+    return out
+
+
+def is_installed(name: str) -> bool:
+    return valid_name(name) and (SKILLS_DIR / name / "SKILL.md").is_file()
+
+
+def is_modified(name: str) -> bool:
+    """True if the installed skill differs from its catalog copy (or has none)."""
+    src = _catalog_dir(name)
+    if not src:
+        return True
+    return _tree_hash(src) != _tree_hash(SKILLS_DIR / name)
+
+
+def install_from_catalog(name: str) -> None:
+    """Copy skill_catalog/<name> into .agents/skills/<name>. Raises ValueError on refusal."""
+    src = _catalog_dir(name)
+    if not src:
+        raise ValueError(f"'{name}' is not in the skill catalog")
+    dst = SKILLS_DIR / name
+    if dst.exists():
+        if not is_modified(name):
+            return  # already installed, identical
+        raise ValueError(f".agents/skills/{name} already exists with local changes — remove it manually first")
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+
+def uninstall(name: str) -> None:
+    """Remove .agents/skills/<name>. Only unmodified catalog skills can be removed here;
+    hand-written skills stay on disk."""
+    if not is_installed(name):
+        raise ValueError(f"'{name}' is not installed")
+    if is_modified(name):
+        raise ValueError(f"'{name}' is hand-written or locally modified — remove .agents/skills/{name} manually")
+    shutil.rmtree(SKILLS_DIR / name)
 
 
 def register_skill_tools() -> None:

@@ -34,7 +34,9 @@ PERMISSIONS = {
     "settings.input_guard": "Configure the input sanitizer (cloud-block patterns, prohibited prompt types, role restrictions)",
     "database.manage": "Inspect system & workspace SQLite databases and execute SQL queries",
     "settings.shell.configure": "Edit the global shell command allowlist (capabilities.shell)",
+    "settings.agents.configure": "Allow/deny Agent Library profiles and prompt commands (agent_library)",
     "git.push": "Push to git remotes / open pull requests (uses the server's git & GitHub credentials)",
+    "capabilities.install": "Install/remove skills, plugins and connectors from the Customize catalog (shared by every user)",
 }
 
 # Permissions granted to the default 'user' role so regular accounts

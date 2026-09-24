@@ -72,6 +72,7 @@ from routes import (
     knowledge_router,
     mcp_manager_router,
     plugins_router,
+    customize_router,
     projects_router,
     proxy_router,
 )
@@ -273,6 +274,7 @@ app.include_router(agent_router, dependencies=_authed)
 app.include_router(git_router, dependencies=_authed)
 app.include_router(mcp_manager_router, dependencies=_authed)
 app.include_router(plugins_router, dependencies=_authed)
+app.include_router(customize_router, dependencies=_authed)
 app.include_router(admin_rbac_router, dependencies=_authed)
 app.include_router(knowledge_router, dependencies=_authed)
 app.include_router(input_guard_router, dependencies=_authed)
