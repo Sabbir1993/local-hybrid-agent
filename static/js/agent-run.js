@@ -27,6 +27,7 @@ async function runAgentSSE(text) {
   const sentFiles = sentAttachments.map(a => a.name).join(', ');
   const nFiles = sentAttachments.filter(a => a.content != null).length;
   if (input) input.value = '';
+  if (window.renderInputHighlights) window.renderInputHighlights();
   clearAttachments();
 
   // Auto-compact when the context window is nearly full — agent mode with an

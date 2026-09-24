@@ -86,7 +86,9 @@ def skills_prompt_fragment() -> str:
     lines = [
         "",
         "Available Skills:",
-        "When the user's request starts with or mentions a skill name, slash command, or trigger (e.g. /grill-me, grill-me, grill, /<skill-name>), you MUST call read_skill(<name>) on your FIRST step to load and strictly follow that skill's instructions.",
+        "When the user's request starts with or mentions one or more skill names, slash commands, or triggers (e.g. /grill-me, /goal, /code-review, /<skill-name>):",
+        "- You MUST call read_skill(<name>) on your FIRST step for EACH skill mentioned in the request.",
+        "- If multiple skills or commands are chained in a single request (e.g. [/grill-me ... /goal ...]): follow their instructions in sequence. First execute the earlier phase (e.g. ask clarifying interview questions for /grill-me), and then adhere to subsequent skills/guidelines (e.g. autonomous production readiness for /goal).",
     ]
     for sk in skills.values():
         lines.append(f"- {sk['name']}: {sk['description']}")

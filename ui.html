@@ -157,7 +157,8 @@
           <div id="attach-preview-bar" class="attach-preview-bar"></div>
           <div id="proj-init-bar" class="proj-init-bar" style="display:none;"></div>
           <div id="cmd-chip-bar" class="cmd-chip-bar" title="Armed command — press Enter to run, Backspace on an empty box (or ✕) to remove"></div>
-          <div style="position:relative;">
+          <div style="position:relative;" class="composer-input-wrap">
+            <div id="input-backdrop" class="input-backdrop" aria-hidden="true"></div>
             <textarea id="input" placeholder="Message the model…" title="Type your prompt here. Press Enter to send, Shift+Enter for newline. @ = tag project files (agent mode). / = commands"></textarea>
             <div id="cmd-menu" style="display:none;"></div>
           </div>

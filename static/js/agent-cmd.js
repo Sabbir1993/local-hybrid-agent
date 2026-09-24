@@ -91,7 +91,61 @@ function disarmCmd() {
   armedCmd = null;
   cmdChipRender();
   refreshInputPlaceholder();
+  renderInputHighlights();
 }
+
+function renderInputHighlights() {
+  const input = $('input');
+  const backdrop = $('input-backdrop');
+  const bar = $('cmd-chip-bar');
+  if (!input) return;
+
+  const val = input.value || '';
+
+  // 1. Live backdrop highlighting behind textarea
+  if (backdrop) {
+    if (!val) {
+      backdrop.innerHTML = '';
+    } else {
+      let escaped = esc(val);
+      // highlight /commands (preceded by start of line, whitespace, or open bracket/punct)
+      escaped = escaped.replace(/(^|[\s\[({,;:"'])\/([a-zA-Z0-9_\-]+)(?=$|[\s\])}>.,;:!?])/g,
+        '$1<mark class="hl-cmd">/$2</mark>');
+      // highlight @tags
+      escaped = escaped.replace(/(^|[\s\[({,;:"'])@([\w\-./\\]+\.[\w]+)(?=$|[\s\])}>.,;:!?])/g,
+        '$1<mark class="hl-tag">@$2</mark>');
+      if (val.endsWith('\n')) escaped += '<br>&nbsp;';
+      backdrop.innerHTML = escaped;
+      backdrop.scrollTop = input.scrollTop;
+    }
+  }
+
+  // 2. Active token badge bar (if not using an armedCmd)
+  if (!armedCmd && bar) {
+    const cmdMatches = [...val.matchAll(/(?:^|[\s\[({,;:"'])\/([a-zA-Z0-9_\-]+)(?=$|[\s\])}>.,;:!?])/g)].map(m => m[1]);
+    const tagMatches = [...val.matchAll(/(?:^|[\s\[({,;:"'])@([\w\-./\\]+\.[\w]+)(?=$|[\s\])}>.,;:!?])/g)].map(m => m[1]);
+
+    const uniqueCmds = [...new Set(cmdMatches)];
+    const uniqueTags = [...new Set(tagMatches)];
+
+    if (uniqueCmds.length || uniqueTags.length) {
+      const itemsHtml = [
+        ...uniqueCmds.map(c =>
+          `<div class="cmd-active-badge cmd" title="Internal command directive"><span class="badge-icon">⚡</span>/${esc(c)}<span class="badge-label">Directive</span></div>`
+        ),
+        ...uniqueTags.map(t =>
+          `<div class="cmd-active-badge tag" title="Project target file"><span class="badge-icon">📄</span>@${esc(t)}<span class="badge-label">File</span></div>`
+        )
+      ].join('');
+      bar.innerHTML = itemsHtml;
+      bar.style.display = 'flex';
+    } else {
+      bar.innerHTML = '';
+      bar.style.display = 'none';
+    }
+  }
+}
+window.renderInputHighlights = renderInputHighlights;
 
 /* Run an armed command, with whatever is typed in the composer as its argument. */
 function runArmedCmd(cmd, text) {
@@ -258,17 +312,21 @@ async function cmdMenuOpen(kind, query) {
     const all = agentMode ? [
       { icon: '📋', name: 'plan', desc: 'switch to Plan mode (read-only, propose)', category: 'mode' },
       { icon: '🔨', name: 'build', desc: 'switch to Build mode (execute)', category: 'mode' },
+      { icon: '🎯', name: 'goal', desc: 'autonomous goal execution — drive to production readiness', category: 'mode' },
       { icon: '🧭', name: 'init', desc: 'scan the project and write AGENTS.md (auto-loaded into agent tasks)', category: 'utility' },
       { icon: '🧹', name: 'compact', desc: 'compress conversation history (needs an active project)', category: 'utility' },
       { icon: '🤖', name: 'subagent', desc: 'delegate a sub-task to a focused sub-agent', category: 'utility', template: true },
       { icon: '🧑‍🤝‍🧑', name: 'multiagent', desc: 'delegate multiple roles (planner/coder/reviewer) in one prompt', category: 'utility', template: true },
     ] : [
+      { icon: '🎯', name: 'goal', desc: 'autonomous goal execution — drive to completion', category: 'utility' },
       { icon: '🧹', name: 'compact', desc: 'compress conversation history', category: 'utility' },
     ];
     try {
       const d = await (await fetch('/control/capabilities')).json();
       (d.skills && d.skills.items || []).forEach(s => {
-        all.push({ icon: '🎯', name: s.name, desc: s.description || '', isSkill: true, category: 'skills' });
+        if (!all.some(x => x.name.toLowerCase() === s.name.toLowerCase())) {
+          all.push({ icon: '🎯', name: s.name, desc: s.description || '', isSkill: true, category: 'skills' });
+        }
       });
     } catch (e) {}
     const q = query.toLowerCase();
@@ -285,14 +343,18 @@ function cmdMenuPick(i) {
   const kind = cmdMenu.kind;
   const tok = currentToken(input);
   const tokLen = tok ? (tok.text.length + 1) : 0;
-  const startIdx = cmdMenu.tokenStart >= 0 ? cmdMenu.tokenStart : 0;
+  const startIdx = cmdMenu.tokenStart >= 0 ? cmdMenu.tokenStart : (tok ? tok.start : 0);
   const before = input.value.slice(0, startIdx);
   const after = input.value.slice(startIdx + tokLen);
   cmdMenuClose();
 
   if (kind === 'files') {
-    input.value = before + '@' + it.value + ' ' + after.replace(/^\s?/, '');
+    const insertText = '@' + it.value + ' ';
+    input.value = before + insertText + after.replace(/^\s?/, '');
     input.focus();
+    const pos = before.length + insertText.length;
+    input.setSelectionRange(pos, pos);
+    renderInputHighlights();
   } else if (kind === 'slash' && it.template) {
     // Structured-arg commands (e.g. subagent/multiagent) don't fit the arm-and-type-argument
     // pattern, so insert an editable prompt skeleton instead of arming a chip.
@@ -303,21 +365,37 @@ function cmdMenuPick(i) {
     input.focus();
     const pos = before.length + skeleton.length;
     input.setSelectionRange(pos, pos);
+    renderInputHighlights();
   } else if (kind === 'slash') {
-    if (it.name === 'plan') {
-      if (window._setPlanMode) window._setPlanMode(true);
-    } else if (it.name === 'build') {
-      if (window._setPlanMode) window._setPlanMode(false);
+    if (it.name === 'plan' || it.name === 'build') {
+      const isPlan = it.name === 'plan';
+      if (window._setPlanMode) window._setPlanMode(isPlan);
+      // Remove the slash token typed so far without inserting /plan or /build into the input
+      input.value = before + after.replace(/^\s?/, '');
+      input.focus();
+      const pos = before.length;
+      input.setSelectionRange(pos, pos);
+      renderInputHighlights();
+      toast(isPlan ? '📋 Switched to Plan mode' : '🔨 Switched to Build mode');
+      return;
     }
-    armCmd(it.name, it);
+
+    // Insert inline directly where the user was typing, preserving sentence flow
+    const insertText = '/' + it.name + ' ';
+    input.value = before + insertText + after.replace(/^\s?/, '');
+    input.focus();
+    const pos = before.length + insertText.length;
+    input.setSelectionRange(pos, pos);
+    renderInputHighlights();
   }
 }
 
 function currentToken(input) {
   // text from the last @ or / up to the caret (or end of the current word)
+  // Supports boundaries like whitespace, brackets, parens, quotes, or line start
   const pos = input.selectionStart != null ? input.selectionStart : input.value.length;
   const upto = input.value.slice(0, pos);
-  const m = upto.match(/(?:^|\s)([@\/])([^@\/\s]*)$/);
+  const m = upto.match(/(?:^|[\s\[({<,;:"'])([@\/])([^\s@\/\],>)}:;]*)$/);
   return m ? { ch: m[1], text: m[2], start: pos - m[2].length - 1 } : null;
 }
 
@@ -325,23 +403,28 @@ function currentToken(input) {
   const input = $('input');
   if (!input) return;
   input.addEventListener('input', () => {
+    renderInputHighlights();
     // If user typed '/compact ' directly, auto-arm it
     if (input.value.trim().toLowerCase() === '/compact' && input.value.endsWith(' ')) {
       cmdMenuClose();
       armCmd('compact');
       return;
     }
-    // slash menu works in chat mode too (/compact); @ file tags stay agent-only
+    // slash menu works anywhere in the sentence (chat mode & agent mode); @ file tags stay agent-only
     const tok = currentToken(input);
     if (tok && tok.ch === '@' && agentMode) {
       if (!cmdMenu.open || cmdMenu.kind !== 'files') cmdMenu.tokenStart = tok.start;
       cmdMenuOpen('files', tok.text);
-    } else if (tok && tok.ch === '/' && tok.start === 0) {
+    } else if (tok && tok.ch === '/') {
       if (!cmdMenu.open || cmdMenu.kind !== 'slash') cmdMenu.tokenStart = tok.start;
       cmdMenuOpen('slash', tok.text);
     } else {
       cmdMenuClose();
     }
+  });
+  input.addEventListener('scroll', () => {
+    const b = $('input-backdrop');
+    if (b) b.scrollTop = input.scrollTop;
   });
   input.addEventListener('keydown', e => {
     if (e.key === 'Backspace' && !input.value && armedCmd) {

@@ -30,6 +30,7 @@ function submitPrompt() {
   // /compact [extra instructions] — context compaction (both chat & agent mode)
   if (/^\/compact(\s|$)/i.test(text)) {
     if (input) input.value = '';
+    if (window.renderInputHighlights) window.renderInputHighlights();
     doCompact(text.replace(/^\/compact\s*/i, '').trim());
     return;
   }
@@ -37,6 +38,7 @@ function submitPrompt() {
   // /init [focus] — scan the project and write AGENTS.md (agent mode)
   if (/^\/init(\s|$)/i.test(text)) {
     if (input) input.value = '';
+    if (window.renderInputHighlights) window.renderInputHighlights();
     if (window.runInit) window.runInit(text.replace(/^\/init\s*/i, '').trim());
     return;
   }
@@ -45,9 +47,13 @@ function submitPrompt() {
   if (/^\/(plan|build)(\s|$)/i.test(text)) {
     if (agentMode && (!curProject || !curProject.id)) { flashProjectsCard(); return; }
     if (window._setPlanMode) window._setPlanMode(/^\/plan/i.test(text));
-    if (input) input.value = '';
-    toast(/^\/plan/i.test(text) ? '📋 Plan mode — explore & propose changes' : '🔨 Build mode — execute changes');
-    return;
+    const rest = text.replace(/^\/(plan|build)\s*/i, '').trim();
+    if (!rest) {
+      if (input) input.value = '';
+      if (window.renderInputHighlights) window.renderInputHighlights();
+      toast(/^\/plan/i.test(text) ? '📋 Plan mode — explore & propose changes' : '🔨 Build mode — execute changes');
+      return;
+    }
   }
 
   // Project gate: In agent mode, require an active project before sending any prompt!

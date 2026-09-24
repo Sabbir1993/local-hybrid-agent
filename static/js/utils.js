@@ -71,6 +71,12 @@ function md(s) {
       t = t.replace(/^#{1,3} (.*)$/gm, '<b>$1</b>');
       t = t.replace(/^\s*[-*] (.*)$/gm, '• $1');
 
+      // Highlight internal directives (/commands, /skills) and file tags (@files)
+      t = t.replace(/(^|[\s\[({,;:"'])\/([a-zA-Z0-9_\-]+)(?=$|[\s\])}>.,;:!?])/g,
+        '$1<span class="token-hl token-cmd" title="Internal directive: /$2">/$2</span>');
+      t = t.replace(/(^|[\s\[({,;:"'])@([\w\-./\\]+\.[\w]+)(?=$|[\s\])}>.,;:!?])/g,
+        '$1<span class="token-hl token-tag" title="Target file: @$2">@$2</span>');
+
       // `t` is already HTML-escaped here, so captured groups are safe inside a
       // quoted attribute. Model text never goes into inline JS (onclick=...):
       // the browser would decode &#39; back to ' and let it break out of the

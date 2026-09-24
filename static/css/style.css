@@ -2252,7 +2252,107 @@ body.ws-resizing #ws-grip::after { background: var(--accent); opacity: 1; }
 }
 .cmd-group-label:first-child { padding-top: 2px; }
 
-/* ---------- armed slash-command chip (like <compact> in other agents) ---------- */
+/* ---------- armed slash-command chip & token highlighter ---------- */
+.composer-input-wrap {
+  position: relative;
+}
+
+.input-backdrop {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  padding: 4px 4px 10px;
+  font-size: 13.5px;
+  font-family: inherit;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: transparent;
+  pointer-events: none;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.input-backdrop mark.hl-cmd {
+  color: transparent;
+  background: rgba(99, 102, 241, 0.22);
+  border-bottom: 2px solid #818cf8;
+  border-radius: 4px;
+  padding: 1px 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.input-backdrop mark.hl-tag {
+  color: transparent;
+  background: rgba(56, 189, 248, 0.22);
+  border-bottom: 2px solid #38bdf8;
+  border-radius: 4px;
+  padding: 1px 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* Active command & file badges in the composer bar */
+.cmd-active-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2.5px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.cmd-active-badge.cmd {
+  background: rgba(99, 102, 241, 0.14);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+}
+.cmd-active-badge.tag {
+  background: rgba(56, 189, 248, 0.14);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+.cmd-active-badge .badge-icon {
+  font-size: 11.5px;
+  line-height: 1;
+}
+.cmd-active-badge .badge-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.75;
+  margin-left: 2px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Chat bubble token badges */
+.token-hl {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.9em;
+  font-weight: 600;
+  vertical-align: baseline;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.token-hl.token-cmd {
+  background: rgba(99, 102, 241, 0.16);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+}
+.token-hl.token-tag {
+  background: rgba(56, 189, 248, 0.16);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
 .cmd-chip-bar {
   display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px;
 }

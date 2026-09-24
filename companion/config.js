@@ -10,5 +10,5 @@ try {
 
 module.exports = {
   // No public tunnel URL is baked in: it would ship in every build and expose the server.
-  SERVER_URL: process.env.A770_SERVER_URL || "https://designing-chain-millennium-sons.trycloudflare.com",
+  SERVER_URL: process.env.A770_SERVER_URL || "https://band-rio-fabric-simpsons.trycloudflare.com",
 };

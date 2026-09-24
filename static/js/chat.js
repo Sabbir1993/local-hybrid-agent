@@ -766,6 +766,7 @@ async function send(inputText) {
   const sentFiles = sentAttachments.map(a => a.name).join(', ');
   const nFiles = sentAttachments.filter(a => a.content != null).length;
   if (input) input.value = '';
+  if (window.renderInputHighlights) window.renderInputHighlights();
   clearAttachments();
 
   const userMsg = {
