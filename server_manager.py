@@ -62,6 +62,7 @@ from core.state import keepalive_loop, state
 from core.web_tools import register_web_tools
 from core.router_tuner import tuner_background_task
 from core.file_tools import register_file_tools
+from core.media_tools import register_media_tools
 
 from routes import (
     admin_rbac_router,
@@ -71,6 +72,8 @@ from routes import (
     chat_router,
     cloud_router,
     control_router,
+    lanes_router,
+    media_router,
     db_explorer_router,
     git_router,
     input_guard_router,
@@ -126,26 +129,27 @@ def _backfill_legacy_data_ownership() -> None:
 
 def _backfill_legacy_cloud_providers() -> None:
     """One-time migration: the old shared config/providers.json (pre-per-user
-    cloud config) becomes the first super admin's own per-user file, since
-    core.cloud no longer reads the legacy shared file at all. Idempotent --
-    a no-op once the legacy file is gone or the target already exists."""
-    if not PROVIDERS_FILE.exists():
+    cloud config) becomes the first super admin's own per-user file, with API
+    keys moved to the OS keychain. A providers.json.migrated left behind by the
+    older migration (plaintext keys) gets the same treatment. Both files are
+    shredded afterwards. Idempotent -- a no-op once the legacy files are gone."""
+    legacy = [p for p in (PROVIDERS_FILE, PROVIDERS_FILE.with_suffix(".json.migrated")) if p.exists()]
+    if not legacy:
         return
     row = auth_db.db().execute(
         "SELECT id FROM users WHERE is_super_admin = 1 ORDER BY id LIMIT 1"
     ).fetchone()
     if not row:
         return
-    target = PROVIDERS_DIR / f"user_{row['id']}.json"
-    if target.exists():
-        return
-    try:
-        PROVIDERS_DIR.mkdir(parents=True, exist_ok=True)
-        target.write_text(PROVIDERS_FILE.read_text(encoding="utf-8"), encoding="utf-8")
-        PROVIDERS_FILE.rename(PROVIDERS_FILE.with_suffix(".json.migrated"))
-        print(f"[server_manager] migrated legacy config/providers.json -> {target.name}")
-    except Exception as e:
-        print(f"[server_manager] legacy cloud provider migration failed: {e}", file=sys.stderr)
+    from core import cloud as cloud_core
+    for p in legacy:
+        try:
+            r = cloud_core.import_legacy_file(p, row["id"])
+            print(f"[server_manager] legacy {p.name}: {r['imported']} key(s) moved to the OS keychain, "
+                  f"{r['skipped']} already there/unused; plaintext file removed")
+        except Exception as e:
+            print(f"[server_manager] legacy {p.name} not migrated (file kept): {type(e).__name__}",
+                  file=sys.stderr)
 
 
 _shutdown_done = False
@@ -187,6 +191,7 @@ async def lifespan(app: FastAPI):
     register_skill_tools()
     register_shell_tools()
     register_file_tools()
+    register_media_tools()
     load_plugins()
     print(f"[server_manager] runtime={ACTIVE_RUNTIME['name']} backend={ACTIVE_RUNTIME['backend']} "
           f"bin={ACTIVE_RUNTIME['llama_bin_dir']} devices={ACTIVE_RUNTIME['gpu_devices']}")
@@ -286,6 +291,8 @@ app.include_router(control_router, dependencies=_authed)
 app.include_router(projects_router, dependencies=_authed)
 app.include_router(capabilities_router, dependencies=_authed)
 app.include_router(cloud_router, dependencies=_chat_users)
+app.include_router(lanes_router, dependencies=_chat_users)
+app.include_router(media_router, dependencies=_chat_users)
 app.include_router(chat_router, dependencies=_chat_users)
 app.include_router(agent_router, dependencies=_chat_users)
 app.include_router(git_router, dependencies=_chat_users)
@@ -298,11 +305,12 @@ app.include_router(my_tokens_router, dependencies=_authed)
 app.include_router(knowledge_router, dependencies=_authed)
 app.include_router(input_guard_router, dependencies=_authed)
 app.include_router(db_explorer_router, dependencies=_authed)
-# Reverse proxy catch-all must be mounted last
-app.include_router(proxy_router, dependencies=_authed)
 # Own auth handling (session cookie checked inside the socket handler) since
 # Depends() on a websocket route doesn't compose with the HTTP auth flow above.
+# Must sit before the proxy catch-all, or /companion/pair and /companion/devices 404.
 app.include_router(companion_router)
+# Reverse proxy catch-all must be mounted last
+app.include_router(proxy_router, dependencies=_authed)
 
 
 def main():

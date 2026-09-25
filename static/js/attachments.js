@@ -22,6 +22,8 @@ function refreshAttachUI() {
         let thumb;
         if (a.isImage && a.dataUrl) {
           thumb = `<img src="${a.dataUrl}" alt="${esc(a.name)}" class="chat-img-thumb" title="Click to enlarge">`;
+        } else if (a.isAudio) {
+          thumb = `<span style="font-size:20px; line-height:1;" title="${a.uploading ? 'Turning speech into text…' : 'Transcribed'}">${a.uploading ? '⏳' : '🎤'}</span>`;
         } else if (a.isDoc) {
           const docIcon = a.uploading ? '⏳' : (a.truncated ? '📄⚡' : '📄');
           const docTitle = a.uploading ? 'Uploading & extracting...' : (a.truncated ? 'Truncated — agent will use read_file_chunk for more' : 'Document uploaded & extracted');
@@ -29,7 +31,9 @@ function refreshAttachUI() {
         } else {
           thumb = `<span style="font-size:20px; line-height:1;">📝</span>`;
         }
-        const statusBadge = a.isDoc && a.uploading
+        const statusBadge = a.isAudio
+          ? (a.uploading ? `<span class="attach-doc-uploading">transcribing…</span>` : `<span class="attach-doc-badge ok">transcript</span>`)
+          : a.isDoc && a.uploading
           ? `<span class="attach-doc-uploading">uploading…</span>`
           : (a.isDoc && a.truncated ? `<span class="attach-doc-badge truncated" title="Content truncated — agent will page through using read_file_chunk">chunked</span>` : (a.isDoc ? `<span class="attach-doc-badge ok">extracted</span>` : ''));
         return `<div class="attach-card ${a.isDoc && a.uploading ? 'uploading' : ''}">
@@ -54,6 +58,7 @@ function refreshAttachUI() {
   } else {
     info.textContent = 'Enter to send · Shift+Enter for newline';
   }
+  if (typeof mediaPaintPics === 'function') mediaPaintPics();
 }
 
 function removeAttachment(idx) {
@@ -66,6 +71,8 @@ function removeAttachment(idx) {
 
 function preloadAttachmentVision(att) {
   if (!att || !att.isImage || !att.b64 || att.visionPromise) return;
+  // 🖼 Image mode: the picture goes to the image model, not to be described
+  if (typeof mediaComposeMode === 'function' && mediaComposeMode() === 'image') return;
   att.visionPromise = (async () => {
     try {
       const r = await fetch('/agent/vision', {
@@ -92,7 +99,14 @@ $('btn-attach').onclick = () => $('file-input').click();
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
 const DOC_RE = /\.(xlsx?|pdf|pptx?|docx?|csv)$/i;
 
+const AUDIO_RE = /\.(mp3|m4a|wav|ogg|oga|opus|webm|flac|aac)$/i;
+
 async function addAttachmentFile(f, namePrefix = 'screenshot') {
+  // audio: attached as its transcript (media.js; needs a speech-to-text model)
+  if (AUDIO_RE.test(f.name || '') || (f.type && f.type.startsWith('audio/'))) {
+    if (typeof mediaAttachAudio === 'function') mediaAttachAudio(f);
+    return;
+  }
   const isImage = IMAGE_RE.test(f.name || '') || (f.type && f.type.startsWith('image/'));
   const isDoc = !isImage && DOC_RE.test(f.name || '');
 
@@ -225,6 +239,10 @@ $('attach-info').onclick = () => {
 
 async function buildPromptText(text, attList = null, signal = null) {
   const list = (attList && attList.length) ? attList : attachments;
+  // audio attachments still being transcribed: wait for their text
+  for (const a of list.filter(x => x.transcribePromise)) {
+    try { await a.transcribePromise; } catch (_) {}
+  }
   const textParts = list.filter(a => a.content != null).map(a =>
     `--- FILE: ${a.name} ---\n${a.content}\n--- END ${a.name} ---`);
   const imgParts = [];

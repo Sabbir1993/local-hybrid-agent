@@ -20,6 +20,7 @@ from core.audit import audit_log
 from core import input_guard
 from core import mcp as mcp_core
 from core import output_guard
+from core import verifier
 from core.sse import sse
 from core.small_model import APP_CONFIG, small_models
 from core import cloud
@@ -129,6 +130,30 @@ def _finalize_download_tags(content: str, written: list[str], query: str) -> tup
         if f"[DOWNLOAD: {f}]" not in out and f"download?path={f}" not in out.lower():
             out += f"\n\n[DOWNLOAD: {f}]"
     return out, out != (content or "")
+
+def _finalize_media(content: str, made: list[str]) -> tuple[str, bool]:
+    """Pictures/videos made this turn are always shown: append each result's
+    markdown line (image / [VIDEO:] / [DOWNLOAD:]) the reply doesn't carry yet.
+    The model may drop or garble it, and it only saw a copy of the path."""
+    out = (content or "").rstrip()
+    for md in made:
+        for line in (ln.strip() for ln in md.split("\n")):
+            m = re.search(r"path=([^)\s]+)\)", line)          # an image: its path; a tag: the tag
+            if line and (m.group(1) if m else line) not in out:
+                out += "\n\n" + line
+    return out, out != (content or "")
+
+
+def _wraps_media(made: list[str], fname: str, query: str) -> bool:
+    """An HTML page written after an image this turn is the model wrapping the
+    picture (with a link it may have garbled) instead of showing it - unless the
+    user asked for a page."""
+    return bool(made) and Path(fname or "").suffix.lower() in (".html", ".htm") \
+        and ".html" not in _requested_exts(query)
+
+
+_WRAP_REFUSAL = ("error: the picture is already saved and shown to the user - don't put it in an HTML page "
+                 "or any other file. Reply with the markdown generate_image returned and one short sentence.")
 
 WEB_TOOL_NAMES = ("web_search", "web_fetch", "web_search_images")
 
@@ -260,6 +285,8 @@ class ChatRunRequest(BaseModel):
     system_prompt: Optional[str] = None
     # None (older clients) keeps the Deep-only behaviour; see core/reasoning.py
     reasoning_effort: Optional[Literal["none", "low", "medium", "high", "extra"]] = None
+    # answer check for this request (shield toggle): off | badge | gate; None = saved setting
+    verify: Optional[Literal["off", "badge", "gate"]] = None
 
 
 @router.post("/chat/run")
@@ -337,6 +364,18 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             rt = registry.get(t_name)
             if rt and rt.schema:
                 chat_tools.append(rt.schema)
+    # images made on this PC (stable-diffusion.cpp): the model may draw when asked.
+    # A cloud-first route isn't offered here (chat has no ask-first dialog for cost);
+    # /image and agent mode handle those.
+    chat_media_tools = set()
+    try:
+        from core import media_tools
+        img_schema = media_tools.chat_image_tool_schema()
+        if img_schema:
+            chat_tools.append(img_schema)
+            chat_media_tools.add("generate_image")
+    except Exception as e:
+        print(f"[chat] image tool unavailable: {type(e).__name__}", file=sys.stderr)
     # connected MCP servers (Settings -> Capabilities -> MCP); dispatched via run_tool -> registry
     mcp_prompt = ""
     if APP_CONFIG.get("capabilities", {}).get("mcp", False):
@@ -564,6 +603,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         continued = False
         finish_reason = None
         written_files = []
+        made_media = []              # markdown of pictures/videos generate_image made this turn
         final_prompt_toks = None     # same figure goes to the done event and the monitor
         ctx_budget = int(common.main_ctx_tokens(cloud_main) * 0.7)
         # --- Output sanitizer: redact model deltas before they reach the
@@ -810,6 +850,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         already_saved = False
                     # a tag for a file that already exists is a link to it, never a
                     # cue to regenerate it from the reply text
+                    if _wraps_media(made_media, clean_fname, last_query) and not already_saved:
+                        content = _re.sub(rf'[ \t]*\[DOWNLOAD:\s*{_re.escape(dl_f)}\][ \t]*', '', content)
+                        yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+                        continue
                     if clean_fname not in written_files and not already_saved:
                         # Extract matching code fence or full content to save to common storage
                         cand_code = None
@@ -998,6 +1042,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         content, _chg = _finalize_download_tags(content, written_files, last_query)
                         if _chg:
                             yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+                    if made_media:
+                        content, _chg = _finalize_media(content, made_media)
+                        if _chg:
+                            yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
                     gen_toks = 0
                     if res_dict:
@@ -1011,6 +1059,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if not gen_toks and content:
                         gen_toks = max(1, round(len(content) / 3.5))
                     prompt_toks = final_prompt_toks = _prompt_tokens_of(res_dict, msgs)
+                    async for _vc in verifier.sse_events(user, "chat", last_query, content, msgs,
+                                                         main_client, req.verify, model_source == "cloud"):
+                        yield _vc
                     yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
                     return
 
@@ -1046,6 +1097,21 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif t_name == "web_fetch":
                             u = args.get("url") or ""
                             res_str = await tool_web_fetch({"url": u})
+                        elif t_name in ("generate_image", "generate_video") and t_name not in chat_media_tools:
+                            res_str = ("error: making images isn't available in chat right now - "
+                                       "ask the user to use /image or agent mode")
+                        elif t_name in chat_media_tools:
+                            # stream the job's steps into the tool card while it works
+                            from core import media_tools as _mt
+                            res_str = "error: failed"
+                            async for ev, *rest in _mt.generate_events(
+                                    "image" if t_name == "generate_image" else "video", args):
+                                if ev == "progress":
+                                    yield sse("tool_progress", {"id": tc_id, "name": t_name, **rest[0]})
+                                else:
+                                    res_str, done = rest
+                                    if done and done.get("markdown"):
+                                        made_media.append(done["markdown"])
                         elif t_name in ("doc_inspect", "doc_edit"):
                             impl = tool_doc_inspect_common if t_name == "doc_inspect" else tool_doc_edit_common
                             res_str = await run_in_executor_ctx(impl, args)
@@ -1053,6 +1119,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                 res_str = "error: " + res_str
                             else:
                                 written_files.extend(_DL_TAG_RE.findall(res_str))
+                        elif t_name == "write_file" and _wraps_media(
+                                made_media, args.get("path") or args.get("file") or args.get("filename"), last_query):
+                            res_str = _WRAP_REFUSAL
                         elif t_name == "write_file":
                             res_str = tool_write_file_common(args)
                             p_name = args.get("path") or args.get("file") or args.get("filename")
@@ -1176,6 +1245,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 content, _chg = _finalize_download_tags(content, written_files, last_query)
                 if _chg:
                     yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+            if made_media:
+                content, _chg = _finalize_media(content, made_media)
+                if _chg:
+                    yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
             gen_toks = 0
             if res_dict:
@@ -1190,6 +1263,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 gen_toks = max(1, round(len(content) / 3.5))
             prompt_toks = final_prompt_toks = _prompt_tokens_of(res_dict, msgs)
 
+            async for _vc in verifier.sse_events(user, "chat", last_query, content, msgs,
+                                                 main_client, req.verify, model_source == "cloud"):
+                yield _vc
             yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
         except asyncio.CancelledError:
             pass
@@ -1274,36 +1350,19 @@ async def _summarize_history(convo: list, instructions: Optional[str], use_execu
         "stream": False,
     }
 
-    main_ready = (state.process is not None and state.process.poll() is None
-                  and state.client is not None)
-    cloud_exec = cloud.cloud_lane("executor", user_id)
-    cloud_main = cloud.cloud_lane("main", user_id)
-    if use_executor or not main_ready:
-        if cloud_exec:
-            # cloud executor: no local process / no VRAM (llama.cpp-only fields
-            # are stripped by CloudClient, e.g. -1 max_tokens)
-            r = await cloud.CloudClient(cloud_exec).post("/v1/chat/completions", json=payload, timeout=None)
-            source = f"cloud-executor:{cloud_exec.display}"
-        else:
-            inst = small_models.instances.get("executor")
-            if not inst or not inst.available:
-                raise RuntimeError("no model available for compaction "
-                                   "(main model not running, executor not configured)")
-            await inst.ensure_loaded()
-            r = await inst.client.post("/v1/chat/completions", json=payload, timeout=None)
-            source = f"executor:{inst.model_path.name if inst.model_path else '?'}"
+    # "Summarizing chats" job (core/lanes.py). Unless the user mapped that job to
+    # a model in Settings -> Models, the main model goes first (then the helper),
+    # as before; use_executor forces the job's own route.
+    from core import lanes
+    if use_executor or "summarize" in cloud.role_map(user_id):
+        data, used = await lanes.post_chat("summarize", payload, user_id)
     else:
-        r = await (cloud.CloudClient(cloud_main) if cloud_main else state.client).post(
-            "/v1/chat/completions", json=payload, timeout=None)
-        source = f"cloud-main:{cloud_main.display}" if cloud_main else "main"
-    r.raise_for_status()
-    data = r.json()
-    summary = ""
-    try:
-        summary = str(data["choices"][0]["message"]["content"] or "")
-    except (KeyError, IndexError, TypeError):
-        pass
-    summary = _strip_think(summary)
+        try:
+            data, used = await lanes.post_chat("agent.reason", payload, user_id)
+        except RuntimeError:
+            data, used = await lanes.post_chat("summarize", payload, user_id)
+    source = used.describe()
+    summary = _strip_think(lanes.message_text(data))
     # Output sanitizer: summaries are user-facing and may replay earlier chat
     # content. user=None means role-targeted rules don't apply (global rules do).
     summary, _og = output_guard.redact_full(summary, None, source.startswith("cloud"))

@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Settings — Local Agent</title>
 <script src="/static/js/theme-boot.js?v=1.0"></script>
-<link rel="stylesheet" href="/static/css/style.css?v=4.6">
+<link rel="stylesheet" href="/static/css/style.css?v=4.7">
+<link rel="stylesheet" href="/static/css/lanes.css?v=1.2">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 <style>
   html, body {
@@ -264,6 +265,10 @@
           <span class="tab-icon">⚙️</span>
           <span class="tab-label">Model Launch Config</span>
         </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-lanes">
+          <span class="tab-icon">🧭</span>
+          <span class="tab-label">Models &amp; Jobs</span>
+        </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-cloud">
           <span class="tab-icon">☁️</span>
           <span class="tab-label">Cloud Models</span>
@@ -519,6 +524,14 @@
         <div id="devices-content"><div class="mon-empty">Loading…</div></div>
       </div>
 
+      <div class="card settings-panel" id="sec-lanes">
+        <div class="settings-panel-head">
+          <h2>🧭 Models &amp; Jobs</h2>
+          <p>Choose which model does each job — on this PC or in the cloud — and whether answers get double-checked.</p>
+        </div>
+        <div id="lanes-content"><div class="mon-empty">Loading…</div></div>
+      </div>
+
       <div class="card settings-panel" id="sec-cloud">
         <div class="settings-panel-head">
           <h2>☁️ Cloud Models</h2>
@@ -613,10 +626,11 @@
 <script src="/static/js/config.js?v=3.1"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
 <script src="/static/js/capabilities.js?v=2.9"></script>
-<script src="/static/js/cloud.js?v=3.0"></script>
+<script src="/static/js/cloud.js?v=3.1"></script>
 <script src="/static/js/rbac.js?v=1.2"></script>
 <script src="/static/js/knowledge.js?v=1.1"></script>
 <script src="/static/js/input-guard.js?v=1.0"></script>
+<script src="/static/js/lanes.js?v=1.9"></script>
 <script src="/static/js/settings-page.js?v=1.0"></script>
 </body>
 </html>

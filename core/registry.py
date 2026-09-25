@@ -103,8 +103,22 @@ class ToolRegistry:
         return out
 
     def schemas(self) -> list:
-        """OpenAI 'tools' array for the LLM request (enabled tools only)."""
-        return [t.schema for t in self._visible() if t.enabled]
+        """OpenAI 'tools' array for the LLM request (enabled tools only). A tool
+        whose meta has a "visible" callable is offered only while it returns True
+        (e.g. media tools, only once that job has a model for this user)."""
+        out = []
+        for t in self._visible():
+            if not t.enabled:
+                continue
+            vis = t.meta.get("visible")
+            if callable(vis):
+                try:
+                    if not vis():
+                        continue
+                except Exception:
+                    continue
+            out.append(t.schema)
+        return out
 
     async def async_run(self, name: str, args: dict) -> str:
         """Dispatch like run_tool(): coroutines awaited, sync fns in executor."""

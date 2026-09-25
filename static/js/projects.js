@@ -503,6 +503,9 @@ async function openSession(s) {
         modelSource: meta.modelSource || undefined,
         modelProvider: meta.modelProvider || undefined,
         runId: meta.runId || undefined,
+        check: meta.check || undefined,
+        // /image and /video results (media.js); restored cards retry as a new message
+        media: meta.media ? Object.assign({}, meta.media, { restored: true, saved: true }) : undefined,
       };
     });
     curSession = s;
@@ -574,6 +577,8 @@ function toggleSessionMenu(btn, s) {
 }
 
 async function deleteSession(sid) {
+  // stop an image the chat is still making (it would land in a chat that's gone)
+  if (typeof mediaStopChat === 'function') mediaStopChat(sid, curSession && curSession.id === sid ? messages : null);
   try { await fetch(`/control/sessions/${sid}`, { method: 'DELETE', headers: { ...getDeviceHeaders() } }); } catch (e) {}
   if (curSession && curSession.id === sid) {
     curSession = null;

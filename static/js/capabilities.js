@@ -267,9 +267,9 @@ function agentLibraryHtml(lib, canEdit) {
         <b>/multi-* lanes</b>
         ${['backend', 'frontend'].map(k => `<span>${k}</span>
           <select class="lib-lane" data-role="${k}" ${canEdit ? '' : 'disabled'} style="${inp}">
-            ${['main', 'executor'].map(l => `<option value="${l}" ${((lib.multi_lanes || {})[k] || (k === 'backend' ? 'main' : 'executor')) === l ? 'selected' : ''}>${l}</option>`).join('')}
+            ${(lib.lane_options || [{ name: 'main', label: 'main' }, { name: 'executor', label: 'executor' }]).map(o => `<option value="${esc(o.name)}" ${((lib.multi_lanes || {})[k] || (k === 'backend' ? 'main' : 'executor')) === o.name ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}
           </select>`).join('')}
-        <span class="dim" style="font-size:9.5px;">which local lane plays each analyst in /multi-plan, /multi-execute…</span>
+        <span class="dim" style="font-size:9.5px;">which model plays each analyst in /multi-plan, /multi-execute… (add models in Models &amp; Jobs)</span>
       </label>
     </div>
     <details class="cap-item"><summary><b>🤖 Agent profiles</b> <span class="dim">(${count(lib.agents)}/${(lib.agents || []).length} allowed · spawn_agent roles)</span></summary>

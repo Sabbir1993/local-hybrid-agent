@@ -107,6 +107,7 @@ if ($('modal-bg')) $('modal-bg').onclick = e => { if (e.target.id === 'modal-bg'
 if ($('m-ok')) $('m-ok').onclick = async () => {
   $('modal-bg').hidden = true;
   if (ctrl) ctrl.abort();
+  if (typeof mediaStopChat === 'function') mediaStopChat(curSession ? curSession.id : null, messages);
   try { await fetch('/control/stop', { method: 'POST' }); } catch (e) {}
   messages = [];
   renderAll();

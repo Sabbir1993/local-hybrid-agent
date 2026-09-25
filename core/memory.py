@@ -108,9 +108,13 @@ async def _embed_texts(texts: list) -> Optional[list]:
     if time.time() < _embedder_down_until:
         return None
     try:
+        # "Search memory" job (core/lanes.py): a local embedding lane, "embedder"
+        # by default. Changing it means stored vectors need a re-index.
+        from . import lanes
         from .small_model import small_models
-        inst = small_models.instances["embedder"]
-        if not inst.available:
+        route = lanes.targets("embed")
+        inst = small_models.instances.get(route[0].lane) if route else None
+        if inst is None or not inst.available:
             _embedder_down_until = time.time() + EMBEDDER_RETRY_S
             return None
         await inst.ensure_loaded()

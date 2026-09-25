@@ -15,25 +15,9 @@ async function loadCloudCard() {
   }
 }
 
-function cloudLaneOptions(selectedKey) {
-  if (!cloudSnap) return '';
-  let h = `<option value="local"${!selectedKey ? ' selected' : ''}>Local (llama-server)</option>`;
-  const byProv = {};
-  (cloudSnap.models || []).forEach(m => (byProv[m.provider] = byProv[m.provider] || []).push(m));
-  Object.keys(byProv).forEach(p => {
-    h += `<optgroup label="CLOUD ${esc(p)}">`;
-    byProv[p].forEach(m => {
-      h += `<option value="${esc(m.key)}"${selectedKey === m.key ? ' selected' : ''}>${esc(m.display)} · ${esc(m.provider_name)}</option>`;
-    });
-    h += '</optgroup>';
-  });
-  return h;
-}
-
 function renderCloudCard(d) {
   const provs = d.providers || [];
   const models = d.models || [];
-  const local = d.local || {};
 
   let h = `<div class="rep-bar" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
     <span><b>${provs.length}</b> provider(s) · <b>${models.length}</b> cloud model(s)</span>
@@ -70,46 +54,13 @@ function renderCloudCard(d) {
     });
   }
 
-  // ---- lane routing (main is set by the top dropdown; executor/vision here) ----
-  const lanes = d.lanes || {};
-  const b = d.bindings || {};
-  const exLocal = ((local.small || {}).executor || {});
-  const viLocal = ((local.small || {}).vision || {});
-  const routingMode = b.routing_mode === 'custom' ? 'custom' : 'auto';
-  h += `<div style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px;">
-    <div style="font-size:10px; color:var(--dim); font-weight:700; text-transform:uppercase; letter-spacing:1px; margin-bottom:7px;">Lane routing</div>
-    <div style="display:grid; grid-template-columns:88px 1fr; gap:7px; align-items:center;">
-      <span style="font-size:11px;">Main lane</span>
-      <input type="text" id="cl-main" disabled value="${esc(lanes.main && lanes.main.key ? `${lanes.main.display} (${lanes.main.provider_name})` : 'Local (model dropdown selects this)')}" title="Set by the model dropdown at the top — pick a cloud model there to send the main lane to the cloud" style="font-family:monospace; font-size:10.5px; opacity:0.8;">
-      <span style="font-size:11px;">Routing</span>
-      <select id="cl-mode" title="Auto: executor & vision always mirror the main lane (cloud model if main is cloud, local if main is local). Custom: pick executor & vision independently.">
-        <option value="auto"${routingMode === 'auto' ? ' selected' : ''}>Auto — executor &amp; vision follow the main lane</option>
-        <option value="custom"${routingMode === 'custom' ? ' selected' : ''}>Custom — pick executor &amp; vision separately</option>
-      </select>
-      <div id="cl-custom-rows" style="display:${routingMode === 'custom' ? 'contents' : 'none'};">
-        <span style="font-size:11px;">Executor</span>
-        <select id="cl-exec">${cloudLaneOptions(b.executor)}</select>
-        <span style="font-size:11px;">Vision</span>
-        <select id="cl-vision">${cloudLaneOptions(b.vision)}</select>
-      </div>
-    </div>
-    <label style="display:flex; align-items:center; gap:6px; margin-top:8px; font-size:11px; cursor:pointer;">
-      <input type="checkbox" id="cl-fallback" ${b.fallback_local ? 'checked' : ''} style="accent-color:var(--green);">
-      Fall back to the local model if a cloud call fails
-    </label>
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:9px;">
-      <span class="dim" style="font-size:9.5px;">
-        executor now: ${lanes.executor && lanes.executor.key
-          ? '\u2601 ' + esc(lanes.executor.display) + ' (' + esc(lanes.executor.provider_name) + ')'
-          : '\uD83D\uDDA5 Local' + (exLocal.model ? ' · ' + esc(exLocal.model) : '')}<br>
-        vision now: ${lanes.vision && lanes.vision.key
-          ? '\u2601 ' + esc(lanes.vision.display) + ' (' + esc(lanes.vision.provider_name) + ')'
-          : '\uD83D\uDDA5 Local' + (viLocal.model ? ' · ' + esc(viLocal.model) : '')}
-      </span>
-      <button class="btn blue" id="cl-save" style="width:auto; margin:0; padding:5px 16px; font-weight:700;">Save lanes</button>
-    </div>
-    <div id="cl-result" class="dim" style="font-size:10px; margin-top:6px; min-height:12px;"></div>
-  </div>`;
+  // Which model does each job (main / helper / image reader, local fallback) is
+  // set in Settings -> Models & Jobs (static/js/lanes.js) - one place only.
+  h += `<div style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px; display:flex; align-items:center; justify-content:space-between; gap:8px;">
+    <span class="dim" style="font-size:11px;">Which model does each job is set in <b>Models &amp; Jobs</b>.</span>
+    <button class="btn ghost" id="cl-goto-lanes" style="width:auto; margin:0; padding:4px 12px;">Open Models &amp; Jobs</button>
+  </div>
+  <div id="cl-result" class="dim" style="font-size:10px; margin-top:6px; min-height:12px;"></div>`;
 
     // ---- add / edit provider form ----
   h += `<div id="cloud-form" hidden style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px;">
@@ -337,47 +288,9 @@ function wireCloudCard() {
     };
   });
 
-  const modeSel = g('#cl-mode');
-  const customRows = g('#cl-custom-rows');
-  if (modeSel) modeSel.onchange = () => {
-    if (customRows) customRows.style.display = modeSel.value === 'custom' ? 'contents' : 'none';
-  };
-
-  const laneSave = g('#cl-save');
-  // The fallback checkbox takes effect immediately too — toggling it then
-  // pressing Save lanes still works, this just skips the extra round-trip.
-  const fbBox = g('#cl-fallback');
-  if (fbBox) fbBox.onchange = async () => {
-    const out = g('#cl-result');
-    try {
-      const r = await fetch('/control/cloud/lanes', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fallback_local: fbBox.checked }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-      cloudSnap = j;
-      const b = j.bindings || {};
-      if (out) out.textContent = 'Local fallback ' + (b.fallback_local ? 'ON — cloud failures retry locally' : 'OFF — cloud failures surface as errors');
-    } catch (e) { toast('Fallback save failed: ' + e.message, true); }
-  };
-  if (laneSave) laneSave.onclick = async () => {
-    const body = {
-      executor: g('#cl-exec').value,
-      vision: g('#cl-vision').value,
-      fallback_local: g('#cl-fallback').checked,
-      routing_mode: modeSel ? modeSel.value : 'auto',
-    };
-    try {
-      const r = await fetch('/control/cloud/lanes', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-      toast('Lane routing saved');
-      await loadCloudCard();
-      if (typeof pollStatus === 'function') pollStatus();
-    } catch (e) { toast('Lane save failed: ' + e.message, true); }
+  const gotoLanes = g('#cl-goto-lanes');
+  if (gotoLanes) gotoLanes.onclick = () => {
+    if (typeof switchSettingsTab === 'function') switchSettingsTab('sec-lanes');
+    else location.href = '/settings#sec-lanes';
   };
 }

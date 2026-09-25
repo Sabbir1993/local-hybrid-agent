@@ -16,10 +16,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core import memory, knowledge_router
 from routes import common
 from routes.chat import (wants_file_output, looks_undelivered, shrink_old_tool_results,
-                         session_files, file_followup_intent)
+                         session_files, file_followup_intent, _finalize_media, _wraps_media)
 
 MARKET_Q = ("hi can you prepare of a market analysis html based on web based online gaming "
             "market size? local [BD] along with foreign ?")
+
+
+class ChatMediaTests(unittest.TestCase):
+    MD = "![a boy](/agent/raw?path=generated/20260926_010055_a-boy.png)"
+
+    def test_missing_or_garbled_image_is_appended(self):
+        out, chg = _finalize_media("Here is your picture.", [self.MD])
+        self.assertTrue(chg)
+        self.assertTrue(out.endswith("\n\n" + self.MD))
+        bad = "![x](/agent/raw?path=generated/[card ****0055]_a-boy.png)"
+        self.assertIn("path=generated/20260926_010055_a-boy.png)", _finalize_media(bad, [self.MD])[0])
+        vid = "[VIDEO: generated/w.webm]\n\n[DOWNLOAD: generated/w.webm]"
+        out = _finalize_media("[VIDEO: generated/w.webm]", [vid])[0]
+        self.assertIn("[DOWNLOAD: generated/w.webm]", out)
+        self.assertEqual(out.count("[VIDEO: generated/w.webm]"), 1)
+
+    def test_reply_that_shows_it_is_kept(self):
+        out, chg = _finalize_media("Done!\n\n" + self.MD, [self.MD])
+        self.assertFalse(chg)
+
+    def test_html_wrapper_after_an_image_is_refused(self):
+        q = "Bangladeshi rural boy riding a cycle. make a image with 8k clearity"
+        self.assertTrue(_wraps_media([self.MD], "boy-cycle.html", q))
+        self.assertFalse(_wraps_media([], "boy-cycle.html", q))                  # no image this turn
+        self.assertFalse(_wraps_media([self.MD], "notes.txt", q))
+        self.assertFalse(_wraps_media([self.MD], "gallery.html", q + " and put it in an html page"))
 
 
 class DatePromptTests(unittest.TestCase):

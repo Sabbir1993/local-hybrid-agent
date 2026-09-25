@@ -36,8 +36,18 @@ function scrollToBottom() {
 window.scrollToBottom = scrollToBottom;
 document.getElementById('btn-scroll-bottom')?.addEventListener('click', scrollToBottom);
 
+// the answer-check verdict saved with a message (no draft copy when nothing was fixed)
+function _checkMeta(m) {
+  const c = m && m.check;
+  if (!c || c.state !== 'done') return undefined;
+  return { state: 'done', mode: c.mode, verdict: c.verdict, issues: c.issues || [], checker: c.checker,
+           source: c.source, fixed: c.fixed || 0, original: c.original || undefined, note: c.note || undefined };
+}
+window._checkMeta = _checkMeta;
+
 function renderAll() {
   const inner = $('chat-inner');
+  if (typeof mediaSyncStop === 'function') mediaSyncStop();   // Stop follows the open chat's images
   const isLoaded = (typeof mainLaneReady === 'function') ? mainLaneReady() : (curStatus && curStatus.pid);
   inner.innerHTML = messages.length ? messages.map(bubbleHtml).join('') :
     `<div id="empty">
@@ -493,7 +503,13 @@ function bubbleHtml(m, idx) {
   }
 
   let body = '';
-  if (hasText) {
+  const acHidden = typeof answerCheckHides === 'function' && answerCheckHides(m);
+  const mediaLive = typeof mediaBusy === 'function' && mediaBusy(m);
+  if (mediaLive) {
+    body = mediaCardHtml(m, idx);          // /image or /video still running / asking / failed
+  } else if (acHidden) {
+    body = answerCheckGateHtml(m);
+  } else if (hasText) {
     body = md(m.content);
   } else if (!generating && m.reasoning && m.reasoning.trim()) {
     // If generation completed and content was empty, render reasoning so user is never left with a blank message
@@ -507,7 +523,7 @@ function bubbleHtml(m, idx) {
   }
   
   // Render interactive grill-me / ask_question choice cards if options or question frontiers are present
-  if (hasText && !generating) {
+  if (hasText && !generating && !acHidden) {
     const qCards = renderInteractiveQuestions(m.content, idx);
     if (qCards) {
       body += qCards;
@@ -515,7 +531,7 @@ function bubbleHtml(m, idx) {
   }
 
   // Render dedicated media preview section for images and videos found in assistant response
-  if (hasText && typeof renderMediaPreviewSection === 'function') {
+  if (hasText && !m.media && typeof renderMediaPreviewSection === 'function') {
     const mediaPreview = renderMediaPreviewSection(m.content);
     if (mediaPreview) {
       body += mediaPreview;
@@ -528,6 +544,8 @@ function bubbleHtml(m, idx) {
     const alertHtml = m.errorAlert ? `<div class="chat-alert-box error"><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; margin-top:2px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><div><strong>Service Notice</strong><div style="font-size:12px; margin-top:2px; opacity:0.9;">${esc(m.errorAlert)}</div></div></div>` : '';
     inner += `<div class="${bubbleClass}">${body}${alertHtml}</div>`;
   }
+  if (typeof answerCheckBadgeHtml === 'function') inner += answerCheckBadgeHtml(m, idx);
+  if (m.media && typeof mediaActionsHtml === 'function') inner += mediaActionsHtml(m, idx);
   if (m.tps) {
     const modelTag = m.modelDisplay
       ? `${m.modelSource === 'cloud' ? '☁ ' : ''}${esc(m.modelDisplay)} · `
@@ -811,6 +829,7 @@ function setGenUI(on) {
     startClaudeWorkingTicker(job ? job.t0 : performance.now());
   } else {
     stopClaudeWorkingTicker();
+    if (typeof mediaSyncStop === 'function') mediaSyncStop();   // an image may still be in progress
   }
   $('input').focus();
 }
@@ -939,6 +958,7 @@ async function send(inputText) {
         web_search: !!chatWebSearch,
         deep_mode: !!chatDeepMode,
         reasoning_effort: typeof getReasoningEffort === 'function' ? getReasoningEffort() : undefined,
+        verify: typeof answerCheckBegin === 'function' ? answerCheckBegin(job.assistantMsg) : undefined,
         system_prompt: sys || undefined,
         temperature: samplingCfg.temp,
         max_tokens: (isNaN(samplingCfg.maxtok) || samplingCfg.maxtok <= 0) ? -1 : samplingCfg.maxtok,
@@ -951,7 +971,9 @@ async function send(inputText) {
     }
     await readSSE(res, (ev, d) => {
       const L = getJobAssistant();
-      if (ev === 'lane') {
+      if (typeof sseAnswerCheck === 'function' && sseAnswerCheck(L, ev, d)) {
+        // verify_start / verify_result (answer-check.js)
+      } else if (ev === 'lane') {
         L.modelDisplay = d.display || d.model;
         L.modelSource = d.source;
         L.modelProvider = d.provider;
@@ -976,7 +998,8 @@ async function send(inputText) {
         L.content = (d.text || '');
         L.statusText = '';
       } else if (ev === 'delta_reset') {
-        if (L.content && L.content.trim()) {
+        // a checked-and-fixed answer replaces the draft (kept in check.original)
+        if (L.content && L.content.trim() && !(L.check && L.check.state === 'checking')) {
           L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + L.content.trim();
         }
         L.content = '';
@@ -984,8 +1007,11 @@ async function send(inputText) {
         sseToolCall(L, d);
       } else if (ev === 'tool_result') {
         sseToolResult(L, d);
+      } else if (ev === 'tool_progress') {
+        sseToolProgress(L, d);
       } else if (ev === 'done') {
         L.statusText = '';
+        if (typeof answerCheckEnd === 'function') answerCheckEnd(L);
         if (typeof window.setLiveHud === 'function') {
           window.setLiveHud({ phase: 'done', text: 'Response complete' });
         }
@@ -1047,6 +1073,7 @@ async function send(inputText) {
   targetAssistant.tps = ntok / dt; targetAssistant.ntok = ntok; targetAssistant.secs = dt;
   if (ntok > 1 && $('chip-ts')) $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
 
+  if (typeof answerCheckEnd === 'function') answerCheckEnd(targetAssistant);
   persistMsgForSession(sessionId, 'assistant', targetAssistant.content, {
     tps: targetAssistant.tps,
     ntok,
@@ -1057,6 +1084,7 @@ async function send(inputText) {
     modelDisplay: targetAssistant.modelDisplay || undefined,
     modelSource: targetAssistant.modelSource || undefined,
     modelProvider: targetAssistant.modelProvider || undefined,
+    check: _checkMeta(targetAssistant),
   });
 
   window.bgJobs.delete(String(sessionId));

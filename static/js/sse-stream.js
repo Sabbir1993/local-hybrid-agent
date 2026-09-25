@@ -83,6 +83,16 @@ function sseToolCall(L, d) {
   }
 }
 
+// tool_progress: a long tool (image/video generation) reports its step; kept on
+// its tool_call act (latest only) so the card can show a bar
+function sseToolProgress(L, d) {
+  const call = (L.acts || []).slice().reverse().find(a => a.type === 'tool_call' && (a.id === d.id || (!d.id && a.name === d.name)));
+  if (!call) return;
+  call.progress = { text: d.text || '', pct: d.pct, elapsed: d.elapsed };
+  L.statusText = d.text || L.statusText;
+  _sseHud({ phase: 'running', name: d.name, text: d.text || 'Working…' });
+}
+
 // tool_result: record it; a file write/edit also gets a toast + HUD with Preview/Reveal
 function sseToolResult(L, d) {
   if (!L.acts) L.acts = [];
@@ -127,7 +137,6 @@ function sseKbBlocked(L, d) {
   if (!L.acts) L.acts = [];
   L.acts.push({ type: 'tool_call', id: 'kb_blocked', name: 'search_knowledge_base', args: {} });
   L.acts.push({ type: 'tool_result', id: 'kb_blocked', name: 'search_knowledge_base', ok: false, result: d.message || '' });
-  if (typeof toast === 'function') toast('🔒 Company knowledge base is local-only — start a local model to use it');
 }
 
 // guard: the output sanitizer redacted part of the response

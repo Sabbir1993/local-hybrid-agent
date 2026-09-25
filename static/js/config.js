@@ -167,7 +167,7 @@ $('profile').onchange = e => {
     if (eng && (eng.value === 'all-local' || eng.value === 'main-local-rest-cloud')) {
       eng.value = 'main-cloud-rest-local';
       try { localStorage.setItem('agent_engine', eng.value); } catch (err) {}
-      toast('\u2601 Cloud main lane — engine set to "Main Cloud · Rest Local"');
+      toast('\u2601 Cloud main model — agent set to "Best quality" (cloud main, local helpers)');
     }
     // Cloud models cost nothing to "load" (no VRAM involved) - bind the main
     // lane immediately instead of making the user press the Load button too.

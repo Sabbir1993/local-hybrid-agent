@@ -24,8 +24,6 @@ document.addEventListener('click', (e) => {
     img.src = load.dataset.loadSrc;
     img.alt = load.dataset.loadAlt || 'Image';
     img.className = 'chat-inline-img';
-    img.dataset.previewPath = load.dataset.loadSrc;
-    img.dataset.previewTitle = img.alt;
     img.title = 'Click to enlarge';
     const card = load.closest('.media-card-thumb-wrap');
     if (card) { img.className = 'media-card-thumb'; card.replaceChildren(img); }
@@ -116,6 +114,12 @@ function md(s) {
         out += '<pre><code>' + (lang ? hlCode(code, lang) : esc(code)) + '</code></pre>';
       }
     } else {
+      // files shown as an inline image here: their download chips would repeat them
+      const shown = new Set();
+      String(parts[i]).replace(/!\[[^\]]*\]\((?:\/agent\/raw|\/raw)\?path=([^)&\s]+)[^)]*\)/g, (_, p) => {
+        try { shown.add(decodeURIComponent(p)); } catch (e) { shown.add(p); }
+        return _;
+      });
       let t = esc(parts[i]);
       t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
       t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -137,7 +141,7 @@ function md(s) {
       // 1. Render markdown images: ![alt](url)
       t = t.replace(/!\[([^\]]*)\]\(((?:https?:\/\/|\/agent\/raw|\/raw)[^)]+)\)/g, (match, alt, url) => {
         if (!isLocalMediaUrl(url)) return externalImageButton(url, alt);
-        return `<span class="chat-inline-media"><img src="${url}" alt="${alt}" class="chat-inline-img" loading="lazy" data-preview-path="${url}" data-preview-title="${alt || 'Image'}" title="Click to enlarge" /></span>`;
+        return `<span class="chat-inline-media"><img src="${url}" alt="${alt}" class="chat-inline-img" loading="lazy" title="Click to enlarge" /></span>`;
       });
 
       // 2. Render links & file download buttons
@@ -146,6 +150,7 @@ function md(s) {
           const m = url.match(/[?&]path=([^&]+)/);
           let fpath = text;
           if (m) { try { fpath = esc(decodeURIComponent(m[1])); } catch (e) { fpath = m[1]; } }
+          if (m && shown.has(_unesc(fpath))) return '';
           return `<span style="display:inline-flex; align-items:center; gap:4px; margin:2px 0;">
             <button type="button" class="file-action-badge primary" data-preview-path="${fpath}" data-preview-title="${text}" title="Preview ${text}">👁️ Preview ${text}</button>
             <a href="${url}" class="file-action-badge" download title="Download ${text}">⬇</a>
@@ -154,9 +159,16 @@ function md(s) {
         return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
       });
 
+      // 3a. [VIDEO: generated/x.mp4] markers from /video and generate_video: inline player
+      t = t.replace(/\[VIDEO:\s*([^\]]+)\]/g, (_, fname) => {
+        const src = `/agent/raw?path=${encodeURIComponent(fname.trim())}`;
+        return `<span class="chat-inline-media"><video class="chat-inline-video" controls preload="metadata" src="${src}"></video></span>`;
+      });
+
       // 3. Parse [DOWNLOAD: filename] markers emitted by the agent
       t = t.replace(/\[DOWNLOAD:\s*([^\]]+)\]/g, (_, fname) => {
         const cleanName = fname.trim();
+        if (shown.has(_unesc(cleanName))) return '';
         const url = `/agent/download?path=${encodeURIComponent(cleanName)}`;
         return `<span style="display:inline-flex; align-items:center; gap:4px; margin:2px 0;">
           <button type="button" class="file-action-badge primary" data-preview-path="${cleanName}" data-preview-title="${cleanName}" title="Preview ${cleanName}">👁️ Preview ${cleanName}</button>
@@ -168,6 +180,11 @@ function md(s) {
     }
   }
   return out;
+}
+
+// md() works on escaped text; compare file paths unescaped
+function _unesc(s) {
+  return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
 }
 
 /* ---------------- Image & Video Preview Section ---------------- */
@@ -183,7 +200,7 @@ function extractMediaItems(s) {
   }
 
   // 1. Markdown images: ![alt](url)
-  const mdImgRx = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+|\/agent\/raw[^)\s]+|\/raw[^)\s]+)\)/g;
+  const mdImgRx = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;   // local ones are already inline
   let m;
   while ((m = mdImgRx.exec(s)) !== null) {
     addItem('image', m[2], m[1] || 'Image');

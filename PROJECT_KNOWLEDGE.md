@@ -41,8 +41,10 @@ confusion:
 | **Capability** | A tool *source*: builtin, web, skill, mcp, plugin, shell. Toggleable wholesale from the UI. |
 | **Lane escalation** | Automatically discarding a weak executor response and re-running that step on the main model. |
 | **Delta reset** | SSE event telling the UI to throw away already-streamed text (used before escalation / validation rewrite). |
-| **Cloud lane** | A lane served by a remote OpenAI-compatible provider instead of a local `llama-server`. Bindings live in `providers.json` (`core/cloud.py`). |
-| **providers.json** | Untracked file holding cloud providers (base URLs + API keys) and lane bindings. Written only by the Settings → ☁️ Cloud Models card. |
+| **Cloud lane** | A lane served by a remote OpenAI-compatible provider instead of a local `llama-server`. Bindings live in `config/providers/user_<id>.json` (`core/cloud.py`). |
+| **providers/user_<id>.json** | Untracked per-user file: cloud providers (base URLs; API keys are in the OS keychain, `apiKeyRef: "keyring"`), lane bindings, own cloud lanes (`lanes`), job choices (`role_map`), answer-check settings (`verification`). |
+| **Job** | A fixed kind of work (`core/lanes.py` `JOBS`: agent.reason, agent.tool_step, summarize, commit_msg, subagent, verify, search_rewrite, input_guard, vision, embed, plus the media jobs image_gen, video_gen, transcribe). Call sites ask `lanes.targets(job)` / `lanes.post_chat(job, …)`; the role map picks the lane, then its `fallback` chain. Media jobs have no default lane (off until mapped) and only use lanes of their own kind. |
+| **Media lane** | Kind `image_gen` / `video_gen` / `stt`. Local ones are app.json `small_models` entries with `engine`: `whisper` (whisper.cpp server, `.bin` model, `gpu` or `-1` for CPU) or `sdcpp` (stable-diffusion.cpp `sd-server`: `diffusion_model` / `llm` / `vae` under `Models/orchestrator/image-models|video-models`, `gpu`, `offload_to_cpu`, `steps`, `cfg_scale`, `sampler`, `flow_shift`; `SdCppInstance` is **loaded only by hand** - `POST /control/lanes/{name}/load` - never by a request, and never idle-unloaded; optional `llm_vision` / `edit_refs` / `max_refs` enable editing with reference pictures - `edit_caps()`). Input pictures (`POST /media/generate` `mode` img2img|edit + `images[{b64|path}]` + `strength`) go through `core/media_images.prepare_inputs` and only to sd.cpp lanes (`media.edit_targets`), never cloud. Cloud ones are user lanes on an OpenAI-style or Google provider (`core/media.py`). `transcribe` never goes to the cloud unless app.json `media.allow_cloud_audio` is true. |
 
 ---
 
@@ -712,6 +714,23 @@ and `revert`. **Not persisted** — cleared by `set_active_project()` and lost o
 | DELETE | `/control/cloud/provider?name=` | remove a provider and unbind lanes that used it |
 | POST | `/control/cloud/lanes` | bind executor/vision (`{"clear":["main"]}` unbinds); `fallback_local` |
 | POST | `/control/cloud/test` | 1-token probe → `{ok, ms, sample}` or `{ok:false, error}` |
+
+### Images, videos, speech (`routes/media.py`, `core/media.py`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/media/status` | which of image / video / transcribe have a model for this user |
+| POST | `/media/generate` | `{kind, prompt, aspect?, seconds?, seed?, negative?, lane?, confirm_cost?}` → `{job_id, on_pc}`; 409 `not_setup`, 409 `needs_confirm` (cloud video), 409 `not_loaded {lane, label, can_load}` (local sd.cpp model not loaded, no backup), 429 busy |
+| GET | `/media/jobs/{id}` | SSE `queued` → `progress {text, pct}` → `done {files, markdown, model, where}` / `error {message}`; owner only, kept 30 min |
+| DELETE | `/media/jobs/{id}` | stop waiting (the service may still finish) |
+| POST | `/media/transcribe` | multipart 16 kHz WAV + `language` → `{text, model, source, ms}` (cap `media.max_audio_mb`) |
+| POST | `/control/media-settings` | admin: `allow_cloud_audio`, `image_per_day`, `video_per_day` (cloud-only daily limits) |
+| POST | `/control/lanes/{name}/load` | load an sd.cpp image/video model (`model.local.load`); returns at once, the page polls `state` (`not_loaded` / `loading` / `loaded` / `failed`) |
+| GET | `/control/lanes/files` | admin: model files under `Models/orchestrator` - `{folder, models, mmproj, whisper, image, video}` (`core/profiles.discover_helper_files`) |
+
+sd.cpp jobs use sd-server's native async API (`POST /sdcpp/v1/img_gen|vid_gen` → poll `/sdcpp/v1/jobs/{id}` → `result.images[].b64_json` / `result.b64_json`; cancel → `/sdcpp/v1/jobs/{id}/cancel`, `core/media.sdcpp_generate`). Plain chat offers `generate_image` only when the image job's first model is local (`media_tools.chat_image_tool_schema`); media tools named by the model without being offered are refused.
+
+Results go to `common/user_<id>/generated/` and are shown with `![..](/agent/raw?path=generated/..)` or `[VIDEO: generated/..]`. Prompts pass `input_guard.check_async` (PAN block + policy rules) before any engine; cloud prompts are PAN-masked again. Agent tools `generate_image` / `generate_video` / `transcribe_audio` (`core/media_tools.py`) are offered only when the job has a model; cloud generations raise a once-only `permission_request` (`kind: "media"`); sub-agents never get them.
 
 ### Capabilities / shell
 

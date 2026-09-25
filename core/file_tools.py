@@ -45,6 +45,9 @@ MIME_MAP = {
 
 DOCUMENT_EXTENSIONS = set(MIME_MAP.keys()) | {".txt", ".md"}
 
+# generated videos (core/media.py): served inline by /agent/raw, not documents
+VIDEO_MIME = {".mp4": "video/mp4", ".webm": "video/webm"}
+
 # Default chunking limits
 DEFAULT_MAX_CHARS = 12_000    # ~3000 tokens - safe for 4096-token context windows
 CHUNK_SIZE = 10_000           # size for read_file_chunk pages

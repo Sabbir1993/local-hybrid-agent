@@ -126,6 +126,8 @@ function toolMeta(name) {
     case 'grep': return { icon: '🔍', label: 'grep', verb: 'Searched', cls: 'grep' };
     case 'revert': return { icon: '↩️', label: 'revert', verb: 'Reverted', cls: 'revert' };
     case 'spawn_agent': return { icon: '🤖', label: 'spawn_agent', verb: 'Delegated', cls: 'subagent' };
+    case 'generate_image': return { icon: '🎨', label: 'generate_image', verb: 'Made image', running: 'Making image', cls: 'media' };
+    case 'generate_video': return { icon: '🎬', label: 'generate_video', verb: 'Made video', running: 'Making video', cls: 'media' };
     default: return { icon: '🛠️', label: name, verb: 'Done', cls: 'default' };
   }
 }
@@ -274,7 +276,8 @@ function buildChronologicalStream(acts) {
         result: null,
         ok: true,
         diff: null,
-        verify: null
+        verify: null,
+        progress: a.progress || null
       };
       if (a.id) toolMap.set(a.id, toolItem);
       toolMap.set(a.name, toolItem);
@@ -377,7 +380,7 @@ function renderFileCard(t, isItemRunning) {
   const previewBtn = diff
     ? `<button type="button" class="btn ghost agy-open-btn" data-ws-open="${esc(p)}" title="Open in project panel">↗ Open</button>`
     : isPreviewable
-    ? `<button type="button" class="btn ghost" style="padding:1px 7px; font-size:10px; margin-left:auto; border-radius:4px;" data-preview-path="${esc(p)}" data-preview-title="${esc(filename)}" title="Preview file">👁️ Preview</button>`
+    ? `<button type="button" class="btn ghost codex-head-btn" data-preview-path="${esc(p)}" data-preview-title="${esc(filename)}" title="Preview file">👁️ Preview</button>`
     : '';
 
   const openByDefault = !isRunning;
@@ -422,13 +425,16 @@ function renderGenericToolCard(t, isItemRunning) {
 
   const isPreviewable = p && /\.(html|htm|csv|xlsx|xls|pdf|md|py|js|ts|json|txt|svg|png|jpg|jpeg|webp|pptx)$/i.test(p);
   const previewBtn = isPreviewable
-    ? `<button type="button" class="btn ghost" style="padding:1px 7px; font-size:10px; margin-left:auto; border-radius:4px;" data-preview-path="${esc(p)}" data-preview-title="${esc(p)}" title="Preview file">👁️ Preview</button>`
+    ? `<button type="button" class="btn ghost codex-head-btn" data-preview-path="${esc(p)}" data-preview-title="${esc(p)}" title="Preview file">👁️ Preview</button>`
     : '';
+  const isMedia = meta.cls === 'media';
+  const title = isMedia ? esc(String(t.args.prompt || '').slice(0, 90)) : label;
+  const verb = isRunning && meta.running ? meta.running : meta.verb;
 
   return `<details class="codex-action-card">
     <summary class="codex-action-head">
       <span class="codex-action-icon">${meta.icon}</span>
-      <span class="codex-action-title"><b>${meta.verb}</b> ${label}</span>
+      <span class="codex-action-title"><b>${verb}</b> ${title}</span>
       ${extra}
       <span class="agy-step-spacer"></span>
       ${isRunning ? '<span class="agy-summary-pulse active" style="width:6px; height:6px;"></span>' : (t.ok ? '' : '<span style="color:var(--red); font-size:11px;">⚠</span>')}
@@ -446,7 +452,21 @@ function renderGenericToolCard(t, isItemRunning) {
         <pre class="agy-detail-code" style="color:${t.ok ? 'var(--dim)' : 'var(--red)'};"><code>${esc(t.result || '(empty)')}</code></pre>
       ` : ''}
     </div>
-  </details>`;
+  </details>${isMedia && isRunning ? mediaProgressHtml(t.progress) : ''}`;
+}
+
+// live step bar under a running generate_image / generate_video card (tool_progress events)
+function mediaProgressHtml(pr) {
+  const pct = pr && pr.pct != null ? Math.max(0, Math.min(100, Math.round(pr.pct))) : null;
+  const secs = pr && pr.elapsed != null ? pr.elapsed : null;
+  const clock = secs != null ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : '';
+  const text = (pr && pr.text) || 'Starting…';
+  return `<div class="codex-media-progress" role="status" aria-live="polite">
+    <div class="codex-media-progress-row"><span>${esc(text)}</span>${clock ? `<span class="codex-media-clock">${clock}</span>` : ''}</div>
+    <div class="media-bar"${pct != null ? ` role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"` : ''}>
+      <span class="${pct == null ? 'indeterminate' : ''}" style="width:${pct == null ? 30 : pct}%"></span>
+    </div>
+  </div>`;
 }
 
 function agentActsHtml(acts) {

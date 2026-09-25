@@ -233,9 +233,12 @@ async def agent_library_update(req: AgentLibraryReq,
             return JSONResponse({"error": "default_policy must be 'deny' or 'allow'"}, status_code=400)
         lib["default_policy"] = req.default_policy
     if req.multi_lanes is not None:
+        from core.lanes import registry, kind_ok
+        reg = registry()
         ml = {k: v for k, v in req.multi_lanes.items() if k in ("backend", "frontend")}
-        if any(v not in ("main", "executor") for v in ml.values()):
-            return JSONResponse({"error": "multi_lanes values must be 'main' or 'executor'"}, status_code=400)
+        if any(v not in reg or not kind_ok("chat", reg[v]["kind"]) for v in ml.values()):
+            return JSONResponse({"error": "multi_lanes values must name a text model, e.g. 'main' or 'executor'"},
+                                status_code=400)
         lib["multi_lanes"] = {**(lib.get("multi_lanes") or {}), **ml}
     for kind in ("agents", "commands"):
         upd = getattr(req, kind)

@@ -28,13 +28,15 @@ depending on which module happens to be imported first.
 
 import contextlib
 import json
+import sys
 import time
 from typing import Optional
 
 MAX_SUBAGENT_STEPS = 15
 DEFAULT_SUBAGENT_STEPS = 8
 # run_python: sub-agents have no SSE stream to raise the approval modal on
-DENIED_TOOLS = {"run_shell", "run_python", "spawn_agent"}
+# media tools: cost money / long GPU jobs - only the main agent may use them
+DENIED_TOOLS = {"run_shell", "run_python", "spawn_agent", "generate_image", "generate_video"}
 
 SUBAGENT_SYSTEM_PROMPT = """You are a focused sub-agent delegated a single, self-contained task \
 by a parent AI coding agent. Workspace: {workspace}
@@ -72,8 +74,7 @@ SPAWN_AGENT_SCHEMA = {
                 },
                 "lane": {
                     "type": "string",
-                    "enum": ["main", "executor"],
-                    "description": "Explicit lane override (ignored if role is set).",
+                    "description": "Explicit model (lane) override, e.g. main or executor (ignored if role is set).",
                 },
                 "tools": {
                     "type": "array",
@@ -131,9 +132,13 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
     if role and not role_cfg:
         from .roles import known_role_names
         return f"error: unknown role '{role}'. Available: {', '.join(known_role_names()) or '(none)'}"
-    lane =lane_override or role_cfg.get("lane") or "executor"
-    if lane not in ("main", "executor"):
-        lane = "executor"
+    # explicit lane (role or override) wins; otherwise the "Sub-agents" job's model
+    # (core/lanes.py, the executor by default). Any registered lane is allowed.
+    from . import lanes as lanes_mod
+    reg = lanes_mod.registry()
+    lane = lane_override or role_cfg.get("lane") or None
+    if lane and (lane not in reg or not lanes_mod.kind_ok("chat", reg[lane]["kind"])):
+        lane = None
     steps = min(MAX_SUBAGENT_STEPS, max(1, int(max_steps or role_cfg.get("max_steps") or DEFAULT_SUBAGENT_STEPS)))
 
     all_schemas = [t for t in registry.schemas() if t.get("function", {}).get("name") not in DENIED_TOOLS]
@@ -156,17 +161,28 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
     msgs = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": task}]
 
     async with _subagent_scope():
-        if lane == "main":
-            client = state.client
-            if client is None:
-                return "error: main lane is not available for a sub-agent run (model not loaded)"
+        # sub-agents stay local, as before, unless they're pointed at a cloud model
+        # on purpose: a user's own cloud lane, or the job mapped in Settings
+        from . import cloud
+        if lane:
+            d = reg[lane]
+            route = [lanes_mod.Target(lane) if d["local"] else lanes_mod.Target(lane, cloud.cloud_lane(lane))]
         else:
-            ex_inst = small_models.instances["executor"]
-            if not ex_inst.available:
-                return "error: executor lane is not available for a sub-agent run"
-            await ex_inst.ensure_loaded()
-            client = ex_inst.client
-
+            route = lanes_mod.targets("subagent", force_local="subagent" not in cloud.role_map())
+        route = [t for t in route if t.is_cloud or t.lane == "main" or t.lane in reg]
+        client, lane_used = None, None
+        for t in route:
+            if not t.available():
+                continue
+            try:
+                client, lane_used = await t.client(), t
+                break
+            except Exception as e:
+                print(f"[subagent] {t.describe()} unavailable: {e}", file=sys.stderr)
+        if client is None:
+            return f"error: no model is available for a sub-agent run ({lane or 'sub-agent default'})"
+        lane = lane_used.lane
+        src = lane_used.source
         model_name = f"subagent:{role or 'generic'}:{lane}"
         final_content = ""
         for _ in range(steps):
@@ -174,7 +190,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
             msgs[:] = compact_messages(msgs, int(ex_ctx * 0.7))
 
             rid = monitor_begin("agent/subagent", True, n_msgs=len(msgs),
-                                 model=model_name, source="local")
+                                 model=model_name, source=src)
             res = None
             try:
                 async for ev, val in _llm_chat_stream(client, msgs, tools_for_subagent, 0.3, -1, rid=rid):
@@ -190,10 +206,10 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                 ctoks = u.get("completion_tokens") or (req_mon.get("gen_tokens") if req_mon else 0)
                 tps = (ctoks / dt) if (ctoks and dt and dt > 0) else None
                 monitor_end(rid, 200, prompt_tokens=ptoks, completion_tokens=ctoks, tps=tps, duration=dt,
-                            model=model_name, prompt_cached=pcached, completion_cached=ccached, source="local")
+                            model=model_name, prompt_cached=pcached, completion_cached=ccached, source=src)
                 db_record_request("agent/subagent", model_name, ptoks, ctoks, tps, dt, None, True, 200,
                                    prompt_cached_tokens=pcached, completion_cached_tokens=ccached,
-                                   is_orchestrator=True, source="local")
+                                   is_orchestrator=True, source=src)
 
             if res is None:
                 final_content = "(sub-agent got no response from the model)"

@@ -23,6 +23,18 @@ const CMD_HINTS = {
     title: '/init — scan the project and write AGENTS.md (auto-loaded into every agent task)',
     hint: 'Enter to initialize',
   },
+  image: {
+    icon: '🎨',
+    ph: 'Describe the picture (subject, style, light…) — Enter to make it',
+    title: '/image — make a picture from a description',
+    hint: 'Enter to make the image',
+  },
+  video: {
+    icon: '🎬',
+    ph: 'Describe the scene and what moves — Enter to make the video (takes a few minutes)',
+    title: '/video — make a short video clip from a description',
+    hint: 'Enter to make the video',
+  },
   build: {
     icon: '🔨',
     ph: 'Describe what to build or fix (executes changes in workspace) — Enter to execute',
@@ -63,7 +75,9 @@ function cmdChipRender() {
        <span class="cmd-chip-name">&lt;${esc(armedCmd.name)}&gt;</span>
        <span class="cmd-chip-hint">${esc(h.hint || 'Enter to run')}</span>
        <span class="cmd-chip-x" data-x="1" title="Remove command (or press Backspace on an empty box)">✕</span>
-     </div>`;
+     </div>`
+    + ((armedCmd.name === 'image' || armedCmd.name === 'video') && typeof mediaOptsHtml === 'function'
+      ? mediaOptsHtml(armedCmd.name) : '');
   const x = bar.querySelector('[data-x]');
   if (x) x.onclick = () => { disarmCmd(); const i = $('input'); if (i) i.focus(); };
 }
@@ -175,6 +189,11 @@ function runArmedCmd(cmd, text) {
   if (cmd.name === 'init') {
     disarmCmd();
     runInit(arg);
+    return;
+  }
+  if (cmd.name === 'image' || cmd.name === 'video') {
+    disarmCmd();
+    if (typeof mediaRun === 'function') mediaRun(cmd.name, arg);
     return;
   }
   if (agentMode && isLibraryCommand(cmd.name)) {
@@ -357,10 +376,12 @@ async function cmdMenuOpen(kind, query) {
       { icon: '🧭', name: 'init', desc: 'scan the project and write AGENTS.md (auto-loaded into agent tasks)', category: 'utility' },
       { icon: '🧹', name: 'compact', desc: 'compress conversation history (needs an active project)', category: 'utility' },
       { icon: '🤖', name: 'subagent', desc: 'delegate a sub-task to a focused sub-agent', category: 'utility', template: true },
+      ..._mediaSlashItems(),
       { icon: '🧑‍🤝‍🧑', name: 'multiagent', desc: 'delegate multiple roles (planner/coder/reviewer) in one prompt', category: 'utility', template: true },
     ] : [
       { icon: '🎯', name: 'goal', desc: 'autonomous goal execution — drive to completion', category: 'utility' },
       { icon: '🧹', name: 'compact', desc: 'compress conversation history', category: 'utility' },
+      ..._mediaSlashItems(),
     ];
     try {
       const d = await (await fetch('/control/capabilities')).json();
@@ -385,6 +406,15 @@ async function cmdMenuOpen(kind, query) {
     if (!cmdMenu.items.length) { cmdMenuClose(); return; }
   }
   cmdMenuRender();
+}
+
+/* /image and /video: listed in both modes; the hint says when they still need setting up */
+function _mediaSlashItems() {
+  const ready = k => typeof mediaReady === 'function' && mediaReady(k);
+  return [
+    { icon: '🎨', name: 'image', desc: ready('image') ? 'make a picture from a description' : 'make a picture (set up a model in Settings first)', category: 'create' },
+    { icon: '🎬', name: 'video', desc: ready('video') ? 'make a short video clip' : 'make a video (set up a model in Settings first)', category: 'create' },
+  ];
 }
 
 function cmdMenuPick(i) {
@@ -418,6 +448,11 @@ function cmdMenuPick(i) {
     input.setSelectionRange(pos, pos);
     renderInputHighlights();
   } else if (kind === 'slash') {
+    if (it.name === 'image' || it.name === 'video') {
+      input.value = before + after.replace(/^\s?/, '');
+      armCmd(it.name);
+      return;
+    }
     if (it.name === 'plan' || it.name === 'build') {
       const isPlan = it.name === 'plan';
       if (window._setPlanMode) window._setPlanMode(isPlan);
@@ -459,6 +494,13 @@ function currentToken(input) {
     if (input.value.trim().toLowerCase() === '/compact' && input.value.endsWith(' ')) {
       cmdMenuClose();
       armCmd('compact');
+      return;
+    }
+    // '/image ' or '/video ' typed at the start: arm it and show the options row
+    const mediaTyped = input.value.match(/^\/(image|video) $/i);
+    if (mediaTyped) {
+      cmdMenuClose();
+      armCmd(mediaTyped[1].toLowerCase());
       return;
     }
     // slash menu works anywhere in the sentence (chat mode & agent mode); @ file tags stay agent-only

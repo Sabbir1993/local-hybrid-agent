@@ -1,6 +1,6 @@
 """Auto-generate commit messages / PR title+description from a git diff.
 
-Uses the fast "executor" lane (same pattern as routes/chat.py::_summarize_history) -
+Uses the "Commit & PR messages" job (core/lanes.py; the fast executor lane by default) (same pattern as routes/chat.py::_summarize_history) -
 a short, low-temperature, non-streaming completion. Never calls out to GitHub/MCP;
 this only talks to the app's own configured model. Diffs stay on the executor lane by
 default (prefer local) since they may contain secrets/credentials - see generate().
@@ -9,9 +9,7 @@ default (prefer local) since they may contain secrets/credentials - see generate
 import re
 from typing import Optional
 
-from .small_model import small_models
-from . import cloud
-from .state import state
+from . import lanes
 
 MAX_DIFF_CHARS = 12000  # keep the prompt small/cheap; a huge diff gets truncated
 
@@ -55,25 +53,10 @@ async def _complete(system_prompt: str, diff_text: str, user_id: Optional[int] =
         "stream": False,
     }
 
-    cloud_exec = cloud.cloud_lane("executor", user_id)
-    if cloud_exec:
-        r = await cloud.CloudClient(cloud_exec).post("/v1/chat/completions", json=payload, timeout=None)
-    else:
-        inst = small_models.instances.get("executor")
-        if inst and inst.available:
-            await inst.ensure_loaded()
-            r = await inst.client.post("/v1/chat/completions", json=payload, timeout=None)
-        elif state.process is not None and state.process.poll() is None and state.client is not None:
-            # fall back to the main model if no executor lane is configured
-            r = await state.client.post("/v1/chat/completions", json=payload, timeout=None)
-        else:
-            raise RuntimeError("no model available (executor not configured, main model not running)")
-    r.raise_for_status()
-    data = r.json()
-    try:
-        text = str(data["choices"][0]["message"]["content"] or "")
-    except (KeyError, IndexError, TypeError):
-        text = ""
+    # "Commit & PR messages" job: the fast helper by default, remappable in
+    # Settings -> Models (core/lanes.py walks the fallback chain)
+    data, _t = await lanes.post_chat("commit_msg", payload, user_id)
+    text = lanes.message_text(data)
     return _strip_think(text)
 
 

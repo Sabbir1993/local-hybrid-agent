@@ -225,6 +225,13 @@ class DeviceTests(_TempAuthDb):
         src = (ROOT / "companion" / "main.js").read_text(encoding="utf-8")
         self.assertIn('update("a770-device:" + raw)', src)
 
+    def test_companion_router_mounted_before_proxy_catch_all(self):
+        # the proxy's /{path:path} route would otherwise 404 POST /companion/pair
+        src = (ROOT / "server_manager.py").read_text(encoding="utf-8")
+        comp = src.index("app.include_router(companion_router")
+        proxy = src.index("app.include_router(proxy_router")
+        self.assertLess(comp, proxy)
+
     def _ws_app(self):
         from core import companion_bridge as cb
         app = FastAPI()

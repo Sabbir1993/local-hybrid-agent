@@ -1,0 +1,77 @@
+/* ---------- images / videos / dictation (static/js/media.js) ---------- */
+
+/* 🎤 button next to 🛡 */
+.comp-mic-btn { min-width: 30px; font-size: 13px; }
+.comp-mic-btn[hidden] { display: none !important; }
+#comp-mode[hidden] { display: none !important; }
+.comp-mic-btn.recording { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, transparent);
+                          background: color-mix(in srgb, var(--red) 14%, transparent); }
+.comp-mic-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* recording / transcribing strip above the composer buttons */
+.mic-pill { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 2px;
+            padding: 6px 10px; border-radius: 10px; font-size: 12px;
+            border: 1px solid var(--border); background: var(--panel2); }
+.mic-pill[hidden] { display: none; }
+.mic-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); flex-shrink: 0;
+           animation: micPulse 1s ease-in-out infinite; }
+@keyframes micPulse { 50% { opacity: .35; } }
+.mic-time { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 36px; }
+.mic-level { width: 70px; height: 6px; border-radius: 3px; background: var(--panel); overflow: hidden;
+             border: 1px solid var(--border-subtle); }
+.mic-level > span { display: block; height: 100%; width: 0; background: var(--green); transition: width .08s linear; }
+.mic-label { color: var(--dim); }
+.mic-lang select { font-size: 11.5px; padding: 2px 4px; background: var(--bg-input); color: var(--text);
+                   border: 1px solid var(--border); border-radius: 6px; }
+.mic-btn { width: auto !important; margin: 0 !important; padding: 3px 10px !important; font-size: 11.5px !important; }
+.mic-pill .btn:first-of-type { margin-left: auto !important; }
+@media (prefers-reduced-motion: reduce) { .mic-dot { animation: none; } }
+
+/* options row under the armed <image> / <video> chip */
+.media-opts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 11.5px; }
+.media-seg { border: 1px solid var(--border); background: var(--panel2); color: var(--text); border-radius: 999px;
+             padding: 2px 10px; font-size: 11.5px; cursor: pointer; }
+.media-seg.on { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+.media-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.media-len select { font-size: 11.5px; padding: 1px 4px; background: var(--bg-input); color: var(--text);
+                    border: 1px solid var(--border); border-radius: 6px; margin-left: 4px; }
+.media-who { color: var(--dim); margin-left: auto; }
+.media-who.warn { color: var(--amber); }
+
+/* progress / confirm / error card in the chat */
+.media-live { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; padding: 2px 0; }
+.media-live-head { display: flex; align-items: center; gap: 10px; }
+.media-live-head [data-media-elapsed] { font-variant-numeric: tabular-nums; }
+.media-prompt { color: var(--text-muted); font-style: italic; font-size: 12px; overflow-wrap: anywhere; }
+.media-live-text { font-size: 11.5px; }
+.media-bar { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; max-width: 320px; }
+.media-bar > span { display: block; height: 100%; background: var(--accent); transition: width .3s ease; }
+.media-actions-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.media-actions-row .btn { width: auto; margin: 0; padding: 4px 12px; font-size: 11.5px; }
+.media-confirm { border-left: 3px solid var(--amber); padding-left: 10px; }
+.media-error { border-left: 3px solid var(--red); padding-left: 10px; }
+
+/* under a finished image / video */
+.media-done-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; margin: 4px 0 2px; }
+.media-done-row > span { margin-right: 4px; }
+.media-mini { width: auto !important; margin: 0 !important; padding: 2px 8px !important; font-size: 11px !important; }
+.chat-inline-video { max-width: min(560px, 100%); max-height: 420px; border-radius: 10px; display: block; margin: 6px 0;
+                     border: 1px solid var(--border); background: #000; }
+
+/* pictures to start from (above the composer, 🖼 mode) */
+.media-pics-bar[hidden] { display: none !important; }
+.media-pics { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; margin: 4px 0 6px; }
+.media-pics-t { font-weight: 600; }
+.media-pic { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px 2px 2px; border-radius: 8px;
+             border: 1px solid var(--border); background: var(--panel2); }
+.media-pic img { width: 28px; height: 28px; object-fit: cover; border-radius: 6px; }
+.media-pic code { font-size: 10.5px; }
+.media-pic.bad { border-color: var(--red); }
+.media-pic button { border: 0; background: none; color: var(--dim); cursor: pointer; padding: 0 2px; font-size: 11px; }
+.media-pic button:focus-visible { outline: 2px solid var(--accent); }
+.media-seg:disabled { opacity: .45; cursor: not-allowed; }
+.media-strength { display: inline-flex; align-items: center; gap: 6px; }
+.media-strength input { width: 110px; accent-color: var(--accent); }
+.media-strength output { font-variant-numeric: tabular-nums; min-width: 34px; }
+.media-pics-note { margin-left: auto; }
+.media-pics-warn { flex-basis: 100%; color: var(--amber); }

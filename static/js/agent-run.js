@@ -139,6 +139,7 @@ async function runAgentSSE(text) {
           attachments: docAttachments,
           cloud_model_override: cloudModelOverride || undefined,
           reasoning_effort: typeof getReasoningEffort === 'function' ? getReasoningEffort() : undefined,
+          verify: typeof answerCheckBegin === 'function' ? answerCheckBegin(job.assistantMsg) : undefined,
         }),
         signal: jobCtrl.signal,
       });
@@ -148,6 +149,10 @@ async function runAgentSSE(text) {
       }
       await readSSE(res, (ev, d) => {
         const L = getJobAssistant();
+        if (typeof sseAnswerCheck === 'function' && sseAnswerCheck(L, ev, d)) {
+          if (typeof scheduleRenderLast === 'function' && curSession && String(curSession.id) === String(sessionId)) scheduleRenderLast();
+          return;
+        }
         if (ev === 'run') {
           L.runId = d.run_id;   // routing telemetry id -> thumbs up/down feedback
         }
@@ -216,7 +221,7 @@ async function runAgentSSE(text) {
             window.setLiveHud({ phase: 'running', text: 'Verifying tool changes...' });
           }
         }
-        else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd);
+        else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd, d.kind);
         else if (ev === 'delta') {
           closeThought(L);
           if (L._resetPrev != null) {
@@ -238,7 +243,8 @@ async function runAgentSSE(text) {
         else if (ev === 'delta_reset') {
           // Replacing content with a synthesized final answer: decide on the next
           // delta whether the prior streamed text is worth keeping as reasoning
-          if (L.content && L.content.trim()) L._resetPrev = L.content.trim();
+          // a checked-and-fixed answer replaces the draft (kept in check.original)
+          if (L.content && L.content.trim() && !(L.check && L.check.state === 'checking')) L._resetPrev = L.content.trim();
           L.content = '';
         }
         else if (ev === 'validated') {
@@ -269,6 +275,7 @@ async function runAgentSSE(text) {
         }
         else if (ev === 'done') {
           closeThought(L);
+          if (typeof answerCheckEnd === 'function') answerCheckEnd(L);
           // run ended early (step cap or loop stop): keep why, so the bubble can offer Continue
           if (d.reason) {
             if (!L.acts) L.acts = [];
@@ -304,6 +311,7 @@ async function runAgentSSE(text) {
       if (ntok > 1 && $('chip-ts') && curSession && String(curSession.id) === String(sessionId)) {
         $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
       }
+      if (typeof answerCheckEnd === 'function') answerCheckEnd(targetAssistant);
       persistMsgForSession(sessionId, 'assistant', targetAssistant.content, {
         tps: targetAssistant.tps, ntok, secs: dt,
         promptTokens: targetAssistant.promptTokens || undefined,
@@ -313,6 +321,7 @@ async function runAgentSSE(text) {
         modelSource: targetAssistant.modelSource || undefined,
         modelProvider: targetAssistant.modelProvider || undefined,
         runId: targetAssistant.runId || undefined,
+        check: typeof _checkMeta === 'function' ? _checkMeta(targetAssistant) : undefined,
       });
     } catch (e) {
       if (e.name !== 'AbortError') {

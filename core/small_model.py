@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import collections
 import json
 import subprocess
 import sys
@@ -110,6 +111,13 @@ def _load_app_config() -> dict:
             "enabled": False,
             "rules": [],
         },
+        # images / videos / speech (core/media.py). Audio can't be scanned for
+        # card numbers, so cloud speech-to-text is off until an admin allows it.
+        "media": {
+            "allow_cloud_audio": False,
+            "limits": {"image_per_day": 50, "video_per_day": 5},
+            "max_audio_mb": 25,
+        },
     }
     # Multiagent role definitions live in their own file so they're easy to find
     # and edit independently of the general app config.
@@ -127,13 +135,15 @@ def _load_app_config() -> dict:
             for k in ("models_dir", "workspace_dir", "common_dir"):
                 if d.get(k):
                     base[k] = d[k]
-            for k, sub in base["small_models"].items():
-                if isinstance(d.get("small_models", {}).get(k), dict):
-                    sub.update(d["small_models"][k])
+            # built-in lanes merge over their defaults; any other entry is a
+            # custom local lane added from Settings -> Models (core/lanes.py)
+            for k, v in (d.get("small_models") or {}).items():
+                if isinstance(v, dict):
+                    base["small_models"].setdefault(k, {}).update(v)
             # "roles" is included here as a legacy override: an un-migrated
             # app.json that still has a "roles" block wins over config/roles.json.
             for k in ("router", "agent", "capabilities", "provider", "cloud", "roles",
-                      "input_guard", "output_guard", "preflight"):
+                      "input_guard", "output_guard", "preflight", "media"):
                 if isinstance(d.get(k), dict):
                     sub = base.get(k)
                     if isinstance(sub, dict):
@@ -153,12 +163,80 @@ def _load_app_config() -> dict:
 APP_CONFIG = _load_app_config()
 
 
+# kind of each built-in lane; custom lanes carry "kind" in their config entry
+BUILTIN_KINDS = {"executor": "chat", "vision": "vision", "embedder": "embed"}
+
+
+LANE_KINDS = ("chat", "vision", "embed", "image_gen", "video_gen", "stt")
+
+
+def lane_kind_of(name: str, cfg: Optional[dict] = None) -> str:
+    k = str((cfg or {}).get("kind") or BUILTIN_KINDS.get(name) or "chat").lower()
+    return k if k in LANE_KINDS else "chat"
+
+
+def lane_engine_of(name: str, cfg: Optional[dict] = None) -> str:
+    """What serves a local lane: llama (llama-server), whisper (whisper-server)
+    or sdcpp (stable-diffusion.cpp's sd-server, for images and videos)."""
+    kind = lane_kind_of(name, cfg)
+    if kind in ("image_gen", "video_gen"):
+        return "sdcpp"
+    if kind == "stt":
+        return "whisper"
+    return "llama"
+
+
+def whisper_search_dirs() -> list:
+    """Where whisper-server(.exe) is looked for, first match wins. Only config /
+    fixed locations: the UI can't point the server at an arbitrary program."""
+    out = []
+    v = ACTIVE_RUNTIME.get("whisper_bin_dir")
+    if v:
+        out.append(Path(v))
+    # programs live next to llama-vulkan (E:\AI\vulkan-arc\...), never in the models folders
+    llama = Path(ACTIVE_RUNTIME["llama_bin_dir"])
+    out += [llama.parent / "whisper-vulkan", llama.parent / "whisper", llama]
+    return out
+
+
+def sd_search_dirs() -> list:
+    """Where sd-server(.exe) (stable-diffusion.cpp) is looked for. Config / fixed
+    locations only, like whisper-server."""
+    out = []
+    v = ACTIVE_RUNTIME.get("sd_bin_dir")
+    if v:
+        out.append(Path(v))
+    llama = Path(ACTIVE_RUNTIME["llama_bin_dir"])
+    out += [llama.parent / "sd-vulkan", llama.parent / "sd"]
+    return out
+
+
+def find_sd_server() -> Optional[Path]:
+    for d in sd_search_dirs():
+        for n in ("sd-server.exe", "sd-server"):
+            p = d / n
+            if p.is_file():
+                return p
+    return None
+
+
+def find_whisper_server() -> Optional[Path]:
+    for d in whisper_search_dirs():
+        for n in ("whisper-server.exe", "whisper-server"):
+            p = d / n
+            if p.is_file():
+                return p
+    return None
+
+
 class SmallModelInstance:
-    """One on-demand llama-server child for a small model (executor/vision/embedder)."""
+    """One on-demand llama-server child for a small model (executor/vision/embedder
+    or a custom local lane)."""
 
     def __init__(self, role: str, cfg: dict, client_hint=None):
         self.role = role
         self.cfg = cfg or {}
+        self.kind = lane_kind_of(role, self.cfg)
         models_base = Path(APP_CONFIG.get("models_dir") or "E:/AI/Models")
         
         raw_m = cfg.get("model")
@@ -192,12 +270,13 @@ class SmallModelInstance:
         self.last_used = 0.0
         self.lock = asyncio.Lock()
         self.load_error: Optional[str] = None
+        self._log_tail = collections.deque(maxlen=60)   # last server lines, to explain a failed start
 
     @property
     def available(self) -> bool:
         if not self.model_path or not self.model_path.exists():
             return False
-        if self.role == "vision" and (not self.mmproj_path or not self.mmproj_path.exists()):
+        if self.kind == "vision" and (not self.mmproj_path or not self.mmproj_path.exists()):
             return False
         return True
 
@@ -214,39 +293,10 @@ class SmallModelInstance:
                 return
             if not self.available:
                 raise RuntimeError(f"{self.role} model not configured or files missing: {self.model_path}")
-            bin_dir = ACTIVE_RUNTIME["llama_bin_dir"]
-            backend = ACTIVE_RUNTIME["backend"]
-            prefix = device_prefix(backend)
-            server_bin = find_llama_server(bin_dir)
-            # Preflight: refuse to spawn if this small model wouldn't fit on
-            # its target Vulkan device (prevents the WDDM OOM desktop hang).
+            prefix = device_prefix(ACTIVE_RUNTIME["backend"])
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                lambda: vram.check_small_model_or_raise(
-                    self.role, self.model_path, self.ctx, self.gpu,
-                    mmproj_path=self.mmproj_path),
-            )
-            cmd = [
-                str(server_bin),
-                "-m", str(self.model_path),
-                "-c", str(self.ctx),
-                "-ngl", "999",
-                "-dev", f"{prefix}{self.gpu}",
-                "--port", str(self.port),
-                "--host", "127.0.0.1",
-                "-np", str(self.n_slots),
-                "-fa", "on",
-                "--jinja",
-            ]
-            if self.n_slots > 1:
-                cmd += ["-kvu"]
-            if self.kv_cache_type:
-                cmd += ["-ctk", self.kv_cache_type, "-ctv", self.kv_cache_type]
-            if self.mmproj_path and self.mmproj_path.exists():
-                cmd += ["--mmproj", str(self.mmproj_path)]
-            if self.role == "embedder":
-                cmd += ["--embedding"]
+            await self._preflight(loop)
+            cmd, env = self._launch_cmd()
 
             print(f"[{self.role}] auto-loading on {prefix}{self.gpu} (port {self.port})...")
             self.process = subprocess.Popen(
@@ -255,19 +305,25 @@ class SmallModelInstance:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                env=env,
             )
             self.load_error = None
+            self._log_tail.clear()
             asyncio.create_task(self._pump_logs())
 
-            deadline = time.time() + 90
+            deadline = time.time() + self._start_timeout
             while time.time() < deadline:
                 if self.process.poll() is not None:
+                    await asyncio.sleep(0.3)          # let the log pump read the last lines
                     self.load_error = f"exited code {self.process.returncode}"
+                    why = self._exit_reason()
+                    if why:
+                        self.load_error += f" - {why}"
                     self.process = None
                     raise RuntimeError(f"[{self.role}] failed to start ({self.load_error})")
                 try:
-                    r = await self.client.get("/health", timeout=2.0)
-                    if r.status_code == 200:
+                    r = await self.client.get(self._health_path, timeout=2.0)
+                    if self._healthy(r):
                         print(f"[{self.role}] ready on port {self.port}")
                         self.last_used = time.time()
                         return
@@ -275,8 +331,50 @@ class SmallModelInstance:
                     pass
                 await asyncio.sleep(0.5)
             self._stop()
-            self.load_error = "timed out after 90s"
+            self.load_error = f"timed out after {self._start_timeout}s"
             raise RuntimeError(f"[{self.role}] health check timed out")
+
+    _health_path = "/health"
+    _start_timeout = 90
+
+    def _healthy(self, r) -> bool:
+        return r.status_code == 200
+
+    async def _preflight(self, loop) -> None:
+        # refuse to spawn if this small model wouldn't fit on its target
+        # Vulkan device (prevents the WDDM OOM desktop hang)
+        await loop.run_in_executor(
+            None,
+            lambda: vram.check_small_model_or_raise(
+                self.role, self.model_path, self.ctx, self.gpu,
+                mmproj_path=self.mmproj_path),
+        )
+
+    def _launch_cmd(self) -> tuple:
+        """(argv, env or None) for this lane's server process."""
+        prefix = device_prefix(ACTIVE_RUNTIME["backend"])
+        server_bin = find_llama_server(ACTIVE_RUNTIME["llama_bin_dir"])
+        cmd = [
+            str(server_bin),
+            "-m", str(self.model_path),
+            "-c", str(self.ctx),
+            "-ngl", "999",
+            "-dev", f"{prefix}{self.gpu}",
+            "--port", str(self.port),
+            "--host", "127.0.0.1",
+            "-np", str(self.n_slots),
+            "-fa", "on",
+            "--jinja",
+        ]
+        if self.n_slots > 1:
+            cmd += ["-kvu"]
+        if self.kv_cache_type:
+            cmd += ["-ctk", self.kv_cache_type, "-ctv", self.kv_cache_type]
+        if self.mmproj_path and self.mmproj_path.exists():
+            cmd += ["--mmproj", str(self.mmproj_path)]
+        if self.kind == "embed":
+            cmd += ["--embedding"]
+        return cmd, None
 
     def _stop(self) -> None:
         if self.process and self.process.poll() is None:
@@ -290,7 +388,7 @@ class SmallModelInstance:
     async def unload_if_idle(self) -> bool:
         if not self.is_up():
             return False
-        idle_limit = int(APP_CONFIG["agent"].get("idle_unload_s", 120))
+        idle_limit = int(self.cfg.get("idle_unload_s") or APP_CONFIG["agent"].get("idle_unload_s", 120))
         if idle_limit <= 0:
             return False
         if time.time() - self.last_used > idle_limit:
@@ -303,11 +401,249 @@ class SmallModelInstance:
 
     async def _pump_logs(self) -> None:
         loop = asyncio.get_event_loop()
-        while self.process and self.process.poll() is None:
-            line = await loop.run_in_executor(None, self.process.stdout.readline)
+        proc = self.process
+        # read to EOF (not just while running) so the lines explaining a crash are kept
+        while proc is not None and proc.stdout is not None:
+            line = await loop.run_in_executor(None, proc.stdout.readline)
             if not line:
                 break
-            print(f"[{self.role}] {line.rstrip()}")
+            line = line.rstrip()
+            if self._on_log_line(line):
+                continue                   # a progress-bar update: used, not logged
+            self._log_tail.append(line)
+            print(f"[{self.role}] {line}")
+
+    def _on_log_line(self, line: str) -> bool:
+        """A server output line. True = it was a progress update (don't log it)."""
+        return False
+
+    def _exit_reason(self) -> Optional[str]:
+        """A short reason from the server's last error line (card numbers masked)."""
+        errs = [l for l in self._log_tail if re.search(r"\berror\b|failed|not found", l, re.I)]
+        if not errs:
+            return None
+        from . import pan
+        return pan.mask_pans(re.sub(r"\s+", " ", errs[-1]).strip()[-200:])[0]
+
+
+class WhisperInstance(SmallModelInstance):
+    """On-demand whisper.cpp server (speech to text) for an "stt" lane. Same
+    lifecycle as a llama small model: loads on first use, idle reaper unloads it.
+    Only 16 kHz mono WAV is ever sent to it, so it needs no ffmpeg."""
+
+    def __init__(self, role: str, cfg: dict):
+        super().__init__(role, cfg)
+        if int(cfg.get("gpu", 0) if cfg.get("gpu") is not None else 0) < 0:
+            self.gpu = -1          # CPU (the base class would remap it to a GPU)
+        self.threads = int(cfg.get("threads") or 4)
+        self.language = str(cfg.get("language") or "auto")
+
+    @property
+    def available(self) -> bool:
+        return bool(self.model_path and self.model_path.exists() and find_whisper_server())
+
+    def describe(self) -> str:
+        return f"whisper {self.model_path.name if self.model_path else '?'}"
+
+    # whisper-server has no /health on every build: any HTTP answer means it's listening
+    _health_path = "/"
+
+    def _healthy(self, r) -> bool:
+        return r.status_code < 500
+
+    async def _preflight(self, loop) -> None:
+        return None          # ggml .bin files aren't gguf; whisper models are small (<2 GB)
+
+    def _launch_cmd(self) -> tuple:
+        import os
+        exe = find_whisper_server()
+        if exe is None:
+            raise RuntimeError("whisper-server not found - install whisper.cpp (see Settings -> Models)")
+        cmd = [str(exe), "-m", str(self.model_path), "--host", "127.0.0.1", "--port", str(self.port),
+               "-t", str(self.threads), "--inference-path", "/v1/audio/transcriptions"]
+        env = dict(os.environ)
+        if self.gpu < 0:
+            cmd += ["-ng"]                                   # CPU only
+        else:
+            env["GGML_VK_VISIBLE_DEVICES"] = str(self.gpu)   # pin to one Vulkan device
+        return cmd, env
+
+    async def transcribe(self, wav: bytes, language: Optional[str] = None) -> str:
+        await self.ensure_loaded()
+        self.last_used = time.time()
+        lang = (language or self.language or "auto").strip().lower()
+        r = await self.client.post("/v1/audio/transcriptions",
+                                   files={"file": ("audio.wav", wav, "audio/wav")},
+                                   data={"response_format": "json", "language": lang, "temperature": "0"},
+                                   timeout=600)
+        r.raise_for_status()
+        self.last_used = time.time()
+        try:
+            return str(r.json().get("text") or "").strip()
+        except ValueError:
+            return r.text.strip()
+
+
+class SdCppInstance(SmallModelInstance):
+    """stable-diffusion.cpp's sd-server for a local image / video lane (Vulkan).
+    Unlike the other helpers it is loaded and unloaded by hand (Settings -> Models
+    & Jobs or the chat card): the weights are big, so a request never starts it
+    and the idle reaper never stops it."""
+
+    _health_path = "/sdcpp/v1/capabilities"
+    _start_timeout = 600          # large diffusion + text-encoder weights
+
+    def __init__(self, role: str, cfg: dict):
+        super().__init__(role, cfg)
+        base = Path(APP_CONFIG.get("models_dir") or "E:/AI/Models")
+
+        def _p(key):
+            v = self.cfg.get(key)
+            if not v:
+                return None
+            q = Path(str(v))
+            return q if q.is_absolute() else base / q
+        self.model_path = _p("diffusion_model")
+        self.llm_path = _p("llm")
+        self.vae_path = _p("vae")
+        self.llm_vision_path = _p("llm_vision")     # the text encoder's vision part (editing)
+        self.mmproj_path = None
+        if cfg.get("gpu") is not None and int(cfg.get("gpu")) < 0:
+            self.gpu = -1
+        self.offload_to_cpu = bool(self.cfg.get("offload_to_cpu", False))
+        self.vae_tiling = bool(self.cfg.get("vae_tiling", True))
+        self.timeout_s = int(self.cfg.get("timeout_s") or (900 if self.kind == "image_gen" else 3600))
+        self.loading_since: Optional[float] = None
+        self.busy = 0                 # generations in flight (a load/unload waits for 0)
+        # the running job's step, from sd.cpp's console progress bar: (step, total, secs/step, when)
+        self.step: Optional[tuple] = None
+
+    def files(self) -> list:
+        return [p for p in (self.model_path, self.llm_path, self.vae_path, self.llm_vision_path) if p]
+
+    def edit_caps(self) -> dict:
+        """What it can do with pictures: change one (init image, any model) and combine
+        references (edit models: Qwen Image 2.1 with its vision weights, FLUX Kontext...)."""
+        refs = bool(self.llm_vision_path) or bool(self.cfg.get("edit_refs"))
+        return {"img2img": self.kind == "image_gen", "refs": refs and self.kind == "image_gen",
+                "max_refs": max(1, min(10, int(self.cfg.get("max_refs") or 4)))}
+
+    @property
+    def available(self) -> bool:
+        return bool(self.model_path and all(p.exists() for p in self.files()) and find_sd_server())
+
+    def describe(self) -> str:
+        return f"sd.cpp {self.model_path.name if self.model_path else '?'}"
+
+    def est_bytes(self) -> int:
+        """GPU memory the weights need (0 when they stay in RAM)."""
+        if self.offload_to_cpu or self.gpu < 0:
+            return 0
+        total = 0
+        for p in self.files():
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+        return int(total * 1.05) + int(1.5 * 1024 ** 3)     # + compute / VAE decode
+
+    _STEP_RE = re.compile(r"\|\s*(\d+)/(\d+)\s*-\s*([\d.]+)\s*(s/it|it/s)")
+
+    def _on_log_line(self, line: str) -> bool:
+        # sd.cpp redraws "  |=====>     | 12/20 - 5.12s/it" with a carriage return;
+        # the pipe is in text mode, so every redraw arrives as its own line
+        m = self._STEP_RE.search(line)
+        if not m:
+            return False
+        i, n, v = int(m.group(1)), int(m.group(2)), float(m.group(3))
+        spi = v if m.group(4) == "s/it" else (1 / v if v > 0 else 0.0)
+        self.step = (i, n, spi, time.time())
+        if i >= n:                          # one line per finished bar in the console
+            print(f"[{self.role}] {line.replace(chr(27) + '[K', '').strip()}")
+        return True
+
+    def _exit_reason(self) -> Optional[str]:
+        tail = "\n".join(self._log_tail).lower()
+        if "vae tensor" in tail and "not in model metadata" in tail:
+            return "the VAE file is missing or isn't this model's VAE - pick its own VAE (.safetensors)"
+        if re.search(r"(conditioner|llm|text encoder|cond_stage|text_encoders?)[^\n]*(not in model metadata|not found|missing)", tail):
+            return "the text encoder is missing or doesn't match this model - pick its own text encoder"
+        if "out of memory" in tail or "erroroutofdevicememory" in tail:
+            return "not enough GPU memory - turn on 'Keep weights in RAM' or use another GPU"
+        return super()._exit_reason()
+
+    def state(self) -> str:
+        if self.is_up():
+            return "loaded"
+        if self.loading_since:
+            return "loading"
+        return "failed" if self.load_error else "not_loaded"
+
+    async def _preflight(self, loop) -> None:
+        need = self.est_bytes()
+        if not need:
+            return
+        from . import vram
+        devs = await loop.run_in_executor(None, vram.query_devices)
+        dev = next((d for d in devs or [] if d.get("index") == self.gpu), None)
+        if dev and dev.get("free_b") is not None and dev["free_b"] < need:
+            gb = 1024 ** 3
+            raise vram.PreflightError(
+                f"Needs about {need / gb:.1f} GB, GPU {self.gpu} has {dev['free_b'] / gb:.1f} GB free - "
+                "turn on 'Keep weights in RAM' or unload other models on that GPU", {})
+
+    def _launch_cmd(self) -> tuple:
+        import os
+        exe = find_sd_server()
+        if exe is None:
+            raise RuntimeError("sd-server not found - install stable-diffusion.cpp (see Settings -> Models)")
+        cmd = [str(exe), "--diffusion-model", str(self.model_path),
+               "--listen-ip", "127.0.0.1", "--listen-port", str(self.port), "--diffusion-fa"]
+        if self.llm_path:
+            cmd += ["--llm", str(self.llm_path)]
+        if self.vae_path:
+            cmd += ["--vae", str(self.vae_path)]
+        if self.llm_vision_path:
+            cmd += ["--llm_vision", str(self.llm_vision_path)]
+        if self.offload_to_cpu:
+            cmd += ["--offload-to-cpu"]
+        if self.vae_tiling:
+            cmd += ["--vae-tiling"]
+        env = dict(os.environ)
+        # pin to one Vulkan device ("" = no GPU: CPU only)
+        env["GGML_VK_VISIBLE_DEVICES"] = str(self.gpu) if self.gpu >= 0 else ""
+        return cmd, env
+
+    async def load(self) -> None:
+        """Start sd-server (the only way it starts)."""
+        if self.is_up():
+            return
+        self.loading_since = time.time()
+        self.load_error = None
+        try:
+            await SmallModelInstance.ensure_loaded(self)
+        except Exception as e:
+            self.load_error = self.load_error or str(e)[:300]
+            raise
+        finally:
+            self.loading_since = None
+
+    async def ensure_loaded(self) -> None:
+        # a request never loads the image model: it stays a manual action
+        if not self.is_up():
+            raise RuntimeError("the image model isn't loaded")
+
+    async def unload_if_idle(self) -> bool:
+        return False                  # stays loaded until someone unloads it
+
+
+def make_instance(name: str, cfg: dict):
+    engine = lane_engine_of(name, cfg)
+    if engine == "sdcpp":
+        return SdCppInstance(name, cfg)
+    if engine == "whisper":
+        return WhisperInstance(name, cfg)
+    return SmallModelInstance(name, cfg)
 
 
 class SmallModelManager:
@@ -315,12 +651,21 @@ class SmallModelManager:
 
     def __init__(self):
         sm = APP_CONFIG["small_models"]
-        self.instances = {
-            "executor": SmallModelInstance("executor", sm["executor"]),
-            "vision": SmallModelInstance("vision", sm["vision"]),
-            "embedder": SmallModelInstance("embedder", sm["embedder"]),
-        }
+        self.instances = {name: make_instance(name, cfg)
+                          for name, cfg in sm.items() if isinstance(cfg, dict)}
         self.reaper_task: Optional[asyncio.Task] = None
+
+    def reconfigure(self, name: str, cfg: Optional[dict]) -> None:
+        """Apply an edited/added/removed local lane live (Settings -> Models).
+        A running server for that lane is stopped; the next request reloads it."""
+        old = self.instances.pop(name, None)
+        if old is not None and old.is_up():
+            old._stop()
+        if cfg is None:
+            APP_CONFIG["small_models"].pop(name, None)
+            return
+        APP_CONFIG["small_models"][name] = dict(cfg)
+        self.instances[name] = make_instance(name, APP_CONFIG["small_models"][name])
 
     def start_reaper(self) -> None:
         if self.reaper_task is None:
@@ -348,11 +693,15 @@ class SmallModelManager:
         out = {}
         for role, inst in self.instances.items():
             out[role] = {
+                "kind": inst.kind,
+                "engine": lane_engine_of(role, getattr(inst, "cfg", None)),
                 "model": inst.model_path.name if inst.model_path else None,
                 "available": inst.available,
                 "loaded": inst.is_up(),
                 "port": inst.port,
                 "error": inst.load_error,
+                "state": inst.state() if hasattr(inst, "state") else None,
+                "loading_since": getattr(inst, "loading_since", None),
             }
         return out
 
@@ -391,11 +740,14 @@ async def describe_image_bytes(data: bytes, question: str = "Describe this image
         "max_tokens": 400,
         "temperature": 0.1,
     }
-    # 1. Main model if vision-capable
+    # 1. Main model if vision-capable -- unless the user picked a model for the
+    #    "Reading images" job in Settings -> Models (core/lanes.py)
+    from . import cloud, lanes
+    explicit = "vision" in cloud.role_map()
     try:
         from .state import state
         main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
-        if main_ready and bool((state.profile or {}).get("vision_capable")):
+        if not explicit and main_ready and bool((state.profile or {}).get("vision_capable")):
             r = await state.client.post("/v1/chat/completions", json=payload, timeout=None)
             state.last_activity = time.time()
             data = r.json()
@@ -404,26 +756,12 @@ async def describe_image_bytes(data: bytes, question: str = "Describe this image
     except Exception as e:
         print(f"[vision] main model vision failed: {e} - falling back to vision lane/model")
 
-    # 2. Cloud vision lane if configured
-    from . import cloud
-    cm = cloud.cloud_lane("vision")
-    if cm:
-        try:
-            r = await cloud.CloudClient(cm).post("/v1/chat/completions", json=payload, timeout=None)
-            data = r.json()
-            return ((data.get("choices") or [{}])[0].get("message", {}).get("content")
-                    or "(cloud vision model returned no text)")
-        except Exception as e:
-            print(f"[vision] cloud lane failed ({cm.key}): {e}")
-
-    inst = small_models.instances["vision"]
-    if not inst.available:
-        return "error: vision model not configured in config.json (small_models.vision)"
-    await inst.ensure_loaded()
-    r = await inst.client.post("/v1/chat/completions", json=payload, timeout=None)
-    inst.last_used = time.time()
-    data = r.json()
-    return (data.get("choices") or [{}])[0].get("message", {}).get("content") or "(vision model returned no text)"
+    # 2. the job's route: cloud vision binding, then the local vision model
+    try:
+        data, _t = await lanes.post_chat("vision", payload)
+    except RuntimeError as e:
+        return f"error: no image model available ({e})"
+    return lanes.message_text(data) or "(vision model returned no text)"
 
 
 # ---------------- Dual CPU Routers: Needle-2 & Laya (0 VRAM) ----------------

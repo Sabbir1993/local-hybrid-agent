@@ -330,11 +330,30 @@ updateWsRail();
 document.addEventListener('DOMContentLoaded', updateWsRail);
 
 /* ---------------- shell permission modal ---------------- */
-function showPermModal(reqId, cmd) {
+function showPermModal(reqId, cmd, kind) {
   const m = $('perm-modal');
   if (!m) return;
   m.dataset.reqId = reqId;
   $('perm-cmd').textContent = cmd;
+  // code and paid cloud media can only ever be allowed once: no saved patterns
+  const onceOnly = kind === 'python' || kind === 'media';
+  ['perm-project', 'perm-user', 'perm-always'].forEach(id => { const b = $(id); if (b) b.hidden = onceOnly; });
+  const h = m.querySelector('h2');
+  if (h && h.firstChild && h.firstChild.nodeType === 3) {
+    h.firstChild.textContent = kind === 'media' ? '💳 Cloud media — may cost money ' :
+      kind === 'python' ? '🔑 Run Python code ' : '🔑 Shell Execution Permission ';
+  }
+  const lead = m.querySelector('#perm-box > p.dim');
+  if (lead) lead.textContent = kind === 'media' ? 'The agent wants to make this with a paid cloud service:' :
+    kind === 'python' ? 'The agent wants to run this code:' : 'The agent wants to run a shell command:';
+  if (onceOnly) {
+    $('perm-note').textContent = kind === 'media'
+      ? 'Allow it just this once, or deny. The agent asks again next time.'
+      : 'Code can only be allowed once.';
+    m.dataset.pattern = '';
+    m.hidden = false;
+    return;
+  }
   // suggest the leading command word as an allow pattern, * for everything
   const firstWord = (cmd.trim().split(/\s+/)[0] || '*') + ' *';
   const p = getActiveProject();

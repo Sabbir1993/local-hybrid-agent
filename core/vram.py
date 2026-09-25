@@ -548,6 +548,8 @@ def _small_models_loaded():
 
 
 def _small_model_est_bytes(inst) -> int:
+    if hasattr(inst, "est_bytes"):          # sd.cpp image / video model
+        return inst.est_bytes()
     info = parse_gguf_info(inst.model_path)
     if info:
         fp = estimate_footprint(info, inst.ctx, "f16", 512, "on", headroom_gb=0.0)

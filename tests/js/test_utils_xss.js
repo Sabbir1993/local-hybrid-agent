@@ -37,7 +37,11 @@ assert(/data-load-src="https:\/\/cdn\.example\/c\.png"/.test(ext), ext);
 assert(!/<img/.test(ext), 'external image must not auto-load: ' + ext);
 const loc = ctx.md('![chart](/agent/raw?path=c.png)');
 assert(/<img src="\/agent\/raw\?path=c\.png"/.test(loc), loc);
-assert(/data-preview-path="\/agent\/raw\?path=c\.png"/.test(loc), loc);
+// only the image viewer opens it (not the file preview too)
+assert(!/data-preview-path/.test(loc), loc);
+// one preview: no download chip for a file already shown as an image
+const once = ctx.md('![cat](/agent/raw?path=generated/x.png)\n\n[DOWNLOAD: generated/x.png]\n\n[DOWNLOAD: a.pdf]');
+assert((once.match(/file-action-badge primary/g) || []).length === 1 && /a\.pdf/.test(once), once);
 
 // esc() tolerates non-strings (API fields may be missing or numeric)
 assert.strictEqual(ctx.esc(undefined), '');

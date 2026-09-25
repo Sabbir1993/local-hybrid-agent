@@ -124,12 +124,14 @@ def is_semantic(rule: dict) -> bool:
 
 
 async def _classify(policy: str, text: str) -> bool:
-    """Ask the LOCAL executor model (never cloud) whether `text` violates the
-    natural-language policy. Module-level so tests can monkeypatch it."""
+    """Ask a LOCAL model (never cloud) whether `text` violates the natural-language
+    policy -- the "Policy checks" job (core/lanes.py; the executor by default).
+    Module-level so tests can monkeypatch it."""
     import asyncio
-    from .small_model import small_models
-    inst = small_models.instances.get("executor")
-    if not inst or not inst.available:
+    from . import lanes
+    route = lanes.targets("input_guard")      # local_only job: no cloud targets
+    t = route[0] if route else None
+    if t is None or not t.available():
         return False                      # fail open: no local model, no block
     payload = {
         "messages": [
@@ -147,9 +149,9 @@ async def _classify(policy: str, text: str) -> bool:
         "stream": False,
     }
     try:
-        await inst.ensure_loaded()
+        client = await t.client()
         r = await asyncio.wait_for(
-            inst.client.post("/v1/chat/completions", json=payload),
+            client.post("/v1/chat/completions", json=payload),
             timeout=SEMANTIC_TIMEOUT_S)
         r.raise_for_status()
         data = r.json()

@@ -489,14 +489,17 @@ _REWRITE_PROMPT = (
 
 
 async def rewrite_query(message: str, fallback: str) -> str:
-    """Turn a conversational message into a search query with the small executor model.
-    Only used when that model is already running - never loads one just for this."""
+    """Turn a conversational message into a search query -- the "Web search queries"
+    job (core/lanes.py; the small executor by default, always local). Only used when
+    that model is already running - never loads one just for this."""
     try:
-        from .small_model import small_models
-        inst = small_models.instances.get("executor")
-        if not inst or not inst.is_up():
+        from . import lanes
+        route = lanes.targets("search_rewrite")
+        t = route[0] if route else None
+        if t is None or t.lane == "main" or not t.is_up():
             return fallback
-        r = await asyncio.wait_for(inst.client.post("/v1/chat/completions", json={
+        client = await t.client()
+        r = await asyncio.wait_for(client.post("/v1/chat/completions", json={
             "messages": [{"role": "system", "content": _REWRITE_PROMPT},
                          {"role": "user", "content": message[:1500]}],
             "max_tokens": 40, "temperature": 0.0}), timeout=8)

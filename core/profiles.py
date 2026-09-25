@@ -136,6 +136,137 @@ def in_models_dir(p) -> bool:
     return any(rp.is_relative_to(r.resolve()) for r in models_roots())
 
 
+# Helper models (every lane except the main model) live only in
+# Models/orchestrator; image / video generation models in its own subfolders.
+HELPER_DIR_NAME = "orchestrator"
+MEDIA_DIR_NAMES = {"image_gen": "image-models", "video_gen": "video-models", "stt": "voice-models"}
+# config/app.json "media_dirs" key -> kind (absolute, or relative to models_dir). Read at start.
+MEDIA_DIR_KEYS = {"image_models": "image_gen", "video_models": "video_gen", "voice_models": "stt"}
+
+
+def _load_media_dirs_config() -> dict:
+    try:
+        d = json.loads(CONFIG_FILE.read_text()).get("media_dirs") if CONFIG_FILE.exists() else None
+    except Exception:
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    return {MEDIA_DIR_KEYS[k]: str(v).strip() for k, v in d.items()
+            if k in MEDIA_DIR_KEYS and isinstance(v, str) and v.strip()}
+
+
+MEDIA_DIRS_CFG = _load_media_dirs_config()
+
+
+def helper_root() -> Path:
+    return MODELS_DIR / HELPER_DIR_NAME
+
+
+def media_root(kind: str) -> Path:
+    """Folder for image / video / voice model files: app.json media_dirs, else
+    Models/orchestrator/<image-models|video-models|voice-models>."""
+    v = MEDIA_DIRS_CFG.get(kind)
+    if v:
+        p = Path(v)
+        return p if p.is_absolute() else MODELS_DIR / p
+    return helper_root() / MEDIA_DIR_NAMES[kind]
+
+
+def _inside(p, root: Path) -> bool:
+    try:
+        return Path(p).resolve().is_relative_to(root.resolve())
+    except OSError:
+        return False
+
+
+def in_helper_dir(p) -> bool:
+    """True when p is inside Models/orchestrator (helper-lane model files)."""
+    return _inside(p, helper_root())
+
+
+def in_media_dir(p, kind: str) -> bool:
+    """True when p is inside Models/orchestrator/<image-models|video-models|voice-models>."""
+    return _inside(p, media_root(kind))
+
+
+def _rel(p: Path) -> str:
+    try:
+        return str(p.relative_to(MODELS_DIR)).replace("\\", "/")
+    except ValueError:
+        return str(p)
+
+
+def _entry(p: Path) -> dict:
+    try:
+        size_gb = round(p.stat().st_size / 1e9, 2)
+    except OSError:
+        size_gb = None
+    return {"path": _rel(p), "name": p.name, "size_gb": size_gb}
+
+
+def discover_helper_files(limit: int = 300) -> dict:
+    """Model files the Settings wizard may pick for helper lanes.
+    {"folder", "models", "mmproj", "whisper", "image", "video"}; paths are
+    relative to the models dir (as config/app.json stores them). The image /
+    video subfolders are listed apart so a big diffusion model never shows up
+    as a text helper."""
+    root = helper_root()
+    media_dirs = {media_root(k).resolve() for k in MEDIA_DIR_NAMES}
+    out = {"folder": str(root), "models": [], "mmproj": [], "whisper": [],
+           "image": [], "video": []}
+    if not root.is_dir():
+        return out
+
+    def _walk(d: Path, depth: int = 0):
+        try:
+            items = sorted(d.iterdir())
+        except OSError:
+            return
+        for f in items:
+            if f.name.startswith("."):
+                continue
+            if f.is_dir():
+                if depth < 2 and f.resolve() not in media_dirs:
+                    yield from _walk(f, depth + 1)
+            elif f.is_file():
+                yield f
+
+    for f in _walk(root):
+        if sum(len(v) for v in out.values() if isinstance(v, list)) >= limit:
+            break
+        n = f.name.lower()
+        if n.endswith(".gguf"):
+            if "mmproj" in n:
+                out["mmproj"].append(_entry(f))
+            elif not n.startswith("mtp-") and not _is_later_shard(f):
+                e = _entry(f)
+                e["display"] = f.stem
+                out["models"].append(e)
+    # a projector next to a model (same folder) is offered as its default
+    for m in out["models"]:
+        folder = str(Path(m["path"]).parent)
+        mm = [x for x in out["mmproj"] if str(Path(x["path"]).parent) == folder]
+        m["mmproj_path"] = mm[0]["path"] if len(mm) == 1 else None
+    for kind, key in (("image_gen", "image"), ("video_gen", "video")):
+        d = media_root(kind)
+        if not d.is_dir():
+            continue
+        for f in sorted(d.rglob("*")):
+            if len(out[key]) >= limit:
+                break
+            if f.is_file() and f.suffix.lower() in (".gguf", ".safetensors"):
+                out[key].append(_entry(f))
+    # whisper.cpp models (ggml .bin) come only from voice-models
+    d = media_root("stt")
+    if d.is_dir():
+        for f in sorted(d.rglob("*.bin")):
+            if len(out["whisper"]) >= limit:
+                break
+            if f.is_file():
+                out["whisper"].append(_entry(f))
+    return out
+
+
 def is_companion_file(p: Path) -> bool:
     n = p.name.lower()
     return n.startswith("mtp-") or "mmproj" in n

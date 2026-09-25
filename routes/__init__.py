@@ -10,6 +10,8 @@ from .capabilities import router as capabilities_router
 from .chat import router as chat_router
 from .agent import router as agent_router
 from .cloud import router as cloud_router
+from .lanes import router as lanes_router
+from .media import router as media_router
 from .git import router as git_router
 from .mcp_manager import router as mcp_manager_router
 from .plugins import router as plugins_router
@@ -28,6 +30,8 @@ __all__ = [
     "chat_router",
     "agent_router",
     "cloud_router",
+    "lanes_router",
+    "media_router",
     "git_router",
     "mcp_manager_router",
     "plugins_router",

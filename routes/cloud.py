@@ -51,6 +51,7 @@ class LaneReq(BaseModel):
     fallback_local: Optional[bool] = None
     routing_mode: Optional[str] = None     # "auto" | "custom"
     clear: Optional[list[str]] = None      # lanes to unbind explicitly
+    set: Optional[dict[str, Optional[str]]] = None   # {lane: "<provider>/<model>"} for any lane
 
 
 class ProbeReq(BaseModel):
@@ -156,6 +157,9 @@ async def cloud_set_lanes(req: LaneReq, user: Principal = Depends(get_current_us
     for lane in CLOUD_LANES:
         v = getattr(req, lane)
         if v is not None:
+            updates[lane] = v
+    for lane, v in (req.set or {}).items():
+        if lane in CLOUD_LANES or lane in cloud.user_lanes(user.id):
             updates[lane] = v
     for lane in (req.clear or []):
         if lane in CLOUD_LANES:

@@ -24,7 +24,7 @@ from core import input_guard
 from core.project_context import load_project_instructions, prompt_block as project_prompt_block, INIT_PROMPT
 from core.knowledge_access import allowed_source_ids_for, kb_local_only, set_kb_cloud_blocked
 from core.memory import search_memory_hybrid
-from core.file_tools import extract_file_content, MIME_MAP
+from core.file_tools import extract_file_content, MIME_MAP, VIDEO_MIME
 from core.db import (
     db_record_request,
     db_add_project_allow_pattern,
@@ -154,6 +154,10 @@ LOOP_STOP_STREAK = 3
 MAX_PLAN_NUDGES = 3
 
 
+# answer check (shield toggle): SSE events come from core/verifier.py
+from core.verifier import sse_events as answer_check_events
+
+
 # ---------------- output sanitizer helpers ----------------
 def _guard_flush_events(redactor, streamed_content) -> list:
     """Flush the output-guard holdback at end of a lane stream. Returns SSE
@@ -270,6 +274,8 @@ def _pattern_error(pattern: str, rec: dict) -> Optional[str]:
     the exact command line or '<first word> *'. Never a bare '*', never for code."""
     if rec.get("kind") == "python":
         return "run_python code can only be allowed once"
+    if rec.get("kind") == "media":
+        return "a cloud image/video can only be allowed once"
     pat = pattern.strip().lower()
     cmd = str(rec.get("cmd") or "").strip().lower()
     first = cmd.split()[0] if cmd.split() else ""
@@ -361,6 +367,24 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         mode = "all-local"
     cloud_main = cloud.cloud_lane("main", user.id)
     cloud_exec = cloud.cloud_lane("executor", user.id)
+    # Jobs mapped in Settings -> Models (core/lanes.py): "Thinking & planning" may
+    # point at a cloud model, "Routine tool calls" at any text model. Unmapped
+    # jobs keep main / executor. The mode below still forces local when asked.
+    from core import lanes
+    _rm = cloud.role_map(user.id)
+    _reg = lanes.registry(user.id)
+    _reason = _rm.get("agent.reason")
+    if _reason and _reason != "main" and not lanes.validate_mapping("agent.reason", _reason, user.id):
+        cloud_main = cloud.cloud_lane(_reason, user.id) or cloud_main
+    _step = _rm.get("agent.tool_step")
+    steps_on_main = False
+    if _step and _step != "executor" and not lanes.validate_mapping("agent.tool_step", _step, user.id):
+        if _step == "main":
+            steps_on_main = True
+        else:
+            cloud_exec = cloud.cloud_lane(_step, user.id)
+            if _reg[_step]["local"] and small_models.instances.get(_step) is not None:
+                ex_inst = small_models.instances[_step]
     if mode in ("no-orchestration", "all-cloud", "direct"):
         # No Orchestration mode: run every request directly on the selected model.
         # Bypass executor tiered routing and router completely.
@@ -545,7 +569,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     if not has_sys:
         msgs.insert(0, {"role": "system", "content": sys_prompt})
 
-    if mode in ("no-orchestration", "all-cloud", "direct"):
+    if mode in ("no-orchestration", "all-cloud", "direct") or steps_on_main:
         use_executor = False
     else:
         use_executor = bool(cloud_exec) or ex_inst.available
@@ -1088,6 +1112,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             yield "event: delta_reset\ndata: {}\n\n"
                             yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
                     run_outcome = "synthesized" if was_synth else "answered"
+                    async for _vc in answer_check_events(
+                            user, "agent", last_query, val_text if was_synth else final_content,
+                            msgs, main_client, req.verify, _cloud_out):
+                        yield _vc
                     yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
                     yield "event: done\ndata: {}\n\n"
                     return
@@ -1188,6 +1216,28 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                             continue
 
+                    # cloud image/video generation can cost money: always ask first
+                    if name in ("generate_image", "generate_video"):
+                        from core.media_tools import first_is_cloud
+                        _is_cloud, _prov = first_is_cloud(name)
+                        if _is_cloud:
+                            import uuid as _uuid
+                            what = "an image" if name == "generate_image" else "a video"
+                            shown = (f"Make {what} with {_prov} (cloud - may cost money):\n"
+                                     + str((args or {}).get("prompt") or "")[:1500])
+                            preq_id = _uuid.uuid4().hex[:12]
+                            ev = asyncio.Event()
+                            _perm_pending[preq_id] = {"cmd": shown, "event": ev, "result": None,
+                                                      "user_id": user.id, "kind": "media"}
+                            yield sse("permission_request", {'req_id': preq_id, 'cmd': shown, 'kind': 'media'})
+                            allowed, pnote = await _await_permission(preq_id, ev)
+                            if not allowed:
+                                result = f"error: the user declined making {what} in the cloud" + (f" ({pnote})" if pnote else "")
+                                yield sse("tool_result", {'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                                actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                                msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                                continue
+
                     # shell commands: ask permission here (not inside the tool)
                     # so the SSE stream can emit the modal event while we wait
                     if name == "run_shell" and "command" in str(args or {}):
@@ -1267,6 +1317,11 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             elif was_synth and val_text != final_content:
                 yield "event: delta_reset\ndata: {}\n\n"
                 yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
+            async for _vc in answer_check_events(
+                    user, "agent", last_query,
+                    val_text if (was_synth or not final_content.strip()) else final_content,
+                    msgs, main_client, req.verify, _cloud_out):
+                yield _vc
             yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
             plan_note = ("stopped: repeating the same tool calls" if stop_reason == "loop"
                          else f"max steps reached ({steps})")
@@ -1432,7 +1487,8 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
     clean_stem = _re.sub(r'([-_][0-9a-fA-F]{8})+$', '', raw_stem)
 
     # 1. If explicit space requested or specific revision uuid requested, try direct resolution first
-    if space == "common":
+    #    (generated/ holds images and videos from core/media.py: always an exact path)
+    if space == "common" or str(path).replace("\\", "/").lstrip("/").startswith("generated/"):
         try:
             cand = _common_resolve(path)
             if cand.is_file():
@@ -1579,7 +1635,7 @@ async def agent_download(path: str, space: Optional[str] = None):
         return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
 
     suffix = p.suffix.lower()
-    mime = MIME_MAP.get(suffix, "application/octet-stream")
+    mime = MIME_MAP.get(suffix) or VIDEO_MIME.get(suffix) or "application/octet-stream"
     return FileResponse(
         str(p),
         media_type=mime,
@@ -1611,6 +1667,8 @@ async def agent_raw(path: str, space: Optional[str] = None):
             mime = "image/svg+xml"
         elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
             mime = f"image/{suffix.lstrip('.')}"
+        elif suffix in VIDEO_MIME:
+            mime = VIDEO_MIME[suffix]
         else:
             mime = "application/octet-stream"
 
@@ -1815,8 +1873,13 @@ async def agent_vision(req: VisionReq, user: Principal = Depends(get_current_use
     # ── Priority 1: Main Model if capable of vision ───────────────────────
     # If the main model (local with --mmproj) is running and vision-capable,
     # use it directly for vision tasks without spawning a secondary model.
+    # "Reading images" job (core/lanes.py): an explicit mapping in Settings ->
+    # Models skips the main model and goes straight to that job's route
+    from core import lanes
+    vision_route = lanes.targets("vision", user.id)
+    vision_explicit = "vision" in cloud.role_map(user.id)
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
-    main_vision = main_ready and bool((state.profile or {}).get("vision_capable"))
+    main_vision = main_ready and bool((state.profile or {}).get("vision_capable")) and not vision_explicit
     if main_vision:
         model_name = Path((state.profile or {}).get("model_path", "")).name or "Main LLM (vision)"
         model_name = model_name.replace(".gguf", "")
@@ -1846,7 +1909,7 @@ async def agent_vision(req: VisionReq, user: Principal = Depends(get_current_use
     if req.cloud_model_override:
         cm = cloud.get_cloud(req.cloud_model_override, user.id)
     if not cm:
-        cm = cloud.cloud_lane("vision", user.id)
+        cm = next((t.cm for t in vision_route if t.is_cloud), None)
     if cm:
         rid = monitor_begin("agent/vision", False, body_bytes, model=cm.model_id, source="cloud", provider=cm.provider_name)
         t0 = time.time()
@@ -1869,8 +1932,9 @@ async def agent_vision(req: VisionReq, user: Principal = Depends(get_current_use
             print(f"[agent/vision] cloud vision lane failed ({cm.key}): {e} - falling back to small vision model", file=sys.stderr)
 
     # ── Priority 3: Dedicated small vision model ───────────────────────────
-    inst = small_models.instances["vision"]
-    if not inst.available:
+    local_t = next((t for t in vision_route if not t.is_cloud and t.available()), None)
+    inst = small_models.instances.get(local_t.lane if local_t else "vision")
+    if inst is None or not inst.available:
         return JSONResponse({"error": "vision model not configured (config/app.json small_models.vision.model/mmproj)"}, status_code=400)
     model_name = inst.model_path.name if inst.model_path else "vision"
     rid = monitor_begin("agent/vision", False, body_bytes, model=model_name, source="local")

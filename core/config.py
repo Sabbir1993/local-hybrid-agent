@@ -90,7 +90,11 @@ def _load_runtime() -> dict:
         if preset.get(k) not in (None, "", []):
             CONFIG_DEFAULTS[k] = preset[k]
     return {"name": name, **{k: CONFIG_DEFAULTS[k] for k in RUNTIME_KEYS},
-            "small_model_gpu": preset.get("small_model_gpu")}
+            "small_model_gpu": preset.get("small_model_gpu"),
+            # optional folder holding whisper-server(.exe) for speech to text
+            "whisper_bin_dir": preset.get("whisper_bin_dir"),
+            # optional folder holding sd-server(.exe) (stable-diffusion.cpp) for local images
+            "sd_bin_dir": preset.get("sd_bin_dir")}
 
 
 ACTIVE_RUNTIME = _load_runtime()

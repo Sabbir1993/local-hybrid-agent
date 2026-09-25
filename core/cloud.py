@@ -79,7 +79,7 @@ def _read_json(p: Path) -> dict:
 
 
 def _merge_sections(base_cfg: dict, override_cfg: dict) -> dict:
-    out = {"provider": {}, "cloud": {}}
+    out = {"provider": {}, "cloud": {}, "lanes": {}, "role_map": {}, "verification": {}}
     for src in (base_cfg, override_cfg):
         prov = src.get("provider")
         if isinstance(prov, dict):
@@ -98,6 +98,17 @@ def _merge_sections(base_cfg: dict, override_cfg: dict) -> dict:
         cl = src.get("cloud")
         if isinstance(cl, dict):
             out["cloud"].update(deepcopy(cl))
+        vf = src.get("verification")
+        if isinstance(vf, dict):
+            out["verification"].update(deepcopy(vf))
+        rm = src.get("role_map")
+        if isinstance(rm, dict):
+            out["role_map"].update({str(k): str(v) for k, v in rm.items() if v})
+    # a user's own cloud-backed lanes (core/lanes.py); only from the user file --
+    # local lanes are shared hardware and live in app.json small_models
+    ln = override_cfg.get("lanes")
+    if isinstance(ln, dict):
+        out["lanes"] = {str(k): deepcopy(v) for k, v in ln.items() if isinstance(v, dict)}
     return out
 
 
@@ -208,6 +219,22 @@ class CloudModel:
             return base + "/chat/completions"
         return base + "/v1/chat/completions"
 
+    def url(self, path: str) -> str:
+        """Absolute URL of another OpenAI-style endpoint (images, videos, audio)
+        on this provider, e.g. url("/images/generations")."""
+        base = self.base_url.rstrip("/")
+        if not base:
+            return ""
+        if not re.search(r"/v\d+[a-z0-9]*$", base):
+            base += "/v1"
+        return base + "/" + path.lstrip("/")
+
+    @property
+    def is_google(self) -> bool:
+        """Gemini API (generativelanguage.googleapis.com): Imagen / Veo use its native API."""
+        from urllib.parse import urlparse
+        return (urlparse(self.base_url).hostname or "").endswith("generativelanguage.googleapis.com")
+
     def info(self, lane: Optional[str] = None) -> dict:
         return {
             "lane": lane,
@@ -271,7 +298,27 @@ def get_cloud(key: Optional[str], user_id: Optional[int] = None) -> Optional[Clo
     return None
 
 
+def user_lanes(user_id: Optional[int] = None) -> dict:
+    """This user's own cloud-backed lanes: name -> {kind, label, cloud, fallback}."""
+    return _merged(user_id).get("lanes") or {}
+
+
+def role_map(user_id: Optional[int] = None) -> dict:
+    """job -> lane overrides (app.json defaults, then this user's own)."""
+    return _merged(user_id).get("role_map") or {}
+
+
+def verification(user_id: Optional[int] = None) -> dict:
+    """Answer-check settings (app.json defaults, then this user's own)."""
+    return _merged(user_id).get("verification") or {}
+
+
 def cloud_lane(lane: str, user_id: Optional[int] = None) -> Optional[CloudModel]:
+    if lane not in CLOUD_LANES:
+        # custom lane: a user-owned cloud lane carries its own binding
+        d = user_lanes(user_id).get(lane)
+        key = str((d or {}).get("cloud") or "").strip()
+        return get_cloud(key, user_id) if key else None
     b = cloud_bindings(user_id)
     # Auto routing: executor/vision follow whatever the main lane is bound to
     # (cloud model -> same cloud model; local -> local). Custom lets each lane
@@ -521,6 +568,17 @@ def save_provider(user_id: int, name: str, data: dict) -> dict:
     return entry
 
 
+def write_user_section(user_id: int, section: str, value) -> None:
+    """Replace one top-level section ("lanes" / "role_map") of this user's file."""
+    cfg = _hydrate_keys(user_id, _read_json(_provider_file(user_id)))
+    if value is None:
+        cfg.pop(section, None)
+    else:
+        cfg[section] = deepcopy(value)
+    _write_providers(user_id, cfg)
+    reload(user_id)
+
+
 def delete_model(user_id: int, provider: str, model_id: str) -> dict:
     """Remove one model from a provider and unbind any lane pointing at it."""
     provider = str(provider or "").strip()
@@ -561,13 +619,19 @@ def delete_provider(user_id: int, name: str) -> dict:
 
 
 def set_lanes(user_id: int, updates: dict) -> dict:
-    """Bind lanes to '<provider>/<model>' (None / 'local' unbinds)."""
+    """Bind lanes to '<provider>/<model>' (None / 'local' unbinds). Built-in lanes
+    live in "cloud"; a user's own custom lanes keep their binding in "lanes"."""
     cfg = _read_json(_provider_file(user_id))
     cl = cfg.setdefault("cloud", {})
-    for lane in CLOUD_LANES:
-        if lane in updates:
-            v = updates[lane]
-            cl[lane] = None if v in (None, "", "local", "null") else str(v).strip()
+    own = cfg.get("lanes") if isinstance(cfg.get("lanes"), dict) else {}
+    for lane, v in updates.items():
+        if lane in ("fallback_local", "routing_mode"):
+            continue
+        v = None if v in (None, "", "local", "null") else str(v).strip()
+        if lane in CLOUD_LANES:
+            cl[lane] = v
+        elif lane in own and v:
+            own[lane]["cloud"] = v
     if "fallback_local" in updates:
         cl["fallback_local"] = bool(updates["fallback_local"])
     if "routing_mode" in updates:
@@ -622,3 +686,57 @@ async def probe(cm: CloudModel, prompt: str = "ping") -> dict:
     except Exception as e:
         return {"ok": False, "ms": int((time.time() - t0) * 1000),
                 "error": f"{type(e).__name__}: {e}", "endpoint": cm.endpoint()}
+
+# ---------------- legacy plaintext key files ----------------
+
+def _shred(path: Path) -> None:
+    """Overwrite a file with zeros before deleting it (best effort on SSDs)."""
+    import os
+    try:
+        n = path.stat().st_size
+        with open(path, "r+b") as f:
+            f.write(b"\0" * n)
+            f.flush()
+            os.fsync(f.fileno())
+    finally:
+        path.unlink()
+
+
+def import_legacy_file(path: Path, user_id: int) -> dict:
+    """Move the plaintext API keys of a legacy shared providers file into the OS
+    keychain for `user_id`, then shred the file. Only keys for providers that
+    user still has (and has no keychain entry for) are kept; a provider the user
+    deleted is not brought back. The file is kept if the keychain fails, so no
+    key is lost. Never logs key values. -> {"imported", "skipped", "removed"}"""
+    from . import credentials
+    path = Path(path)
+    legacy = _read_json(path)
+    own = _read_json(_provider_file(user_id))
+    if not own:
+        # no per-user file yet: the legacy file becomes this user's config
+        _write_providers(user_id, legacy)
+        reload(user_id)
+        _shred(path)
+        n = sum(1 for e in (legacy.get("provider") or {}).values()
+                if isinstance(e, dict) and (e.get("options") or {}).get("apiKey"))
+        return {"imported": n, "skipped": 0, "removed": True}
+    imported = skipped = 0
+    for name, entry in (legacy.get("provider") or {}).items():
+        opts = (entry or {}).get("options") if isinstance(entry, dict) else None
+        key = str((opts or {}).get("apiKey") or (opts or {}).get("api_key") or "").strip()
+        if not key:
+            continue
+        mine = (own.get("provider") or {}).get(name)
+        if not isinstance(mine, dict) or credentials.has_token(_key_id(user_id, name)):
+            skipped += 1
+            continue
+        credentials.set_token(_key_id(user_id, name), key)   # raises -> file kept
+        if not credentials.has_token(_key_id(user_id, name)):
+            raise RuntimeError("keychain write could not be verified")
+        mine.setdefault("options", {})["apiKeyRef"] = _KEY_REF
+        imported += 1
+    if imported:
+        _write_providers(user_id, own)
+        reload(user_id)
+    _shred(path)
+    return {"imported": imported, "skipped": skipped, "removed": True}

@@ -1947,6 +1947,22 @@ details[open] > summary .codex-chevron {
   color: var(--text);
   font-weight: 600;
 }
+.codex-action-title, .codex-file-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* small buttons at the right end of a tool card's head (.btn is width:100% by default) */
+.codex-file-head .btn, .codex-action-head .btn {
+  width: auto; flex: none; margin: 0; padding: 1px 7px; font-size: 10px; border-radius: 4px; white-space: nowrap;
+}
+/* live step bar under a running generate_image / generate_video card */
+.codex-media-progress {
+  display: flex; flex-direction: column; gap: 5px; padding: 4px 10px 8px 30px; font-size: 11.5px; color: var(--dim);
+}
+.codex-media-progress-row { display: flex; gap: 10px; align-items: center; }
+.codex-media-clock { margin-left: auto; font-variant-numeric: tabular-nums; }
+.codex-media-progress .media-bar > span.indeterminate { animation: mediaSlide 1.4s ease-in-out infinite; }
+@keyframes mediaSlide { from { margin-left: -30%; } to { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .codex-media-progress .media-bar > span.indeterminate { animation: none; } }
 .codex-action-body {
   padding: 6px 12px 10px;
   margin-left: 6px;
@@ -2897,16 +2913,21 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 }
 #img-title {
   font-size: 11.5px; color: var(--dim); overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap;
+  text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;
 }
+/* Download / close stay on one line at the right; a long title is cut with "…" */
+#img-header > div { flex-shrink: 0; }
+#img-header .btn { width: auto !important; margin: 0 !important; white-space: nowrap; }
 #img-body {
   padding: 8px; display: flex; align-items: center; justify-content: center;
   background: #000; overflow: auto;
 }
 #img-full {
   max-width: 88vw; max-height: calc(88vh - 54px); object-fit: contain;
-  display: block; border-radius: 4px; user-select: none;
+  display: block; border-radius: 4px; user-select: none; cursor: zoom-in;
 }
+#img-body.zoomed { width: 88vw; height: calc(88vh - 38px); display: block; }
+#img-body.zoomed #img-full { max-width: none; max-height: none; cursor: zoom-out; margin: auto; }
 @keyframes imgZoomIn {
   from { opacity: 0; transform: scale(0.95); }
   to { opacity: 1; transform: scale(1); }
@@ -4102,8 +4123,8 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 }
 
 .chat-inline-img {
-  max-width: 320px;
-  max-height: 240px;
+  max-width: min(480px, 100%);
+  max-height: 480px;
   border-radius: 8px;
   border: 1px solid var(--border);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);

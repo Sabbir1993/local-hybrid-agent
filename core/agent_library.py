@@ -277,6 +277,15 @@ def profile_role(name: str) -> dict:
     }
 
 
+def _shared_text_lanes() -> list:
+    try:
+        from .lanes import registry, kind_ok
+        return [{"name": n, "label": d["label"]} for n, d in registry().items()
+                if d["owner"] == "shared" and kind_ok("chat", d["kind"])]
+    except Exception:
+        return [{"name": "main", "label": "Main brain"}, {"name": "executor", "label": "Fast helper"}]
+
+
 def expand_command(name: str, args: str = "") -> Optional[str]:
     """Allowed command -> ready-to-run agent prompt, or None."""
     from .project_context import sanitize
@@ -286,8 +295,11 @@ def expand_command(name: str, args: str = "") -> Optional[str]:
     args = (args or "").strip()
     body = cmd["body"]
     if cmd.get("source") == "native":
+        from .lanes import registry, kind_ok
+        reg = registry()
         cfg_lanes = library_cfg().get("multi_lanes") or {}
-        lanes = {k: (cfg_lanes.get(k) if cfg_lanes.get(k) in ("main", "executor") else v)
+        lanes = {k: (cfg_lanes.get(k) if cfg_lanes.get(k) in reg
+                     and kind_ok("chat", reg[cfg_lanes[k]]["kind"]) else v)
                  for k, v in DEFAULT_MULTI_LANES.items()}
         body = body.replace("$BACKEND_LANE", lanes["backend"]).replace("$FRONTEND_LANE", lanes["frontend"])
     if "$ARGUMENTS" in body:
@@ -325,4 +337,6 @@ def library_status() -> dict:
         "commands": rows("commands", all_prompt_commands()),
         "config": {k: cfg.get(k, {"allow": [], "deny": []}) for k in ("agents", "commands")},
         "multi_lanes": {**DEFAULT_MULTI_LANES, **(cfg.get("multi_lanes") or {})},
+        # shared text models (core/lanes.py) that can play an analyst role
+        "lane_options": _shared_text_lanes(),
     }

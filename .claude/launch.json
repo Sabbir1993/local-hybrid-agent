@@ -4,7 +4,9 @@
     {
       "name": "Local Agent",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["server_manager.py"],
+      "runtimeArgs": [
+        "server_manager.py"
+      ],
       "port": 8000
     }
   ]

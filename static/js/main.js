@@ -35,6 +35,25 @@ function submitPrompt() {
     return;
   }
 
+  // /image | /video <description> — make a picture or clip (media.js; both modes, no project needed)
+  const mediaM = text.match(/^\/(image|video)(?:\s+([\s\S]*))?$/i);
+  if (mediaM && typeof window.mediaRun === 'function') {
+    if (input) input.value = '';
+    if (window.renderInputHighlights) window.renderInputHighlights();
+    window.mediaRun(mediaM[1].toLowerCase(), (mediaM[2] || '').trim(), { takePics: true });
+    return;
+  }
+  // composer select set to 🖼 Image: Send makes an image from the text (other /commands still work);
+  // attached pictures are what it starts from. Documents / text files still go to chat.
+  const otherFiles = attachments && attachments.some(a => !a.isImage);
+  if (!text.startsWith('/') && !otherFiles && typeof window.mediaComposeMode === 'function'
+      && window.mediaComposeMode() === 'image') {
+    if (input) input.value = '';
+    if (window.renderInputHighlights) window.renderInputHighlights();
+    window.mediaRun('image', text, { takePics: true });
+    return;
+  }
+
   // /init [focus] — scan the project and write AGENTS.md (agent mode)
   if (/^\/init(\s|$)/i.test(text)) {
     if (input) input.value = '';
@@ -93,6 +112,8 @@ Object.keys(CFG_INPUT_DEFAULTS).forEach(id => {
 });
 $('btn-send').onclick = submitPrompt;
 $('btn-abort').onclick = () => {
+  // an image this chat is making stops too
+  if (typeof mediaStopChat === 'function') mediaStopChat(curSession ? curSession.id : null, messages);
   if (curSession && window.bgJobs && window.bgJobs.has(String(curSession.id))) {
     abortSessionJob(curSession.id);
   } else if (ctrl) {
@@ -117,8 +138,20 @@ function openImageModal(src, title = 'Image attachment') {
   const dl = $('img-dl');
   if (!m || !img || !src) return;
   img.src = src;
+  imgModalZoom = 1.0;
+  img.style.transform = '';
+  const body = $('img-body');
+  if (body) body.classList.remove('zoomed');
+  img.title = 'Click to zoom';
   if (t) t.textContent = title;
-  if (dl) dl.href = src;
+  if (dl) {
+    // a file from the user's folder downloads with its own name; anything else as-is
+    const mm = String(src).match(/\/(?:agent\/)?raw\?path=([^&]+)/);
+    let name = 'image';
+    if (mm) { try { name = decodeURIComponent(mm[1]).split('/').pop(); } catch (e) {} }
+    dl.href = mm ? `/agent/download?path=${mm[1]}` : src;
+    dl.setAttribute('download', name);
+  }
   m.hidden = false;
   m.removeAttribute('hidden');
   m.style.display = 'flex';
@@ -156,6 +189,25 @@ if (imgBody) {
   }, { passive: false });
 }
 
+
+// click the picture: fit to the window <-> full size (scroll to look around)
+const imgFullEl = $('img-full');
+if (imgFullEl) {
+  imgFullEl.addEventListener('click', e => {
+    const body = $('img-body');
+    if (!body) return;
+    const r = imgFullEl.getBoundingClientRect();
+    const fx = (e.clientX - r.left) / Math.max(1, r.width), fy = (e.clientY - r.top) / Math.max(1, r.height);
+    imgModalZoom = 1.0;
+    imgFullEl.style.transform = '';
+    const on = body.classList.toggle('zoomed');
+    imgFullEl.title = on ? 'Click to fit the window' : 'Click to zoom';
+    if (on) {            // keep the clicked spot under the pointer
+      body.scrollLeft = fx * body.scrollWidth - body.clientWidth / 2;
+      body.scrollTop = fy * body.scrollHeight - body.clientHeight / 2;
+    }
+  });
+}
 
 // Global click handler to expand images on popup
 document.addEventListener('click', e => {
