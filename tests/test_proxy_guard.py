@@ -95,8 +95,10 @@ class ProxyHelpersTests(unittest.TestCase):
             {"role": "user", "content": "hello"},
             {"role": "user", "content": [{"type": "text", "text": "part"},
                                          {"type": "image_url", "image_url": {"url": "x"}}]},
+            # client-supplied assistant turns are scanned too: role is not a trust boundary
+            {"role": "assistant", "content": "", "tool_calls": [{"function": {"arguments": "{\"a\":1}"}}]},
         ], "prompt": "raw"}
-        self.assertEqual(proxy._prompt_texts(payload), ["hello", "part", "raw"])
+        self.assertEqual(proxy._prompt_texts(payload), ["sys", "hello", "part", "", '{"a":1}', "raw"])
 
     def test_credentials_not_forwarded(self):
         class Req:

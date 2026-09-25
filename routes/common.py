@@ -47,11 +47,110 @@ def main_ctx_tokens(cloud_main=None) -> int:
     return ctx // n_slots if n_slots > 1 else ctx
 
 
+_THINK_OPEN, _THINK_CLOSE = "<think>", "</think>"
+
+
+class ThinkSplitter:
+    """Splits streamed `content` into answer text and inline <think> reasoning.
+
+    Handles tags split across chunks, and the "forced-open" case: templates that
+    pre-fill <think> in the prompt, so the model streams reasoning with no opening
+    tag and then a bare </think>. That first orphan close yields ("reclaim", "") -
+    everything streamed as content so far was reasoning."""
+
+    def __init__(self):
+        self.in_think = False
+        self.seen_tag = False
+        self.carry = ""
+        self.strip_ws = False   # drop the blank lines right after </think>
+
+    def _hold(self, s: str) -> int:
+        """Length of a trailing partial tag in `s` to keep for the next chunk."""
+        tags = [_THINK_CLOSE] if self.in_think else [_THINK_OPEN] + ([] if self.seen_tag else [_THINK_CLOSE])
+        for k in range(min(len(s), len(_THINK_CLOSE) - 1), 0, -1):
+            if any(t.startswith(s[-k:]) for t in tags):
+                return k
+        return 0
+
+    def _content(self, out: list, text: str):
+        if self.strip_ws:
+            text = text.lstrip()
+            if text:
+                self.strip_ws = False
+        if text:
+            out.append(("content", text))
+
+    def feed(self, chunk: str) -> list:
+        s, self.carry, out = self.carry + chunk, "", []
+        while s:
+            if self.in_think:
+                i = s.find(_THINK_CLOSE)
+                if i < 0:
+                    k = self._hold(s)
+                    if k:
+                        s, self.carry = s[:-k], s[-k:]
+                    if s:
+                        out.append(("thought", s))
+                    break
+                if i:
+                    out.append(("thought", s[:i]))
+                self.in_think, self.strip_ws = False, True
+                s = s[i + len(_THINK_CLOSE):]
+                continue
+            i_open = s.find(_THINK_OPEN)
+            i_close = -1 if self.seen_tag else s.find(_THINK_CLOSE)
+            if i_close >= 0 and (i_open < 0 or i_close < i_open):
+                # orphan close: the reasoning had no opening tag
+                out.append(("reclaim", ""))
+                if i_close:
+                    out.append(("thought", s[:i_close]))
+                self.seen_tag, self.strip_ws = True, True
+                s = s[i_close + len(_THINK_CLOSE):]
+                continue
+            if i_open >= 0:
+                self._content(out, s[:i_open])
+                self.in_think = self.seen_tag = True
+                s = s[i_open + len(_THINK_OPEN):]
+                continue
+            k = self._hold(s)
+            if k:
+                s, self.carry = s[:-k], s[-k:]
+            self._content(out, s)
+            break
+        return out
+
+    def flush(self) -> list:
+        s, self.carry = self.carry, ""
+        if not s:
+            return []
+        return [("thought", s)] if self.in_think else [("content", s)]
+
+
+def _emit_split(think: ThinkSplitter, parts: list, content_acc: list, reasoning_acc: list, rid):
+    """Turn ThinkSplitter output into stream events, keeping the accumulators in sync."""
+    for kind, text in parts:
+        if kind == "reclaim":
+            moved = "".join(content_acc)
+            content_acc.clear()
+            if moved:
+                reasoning_acc.append(moved)
+                yield ("content_to_thought", moved)
+            continue
+        if rid:
+            monitor_token(rid, 1)
+        if kind == "thought":
+            reasoning_acc.append(text)
+            yield ("thought_delta", text)
+        else:
+            content_acc.append(text)
+            yield ("content_delta", text)
+
+
 async def _process_sse_stream(response, rid: Optional[int] = None):
     content_acc = []
     reasoning_acc = []
     accumulated_tcs = {}
-    in_think_tag = False
+    think = ThinkSplitter()
 
     last_usage = None
     last_timings = None
@@ -89,55 +188,8 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
 
         c_chunk = delta.get("content")
         if c_chunk:
-            if "<think>" in c_chunk:
-                in_think_tag = True
-                parts = c_chunk.split("<think>", 1)
-                if parts[0]:
-                    content_acc.append(parts[0])
-                    if rid:
-                        monitor_token(rid, 1)
-                    yield ("content_delta", parts[0])
-                if len(parts) > 1 and parts[1]:
-                    if "</think>" in parts[1]:
-                        in_think_tag = False
-                        th_part, post = parts[1].split("</think>", 1)
-                        reasoning_acc.append(th_part)
-                        if rid:
-                            monitor_token(rid, 1)
-                        yield ("thought_delta", th_part)
-                        if post:
-                            content_acc.append(post)
-                            if rid:
-                                monitor_token(rid, 1)
-                            yield ("content_delta", post)
-                    else:
-                        reasoning_acc.append(parts[1])
-                        if rid:
-                            monitor_token(rid, 1)
-                        yield ("thought_delta", parts[1])
-            elif "</think>" in c_chunk and in_think_tag:
-                in_think_tag = False
-                th_part, post = c_chunk.split("</think>", 1)
-                if th_part:
-                    reasoning_acc.append(th_part)
-                    if rid:
-                        monitor_token(rid, 1)
-                    yield ("thought_delta", th_part)
-                if post:
-                    content_acc.append(post)
-                    if rid:
-                        monitor_token(rid, 1)
-                    yield ("content_delta", post)
-            elif in_think_tag:
-                reasoning_acc.append(c_chunk)
-                if rid:
-                    monitor_token(rid, 1)
-                yield ("thought_delta", c_chunk)
-            else:
-                content_acc.append(c_chunk)
-                if rid:
-                    monitor_token(rid, 1)
-                yield ("content_delta", c_chunk)
+            for item in _emit_split(think, think.feed(c_chunk), content_acc, reasoning_acc, rid):
+                yield item
 
         tcs = delta.get("tool_calls") or []
         for tc in tcs:
@@ -180,6 +232,8 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
                     "id": accumulated_tcs[idx]["id"]
                 })
 
+    for item in _emit_split(think, think.flush(), content_acc, reasoning_acc, rid):
+        yield item
     for k in accumulated_tcs:
         accumulated_tcs[k].pop("_stream_meta", None)
     tool_calls = [accumulated_tcs[k] for k in sorted(accumulated_tcs.keys())]

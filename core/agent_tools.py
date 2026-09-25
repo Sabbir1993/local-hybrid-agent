@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import contextvars
 import inspect
 import json
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from .db import _projects_db
-from .small_model import APP_CONFIG, COMMON_ROOT, describe_image_file
+from .small_model import APP_CONFIG, COMMON_ROOT, describe_image_bytes
 from .request_context import set_current_user, get_current_user_id, get_current_device_id  # noqa: F401 (re-exported)
 from . import companion_bridge
 
@@ -77,6 +78,12 @@ def require_device_workspace() -> tuple[int, Path]:
     if not companion_bridge.is_available(uid):
         raise WorkspaceAccessDenied(
             "the A770 Companion app is not connected - open it on your machine and try again")
+    # the connected companion must be the machine this project lives on; otherwise a
+    # path chosen on laptop A would be opened on laptop B
+    comp_dev = (companion_bridge.connection_info(uid) or {}).get("device_id")
+    if comp_dev and comp_dev != did:
+        raise WorkspaceAccessDenied(
+            "the connected A770 Companion is on a different machine than this project")
     return uid, Path(row["workspace_dir"])
 
 
@@ -925,18 +932,37 @@ def _markdown_to_html_dom(content: str, title: str = "", is_slides: bool = False
 </html>"""
 
 
+# The HTML may be model-written (prompt-injectable), and this browser runs on the
+# server: no scripts, no network, no file:// subresources (iframe of config/app.json,
+# fetch of 127.0.0.1:8090 or cloud metadata). Only inline styles and data: images/fonts.
+_PDF_CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; "
+            "script-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'")
+_DOCTYPE_RX = re.compile(r"^\s*<!doctype[^>]*>", re.IGNORECASE)
+
+
+def _lock_down_html(html_content: str) -> str:
+    # Our <head> goes first so the CSP applies before any of the document is parsed; a
+    # later <html>/<head> from the content merges in and its <style>s still apply.
+    body = _DOCTYPE_RX.sub("", html_content, count=1)
+    return ('<!doctype html><html><head><meta charset="utf-8">'
+            f'<meta http-equiv="Content-Security-Policy" content="{_PDF_CSP}"></head>' + body)
+
+
 def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
     browser_bin = _find_chromium_binary()
     if not browser_bin:
         return False
 
+    import shutil
     import tempfile
     abs_pdf = os.path.abspath(str(output_pdf_path))
     output_pdf_path.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as tf:
-        tf.write(html_content)
+        tf.write(_lock_down_html(html_content))
         tmp_html = os.path.abspath(tf.name)
+    # throwaway profile: never the service account's real browser cookies/logins
+    profile_dir = tempfile.mkdtemp(prefix="pdfprof_")
 
     try:
         cmd = [
@@ -944,6 +970,12 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
             "--headless=new",
             "--disable-gpu",
             "--no-pdf-header-footer",
+            f"--user-data-dir={profile_dir}",
+            "--blink-settings=scriptEnabled=false",
+            "--host-resolver-rules=MAP * ~NOTFOUND",
+            "--proxy-server=127.0.0.1:9",
+            "--disable-extensions",
+            "--no-first-run",
             f"--print-to-pdf={abs_pdf}",
             tmp_html
         ]
@@ -962,6 +994,7 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
                 os.remove(tmp_html)
         except Exception:
             pass
+        shutil.rmtree(profile_dir, ignore_errors=True)
 
 
 def _pdf_looks_valid(p: Path) -> bool:
@@ -1241,10 +1274,13 @@ async def tool_run_python(args: dict) -> str:
     script = ws / "_agent_run.py"
     await companion_bridge.call(uid, "fs.write", {"path": str(script), "content": code, "append": False})
     raw_t = APP_CONFIG.get("agent", {}).get("exec_timeout_s", 0)
-    timeout = int(raw_t) if raw_t and int(raw_t) > 0 else None
+    from .shell_tools import DEFAULT_EXEC_TIMEOUT_S   # 0 = default, never unbounded on the device
+    timeout = int(raw_t) if raw_t and int(raw_t) > 0 else DEFAULT_EXEC_TIMEOUT_S
     try:
         data = await companion_bridge.call(
-            uid, "shell.run", {"command": 'python "_agent_run.py"', "cwd": str(ws), "timeout": timeout},
+            # display: the companion shows (and checks against the file) the code itself, not the shim
+            uid, "shell.run", {"command": 'python "_agent_run.py"', "cwd": str(ws), "timeout": timeout,
+                               "display": code},
             timeout=(timeout or 60) + 10)
     except TimeoutError:
         return f"error: timed out after {timeout}s (config agent.exec_timeout_s)"
@@ -1357,11 +1393,19 @@ async def tool_revert(args: dict) -> str:
     return f"error: no tracked change for {target}"
 
 
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
 async def tool_analyze_image(args: dict) -> str:
+    # Read through the companion: the path is on the user's device, never this server's disk.
     p = _ws_resolve(args["path"])
-    if not p.is_file():
-        raise FileNotFoundError(p)
-    return await describe_image_file(p, args.get("question", "Describe this image in detail for a coding agent."))
+    data = await companion_bridge.call(_remote_uid(), "fs.read_b64", {"path": str(p)})
+    if not data.get("data"):
+        return f"error: File not found: '{args['path']}'"
+    raw = base64.b64decode(data["data"])
+    if len(raw) > MAX_IMAGE_BYTES:
+        return f"error: image too large ({len(raw)} bytes, max {MAX_IMAGE_BYTES})"
+    return await describe_image_bytes(raw, args.get("question", "Describe this image in detail for a coding agent."))
 
 
 async def tool_search_memory(args: dict) -> str:

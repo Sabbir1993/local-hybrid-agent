@@ -15,6 +15,7 @@ import time
 from typing import Optional
 
 from .config import AUTH_DB_FILE
+from .sqlite_util import ThreadLocalDB, transaction
 
 _BUILTIN_ROLES = ("admin", "user")
 
@@ -49,9 +50,8 @@ _RETIRED_PERMISSIONS = ("settings.integrations.configure",)
 _DEFAULT_USER_PERMISSIONS = ("chat.use",)
 
 
-def _init_auth_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(AUTH_DB_FILE), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+def _init_auth_db() -> ThreadLocalDB:
+    conn = ThreadLocalDB(AUTH_DB_FILE, row_factory=sqlite3.Row)
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,6 +169,37 @@ def _init_auth_db() -> sqlite3.Connection:
         updated_at REAL NOT NULL,
         PRIMARY KEY (user_id, name)
     );
+
+    -- admin-issued API tokens (Bearer a770_pat_...); only the sha256 is stored
+    CREATE TABLE IF NOT EXISTS api_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_hash TEXT UNIQUE NOT NULL,
+        prefix TEXT NOT NULL,
+        name TEXT NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_by INTEGER REFERENCES users(id),
+        permissions TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        expires_at REAL NOT NULL,
+        last_used_at REAL,
+        last_used_ip TEXT,
+        revoked_at REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
+
+    -- paired companion devices: device_hash is an HMAC of the OS machine id (the raw
+    -- id is never stored), key_hash the sha256 of the device's pairing key
+    CREATE TABLE IF NOT EXISTS companion_devices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        device_hash TEXT NOT NULL,
+        key_hash TEXT UNIQUE NOT NULL,
+        created_at REAL NOT NULL,
+        last_seen_at REAL,
+        revoked_at REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_companion_devices_user ON companion_devices(user_id);
     """)
     conn.commit()
     _seed_defaults(conn)
@@ -215,10 +246,10 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-_auth_db: Optional[sqlite3.Connection] = None
+_auth_db: Optional[ThreadLocalDB] = None
 
 
-def db() -> sqlite3.Connection:
+def db() -> ThreadLocalDB:
     global _auth_db
     if _auth_db is None:
         _auth_db = _init_auth_db()
@@ -226,6 +257,27 @@ def db() -> sqlite3.Connection:
 
 
 # ---------------- users ----------------
+# Columns that point at users(id) with no ON DELETE action. They are cleared
+# rather than cascaded: audit rows keep their username (PCI DSS 10 retention),
+# and grants stay in place without the grantor link.
+_USER_REFERRERS = (("audit_log", "user_id"), ("role_permissions", "granted_by"),
+                   ("user_roles", "assigned_by"), ("knowledge_sources", "created_by"),
+                   ("knowledge_source_role_access", "granted_by"), ("api_tokens", "created_by"))
+# Rows owned by the user. ON DELETE CASCADE covers these when foreign keys are
+# on; deleting them here as well keeps the result the same when they aren't.
+_USER_OWNED = ("user_roles", "auth_sessions", "user_allow_patterns", "user_mcp_servers",
+               "api_tokens", "companion_devices")
+
+
+def delete_user(user_id: int) -> None:
+    with transaction(db()) as c:
+        for table, col in _USER_REFERRERS:
+            c.execute(f"UPDATE {table} SET {col} = NULL WHERE {col} = ?", (user_id,))
+        for table in _USER_OWNED:
+            c.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+        c.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+
 def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
     return db().execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
 
@@ -483,6 +535,103 @@ def revoke_session_row(session_id_hash: str) -> None:
 def revoke_all_sessions_for_user(user_id: int) -> None:
     db().execute("UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
                  (time.time(), user_id))
+    db().commit()
+
+
+# ---------------- API tokens ----------------
+_TOKEN_COLS = ("t.id, t.prefix, t.name, t.user_id, u.username, t.created_by, t.permissions, "
+               "t.created_at, t.expires_at, t.last_used_at, t.last_used_ip, t.revoked_at")
+
+
+def create_api_token_row(token_hash: str, prefix: str, name: str, user_id: int,
+                         created_by: Optional[int], permissions: list, expires_at: float) -> int:
+    cur = db().execute(
+        "INSERT INTO api_tokens (token_hash, prefix, name, user_id, created_by, permissions, "
+        "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (token_hash, prefix, name, user_id, created_by, json.dumps(sorted(permissions)),
+         time.time(), expires_at),
+    )
+    db().commit()
+    return cur.lastrowid
+
+
+def get_api_token_by_hash(token_hash: str) -> Optional[sqlite3.Row]:
+    return db().execute("SELECT * FROM api_tokens WHERE token_hash = ?", (token_hash,)).fetchone()
+
+
+def get_api_token(token_id: int) -> Optional[sqlite3.Row]:
+    return db().execute("SELECT * FROM api_tokens WHERE id = ?", (token_id,)).fetchone()
+
+
+def list_api_tokens(user_id: Optional[int] = None) -> list:
+    sql = f"SELECT {_TOKEN_COLS} FROM api_tokens t LEFT JOIN users u ON u.id = t.user_id"
+    args: tuple = ()
+    if user_id is not None:
+        sql += " WHERE t.user_id = ?"
+        args = (user_id,)
+    rows = db().execute(sql + " ORDER BY t.created_at DESC", args).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["permissions"] = json.loads(d["permissions"] or "[]")
+        out.append(d)
+    return out
+
+
+def touch_api_token(token_id: int, ip: Optional[str]) -> None:
+    db().execute("UPDATE api_tokens SET last_used_at = ?, last_used_ip = ? WHERE id = ?",
+                 (time.time(), ip, token_id))
+    db().commit()
+
+
+def revoke_api_token(token_id: int) -> None:
+    db().execute("UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                 (time.time(), token_id))
+    db().commit()
+
+
+# ---------------- companion devices ----------------
+def create_companion_device(user_id: int, name: str, device_hash: str, key_hash: str) -> int:
+    cur = db().execute(
+        "INSERT INTO companion_devices (user_id, name, device_hash, key_hash, created_at) "
+        "VALUES (?, ?, ?, ?, ?)", (user_id, name, device_hash, key_hash, time.time()))
+    db().commit()
+    return cur.lastrowid
+
+
+def get_companion_device_by_key(key_hash: str) -> Optional[sqlite3.Row]:
+    return db().execute("SELECT * FROM companion_devices WHERE key_hash = ?", (key_hash,)).fetchone()
+
+
+def get_companion_device(device_row_id: int) -> Optional[sqlite3.Row]:
+    return db().execute("SELECT * FROM companion_devices WHERE id = ?", (device_row_id,)).fetchone()
+
+
+def list_companion_devices(user_id: Optional[int] = None) -> list:
+    sql = ("SELECT d.id, d.user_id, u.username, d.name, d.created_at, d.last_seen_at, d.revoked_at "
+           "FROM companion_devices d LEFT JOIN users u ON u.id = d.user_id")
+    args: tuple = ()
+    if user_id is not None:
+        sql += " WHERE d.user_id = ?"
+        args = (user_id,)
+    return [dict(r) for r in db().execute(sql + " ORDER BY d.created_at DESC", args).fetchall()]
+
+
+def revoke_companion_devices(user_id: int, device_hash: str) -> None:
+    """Re-pairing a machine retires its earlier keys."""
+    db().execute("UPDATE companion_devices SET revoked_at = ? WHERE user_id = ? AND device_hash = ? "
+                 "AND revoked_at IS NULL", (time.time(), user_id, device_hash))
+    db().commit()
+
+
+def revoke_companion_device(device_row_id: int) -> None:
+    db().execute("UPDATE companion_devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                 (time.time(), device_row_id))
+    db().commit()
+
+
+def touch_companion_device(device_row_id: int) -> None:
+    db().execute("UPDATE companion_devices SET last_seen_at = ? WHERE id = ?", (time.time(), device_row_id))
     db().commit()
 
 

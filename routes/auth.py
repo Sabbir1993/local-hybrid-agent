@@ -1,6 +1,7 @@
 """routes/auth.py - login/logout/me/change-password."""
 
 import time
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -11,11 +12,13 @@ from core.auth import (
     CSRF_COOKIE,
     SESSION_ABSOLUTE_MAX_S,
     SESSION_COOKIE,
-    SESSION_TTL_S,
     Principal,
     create_session,
     new_csrf_token,
+    password_policy_error,
     revoke_session,
+    session_idle_s,
+    verify_session,
 )
 from core.auth_provider import get_auth_provider, hash_password, verify_password
 from core.deps import get_current_user
@@ -36,7 +39,9 @@ class ChangePasswordBody(BaseModel):
 def _set_auth_cookies(response: Response, raw_session: str, csrf: str, secure: bool) -> None:
     response.set_cookie(
         SESSION_COOKIE, raw_session, httponly=True, samesite="strict",
-        secure=secure, max_age=SESSION_TTL_S, path="/",
+        # idle expiry is enforced server-side (verify_session); a cookie that expired after
+        # the idle window would log out users who are actively working
+        secure=secure, max_age=SESSION_ABSOLUTE_MAX_S, path="/",
     )
     response.set_cookie(
         CSRF_COOKIE, csrf, httponly=False, samesite="strict",
@@ -51,8 +56,14 @@ _IP_MAX_FAILURES = 30
 _ip_failures: dict = {}
 
 
+_IP_TRACK_MAX = 10_000   # bound memory under a spray from many source addresses
+
+
 def _ip_blocked(ip) -> bool:
     now = time.time()
+    if len(_ip_failures) > _IP_TRACK_MAX:
+        for k in [k for k, v in _ip_failures.items() if not v or now - v[-1] >= _IP_WINDOW_S]:
+            _ip_failures.pop(k, None)
     hits = [t for t in _ip_failures.get(ip, ()) if now - t < _IP_WINDOW_S]
     if hits:
         _ip_failures[ip] = hits
@@ -79,7 +90,8 @@ async def login(body: LoginBody, request: Request, response: Response):
     secure = request.url.scheme == "https"
     _set_auth_cookies(response, raw_session, csrf, secure)
 
-    audit_log(None, action="login.success", resource=user.username, result="allow", ip=ip)
+    audit_log(SimpleNamespace(id=user.id, username=user.username), action="login.success",
+              resource=user.username, result="allow", ip=ip)
     roles = auth_db.get_user_role_names(user.id)
     perms = sorted(auth_db.get_user_permission_keys(user.id))
     return {
@@ -93,7 +105,11 @@ async def login(body: LoginBody, request: Request, response: Response):
 @router.post("/logout")
 async def logout(request: Request, response: Response):
     token = request.cookies.get(SESSION_COOKIE)
+    principal = verify_session(token)
     revoke_session(token)
+    if principal:
+        audit_log(principal, action="logout", resource=principal.username, result="allow",
+                  ip=request.client.host if request.client else None)
     response.delete_cookie(SESSION_COOKIE, path="/")
     response.delete_cookie(CSRF_COOKIE, path="/")
     return {"ok": True}
@@ -107,6 +123,7 @@ async def me(user: Principal = Depends(get_current_user)):
                   "is_super_admin": user.is_super_admin, "must_change_password": user.must_change_password},
         "roles": user.role_names,
         "permissions": perms,
+        "idle_seconds": session_idle_s(),
     }
 
 
@@ -117,7 +134,14 @@ async def change_password(body: ChangePasswordBody, request: Request, response: 
     if not row or row["auth_provider"] != "local" or not row["password_hash"]:
         raise HTTPException(status_code=400, detail="password login not available for this account")
     if not verify_password(body.current_password, row["password_hash"]):
+        audit_log(user, action="password.change", resource=user.username, result="deny",
+                  detail={"reason": "wrong current password"})
         raise HTTPException(status_code=401, detail="current password is incorrect")
+    err = password_policy_error(body.new_password, user.username)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    if verify_password(body.new_password, row["password_hash"]):
+        raise HTTPException(status_code=400, detail="new password must differ from the current one")
     new_hash = hash_password(body.new_password)
     auth_db.db().execute(
         "UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?",
@@ -125,6 +149,8 @@ async def change_password(body: ChangePasswordBody, request: Request, response: 
     )
     auth_db.db().commit()
     auth_db.revoke_all_sessions_for_user(user.id)
+    audit_log(user, action="password.change", resource=user.username, result="allow",
+              ip=request.client.host if request.client else None)
 
     # Re-issue a fresh session for this request so the caller isn't logged out
     # by the mass-revoke that just happened above.

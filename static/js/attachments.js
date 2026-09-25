@@ -38,7 +38,7 @@ function refreshAttachUI() {
             <span class="attach-card-name" title="${esc(a.name)}">${esc(a.name)}</span>
             <span class="attach-card-size">${fmtBytes(a.size || 0)}${statusBadge}</span>
           </div>
-          <span class="attach-card-remove" onclick="removeAttachment(${i})" title="Remove attachment">✕</span>
+          <span class="attach-card-remove" data-click="remove-attachment" data-arg="${i}" title="Remove attachment">✕</span>
         </div>`;
       }).join('');
     }

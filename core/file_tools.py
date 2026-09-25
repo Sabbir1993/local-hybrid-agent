@@ -48,6 +48,7 @@ DOCUMENT_EXTENSIONS = set(MIME_MAP.keys()) | {".txt", ".md"}
 # Default chunking limits
 DEFAULT_MAX_CHARS = 12_000    # ~3000 tokens - safe for 4096-token context windows
 CHUNK_SIZE = 10_000           # size for read_file_chunk pages
+MAX_CHUNK_CHARS = 40_000      # largest page a caller may ask for
 
 
 # ------------------------------------------------------------------
@@ -240,7 +241,8 @@ async def tool_read_file_chunk(args: dict) -> str:
     if not path_arg:
         raise ValueError("path required")
     offset = int(args.get("offset_chars", 0))
-    chunk = int(args.get("max_chars", CHUNK_SIZE))
+    # model-chosen: capped so one call can't pull a whole document into context
+    chunk = max(1, min(int(args.get("max_chars", CHUNK_SIZE)), MAX_CHUNK_CHARS))
 
     status, full_text = await _read_project_text(path_arg)
     if full_text is None:

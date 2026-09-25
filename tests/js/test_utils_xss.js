@@ -8,7 +8,7 @@ const assert = require('assert');
 
 const ctx = {
   document: { addEventListener() {} },
-  hlLangFor: () => '', hlCode: (c) => c, console,
+  hlLangFor: () => '', hlCode: (c) => c, console, window: {},
 };
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../../static/js/utils.js'), 'utf8'), ctx);
@@ -38,5 +38,35 @@ assert(!/<img/.test(ext), 'external image must not auto-load: ' + ext);
 const loc = ctx.md('![chart](/agent/raw?path=c.png)');
 assert(/<img src="\/agent\/raw\?path=c\.png"/.test(loc), loc);
 assert(/data-preview-path="\/agent\/raw\?path=c\.png"/.test(loc), loc);
+
+// esc() tolerates non-strings (API fields may be missing or numeric)
+assert.strictEqual(ctx.esc(undefined), '');
+assert.strictEqual(ctx.esc(3), '3');
+
+// toast() renders its message as text: filenames/titles/remote errors are untrusted
+{
+  const made = [];
+  const el = () => { const e = { children: [], appendChild(c) { this.children.push(c); }, classList: { add() {}, remove() {} } }; made.push(e); return e; };
+  const toastEl = el();
+  ctx.$ = (id) => (id === 'toast' ? toastEl : null);
+  ctx.document.createElement = el;
+  ctx.setTimeout = () => 0; ctx.clearTimeout = () => {};
+  try { ctx.toast('<img src=x onerror=alert(1)>.csv'); } catch (e) { /* later DOM calls are not stubbed */ }
+  const span = toastEl.children[0];
+  assert(span && span.textContent === '<img src=x onerror=alert(1)>.csv', 'toast must use textContent');
+  assert(!span.innerHTML, 'toast must not set innerHTML');
+}
+
+// login.js safeNext(): only same-origin paths survive
+{
+  const src = fs.readFileSync(path.join(__dirname, '../../static/js/login.js'), 'utf8');
+  const fnSrc = src.match(/function safeNext\(next\) \{[\s\S]*?\n\}/)[0];
+  const lctx = { URL, location: { origin: 'https://app.example' } };
+  vm.createContext(lctx);
+  vm.runInContext(fnSrc, lctx);
+  for (const bad of ['javascript:alert(1)', '//evil.example', '/\\evil.example', 'https://evil.example/', '', null])
+    assert.strictEqual(lctx.safeNext(bad), '/', `next=${bad}`);
+  assert.strictEqual(lctx.safeNext('/settings?tab=db#x'), '/settings?tab=db#x');
+}
 
 console.log('utils XSS tests: OK');

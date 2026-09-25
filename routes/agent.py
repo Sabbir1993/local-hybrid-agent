@@ -13,7 +13,7 @@ from typing import Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, UploadFile, File as FastAPIFile, Request
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.auth import Principal, user_has_permission
 from core.backend import device_prefix
@@ -47,6 +47,7 @@ from core.state import state
 from core.request_context import get_current_user_id
 from core import cloud
 from core import output_guard
+from core.sse import sse
 from core.agent_tools import (
     AGENT_TOOLS,
     AGENT_CORE_TOOLS,
@@ -232,6 +233,10 @@ async def agent_permission_answer(req: PermissionAnswerReq, user: Principal = De
     # only the user whose agent run raised the request may answer it
     if rec is None or rec.get("user_id") != user.id:
         return JSONResponse({"error": "unknown or expired permission request"}, status_code=404)
+    if req.decision in ("always", "project", "user") and req.pattern:
+        err = _pattern_error(req.pattern, rec)
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
     if req.decision == "always" and req.pattern:
         # "always" edits the global allowlist for every user -- same permission
         # as the Settings shell card (routes/capabilities.py)
@@ -258,6 +263,19 @@ async def agent_permission_answer(req: PermissionAnswerReq, user: Principal = De
                      "note": f"pattern allowed for {req.decision}" if req.decision in ("always", "project", "user") else ""}
     rec["event"].set()
     return {"ok": True, "decision": req.decision}
+
+
+def _pattern_error(pattern: str, rec: dict) -> Optional[str]:
+    """A saved allow pattern must come from the command that was actually shown:
+    the exact command line or '<first word> *'. Never a bare '*', never for code."""
+    if rec.get("kind") == "python":
+        return "run_python code can only be allowed once"
+    pat = pattern.strip().lower()
+    cmd = str(rec.get("cmd") or "").strip().lower()
+    first = cmd.split()[0] if cmd.split() else ""
+    if not first or pat not in (cmd, f"{first} *"):
+        return "pattern must be the approved command or '<command> *'"
+    return None
 
 
 async def _await_permission(req_id: str, ev: asyncio.Event):
@@ -391,7 +409,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     # invoice is caught even when the regex only exists inside the file text).
     # NOTE: must stay AFTER the `msgs = ...` assignment above (it reads msgs).
     _any_cloud = bool(cloud_main) or bool(cloud_exec)
-    _scan_texts = [str(m.get("content", "")) for m in msgs if m.get("role") == "user"]
+    _scan_texts = input_guard.message_texts(msgs)   # every client-supplied role
     _scan_texts += [f"{att.name} {att.preview or ''}" for att in req.attachments]
     _hit = await input_guard.check_async(_scan_texts, user, any_cloud_lane=_any_cloud)
     if _hit:
@@ -631,7 +649,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             else:
                 await ex_inst.ensure_loaded()
                 active_client = ex_inst.client
-            chat_rid = monitor_begin("agent/direct", True, json.dumps({"messages": msgs}).encode(),
+            chat_rid = monitor_begin("agent/direct", True, n_msgs=len(msgs),
                                      model=model_info.get("model"), source=model_info.get("source"),
                                      provider=model_info.get("provider_name"))
             try:
@@ -653,6 +671,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         continue
                     if ev == "thought_delta":
                         yield f"event: thought_delta\ndata: {json.dumps({'step': 1, 'delta': val, 'model': model_info['display']})}\n\n"
+                    elif ev == "content_to_thought":
+                        # forced-open <think>: the text streamed as the answer was reasoning
+                        _red.reset()
+                        yield f"event: delta_to_thought\ndata: {json.dumps({'step': 1, 'model': model_info['display']})}\n\n"
                     elif ev == "content_delta":
                         _safe = _red.feed(val)
                         if _safe:
@@ -670,7 +692,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             yield f"event: done\ndata: {{}}\n\n"
         return StreamingResponse(direct_chat(), media_type="text/event-stream")
 
-    async def sse():
+    async def event_stream():
         actions_taken = []
         final_content = ""
         final_reasoning = ""
@@ -721,6 +743,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             print(f"[agent] router error: {e}", file=sys.stderr)
 
                     r_duration = max(0.001, time.time() - r_start)
+                    # the router lane has no approval modal / plan checks: it may only
+                    # short-cut read-only tools; anything else goes through the main loop
+                    if nr and nr.get("name") not in PLAN_MODE_TOOLS:
+                        nr = None
                     if nr:
                         r_c_toks = max(1, (len(nr.get("reasoning", "")) + len(json.dumps(nr.get("args", {})))) // 4)
                         r_tps = round(r_c_toks / r_duration, 1) if r_duration > 0 else 50.0
@@ -731,10 +757,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         if nr.get("reasoning"):
                             yield f"event: thought\ndata: {json.dumps({'step': step + 1, 'text': nr['reasoning'], 'model': r_model_info['display']})}\n\n"
                         tc_id = "n0"
-                        yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': nr['name'], 'args': nr['args'], 'model': r_model_info['display'], 'device': r_model_info['device']})}\n\n"
+                        yield sse("tool_call", {'id': tc_id, 'name': nr['name'], 'args': nr['args'], 'model': r_model_info['display'], 'device': r_model_info['device']})
                         result = await run_tool(nr["name"], nr["args"])
                         ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
-                        yield f"event: tool_result\ndata: {json.dumps(_with_diff({'id': tc_id, 'name': nr['name'], 'ok': ok, 'result': result, 'model': r_model_info['display']}, nr['args']))}\n\n"
+                        yield sse("tool_result", _with_diff({'id': tc_id, 'name': nr['name'], 'ok': ok, 'result': result, 'model': r_model_info['display']}, nr['args']))
                         actions_taken.append({"name": nr["name"], "args": nr["args"], "ok": ok, "result": result})
                         route_log.event(run_id, step, q_category, "router", "router_hit", router_tool=nr["name"],
                                         router_conf=nr.get("confidence"), duration_s=r_duration)
@@ -819,7 +845,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     ex_ctx = int(cloud_exec.ctx if cloud_exec else (ex_inst.cfg.get("ctx") or 16384))
                     pre_tokens = estimate_prompt_tokens(msgs)
                     # in-place slice assignment: must NOT rebind `msgs` here, or it
-                    # becomes a local of sse() and earlier reads raise UnboundLocalError
+                    # becomes a local of event_stream() and earlier reads raise UnboundLocalError
                     msgs[:] = compact_messages(msgs, int(ex_ctx * 0.7))
                     post_tokens = estimate_prompt_tokens(msgs)
                     if post_tokens < pre_tokens:
@@ -841,7 +867,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                    + json.dumps({'lane': lane_name, 'before_tokens': pre_tokens,
                                                  'after_tokens': post_tokens}) + "\n\n")
 
-                step_rid = monitor_begin(f"agent/{lane_name}", True, json.dumps({"messages": msgs}).encode(),
+                step_rid = monitor_begin(f"agent/{lane_name}", True, n_msgs=len(msgs),
                                          model=model_info.get("model"), source=model_info.get("source"),
                                          provider=model_info.get("provider_name"))
                 res_dict = None
@@ -870,13 +896,18 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             continue
                         if ev == "thought_delta":
                             yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
+                        elif ev == "content_to_thought":
+                            # forced-open <think>: the text streamed as the answer was reasoning
+                            _red.reset()
+                            streamed_content.clear()
+                            yield f"event: delta_to_thought\ndata: {json.dumps({'step': step + 1, 'model': model_info['display']})}\n\n"
                         elif ev == "content_delta":
                             _safe = _red.feed(val)
                             streamed_content.append(_safe)
                             if _safe:
                                 yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
                         elif ev == "tool_preparing":
-                            yield f"event: tool_preparing\ndata: {json.dumps({'step': step + 1, **val})}\n\n"
+                            yield sse("tool_preparing", {'step': step + 1, **val})
                         elif ev == "result":
                             res_dict = val
                     for _c in _guard_flush_events(_red, streamed_content):
@@ -931,7 +962,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     lane_name = "main"
                     model_info = get_model_info("main")
                     yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
-                    esc_rid = monitor_begin("agent/main-escalated", True, json.dumps({"messages": msgs}).encode(),
+                    esc_rid = monitor_begin("agent/main-escalated", True, n_msgs=len(msgs),
                                             model=model_info.get("model"), source=model_info.get("source"),
                                             provider=model_info.get("provider_name"))
                     esc_tools = ([t for t in all_tools()
@@ -960,13 +991,18 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                 continue
                             if ev == "thought_delta":
                                 yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
+                            elif ev == "content_to_thought":
+                                # forced-open <think>: the text streamed as the answer was reasoning
+                                _red.reset()
+                                streamed_content.clear()
+                                yield f"event: delta_to_thought\ndata: {json.dumps({'step': step + 1, 'model': model_info['display']})}\n\n"
                             elif ev == "content_delta":
                                 _safe = _red.feed(val)
                                 streamed_content.append(_safe)
                                 if _safe:
                                     yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
                             elif ev == "tool_preparing":
-                                yield f"event: tool_preparing\ndata: {json.dumps({'step': step + 1, **val})}\n\n"
+                                yield sse("tool_preparing", {'step': step + 1, **val})
                             elif ev == "result":
                                 res_dict = val
                         for _c in _guard_flush_events(_red, streamed_content):
@@ -1114,24 +1150,43 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 msgs.append({"role": "assistant", "content": history_content, "tool_calls": clean_tool_calls})
 
                 for name, tc_id, args in parsed_actions:
-                    yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': name, 'args': args})}\n\n"
+                    yield sse("tool_call", {'id': tc_id, 'name': name, 'args': args})
 
                     if req.plan and name not in PLAN_MODE_TOOLS:
                         # plan mode: mutating tools are unavailable — hard block
                         result = f"error: plan mode is active — '{name}' is read-only-restricted. Produce the plan instead."
-                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': name, 'ok': False, 'result': result})}\n\n"
+                        yield sse("tool_result", {'id': tc_id, 'name': name, 'ok': False, 'result': result})
                         actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                         continue
 
                     approved, note = fast_sandbox_check(name, args)
-                    yield f"event: verify\ndata: {json.dumps({'id': tc_id, 'name': name, 'approved': approved, 'note': note})}\n\n"
+                    yield sse("verify", {'id': tc_id, 'name': name, 'approved': approved, 'note': note})
                     if not approved:
                         result = f"error: sandbox violation — {note}"
-                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': name, 'ok': False, 'result': result})}\n\n"
+                        yield sse("tool_result", {'id': tc_id, 'name': name, 'ok': False, 'result': result})
                         actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                         continue
+
+                    # run_python is arbitrary code on the user's machine: with ask_first on it
+                    # always needs a one-time approval here (no allow pattern can cover code)
+                    if name == "run_python" and shell_cfg().get("ask_first", True):
+                        import uuid as _uuid
+                        code = str((args or {}).get("code") or "")
+                        shown = "run_python:\n" + (code if len(code) <= 4000 else code[:4000] + "\n… (truncated)")
+                        preq_id = _uuid.uuid4().hex[:12]
+                        ev = asyncio.Event()
+                        _perm_pending[preq_id] = {"cmd": shown, "event": ev, "result": None,
+                                                  "user_id": user.id, "kind": "python"}
+                        yield sse("permission_request", {'req_id': preq_id, 'cmd': shown, 'kind': 'python'})
+                        allowed, pnote = await _await_permission(preq_id, ev)
+                        if not allowed:
+                            result = "error: user denied run_python" + (f" ({pnote})" if pnote else "")
+                            yield sse("tool_result", {'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                            actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                            msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                            continue
 
                     # shell commands: ask permission here (not inside the tool)
                     # so the SSE stream can emit the modal event while we wait
@@ -1153,11 +1208,11 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             ev = asyncio.Event()
                             _perm_pending[preq_id] = {"cmd": cmd, "event": ev, "result": None,
                                                       "user_id": user.id}
-                            yield f"event: permission_request\ndata: {json.dumps({'req_id': preq_id, 'cmd': cmd})}\n\n"
+                            yield sse("permission_request", {'req_id': preq_id, 'cmd': cmd})
                             allowed, pnote = await _await_permission(preq_id, ev)
                             if not allowed:
                                 result = f"error: user denied shell command: {cmd}" + (f" ({pnote})" if pnote else "")
-                                yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': name, 'ok': False, 'result': result})}\n\n"
+                                yield sse("tool_result", {'id': tc_id, 'name': name, 'ok': False, 'result': result})
                                 actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                                 msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                                 continue
@@ -1169,12 +1224,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     await fire_hook("after_tool", name, args, result)
                     ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
                     route_log.event(run_id, step, q_category, lane_name, "tool", tool_name=name, tool_ok=ok)
-                    yield f"event: tool_result\ndata: {json.dumps(_with_diff({'id': tc_id, 'name': name, 'ok': ok, 'result': result}, args))}\n\n"
+                    yield sse("tool_result", _with_diff({'id': tc_id, 'name': name, 'ok': ok, 'result': result}, args))
                     actions_taken.append({"name": name, "args": args, "ok": ok, "result": result})
                     msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                     # structured plan state → UI checklist
                     if name in ("create_plan", "update_plan_item", "get_plan") and req.session_id:
-                        yield f"event: plan\ndata: {json.dumps({'items': db_get_plan_items(req.session_id)})}\n\n"
+                        yield sse("plan", {'items': db_get_plan_items(req.session_id)})
 
                 # re-assert the plan-tracking reminder every step (not just once at
                 # turn start) so a long tool-call run doesn't drift away from calling
@@ -1234,7 +1289,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         finally:
             route_log.run_end(run_id, steps_run, run_outcome)
 
-    return StreamingResponse(sse(), media_type="text/event-stream")
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.get("/agent/project_instructions")
@@ -1299,6 +1354,10 @@ async def agent_workspace():
     return {"root": str(ws), "project": get_active_project(), "files": files[:500]}
 
 
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_UPLOAD_FILES = 20
+
+
 @router.post("/agent/upload")
 async def agent_upload(files: list[UploadFile] = FastAPIFile(...), space: Optional[str] = None):
     """Upload one or more document files.
@@ -1307,6 +1366,8 @@ async def agent_upload(files: list[UploadFile] = FastAPIFile(...), space: Option
     lives on the user's machine; writing active_workspace() here would write to
     that path on the SERVER's disk. (`space` is accepted for compatibility.)
     """
+    if len(files) > MAX_UPLOAD_FILES:
+        return JSONResponse({"error": f"too many files (max {MAX_UPLOAD_FILES} per upload)"}, status_code=400)
     target_dir = common_workspace()
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1318,7 +1379,9 @@ async def agent_upload(files: list[UploadFile] = FastAPIFile(...), space: Option
         dest = _unique_dest(target_dir, safe_name)
         safe_name = dest.name
         try:
-            data = await uf.read()
+            data = await uf.read(MAX_UPLOAD_BYTES + 1)
+            if len(data) > MAX_UPLOAD_BYTES:
+                raise ValueError(f"file too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)")
             dest.write_bytes(data)
         except Exception as e:
             results.append({
@@ -1563,6 +1626,45 @@ async def agent_raw(path: str, space: Optional[str] = None):
     return FileResponse(str(p), media_type=mime, headers=headers)
 
 
+# ---- HTML preview of generated markup (code blocks, unsaved files) ----
+# The app's CSP forbids inline script, and an iframe srcdoc inherits it, so previews
+# are served from here instead with the same sandbox CSP as /agent/raw: scripts run,
+# but in an opaque origin without this app's cookies or API.
+_PREVIEW_TTL_S = 15 * 60
+_PREVIEW_MAX_BYTES = 2 * 1024 * 1024
+_PREVIEW_MAX_PER_USER = 20
+_previews: dict = {}          # id -> (user_id, created, html)
+
+
+class PreviewHtmlReq(BaseModel):
+    html: str = Field(max_length=_PREVIEW_MAX_BYTES)
+
+
+@router.post("/agent/preview-html")
+async def put_preview_html(req: PreviewHtmlReq, user: Principal = Depends(get_current_user)):
+    import secrets
+    now = time.time()
+    for k in [k for k, (_, ts, _h) in _previews.items() if now - ts > _PREVIEW_TTL_S]:
+        _previews.pop(k, None)
+    mine = sorted((ts, k) for k, (uid, ts, _h) in _previews.items() if uid == user.id)
+    for _ts, k in mine[:max(0, len(mine) - _PREVIEW_MAX_PER_USER + 1)]:
+        _previews.pop(k, None)
+    pid = secrets.token_urlsafe(18)
+    _previews[pid] = (user.id, now, req.html)
+    return {"url": f"/agent/preview-html/{pid}"}
+
+
+@router.get("/agent/preview-html/{pid}")
+async def get_preview_html(pid: str, user: Principal = Depends(get_current_user)):
+    from fastapi.responses import HTMLResponse
+    hit = _previews.get(pid)
+    if not hit or hit[0] != user.id or time.time() - hit[1] > _PREVIEW_TTL_S:
+        return JSONResponse({"error": "preview expired - reopen it"}, status_code=404)
+    return HTMLResponse(hit[2], headers={
+        "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-modals",
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
 @router.get("/agent/slides")
 async def agent_slides(path: str, space: Optional[str] = None):
     """Render model of a .pptx for the preview modal (positions, text, images)."""
@@ -1689,7 +1791,7 @@ async def agent_ws_file(path: str, user: Principal = Depends(get_current_user)):
 
 
 class VisionReq(BaseModel):
-    image_b64: str
+    image_b64: str = Field(..., max_length=15 * 1024 * 1024)   # ~11 MB image
     mime: str = "image/png"
     question: str = "Describe this image in detail for a coding agent."
     cloud_model_override: Optional[str] = None

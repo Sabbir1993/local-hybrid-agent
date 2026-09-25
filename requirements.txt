@@ -1,10 +1,16 @@
+# Top-level dependencies (floors). This file is the input for the hash-locked lock file:
+#   python scripts/audit_deps.py --lock     -> requirements.lock (pip-compile --generate-hashes)
+#   python scripts/audit_deps.py            -> pip-audit of requirements.lock
+# Production install:  pip install --require-hashes -r requirements.lock
+# Web search needs no package: core/web_search.py scrapes with httpx + lxml.
+
 # --- Web server / API ---
 fastapi>=0.110
-starlette>=0.37
+starlette>=0.47.2          # CVE-2024-47874, CVE-2025-54121
 uvicorn>=0.29
 httpx>=0.27
 pydantic>=2.6
-python-multipart>=0.0.9
+python-multipart>=0.0.18   # CVE-2024-53981
 
 # --- Auth / credentials ---
 keyring>=25.0
@@ -14,6 +20,7 @@ argon2-cffi>=23.1
 openpyxl>=3.1
 xlrd>=2.0
 pdfplumber>=0.11
+pdfminer.six>=20251107     # CMap pickle-loading fix (pulled in by pdfplumber)
 python-pptx>=1.0
 python-docx>=1.1
 reportlab>=4.0
@@ -22,13 +29,14 @@ pandas>=2.2
 # --- Memory / embeddings ---
 numpy>=1.26
 
-# --- Web search ---
-duckduckgo_search>=8.0
-
 # --- CPU tool routers (core/small_model.py; engine chosen in config/app.json "router.engine") ---
+# both installed from PyPI (Apache-2.0); laya by Convai Innovations, cactus-needle lists no author - review before upgrading
 cactus-needle>=2.0
 laya>=0.3
 
 # --- Office skill scripts (.agents/skills/docx, .claude/skills/docx) ---
 lxml>=5.0
-defusedxml>=0.7
+defusedxml>=0.7            # openpyxl uses it automatically when installed (XXE / billion laughs)
+
+# --- transitive, pinned above known CVEs ---
+jinja2>=3.1.6              # CVE-2024-56201 / -56326 / CVE-2025-27516

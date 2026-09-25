@@ -3,6 +3,7 @@ routes/capabilities.py - Tool capabilities, shell execution settings, and model 
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -10,7 +11,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from core.config import CONFIG_FILE
+from core.config import CONFIG_FILE, write_app_config
 from core.small_model import (
     APP_CONFIG,
     small_models,
@@ -168,11 +169,14 @@ async def shell_settings(req: ShellSettingsReq,
     if req.timeout_s is not None:
         shell["timeout_s"] = max(5, min(600, int(req.timeout_s)))
     try:
-        cfg_path.write_text(_json.dumps(cfg, indent=2), encoding="utf-8")
+        write_app_config(cfg, CONFIG_FILE)
     except Exception as e:
         return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
     # live update
     APP_CONFIG["capabilities"]["shell"] = shell
+    audit_log(user, action="settings.shell.configure", resource="capabilities.shell",
+              permission_key="settings.shell.configure",
+              detail={k: v for k, v in req.model_dump().items() if v is not None})
     return {"ok": True, "shell": shell}
 
 
@@ -196,7 +200,7 @@ async def agent_settings(req: AgentSettingsReq,
     old = cfg.setdefault("agent", {}).get("max_steps")
     cfg["agent"]["max_steps"] = steps
     try:
-        CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        write_app_config(cfg, CONFIG_FILE)
     except Exception as e:
         return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
     APP_CONFIG.setdefault("agent", {})["max_steps"] = steps
@@ -243,7 +247,7 @@ async def agent_library_update(req: AgentLibraryReq,
             if vals is not None:
                 sect[key] = sorted({str(v).strip() for v in vals if str(v).strip()})
     try:
-        CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        write_app_config(cfg, CONFIG_FILE)
     except Exception as e:
         return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
     APP_CONFIG["agent_library"] = lib
@@ -264,9 +268,13 @@ async def capabilities_toggle(req: CapToggleReq,
     except Exception as e:
         return JSONResponse({"error": f"config/app.json unreadable: {e}"}, status_code=500)
     caps = cfg.setdefault("capabilities", {})
+    # on/off switches only: a free-form key could replace a structured section
+    # (shell, mcp_servers, mcp_allowed_commands...) with a bare boolean
+    if not re.fullmatch(r"[a-z_]{1,32}", req.section or "") or not isinstance(caps.get(req.section, False), bool):
+        return JSONResponse({"error": f"'{req.section}' is not an on/off capability"}, status_code=400)
     caps[req.section] = req.enabled
     try:
-        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        write_app_config(cfg, CONFIG_FILE)
     except Exception as e:
         return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
     # apply live
@@ -372,7 +380,7 @@ def _write_router(changes: dict):
     old = {k: live.get(k) for k in changes}
     cfg.setdefault("router", {}).update(changes)
     try:
-        CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        write_app_config(cfg, CONFIG_FILE)
     except Exception as e:
         return None, JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
     APP_CONFIG.setdefault("router", {}).update(changes)

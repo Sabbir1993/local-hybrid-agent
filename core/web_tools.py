@@ -1,216 +1,99 @@
-"""Web capability tools: web_fetch (URL -> readable text) + web_search (DuckDuckGo).
+"""Web capability tools: web_search, web_fetch, web_search_images.
 
-Keyless by design; config slot capabilities.web_search_api_key reserved for a
-future Brave/Tavily swap-in when DDG rate-limits.
+Keyless. The search pipeline (engines, merge, rerank, page extraction, cache) lives
+in core/web_search.py; this module is the tool surface the model sees.
+Config: config/app.json "web" block -
+  region            bd-en (default) | bd-bn | us-en | uk-en | in-en | wt-wt
+  auto_fetch_top    pages read per search for excerpts (default 3, 0 = snippets only)
+  backends          order of engines (default ["searxng", "duckduckgo", "bing"])
+  searxng_url       optional org-run SearXNG instance (JSON format enabled)
+  redact_query_pii  strip emails / phone / account numbers from queries (default true)
 """
 
 import asyncio
 import json
 import re
-import sys
-from html.parser import HTMLParser
-from typing import Optional
-from urllib.parse import urlparse, urljoin, quote_plus, unquote
+from urllib.parse import urlparse, quote_plus
 
 import httpx
 
+from . import web_search as ws
 from .agent_tools import MAX_TOOL_OUTPUT
-from .net_guard import BlockedURLError, guarded_get
+from .net_guard import BlockedURLError
 from .registry import registry
-from .small_model import APP_CONFIG
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+UA = ws.UA
 FETCH_TIMEOUT_S = 15
-SEARCH_TIMEOUT_S = 12
-MAX_SEARCH_RESULTS = 8
-MAX_RESULTS_CHARS = 6000
+SEARCH_TIMEOUT_S = ws.SEARCH_TIMEOUT_S
+MAX_RESULTS_CHARS = 12000
 
 
-class _TextExtractor(HTMLParser):
-    """Strip scripts/styles/nav chrome, keep readable text + links."""
-    SKIP = {"script", "style", "noscript", "svg", "iframe", "header", "footer", "nav", "aside", "form", "button"}
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.parts = []
-        self.links = []
-        self._skip_depth = 0
-        self._a_href = None
-        self._a_text = []
-        self._title = []
-        self._in_title = False
-
-    def handle_starttag(self, tag, attrs):
-        if tag in self.SKIP:
-            self._skip_depth += 1
-        elif tag == "a":
-            self._a_href = dict(attrs).get("href")
-            self._a_text = []
-        elif tag == "title":
-            self._in_title = True
-        elif tag in ("p", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "div"):
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag):
-        if tag in self.SKIP and self._skip_depth > 0:
-            self._skip_depth -= 1
-        elif tag == "a":
-            if self._a_href and self._a_text:
-                self.links.append((self._a_href, " ".join("".join(self._a_text).split())))
-            self._a_href = None
-            self._a_text = []
-        elif tag == "title":
-            self._in_title = False
-        elif tag in ("p", "li", "h1", "h2", "h3", "h4"):
-            self.parts.append("\n")
-
-    def handle_data(self, data):
-        if self._skip_depth:
-            return
-        if self._in_title:
-            self._title.append(data)
-        if self._a_href is not None:
-            self._a_text.append(data)
-        self.parts.append(data)
-
-    def text(self) -> str:
-        out = re.sub(r"[ \t\r\f]+", " ", "".join(self.parts))
-        out = re.sub(r"\n\s*\n+", "\n\n", out)
-        return out.strip()
-
-    def title(self) -> str:
-        return " ".join("".join(self._title).split())
+_PAN_EGRESS_ERROR = ("error: refusing to send a payment card number to an external site "
+                     "(PCI DSS) - remove it from the {what}")
 
 
-FETCH_MAX_BYTES = 5 * 1024 * 1024
+def _pan_egress(text: str) -> bool:
+    """URLs and search queries leave for arbitrary third parties -- also the easiest
+    exfiltration channel for a prompt-injected page -- so a PAN in them is refused."""
+    from . import pan
+    return pan.enabled("pan_cloud_egress") and pan.contains_pan(text)
 
 
-def _fetch_sync(url: str, timeout: float):
-    # SSRF-guarded (core/net_guard.py): the URL comes from the model, so every
-    # redirect hop must resolve to a public address; body capped at 5 MB.
-    return guarded_get(url, timeout,
-                       headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
-                       max_bytes=FETCH_MAX_BYTES)
+def _query_arg(args) -> str:
+    if isinstance(args, str):
+        return args.strip()
+    if isinstance(args, dict):
+        return str(args.get("query") or args.get("q") or "").strip()
+    return str(args or "").strip()
 
 
 async def tool_web_fetch(args: dict) -> str:
     url = (args.get("url") or "").strip()
+    focus = str(args.get("query") or "").strip()
     if not url:
         raise ValueError("url required")
+    if _pan_egress(url):
+        return _PAN_EGRESS_ERROR.format(what="URL")
     if not re.match(r"^https?://", url):
         url = "https://" + url
     parsed = urlparse(url)
     if not parsed.netloc:
         return f"error: invalid url: {args.get('url')}"
-    try:
-        r = await asyncio.get_event_loop().run_in_executor(
-            None, _fetch_sync, url, FETCH_TIMEOUT_S)
-    except BlockedURLError as e:
-        return f"error: {e}"
-    except httpx.HTTPError as e:
-        return f"error: fetch failed: {type(e).__name__}: {e}"
-    if r.status_code >= 400:
-        return f"error: HTTP {r.status_code} fetching {url}"
-    ctype = r.headers.get("content-type", "")
-    if "html" in ctype or "xml" in ctype or not ctype:
-        p = _TextExtractor()
+    page = ws.cache_get(("fetch", url))
+    if page is None:
         try:
-            p.feed(r.text)
-        except Exception:
-            return f"(non-parsable HTML from {url}, {len(r.text)} bytes)"
-        title = p.title()
-        body = p.text()
-        base = str(r.url)
-        links = []
-        for href, txt in p.links[:15]:
-            if href and txt and not href.startswith(("javascript:", "mailto:", "#")):
-                links.append(f"- [{txt[:60]}]({urljoin(base, href)})")
-        out = f"# {title or parsed.netloc}\nSource: {base}\n\n{body}"
-        if links:
-            out += "\n\n## Links\n" + "\n".join(links)
-    else:
-        out = r.text   # plain text / json / csv etc.
-    if len(out) > MAX_TOOL_OUTPUT:
-        out = out[:MAX_TOOL_OUTPUT] + f"\n... (truncated, {len(out)} chars total)"
-    return out
-
-
-def _ddg_search_sync(query: str, api_key: str) -> list:
-    """DuckDuckGo HTML results; returns [{title, url, snippet}]."""
-    results = []
-    if api_key:
-        # future: Brave/Tavily key path — placeholder switch
-        pass
-    url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
-    with httpx.Client(follow_redirects=True, timeout=SEARCH_TIMEOUT_S,
-                      headers={"User-Agent": UA}) as c:
-        r = c.get(url)
-    if r.status_code != 200:
-        raise RuntimeError(f"DDG returned HTTP {r.status_code}")
-    rx_item = re.compile(
-        r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
-    rx_snip = re.compile(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', re.S)
-    rx_tag = re.compile(r"<[^>]+>")
-    items = rx_item.findall(r.text)
-    snips = rx_snip.findall(r.text)
-    for i, (href, title) in enumerate(items[:MAX_SEARCH_RESULTS]):
-        # DDG wraps urls in /l/?uddg=<encoded>
-        m = re.search(r"[?&]uddg=([^&]+)", href)
-        real = unquote(m.group(1)) if m else href
-        snip = rx_tag.sub("", snips[i]) if i < len(snips) else ""
-        title = rx_tag.sub("", title).strip()
-        results.append({"title": title, "url": real, "snippet": " ".join(snip.split())[:250]})
-    return results
-
-
-def _bing_search_sync(query: str, count: int = 8) -> list:
-    """Bing organic web search results fallback."""
-    import base64
-    url = "https://www.bing.com/search?q=" + quote_plus(query)
-    with httpx.Client(follow_redirects=True, timeout=SEARCH_TIMEOUT_S,
-                      headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"}) as c:
-        r = c.get(url)
-    if r.status_code != 200:
-        raise RuntimeError(f"Bing search returned HTTP {r.status_code}")
-    results = []
-    rx_tag = re.compile(r"<[^>]+>")
-    for m in re.finditer(r'<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>([\s\S]*?)</li>', r.text):
-        li = m.group(1)
-        h2 = re.search(r'<h2[^>]*>([\s\S]*?)</h2>', li)
-        if not h2:
-            continue
-        a = re.search(r'<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>', h2.group(1))
-        if not a:
-            continue
-        href = a.group(1).replace("&amp;", "&")
-        raw_title = a.group(2)
-        title = rx_tag.sub("", raw_title).strip()
-
-        # Decode Bing tracking URL: u=a1<base64>
-        m_u = re.search(r"[?&]u=a1([a-zA-Z0-9_-]+)", href)
-        if m_u:
-            try:
-                b64 = m_u.group(1).replace("-", "+").replace("_", "/")
-                padded = b64 + "=" * (-len(b64) % 4)
-                decoded = base64.b64decode(padded).decode("utf-8", errors="ignore")
-                if decoded.startswith("http"):
-                    href = decoded
-            except Exception:
-                pass
-
-        p = re.search(r'<p[^>]*>([\s\S]*?)</p>', li)
-        snip = rx_tag.sub("", p.group(1)).strip() if p else ""
-        results.append({"title": title, "url": href, "snippet": " ".join(snip.split())[:250]})
-        if len(results) >= count:
-            break
-    return results
+            # SSRF-guarded (core/net_guard.py): every redirect hop must resolve to a public address
+            r = await asyncio.to_thread(ws.fetch_page, url, FETCH_TIMEOUT_S, ws.region()["accept"])
+        except BlockedURLError as e:
+            return f"error: {e}"
+        except httpx.HTTPError as e:
+            return f"error: fetch failed: {type(e).__name__}: {e}"
+        if r.status_code >= 400:
+            return f"error: HTTP {r.status_code} fetching {url}"
+        page = {**ws.extract_response(r), "url": str(r.url)}
+        ws.cache_put(("fetch", url), page)
+    body = page["text"]
+    budget = MAX_TOOL_OUTPUT - 2000
+    if len(body) > budget:
+        if focus:
+            # long page + a stated goal: return the relevant passages, not just the top
+            parts = await ws.best_passages(focus, body, k=max(3, budget // ws.PASSAGE_CHARS))
+            body = (f"(long page, {len(page['text'])} chars - showing the passages most relevant to "
+                    f"'{focus}')\n\n" + "\n\n...\n\n".join(parts))[:budget]
+        else:
+            body = body[:budget] + (f"\n... (truncated, {len(page['text'])} chars total - call web_fetch "
+                                    "again with a 'query' to get the relevant parts)")
+    out = f"# {page['title'] or parsed.netloc}\nSource: {page['url']}\n\n{body}"
+    if page["links"]:
+        out += "\n\n## Links\n" + "\n".join(f"- [{t}]({u})" for u, t in page["links"])
+    return out[:MAX_TOOL_OUTPUT]
 
 
 def _bing_images_search_sync(query: str, count: int = 8) -> list:
     """Bing image search results."""
     url = "https://www.bing.com/images/search?q=" + quote_plus(query)
     with httpx.Client(follow_redirects=True, timeout=SEARCH_TIMEOUT_S,
-                      headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"}) as c:
+                      headers={"User-Agent": UA, "Accept-Language": ws.region()["accept"]}) as c:
         r = c.get(url)
     if r.status_code != 200:
         raise RuntimeError(f"Bing images search returned HTTP {r.status_code}")
@@ -240,58 +123,51 @@ def _bing_images_search_sync(query: str, count: int = 8) -> list:
 
 
 async def tool_web_search(args) -> str:
-    if isinstance(args, str):
-        query = args.strip()
-    elif isinstance(args, dict):
-        query = (args.get("query") or args.get("q") or "").strip()
-    else:
-        query = str(args or "").strip()
+    query = _query_arg(args)
     if not query:
         raise ValueError("query required")
-    cfg = APP_CONFIG.get("capabilities", {})
-    api_key = cfg.get("web_search_api_key", "")
-    results = []
-    used_engine = "DuckDuckGo"
-
-    # Attempt DuckDuckGo first
+    if _pan_egress(query):
+        return _PAN_EGRESS_ERROR.format(what="search query")
+    recency = str(args.get("recency") or "").lower() if isinstance(args, dict) else ""
+    query, redacted = ws.redact_query(query)
+    if not query:
+        return "error: nothing left to search after removing personal data from the query"
     try:
-        results = await asyncio.get_event_loop().run_in_executor(
-            None, _ddg_search_sync, query, api_key)
+        res = await ws.search(query, recency)
     except Exception as e:
-        # DDG failed (rate-limit, bot check, HTTP 202, or network) - fall back to Bing
-        try:
-            results = await asyncio.get_event_loop().run_in_executor(
-                None, _bing_search_sync, query, MAX_SEARCH_RESULTS)
-            used_engine = "Bing"
-        except Exception as e_bing:
-            return f"error: search failed: DDG ({e}), Bing fallback ({e_bing})"
+        return f"error: search failed: {type(e).__name__}: {e}"
+    if not res["results"]:
+        errs = "; ".join(f"{k}: {v}" for k, v in res["errors"].items())
+        return f"(no results for: {query})" + (f" [engine errors - {errs}]" if errs else "")
 
-    if not results:
-        # If DDG yielded 0 results, try Bing before giving up
-        if used_engine == "DuckDuckGo":
-            try:
-                results = await asyncio.get_event_loop().run_in_executor(
-                    None, _bing_search_sync, query, MAX_SEARCH_RESULTS)
-                if results:
-                    used_engine = "Bing"
-            except Exception:
-                pass
-
-    if not results:
-        return f"(no results for: {query})"
-
-    out = [f"Web results for: {query} (via {used_engine})", ""]
-    for i, r in enumerate(results, 1):
-        out.append(f"{i}. {r['title']}\n   {r['url']}")
+    names = {"duckduckgo": "DuckDuckGo", "bing": "Bing", "searxng": "SearXNG"}
+    engines = " + ".join(names.get(e, e) for e in res["engines"])
+    out = [f"Web results for: {query} (via {engines}" + (f", past {recency}" if recency else "") + ")"]
+    if redacted:
+        out.append(f"Note: removed {', '.join(redacted)} from the query before sending it to the "
+                   "search engine (privacy).")
+    out.append("")
+    for i, r in enumerate(res["results"], 1):
+        out.append(f"[{i}] {r['title']}\n    {r['url']}")
         if r.get("snippet"):
-            out.append(f"   {r['snippet']}")
+            out.append(f"    {r['snippet']}")
+        room = 1200                                  # excerpt budget per source
+        for p in r.get("passages") or []:
+            if room <= 80:
+                break
+            p = p if len(p) <= room else p[:room].rsplit(" ", 1)[0] + " …"
+            room -= len(p)
+            out.append("    > " + p.replace("\n", "\n    > "))
+        out.append("")
+    out.append("Answer from these sources and cite them inline as [n](URL). Lines marked '>' are "
+               "excerpts read from the page itself - prefer them over snippets. If they don't answer "
+               "the question, call web_fetch on the most promising URL with a 'query'.")
 
     # If query specifically asks for a photo/image, also append top image suggestions
     lower_q = query.lower()
     if any(w in lower_q for w in ("photo", "picture", "image", "portrait", "look like")):
         try:
-            img_results = await asyncio.get_event_loop().run_in_executor(
-                None, _bing_images_search_sync, query, 3)
+            img_results = await asyncio.to_thread(_bing_images_search_sync, query, 3)
             if img_results:
                 out.append("\nImage Results:")
                 for img in img_results:
@@ -306,17 +182,14 @@ async def tool_web_search(args) -> str:
 
 
 async def tool_web_search_images(args) -> str:
-    if isinstance(args, str):
-        query = args.strip()
-    elif isinstance(args, dict):
-        query = (args.get("query") or args.get("q") or "").strip()
-    else:
-        query = str(args or "").strip()
+    query = _query_arg(args)
     if not query:
         raise ValueError("query required")
+    if _pan_egress(query):
+        return _PAN_EGRESS_ERROR.format(what="search query")
+    query, _ = ws.redact_query(query)
     try:
-        results = await asyncio.get_event_loop().run_in_executor(
-            None, _bing_images_search_sync, query, 6)
+        results = await asyncio.to_thread(_bing_images_search_sync, query, 6)
     except Exception as e:
         return f"error: image search failed: {e}"
 
@@ -338,9 +211,10 @@ def register_web_tools() -> None:
         "web_fetch", tool_web_fetch,
         {"type": "function", "function": {
             "name": "web_fetch",
-            "description": "Fetch a web page by URL and return its readable text content (HTML stripped). Use for docs, articles, APIs.",
+            "description": "Fetch a web page (or PDF) by URL and return its main readable text (menus, ads and cookie banners removed). Use for docs, articles, APIs. Give 'query' to get the relevant parts of long pages.",
             "parameters": {"type": "object",
-                           "properties": {"url": {"type": "string", "description": "absolute URL, e.g. https://example.com/docs"}},
+                           "properties": {"url": {"type": "string", "description": "absolute URL, e.g. https://example.com/docs"},
+                                          "query": {"type": "string", "description": "optional: what you are looking for on the page"}},
                            "required": ["url"]},
         }},
         source="web", meta={"label": "Web fetch"}, replace=True)
@@ -348,9 +222,11 @@ def register_web_tools() -> None:
         "web_search", tool_web_search,
         {"type": "function", "function": {
             "name": "web_search",
-            "description": "Search the web and return top result titles, URLs and snippets. For recent or current data, include the current year (from the CURRENT DATE in the system prompt) in the query - not your training-cutoff year.",
+            "description": "Search the web (several engines, reranked) and return numbered sources with snippets plus excerpts read from the top pages. For news, prices, releases or other time-sensitive data set 'recency' and/or include the current year (from the CURRENT DATE in the system prompt) - not your training-cutoff year; leave both out for evergreen topics (company profiles, definitions, documentation). Keep queries short and specific; never include personal data.",
             "parameters": {"type": "object",
-                           "properties": {"query": {"type": "string", "description": "search query"}},
+                           "properties": {"query": {"type": "string", "description": "search query (keywords)"},
+                                          "recency": {"type": "string", "enum": ["day", "week", "month", "year"],
+                                                      "description": "optional: only results from this recent period"}},
                            "required": ["query"]},
         }},
         source="web", meta={"label": "Web search"}, replace=True)

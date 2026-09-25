@@ -33,7 +33,8 @@ from typing import Optional
 
 MAX_SUBAGENT_STEPS = 15
 DEFAULT_SUBAGENT_STEPS = 8
-DENIED_TOOLS = {"run_shell", "spawn_agent"}
+# run_python: sub-agents have no SSE stream to raise the approval modal on
+DENIED_TOOLS = {"run_shell", "run_python", "spawn_agent"}
 
 SUBAGENT_SYSTEM_PROMPT = """You are a focused sub-agent delegated a single, self-contained task \
 by a parent AI coding agent. Workspace: {workspace}
@@ -172,7 +173,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
             ex_ctx = 16384
             msgs[:] = compact_messages(msgs, int(ex_ctx * 0.7))
 
-            rid = monitor_begin("agent/subagent", True, json.dumps({"messages": msgs}).encode(),
+            rid = monitor_begin("agent/subagent", True, n_msgs=len(msgs),
                                  model=model_name, source="local")
             res = None
             try:

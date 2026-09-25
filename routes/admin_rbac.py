@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from core import auth_db
 from core.audit import audit_log
-from core.auth import Principal, user_has_permission
+from core.auth import Principal, password_policy_error, user_has_permission
 from core.auth_provider import hash_password
 from core.deps import get_current_user, require_permission
 from core.db import db_clear_all_projects_data
@@ -46,6 +46,36 @@ class RolePermissionsBody(BaseModel):
     revoke: list[str] = []
 
 
+def _role_permission_keys(role_name: str) -> set | None:
+    rows = auth_db.db().execute(
+        "SELECT p.key FROM roles r JOIN role_permissions rp ON rp.role_id = r.id "
+        "JOIN permissions p ON p.id = rp.permission_id WHERE r.name = ?", (role_name,),
+    ).fetchall()
+    if not rows and not auth_db.db().execute("SELECT 1 FROM roles WHERE name = ?", (role_name,)).fetchone():
+        return None
+    return {r["key"] for r in rows}
+
+
+def _check_assignable_roles(user: Principal, role_names: list[str]) -> None:
+    """A caller may only hand out roles whose permissions they already hold --
+    otherwise users.manage alone is a path to admin."""
+    if user.is_super_admin:
+        return
+    for name in role_names:
+        keys = _role_permission_keys(name)
+        if keys is None:
+            raise HTTPException(status_code=400, detail=f"unknown role '{name}'")
+        missing = keys - user.permission_keys
+        if missing:
+            raise HTTPException(status_code=403,
+                                detail=f"cannot assign role '{name}': you lack {sorted(missing)[0]}")
+
+
+def _check_can_modify(user: Principal, target) -> None:
+    if target["is_super_admin"] and not user.is_super_admin:
+        raise HTTPException(status_code=403, detail="only a super admin can modify a super admin")
+
+
 def _user_public(row) -> dict:
     return {
         "id": row["id"], "username": row["username"], "display_name": row["display_name"],
@@ -67,10 +97,17 @@ async def list_users(user: Principal = Depends(require_permission("users.manage"
 async def create_user(body: CreateUserBody, user: Principal = Depends(require_permission("users.manage"))):
     if auth_db.get_user_by_username(body.username):
         raise HTTPException(status_code=409, detail="username already exists")
+    _check_assignable_roles(user, body.roles or ["user"])
+    err = password_policy_error(body.password, body.username)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
     uid = auth_db.create_user(
         username=body.username, password_hash=hash_password(body.password),
         display_name=body.display_name, email=body.email,
     )
+    # the admin chose this password: the user must replace it at first sign-in
+    auth_db.db().execute("UPDATE users SET must_change_password = 1 WHERE id = ?", (uid,))
+    auth_db.db().commit()
     for role_name in (body.roles or ["user"]):
         auth_db.assign_role(uid, role_name, assigned_by=user.id)
     audit_log(user, action="users.manage", resource=body.username, result="allow")
@@ -83,6 +120,12 @@ async def update_user(user_id: int, body: UpdateUserBody,
     target = auth_db.get_user_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="user not found")
+    _check_can_modify(user, target)
+    if body.roles is not None:
+        if user_id == user.id and not user.is_super_admin:
+            raise HTTPException(status_code=403, detail="cannot change your own roles")
+        _check_assignable_roles(user, body.roles)
+    before_roles = auth_db.get_user_role_names(user_id)
 
     if body.is_super_admin is not None:
         if not user.is_super_admin:
@@ -105,7 +148,10 @@ async def update_user(user_id: int, body: UpdateUserBody,
             auth_db.assign_role(user_id, role_name, assigned_by=user.id)
 
     auth_db.db().commit()
-    audit_log(user, action="users.manage", resource=target["username"], result="allow")
+    detail = {k: v for k, v in body.model_dump().items() if v is not None}
+    if body.roles is not None:
+        detail["roles_before"] = before_roles
+    audit_log(user, action="users.manage", resource=target["username"], detail=detail, result="allow")
     return _user_public(auth_db.get_user_by_id(user_id))
 
 
@@ -116,8 +162,8 @@ async def delete_user(user_id: int, user: Principal = Depends(require_permission
     target = auth_db.get_user_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="user not found")
-    auth_db.db().execute("DELETE FROM users WHERE id = ?", (user_id,))
-    auth_db.db().commit()
+    _check_can_modify(user, target)
+    auth_db.delete_user(user_id)
     audit_log(user, action="users.manage", resource=target["username"], detail={"deleted": True}, result="allow")
     return {"ok": True}
 
@@ -180,6 +226,11 @@ async def update_role_permissions(role_id: int, body: RolePermissionsBody,
     role = auth_db.db().execute("SELECT * FROM roles WHERE id = ?", (role_id,)).fetchone()
     if not role:
         raise HTTPException(status_code=404, detail="role not found")
+    if not user.is_super_admin:
+        missing = set(body.grant) - user.permission_keys
+        if missing:
+            raise HTTPException(status_code=403,
+                                detail=f"cannot grant a permission you don't hold: {sorted(missing)[0]}")
     now = time.time()
     for key in body.grant:
         perm = auth_db.db().execute("SELECT id FROM permissions WHERE key = ?", (key,)).fetchone()

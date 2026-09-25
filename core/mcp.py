@@ -167,6 +167,11 @@ class McpServer:
                 if isinstance(resp.get("error"), dict):
                     raise RuntimeError(f"mcp error: {resp['error'].get('message')}")
                 return resp.get("result")
+        # the executor thread is still blocked in readline(); if we kept the process,
+        # it would swallow the next response and desync every later call
+        self.status = "error"
+        self.error = f"rpc timeout waiting for id {rid}"
+        self._cleanup()
         raise TimeoutError(f"mcp rpc timeout waiting for id {rid}")
 
     # ---------------- streamable-http plumbing ----------------
@@ -188,8 +193,13 @@ class McpServer:
         }
         if self._session_header:
             headers["Mcp-Session-Id"] = self._session_header
+        if self.owner is not None:
+            from .net_guard import check_url
+            await asyncio.get_running_loop().run_in_executor(None, check_url, self.cfg["url"])
         r = await self._http.post(self.cfg["url"], json=msg, headers=headers, timeout=timeout)
         if r.status_code >= 400:
+            if self.owner is not None:   # don't echo arbitrary upstream bodies to a non-admin
+                raise RuntimeError(f"mcp http {r.status_code}")
             raise RuntimeError(f"mcp http {r.status_code}: {r.text[:200]}")
         sid = r.headers.get("mcp-session-id")
         if sid:
@@ -233,47 +243,51 @@ class McpServer:
     async def connect(self) -> list:
         """initialize handshake + tools/list. Returns tool list; sets .status."""
         async with self._lock:
-            if self.status == "ready":
-                return self.tools
-            self.status = "connecting"
-            self.error = None
-            try:
-                if self.transport == "stdio":
-                    self._spawn_stdio()
-                result = await self._rpc("initialize", {
-                    "protocolVersion": MCP_PROTOCOL_VERSION,
-                    "capabilities": {},
-                    "clientInfo": {"name": "a770-runtime", "version": "1.0"},
-                }, timeout=self._init_timeout())
-                if not result:
-                    raise RuntimeError("no initialize result")
-                await self._rpc("notifications/initialized", notify=True)
-                tools_res = await self._rpc("tools/list", {})
-                self.tools = (tools_res or {}).get("tools", []) if isinstance(tools_res, dict) else []
-                self.status = "ready"
-                print(f"[mcp] server '{self.name}' ready with {len(self.tools)} tool(s)")
-                return self.tools
-            except Exception as e:
-                self.status = "error"
-                self.error = str(e) or type(e).__name__
-                tail = self._stderr_summary()
-                if tail:
-                    self.error += f" - stderr: {tail}"
-                self._cleanup()
-                print(f"[mcp] server '{self.name}' failed: {e}", file=sys.stderr)
-                return []
+            return await self._connect_locked()
+
+    async def _connect_locked(self) -> list:
+        # caller holds self._lock (asyncio.Lock is not reentrant)
+        if self.status == "ready":
+            return self.tools
+        self.status = "connecting"
+        self.error = None
+        try:
+            if self.transport == "stdio":
+                self._spawn_stdio()
+            result = await self._rpc("initialize", {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "a770-runtime", "version": "1.0"},
+            }, timeout=self._init_timeout())
+            if not result:
+                raise RuntimeError("no initialize result")
+            await self._rpc("notifications/initialized", notify=True)
+            tools_res = await self._rpc("tools/list", {})
+            self.tools = (tools_res or {}).get("tools", []) if isinstance(tools_res, dict) else []
+            self.status = "ready"
+            print(f"[mcp] server '{self.name}' ready with {len(self.tools)} tool(s)")
+            return self.tools
+        except Exception as e:
+            self.status = "error"
+            self.error = str(e) or type(e).__name__
+            tail = self._stderr_summary()
+            if tail:
+                self.error += f" - stderr: {tail}"
+            self._cleanup()
+            print(f"[mcp] server '{self.name}' failed: {e}", file=sys.stderr)
+            return []
 
     async def call_tool(self, tool_name: str, args: dict) -> str:
         async with self._lock:
             if self.status != "ready":
-                await self.connect()
+                await self._connect_locked()
             if self.status != "ready":
                 return f"error: mcp server '{self.name}' unavailable: {self.error}"
         try:
             async with self._lock:
                 result = await self._rpc("tools/call", {
                     "name": tool_name,
-                    "arguments": args or {},
+                    "arguments": _mask_args(args or {}),
                 })
         except Exception as e:
             return f"error: mcp call failed: {type(e).__name__}: {e}"
@@ -317,6 +331,19 @@ class McpServer:
                 for t in self.tools
             ],
         }
+
+
+def _mask_args(obj):
+    """PCI-DSS: tool arguments leave this host (often to a third-party API), so card
+    numbers the model put into them are masked like any other egress."""
+    from . import pan
+    if isinstance(obj, str):
+        return pan.mask_pans(obj)[0] if pan.enabled("pan_cloud_egress") else obj
+    if isinstance(obj, dict):
+        return {k: _mask_args(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_mask_args(v) for v in obj]
+    return obj
 
 
 def _stringify_content(result) -> str:
@@ -448,11 +475,16 @@ def chat_prompt() -> str:
         "CONNECTED MCP SERVERS (authoritative, organization-provided tools):\n"
         + "\n".join(lines) + "\n\n"
         "RULES:\n"
-        "1. When the user mentions one of these server names or the product/API it covers, it refers to THAT "
-        "product - never reinterpret the name from general knowledge.\n"
-        "2. For such questions call the server's tools FIRST (listing/spec/checklist/ask tools) and base the "
-        "answer on their results instead of answering from memory or a web search.\n"
-        "3. Never invent endpoints, parameters or credentials; use [PLACEHOLDER] for keys and secrets in code."
+        "1. When the user mentions one of these server names, it refers to THAT product - never reinterpret "
+        "the name from general knowledge.\n"
+        "2. Call a server's tools FIRST only when the question is about the API/integration it covers "
+        "(endpoints, parameters, request/response, error codes, SDK or code samples, integration steps) "
+        "and base the answer on their results.\n"
+        "3. A company or brand name alone is not an API question: for general questions (overview, news, "
+        "people, products, 'summarize X') use the company knowledge-base context if provided, then "
+        "`web_search` if available - not these tools, and do not put these server/product names into web "
+        "search queries unless the user wrote them.\n"
+        "4. Never invent endpoints, parameters or credentials; use [PLACEHOLDER] for keys and secrets in code."
     )
 
 

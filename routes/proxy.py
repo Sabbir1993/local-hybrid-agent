@@ -14,7 +14,8 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 from core.state import state
 from core.auth import Principal
-from core.deps import get_current_user
+from core.auth import user_has_permission
+from core.deps import require_permission
 from core.monitor import (
     _monitor_state,
     monitor_begin,
@@ -31,6 +32,12 @@ from core.audit import audit_log
 router = APIRouter(tags=["proxy"])
 
 _CHAT_PATHS = ("v1/chat/completions", "chat/completions")
+# Only the OpenAI-compatible inference surface is exposed. llama-server's
+# admin endpoints (/slots erase/save/restore, /props, /lora-adapters,
+# /metrics) would let any user wipe or read other users' KV cache.
+_ALLOWED_PATHS = frozenset(_CHAT_PATHS + (
+    "v1/completions", "completions", "v1/embeddings", "embeddings", "v1/models", "models", "health",
+))
 
 # Never forward the caller's app credentials to llama-server / cloud upstreams.
 _STRIP_HEADERS = {"host", "cookie", "authorization", "x-csrf-token", "content-length"}
@@ -42,16 +49,7 @@ def _upstream_headers(request: Request) -> dict:
 
 def _prompt_texts(payload: dict) -> list:
     """User-authored text in an OpenAI chat / completions / llama.cpp body."""
-    texts = []
-    for m in payload.get("messages") or []:
-        if not isinstance(m, dict) or m.get("role") != "user":
-            continue
-        c = m.get("content")
-        if isinstance(c, str):
-            texts.append(c)
-        elif isinstance(c, list):
-            texts.extend(str(part.get("text", "")) for part in c
-                         if isinstance(part, dict) and part.get("type") == "text")
+    texts = input_guard.message_texts(payload.get("messages"))   # every role, not just "user"
     prompt = payload.get("prompt")
     if isinstance(prompt, str):
         texts.append(prompt)
@@ -257,8 +255,8 @@ async def _proxy_cloud_inner(client, cm, path, payload, is_streaming, rid, t0, u
 
 
 @router.api_route("/{path:path}", methods=["GET", "POST"])
-async def proxy(path: str, request: Request, user: Principal = Depends(get_current_user)):
-    if path in ("favicon.ico", "index.html"):
+async def proxy(path: str, request: Request, user: Principal = Depends(require_permission("chat.use"))):
+    if path.lower().strip("/") not in _ALLOWED_PATHS:
         return JSONResponse({"error": "not found"}, status_code=404)
 
     # Main lane bound to the cloud: route chat-completions traffic there
@@ -299,6 +297,9 @@ async def proxy(path: str, request: Request, user: Principal = Depends(get_curre
 
     if state.process is None or state.process.poll() is not None or state.client is None:
         target = state.profile_path or state.profile
+        if target and not user_has_permission(user, "model.local.load"):
+            return JSONResponse({"error": {"message": "No model is running and you lack permission to start one.",
+                                           "type": "model_not_loaded"}}, status_code=503)
         if target:
             try:
                 print(f"[server_manager] proxy {path}: model not running — auto-starting...")

@@ -16,3 +16,8 @@ config/providers/
 /.agents
 # companion runtime config (server URL) - keep out of git
 companion/.env
+# SQLite sidecars can hold recent rows (sessions, chat text) just like the .db
+*.db-wal
+*.db-shm
+*.db-journal
+*.bak

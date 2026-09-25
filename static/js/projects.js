@@ -275,7 +275,7 @@ async function loadProjects(autoRestoreSessions = false) {
         list.innerHTML = `
           <div class="project-empty-state">
             <span style="font-size:11px; color:var(--dim);">${emptyMsg}</span>
-            <button class="btn ghost" style="font-size:10.5px; padding:3px 8px; margin-top:4px;" onclick="$('btn-newproject').click()">+ Create Project</button>
+            <button class="btn ghost" style="font-size:10.5px; padding:3px 8px; margin-top:4px;" data-click="new-project">+ Create Project</button>
           </div>`;
       } else {
         userProjects.forEach(p => {
@@ -926,7 +926,7 @@ async function navigateDirPicker(path) {
     d.subdirs.forEach(name => {
       const item = document.createElement('div');
       item.className = 'dir-item';
-      item.innerHTML = `<span style="font-size:13px;">📁</span> <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</span>`;
+      item.innerHTML = `<span style="font-size:13px;">📁</span> <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(name)}</span>`;
       
       const getFullPath = () => {
         const sep = d.current.includes('\\') ? '\\' : '/';

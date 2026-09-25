@@ -104,10 +104,14 @@ function mkdir({ path: base, name }) {
   return { path: path.resolve(target) };
 }
 
+const MAX_READ_BYTES = 20 * 1024 * 1024;
+
 function read({ path: p }) {
   if (!fs.existsSync(p) || !fs.statSync(p).isFile()) {
     return { content: null };
   }
+  const size = fs.statSync(p).size;
+  if (size > MAX_READ_BYTES) throw new Error(`File too large to read (${size} bytes, max ${MAX_READ_BYTES})`);
   return { content: fs.readFileSync(p, "utf-8") };
 }
 
@@ -207,8 +211,15 @@ function tree({ root, rel }) {
   return { nodes };
 }
 
+const MAX_GREP_PATTERN = 300;
+
 function grep({ root, pattern }) {
-  const rx = new RegExp(pattern, "i");
+  // the pattern is model-chosen and runs on this machine's event loop: keep it short
+  // and refuse nested quantifiers like (a+)+ that backtrack catastrophically
+  const pat = String(pattern || "");
+  if (pat.length > MAX_GREP_PATTERN) throw new Error(`pattern too long (max ${MAX_GREP_PATTERN} chars)`);
+  if (/\([^)]*[+*][^)]*\)[+*{]/.test(pat)) throw new Error("pattern has nested quantifiers");
+  const rx = new RegExp(pat, "i");
   const hits = [];
   walk(root, (full) => {
     if (hits.length >= 100) return;

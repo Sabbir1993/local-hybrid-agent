@@ -89,11 +89,22 @@ class MarketplaceTests(unittest.TestCase):
         self.assertEqual(d["count"], 1)
         self.assertEqual(d["items"][0]["manifest_url"], "https://example.com/m.json")
 
-    def test_registry_blocks_private_override(self):
+    def test_registry_ignores_url_override(self):
+        # users can't redirect the server to a registry of their choosing
         r = self.client.get("/customize/plugins/registry",
                             params={"url": "http://127.0.0.1/evil.json"})
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("blocked", r.json()["error"])
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["items"][0]["manifest_url"], "https://example.com/m.json")
+
+    def test_registry_defaults_to_local_file(self):
+        APP_CONFIG["capabilities"]["plugin_marketplace_url"] = ""
+        local = Path(self.tmp.name) / "plugin_registry.json"
+        local.write_text(json.dumps({"plugins": [{"name": "localdemo",
+                                                  "manifest_url": "https://example.com/l.json"}]}))
+        with mock.patch.object(cz, "LOCAL_REGISTRY_FILE", local), \
+             mock.patch("routes.customize.guarded_get", side_effect=AssertionError("no network")):
+            d = self.client.get("/customize/plugins/registry").json()
+        self.assertEqual([i["name"] for i in d["items"]], ["localdemo"])
 
     def test_inspect_returns_preview_without_writing(self):
         d = self.client.post("/customize/plugins/inspect-remote",
@@ -108,9 +119,22 @@ class MarketplaceTests(unittest.TestCase):
                              json={"manifest_url": "http://169.254.169.254/x"})
         self.assertEqual(r.status_code, 400)
 
-    def test_install_remote_writes_and_loads(self):
+    def _reviewed_sha(self):
+        return self.client.post("/customize/plugins/inspect-remote",
+                                json={"manifest_url": "https://example.com/m.json"}).json()["code_sha256"]
+
+    def test_install_remote_requires_reviewed_hash(self):
         r = self.client.post("/customize/plugins/install-remote",
                              json={"manifest_url": "https://example.com/m.json"})
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post("/customize/plugins/install-remote",
+                             json={"manifest_url": "https://example.com/m.json", "code_sha256": "0" * 64})
+        self.assertEqual(r.status_code, 409)
+
+    def test_install_remote_writes_and_loads(self):
+        r = self.client.post("/customize/plugins/install-remote",
+                             json={"manifest_url": "https://example.com/m.json",
+                                   "code_sha256": self._reviewed_sha()})
         self.assertEqual(r.status_code, 200, r.text)
         self.assertTrue(r.json()["loaded"])
         d = self.client.post("/customize/plugins/inspect-remote",

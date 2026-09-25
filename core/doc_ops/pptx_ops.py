@@ -152,16 +152,27 @@ def _solid_rgb(fill_parent) -> Optional[str]:
         f = fill_parent.fill
         from pptx.enum.dml import MSO_FILL
         if f.type == MSO_FILL.SOLID and f.fore_color.type is not None:
-            return "#" + str(f.fore_color.rgb)
+            return _hex(f.fore_color.rgb)
     except Exception:
         pass
     return None
 
 
+_HEX_RX = re.compile(r"^[0-9A-Fa-f]{6}$")
+# Preview values end up in style="..." / src="..." in the browser; a crafted file
+# controls both the raw srgbClr value and [Content_Types].xml.
+_PREVIEW_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/bmp", "image/webp"}
+
+
+def _hex(val) -> Optional[str]:
+    v = str(val or "")
+    return "#" + v if _HEX_RX.match(v) else None
+
+
 def _bg_rgb(cSld_owner) -> Optional[str]:
     try:
         clr = cSld_owner._element.xpath("./p:cSld/p:bg/p:bgPr/a:solidFill/a:srgbClr/@val")
-        return "#" + clr[0] if clr else None
+        return _hex(clr[0]) if clr else None
     except Exception:
         return None
 
@@ -181,7 +192,7 @@ def _run_style(font) -> dict:
             pass
     try:
         if font.color and font.color.type is not None:
-            st["color"] = "#" + str(font.color.rgb)
+            st["color"] = _hex(font.color.rgb)
     except Exception:
         pass
     return st
@@ -249,7 +260,7 @@ def _preview_shapes(shapes, tx, budget: list, skip_placeholders: bool = False) -
                 img = sh.image
                 blob = img.blob
                 if len(blob) <= PREVIEW_MAX_IMAGE and budget[0] + len(blob) <= PREVIEW_MAX_IMAGES \
-                        and img.content_type.startswith("image/") and img.ext.lower() != "wmf":
+                        and img.content_type in _PREVIEW_IMAGE_TYPES:
                     import base64
                     budget[0] += len(blob)
                     item["src"] = f"data:{img.content_type};base64," + base64.b64encode(blob).decode()
@@ -277,7 +288,7 @@ def _preview_shapes(shapes, tx, budget: list, skip_placeholders: bool = False) -
             item["fill"] = fill
         try:
             if sh.line.fill.type is not None and sh.line.color.type is not None:
-                item["line"] = "#" + str(sh.line.color.rgb)
+                item["line"] = _hex(sh.line.color.rgb)
         except Exception:
             pass
         if getattr(sh, "has_text_frame", False) and sh.has_text_frame:

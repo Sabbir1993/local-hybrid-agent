@@ -6,10 +6,11 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Optional
 
 from .config import USAGE_DB_FILE, PROJECTS_DB_FILE
+from .sqlite_util import ThreadLocalDB, transaction
 
 # ---------------- usage tracking (sqlite) ----------------
-def _init_usage_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(USAGE_DB_FILE), check_same_thread=False)
+def _init_usage_db() -> ThreadLocalDB:
+    conn = ThreadLocalDB(USAGE_DB_FILE)
     conn.execute("""CREATE TABLE IF NOT EXISTS requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts REAL NOT NULL,
@@ -207,9 +208,8 @@ def db_report(days: int = 30, model: Optional[str] = None) -> dict:
 
 
 # ---------------- projects & sessions (sqlite) ----------------
-def _init_projects_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(PROJECTS_DB_FILE), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+def _init_projects_db() -> ThreadLocalDB:
+    conn = ThreadLocalDB(PROJECTS_DB_FILE, row_factory=sqlite3.Row)
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -296,10 +296,14 @@ def _init_projects_db() -> sqlite3.Connection:
         has_dev_name = "device_name" in old_cols
         has_allow_pats = "allow_patterns" in old_cols
         has_uid = "user_id" in old_cols
-        conn.execute("PRAGMA foreign_keys = OFF;")
+        # Build the new table first and rename it into place. Renaming the OLD
+        # table would make SQLite rewrite sessions' REFERENCES to "projects_old",
+        # which is then dropped (see core/db_repair.py for the fix-up).
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
         conn.executescript(f"""
-            ALTER TABLE projects RENAME TO projects_old;
-            CREATE TABLE projects (
+            DROP TABLE IF EXISTS projects_new;
+            CREATE TABLE projects_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 created_at REAL NOT NULL,
@@ -310,16 +314,33 @@ def _init_projects_db() -> sqlite3.Connection:
                 device_name TEXT DEFAULT 'Default Device',
                 UNIQUE(name, user_id, device_id)
             );
-            INSERT INTO projects (id, name, created_at, workspace_dir, allow_patterns, user_id, device_id, device_name)
+            INSERT INTO projects_new (id, name, created_at, workspace_dir, allow_patterns, user_id, device_id, device_name)
                 SELECT id, name, created_at, workspace_dir,
                        {'allow_patterns' if has_allow_pats else "'[]'"},
                        {'user_id' if has_uid else 'NULL'},
                        {'COALESCE(device_id, "default")' if has_dev_id else "'default'"},
                        {'COALESCE(device_name, "Default Device")' if has_dev_name else "'Default Device'"}
-                FROM projects_old;
-            DROP TABLE projects_old;
+                FROM projects;
+            PRAGMA legacy_alter_table = ON;
+            DROP TABLE projects;
+            ALTER TABLE projects_new RENAME TO projects;
+            PRAGMA legacy_alter_table = OFF;
         """)
-        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute(f"PRAGMA foreign_keys = {'ON' if conn.foreign_keys else 'OFF'}")
+
+    # migration: hardware-derived device ids (a slice of the OS machine GUID) are
+    # replaced by their one-way hash (request_context.normalize_device_id)
+    from .request_context import normalize_device_id
+    for (old,) in conn.execute("SELECT DISTINCT device_id FROM projects WHERE device_id LIKE 'dev_win_%' "
+                               "OR device_id LIKE 'dev_lnx_%' OR device_id LIKE 'dev_mac_%'").fetchall():
+        new = normalize_device_id(old)
+        if new == old:
+            continue
+        try:
+            conn.execute("UPDATE projects SET device_id = ? WHERE device_id = ?", (new, old))
+        except sqlite3.IntegrityError:
+            # a same-named project already exists under the hashed id: keep that one
+            conn.execute("UPDATE OR IGNORE projects SET device_id = ? WHERE device_id = ?", (new, old))
 
     conn.commit()
     return conn
@@ -331,11 +352,9 @@ def db_clear_all_projects_data() -> dict:
     counts = {}
     for table in ("plan_items", "messages", "sessions", "projects"):
         counts[table] = _projects_db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-    _projects_db.execute("DELETE FROM plan_items")
-    _projects_db.execute("DELETE FROM messages")
-    _projects_db.execute("DELETE FROM sessions")
-    _projects_db.execute("DELETE FROM projects")
-    _projects_db.commit()
+    with transaction(_projects_db) as c:
+        for table in ("plan_items", "messages", "sessions", "projects"):
+            c.execute(f"DELETE FROM {table}")
     return counts
 
 
@@ -555,17 +574,27 @@ def db_list_user_devices(owner_user_id: int) -> list:
 def db_delete_project(pid: int, owner_user_id: int) -> None:
     if db_project_owner(pid) != owner_user_id:
         raise PermissionError("not your project")
-    _projects_db.execute(
-        "DELETE FROM plan_items WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
-        (pid,)
-    )
-    _projects_db.execute(
-        "DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
-        (pid,)
-    )
-    _projects_db.execute("DELETE FROM sessions WHERE project_id = ?", (pid,))
-    _projects_db.execute("DELETE FROM projects WHERE id = ?", (pid,))
-    _projects_db.commit()
+    sids = [r[0] for r in _projects_db.execute("SELECT id FROM sessions WHERE project_id = ?", (pid,))]
+    with transaction(_projects_db) as c:
+        c.execute("DELETE FROM plan_items WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
+                  (pid,))
+        c.execute("DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
+                  (pid,))
+        c.execute("DELETE FROM sessions WHERE project_id = ?", (pid,))
+        c.execute("DELETE FROM projects WHERE id = ?", (pid,))
+    _forget_session_memory(sids)
+
+
+def _forget_session_memory(sids: list) -> None:
+    """Drop the memory-search chunks of deleted sessions (they live in memory.db,
+    so no foreign key can cascade them)."""
+    if not sids:
+        return
+    try:
+        from .memory import delete_session_chunks
+        delete_session_chunks(sids)
+    except Exception as e:
+        print(f"[db] memory cleanup for deleted sessions failed: {e}", file=sys.stderr)
 
 
 def db_session_docs(limit: int = 60) -> list:
@@ -610,11 +639,21 @@ def db_list_sessions(pid: Optional[int], owner_user_id: int) -> list:
     ]
 
 
+def _at_rest(text):
+    """Mask card numbers before anything lands in projects.db (PCI DSS 3.4). The
+    input guard blocks PAN prompts, but the UI persists a message before the server
+    rules on it, and titles / tool output / imported sessions never pass the guard."""
+    from . import pan
+    if not isinstance(text, str) or not pan.enabled("pan_at_rest"):
+        return text
+    return pan.mask_pans(text)[0]
+
+
 def db_create_session(pid: Optional[int], title: str = None, owner_user_id: int = None) -> dict:
     if owner_user_id is None:
         raise ValueError("owner_user_id required")
     now = time.time()
-    title = (title or "New session").strip()[:80]
+    title = _at_rest((title or "New session").strip())[:80]
     actual_pid = None if (pid is None or pid == 0) else pid
     if actual_pid is not None and db_project_owner(actual_pid) != owner_user_id:
         raise PermissionError("not your project")
@@ -628,7 +667,7 @@ def db_create_session(pid: Optional[int], title: str = None, owner_user_id: int 
 def db_update_session_title(sid: int, title: str, owner_user_id: int) -> None:
     if db_session_owner(sid) != owner_user_id:
         raise PermissionError("not your session")
-    title = (title or "New session").strip()[:80]
+    title = _at_rest((title or "New session").strip())[:80]
     _projects_db.execute("UPDATE sessions SET title = ? WHERE id = ?", (title, sid))
     _projects_db.commit()
 
@@ -636,10 +675,11 @@ def db_update_session_title(sid: int, title: str, owner_user_id: int) -> None:
 def db_delete_session(sid: int, owner_user_id: int) -> None:
     if db_session_owner(sid) != owner_user_id:
         raise PermissionError("not your session")
-    _projects_db.execute("DELETE FROM plan_items WHERE session_id = ?", (sid,))
-    _projects_db.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
-    _projects_db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
-    _projects_db.commit()
+    with transaction(_projects_db) as c:
+        c.execute("DELETE FROM plan_items WHERE session_id = ?", (sid,))
+        c.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
+        c.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+    _forget_session_memory([sid])
 
 
 def db_load_messages(sid: int, owner_user_id: int) -> list:
@@ -657,32 +697,9 @@ def db_append_message(sid: int, role: str, content: str, meta: dict = None, owne
         raise PermissionError("not your session")
     cur = _projects_db.execute(
         "INSERT INTO messages (session_id, role, content, meta, created_at) VALUES (?, ?, ?, ?, ?)",
-        (sid, role, content, json.dumps(meta) if meta else None, time.time()))
+        (sid, role, _at_rest(content), _at_rest(json.dumps(meta)) if meta else None, time.time()))
     _projects_db.commit()
     return cur.lastrowid
-
-
-def db_archive_messages(sid: int) -> Optional[str]:
-    """Dump the full transcript of a session to a markdown file before /compact
-    rewrites it. Returns the archive path, or None when there is nothing to save."""
-    msgs = db_load_messages(sid)
-    if not msgs:
-        return None
-    archive_dir = PROJECTS_DB_FILE.parent / "compacts"
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    path = archive_dir / f"session-{sid}-{int(time.time())}.md"
-    lines = [f"# Transcript archive — session {sid}", ""]
-    for m in msgs:
-        role = (m.get("role") or "?").upper()
-        lines.append(f"## {role}")
-        lines.append(str(m.get("content") or ""))
-        lines.append("")
-    try:
-        path.write_text("\n".join(lines), encoding="utf-8")
-        return str(path)
-    except OSError as e:
-        print(f"[db] transcript archive failed: {e}", file=sys.stderr)
-        return None
 
 
 # ---------------- structured plan tracking ----------------
@@ -692,13 +709,12 @@ _VALID_PLAN_STATUS = ("pending", "in_progress", "done", "failed")
 def db_set_plan_items(sid: int, texts: list) -> list:
     """Replace the session's plan with an ordered list of step texts (status reset to pending)."""
     now = time.time()
-    _projects_db.execute("DELETE FROM plan_items WHERE session_id = ?", (sid,))
-    for i, t in enumerate(texts, start=1):
-        _projects_db.execute(
+    with transaction(_projects_db) as c:
+        c.execute("DELETE FROM plan_items WHERE session_id = ?", (sid,))
+        c.executemany(
             "INSERT INTO plan_items (session_id, ord, text, status, created_at, updated_at) "
             "VALUES (?, ?, ?, 'pending', ?, ?)",
-            (sid, i, str(t)[:300], now, now))
-    _projects_db.commit()
+            [(sid, i, str(t)[:300], now, now) for i, t in enumerate(texts, start=1)])
     return db_get_plan_items(sid)
 
 

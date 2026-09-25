@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from core.config import CONFIG_FILE
+from core.config import CONFIG_FILE, write_app_config
 from core import plugins as plugins_core
 from core.audit import audit_log
 from core.auth import Principal
@@ -39,7 +39,7 @@ def _set_disabled(name: str, disabled: bool) -> None:
     if disabled:
         cur.append(name)
     caps["plugins_disabled"] = sorted(cur)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    write_app_config(cfg, CONFIG_FILE)
     plugins_core._caps()["plugins_disabled"] = caps["plugins_disabled"]
 
 

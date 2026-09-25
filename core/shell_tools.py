@@ -35,6 +35,9 @@ MAX_OUTPUT_CHARS = 20000
 FORBIDDEN_SUBSTR = ("format ", "del /f /s /q c:\\", "rd /s /q c:\\", "remove-item -recurse c:\\")
 
 
+DEFAULT_EXEC_TIMEOUT_S = 60
+
+
 def shell_cfg() -> dict:
     caps = APP_CONFIG.get("capabilities", {})
     return caps.get("shell") or {"enabled": False}
@@ -54,6 +57,18 @@ def is_compound(cmd: str) -> bool:
     return bool(_SHELL_META_RE.search(cmd or ""))
 
 
+# Arguments that turn an innocent-looking allow pattern ("git diff*", "type *") into a
+# file write, code execution, or a read outside the project. A command carrying one is
+# never auto-approved -- it still runs if the user approves it in the modal.
+_RISKY_ARG_RE = re.compile(
+    r"(?:^|\s)(?:--output\b|-o\b|--ext-diff\b|--upload-pack\b|--receive-pack\b|--exec\b"
+    r"|-c\s|--config\b|--git-dir\b|--work-tree\b)"
+    r"|![^!\s]+!"                               # cmd.exe delayed expansion
+    # absolute / UNC path argument ("/x" alone is a cmd.exe switch, "/etc/x" a path)
+    r"|(?:^|\s)[\"']?(?:[a-z]:|\\|/[^\s/]*/)"
+    r"|\.\.[\\/]|[\\/]\.\.(?:$|\s)")   # parent-directory traversal
+
+
 def command_allowed(cmd: str, patterns: list) -> bool:
     """True when `cmd` is auto-approved by one of the allow patterns."""
     c = (cmd or "").strip().lower()
@@ -61,6 +76,9 @@ def command_allowed(cmd: str, patterns: list) -> bool:
     if "*" in pats:
         return True             # user explicitly allowed everything
     if not c or is_compound(c):
+        return False
+    first, _, rest = c.partition(" ")
+    if rest and _RISKY_ARG_RE.search(" " + rest):
         return False
     return any(fnmatch.fnmatch(c, p) for p in pats)
 
@@ -109,7 +127,9 @@ async def tool_run_shell(args: dict) -> str:
                 return f"error: user denied shell command: {cmd}" + (f" ({note})" if note else "")
 
     raw_t = cfg.get("timeout_s", 0)
-    timeout = int(raw_t) if raw_t and int(raw_t) > 0 else None
+    # 0 = "default", not "forever": the server stops waiting after this, so the
+    # companion must kill the process then too instead of leaving it running
+    timeout = int(raw_t) if raw_t and int(raw_t) > 0 else DEFAULT_EXEC_TIMEOUT_S
     from .agent_tools import require_device_workspace
     # Agent shell commands run ONLY on the user's machine via the companion.
     # (Skill installs used to run server-side in BASE_DIR -- that was agent
@@ -143,7 +163,7 @@ async def tool_run_shell(args: dict) -> str:
 def add_allow_pattern(pattern: str) -> None:
     """Persist a new allow pattern (from 'Always allow') into config/app.json."""
     import json
-    from .config import CONFIG_FILE
+    from .config import CONFIG_FILE, write_app_config
     pattern = pattern.strip()
     if not pattern:
         return
@@ -154,7 +174,7 @@ def add_allow_pattern(pattern: str) -> None:
         pats = shell.setdefault("allow_patterns", [])
         if pattern not in pats:
             pats.append(pattern)
-        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        write_app_config(cfg, CONFIG_FILE)
         # live-update the in-memory config too
         caps = APP_CONFIG.setdefault("capabilities", {})
         sc = caps.setdefault("shell", {})

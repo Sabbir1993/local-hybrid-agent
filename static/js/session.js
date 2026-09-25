@@ -14,9 +14,24 @@
   window.__perms = new Set();
   window.__user = null;
 
+  // Idle logout (PCI DSS 8.2.8). Background polls send X-A770-Background so they
+  // don't slide the server-side idle expiry; real input does (via touchServer).
+  let idleMs = 15 * 60 * 1000;
+  let lastActive = Date.now();
+  let lastTouch = Date.now();
+  let idleWarnEl = null;
+  let loggingOut = false;
+
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async function (input, init) {
     init = init || {};
+    if (init.background) {
+      init.headers = new Headers(init.headers || {});
+      init.headers.set('X-A770-Background', '1');
+      delete init.background;
+    } else {
+      lastTouch = Date.now();
+    }
     const method = (init.method || 'GET').toUpperCase();
     if (method !== 'GET' && method !== 'HEAD') {
       const csrf = readCookie('a770_csrf');
@@ -62,11 +77,20 @@
     const label = user.display_name || user.username;
     emailEl.textContent = label;
     if (user.is_super_admin) {
-      emailEl.innerHTML = label + '<br><span class="user-menu-badge">super admin</span>';
+      emailEl.innerHTML = esc(label) + '<br><span class="user-menu-badge">super admin</span>';
     }
 
     const pwdForm = dd.querySelector('.user-menu-pwd-form');
     const pwdMsg = dd.querySelector('.user-menu-msg');
+    if (user.must_change_password) {
+      // first sign-in / admin reset: open the form straight away (PCI DSS 8.3.5)
+      setTimeout(() => {
+        dd.classList.add('open');
+        pwdForm.style.display = 'flex';
+        pwdMsg.textContent = 'Set a new password (12+ characters, letters and digits) to continue.';
+        pwdMsg.className = 'user-menu-msg err';
+      }, 0);
+    }
     const resetPwdForm = () => {
       pwdForm.style.display = 'none';
       pwdMsg.textContent = '';
@@ -74,7 +98,10 @@
       dd.querySelectorAll('.user-menu-pwd-form input').forEach(i => { i.value = ''; });
     };
 
-    const closeMenu = () => { dd.classList.remove('open'); resetPwdForm(); };
+    const closeMenu = () => {
+      if (user.must_change_password) return;   // the server refuses everything else until it's done
+      dd.classList.remove('open'); resetPwdForm();
+    };
 
     trigger.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -90,6 +117,7 @@
       if (action === 'change-pwd') {
         pwdForm.style.display = pwdForm.style.display === 'none' ? 'flex' : 'none';
       } else if (action === 'pwd-cancel') {
+        if (user.must_change_password) return;
         resetPwdForm();
       } else if (action === 'pwd-save') {
         const current = dd.querySelector('[data-field="current"]').value;
@@ -116,6 +144,7 @@
           if (!r.ok) throw new Error(d.detail || 'failed');
           pwdMsg.textContent = 'Password changed.';
           pwdMsg.className = 'user-menu-msg ok';
+          if (user.must_change_password) { setTimeout(() => location.reload(), 800); return; }
           setTimeout(closeMenu, 1200);
         }).catch((err) => {
           pwdMsg.textContent = err.message;
@@ -138,9 +167,77 @@
     });
   }
 
+  function idleLogout() {
+    if (loggingOut) return;
+    loggingOut = true;
+    fetch('/auth/logout', { method: 'POST' }).catch(() => {}).finally(() => {
+      location.href = '/login?next=' + encodeURIComponent(location.pathname);
+    });
+  }
+
+  function hideIdleWarning() {
+    if (idleWarnEl) { idleWarnEl.remove(); idleWarnEl = null; }
+  }
+
+  function showIdleWarning() {
+    if (idleWarnEl) return;
+    idleWarnEl = document.createElement('div');
+    idleWarnEl.className = 'idle-warning';
+    idleWarnEl.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:10000;padding:12px 14px;'
+      + 'border-radius:8px;background:var(--panel,#222);color:var(--text,#eee);'
+      + 'border:1px solid var(--border,#555);box-shadow:0 4px 16px rgba(0,0,0,.35);font-size:13px';
+    const msg = document.createElement('div');
+    msg.textContent = 'You will be signed out in 1 minute due to inactivity.';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn accent';
+    btn.style.marginTop = '8px';
+    btn.textContent = 'Stay signed in';
+    btn.addEventListener('click', () => markActive(true));
+    idleWarnEl.append(msg, btn);
+    document.body.appendChild(idleWarnEl);
+  }
+
+  // Any real input (or a streaming job) counts as activity. The server session is
+  // refreshed at most once a minute while active, so typing a long prompt without
+  // sending anything doesn't let it lapse.
+  function markActive(force) {
+    const now = Date.now();
+    // tabs share one session: publish activity so an idle tab doesn't sign out an active one
+    if (now - lastActive > 5000) { try { localStorage.setItem('a770_last_active', String(now)); } catch (_) {} }
+    lastActive = now;
+    hideIdleWarning();
+    if (force === true || Date.now() - lastTouch > 60 * 1000) {
+      lastTouch = Date.now();
+      nativeFetch('/auth/me', { credentials: 'same-origin' }).then(r => {
+        if (r.status === 401) idleLogout();
+      }).catch(() => {});
+    }
+  }
+  window.markActive = markActive;
+
+  function startIdleWatch() {
+    ['keydown', 'pointerdown', 'wheel', 'touchstart'].forEach(ev =>
+      document.addEventListener(ev, markActive, { passive: true, capture: true }));
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') checkIdle();
+    });
+    setInterval(checkIdle, 10 * 1000);
+  }
+
+  function checkIdle() {
+    const shared = Number(localStorage.getItem('a770_last_active') || 0);
+    if (shared > lastActive) { lastActive = shared; hideIdleWarning(); }
+    const idle = Date.now() - lastActive;
+    if (idle >= idleMs) idleLogout();
+    else if (idle >= idleMs - 60 * 1000) showIdleWarning();
+  }
+
   window.__sessionReady = fetch('/auth/me').then(async (resp) => {
     if (!resp.ok) return null;
     const data = await resp.json();
+    if (data.idle_seconds) idleMs = data.idle_seconds * 1000;
+    if (data.user) startIdleWatch();
     window.__user = data.user;
     window.__perms = new Set(data.permissions || []);
     applyPermGating(data);

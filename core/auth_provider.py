@@ -17,6 +17,16 @@ from argon2.exceptions import VerifyMismatchError, InvalidHash
 from . import auth_db
 
 _hasher = PasswordHasher()
+_dummy_hash: Optional[str] = None
+
+
+def _burn_hash_time(password: str) -> None:
+    """Spend one argon2 verify on a failed lookup so response time doesn't reveal
+    whether the username exists / is active / is locked."""
+    global _dummy_hash
+    if _dummy_hash is None:
+        _dummy_hash = _hasher.hash("timing-equalizer")
+    verify_password(password or "", _dummy_hash)
 
 
 @dataclass
@@ -54,12 +64,10 @@ class LocalAuthProvider:
 
     def verify_credentials(self, username: str, password: str) -> Optional[UserRecord]:
         row = auth_db.get_user_by_username(username)
-        if not row or not row["is_active"] or not row["password_hash"]:
-            return None
-        if row["auth_provider"] != "local":
-            return None
-        if auth_db.is_locked(row):
-            return None             # same generic failure: don't reveal the lock
+        if (not row or not row["is_active"] or not row["password_hash"]
+                or row["auth_provider"] != "local" or auth_db.is_locked(row)):
+            _burn_hash_time(password)
+            return None             # same generic failure: don't reveal which check failed
         if not verify_password(password, row["password_hash"]):
             if auth_db.record_failed_login(row["id"]):
                 from .audit import audit_log

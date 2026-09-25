@@ -19,6 +19,7 @@ from typing import Optional
 
 import asyncio
 import hashlib
+import hmac
 import json
 
 from fastapi import APIRouter, Depends
@@ -26,6 +27,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from core.net_guard import BlockedURLError, guarded_get
+from core.config import BASE_DIR
 from core.small_model import APP_CONFIG
 from core import credentials, mcp_catalog
 from core import mcp as mcp_core
@@ -49,9 +51,7 @@ MAX_PREVIEW_CHARS = 20000
 # Every URL fetch below goes through core.net_guard.guarded_get (SSRF guard,
 # private-network block, capped body). Nothing is written to plugins/ until the
 # user reviews the manifest + code preview and confirms install.
-DEFAULT_MARKETPLACE_URL = (
-    "https://raw.githubusercontent.com/Sabbir1993/local-hybrid-agent/main/plugin_registry.json"
-)
+LOCAL_REGISTRY_FILE = BASE_DIR / "plugin_registry.json"
 MARKETPLACE_TIMEOUT_S = 15
 REMOTE_MAX_MANIFEST_BYTES = 64 * 1024
 REMOTE_MAX_CODE_BYTES = 512 * 1024
@@ -73,6 +73,7 @@ class RemoteInstallReq(BaseModel):
     manifest_url: str = ""
     code_url: str = ""          # optional override
     name: str = ""              # optional override (must match manifest name when both given)
+    code_sha256: str = ""       # from inspect-remote: install only the exact code that was reviewed
 
 
 def _err(msg: str, code: int = 400) -> JSONResponse:
@@ -241,8 +242,8 @@ def _item(kind: str, item_id: str) -> Optional[dict]:
 # ---------------- remote marketplace (plugins via URL) ----------------
 
 def _marketplace_url() -> str:
-    return str((_caps().get("plugin_marketplace_url") or DEFAULT_MARKETPLACE_URL)).strip() \
-        or DEFAULT_MARKETPLACE_URL
+    """Admin-configured remote registry, or "" for the local plugin_registry.json."""
+    return str(_caps().get("plugin_marketplace_url") or "").strip()
 
 
 async def _fetch_url(url: str, max_bytes: int):
@@ -346,24 +347,33 @@ async def _fetch_manifest_and_code(manifest_url: str, code_url_override: str = "
 
 @router.get("/plugins/registry")
 async def plugin_registry(q: Optional[str] = None,
-                          url: Optional[str] = None,
                           user: Principal = Depends(get_current_user)):
-    target = (url or "").strip() or _marketplace_url()
-    try:
-        from core.net_guard import check_url
-        check_url(target)
-    except BlockedURLError as e:
-        return _err(f"blocked URL: {e}")
-    try:
-        resp = await _fetch_url(target, REMOTE_MAX_CODE_BYTES)
-    except ValueError as e:
-        return _err(str(e))
-    if resp.status_code >= 400:
-        return _err(f"registry fetch failed: HTTP {resp.status_code}", 502)
-    try:
-        raw = json.loads(resp.text)
-    except ValueError:
-        return _err("registry did not return valid JSON", 502)
+    # No per-request URL override: users can't point the server at a registry of
+    # their choosing; only the admin-set config value (or the local file) is used.
+    target = _marketplace_url()
+    if not target:
+        try:
+            raw = json.loads(LOCAL_REGISTRY_FILE.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raw = {"plugins": []}
+        except ValueError:
+            return _err("plugin_registry.json is not valid JSON", 500)
+    else:
+        try:
+            from core.net_guard import check_url
+            check_url(target)
+        except BlockedURLError as e:
+            return _err(f"blocked URL: {e}")
+        try:
+            resp = await _fetch_url(target, REMOTE_MAX_CODE_BYTES)
+        except ValueError as e:
+            return _err(str(e))
+        if resp.status_code >= 400:
+            return _err(f"registry fetch failed: HTTP {resp.status_code}", 502)
+        try:
+            raw = json.loads(resp.text)
+        except ValueError:
+            return _err("registry did not return valid JSON", 502)
     entries = raw.get("plugins") if isinstance(raw, dict) else raw
     if not isinstance(entries, list):
         return _err('registry JSON must be {"plugins": [...]}', 502)
@@ -416,6 +426,12 @@ async def install_remote_plugin(req: RemoteInstallReq, user: Principal = Depends
     code_text = data.get("code_text") or ""
     if not data.get("code_url"):
         return _err("manifest has no code_url/source_url - nothing to install")
+    # The code is fetched again here; without this pin the server could serve
+    # different code to install than it showed in the review.
+    if not req.code_sha256:
+        return _err("code_sha256 from the reviewed preview is required")
+    if not hmac.compare_digest(req.code_sha256.lower(), str(data.get("code_sha256") or "")):
+        return _err("remote code changed since it was reviewed - inspect it again", 409)
     if data.get("code_truncated"):
         return _err("remote code too large (> 512 KiB)")
     if plugins_core.is_installed(name) and not plugins_core.is_modified(name):

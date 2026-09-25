@@ -128,7 +128,18 @@ def git_commit(message: str) -> dict:
     return {"ok": True, "output": out.strip()}
 
 
+def _bad_ref(*names) -> Optional[str]:
+    """Caller-supplied remote/branch names must not be parsed as git options
+    (--receive-pack=..., --output=... run programs / write files)."""
+    for n in names:
+        if n and str(n).lstrip().startswith("-"):
+            return f"invalid git ref or remote name: {n!r}"
+    return None
+
+
 def git_push(remote: str = "origin", branch: Optional[str] = None) -> dict:
+    if _bad_ref(remote, branch):
+        return {"error": _bad_ref(remote, branch)}
     cwd = _cwd()
     if not _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
@@ -172,6 +183,8 @@ def git_diff_range(base: str) -> dict:
         return {"error": f"'{cwd}' is not a git repository"}
     if not base or not base.strip():
         return {"error": "base branch is required"}
+    if _bad_ref(base):
+        return {"error": _bad_ref(base)}
     code, out, err = _run(["diff", f"{base}...HEAD"], cwd)
     if code != 0:
         return {"error": err.strip() or f"git diff {base}...HEAD failed"}
@@ -181,6 +194,8 @@ def git_diff_range(base: str) -> dict:
 
 
 def git_remote_url(remote: str = "origin") -> Optional[str]:
+    if _bad_ref(remote):
+        return None
     cwd = _cwd()
     if not _is_repo(cwd):
         return None

@@ -1,6 +1,8 @@
 import json
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 # Port & Network Settings
@@ -92,6 +94,62 @@ def _load_runtime() -> dict:
 
 
 ACTIVE_RUNTIME = _load_runtime()
+
+
+# One lock for every read-modify-write of config/app.json, so two saves can't
+# drop each other's change; the write itself goes through a temp file + rename
+# so a crash mid-save never leaves a truncated app.json behind.
+CONFIG_LOCK = threading.RLock()
+
+
+def atomic_write_json(path: Path, data) -> None:
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2))
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(6):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                # Windows refuses the rename while another handle has the file open
+                if attempt == 5:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def read_app_config(path: Path = None) -> dict:
+    return json.loads(Path(path or CONFIG_FILE).read_text(encoding="utf-8"))
+
+
+def write_app_config(cfg: dict, path: Path = None) -> None:
+    # Callers pass their own module-level CONFIG_FILE so tests that patch it
+    # never touch the real config/app.json.
+    with CONFIG_LOCK:
+        atomic_write_json(path or CONFIG_FILE, cfg)
+    try:
+        from . import cloud
+        cloud.reload()
+    except Exception:
+        pass
+
+
+def update_app_config(mutator, path: Path = None) -> dict:
+    """Re-read app.json, apply mutator(cfg) in place, write it back atomically."""
+    with CONFIG_LOCK:
+        cfg = read_app_config(path)
+        mutator(cfg)
+        write_app_config(cfg, path)
+    return cfg
 
 
 def apply_runtime(profile: dict) -> dict:

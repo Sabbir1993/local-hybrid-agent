@@ -197,7 +197,10 @@ function renderKnowledgePanel(box, sources) {
         const text = $('kb-add-text').value;
         if (!text.trim()) { toast('Paste some text first', true); return; }
         updateProgress({ percent: 100, statusText: 'Processing & indexing knowledge...' });
-        const res = await fetch('/knowledge/text?' + new URLSearchParams({ title, text }), { method: 'POST' });
+        const res = await fetch('/knowledge/text', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, text }),
+        });
         j = await res.json().catch(() => ({}));
         if (!res.ok || j.ok === false) throw new Error(j.error || j.detail || ('HTTP ' + res.status));
       } else if (kindSel.value === 'url') {

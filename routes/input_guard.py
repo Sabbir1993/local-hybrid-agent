@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from core.config import CONFIG_FILE
+from core.config import CONFIG_FILE, write_app_config
 from core.small_model import APP_CONFIG
 from core.auth import Principal
 from core.deps import require_permission
@@ -52,7 +52,7 @@ def _save(req: InputGuardSaveReq, cfg_key: str, user: Principal):
     try:
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         cfg[cfg_key] = block
-        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        write_app_config(cfg, CONFIG_FILE)
     except Exception as e:
         return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
     # Live update (hot reload for the running process).

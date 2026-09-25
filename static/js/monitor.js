@@ -55,7 +55,7 @@ function renderMonitorRecent(list) {
 
 async function pollMonitor() {
   try {
-    const d = await (await fetch('/control/monitor')).json();
+    const d = await (await fetch('/control/monitor', { background: true })).json();
     // active generations
     const al = $('mon-active-list');
     if (!d.active || !d.active.length) {

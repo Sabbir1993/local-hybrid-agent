@@ -20,11 +20,13 @@ from core.audit import audit_log
 from core import input_guard
 from core import mcp as mcp_core
 from core import output_guard
+from core.sse import sse
 from core.small_model import APP_CONFIG, small_models
 from core import cloud
 from core.state import state
 from core.registry import registry
 from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch, tool_web_search_images
+from core import web_search as web_search_mod
 from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA, _common_resolve
 from core.request_context import run_in_executor_ctx
 from core.doc_tools import (DOC_EDIT_SCHEMA, DOC_INSPECT_SCHEMA, tool_doc_edit_common,
@@ -294,7 +296,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # models are allowed. block_all rules fire regardless. Human-readable
     # rule message is surfaced to the UI's existing error bubble.
     _hit = await input_guard.check_async(
-        [str(m.get("content", "")) for m in msgs if m.get("role") == "user"],
+        input_guard.message_texts(msgs),
         user, any_cloud_lane=cloud_main is not None)
     if _hit:
         audit_log(user, action="input_guard.block", resource=_hit.get("name"),
@@ -492,7 +494,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             "3. When the user asks about recent events, real-time facts, current versions, weather, or anything outside your certain knowledge, call `web_search(query=...)` immediately.\n"
             "4. When the user asks for a photo, picture, image, or portrait (e.g. 'Can you give his photo?', 'show a picture of...'), call `web_search_images(query=...)` immediately, and in your final answer include the image links using markdown image syntax `![Description](URL)`.\n"
             "5. If you are confident in your knowledge (e.g. general explanations, basic math, creative writing, common programming concepts), answer directly without calling tools.\n"
-            "6. When answering based on web search or fetch results, synthesize a clear, helpful response and provide citations or links using markdown [Title](URL) or `![Title](URL)` for images."
+            "6. When answering based on web search or fetch results, synthesize a clear, helpful response and cite each fact inline with the source number and link from the results, e.g. [1](URL), or `![Title](URL)` for images. Prefer the page excerpts (lines starting with '>') over snippets, and say so when the sources disagree or don't answer the question.\n"
+            "7. Never put personal data (names of customers, emails, phone or account numbers) into search queries.\n"
+            "8. COMPANY / ORGANIZATION OVERVIEW ('summarize X', 'what does X do', X's products): search the plain "
+            "name first (e.g. `web_search(query='<name> official website')`, no recency, no extra product names), "
+            "identify the official domain from the results, then `web_fetch` its homepage and its About / Products / "
+            "Services pages (up to 3 pages) and base the summary on them; use other sources only for news or "
+            "third-party facts. Never add product, server or tool names from this system prompt to a search query "
+            "unless the user wrote them."
         )
         sys_parts.append(web_prompt)
 
@@ -539,14 +548,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         model_source = "local"
         model_provider = None
 
-    async def sse():
+    async def event_stream():
         nonlocal clean_model_name, model_display, model_source, model_provider
         lane_info = {"lane": "main", "model": clean_model_name, "display": model_display,
                      "source": model_source, "provider": model_provider}
         yield f"event: lane\ndata: {json.dumps(lane_info)}\n\n"
         if kb_blocked_reason:
             yield f"event: kb_blocked\ndata: {json.dumps({'message': kb_blocked_reason})}\n\n"
-        chat_rid = monitor_begin("chat/run", True, json.dumps({"messages": msgs}).encode(),
+        chat_rid = monitor_begin("chat/run", True, n_msgs=len(msgs),
                                  model=clean_model_name, source=model_source, provider=model_provider)
         t0 = time.time()
         turn_limit = max_turns       # grows by one if a continuation nudge needs it
@@ -587,10 +596,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if is_fetch_intent:
                         target_url = url_matches[0]
                         tc_id = "fetch_0"
-                        yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': 'web_fetch', 'args': {'url': target_url}})}\n\n"
+                        yield sse("tool_call", {'id': tc_id, 'name': 'web_fetch', 'args': {'url': target_url}})
                         res_str = await tool_web_fetch({"url": target_url})
                         ok = not (isinstance(res_str, str) and (res_str.startswith("error:") or res_str.startswith("File not found")))
-                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': 'web_fetch', 'ok': ok, 'result': res_str})}\n\n"
+                        yield sse("tool_result", {'id': tc_id, 'name': 'web_fetch', 'ok': ok, 'result': res_str})
                         msgs.append({
                             "role": "assistant",
                             "content": f"I will fetch and read the content from {target_url}.",
@@ -603,8 +612,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 if turn == 0 and kb_used and kb_hits:
                     tc_id = "kb_fetch_0"
                     source_names = ", ".join(sorted(set(h.get("title", "") for h in kb_hits)))
-                    yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': 'search_knowledge_base', 'args': {'query': last_query}})}\n\n"
-                    yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': 'search_knowledge_base', 'ok': True, 'result': f'Retrieved {len(kb_hits)} records from company knowledge base ({source_names})'})}\n\n"
+                    yield sse("tool_call", {'id': tc_id, 'name': 'search_knowledge_base', 'args': {'query': last_query}})
+                    yield sse("tool_result", {'id': tc_id, 'name': 'search_knowledge_base', 'ok': True, 'result': f'Retrieved {len(kb_hits)} records from company knowledge base ({source_names})'})
 
                 res_dict = None
                 streamed_content = []
@@ -669,6 +678,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         continue
                     if ev == "thought_delta":
                         yield f"event: thought_delta\ndata: {json.dumps({'delta': val})}\n\n"
+                    elif ev == "content_to_thought":
+                        # forced-open <think>: the text streamed as the answer was reasoning
+                        redactor.reset()
+                        streamed_content.clear()
+                        yield "event: delta_to_thought\ndata: {}\n\n"
                     elif ev == "content_delta":
                         _safe = redactor.feed(val)
                         streamed_content.append(_safe)
@@ -678,7 +692,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         if _n:
                             yield _n
                     elif ev == "tool_preparing":
-                        yield f"event: tool_preparing\ndata: {json.dumps(val)}\n\n"
+                        yield sse("tool_preparing", val)
                     elif ev == "result":
                         res_dict = val
 
@@ -742,21 +756,22 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if url_matches:
                         target_url = url_matches[0]
                         tc_id = "recov_fetch_0"
-                        yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': 'web_fetch', 'args': {'url': target_url}})}\n\n"
+                        yield sse("tool_call", {'id': tc_id, 'name': 'web_fetch', 'args': {'url': target_url}})
                         res_str = await tool_web_fetch({"url": target_url})
                         ok = not (isinstance(res_str, str) and (res_str.startswith("error:") or res_str.startswith("File not found")))
-                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': 'web_fetch', 'ok': ok, 'result': res_str})}\n\n"
+                        yield sse("tool_result", {'id': tc_id, 'name': 'web_fetch', 'ok': ok, 'result': res_str})
                         msgs.append({"role": "assistant", "content": f"I will fetch the contents of {target_url}.", "tool_calls": [{"id": tc_id, "type": "function", "function": {"name": "web_fetch", "arguments": json.dumps({"url": target_url})}}]})
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": res_str})
                         continue
                     else:
                         q_clean = _re.sub(r'^(search|google|find|look up|what is|who is)\s+(for\s+)?', '', last_query, flags=_re.IGNORECASE).strip()
-                        q_search = q_clean or last_query
+                        # the small executor model turns the chatty message into keywords (if it's running)
+                        q_search = await web_search_mod.rewrite_query(last_query, q_clean or last_query)
                         tc_id = "recov_search_0"
-                        yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': 'web_search', 'args': {'query': q_search}})}\n\n"
+                        yield sse("tool_call", {'id': tc_id, 'name': 'web_search', 'args': {'query': q_search}})
                         res_str = await tool_web_search({"query": q_search})
                         ok = not (isinstance(res_str, str) and (res_str.startswith("error:") or res_str.startswith("File not found")))
-                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': 'web_search', 'ok': ok, 'result': res_str})}\n\n"
+                        yield sse("tool_result", {'id': tc_id, 'name': 'web_search', 'ok': ok, 'result': res_str})
                         msgs.append({"role": "assistant", "content": f"I will search the web for {q_search}.", "tool_calls": [{"id": tc_id, "type": "function", "function": {"name": "web_search", "arguments": json.dumps({"query": q_search})}}]})
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": res_str})
                         continue
@@ -884,11 +899,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         tc_id = "recov_write_0"
                         redactor.reset()
                         yield "event: delta_reset\ndata: {}\n\n"
-                        yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': 'write_file', 'args': {'path': target_filename, 'content': data_to_save}})}\n\n"
+                        yield sse("tool_call", {'id': tc_id, 'name': 'write_file', 'args': {'path': target_filename, 'content': data_to_save}})
                         res_str = tool_write_file_common({"path": target_filename, "content": data_to_save})
                         ok = not res_str.startswith("error:")
                         target_filename = _saved_filename(res_str, target_filename)
-                        yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': 'write_file', 'ok': ok, 'result': res_str})}\n\n"
+                        yield sse("tool_result", {'id': tc_id, 'name': 'write_file', 'ok': ok, 'result': res_str})
 
                         if ok:
                             written_files.append(target_filename)
@@ -1015,7 +1030,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if not isinstance(args, dict):
                         args = {"query": str(args)}
 
-                    yield f"event: tool_call\ndata: {json.dumps({'id': tc_id, 'name': t_name, 'args': args})}\n\n"
+                    yield sse("tool_call", {'id': tc_id, 'name': t_name, 'args': args})
 
                     try:
                         if t_name in WEB_TOOL_NAMES and web_calls >= max_web_calls:
@@ -1066,7 +1081,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                     if t_name in WEB_TOOL_NAMES:
                         web_calls += 1
-                    yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': t_name, 'ok': ok, 'result': res_str})}\n\n"
+                    yield sse("tool_result", {'id': tc_id, 'name': t_name, 'ok': ok, 'result': res_str})
 
                     hist_args = dict(args)
                     if t_name in ("write_file", "edit_file"):
@@ -1114,6 +1129,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         continue
                     if ev == "thought_delta":
                         yield f"event: thought_delta\ndata: {json.dumps({'delta': val})}\n\n"
+                    elif ev == "content_to_thought":
+                        # forced-open <think>: the text streamed as the answer was reasoning
+                        redactor.reset()
+                        streamed_content.clear()
+                        yield "event: delta_to_thought\ndata: {}\n\n"
                     elif ev == "content_delta":
                         _safe = redactor.feed(val)
                         streamed_content.append(_safe)
@@ -1194,7 +1214,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                               prompt_cached_tokens=pcached, completion_cached_tokens=0, is_orchestrator=False,
                               source=model_source, provider=model_provider)
 
-    return StreamingResponse(sse(), media_type="text/event-stream")
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # ---------------- /compact — Claude-Code-style context compaction ----------------
@@ -1318,11 +1338,23 @@ async def chat_compact(req: CompactRequest, user: Principal = Depends(get_curren
         return JSONResponse({"error": "Nothing to compact yet — send a few messages first"},
                             status_code=400)
 
+    # the whole history (+ instructions) goes to a model, possibly a cloud one:
+    # same input rules as /chat/run, or compaction is a way around them
+    _any_cloud = bool(cloud.cloud_lane("executor", user.id) or cloud.cloud_lane("main", user.id))
+    _hit = await input_guard.check_async(
+        input_guard.message_texts(convo) + [str(req.instructions or "")], user, any_cloud_lane=_any_cloud)
+    if _hit:
+        audit_log(user, action="input_guard.block", resource=_hit.get("name"),
+                  detail={"scope": _hit.get("scope"), "endpoint": "chat/compact",
+                          "pattern": _hit.get("_matched_pattern")}, result="deny")
+        return JSONResponse({"error": _hit.get("message")}, status_code=403)
+
     before_tokens = estimate_prompt_tokens(convo)
     try:
         summary = await _summarize_history(convo, req.instructions, req.use_executor, user.id)
     except Exception as e:
-        return JSONResponse({"error": f"compact failed: {e}"}, status_code=500)
+        print(f"[chat/compact] failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return JSONResponse({"error": "compact failed - see server log"}, status_code=500)
 
     keep_n = max(0, min(int(req.keep_last or 0), len(convo) - 1))
     kept = convo[-keep_n:] if keep_n else []

@@ -8,14 +8,16 @@
 //    picks in the native "Select Local Workspace" dialog is approved
 //    automatically; anything else triggers an Allow/Deny prompt.
 //  - Shell commands need a local confirmation (with a "don't ask again this
-//    session" option) and must run inside an approved folder.
+//    session" option for that exact command) and must run inside an approved folder.
+//  - Paths are compared after resolving symlinks/junctions, so a link inside an
+//    approved folder can't reach outside it.
 
 const { app, dialog, BrowserWindow } = require("electron");
 const fs = require("fs");
 const path = require("path");
 
 let roots = null;               // approved folder roots (resolved, persisted)
-let shellTrustedThisSession = false;
+const trustedCommands = new Set();   // exact cwd+command+code the user allowed this session
 let promptChain = Promise.resolve();   // one dialog at a time
 
 function storePath() {
@@ -40,8 +42,25 @@ function saveRoots() {
   }
 }
 
+// Real path of `p`, resolving symlinks/junctions. For a path that doesn't exist
+// yet (a file about to be written), resolve its nearest existing ancestor.
+function realish(p) {
+  let cur = path.resolve(String(p || ""));
+  const rest = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(cur), ...rest.reverse());
+    } catch (_) {
+      const parent = path.dirname(cur);
+      if (parent === cur) return path.resolve(String(p || ""));
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
 function norm(p) {
-  const r = path.resolve(String(p || ""));
+  const r = realish(p);
   return process.platform === "win32" ? r.toLowerCase() : r;
 }
 
@@ -105,24 +124,34 @@ async function ensurePath(target, action) {
   approveRoot(dir);
 }
 
-async function confirmShell(command, cwd) {
+const MAX_SHOWN_CODE = 3000;
+
+// `display` is what actually runs when `command` is only a wrapper (run_python sends
+// `python "_agent_run.py"` plus the script body): the user approves the code, not the shim.
+async function confirmShell(command, cwd, display) {
   if (!cwd || !isApproved(cwd)) {
     await ensurePath(cwd || process.cwd(), "run a command in");
   }
-  if (shellTrustedThisSession) return;
+  const key = `${norm(cwd || "")}\n${command}\n${display || ""}`;
+  if (trustedCommands.has(key)) return;
+  let shown = display ? `${command}\n\n--- code ---\n${display}` : command;
+  if (shown.length > MAX_SHOWN_CODE) {
+    shown = shown.slice(0, MAX_SHOWN_CODE) + `\n… (${shown.length - MAX_SHOWN_CODE} more chars)`;
+  }
   const { response, checkboxChecked } = await prompt({
     type: "question",
     buttons: ["Deny", "Run"],
     defaultId: 0,
     cancelId: 0,
     title: "A770 Companion — run command?",
-    message: "The AI agent wants to run this command on your computer:",
-    detail: `${command}\n\nin: ${cwd}`,
-    checkboxLabel: "Don't ask again until the companion restarts",
+    message: display ? "The AI agent wants to run this code on your computer:"
+                     : "The AI agent wants to run this command on your computer:",
+    detail: `${shown}\n\nin: ${cwd}`,
+    checkboxLabel: "Don't ask again for this exact command until the companion restarts",
     checkboxChecked: false,
   });
   if (response !== 1) throw new Error("denied by local user");
-  if (checkboxChecked) shellTrustedThisSession = true;
+  if (checkboxChecked) trustedCommands.add(key);
 }
 
 module.exports = { ensurePath, confirmShell, approveRoot, isApproved };

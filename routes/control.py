@@ -188,7 +188,9 @@ def _standalone_profile(target: str) -> Optional[dict]:
     and saved in the drawer match what the model will actually launch with.
     """
     p = Path(target)
-    if not p.exists():
+    # only model files under a models root: ?model= is caller-supplied, and an
+    # arbitrary path would reveal whether files exist anywhere on the server
+    if not in_models_dir(p) or not p.exists():
         return None
     saved = load_model_configs().get(_model_key(p)) or {}
     prof = {"name": p.stem, "model_path": str(p)}
@@ -246,7 +248,7 @@ async def get_config(model: Optional[str] = None, user: Principal = Depends(get_
         if not model or _model_key(model) == loaded_key:
             return _config_for_profile(state.profile)
     target = model or common.curStatus_model_hint
-    if target and Path(target).exists():
+    if target:
         prof = _standalone_profile(target)
         if prof:
             return _config_for_profile(prof)

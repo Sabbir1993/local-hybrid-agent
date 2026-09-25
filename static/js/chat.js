@@ -34,6 +34,7 @@ function scrollToBottom() {
   }
 }
 window.scrollToBottom = scrollToBottom;
+document.getElementById('btn-scroll-bottom')?.addEventListener('click', scrollToBottom);
 
 function renderAll() {
   const inner = $('chat-inner');
@@ -99,7 +100,24 @@ window.addEventListener('blur', _releaseChatPointer);
 // Chrome can skip mouseup after a native scrollbar drag; any buttonless move ends the hold
 window.addEventListener('mousemove', e => { if (_chatPointerHeld && e.buttons === 0) _releaseChatPointer(); }, { passive: true });
 
+// Streaming events can arrive far faster than the screen refreshes; each one
+// used to rebuild the whole last bubble (markdown + highlighting). Coalesce
+// them into at most one render per animation frame.
+let _renderRaf = 0;
+function scheduleRenderLast() {
+  if (_renderRaf) return;
+  _renderRaf = requestAnimationFrame(() => {
+    _renderRaf = 0;
+    renderLast();
+  });
+}
+window.scheduleRenderLast = scheduleRenderLast;
+
 function renderLast() {
+  if (_renderRaf) {   // a direct render supersedes the pending frame
+    cancelAnimationFrame(_renderRaf);
+    _renderRaf = 0;
+  }
   const inner = $('chat-inner');
   if (!inner) return;
   if (_chatPointerHeld) { _renderLastPending = true; return; }
@@ -366,7 +384,7 @@ function onClaudeWorkingTick() {
       if (textEl && textEl.textContent !== msg) textEl.textContent = msg;
       if (timerEl) timerEl.textContent = `${elapsedSec}s`;
     } else {
-      renderLast();
+      scheduleRenderLast();
     }
   }
 }
@@ -374,7 +392,7 @@ function onClaudeWorkingTick() {
 function bubbleHtml(m, idx) {
   if (m.role === 'user') {
     const imgs = (m.images || []).map(u =>
-      `<img src="${u}" class="chat-img-thumb" alt="Attachment" title="Click to enlarge" onclick="openImageModal(this.src, 'Image attachment')" style="max-width:240px; max-height:180px; border-radius:8px; display:block; margin:6px 0; border:1px solid rgba(255,255,255,0.15); box-shadow:0 2px 8px rgba(0,0,0,0.3); cursor:zoom-in;">`).join('');
+      `<img src="${esc(u)}" class="chat-img-thumb" alt="Attachment" title="Click to enlarge" data-click="open-image" style="max-width:240px; max-height:180px; border-radius:8px; display:block; margin:6px 0; border:1px solid rgba(255,255,255,0.15); box-shadow:0 2px 8px rgba(0,0,0,0.3); cursor:zoom-in;">`).join('');
     const filesTag = m.files ? `<div class="dim" style="font-size:10.5px; margin-top:4px;">📎 ${esc(m.files)}</div>` : '';
     // Display clean user text, strip any injected vision/file tags from the bubble UI
     let displayText = m.displayContent || m.content || '';
@@ -438,6 +456,10 @@ function bubbleHtml(m, idx) {
   }
 
   const isLast = idx === messages.length - 1;
+  // answers saved with a leaked think block (bare </think>) -> reasoning card
+  if (!(generating && isLast) && m.content && m.content.includes('</think>')) {
+    sseApplyThinkSplit(m);
+  }
   if (m.acts && m.acts.length && typeof agentStoppedHtml === 'function') {
     inner += agentStoppedHtml(m.acts, isLast && !generating);
   }
@@ -460,8 +482,8 @@ function bubbleHtml(m, idx) {
       ? `Thinking (${elapsedSec}s)...`
       : (finalSec ? `Thought for ${finalSec}s` : 'Thought');
     const thinkBody = esc(m.reasoning).replace(/\n/g, '<br>') + (isActivelyThinking ? '<span class="cursor">▍</span>' : '');
-    inner += `<details class="think codex-thought-card" ${isOpen ? 'open' : ''} ontoggle="onToggleThink(${idx}, this.open)">
-      <summary class="codex-thought-head" onclick="onThinkSummaryClick(${idx}, event)">
+    inner += `<details class="think codex-thought-card" ${isOpen ? 'open' : ''} data-think-idx="${idx}">
+      <summary class="codex-thought-head" data-click="think-summary" data-arg="${idx}">
         <span class="codex-thought-icon">🧠</span>
         <span class="codex-thought-title">${statusLabel}</span>
         <span class="codex-chevron">▾</span>
@@ -773,7 +795,7 @@ function renderInteractiveQuestions(rawText, idx) {
   });
 
   html += `<div class="grill-footer">`;
-  html += `<button type="button" class="btn primary grill-submit-btn" ${isSubmitted ? 'disabled' : ''} onclick="submitGrillAnswers(${idx})">${isSubmitted ? '✓ Answer Submitted' : '✓ Submit Decisions'}</button>`;
+  html += `<button type="button" class="btn primary grill-submit-btn" ${isSubmitted ? 'disabled' : ''} data-click="submit-grill" data-arg="${idx}">${isSubmitted ? '✓ Answer Submitted' : '✓ Submit Decisions'}</button>`;
   html += `</div>`;
   html += `</div>`;
 
@@ -927,151 +949,63 @@ async function send(inputText) {
       const e = await res.json().catch(() => ({}));
       throw new Error(e.error || ('HTTP ' + res.status));
     }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf('\n\n')) >= 0) {
-        const raw = buf.slice(0, i);
-        buf = buf.slice(i + 2);
-        const evM = raw.match(/^event: (.+)$/m);
-        const dtM = raw.match(/^data: (.+)$/m);
-        if (!evM || !dtM) continue;
-        const ev = evM[1];
-        let d = {};
-        try { d = JSON.parse(dtM[1]); } catch (e) {}
-        const L = getJobAssistant();
-        if (ev === 'lane') {
-          L.modelDisplay = d.display || d.model;
-          L.modelSource = d.source;
-          L.modelProvider = d.provider;
-        } else if (ev === 'queued') {
-          // all local model slots busy: routes/common.py admission gate
-          L.statusText = '⏳ Waiting for a free model slot' + (d.position ? ` (#${d.position} in queue)` : '') + '...';
-        } else if (ev === 'delta') {
-          L.content += (d.text || '');
-          L.statusText = '';
-        } else if (ev === 'thought_delta') {
-          L.reasoning = (L.reasoning || '') + (d.delta || '');
-          if (typeof window.setLiveHud === 'function') {
-            window.setLiveHud({ phase: 'thinking', text: 'Thinking & analyzing...' });
-          }
-        } else if (ev === 'tool_preparing') {
-          const p = d.path ? d.path.split(/[\\\/]/).pop() : '';
-          const actionVerb = d.name === 'write_file' ? 'Preparing to write' : (d.name === 'edit_file' ? 'Preparing to edit' : `Preparing ${d.name}`);
-          const label = p ? `${actionVerb} ${p}...` : `${actionVerb}...`;
-          L.statusText = label;
-          if (typeof window.setLiveHud === 'function') {
-            const bytesStr = d.bytes ? ` (~${Math.round(d.bytes / 4)} tokens)` : '';
-            window.setLiveHud({
-              phase: 'preparing',
-              name: d.name,
-              path: d.path,
-              text: label,
-              subtext: bytesStr
-            });
-          }
-        } else if (ev === 'thought') {
-          L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + (d.text || '');
-        } else if (ev === 'delta_replace') {
-          L.content = (d.text || '');
-          L.statusText = '';
-        } else if (ev === 'delta_reset') {
-          if (L.content && L.content.trim()) {
-            L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + L.content.trim();
-          }
-          L.content = '';
-        } else if (ev === 'tool_call') {
-          if (!L.acts) L.acts = [];
-          L.acts.push({ type: 'tool_call', ...d });
-          L.statusText = formatToolStatus(d.name, d.args);
-          const p = (d.args && (d.args.path || d.args.file || d.args.filename)) || '';
-          if (typeof window.setLiveHud === 'function') {
-            window.setLiveHud({
-              phase: (d.name === 'write_file' || d.name === 'edit_file') ? 'writing' : 'running',
-              name: d.name,
-              path: p,
-              text: L.statusText
-            });
-          }
-          if (L.content && L.content.trim()) {
-            L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + L.content.trim();
-            L.content = '';
-          }
-        } else if (ev === 'tool_result') {
-          if (!L.acts) L.acts = [];
-          L.acts.push({ type: 'tool_result', ...d });
-          L.statusText = 'Crunching tool results...';
-          if (d.name === 'write_file' || d.name === 'edit_file') {
-            const p = (d.args && (d.args.path || d.args.file || d.args.filename)) || '';
-            const filename = p ? p.split(/[\\\/]/).pop() : 'file';
-            const isSuccess = d.ok !== false;
-            const verb = d.name === 'write_file' ? 'Saved' : 'Updated';
-            const actions = [];
-            if (p && isSuccess && typeof openFilePreview === 'function') {
-              actions.push({
-                label: '👁️ Preview',
-                onClick: () => openFilePreview(p, filename)
-              });
-            }
-            if (p && typeof wsShowFile === 'function') {
-              actions.push({
-                label: '📂 Reveal',
-                onClick: () => {
-                  if (typeof setWsPanel === 'function') setWsPanel(true);
-                  if (typeof wsShowFile === 'function') wsShowFile(p);
-                }
-              });
-            }
-            if (typeof toast === 'function') {
-              toast(isSuccess ? `💾 ${verb} ${filename}` : `⚠️ Failed to write ${filename}`, {
-                isErr: !isSuccess,
-                duration: 5000,
-                actions: actions
-              });
-            }
-            if (typeof window.setLiveHud === 'function') {
-              window.setLiveHud({
-                phase: isSuccess ? 'done' : 'error',
-                name: d.name,
-                path: p,
-                text: isSuccess ? `💾 ${verb} ${filename}` : `⚠️ Failed to save ${filename}`,
-                actions: actions
-              });
-            }
-          }
-        } else if (ev === 'done') {
-          L.statusText = '';
-          if (typeof window.setLiveHud === 'function') {
-            window.setLiveHud({ phase: 'done', text: 'Response complete' });
-          }
-          if (d && (d.completion_tokens || d.total_tokens)) {
-            if (d.completion_tokens) L.ntok = d.completion_tokens;
-            // Real prompt size (system prompt + tools + history + tool results);
-            // persisted so the context chip survives a reload.
-            if (d.prompt_tokens) L.promptTokens = d.prompt_tokens;
-          }
-        } else if (ev === 'kb_blocked') {
-          // Data residency: KB withheld from the cloud lane; show it as a failed KB step
-          if (!L.acts) L.acts = [];
-          L.acts.push({ type: 'tool_call', id: 'kb_blocked', name: 'search_knowledge_base', args: {} });
-          L.acts.push({ type: 'tool_result', id: 'kb_blocked', name: 'search_knowledge_base', ok: false, result: d.message || '' });
-          toast('🔒 Company knowledge base is local-only — start a local model to use it');
-        } else if (ev === 'guard') {
-          // Output sanitizer redacted part of the response
-          toast('🧼 ' + (d.message || ('Response filtered by policy: ' + (d.rule || ''))));
-        } else if (ev === 'error') {
-          throw new Error(d.error || 'Chat execution error');
+    await readSSE(res, (ev, d) => {
+      const L = getJobAssistant();
+      if (ev === 'lane') {
+        L.modelDisplay = d.display || d.model;
+        L.modelSource = d.source;
+        L.modelProvider = d.provider;
+      } else if (ev === 'queued') {
+        // all local model slots busy: routes/common.py admission gate
+        L.statusText = '⏳ Waiting for a free model slot' + (d.position ? ` (#${d.position} in queue)` : '') + '...';
+      } else if (ev === 'delta') {
+        L.content += (d.text || '');
+        L.statusText = '';
+      } else if (ev === 'thought_delta') {
+        L.reasoning = (L.reasoning || '') + (d.delta || '');
+        if (typeof window.setLiveHud === 'function') {
+          window.setLiveHud({ phase: 'thinking', text: 'Thinking & analyzing...' });
         }
-        if (curSession && String(curSession.id) === String(sessionId)) {
-          renderLast();
+      } else if (ev === 'delta_to_thought') {
+        sseDeltaToThought(L);
+      } else if (ev === 'tool_preparing') {
+        sseToolPreparing(L, d);
+      } else if (ev === 'thought') {
+        L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + (d.text || '');
+      } else if (ev === 'delta_replace') {
+        L.content = (d.text || '');
+        L.statusText = '';
+      } else if (ev === 'delta_reset') {
+        if (L.content && L.content.trim()) {
+          L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + L.content.trim();
         }
+        L.content = '';
+      } else if (ev === 'tool_call') {
+        sseToolCall(L, d);
+      } else if (ev === 'tool_result') {
+        sseToolResult(L, d);
+      } else if (ev === 'done') {
+        L.statusText = '';
+        if (typeof window.setLiveHud === 'function') {
+          window.setLiveHud({ phase: 'done', text: 'Response complete' });
+        }
+        if (d && (d.completion_tokens || d.total_tokens)) {
+          if (d.completion_tokens) L.ntok = d.completion_tokens;
+          // Real prompt size (system prompt + tools + history + tool results);
+          // persisted so the context chip survives a reload.
+          if (d.prompt_tokens) L.promptTokens = d.prompt_tokens;
+        }
+      } else if (ev === 'kb_blocked') {
+        sseKbBlocked(L, d);
+      } else if (ev === 'guard') {
+        sseGuardToast(d);
+      } else if (ev === 'error') {
+        throw new Error(d.error || 'Chat execution error');
       }
-    }
+      if (curSession && String(curSession.id) === String(sessionId)) {
+        scheduleRenderLast();
+      }
+    });
   } catch (e) {
     if (e.name !== 'AbortError') {
       const L = getJobAssistant();
@@ -1093,11 +1027,7 @@ async function send(inputText) {
   }
 
   const targetAssistant = getJobAssistant();
-  const m = targetAssistant.content.match(/^\s*<think>([\s\S]*?)<\/think>/);
-  if (m) {
-    targetAssistant.reasoning = (targetAssistant.reasoning || '') + m[1];
-    targetAssistant.content = targetAssistant.content.slice(m[0].length).trim();
-  }
+  sseApplyThinkSplit(targetAssistant);
   // Recovery: if content is empty and no error alert, promote reasoning or latest tool result so message never terminates blank
   if (!targetAssistant.content.trim() && !targetAssistant.errorAlert) {
     if (targetAssistant.reasoning && targetAssistant.reasoning.trim()) {

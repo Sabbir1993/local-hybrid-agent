@@ -12,6 +12,7 @@ from .config import (
     MODEL_CONFIGS_FILE,
     BASE_DIR,
     CONFIG_FILE,
+    atomic_write_json,
 )
 
 
@@ -62,7 +63,7 @@ def load_model_configs() -> dict:
 
     if migrated:
         try:
-            MODEL_CONFIGS_FILE.write_text(json.dumps(store, indent=2), encoding="utf-8")
+            atomic_write_json(MODEL_CONFIGS_FILE, store)
             print(f"[server_manager] migrated model_configs.json to model-name keys")
         except Exception as e:
             print(f"[server_manager] failed saving migrated model_configs.json: {e}", file=sys.stderr)
@@ -87,7 +88,7 @@ def save_model_config(model_identifier: str, cfg: dict) -> None:
             out[k] = cfg[k]
     store[key] = out
     try:
-        MODEL_CONFIGS_FILE.write_text(json.dumps(store, indent=2), encoding="utf-8")
+        atomic_write_json(MODEL_CONFIGS_FILE, store)
         print(f"[server_manager] saved model config for [{key}] in model_configs.json")
     except Exception as e:
         print(f"[server_manager] model_configs.json write failed: {e}", file=sys.stderr)

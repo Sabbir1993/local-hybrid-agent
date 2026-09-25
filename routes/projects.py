@@ -4,10 +4,8 @@ routes/projects.py - Projects, sessions, messages, and filesystem browsing endpo
 
 import asyncio
 import os
-import string
 import subprocess
 import sys
-from pathlib import Path
 from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, Header, Request
@@ -16,7 +14,7 @@ from pydantic import BaseModel
 
 from core.auth import Principal
 from core.deps import get_current_user
-from core.request_context import set_current_device, get_current_device_id
+from core.request_context import set_current_device, get_current_device_id, normalize_device_id
 from core.db import (
     db_list_projects,
     db_create_project,
@@ -70,25 +68,6 @@ class BrowseFolderReq(BaseModel):
 class MkdirReq(BaseModel):
     path: str
     name: str
-
-
-def _get_drives() -> list:
-    drives = []
-    if sys.platform == "win32":
-        try:
-            from ctypes import windll
-            bitmask = windll.kernel32.GetLogicalDrives()
-            for letter in string.ascii_uppercase:
-                if bitmask & 1:
-                    d = f"{letter}:\\"
-                    if os.path.exists(d):
-                        drives.append(d)
-                bitmask >>= 1
-        except Exception as e:
-            print(f"[server_manager] Failed to query logical drives: {e}", file=sys.stderr)
-    if not drives:
-        drives = ["E:\\", "C:\\"] if sys.platform == "win32" else ["/"]
-    return drives
 
 
 def _ask_directory_native(initial_dir: str = "") -> str:
@@ -195,59 +174,13 @@ async def fs_browse(request: Request, path: Optional[str] = "", user: Principal 
         except Exception as e:
             return JSONResponse({"ok": False, "error": f"companion: {e}"}, status_code=502)
 
-    client_ip = request.client.host if (request and request.client) else ""
-    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost", "testclient")
-    if not is_localhost:
-        return JSONResponse({
-            "ok": False,
-            "error": "In-app filesystem browsing requires the local companion app on your machine.",
-            "is_remote": True,
-        }, status_code=400)
-
-    drives = _get_drives()
-    raw_path = (path or "").strip()
-    if not raw_path:
-        if os.path.isdir("E:\\AI"):
-            target_path = Path("E:\\AI")
-        elif drives:
-            target_path = Path(drives[0])
-        else:
-            target_path = Path(os.path.expanduser("~"))
-    else:
-        target_path = Path(raw_path).expanduser().resolve()
-
-    if not target_path.exists() or not target_path.is_dir():
-        if target_path.parent.exists() and target_path.parent.is_dir():
-            target_path = target_path.parent
-        else:
-            target_path = Path("E:\\AI") if os.path.isdir("E:\\AI") else Path(os.path.expanduser("~"))
-
-    subdirs = []
-    try:
-        with os.scandir(str(target_path)) as it:
-            for entry in it:
-                try:
-                    if entry.is_dir(follow_symlinks=False):
-                        name = entry.name
-                        if not name.startswith(('.', '$')) and name.lower() not in (
-                            'system volume information', 'recovery', '$recycle.bin'
-                        ):
-                            subdirs.append(name)
-                except (PermissionError, OSError):
-                    continue
-    except (PermissionError, OSError) as e:
-        print(f"[server_manager] fs_browse scan error on {target_path}: {e}", file=sys.stderr)
-
-    subdirs.sort(key=lambda s: s.lower())
-    parent_dir = str(target_path.parent) if target_path.parent != target_path else None
-
-    return {
-        "ok": True,
-        "current": str(target_path),
-        "parent": parent_dir,
-        "drives": drives,
-        "subdirs": subdirs[:250],
-    }
+    # No server-disk fallback: project folders live on users' machines, and a
+    # "localhost" client may be anyone arriving through a local tunnel/proxy.
+    return JSONResponse({
+        "ok": False,
+        "error": "In-app filesystem browsing requires the local companion app on your machine.",
+        "is_remote": True,
+    }, status_code=400)
 
 
 @router.post("/control/fs/mkdir")
@@ -258,16 +191,9 @@ async def fs_mkdir(req: MkdirReq, user: Principal = Depends(get_current_user)):
             return {"ok": True, **data}
         except Exception as e:
             return JSONResponse({"ok": False, "error": f"companion: {e}"}, status_code=502)
-    try:
-        base = Path(req.path).expanduser().resolve()
-        name = req.name.strip()
-        if not name or any(c in name for c in '<>:"/\\|?*'):
-            return JSONResponse({"ok": False, "error": "Invalid folder name"}, status_code=400)
-        target = base / name
-        target.mkdir(parents=True, exist_ok=True)
-        return {"ok": True, "path": str(target.resolve())}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    # never create folders on the server's own disk (see fs_browse)
+    return JSONResponse({"ok": False, "error": "Creating folders requires the companion app on your machine.",
+                         "is_remote": True}, status_code=400)
 
 
 class MessageReq(BaseModel):
@@ -289,7 +215,7 @@ async def rename_device(req: RenameDeviceReq,
     new_name = req.new_name.strip()
     if not new_name:
         return JSONResponse({"error": "Device name cannot be empty"}, status_code=400)
-    dev_id = req.device_id or x_device_id
+    dev_id = normalize_device_id(req.device_id or x_device_id)
     db_rename_device(owner_user_id=user.id, new_name=new_name, device_id=dev_id, old_name=req.old_name)
     set_current_device(dev_id or "default", new_name)
     return {"ok": True, "device_name": new_name}
@@ -306,7 +232,7 @@ async def list_projects(user: Principal = Depends(get_current_user),
                         device_id: Optional[str] = None,
                         x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
                         x_device_name: Optional[str] = Header(None, alias="X-Device-Name")):
-    cur_dev_id = device_id or x_device_id or "default"
+    cur_dev_id = normalize_device_id(device_id or x_device_id) or "default"
     set_current_device(cur_dev_id, x_device_name)
 
     # Filter by current device and device name.
@@ -344,7 +270,7 @@ async def create_project(req: ProjectReq,
                          user: Principal = Depends(get_current_user),
                          x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
                          x_device_name: Optional[str] = Header(None, alias="X-Device-Name")):
-    dev_id = req.device_id or x_device_id or "default"
+    dev_id = normalize_device_id(req.device_id or x_device_id) or "default"
     dev_name = req.device_name or x_device_name or "Default Device"
     set_current_device(dev_id, dev_name)
     try:
@@ -360,7 +286,7 @@ async def update_project_workspace(pid: int, req: UpdateWorkspaceReq,
                                   user: Principal = Depends(get_current_user),
                                   x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
                                   x_device_name: Optional[str] = Header(None, alias="X-Device-Name")):
-    dev_id = req.device_id or x_device_id or "default"
+    dev_id = normalize_device_id(req.device_id or x_device_id) or "default"
     dev_name = req.device_name or x_device_name or "Default Device"
     set_current_device(dev_id, dev_name)
     try:
@@ -375,7 +301,7 @@ async def update_project_workspace(pid: int, req: UpdateWorkspaceReq,
 @router.delete("/control/projects/{pid}")
 async def delete_project(pid: int, user: Principal = Depends(get_current_user),
                          x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
-    dev_id = x_device_id or "default"
+    dev_id = normalize_device_id(x_device_id) or "default"
     pname = None
     for p in db_list_projects(owner_user_id=user.id):
         if p["id"] == pid:
@@ -397,7 +323,7 @@ async def delete_project(pid: int, user: Principal = Depends(get_current_user),
 async def activate_project(pid: int, user: Principal = Depends(get_current_user),
                            x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
                            x_device_name: Optional[str] = Header(None, alias="X-Device-Name")):
-    dev_id = x_device_id or "default"
+    dev_id = normalize_device_id(x_device_id) or "default"
     set_current_device(dev_id, x_device_name)
     if pid == 0:
         set_active_project(None, user.id, dev_id)

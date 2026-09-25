@@ -4,12 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sign in — Local Agent</title>
-<script>
-  (function() {
-    var t = localStorage.getItem('a770_theme') || 'claude';
-    document.documentElement.setAttribute('data-theme', t);
-  })();
-</script>
+<script src="/static/js/theme-boot.js?v=1.0"></script>
 <link rel="stylesheet" href="/static/css/style.css?v=3.0">
 <style>
   body { display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; background:var(--bg); }
@@ -35,31 +30,6 @@
     <button id="login-submit" class="btn accent" type="submit">Sign in</button>
   </form>
 </div>
-<script>
-document.getElementById('login-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const errBox = document.getElementById('login-err');
-  errBox.textContent = '';
-  const username = document.getElementById('username').value.trim();
-  const password = document.getElementById('password').value;
-  try {
-    const resp = await fetch('/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ username, password }),
-    });
-    if (!resp.ok) {
-      const data = await resp.json().catch(() => ({}));
-      errBox.textContent = data.detail || 'Sign in failed';
-      return;
-    }
-    const params = new URLSearchParams(location.search);
-    location.href = params.get('next') || '/';
-  } catch (err) {
-    errBox.textContent = 'Network error — is the server running?';
-  }
-});
-</script>
+<script src="/static/js/login.js?v=1.0"></script>
 </body>
 </html>

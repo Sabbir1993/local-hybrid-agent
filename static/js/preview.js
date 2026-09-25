@@ -11,7 +11,7 @@ function initMermaidTheme() {
   mermaid.initialize({
     startOnLoad: false,
     theme: isDark ? 'dark' : 'default',
-    securityLevel: 'loose',
+    securityLevel: 'strict',   // diagrams are model-written: no HTML labels or click callbacks
     themeVariables: {
       darkMode: isDark,
       fontFamily: 'inherit',
@@ -149,6 +149,22 @@ async function openFilePreview(filePath, title = '', directContent = null) {
   }
 }
 
+// Generated HTML is served back by the server (own sandbox CSP) rather than srcdoc:
+// a srcdoc frame inherits this page's CSP, which blocks the preview's own scripts.
+async function loadHtmlContent(iframe, content) {
+  try {
+    const r = await fetch('/agent/preview-html', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html: String(content) }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.url) throw new Error(d.error || d.detail || ('HTTP ' + r.status));
+    iframe.src = d.url;
+  } catch (e) {
+    iframe.srcdoc = '<p style="font:13px sans-serif;padding:16px">Preview failed: ' + esc(e.message) + '</p>';
+  }
+}
+
 // 1. HTML Viewer with Desktop / Tablet / Mobile device simulation
 function renderHtmlPreview(url, content, container, controls) {
   controls.innerHTML = `
@@ -169,7 +185,7 @@ function renderHtmlPreview(url, content, container, controls) {
   iframe.style.cssText = 'width:100%; height:100%; border:none; background:#ffffff; transition:max-width 0.2s ease;';
   
   if (content) {
-    iframe.srcdoc = content;
+    loadHtmlContent(iframe, content);
   } else if (url) {
     // Check if server returns 200 before setting iframe.src, so 404 JSON isn't rendered directly in the iframe
     fetch(url).then(async res => {
@@ -205,7 +221,7 @@ function renderHtmlPreview(url, content, container, controls) {
   const refBtn = controls.querySelector('#btn-html-refresh');
   if (refBtn) {
     refBtn.onclick = () => {
-      if (content) iframe.srcdoc = content;
+      if (content) loadHtmlContent(iframe, content);
       else if (url) iframe.src = url;
     };
   }
@@ -505,13 +521,17 @@ function renderSlidesPreview(deck, container, controls) {
   };
   // font size relative to slide height, so text scales with the slide card
   const fs = pt => `font-size:${(pt / slideHpt * 100).toFixed(3)}cqh;`;
+  // Values come from the uploaded file and land in style="" / src="": accept only
+  // plain hex colours and inline image data, never raw strings.
+  const col = v => (/^#[0-9a-fA-F]{6}$/.test(v || '') ? v : '');
+  const imgSrc = v => (/^data:image\/(png|jpeg|gif|bmp|webp);base64,[A-Za-z0-9+/=]+$/.test(v || '') ? v : '');
 
   function shapeHtml(s, defColor) {
     const pos = `left:${pct(s.x, W)}; top:${pct(s.y, H)}; width:${pct(s.w, W)}; height:${pct(s.h, H)};` +
-      (s.rot ? ` transform:rotate(${s.rot}deg);` : '');
+      (s.rot ? ` transform:rotate(${Number(s.rot) || 0}deg);` : '');
     if (s.kind === 'picture') {
-      return s.src
-        ? `<img class="pptx-shape" src="${s.src}" style="${pos} object-fit:contain;" alt="">`
+      return imgSrc(s.src)
+        ? `<img class="pptx-shape" src="${imgSrc(s.src)}" style="${pos} object-fit:contain;" alt="">`
         : `<div class="pptx-shape pptx-ph" style="${pos}">🖼️</div>`;
     }
     if (s.kind === 'chart') {
@@ -524,7 +544,8 @@ function renderSlidesPreview(deck, container, controls) {
     }
     const isTitle = s.kind === 'title';
     const defPt = isTitle ? 36 : (s.kind.startsWith('placeholder') ? 20 : 16);
-    const color = s.fill ? (isDark(s.fill) ? '#ffffff' : '#1f2328') : defColor;
+    const fill = col(s.fill), line = col(s.line);
+    const color = fill ? (isDark(fill) ? '#ffffff' : '#1f2328') : defColor;
     const just = { top: 'flex-start', middle: 'center', bottom: 'flex-end' }[s.anchor] || (isTitle ? 'center' : 'flex-start');
     const bullets = s.kind.startsWith('placeholder:body') || s.kind === 'placeholder:object' || s.kind === 'placeholder';
     const paras = (s.paras || []).map(p => {
@@ -532,19 +553,19 @@ function renderSlidesPreview(deck, container, controls) {
       const align = { center: 'center', right: 'right', justify: 'justify' }[p.align] || 'left';
       const runs = (p.runs || []).map(r => {
         const st = (r.size ? fs(r.size) : '') + (r.bold ? 'font-weight:700;' : '') +
-          (r.italic ? 'font-style:italic;' : '') + (r.color ? `color:${r.color};` : '');
+          (r.italic ? 'font-style:italic;' : '') + (col(r.color) ? `color:${col(r.color)};` : '');
         return `<span style="${st}">${esc(r.text).replace(/\n/g, '<br>')}</span>`;
       }).join('');
       const bullet = bullets && runs ? '<span class="pptx-bullet">•</span>' : '';
-      return `<div style="text-align:${align}; ${fs(ps.size || (defPt - p.level * 2))} padding-left:${p.level * 4}%;` +
-        `${ps.bold || isTitle ? 'font-weight:700;' : ''}${ps.color ? `color:${ps.color};` : ''}">${bullet}${runs || '&nbsp;'}</div>`;
+      return `<div style="text-align:${align}; ${fs(ps.size || (defPt - p.level * 2))} padding-left:${(Number(p.level) || 0) * 4}%;` +
+        `${ps.bold || isTitle ? 'font-weight:700;' : ''}${col(ps.color) ? `color:${col(ps.color)};` : ''}">${bullet}${runs || '&nbsp;'}</div>`;
     }).join('');
-    const box = (s.fill ? `background:${s.fill};` : '') + (s.line ? `border:1px solid ${s.line};` : '');
+    const box = (fill ? `background:${fill};` : '') + (line ? `border:1px solid ${line};` : '');
     return `<div class="pptx-shape pptx-text" style="${pos} ${box} color:${color}; justify-content:${just};">${paras}</div>`;
   }
 
   function slideHtml(sl, idx) {
-    const bg = sl.bg || '#ffffff';
+    const bg = col(sl.bg) || '#ffffff';
     const defColor = isDark(bg) ? '#f0f6fc' : '#1f2328';
     return `<div class="pptx-slide-wrap">
       <div class="pptx-slide-num">${idx + 1}</div>

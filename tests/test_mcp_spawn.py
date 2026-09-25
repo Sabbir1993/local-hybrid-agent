@@ -100,6 +100,10 @@ class ChatExposureTests(unittest.TestCase):
         self.assertIn("`isms_t`", prompt)
         self.assertIn("ISMSPLUS", prompt)
         self.assertIn("mcp__isms_t__list_endpoints", prompt)
+        # scoped to API questions; a company-name mention must not forbid web search
+        self.assertIn("API/integration", prompt)
+        self.assertNotIn("instead of answering from memory or a web search", prompt)
+        self.assertIn("do not put these server/product names into web search queries", prompt)
 
     def test_errored_server_hidden(self):
         self.srv.status = "error"

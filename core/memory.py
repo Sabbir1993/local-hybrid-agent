@@ -20,11 +20,13 @@ import json
 import re
 import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
 
 from .config import MEMORY_DB_FILE
+from .sqlite_util import ThreadLocalDB
 
 try:
     import numpy as _np
@@ -52,10 +54,10 @@ _last_index = 0.0
 _embedder_down_until = 0.0
 
 
-def _db() -> sqlite3.Connection:
+def _db() -> ThreadLocalDB:
     global _conn
     if _conn is None:
-        _conn = sqlite3.connect(str(MEMORY_DB_FILE), check_same_thread=False)
+        _conn = ThreadLocalDB(MEMORY_DB_FILE)
         _conn.execute("""
             CREATE TABLE IF NOT EXISTS chunks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +72,13 @@ def _db() -> sqlite3.Connection:
             )
         """)
         _conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+        # chunks_gen changes whenever any connection (db explorer included)
+        # writes chunks, so the in-process search cache knows when to reload.
+        _conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('chunks_gen', '0')")
+        for ev in ("INSERT", "UPDATE", "DELETE"):
+            _conn.execute(f"""CREATE TRIGGER IF NOT EXISTS chunks_gen_{ev.lower()} AFTER {ev} ON chunks
+                BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'chunks_gen'; END""")
+        _conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_novec ON chunks(source) WHERE vec IS NULL")
         _conn.commit()
     return _conn
 
@@ -278,6 +287,15 @@ def delete_knowledge_chunks(source_id: int) -> None:
     _db().commit()
 
 
+def delete_session_chunks(session_ids) -> None:
+    paths = [f"session:{int(i)}" for i in session_ids]
+    if not paths:
+        return
+    _db().execute(f"DELETE FROM chunks WHERE source='session' AND path IN ({','.join('?' * len(paths))})",
+                  paths)
+    _db().commit()
+
+
 def clear_chat_history_chunks() -> None:
     """Danger-zone: drop indexed chat/workspace memory (not the org knowledge
     base -- that's a separate, deliberately-curated source)."""
@@ -294,21 +312,99 @@ def _knowledge_id_from_path(path: str) -> Optional[int]:
     return None
 
 
+def _decode_vec(vec):
+    if vec is None:
+        return None
+    try:
+        raw = bytes(vec)
+        if _np is not None:
+            return _np.frombuffer(raw, dtype=_np.float32)
+        return json.loads(raw.decode())
+    except Exception:
+        return None
+
+
+# Search cache: every chunk with its lower-cased text, plus the vectors as one
+# unit-normalised matrix, so a query costs one matrix-vector product instead
+# of a SELECT of the whole table and a per-row Python loop. Rebuilt only when
+# meta.chunks_gen moves (see the triggers in _db()).
+_cache_lock = threading.Lock()
+_cache: dict = {"gen": None}
+
+
+def _chunks_gen():
+    row = _db().execute("SELECT value FROM meta WHERE key = 'chunks_gen'").fetchone()
+    return row[0] if row else None
+
+
+def _cached_entries() -> dict:
+    gen = _chunks_gen()
+    cache = _cache
+    if gen is not None and cache.get("gen") == gen:
+        return cache
+    with _cache_lock:
+        gen = _chunks_gen()
+        if gen is not None and _cache.get("gen") == gen:
+            return _cache
+        rows = _db().execute("SELECT source, path, text, vec FROM chunks ORDER BY id").fetchall()
+        built = _build_cache([(source, path, text, _decode_vec(vec)) for source, path, text, vec in rows], gen)
+        _set_cache(built)
+        return built
+
+
+def _build_cache(entries: list, gen=None) -> dict:
+    """entries: [(source, path, text, vec_or_None)] -> the search cache."""
+    built = {"gen": gen, "entries": entries, "lower": [e[2].lower() for e in entries],
+             "dim": None, "mat": None, "pos": None}
+    if _np is not None:
+        dims = [len(e[3]) for e in entries if e[3] is not None]
+        if dims:
+            dim = max(set(dims), key=dims.count)
+            keep = [i for i, e in enumerate(entries) if e[3] is not None and len(e[3]) == dim]
+            mat = _np.vstack([_np.asarray(entries[i][3], dtype=_np.float32) for i in keep])
+            norms = _np.linalg.norm(mat, axis=1)
+            mat = (mat / _np.maximum(norms, 1e-9)[:, None]).astype(_np.float32)
+            mat[norms <= 1e-9] = 0.0
+            pos = _np.full(len(entries), -1, dtype=_np.int64)
+            pos[keep] = _np.arange(len(keep))
+            built.update(dim=dim, mat=mat, pos=pos)
+    return built
+
+
+def _set_cache(built: dict) -> None:
+    global _cache
+    _cache = built
+
+
 def _load_entries() -> list:
+    return list(_cached_entries()["entries"])
+
+
+def _cosines(cache: dict, idxs: list, qvec) -> list:
+    """Cosine of the query against cached rows idxs (0.0 for rows with no vector)."""
+    if qvec is None or not idxs:
+        return [0.0] * len(idxs)
+    if _np is not None and cache.get("mat") is not None:
+        q = _np.asarray(qvec, dtype=_np.float32)
+        qn = float(_np.linalg.norm(q))
+        if len(q) != cache["dim"] or qn < 1e-9:
+            return [0.0] * len(idxs)
+        pos = cache["pos"][_np.asarray(idxs, dtype=_np.int64)]
+        out = _np.zeros(len(idxs), dtype=_np.float32)
+        has = pos >= 0
+        if has.any():
+            out[has] = cache["mat"][pos[has]] @ (q / qn)
+        return out.tolist()
     out = []
-    for source, path, text, vec in _db().execute(
-            "SELECT source, path, text, vec FROM chunks").fetchall():
-        v = None
-        if vec is not None:
-            try:
-                raw = bytes(vec)
-                if _np is not None:
-                    v = _np.frombuffer(raw, dtype=_np.float32)
-                else:
-                    v = json.loads(raw.decode())
-            except Exception:
-                v = None
-        out.append((source, path, text, v))
+    for i in idxs:
+        v = cache["entries"][i][3]
+        if v is None or len(v) != len(qvec):
+            out.append(0.0)
+            continue
+        dot = sum(x * y for x, y in zip(qvec, v))
+        na = sum(x * x for x in qvec) ** 0.5
+        nb = sum(y * y for y in v) ** 0.5
+        out.append(dot / (na * nb) if na * nb > 1e-9 else 0.0)
     return out
 
 
@@ -352,63 +448,49 @@ async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optio
     If `sources` is given (e.g. {'knowledge'}), entries are pre-filtered to
     only those sources before scoring and top-k truncation.
     """
-    entries = [e for e in _load_entries() if e[0] != "workspace"]
-    if not entries:
-        return []
+    cache = _cached_entries()
+    all_entries = cache["entries"]
 
-    if sources is not None:
-        entries = [e for e in entries if e[0] in sources]
-        if not entries:
-            return []
-
-    if requesting_user_id is not None or allowed_knowledge_source_ids is not None:
-        from .db import db_session_owner
-        filtered = []
-        for source, path, text, v in entries:
-            if source == "session" and requesting_user_id is not None:
-                sid = _session_id_from_path(path)
-                owner = db_session_owner(sid) if sid is not None else None
-                if owner is not None and owner != requesting_user_id:
-                    continue
-            if source == "knowledge":
-                if not allowed_knowledge_source_ids:
-                    continue
-                kid = _knowledge_id_from_path(path)
-                if kid is None or kid not in allowed_knowledge_source_ids:
-                    continue
-            filtered.append((source, path, text, v))
-        entries = filtered
-    else:
-        entries = [e for e in entries if e[0] != "knowledge"]
-    if not entries:
+    # Fail closed: a session chunk is returned only when its session still exists and
+    # belongs to the caller -- orphaned chunks (deleted session, legacy NULL owner) and
+    # callers with no user id get none.
+    from .db import db_session_owner
+    owners: dict = {}
+    idxs = []
+    for i, (source, path, _text, _v) in enumerate(all_entries):
+        if source == "workspace" or (sources is not None and source not in sources):
+            continue
+        if source == "session":
+            if requesting_user_id is None:
+                continue
+            sid = _session_id_from_path(path)
+            if sid not in owners:
+                owners[sid] = db_session_owner(sid) if sid is not None else None
+            if owners[sid] != requesting_user_id:
+                continue
+        elif source == "knowledge":
+            if not allowed_knowledge_source_ids:
+                continue
+            kid = _knowledge_id_from_path(path)
+            if kid is None or kid not in allowed_knowledge_source_ids:
+                continue
+        idxs.append(i)
+    if not idxs:
         return []
     qv = await _embed_texts([query])
     qvec = qv[0] if qv else None
 
     words = [w.lower() for w in re.findall(r"\w{3,}", query)][:8]
-    lex_raw, cos_raw = [], []
-    for _source, _path, text, v in entries:
-        tl = text.lower()
-        lex_raw.append(float(sum(tl.count(w) for w in words)))
-        if qvec is not None and v is not None:
-            if _np is not None:
-                a = _np.asarray(qvec, dtype=_np.float32)
-                b = _np.asarray(v, dtype=_np.float32)
-                denom = float(_np.linalg.norm(a) * _np.linalg.norm(b))
-                cos_raw.append(float(_np.dot(a, b) / denom) if denom > 1e-9 else 0.0)
-            else:
-                dot = sum(x * y for x, y in zip(qvec, v))
-                na = sum(x * x for x in qvec) ** 0.5
-                nb = sum(y * y for y in v) ** 0.5
-                cos_raw.append(dot / (na * nb) if na * nb > 1e-9 else 0.0)
-        else:
-            cos_raw.append(0.0)
+    lower = cache["lower"]
+    lex_raw = [float(sum(lower[i].count(w) for w in words)) for i in idxs]
+    cos_raw = _cosines(cache, idxs, qvec)
 
     lex_n = _norm(lex_raw)
     cos_n = _norm(cos_raw) if qvec is not None else None
     results = []
-    for i, (source, path, text, _v) in enumerate(entries):
-        score = (0.5 * cos_n[i] + 0.5 * lex_n[i]) if cos_n is not None else lex_n[i]
+    for j, i in enumerate(idxs):
+        source, path, text, _v = all_entries[i]
+        score = (0.5 * cos_n[j] + 0.5 * lex_n[j]) if cos_n is not None else lex_n[j]
         results.append({"source": source, "path": path, "text": text, "score": score})
     results.sort(key=lambda r: r["score"], reverse=True)
     return results[:max(1, k)]
@@ -441,17 +523,16 @@ async def search_knowledge_hybrid(query: str, k: int = 6,
     except Exception as e:
         print(f"[memory] failed reading knowledge source titles: {e}", file=sys.stderr)
 
-    entries = [e for e in _load_entries() if e[0] == "knowledge"]
-    if not entries:
-        return []
-
+    cache = _cached_entries()
     # Pre-filter by allowed source IDs
-    filtered = []
-    for source, path, text, v in entries:
+    idxs, entries = [], []
+    for i, (source, path, text, v) in enumerate(cache["entries"]):
+        if source != "knowledge":
+            continue
         kid = _knowledge_id_from_path(path)
         if kid is not None and kid in allowed_knowledge_source_ids:
-            filtered.append((source, path, text, v, kid))
-    entries = filtered
+            idxs.append(i)
+            entries.append((source, path, text, v, kid))
     if not entries:
         return []
 
@@ -478,9 +559,11 @@ async def search_knowledge_hybrid(query: str, k: int = 6,
         "employee data", "what data", "internal data", "company documents"
     ))
 
-    lex_raw, cos_raw, title_boost, query_lex = [], [], [], []
-    for _source, _path, text, v, kid in entries:
-        tl = text.lower()
+    lex_raw, title_boost, query_lex = [], [], []
+    cos_raw = _cosines(cache, idxs, qvec)
+    lower = cache["lower"]
+    for j, (_source, _path, text, v, kid) in enumerate(entries):
+        tl = lower[idxs[j]]
         lex = float(sum(tl.count(w) for w in words))
         query_lex.append(lex)
         # Extra lexical boost if source title words appear in text
@@ -488,21 +571,6 @@ async def search_knowledge_hybrid(query: str, k: int = 6,
             s_title = source_titles[kid].lower()
             lex += float(sum(tl.count(tw) for tw in re.findall(r"\w{3,}", s_title)))
         lex_raw.append(lex)
-
-        if qvec is not None and v is not None:
-            if _np is not None:
-                a = _np.asarray(qvec, dtype=_np.float32)
-                b = _np.asarray(v, dtype=_np.float32)
-                denom = float(_np.linalg.norm(a) * _np.linalg.norm(b))
-                cos_val = float(_np.dot(a, b) / denom) if denom > 1e-9 else 0.0
-            else:
-                dot = sum(x * y for x, y in zip(qvec, v))
-                na = sum(x * x for x in qvec) ** 0.5
-                nb = sum(y * y for y in v) ** 0.5
-                cos_val = dot / (na * nb) if na * nb > 1e-9 else 0.0
-            cos_raw.append(cos_val)
-        else:
-            cos_raw.append(0.0)
 
         # Title / broad boost
         boost = 0.0

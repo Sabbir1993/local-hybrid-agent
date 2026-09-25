@@ -23,6 +23,8 @@ the fallback for the deeper, harder-to-thread call sites.
 import asyncio
 import contextvars
 import functools
+import hashlib
+import re
 from typing import Any, Callable, Optional
 
 _current_user_id: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
@@ -41,8 +43,25 @@ def get_current_user_id() -> Optional[int]:
     return _current_user_id.get()
 
 
+# Companions used to report a slice of the OS machine GUID (dev_win_<hex>, dev_lnx_...,
+# dev_mac_...): a stable hardware identifier. It is never stored as-is - it's replaced
+# by a one-way hash, which the rebuilt companion also sends itself (so old and new
+# companions map to the same projects).
+_HW_DEVICE_RX = re.compile(r"^dev_(win|lnx|mac)_[0-9a-z]+$")
+
+
+def device_hash(raw: str) -> str:
+    return "dev_h_" + hashlib.sha256(("a770-device:" + raw).encode("utf-8")).hexdigest()[:24]
+
+
+def normalize_device_id(device_id: Optional[str]) -> Optional[str]:
+    if device_id and _HW_DEVICE_RX.match(device_id):
+        return device_hash(device_id)
+    return device_id
+
+
 def set_current_device(device_id: Optional[str], device_name: Optional[str] = None) -> None:
-    _current_device_id.set(device_id)
+    _current_device_id.set(normalize_device_id(device_id))
     if device_name is not None:
         _current_device_name.set(device_name)
 

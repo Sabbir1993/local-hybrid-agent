@@ -15,9 +15,13 @@ Each key accepts "off"; anything else keeps the safe default.
 """
 
 import re
+import unicodedata
 
-# 13-19 digits, optionally grouped by single spaces or hyphens.
-PAN_PATTERN = r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)"
+# 13-19 digits, optionally grouped by one separator between digits: space, tab,
+# hyphen, dot, en dash, NBSP, or a zero-width char (pasted from PDFs / web pages).
+# \d matches any Unicode decimal digit, so Bengali ০-৯ numerals are caught too.
+_SEP = "[ \t.\u2013\u00a0\u200b-\u200d\u2060\ufeff-]"
+PAN_PATTERN = r"(?<!\d)(?:\d" + _SEP + r"?){12,18}\d(?!\d)"
 PAN_RX = re.compile(PAN_PATTERN)
 
 BLOCK_MESSAGE = (
@@ -51,8 +55,13 @@ def _luhn_ok(digits: str) -> bool:
     return total % 10 == 0
 
 
+def _digits(candidate: str) -> str:
+    """ASCII digits only: separators dropped, any Unicode digit (e.g. Bengali) normalized."""
+    return "".join(str(unicodedata.digit(ch)) for ch in candidate if ch.isdigit())
+
+
 def is_pan(candidate: str) -> bool:
-    digits = re.sub(r"[ -]", "", candidate)
+    digits = _digits(candidate)
     if not 13 <= len(digits) <= 19:
         return False
     if digits[0] not in "23456":          # Mastercard 2/5, Amex 3, Visa 4, Discover/UnionPay 6
@@ -73,7 +82,7 @@ def mask_match(m: "re.Match") -> str:
     s = m.group(0)
     if not is_pan(s):
         return s
-    return f"[card ****{re.sub(r'[ -]', '', s)[-4:]}]"
+    return f"[card ****{_digits(s)[-4:]}]"
 
 
 def mask_pans(text: str) -> tuple[str, int]:
@@ -108,4 +117,10 @@ def mask_messages(messages) -> int:
                 if isinstance(part, dict) and isinstance(part.get("text"), str):
                     part["text"], k = mask_pans(part["text"])
                     n += k
+        # assistant tool calls carry model-written arguments (JSON strings)
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            if isinstance(fn, dict) and isinstance(fn.get("arguments"), str):
+                fn["arguments"], k = mask_pans(fn["arguments"])
+                n += k
     return n

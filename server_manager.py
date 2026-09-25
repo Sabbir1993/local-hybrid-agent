@@ -16,6 +16,7 @@ import asyncio
 import getpass
 import json
 import secrets
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -43,8 +44,8 @@ from core.config import (
 )
 from core import auth_db
 from core.auth_provider import hash_password
-from core.csrf import CSRFMiddleware
-from core.deps import get_current_user
+from core.csrf import CSRFMiddleware, SecurityHeadersMiddleware
+from core.deps import get_current_user, require_permission
 from core.agent_tools import WorkspaceAccessDenied
 from core.mcp import connect_all_mcp, stop_all_mcp
 from core.plugins import load_plugins
@@ -52,6 +53,8 @@ from core.process import kill_orphan_llama_servers
 from core.registry import bootstrap_builtin_tools
 from core.shell_tools import register_shell_tools
 from core.companion_bridge import router as companion_router
+from routes.api_docs import router as api_docs_router
+from routes.api_tokens import router as api_tokens_router, self_router as my_tokens_router
 from core.skills import register_skill_tools
 from core.small_model import small_models
 from core.memory import memory_background_task
@@ -172,6 +175,10 @@ def _shutdown_cleanup() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Before any request: fix the foreign-key schema (backs up first) and
+    # switch foreign keys on for the databases that check clean.
+    from core.db_repair import enable_foreign_keys
+    enable_foreign_keys()
     _bootstrap_super_admin()
     _backfill_legacy_data_ownership()
     _backfill_legacy_cloud_providers()
@@ -210,8 +217,10 @@ async def lifespan(app: FastAPI):
         _shutdown_cleanup()
 
 
-app = FastAPI(title="Local Agent", lifespan=lifespan)
+# built-in docs are unauthenticated; routes/api_docs.py serves them behind login / API token
+app = FastAPI(title="Local Agent", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(CSRFMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 @app.exception_handler(WorkspaceAccessDenied)
@@ -224,7 +233,7 @@ async def _workspace_denied(request: Request, exc: WorkspaceAccessDenied):
 @app.get("/static/{file_path:path}")
 async def serve_static(file_path: str):
     p = (STATIC_DIR / file_path).resolve()
-    if p.exists() and p.is_file() and str(p).startswith(str(STATIC_DIR.resolve())):
+    if p.exists() and p.is_file() and p.is_relative_to(STATIC_DIR.resolve()):
         media = "text/css" if p.suffix == ".css" else ("application/javascript" if p.suffix == ".js" else None)
         return FileResponse(p, media_type=media,
                             headers={"Cache-Control": "no-cache, must-revalidate"})
@@ -269,18 +278,23 @@ async def ui_root(request: Request):
 # routes layer finer-grained require_permission() checks on top (see each
 # router's own dependencies=[...] for the privileged endpoints).
 app.include_router(auth_router)
+app.include_router(api_docs_router)        # checks auth itself (redirects the browser to /login)
 _authed = [Depends(get_current_user)]
+# chat.use is the default "user" permission; revoking it must actually cut chat/agent access
+_chat_users = [Depends(require_permission("chat.use"))]
 app.include_router(control_router, dependencies=_authed)
 app.include_router(projects_router, dependencies=_authed)
 app.include_router(capabilities_router, dependencies=_authed)
-app.include_router(cloud_router, dependencies=_authed)
-app.include_router(chat_router, dependencies=_authed)
-app.include_router(agent_router, dependencies=_authed)
-app.include_router(git_router, dependencies=_authed)
+app.include_router(cloud_router, dependencies=_chat_users)
+app.include_router(chat_router, dependencies=_chat_users)
+app.include_router(agent_router, dependencies=_chat_users)
+app.include_router(git_router, dependencies=_chat_users)
 app.include_router(mcp_manager_router, dependencies=_authed)
 app.include_router(plugins_router, dependencies=_authed)
 app.include_router(customize_router, dependencies=_authed)
 app.include_router(admin_rbac_router, dependencies=_authed)
+app.include_router(api_tokens_router, dependencies=_authed)
+app.include_router(my_tokens_router, dependencies=_authed)
 app.include_router(knowledge_router, dependencies=_authed)
 app.include_router(input_guard_router, dependencies=_authed)
 app.include_router(db_explorer_router, dependencies=_authed)
@@ -296,6 +310,9 @@ def main():
     ap.add_argument("--profile", required=False, default=None, help="Path to initial profile JSON (optional)")
     ap.add_argument("--models-dir", required=False, default=None, help="Path to directory containing .gguf models")
     ap.add_argument("--port", type=int, default=PROXY_PORT, help="Port for this proxy (default 8000)")
+    ap.add_argument("--host", default=os.environ.get("A770_HOST", PROXY_HOST),
+                    help="Bind address (default %(default)s; env A770_HOST). Use 127.0.0.1 behind "
+                         "a TLS reverse proxy / tunnel so sessions never cross the LAN in plaintext")
     args = ap.parse_args()
 
     if args.profile:
@@ -305,7 +322,14 @@ def main():
         from core.profiles import register_models_root
         register_models_root(common.models_dir)
 
-    uvicorn.run(app, host=PROXY_HOST, port=args.port)
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        # PCI DSS 4.2.1: session cookies over plain HTTP on the LAN are sniffable
+        print(f"[server_manager] WARNING: listening on {args.host}:{args.port} over plain HTTP. "
+              "Bind to 127.0.0.1 (--host) and put TLS in front unless this network is trusted.",
+              file=sys.stderr)
+    # proxy_headers: behind a local TLS proxy / cloudflared, X-Forwarded-Proto makes
+    # request.url.scheme "https" so cookies get the Secure flag (FORWARDED_ALLOW_IPS env)
+    uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True)
 
 
 if __name__ == "__main__":

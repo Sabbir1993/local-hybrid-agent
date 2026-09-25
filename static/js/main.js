@@ -285,7 +285,7 @@ async function _populateCloudModelSel() {
     const models = (data.cloud || []);
     const prev = sel.value || localStorage.getItem('cloud_model_override') || '';
     sel.innerHTML = '<option value="">☁ Pick cloud model…</option>' +
-      models.map(m => `<option value="${m.key}">${m.display || m.name} (${m.provider_name || m.provider || ''})</option>`).join('');
+      models.map(m => `<option value="${esc(m.key)}">${esc(m.display || m.name)} (${esc(m.provider_name || m.provider || '')})</option>`).join('');
     if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
   } catch (e) {}
 }

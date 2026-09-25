@@ -174,7 +174,9 @@ def fast_sandbox_check(tool_name: str, args: dict) -> tuple[bool, str]:
     for fb in forbidden_files:
         if target_clean == fb or target_clean.endswith("/" + fb):
             return False, f"modifying core runtime file '{fb}' is forbidden in sandbox"
-    if target_clean.startswith(".git") or "/.git" in target_clean:
+    # GIT~1 is the Windows 8.3 short name of .git (hooks there run on the next git command)
+    segs = [x for x in target_clean.split("/") if x]
+    if target_clean.startswith(".git") or any(x == ".git" or x.startswith("git~") for x in segs):
         return False, "modifying .git directory is forbidden"
     return True, "approved by sandbox safety validator"
 
@@ -494,6 +496,11 @@ def _extract_text_tool_calls(text: str) -> list:
 
 
 async def run_tool(name: str, args: dict) -> str:
+    # every lane (main loop, router, sub-agents, chat) ends up here, so the write
+    # sandbox is enforced here too -- not only where the main loop checks it
+    approved, note = fast_sandbox_check(name, args or {})
+    if not approved:
+        return f"error: sandbox violation — {note}"
     # registry first (covers builtin + web + skills + mcp + plugins);
     # fall back to the raw builtin table for the executor lane's core set
     if registry.get(name) is not None:

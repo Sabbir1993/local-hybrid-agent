@@ -60,11 +60,17 @@ async def list_sources(user: Principal = Depends(require_permission("knowledge.m
     return {"sources": [_source_public(r) for r in auth_db.list_knowledge_sources()]}
 
 
+class TextBody(BaseModel):
+    title: str
+    text: str
+
+
 @router.post("/text")
-async def add_text_source(title: str, text: str,
+async def add_text_source(body: TextBody,
                            user: Principal = Depends(require_permission("knowledge.manage"))):
-    source_id = auth_db.create_knowledge_source(title=title, kind="text", created_by=user.id)
-    result = await _finish_ingest(source_id, text, user)
+    # JSON body, not query params: document text in a URL lands in access/proxy logs
+    source_id = auth_db.create_knowledge_source(title=body.title, kind="text", created_by=user.id)
+    result = await _finish_ingest(source_id, body.text, user)
     return {**result, "source": _source_public(auth_db.get_knowledge_source(source_id))}
 
 
@@ -85,6 +91,12 @@ async def add_url_source(body: UrlBody, user: Principal = Depends(require_permis
     return {**result, "source": _source_public(auth_db.get_knowledge_source(source_id))}
 
 
+# the client sends 5 MB chunks (static/js/knowledge.js); 200 of them = 1 GB per document
+MAX_KB_FILE_BYTES = 50 * 1024 * 1024
+MAX_KB_CHUNK_BYTES = 8 * 1024 * 1024
+MAX_KB_CHUNKS = 200
+
+
 @router.post("/upload")
 async def upload_source(file: UploadFile = FastAPIFile(...), title: Optional[str] = None,
                          user: Principal = Depends(require_permission("knowledge.manage"))):
@@ -93,7 +105,9 @@ async def upload_source(file: UploadFile = FastAPIFile(...), title: Optional[str
     if ext not in knowledge_ingest.EXTRACTORS:
         return JSONResponse({"error": f"unsupported file type: {ext}"}, status_code=400)
     KNOWLEDGE_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    data = await file.read()
+    data = await file.read(MAX_KB_FILE_BYTES + 1)
+    if len(data) > MAX_KB_FILE_BYTES:
+        return JSONResponse({"error": "file too large - use the chunked upload"}, status_code=413)
     content_hash = hashlib.sha256(data).hexdigest()
     stored_name = f"{uuid.uuid4().hex}{ext}"
     dest = KNOWLEDGE_UPLOADS_DIR / stored_name
@@ -137,7 +151,7 @@ async def upload_chunk(
     """Receive a single chunk of a large file upload."""
     if not upload_id or not all(c.isalnum() or c in "-_" for c in upload_id):
         return JSONResponse({"error": "invalid upload_id"}, status_code=400)
-    if chunk_index < 0 or total_chunks <= 0 or chunk_index >= total_chunks:
+    if chunk_index < 0 or total_chunks <= 0 or chunk_index >= total_chunks or total_chunks > MAX_KB_CHUNKS:
         return JSONResponse({"error": "invalid chunk_index or total_chunks"}, status_code=400)
 
     _cleanup_old_chunks()
@@ -145,7 +159,9 @@ async def upload_chunk(
     upload_dir.mkdir(parents=True, exist_ok=True)
     chunk_path = upload_dir / f"{chunk_index}.part"
 
-    chunk_data = await file.read()
+    chunk_data = await file.read(MAX_KB_CHUNK_BYTES + 1)
+    if len(chunk_data) > MAX_KB_CHUNK_BYTES:
+        return JSONResponse({"error": "chunk too large"}, status_code=413)
     chunk_path.write_bytes(chunk_data)
     return {"ok": True, "chunk_index": chunk_index, "total_chunks": total_chunks}
 

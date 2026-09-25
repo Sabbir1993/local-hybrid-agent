@@ -361,11 +361,25 @@ small_models = SmallModelManager()
 
 
 # ---------------- vision (SmolVLM locally, or a cloud VLM) ----------------
-async def describe_image_file(p: Path, question: str = "Describe this image in detail.") -> str:
+def image_mime(data: bytes) -> Optional[str]:
+    """Sniff the real image type from magic bytes (never trust the file extension)."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    return None
+
+
+async def describe_image_bytes(data: bytes, question: str = "Describe this image in detail.") -> str:
     """Send one image through the vision lane (cloud when bound, else local)."""
-    b64 = base64.b64encode(p.read_bytes()).decode()
-    mime = "image/png" if p.suffix.lower() == ".png" else (
-        "image/webp" if p.suffix.lower() == ".webp" else "image/jpeg")
+    mime = image_mime(data)
+    if mime is None:
+        return "error: not a PNG, JPEG, WEBP or GIF image"
+    b64 = base64.b64encode(data).decode()
     payload = {
         "messages": [{
             "role": "user",

@@ -46,6 +46,7 @@ from .config import (
     CLOUD_TIMEOUT_S,
     CONFIG_FILE,
     PROVIDERS_DIR,
+    atomic_write_json,
 )
 from .request_context import get_current_user_id
 
@@ -100,11 +101,38 @@ def _merge_sections(base_cfg: dict, override_cfg: dict) -> dict:
     return out
 
 
+# API keys live in the OS keychain (core/credentials.py), like MCP secrets; the
+# providers JSON only keeps "apiKeyRef": "keyring". Keys found in plaintext are
+# moved on first read.
+_KEY_REF = "keyring"
+
+
+def _key_id(user_id: int, provider: str) -> str:
+    return f"cloud:user_{user_id}:{provider}"
+
+
+def _hydrate_keys(user_id: int, cfg: dict) -> dict:
+    """In-memory only: fill options.apiKey from the keychain; migrate plaintext keys."""
+    from . import credentials
+    plaintext = False
+    for name, entry in (cfg.get("provider") or {}).items():
+        opts = entry.get("options") if isinstance(entry, dict) else None
+        if not isinstance(opts, dict):
+            continue
+        if opts.get("apiKeyRef") == _KEY_REF:
+            opts["apiKey"] = credentials.get_token(_key_id(user_id, name)) or ""
+        elif str(opts.get("apiKey") or opts.get("api_key") or "").strip():
+            plaintext = True
+    if plaintext:
+        _write_providers(user_id, cfg)
+    return cfg
+
+
 def _merged(user_id: Optional[int] = None) -> dict:
     uid = _resolve_user(user_id)
     cache_key = uid if uid is not None else "_shared"
     if cache_key not in _CACHE:
-        override = _read_json(_provider_file(uid)) if uid is not None else {}
+        override = _hydrate_keys(uid, _read_json(_provider_file(uid))) if uid is not None else {}
         _CACHE[cache_key] = _merge_sections(_read_json(CONFIG_FILE), override)
     return _CACHE[cache_key]
 
@@ -302,10 +330,33 @@ def providers_public(user_id: Optional[int] = None) -> list:
     return out
 
 
+# Provider base URLs are user-supplied: without this a user could point one at
+# llama-server (127.0.0.1:8090), LAN hosts or cloud metadata and read replies back.
+_BLOCKED_HEADERS = {"host", "connection", "keep-alive", "proxy-authorization", "proxy-connection",
+                    "te", "trailer", "transfer-encoding", "upgrade", "content-length", "cookie"}
+
+
+def check_provider_url(url: str) -> str:
+    from .net_guard import check_url, BlockedURLError
+    if not str(url or "").lower().startswith("https://"):
+        raise ValueError("provider base URL must be https://")
+    try:
+        return check_url(url)
+    except BlockedURLError as e:
+        raise ValueError(f"provider base URL rejected: {e}") from e
+
+
+async def _guard_request(request: httpx.Request) -> None:
+    # re-checked per request: DNS can change after the URL was saved
+    import asyncio
+    await asyncio.get_running_loop().run_in_executor(None, check_provider_url, str(request.url))
+
+
 def _client_for(cm: "CloudModel") -> httpx.AsyncClient:
     c = _CLIENTS.get(cm.key)
     if c is None:
-        c = httpx.AsyncClient(timeout=httpx.Timeout(cm.timeout_s, connect=20.0))
+        c = httpx.AsyncClient(timeout=httpx.Timeout(cm.timeout_s, connect=20.0),
+                              event_hooks={"request": [_guard_request]})
         _CLIENTS[cm.key] = c
     return c
 
@@ -402,8 +453,26 @@ class CloudClient:
 # an ambient "current user" guess, unlike the read-side lane/model lookups.
 
 def _write_providers(user_id: int, cfg: dict) -> None:
+    """Persist a user's providers with API keys moved to the OS keychain. If the
+    keychain is unavailable the key stays in the file rather than being lost."""
+    from . import credentials
+    out = deepcopy(cfg)
+    for name, entry in (out.get("provider") or {}).items():
+        opts = entry.get("options") if isinstance(entry, dict) else None
+        if not isinstance(opts, dict):
+            continue
+        key = str(opts.pop("apiKey", "") or opts.pop("api_key", "") or "").strip()
+        opts.pop("api_key", None)
+        if key:
+            try:
+                credentials.set_token(_key_id(user_id, name), key)
+                opts["apiKeyRef"] = _KEY_REF
+            except Exception as e:
+                print(f"[cloud] keychain unavailable, API key for '{name}' kept in file: {e}",
+                      file=sys.stderr)
+                opts["apiKey"] = key
     PROVIDERS_DIR.mkdir(parents=True, exist_ok=True)
-    _provider_file(user_id).write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    atomic_write_json(_provider_file(user_id), out)
 
 
 def save_provider(user_id: int, name: str, data: dict) -> dict:
@@ -412,19 +481,22 @@ def save_provider(user_id: int, name: str, data: dict) -> dict:
     name = str(name or "").strip()
     if not name:
         raise ValueError("provider name is required")
-    cfg = _read_json(_provider_file(user_id))
+    cfg = _hydrate_keys(user_id, _read_json(_provider_file(user_id)))
     entry = (cfg.setdefault("provider", {})).setdefault(name, {})
     if data.get("npm") is not None:
         entry["npm"] = data["npm"]
     entry["name"] = str(data.get("name") or entry.get("name") or name)
     opts = entry.setdefault("options", {})
     if data.get("base_url"):
-        opts["baseURL"] = str(data["base_url"]).strip()
+        opts["baseURL"] = check_provider_url(str(data["base_url"]).strip())
     if data.get("api_key"):
         opts["apiKey"] = str(data["api_key"]).strip()
     if data.get("chat_path"):
         opts["chat_path"] = str(data["chat_path"]).strip()
     if isinstance(data.get("extra_headers"), dict) and data["extra_headers"]:
+        bad = [k for k in data["extra_headers"] if str(k).strip().lower() in _BLOCKED_HEADERS]
+        if bad:
+            raise ValueError(f"header '{bad[0]}' cannot be overridden")
         opts["extra_headers"] = {str(k): str(v) for k, v in data["extra_headers"].items()}
     if isinstance(data.get("extra_body"), dict) and data["extra_body"]:
         opts["extra_body"] = data["extra_body"]
@@ -474,8 +546,10 @@ def delete_model(user_id: int, provider: str, model_id: str) -> dict:
 def delete_provider(user_id: int, name: str) -> dict:
     """Remove a provider and unbind any lane that pointed at one of its models."""
     name = str(name or "").strip()
-    cfg = _read_json(_provider_file(user_id))
+    cfg = _hydrate_keys(user_id, _read_json(_provider_file(user_id)))
     (cfg.get("provider") or {}).pop(name, None)
+    from . import credentials
+    credentials.delete_token(_key_id(user_id, name))
     cl = cfg.setdefault("cloud", {})
     for lane in CLOUD_LANES:
         v = cl.get(lane)
@@ -534,8 +608,9 @@ async def probe(cm: CloudModel, prompt: str = "ping") -> dict:
         ms = int((time.time() - t0) * 1000)
         if r.status_code != 200:
             body = r.text[:300]
+            print(f"[cloud] probe {cm.key} -> {r.status_code}: {body}", file=sys.stderr)
             return {"ok": False, "ms": ms, "status": r.status_code,
-                    "error": body + _hint(r.status_code, body), "endpoint": cm.endpoint()}
+                    "error": f"HTTP {r.status_code}" + _hint(r.status_code, body), "endpoint": cm.endpoint()}
         sample = ""
         try:
             sample = str(r.json()["choices"][0]["message"]["content"] or "")

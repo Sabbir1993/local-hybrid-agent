@@ -22,7 +22,7 @@ let pollFailures = 0;
 let _lastLocalPid = null;
 async function pollStatus() {
   try {
-    const res = await fetch('/control/status');
+    const res = await fetch('/control/status', { background: true });
     if (!res.ok) throw new Error('status not ok');
     const s = await res.json();
     pollFailures = 0;
@@ -51,7 +51,7 @@ async function pollStatus() {
         `${cloudMain.display}  ·  via ${cloudMain.provider}  ·  cloud (no VRAM)`;
       const ec = document.querySelector('.empty-card');
       if (ec) {
-        ec.innerHTML = `<p><b>${cloudMain.display} is ready!</b></p><p class="dim" style="margin-top:6px;">Main lane is served by <b>${cloudMain.provider}</b> in the cloud — your local GPU(s) stay free. Type your message below and press Enter.</p>`;
+        ec.innerHTML = `<p><b>${esc(cloudMain.display)} is ready!</b></p><p class="dim" style="margin-top:6px;">Main lane is served by <b>${esc(cloudMain.provider)}</b> in the cloud — your local GPU(s) stay free. Type your message below and press Enter.</p>`;
       }
     } else if (s.model && s.pid) {
       const visionTag = s.vision_capable ? '  ·  👁 vision' : '';

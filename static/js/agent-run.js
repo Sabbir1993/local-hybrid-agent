@@ -103,6 +103,12 @@ async function runAgentSSE(text) {
   if (typeof updateBgIndicators === 'function') updateBgIndicators();
 
   const getJobAssistant = () => job.assistantMsg;
+  // End the thought card that is still streaming, keeping how long it ran
+  const closeThought = (L) => {
+    if (!L._curThought) return;
+    L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
+    L._curThought = null;
+  };
 
   (async () => {
     let usage = null;
@@ -140,247 +146,150 @@ async function runAgentSSE(text) {
         const e = await res.json().catch(() => ({}));
         throw new Error(e.message || e.error || ('HTTP ' + res.status));
       }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let i;
-        while ((i = buf.indexOf('\n\n')) >= 0) {
-          const raw = buf.slice(0, i);
-          buf = buf.slice(i + 2);
-          const evM = raw.match(/^event: (.+)$/m);
-          const dtM = raw.match(/^data: (.+)$/m);
-          if (!evM || !dtM) continue;
-          const ev = evM[1], d = JSON.parse(dtM[1]);
-          const L = getJobAssistant();
-          if (ev === 'run') {
-            L.runId = d.run_id;   // routing telemetry id -> thumbs up/down feedback
+      await readSSE(res, (ev, d) => {
+        const L = getJobAssistant();
+        if (ev === 'run') {
+          L.runId = d.run_id;   // routing telemetry id -> thumbs up/down feedback
+        }
+        else if (ev === 'step') {
+          closeThought(L);
+          L.acts.push({ type: 'step', ...d });
+          L.statusText = d.step ? `Planning step ${d.step}...` : 'Planning next step...';
+        }
+        else if (ev === 'lane') {
+          L.acts.push({ type: 'lane', ...d });
+          L.modelDisplay = d.display || d.model;
+          L.modelSource = d.source;
+          L.modelProvider = d.provider;
+        }
+        else if (ev === 'thought') {
+          closeThought(L);
+          L.acts.push({ type: 'thought', duration_s: d.duration_s || 2, ...d });
+          L.statusText = 'Synthesizing strategy...';
+          if (typeof window.setLiveHud === 'function') {
+            window.setLiveHud({ phase: 'thinking', text: 'Synthesizing strategy...' });
           }
-          else if (ev === 'step') {
-            if (L._curThought) {
-              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
-              L._curThought = null;
-            }
-            L.acts.push({ type: 'step', ...d });
-            L.statusText = d.step ? `Planning step ${d.step}...` : 'Planning next step...';
+        }
+        else if (ev === 'thought_delta') {
+          if (!L._curThought) {
+            L._curThought = { type: 'thought', text: '', t0: performance.now(), step: d.step, model: d.model };
+            L.acts.push(L._curThought);
           }
-          else if (ev === 'lane') {
-            L.acts.push({ type: 'lane', ...d });
-            L.modelDisplay = d.display || d.model;
-            L.modelSource = d.source;
-            L.modelProvider = d.provider;
+          L._curThought.text += (d.delta || '');
+          L._curThought.duration_s = Math.max(1, Math.floor((performance.now() - L._curThought.t0) / 1000));
+          L.reasoning = (L.reasoning || '') + (d.delta || '');
+          if (typeof window.setLiveHud === 'function') {
+            window.setLiveHud({ phase: 'thinking', text: 'Thinking & analyzing...' });
           }
-          else if (ev === 'thought') {
-            if (L._curThought) {
-              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
-              L._curThought = null;
-            }
-            L.acts.push({ type: 'thought', duration_s: d.duration_s || 2, ...d });
-            L.statusText = 'Synthesizing strategy...';
-            if (typeof window.setLiveHud === 'function') {
-              window.setLiveHud({ phase: 'thinking', text: 'Synthesizing strategy...' });
-            }
-          }
-          else if (ev === 'thought_delta') {
+        }
+        else if (ev === 'delta_to_thought') {
+          const moved = sseDeltaToThought(L);
+          if (moved) {
             if (!L._curThought) {
               L._curThought = { type: 'thought', text: '', t0: performance.now(), step: d.step, model: d.model };
               L.acts.push(L._curThought);
             }
-            L._curThought.text += (d.delta || '');
-            L._curThought.duration_s = Math.max(1, Math.floor((performance.now() - L._curThought.t0) / 1000));
-            L.reasoning = (L.reasoning || '') + (d.delta || '');
-            if (typeof window.setLiveHud === 'function') {
-              window.setLiveHud({ phase: 'thinking', text: 'Thinking & analyzing...' });
-            }
-          }
-          else if (ev === 'tool_preparing') {
-            if (L._curThought) {
-              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
-              L._curThought = null;
-            }
-            const p = d.path ? d.path.split(/[\\/]/).pop() : '';
-            const actionVerb = d.name === 'write_file' ? 'Preparing to write' : (d.name === 'edit_file' ? 'Preparing to edit' : `Preparing ${d.name}`);
-            const label = p ? `${actionVerb} ${p}...` : `${actionVerb}...`;
-            L.statusText = label;
-            if (typeof window.setLiveHud === 'function') {
-              const bytesStr = d.bytes ? ` (~${Math.round(d.bytes / 4)} tokens)` : '';
-              window.setLiveHud({
-                phase: 'preparing',
-                name: d.name,
-                path: d.path,
-                text: label,
-                subtext: bytesStr
-              });
-            }
-          }
-          else if (ev === 'tool_call') {
-            if (L._curThought) {
-              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
-              L._curThought = null;
-            }
-            // If the model was streaming its preamble before calling a tool, keep it as thought/reasoning or preamble
-            L.acts.push({ type: 'tool_call', ...d });
-            const toolLabel = (typeof formatToolStatus === 'function') ? formatToolStatus(d.name, d.args) : (`Running ${d.name}...`);
-            L.statusText = toolLabel;
-            const p = (d.args && (d.args.path || d.args.file || d.args.filename)) || '';
-            if (typeof window.setLiveHud === 'function') {
-              window.setLiveHud({
-                phase: (d.name === 'write_file' || d.name === 'edit_file') ? 'writing' : 'running',
-                name: d.name,
-                path: p,
-                text: toolLabel
-              });
-            }
-            if (L.content && L.content.trim()) {
-              if (!L.reasoning) L.reasoning = L.content.trim();
-              else L.reasoning += '\n\n' + L.content.trim();
-              L.content = '';
-            }
-          }
-          else if (ev === 'tool_result') {
-            L.acts.push({ type: 'tool_result', ...d });
-            L.statusText = 'Crunching tool results...';
-            // agent changed a file -> refresh the workspace side panel if active
-            if (wsPanelOpen && (d.name === 'write_file' || d.name === 'edit_file' || d.name === 'revert')) {
-              if (curSession && String(curSession.id) === String(sessionId)) {
-                wsRefreshTree();
-              }
-            }
-            if (d.name === 'write_file' || d.name === 'edit_file') {
-              const p = (d.args && (d.args.path || d.args.file || d.args.filename)) || '';
-              const filename = p ? p.split(/[\\/]/).pop() : 'file';
-              const isSuccess = d.ok !== false;
-              const verb = d.name === 'write_file' ? 'Saved' : 'Updated';
-              const actions = [];
-              if (p && isSuccess && typeof openFilePreview === 'function') {
-                actions.push({
-                  label: '👁️ Preview',
-                  onClick: () => openFilePreview(p, filename)
-                });
-              }
-              if (p && typeof wsShowFile === 'function') {
-                actions.push({
-                  label: '📂 Reveal',
-                  onClick: () => {
-                    if (typeof setWsPanel === 'function') setWsPanel(true);
-                    if (typeof wsShowFile === 'function') wsShowFile(p);
-                  }
-                });
-              }
-              if (typeof toast === 'function') {
-                toast(isSuccess ? `💾 ${verb} ${filename}` : `⚠️ Failed to write ${filename}`, {
-                  isErr: !isSuccess,
-                  duration: 5000,
-                  actions: actions
-                });
-              }
-              if (typeof window.setLiveHud === 'function') {
-                window.setLiveHud({
-                  phase: isSuccess ? 'done' : 'error',
-                  name: d.name,
-                  path: p,
-                  text: isSuccess ? `💾 ${verb} ${filename}` : `⚠️ Failed to save ${filename}`,
-                  actions: actions
-                });
-              }
-            }
-          }
-          else if (ev === 'verify') {
-            L.acts.push({ type: 'verify', ...d });
-            L.statusText = 'Verifying tool changes...';
-            if (typeof window.setLiveHud === 'function') {
-              window.setLiveHud({ phase: 'running', text: 'Verifying tool changes...' });
-            }
-          }
-          else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd);
-          else if (ev === 'delta') {
-            if (L._curThought) {
-              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
-              L._curThought = null;
-            }
-            if (L._resetPrev != null) {
-              // after a delta_reset: keep the earlier text as reasoning only when the
-              // replacement is genuinely different (a cleaned-up copy would duplicate it)
-              const prev = L._resetPrev;
-              L._resetPrev = null;
-              if (!(d.text || '').includes(prev.slice(0, 160))) {
-                L.reasoning = L.reasoning ? L.reasoning + '\n\n' + prev : prev;
-              }
-            }
-            L.content += (d.text || '');
-            L.statusText = '';
-          }
-          else if (ev === 'delta_replace') {
-            L.content = (d.text || '');
-            L.statusText = '';
-          }
-          else if (ev === 'delta_reset') {
-            // Replacing content with a synthesized final answer: decide on the next
-            // delta whether the prior streamed text is worth keeping as reasoning
-            if (L.content && L.content.trim()) L._resetPrev = L.content.trim();
-            L.content = '';
-          }
-          else if (ev === 'validated') {
-            L.acts.push({ type: 'validated', ...d });
-            L.statusText = 'Validating solution...';
-          }
-          else if (ev === 'ctx') {
-            // Smart context truncation fired on the backend — surface it
-            const kb = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
-            toast(`🧹 Context truncated to fit the window: ${kb(d.before_tokens)} → ${kb(d.after_tokens)} tokens`);
-          }
-          else if (ev === 'plan') {
-            // structured plan checklist — keep only the latest snapshot in acts
-            if (!L.acts) L.acts = [];
-            const planAct = { type: 'plan', items: d.items || [] };
-            const pi = L.acts.findIndex(a => a.type === 'plan');
-            if (pi >= 0) L.acts[pi] = planAct; else L.acts.push(planAct);
-          }
-          else if (ev === 'kb_blocked') {
-            // Data residency: KB withheld from the cloud lane; show it as a failed KB step
-            if (!L.acts) L.acts = [];
-            L.acts.push({ type: 'tool_call', id: 'kb_blocked', name: 'search_knowledge_base', args: {} });
-            L.acts.push({ type: 'tool_result', id: 'kb_blocked', name: 'search_knowledge_base', ok: false, result: d.message || '' });
-            if (typeof toast === 'function') toast('🔒 Company knowledge base is local-only — start a local model to use it');
-          }
-          else if (ev === 'guard') {
-            // Output sanitizer redacted part of the response
-            if (!L.acts) L.acts = [];
-            L.acts.push({ type: 'guard', rule: d.rule, message: d.message });
-            toast('🧼 ' + (d.message || ('Response filtered by policy: ' + (d.rule || ''))));
-          }
-          else if (ev === 'usage') {
-            // per-step prompt size; the last step's is the run's real context use
-            if (d.prompt_tokens) L.promptTokens = d.prompt_tokens;
-          }
-          else if (ev === 'done') {
-            if (L._curThought) {
-              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
-              L._curThought = null;
-            }
-            // run ended early (step cap or loop stop): keep why, so the bubble can offer Continue
-            if (d.reason) {
-              if (!L.acts) L.acts = [];
-              L.acts.push({ type: 'stopped', reason: d.reason, note: d.note || '', steps: d.steps,
-                            pending: d.pending || 0, plan_total: d.plan_total || 0 });
-            }
-          }
-          else if (ev === 'error') throw new Error(d.error);
-
-          if (curSession && String(curSession.id) === String(sessionId)) {
-            renderLast();
+            L._curThought.text += moved;
           }
         }
-      }
+        else if (ev === 'tool_preparing') {
+          closeThought(L);
+          sseToolPreparing(L, d);
+        }
+        else if (ev === 'tool_call') {
+          closeThought(L);
+          sseToolCall(L, d);
+        }
+        else if (ev === 'tool_result') {
+          sseToolResult(L, d);
+          // agent changed a file -> refresh the workspace side panel if active
+          if (wsPanelOpen && (d.name === 'write_file' || d.name === 'edit_file' || d.name === 'revert')) {
+            if (curSession && String(curSession.id) === String(sessionId)) {
+              wsRefreshTree();
+            }
+          }
+        }
+        else if (ev === 'verify') {
+          L.acts.push({ type: 'verify', ...d });
+          L.statusText = 'Verifying tool changes...';
+          if (typeof window.setLiveHud === 'function') {
+            window.setLiveHud({ phase: 'running', text: 'Verifying tool changes...' });
+          }
+        }
+        else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd);
+        else if (ev === 'delta') {
+          closeThought(L);
+          if (L._resetPrev != null) {
+            // after a delta_reset: keep the earlier text as reasoning only when the
+            // replacement is genuinely different (a cleaned-up copy would duplicate it)
+            const prev = L._resetPrev;
+            L._resetPrev = null;
+            if (!(d.text || '').includes(prev.slice(0, 160))) {
+              L.reasoning = L.reasoning ? L.reasoning + '\n\n' + prev : prev;
+            }
+          }
+          L.content += (d.text || '');
+          L.statusText = '';
+        }
+        else if (ev === 'delta_replace') {
+          L.content = (d.text || '');
+          L.statusText = '';
+        }
+        else if (ev === 'delta_reset') {
+          // Replacing content with a synthesized final answer: decide on the next
+          // delta whether the prior streamed text is worth keeping as reasoning
+          if (L.content && L.content.trim()) L._resetPrev = L.content.trim();
+          L.content = '';
+        }
+        else if (ev === 'validated') {
+          L.acts.push({ type: 'validated', ...d });
+          L.statusText = 'Validating solution...';
+        }
+        else if (ev === 'ctx') {
+          // Smart context truncation fired on the backend — surface it
+          const kb = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+          toast(`🧹 Context truncated to fit the window: ${kb(d.before_tokens)} → ${kb(d.after_tokens)} tokens`);
+        }
+        else if (ev === 'plan') {
+          // structured plan checklist — keep only the latest snapshot in acts
+          if (!L.acts) L.acts = [];
+          const planAct = { type: 'plan', items: d.items || [] };
+          const pi = L.acts.findIndex(a => a.type === 'plan');
+          if (pi >= 0) L.acts[pi] = planAct; else L.acts.push(planAct);
+        }
+        else if (ev === 'kb_blocked') sseKbBlocked(L, d);
+        else if (ev === 'guard') {
+          if (!L.acts) L.acts = [];
+          L.acts.push({ type: 'guard', rule: d.rule, message: d.message });
+          sseGuardToast(d);
+        }
+        else if (ev === 'usage') {
+          // per-step prompt size; the last step's is the run's real context use
+          if (d.prompt_tokens) L.promptTokens = d.prompt_tokens;
+        }
+        else if (ev === 'done') {
+          closeThought(L);
+          // run ended early (step cap or loop stop): keep why, so the bubble can offer Continue
+          if (d.reason) {
+            if (!L.acts) L.acts = [];
+            L.acts.push({ type: 'stopped', reason: d.reason, note: d.note || '', steps: d.steps,
+                          pending: d.pending || 0, plan_total: d.plan_total || 0 });
+          }
+        }
+        else if (ev === 'error') throw new Error(d.error);
+
+        if (curSession && String(curSession.id) === String(sessionId)) {
+          scheduleRenderLast();
+        }
+      });
       const targetAssistant = getJobAssistant();
       if (targetAssistant._resetPrev != null) {
         // delta_reset with no replacement text: keep what was streamed
         if (!targetAssistant.content) targetAssistant.content = targetAssistant._resetPrev;
         targetAssistant._resetPrev = null;
       }
+      const leaked = sseApplyThinkSplit(targetAssistant);
+      if (leaked) (targetAssistant.acts = targetAssistant.acts || []).push({ type: 'thought', text: leaked, duration_s: 1 });
       if (!targetAssistant.content && targetAssistant.acts && targetAssistant.acts.length > 0) {
         targetAssistant.content = 'Task completed. See tool operations above for details.';
       }

@@ -8,6 +8,8 @@ execute SQL queries with detailed execution metrics and audit logging.
 """
 
 import hashlib
+import re
+from contextlib import closing
 import os
 import sqlite3
 import time
@@ -163,10 +165,47 @@ def _resolve_db(db_id: str) -> Path:
     raise HTTPException(status_code=404, detail=f"Database '{db_id}' not found")
 
 
+# auth.db columns nobody should read through the console: credential hashes
+# and live session ids (the sha256 is enough to hijack if the DB is copied).
+_HIDDEN_COLUMNS = {("users", "password_hash"), ("auth_sessions", "id")}
+# Introspection pragmas take a table/index argument; settable ones must be bare (no "= v").
+_INTROSPECT_PRAGMAS = {"table_info", "table_xinfo", "index_list", "index_info", "index_xinfo",
+                       "foreign_key_list", "database_list", "compile_options", "page_count"}
+_SETTABLE_PRAGMAS = {"page_size", "user_version", "schema_version", "journal_mode"}
+_VACUUM_RE = re.compile(r"\bVACUUM\b", re.IGNORECASE)
+
+
+def _authorizer(hide_auth_columns: bool):
+    def _auth(action, arg1, arg2, _db, _trigger):
+        if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH):
+            return sqlite3.SQLITE_DENY
+        if action == sqlite3.SQLITE_PRAGMA:
+            name = (arg1 or "").lower()
+            if not (name in _INTROSPECT_PRAGMAS or (name in _SETTABLE_PRAGMAS and arg2 is None)):
+                return sqlite3.SQLITE_DENY
+        if action == sqlite3.SQLITE_FUNCTION and (arg2 or "").lower() == "load_extension":
+            return sqlite3.SQLITE_DENY
+        if hide_auth_columns and action == sqlite3.SQLITE_READ and (arg1, arg2) in _HIDDEN_COLUMNS:
+            return sqlite3.SQLITE_IGNORE   # column reads back as NULL
+        return sqlite3.SQLITE_OK
+    return _auth
+
+
+def _connect(path: Path, timeout: float, writable: bool = False):
+    """Open a console connection: read-only unless explicitly writable, with
+    ATTACH / PRAGMA writes / load_extension blocked either way. auth.db is
+    never writable -- it holds the audit log (PCI DSS 10.3.2)."""
+    writable = writable and path.resolve() != Path(AUTH_DB_FILE).resolve()
+    uri = path.resolve().as_uri() + ("" if writable else "?mode=ro")
+    conn = sqlite3.connect(uri, uri=True, timeout=timeout)
+    conn.set_authorizer(_authorizer(path.resolve() == Path(AUTH_DB_FILE).resolve()))
+    return closing(conn)
+
+
 def _get_table_count(path: Path) -> int:
     """Count user tables in database."""
     try:
-        with sqlite3.connect(str(path), timeout=3.0) as conn:
+        with _connect(path, timeout=3.0) as conn:
             cur = conn.execute(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'"
             )
@@ -222,7 +261,7 @@ async def get_schema(db_id: str, user: Principal = Depends(require_permission("d
     tables = []
 
     try:
-        with sqlite3.connect(str(path), timeout=5.0) as conn:
+        with _connect(path, timeout=5.0) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT type, name, sql FROM sqlite_master "
@@ -289,6 +328,11 @@ async def execute_query(
     if not sql:
         raise HTTPException(status_code=400, detail="SQL query cannot be empty")
 
+    if _VACUUM_RE.search(sql):
+        raise HTTPException(status_code=400, detail="VACUUM is not allowed from the console")
+    # Writes are reserved for super admins; everyone else gets a read-only handle.
+    writable = user.is_super_admin
+
     t0 = time.perf_counter()
     is_mutation = False
     affected_rows = 0
@@ -296,7 +340,7 @@ async def execute_query(
     rows_data = []
 
     try:
-        with sqlite3.connect(str(path), timeout=10.0) as conn:
+        with _connect(path, timeout=10.0, writable=writable) as conn:
             cur = conn.cursor()
             cur.execute(sql)
 
@@ -383,9 +427,11 @@ async def get_table_data(
 ):
     """Quick paginated view of a specific table's contents."""
     path = _resolve_db(db_id)
+    audit_log(user, action="database.read", resource=f"{db_id}:{table_name}", permission_key="database.manage",
+              detail={"limit": limit, "offset": offset})
 
     try:
-        with sqlite3.connect(str(path), timeout=5.0) as conn:
+        with _connect(path, timeout=5.0) as conn:
             # Verify table exists in sqlite_master
             check = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",

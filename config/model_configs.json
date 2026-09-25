@@ -117,7 +117,7 @@
   "ornith-1.5-9b-q4_k_m.gguf": {
     "context_size": 131920,
     "n_gpu_layers": 999,
-    "threads": 0,
+    "threads": 12,
     "threads_batch": 0,
     "batch_size": 2048,
     "ubatch_size": 512,
@@ -137,7 +137,7 @@
     "kv_unified": true,
     "kv_unified_per_slot": 131920,
     "cache_reuse": 256,
-    "cache_ram": 16384
+    "cache_ram": 1024
   },
   "qwen2.5-coder-14b-instruct-q4_k_m.gguf": {
     "context_size": 128000,

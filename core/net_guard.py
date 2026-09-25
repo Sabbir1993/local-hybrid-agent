@@ -22,6 +22,7 @@ import httpx
 _BLOCKED_HOSTNAMES = ("localhost", "localhost.localdomain", "metadata.google.internal")
 _BLOCKED_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home.arpa")
 MAX_REDIRECTS = 5
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
 
 
 class BlockedURLError(ValueError):
@@ -29,8 +30,14 @@ class BlockedURLError(ValueError):
 
 
 def _ip_blocked(ip: ipaddress._BaseAddress) -> bool:
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-        ip = ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv6Address):
+        # IPv4 embedded in IPv6 (::ffff:, 6to4 2002::/16, NAT64 64:ff9b::/96) reaches the v4 host
+        if ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        elif ip.sixtofour:
+            ip = ip.sixtofour
+        elif ip in _NAT64:
+            ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
     return (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
             or ip.is_multicast or ip.is_unspecified or not ip.is_global)
 

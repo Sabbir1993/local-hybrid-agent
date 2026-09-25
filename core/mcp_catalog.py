@@ -26,7 +26,7 @@ CATALOG = []
 # get an Install button - public-registry results are browse-only.
 #   secret_env: env vars the admin types on install; values go to the OS keychain
 #   egress:     True when tool calls leave this host (third-party API) - shown as a warning,
-#               since MCP tool *arguments* are not PAN-masked (only results are, core/mcp.py)
+#               (tool arguments and results are both PAN-masked in core/mcp.py)
 PRESETS = [
     {
         "id": "sequential-thinking",
@@ -52,18 +52,9 @@ PRESETS = [
         "args": ["mcp-server-time", "--local-timezone=Asia/Dhaka"],
         "egress": False,
     },
-    {
-        "id": "fetch",
-        "name": "Fetch",
-        "description": "Fetch a web page and convert it to markdown for the model to read.",
-        "category": "web",
-        "author": "Model Context Protocol",
-        "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
-        "transport": "stdio",
-        "command": "uvx",
-        "args": ["mcp-server-fetch"],
-        "egress": True,
-    },
+    # No "fetch" preset: mcp-server-fetch runs on this host with no SSRF guard, so any
+    # user's agent could reach 127.0.0.1:8090, LAN hosts or cloud metadata. The built-in
+    # web_fetch tool covers the same need through core/net_guard.
     {
         "id": "github",
         "name": "GitHub",

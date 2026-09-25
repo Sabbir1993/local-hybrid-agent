@@ -117,7 +117,7 @@ class KBGateTests(unittest.TestCase):
         async def fake_embed(texts):
             return [qvec]
         titles = titles or []
-        with mock.patch.object(memory, "_load_entries", return_value=self.ENTRIES), \
+        with mock.patch.object(memory, "_cached_entries", return_value=memory._build_cache(self.ENTRIES)), \
              mock.patch.object(memory, "_embed_texts", side_effect=fake_embed), \
              mock.patch.object(memory, "_knowledge_id_from_path", return_value=1), \
              mock.patch("core.auth_db.list_knowledge_sources", return_value=titles):

@@ -4,12 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Settings — Local Agent</title>
-<script>
-  (function() {
-    var t = localStorage.getItem('a770_theme') || 'claude';
-    document.documentElement.setAttribute('data-theme', t);
-  })();
-</script>
+<script src="/static/js/theme-boot.js?v=1.0"></script>
 <link rel="stylesheet" href="/static/css/style.css?v=4.6">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 <style>
@@ -273,6 +268,10 @@
           <span class="tab-icon">☁️</span>
           <span class="tab-label">Cloud Models</span>
         </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-devices">
+          <span class="tab-icon">💻</span>
+          <span class="tab-label">Companion Devices</span>
+        </button>
 
         <div class="settings-group-label">Agent Capabilities</div>
         <button type="button" class="settings-tab-btn" data-tab="sec-caps" data-perm="settings.orchestration.configure">
@@ -313,15 +312,15 @@
           <p class="dim">Select color palette and interface theme</p>
         </div>
         <div class="theme-grid">
-          <button type="button" class="theme-opt" data-t="slate" onclick="setTheme('slate')"><span class="theme-swatch" style="background:#79c0ff"></span> Slate &amp; Indigo</button>
-          <button type="button" class="theme-opt" data-t="claude" onclick="setTheme('claude')"><span class="theme-swatch" style="background:#d97757"></span> Claude Warm</button>
-          <button type="button" class="theme-opt" data-t="tokyonight" onclick="setTheme('tokyonight')"><span class="theme-swatch" style="background:#7aa2f7"></span> Tokyo Night</button>
-          <button type="button" class="theme-opt" data-t="nord" onclick="setTheme('nord')"><span class="theme-swatch" style="background:#88c0d0"></span> Nord Arctic</button>
-          <button type="button" class="theme-opt" data-t="classic" onclick="setTheme('classic')"><span class="theme-swatch" style="background:#6c8cff"></span> Classic Dark</button>
-          <button type="button" class="theme-opt" data-t="oled" onclick="setTheme('oled')"><span class="theme-swatch" style="background:#3b82f6"></span> OLED Black</button>
-          <button type="button" class="theme-opt" data-t="ssl" onclick="setTheme('ssl')"><span class="theme-swatch" style="background: linear-gradient(135deg, #2d489a 50%, #eb3439 50%);"></span> SSL Wireless (Navy)</button>
-          <button type="button" class="theme-opt" data-t="ssl-light" onclick="setTheme('ssl-light')"><span class="theme-swatch" style="background: linear-gradient(135deg, #2d489a 50%, #eb3439 50%); border: 1px solid #94a3b8;"></span> SSL Wireless (Light)</button>
-          <button type="button" class="theme-opt" data-t="light" onclick="setTheme('light')" style="grid-column: span 2;"><span class="theme-swatch" style="background:#2563eb; border:1px solid #94a3b8;"></span> ☀️ Pure Light (Modern Crisp)</button>
+          <button type="button" class="theme-opt" data-t="slate"><span class="theme-swatch" style="background:#79c0ff"></span> Slate &amp; Indigo</button>
+          <button type="button" class="theme-opt" data-t="claude"><span class="theme-swatch" style="background:#d97757"></span> Claude Warm</button>
+          <button type="button" class="theme-opt" data-t="tokyonight"><span class="theme-swatch" style="background:#7aa2f7"></span> Tokyo Night</button>
+          <button type="button" class="theme-opt" data-t="nord"><span class="theme-swatch" style="background:#88c0d0"></span> Nord Arctic</button>
+          <button type="button" class="theme-opt" data-t="classic"><span class="theme-swatch" style="background:#6c8cff"></span> Classic Dark</button>
+          <button type="button" class="theme-opt" data-t="oled"><span class="theme-swatch" style="background:#3b82f6"></span> OLED Black</button>
+          <button type="button" class="theme-opt" data-t="ssl"><span class="theme-swatch" style="background: linear-gradient(135deg, #2d489a 50%, #eb3439 50%);"></span> SSL Wireless (Navy)</button>
+          <button type="button" class="theme-opt" data-t="ssl-light"><span class="theme-swatch" style="background: linear-gradient(135deg, #2d489a 50%, #eb3439 50%); border: 1px solid #94a3b8;"></span> SSL Wireless (Light)</button>
+          <button type="button" class="theme-opt" data-t="light" style="grid-column: span 2;"><span class="theme-swatch" style="background:#2563eb; border:1px solid #94a3b8;"></span> ☀️ Pure Light (Modern Crisp)</button>
         </div>
       </div>
 
@@ -512,6 +511,14 @@
       </div>
 
       <!-- Section 6: Cloud Models -->
+      <div class="card settings-panel" id="sec-devices">
+        <div class="settings-panel-head">
+          <h2>💻 Companion Devices</h2>
+          <p class="dim">Machines whose A770 Companion is paired with your account. Each has its own key; revoke one if the machine is lost or no longer yours.</p>
+        </div>
+        <div id="devices-content"><div class="mon-empty">Loading…</div></div>
+      </div>
+
       <div class="card settings-panel" id="sec-cloud">
         <div class="settings-panel-head">
           <h2>☁️ Cloud Models</h2>
@@ -571,7 +578,7 @@
           <div id="settings-db-summary" style="display:flex; flex-direction:column; gap:6px; margin-bottom:12px;">
             <div class="dim" style="font-size:11px;">Loading databases…</div>
           </div>
-          <a href="/#db" class="btn accent" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; width:auto; padding:6px 14px; font-size:12px;" onclick="localStorage.setItem('a770_open_db', '1')">🗄️ Open Database Explorer Console</a>
+          <a href="/#db" class="btn accent" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; width:auto; padding:6px 14px; font-size:12px;" data-open-db>🗄️ Open Database Explorer Console</a>
         </div>
       </div>
 
@@ -598,203 +605,18 @@
 
 <div id="toast"></div>
 
-<script src="/static/js/session.js?v=1.0"></script>
+<script src="/static/js/session.js?v=1.2"></script>
 <script src="/static/js/theme.js?v=2.7"></script>
-<script src="/static/js/utils.js?v=2.5"></script>
+<script src="/static/js/utils.js?v=2.7"></script>
 <script src="/static/js/sampling.js?v=1.0"></script>
-<script src="/static/js/gpu-status.js?v=3.2"></script>
+<script src="/static/js/gpu-status.js?v=3.4"></script>
 <script src="/static/js/config.js?v=3.1"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
-<script src="/static/js/capabilities.js?v=2.8"></script>
+<script src="/static/js/capabilities.js?v=2.9"></script>
 <script src="/static/js/cloud.js?v=3.0"></script>
-<script src="/static/js/rbac.js?v=1.1"></script>
-<script src="/static/js/knowledge.js?v=1.0"></script>
+<script src="/static/js/rbac.js?v=1.2"></script>
+<script src="/static/js/knowledge.js?v=1.1"></script>
 <script src="/static/js/input-guard.js?v=1.0"></script>
-<script>
-// --- Tab Navigation & View Management ---
-function switchSettingsTab(tabId, updateHash = true) {
-  if (!tabId) return;
-  const panel = document.getElementById(tabId);
-  const btn = document.querySelector(`.settings-tab-btn[data-tab="${tabId}"]`);
-  if (!panel || !btn) return;
-
-  document.querySelectorAll('.settings-tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.settings-panel').forEach(p => p.classList.remove('active'));
-
-  btn.classList.add('active');
-  panel.classList.add('active');
-
-  localStorage.setItem('a770_active_settings_tab', tabId);
-  if (updateHash) {
-    try {
-      history.replaceState(null, '', '#' + tabId);
-    } catch (_) {}
-  }
-
-  // Trigger special actions
-  if (tabId === 'sec-gpus' && typeof triggerGpuQuery === 'function') {
-    triggerGpuQuery();
-  }
-}
-window.switchSettingsTab = switchSettingsTab;
-
-function cleanupEmptyNavGroups() {
-  document.querySelectorAll('.settings-group-label').forEach(label => {
-    let next = label.nextElementSibling;
-    let hasVisible = false;
-    while (next && !next.classList.contains('settings-group-label')) {
-      if (next.classList.contains('settings-tab-btn') && next.offsetParent !== null && next.style.display !== 'none') {
-        hasVisible = true;
-        break;
-      }
-      next = next.nextElementSibling;
-    }
-    label.style.display = hasVisible ? '' : 'none';
-  });
-}
-
-// Bind tab click events
-document.querySelectorAll('.settings-tab-btn').forEach(btn => {
-  btn.onclick = () => {
-    const tabId = btn.getAttribute('data-tab');
-    switchSettingsTab(tabId);
-  };
-});
-
-// Search filter in tabs
-const searchInput = document.getElementById('settings-tab-search');
-if (searchInput) {
-  searchInput.addEventListener('input', (e) => {
-    const q = e.target.value.toLowerCase().trim();
-    document.querySelectorAll('.settings-tab-btn').forEach(b => {
-      const text = b.textContent.toLowerCase();
-      b.style.display = (!q || text.includes(q)) ? 'flex' : 'none';
-    });
-    cleanupEmptyNavGroups();
-  });
-}
-
-// Support browser back/forward and deep hash links
-window.addEventListener('hashchange', () => {
-  const hash = location.hash ? location.hash.replace(/^#/, '') : '';
-  if (hash) {
-    const targetId = hash.startsWith('sec-') ? hash : ('sec-' + hash);
-    if (document.getElementById(targetId)) {
-      switchSettingsTab(targetId, false);
-    }
-  }
-});
-
-
-
-// --- GPU Status Query Logic ---
-const secGpu = document.getElementById('sec-gpus');
-const btnRefreshGpu = document.getElementById('btn-refresh-gpu');
-async function triggerGpuQuery() {
-  if (!secGpu || !document.getElementById('gpu-list')) return;
-  const glist = document.getElementById('gpu-list');
-  if (btnRefreshGpu) {
-    btnRefreshGpu.disabled = true;
-    btnRefreshGpu.textContent = 'Querying…';
-  }
-  if (glist && !glist.querySelector('.gpu')) {
-    glist.innerHTML = '<div class="dim" style="font-size:12px">querying discrete GPUs…</div>';
-  }
-  try {
-    await pollGpu();
-  } finally {
-    if (btnRefreshGpu) {
-      btnRefreshGpu.disabled = false;
-      btnRefreshGpu.textContent = '⚡ Check GPU';
-    }
-  }
-}
-if (btnRefreshGpu) {
-  btnRefreshGpu.onclick = (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    triggerGpuQuery();
-  };
-}
-
-// --- Session & Permissions Ready ---
-window.__sessionReady.then((data) => {
-  if (!data) return;   // not authenticated -- fetch() 401 handler already redirects to /login
-
-  // Clean empty category titles after applyPermGating removed unauthorized tabs
-  cleanupEmptyNavGroups();
-
-  // Determine initial tab from hash or localStorage or default to sec-theme
-  let targetTab = location.hash ? location.hash.replace(/^#/, '') : localStorage.getItem('a770_active_settings_tab');
-  if (targetTab && !targetTab.startsWith('sec-') && document.getElementById('sec-' + targetTab)) {
-    targetTab = 'sec-' + targetTab;
-  }
-  const targetBtn = targetTab ? document.querySelector(`.settings-tab-btn[data-tab="${targetTab}"]`) : null;
-  if (targetBtn && document.getElementById(targetTab)) {
-    switchSettingsTab(targetTab, false);
-  } else {
-    const firstVisibleBtn = document.querySelector('.settings-tab-btn');
-    if (firstVisibleBtn) {
-      switchSettingsTab(firstVisibleBtn.getAttribute('data-tab'), false);
-    }
-  }
-
-  // Permission-based panel initializers
-  if (document.getElementById('sec-cfg')) {
-    loadProfiles();
-  }
-  if (document.getElementById('sec-sampling')) initSamplingPanel();
-  if (document.getElementById('sec-caps')) loadCapabilities();
-  if (document.getElementById('cloud-content')) loadCloudCard();
-  if (document.getElementById('sec-users')) loadUsersPanel();
-  if (document.getElementById('sec-knowledge')) loadKnowledgePanel();
-  if (document.getElementById('sec-guard')) loadInputGuardPanel();
-  if (document.getElementById('sec-db')) {
-    fetch('/db/list').then(r => r.json()).then(d => {
-      const box = document.getElementById('settings-db-summary');
-      if (!box) return;
-      const dbs = d.databases || [];
-      box.innerHTML = dbs.map(db => `
-        <div class="cap-item" style="display:flex; justify-content:space-between; align-items:center;">
-          <div>
-            <b>${db.name}</b> <span class="dim">(${db.title})</span>
-            <div class="dim" style="font-size:10.5px;">${db.description}</div>
-          </div>
-          <span class="mono dim" style="font-size:11px;">${db.table_count} tables · ${(db.size_bytes / 1024).toFixed(1)} KB</span>
-        </div>
-      `).join('') || '<div class="dim" style="font-size:11px;">No databases found.</div>';
-    }).catch(e => {
-      const box = document.getElementById('settings-db-summary');
-      if (box) box.innerHTML = `<div class="dim" style="color:var(--red); font-size:11px;">${e.message}</div>`;
-    });
-  }
-  const clearBtn = document.getElementById('btn-clear-all-data');
-  if (clearBtn) {
-    clearBtn.onclick = async () => {
-      const typed = prompt('This permanently deletes every user\'s chats, sessions, projects and workspace files.\n\nType DELETE to confirm:');
-      if (typed !== 'DELETE') return;
-      clearBtn.disabled = true;
-      const out = document.getElementById('clear-all-data-result');
-      out.textContent = 'Clearing…';
-      try {
-        const r = await fetch('/admin/clear_all_data', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ confirm: typed }),
-        });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.detail || 'failed');
-        out.textContent = `Done: removed ${d.cleared.projects} projects, ${d.cleared.sessions} sessions, `
-          + `${d.cleared.messages} messages, ${d.cleared.plan_items} plan items.`;
-      } catch (e) {
-        out.textContent = `Error: ${e.message}`;
-      } finally {
-        clearBtn.disabled = false;
-      }
-    };
-  }
-});
-pollStatus();
-</script>
+<script src="/static/js/settings-page.js?v=1.0"></script>
 </body>
 </html>

@@ -170,7 +170,7 @@
     try {
       await api('/customize/plugins/install-remote', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ manifest_url: r.manifest_url, code_url: r.code_url || '' }),
+        body: JSON.stringify({ manifest_url: r.manifest_url, code_url: r.code_url || '', code_sha256: r.code_sha256 || '' }),
       });
       toast(`Installed '${r.manifest.name}'`);
       S.remote = null; S.marketUrl = '';

@@ -10,15 +10,21 @@ _monitor_state = {
 MONITOR_RECENT_MAX = 60
 
 
-def monitor_begin(endpoint: str, stream: bool, body_bytes: bytes, model: Optional[str] = None,
-                  source: Optional[str] = None, provider: Optional[str] = None) -> int:
+def monitor_begin(endpoint: str, stream: bool, body_bytes: Optional[bytes] = None, model: Optional[str] = None,
+                  source: Optional[str] = None, provider: Optional[str] = None,
+                  n_msgs: Optional[int] = None) -> int:
     _monitor_state["seq"] += 1
     rid = _monitor_state["seq"]
     prompt_tok = None
     client = None
     req_model = model
+    if n_msgs is not None:
+        # Callers that already hold the message list pass its length, so the
+        # whole history isn't re-serialized on every agent step.
+        prompt_tok = n_msgs or None
+        body_bytes = None
     try:
-        d = json.loads(body_bytes)
+        d = json.loads(body_bytes) if body_bytes else None
         if isinstance(d, dict):
             n_msgs = len(d.get("messages", [])) or None
             prompt_tok = n_msgs

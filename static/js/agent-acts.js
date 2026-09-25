@@ -228,7 +228,7 @@ function agentStoppedHtml(acts, canContinue) {
     ? 'Stopped: the agent kept repeating the same tool calls.'
     : `Paused after ${s.steps || 'the maximum'} steps${left}.`;
   const btn = canContinue
-    ? `<button type="button" class="btn accent agy-continue-btn" onclick="agentContinue()">▶ Continue</button>`
+    ? `<button type="button" class="btn accent agy-continue-btn" data-click="agent-continue">▶ Continue</button>`
     : '';
   return `<div class="agy-stopped ${s.reason === 'loop' ? 'loop' : ''}"><span>${esc(msg)}</span>${btn}</div>`;
 }
@@ -377,7 +377,7 @@ function renderFileCard(t, isItemRunning) {
   const previewBtn = diff
     ? `<button type="button" class="btn ghost agy-open-btn" data-ws-open="${esc(p)}" title="Open in project panel">↗ Open</button>`
     : isPreviewable
-    ? `<button type="button" class="btn ghost" style="padding:1px 7px; font-size:10px; margin-left:auto; border-radius:4px;" onclick="event.stopPropagation(); openFilePreview('${esc(p).replace(/'/g, "\\'")}', '${esc(filename).replace(/'/g, "\\'")}')" title="Preview file">👁️ Preview</button>`
+    ? `<button type="button" class="btn ghost" style="padding:1px 7px; font-size:10px; margin-left:auto; border-radius:4px;" data-preview-path="${esc(p)}" data-preview-title="${esc(filename)}" title="Preview file">👁️ Preview</button>`
     : '';
 
   const openByDefault = !isRunning;
@@ -422,7 +422,7 @@ function renderGenericToolCard(t, isItemRunning) {
 
   const isPreviewable = p && /\.(html|htm|csv|xlsx|xls|pdf|md|py|js|ts|json|txt|svg|png|jpg|jpeg|webp|pptx)$/i.test(p);
   const previewBtn = isPreviewable
-    ? `<button type="button" class="btn ghost" style="padding:1px 7px; font-size:10px; margin-left:auto; border-radius:4px;" onclick="event.stopPropagation(); openFilePreview('${esc(p).replace(/'/g, "\\'")}', '${esc(p).replace(/'/g, "\\'")}')" title="Preview file">👁️ Preview</button>`
+    ? `<button type="button" class="btn ghost" style="padding:1px 7px; font-size:10px; margin-left:auto; border-radius:4px;" data-preview-path="${esc(p)}" data-preview-title="${esc(p)}" title="Preview file">👁️ Preview</button>`
     : '';
 
   return `<details class="codex-action-card">
@@ -462,7 +462,7 @@ function agentActsHtml(acts) {
   if (stream.length > 2) {
     h += `<div class="codex-timeline-toolbar">
       <span class="codex-timeline-count">${toolOps.length} action${toolOps.length !== 1 ? 's' : ''}</span>
-      <button type="button" class="btn ghost codex-toggle-all" onclick="toggleAllCodex(this)">⤡ Collapse All</button>
+      <button type="button" class="btn ghost codex-toggle-all" data-click="toggle-all-codex">⤡ Collapse All</button>
     </div>`;
   }
 

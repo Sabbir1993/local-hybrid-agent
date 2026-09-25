@@ -177,6 +177,26 @@ async def semantic_hit(texts: list, rule: dict) -> Optional[dict]:
         return hit
     return None
 
+def message_texts(messages) -> list:
+    """Every piece of text in client-supplied OpenAI-style messages, whatever the
+    role: a client can put a card number or cloud-restricted text in an
+    'assistant' / 'system' / 'tool' message just as easily as in a 'user' one."""
+    texts = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            texts.append(c)
+        elif isinstance(c, list):
+            texts.extend(str(p.get("text", "")) for p in c if isinstance(p, dict) and "text" in p)
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            if isinstance(fn, dict) and fn.get("arguments"):
+                texts.append(str(fn["arguments"]))
+    return texts
+
+
 def check(texts: list, user, any_cloud_lane: bool) -> Optional[dict]:
     """Evaluate the prompt texts against all enabled rules.
 

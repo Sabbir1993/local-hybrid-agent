@@ -16,7 +16,8 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from core.config import CONFIG_FILE
+from core.config import BASE_DIR, CONFIG_FILE, write_app_config
+from core.net_guard import BlockedURLError, check_url
 from core.small_model import APP_CONFIG
 from core import credentials, mcp_catalog
 from core import mcp as mcp_core
@@ -117,6 +118,7 @@ async def authorize_poll(server_id: str, session: str, user: Principal = Depends
 
     credentials.set_token(server_id, result["token"])
     _persist_server_entry(server_id, entry)
+    audit_log(user, action="mcp.authorize", resource=server_id, permission_key=MANAGE_PERM)
     live = await mcp_core.connect_one(server_id, _server_cfg(entry))
     return {"status": "success", "connected": live}
 
@@ -129,6 +131,7 @@ async def disable(server_id: str, user: Principal = Depends(_manage)):
     mcp_core.disconnect_one(server_id)
     credentials.delete_token(server_id)
     _remove_server_entry(server_id)
+    audit_log(user, action="mcp.disable", resource=server_id, permission_key=MANAGE_PERM)
     return {"ok": True}
 
 
@@ -150,7 +153,7 @@ def _persist_server_entry(server_id: str, entry: dict) -> None:
         return
     servers = cfg.setdefault("capabilities", {}).setdefault("mcp_servers", {})
     servers[server_id] = _server_cfg(entry)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    write_app_config(cfg, CONFIG_FILE)
     APP_CONFIG.setdefault("capabilities", {}).setdefault("mcp_servers", {})[server_id] = servers[server_id]
 
 
@@ -161,7 +164,7 @@ def _remove_server_entry(server_id: str) -> None:
         return
     servers = cfg.setdefault("capabilities", {}).setdefault("mcp_servers", {})
     servers.pop(server_id, None)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    write_app_config(cfg, CONFIG_FILE)
     (APP_CONFIG.get("capabilities", {}).get("mcp_servers", {}) or {}).pop(server_id, None)
 
 
@@ -176,6 +179,9 @@ _NAME_RX = re.compile(r"^[a-z0-9_-]{1,32}$")
 _ENV_KEY_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _PKG_RX = re.compile(r"^(@[a-z0-9._-]+/)?[a-z0-9._-]{1,100}$")
 DEFAULT_ALLOWED_COMMANDS = ["npx", "node", "python", "uvx"]
+# node/python are only accepted to run a script file shipped inside this repo
+# (e.g. core/echo_mcp_server.py) -- never -c / -e / -m or a path outside BASE_DIR.
+_SCRIPT_COMMANDS = ("node", "python")
 _USER_COMMANDS = ("npx", "uvx")
 # env vars that change how npx/uvx/node/python resolve or load code - a non-admin could
 # otherwise point the approved package at another registry or preload their own script
@@ -217,6 +223,14 @@ def _user_packages() -> list:
             (APP_CONFIG.get("capabilities", {}).get("mcp_user_allowed_packages") or []) if str(p).strip()]
 
 
+# name, optional version: '@scope/pkg', 'pkg@1.2.3', 'pkg@latest', 'pkg==1.0', 'pkg[extra]'.
+# No aliases (npm:), URLs, git+/file: specs, paths, or whitespace -- all of those make npx/uvx
+# install something other than the approved name.
+_SPEC_RX = re.compile(
+    r"^(@[a-z0-9._-]+/)?[a-z0-9._-]{1,100}(\[[a-z0-9,_-]+\])?"
+    r"((@|==)[a-z0-9.+^~*-]{1,64})?$")
+
+
 def _package_base(spec: str) -> str:
     """'@scope/pkg@1.2' / 'pkg@latest' / 'pkg==1.0' / 'pkg[extra]' -> the bare package name."""
     spec = spec.strip().lower()
@@ -238,11 +252,34 @@ def _validate_user_stdio(req: McpServerReq) -> Optional[str]:
         i += 1
     if i >= len(args) or args[i].startswith("-"):
         return f"the first {cmd} argument must be the package name (only -y may come before it for npx)"
+    if not _SPEC_RX.match(args[i].strip().lower()):
+        return f"'{args[i]}' is not a plain package spec (use name or name@version)"
     pkg = _package_base(args[i])
     allowed = _user_packages()
     if pkg not in allowed:
         return (f"package '{pkg}' is not approved for personal servers; approved: "
                 f"{', '.join(allowed) or '(none - ask an admin)'}")
+    return None
+
+
+def _validate_script_command(cmd: str, args: list) -> Optional[str]:
+    args = [str(a) for a in args if str(a) != ""]
+    if not args or args[0].startswith("-"):
+        return f"'{cmd}' may only run a script file from this app's folder (no -c/-e/-m)"
+    script = (BASE_DIR / args[0]).resolve()
+    if not script.is_file() or not script.is_relative_to(BASE_DIR):
+        return f"'{cmd}' script must be an existing file inside {BASE_DIR}"
+    return None
+
+
+def _public_url_error(url: str) -> Optional[str]:
+    u = urlparse(url or "")
+    if not (u.scheme == "https" and u.hostname) or _is_internal_host(u.hostname):
+        return "url must be a public https:// address"
+    try:
+        check_url(url)   # resolves DNS: 127.0.0.1.nip.io and friends are caught here
+    except BlockedURLError as e:
+        return f"url must be a public https:// address ({e})"
     return None
 
 
@@ -276,11 +313,16 @@ def _validate(req: McpServerReq, restricted: bool = False) -> Optional[str]:
             if cmd not in _allowed_commands():
                 return (f"command '{cmd}' is not allowed; allowed: {', '.join(_allowed_commands())} "
                         f"(capabilities.mcp_allowed_commands in config/app.json)")
+            if cmd in _SCRIPT_COMMANDS:
+                err = _validate_script_command(cmd, req.args)
+                if err:
+                    return err
     else:
         u = urlparse(req.url or "")
         if restricted:
-            if not (u.scheme == "https" and u.hostname) or _is_internal_host(u.hostname):
-                return "url must be a public https:// address"
+            err = _public_url_error(req.url)
+            if err:
+                return err
         else:
             local = u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost")
             if not (u.scheme == "https" and u.hostname) and not local:
@@ -352,7 +394,7 @@ def _write_server(name: str, scfg: Optional[dict]) -> None:
     else:
         servers[name] = scfg
         live[name] = scfg
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    write_app_config(cfg, CONFIG_FILE)
 
 
 def _public_cfg(name: str, scfg: dict, scope: str = "global") -> dict:
@@ -573,7 +615,7 @@ async def set_user_packages(req: UserPackagesReq, user: Principal = Depends(_man
     cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     old = cfg.setdefault("capabilities", {}).get("mcp_user_allowed_packages") or []
     cfg["capabilities"]["mcp_user_allowed_packages"] = pkgs
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    write_app_config(cfg, CONFIG_FILE)
     APP_CONFIG.setdefault("capabilities", {})["mcp_user_allowed_packages"] = pkgs
     audit_log(user, action="mcp.user_packages.update", resource="mcp", permission_key=MANAGE_PERM,
               detail={"from": old, "to": pkgs})

@@ -4,14 +4,15 @@
 // unauthenticated), and holds a WebSocket to core/companion_bridge.py to
 // execute fs/shell RPCs from fsops.js / shellops.js on this machine.
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, session: electronSession, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Tray, Menu, nativeImage, session: electronSession, dialog, ipcMain, shell, safeStorage } = require("electron");
+const crypto = require("crypto");
 const WebSocket = require("ws");
 const os = require("os");
 const path = require("path");
 const { autoUpdater } = require("electron-updater");
 
 
-const { SERVER_URL } = require("./config");
+const { SERVER_URL, SERVER_URL_ERROR } = require("./config");
 const fsops = require("./fsops");
 const shellops = require("./shellops");
 const policy = require("./policy");
@@ -21,11 +22,13 @@ const appIcon = nativeImage.createFromPath(APP_ICON_PATH);
 const trayIconImage = appIcon.resize({ width: 32, height: 32 });
 
 const SESSION_COOKIE_NAME = "a770_session";
+const CSRF_COOKIE_NAME = "a770_csrf";
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
 const KEEPALIVE_MS = 25000;        // client ping; a link with no pong by the next tick is dead
 const CLOSE_REPLACED = 4409;       // server: another companion signed in as this user took over
-const CLOSE_UNAUTHORIZED = 4401;   // server: session cookie invalid / expired
+const CLOSE_UNAUTHORIZED = 4401;   // server: session cookie / device key invalid or revoked
+const CLOSE_WRONG_DEVICE = 4403;   // server: device key used from a different machine
 
 process.on("uncaughtException", (e) => console.error("[uncaughtException]", e));
 process.on("unhandledRejection", (e) => console.error("[unhandledRejection]", e));
@@ -62,41 +65,108 @@ function setTrayStatus(text, connectedNow) {
   );
 }
 
-async function getSessionCookie() {
-  const ses = (mainWindow && mainWindow.webContents && mainWindow.webContents.session) || electronSession.defaultSession;
-  let currentUrl = (mainWindow && mainWindow.webContents && mainWindow.webContents.getURL()) || SERVER_URL;
-  if (!currentUrl || currentUrl === "about:blank") currentUrl = SERVER_URL;
+// ---- device pairing ----
+// After the user signs in here, the companion trades the browser session for its own
+// device key (POST /companion/pair). The socket then authenticates with that key: it
+// is bound to this machine, survives the 15-minute session idle timeout, and can be
+// revoked on its own from Settings. Stored encrypted with the OS keychain (safeStorage).
+function deviceKeyPath() {
+  return path.join(app.getPath("userData"), "device-key.bin");
+}
 
+function loadDeviceKey() {
   try {
-    const cookies = await ses.cookies.get({ url: currentUrl, name: SESSION_COOKIE_NAME });
-    if (cookies && cookies.length) return cookies[0].value;
-  } catch (_) {}
+    const fs = require("fs");
+    if (!safeStorage.isEncryptionAvailable() || !fs.existsSync(deviceKeyPath())) return null;
+    const key = safeStorage.decryptString(fs.readFileSync(deviceKeyPath()));
+    return key.startsWith("a770_dev_") ? key : null;
+  } catch (e) {
+    console.error("[deviceKey] unreadable:", e.message);
+    return null;
+  }
+}
 
-  // Lookups are always scoped to this app's server: a name-only lookup could
-  // return a same-named cookie set by some other site.
+function saveDeviceKey(key) {
   try {
-    const cookies = await ses.cookies.get({ url: SERVER_URL, name: SESSION_COOKIE_NAME });
-    if (cookies && cookies.length) return cookies[0].value;
-  } catch (_) {}
+    if (!safeStorage.isEncryptionAvailable()) return false;   // never store it in plaintext
+    require("fs").writeFileSync(deviceKeyPath(), safeStorage.encryptString(key), { mode: 0o600 });
+    return true;
+  } catch (e) {
+    console.error("[deviceKey] save failed:", e.message);
+    return false;
+  }
+}
 
-  try {
-    const cookies = await electronSession.defaultSession.cookies.get({ url: currentUrl, name: SESSION_COOKIE_NAME });
-    if (cookies && cookies.length) return cookies[0].value;
-  } catch (_) {}
+function clearDeviceKey() {
+  try { require("fs").unlinkSync(deviceKeyPath()); } catch (_) {}
+}
 
+async function getServerCookie(name) {
   try {
-    const cookies = await electronSession.defaultSession.cookies.get({ url: SERVER_URL, name: SESSION_COOKIE_NAME });
-    if (cookies && cookies.length) return cookies[0].value;
-  } catch (_) {}
+    const cookies = await electronSession.defaultSession.cookies.get({ url: SERVER_URL, name });
+    return cookies && cookies.length ? cookies[0].value : null;
+  } catch (_) {
+    return null;
+  }
+}
 
+async function pairDevice(sessionToken) {
+  const csrf = await getServerCookie(CSRF_COOKIE_NAME);
+  if (!csrf) return null;
   try {
-    const all = await ses.cookies.get({ url: currentUrl });
-    for (const c of all) {
-      if (c.name === SESSION_COOKIE_NAME) return c.value;
+    const r = await fetch(SERVER_URL + "/companion/pair", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE_NAME}=${sessionToken}; ${CSRF_COOKIE_NAME}=${csrf}`,
+        "X-CSRF-Token": csrf,
+        "User-Agent": "A770Companion A770NativeApp",
+      },
+      body: JSON.stringify({ device_id: getMachineId(), name: os.hostname() }),
+      redirect: "error",
+    });
+    if (!r.ok) {
+      console.warn("[pairDevice] server refused pairing:", r.status);
+      return null;
     }
-  } catch (_) {}
+    const d = await r.json();
+    if (!d.device_key || !saveDeviceKey(d.device_key)) return null;
+    console.log("[pairDevice] paired as device", d.id);
+    return d.device_key;
+  } catch (e) {
+    console.error("[pairDevice] failed:", e.message);
+    return null;
+  }
+}
 
+// The session cookie is only ever read for the configured server origin -- never for
+// whatever page the window happens to show (a followed link must not receive it).
+async function getSessionCookie() {
+  const sessions = [];
+  if (mainWindow && mainWindow.webContents) sessions.push(mainWindow.webContents.session);
+  sessions.push(electronSession.defaultSession);
+  for (const ses of sessions) {
+    try {
+      const cookies = await ses.cookies.get({ url: SERVER_URL, name: SESSION_COOKIE_NAME });
+      if (cookies && cookies.length) return cookies[0].value;
+    } catch (_) {}
+  }
   return null;
+}
+
+function isServerUrl(url) {
+  try {
+    return new URL(url).origin === SERVER_URL;
+  } catch (_) {
+    return false;
+  }
+}
+
+function openExternally(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol === "https:" || u.protocol === "http:") shell.openExternal(u.href);
+  } catch (_) {}
 }
 
 function showMainWindow() {
@@ -124,11 +194,26 @@ function createMainWindow() {
   } catch (_) {}
 
   win.webContents.on("did-fail-load", (e, code, desc, url) => {
+    // No fallback to another origin (it used to try plaintext http://127.0.0.1:8000,
+    // handing the session to whatever listens there).
     console.error("[main window] did-fail-load", code, desc, url);
-    if (url && url.startsWith("https://") && !url.includes("127.0.0.1") && !url.includes("localhost")) {
-      console.log("[main window] Remote failed, trying local server http://127.0.0.1:8000/...");
-      win.loadURL("http://127.0.0.1:8000/");
+  });
+
+  // The window only ever shows the configured server; links elsewhere (chat
+  // output, model-written HTML) open in the system browser instead.
+  win.webContents.on("will-navigate", (e, url) => {
+    if (!isServerUrl(url)) {
+      e.preventDefault();
+      openExternally(url);
     }
+  });
+  win.webContents.on("will-redirect", (e, url) => {
+    if (!isServerUrl(url)) e.preventDefault();
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isServerUrl(url)) return { action: "allow" };
+    openExternally(url);
+    return { action: "deny" };
   });
 
   // Only (re)connect when there is no live socket, or the user signed in again.
@@ -161,8 +246,19 @@ function createMainWindow() {
   return win;
 }
 
+// IPC is callable only from the server's own pages, never from a frame of another origin.
+function fromServer(event) {
+  const url = (event.senderFrame && event.senderFrame.url) || "";
+  if (!isServerUrl(url)) {
+    console.warn("[ipc] rejected call from", url);
+    return false;
+  }
+  return true;
+}
+
 // Register IPC handlers for direct native folder browsing from the web app
 ipcMain.handle("dialog:browseFolder", async (event, initialDir) => {
+  if (!fromServer(event)) return "";
   try {
     const picked = (await fsops.browseFolder({ initial_dir: initialDir })).path || "";
     if (picked) policy.approveRoot(picked);   // the user chose it in a native dialog
@@ -174,6 +270,7 @@ ipcMain.handle("dialog:browseFolder", async (event, initialDir) => {
 });
 
 ipcMain.handle("fs:browse", async (event, targetPath) => {
+  if (!fromServer(event)) return { ok: false, error: "forbidden" };
   try {
     return fsops.browse({ path: targetPath });
   } catch (e) {
@@ -183,7 +280,9 @@ ipcMain.handle("fs:browse", async (event, targetPath) => {
 });
 
 ipcMain.handle("fs:mkdir", async (event, args) => {
+  if (!fromServer(event)) return { ok: false, error: "forbidden" };
   try {
+    await policy.ensurePath((args || {}).path, "create a folder in");
     return fsops.mkdir(args || {});
   } catch (e) {
     console.error("[ipcMain fs:mkdir] error:", e);
@@ -191,7 +290,22 @@ ipcMain.handle("fs:mkdir", async (event, args) => {
   }
 });
 
+// One-way hash of the hardware id: identical to the server's normalize_device_id, so
+// projects registered by older companions (which sent dev_win_<guid slice>) still match.
+function hashDeviceId(raw) {
+  return "dev_h_" + crypto.createHash("sha256").update("a770-device:" + raw).digest("hex").slice(0, 24);
+}
+
+let cachedMachineId = null;
 function getMachineId() {
+  if (!cachedMachineId) {
+    const raw = rawMachineId();
+    cachedMachineId = /^dev_(win|lnx|mac)_[0-9a-z]+$/.test(raw) ? hashDeviceId(raw) : raw;
+  }
+  return cachedMachineId;
+}
+
+function rawMachineId() {
   try {
     if (process.platform === "win32") {
       const { execSync } = require("child_process");
@@ -242,11 +356,11 @@ function getMachineId() {
 }
 
 ipcMain.on("system:getDeviceIdSync", (event) => {
-  event.returnValue = getMachineId();
+  event.returnValue = fromServer(event) ? getMachineId() : null;
 });
 
-ipcMain.handle("system:getDeviceId", () => {
-  return getMachineId();
+ipcMain.handle("system:getDeviceId", (event) => {
+  return fromServer(event) ? getMachineId() : null;
 });
 
 function scheduleReconnect() {
@@ -277,7 +391,17 @@ const OPS = {
   "fs.list": async (p) => { await policy.ensurePath(p.root, "list files in"); return fsops.list(p); },
   "fs.grep": async (p) => { await policy.ensurePath(p.root, "search files in"); return fsops.grep(p); },
   "fs.tree": async (p) => { await policy.ensurePath(p.root, "browse"); return fsops.tree(p); },
-  "shell.run": async (p) => { await policy.confirmShell(p.command, p.cwd); return shellops.run(p); },
+  "shell.run": async (p) => {
+    await policy.confirmShell(p.command, p.cwd, p.display);
+    // run_python: the script was written before approval -- run it only if it is
+    // exactly the code the user just approved
+    if (p.display != null && p.command === 'python "_agent_run.py"') {
+      const script = require("path").join(p.cwd || "", "_agent_run.py");
+      const onDisk = require("fs").existsSync(script) ? require("fs").readFileSync(script, "utf-8") : null;
+      if (onDisk !== p.display) throw new Error("script on disk does not match the approved code");
+    }
+    return shellops.run(p);
+  },
 };
 
 async function handleCall(frame) {
@@ -318,29 +442,35 @@ function dropSocket() {
   } catch {}
 }
 
-function connectWebSocket(sessionToken) {
+let pairing = false;
+
+function connectWebSocket(sessionToken, skipPair = false) {
   clearTimeout(reconnectTimer);
   reconnectTimer = null;
   parkedToken = null;
   dropSocket();
-  let effectiveServer = SERVER_URL;
-  if (mainWindow && mainWindow.webContents) {
-    try {
-      const pageUrl = mainWindow.webContents.getURL();
-      if (pageUrl && pageUrl.startsWith("http")) {
-        const u = new URL(pageUrl);
-        effectiveServer = `${u.protocol}//${u.host}`;
-      }
-    } catch (_) {}
+  const deviceKey = loadDeviceKey();
+  if (!deviceKey && sessionToken && !skipPair) {
+    if (pairing) return;
+    pairing = true;
+    pairDevice(sessionToken)
+      .then((key) => connectWebSocket(sessionToken, !key))   // unpaired: old session auth
+      .finally(() => { pairing = false; });
+    return;
   }
+  // Always the configured origin: deriving it from the window's current page would
+  // send the session token (and file/shell access) to any site the window reached.
+  const effectiveServer = SERVER_URL;
   // The session token travels only in headers: a ?token= query string ends up
   // in proxy / tunnel / access logs.
   const wsUrl = effectiveServer.replace(/^http/, "ws") + "/ws/companion";
   console.log("[connectWebSocket] connecting to", wsUrl);
+  const authHeaders = deviceKey
+    ? { Authorization: `Bearer ${deviceKey}` }
+    : { Cookie: `${SESSION_COOKIE_NAME}=${sessionToken}`, Authorization: `Bearer ${sessionToken}` };
   const sock = new WebSocket(wsUrl, {
     headers: {
-      Cookie: `${SESSION_COOKIE_NAME}=${sessionToken}`,
-      Authorization: `Bearer ${sessionToken}`,
+      ...authHeaders,
       "ngrok-skip-browser-warning": "true",
       "User-Agent": "A770Companion A770NativeApp"
     }
@@ -361,7 +491,7 @@ function connectWebSocket(sessionToken) {
     if (!current()) return;
     console.log("[connectWebSocket] open");
     reconnectDelay = RECONNECT_BASE_MS;
-    sock.send(JSON.stringify({ type: "hello", hostname: os.hostname() }));
+    sock.send(JSON.stringify({ type: "hello", hostname: os.hostname(), device_id: getMachineId() }));
     setTrayStatus(`connected to ${effectiveServer}`, true);
     let alive = true;
     sock.on("pong", () => { alive = true; });
@@ -395,6 +525,14 @@ function connectWebSocket(sessionToken) {
     if (!current()) return;
     console.log("[connectWebSocket] closed", code, reason.toString());
     dropSocket();
+    if (deviceKey && (code === CLOSE_UNAUTHORIZED || code === CLOSE_WRONG_DEVICE)) {
+      // key revoked in Settings (or copied from another machine): forget it and
+      // re-pair with the current sign-in, if there is one
+      clearDeviceKey();
+      setTrayStatus("device key revoked — re-pairing…", false);
+      scheduleReconnect();
+      return;
+    }
     if (code === CLOSE_REPLACED || code === CLOSE_UNAUTHORIZED) {
       // don't fight another companion for the connection / retry a bad session;
       // resume when the user signs in again or clicks "Reconnect" in the tray
@@ -422,6 +560,15 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.whenReady().then(() => {
+  if (!SERVER_URL) {
+    dialog.showErrorBox("A770 Companion — not configured",
+      `${SERVER_URL_ERROR}.
+
+Set A770_SERVER_URL=https://your-server in a .env file next to the app.`);
+    isQuitting = true;
+    app.quit();
+    return;
+  }
   tray = new Tray(trayIconImage);
   tray.on("click", showMainWindow);
   setTrayStatus("starting…", false);

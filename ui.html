@@ -4,12 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Local Agent — Control Center</title>
-<script>
-  (function() {
-    var t = localStorage.getItem('a770_theme') || 'claude';
-    document.documentElement.setAttribute('data-theme', t);
-  })();
-</script>
+<script src="/static/js/theme-boot.js?v=1.0"></script>
 <link rel="stylesheet" href="/static/css/style.css?v=5.0">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
@@ -153,7 +148,7 @@
       </div>
     </div></div>
 
-    <button id="btn-scroll-bottom" class="chat-scroll-btn" style="display:none;" onclick="scrollToBottom()" title="Jump to bottom">⬇ Jump to bottom</button>
+    <button id="btn-scroll-bottom" class="chat-scroll-btn" style="display:none;" title="Jump to bottom">⬇ Jump to bottom</button>
 
     <footer>
       <div id="f-inner">
@@ -744,37 +739,39 @@ Full instructions the agent reads via read_skill.</pre>
   </div>
 </div>
 
-<script src="/static/js/session.js?v=1.0"></script>
+<script src="/static/js/session.js?v=1.2"></script>
 <script src="/static/js/highlight.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<!-- pinned exact versions; SheetJS 0.18.5 (last npm build) has CVE-2023-30533 / CVE-2024-22363 -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js" integrity="sha384-R63zfMfSwJF4xCR11wXii+QUsbiBIdiDzDbtxia72oGWfkT7WHJfmD/I/eeHPJyT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="/static/js/theme.js?v=2.8"></script>
-<script src="/static/js/utils.js?v=2.5"></script>
+<script src="/static/js/utils.js?v=2.7"></script>
+<script src="/static/js/sse-stream.js?v=1.1"></script>
 <script src="/static/js/sampling.js?v=1.1"></script>
-<script src="/static/js/preview.js?v=2.6"></script>
-<script src="/static/js/gpu-status.js?v=3.2"></script>
-<script src="/static/js/chat.js?v=3.8"></script>
+<script src="/static/js/preview.js?v=2.8"></script>
+<script src="/static/js/gpu-status.js?v=3.4"></script>
+<script src="/static/js/chat.js?v=3.12"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
-<script src="/static/js/monitor.js?v=3.0"></script>
-<script src="/static/js/capabilities.js?v=2.8"></script>
+<script src="/static/js/monitor.js?v=3.1"></script>
+<script src="/static/js/capabilities.js?v=2.9"></script>
 <script src="/static/js/git.js?v=1.0"></script>
 <script src="/static/js/usage-report.js?v=2.5"></script>
 <script src="/static/js/audit-log.js?v=1.0"></script>
 <script src="/static/js/db-explorer.js?v=1.0"></script>
-<script src="/static/js/customize.js?v=1.0"></script>
+<script src="/static/js/customize.js?v=1.1"></script>
 <script src="/static/js/effort.js?v=1.1"></script>
 <script src="/static/js/config.js?v=3.2"></script>
 <script src="/static/js/cloud.js?v=3.0"></script>
-<script src="/static/js/attachments.js?v=2.5"></script>
-<script src="/static/js/projects.js?v=4.0"></script>
+<script src="/static/js/attachments.js?v=2.6"></script>
+<script src="/static/js/projects.js?v=4.2"></script>
 <script src="/static/js/workspace.js?v=2.8"></script>
 <script src="/static/js/dnd.js?v=1.0"></script>
 <script src="/static/js/agent-cmd.js?v=3.6"></script>
-<script src="/static/js/agent-acts.js?v=2.7"></script>
-<script src="/static/js/agent-run.js?v=3.6"></script>
+<script src="/static/js/agent-acts.js?v=2.9"></script>
+<script src="/static/js/agent-run.js?v=3.9"></script>
 <script src="/static/js/compact.js?v=2.9"></script>
 <script src="/static/js/export.js?v=1.0"></script>
-<script src="/static/js/main.js?v=3.6"></script>
+<script src="/static/js/main.js?v=3.7"></script>
 
 </body>
 </html>

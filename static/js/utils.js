@@ -1,5 +1,5 @@
 /* ---------------- helpers ---------------- */
-function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
 // Files served by this app (/agent/raw, /raw) may auto-load. Anything else is
 // click-to-load: an <img> that fetches as soon as a reply renders is a
@@ -36,8 +36,59 @@ document.addEventListener('click', (e) => {
   if (prev && typeof openFilePreview === 'function') {
     e.preventDefault();
     openFilePreview(prev.dataset.previewPath, prev.dataset.previewTitle || '');
+    return;
   }
+  const act = e.target.closest('[data-click]');
+  if (act && CLICK_ACTIONS[act.dataset.click]) CLICK_ACTIONS[act.dataset.click](act, e);
 });
+
+// The CSP forbids inline handlers (onclick=...), so generated markup names an action
+// instead: <button data-click="hud-close">, optional data-arg. Handlers resolve the
+// page's functions at click time (not every page defines all of them).
+const CLICK_ACTIONS = {
+  'agent-continue': () => agentContinue(),
+  'toggle-all-codex': (el) => toggleAllCodex(el),
+  'remove-attachment': (el) => removeAttachment(parseInt(el.dataset.arg, 10)),
+  'open-image': (el) => openImageModal(el.src, 'Image attachment'),
+  'think-summary': (el, e) => onThinkSummaryClick(parseInt(el.dataset.arg, 10), e),
+  'submit-grill': (el) => submitGrillAnswers(parseInt(el.dataset.arg, 10)),
+  'new-project': () => document.getElementById('btn-newproject').click(),
+  'hud-close': () => setLiveHud(null),
+  'mermaid-fullscreen': (el) => openFilePreview('diagram.mermaid', 'Mermaid Diagram',
+    el.closest('.mermaid-box').querySelector('.mermaid-code-raw').textContent),
+};
+
+// Non-bubbling events, caught in the capture phase.
+document.addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (d && d.dataset && d.dataset.thinkIdx !== undefined && typeof onToggleThink === 'function')
+    onToggleThink(parseInt(d.dataset.thinkIdx, 10), d.open);
+}, true);
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (img && img.dataset && img.dataset.hideCardOnError !== undefined) {
+    const card = img.closest('.media-card');
+    if (card) card.style.display = 'none';
+  }
+}, true);
+
+// data-stop: clicks inside must not reach ancestor handlers (e.g. buttons inside a
+// <summary>). Needs a listener on the element itself - a document-level one runs too late.
+function bindStopPropagation(root) {
+  (root.querySelectorAll ? root.querySelectorAll('[data-stop]:not([data-stop-bound])') : []).forEach(el => {
+    el.setAttribute('data-stop-bound', '');
+    el.addEventListener('click', (ev) => ev.stopPropagation());
+  });
+}
+if (typeof MutationObserver !== 'undefined' && document.documentElement) {
+  new MutationObserver(muts => {
+    for (const m of muts) for (const n of m.addedNodes) {
+      if (n.nodeType !== 1) continue;
+      if (n.matches('[data-stop]:not([data-stop-bound])')) bindStopPropagation(n.parentNode);
+      else bindStopPropagation(n);
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+}
 
 function md(s) {
   // split fences BEFORE escaping: hlCode() escapes internally
@@ -54,7 +105,7 @@ function md(s) {
           <div class="mermaid-header">
             <span>📊 Mermaid Diagram</span>
             <div style="display:flex; gap:6px;">
-              <button class="btn ghost" style="padding:2px 6px; font-size:10px;" onclick="openFilePreview('diagram.mermaid', 'Mermaid Diagram', this.closest('.mermaid-box').querySelector('.mermaid-code-raw').textContent)">⤢ Fullscreen</button>
+              <button class="btn ghost" style="padding:2px 6px; font-size:10px;" data-click="mermaid-fullscreen">⤢ Fullscreen</button>
             </div>
           </div>
           <div class="mermaid-viewport"><div class="dim" style="font-size:11px;">Rendering diagram…</div></div>
@@ -205,7 +256,7 @@ function renderMediaPreviewSection(text) {
       // Image: local files load right away, external ones only on click
       const thumb = esc(it.thumb || it.url);
       const media = isLocalMediaUrl(it.url)
-        ? `<img src="${thumb}" class="media-card-thumb" loading="lazy" alt="${cleanTitle}" data-preview-path="${safeUrl}" data-preview-title="${cleanTitle}" onerror="this.closest('.media-card').style.display='none'" />`
+        ? `<img src="${thumb}" class="media-card-thumb" loading="lazy" alt="${cleanTitle}" data-preview-path="${safeUrl}" data-preview-title="${cleanTitle}" data-hide-card-on-error />`
         : externalImageButton(thumb, cleanTitle);
       html += `<div class="media-card media-card-img">
         <div class="media-card-thumb-wrap">
@@ -234,7 +285,7 @@ function toast(msg, isErrOrOptions) {
   t.innerHTML = '';
   const textSpan = document.createElement('span');
   textSpan.className = 'toast-text';
-  textSpan.innerHTML = typeof msg === 'string' ? msg : '';
+  textSpan.textContent = typeof msg === 'string' ? msg : '';   // callers pass filenames, titles, remote errors
   t.appendChild(textSpan);
 
   if (actions.length) {
@@ -296,10 +347,10 @@ function setLiveHud(state) {
   if (Array.isArray(state.actions) && state.actions.length) {
     actionsHtml = `<div class="hud-actions">`
       + state.actions.map((a, i) => `<button class="hud-action-btn" data-act="${i}">${esc(a.label)}</button>`).join('')
-      + `<button class="hud-close-btn" title="Dismiss" onclick="setLiveHud(null)">✕</button>`
+      + `<button class="hud-close-btn" title="Dismiss" data-click="hud-close">✕</button>`
       + `</div>`;
   } else if (state.phase === 'done' || state.phase === 'error') {
-    actionsHtml = `<div class="hud-actions"><button class="hud-close-btn" title="Dismiss" onclick="setLiveHud(null)">✕</button></div>`;
+    actionsHtml = `<div class="hud-actions"><button class="hud-close-btn" title="Dismiss" data-click="hud-close">✕</button></div>`;
   }
 
   hud.innerHTML = `<div class="hud-left">`
