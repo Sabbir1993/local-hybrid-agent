@@ -9,7 +9,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, UploadFile, File as FastAPIFile, Request
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
@@ -60,8 +60,6 @@ from core.agent_tools import (
     _common_resolve,
     _ws_changes,
     _remote_uid,
-    _save_text_as_excel,
-    _create_default_excel,
     tool_write_file_common,
     pop_file_diff,
 )
@@ -101,6 +99,7 @@ from core.monitor import (
     parse_cache_tokens,
 )
 from . import common
+from core import reasoning
 from .common import _process_sse_stream, _llm_chat_stream
 
 
@@ -143,6 +142,8 @@ class AgentRequest(BaseModel):
     session_id: Optional[int] = None
     attachments: list[AttachedFile] = []
     cloud_model_override: Optional[str] = None   # key of cloud model for executor/vision lanes
+    # composer effort level (None = model/template default); see core/reasoning.py
+    reasoning_effort: Optional[Literal["none", "low", "medium", "high", "extra"]] = None
 
 
 AGENT_MAX_STEPS = 60
@@ -305,6 +306,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             return JSONResponse({"error": "session not found"}, status_code=404)
     from core.agent_tools import set_current_user
     set_current_user(user.id)
+    effort = reasoning.resolve(req.reasoning_effort)
 
     if not companion_bridge.is_connected(user.id):
         return JSONResponse(
@@ -637,9 +639,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     fb_client = await _local_fallback("main" if (use_cloud_main or main_ready) else "executor")
                     direct_stream = common._llm_chat_stream_with_fallback(
                         active_client, fb_client, msgs, None, req.temperature,
-                        req.max_tokens, rid=chat_rid, lane="direct")
+                        req.max_tokens, rid=chat_rid, lane="direct", effort=effort)
                 else:
-                    direct_stream = _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens, rid=chat_rid)
+                    direct_stream = _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens, rid=chat_rid, effort=effort)
                 _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
                 async for ev, val in direct_stream:
                     if ev == "queued":
@@ -849,9 +851,11 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         fb_client = await _local_fallback(lane_name)
                         lane_stream = common._llm_chat_stream_with_fallback(
                             active_client, fb_client, msgs, tools_for_lane, req.temperature,
-                            req.max_tokens, rid=step_rid, grammar=step_grammar, lane=lane_name)
+                            req.max_tokens, rid=step_rid, grammar=step_grammar, lane=lane_name,
+                            effort=None if step_grammar else effort)
                     else:
-                        lane_stream = _llm_chat_stream(active_client, msgs, tools_for_lane, req.temperature, req.max_tokens, rid=step_rid, grammar=step_grammar)
+                        lane_stream = _llm_chat_stream(active_client, msgs, tools_for_lane, req.temperature, req.max_tokens, rid=step_rid, grammar=step_grammar,
+                                                       effort=None if step_grammar else effort)
                     _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
                     _cloud_out = bool(getattr(active_client, "is_cloud", False))
                     async for ev, val in lane_stream:
@@ -940,9 +944,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             fb_main = await _local_fallback("main")
                             esc_stream = common._llm_chat_stream_with_fallback(
                                 main_client, fb_main, msgs, esc_tools, req.temperature,
-                                req.max_tokens, rid=esc_rid, lane="main")
+                                req.max_tokens, rid=esc_rid, lane="main", effort=effort)
                         else:
-                            esc_stream = _llm_chat_stream(main_client, msgs, esc_tools, req.temperature, req.max_tokens, rid=esc_rid)
+                            esc_stream = _llm_chat_stream(main_client, msgs, esc_tools, req.temperature, req.max_tokens, rid=esc_rid, effort=effort)
                         _red = output_guard.OutputRedactor(user, getattr(main_client, "is_cloud", False))
                         _cloud_out = bool(getattr(main_client, "is_cloud", False))
                         async for ev, val in esc_stream:
@@ -1438,10 +1442,23 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
                         csv_m = _re.search(r'```(?:csv|tsv|excel)?\n([\s\S]+?)\n```', c_text, _re.IGNORECASE)
                         if csv_m:
                             cand_code = csv_m.group(1).strip()
-                    res_str = tool_write_file_common({"path": clean_name, "content": cand_code or c_text})
+                    if not cand_code:
+                        # no tabular data in this message: try an older one. Writing the
+                        # whole chat reply into column A would be a fabricated spreadsheet.
+                        continue
+                    res_str = tool_write_file_common({"path": clean_name, "content": cand_code})
+                    if res_str.startswith("error:"):
+                        continue
                     m = _re.search(r"\[DOWNLOAD:\s*([^\]]+)\]", res_str or "")
                     real_saved = m.group(1).strip() if m else clean_name
-                    p = common_workspace() / real_saved
+                    q = common_workspace() / real_saved
+                    if not q.is_file():
+                        # do not hand back a path that was never written (it would 404
+                        # later with no record of why)
+                        print(f"[download recovery] {clean_name}: expected {real_saved} "
+                              f"not on disk", file=sys.stderr)
+                        continue
+                    p = q
                     break
 
                 if ext:
@@ -1465,17 +1482,22 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
 
                 if cand_code:
                     res_str = tool_write_file_common({"path": clean_name, "content": cand_code})
+                    if res_str.startswith("error:"):
+                        continue
                     m = _re.search(r"\[DOWNLOAD:\s*([^\]]+)\]", res_str or "")
                     real_saved = m.group(1).strip() if m else clean_name
                     p = common_workspace() / real_saved
                     # Also write unversioned copy as alias
                     try:
                         (common_workspace() / clean_name).write_text(cand_code, encoding="utf-8")
-                    except Exception:
-                        pass
+                    except OSError as e:
+                        print(f"[download recovery] alias write failed for {clean_name}: {e}",
+                              file=sys.stderr)
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            # this means the requested file cannot be recovered: surface it instead of
+            # silently returning a path that was never written
+            print(f"[download recovery] {clean_name}: {type(e).__name__}: {e}", file=sys.stderr)
 
     return p
 
@@ -1539,6 +1561,25 @@ async def agent_raw(path: str, space: Optional[str] = None):
         # in a tab: scripts work (charts), but never with this app's cookies/API.
         headers["Content-Security-Policy"] = "sandbox allow-scripts allow-forms allow-popups allow-modals"
     return FileResponse(str(p), media_type=mime, headers=headers)
+
+
+@router.get("/agent/slides")
+async def agent_slides(path: str, space: Optional[str] = None):
+    """Render model of a .pptx for the preview modal (positions, text, images)."""
+    p = _resolve_requested_file(path, space)
+    if p is None or not p.is_file():
+        return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+    if p.suffix.lower() != ".pptx":
+        return JSONResponse({"error": "only .pptx files can be previewed as slides"}, status_code=400)
+    from core.doc_ops import pptx_ops
+    from core.doc_ops.base import DocOpError
+    try:
+        model = await asyncio.get_running_loop().run_in_executor(None, pptx_ops.preview, p.read_bytes())
+    except DocOpError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except Exception as e:
+        return JSONResponse({"error": f"could not read presentation: {type(e).__name__}"}, status_code=422)
+    return JSONResponse(model, headers={"Cache-Control": "no-cache"})
 
 
 async def _ws_tree_scan(rel_dir: str) -> list:

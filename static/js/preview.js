@@ -83,7 +83,7 @@ async function openFilePreview(filePath, title = '', directContent = null) {
   const iconMap = {
     html: '🌐', htm: '🌐', svg: '🖼️', mermaid: '📊', mmd: '📊',
     csv: '📋', xlsx: '📊', xls: '📊', pdf: '📕',
-    md: '📝', py: '🐍', js: '⚡', json: '🧩', txt: '📄'
+    md: '📝', py: '🐍', js: '⚡', json: '🧩', txt: '📄', pptx: '📽️'
   };
   iconEl.textContent = iconMap[ext] || '👁️';
 
@@ -119,6 +119,13 @@ async function openFilePreview(filePath, title = '', directContent = null) {
       renderExcelPreview(buf, contentEl, controlsEl);
     } else if (ext === 'pdf') {
       renderPdfPreview(rawUrl, contentEl, controlsEl);
+    } else if (ext === 'pptx') {
+      const r = await fetch(`/agent/slides?path=${encodeURIComponent(filePath)}`);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+      renderSlidesPreview(data, contentEl, controlsEl);
+    } else if (['ppt', 'doc', 'docx', 'xlsm', 'pptm', 'zip'].includes(ext)) {
+      contentEl.innerHTML = `<div style="padding:40px 24px; text-align:center; color:var(--dim); font-size:12px;">No inline preview for .${esc(ext)} files. Use ⬇ Download to open it.</div>`;
     } else if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'ico'].includes(ext) || (filePath && filePath.startsWith('http') && !filePath.includes('.pdf') && !filePath.includes('.csv'))) {
       renderImagePreview(filePath && filePath.startsWith('http') ? filePath : rawUrl, contentEl, controlsEl);
     } else if (ext === 'md') {
@@ -479,6 +486,77 @@ function renderPdfPreview(url, container, controls) {
   }).catch(err => {
     container.innerHTML = `<div style="padding:24px; color:var(--red); font-size:12px;">Failed to load PDF: ${esc(err.message)}</div>`;
   });
+}
+
+// 5a. PowerPoint Slide Viewer (model from /agent/slides; EMU coords, pt fonts)
+function renderSlidesPreview(deck, container, controls) {
+  const slides = deck.slides || [];
+  if (!slides.length) {
+    container.innerHTML = '<div style="padding:20px; color:var(--dim);">Presentation has no slides.</div>';
+    return;
+  }
+  const W = deck.width || 12192000, H = deck.height || 6858000;
+  const slideHpt = H / 12700;
+  const pct = (v, total) => (v / total * 100).toFixed(3) + '%';
+  const isDark = hex => {
+    if (!hex || hex.length < 7) return false;
+    const n = parseInt(hex.slice(1), 16);
+    return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) < 128;
+  };
+  // font size relative to slide height, so text scales with the slide card
+  const fs = pt => `font-size:${(pt / slideHpt * 100).toFixed(3)}cqh;`;
+
+  function shapeHtml(s, defColor) {
+    const pos = `left:${pct(s.x, W)}; top:${pct(s.y, H)}; width:${pct(s.w, W)}; height:${pct(s.h, H)};` +
+      (s.rot ? ` transform:rotate(${s.rot}deg);` : '');
+    if (s.kind === 'picture') {
+      return s.src
+        ? `<img class="pptx-shape" src="${s.src}" style="${pos} object-fit:contain;" alt="">`
+        : `<div class="pptx-shape pptx-ph" style="${pos}">🖼️</div>`;
+    }
+    if (s.kind === 'chart') {
+      return `<div class="pptx-shape pptx-ph" style="${pos}">📊 ${esc(s.title || 'Chart')}</div>`;
+    }
+    if (s.kind === 'table') {
+      const rows = (s.rows || []).map((r, i) =>
+        `<tr>${r.map(c => `<${i ? 'td' : 'th'}>${esc(c)}</${i ? 'td' : 'th'}>`).join('')}</tr>`).join('');
+      return `<div class="pptx-shape" style="${pos} overflow:hidden;"><table class="pptx-table" style="${fs(12)}">${rows}</table></div>`;
+    }
+    const isTitle = s.kind === 'title';
+    const defPt = isTitle ? 36 : (s.kind.startsWith('placeholder') ? 20 : 16);
+    const color = s.fill ? (isDark(s.fill) ? '#ffffff' : '#1f2328') : defColor;
+    const just = { top: 'flex-start', middle: 'center', bottom: 'flex-end' }[s.anchor] || (isTitle ? 'center' : 'flex-start');
+    const bullets = s.kind.startsWith('placeholder:body') || s.kind === 'placeholder:object' || s.kind === 'placeholder';
+    const paras = (s.paras || []).map(p => {
+      const ps = p.style || {};
+      const align = { center: 'center', right: 'right', justify: 'justify' }[p.align] || 'left';
+      const runs = (p.runs || []).map(r => {
+        const st = (r.size ? fs(r.size) : '') + (r.bold ? 'font-weight:700;' : '') +
+          (r.italic ? 'font-style:italic;' : '') + (r.color ? `color:${r.color};` : '');
+        return `<span style="${st}">${esc(r.text).replace(/\n/g, '<br>')}</span>`;
+      }).join('');
+      const bullet = bullets && runs ? '<span class="pptx-bullet">•</span>' : '';
+      return `<div style="text-align:${align}; ${fs(ps.size || (defPt - p.level * 2))} padding-left:${p.level * 4}%;` +
+        `${ps.bold || isTitle ? 'font-weight:700;' : ''}${ps.color ? `color:${ps.color};` : ''}">${bullet}${runs || '&nbsp;'}</div>`;
+    }).join('');
+    const box = (s.fill ? `background:${s.fill};` : '') + (s.line ? `border:1px solid ${s.line};` : '');
+    return `<div class="pptx-shape pptx-text" style="${pos} ${box} color:${color}; justify-content:${just};">${paras}</div>`;
+  }
+
+  function slideHtml(sl, idx) {
+    const bg = sl.bg || '#ffffff';
+    const defColor = isDark(bg) ? '#f0f6fc' : '#1f2328';
+    return `<div class="pptx-slide-wrap">
+      <div class="pptx-slide-num">${idx + 1}</div>
+      <div class="pptx-slide" style="aspect-ratio:${W} / ${H}; background:${bg};">
+        ${(sl.shapes || []).map(s => shapeHtml(s, defColor)).join('')}
+      </div>
+      ${sl.notes ? `<div class="pptx-notes">📝 ${esc(sl.notes)}</div>` : ''}
+    </div>`;
+  }
+
+  controls.innerHTML = `<span style="font-size:11px; color:var(--dim);">${slides.length} slide${slides.length !== 1 ? 's' : ''} · approximate layout</span>`;
+  container.innerHTML = `<div class="pptx-deck">${slides.map(slideHtml).join('')}</div>`;
 }
 
 // 5b. Image Viewer

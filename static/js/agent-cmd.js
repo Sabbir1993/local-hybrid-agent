@@ -584,8 +584,8 @@ function setAppMode(isAgent, isUserSwitch = false) {
   if (typeof _updateCloudModelSelVisibility === 'function') _updateCloudModelSelVisibility();
   const webToggle = $('btn-web-toggle');
   if (webToggle) webToggle.style.display = agentMode ? 'none' : 'flex';
-  const deepToggle = $('btn-deep-toggle');
-  if (deepToggle) deepToggle.style.display = agentMode ? 'none' : 'flex';
+  // effort chip: Deep research is chat-only, so its switch hides in agent mode
+  if (typeof updateEffortUI === 'function') updateEffortUI();
   if (agentMode && window._setPlanMode) window._setPlanMode(planMode);   // refresh placeholder
   // workspace side panel needs agent mode + an active project
   if (!agentMode && wsPanelOpen) setWsPanel(false);

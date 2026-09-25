@@ -6,17 +6,26 @@ capability catalogs.
   plugins     plugin_catalog/     -> plugins/            (core/plugins.py)
   connectors  mcp_catalog.PRESETS -> capabilities.mcp_servers (routes/mcp_manager.py)
 
-Everything installable is reviewed, in-repo content - nothing is fetched from the
-internet on install. The public MCP Registry is proxied browse-only. Browsing needs
-a session; every install/uninstall needs capabilities.install and is audit-logged.
+Everything installable from the in-repo catalogs is reviewed, in-repo content.
+The public MCP Registry is proxied browse-only. The Marketplace tab browses an
+external plugin registry and installs plugins via URL: every fetch goes through
+the SSRF guard (core.net_guard.guarded_get), the manifest + code preview must be
+reviewed first, and installs need capabilities.install and are audit-logged.
+Browsing needs a session; every install/uninstall needs capabilities.install
+and is audit-logged.
 """
 
 from typing import Optional
+
+import asyncio
+import hashlib
+import json
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from core.net_guard import BlockedURLError, guarded_get
 from core.small_model import APP_CONFIG
 from core import credentials, mcp_catalog
 from core import mcp as mcp_core
@@ -24,7 +33,7 @@ from core import plugins as plugins_core
 from core import skills as skills_core
 from core.audit import audit_log
 from core.auth import Principal
-from core.deps import require_permission
+from core.deps import get_current_user, require_permission
 from routes import mcp_manager
 from routes.plugins import _set_disabled as _set_plugin_disabled
 
@@ -34,11 +43,36 @@ _manage = require_permission(_PERM)
 KINDS = ("skills", "plugins", "connectors")
 MAX_PREVIEW_CHARS = 20000
 
+# Remote plugin registry + URL installs.
+# An operator can point this at any JSON registry of the form
+# {"plugins": [{"name": ..., "manifest_url": ..., "code_url": ..., ...}]}.
+# Every URL fetch below goes through core.net_guard.guarded_get (SSRF guard,
+# private-network block, capped body). Nothing is written to plugins/ until the
+# user reviews the manifest + code preview and confirms install.
+DEFAULT_MARKETPLACE_URL = (
+    "https://raw.githubusercontent.com/Sabbir1993/local-hybrid-agent/main/plugin_registry.json"
+)
+MARKETPLACE_TIMEOUT_S = 15
+REMOTE_MAX_MANIFEST_BYTES = 64 * 1024
+REMOTE_MAX_CODE_BYTES = 512 * 1024
+REMOTE_PREVIEW_CHARS = 12000
+
 router = APIRouter(prefix="/customize", tags=["customize"])
 
 
 class InstallReq(BaseModel):
     secrets: dict = {}        # connectors only: {ENV_KEY: value} -> OS keychain
+
+
+class RemoteInspectReq(BaseModel):
+    manifest_url: str = ""
+    code_url: str = ""          # optional override; else taken from manifest's code_url/source_url
+
+
+class RemoteInstallReq(BaseModel):
+    manifest_url: str = ""
+    code_url: str = ""          # optional override
+    name: str = ""              # optional override (must match manifest name when both given)
 
 
 def _err(msg: str, code: int = 400) -> JSONResponse:
@@ -202,6 +236,221 @@ async def preview(kind: str, item_id: str):
 
 def _item(kind: str, item_id: str) -> Optional[dict]:
     return next((i for i in _LISTERS[kind]() if i["id"] == item_id), None)
+
+
+# ---------------- remote marketplace (plugins via URL) ----------------
+
+def _marketplace_url() -> str:
+    return str((_caps().get("plugin_marketplace_url") or DEFAULT_MARKETPLACE_URL)).strip() \
+        or DEFAULT_MARKETPLACE_URL
+
+
+async def _fetch_url(url: str, max_bytes: int):
+    try:
+        return await asyncio.to_thread(
+            guarded_get, url, MARKETPLACE_TIMEOUT_S,
+            {"User-Agent": "local-hybrid-agent/1.0"}, max_bytes)
+    except BlockedURLError as e:
+        raise ValueError(f"blocked URL: {e}")
+
+
+def _normalize_registry_entry(e: dict) -> Optional[dict]:
+    if not isinstance(e, dict):
+        return None
+    manifest_url = str(e.get("manifest_url") or e.get("plugin_url") or "").strip()
+    code_url = str(e.get("code_url") or e.get("source_url") or "").strip()
+    name = str(e.get("name") or "").strip()
+    if not (manifest_url or code_url):
+        return None
+    if name and not plugins_core.valid_name(name):
+        return None
+    return {"name": name,
+            "title": str(e.get("title") or name or manifest_url or code_url)[:80],
+            "description": str(e.get("description") or "")[:400],
+            "version": str(e.get("version") or "")[:20],
+            "author": str(e.get("author") or "")[:80],
+            "category": str(e.get("category") or "general")[:40],
+            "manifest_url": manifest_url, "code_url": code_url,
+            "homepage": str(e.get("homepage") or "")[:200]}
+
+
+def _validate_manifest_dict(m: dict) -> dict:
+    if not isinstance(m, dict):
+        raise ValueError("manifest must be a JSON object")
+    name = str(m.get("name") or "").strip()
+    if not plugins_core.valid_name(name):
+        raise ValueError("manifest 'name' must match ^[a-z0-9][a-z0-9_-]{0,40}$")
+    code_url = str(m.get("code_url") or m.get("source_url") or "").strip()
+    if code_url:
+        from core.net_guard import check_url
+        try:
+            check_url(code_url)
+        except BlockedURLError as e:
+            raise ValueError(f"manifest code_url blocked: {e}")
+    tools = m.get("tools") or []
+    if not isinstance(tools, list):
+        raise ValueError("manifest 'tools' must be a list")
+    return {"name": name,
+            "title": str(m.get("title") or name)[:80],
+            "description": str(m.get("description") or "")[:400],
+            "version": str(m.get("version") or "")[:20],
+            "author": str(m.get("author") or "")[:80],
+            "category": str(m.get("category") or "general")[:40],
+            "tools": [str(t)[:60] for t in tools][:20],
+            "code_url": code_url,
+            "homepage": str(m.get("homepage") or "")[:200]}
+
+
+async def _fetch_manifest_and_code(manifest_url: str, code_url_override: str = "") -> dict:
+    from core.net_guard import check_url
+    manifest_url = (manifest_url or "").strip()
+    if not manifest_url:
+        raise ValueError("manifest_url required")
+    try:
+        check_url(manifest_url)
+    except BlockedURLError as e:
+        raise ValueError(f"blocked URL: {e}")
+    try:
+        mresp = await _fetch_url(manifest_url, REMOTE_MAX_MANIFEST_BYTES)
+    except ValueError as e:
+        raise e
+    if mresp.status_code >= 400:
+        raise ValueError(f"manifest fetch failed: HTTP {mresp.status_code}")
+    if mresp.truncated:
+        raise ValueError("manifest too large (> 64 KiB)")
+    try:
+        manifest = json.loads(mresp.text)
+    except ValueError:
+        raise ValueError("manifest is not valid JSON")
+    info = _validate_manifest_dict(manifest)
+    code_url = (code_url_override or "").strip() or info["code_url"]
+    code_text, code_sha256, code_truncated = "", None, False
+    if code_url:
+        try:
+            check_url(code_url)
+        except BlockedURLError as e:
+            raise ValueError(f"blocked URL: {e}")
+        try:
+            cresp = await _fetch_url(code_url, REMOTE_MAX_CODE_BYTES)
+        except ValueError as e:
+            raise e
+        if cresp.status_code >= 400:
+            raise ValueError(f"code fetch failed: HTTP {cresp.status_code}")
+        code_text = cresp.content.decode(cresp.encoding or "utf-8", errors="replace")
+        code_sha256 = hashlib.sha256(cresp.content).hexdigest()
+        code_truncated = bool(cresp.truncated)
+    return {"manifest": info, "manifest_url": manifest_url, "code_url": code_url,
+            "code_text": code_text, "code_sha256": code_sha256,
+            "code_truncated": code_truncated}
+
+
+@router.get("/plugins/registry")
+async def plugin_registry(q: Optional[str] = None,
+                          url: Optional[str] = None,
+                          user: Principal = Depends(get_current_user)):
+    target = (url or "").strip() or _marketplace_url()
+    try:
+        from core.net_guard import check_url
+        check_url(target)
+    except BlockedURLError as e:
+        return _err(f"blocked URL: {e}")
+    try:
+        resp = await _fetch_url(target, REMOTE_MAX_CODE_BYTES)
+    except ValueError as e:
+        return _err(str(e))
+    if resp.status_code >= 400:
+        return _err(f"registry fetch failed: HTTP {resp.status_code}", 502)
+    try:
+        raw = json.loads(resp.text)
+    except ValueError:
+        return _err("registry did not return valid JSON", 502)
+    entries = raw.get("plugins") if isinstance(raw, dict) else raw
+    if not isinstance(entries, list):
+        return _err('registry JSON must be {"plugins": [...]}', 502)
+    items = [n for n in (_normalize_registry_entry(x) for x in entries) if n]
+    needle = (q or "").strip().lower()
+    if needle:
+        items = [i for i in items
+                 if needle in " ".join(str(i.get(k) or "") for k in
+                                       ("name", "title", "description", "author", "category")).lower()]
+    installed = {p["name"] for p in plugins_core.plugins_status()}
+    for i in items:
+        i["installed"] = bool(i["name"] and i["name"] in installed)
+    return {"registry_url": target, "count": len(items), "items": items[:200]}
+
+
+@router.post("/plugins/inspect-remote")
+async def inspect_remote_plugin(req: RemoteInspectReq,
+                                user: Principal = Depends(get_current_user)):
+    try:
+        data = await _fetch_manifest_and_code(req.manifest_url, req.code_url)
+    except ValueError as e:
+        return _err(str(e))
+    import ast
+    if data.get("code_text"):
+        try:
+            ast.parse(data["code_text"])
+            data["code_syntax"] = "ok"
+        except SyntaxError as e:
+            data["code_syntax"] = f"syntax error: {e}"
+    else:
+        data["code_syntax"] = "no-code-url" if not data.get("code_url") else "empty"
+    data["code_preview"] = (data.pop("code_text") or "")[:REMOTE_PREVIEW_CHARS]
+    data["name_taken"] = plugins_core.is_installed(data["manifest"]["name"])
+    return data
+
+
+@router.post("/plugins/install-remote")
+async def install_remote_plugin(req: RemoteInstallReq, user: Principal = Depends(_manage)):
+    name_override = (req.name or "").strip()
+    if name_override and not plugins_core.valid_name(name_override):
+        return _err("invalid plugin name")
+    try:
+        data = await _fetch_manifest_and_code(req.manifest_url, req.code_url)
+    except ValueError as e:
+        return _err(str(e))
+    manifest = data["manifest"]
+    name = manifest["name"]
+    if name_override and name_override != name:
+        return _err(f"name override '{name_override}' does not match manifest name '{name}'")
+    code_text = data.get("code_text") or ""
+    if not data.get("code_url"):
+        return _err("manifest has no code_url/source_url - nothing to install")
+    if data.get("code_truncated"):
+        return _err("remote code too large (> 512 KiB)")
+    if plugins_core.is_installed(name) and not plugins_core.is_modified(name):
+        return _err(f"plugin '{name}' is already installed", 409)
+    if plugins_core.is_installed(name) and plugins_core.is_modified(name):
+        return _err(f"plugins/{name} already exists with local changes - remove it manually first", 409)
+    try:
+        compile(code_text, f"<remote {name}/plugin.py>", "exec")
+    except SyntaxError as e:
+        return _err(f"remote code has a syntax error: {e}")
+    try:
+        dest = plugins_core.PLUGINS_DIR / name
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "plugin.py").write_text(code_text, encoding="utf-8")
+        (dest / "plugin.json").write_text(json.dumps(
+            {"title": manifest["title"], "description": manifest["description"],
+             "version": manifest["version"], "author": manifest["author"],
+             "category": manifest["category"], "tools": manifest["tools"]}, indent=2),
+            encoding="utf-8")
+        (dest / ".remote_source").write_text(json.dumps(
+            {"manifest_url": data["manifest_url"], "code_url": data["code_url"],
+             "sha256": data["code_sha256"]}, indent=2), encoding="utf-8")
+        if name in plugins_core.disabled_names():
+            _set_plugin_disabled(name, False)
+        if plugins_core.plugins_enabled():
+            plugins_core.load_plugin(name)
+    except OSError as e:
+        return _err(f"install failed: {e}", 500)
+    audit_log(user, action="customize.plugins.install-remote", resource=name,
+              permission_key=_PERM,
+              detail={"manifest_url": data["manifest_url"], "code_url": data["code_url"],
+                      "sha256": data["code_sha256"]})
+    api = plugins_core._loaded.get(name)
+    return {"ok": True, "name": name, "loaded": api is not None,
+            "sha256": data["code_sha256"], "error": plugins_core._errors.get(name)}
 
 
 @router.post("/{kind}/{item_id}/install")

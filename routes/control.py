@@ -27,6 +27,7 @@ from core.config import (
     MODEL_CONFIG_KEYS,
     CLOUD_TIMEOUT_S,
 )
+from core import reasoning
 from core.db import db_report
 from core.gpu import get_gpu_stats, get_hardware_engine_summary, refresh_hw_async
 from core.profiles import (
@@ -139,13 +140,10 @@ def check_tool_calling(filename: str) -> bool:
     return any(k in nl for k in tool_keywords)
 
 
-def check_reasoning(filename: str) -> bool:
-    nl = str(filename or "").lower()
-    reasoning_keywords = [
-        "r1", "qwq", "reason", "reasoning", "deepseek-r1", "marco",
-        "thinking", "distill", "heretic", "sky-t1"
-    ]
-    return any(k in nl for k in reasoning_keywords)
+def _reasoning_caps(mode: str) -> dict:
+    """Effort-chip capability: "levels" (None..Extra), "toggle" (always-thinking
+    template: budget only) or "none" (chip hidden). See core/reasoning.py."""
+    return {"reasoning_available": mode != "none", "reasoning_mode": mode}
 
 
 def _config_for_profile(p: dict) -> dict:
@@ -179,7 +177,7 @@ def _config_for_profile(p: dict) -> dict:
         "mtp_note": p.get("mtp_note", ""),
         "mmproj_note": p.get("mmproj_note", ""),
         "tools_available": check_tool_calling(str(p.get("name") or p.get("model_path") or "")),
-        "reasoning_available": check_reasoning(str(p.get("name") or p.get("model_path") or "")),
+        **_reasoning_caps(reasoning.local_mode(p.get("model_path"))),
     }
 
 
@@ -229,7 +227,7 @@ async def get_config(model: Optional[str] = None, user: Principal = Depends(get_
                     "display": cm.display, "ctx": cm.ctx, "context_size": cm.ctx,
                     "endpoint": cm.endpoint(),
                     "tools_available": True,
-                    "reasoning_available": check_reasoning(cm.model_id or cm.display or ""),
+                    **_reasoning_caps(reasoning.cloud_mode(cm)),
                     "vision_capable": any(k in (cm.model_id or "").lower() for k in ["vision", "4o", "gemini", "claude-3", "vl"])}
     # No ?model= given: if the main lane itself is cloud-bound, report that
     if not model:
@@ -239,7 +237,7 @@ async def get_config(model: Optional[str] = None, user: Principal = Depends(get_
                     "display": cm_bound.display, "ctx": cm_bound.ctx,
                     "context_size": cm_bound.ctx, "endpoint": cm_bound.endpoint(),
                     "tools_available": True,
-                    "reasoning_available": check_reasoning(cm_bound.model_id or cm_bound.display or ""),
+                    **_reasoning_caps(reasoning.cloud_mode(cm_bound)),
                     "vision_capable": any(k in (cm_bound.model_id or "").lower() for k in ["vision", "4o", "gemini", "claude-3", "vl"])}
     # The ?model= target wins when it names a different model than the one
     # loaded — the drawer edits the dropdown-selected model, not what's in VRAM.
@@ -398,7 +396,7 @@ async def profiles(user: Principal = Depends(get_current_user)):
                 "mmproj_path": str(mmproj) if mmproj else None,
                 "mmproj_note": comp["mmproj_note"],
                 "tools_available": check_tool_calling(gfile.name),
-                "reasoning_available": check_reasoning(gfile.name),
+                **_reasoning_caps(reasoning.local_mode(gfile)),
                 "size_gb": size_gb,
                 "family": folder or gfile.stem.split("-")[0],
             })
@@ -420,7 +418,7 @@ async def profiles(user: Principal = Depends(get_current_user)):
                 "size_gb": None,
                 "ctx": cm.ctx,
                 "tools_available": True,
-                "reasoning_available": check_reasoning(cm.model_id or cm.display or ""),
+                **_reasoning_caps(reasoning.cloud_mode(cm)),
                 "vision_capable": any(k in (cm.model_id or "").lower() for k in ["vision", "4o", "gemini", "claude-3", "vl"]),
             } for cm in cloud.cloud_models(user.id)]}
 
@@ -436,6 +434,8 @@ async def available_models(user: Principal = Depends(get_current_user)):
     local_models = []
     # Local model only shows when an admin has loaded one into GPU VRAM and it is actively running
     if loaded_name and is_running:
+        # template header read (cached per file): drives the composer's effort chip
+        local_mode = await asyncio.to_thread(reasoning.local_mode, loaded_path)
         local_models.append({
             "id": loaded_path or loaded_name,
             "display": loaded_name,
@@ -443,6 +443,7 @@ async def available_models(user: Principal = Depends(get_current_user)):
             "kind": "local",
             "provider": "local",
             "provider_name": "Local",
+            **_reasoning_caps(local_mode),
         })
 
     cloud_models = []
@@ -454,6 +455,7 @@ async def available_models(user: Principal = Depends(get_current_user)):
             "kind": "cloud",
             "provider": cm.provider,
             "provider_name": cm.provider_name,
+            **_reasoning_caps(reasoning.cloud_mode(cm)),
         })
 
     return {"models": local_models + cloud_models}

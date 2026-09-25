@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from core import reasoning
 from core.monitor import monitor_token
 from core.agent_loop import safe_parse_and_repair_args
 from core.request_context import get_current_user_id
@@ -199,7 +200,7 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
 async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=None, temperature=0.4,
                                         max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None,
                                         grammar: Optional[str] = None, lane: str = "cloud",
-                                        extra: Optional[dict] = None):
+                                        extra: Optional[dict] = None, effort: Optional[str] = None):
     """Stream from `primary` (usually a CloudClient); if it fails before emitting any
     content, retry the same request on `fallback` (the local lane) instead of failing
     the whole agent step. Yields ("fallback", reason) once before switching so callers
@@ -207,7 +208,7 @@ async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=No
     produced = False
     try:
         async for item in _llm_chat_stream(primary, msgs, tools, temperature, max_tokens,
-                                           repeat_penalty, rid, grammar, extra=extra):
+                                           repeat_penalty, rid, grammar, extra=extra, effort=effort):
             produced = True
             yield item
         return
@@ -219,7 +220,7 @@ async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=No
               file=sys.stderr)
         yield ("fallback", reason)
     async for item in _llm_chat_stream(fallback, msgs, tools, temperature, max_tokens,
-                                       repeat_penalty, rid, grammar, extra=extra):
+                                       repeat_penalty, rid, grammar, extra=extra, effort=effort):
         yield item
 
 
@@ -275,13 +276,13 @@ class _Admission:
 admission = _Admission()
 
 
-async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None):
+async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None):
     """Stream one completion. Requests to the local main llama-server first pass
     the fair-share admission gate; a ("queued", {"position": n}) item is yielded
     when the caller has to wait for a slot."""
     if client_or_state is not state.client or not admission.enabled():
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
-                                               repeat_penalty, rid, grammar, extra=extra):
+                                               repeat_penalty, rid, grammar, extra=extra, effort=effort):
             yield item
         return
     glob, mine = admission._sems(get_current_user_id())
@@ -299,14 +300,14 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
         admission.waiting -= 1
     try:
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
-                                               repeat_penalty, rid, grammar, extra=extra):
+                                               repeat_penalty, rid, grammar, extra=extra, effort=effort):
             yield item
     finally:
         glob.release()
         mine.release()
 
 
-async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None):
+async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None):
     payload = {
         "messages": msgs,
         "temperature": temperature,
@@ -319,6 +320,15 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
         # cloud providers, which may reject unknown keys
         if extra:
             payload.update(extra)
+        # reasoning effort (level already resolved by the route); its template
+        # kwargs are merged so they don't clobber other chat_template_kwargs
+        for k, v in reasoning.local_fields(effort).items():
+            if k == "chat_template_kwargs":
+                payload[k] = {**(payload.get(k) or {}), **v}
+            else:
+                payload[k] = v
+    elif getattr(client_or_state, "is_cloud", False):
+        payload.update(reasoning.cloud_fields(effort, getattr(client_or_state, "cm", None)))
     if max_tokens is not None and int(max_tokens) > 0:
         payload["max_tokens"] = int(max_tokens)
     else:
@@ -332,6 +342,15 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
         if response.status_code != 200:
             err_text = await response.aread()
             err_msg = err_text.decode("utf-8", "replace")[:300]
+            effort_keys = [k for k in reasoning.CLOUD_KEYS if k in payload]
+            if effort_keys and response.status_code in (400, 422) and getattr(client_or_state, "is_cloud", False):
+                # Provider/build rejected the reasoning fields: retry once
+                # without them (model's default thinking) rather than failing.
+                print(f"[common] reasoning fields {effort_keys} rejected ({response.status_code}: {err_msg[:120]}) - retrying without them", file=sys.stderr)
+                async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
+                                                       repeat_penalty, rid, grammar, extra=extra):
+                    yield item
+                return
             if grammar:
                 # This llama-server build rejected the grammar (unsupported field
                 # or invalid GBNF). Retry once unconstrained so the lane survives.

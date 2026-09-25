@@ -109,16 +109,6 @@ if (btnWebToggle) {
   };
   updateWebToggleUI();
 }
-const btnDeepToggle = $('btn-deep-toggle');
-if (btnDeepToggle) {
-  btnDeepToggle.onclick = () => {
-    chatDeepMode = !chatDeepMode;
-    try { localStorage.setItem('chat_deep_mode', chatDeepMode ? '1' : '0'); } catch (e) {}
-    updateDeepToggleUI();
-    toast(chatDeepMode ? '💭 Deep mode on — more research & reasoning (slower)' : '💭 Deep mode off');
-  };
-  updateDeepToggleUI();
-}
 /* image preview lightbox modal */
 function openImageModal(src, title = 'Image attachment') {
   const m = $('img-modal');

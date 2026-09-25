@@ -30,7 +30,7 @@ try {
   const savedWeb = localStorage.getItem('chat_web_search');
   if (savedWeb !== null) chatWebSearch = savedWeb === '1';
 } catch (e) {}
-// Deep mode: larger tool/web budget + planning + model reasoning (slower)
+// Deep research: larger tool/web budget + planning (switch in the effort menu, effort.js)
 let chatDeepMode = false;
 try { chatDeepMode = localStorage.getItem('chat_deep_mode') === '1'; } catch (e) {}
 
@@ -102,15 +102,6 @@ function updateBgIndicators() {
       ind.remove();
     }
   });
-}
-
-function updateDeepToggleUI() {
-  const btn = $('btn-deep-toggle');
-  if (!btn) return;
-  btn.classList.toggle('active', !!chatDeepMode);
-  btn.title = chatDeepMode
-    ? 'Deep mode is ON (plans, researches more, reasons longer — slower) — Click to turn OFF'
-    : 'Deep mode is OFF (normal research budget) — Click to turn ON';
 }
 
 function updateWebToggleUI() {

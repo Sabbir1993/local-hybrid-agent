@@ -118,6 +118,15 @@
     "deep_max_tool_rounds": 20,
     "deep_max_web_calls": 12
   },
+  "reasoning_effort": {
+    "default": "low",
+    "budgets": {
+      "low": 1024,
+      "medium": 4096,
+      "high": 12288,
+      "extra": -1
+    }
+  },
   "agent": {
     "exec_timeout_s": 0,
     "max_steps": 60,

@@ -112,6 +112,22 @@ class PptxTests(unittest.TestCase):
         with self.assertRaises(DocOpError):
             pptx_ops.apply(self.deck, [{"op": "set_text", "addr": "s9/title", "text": "x"}])
 
+    def test_parse_conversational_slide_outlines(self):
+        outline = (
+            "10 SLIDES + TITLE/THANKYOU STRUCTURE:\n"
+            "Slide 1 (Title): Full-bleed deep navy. Big title \"Acme Corp\". Subtitle \"Annual Strategy\".\n"
+            "Slide 2 (Executive Summary): Header \"Strategic Priorities\". Three bullets:\n"
+            "- Accelerate Cloud Migration\n"
+            "- Expand Global Merchant Footprint\n"
+            "- Strengthen Compliance & Governance\n"
+            "Slide 3 (Scale): Header \"Platform Metrics\". Bullets:\n"
+            "- 50M+ active accounts\n"
+            "GLOBAL THEME: Deep navy background, gold highlights.\n"
+        )
+        deck = pptx_ops.create(outline)
+        titles = [e["text"] for e in pptx_ops.inspect(deck)["elements"] if e["kind"] == "title"]
+        self.assertEqual(titles, ["Acme Corp", "Strategic Priorities", "Platform Metrics"])
+
 
 class XlsxTests(unittest.TestCase):
     def setUp(self):

@@ -25,6 +25,8 @@ async function loadProfiles() {
         o.dataset.provider = m.provider_name || (isCloud ? 'Cloud' : 'Local');
         o.dataset.providerKey = m.provider || (isCloud ? 'cloud' : 'local');
         o.dataset.loaded = m.currently_loaded ? '1' : '0';
+        o.dataset.reasoning = m.reasoning_available ? '1' : '';
+        o.dataset.reasoningMode = m.reasoning_mode || 'none';
         sel.appendChild(o);
       });
       if (!sel.options.length) {
@@ -36,6 +38,7 @@ async function loadProfiles() {
       if (restored && [...sel.options].some(o => o.value === restored)) sel.value = restored;
     } catch (e) {}
     renderModelPicker();
+    if (typeof updateEffortUI === 'function') updateEffortUI();
     return;
   }
 
@@ -74,6 +77,7 @@ async function loadProfiles() {
       o.dataset.mmproj = m.mmproj_path || '';
       o.dataset.tools = m.tools_available ? '1' : '';
       o.dataset.reasoning = m.reasoning_available ? '1' : '';
+      o.dataset.reasoningMode = m.reasoning_mode || 'none';
       o.dataset.kind = 'local';
       o.dataset.provider = 'Local';
       sel.appendChild(o);
@@ -154,6 +158,7 @@ $('profile').onchange = e => {
   e.target._user = true;
   try { localStorage.setItem('app_model', e.target.value); } catch (err) {}
   updateModelCapabilitiesBar();
+  if (typeof updateEffortUI === 'function') updateEffortUI();
   // Picking a cloud model means "this is my main lane": nudge the agent engine to
   // a mode that keeps the local model out of the way (the executor stays local
   // unless it is bound to the cloud in the Cloud Models card).

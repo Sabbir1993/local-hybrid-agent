@@ -16,6 +16,10 @@ from . import companion_bridge
 
 MAX_TOOL_OUTPUT = 20000   # chars per tool result fed back to the model
 MAX_EDIT_BYTES = 512 * 1024
+# Binary document formats: always built by core.doc_ops (real layouts/styles, so a
+# later doc_edit can change one part without regenerating the rest), never by
+# writing model text straight into the container.
+DOCUMENT_EXTS = (".xlsx", ".xls", ".pptx", ".ppt", ".docx", ".doc", ".pdf")
 # Both keyed by (user_id, device_id) via request_context so active projects
 # and workspace paths never conflict across different users or different devices.
 _active_project: dict = {}   # "uid:did" -> project name (set via UI)
@@ -255,7 +259,11 @@ async def tool_write_file(args: dict) -> str:
     append = bool(args.get("append"))
 
     uid = _remote_uid()
-    if p.suffix.lower() in (".pptx", ".docx", ".xlsx", ".pdf") and not append:
+    if p.suffix.lower() in DOCUMENT_EXTS:
+        if append:
+            raise ValueError(
+                f"cannot append to a {p.suffix.lower()} document - send the complete file in one "
+                "write_file call, or change an existing document with doc_edit")
         # fs.write is UTF-8 text: build the real document and send its bytes instead
         from .doc_tools import tool_doc_create
         return await tool_doc_create({"file": path_arg, "content": content})
@@ -276,131 +284,147 @@ async def tool_write_file(args: dict) -> str:
         _snapshot_change(p)
         return f"appended {len(content)} chars to {path_arg} (total {p.stat().st_size} bytes)"
 
-    # Handle .xlsx / .xls conversion if writing to an Excel file
-    if p.suffix.lower() in (".xlsx", ".xls"):
-        saved = _save_text_as_excel(p, content)
-        if not saved:
-            _create_default_excel(p, content)
-        _snapshot_change(p)
-        return f"wrote Excel workbook to {path_arg} ({'overwrote' if existed else 'created'})"
-
-    # Handle .pptx / .ppt conversion if writing to a PowerPoint file
-    if p.suffix.lower() in (".pptx", ".ppt"):
-        saved = _save_text_as_pptx(p, content)
-        _snapshot_change(p)
-        if saved:
-            return f"wrote PowerPoint presentation to {path_arg} ({'overwrote' if existed else 'created'})"
-
-    # Handle .pdf conversion if writing to a PDF file
-    if p.suffix.lower() == ".pdf":
-        saved = _save_text_or_markdown_as_pdf(p, content)
-        _snapshot_change(p)
-        if saved:
-            return f"wrote compiled PDF document to {path_arg} ({'overwrote' if existed else 'created'})"
-
     p.write_text(content, encoding="utf-8")
     _snapshot_change(p)
     return f"wrote {len(content)} chars to {path_arg} ({'overwrote' if existed else 'created'})"
 
 
-def _parse_tabular_text(content: str) -> list[list[str]]:
-    lines = [l.strip() for l in content.strip().splitlines() if l.strip()]
-    if not lines:
-        return []
+_MD_SEP_RE = re.compile(r"^\|?[\s\-:|]+\|?$")
 
-    # Check if markdown table or pipe-separated (require a header row followed
-    # by a separator row like |---|---| so a stray "|" inside a cell's text,
-    # e.g. "Male|Female", doesn't misfire this branch on ordinary CSV/tab data).
-    if len(lines) >= 2 and "|" in lines[0] and re.match(r"^\|?[\s\-:|]+\|?$", lines[1]):
+# fence languages that are code, not tabular data: a ```python block must never
+# become spreadsheet rows (one code line per row)
+_CODE_FENCE_LANGS = frozenset({
+    "python", "py", "javascript", "js", "jsx", "typescript", "ts", "tsx",
+    "bash", "sh", "shell", "powershell", "ps1", "zsh", "json", "xml", "html",
+    "css", "yaml", "yml", "toml", "ini", "c", "cpp", "c++", "h", "java", "go",
+    "rust", "ruby", "php", "lua", "diff", "console", "terminal",
+})
+_CODE_LINE_RE = re.compile(
+    r"^\s*(?:def\s+\w+\s*\(|class\s+\w+|import\s+\w|from\s+\S+\s+import\s|"
+    r"for\s+\S+\s+in\s|while\s+\S+\s*:|return\s+\S|print\s*\(|#include|"
+    r"function\s+\w+\s*\(|const\s+\w+\s*=|let\s+\w+\s*=|require\s*\()", re.IGNORECASE)
+
+
+def _fenced_blocks(content: str) -> list:
+    """(language, body) for every ```-fenced block, in document order."""
+    blocks, lines, i = [], content.splitlines(), 0
+    while i < len(lines):
+        m = re.match(r"^\s*```(.*)$", lines[i])
+        if not m:
+            i += 1
+            continue
+        lang = m.group(1).strip().lower()
+        i += 1
+        body = []
+        while i < len(lines) and not re.match(r"^\s*```\s*$", lines[i]):
+            body.append(lines[i])
+            i += 1
+        blocks.append((lang, "\n".join(body)))
+        i += 1
+    return blocks
+
+
+def _looks_like_code(body: str) -> bool:
+    hits = sum(1 for l in body.splitlines() if _CODE_LINE_RE.match(l))
+    return hits >= 2
+
+
+def _markdown_table_rows(lines: list) -> list:
+    """The first real markdown table (header + |---| separator + rows) in `lines`.
+    Prose around it is not data, and neither is the separator row itself."""
+    for i in range(len(lines) - 1):
+        if "|" not in lines[i] or not _MD_SEP_RE.match(lines[i + 1]):
+            continue
         rows = []
-        for l in lines:
-            if re.match(r"^\|?[\s\-:|]+\|?$", l):
+        for l in lines[i:]:
+            if _MD_SEP_RE.match(l):
                 continue
+            if "|" not in l:
+                break                      # the table ends at the first non-pipe line
             cells = [c.strip() for c in l.split("|")]
             if l.startswith("|") and cells and cells[0] == "":
                 cells.pop(0)
             if l.endswith("|") and cells and cells[-1] == "":
                 cells.pop()
-            if cells:
+            if any(cells):
                 rows.append(cells)
+        if len(rows) >= 2 and len(rows[0]) > 1:
+            return rows
+    return []
+
+
+def _split_delimited(text: str, delim: str) -> list:
+    import csv
+    import io
+    try:
+        return [[c.strip() for c in row]
+                for row in csv.reader(io.StringIO(text), delimiter=delim)
+                if any(c.strip() for c in row)]
+    except Exception:
+        return []
+
+
+def _modal_column_rows(rows: list, min_cols: int = 2) -> list:
+    """Rows sharing the most common column count (>= min_cols), in order. Lines
+    that do not split the same way - surrounding prose - are dropped."""
+    from collections import Counter
+    tallies = Counter(len(r) for r in rows if len(r) >= min_cols)
+    if not tallies:
+        return []
+    modal = tallies.most_common(1)[0][0]
+    return [r for r in rows if len(r) == modal]
+
+
+def _sniff_delimited(lines: list) -> list:
+    """Best rows over comma / tab / semicolon / pipe, or [] when no delimiter
+    turns at least two lines into a consistent multi-column table."""
+    best: list = []
+    for delim in (",", "\t", ";", "|"):
+        rows = _modal_column_rows(_split_delimited("\n".join(lines), delim))
+        if len(rows) >= 2 and len(rows) > len(best):
+            best = rows
+    return best
+
+
+def _parse_tabular_text(content: str) -> list[list[str]]:
+    """Spreadsheet rows taken from model output: the table, never the prose
+    around it.
+
+    Order: a fenced data block, then a markdown table anywhere in the reply, then
+    delimited text (sniffed, and filtered to the rows that split consistently so
+    surrounding sentences drop out), and only when nothing multi-column exists,
+    every line as a single column.
+    """
+    lines = [l.strip() for l in content.strip().splitlines() if l.strip()]
+    if not lines:
+        return []
+    blocks = _fenced_blocks(content)
+
+    # 1. a ```csv / ```markdown / bare ``` data block - but never a code block
+    for lang, body in blocks:
+        if lang in _CODE_FENCE_LANGS or not body.strip() or _looks_like_code(body):
+            continue
+        body_lines = [l.strip() for l in body.splitlines() if l.strip()]
+        rows = _markdown_table_rows(body_lines) or _sniff_delimited(body_lines)
         if rows:
             return rows
 
-    # Sniff the delimiter (comma, tab, semicolon, or pipe) rather than
-    # assuming comma - models frequently emit tab- or semicolon-separated
-    # rows, which a comma-only csv.reader collapses into a single column.
-    import csv
-    import io
-    header = lines[0]
-    candidates = [",", "\t", ";", "|"]
-    counts = {d: header.count(d) for d in candidates}
-    best = max(counts, key=counts.get)
-    if counts[best] > 0:
-        try:
-            reader = csv.reader(io.StringIO(content), delimiter=best)
-            rows = [[c.strip() for c in row] for row in reader if any(c.strip() for c in row)]
-            if rows and len(rows[0]) > 1:
-                return rows
-        except Exception:
-            pass
+    # 2. a markdown table with a |---|---| separator, wherever it appears
+    rows = _markdown_table_rows(lines)
+    if rows:
+        return rows
 
-    return [[l] for l in lines]
+    # 3. delimited text: rows that do not split the same way are prose
+    rows = _sniff_delimited(lines)
+    if rows:
+        return rows
 
-
-def _save_text_as_excel(p: Path, content: str) -> bool:
-    try:
-        import openpyxl
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Sheet1"
-        rows = _parse_tabular_text(content)
-        if not rows:
-            return False
-        for r_idx, row in enumerate(rows, start=1):
-            for c_idx, val in enumerate(row, start=1):
-                val_clean = str(val).strip()
-                if val_clean.lower() == "true":
-                    ws.cell(row=r_idx, column=c_idx, value=True)
-                elif val_clean.lower() == "false":
-                    ws.cell(row=r_idx, column=c_idx, value=False)
-                else:
-                    # Strip leading currency symbols or trailing % for numeric cell values
-                    v_num = val_clean.replace("$", "").replace("€", "").replace("£", "").replace(",", "").strip()
-                    try:
-                        if "." in v_num:
-                            ws.cell(row=r_idx, column=c_idx, value=float(v_num))
-                        else:
-                            ws.cell(row=r_idx, column=c_idx, value=int(v_num))
-                    except ValueError:
-                        ws.cell(row=r_idx, column=c_idx, value=val_clean)
-        wb.save(str(p))
-        return True
-    except Exception as e:
-        print(f"[_save_text_as_excel error: {e}]", file=sys.stderr)
-        return False
-
-
-def _create_default_excel(p: Path, content: str = "") -> bool:
-    try:
-        import openpyxl
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Sheet1"
-        rows = _parse_tabular_text(content) if content else []
-        if not rows or len(rows) < 1:
-            ws.append(["Item ID", "Name", "Category", "Quantity", "Price", "Status"])
-            ws.append([1, "Item Alpha", "General", 10, 25.50, "Active"])
-            ws.append([2, "Item Beta", "Hardware", 5, 149.99, "In Stock"])
-            ws.append([3, "Item Gamma", "Software", 20, 79.00, "Active"])
-            ws.append([4, "Item Delta", "Services", 2, 500.00, "Complete"])
-        else:
-            for row in rows:
-                ws.append(row)
-        wb.save(str(p))
-        return True
-    except Exception as e:
-        print(f"[_create_default_excel error: {e}]", file=sys.stderr)
-        return False
+    # 4. nothing multi-column: one column of lines, minus fence markers. A reply
+    #    whose only body is code is an answer, not data - return [] so the caller
+    #    reports "no tabular data" instead of saving one code line per row.
+    if any(lang in _CODE_FENCE_LANGS or _looks_like_code(body) for lang, body in blocks):
+        return []
+    return [[l] for l in lines if not l.startswith("```")]
 
 
 def _find_chromium_binary() -> Optional[str]:
@@ -924,9 +948,11 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
             tmp_html
         ]
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
-        if res.returncode == 0 and os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
-            return True
-        return False
+        if res.returncode != 0:
+            print(f"[_render_html_to_pdf] browser exited {res.returncode}: "
+                  f"{(res.stderr or '').strip()[:300]}", file=sys.stderr)
+            return False
+        return _pdf_looks_valid(Path(abs_pdf))
     except Exception as e:
         print(f"[_render_html_to_pdf browser error: {e}]", file=sys.stderr)
         return False
@@ -937,394 +963,38 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
         except Exception:
             pass
 
-def generate_fresh_dashboard_html(title: str, summary: str = "") -> str:
-    """Generate a modern, self-contained interactive dashboard HTML file with Chart.js,
-    KPI summary cards, interactive charts, and responsive data tables."""
-    clean_title = (title or "Analytics Dashboard").replace("_", " ").replace("-", " ").strip()
-    if not clean_title.lower().endswith("dashboard") and not clean_title.lower().endswith("html"):
-        clean_title += " Dashboard"
-    clean_title = clean_title.replace(".Html", "").replace(".html", "").title()
-    desc = summary.strip() or f"Comprehensive interactive dashboard for {clean_title} with real-time KPI metrics and financial analysis."
-    import re as _re
-    desc_clean = _re.sub(r'\[DOWNLOAD:[^\]]+\]', '', desc).strip()
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{clean_title}</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<style>
-  :root {{
-    --bg: #0b0f19;
-    --card: #151d30;
-    --card-border: #222f4c;
-    --accent: #38bdf8;
-    --accent-glow: rgba(56, 189, 248, 0.15);
-    --green: #34d399;
-    --amber: #fbbf24;
-    --purple: #a855f7;
-    --text: #f1f5f9;
-    --text-dim: #94a3b8;
-  }}
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    padding: 24px;
-    line-height: 1.5;
-  }}
-  .header {{
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-bottom: 20px;
-    border-bottom: 1px solid var(--card-border);
-    margin-bottom: 24px;
-    flex-wrap: wrap;
-    gap: 12px;
-  }}
-  .title-group h1 {{
-    font-size: 24px;
-    font-weight: 700;
-    color: #fff;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }}
-  .title-group p {{
-    font-size: 13px;
-    color: var(--text-dim);
-    margin-top: 4px;
-    max-width: 900px;
-  }}
-  .badge {{
-    background: var(--accent-glow);
-    color: var(--accent);
-    border: 1px solid rgba(56,189,248,0.3);
-    padding: 4px 10px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 600;
-  }}
-  .grid-kpi {{
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 16px;
-    margin-bottom: 24px;
-  }}
-  .kpi-card {{
-    background: var(--card);
-    border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 18px;
-    transition: transform 0.2s, border-color 0.2s;
-  }}
-  .kpi-card:hover {{
-    transform: translateY(-2px);
-    border-color: var(--accent);
-  }}
-  .kpi-label {{
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-dim);
-    margin-bottom: 8px;
-  }}
-  .kpi-val {{
-    font-size: 28px;
-    font-weight: 800;
-    color: #fff;
-  }}
-  .kpi-sub {{
-    font-size: 12px;
-    margin-top: 6px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }}
-  .up {{ color: var(--green); }}
-  .chart-grid {{
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-    gap: 20px;
-    margin-bottom: 24px;
-  }}
-  .chart-card {{
-    background: var(--card);
-    border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 20px;
-  }}
-  .chart-title {{
-    font-size: 15px;
-    font-weight: 700;
-    margin-bottom: 14px;
-    color: #fff;
-  }}
-  .table-card {{
-    background: var(--card);
-    border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 20px;
-    overflow-x: auto;
-  }}
-  table {{
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13.5px;
-    text-align: left;
-  }}
-  th {{
-    background: rgba(255,255,255,0.03);
-    padding: 12px 14px;
-    color: var(--text-dim);
-    font-weight: 600;
-    border-bottom: 1px solid var(--card-border);
-  }}
-  td {{
-    padding: 12px 14px;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
-  }}
-  tr:hover td {{
-    background: rgba(255,255,255,0.02);
-  }}
-  .tag-ok {{
-    background: rgba(52,211,153,0.15);
-    color: var(--green);
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11.5px;
-    font-weight: 600;
-  }}
-</style>
-</head>
-<body>
-  <div class="header">
-    <div class="title-group">
-      <h1>📊 {clean_title}</h1>
-      <p>{desc_clean[:300]}</p>
-    </div>
-    <span class="badge">● Live Interactive Report</span>
-  </div>
-
-  <div class="grid-kpi">
-    <div class="kpi-card">
-      <div class="kpi-label">Total Asset Base</div>
-      <div class="kpi-val">$5.82B</div>
-      <div class="kpi-sub up">▲ +12.4% vs prev quarter</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Net Interest Margin (NIM)</div>
-      <div class="kpi-val">3.84%</div>
-      <div class="kpi-sub up">▲ +18 bps improvement</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Non-Performing Loans (NPL)</div>
-      <div class="kpi-val">1.42%</div>
-      <div class="kpi-sub" style="color:var(--green);">● Well below risk ceiling (3.5%)</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">ESG &amp; Capital Adequacy</div>
-      <div class="kpi-val">16.8%</div>
-      <div class="kpi-sub" style="color:var(--accent);">Tier-1 ratio compliant (CAR)</div>
-    </div>
-  </div>
-
-  <div class="chart-grid">
-    <div class="chart-card">
-      <div class="chart-title">Quarterly Asset &amp; Deposit Growth Trend ($B)</div>
-      <canvas id="growthChart" height="220"></canvas>
-    </div>
-    <div class="chart-card">
-      <div class="chart-title">Portfolio Distribution by Segment</div>
-      <canvas id="distChart" height="220"></canvas>
-    </div>
-  </div>
-
-  <div class="table-card">
-    <div class="chart-title" style="margin-bottom:12px;">Comparative Portfolio Analysis</div>
-    <table>
-      <thead>
-        <tr>
-          <th>Institution / Division</th>
-          <th>Total Assets</th>
-          <th>Net Deposit Base</th>
-          <th>Capital Adequacy (CAR)</th>
-          <th>NPL Ratio</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><b>City Bank PLC (Corporate Core)</b></td>
-          <td>$3.24B</td>
-          <td>$2.85B</td>
-          <td>17.2%</td>
-          <td>1.28%</td>
-          <td><span class="tag-ok">Optimal</span></td>
-        </tr>
-        <tr>
-          <td><b>Retail &amp; Consumer Banking</b></td>
-          <td>$1.45B</td>
-          <td>$1.32B</td>
-          <td>16.5%</td>
-          <td>1.54%</td>
-          <td><span class="tag-ok">Healthy</span></td>
-        </tr>
-        <tr>
-          <td><b>SME &amp; Micro-Enterprise</b></td>
-          <td>$0.72B</td>
-          <td>$0.61B</td>
-          <td>15.8%</td>
-          <td>1.75%</td>
-          <td><span class="tag-ok">Stable</span></td>
-        </tr>
-        <tr>
-          <td><b>Treasury &amp; Capital Markets</b></td>
-          <td>$0.41B</td>
-          <td>$0.38B</td>
-          <td>18.4%</td>
-          <td>0.82%</td>
-          <td><span class="tag-ok">Optimal</span></td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-
-  <script>
-    const ctx1 = document.getElementById('growthChart').getContext('2d');
-    new Chart(ctx1, {{
-      type: 'line',
-      data: {{
-        labels: ['Q1 2025', 'Q2 2025', 'Q3 2025', 'Q4 2025', 'Q1 2026 (YTD)'],
-        datasets: [
-          {{ label: 'Total Assets ($B)', data: [4.8, 5.1, 5.35, 5.62, 5.82], borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.15)', fill: true, tension: 0.3 }},
-          {{ label: 'Net Deposits ($B)', data: [4.2, 4.45, 4.7, 4.98, 5.16], borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3 }}
-        ]
-      }},
-      options: {{
-        responsive: true,
-        plugins: {{ legend: {{ labels: {{ color: '#94a3b8' }} }} }},
-        scales: {{
-          x: {{ grid: {{ color: '#222f4c' }}, ticks: {{ color: '#94a3b8' }} }},
-          y: {{ grid: {{ color: '#222f4c' }}, ticks: {{ color: '#94a3b8' }} }}
-        }}
-      }}
-    }});
-
-    const ctx2 = document.getElementById('distChart').getContext('2d');
-    new Chart(ctx2, {{
-      type: 'doughnut',
-      data: {{
-        labels: ['Corporate Banking', 'Retail & Consumer', 'SME Lending', 'Treasury & Forex'],
-        datasets: [{{
-          data: [52, 25, 15, 8],
-          backgroundColor: ['#38bdf8', '#34d399', '#fbbf24', '#a855f7'],
-          borderWidth: 0
-        }}]
-      }},
-      options: {{
-        responsive: true,
-        plugins: {{ legend: {{ position: 'bottom', labels: {{ color: '#94a3b8' }} }} }}
-      }}
-    }});
-  </script>
-</body>
-</html>"""
-
-
-def _save_text_as_pptx(p: Path, content: str) -> bool:
+def _pdf_looks_valid(p: Path) -> bool:
+    """True only for a real PDF: present, non-empty, headed %PDF-. A renderer that
+    writes escaped HTML source or a truncated body into the .pdf path is a failure,
+    not a deliverable."""
     try:
-        from pptx import Presentation
-        from pptx.util import Inches, Pt
-        from pptx.dml.color import RGBColor
-
-        prs = Presentation()
-        prs.slide_width = Inches(13.333)
-        prs.slide_height = Inches(7.5)
-        blank_slide_layout = prs.slide_layouts[6]
-
-        raw_slides = []
-        cur = {"title": "", "bullets": [], "text": []}
-        for line in content.strip().splitlines():
-            sline = line.strip()
-            if sline.startswith("---") or (sline.startswith("# ") and (cur["title"] or cur["bullets"] or cur["text"])):
-                if cur["title"] or cur["bullets"] or cur["text"]:
-                    raw_slides.append(cur)
-                cur = {"title": sline[2:].strip() if sline.startswith("# ") else "", "bullets": [], "text": []}
-            elif sline.startswith("# "):
-                cur["title"] = sline[2:].strip()
-            elif sline.startswith("## ") and not cur["title"]:
-                cur["title"] = sline[3:].strip()
-            elif sline.startswith("- ") or sline.startswith("* "):
-                cur["bullets"].append(sline[2:].strip())
-            elif sline:
-                cur["text"].append(sline)
-        if cur["title"] or cur["bullets"] or cur["text"]:
-            raw_slides.append(cur)
-
-        if not raw_slides:
-            raw_slides = [{"title": p.stem.replace("_", " ").title(), "bullets": ["Generated by Autonomous Agent"], "text": []}]
-
-        for idx, sdata in enumerate(raw_slides):
-            slide = prs.slides.add_slide(blank_slide_layout)
-            title_box = slide.shapes.add_textbox(Inches(0.8), Inches(0.6), Inches(11.7), Inches(1.2))
-            tf = title_box.text_frame
-            tf.word_wrap = True
-            p_title = tf.paragraphs[0]
-            p_title.text = sdata["title"] or f"Slide {idx + 1}"
-            p_title.font.size = Pt(30)
-            p_title.font.bold = True
-            p_title.font.color.rgb = RGBColor(30, 64, 175)
-
-            content_box = slide.shapes.add_textbox(Inches(0.8), Inches(2.0), Inches(11.7), Inches(4.8))
-            ctf = content_box.text_frame
-            ctf.word_wrap = True
-
-            first = True
-            for b in sdata["bullets"]:
-                bp = ctf.paragraphs[0] if first else ctf.add_paragraph()
-                first = False
-                bp.text = f"• {b}"
-                bp.font.size = Pt(20)
-                bp.space_after = Pt(12)
-                bp.font.color.rgb = RGBColor(51, 65, 85)
-
-            for t in sdata["text"]:
-                tp = ctf.paragraphs[0] if first else ctf.add_paragraph()
-                first = False
-                tp.text = t
-                tp.font.size = Pt(18)
-                tp.space_after = Pt(10)
-                tp.font.color.rgb = RGBColor(71, 85, 105)
-
-        prs.save(str(p))
-        return True
-    except Exception as e:
-        print(f"[_save_text_as_pptx error: {e}]", file=sys.stderr)
+        return p.is_file() and p.stat().st_size > 0 and p.read_bytes()[:5] == b"%PDF-"
+    except OSError:
         return False
 
 
 def _save_text_or_markdown_as_pdf(p: Path, content: str) -> bool:
     try:
-        # Check if already a PDF binary
-        if content.startswith("%PDF-") or (isinstance(content, bytes) and content.startswith(b"%PDF-")):
-            if isinstance(content, str):
-                p.write_bytes(content.encode("latin1", errors="replace"))
-            else:
-                p.write_bytes(content)
-            return True
+        # Content already is PDF bytes (str form, latin1-encoded by the caller)
+        if isinstance(content, str) and content.startswith("%PDF-"):
+            p.write_bytes(content.encode("latin1", errors="replace"))
+            return _pdf_looks_valid(p)
+        if isinstance(content, bytes) and content.startswith(b"%PDF-"):
+            p.write_bytes(content)
+            return _pdf_looks_valid(p)
 
-        # Determine if content is already an HTML document
+        # An HTML document has to be rendered by the browser. Falling through to the
+        # markdown path would only escape its markup and emit a PDF of the HTML
+        # source - a wrong document reported as a correct one.
         c_low = content.strip().lower()
         if c_low.startswith("<!doctype html") or "<html" in c_low[:200]:
-            rendered = _render_html_to_pdf(content, p)
-            if rendered:
+            if _render_html_to_pdf(content, p):
                 return True
+            reason = ("no Chrome/Edge is installed to render HTML to PDF"
+                      if not _find_chromium_binary() else "the headless browser render failed")
+            print(f"[_save_text_or_markdown_as_pdf] {reason}", file=sys.stderr)
+            return False
 
         # Check if requested as slides or presentation
         stem_low = p.stem.lower()
@@ -1335,9 +1005,10 @@ def _save_text_or_markdown_as_pdf(p: Path, content: str) -> bool:
         html_dom = _markdown_to_html_dom(content, title=doc_title, is_slides=is_slides)
 
         # Step 2: Render HTML DOM to PDF via Headless Chromium/Edge
-        rendered = _render_html_to_pdf(html_dom, p)
-        if rendered:
+        if _render_html_to_pdf(html_dom, p):
             return True
+
+        # Step 3: ReportLab fallback for markdown when no browser is available
 
         # Fallback to ReportLab if headless browser is unavailable
         from reportlab.lib.pagesizes import letter
@@ -1412,10 +1083,14 @@ def _save_text_or_markdown_as_pdf(p: Path, content: str) -> bool:
             story.append(Paragraph("<br/>".join(code_buf), code_style))
 
         if not story:
-            story.append(Paragraph("Empty Document", normal))
+            # nothing to render: a PDF containing a single "Empty Document" line is
+            # a fabricated deliverable, so fail and let the caller report it
+            print("[_save_text_or_markdown_as_pdf] content produced no document elements",
+                  file=sys.stderr)
+            return False
 
         doc.build(story)
-        return True
+        return _pdf_looks_valid(p)
     except Exception as e:
         print(f"[_save_text_or_markdown_as_pdf error: {e}]", file=sys.stderr)
         return False
@@ -1459,34 +1134,55 @@ def tool_write_file_common(args: dict) -> str:
     try:
         doc_ops._check_ops_for_pan([{"op": "write", "content": content}])
     except DocOpError as e:
-        return f"write refused: {e}"
+        return f"error: write refused: {e}"
     sfx = suffix.lower()
     spec = None
 
     # Handle .xlsx / .xls conversion if structured text data is provided
     if sfx in (".xlsx", ".xls"):
-        saved = _save_text_as_excel(p, content)
-        if not saved:
-            _create_default_excel(p, content)
+        if not content.strip():
+            return ("error: refusing to create an empty spreadsheet - provide the data rows. "
+                    "A spreadsheet is never filled with placeholder rows.")
+        if sfx == ".xls":
+            # openpyxl writes OOXML only: naming zip bytes ".xls" is what makes Excel
+            # warn about a mismatched extension, so publish the real format instead
+            p = p.with_suffix(".xlsx")
+            unique_path_arg = p.name
+        try:
+            data, spec = doc_ops.create(p.name, content)
+        except DocOpError as e:
+            return f"error: {e}"
+        p.write_bytes(data)
         msg = f"Wrote Excel file to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
 
     # PowerPoint / Word: built on real layouts and styles so doc_edit can later
     # change one slide or paragraph without regenerating the rest
     elif sfx in (".pptx", ".ppt", ".docx", ".doc"):
+        if not content.strip():
+            return ("error: refusing to create an empty document - provide the content "
+                    "(markdown; slides split by '---' or a leading '# ').")
         if sfx in (".ppt", ".doc"):
             p = p.with_suffix(sfx + "x")
             unique_path_arg = p.name
         try:
             data, spec = doc_ops.create(p.name, content)
         except DocOpError as e:
-            return f"doc error: {e}"
+            return f"error: {e}"
         p.write_bytes(data)
         kind = "PowerPoint presentation" if p.suffix == ".pptx" else "Word document"
         msg = f"Wrote {kind} to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
 
     # Handle .pdf conversion if writing to a PDF file (via HTML DOM first)
     elif sfx == ".pdf":
-        _save_text_or_markdown_as_pdf(p, content)
+        if not content.strip():
+            return ("error: refusing to create an empty PDF - provide the document content "
+                    "(markdown or an HTML document).")
+        if not _save_text_or_markdown_as_pdf(p, content):
+            if p.is_file():
+                p.unlink()   # never leave a half-written or bogus container behind
+            return ("error: the PDF could not be compiled (Chrome/Edge missing or the render "
+                    "failed), so nothing was saved. Send the document as markdown instead of "
+                    "HTML, or try again.")
         spec = content   # PDF edits patch this markdown and re-render
         msg = f"Wrote compiled PDF document to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
 

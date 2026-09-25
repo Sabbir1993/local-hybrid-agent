@@ -132,6 +132,7 @@ async function runAgentSSE(text) {
           max_tokens: (() => { const mt = getSamplingConfig().maxtok; return (isNaN(mt) || mt <= 0) ? -1 : mt; })(),
           attachments: docAttachments,
           cloud_model_override: cloudModelOverride || undefined,
+          reasoning_effort: typeof getReasoningEffort === 'function' ? getReasoningEffort() : undefined,
         }),
         signal: jobCtrl.signal,
       });
@@ -159,6 +160,10 @@ async function runAgentSSE(text) {
             L.runId = d.run_id;   // routing telemetry id -> thumbs up/down feedback
           }
           else if (ev === 'step') {
+            if (L._curThought) {
+              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
+              L._curThought = null;
+            }
             L.acts.push({ type: 'step', ...d });
             L.statusText = d.step ? `Planning step ${d.step}...` : 'Planning next step...';
           }
@@ -169,19 +174,33 @@ async function runAgentSSE(text) {
             L.modelProvider = d.provider;
           }
           else if (ev === 'thought') {
-            L.acts.push({ type: 'thought', ...d });
+            if (L._curThought) {
+              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
+              L._curThought = null;
+            }
+            L.acts.push({ type: 'thought', duration_s: d.duration_s || 2, ...d });
             L.statusText = 'Synthesizing strategy...';
             if (typeof window.setLiveHud === 'function') {
               window.setLiveHud({ phase: 'thinking', text: 'Synthesizing strategy...' });
             }
           }
           else if (ev === 'thought_delta') {
+            if (!L._curThought) {
+              L._curThought = { type: 'thought', text: '', t0: performance.now(), step: d.step, model: d.model };
+              L.acts.push(L._curThought);
+            }
+            L._curThought.text += (d.delta || '');
+            L._curThought.duration_s = Math.max(1, Math.floor((performance.now() - L._curThought.t0) / 1000));
             L.reasoning = (L.reasoning || '') + (d.delta || '');
             if (typeof window.setLiveHud === 'function') {
               window.setLiveHud({ phase: 'thinking', text: 'Thinking & analyzing...' });
             }
           }
           else if (ev === 'tool_preparing') {
+            if (L._curThought) {
+              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
+              L._curThought = null;
+            }
             const p = d.path ? d.path.split(/[\\/]/).pop() : '';
             const actionVerb = d.name === 'write_file' ? 'Preparing to write' : (d.name === 'edit_file' ? 'Preparing to edit' : `Preparing ${d.name}`);
             const label = p ? `${actionVerb} ${p}...` : `${actionVerb}...`;
@@ -198,6 +217,10 @@ async function runAgentSSE(text) {
             }
           }
           else if (ev === 'tool_call') {
+            if (L._curThought) {
+              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
+              L._curThought = null;
+            }
             // If the model was streaming its preamble before calling a tool, keep it as thought/reasoning or preamble
             L.acts.push({ type: 'tool_call', ...d });
             const toolLabel = (typeof formatToolStatus === 'function') ? formatToolStatus(d.name, d.args) : (`Running ${d.name}...`);
@@ -274,6 +297,10 @@ async function runAgentSSE(text) {
           }
           else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd);
           else if (ev === 'delta') {
+            if (L._curThought) {
+              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
+              L._curThought = null;
+            }
             if (L._resetPrev != null) {
               // after a delta_reset: keep the earlier text as reasoning only when the
               // replacement is genuinely different (a cleaned-up copy would duplicate it)
@@ -330,6 +357,10 @@ async function runAgentSSE(text) {
             if (d.prompt_tokens) L.promptTokens = d.prompt_tokens;
           }
           else if (ev === 'done') {
+            if (L._curThought) {
+              L._curThought.duration_s = Math.max(1, Math.round((performance.now() - L._curThought.t0) / 1000));
+              L._curThought = null;
+            }
             // run ended early (step cap or loop stop): keep why, so the bubble can offer Continue
             if (d.reason) {
               if (!L.acts) L.acts = [];

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import csv_ops, docx_ops, md_ops, pptx_ops, xlsx_ops
-from .base import MACRO_EXTS, DocOpError, check_size
+from .base import MACRO_EXTS, DocOpError, check_size, require
 
 EDITABLE = {".pptx": pptx_ops, ".xlsx": xlsx_ops, ".csv": csv_ops, ".docx": docx_ops, ".md": md_ops}
 LEGACY = {".ppt": ".pptx", ".xls": ".xlsx", ".doc": ".docx"}
@@ -188,9 +188,12 @@ def edit(data: bytes, name: str, ops, source_spec: Optional[str] = None) -> Edit
 # ------------------------------------------------------------------
 
 def _rows_from_text(content: str) -> list[list]:
+    """Rows for a new spreadsheet. _parse_tabular_text already returns one column
+    of lines when nothing multi-column exists, or [] when the content is code -
+    so its answer is authoritative: overriding it here used to put prose and code
+    back into the sheet."""
     from ..agent_tools import _parse_tabular_text
-    rows = _parse_tabular_text(content)
-    return rows or [[line] for line in content.splitlines() if line.strip()]
+    return _parse_tabular_text(content)
 
 
 def render_pdf(md: str, title: str = "document") -> bytes:
@@ -226,9 +229,15 @@ def create(name: str, content: str, template: Optional[bytes] = None) -> tuple[b
     if ext == ".docx":
         return docx_ops.create(content, title=title), content
     if ext == ".xlsx":
-        return xlsx_ops.create(_rows_from_text(content)), content
+        rows = _rows_from_text(content)
+        require(rows, "no tabular data found in the content - a spreadsheet needs rows "
+                      "(a markdown table or delimited rows), not prose or code")
+        return xlsx_ops.create(rows), content
     if ext == ".csv":
-        return csv_ops.create(_rows_from_text(content)), None
+        rows = _rows_from_text(content)
+        require(rows, "no tabular data found in the content - a CSV needs rows "
+                      "(a markdown table or delimited rows), not prose or code")
+        return csv_ops.create(rows), None
     if ext == ".pdf":
         return render_pdf(content, title), content
     raise DocOpError(f"cannot create {ext} documents")

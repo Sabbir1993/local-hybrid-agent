@@ -238,230 +238,261 @@ function agentContinue() {
   if (typeof send === 'function') send(AGENT_CONTINUE_PROMPT);
 }
 
-function agentActsHtml(acts) {
-  if (!acts || !acts.length) return '';
-  const steps = parseStepsFromActs(acts);
-  if (!steps.length) return '';
+function buildChronologicalStream(acts) {
+  if (!acts || !acts.length) return [];
+  const stream = [];
+  const toolMap = new Map();
 
-  const allTools = [];
-  const thoughts = [];
-  steps.forEach(s => {
-    if (s.thought && s.thought.trim()) thoughts.push(s.thought.trim());
-    s.tools.forEach(t => allTools.push({
-      ...t,
-      step: s.step,
-      lane: s.lane,
-      thought: s.thought ? s.thought.trim() : ''
-    }));
+  acts.forEach(a => {
+    if (a.type === 'thought' || a.type === 'reasoning') {
+      const text = (a.text || '').trim();
+      if (!text) return;
+      const last = stream[stream.length - 1];
+      if (last && last.type === 'thought' && !last.finalized) {
+        last.text += '\n\n' + text;
+        if (a.duration_s) last.duration_s = Math.max(last.duration_s || 1, a.duration_s);
+      } else {
+        stream.push({
+          type: 'thought',
+          text: text,
+          duration_s: a.duration_s || a.secs || 2,
+          step: a.step,
+          model: a.model || ''
+        });
+      }
+    } else if (a.type === 'tool_call') {
+      const last = stream[stream.length - 1];
+      if (last && last.type === 'thought') last.finalized = true;
+
+      const toolItem = {
+        type: 'tool',
+        id: a.id,
+        name: a.name,
+        args: a.args || {},
+        model: a.model || '',
+        device: a.device || '',
+        result: null,
+        ok: true,
+        diff: null,
+        verify: null
+      };
+      if (a.id) toolMap.set(a.id, toolItem);
+      toolMap.set(a.name, toolItem);
+      stream.push(toolItem);
+    } else if (a.type === 'tool_result') {
+      let match = (a.id && toolMap.get(a.id)) || toolMap.get(a.name);
+      if (!match) {
+        for (let i = stream.length - 1; i >= 0; i--) {
+          if (stream[i].type === 'tool' && stream[i].result === null) {
+            match = stream[i];
+            break;
+          }
+        }
+      }
+      if (match) {
+        match.result = a.result;
+        match.ok = a.ok !== false;
+        if (a.diff) match.diff = a.diff;
+      } else {
+        stream.push({
+          type: 'tool',
+          id: a.id,
+          name: a.name,
+          args: {},
+          result: a.result,
+          ok: a.ok !== false,
+          diff: a.diff
+        });
+      }
+    } else if (a.type === 'verify') {
+      const match = (a.id && toolMap.get(a.id)) || toolMap.get(a.name);
+      if (match) match.verify = a;
+    }
   });
 
-  if (allTools.length === 0 && thoughts.length === 0) return '';
+  return stream;
+}
 
-  const totalOps = allTools.length;
-  const isAllDone = totalOps > 0 && allTools.every(t => t.result !== null);
-  const hasFailed = allTools.some(t => t.result !== null && !t.ok);
-
-  // Count files & searches for header summary like: "Exploring 14 files, 3 searches"
-  const fileOps = allTools.filter(t => ['read_file', 'write_file', 'edit_file'].includes(t.name));
-  const webOps = allTools.filter(t => ['web_search', 'web_fetch', 'web_search_images'].includes(t.name));
-  const searchOps = allTools.filter(t => ['grep', 'list_files', 'search_memory', 'search_knowledge_base'].includes(t.name));
-  const otherOps = allTools.filter(t => !['read_file', 'write_file', 'edit_file', 'grep', 'list_files', 'web_search', 'web_fetch', 'web_search_images', 'search_memory', 'search_knowledge_base'].includes(t.name));
-
-  const summaryParts = [];
-  if (webOps.length > 0) summaryParts.push(`${webOps.length} web search${webOps.length !== 1 ? 'es' : ''}`);
-  if (fileOps.length > 0) summaryParts.push(`${fileOps.length} file${fileOps.length !== 1 ? 's' : ''}`);
-  if (searchOps.length > 0) summaryParts.push(`${searchOps.length} search${searchOps.length !== 1 ? 'es' : ''}`);
-  if (otherOps.length > 0) summaryParts.push(`${otherOps.length} action${otherOps.length !== 1 ? 's' : ''}`);
-  if (summaryParts.length === 0) summaryParts.push(`${totalOps} step${totalOps !== 1 ? 's' : ''}`);
-
-  const summaryTitle = isAllDone ? `Completed ${summaryParts.join(', ')}` : `Running ${summaryParts.join(', ')}`;
-
-  let h = '<div class="agy-agent-container">';
-  h += `<details class="agy-agent-drawer" open>
-    <summary class="agy-agent-summary">
-      <div class="agy-summary-left">
-        <span class="agy-summary-pulse ${hasFailed ? 'err' : (isAllDone ? 'done' : 'active')}"></span>
-        <span>${esc(summaryTitle)}</span>
-      </div>
-      <span class="agy-summary-chevron">▼</span>
+function renderThoughtCard(item, isRunning) {
+  const duration = item.duration_s ? Math.max(1, Math.round(item.duration_s)) : 2;
+  const title = isRunning ? `Thinking (${duration}s)...` : `Thought for ${duration}s`;
+  return `<details class="codex-thought-card">
+    <summary class="codex-thought-head">
+      <span class="codex-thought-icon">🧠</span>
+      <span class="codex-thought-title">${esc(title)}</span>
+      <span class="codex-chevron">▾</span>
     </summary>
-    <div class="agy-steps-list">`;
+    <div class="codex-thought-body">${esc(item.text).replace(/\n/g, '<br>')}</div>
+  </details>`;
+}
 
-  // Render individual action items in the Antigravity list format
-  allTools.forEach(t => {
-    let p = t.args.path || t.args.file || t.args.filename;
-    if (!p && t.args.raw) {
-      const m = t.args.raw.match(/"(?:path|file|filename)"\s*:\s*"([^"]+)"/);
-      if (m) p = m[1];
-    }
+function renderCommandCard(t, isItemRunning) {
+  const isRunning = t.result === null;
+  let fullCmd = '';
+  if (t.name === 'run_python') {
+    fullCmd = (t.args.code || t.args.command || (t.args.file ? `python ${t.args.file}` : '')).trim();
+  } else {
+    fullCmd = (t.args.command || t.args.cmd || t.args.code || '').trim();
+  }
+  const shortCmd = fullCmd.split('\n')[0] || t.name;
+  const preview = shortCmd.length > 60 ? shortCmd.slice(0, 58) + '…' : shortCmd;
+  const headTitle = isRunning ? `Running command (${esc(preview)})...` : `Ran command (${esc(preview)})`;
 
-    let verb = 'Analyzed';
-    let iconClass = 'file';
-    let iconSymbol = '📄';
-    let label = esc(p || t.name);
-    let extra = '';
+  return `<details class="codex-cmd-card" open>
+    <summary class="codex-cmd-head">
+      <span class="codex-cmd-icon">&gt;_</span>
+      <span class="codex-cmd-title">${headTitle}</span>
+      <span class="agy-step-spacer"></span>
+      ${isRunning ? '<span class="agy-summary-pulse active" style="width:6px; height:6px;"></span>' : (t.ok ? '' : '<span style="color:var(--red); font-size:11px;">⚠</span>')}
+      <span class="codex-chevron">▾</span>
+    </summary>
+    <div class="codex-cmd-body">
+      <div class="codex-cmd-prompt"><span class="codex-prompt-sym">$</span> ${esc(fullCmd || shortCmd)}</div>
+      ${!isRunning ? `
+        <div class="codex-cmd-out-label">OUTPUT</div>
+        <pre class="codex-cmd-terminal"><code>${esc(t.result != null ? String(t.result).trim() : '(no output)')}</code></pre>
+      ` : `
+        <div class="codex-cmd-running"><span class="agy-summary-pulse active" style="width:6px; height:6px;"></span> Executing...</div>
+      `}
+    </div>
+  </details>`;
+}
 
-    if (t.name === 'read_file') {
-      verb = 'Analyzed';
-      iconClass = 'python';
-      iconSymbol = p && p.endsWith('.py') ? '🐍' : '📄';
-      if (t.args.start_line != null && t.args.end_line != null) {
-        extra = `<span class="agy-step-lines">#L${t.args.start_line}-${t.args.end_line}</span>`;
+function renderFileCard(t, isItemRunning) {
+  const p = t.args.path || t.args.file || t.args.filename || '';
+  const filename = p ? p.split(/[\\/]/).pop() : 'file';
+  const diff = (t.diff && (t.name === 'write_file' || t.name === 'edit_file')) ? t.diff : null;
+  const isRunning = t.result === null;
+  const isEdit = t.name === 'edit_file' || (diff && !diff.created);
+  const verb = isRunning ? (isEdit ? 'Editing file' : 'Writing file') : (isEdit ? 'Edited file' : 'Created file');
+  const icon = isEdit ? '✏️' : '💾';
+
+  let diffPill = '';
+  if (diff) {
+    if (diff.added) diffPill += `<span class="codex-diff-pill add">+${diff.added}</span> `;
+    if (diff.removed) diffPill += `<span class="codex-diff-pill del">-${diff.removed}</span>`;
+  }
+
+  const isPreviewable = p && /\.(html|htm|csv|xlsx|xls|pdf|md|py|js|ts|json|txt|svg|png|jpg|jpeg|webp|pptx)$/i.test(p);
+  const previewBtn = diff
+    ? `<button type="button" class="btn ghost agy-open-btn" data-ws-open="${esc(p)}" title="Open in project panel">↗ Open</button>`
+    : isPreviewable
+    ? `<button type="button" class="btn ghost" style="padding:1px 7px; font-size:10px; margin-left:auto; border-radius:4px;" onclick="event.stopPropagation(); openFilePreview('${esc(p).replace(/'/g, "\\'")}', '${esc(filename).replace(/'/g, "\\'")}')" title="Preview file">👁️ Preview</button>`
+    : '';
+
+  const openByDefault = !isRunning;
+
+  return `<details class="codex-file-card"${openByDefault ? ' open' : ''}>
+    <summary class="codex-file-head">
+      <span class="codex-file-icon">${icon}</span>
+      <span class="codex-file-title">${verb} <b>${esc(filename)}</b></span>
+      ${diffPill}
+      <span class="agy-step-spacer"></span>
+      ${isRunning ? '<span class="agy-summary-pulse active" style="width:6px; height:6px;"></span>' : (t.ok ? '' : '<span style="color:var(--red); font-size:11px;">⚠</span>')}
+      ${previewBtn}
+      <span class="codex-chevron">▾</span>
+    </summary>
+    <div class="codex-file-body">
+      ${p ? `<div class="codex-file-subpath">.../${esc(p)}</div>` : ''}
+      ${diff ? agentDiffHtml(diff, p) : (t.name === 'write_file' && typeof t.args.content === 'string' ? `<pre class="agy-detail-code"><code>${esc(t.args.content)}</code></pre>` : '')}
+      ${t.result !== null && !(diff && t.ok) ? `
+        <div style="font-size:10px; font-weight:700; color:var(--dim); margin:6px 0 4px; text-transform:uppercase;">Result</div>
+        <pre class="agy-detail-code" style="color:${t.ok ? 'var(--dim)' : 'var(--red)'};"><code>${esc(t.result || '(empty)')}</code></pre>
+      ` : ''}
+    </div>
+  </details>`;
+}
+
+function renderGenericToolCard(t, isItemRunning) {
+  const meta = toolMeta(t.name);
+  const isRunning = t.result === null;
+  const p = t.args.path || t.args.file || t.args.filename || '';
+  const label = esc(p || quickArgPreview(t.name, t.args) || t.name);
+
+  let extra = '';
+  if (t.name === 'read_file' && t.args.start_line != null && t.args.end_line != null) {
+    extra = `<span class="agy-step-lines">#L${t.args.start_line}-${t.args.end_line}</span>`;
+  } else if (t.name === 'grep' && t.result) {
+    const matches = (t.result.match(/\n/g) || []).length + 1;
+    extra = `<span class="agy-step-count">${matches} result${matches !== 1 ? 's' : ''}</span>`;
+  } else if (t.name === 'web_search' && t.result) {
+    const matches = (t.result.match(/https?:\/\//g) || []).length;
+    if (matches > 0) extra = `<span class="agy-step-count">${matches} sources</span>`;
+  }
+
+  const isPreviewable = p && /\.(html|htm|csv|xlsx|xls|pdf|md|py|js|ts|json|txt|svg|png|jpg|jpeg|webp|pptx)$/i.test(p);
+  const previewBtn = isPreviewable
+    ? `<button type="button" class="btn ghost" style="padding:1px 7px; font-size:10px; margin-left:auto; border-radius:4px;" onclick="event.stopPropagation(); openFilePreview('${esc(p).replace(/'/g, "\\'")}', '${esc(p).replace(/'/g, "\\'")}')" title="Preview file">👁️ Preview</button>`
+    : '';
+
+  return `<details class="codex-action-card">
+    <summary class="codex-action-head">
+      <span class="codex-action-icon">${meta.icon}</span>
+      <span class="codex-action-title"><b>${meta.verb}</b> ${label}</span>
+      ${extra}
+      <span class="agy-step-spacer"></span>
+      ${isRunning ? '<span class="agy-summary-pulse active" style="width:6px; height:6px;"></span>' : (t.ok ? '' : '<span style="color:var(--red); font-size:11px;">⚠</span>')}
+      ${previewBtn}
+      <span class="codex-chevron">▾</span>
+    </summary>
+    <div class="codex-action-body">
+      <div class="agy-detail-bar">
+        <span>${esc(t.name)} ${p ? '· ' + esc(p) : ''}</span>
+        ${t.model ? `<span style="font-family:monospace; opacity:0.8; margin-left:8px;">${esc(t.model)}</span>` : ''}
+      </div>
+      ${t.args && Object.keys(t.args).length > 0 ? `<pre class="agy-detail-code"><code>${esc(formatToolArgs(t.name, t.args))}</code></pre>` : ''}
+      ${t.result !== null ? `
+        <div style="font-size:10px; font-weight:700; color:var(--dim); margin:6px 0 4px; text-transform:uppercase;">Result</div>
+        <pre class="agy-detail-code" style="color:${t.ok ? 'var(--dim)' : 'var(--red)'};"><code>${esc(t.result || '(empty)')}</code></pre>
+      ` : ''}
+    </div>
+  </details>`;
+}
+
+function agentActsHtml(acts) {
+  if (!acts || !acts.length) return '';
+  const stream = buildChronologicalStream(acts);
+  if (!stream.length) return '';
+
+  const toolOps = stream.filter(s => s.type === 'tool');
+  const isAllDone = toolOps.length === 0 || toolOps.every(t => t.result !== null);
+
+  let h = '<div class="agy-agent-container"><div class="agy-stream-timeline">';
+
+  if (stream.length > 2) {
+    h += `<div class="codex-timeline-toolbar">
+      <span class="codex-timeline-count">${toolOps.length} action${toolOps.length !== 1 ? 's' : ''}</span>
+      <button type="button" class="btn ghost codex-toggle-all" onclick="toggleAllCodex(this)">⤡ Collapse All</button>
+    </div>`;
+  }
+
+  stream.forEach((item, idx) => {
+    const isLast = idx === stream.length - 1;
+    const isItemRunning = !isAllDone && isLast;
+    if (item.type === 'thought') {
+      h += renderThoughtCard(item, isItemRunning);
+    } else if (item.type === 'tool') {
+      const isCmd = ['run_python', 'run_command', 'shell', 'exec', 'terminal'].includes(item.name);
+      const isFile = ['edit_file', 'write_file'].includes(item.name);
+      if (isCmd) {
+        h += renderCommandCard(item, isItemRunning);
+      } else if (isFile) {
+        h += renderFileCard(item, isItemRunning);
+      } else {
+        h += renderGenericToolCard(item, isItemRunning);
       }
-    } else if (t.name === 'write_file') {
-      verb = 'Created';
-      iconClass = 'edit';
-      iconSymbol = '💾';
-      if (typeof t.args.content === 'string') {
-        const lines = t.args.content.split('\n').length;
-        extra = `<span class="agy-step-lines">(${lines} lines)</span>`;
-      }
-    } else if (t.name === 'edit_file') {
-      verb = 'Edited';
-      iconClass = 'edit';
-      iconSymbol = '✏️';
-    } else if (t.name === 'grep') {
-      verb = 'Searched';
-      iconClass = 'search';
-      iconSymbol = '🔍';
-      label = esc(t.args.query || t.args.pattern || 'pattern');
-      if (t.result) {
-        const matches = (t.result.match(/\\n/g) || []).length + 1;
-        extra = `<span class="agy-step-count">${matches} result${matches !== 1 ? 's' : ''}</span>`;
-      }
-    } else if (t.name === 'search_knowledge_base') {
-      verb = 'Searched KB';
-      iconClass = 'search';
-      iconSymbol = '🏢';
-      label = esc(t.args.query || 'company knowledge');
-    } else if (t.name === 'search_memory') {
-      verb = 'Searched memory';
-      iconClass = 'search';
-      iconSymbol = '🧠';
-      label = esc(t.args.query || 'memory');
-    } else if (t.name === 'list_files') {
-      verb = 'Listed';
-      iconClass = 'file';
-      iconSymbol = '📁';
-      label = esc(t.args.path || 'workspace');
-    } else if (t.name === 'run_python') {
-      verb = 'Executed';
-      iconClass = 'python';
-      iconSymbol = '⚡';
-      label = esc(t.args.file || (t.args.code ? t.args.code.slice(0, 30) + '…' : 'python code'));
-    } else if (t.name === 'create_plan') {
-      verb = 'Planned';
-      iconClass = 'plan';
-      iconSymbol = '📋';
-      label = `${(t.args.items && t.args.items.length) || '?'} steps`;
-    } else if (t.name === 'update_plan_item') {
-      verb = 'Plan update';
-      iconClass = 'plan';
-      iconSymbol = '✔️';
-      label = `step ${esc(String(t.args.item != null ? t.args.item : '?'))} → ${esc(String(t.args.status || ''))}`;
-    } else if (t.name === 'get_plan') {
-      verb = 'Checked plan';
-      iconClass = 'plan';
-      iconSymbol = '🗒️';
-      label = 'plan status';
-    } else if (t.name === 'web_search') {
-      verb = 'Searched web';
-      iconClass = 'search';
-      iconSymbol = '🌐';
-      label = esc(t.args.query || t.args.q || 'web query');
-      if (t.result) {
-        const matches = (t.result.match(/https?:\/\//g) || []).length;
-        if (matches > 0) extra = `<span class="agy-step-count">${matches} source${matches !== 1 ? 's' : ''}</span>`;
-      }
-    } else if (t.name === 'web_search_images') {
-      verb = 'Searched images';
-      iconClass = 'file';
-      iconSymbol = '🖼️';
-      label = esc(t.args.query || t.args.q || 'image query');
-      if (t.result) {
-        const matches = (t.result.match(/https?:\/\//g) || []).length;
-        if (matches > 0) extra = `<span class="agy-step-count">${matches} image${matches !== 1 ? 's' : ''}</span>`;
-      }
-    } else if (t.name === 'web_fetch') {
-      verb = 'Fetched page';
-      iconClass = 'file';
-      iconSymbol = '🔗';
-      label = esc(t.args.url || 'web page');
-    } else if (t.name === 'spawn_agent') {
-      verb = 'Delegated';
-      iconClass = 'subagent';
-      iconSymbol = '🤖';
-      label = esc((t.args.role ? `${t.args.role} sub-agent: ` : 'sub-agent: ') + (t.args.task || '').slice(0, 50));
     }
-
-    const isRunning = t.result === null;
-
-    // Agent Task writes carry a diff: the file lives in the user's project, so show
-    // +/- stats and open it in the workspace panel instead of a server preview.
-    const diff = (t.diff && (t.name === 'write_file' || t.name === 'edit_file')) ? t.diff : null;
-    if (diff) {
-      verb = diff.created ? 'Created' : 'Edited';
-      extra = `<span class="agy-diff-stat"><span class="add">+${diff.added || 0}</span> <span class="del">-${diff.removed || 0}</span></span>`;
-    }
-
-    const isPreviewable = p && /\.(html|htm|csv|xlsx|xls|pdf|md|py|js|ts|json|txt|svg|png|jpg|jpeg|webp)$/i.test(p);
-    const previewBtn = diff
-      ? `<button type="button" class="btn ghost agy-open-btn" data-ws-open="${esc(p || '')}" title="Open in project panel">↗ Open</button>`
-      : isPreviewable
-      ? `<button type="button" class="btn ghost" style="padding:1px 7px; font-size:10px; margin-left:auto; border-radius:4px;" onclick="event.stopPropagation(); openFilePreview('${esc(p).replace(/'/g, "\\'")}', '${esc(p).replace(/'/g, "\\'")}')" title="Preview file">👁️ Preview</button>`
-      : '';
-    const openByDefault = diff && !diff.created && (diff.hunks || []).length <= 40;
-
-    h += `<details class="agy-step-detail"${openByDefault ? ' open' : ''}>
-      <summary class="agy-step-row">
-        <span class="agy-step-verb">${verb}</span>
-        <span class="agy-step-icon ${iconClass}">${iconSymbol}</span>
-        <span class="agy-step-file">${label}</span>
-        ${extra}
-        <span class="agy-step-spacer"></span>
-        ${isRunning ? '<span class="agy-summary-pulse active" style="width:6px; height:6px;"></span>' : (t.ok ? '' : '<span style="color:var(--red); font-size:11px;">⚠</span>')}
-      </summary>
-      <div class="agy-detail-body">
-        <div class="agy-detail-bar">
-          <span>${esc(t.name)} ${p ? '· ' + esc(p) : ''}</span>
-          ${previewBtn}
-          ${t.model ? `<span style="font-family:monospace; opacity:0.8; margin-left:8px;">${esc(t.model)}</span>` : ''}
-        </div>`;
-
-    if (t.thought) {
-      h += `<div style="font-size:11px; color:var(--dim); margin-bottom:6px; font-style:italic;">💭 ${esc(t.thought)}</div>`;
-    }
-
-    if (diff) {
-      h += agentDiffHtml(diff, p);
-    } else if (t.name === 'write_file' && typeof t.args.content === 'string') {
-      h += `<pre class="agy-detail-code"><code>${esc(t.args.content)}</code></pre>`;
-    } else if (t.name === 'edit_file' && (t.args.old_string || t.args.new_string)) {
-      h += `<div class="agy-detail-code">
-        <div style="color:#fca5a5;">- ${esc(t.args.old_string || '')}</div>
-        <div style="color:#86efac;">+ ${esc(t.args.new_string || '')}</div>
-      </div>`;
-    } else if (t.args && Object.keys(t.args).length > 0) {
-      h += `<pre class="agy-detail-code"><code>${esc(JSON.stringify(t.args, null, 2))}</code></pre>`;
-    }
-
-    if (t.result !== null && !(diff && t.ok)) {
-      h += `<div style="font-size:10px; font-weight:700; color:var(--dim); margin:6px 0 4px; text-transform:uppercase;">Result</div>
-      <pre class="agy-detail-code" style="color:${t.ok ? 'var(--dim)' : 'var(--red)'};"><code>${esc(t.result || '(empty)')}</code></pre>`;
-    }
-
-    h += `</div></details>`;
   });
 
   if (!isAllDone) {
     h += `<div class="agy-working-bar"><span class="agy-summary-pulse active" style="width:6px; height:6px;"></span> Working…</div>`;
   }
 
-  h += `</div></details></div>`;
+  h += '</div></div>';
   return h;
 }
 
-/* Thumbs up/down on agent answers -> POST /agent/feedback. Feeds the usage-based
+/* Thumbs up/down/* Thumbs up/down on agent answers -> POST /agent/feedback. Feeds the usage-based
    router tuner (Settings -> Router); only the category/lane stats are stored, never text. */
 function runRatingHtml(runId) {
   if (!runId) return '';

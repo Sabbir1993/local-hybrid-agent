@@ -139,6 +139,188 @@ def inspect(data: bytes) -> dict:
 
 
 # ------------------------------------------------------------------
+# Visual preview model (for the UI slide viewer)
+# ------------------------------------------------------------------
+
+PREVIEW_MAX_IMAGE = 3 * 1024 * 1024     # per picture
+PREVIEW_MAX_IMAGES = 24 * 1024 * 1024   # whole deck
+
+
+def _solid_rgb(fill_parent) -> Optional[str]:
+    """'#rrggbb' of an explicit solid fill, else None (theme/gradient/none)."""
+    try:
+        f = fill_parent.fill
+        from pptx.enum.dml import MSO_FILL
+        if f.type == MSO_FILL.SOLID and f.fore_color.type is not None:
+            return "#" + str(f.fore_color.rgb)
+    except Exception:
+        pass
+    return None
+
+
+def _bg_rgb(cSld_owner) -> Optional[str]:
+    try:
+        clr = cSld_owner._element.xpath("./p:cSld/p:bg/p:bgPr/a:solidFill/a:srgbClr/@val")
+        return "#" + clr[0] if clr else None
+    except Exception:
+        return None
+
+
+def _run_style(font) -> dict:
+    st = {}
+    try:
+        if font.size:
+            st["size"] = font.size.pt
+    except Exception:
+        pass
+    for k in ("bold", "italic"):
+        try:
+            if getattr(font, k):
+                st[k] = True
+        except Exception:
+            pass
+    try:
+        if font.color and font.color.type is not None:
+            st["color"] = "#" + str(font.color.rgb)
+    except Exception:
+        pass
+    return st
+
+
+def _frame_paras(tf) -> list:
+    out = []
+    for p in tf.paragraphs:
+        runs = []
+        for r in p.runs:
+            if r.text:
+                runs.append({"text": r.text.replace("\v", "\n"), **_run_style(r.font)})
+        para = {"level": p.level, "runs": runs}
+        try:
+            if p.alignment is not None:
+                para["align"] = str(p.alignment).split(".")[-1].split(" ")[0].lower()
+        except Exception:
+            pass
+        ps = _run_style(p.font)
+        if ps:
+            para["style"] = ps
+        out.append(para)
+    return out
+
+
+def _preview_shapes(shapes, tx, budget: list, skip_placeholders: bool = False) -> list:
+    """Flatten shapes into positioned boxes. tx maps a shape's (x, y, w, h) EMU
+    into slide EMU (identity at top level, group child-space transform inside groups)."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    out = []
+    for sh in shapes:
+        if skip_placeholders and sh.is_placeholder:
+            continue
+        try:
+            x, y, w, h = sh.left, sh.top, sh.width, sh.height
+        except Exception:
+            continue
+        if x is None or w is None:
+            continue
+        box = tx(x, y or 0, w, h or 0)
+        if sh.shape_type == MSO_SHAPE_TYPE.GROUP:
+            try:
+                xfrm = sh._element.xpath("./p:grpSpPr/a:xfrm")[0]
+                off, ext = xfrm.find(_a("off")), xfrm.find(_a("ext"))
+                choff, chext = xfrm.find(_a("chOff")), xfrm.find(_a("chExt"))
+                cx, cy = int(choff.get("x")), int(choff.get("y"))
+                cw, ch = max(int(chext.get("cx")), 1), max(int(chext.get("cy")), 1)
+                gx, gy, gw, gh = int(off.get("x")), int(off.get("y")), int(ext.get("cx")), int(ext.get("cy"))
+
+                def inner(ix, iy, iw, ih, _o=tx, gx=gx, gy=gy, gw=gw, gh=gh, cx=cx, cy=cy, cw=cw, ch=ch):
+                    sx, sy = gw / cw, gh / ch
+                    return _o(gx + (ix - cx) * sx, gy + (iy - cy) * sy, iw * sx, ih * sy)
+                out.extend(_preview_shapes(sh.shapes, inner, budget))
+            except Exception:
+                pass
+            continue
+        item = {"x": box[0], "y": box[1], "w": box[2], "h": box[3], "kind": _shape_kind(sh)}
+        try:
+            if sh.rotation:
+                item["rot"] = sh.rotation
+        except Exception:
+            pass
+        if item["kind"] == "picture":
+            try:
+                img = sh.image
+                blob = img.blob
+                if len(blob) <= PREVIEW_MAX_IMAGE and budget[0] + len(blob) <= PREVIEW_MAX_IMAGES \
+                        and img.content_type.startswith("image/") and img.ext.lower() != "wmf":
+                    import base64
+                    budget[0] += len(blob)
+                    item["src"] = f"data:{img.content_type};base64," + base64.b64encode(blob).decode()
+            except Exception:
+                pass
+            out.append(item)
+            continue
+        if item["kind"] == "table":
+            rows = []
+            for row in sh.table.rows:
+                rows.append([_clip(c.text, 300) for c in row.cells])
+            item["rows"] = rows
+            out.append(item)
+            continue
+        if item["kind"] == "chart":
+            try:
+                ch = sh.chart
+                item["title"] = ch.chart_title.text_frame.text if ch.has_title else ""
+            except Exception:
+                item["title"] = ""
+            out.append(item)
+            continue
+        fill = _solid_rgb(sh) if hasattr(sh, "fill") else None
+        if fill:
+            item["fill"] = fill
+        try:
+            if sh.line.fill.type is not None and sh.line.color.type is not None:
+                item["line"] = "#" + str(sh.line.color.rgb)
+        except Exception:
+            pass
+        if getattr(sh, "has_text_frame", False) and sh.has_text_frame:
+            item["paras"] = _frame_paras(sh.text_frame)
+            try:
+                anchor = sh.text_frame.vertical_anchor
+                if anchor is not None:
+                    item["anchor"] = str(anchor).split(".")[-1].split(" ")[0].lower()
+            except Exception:
+                pass
+        if item.get("paras") or fill or item.get("line"):
+            out.append(item)
+    return out
+
+
+def preview(data: bytes) -> dict:
+    """Positioned, render-ready slide model: coordinates in EMU, fonts in pt."""
+    prs = _open(data)
+    w, h = int(prs.slide_width or 12192000), int(prs.slide_height or 6858000)
+    ident = lambda x, y, cw, ch: (int(x), int(y), int(cw), int(ch))  # noqa: E731
+    budget = [0]
+    slides = []
+    for slide in prs.slides:
+        layout = slide.slide_layout
+        master = layout.slide_master
+        bg = _bg_rgb(slide) or _bg_rgb(layout) or _bg_rgb(master)
+        shapes = []
+        # master/layout artwork (logos, bars) under the slide's own shapes
+        for owner in (master, layout):
+            try:
+                shapes.extend(_preview_shapes(owner.shapes, ident, budget, skip_placeholders=True))
+            except Exception:
+                pass
+        shapes.extend(_preview_shapes(slide.shapes, ident, budget))
+        notes = ""
+        if slide.has_notes_slide:
+            nt = slide.notes_slide.notes_text_frame
+            notes = nt.text.strip() if nt is not None else ""
+        slides.append({"bg": bg, "shapes": shapes, "notes": notes})
+    return {"width": w, "height": h, "slides": slides}
+
+
+# ------------------------------------------------------------------
 # Addressing
 # ------------------------------------------------------------------
 
@@ -327,9 +509,8 @@ class _Ctx:
     def new_slide(self, slide):
         k = f"slide:{slide.slide_id}"
         self.rules.added_prefixes |= {k, k + ":rels"}
-        for el in slide.shapes._spTree.iter():
-            self.snap.touch(el, ancestors=False)
-        for el in slide._element:
+        self.snap.touch(slide._element, ancestors=False)
+        for el in slide._element.iter():
             self.snap.touch(el, ancestors=False)
 
 
@@ -621,18 +802,61 @@ def parse_markdown_slides(md: str) -> list[dict]:
         if cur["title"] or cur["bullets"] or cur["notes"]:
             slides.append(dict(cur))
 
+    slide_marker = re.compile(
+        r'^(?:'
+        r'---\s*$'
+        r'|(?:\#{1,3}\s+(?P<h_title>.+))$'
+        r'|(?:\*{0,2}\s*Slide\s+\d+\s*(?:\((?P<cat>[^)]+)\))?\s*:\*{0,2}\s*(?P<s_rest>.*))$'
+        r')',
+        re.IGNORECASE
+    )
+
     for line in (md or "").strip().splitlines():
         s = line.rstrip()
         st = s.strip()
+        if not st:
+            continue
+        # Skip deck meta header/footer outlines
+        if re.match(r'^\d+\s*slides\s*\+.*structure', st, re.IGNORECASE) or st.startswith("GLOBAL THEME:"):
+            continue
+
         if st.startswith("---"):
             flush()
             cur = {"title": "", "bullets": [], "notes": ""}
-        elif st.startswith("# ") or (st.startswith("## ") and not cur["title"]):
-            if cur["title"] or cur["bullets"]:
+            continue
+
+        m = slide_marker.match(st)
+        if m:
+            h_title = m.group("h_title")
+            cat = m.group("cat") or ""
+            s_rest = m.group("s_rest") or ""
+
+            if h_title:
+                if cur["title"] or cur["bullets"]:
+                    flush()
+                    cur = {"title": "", "bullets": [], "notes": ""}
+                cur["title"] = h_title.strip().lstrip("#").strip()
+            else:
+                # Conversational format: Slide 1 (Title): ...
                 flush()
                 cur = {"title": "", "bullets": [], "notes": ""}
-            cur["title"] = st.lstrip("#").strip()
-        elif st.lower().startswith(("notes:", "note:")):
+                # Try finding header/title in quotes first: Title "Why SSL Wireless..."
+                m_title = re.search(r'(?:header(?:\s+banner)?|title)\s*(?:[^:]+:|\s*)?\s*\"([^\"]+)\"', s_rest, re.IGNORECASE)
+                if m_title:
+                    cur["title"] = m_title.group(1).strip()
+                else:
+                    q = re.findall(r'\"([^\"]+)\"', s_rest)
+                    if cat:
+                        cur["title"] = cat.strip()
+                    elif q:
+                        cur["title"] = q[0].strip()
+                    elif s_rest:
+                        cur["title"] = s_rest.strip()
+                    else:
+                        cur["title"] = "Slide"
+            continue
+
+        if st.lower().startswith(("notes:", "note:")):
             cur["notes"] = st.split(":", 1)[1].strip()
         elif st.startswith(("- ", "* ", "+ ")) or re.match(r"^\d+[.)]\s", st):
             indent = (len(s) - len(s.lstrip(" "))) // 2
@@ -646,7 +870,8 @@ def parse_markdown_slides(md: str) -> list[dict]:
 
 def create(md: str, template: Optional[bytes] = None, title: str = "") -> bytes:
     from pptx import Presentation
-    from pptx.util import Inches
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
     slides = parse_markdown_slides(md) or [{"title": title or "Presentation", "bullets": [], "notes": ""}]
     if template:
         prs = _open(template)
@@ -672,14 +897,72 @@ def create(md: str, template: Optional[bytes] = None, title: str = "") -> bytes:
     for i, sd in enumerate(slides):
         cover = i == 0 and len(sd["bullets"]) <= 1
         slide = prs.slides.add_slide(pick(cover))
-        if slide.shapes.title is not None:
-            slide.shapes.title.text_frame.text = sd["title"]
-        body = next((p for p in slide.placeholders if p.placeholder_format.idx != 0), None)
-        if body is not None:
-            if sd["bullets"]:
-                _set_frame_text(body.text_frame._txBody, "\n".join(sd["bullets"]))
-            else:
-                body._element.getparent().remove(body._element)
+
+        if not template:
+            try:
+                slide.background.fill.solid()
+                slide.background.fill.fore_color.rgb = RGBColor(11, 25, 44)
+            except Exception:
+                pass
+
+        if cover:
+            if slide.shapes.title is not None:
+                slide.shapes.title.text_frame.text = sd["title"]
+                if not template:
+                    slide.shapes.title.left = Inches(1.2)
+                    slide.shapes.title.top = Inches(2.2)
+                    slide.shapes.title.width = Inches(10.9)
+                    slide.shapes.title.height = Inches(1.5)
+                    for p in slide.shapes.title.text_frame.paragraphs:
+                        p.font.name = "Segoe UI"
+                        p.font.size = Pt(38)
+                        p.font.bold = True
+                        p.font.color.rgb = RGBColor(255, 255, 255)
+            body = next((p for p in slide.placeholders if p.placeholder_format.idx != 0), None)
+            if body is not None:
+                if sd["bullets"]:
+                    _set_frame_text(body.text_frame._txBody, "\n".join(sd["bullets"]))
+                    if not template:
+                        body.left = Inches(1.2)
+                        body.top = Inches(3.8)
+                        body.width = Inches(10.9)
+                        body.height = Inches(1.2)
+                        for p in body.text_frame.paragraphs:
+                            p.font.name = "Segoe UI"
+                            p.font.size = Pt(18)
+                            p.font.color.rgb = RGBColor(148, 163, 184)
+                else:
+                    body._element.getparent().remove(body._element)
+        else:
+            if slide.shapes.title is not None:
+                slide.shapes.title.text_frame.text = sd["title"]
+                if not template:
+                    slide.shapes.title.left = Inches(0.8)
+                    slide.shapes.title.top = Inches(0.6)
+                    slide.shapes.title.width = Inches(11.733)
+                    slide.shapes.title.height = Inches(0.9)
+                    for p in slide.shapes.title.text_frame.paragraphs:
+                        p.font.name = "Segoe UI"
+                        p.font.size = Pt(28)
+                        p.font.bold = True
+                        p.font.color.rgb = RGBColor(255, 255, 255)
+            body = next((p for p in slide.placeholders if p.placeholder_format.idx != 0), None)
+            if body is not None:
+                if sd["bullets"]:
+                    _set_frame_text(body.text_frame._txBody, "\n".join(sd["bullets"]))
+                    if not template:
+                        body.left = Inches(0.8)
+                        body.top = Inches(1.6)
+                        body.width = Inches(11.733)
+                        body.height = Inches(5.0)
+                        for p in body.text_frame.paragraphs:
+                            p.font.name = "Segoe UI"
+                            p.font.size = Pt(16)
+                            p.font.color.rgb = RGBColor(226, 232, 240)
+                            p.space_after = Pt(12)
+                else:
+                    body._element.getparent().remove(body._element)
+
         if sd["notes"]:
             slide.notes_slide.notes_text_frame.text = sd["notes"]
     return _save(prs)

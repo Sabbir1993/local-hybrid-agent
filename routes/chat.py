@@ -8,7 +8,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -49,6 +49,7 @@ from core.db import (
     db_append_message,
 )
 from . import common
+from core import reasoning
 from .common import _llm_chat_stream
 
 router = APIRouter(tags=["chat"])
@@ -60,6 +61,72 @@ def _saved_filename(res_str: str, fallback: str) -> str:
     tag it always includes) so callers don't keep referencing the pre-write name."""
     m = re.search(r"\[DOWNLOAD:\s*([^\]]+)\]", res_str or "")
     return m.group(1).strip() if m else fallback
+
+
+def _prompt_tokens_of(res_dict, msgs) -> int:
+    """Full prompt size of the last LLM call, cached tokens included.
+    llama.cpp's timings.prompt_n counts only freshly-evaluated tokens, so add
+    cache_n; a count far below the estimate is cache-excluded - use the estimate."""
+    est = estimate_prompt_tokens(msgs)
+    u = (res_dict or {}).get("usage") or {}
+    t = (res_dict or {}).get("timings") or {}
+    real = int(u.get("prompt_tokens") or 0)
+    if t:
+        real = max(real, int(t.get("prompt_n") or 0) + int(t.get("cache_n") or 0))
+    return real if real >= est * 0.5 else est
+
+_HELPER_EXTS = {".py", ".js", ".ts", ".sh", ".bat", ".ps1"}
+
+
+def _requested_exts(query: str) -> set[str]:
+    """File extensions the user's message asks for (empty = not stated)."""
+    q = (query or "").lower()
+    exts = {"." + e for e in re.findall(r"\.(pptx|ppt|xlsx|xls|csv|docx|pdf|html|json|txt|md|py)\b", q)}
+    if re.search(r"\bpdf\b", q):
+        exts.add(".pdf")
+    if re.search(r"\b(pptx?|powerpoint)\b", q) or (
+            re.search(r"\b(slides?|deck|presentation)\b", q) and ".pdf" not in exts):
+        exts.add(".pptx")
+    if re.search(r"\b(excel|spreadsheet|workbook)\b", q):
+        exts.add(".xlsx")
+    if re.search(r"\bcsv\b", q):
+        exts.add(".csv")
+    if re.search(r"\b(word|docx)\b", q):
+        exts.add(".docx")
+    if re.search(r"\b(html|dashboard|web ?page)\b", q):
+        exts.add(".html")
+    return {".pptx" if e == ".ppt" else ".xlsx" if e == ".xls" else e for e in exts}
+
+
+def _pick_deliverables(written: list[str], query: str) -> list[str]:
+    """A turn may write several drafts (v1, v2, _final, ...) and helper scripts
+    before it lands the file. Only the latest file of each requested type is the
+    deliverable; everything else stays on disk but gets no download badge."""
+    uniq = list(dict.fromkeys(written))
+    if len(uniq) <= 1:
+        return uniq
+    want = _requested_exts(query)
+    cands = [f for f in uniq if Path(f).suffix.lower() in want] if want else []
+    if not cands:
+        cands = [f for f in uniq if Path(f).suffix.lower() not in _HELPER_EXTS] or uniq
+    latest: dict[str, str] = {}
+    for f in cands:  # later writes supersede earlier ones of the same type
+        latest[Path(f).suffix.lower()] = f
+    return [f for f in cands if f in latest.values()]
+
+
+def _finalize_download_tags(content: str, written: list[str], query: str) -> tuple[str, bool]:
+    """Drop [DOWNLOAD:] tags for superseded files written this turn and append
+    tags for deliverables the reply doesn't link yet. Returns (content, changed)."""
+    keep = _pick_deliverables(written, query)
+    out = content or ""
+    for f in set(written) - set(keep):
+        out = re.sub(rf"[ \t]*\[DOWNLOAD:\s*{re.escape(f)}\s*\][ \t]*\n?", "", out)
+    out = re.sub(r"\n{3,}", "\n\n", out).rstrip()
+    for f in keep:
+        if f"[DOWNLOAD: {f}]" not in out and f"download?path={f}" not in out.lower():
+            out += f"\n\n[DOWNLOAD: {f}]"
+    return out, out != (content or "")
 
 WEB_TOOL_NAMES = ("web_search", "web_fetch", "web_search_images")
 
@@ -189,6 +256,8 @@ class ChatRunRequest(BaseModel):
     temperature: float = 0.7
     max_tokens: int = -1
     system_prompt: Optional[str] = None
+    # None (older clients) keeps the Deep-only behaviour; see core/reasoning.py
+    reasoning_effort: Optional[Literal["none", "low", "medium", "high", "extra"]] = None
 
 
 @router.post("/chat/run")
@@ -360,7 +429,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         "7. CHANGING AN EXISTING DOCUMENT (.pptx, .xlsx, .docx, .csv, .pdf - one you created or one the user attached): "
         "never regenerate it with write_file. Call `doc_inspect(file)` for its outline, then `doc_edit(file, ops)` "
         "targeting only what the user asked to change; everything else stays exactly as it was, and a new "
-        "version is saved with its own [DOWNLOAD: ...] link."
+        "version is saved with its own [DOWNLOAD: ...] link.\n"
+        "8. ONE DELIVERABLE PER REQUEST: write exactly one file in the format the user asked for (a PDF request "
+        "gets one .pdf, a slide request gets one .pptx). Never save drafts or numbered versions (v2, _final, "
+        "_proper), never write helper/generator scripts (.py) to build a document, and link only that one file."
     )
     sys_parts.append(file_prompt)
 
@@ -437,9 +509,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             f"2. Research each one with targeted web searches (use the current year; you have up to {max_web_calls} web calls).\n"
             "3. Stop searching as soon as you have enough data, then write the complete deliverable in one go. "
             "Cite sources, and label any figure you could not verify as an estimate.")
-    # llama-server only: turn the model's reasoning on in deep mode (ignored by
-    # chat templates without an enable_thinking switch)
-    llm_extra = {"chat_template_kwargs": {"enable_thinking": True}} if deep else None
+    # How much the model reasons: the composer's effort level, independent of
+    # Deep research; mapped per local/cloud target in common._llm_chat_stream_raw
+    effort = reasoning.resolve(req.reasoning_effort, deep)
 
     combined_sys = "\n\n".join(sys_parts).strip()
     if combined_sys:
@@ -483,6 +555,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         continued = False
         finish_reason = None
         written_files = []
+        final_prompt_toks = None     # same figure goes to the done event and the monitor
         ctx_budget = int(common.main_ctx_tokens(cloud_main) * 0.7)
         # --- Output sanitizer: redact model deltas before they reach the
         # client (cloud_only rules only fire while the lane is cloud; the
@@ -571,9 +644,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             print(f"[chat] local fallback unavailable: {e}", file=sys.stderr)
                     chat_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, current_tools, req.temperature,
-                        req.max_tokens, rid=chat_rid, lane="main", extra=llm_extra)
+                        req.max_tokens, rid=chat_rid, lane="main", effort=effort)
                 else:
-                    chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid, extra=llm_extra)
+                    chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid, effort=effort)
                 async for ev, val in chat_stream:
                     if ev == "queued":
                         yield f"event: queued\ndata: {json.dumps(val)}\n\n"
@@ -747,32 +820,27 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             tbl_m = _re.search(r'(\|.+?\|\n\|[\s\-:|]+\|\n(?:\|.+?\|\n?)+)', content)
                             if tbl_m:
                                 cand_code = tbl_m.group(1).strip()
-                        if not cand_code and ext in {'pdf', 'pptx', 'ppt'}:
-                            # Extract the text or markdown prior to the download tag for the PDF/presentation
-                            cand_code = content.split('[DOWNLOAD:')[0].strip()
                         if not cand_code:
-                            # Model mentioned [DOWNLOAD: filename] but forgot to output the code block
-                            # Generate a complete standalone HTML/document file based on the topic
-                            title_clean = clean_fname.replace('_', ' ').replace('-', ' ').title()
-                            # (no invented placeholder rows for csv/xlsx: a data file the
-                            # model never produced must not be filled with fabricated data)
-                            # (html: never fall back to a canned dashboard - it carried
-                            # invented figures; ask the model to continue instead)
-                            if ext in {'html', 'htm'}:
-                                missing_dl.append(clean_fname)
-                            elif ext in ('pptx', 'ppt'):
-                                # (no canned agenda deck: ask the model to continue instead)
-                                missing_dl.append(clean_fname)
-                            elif ext == 'pdf':
-                                cand_code = f"# {title_clean}\n\n{content.split('[DOWNLOAD:')[0].strip() or 'Document compilation.'}"
+                            # The model wrote [DOWNLOAD: x] but never produced the content for
+                            # it. Never invent a document: route it to missing_dl, which nudges
+                            # the model to output the real thing and, failing that, drops the
+                            # dead link. (no invented placeholder rows for csv/xlsx; no canned
+                            # agenda deck for pptx; no PDF built out of the chat reply; no canned
+                            # HTML dashboard - all of those carried invented content before)
+                            missing_dl.append(clean_fname)
 
                         if cand_code:
                             res_str = tool_write_file_common({"path": clean_fname, "content": cand_code})
-                            real_saved = _saved_filename(res_str, clean_fname)
-                            written_files.append(real_saved)
-                            if real_saved != clean_fname and content:
-                                content = _re.sub(rf'\[DOWNLOAD:\s*{_re.escape(clean_fname)}\]', f'[DOWNLOAD: {real_saved}]', content)
-                                yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+                            if res_str.startswith("error:"):
+                                # the write failed: keep the tag as a dead link so the
+                                # missing_dl pass below drops it instead of advertising it
+                                missing_dl.append(clean_fname)
+                            else:
+                                real_saved = _saved_filename(res_str, clean_fname)
+                                written_files.append(real_saved)
+                                if real_saved != clean_fname and content:
+                                    content = _re.sub(rf'\[DOWNLOAD:\s*{_re.escape(clean_fname)}\]', f'[DOWNLOAD: {real_saved}]', content)
+                                    yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
 
                 if (is_file_refusal or is_file_intent) and turn == 0 and not tool_calls:
@@ -821,11 +889,18 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         ok = not res_str.startswith("error:")
                         target_filename = _saved_filename(res_str, target_filename)
                         yield f"event: tool_result\ndata: {json.dumps({'id': tc_id, 'name': 'write_file', 'ok': ok, 'result': res_str})}\n\n"
-                        written_files.append(target_filename)
 
-                        final_msg = f"I have filled and saved the data to **{target_filename}** in common storage.\n\n[DOWNLOAD: {target_filename}]"
-                        if table_match:
-                            final_msg += f"\n\nHere is a preview of the saved rows:\n\n{table_match.group(1)}"
+                        if ok:
+                            written_files.append(target_filename)
+                            final_msg = f"I have filled and saved the data to **{target_filename}** in common storage.\n\n[DOWNLOAD: {target_filename}]"
+                            if table_match:
+                                final_msg += f"\n\nHere is a preview of the saved rows:\n\n{table_match.group(1)}"
+                        else:
+                            # never claim a save that did not happen, and never advertise a
+                            # [DOWNLOAD:] link to a file that is not on disk
+                            final_msg = (f"I could not save that as a file - **nothing was written**.\n\n"
+                                         f"{res_str}\n\nAsk me to produce the rows or the code "
+                                         f"explicitly and I will try again.")
                         yield f"event: delta\ndata: {json.dumps({'text': final_msg})}\n\n"
                         content = final_msg
 
@@ -837,7 +912,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": res_str})
 
                         gen_toks = max(1, round(len(content) / 3.5))
-                        prompt_toks = sum(len(m.get("content", "")) for m in msgs) // 4
+                        prompt_toks = final_prompt_toks = _prompt_tokens_of(None, msgs)
                         yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
                         return
 
@@ -905,30 +980,22 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                 yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
 
                     if written_files:
-                        for wf in written_files:
-                            if f"[DOWNLOAD: {wf}]" not in (content or "") and f"download?path={wf}" not in (content or "").lower():
-                                dl_tag = f"\n\n[DOWNLOAD: {wf}]"
-                                yield f"event: delta\ndata: {json.dumps({'text': dl_tag})}\n\n"
-                                content = (content or "") + dl_tag
+                        content, _chg = _finalize_download_tags(content, written_files, last_query)
+                        if _chg:
+                            yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
                     gen_toks = 0
-                    prompt_toks = 0
                     if res_dict:
                         if res_dict.get("usage"):
-                            u = res_dict["usage"]
-                            prompt_toks = u.get("prompt_tokens", 0)
-                            gen_toks = u.get("completion_tokens", 0)
+                            gen_toks = res_dict["usage"].get("completion_tokens", 0)
                         elif res_dict.get("timings"):
-                            t = res_dict["timings"]
-                            prompt_toks = t.get("prompt_n", 0)
-                            gen_toks = t.get("predicted_n", 0)
+                            gen_toks = res_dict["timings"].get("predicted_n", 0)
                     if not gen_toks:
                         req_mon = _monitor_state["active"].get(chat_rid)
                         gen_toks = req_mon.get("gen_tokens", 0) if req_mon else 0
                     if not gen_toks and content:
                         gen_toks = max(1, round(len(content) / 3.5))
-                    if not prompt_toks:
-                        prompt_toks = sum(len(m.get("content", "")) for m in msgs) // 4
+                    prompt_toks = final_prompt_toks = _prompt_tokens_of(res_dict, msgs)
                     yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
                     return
 
@@ -974,7 +1041,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif t_name == "write_file":
                             res_str = tool_write_file_common(args)
                             p_name = args.get("path") or args.get("file") or args.get("filename")
-                            if p_name:
+                            # a failed write must not contribute a download link: every
+                            # written_files entry later becomes a [DOWNLOAD:] marker, which
+                            # would point the UI at a file that does not exist
+                            if p_name and not res_str.startswith("error:"):
                                 real_name = _saved_filename(res_str, Path(p_name).name)
                                 written_files.append(real_name)
                                 # The model's own reply (written before this tool result
@@ -1034,9 +1104,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             pass
                     final_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, None, req.temperature,
-                        req.max_tokens, rid=chat_rid, lane="main", extra=llm_extra)
+                        req.max_tokens, rid=chat_rid, lane="main", effort=effort)
                 else:
-                    final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid, extra=llm_extra)
+                    final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid, effort=effort)
 
                 async for ev, val in final_stream:
                     if ev == "queued":
@@ -1083,30 +1153,22 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
 
             if written_files:
-                for wf in written_files:
-                    if f"[DOWNLOAD: {wf}]" not in (content or "") and f"download?path={wf}" not in (content or "").lower():
-                        dl_tag = f"\n\n[DOWNLOAD: {wf}]"
-                        yield f"event: delta\ndata: {json.dumps({'text': dl_tag})}\n\n"
-                        content = (content or "") + dl_tag
+                content, _chg = _finalize_download_tags(content, written_files, last_query)
+                if _chg:
+                    yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
             gen_toks = 0
-            prompt_toks = 0
             if res_dict:
                 if res_dict.get("usage"):
-                    u = res_dict["usage"]
-                    prompt_toks = u.get("prompt_tokens", 0)
-                    gen_toks = u.get("completion_tokens", 0)
+                    gen_toks = res_dict["usage"].get("completion_tokens", 0)
                 elif res_dict.get("timings"):
-                    t = res_dict["timings"]
-                    prompt_toks = t.get("prompt_n", 0)
-                    gen_toks = t.get("predicted_n", 0)
+                    gen_toks = res_dict["timings"].get("predicted_n", 0)
             if not gen_toks:
                 req_mon = _monitor_state["active"].get(chat_rid)
                 gen_toks = req_mon.get("gen_tokens", 0) if req_mon else 0
             if not gen_toks and content:
                 gen_toks = max(1, round(len(content) / 3.5))
-            if not prompt_toks:
-                prompt_toks = sum(len(m.get("content", "")) for m in msgs) // 4
+            prompt_toks = final_prompt_toks = _prompt_tokens_of(res_dict, msgs)
 
             yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
         except asyncio.CancelledError:
@@ -1123,7 +1185,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             req_mon = _monitor_state["active"].get(chat_rid)
             toks = req_mon.get("gen_tokens") if req_mon else None
             tps = (toks / dt) if (toks and dt and dt > 0) else None
-            ptoks = sum(len(m.get("content", "")) for m in msgs) // 4
+            ptoks = final_prompt_toks or estimate_prompt_tokens(msgs)
             pcached = (sum(len(m.get("content", "")) for m in msgs[:-1]) // 4) if len(msgs) > 1 else 0
             monitor_end(chat_rid, 200, prompt_tokens=ptoks, completion_tokens=toks, tps=tps, duration=dt,
                         model=clean_model_name, prompt_cached=pcached, completion_cached=0,

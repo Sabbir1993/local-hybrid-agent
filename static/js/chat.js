@@ -76,9 +76,33 @@ function onToggleThink(idx, isOpen) {
 }
 window.onToggleThink = onToggleThink;
 
+// While a mouse button is held inside the chat (dragging a scrollbar, selecting
+// text), streaming re-renders would replace the element under the pointer and
+// cancel the drag. Hold them back and catch up once the button is released.
+let _chatPointerHeld = false;
+let _renderLastPending = false;
+function _releaseChatPointer() {
+  if (!_chatPointerHeld) return;
+  _chatPointerHeld = false;
+  if (_renderLastPending) {
+    _renderLastPending = false;
+    renderLast();
+  }
+}
+document.addEventListener('pointerdown', e => {
+  if (e.button === 0 && e.target.closest && e.target.closest('#chat-inner')) _chatPointerHeld = true;
+}, true);
+window.addEventListener('pointerup', _releaseChatPointer, true);
+window.addEventListener('mouseup', _releaseChatPointer, true);
+window.addEventListener('pointercancel', _releaseChatPointer, true);
+window.addEventListener('blur', _releaseChatPointer);
+// Chrome can skip mouseup after a native scrollbar drag; any buttonless move ends the hold
+window.addEventListener('mousemove', e => { if (_chatPointerHeld && e.buttons === 0) _releaseChatPointer(); }, { passive: true });
+
 function renderLast() {
   const inner = $('chat-inner');
   if (!inner) return;
+  if (_chatPointerHeld) { _renderLastPending = true; return; }
   const lastIdx = messages.length - 1;
   if (lastIdx < 0 || inner.children.length !== messages.length || $('empty')) {
     renderAll();
@@ -117,7 +141,9 @@ function renderLast() {
     const t0 = (job && job.t0) ? job.t0 : _genStartTime;
     const elapsedSec = Math.max(1, Math.floor((performance.now() - t0) / 1000));
     const thinkSummary = existingThink.querySelector('summary');
-    if (thinkSummary) thinkSummary.textContent = `💭 Thinking (${elapsedSec}s)...`;
+    if (thinkSummary) {
+      thinkSummary.innerHTML = `<span class="codex-thought-icon">🧠</span> <span class="codex-thought-title">Thinking (${elapsedSec}s)...</span><span class="codex-chevron">▾</span>`;
+    }
 
     const thinkBody = esc(m.reasoning).replace(/\n/g, '<br>') + '<span class="cursor">▍</span>';
     existingThinkDiv.innerHTML = thinkBody;
@@ -327,7 +353,7 @@ function onClaudeWorkingTick() {
   const isActivelyThinking = isGeneratingThis && !hasText;
   const thinkSummary = lastEl.querySelector('details.think > summary');
   if (thinkSummary && isActivelyThinking) {
-    thinkSummary.textContent = `💭 Thinking (${elapsedSec}s)...`;
+    thinkSummary.innerHTML = `<span class="codex-thought-icon">🧠</span> <span class="codex-thought-title">Thinking (${elapsedSec}s)...</span><span class="codex-chevron">▾</span>`;
   }
 
   // 2. If content text hasn't streamed in yet, update or create the working pill
@@ -417,17 +443,31 @@ function bubbleHtml(m, idx) {
   }
   const hasText = !!(m.content && m.content.trim());
 
-  if (m.reasoning) {
+  const actsHasThoughts = m.acts && m.acts.some(a => a.type === 'thought' || a.type === 'reasoning');
+  if (m.reasoning && !actsHasThoughts) {
     const isGeneratingThis = generating && isLast;
     const isActivelyThinking = isGeneratingThis && !hasText;
     const job = (curSession && window.bgJobs) ? window.bgJobs.get(String(curSession.id)) : null;
     const t0 = (job && job.t0) ? job.t0 : _genStartTime;
     const elapsedSec = isActivelyThinking ? Math.max(1, Math.floor((performance.now() - t0) / 1000)) : 0;
+    if (isActivelyThinking) {
+      m._lastThinkSec = elapsedSec;
+    }
+    const finalSec = m._lastThinkSec || (m.secs ? Math.max(1, Math.round(m.secs)) : null);
     // Auto-expand while thinking if user hasn't explicitly toggled it
     const isOpen = m._thinkOpen !== undefined ? m._thinkOpen : isActivelyThinking;
-    const statusLabel = isActivelyThinking ? `💭 Thinking (${elapsedSec}s)...` : '💭 Thinking';
+    const statusLabel = isActivelyThinking
+      ? `Thinking (${elapsedSec}s)...`
+      : (finalSec ? `Thought for ${finalSec}s` : 'Thought');
     const thinkBody = esc(m.reasoning).replace(/\n/g, '<br>') + (isActivelyThinking ? '<span class="cursor">▍</span>' : '');
-    inner += `<details class="think" ${isOpen ? 'open' : ''} ontoggle="onToggleThink(${idx}, this.open)"><summary onclick="onThinkSummaryClick(${idx}, event)">${statusLabel}</summary><div class="think-content">${thinkBody}</div></details>`;
+    inner += `<details class="think codex-thought-card" ${isOpen ? 'open' : ''} ontoggle="onToggleThink(${idx}, this.open)">
+      <summary class="codex-thought-head" onclick="onThinkSummaryClick(${idx}, event)">
+        <span class="codex-thought-icon">🧠</span>
+        <span class="codex-thought-title">${statusLabel}</span>
+        <span class="codex-chevron">▾</span>
+      </summary>
+      <div class="think-content codex-thought-body">${thinkBody}</div>
+    </details>`;
   }
 
   let body = '';
@@ -464,7 +504,7 @@ function bubbleHtml(m, idx) {
     const isWorkingPill = generating && isLast && !hasText && !m.errorAlert;
     const bubbleClass = isWorkingPill ? 'bubble claude-working-container' : 'bubble';
     const alertHtml = m.errorAlert ? `<div class="chat-alert-box error"><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; margin-top:2px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><div><strong>Service Notice</strong><div style="font-size:12px; margin-top:2px; opacity:0.9;">${esc(m.errorAlert)}</div></div></div>` : '';
-    inner += `<div class="${bubbleClass}">${body}${alertHtml}${generating && isLast && hasText ? '<span class="cursor">▍</span>' : ''}</div>`;
+    inner += `<div class="${bubbleClass}">${body}${alertHtml}</div>`;
   }
   if (m.tps) {
     const modelTag = m.modelDisplay
@@ -876,6 +916,7 @@ async function send(inputText) {
         messages: msgs,
         web_search: !!chatWebSearch,
         deep_mode: !!chatDeepMode,
+        reasoning_effort: typeof getReasoningEffort === 'function' ? getReasoningEffort() : undefined,
         system_prompt: sys || undefined,
         temperature: samplingCfg.temp,
         max_tokens: (isNaN(samplingCfg.maxtok) || samplingCfg.maxtok <= 0) ? -1 : samplingCfg.maxtok,

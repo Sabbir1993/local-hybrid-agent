@@ -5,13 +5,14 @@
  */
 
 (function () {
-  const KIND_LABEL = { skills: 'skills', connectors: 'connectors', plugins: 'plugins' };
+  const KIND_LABEL = { skills: 'skills', connectors: 'connectors', plugins: 'plugins', marketplace: 'marketplace plugins' };
   const CAT_ICON = {
     security: '🛡️', compliance: '⚖️', engineering: '⌨️', operations: '🧰', finance: '💰',
     productivity: '✅', web: '🌐', tickets: '🎫', developer: '🧪', data: '🗃️', general: '🧩', custom: '🔧',
   };
   const S = { kind: 'skills', view: 'discover', q: '', category: null, data: {}, detail: null,
-              registry: null, registryQ: '', busy: false };
+              registry: null, registryQ: '', busy: false,
+              market: null, marketQ: '', marketUrl: '', remote: null, remoteBusy: false };
 
   const $c = id => document.getElementById(id);
   const e = s => esc(String(s == null ? '' : s));
@@ -94,6 +95,7 @@
   async function render() {
     syncBar();
     const body = $c('cz-body');
+    if (S.kind === 'marketplace') { renderMarketplace(body); return; }
     if (S.detail) return renderDetail();
     let d;
     try { d = await load(S.kind); }
@@ -121,6 +123,104 @@
       h += `<div class="cz-note">Only reviewed entries from the in-repo catalog can be installed. New ${KIND_LABEL[S.kind]} are added to the catalog through code review.</div>`;
     }
     body.innerHTML = h;
+  }
+
+  function marketCard(it) {
+    return `
+      <div class="cz-card static">
+        <div class="cz-icon">${catIcon(it.category)}</div>
+        <div class="cz-main">
+          <div class="cz-name">${e(it.title)}${it.installed ? ' <span class="cz-chip ok">installed</span>' : ''}</div>
+          <div class="cz-desc">${e(it.description)}</div>
+          <div class="cz-by">${it.author ? 'by ' + e(it.author) + ' - ' : ''}${e(it.name || '')}</div>
+          <div class="cz-actions" style="flex-direction:row; gap:8px; margin-top:8px;">
+            ${it.manifest_url ? `<button class="btn ghost cz-act" data-review="${e(it.manifest_url)}" data-code="${e(it.code_url || '')}">Review</button>` : ''}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  async function searchMarketplace(q) {
+    S.marketQ = q;
+    S.market = 'loading';
+    render();
+    try { S.market = await api('/customize/plugins/registry?q=' + encodeURIComponent(q)); }
+    catch (err) { S.market = { error: err.message, items: [] }; }
+    if (S.kind === 'marketplace' && !S.detail) render();
+  }
+
+  async function reviewRemote(manifestUrl, codeUrl) {
+    S.marketUrl = manifestUrl || '';
+    S.remoteBusy = true; S.remote = null;
+    render();
+    try {
+      S.remote = await api('/customize/plugins/inspect-remote', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manifest_url: manifestUrl, code_url: codeUrl || '' }),
+      });
+    } catch (err) { S.remote = { error: err.message }; }
+    S.remoteBusy = false;
+    if (S.kind === 'marketplace') render();
+  }
+
+  async function installRemote() {
+    const r = S.remote;
+    if (!r || !r.manifest) return;
+    if (!confirm(`Install remote plugin '${r.manifest.name}'? Only continue if you reviewed the code.`)) return;
+    try {
+      await api('/customize/plugins/install-remote', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manifest_url: r.manifest_url, code_url: r.code_url || '' }),
+      });
+      toast(`Installed '${r.manifest.name}'`);
+      S.remote = null; S.marketUrl = '';
+      S.market = null;
+      render();
+    } catch (err) { toast('Install failed: ' + err.message, true); }
+  }
+
+  function renderMarketplace(body) {
+    let h = `<div class="cz-banner">Remote plugins run as <b>in-process Python</b>. Review the manifest and code preview before installing.</div>
+      <div class="cz-sec"><span>Plugin Marketplace</span> <span class="cz-dim">external registry</span></div>
+      <form class="cz-reg-form" id="cz-market-form"><input type="search" id="cz-market-q" placeholder="Search marketplace" value="${e(S.marketQ)}" maxlength="100"><button class="btn ghost" type="submit">Search</button></form>
+      <form class="cz-reg-form" id="cz-remote-form"><input type="url" id="cz-remote-url" placeholder="Paste a plugin.json manifest URL to review" value="${e(S.marketUrl)}" maxlength="500"><button class="btn ghost" type="submit">Review URL</button></form>`;
+    if (S.remote) h += remoteDetailHtml();
+    else if (S.remoteBusy) h += '<div class="cz-empty">Fetching manifest…</div>';
+    if (S.market === 'loading') h += '<div class="cz-empty">Loading marketplace…</div>';
+    else if (S.market && S.market.error) h += `<div class="cz-empty">${e(S.market.error)}</div>`;
+    else if (S.market) {
+      const items = (S.market.items || []).filter(it => {
+        if (!S.q) return true;
+        const q = S.q.toLowerCase();
+        return [it.name, it.title, it.description, it.author].some(v => String(v || '').toLowerCase().includes(q));
+      });
+      h += `<div class="cz-sec"><span>Results</span> <span class="cz-count">${items.length}</span></div>`;
+      h += items.length ? '<div class="cz-grid">' + items.map(marketCard).join('') + '</div>'
+        : '<div class="cz-empty">No marketplace results.</div>';
+    }
+    body.innerHTML = h;
+  }
+
+  function remoteDetailHtml() {
+    const r = S.remote;
+    if (r.error) return `<div class="cz-empty">${e(r.error)}</div>`;
+    const m = r.manifest || {};
+    return `
+      <div class="cz-detail">
+        <div class="cz-dtitle">${e(m.title || m.name)} ${r.name_taken ? '<span class="cz-chip mid">installed</span>' : ''}</div>
+        <div class="cz-desc">${e(m.description || '')}</div>
+        <table class="cz-meta">
+          <tr><th>Manifest</th><td><code>${e(r.manifest_url || '')}</code></td></tr>
+          <tr><th>Code</th><td><code>${e(r.code_url || '(none)')}</code></td></tr>
+          <tr><th>Syntax</th><td>${e(r.code_syntax || '')}</td></tr>
+        </table>
+        <div class="cz-actions">
+          ${r.code_url && !r.name_taken ? `<button class="btn accent cz-act" id="cz-remote-install">Install - I reviewed the code</button>` : ''}
+          <button class="btn ghost cz-act" id="cz-remote-clear">Clear review</button>
+        </div>
+        <div class="cz-sec"><span>Code preview</span></div>
+        <div class="cz-preview"><pre>${e(r.code_preview || '(no code)')}</pre></div>
+      </div>`;
   }
 
   function registrySection() {
@@ -234,6 +334,10 @@
 
   function onBodyClick(ev) {
     const t = ev.target;
+    const rv = t.closest('[data-review]');
+    if (rv) { reviewRemote(rv.dataset.review, rv.dataset.code || ''); return; }
+    if (t.id === 'cz-remote-install') { installRemote(); return; }
+    if (t.id === 'cz-remote-clear') { S.remote = null; S.marketUrl = ''; render(); return; }
     const inst = t.closest('[data-install]');
     if (inst) {
       ev.stopPropagation();
@@ -271,6 +375,7 @@
     $c('cz-modal').hidden = false;
     S.data = {};            // always show fresh install state
     S.detail = null;
+    S.market = null; S.remote = null; S.remoteBusy = false; S.marketUrl = '';
     render();
     $c('cz-q').focus();
   }
@@ -287,6 +392,7 @@
     });
     document.querySelectorAll('#cz-box .cz-tab').forEach(b => b.onclick = () => {
       S.kind = b.dataset.kind; S.category = null; S.detail = null; S.q = ''; render();
+      if (S.kind === 'marketplace' && !S.market) searchMarketplace('');
     });
     document.querySelectorAll('#cz-box .cz-view').forEach(b => b.onclick = () => {
       S.view = b.dataset.view; S.category = null; S.detail = null; render();
@@ -302,9 +408,22 @@
       if (ev.key === 'Enter' && ev.target.matches('.cz-card[data-open]')) { S.detail = ev.target.dataset.open; render(); }
     });
     body.addEventListener('submit', ev => {
-      if (ev.target.id !== 'cz-reg-form') return;
-      ev.preventDefault();
-      searchRegistry($c('cz-reg-q').value.trim());
+      if (ev.target.id === 'cz-reg-form') {
+        ev.preventDefault();
+        searchRegistry($c('cz-reg-q').value.trim());
+        return;
+      }
+      if (ev.target.id === 'cz-market-form') {
+        ev.preventDefault();
+        searchMarketplace($c('cz-market-q').value.trim());
+        return;
+      }
+      if (ev.target.id === 'cz-remote-form') {
+        ev.preventDefault();
+        const u = $c('cz-remote-url').value.trim();
+        if (u) reviewRemote(u, '');
+        return;
+      }
     });
   }
 })();
