@@ -16,6 +16,12 @@ const { SERVER_URL, SERVER_URL_ERROR } = require("./config");
 const fsops = require("./fsops");
 const shellops = require("./shellops");
 const policy = require("./policy");
+const oauthops = require("./oauthops");
+// loaded on first use: playwright-core is only needed once the agent opens a browser
+let _browserops = null;
+const browserops = () => (_browserops = _browserops || require("./browserops"));
+const androidops = require("./androidops");
+const iosops = require("./iosops");
 
 const APP_ICON_PATH = path.join(__dirname, "build", "icon.png");
 const appIcon = nativeImage.createFromPath(APP_ICON_PATH);
@@ -53,6 +59,20 @@ function setTrayStatus(text, connectedNow) {
       { label: connectedNow ? "🟢 Connected" : "🔴 Not connected", enabled: false },
       { label: "Show App", click: showMainWindow },
       { label: "Reconnect", click: reconnectNow, enabled: !connectedNow },
+      {
+        label: "Also confirm commands on this device",
+        type: "checkbox",
+        checked: policy.localConfirmEnabled(),
+        click: (item) => policy.setLocalConfirm(item.checked),
+      },
+      {
+        label: "Forget always-allowed commands",
+        click: () => {
+          policy.forgetAlwaysAllowed();
+          dialog.showMessageBox({ type: "info", title: "A770 Companion",
+            message: "The agent will ask again before running any command." });
+        },
+      },
       { type: "separator" },
       {
         label: "Quit",
@@ -392,9 +412,9 @@ const OPS = {
   "fs.grep": async (p) => { await policy.ensurePath(p.root, "search files in"); return fsops.grep(p); },
   "fs.tree": async (p) => { await policy.ensurePath(p.root, "browse"); return fsops.tree(p); },
   "shell.run": async (p) => {
-    await policy.confirmShell(p.command, p.cwd, p.display);
+    await policy.confirmShell(p.command, p.cwd, p.display, p.approved_in_app === true);
     // run_python: the script was written before approval -- run it only if it is
-    // exactly the code the user just approved
+    // exactly the code that was approved
     if (p.display != null && p.command === 'python "_agent_run.py"') {
       const script = require("path").join(p.cwd || "", "_agent_run.py");
       const onDisk = require("fs").existsSync(script) ? require("fs").readFileSync(script, "utf-8") : null;
@@ -402,6 +422,48 @@ const OPS = {
     }
     return shellops.run(p);
   },
+  // OAuth sign-in redirect for remote MCP servers (oauthops.js)
+  "oauth.loopback": (p) => oauthops.loopback(p),
+  // agent test browser (browserops.js)
+  "browser.navigate": (p) => browserops().navigate(p),
+  "browser.snapshot": (p) => browserops().snapshot(p),
+  "browser.click": (p) => browserops().click(p),
+  "browser.type": (p) => browserops().type(p),
+  "browser.press": (p) => browserops().press(p),
+  "browser.select": (p) => browserops().select(p),
+  "browser.screenshot": (p) => browserops().screenshot(p),
+  "browser.console": (p) => browserops().console(p),
+  "browser.eval": (p) => browserops().evaluate(p),
+  "browser.wait": (p) => browserops().waitFor(p),
+  "browser.close": (p) => browserops().close(p),
+  // Android emulator / phone over adb (androidops.js)
+  "android.devices": androidops.devices,
+  "android.boot_avd": androidops.bootAvd,
+  "android.pair": androidops.pair,
+  "android.connect": androidops.connect,
+  "android.install": androidops.install,
+  "android.launch": androidops.launch,
+  "android.stop": androidops.stopApp,
+  "android.screenshot": androidops.screenshot,
+  "android.ui_dump": androidops.uiDump,
+  "android.tap": androidops.tap,
+  "android.swipe": androidops.swipe,
+  "android.text": androidops.text,
+  "android.key": androidops.key,
+  "android.logcat": androidops.logcat,
+  // iOS Simulator, macOS companions only (iosops.js)
+  "ios.devices": iosops.devices,
+  "ios.boot": iosops.boot,
+  "ios.install": iosops.install,
+  "ios.launch": iosops.launch,
+  "ios.screenshot": iosops.screenshot,
+  "ios.ui_dump": iosops.uiDump,
+  "ios.tap": iosops.tap,
+  "ios.text": iosops.text,
+  "ios.logcat": iosops.logcat,
+  // lets the server tell the user their companion predates these ops
+  "companion.capabilities": async () => ({ ops: Object.keys(OPS), platform: process.platform,
+                                            version: app.getVersion() }),
 };
 
 async function handleCall(frame) {

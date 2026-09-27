@@ -1,7 +1,7 @@
 {
   "name": "local-agent",
-  "version": "0.1.103",
-  "description": "Local companion for Local Agent \u2014 runs file/shell operations on your own machine on the server's behalf.",
+  "version": "0.2.0",
+  "description": "Local companion for Local Agent — runs file/shell operations on your own machine on the server's behalf.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -22,11 +22,17 @@
         "provider": "generic",
         "url": "SERVER_URL/companion-updates/"
       }
-    ]
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png"
+    }
   },
   "dependencies": {
     "dotenv": "^9.0.2",
     "electron-updater": "^6.1.7",
+    "playwright-core": "^1.63.0",
     "ws": "^8.16.0"
   },
   "devDependencies": {

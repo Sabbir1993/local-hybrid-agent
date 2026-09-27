@@ -126,32 +126,159 @@ async function ensurePath(target, action) {
 
 const MAX_SHOWN_CODE = 3000;
 
+// "Always allow on this device": exact command line + folder, persisted here on the
+// device only (the server can't add to it). Cleared from the tray menu.
+let alwaysCommands = null;
+
+function alwaysPath() {
+  return path.join(app.getPath("userData"), "trusted-commands.json");
+}
+
+function loadAlways() {
+  if (alwaysCommands) return alwaysCommands;
+  try {
+    const list = JSON.parse(fs.readFileSync(alwaysPath(), "utf8"));
+    alwaysCommands = new Set(list.filter((k) => typeof k === "string"));
+  } catch {
+    alwaysCommands = new Set();
+  }
+  return alwaysCommands;
+}
+
+function saveAlways() {
+  try {
+    fs.writeFileSync(alwaysPath(), JSON.stringify([...loadAlways()], null, 2), "utf8");
+  } catch (e) {
+    console.error("[policy] failed to persist trusted commands:", e.message);
+  }
+}
+
+function alwaysAllowedCount() {
+  return loadAlways().size;
+}
+
+function forgetAlwaysAllowed() {
+  alwaysCommands = new Set();
+  trustedCommands.clear();
+  saveAlways();
+}
+
+// "Also confirm on this device": off by default. The user already approves each command
+// in the web app's permission card, so a second local dialog is skipped unless turned on
+// from the tray menu (then every command is confirmed here too).
+function settingsPath() {
+  return path.join(app.getPath("userData"), "policy-settings.json");
+}
+
+let settings = null;
+function loadSettings() {
+  if (settings) return settings;
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath(), "utf8")) || {};
+  } catch {
+    settings = {};
+  }
+  return settings;
+}
+
+function localConfirmEnabled() {
+  return loadSettings().confirmLocally === true;
+}
+
+function setLocalConfirm(on) {
+  loadSettings().confirmLocally = !!on;
+  try {
+    fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), "utf8");
+  } catch (e) {
+    console.error("[policy] failed to persist settings:", e.message);
+  }
+}
+
 // `display` is what actually runs when `command` is only a wrapper (run_python sends
 // `python "_agent_run.py"` plus the script body): the user approves the code, not the shim.
-async function confirmShell(command, cwd, display) {
+// `approvedInApp`: the server says the user approved it in the web app's card (or an allow
+// rule / ask_first=off covered it) - no second dialog unless local confirmation is on.
+// The folder check above still applies either way.
+async function confirmShell(command, cwd, display, approvedInApp) {
   if (!cwd || !isApproved(cwd)) {
     await ensurePath(cwd || process.cwd(), "run a command in");
   }
+  if (approvedInApp && !localConfirmEnabled()) return;
   const key = `${norm(cwd || "")}\n${command}\n${display || ""}`;
   if (trustedCommands.has(key)) return;
+  if (!display && loadAlways().has(key)) return;
   let shown = display ? `${command}\n\n--- code ---\n${display}` : command;
   if (shown.length > MAX_SHOWN_CODE) {
     shown = shown.slice(0, MAX_SHOWN_CODE) + `\n… (${shown.length - MAX_SHOWN_CODE} more chars)`;
   }
+  // code changes every time, so it can't be allowed forever; a command line can
+  const buttons = display ? ["Deny", "Run"] : ["Deny", "Run", "Always allow on this device"];
   const { response, checkboxChecked } = await prompt({
     type: "question",
-    buttons: ["Deny", "Run"],
+    buttons,
     defaultId: 0,
     cancelId: 0,
     title: "A770 Companion — run command?",
     message: display ? "The AI agent wants to run this code on your computer:"
                      : "The AI agent wants to run this command on your computer:",
-    detail: `${shown}\n\nin: ${cwd}`,
+    detail: `${shown}\n\nin: ${cwd}` +
+      (display ? "" : "\n\n\"Always allow\" remembers this exact command in this folder " +
+                      "(clear it from the tray menu)."),
     checkboxLabel: "Don't ask again for this exact command until the companion restarts",
     checkboxChecked: false,
   });
+  if (response === 2 && !display) {
+    loadAlways().add(key);
+    saveAlways();
+    return;
+  }
   if (response !== 1) throw new Error("denied by local user");
   if (checkboxChecked) trustedCommands.add(key);
 }
 
-module.exports = { ensurePath, confirmShell, approveRoot, isApproved };
+// Agent browser (browserops.js): a site other than a local dev host needs a one-time
+// Allow per origin until the companion restarts.
+const trustedOrigins = new Set();
+
+async function confirmOrigin(origin) {
+  if (trustedOrigins.has(origin)) return;
+  const { response } = await prompt({
+    type: "question",
+    buttons: ["Deny", "Allow this site"],
+    defaultId: 0,
+    cancelId: 0,
+    title: "A770 Companion — open a website?",
+    message: "The AI agent wants to open this site in its test browser:",
+    detail: `${origin}\n\nThe agent's browser is a fresh profile (none of your logins or cookies), ` +
+      "but anything the page shows is sent to the AI. Allow only sites you are testing.",
+  });
+  if (response !== 1) throw new Error(`denied by local user: open ${origin}`);
+  trustedOrigins.add(origin);
+}
+
+// Page JavaScript and device actions (install an app, boot an emulator, pair a phone)
+// are confirmed each time, with the same "don't ask again" option as shell commands.
+async function confirmAction(title, message, detail, trustKey) {
+  if (trustKey && trustedCommands.has(trustKey)) return;
+  const { response, checkboxChecked } = await prompt({
+    type: "question",
+    buttons: ["Deny", "Allow"],
+    defaultId: 0,
+    cancelId: 0,
+    title: `A770 Companion — ${title}`,
+    message,
+    detail: detail.length > MAX_SHOWN_CODE ? detail.slice(0, MAX_SHOWN_CODE) + "\n…" : detail,
+    checkboxLabel: trustKey ? "Don't ask again for this until the companion restarts" : undefined,
+    checkboxChecked: false,
+  });
+  if (response !== 1) throw new Error("denied by local user");
+  if (trustKey && checkboxChecked) trustedCommands.add(trustKey);
+}
+
+async function confirmScript(code, url) {
+  await confirmAction("run page script?", "The AI agent wants to run this JavaScript in its test browser:",
+    `${code}\n\non: ${url}`, `js\n${url}\n${code}`);
+}
+
+module.exports = { ensurePath, confirmShell, approveRoot, isApproved, confirmOrigin, confirmAction, confirmScript,
+                   alwaysAllowedCount, forgetAlwaysAllowed, localConfirmEnabled, setLocalConfirm };
