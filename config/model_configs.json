@@ -122,7 +122,7 @@
     "batch_size": 2048,
     "ubatch_size": 512,
     "n_slots": 1,
-    "tensor_split": "9,11",
+    "tensor_split": "15,5",
     "split_mode": "layer",
     "flash_attn": "on",
     "kv_cache_type": "q8_0",
@@ -133,8 +133,8 @@
       1,
       2
     ],
-    "vision_capable": true,
-    "kv_unified": true,
+    "vision_capable": false,
+    "kv_unified": false,
     "kv_unified_per_slot": 131920,
     "cache_reuse": 256,
     "cache_ram": 1024

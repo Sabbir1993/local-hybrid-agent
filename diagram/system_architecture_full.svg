@@ -1,0 +1,921 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2600" height="2617" viewBox="0 0 2600 2617" font-family="'Segoe UI', 'Noto Sans', Arial, sans-serif">
+<title>Local Agent (a770-dual-runtime) — full system architecture</title>
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#444441"/></marker>
+<marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#3C3489"/></marker>
+</defs>
+<rect width="2600" height="2617" fill="#FFFFFF"/>
+<text x="30.0" y="56.0" font-size="32" font-weight="bold" fill="#2C2C2A" text-anchor="start">Local Agent  —  a770-dual-runtime  ·  Full System Architecture</text>
+<text x="30.0" y="86.0" font-size="15" font-weight="normal" fill="#5F5E5A" text-anchor="start">Self-hosted, multi-user, PCI-DSS-aware LLM platform  ·  FastAPI control plane :8000  ·  llama.cpp Vulkan b10840 on 2× Intel Arc A770 16 GB  ·  sd.cpp + whisper.cpp media  ·  Windows 11 (primary) + Linux  ·  branch linux @ 2d3b7b8  ·  2026-09-28</text>
+<rect x="30" y="108" width="16" height="16" rx="3" fill="#E6F1FB" stroke="#185FA5" stroke-width="1.5"/>
+<text x="52.0" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Clients</text>
+<rect x="130.4" y="108" width="16" height="16" rx="3" fill="#FCEBEB" stroke="#A32D2D" stroke-width="1.5"/>
+<text x="152.4" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Edge / security</text>
+<rect x="288.4" y="108" width="16" height="16" rx="3" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="1.5"/>
+<text x="310.4" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">HTTP routers</text>
+<rect x="424.79999999999995" y="108" width="16" height="16" rx="3" fill="#EEEDFE" stroke="#534AB7" stroke-width="1.5"/>
+<text x="446.8" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Agent &amp; orchestration</text>
+<rect x="626.0" y="108" width="16" height="16" rx="3" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1.5"/>
+<text x="648.0" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Tools &amp; integrations</text>
+<rect x="820.0" y="108" width="16" height="16" rx="3" fill="#FAEEDA" stroke="#854F0B" stroke-width="1.5"/>
+<text x="842.0" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Knowledge / media / cloud</text>
+<rect x="1050.0" y="108" width="16" height="16" rx="3" fill="#FBEAF0" stroke="#993556" stroke-width="1.5"/>
+<text x="1072.0" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Guards</text>
+<rect x="1143.2" y="108" width="16" height="16" rx="3" fill="#EAF3DE" stroke="#3B6D11" stroke-width="1.5"/>
+<text x="1165.2" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Runtime control</text>
+<rect x="1301.2" y="108" width="16" height="16" rx="3" fill="#FAECE7" stroke="#993C1D" stroke-width="1.5"/>
+<text x="1323.2" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Inference plane</text>
+<rect x="1459.2" y="108" width="16" height="16" rx="3" fill="#E8E8E8" stroke="#2C2C2A" stroke-width="1.5"/>
+<text x="1481.2" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Hardware</text>
+<rect x="1566.8" y="108" width="16" height="16" rx="3" fill="#E1F5EE" stroke="#085041" stroke-width="1.5"/>
+<text x="1588.8" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Storage</text>
+<rect x="1667.2" y="108" width="16" height="16" rx="3" fill="#E6F1FB" stroke="#0C447C" stroke-width="1.5"/>
+<text x="1689.2" y="121.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">External</text>
+<rect x="46" y="182" width="502" height="180" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="1.2"/>
+<rect x="46" y="182" width="502" height="30" rx="8" fill="#185FA5"/>
+<rect x="46" y="202" width="502" height="10" fill="#185FA5"/>
+<text x="58.0" y="202.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Web SPA — ui.html</text>
+<text x="538.0" y="202.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">browser</text>
+<text x="58.0" y="229.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="70.0" y="229.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Vanilla JS, 40 modules in static/js, no bundler; CSS style/lanes/media</text>
+<text x="58.0" y="246.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="70.0" y="246.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Chat mode: web search, attachments, @ mentions, / commands</text>
+<text x="58.0" y="263.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="70.0" y="263.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Agent mode: Plan / Build, workspace tree, diff viewer, preview pane</text>
+<text x="58.0" y="280.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="70.0" y="280.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Image / video studio (media.js); mic dictation → 16 kHz WAV</text>
+<text x="58.0" y="297.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="70.0" y="297.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Answer-check shield, reasoning-effort selector, /compact, export</text>
+<text x="58.0" y="314.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="70.0" y="314.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Git panel, custom-agent picker, monitor, usage report, audit log, DB</text>
+<text x="70.0" y="331.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">explorer, GPU pill</text>
+<text x="58.0" y="348.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="70.0" y="348.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">CDN (CSP-allowed): mermaid 10.9.3, SheetJS xlsx 0.20.3</text>
+<rect x="562" y="182" width="401" height="180" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="1.2"/>
+<rect x="562" y="182" width="401" height="30" rx="8" fill="#185FA5"/>
+<rect x="562" y="202" width="401" height="10" fill="#185FA5"/>
+<text x="574.0" y="202.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Settings — settings.html</text>
+<text x="574.0" y="229.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="586.0" y="229.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">iframe, 15 tabs:</text>
+<text x="574.0" y="246.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="586.0" y="246.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Model config · Runtime · GPUs · Sampling</text>
+<text x="574.0" y="263.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="586.0" y="263.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Models &amp; Jobs (lanes) · Cloud · Capabilities / MCP</text>
+<text x="574.0" y="280.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="586.0" y="280.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Custom agents · Knowledge · Input/Output guard</text>
+<text x="574.0" y="297.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="586.0" y="297.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Users &amp; RBAC · Devices (companion) · DB · Theme ·</text>
+<text x="586.0" y="314.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Danger zone</text>
+<text x="574.0" y="331.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="586.0" y="331.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">login.html: session login + password change</text>
+<rect x="977" y="182" width="522" height="180" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="1.2"/>
+<rect x="977" y="182" width="522" height="30" rx="8" fill="#185FA5"/>
+<rect x="977" y="202" width="522" height="10" fill="#185FA5"/>
+<text x="989.0" y="202.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Companion — Electron 30, v0.2.0</text>
+<text x="1489.0" y="202.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">user device</text>
+<text x="989.0" y="229.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="1001.0" y="229.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">WS /ws/companion; auth = paired device key (HMAC of machine id) or session</text>
+<text x="1001.0" y="246.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">cookie; Origin header rejected</text>
+<text x="989.0" y="263.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="1001.0" y="263.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">fs.* read/write/edit/list/grep/tree/mkdir/browse · shell.run</text>
+<text x="989.0" y="280.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="1001.0" y="280.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">browser.* (11): Playwright Edge/Chrome, throwaway profile</text>
+<text x="989.0" y="297.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="1001.0" y="297.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">android.* (14): adb / emulator · ios.* (9): simctl + idb (macOS)</text>
+<text x="989.0" y="314.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="1001.0" y="314.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">oauth.loopback · companion.capabilities</text>
+<text x="989.0" y="331.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="1001.0" y="331.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">policy.js: confirmations; refuses password, cc-*, Luhn-valid input</text>
+<text x="989.0" y="348.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="1001.0" y="348.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">NSIS (Win) / DMG (mac); electron-updater (update URL = placeholder)</text>
+<rect x="1513" y="182" width="381" height="180" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="1.2"/>
+<rect x="1513" y="182" width="381" height="30" rx="8" fill="#185FA5"/>
+<rect x="1513" y="202" width="381" height="10" fill="#185FA5"/>
+<text x="1525.0" y="202.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">API clients</text>
+<text x="1525.0" y="229.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="1537.0" y="229.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">OpenAI-compatible /v1/chat/completions, /slots,</text>
+<text x="1537.0" y="246.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">/metrics passthrough</text>
+<text x="1525.0" y="263.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="1537.0" y="263.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Bearer PAT a770_pat_… (sha256-stored, scoped,</text>
+<text x="1537.0" y="280.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">default 30 d, max 90 d)</text>
+<text x="1525.0" y="297.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="1537.0" y="297.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Swagger /docs behind login</text>
+<text x="1525.0" y="314.0" font-size="12.5" font-weight="bold" fill="#185FA5" text-anchor="start">•</text>
+<text x="1537.0" y="314.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Agent workspaces live ONLY on the user device (no</text>
+<text x="1537.0" y="331.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">server workspace)</text>
+<rect x="30" y="158" width="1880" height="224" rx="12" fill="none" stroke="#185FA5" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="46" y="146" width="155.2" height="24" rx="12" fill="#185FA5"/>
+<text x="58.0" y="163.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">1 · CLIENT LAYER</text>
+<rect x="46" y="450" width="416" height="214" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="1.2"/>
+<rect x="46" y="450" width="416" height="30" rx="8" fill="#A32D2D"/>
+<rect x="46" y="470" width="416" height="10" fill="#A32D2D"/>
+<text x="58.0" y="470.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Uvicorn / FastAPI — server_manager.py</text>
+<text x="452.0" y="470.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">entrypoint</text>
+<text x="58.0" y="497.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="70.0" y="497.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">0.0.0.0:8000 (--host / A770_HOST), proxy_headers=True</text>
+<text x="58.0" y="514.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">Lifespan startup</text>
+<text x="58.0" y="531.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="70.0" y="531.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">FK repair (db_repair) → super-admin bootstrap → legacy</text>
+<text x="70.0" y="548.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">migrations</text>
+<text x="58.0" y="565.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="70.0" y="565.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Register tools: builtin, web, skills, shell, file, media,</text>
+<text x="70.0" y="582.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">browser, device, plugins</text>
+<text x="58.0" y="599.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="70.0" y="599.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Kill orphan llama-servers</text>
+<text x="58.0" y="616.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">Background tasks</text>
+<text x="58.0" y="633.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="70.0" y="633.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">MCP connect · watchdog 5 s · keepalive 25 s · small-model</text>
+<text x="70.0" y="650.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">reaper · memory task · router tuner</text>
+<rect x="476" y="450" width="362" height="214" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="1.2"/>
+<rect x="476" y="450" width="362" height="30" rx="8" fill="#A32D2D"/>
+<rect x="476" y="470" width="362" height="10" fill="#A32D2D"/>
+<text x="488.0" y="470.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">SecurityHeadersMiddleware (pure ASGI)</text>
+<text x="488.0" y="497.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="500.0" y="497.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">CSP default-src 'self'; frame-ancestors 'self';</text>
+<text x="500.0" y="514.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">object-src 'none'</text>
+<text x="488.0" y="531.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="500.0" y="531.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">X-Frame-Options SAMEORIGIN, nosniff, Referrer-</text>
+<text x="500.0" y="548.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Policy, Permissions-Policy</text>
+<text x="488.0" y="565.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="500.0" y="565.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">HSTS on https; sandbox CSP for /agent/raw</text>
+<text x="500.0" y="582.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">previews</text>
+<text x="488.0" y="599.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="500.0" y="599.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">SSE passes through unbuffered</text>
+<text x="488.0" y="616.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="500.0" y="616.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Plain-HTTP warning when not on localhost (PCI</text>
+<text x="500.0" y="633.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">4.2.1)</text>
+<rect x="852" y="450" width="362" height="214" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="1.2"/>
+<rect x="852" y="450" width="362" height="30" rx="8" fill="#A32D2D"/>
+<rect x="852" y="470" width="362" height="10" fill="#A32D2D"/>
+<text x="864.0" y="470.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Authentication — core/auth.py</text>
+<text x="864.0" y="497.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="876.0" y="497.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Argon2 password hashes</text>
+<text x="864.0" y="514.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="876.0" y="514.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Cookie a770_session (sha256 stored); idle 15 min</text>
+<text x="876.0" y="531.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">(PCI 8.2.8), absolute 7 d</text>
+<text x="864.0" y="548.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="876.0" y="548.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Lockout 10 fails → 30 min; per-IP 30 fails / 15</text>
+<text x="876.0" y="565.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">min (10k IPs tracked)</text>
+<text x="864.0" y="582.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="876.0" y="582.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">CSRF double-submit: a770_csrf + X-CSRF-Token</text>
+<text x="864.0" y="599.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="876.0" y="599.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">API tokens (PAT); swappable auth_provider (SSO</text>
+<text x="876.0" y="616.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">stub)</text>
+<rect x="1228" y="450" width="326" height="214" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="1.2"/>
+<rect x="1228" y="450" width="326" height="30" rx="8" fill="#A32D2D"/>
+<rect x="1228" y="470" width="326" height="10" fill="#A32D2D"/>
+<text x="1240.0" y="470.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Authorization — RBAC</text>
+<text x="1240.0" y="497.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1252.0" y="497.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">19 permission keys: chat.use,</text>
+<text x="1252.0" y="514.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">model.local.load, knowledge.manage,</text>
+<text x="1252.0" y="531.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">database.manage, git.push,</text>
+<text x="1252.0" y="548.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">custom_agents.publish …</text>
+<text x="1240.0" y="565.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1252.0" y="565.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Built-in roles admin / user + custom roles</text>
+<text x="1240.0" y="582.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1252.0" y="582.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Privileged actions → audit_log</text>
+<rect x="1568" y="450" width="326" height="214" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="1.2"/>
+<rect x="1568" y="450" width="326" height="30" rx="8" fill="#A32D2D"/>
+<rect x="1568" y="470" width="326" height="10" fill="#A32D2D"/>
+<text x="1580.0" y="470.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Admission / fair share</text>
+<text x="1580.0" y="497.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1592.0" y="497.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">routes/common.py _Admission</text>
+<text x="1580.0" y="514.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1592.0" y="514.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Global concurrency = n_slots (queue_enabled)</text>
+<text x="1580.0" y="531.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1592.0" y="531.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">max_inflight_per_user = 1</text>
+<text x="1580.0" y="548.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1592.0" y="548.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Slot affinity id_slot = uid % n_slots</text>
+<text x="1580.0" y="565.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1592.0" y="565.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Cloud media daily caps (image/video per day)</text>
+<rect x="30" y="426" width="1880" height="258" rx="12" fill="none" stroke="#A32D2D" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="46" y="414" width="237.2" height="24" rx="12" fill="#A32D2D"/>
+<text x="58.0" y="431.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">2 · EDGE, AUTH &amp; ADMISSION</text>
+<rect x="46.0" y="754" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="125.5" y="774.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">auth</text>
+<text x="125.5" y="791.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/auth · 4</text>
+<rect x="214.9" y="754" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="294.4" y="774.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">api_tokens</text>
+<text x="294.4" y="791.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/admin/api-tokens · 3</text>
+<rect x="383.8" y="754" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="463.3" y="774.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">api_docs</text>
+<text x="463.3" y="791.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/docs</text>
+<rect x="552.7" y="754" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="632.2" y="774.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">control</text>
+<text x="632.2" y="791.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/control · 17</text>
+<rect x="721.6" y="754" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="801.1" y="774.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">projects</text>
+<text x="801.1" y="791.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/projects · 17</text>
+<rect x="890.5" y="754" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="970.0" y="774.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">capabilities</text>
+<text x="970.0" y="791.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">· 11</text>
+<rect x="1059.5" y="754" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="1138.9" y="774.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">cloud</text>
+<text x="1138.9" y="791.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/control/cloud · 8</text>
+<rect x="1228.4" y="754" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="1307.8" y="774.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">lanes</text>
+<text x="1307.8" y="791.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/control/lanes · 10</text>
+<rect x="1397.3" y="754" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="1476.7" y="774.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">media</text>
+<text x="1476.7" y="791.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/media · 5</text>
+<rect x="1566.2" y="754" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="1645.6" y="774.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">chat</text>
+<text x="1645.6" y="791.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/chat/run, /compact</text>
+<rect x="1735.1" y="754" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="1814.5" y="774.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">agent</text>
+<text x="1814.5" y="791.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/agent · 19 (SSE)</text>
+<rect x="46.0" y="812" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="125.5" y="832.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">git</text>
+<text x="125.5" y="849.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/git · 10</text>
+<rect x="214.9" y="812" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="294.4" y="832.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">mcp_manager</text>
+<text x="294.4" y="849.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/mcp · 16 + OAuth</text>
+<rect x="383.8" y="812" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="463.3" y="832.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">plugins</text>
+<text x="463.3" y="849.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/plugins · 5</text>
+<rect x="552.7" y="812" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="632.2" y="832.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">customize</text>
+<text x="632.2" y="849.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/customize · 8</text>
+<rect x="721.6" y="812" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="801.1" y="832.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">admin_rbac</text>
+<text x="801.1" y="849.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/admin · 14</text>
+<rect x="890.5" y="812" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="970.0" y="832.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">knowledge</text>
+<text x="970.0" y="849.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/knowledge · 10</text>
+<rect x="1059.5" y="812" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="1138.9" y="832.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">input_guard</text>
+<text x="1138.9" y="849.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">· 4</text>
+<rect x="1228.4" y="812" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="1307.8" y="832.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">db_explorer</text>
+<text x="1307.8" y="849.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/db · 4</text>
+<rect x="1397.3" y="812" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="1476.7" y="832.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">custom_agents</text>
+<text x="1476.7" y="849.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/custom-agents · 7</text>
+<rect x="1566.2" y="812" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="1645.6" y="832.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">companion_bridge</text>
+<text x="1645.6" y="849.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">WS /ws/companion, /pair</text>
+<rect x="1735.1" y="812" width="158.9" height="48" rx="6" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="1814.5" y="832.0" font-size="13" font-weight="bold" fill="#2C2C2A" text-anchor="middle">proxy</text>
+<text x="1814.5" y="849.0" font-size="11.5" font-weight="normal" fill="#5F5E5A" text-anchor="middle">/v1/* → :8090</text>
+<text x="46.0" y="884.0" font-size="12.5" font-weight="normal" fill="#444441" text-anchor="start">22 routers in routes/ · SSE events (/agent/run): step, lane, thought(_delta), delta, delta_reset, tool_call, verify, permission_request, tool_result, plan, validated, done, queued · media jobs: queued → progress → done/error · core/sse.py PAN-masks tool events</text>
+<rect x="30" y="728" width="1880" height="174" rx="12" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="46" y="716" width="270.0" height="24" rx="12" fill="#5F5E5A"/>
+<text x="58.0" y="733.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">3 · HTTP API SURFACE — routes/</text>
+<rect x="46" y="970" width="452" height="129" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1.2"/>
+<rect x="46" y="970" width="452" height="30" rx="8" fill="#534AB7"/>
+<rect x="46" y="990" width="452" height="10" fill="#534AB7"/>
+<text x="58.0" y="990.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Agent loop</text>
+<text x="488.0" y="990.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">core</text>
+<text x="58.0" y="1017.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1017.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">routes/agent.py (2078 L) + core/agent_loop.py</text>
+<text x="58.0" y="1034.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1034.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Plan / Build modes; plan state in plan_items</text>
+<text x="58.0" y="1051.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1051.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Recovers text-written tool calls; 3-tier retry</text>
+<text x="58.0" y="1068.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1068.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">max_steps 60; chat 12 tool rounds / 8 web calls (deep 20 / 12)</text>
+<text x="58.0" y="1085.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1085.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Permission prompts streamed as SSE</text>
+<rect x="46" y="1111" width="452" height="231" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1.2"/>
+<rect x="46" y="1111" width="452" height="30" rx="8" fill="#534AB7"/>
+<rect x="46" y="1131" width="452" height="10" fill="#534AB7"/>
+<text x="58.0" y="1131.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Lane registry &amp; jobs — core/lanes.py</text>
+<text x="58.0" y="1158.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1158.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Lanes: main · executor · vision · embedder + admin local lanes</text>
+<text x="70.0" y="1175.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">+ per-user cloud lanes</text>
+<text x="58.0" y="1192.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">13 jobs → default lane</text>
+<text x="58.0" y="1209.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1209.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">agent.reason → main</text>
+<text x="58.0" y="1226.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1226.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">agent.tool_step, summarize, commit_msg, subagent, verify →</text>
+<text x="70.0" y="1243.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">executor</text>
+<text x="58.0" y="1260.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1260.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">search_rewrite, input_guard, embed → local_only</text>
+<text x="58.0" y="1277.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1277.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">vision → vision · image_gen, video_gen, transcribe → media</text>
+<text x="58.0" y="1294.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1294.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Fallback: mapped (cloud→local) → lane fallback → job default →</text>
+<text x="70.0" y="1311.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">main</text>
+<text x="58.0" y="1328.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1328.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Presets: Private · Balanced · Best quality · Main only</text>
+<rect x="46" y="1354" width="452" height="163" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1.2"/>
+<rect x="46" y="1354" width="452" height="30" rx="8" fill="#534AB7"/>
+<rect x="46" y="1374" width="452" height="10" fill="#534AB7"/>
+<text x="58.0" y="1374.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Router — policy / tuner / log</text>
+<text x="58.0" y="1401.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1401.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">CPU classifier laya 421M ModernBERT (alt cactus_needle 45M),</text>
+<text x="70.0" y="1418.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">confidence 0.85</text>
+<text x="58.0" y="1435.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1435.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Keyword categories, repeat_streak_limit 2</text>
+<text x="58.0" y="1452.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1452.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">router_tuner proposes rules after ≥30 samples; admin applies</text>
+<text x="58.0" y="1469.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1469.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Telemetry → usage.db (no prompt text, 90-day retention)</text>
+<text x="58.0" y="1486.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1486.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Executor uses GBNF grammar; weak output escalates to main</text>
+<text x="70.0" y="1503.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">(delta_reset)</text>
+<rect x="46" y="1529" width="452" height="78" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1.2"/>
+<rect x="46" y="1529" width="452" height="30" rx="8" fill="#534AB7"/>
+<rect x="46" y="1549" width="452" height="10" fill="#534AB7"/>
+<text x="58.0" y="1549.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Answer check — verifier.py</text>
+<text x="58.0" y="1576.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1576.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Modes: off · badge · check-before-showing</text>
+<text x="58.0" y="1593.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1593.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Strict-JSON verdict pass / fail / unverified; fail-open</text>
+<rect x="46" y="1619" width="452" height="129" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1.2"/>
+<rect x="46" y="1619" width="452" height="30" rx="8" fill="#534AB7"/>
+<rect x="46" y="1639" width="452" height="10" fill="#534AB7"/>
+<text x="58.0" y="1639.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Reasoning, sub-agents &amp; roles</text>
+<text x="58.0" y="1666.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1666.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Effort budgets: low 1024 · medium 4096 · high 12288 · extra ∞</text>
+<text x="58.0" y="1683.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1683.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">spawn_agent depth ≤ 1</text>
+<text x="58.0" y="1700.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1700.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">roles.json: planner, coder, reviewer, multi-analyzer /</text>
+<text x="70.0" y="1717.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">architect / reviewer</text>
+<text x="58.0" y="1734.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1734.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">/init writes AGENTS.md (project_context)</text>
+<rect x="46" y="1760" width="452" height="129" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1.2"/>
+<rect x="46" y="1760" width="452" height="30" rx="8" fill="#534AB7"/>
+<rect x="46" y="1780" width="452" height="10" fill="#534AB7"/>
+<text x="58.0" y="1780.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Custom agents &amp; Agent Library</text>
+<text x="58.0" y="1807.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1807.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">user_custom_agents: tool allowlist enforced via contextvar,</text>
+<text x="70.0" y="1824.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">preferred_lane, input template, public sharing</text>
+<text x="58.0" y="1841.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1841.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">.agents: 43 profiles · ~75 commands · 14 skills; default deny,</text>
+<text x="70.0" y="1858.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">allowlist 14 agents / 21 commands</text>
+<text x="58.0" y="1875.0" font-size="12.5" font-weight="bold" fill="#534AB7" text-anchor="start">•</text>
+<text x="70.0" y="1875.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">multi_lanes: backend → main, frontend → executor</text>
+<rect x="511.5" y="970" width="452" height="78" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1.2"/>
+<rect x="511.5" y="970" width="452" height="30" rx="8" fill="#0F6E56"/>
+<rect x="511.5" y="990" width="452" height="10" fill="#0F6E56"/>
+<text x="523.5" y="990.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Tool registry — core/registry.py</text>
+<text x="953.5" y="990.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">core</text>
+<text x="523.5" y="1017.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1017.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Single registry; sources: builtin · web · skill · shell ·</text>
+<text x="535.5" y="1034.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">mcp__&lt;srv&gt;__&lt;tool&gt; · plugin__&lt;name&gt;__&lt;tool&gt; · per-user tools</text>
+<rect x="511.5" y="1060" width="452" height="146" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1.2"/>
+<rect x="511.5" y="1060" width="452" height="30" rx="8" fill="#0F6E56"/>
+<rect x="511.5" y="1080" width="452" height="10" fill="#0F6E56"/>
+<text x="523.5" y="1080.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Builtin &amp; document tools</text>
+<text x="523.5" y="1107.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1107.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">agent_tools.py (1795 L): file tools, run_python, list_diff /</text>
+<text x="535.5" y="1124.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">revert, analyze_image, search_memory, plan tools</text>
+<text x="523.5" y="1141.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1141.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">read_file_chunk: xlsx, xls, csv, pdf, pptx, docx</text>
+<text x="523.5" y="1158.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1158.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">doc_ops/: pptx_ops (979 L), xlsx_ops (701), docx_ops (417),</text>
+<text x="535.5" y="1175.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">csv_ops, md_ops → doc_inspect / doc_edit / doc_create; versions</text>
+<text x="535.5" y="1192.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">in doc_files</text>
+<rect x="511.5" y="1218" width="452" height="95" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1.2"/>
+<rect x="511.5" y="1218" width="452" height="30" rx="8" fill="#0F6E56"/>
+<rect x="511.5" y="1238" width="452" height="10" fill="#0F6E56"/>
+<text x="523.5" y="1238.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Shell gate — shell_tools.py</text>
+<text x="523.5" y="1265.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1265.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">allow · project · always · deny; 180 s approval wait</text>
+<text x="523.5" y="1282.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1282.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Allow-patterns per user, forbidden list; shell operators need</text>
+<text x="535.5" y="1299.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">explicit approval</text>
+<rect x="511.5" y="1325" width="452" height="78" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1.2"/>
+<rect x="511.5" y="1325" width="452" height="30" rx="8" fill="#0F6E56"/>
+<rect x="511.5" y="1345" width="452" height="10" fill="#0F6E56"/>
+<text x="523.5" y="1345.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Device &amp; browser tools</text>
+<text x="523.5" y="1372.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1372.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">browser_tools · device_tools → companion_bridge (60 s timeout)</text>
+<text x="523.5" y="1389.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1389.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Workspace is device-only (WorkspaceAccessDenied → 403)</text>
+<rect x="511.5" y="1415" width="452" height="163" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1.2"/>
+<rect x="511.5" y="1415" width="452" height="30" rx="8" fill="#0F6E56"/>
+<rect x="511.5" y="1435" width="452" height="10" fill="#0F6E56"/>
+<text x="523.5" y="1435.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">MCP client — core/mcp.py</text>
+<text x="523.5" y="1462.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1462.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Hand-rolled; stdio + streamable HTTP; protocol 2025-03-26</text>
+<text x="523.5" y="1479.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1479.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Global: echo (stdio), isms (npx mcp-remote)</text>
+<text x="523.5" y="1496.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1496.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Personal servers in auth.db; non-admins: mcp-atlassian / mcp-</text>
+<text x="535.5" y="1513.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">remote only</text>
+<text x="523.5" y="1530.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1530.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">mcp_oauth: OAuth 2.1 + PKCE S256, RFC 9728 / 8414 discovery,</text>
+<text x="535.5" y="1547.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">tokens in keychain, refresh &lt; 60 s</text>
+<text x="523.5" y="1564.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1564.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">GitHub connector: RFC 8628 device flow or PAT</text>
+<rect x="511.5" y="1590" width="452" height="95" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1.2"/>
+<rect x="511.5" y="1590" width="452" height="30" rx="8" fill="#0F6E56"/>
+<rect x="511.5" y="1610" width="452" height="10" fill="#0F6E56"/>
+<text x="523.5" y="1610.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Web search — web_search.py</text>
+<text x="523.5" y="1637.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1637.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Keyless: SearXNG (optional) + DuckDuckGo HTML + Bing HTML</text>
+<text x="523.5" y="1654.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1654.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Reciprocal-rank fusion + nomic embedder rerank</text>
+<text x="523.5" y="1671.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1671.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Query PII redaction; region bd-en</text>
+<rect x="511.5" y="1697" width="452" height="146" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1.2"/>
+<rect x="511.5" y="1697" width="452" height="30" rx="8" fill="#0F6E56"/>
+<rect x="511.5" y="1717" width="452" height="10" fill="#0F6E56"/>
+<text x="523.5" y="1717.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Skills, plugins &amp; git</text>
+<text x="523.5" y="1744.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1744.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Skills: SKILL.md names only in prompt; read_skill ≤ 12k chars;</text>
+<text x="535.5" y="1761.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">30 in skill_catalog, installed via /customize</text>
+<text x="523.5" y="1778.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1778.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Plugins: bd_finance, devtools, json_tools, pci_masker,</text>
+<text x="535.5" y="1795.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">text_codec</text>
+<text x="523.5" y="1812.0" font-size="12.5" font-weight="bold" fill="#0F6E56" text-anchor="start">•</text>
+<text x="535.5" y="1812.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">git_tools (local) · git_ai commit messages via executor ·</text>
+<text x="535.5" y="1829.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">GitHub PR via MCP</text>
+<rect x="977.0" y="970" width="452" height="180" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="1.2"/>
+<rect x="977.0" y="970" width="452" height="30" rx="8" fill="#854F0B"/>
+<rect x="977.0" y="990" width="452" height="10" fill="#854F0B"/>
+<text x="989.0" y="990.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Knowledge ingest — knowledge_ingest.py</text>
+<text x="1419.0" y="990.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">RAG</text>
+<text x="989.0" y="1017.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1017.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Text, URL (SSRF-guarded), file + chunked upload (/upload/chunk,</text>
+<text x="1001.0" y="1034.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">/complete)</text>
+<text x="989.0" y="1051.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1051.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">pdfplumber, DOCX, XLSX extractors</text>
+<text x="989.0" y="1068.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1068.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Chunks 900 chars / 150 overlap; embed batch 16 → nomic :8093</text>
+<text x="989.0" y="1085.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1085.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">knowledge_sources + per-role visibility</text>
+<text x="1001.0" y="1102.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">(knowledge_source_role_access)</text>
+<text x="989.0" y="1119.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1119.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">PAN scan on upload disabled by policy; scripts/scrub_pans.py</text>
+<text x="1001.0" y="1136.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">for cleanup</text>
+<rect x="977.0" y="1162" width="452" height="129" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="1.2"/>
+<rect x="977.0" y="1162" width="452" height="30" rx="8" fill="#854F0B"/>
+<rect x="977.0" y="1182" width="452" height="10" fill="#854F0B"/>
+<text x="989.0" y="1182.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Retrieval — core/memory.py</text>
+<text x="989.0" y="1209.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1209.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Hybrid cosine + lexical (search_memory_hybrid)</text>
+<text x="989.0" y="1226.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1226.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">ACL filter BEFORE scoring (knowledge_access)</text>
+<text x="989.0" y="1243.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1243.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">min_cos 0.45 · auto-inject 0.55</text>
+<text x="989.0" y="1260.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1260.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">knowledge_router detects organizational questions</text>
+<text x="989.0" y="1277.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1277.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">cloud_policy local_only — KB never sent to cloud</text>
+<rect x="977.0" y="1303" width="452" height="180" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="1.2"/>
+<rect x="977.0" y="1303" width="452" height="30" rx="8" fill="#854F0B"/>
+<rect x="977.0" y="1323" width="452" height="10" fill="#854F0B"/>
+<text x="989.0" y="1323.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Media — media.py (881 L)</text>
+<text x="989.0" y="1350.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1350.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">sd.cpp native async /sdcpp/v1/img_gen | vid_gen</text>
+<text x="989.0" y="1367.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1367.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">img2img / edit: ≤10 refs, 10 MB each / 40 MB total, resized</text>
+<text x="1001.0" y="1384.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">≤1536 px, EXIF stripped, local only</text>
+<text x="989.0" y="1401.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1401.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Cloud image/video: OpenAI-style APIs, Google Imagen / Veo</text>
+<text x="1001.0" y="1418.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">(video asks before spend)</text>
+<text x="989.0" y="1435.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1435.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">STT local whisper; cloud audio off unless</text>
+<text x="1001.0" y="1452.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">media.allow_cloud_audio</text>
+<text x="989.0" y="1469.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1469.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Output → common/user_&lt;id&gt;/generated/</text>
+<rect x="977.0" y="1495" width="452" height="129" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="1.2"/>
+<rect x="977.0" y="1495" width="452" height="30" rx="8" fill="#854F0B"/>
+<rect x="977.0" y="1515" width="452" height="10" fill="#854F0B"/>
+<text x="989.0" y="1515.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Cloud client — core/cloud.py</text>
+<text x="989.0" y="1542.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1542.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Per-user OpenAI-compatible providers (OpenRouter-style</text>
+<text x="1001.0" y="1559.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">gateways, Google Gemini)</text>
+<text x="989.0" y="1576.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1576.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Keys in OS keychain; strips llama-only fields</text>
+<text x="989.0" y="1593.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1593.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">PAN mask on egress (CloudClient._prepare); fallback_local</text>
+<text x="1001.0" y="1610.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">configurable</text>
+<rect x="977.0" y="1636" width="452" height="95" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="1.2"/>
+<rect x="977.0" y="1636" width="452" height="30" rx="8" fill="#854F0B"/>
+<rect x="977.0" y="1656" width="452" height="10" fill="#854F0B"/>
+<text x="989.0" y="1656.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Chat, projects &amp; memory</text>
+<text x="989.0" y="1683.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1683.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">projects / sessions / messages (meta JSON)</text>
+<text x="989.0" y="1700.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1700.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">/chat/compact → compacts/; memory_background_task</text>
+<text x="989.0" y="1717.0" font-size="12.5" font-weight="bold" fill="#854F0B" text-anchor="start">•</text>
+<text x="1001.0" y="1717.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Usage accounting → usage.db requests (tokens, t/s, status)</text>
+<rect x="1442.5" y="970" width="452" height="95" rx="8" fill="#FBEAF0" stroke="#993556" stroke-width="1.2"/>
+<rect x="1442.5" y="970" width="452" height="30" rx="8" fill="#993556"/>
+<rect x="1442.5" y="990" width="452" height="10" fill="#993556"/>
+<text x="1454.5" y="990.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">PAN guard — core/pan.py</text>
+<text x="1884.5" y="990.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">PCI</text>
+<text x="1454.5" y="1017.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1466.5" y="1017.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">13–19 digits, any separators incl. Bengali numerals + Luhn</text>
+<text x="1454.5" y="1034.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1466.5" y="1034.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">pan_input: block · pan_output: mask · pan_cloud_egress: mask</text>
+<text x="1454.5" y="1051.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1466.5" y="1051.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">SSE tool events masked (core/sse.py)</text>
+<rect x="1442.5" y="1077" width="452" height="112" rx="8" fill="#FBEAF0" stroke="#993556" stroke-width="1.2"/>
+<rect x="1442.5" y="1077" width="452" height="30" rx="8" fill="#993556"/>
+<rect x="1442.5" y="1097" width="452" height="10" fill="#993556"/>
+<text x="1454.5" y="1097.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Input / output guard</text>
+<text x="1454.5" y="1124.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1466.5" y="1124.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Scopes: cloud_only · block_all · role / user bound</text>
+<text x="1454.5" y="1141.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1466.5" y="1141.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Active input rule: block sensitive attachment to cloud</text>
+<text x="1454.5" y="1158.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1466.5" y="1158.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Output: rolling redaction window; rule “never share personal</text>
+<text x="1466.5" y="1175.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">info” (role user)</text>
+<rect x="1442.5" y="1201" width="452" height="78" rx="8" fill="#FBEAF0" stroke="#993556" stroke-width="1.2"/>
+<rect x="1442.5" y="1201" width="452" height="30" rx="8" fill="#993556"/>
+<rect x="1442.5" y="1221" width="452" height="10" fill="#993556"/>
+<text x="1454.5" y="1221.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">SSRF guard — core/net_guard.py</text>
+<text x="1454.5" y="1248.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1466.5" y="1248.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Applied to every server-side fetch + each redirect (web, KB</text>
+<text x="1466.5" y="1265.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">URL, marketplace)</text>
+<rect x="1442.5" y="1291" width="452" height="231" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="1.2"/>
+<rect x="1442.5" y="1291" width="452" height="30" rx="8" fill="#3B6D11"/>
+<rect x="1442.5" y="1311" width="452" height="10" fill="#3B6D11"/>
+<text x="1454.5" y="1311.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Runtime manager</text>
+<text x="1884.5" y="1311.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">control</text>
+<text x="1454.5" y="1338.0" font-size="12.5" font-weight="bold" fill="#3B6D11" text-anchor="start">•</text>
+<text x="1466.5" y="1338.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">process.py build_launch_command: -dev VulkanN, --tensor-split,</text>
+<text x="1466.5" y="1355.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">-ctk/-ctv, -np, -ncmoe, --jinja, --spec-type draft-mtp</text>
+<text x="1454.5" y="1372.0" font-size="12.5" font-weight="bold" fill="#3B6D11" text-anchor="start">•</text>
+<text x="1466.5" y="1372.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">backend.py: presets vulkan [1,2] / cuda [0]; LLAMA_RUNTIME</text>
+<text x="1466.5" y="1389.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">override</text>
+<text x="1454.5" y="1406.0" font-size="12.5" font-weight="bold" fill="#3B6D11" text-anchor="start">•</text>
+<text x="1466.5" y="1406.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">state.py: watchdog 5 s, health timeout 120 s, restart backoff ≤</text>
+<text x="1466.5" y="1423.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">60 s</text>
+<text x="1454.5" y="1440.0" font-size="12.5" font-weight="bold" fill="#3B6D11" text-anchor="start">•</text>
+<text x="1466.5" y="1440.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Keepalive 1-token ping / 25 s (WDDM idle demotion: 7.7 → 14.4</text>
+<text x="1466.5" y="1457.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">t/s)</text>
+<text x="1454.5" y="1474.0" font-size="12.5" font-weight="bold" fill="#3B6D11" text-anchor="start">•</text>
+<text x="1466.5" y="1474.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">vram.py: preflight mode block, 1.0 GB headroom,</text>
+<text x="1466.5" y="1491.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">compute_tensor_split</text>
+<text x="1454.5" y="1508.0" font-size="12.5" font-weight="bold" fill="#3B6D11" text-anchor="start">•</text>
+<text x="1466.5" y="1508.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">gpu.py perf counters (4 s cache); small_model.py spawn + reaper</text>
+<rect x="1442.5" y="1534" width="452" height="78" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="1.2"/>
+<rect x="1442.5" y="1534" width="452" height="30" rx="8" fill="#3B6D11"/>
+<rect x="1442.5" y="1554" width="452" height="10" fill="#3B6D11"/>
+<text x="1454.5" y="1554.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">autotune.py</text>
+<text x="1454.5" y="1581.0" font-size="12.5" font-weight="bold" fill="#3B6D11" text-anchor="start">•</text>
+<text x="1466.5" y="1581.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">llama-bench sweep of tensor-split / --n-cpu-moe →</text>
+<text x="1466.5" y="1598.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">profile["tuned"]</text>
+<rect x="1442.5" y="1624" width="452" height="78" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="1.2"/>
+<rect x="1442.5" y="1624" width="452" height="30" rx="8" fill="#3B6D11"/>
+<rect x="1442.5" y="1644" width="452" height="10" fill="#3B6D11"/>
+<text x="1454.5" y="1644.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">OpenAI proxy — routes/proxy.py</text>
+<text x="1454.5" y="1671.0" font-size="12.5" font-weight="bold" fill="#3B6D11" text-anchor="start">•</text>
+<text x="1466.5" y="1671.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Catch-all /v1/* → 127.0.0.1:8090; auto-starts the selected</text>
+<text x="1466.5" y="1688.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">model</text>
+<rect x="30" y="946" width="1880" height="963" rx="12" fill="none" stroke="#534AB7" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="46" y="934" width="343.79999999999995" height="24" rx="12" fill="#534AB7"/>
+<text x="58.0" y="951.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">4 · CORE SERVICES — core/ (~60 modules)</text>
+<rect x="46" y="1977" width="320" height="180" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="1.2"/>
+<rect x="46" y="1977" width="320" height="30" rx="8" fill="#993C1D"/>
+<rect x="46" y="1997" width="320" height="10" fill="#993C1D"/>
+<text x="58.0" y="1997.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">main — llama-server</text>
+<text x="356.0" y="1997.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">:8090</text>
+<text x="58.0" y="2024.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="70.0" y="2024.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">127.0.0.1:8090 · Vulkan1 + Vulkan2,</text>
+<text x="70.0" y="2041.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">split_mode layer</text>
+<text x="58.0" y="2058.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="70.0" y="2058.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Default: Ornith-1.5-9B Q4_K_M (split 15,5);</text>
+<text x="70.0" y="2075.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">big models via tensor split + CPU offload</text>
+<text x="58.0" y="2092.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="70.0" y="2092.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">-np = n_slots (currently 1 → serial</text>
+<text x="70.0" y="2109.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">generation)</text>
+<text x="58.0" y="2126.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="70.0" y="2126.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">batch 2048 / ubatch 512, KV q8_0, MTP draft</text>
+<text x="70.0" y="2143.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">where supported</text>
+<rect x="380" y="1977" width="237" height="180" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="1.2"/>
+<rect x="380" y="1977" width="237" height="30" rx="8" fill="#993C1D"/>
+<rect x="380" y="1997" width="237" height="10" fill="#993C1D"/>
+<text x="392.0" y="1997.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">executor</text>
+<text x="607.0" y="1997.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">:8091</text>
+<text x="392.0" y="2024.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="404.0" y="2024.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">“Fast helper” — Spark-X2.5-4B</text>
+<text x="404.0" y="2041.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Q4_K_M</text>
+<text x="392.0" y="2058.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="404.0" y="2058.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">GPU1 · ctx 32576 · np 1 · KV</text>
+<text x="404.0" y="2075.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">q8_0</text>
+<text x="392.0" y="2092.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="404.0" y="2092.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">fallback → main</text>
+<rect x="630" y="1977" width="237" height="180" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="1.2"/>
+<rect x="630" y="1977" width="237" height="30" rx="8" fill="#993C1D"/>
+<rect x="630" y="1997" width="237" height="10" fill="#993C1D"/>
+<text x="642.0" y="1997.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">vision</text>
+<text x="857.0" y="1997.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">:8092</text>
+<text x="642.0" y="2024.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="654.0" y="2024.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Qwen2.5-VL-3B-Instruct Q4_K_M</text>
+<text x="654.0" y="2041.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">+ mmproj f16</text>
+<text x="642.0" y="2058.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="654.0" y="2058.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">GPU1 · ctx 16384 · np 1</text>
+<rect x="881" y="1977" width="237" height="180" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="1.2"/>
+<rect x="881" y="1977" width="237" height="30" rx="8" fill="#993C1D"/>
+<rect x="881" y="1997" width="237" height="10" fill="#993C1D"/>
+<text x="893.0" y="1997.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">embedder</text>
+<text x="1108.0" y="1997.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">:8093</text>
+<text x="893.0" y="2024.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="905.0" y="2024.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">nomic-embed-text-v1.5 Q8_0</text>
+<text x="893.0" y="2041.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="905.0" y="2041.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">GPU1 · ctx 16384 · batch 16</text>
+<rect x="1132" y="1977" width="284" height="180" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="1.2"/>
+<rect x="1132" y="1977" width="284" height="30" rx="8" fill="#993C1D"/>
+<rect x="1132" y="1997" width="284" height="10" fill="#993C1D"/>
+<text x="1144.0" y="1997.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">image_gen — sd.cpp sd-server</text>
+<text x="1406.0" y="1997.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">:8095</text>
+<text x="1144.0" y="2024.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="1156.0" y="2024.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">z_image_turbo Q4_K +</text>
+<text x="1156.0" y="2041.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Qwen3-4B-Instruct-2507 Q4_K_M (text</text>
+<text x="1156.0" y="2058.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">enc) + ae.safetensors</text>
+<text x="1144.0" y="2075.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="1156.0" y="2075.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">GPU2 (Vulkan) · 12 steps, cfg 2.0,</text>
+<text x="1156.0" y="2092.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">euler · manual load, never auto-</text>
+<text x="1156.0" y="2109.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">unloaded</text>
+<rect x="1430" y="1977" width="237" height="180" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="1.2"/>
+<rect x="1430" y="1977" width="237" height="30" rx="8" fill="#993C1D"/>
+<rect x="1430" y="1997" width="237" height="10" fill="#993C1D"/>
+<text x="1442.0" y="1997.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">stt — whisper-server</text>
+<text x="1657.0" y="1997.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">:8096</text>
+<text x="1442.0" y="2024.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="1454.0" y="2024.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">ggml-large-v3-turbo q5_0</text>
+<text x="1442.0" y="2041.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="1454.0" y="2041.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">CPU · language auto (Bangla +</text>
+<text x="1454.0" y="2058.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">English)</text>
+<rect x="1681" y="1977" width="213" height="180" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="1.2"/>
+<rect x="1681" y="1977" width="213" height="30" rx="8" fill="#993C1D"/>
+<rect x="1681" y="1997" width="213" height="10" fill="#993C1D"/>
+<text x="1693.0" y="1997.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">CPU router</text>
+<text x="1884.0" y="1997.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">in-proc</text>
+<text x="1693.0" y="2024.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="1705.0" y="2024.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">laya 421M / cactus_needle</text>
+<text x="1705.0" y="2041.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">45M</text>
+<text x="1693.0" y="2058.0" font-size="12.5" font-weight="bold" fill="#993C1D" text-anchor="start">•</text>
+<text x="1705.0" y="2058.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">in-process · 0 VRAM</text>
+<rect x="30" y="1953" width="1880" height="224" rx="12" fill="none" stroke="#993C1D" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="46" y="1941" width="360.2" height="24" rx="12" fill="#993C1D"/>
+<text x="58.0" y="1958.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">5 · INFERENCE PLANE — local model servers</text>
+<rect x="46" y="2245" width="270" height="146" rx="8" fill="#E8E8E8" stroke="#2C2C2A" stroke-width="1.2"/>
+<rect x="46" y="2245" width="270" height="30" rx="8" fill="#2C2C2A"/>
+<rect x="46" y="2265" width="270" height="10" fill="#2C2C2A"/>
+<text x="58.0" y="2265.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">GPU0 — Intel UHD 770 iGPU</text>
+<text x="58.0" y="2292.0" font-size="12.5" font-weight="bold" fill="#2C2C2A" text-anchor="start">•</text>
+<text x="70.0" y="2292.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Vulkan0 · excluded from all configs</text>
+<text x="70.0" y="2309.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">(gpu_devices [1,2])</text>
+<rect x="330" y="2245" width="372" height="146" rx="8" fill="#E8E8E8" stroke="#2C2C2A" stroke-width="1.2"/>
+<rect x="330" y="2245" width="372" height="30" rx="8" fill="#2C2C2A"/>
+<rect x="330" y="2265" width="372" height="10" fill="#2C2C2A"/>
+<text x="342.0" y="2265.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">GPU1 — Intel Arc A770 16 GB</text>
+<text x="342.0" y="2292.0" font-size="12.5" font-weight="bold" fill="#2C2C2A" text-anchor="start">•</text>
+<text x="354.0" y="2292.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Vulkan1 · main-model layers + helper lanes</text>
+<text x="354.0" y="2309.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">(executor, vision, embedder)</text>
+<text x="342.0" y="2326.0" font-size="12.5" font-weight="bold" fill="#2C2C2A" text-anchor="start">•</text>
+<text x="354.0" y="2326.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">small_model_gpu = 1</text>
+<rect x="716" y="2245" width="372" height="146" rx="8" fill="#E8E8E8" stroke="#2C2C2A" stroke-width="1.2"/>
+<rect x="716" y="2245" width="372" height="30" rx="8" fill="#2C2C2A"/>
+<rect x="716" y="2265" width="372" height="10" fill="#2C2C2A"/>
+<text x="728.0" y="2265.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">GPU2 — Intel Arc A770 16 GB</text>
+<text x="728.0" y="2292.0" font-size="12.5" font-weight="bold" fill="#2C2C2A" text-anchor="start">•</text>
+<text x="740.0" y="2292.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Vulkan2 · PCIe 3.0 slot · main-model layers +</text>
+<text x="740.0" y="2309.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">sd.cpp image generation</text>
+<rect x="1102" y="2245" width="338" height="146" rx="8" fill="#E8E8E8" stroke="#2C2C2A" stroke-width="1.2"/>
+<rect x="1102" y="2245" width="338" height="30" rx="8" fill="#2C2C2A"/>
+<rect x="1102" y="2265" width="338" height="10" fill="#2C2C2A"/>
+<text x="1114.0" y="2265.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">CPU / RAM</text>
+<text x="1114.0" y="2292.0" font-size="12.5" font-weight="bold" fill="#2C2C2A" text-anchor="start">•</text>
+<text x="1126.0" y="2292.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Intel i5-13500 · 64 GB RAM</text>
+<text x="1114.0" y="2309.0" font-size="12.5" font-weight="bold" fill="#2C2C2A" text-anchor="start">•</text>
+<text x="1126.0" y="2309.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">whisper STT, router classifier, MoE / big-</text>
+<text x="1126.0" y="2326.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">model offload (-ncmoe, ngl &lt; max)</text>
+<rect x="1454" y="2245" width="440" height="146" rx="8" fill="#E8E8E8" stroke="#2C2C2A" stroke-width="1.2"/>
+<rect x="1454" y="2245" width="440" height="30" rx="8" fill="#2C2C2A"/>
+<rect x="1454" y="2265" width="440" height="10" fill="#2C2C2A"/>
+<text x="1466.0" y="2265.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">OS, drivers &amp; measured speed</text>
+<text x="1466.0" y="2292.0" font-size="12.5" font-weight="bold" fill="#2C2C2A" text-anchor="start">•</text>
+<text x="1478.0" y="2292.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Windows 11 WDDM, Arc driver 32.0.101.8991 · Linux: Mesa ANV</text>
+<text x="1478.0" y="2309.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Vulkan (setup_linux.sh / start.sh)</text>
+<text x="1466.0" y="2326.0" font-size="12.5" font-weight="bold" fill="#2C2C2A" text-anchor="start">•</text>
+<text x="1478.0" y="2326.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">llama.cpp Vulkan b10840 (SYCL avoided: ~85% MoE loss,</text>
+<text x="1478.0" y="2343.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">llama.cpp#19918)</text>
+<text x="1466.0" y="2360.0" font-size="12.5" font-weight="bold" fill="#2C2C2A" text-anchor="start">•</text>
+<text x="1478.0" y="2360.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Single A770 9.7 t/s → dual (split 9,11) 14.44 t/s gen · 252.6</text>
+<text x="1478.0" y="2377.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">t/s prompt</text>
+<rect x="30" y="2221" width="1880" height="190" rx="12" fill="none" stroke="#2C2C2A" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="46" y="2209" width="163.39999999999998" height="24" rx="12" fill="#2C2C2A"/>
+<text x="58.0" y="2226.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">6 · HARDWARE &amp; OS</text>
+<rect x="46.0" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="60.0" cy="2495" r="10" fill="#3C3489"/>
+<text x="60.0" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">1</text>
+<text x="112.9" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">Client request</text>
+<text x="112.9" y="2536.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">(cookie / PAT)</text>
+<line x1="181.8" y1="2519" x2="197.8" y2="2519" stroke="#3C3489" stroke-width="2" marker-end="url(#ah2)"/>
+<rect x="201.8" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="215.8" cy="2495" r="10" fill="#3C3489"/>
+<text x="215.8" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">2</text>
+<text x="268.8" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">Security headers,</text>
+<text x="268.8" y="2536.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">CSRF, session</text>
+<line x1="337.7" y1="2519" x2="353.7" y2="2519" stroke="#3C3489" stroke-width="2" marker-end="url(#ah2)"/>
+<rect x="357.7" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="371.7" cy="2495" r="10" fill="#3C3489"/>
+<text x="371.7" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">3</text>
+<text x="424.6" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">RBAC permission +</text>
+<text x="424.6" y="2536.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">admission queue</text>
+<line x1="493.5" y1="2519" x2="509.5" y2="2519" stroke="#3C3489" stroke-width="2" marker-end="url(#ah2)"/>
+<rect x="513.5" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="527.5" cy="2495" r="10" fill="#3C3489"/>
+<text x="527.5" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">4</text>
+<text x="580.4" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">Input guard + PAN</text>
+<text x="580.4" y="2536.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">block</text>
+<line x1="649.3" y1="2519" x2="665.3" y2="2519" stroke="#3C3489" stroke-width="2" marker-end="url(#ah2)"/>
+<rect x="669.3" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="683.3" cy="2495" r="10" fill="#3C3489"/>
+<text x="683.3" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">5</text>
+<text x="736.2" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">Router → job → lane</text>
+<text x="736.2" y="2536.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">(local / cloud)</text>
+<line x1="805.2" y1="2519" x2="821.2" y2="2519" stroke="#3C3489" stroke-width="2" marker-end="url(#ah2)"/>
+<rect x="825.2" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="839.2" cy="2495" r="10" fill="#3C3489"/>
+<text x="839.2" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">6</text>
+<text x="892.1" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">RAG: ACL filter,</text>
+<text x="892.1" y="2536.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">hybrid retrieve,</text>
+<text x="892.1" y="2551.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">inject</text>
+<line x1="961.0" y1="2519" x2="977.0" y2="2519" stroke="#3C3489" stroke-width="2" marker-end="url(#ah2)"/>
+<rect x="981.0" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="995.0" cy="2495" r="10" fill="#3C3489"/>
+<text x="995.0" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">7</text>
+<text x="1047.9" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">Agent loop: LLM ⇄</text>
+<text x="1047.9" y="2536.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">tools / MCP /</text>
+<text x="1047.9" y="2551.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">companion</text>
+<line x1="1116.8" y1="2519" x2="1132.8" y2="2519" stroke="#3C3489" stroke-width="2" marker-end="url(#ah2)"/>
+<rect x="1136.8" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="1150.8" cy="2495" r="10" fill="#3C3489"/>
+<text x="1150.8" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">8</text>
+<text x="1203.8" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">Cloud egress PAN-</text>
+<text x="1203.8" y="2536.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">mask (if cloud lane)</text>
+<line x1="1272.7" y1="2519" x2="1288.7" y2="2519" stroke="#3C3489" stroke-width="2" marker-end="url(#ah2)"/>
+<rect x="1292.7" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="1306.7" cy="2495" r="10" fill="#3C3489"/>
+<text x="1306.7" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">9</text>
+<text x="1359.6" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">Answer check</text>
+<text x="1359.6" y="2536.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">(verifier)</text>
+<line x1="1428.5" y1="2519" x2="1444.5" y2="2519" stroke="#3C3489" stroke-width="2" marker-end="url(#ah2)"/>
+<rect x="1448.5" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="1462.5" cy="2495" r="10" fill="#3C3489"/>
+<text x="1462.5" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">10</text>
+<text x="1515.4" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">Output guard + PAN</text>
+<text x="1515.4" y="2536.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">mask</text>
+<line x1="1584.3" y1="2519" x2="1600.3" y2="2519" stroke="#3C3489" stroke-width="2" marker-end="url(#ah2)"/>
+<rect x="1604.3" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="1618.3" cy="2495" r="10" fill="#3C3489"/>
+<text x="1618.3" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">11</text>
+<text x="1671.3" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">SSE stream to client</text>
+<line x1="1740.2" y1="2519" x2="1756.2" y2="2519" stroke="#3C3489" stroke-width="2" marker-end="url(#ah2)"/>
+<rect x="1760.2" y="2481" width="133.8" height="76" rx="8" fill="#F4F0FF" stroke="#3C3489"/>
+<circle cx="1774.2" cy="2495" r="10" fill="#3C3489"/>
+<text x="1774.2" y="2499.0" font-size="11.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">12</text>
+<text x="1827.1" y="2521.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">usage / route_log /</text>
+<text x="1827.1" y="2536.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="middle">audit_log</text>
+<rect x="30" y="2455" width="1880" height="122" rx="12" fill="none" stroke="#3C3489" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="46" y="2443" width="352.0" height="24" rx="12" fill="#3C3489"/>
+<text x="58.0" y="2460.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">7 · REQUEST LIFECYCLE (chat / agent run)</text>
+<line x1="1850" y1="384" x2="1850" y2="412" stroke="#444441" stroke-width="2" marker-end="url(#ah)"/>
+<text x="1760.0" y="402.0" font-size="11.5" font-weight="bold" fill="#444441" text-anchor="start">HTTPS / WS</text>
+<line x1="1850" y1="1911" x2="1850" y2="1939" stroke="#444441" stroke-width="2" marker-end="url(#ah)"/>
+<text x="1700.0" y="1929.0" font-size="11.5" font-weight="bold" fill="#444441" text-anchor="start">OpenAI-compat HTTP</text>
+<line x1="1850" y1="2179" x2="1850" y2="2207" stroke="#444441" stroke-width="2" marker-end="url(#ah)"/>
+<text x="1788.0" y="2197.0" font-size="11.5" font-weight="bold" fill="#444441" text-anchor="start">Vulkan</text>
+<rect x="1956" y="182" width="598" height="282" rx="8" fill="#E1F5EE" stroke="#085041" stroke-width="1.2"/>
+<rect x="1956" y="182" width="598" height="30" rx="8" fill="#085041"/>
+<rect x="1956" y="202" width="598" height="10" fill="#085041"/>
+<text x="1968.0" y="202.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">SQLite stores (WAL, ThreadLocalDB)</text>
+<text x="2544.0" y="202.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">persistence</text>
+<text x="1968.0" y="229.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">auth.db</text>
+<text x="1968.0" y="246.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="246.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">users (lockout), roles, permissions, role_permissions, user_roles, auth_sessions,</text>
+<text x="1980.0" y="263.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">audit_log, knowledge_sources, knowledge_source_role_access, user_allow_patterns,</text>
+<text x="1980.0" y="280.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">user_mcp_servers, api_tokens, companion_devices, user_custom_agents</text>
+<text x="1968.0" y="297.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">projects.db</text>
+<text x="1968.0" y="314.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="314.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">projects, sessions, messages (meta JSON), plan_items, doc_files (version chain)</text>
+<text x="1968.0" y="331.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">usage.db</text>
+<text x="1968.0" y="348.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="348.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">requests (tokens, t/s, status), route_runs, route_events, router_suggestions</text>
+<text x="1968.0" y="365.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">memory.db</text>
+<text x="1968.0" y="382.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="382.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">chunks(source, path, chunk_idx, text, vec BLOB, dim, version), meta (chunks_gen</text>
+<text x="1980.0" y="399.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">trigger)</text>
+<text x="1968.0" y="416.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">Operations</text>
+<text x="1968.0" y="433.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="433.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">busy_timeout, FKs on after repair (db_repair.py), db_backups/ (pre-FK snapshots)</text>
+<text x="1968.0" y="450.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="450.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">scripts: repair_db_schema.py, scrub_pans.py, migrate_common_per_user.py</text>
+<rect x="1956" y="476" width="598" height="197" rx="8" fill="#E1F5EE" stroke="#085041" stroke-width="1.2"/>
+<rect x="1956" y="476" width="598" height="30" rx="8" fill="#085041"/>
+<rect x="1956" y="496" width="598" height="10" fill="#085041"/>
+<text x="1968.0" y="496.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Secrets, config &amp; files</text>
+<text x="1968.0" y="523.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="523.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">OS keychain via keyring (Windows Credential Manager / Linux Secret Service; never</text>
+<text x="1980.0" y="540.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">keyrings.alt): cloud keys, MCP OAuth tokens</text>
+<text x="1968.0" y="557.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="557.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">config/app.json (main), model_configs.json (per-GGUF launch), roles.json,</text>
+<text x="1980.0" y="574.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">providers/user_&lt;id&gt;.json, commands/*.md (11)</text>
+<text x="1968.0" y="591.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="591.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">atomic_write_json + CONFIG_LOCK</text>
+<text x="1968.0" y="608.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="608.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">knowledge_uploads/ (+ .chunks) · E:/AI/common/user_&lt;id&gt;/ · plugin_registry.json</text>
+<text x="1968.0" y="625.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="625.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">In-memory: request monitor (last 60), GPU cache, web-search cache, workspace-change</text>
+<text x="1980.0" y="642.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">snapshots</text>
+<text x="1968.0" y="659.0" font-size="12.5" font-weight="bold" fill="#085041" text-anchor="start">•</text>
+<text x="1980.0" y="659.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Logs: stdout + audit_log table (for Bangladesh Bank / PCI auditors)</text>
+<rect x="1940" y="158" width="630" height="535" rx="12" fill="none" stroke="#085041" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="1956" y="146" width="114.19999999999999" height="24" rx="12" fill="#085041"/>
+<text x="1968.0" y="163.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">8 · STORAGE</text>
+<rect x="1956" y="761" width="598" height="95" rx="8" fill="#E6F1FB" stroke="#0C447C" stroke-width="1.2"/>
+<rect x="1956" y="761" width="598" height="30" rx="8" fill="#0C447C"/>
+<rect x="1956" y="781" width="598" height="10" fill="#0C447C"/>
+<text x="1968.0" y="781.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Cloud AI (per user, opt-in)</text>
+<text x="2544.0" y="781.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">HTTPS</text>
+<text x="1968.0" y="808.0" font-size="12.5" font-weight="bold" fill="#0C447C" text-anchor="start">•</text>
+<text x="1980.0" y="808.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">OpenRouter-style OpenAI-compatible gateways</text>
+<text x="1968.0" y="825.0" font-size="12.5" font-weight="bold" fill="#0C447C" text-anchor="start">•</text>
+<text x="1980.0" y="825.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Google Gemini API · Imagen · Veo (generativelanguage.googleapis.com)</text>
+<text x="1968.0" y="842.0" font-size="12.5" font-weight="bold" fill="#0C447C" text-anchor="start">•</text>
+<text x="1980.0" y="842.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Egress: PAN-masked; KB context never sent (local_only); audio blocked by default</text>
+<rect x="1956" y="868" width="598" height="129" rx="8" fill="#E6F1FB" stroke="#0C447C" stroke-width="1.2"/>
+<rect x="1956" y="868" width="598" height="30" rx="8" fill="#0C447C"/>
+<rect x="1956" y="888" width="598" height="10" fill="#0C447C"/>
+<text x="1968.0" y="888.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">MCP servers &amp; connectors</text>
+<text x="1968.0" y="915.0" font-size="12.5" font-weight="bold" fill="#0C447C" text-anchor="start">•</text>
+<text x="1980.0" y="915.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">ISMS — isms-mcp.sslwireless.com via mcp-remote</text>
+<text x="1968.0" y="932.0" font-size="12.5" font-weight="bold" fill="#0C447C" text-anchor="start">•</text>
+<text x="1980.0" y="932.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Gmail MCP — gmailmcp.googleapis.com (gmail.readonly + gmail.compose, Google Desktop</text>
+<text x="1980.0" y="949.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">client, Internal consent)</text>
+<text x="1968.0" y="966.0" font-size="12.5" font-weight="bold" fill="#0C447C" text-anchor="start">•</text>
+<text x="1980.0" y="966.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">GitHub (device flow / PAT) · Atlassian (mcp-atlassian) · public MCP Registry (browse</text>
+<text x="1980.0" y="983.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">only)</text>
+<rect x="1956" y="1009" width="598" height="95" rx="8" fill="#E6F1FB" stroke="#0C447C" stroke-width="1.2"/>
+<rect x="1956" y="1009" width="598" height="30" rx="8" fill="#0C447C"/>
+<rect x="1956" y="1029" width="598" height="10" fill="#0C447C"/>
+<text x="1968.0" y="1029.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Web &amp; assets</text>
+<text x="1968.0" y="1056.0" font-size="12.5" font-weight="bold" fill="#0C447C" text-anchor="start">•</text>
+<text x="1980.0" y="1056.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">DuckDuckGo HTML · Bing HTML · SearXNG (optional)</text>
+<text x="1968.0" y="1073.0" font-size="12.5" font-weight="bold" fill="#0C447C" text-anchor="start">•</text>
+<text x="1980.0" y="1073.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Hugging Face: convaiinnovations/laya router checkpoint</text>
+<text x="1968.0" y="1090.0" font-size="12.5" font-weight="bold" fill="#0C447C" text-anchor="start">•</text>
+<text x="1980.0" y="1090.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">cdn.jsdelivr.net (mermaid) · cdn.sheetjs.com (xlsx) · youtube-nocookie frames</text>
+<rect x="1940" y="737" width="630" height="387" rx="12" fill="none" stroke="#0C447C" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="1956" y="725" width="196.2" height="24" rx="12" fill="#0C447C"/>
+<text x="1968.0" y="742.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">9 · EXTERNAL SERVICES</text>
+<rect x="1956" y="1192" width="598" height="282" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="1.2"/>
+<rect x="1956" y="1192" width="598" height="30" rx="8" fill="#993C1D"/>
+<rect x="1956" y="1212" width="598" height="10" fill="#993C1D"/>
+<text x="1968.0" y="1212.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Main-model catalog — config/model_configs.json</text>
+<text x="2544.0" y="1212.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">10 entries</text>
+<text x="1968.0" y="1239.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">GGUF (all gpu [1,2], layer)   ctx     ngl  split  KV   MTP</text>
+<text x="1968.0" y="1256.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">─────────────────────────────────────────────────────────</text>
+<text x="1968.0" y="1273.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">ornith-1.5-9b q4_k_m ★      131920   999  15,5  q8_0  -</text>
+<text x="1968.0" y="1290.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">qwen3.8-27b q4_k_m          131072    48  10,10 q8_0  3</text>
+<text x="1968.0" y="1307.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">qwen3.8-flash-next q2_k_xl   65536     -   -    f16   -</text>
+<text x="1968.0" y="1324.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">qwen3.5-9b-uncens q4_k_m    131072   999  9,11  q8_0  y</text>
+<text x="1968.0" y="1341.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">kat-coder-v2.5-dev q4_k_s   131072   999  9,11  q8_0  -</text>
+<text x="1968.0" y="1358.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">spark-x2.5-4b q4_k_m        231072   999  1,0   q8_0  y</text>
+<text x="1968.0" y="1375.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">bonsai-2-27b ptq1_0         132768    45  10,10 q8_0  y</text>
+<text x="1968.0" y="1392.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">qwen2.5-coder-14b q4_k_m    128000   999  9,11  q8_0  -</text>
+<text x="1968.0" y="1409.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">qwen3.8-9b-distill q4_k_m   132768   999  9,11  q8_0  - (vision)</text>
+<text x="1968.0" y="1426.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">neohorse-1-9b q4_k_m        132768   999  9,11  q8_0  - (kv_unified)</text>
+<text x="1968.0" y="1443.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace"></text>
+<text x="1968.0" y="1460.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">★ default main (5-user plan) · n_slots 1 · batch 2048/512</text>
+<rect x="1940" y="1168" width="630" height="326" rx="12" fill="none" stroke="#993C1D" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="1956" y="1156" width="171.6" height="24" rx="12" fill="#993C1D"/>
+<text x="1968.0" y="1173.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">10 · MODEL CATALOG</text>
+<rect x="1956" y="1562" width="598" height="163" rx="8" fill="#FBEAF0" stroke="#993556" stroke-width="1.2"/>
+<rect x="1956" y="1562" width="598" height="30" rx="8" fill="#993556"/>
+<rect x="1956" y="1582" width="598" height="10" fill="#993556"/>
+<text x="1968.0" y="1582.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Compliance controls (PCI DSS / Bangladesh Bank)</text>
+<text x="2544.0" y="1582.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">security</text>
+<text x="1968.0" y="1609.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1980.0" y="1609.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Session idle 15 min (PCI 8.2.8) · lockout + per-IP throttle · Argon2</text>
+<text x="1968.0" y="1626.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1980.0" y="1626.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Plain-HTTP warning off-localhost (PCI 4.2.1) — terminate TLS in front</text>
+<text x="1968.0" y="1643.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1980.0" y="1643.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">PAN block on input, mask on output / SSE / cloud egress</text>
+<text x="1968.0" y="1660.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1980.0" y="1660.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">RBAC-scoped knowledge; KB local-only; audit_log for auditors</text>
+<text x="1968.0" y="1677.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1980.0" y="1677.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Hash-locked requirements.lock, CVE-pinned floors, pip-audit (audit_deps.py),</text>
+<text x="1980.0" y="1694.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">defusedxml</text>
+<text x="1968.0" y="1711.0" font-size="12.5" font-weight="bold" fill="#993556" text-anchor="start">•</text>
+<text x="1980.0" y="1711.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">No Docker dependencies; no server-side agent workspace</text>
+<rect x="1956" y="1737" width="598" height="146" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="1.2"/>
+<rect x="1956" y="1737" width="598" height="30" rx="8" fill="#A32D2D"/>
+<rect x="1956" y="1757" width="598" height="10" fill="#A32D2D"/>
+<text x="1968.0" y="1757.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Open items / watch list</text>
+<text x="1968.0" y="1784.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1980.0" y="1784.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">n_slots = 1 on every model → generations are serial; 5-user plan needs n_slots ≥ 5 +</text>
+<text x="1980.0" y="1801.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">kv_unified</text>
+<text x="1968.0" y="1818.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1980.0" y="1818.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">KB upload PAN scan off by policy choice — keep scrub_pans.py in the ops runbook</text>
+<text x="1968.0" y="1835.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1980.0" y="1835.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Rotate the Gmail OAuth client secret previously stored in plaintext</text>
+<text x="1968.0" y="1852.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1980.0" y="1852.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">Companion auto-update URL is still a placeholder</text>
+<text x="1968.0" y="1869.0" font-size="12.5" font-weight="bold" fill="#A32D2D" text-anchor="start">•</text>
+<text x="1980.0" y="1869.0" font-size="12.5" font-weight="normal" fill="#2C2C2A" text-anchor="start">PROJECT_KNOWLEDGE.md partly stale (app.js / config.json / profiles/)</text>
+<rect x="1940" y="1538" width="630" height="365" rx="12" fill="none" stroke="#993556" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="1956" y="1526" width="253.59999999999997" height="24" rx="12" fill="#993556"/>
+<text x="1968.0" y="1543.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">11 · COMPLIANCE &amp; OPEN ITEMS</text>
+</svg>

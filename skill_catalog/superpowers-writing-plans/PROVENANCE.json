@@ -1,0 +1,17 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "superpowers",
+  "plugin_version": "6.3.0",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/superpowers/skills/writing-plans",
+  "license_file": "plugins/superpowers/LICENSE",
+  "bundled_scripts": [],
+  "files": {
+    "SKILL.md": "94ae832a7a0f1e84c96fd379c334f7d3bed07f1b055f6b3a26d904783f787c15",
+    "agents/openai.yaml": "de6a2f3d9de78d9c5027512ab1abab998f9acbef70960ecdbad525f4dce2e1bb",
+    "plan-document-reviewer-prompt.md": "aa728b96aad603c8be28875a4305637f6c984aa81ffcadcb13e743202fa2a0c7",
+    "LICENSE.upstream": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
+  }
+}

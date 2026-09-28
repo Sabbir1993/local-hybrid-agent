@@ -1,0 +1,25 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "cloudflare",
+  "plugin_version": "0.1.2",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/cloudflare/skills/agents-sdk",
+  "license_file": "plugins/cloudflare/skills/agents-sdk/LICENSE.txt",
+  "bundled_scripts": [],
+  "files": {
+    "LICENSE.txt": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+    "SKILL.md": "faed4e76b1465d34dfc38f52bc085ec792430a2ce33db2bf43ce7ee2fb78d970",
+    "agents/openai.yaml": "bfdad650405fe34b316f2e15f0c6a27b3a83823009f88b4dbc74c8b8310e1e43",
+    "assets/cloudflare-small.svg": "48f68d56ac6c83734e8aa64af35fa3f6a0613a9a2293158153db1402be104f17",
+    "assets/cloudflare.png": "ccef528d73dfe224cfb4817bcb7e15d63922421249d688031ff48c5eef2a2189",
+    "references/callable.md": "a7a826d9058fa8163847028e08615da3511f313ea4325f2dc4c0cd7e997179f3",
+    "references/codemode.md": "8c97dba1eea39ff8cabba54933176e3136e92e467293ba28b2f737bc7359f63a",
+    "references/email.md": "2c7c0744ec26ee43aadc3fabe62b3dd6e9ec2ce38b3b11165e529edb566cf86f",
+    "references/mcp.md": "6b5807d245c160ac69981e1d711894e76fd20e6396e88a40d0d5b54793e96990",
+    "references/state-scheduling.md": "13b989423e72642615a5bfeb1fde4c03ca2f92b78dac8fc745279fc04009621f",
+    "references/streaming-chat.md": "7ede9afbef32fba1cae165ee776fe5254df4e9a8ba6c11239f484774255bf9a7",
+    "references/workflows.md": "67c63391a42f208a9ccc2d9e9c2103a6aebb4c4cad44ad34b0ff9c8308e6d794"
+  }
+}

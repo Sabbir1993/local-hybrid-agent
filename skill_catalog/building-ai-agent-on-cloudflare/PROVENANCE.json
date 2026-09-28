@@ -1,0 +1,19 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "cloudflare",
+  "plugin_version": "0.1.2",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/cloudflare/skills/building-ai-agent-on-cloudflare",
+  "license_file": null,
+  "bundled_scripts": [],
+  "files": {
+    "SKILL.md": "691983d78e76a73cb03d6b313390f57fdb6dd924d822e07fd8243f26e4b1718f",
+    "agents/openai.yaml": "2838facd160972123884a1236dbb23e0bac3f863c19921b0d037fc9ca8edeb27",
+    "references/agent-patterns.md": "dc2ec307e4c8c975269fed04eff86822ecef2fca5365d732420c991fa1025f66",
+    "references/examples.md": "6fa85f9ac80510fc472fc916f05ad997c89c7b88962473f3c8f199709c259dff",
+    "references/state-patterns.md": "190b3bda21146921aaa3953c14b24deca23b55bc786972944bfe8940aa0bb896",
+    "references/troubleshooting.md": "cfb541c7e65cd295fbf29cededa11459540db789d1c830548ab4cc6640b68dfb"
+  }
+}

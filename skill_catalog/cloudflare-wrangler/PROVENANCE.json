@@ -1,0 +1,18 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "cloudflare",
+  "plugin_version": "0.1.2",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/cloudflare/skills/wrangler",
+  "license_file": "plugins/cloudflare/skills/wrangler/LICENSE.txt",
+  "bundled_scripts": [],
+  "files": {
+    "LICENSE.txt": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+    "SKILL.md": "250e1d298efb11dfb3d43e5a188695477292493fdafa99dfd5ed19a69a53edd3",
+    "agents/openai.yaml": "3df482def3f6c6f71a107a214a7ab1b46d01cc1a6be994e5927f4fbd3b96d598",
+    "assets/cloudflare-small.svg": "48f68d56ac6c83734e8aa64af35fa3f6a0613a9a2293158153db1402be104f17",
+    "assets/cloudflare.png": "ccef528d73dfe224cfb4817bcb7e15d63922421249d688031ff48c5eef2a2189"
+  }
+}

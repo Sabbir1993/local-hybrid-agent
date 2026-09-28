@@ -303,6 +303,7 @@ async def generate(kind: str, user, prompt: str, opts: Optional[dict] = None,
 
     errors = []
     not_loaded = None
+    n_not_loaded = 0
     reg = lanes.registry(uid)
     for i, t in enumerate(route):
         label = reg.get(t.lane, {}).get("label") or t.lane
@@ -332,11 +333,12 @@ async def generate(kind: str, user, prompt: str, opts: Optional[dict] = None,
         except Exception as e:
             if isinstance(e, NotLoadedError):
                 not_loaded = not_loaded or e
+                n_not_loaded += 1
             msg = plain_error(e)
             errors.append(f"{label}: {msg}")
             print(f"[media] {job} via {t.describe()} failed: {type(e).__name__}", file=sys.stderr)
-    if not_loaded is not None and len(errors) == 1:
-        raise not_loaded
+    if not_loaded is not None and n_not_loaded == len(errors):
+        raise not_loaded                   # nothing loaded: offer Load / "ask an admin"
     raise MediaError(" / ".join(errors) if len(errors) > 1 else errors[0])
 
 

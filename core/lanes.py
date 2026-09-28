@@ -136,13 +136,50 @@ def registry(user_id: Optional[int] = None) -> dict:
     return out
 
 
+# Image / video models on this PC are shared like the main model: someone with
+# model.local.load loads one, every user makes pictures with whichever is loaded.
+SHARED_MEDIA_JOBS = ("image_gen", "video_gen")
+
+
+def _shared_media_lanes(job: str, reg: dict) -> list:
+    """Shared local lanes that can do a media job, the loaded (or loading) one first."""
+    if job not in SHARED_MEDIA_JOBS:
+        return []
+    need = JOBS[job]["kind"]
+    names = [n for n, d in reg.items()
+             if d["owner"] == "shared" and d["local"] and kind_ok(need, d["kind"])]
+    return sorted(names, key=lambda n: _load_rank(_inst(n)))
+
+
+def _load_rank(inst) -> int:
+    """0 loaded, 1 loading, 2 not loaded."""
+    if inst is None:
+        return 2
+    if inst.is_up():
+        return 0
+    return 1 if getattr(inst, "loading_since", None) else 2
+
+
+def default_lane(job: str, user_id: Optional[int] = None, reg: Optional[dict] = None) -> Optional[str]:
+    """A job's default lane; media jobs default to the shared model on this PC."""
+    spec = JOBS[job]
+    if spec["default"] or job not in SHARED_MEDIA_JOBS:
+        return spec["default"]
+    shared = _shared_media_lanes(job, reg if reg is not None else registry(user_id))
+    return shared[0] if shared else None
+
+
 def role_map(user_id: Optional[int] = None) -> dict:
     """Effective job -> lane for every job (defaults filled in)."""
     from . import cloud
     rm = cloud.role_map(user_id)
+    reg = None
     out = {}
     for job, spec in JOBS.items():
         v = rm.get(job) or spec["default"]
+        if not v and job in SHARED_MEDIA_JOBS:
+            reg = reg if reg is not None else registry(user_id)
+            v = default_lane(job, user_id, reg)
         out[job] = str(v) if v else None      # None: a media job nobody has set up
     return out
 
@@ -256,7 +293,7 @@ def targets(job: str, user_id: Optional[int] = None, force_local: bool = False) 
     reg = registry(user_id)
     mapped = role_map(user_id).get(job) or spec["default"]
     if mapped and validate_mapping(job, mapped, user_id):
-        mapped = spec["default"]
+        mapped = default_lane(job, user_id, reg)
     if not mapped:
         return []                      # a media job nobody has set up
     local_only = force_local or bool(spec.get("local_only"))
@@ -268,7 +305,7 @@ def targets(job: str, user_id: Optional[int] = None, force_local: bool = False) 
         seen.add(lane)
         chain.append(lane)
         lane = reg[lane].get("fallback")
-    for extra in (spec["default"], "main"):
+    for extra in (spec["default"], *_shared_media_lanes(job, reg), "main"):
         if extra and extra not in seen and extra in reg:
             seen.add(extra)
             chain.append(extra)
@@ -285,6 +322,13 @@ def targets(job: str, user_id: Optional[int] = None, force_local: bool = False) 
                 out.append(Target(name, cm))
         if d["local"]:
             out.append(Target(name))
+    if job in SHARED_MEDIA_JOBS:
+        # like the main model: the loaded one serves, whichever the user mapped;
+        # cloud steps keep their place
+        slots = [i for i, t in enumerate(out) if not t.is_cloud]
+        ranked = sorted((out[i] for i in slots), key=lambda t: _load_rank(t.inst))
+        for i, t in zip(slots, ranked):
+            out[i] = t
     if out and out[0].is_cloud and not fb_local:
         return out[:1]                 # user turned local fallback off
     return out
@@ -369,7 +413,7 @@ def public_view(user_id: Optional[int] = None, is_admin: bool = False) -> dict:
         "lanes": lanes,
         "jobs": [{"job": j, **{k: v for k, v in s.items()}} for j, s in JOBS.items()],
         "role_map": role_map(user_id),
-        "defaults": {j: s["default"] for j, s in JOBS.items()},
+        "defaults": {j: default_lane(j, user_id, reg) for j in JOBS},
         "can_edit_local": is_admin,
         "media": _media_view(),
     }

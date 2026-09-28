@@ -480,6 +480,57 @@ class LoadRouteAndChatTests(ModelsDirBase):
         self.assertEqual(nl["lane"], "pc-images")
         self.assertFalse(nl["can_load"])
 
+    def test_everyone_uses_the_shared_image_model(self):
+        # like the main model: a privileged user loads it, every user makes pictures with it
+        self.user = mock.Mock(id=2, username="u2", role_names=["user"])    # never picked a model
+        self.assertEqual(lanes.role_map(2)["image_gen"], "pc-images")
+        self.assertEqual(lanes.public_view(2)["defaults"]["image_gen"], "pc-images")
+        r = self.client.post("/media/generate", json={"kind": "image", "prompt": "a cat"})
+        self.assertEqual(r.status_code, 409)
+        self.assertFalse(r.json()["not_loaded"]["can_load"])            # "ask an admin to load it"
+        self.assertEqual(self.client.post("/control/lanes/pc-images/load").status_code, 403)
+        self.serve(self.inst, self.sd_png)                               # an admin loaded it
+        try:
+            r = self.client.post("/media/generate", json={"kind": "image", "prompt": "a cat"})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertTrue(r.json()["on_pc"])
+            res = run(media.generate("image", self.user, "a cat"))
+            self.assertEqual(res["lane"], "pc-images")
+        finally:
+            self.inst.process = None
+
+    def test_the_loaded_model_serves_whatever_was_mapped(self):
+        other = self.add_sd("pc-images-2", port=8098, label="Second")
+        self.serve(other, self.sd_png)                    # user 1 mapped pc-images; only #2 is loaded
+        try:
+            self.assertEqual(lanes.targets("image_gen", 1)[0].lane, "pc-images-2")
+            self.assertEqual(lanes.role_map(2)["image_gen"], "pc-images-2")
+            res = run(media.generate("image", self.user, "a cat"))
+            self.assertEqual(res["lane"], "pc-images-2")
+            self.assertEqual(res["where"], "this PC")
+        finally:
+            other.process = None
+
+    def test_not_loaded_when_no_shared_model_is_loaded(self):
+        self.add_sd("pc-images-2", port=8098, label="Second")
+        r = self.client.post("/media/generate", json={"kind": "image", "prompt": "a cat"})
+        self.assertEqual(r.status_code, 409, r.text)
+        self.assertEqual(r.json()["not_loaded"]["lane"], "pc-images")    # the user's own pick
+        with self.assertRaises(media.NotLoadedError):
+            run(media.generate("image", self.user, "a cat"))
+
+    def test_own_cloud_image_model_still_goes_first(self):
+        key = self.add_cloud(model="gpt-image-1")
+        lanes.save_user_lane(1, "cloud-img", {"kind": "image_gen", "cloud": key})
+        lanes.set_role_map(1, {"image_gen": "cloud-img"})
+        self.serve(self.inst, self.sd_png)
+        try:
+            route = lanes.targets("image_gen", 1)
+            self.assertTrue(route[0].is_cloud)
+            self.assertIn("pc-images", [t.lane for t in route[1:]])     # the shared one is the backup
+        finally:
+            self.inst.process = None
+
     def test_unload_refused_while_busy(self):
         self.admin = True
         self.inst.process = mock.Mock(poll=lambda: None)
@@ -494,8 +545,10 @@ class LoadRouteAndChatTests(ModelsDirBase):
             self.assertIsNotNone(media_tools.chat_image_tool_schema())
             with mock.patch.object(media_tools, "first_is_cloud", lambda tool: (True, "OpenAI")):
                 self.assertIsNone(media_tools.chat_image_tool_schema())
-            lanes.set_role_map(1, {"image_gen": None})
-            self.assertIsNone(media_tools.chat_image_tool_schema())
+            lanes.set_role_map(1, {"image_gen": None})       # reset: the shared model is the default
+            self.assertIsNotNone(media_tools.chat_image_tool_schema())
+            with mock.patch.dict(small_model.small_models.instances, {}, clear=True):
+                self.assertIsNone(media_tools.chat_image_tool_schema())
 
 
 class PictureEditTests(ModelsDirBase):
@@ -567,9 +620,16 @@ class PictureEditTests(ModelsDirBase):
             res = run(media.generate("image", self.user, "make it blue", {"inputs": [self.pic], "mode": "edit"}))
         self.assertEqual(res["lane"], "pc-images")
         self.assertEqual(cloud_calls, [])
-        # only a cloud model mapped: a plain refusal, still nothing sent
+        # no backup named: the shared model on this PC still takes the pictures
         lanes.save_user_lane(1, "cloud-img", {"kind": "image_gen", "cloud": key, "fallback": None})
-        with mock.patch.object(cloud, "_client_for", lambda cm: cc), self.assertRaises(media.MediaError) as e:
+        with mock.patch.object(cloud, "_client_for", lambda cm: cc):
+            res = run(media.generate("image", self.user, "make it blue", {"inputs": [self.pic], "mode": "edit"}))
+        self.assertEqual(res["lane"], "pc-images")
+        self.assertEqual(cloud_calls, [])
+        # no image model on this PC at all: a plain refusal, still nothing sent
+        with mock.patch.dict(small_model.small_models.instances, {}, clear=True), \
+                mock.patch.object(cloud, "_client_for", lambda cm: cc), \
+                self.assertRaises(media.MediaError) as e:
             run(media.generate("image", self.user, "make it blue", {"inputs": [self.pic], "mode": "edit"}))
         self.assertIn("never sent to a cloud", str(e.exception))
         self.assertEqual(cloud_calls, [])

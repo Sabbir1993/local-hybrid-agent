@@ -1,0 +1,15 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "cloudflare",
+  "plugin_version": "0.1.2",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/cloudflare/skills/web-perf",
+  "license_file": null,
+  "bundled_scripts": [],
+  "files": {
+    "SKILL.md": "1808330a2c800ac88b3c9645167f2d0f71eede503d7b0b11c16140ba96beed68",
+    "agents/openai.yaml": "979c44bd0bc2f5f5b1aab9fbd727c48bb9d5891d61edaff9f1c33012ebf1c997"
+  }
+}

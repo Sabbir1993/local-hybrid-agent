@@ -1,0 +1,21 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "superpowers",
+  "plugin_version": "6.3.0",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/superpowers/skills/using-superpowers",
+  "license_file": "plugins/superpowers/LICENSE",
+  "bundled_scripts": [],
+  "files": {
+    "SKILL.md": "5a9f451b57143d73fafd7dc5def6994d63dfa9499549efa7966a06a2576ce9f6",
+    "agents/openai.yaml": "3c5813a85ca812acc399c3081ab73699dce4740b068ab0be73710a58465bfeaa",
+    "references/antigravity-tools.md": "4880f6de3da4e32f9659ebe7a72b9e0ebfff04e028c2ed96173f86d0387a04c0",
+    "references/codex-tools.md": "1a38ad9b188c393052f58d95657a1c35ea6aafc8b5a27f198f3922912f70bbe7",
+    "references/gemini-tools.md": "62b9157bcb0ee3c6784e3d0da0798ddfa5872f9e0c34bea48f3079dabea71965",
+    "references/hermes-tools.md": "e2185c976a3c87503910e05e2aea58cc89bc8e569bb624b93df9958ac47a9190",
+    "references/pi-tools.md": "703dbc83d23ecab9c6f388460c38abc482e9dee2fe6772a8c7a255152ad3a4d5",
+    "LICENSE.upstream": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
+  }
+}

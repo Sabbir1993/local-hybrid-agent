@@ -95,10 +95,11 @@ async def media_generate(req: GenerateReq, user: Principal = Depends(get_current
                     "Settings -> Models & Jobs.", 409, not_setup=True)
     inst = first.inst
     if media._is_sdcpp(inst) and not inst.is_up():
-        # the local image/video model is loaded by hand only; with no backup, say so up front
+        # the local image/video model is loaded by hand only; when nothing on the
+        # route can run now (no cloud step, no loaded model), say so up front
         route = (media.edit_targets(user.id, req.mode, req.lane) if pics
                  else [t for t in lanes.targets(job_name, user.id) if t.available()])
-        if len(route) <= 1:
+        if not any(t.is_cloud or t.is_up() for t in route):
             label = lanes.registry(user.id).get(first.lane, {}).get("label") or first.lane
             return _err(str(media.NotLoadedError(first.lane, label, req.kind)), 409,
                         not_loaded={"lane": first.lane, "label": label,

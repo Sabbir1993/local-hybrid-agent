@@ -1,0 +1,16 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "superpowers",
+  "plugin_version": "6.3.0",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/superpowers/skills/dispatching-parallel-agents",
+  "license_file": "plugins/superpowers/LICENSE",
+  "bundled_scripts": [],
+  "files": {
+    "SKILL.md": "880375c14987b476dff4dd8525b29221f45652e4d18cfba16b0e741a558f1b95",
+    "agents/openai.yaml": "55e5cdae31b34dcafb3cdeb7ca6e154ad3a1ab56da7e6b0d4cc8e1e098ecb5da",
+    "LICENSE.upstream": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
+  }
+}

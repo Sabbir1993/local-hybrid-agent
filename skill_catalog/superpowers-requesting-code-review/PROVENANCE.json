@@ -1,0 +1,17 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "superpowers",
+  "plugin_version": "6.3.0",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/superpowers/skills/requesting-code-review",
+  "license_file": "plugins/superpowers/LICENSE",
+  "bundled_scripts": [],
+  "files": {
+    "SKILL.md": "a7da17f53b840abb02b8f110ad15b9af5aca3de967a24b7024b162fed61a2c59",
+    "agents/openai.yaml": "1917e3cf2c957e7512343e622b002a873f325fbf931bed77d71afb5a02ca431d",
+    "code-reviewer.md": "5eca5fcfd48a50e0a526ce5ffd64bf625d6b81bb46d11795274dae451fe6ffd4",
+    "LICENSE.upstream": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
+  }
+}

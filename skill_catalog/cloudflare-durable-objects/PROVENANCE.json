@@ -1,0 +1,18 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "cloudflare",
+  "plugin_version": "0.1.2",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/cloudflare/skills/durable-objects",
+  "license_file": null,
+  "bundled_scripts": [],
+  "files": {
+    "SKILL.md": "6ec8e9e79eccea643fd1240b2029d14188eb4991706b46ca601e5288cc4166f9",
+    "agents/openai.yaml": "43ff2f2809ae14955c0361f3de62b4f8f5fe86333c527df527671256c8e0cc7e",
+    "references/rules.md": "92f12b305df75710fed778c22880ca7de73797f8f4fbbc4cffcf3e6c8ac919e5",
+    "references/testing.md": "08c4064e090ff1a8692543c38fc694c42622f59a27390af26c5825b3970f7f02",
+    "references/workers.md": "3149c3ee371b5dbf3a84dac7d5bb42c4c6553762480741f6d2808e4ca20fd932"
+  }
+}

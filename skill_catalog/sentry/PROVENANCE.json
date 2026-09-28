@@ -1,0 +1,21 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "sentry",
+  "plugin_version": "0.1.2",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/sentry/skills/sentry",
+  "license_file": "plugins/sentry/skills/sentry/LICENSE.txt",
+  "bundled_scripts": [
+    "scripts/sentry_api.py"
+  ],
+  "files": {
+    "LICENSE.txt": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+    "SKILL.md": "40a4ab91c3f6a9cf648849e9ffff394e64d108a5c4d2cbc81d78a9eb5c1a084c",
+    "agents/openai.yaml": "c7ed57441b9a1e3f4caa19da4d90d432a65cd398c4f361b47dbf9408be0e065f",
+    "assets/sentry-small.svg": "f1de8efc906c03b583b4d74560b003175c8a3d9ea5950d891ce3142fec11ca99",
+    "assets/sentry.png": "b61e0534635a275cf56f7dad26ac7cc36504b7bd9a60c95791d6e72634129fb1",
+    "scripts/sentry_api.py": "d16ea37c73541d3cb704d95510b4908e90f603d4061eed996c093d9c3de326ec"
+  }
+}

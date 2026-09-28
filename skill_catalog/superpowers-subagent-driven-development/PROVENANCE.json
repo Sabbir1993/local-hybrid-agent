@@ -1,0 +1,22 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "superpowers",
+  "plugin_version": "6.3.0",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/superpowers/skills/subagent-driven-development",
+  "license_file": "plugins/superpowers/LICENSE",
+  "bundled_scripts": [],
+  "files": {
+    "SKILL.md": "edde497106c7e7196c3cbc6ac58f8d75fbfbcab9273d04ab35fc7a54008f3f71",
+    "agents/openai.yaml": "58ef494a996998f2a486a0764b769bdf02e9c148b050b38603dbcdb364ae2771",
+    "implementer-prompt.md": "81dd9d5a3fb0b09b96b5829f03b9796842f3199ef7591d1ba1c2db2a515f64d0",
+    "re-review-prompt.md": "db0d5849478bc79cbde97b9b2cf0e58b50be8b8ed18464b0252c2bf27b6440a6",
+    "scripts/review-package": "fac3d4bd7f94369e8037b9ead2a8a502dca6ab333902b560b9455dbb3c450ebe",
+    "scripts/sdd-workspace": "95a09d9d3983ad1aafd093ca72b4587946dea885c6e302caa02a779a2f911c31",
+    "scripts/task-brief": "d6954ef7841c7da3d77373e6ff5118b3f2f2e998606fd95d33e6527851bce044",
+    "task-reviewer-prompt.md": "eea23e33ec570c3041f40e9569fa711d61b8029f9eecf908345138aa1c6e61ab",
+    "LICENSE.upstream": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
+  }
+}

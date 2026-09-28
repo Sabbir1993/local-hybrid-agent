@@ -1,0 +1,17 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "cloudflare",
+  "plugin_version": "0.1.2",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/cloudflare/skills/workers-best-practices",
+  "license_file": null,
+  "bundled_scripts": [],
+  "files": {
+    "SKILL.md": "dfa2c987aea11f7888cdc133b488db1e139daa62d17597a0c4b0fa84aea2d7cd",
+    "agents/openai.yaml": "ad7c8f6a0f2d016a9caae277483a91f891b7509f176400062df1bf0fd9d2f235",
+    "references/review.md": "3e32da345be0906d020e5235d01f2b6398a41216900b5370a267e3f17757ade0",
+    "references/rules.md": "b0273b18c7fa40fadf33262e7da7c8f2a52f2f1240ce66d590e4c31663261380"
+  }
+}

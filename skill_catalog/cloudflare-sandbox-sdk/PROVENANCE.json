@@ -1,0 +1,17 @@
+{
+  "repo": "openai/plugins",
+  "commit": "1dc195897af4161d039b80d8471ec0a10c9bbc89",
+  "tarball_sha256": "6f85f7ce402bef37223fc5ca0d64eeacda3fe8db3a919c6450d568aa3dfabe6a",
+  "plugin": "cloudflare",
+  "plugin_version": "0.1.2",
+  "plugin_license": "MIT",
+  "upstream_path": "plugins/cloudflare/skills/sandbox-sdk",
+  "license_file": null,
+  "bundled_scripts": [],
+  "files": {
+    "SKILL.md": "251305192b35a8f4b783909f078024eb6223b91108bbf3a6e474f48d4a8f4396",
+    "agents/openai.yaml": "02653aeb3bf62054f8b4379e9eb86ca3063f094a6f78d256ebb5d1774a073017",
+    "references/api-quick-ref.md": "c8a2bd3eca1afee7c9182b7dc7a3dceb9fdd13266c2a5e0730fd52b263b1aea3",
+    "references/examples.md": "f13c04a728f023349dbd5d30c6df4fa253ff58f4831981b8b704c0cd8f3457f9"
+  }
+}
