@@ -9,7 +9,7 @@ from typing import Optional, Union
 import httpx
 
 from .config import HEALTH_TIMEOUT_S, KEEPALIVE_INTERVAL_S, LLAMA_SERVER_PORT, MAX_RESTART_BACKOFF_S, WATCHDOG_INTERVAL_S
-from .process import build_launch_command
+from .process import build_launch_command, kill_process_tree
 from .profiles import build_dynamic_profile
 from . import vram
 
@@ -153,25 +153,13 @@ class ProxyState:
         if self.process and self.process.poll() is None:
             print(f"[server_manager] VRAM wall hit on Vulkan{vram_idx} "
                   f"- killing the loading llama-server")
-            try:
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
-                               capture_output=True, timeout=15)
-            except Exception:
-                pass
+            kill_process_tree(self.process, timeout=15)
         self.process = None
 
     def _stop_process_locked(self):
         if self.process and self.process.poll() is None:
             print("[server_manager] stopping current llama-server...")
-            try:
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
-                               capture_output=True, timeout=15)
-            except Exception:
-                self.process.terminate()
-            try:
-                self.process.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+            kill_process_tree(self.process, timeout=15)
         self.process = None
 
     async def watchdog(self):

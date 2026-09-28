@@ -200,6 +200,9 @@ async def lifespan(app: FastAPI):
     load_plugins()
     print(f"[server_manager] runtime={ACTIVE_RUNTIME['name']} backend={ACTIVE_RUNTIME['backend']} "
           f"bin={ACTIVE_RUNTIME['llama_bin_dir']} devices={ACTIVE_RUNTIME['gpu_devices']}")
+    from core.credentials import keyring_backend_warning
+    if (kr_warn := keyring_backend_warning()):
+        print(f"[server_manager] WARNING: {kr_warn}", file=sys.stderr)
     await asyncio.get_event_loop().run_in_executor(None, kill_orphan_llama_servers)
     asyncio.create_task(connect_all_mcp())
     if common.initial_profile_path is not None and common.initial_profile_path.exists():

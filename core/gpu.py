@@ -6,6 +6,7 @@ import time
 
 from .config import GPU_QUERY_INTERVAL_S, IGNORED_IGPU_LUIDS, CONFIG_FILE, CONFIG_DEFAULTS
 from . import vram
+from .process import IS_WINDOWS
 
 PS_GPU_SCRIPT = r"""
 $ErrorActionPreference = 'SilentlyContinue'
@@ -46,6 +47,26 @@ _gpu_query_lock = asyncio.Lock()
 
 
 def _query_gpu_sync() -> dict:
+    return _query_gpu_windows() if IS_WINDOWS else _query_gpu_linux()
+
+
+def _query_gpu_linux() -> dict:
+    """Same shape as the Windows query, from `llama-bench --list-devices`.
+    gb = dedicated VRAM in use (matches the Windows counter); no portable
+    per-process compute %, so `compute` stays empty."""
+    adapters = []
+    try:
+        for d in vram.query_devices():
+            if d.get("total_b", 0) < vram.GB:  # iGPU / software device
+                continue
+            adapters.append({"luid": f"vulkan{d['index']}",
+                             "gb": round(d.get("used_b", 0) / vram.GB, 2)})
+    except Exception as e:
+        print(f"[server_manager] gpu query failed: {e}", file=sys.stderr)
+    return {"adapters": adapters, "compute": []}
+
+
+def _query_gpu_windows() -> dict:
     try:
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", PS_GPU_SCRIPT],

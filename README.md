@@ -181,7 +181,8 @@ or `config/*.json` — but they are hand-edited, not auto-detected, today.
 
 ## Setup on a new machine
 
-This is the actual "clone the repo and go" path.
+This is the actual "clone the repo and go" path. For a copy-paste command
+list, see [SETUP_WINDOWS.md](SETUP_WINDOWS.md) or [SETUP_LINUX.md](SETUP_LINUX.md).
 
 1. **Get the right llama.cpp binary for your GPU.**
    - Intel Arc / any Vulkan-capable GPU: download a **Vulkan** Windows
@@ -199,12 +200,18 @@ This is the actual "clone the repo and go" path.
    ```
    (or `.\scripts\list_devices.ps1 -BinDir "C:\llama-vulkan"`). Confirm you
    see one device per physical GPU, and note their indices.
-3. **Clone this repo** and install Python 3.10+ dependencies:
+3. **Clone this repo** and install Python 3.10+ dependencies into a
+   dedicated venv (`.venv/`, git-ignored):
    ```
    git clone <this-repo-url>
    cd a770-dual-runtime
-   pip install -r requirements.txt
+   .\scripts\setup_windows.ps1
    ```
+   or by hand: `python -m venv .venv`, `.\.venv\Scripts\Activate.ps1`,
+   `pip install --require-hashes -r requirements.lock`. Keep the venv
+   activated (or use `scripts\start.ps1`, which picks it up) so stdio MCP
+   servers configured as `"command": "python"` run on the same interpreter.
+   On Linux see [Running on Linux](#running-on-linux).
 4. **Tell it which backend and binary to use**: add one preset per llama.cpp
    build under `runtimes` in [`config/app.json`](config/app.json), then pick
    one with `runtime`:
@@ -256,6 +263,41 @@ This is the actual "clone the repo and go" path.
    `providers.json.migrated`) is imported into the keychain on start and
    then deleted. Never commit real API
    keys; use `[PLACEHOLDER]` in anything you share or paste elsewhere.
+
+### Running on Linux
+
+The same codebase runs on Windows and Linux; OS-specific bits (process
+kill, orphan cleanup, GPU panel, folder picker) branch on `os.name`
+(`core/process.py: IS_WINDOWS`). Steps that differ from the Windows list:
+
+1. **Driver:** Intel Arc uses Mesa's ANV Vulkan driver
+   (`mesa-vulkan-drivers vulkan-tools`, kernel 6.2+); check with
+   `vulkaninfo --summary`. NVIDIA: proprietary driver + CUDA toolkit.
+2. **llama.cpp:** the `llama-<build>-bin-ubuntu-vulkan-x64.zip` release, or
+   build it: `cmake -B build -DGGML_VULKAN=ON && cmake --build build -j`
+   (`-DGGML_CUDA=ON` for NVIDIA). Verify with
+   `./llama-bench --list-devices`.
+3. **Python venv + deps:** `./scripts/setup_linux.sh ~/llama-vulkan`. It creates
+   `.venv/` and installs `requirements.lock`, falling back to
+   `requirements.txt` if a hash was pinned to a Windows-only wheel.
+4. **Config:** `config/app.json` ships with Windows paths. Change
+   `models_dir`, `common_dir`, `runtimes.<preset>.llama_bin_dir` and
+   `media_dirs.*` to Linux paths, e.g.
+   `"llama_bin_dir": "/home/<user>/llama-vulkan"`.
+5. **Keychain (required for cloud API keys and MCP OAuth tokens):**
+   `keyring` needs a Secret Service backend: gnome-keyring or KWallet,
+   running and unlocked in the server's D-Bus session (headless: start
+   `gnome-keyring-daemon` inside `dbus-run-session`). **Do not install
+   `keyrings.alt`**, because it keeps secrets in a plaintext file. The server
+   logs a `WARNING: insecure keyring backend` line at startup if no OS
+   keychain is available.
+6. **Start:** `./scripts/start.sh --port 8000` (uses `.venv`, passes
+   arguments through to `server_manager.py`).
+
+Linux differences you'll notice: the GPU panel shows VRAM in use per Vulkan
+device (from `llama-bench --list-devices`) but no per-process compute %,
+and on a headless box the "browse folder" button returns nothing, so type
+the path instead.
 
 ## Usage
 
@@ -332,9 +374,10 @@ curl -X POST http://localhost:8000/control/switch -d '{"profile":"E:/AI/Models/y
   agent mode, settings, monitor, usage report). `static/js/theme.js` holds
   the (optional, cosmetic) machine-specific GPU display-name map.
 - `scripts/list_devices.ps1` — quick Vulkan/CUDA device check.
-- `scripts/start.ps1` — convenience wrapper around `server_manager.py`.
-- `scripts/setup_windows.ps1` — one-time Python dependency install + a
-  printed checklist of the manual steps above.
+- `scripts/start.ps1` / `scripts/start.sh` — convenience wrappers around
+  `server_manager.py` (Windows / Linux); both prefer the repo's `.venv`.
+- `scripts/setup_windows.ps1` / `scripts/setup_linux.sh` — one-time venv +
+  Python dependency install + a printed checklist of the manual steps above.
 
 ## Security note (payment-adjacent environments)
 

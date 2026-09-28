@@ -10,7 +10,8 @@ param(
 
 Write-Host "This script will:" -ForegroundColor Cyan
 Write-Host "  1. Check for Python 3.10+"
-Write-Host "  2. Install the orchestration Python deps (fastapi, uvicorn, httpx)"
+Write-Host "  2. Create a .venv in the repo and install the Python deps into it"
+Write-Host "     (hash-locked requirements.lock, falling back to requirements.txt)"
 Write-Host "  3. Point you at the right llama.cpp release page (download is manual -"
 Write-Host "     GitHub release assets change per build number, not worth scripting)"
 Write-Host ""
@@ -22,9 +23,23 @@ if (-not $py) {
 }
 $pyVersion = (& python --version)
 Write-Host "Found $pyVersion"
+& python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Python 3.10+ is required."
+    exit 1
+}
 
-$reqPath = Join-Path (Split-Path -Parent $PSScriptRoot) "requirements.txt"
-python -m pip install -r $reqPath
+$root = Split-Path -Parent $PSScriptRoot
+$venvPy = Join-Path $root ".venv\Scripts\python.exe"
+if (-not (Test-Path $venvPy)) {
+    python -m venv (Join-Path $root ".venv")
+}
+& $venvPy -m pip install --upgrade pip
+& $venvPy -m pip install --require-hashes -r (Join-Path $root "requirements.lock")
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Locked install failed - falling back to requirements.txt" -ForegroundColor Yellow
+    & $venvPy -m pip install -r (Join-Path $root "requirements.txt")
+}
 
 Write-Host ""
 Write-Host "Next steps (manual):" -ForegroundColor Yellow
@@ -37,4 +52,4 @@ Write-Host "  5. Run .\list_devices.ps1 -BinDir `"$InstallDir`" to confirm your 
 Write-Host "  6. Edit config\app.json 'runtimes': set llama_bin_dir to `"$InstallDir`","
 Write-Host "     backend to 'vulkan' or 'cuda', gpu_devices to your device indices, and 'runtime' to that preset"
 Write-Host "  7. Edit config\app.json: set models_dir to your GGUF folder"
-Write-Host "  8. python server_manager.py --port 8000, then pick a model from the UI"
+Write-Host "  8. .\start.ps1 -Port 8000 (uses .venv), then pick a model from the UI"

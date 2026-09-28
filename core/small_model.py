@@ -13,7 +13,7 @@ import httpx
 
 from .backend import device_prefix
 from .config import ACTIVE_RUNTIME, BASE_DIR, LLAMA_SERVER_PORT, CONFIG_FILE, ROLES_FILE, CONFIG_DEFAULTS
-from .process import find_llama_server
+from .process import IS_WINDOWS, find_llama_server, kill_process_tree
 from . import vram
 
 
@@ -34,8 +34,9 @@ def _load_common_root() -> Path:
                 return p.resolve()
     except Exception:
         pass
+    # legacy Windows default; off Windows Path("E:\\...").parent is "." and always exists
     p = Path("E:\\AI\\common")
-    if not p.parent.exists():
+    if not IS_WINDOWS or not p.parent.exists():
         p = BASE_DIR / "common"
     p.mkdir(parents=True, exist_ok=True)
     return p.resolve()
@@ -378,11 +379,7 @@ class SmallModelInstance:
 
     def _stop(self) -> None:
         if self.process and self.process.poll() is None:
-            try:
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
-                               capture_output=True, timeout=10)
-            except Exception:
-                self.process.terminate()
+            kill_process_tree(self.process, timeout=10)
         self.process = None
 
     async def unload_if_idle(self) -> bool:

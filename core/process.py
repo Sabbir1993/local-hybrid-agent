@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import time
@@ -7,15 +8,42 @@ from typing import Optional
 from .backend import device_prefix
 from .config import ACTIVE_RUNTIME, CONFIG_DEFAULTS, LLAMA_SERVER_PORT, apply_runtime
 
+IS_WINDOWS = os.name == "nt"
+
+
+def kill_process_tree(proc: Optional[subprocess.Popen], timeout: float = 15) -> None:
+    """Force-stop a child server; never raises. Windows: taskkill /T (tree),
+    elsewhere terminate -> wait -> kill (llama/whisper/sd servers spawn no children)."""
+    if proc is None or proc.poll() is not None:
+        return
+    if IS_WINDOWS:
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=timeout)
+        except Exception:
+            pass
+    else:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=timeout)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
 
 def kill_orphan_llama_servers() -> int:
-    """Kill any llama-server.exe left over from a previous/crashed manager."""
+    """Kill any llama-server(.exe) left over from a previous/crashed manager."""
     killed = 0
     try:
-        out = subprocess.run(
-            ["taskkill", "/F", "/IM", "llama-server.exe", "/T"],
-            capture_output=True, text=True, timeout=30,
-        )
+        cmd = (["taskkill", "/F", "/IM", "llama-server.exe", "/T"] if IS_WINDOWS
+               else ["pkill", "-x", "llama-server"])
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         killed = out.returncode == 0
     except Exception as e:
         print(f"[server_manager] orphan cleanup failed: {e}", file=sys.stderr)

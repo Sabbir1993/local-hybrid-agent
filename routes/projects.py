@@ -107,6 +107,8 @@ except Exception:
     except Exception as e:
         print(f"[server_manager] tkinter subprocess failed ({e}), trying PowerShell fallback", file=sys.stderr)
 
+    if os.name != "nt":  # WinForms fallback is Windows-only; headless Linux types the path
+        return ""
     try:
         escaped_init = init_dir.replace("'", "''")
         ps_cmd = (

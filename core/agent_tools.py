@@ -444,6 +444,12 @@ def _find_chromium_binary() -> Optional[str]:
         shutil.which("msedge"),
         shutil.which("chrome"),
         shutil.which("chromium"),
+        # Linux package / snap names
+        shutil.which("google-chrome"),
+        shutil.which("google-chrome-stable"),
+        shutil.which("chromium-browser"),
+        shutil.which("microsoft-edge"),
+        "/snap/bin/chromium",
     ]
     for c in candidates:
         if c and os.path.isfile(c):
