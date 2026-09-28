@@ -427,6 +427,83 @@ Hand-rolled client, no SDK dependency. Protocol version `2025-03-26`.
 - `core/echo_mcp_server.py` is a deliberately minimal test server (`ping`, `add`), already wired into `config.json`.
 - **Global vs personal servers** (Settings -> Capabilities -> MCP). Global servers live in `capabilities.mcp_servers` and need `settings.orchestration.configure`. When an admin saves one, they must pick "Everyone (global)" or "Just me". Personal servers are stored in `auth.db` (`user_mcp_servers`) with secrets in the OS keychain under `u<id>:<name>:env:<KEY>`. Each runs as its own process keyed `<name>@u<id>`, and its tools are registered with an `owner` in the registry, so only that user's requests see them (resolved via `core/request_context.py`). A global name shadows a personal one. Non-admins may add only a public `https://` URL, or `npx`/`uvx` with a package listed in `capabilities.mcp_user_allowed_packages`, and cannot set loader/registry env vars (`NODE_*`, `UV_*`, `PATH`, …).
 
+### MCP OAuth (`core/mcp_oauth.py`) — added 2026-09-28
+
+Generic OAuth 2.1 for **http** MCP servers (Gmail is the first user).
+
+- **Config:** `auth: {type: "oauth", client_id, scopes, auth_url?, token_url?, redirect_port?}` on the server entry. The client secret is stored **only** as `secret_env.OAUTH_CLIENT_SECRET` in the keychain and is never returned by `_public_cfg`. Secret-looking `headers` and a `client_secret` inside `auth` are rejected by `_validate_auth`.
+- **Flow:** discovery from the 401 `WWW-Authenticate` header, then RFC 9728 protected-resource metadata, then RFC 8414/OIDC metadata. It uses authorization code + PKCE S256, and dynamic client registration only when there is no `client_id`. The `resource` parameter is omitted for Google, which also gets `access_type=offline&prompt=consent`. `state` is single-use with a 10-minute TTL.
+- **Redirect:** the companion op `oauth.loopback` (`companion/oauthops.js`) listens on `127.0.0.1:<port>`, opens the system browser and returns `code` + `state`. Fallback: `/mcp/oauth/callback` when `capabilities.mcp_oauth_redirect_base` (a public HTTPS URL) is set. With neither, `start` returns 409.
+- **Tokens:** JSON in the keychain under `u<id>:<server>:env:OAUTH_TOKEN`, per user. They refresh when under 60 s remain; `invalid_grant` clears the token.
+- **`_http_rpc`** injects `Bearer`, sends `MCP-Protocol-Version`, and on a 401 does one forced refresh and retry. After that it raises `McpAuthRequired`, which becomes the tool text "needs you to sign in: Settings -> Capabilities -> MCP -> <name> -> Connect account". `tools/list` follows `nextCursor`.
+- **Migration:** `connect_all_mcp` moves legacy plaintext `env.clientId/clientSecret` into `auth` + keychain on startup (`migrate_plain_client`). For the Gmail URL the default scopes are `gmail.readonly` + `gmail.compose`.
+- **Gmail endpoint facts** (`https://gmailmcp.googleapis.com/mcp/v1`): `initialize`/`tools/list` work anonymously and `tools/call` needs a token. There is no dynamic client registration, so it needs a pre-registered Google **Desktop-app** client (consent screen: Internal).
+
+### Browser testing tools (`core/browser_tools.py`) — added 2026-09-28
+
+Claude-style "look at what you built". All of it runs **on the user's device** through companion ops (`companion/browserops.js`), never on the server.
+
+- The companion uses `playwright-core` with the installed Edge (`channel "msedge"`, then `"chrome"`), in a throwaway context per session with no real profile. It closes after 15 minutes idle.
+- **Tools:** `browser_navigate` (the `device` arg takes a preset: desktop, iphone-14, iphone-se, pixel-7, galaxy-s9, ipad), `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_select`, `browser_screenshot`, `browser_console` (console + failed/4xx/5xx requests), `browser_eval`, `browser_wait`, `browser_close`.
+- **Element refs:** snapshots come from `page.ariaSnapshot({mode:"ai"})` and carry `[ref=eN]` refs. Clicks resolve them through the `aria-ref=eN` locator.
+- **Policy** (`companion/policy.js`):
+  - localhost, `127.0.0.1`, `*.localhost` and `*.test` are allowed; any other origin goes through `confirmOrigin` (native dialog); `file:` goes through `ensurePath`; `javascript:` is blocked.
+  - `evaluate` needs `confirmScript`.
+  - Typing into password or `cc-*` fields, or any Luhn-valid number, is refused.
+- **Screenshots:**
+  - Saved on the device at `<project>/.agent/screens/<ts>-<label>.png` via `fs.write_b64`.
+  - Described by `describe_image_bytes(..., force_local=not capabilities.screenshot_cloud_vision)`, which defaults to the local vision lane only.
+  - A 720 px JPEG thumbnail goes to the run view via `pop_thumbnail` → `payload["image"]`. It is live-only and stripped before `persistMsgForSession`.
+- All text output is PAN-masked (`core/pan.mask_pans`).
+- If the companion reports "unknown op", the tool answers with a hint to upgrade the companion to v0.2.0.
+- Gated by `capabilities.browser`. Skill: `skill_catalog/webapp-testing/SKILL.md`.
+
+### Mobile testing tools (`core/device_tools.py`) — added 2026-09-28
+
+- **Tools:** `mobile_devices`, `mobile_boot`, `mobile_connect`, `mobile_install`, `mobile_launch`, `mobile_ui`, `mobile_tap`, `mobile_type`, `mobile_swipe`, `mobile_screenshot`, `mobile_logs`. They take `platform: android|ios`; the default is android.
+- **Android** (`companion/androidops.js`):
+  - Finds the SDK from `ANDROID_HOME` / `ANDROID_SDK_ROOT` / `%LOCALAPPDATA%\Android\Sdk`.
+  - Runs adb/emulator via `execFile` with a **fixed argv built by the companion**, with no free-form shell. The serial, package and key are validated.
+  - `uiDump` parses `uiautomator dump` into `[nN]` refs with centre coordinates, so the model can tap by ref.
+  - `screencap` is read as a binary buffer.
+  - Text is escaped for `input text`, and card numbers are refused.
+  - Install, boot, pair and connect need `confirmAction`.
+- **iOS** (`companion/iosops.js`): macOS only, via `xcrun simctl` plus `idb` for the UI tree and taps. On Windows the tools answer "needs the companion running on a Mac".
+- Gated by `capabilities.mobile`. Skill: `skill_catalog/mobile-testing/SKILL.md`.
+
+**Wiring and prompts:**
+- Both families are registered in `server_manager.py` (`register_browser_tools()`, `register_device_tools()`).
+- The read-only ones are in `PLAN_MODE_TOOLS`, and the executor lane gets `EXECUTOR_TEST_TOOLS`.
+- When they are registered and plan mode is off, the agent prompt gets a "VERIFY WHAT YOU BUILD" hint.
+- **Companion v0.2.0** is required (`companion/package.json`, which also adds a mac `dmg` target). Its `companion.capabilities` op reports what the device supports.
+
+### Custom agents (`routes/custom_agents.py`, `core/auth_db.py`, `static/js/custom-agents.js`)
+
+User-defined agent profiles with these fields: name, slug, system prompt, tool allowlist, temperature, effort, `preferred_lane`, input template and `is_public`. They are stored in `auth.db` (`custom_agents`); system templates have `user_id IS NULL`.
+
+- **Allowlist is enforced at execution time**, not just in the schemas:
+  - `core/request_context.set_tool_allowlist()` stores it in a contextvar.
+  - `agent_loop.run_tool` refuses anything where `tool_allowed(name)` is false.
+  - The chat side-paths (proactive `web_fetch`, refusal recovery, the final `write_file`) check it too.
+  - The router shortcut only picks allowed tools.
+  - `core/subagent.py` intersects the sub-agent's tools with the parent's allowlist.
+- **Resolution:**
+  - `db_get_custom_agent_by_slug` and `resolve_role` only see **your own agents + templates**. Other users' public agents can't be pulled in via `spawn_agent`; they are usable only when picked explicitly in the UI.
+  - Publishing needs the permission `custom_agents.publish`.
+  - Slugs are sanitized (`slugify_custom_agent`) and case-insensitively unique. A clash returns 409, and slugs that shadow `roles.json` / Agent Library names are refused.
+- **Behaviour:**
+  - The agent's temperature and effort apply whenever the request sends `null`. The frontend sends `null` unless the user changed the value after activating the agent (`customAgentRequestOverrides`).
+  - `preferred_lane`: `main` runs steps on main; `cloud` uses the user's cloud binding; `executor` skips main-first; `auto` uses the Settings "Sub-agents" job mapping.
+  - `input_template` `{input}` is applied on the server to the first user turn only (`apply_input_template`).
+  - An unknown `custom_agent_id` returns 404 `custom_agent_not_found`, and the UI clears the active agent.
+  - An empty tool intersection falls back to the reasoning lane. It no longer disables executor grammar process-wide.
+- **Templates** are seeded idempotently in `_init_auth_db` (`_seed_starter_custom_agents`). Unedited templates (`updated_at == created_at`) are refreshed.
+- **UI:**
+  - Groups: Mine / Shared with me / Starter Templates. Edit and Delete appear only when `can_edit`.
+  - The active agent is bound per session in localStorage (`custom_agent_sessions`) and restored in `openSession`.
+  - The Settings iframe tells the parent about agent changes via `postMessage`.
+- `/control/sampling` POST now requires `settings.runtime.view`.
+
 ### Skills (`core/skills.py`)
 
 Convention: `skills/<name>/SKILL.md` with `---` frontmatter carrying
@@ -739,6 +816,19 @@ Results go to `common/user_<id>/generated/` and are shown with `![..](/agent/raw
 | GET | `/control/capabilities` | web/skills/mcp/plugins/shell state, tool counts, MCP server status, plugin list |
 | POST | `/control/capabilities` | enable/disable one capability (updates registry sources live) |
 | POST | `/control/shell_settings` | shell enabled / ask_first / timeout / allow_patterns |
+| POST | `/mcp/servers/{name}/oauth/start` | begin OAuth (`{scope}`); companion loopback, else redirect mode, else 409 |
+| GET | `/mcp/servers/{name}/oauth/status` | pending / signed_in / error |
+| POST | `/mcp/servers/{name}/oauth/disconnect` | clear the user's token |
+| GET | `/mcp/oauth/callback` | redirect-mode callback (needs `capabilities.mcp_oauth_redirect_base`) |
+
+### Custom agents
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET / POST | `/custom-agents` | list (decorated with `owned`, `scope`, `can_edit`, `subagent_warnings`) / create |
+| GET / PUT / DELETE | `/custom-agents/{id}` | read / update (404, 403, 409 on slug clash) / delete |
+| POST | `/custom-agents/{id}/fork` | copy a template or shared agent into your own |
+| GET | `/custom-agents/tools/available` | tool picker (includes Browser Testing / Mobile Testing) |
 
 ### Monitoring
 
@@ -998,6 +1088,16 @@ under `capabilities` in `config.json`, then restart. Tools appear as
 plus real-hardware sessions logged in `TESTING_LOG.md`. `scratch/` holds ad-hoc
 scripts (`test_agent_e2e.py`, `test_orchestrator.py`) and is gitignored.
 
+**Current suite (2026-09-28):** 452 Python tests plus 6 JS tests, all passing.
+`pytest` isn't installed, so run them with `python -m unittest discover tests`
+and `node tests/js/<file>.js`. The new suites:
+
+- `tests/test_custom_agents.py`: runs on a **temporary auth.db** and never touches the live one.
+- `tests/test_mcp_oauth.py`
+- `tests/test_browser_device_tools.py`: companion faked.
+- `tests/js/test_companion_browserops.js`: real headless Edge; skips if there's no browser or playwright-core.
+- `tests/js/test_companion_androidops.js`: fake adb.
+
 Quick sanity checks that work without a GPU:
 ```
 python -c "import ast; ast.parse(open('server_manager.py',encoding='utf-8').read()); print('OK')"
@@ -1035,6 +1135,29 @@ databases and read `config.json` as import-time side effects.
 | agent lane selection per mode | `routes/agent.py` (`agent_run` ← "lane resolution") |
 | the 4 engine modes (`#agent-engine`) | `ui.html` + `routes/agent.py` (`mode` normalization) |
 | ☁️ status pill / empty-state text | `static/js/gpu-status.js` (`setPill`, `mainLaneReady`) |
+| browser testing tools / policy | `core/browser_tools.py` + `companion/browserops.js`, `companion/policy.js` (`confirmOrigin`, `confirmScript`) |
+| Android / iOS testing tools | `core/device_tools.py` + `companion/androidops.js`, `companion/iosops.js` |
+| browser/mobile on-off, cloud vision for screenshots | `config/app.json → capabilities.browser / mobile / screenshot_cloud_vision` |
+| MCP OAuth (discovery, tokens, refresh) | `core/mcp_oauth.py`; loopback in `companion/oauthops.js`; UI in `static/js/capabilities.js` |
+| custom-agent tool enforcement | `core/request_context.py` (`set_tool_allowlist`, `tool_allowed`) + `core/agent_loop.run_tool` |
+| custom-agent CRUD / slugs / templates | `routes/custom_agents.py`, `core/auth_db.py` (`_seed_starter_custom_agents`, `slugify_custom_agent`) |
+| custom-agent lane / temperature / template | `routes/agent.py`, `routes/chat.py`, `core/roles.py::resolve_role` |
+
+### Pending as of 2026-09-28 (browser/mobile/OAuth/custom-agent work)
+
+- Restart the running server (never start a second `server_manager`).
+- Rebuild the companion to v0.2.0 (`cd companion && npm run dist`).
+- Gmail: create a Google Desktop OAuth client with an Internal consent screen and enable the Gmail MCP API. Then Settings → MCP → gmail → Connect account, and **rotate the old client secret**, which was stored in plaintext.
+- Not yet verified live:
+  - the UI pieces
+  - a real Google sign-in
+  - a real emulator or phone (don't boot an AVD without asking; it competes with the llama servers for GPU/RAM)
+  - anything on iOS
+- Departures from the plan:
+  - the browser/mobile flags ship **on**
+  - iOS shares the `capabilities.mobile` flag
+  - the session↔agent binding is localStorage-only, not on the session row
+- Work is uncommitted on `fine_tune_2`.
 
 ---
 

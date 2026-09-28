@@ -13,13 +13,13 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from core.config import BASE_DIR, CONFIG_FILE, write_app_config
 from core.net_guard import BlockedURLError, check_url
 from core.small_model import APP_CONFIG
-from core import credentials, mcp_catalog
+from core import credentials, mcp_catalog, mcp_oauth
 from core import mcp as mcp_core
 from core import auth_db
 from core.audit import audit_log
@@ -201,6 +201,8 @@ class McpServerReq(BaseModel):
     url: Optional[str] = None
     env: dict = {}                    # plain values, stored in config/app.json (global) / auth.db (user)
     secret_env: dict = {}             # values -> OS keychain; blank value on edit = keep existing
+    headers: dict = {}                # http only: extra non-secret request headers
+    auth: Optional[dict] = None       # http only: {"type": "oauth", client_id, scopes, auth_url?, token_url?, ...}
     disabled: bool = False
 
 
@@ -327,12 +329,59 @@ def _validate(req: McpServerReq, restricted: bool = False) -> Optional[str]:
             local = u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost")
             if not (u.scheme == "https" and u.hostname) and not local:
                 return "url must be https:// (or http://127.0.0.1 / http://localhost)"
+    if req.transport == "http":
+        err = _validate_auth(req, restricted)
+        if err:
+            return err
+    elif req.auth or req.headers:
+        return "auth/headers only apply to http servers"
     for k in list(req.env) + list(req.secret_env):
         if not _ENV_KEY_RX.match(str(k)):
             return f"invalid env var name '{k}'"
         ku = str(k).upper()
         if restricted and (ku in _USER_ENV_DENY or ku.startswith(_USER_ENV_DENY_PREFIXES)):
             return f"env var '{k}' is not allowed on a personal server"
+    return None
+
+
+_HEADER_RX = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+# secrets belong in secret_env (keychain), never in plain headers stored in the config
+_SECRET_HEADERS = {"authorization", "proxy-authorization", "cookie", "x-api-key", "api-key"}
+
+
+def _validate_auth(req: McpServerReq, restricted: bool) -> Optional[str]:
+    for k, v in (req.headers or {}).items():
+        if not _HEADER_RX.match(str(k)):
+            return f"invalid header name '{k}'"
+        if str(k).lower() in _SECRET_HEADERS or str(k).lower().startswith("mcp-"):
+            return f"header '{k}' can't be set here (put secrets in secret env, e.g. AUTHORIZATION)"
+        if len(str(v)) > 512:
+            return f"header '{k}' is too long"
+    a = req.auth
+    if not a:
+        return None
+    if not isinstance(a, dict) or a.get("type") != "oauth":
+        return "auth.type must be 'oauth'"
+    if "client_secret" in a:
+        return "client_secret goes in secret env as OAUTH_CLIENT_SECRET"
+    unknown = set(a) - {"type", "client_id", "scopes", "auth_url", "token_url", "redirect_port",
+                        "extra_params", "resource_param"}
+    if unknown:
+        return f"unknown auth field(s): {', '.join(sorted(unknown))}"
+    for k in ("auth_url", "token_url"):
+        if a.get(k):
+            err = _public_url_error(str(a[k])) if restricted else (
+                None if urlparse(str(a[k])).scheme == "https" else f"auth.{k} must be https://")
+            if err:
+                return f"auth.{k}: {err}"
+    port = a.get("redirect_port") or 0
+    if not isinstance(port, int) or not (port == 0 or 1024 <= port <= 65535):
+        return "auth.redirect_port must be 0 or 1024-65535"
+    scopes = a.get("scopes") or []
+    if not isinstance(scopes, list) or not all(isinstance(x, str) and len(x) < 200 for x in scopes):
+        return "auth.scopes must be a list of strings"
+    if not isinstance(a.get("extra_params") or {}, dict):
+        return "auth.extra_params must be an object"
     return None
 
 
@@ -369,6 +418,12 @@ def _custom_cfg(req: McpServerReq, keep_secret_keys: list) -> dict:
         cfg["args"] = [str(a) for a in req.args if str(a) != ""]
     else:
         cfg["url"] = req.url.strip()
+        if req.headers:
+            cfg["headers"] = {str(k): str(v) for k, v in req.headers.items()}
+        if req.auth:
+            a = {k: v for k, v in req.auth.items() if v not in (None, "", [], {})}
+            a["type"] = "oauth"
+            cfg["auth"] = a
     if req.env:
         cfg["env"] = {str(k): str(v) for k, v in req.env.items()}
     secret_keys = sorted(set(keep_secret_keys) | {k for k, v in req.secret_env.items() if str(v)})
@@ -397,7 +452,7 @@ def _write_server(name: str, scfg: Optional[dict]) -> None:
     write_app_config(cfg, CONFIG_FILE)
 
 
-def _public_cfg(name: str, scfg: dict, scope: str = "global") -> dict:
+def _public_cfg(name: str, scfg: dict, scope: str = "global", owner: Optional[int] = None) -> dict:
     """Config as shown to the UI - secret values never leave the keychain."""
     return {
         "name": name,
@@ -408,6 +463,9 @@ def _public_cfg(name: str, scfg: dict, scope: str = "global") -> dict:
         "url": scfg.get("url"),
         "env": scfg.get("env") or {},
         "secret_env_keys": scfg.get("secret_env_keys") or [],
+        "headers": scfg.get("headers") or {},
+        "auth": scfg.get("auth") or None,
+        "oauth_signed_in": bool(scfg.get("auth")) and mcp_oauth.has_token(name, None if scope == "global" else owner),
         "disabled": bool(scfg.get("disabled")),
         "managed": scfg.get("credential_ref") == "keyring",   # catalog connector: use Connect/Disconnect
     }
@@ -429,7 +487,7 @@ async def _save_server(req: McpServerReq, user: Principal, action: str, keep_sec
               detail={"scope": scope, "transport": scfg["transport"], "command": scfg.get("command"),
                       "args": scfg.get("args"), "url": scfg.get("url"),
                       "secret_env_keys": scfg.get("secret_env_keys", [])})
-    return {"ok": True, "server": _public_cfg(req.name, scfg, scope),
+    return {"ok": True, "server": _public_cfg(req.name, scfg, scope, owner),
             "status": _connect_in_background(req.name, scfg, owner)}
 
 
@@ -462,7 +520,7 @@ async def list_servers(user: Principal = Depends(_use)):
     """Global servers (admins only - their config is org-wide) plus the caller's personal ones."""
     can_global = _can_manage_global(user)
     out = [_public_cfg(n, s, "global") for n, s in mcp_core.configured_servers(APP_CONFIG).items()] if can_global else []
-    out += [_public_cfg(n, s, "user") for n, s in mcp_core.user_servers(user.id).items()]
+    out += [_public_cfg(n, s, "user", user.id) for n, s in mcp_core.user_servers(user.id).items()]
     return {
         "servers": out,
         "can_manage_global": can_global,
@@ -532,6 +590,7 @@ async def update_server(name: str, req: McpServerReq, from_scope: Optional[str] 
         for k in old_keys:
             credentials.delete_token(mcp_core.secret_env_ref(name, k, old_owner))
         mcp_core.disconnect_one(name, old_owner)
+        mcp_oauth.clear_token(name, old_owner)      # sign in again under the new scope
         if old_owner is None:
             _write_server(name, None)
         else:
@@ -554,6 +613,8 @@ async def delete_server(name: str, scope: str = "global", user: Principal = Depe
         return JSONResponse({"error": f"unknown server '{name}'"}, status_code=404)
     mcp_core.disconnect_one(name, owner)
     for k in existing.get("secret_env_keys") or []:
+        credentials.delete_token(mcp_core.secret_env_ref(name, k, owner))
+    for k in (mcp_oauth.TOKEN_KEY, mcp_oauth.DCR_KEY):
         credentials.delete_token(mcp_core.secret_env_ref(name, k, owner))
     if owner is None:
         _write_server(name, None)
@@ -620,3 +681,115 @@ async def set_user_packages(req: UserPackagesReq, user: Principal = Depends(_man
     audit_log(user, action="mcp.user_packages.update", resource="mcp", permission_key=MANAGE_PERM,
               detail={"from": old, "to": pkgs})
     return {"ok": True, "packages": pkgs}
+
+
+# ---------------- OAuth sign-in for http servers (core/mcp_oauth.py) ----------------
+
+def _redirect_base() -> str:
+    """Public https URL of this app, if the admin set one: enables the server-side callback."""
+    return str(APP_CONFIG.get("capabilities", {}).get("mcp_oauth_redirect_base") or "").rstrip("/")
+
+
+class OAuthStartReq(BaseModel):
+    scope: str = "user"
+
+
+async def _loopback_flow(user_id: int, name: str, owner, scfg: dict) -> None:
+    """Companion listens on 127.0.0.1, opens the system browser, returns the code."""
+    from core import companion_bridge
+    try:
+        start = await mcp_oauth.begin(name, owner, scfg)
+        res = await companion_bridge.call(user_id, "oauth.loopback", {
+            "auth_url": start["auth_url"], "placeholder": mcp_oauth.REDIRECT_PLACEHOLDER,
+            "state": start["state"], "port": start["loopback_port"], "timeout_s": 300,
+        }, timeout=320)
+        if not isinstance(res, dict) or not res.get("code"):
+            raise RuntimeError((res or {}).get("error") or "sign-in was cancelled")
+        if res.get("state") != start["state"]:
+            raise RuntimeError("sign-in state mismatch")
+        await mcp_oauth.complete(start["state"], res["code"], res.get("redirect_uri"))
+        mcp_oauth.set_status(name, owner, "done")
+        await mcp_core.connect_one(name, scfg, owner)
+    except Exception as e:
+        msg = str(e)
+        if "unknown op" in msg:
+            msg = ("the companion app on this device is too old for sign-in - install "
+                   "companion v0.2.0 or newer, reopen it, then press Connect account again")
+        mcp_oauth.set_status(name, owner, "error", msg[:300])
+
+
+@router.post("/servers/{name}/oauth/start")
+async def oauth_start(name: str, req: OAuthStartReq, user: Principal = Depends(_use)):
+    owner, resp = _owner_for(req.scope, user)
+    if resp:
+        return resp
+    scfg = _servers_for(owner).get(name)
+    if scfg is None:
+        return JSONResponse({"error": f"unknown server '{name}'"}, status_code=404)
+    if (scfg.get("transport") or ("stdio" if scfg.get("command") else "http")) != "http":
+        return JSONResponse({"error": "OAuth sign-in only applies to http servers"}, status_code=400)
+    from core import companion_bridge
+    audit_log(user, action="mcp.oauth.start", resource=f"mcp:{name}",
+              permission_key=MANAGE_PERM if owner is None else "chat.use", detail={"scope": req.scope})
+    if companion_bridge.is_connected(user.id):
+        mcp_oauth.set_status(name, owner, "pending")
+        task = asyncio.create_task(_loopback_flow(user.id, name, owner, scfg))
+        _bg_tasks.add(task)
+        task.add_done_callback(_bg_tasks.discard)
+        return {"mode": "companion", "status": "pending",
+                "message": "Finish signing in in the browser window the companion opened."}
+    base = _redirect_base()
+    if not base:
+        return JSONResponse({"error": "Open the companion app on this device to sign in "
+                                      "(it receives the sign-in redirect on 127.0.0.1)."}, status_code=409)
+    try:
+        start = await mcp_oauth.begin(name, owner, scfg, redirect_uri=f"{base}/mcp/oauth/callback")
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:300]}, status_code=502)
+    mcp_oauth.set_status(name, owner, "pending")
+    return {"mode": "redirect", "status": "pending", "auth_url": start["auth_url"]}
+
+
+@router.get("/servers/{name}/oauth/status")
+async def oauth_status(name: str, scope: str = "user", user: Principal = Depends(_use)):
+    owner, resp = _owner_for(scope, user)
+    if resp:
+        return resp
+    return mcp_oauth.get_status(name, owner)
+
+
+@router.post("/servers/{name}/oauth/disconnect")
+async def oauth_disconnect(name: str, req: OAuthStartReq, user: Principal = Depends(_use)):
+    owner, resp = _owner_for(req.scope, user)
+    if resp:
+        return resp
+    mcp_oauth.clear_token(name, owner)
+    mcp_oauth.set_status(name, owner, "idle")
+    audit_log(user, action="mcp.oauth.disconnect", resource=f"mcp:{name}",
+              permission_key=MANAGE_PERM if owner is None else "chat.use", detail={"scope": req.scope})
+    return {"ok": True}
+
+
+_DONE_PAGE = """<!doctype html><meta charset=utf-8><title>Signed in</title>
+<body style="font:15px system-ui;padding:40px">{msg}<br><br>You can close this window.</body>"""
+
+
+@router.get("/oauth/callback", response_class=HTMLResponse)
+async def oauth_callback(state: str = "", code: str = "", error: str = "", user: Principal = Depends(_use)):
+    """Server-side redirect target (only with capabilities.mcp_oauth_redirect_base)."""
+    import html as _html
+    if error or not code:
+        return HTMLResponse(_DONE_PAGE.format(msg=_html.escape(f"Sign-in failed: {error or 'no code'}")), status_code=400)
+    # the flow's owner must be the signed-in user (or a global server started by an admin)
+    flow = mcp_oauth._flows.get(state) or {}
+    if flow.get("owner") not in (user.id, None) or (flow.get("owner") is None and not _can_manage_global(user)):
+        return HTMLResponse(_DONE_PAGE.format(msg="This sign-in belongs to another account."), status_code=403)
+    try:
+        done = await mcp_oauth.complete(state, code)
+    except Exception as e:
+        return HTMLResponse(_DONE_PAGE.format(msg=_html.escape(f"Sign-in failed: {e}")), status_code=400)
+    mcp_oauth.set_status(done["name"], done["owner"], "done")
+    scfg = _servers_for(done["owner"]).get(done["name"])
+    if scfg:
+        _connect_in_background(done["name"], scfg, done["owner"])
+    return HTMLResponse(_DONE_PAGE.format(msg="Signed in."))

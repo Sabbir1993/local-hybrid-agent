@@ -184,5 +184,30 @@
     "kv_unified_per_slot": 0,
     "cache_reuse": 256,
     "cache_ram": 0
+  },
+  "neohorse-1-9b-q4_k_m.gguf": {
+    "context_size": 132768,
+    "n_gpu_layers": 999,
+    "threads": 0,
+    "threads_batch": 0,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "n_slots": 1,
+    "tensor_split": "9,11",
+    "split_mode": "layer",
+    "flash_attn": "auto",
+    "kv_cache_type": "q8_0",
+    "mtp_enabled": false,
+    "mtp_draft_n_max": 3,
+    "keepalive_interval_s": 25,
+    "gpu_devices": [
+      1,
+      2
+    ],
+    "vision_capable": false,
+    "kv_unified": true,
+    "kv_unified_per_slot": 0,
+    "cache_reuse": 256,
+    "cache_ram": 0
   }
 }

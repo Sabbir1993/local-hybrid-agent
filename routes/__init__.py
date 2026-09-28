@@ -20,6 +20,7 @@ from .knowledge import router as knowledge_router
 from .proxy import router as proxy_router
 from .input_guard import router as input_guard_router
 from .db_explorer import router as db_explorer_router
+from .custom_agents import router as custom_agents_router
 
 __all__ = [
     "auth_router",
@@ -40,4 +41,5 @@ __all__ = [
     "proxy_router",
     "input_guard_router",
     "db_explorer_router",
+    "custom_agents_router",
 ]

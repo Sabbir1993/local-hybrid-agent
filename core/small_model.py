@@ -723,8 +723,10 @@ def image_mime(data: bytes) -> Optional[str]:
     return None
 
 
-async def describe_image_bytes(data: bytes, question: str = "Describe this image in detail.") -> str:
-    """Send one image through the vision lane (cloud when bound, else local)."""
+async def describe_image_bytes(data: bytes, question: str = "Describe this image in detail.",
+                               force_local: bool = False) -> str:
+    """Send one image through the vision lane (cloud when bound, else local).
+    force_local keeps it on this machine's models (screenshots of apps under test)."""
     mime = image_mime(data)
     if mime is None:
         return "error: not a PNG, JPEG, WEBP or GIF image"
@@ -758,7 +760,7 @@ async def describe_image_bytes(data: bytes, question: str = "Describe this image
 
     # 2. the job's route: cloud vision binding, then the local vision model
     try:
-        data, _t = await lanes.post_chat("vision", payload)
+        data, _t = await lanes.post_chat("vision", payload, force_local=force_local)
     except RuntimeError as e:
         return f"error: no image model available ({e})"
     return lanes.message_text(data) or "(vision model returned no text)"

@@ -80,3 +80,28 @@ async def run_in_executor_ctx(fn: Callable[..., Any], *args: Any) -> Any:
     ctx = contextvars.copy_context()
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, functools.partial(ctx.run, fn, *args))
+
+
+# Tool allowlist of the active custom agent for this request (None = no limit).
+# Checked by core.agent_loop.run_tool, the one choke point every lane's tool call
+# passes through -- filtering the schemas sent to the model is not enough, since a
+# model can still emit (or the text parser can recover) a call to any tool name.
+_tool_allowlist: contextvars.ContextVar[Optional[frozenset]] = contextvars.ContextVar(
+    "tool_allowlist", default=None)
+
+
+def set_tool_allowlist(names) -> contextvars.Token:
+    return _tool_allowlist.set(frozenset(names) if names else None)
+
+
+def reset_tool_allowlist(token: contextvars.Token) -> None:
+    _tool_allowlist.reset(token)
+
+
+def get_tool_allowlist() -> Optional[frozenset]:
+    return _tool_allowlist.get()
+
+
+def tool_allowed(name: str) -> bool:
+    allow = _tool_allowlist.get()
+    return allow is None or name in allow

@@ -17,7 +17,10 @@ function toolIcon(name) {
     case 'get_plan': return '🗒️';
     case 'spawn_agent': return '🤖';
     case 'web_search_images': return '🖼️';
-    default: return '🛠️';
+    default:
+      if (/^browser_/.test(name)) return '🌐';
+      if (/^mobile_/.test(name)) return '📱';
+      return '🛠️';
   }
 }
 
@@ -72,14 +75,16 @@ function parseStepsFromActs(acts) {
           curTool.result = a.result;
           curTool.ok = a.ok !== false;
           if (a.diff) curTool.diff = a.diff;
+          if (a.image) curTool.image = a.image;
         } else {
           const match = curStep.tools.slice().reverse().find(t => t.name === a.name && t.result === null);
           if (match) {
             match.result = a.result;
             match.ok = a.ok !== false;
             if (a.diff) match.diff = a.diff;
+            if (a.image) match.image = a.image;
           } else {
-            curStep.tools.push({ id: a.id, name: a.name, args: {}, verify: null, result: a.result, ok: a.ok !== false, diff: a.diff });
+            curStep.tools.push({ id: a.id, name: a.name, args: {}, verify: null, result: a.result, ok: a.ok !== false, diff: a.diff, image: a.image });
           }
         }
       }
@@ -128,7 +133,13 @@ function toolMeta(name) {
     case 'spawn_agent': return { icon: '🤖', label: 'spawn_agent', verb: 'Delegated', cls: 'subagent' };
     case 'generate_image': return { icon: '🎨', label: 'generate_image', verb: 'Made image', running: 'Making image', cls: 'media' };
     case 'generate_video': return { icon: '🎬', label: 'generate_video', verb: 'Made video', running: 'Making video', cls: 'media' };
-    default: return { icon: '🛠️', label: name, verb: 'Done', cls: 'default' };
+    case 'browser_navigate': return { icon: '🌐', label: name, verb: 'Opened', running: 'Opening', cls: 'default' };
+    case 'browser_screenshot': case 'mobile_screenshot': return { icon: '📸', label: name, verb: 'Captured', running: 'Capturing', cls: 'default' };
+    case 'browser_console': return { icon: '🧾', label: name, verb: 'Checked console', cls: 'default' };
+    default:
+      if (/^browser_/.test(name)) return { icon: '🌐', label: name, verb: name.slice(8).replace(/_/g, ' '), cls: 'default' };
+      if (/^mobile_/.test(name)) return { icon: '📱', label: name, verb: name.slice(7).replace(/_/g, ' '), cls: 'default' };
+      return { icon: '🛠️', label: name, verb: 'Done', cls: 'default' };
   }
 }
 
@@ -296,6 +307,7 @@ function buildChronologicalStream(acts) {
         match.result = a.result;
         match.ok = a.ok !== false;
         if (a.diff) match.diff = a.diff;
+        if (a.image) match.image = a.image;
       } else {
         stream.push({
           type: 'tool',
@@ -304,7 +316,8 @@ function buildChronologicalStream(acts) {
           args: {},
           result: a.result,
           ok: a.ok !== false,
-          diff: a.diff
+          diff: a.diff,
+          image: a.image
         });
       }
     } else if (a.type === 'verify') {
@@ -447,12 +460,19 @@ function renderGenericToolCard(t, isItemRunning) {
         ${t.model ? `<span style="font-family:monospace; opacity:0.8; margin-left:8px;">${esc(t.model)}</span>` : ''}
       </div>
       ${t.args && Object.keys(t.args).length > 0 ? `<pre class="agy-detail-code"><code>${esc(formatToolArgs(t.name, t.args))}</code></pre>` : ''}
+      ${agentShotHtml(t.image)}
       ${t.result !== null ? `
         <div style="font-size:10px; font-weight:700; color:var(--dim); margin:6px 0 4px; text-transform:uppercase;">Result</div>
         <pre class="agy-detail-code" style="color:${t.ok ? 'var(--dim)' : 'var(--red)'};"><code>${esc(t.result || '(empty)')}</code></pre>
       ` : ''}
     </div>
   </details>${isMedia && isRunning ? mediaProgressHtml(t.progress) : ''}`;
+}
+
+// browser/mobile screenshot thumbnail: live-run only (stripped before the message is saved)
+function agentShotHtml(img) {
+  if (!img || !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(img)) return '';
+  return `<img class="agent-shot" src="${img}" alt="screenshot" loading="lazy">`;
 }
 
 // live step bar under a running generate_image / generate_video card (tool_progress events)

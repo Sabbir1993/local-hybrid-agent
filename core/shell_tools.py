@@ -91,6 +91,21 @@ def mark_approved(cmd: str) -> None:
     _approved_cmd.set((cmd or "").strip())
 
 
+_approved_code: contextvars.ContextVar = contextvars.ContextVar("python_approved_code", default=None)
+
+
+def mark_code_approved(code: str) -> None:
+    """Agent loop: the user approved exactly this run_python code in the web app."""
+    _approved_code.set(code or "")
+
+
+def take_code_approval(code: str) -> bool:
+    """Single use: was exactly `code` approved in the web app (or ask_first is off)?"""
+    approved = _approved_code.get()
+    _approved_code.set(None)
+    return approved == (code or "") or not shell_cfg().get("ask_first", True)
+
+
 def _sanity(cmd: str) -> Optional[str]:
     """Blatantly destructive commands are always refused, even with '*'."""
     c = cmd.strip().lower()
@@ -144,7 +159,10 @@ async def tool_run_shell(args: dict) -> str:
 
     try:
         data = await companion_bridge.call(
-            uid, "shell.run", {"command": exec_cmd, "cwd": target_cwd, "timeout": timeout},
+            # the gate above passed (web-app card, allow rule or ask_first off): the
+            # companion skips its own dialog unless the user turned local confirmation on
+            uid, "shell.run", {"command": exec_cmd, "cwd": target_cwd, "timeout": timeout,
+                               "approved_in_app": True},
             timeout=(timeout or 60) + 10)
     except TimeoutError:
         return f"error: command timed out after {timeout}s"

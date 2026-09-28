@@ -9,6 +9,7 @@ guarded by PRAGMA table_info.
 """
 
 import json
+import re
 import sqlite3
 import sys
 import time
@@ -40,6 +41,7 @@ PERMISSIONS = {
     "settings.router.configure": "Edit agent routing rules and apply/dismiss usage-based router suggestions (router)",
     "git.push": "Push to git remotes / open pull requests (uses the server's git & GitHub credentials)",
     "capabilities.install": "Install/remove skills, plugins and connectors from the Customize catalog (shared by every user)",
+    "custom_agents.publish": "Share custom agents with every user (public agents)",
 }
 
 # Keys that used to be in PERMISSIONS; removed from existing databases on start.
@@ -200,9 +202,35 @@ def _init_auth_db() -> ThreadLocalDB:
         revoked_at REAL
     );
     CREATE INDEX IF NOT EXISTS idx_companion_devices_user ON companion_devices(user_id);
+
+    -- user-wise custom agents
+    CREATE TABLE IF NOT EXISTS user_custom_agents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        description TEXT NOT NULL,
+        icon TEXT DEFAULT '🤖',
+        system_prompt TEXT NOT NULL,
+        tool_allowlist TEXT DEFAULT '[]',
+        input_template TEXT DEFAULT '',
+        preferred_lane TEXT DEFAULT 'auto',
+        reasoning_effort TEXT DEFAULT 'medium',
+        temperature REAL DEFAULT 0.4,
+        is_public INTEGER DEFAULT 0,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_agents_slug_user ON user_custom_agents(COALESCE(user_id, 0), slug);
+    CREATE INDEX IF NOT EXISTS idx_user_custom_agents_user ON user_custom_agents(user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_custom_agents_public ON user_custom_agents(is_public);
     """)
     conn.commit()
     _seed_defaults(conn)
+    try:
+        _seed_starter_custom_agents(conn)
+    except Exception as _e:
+        print(f"[auth_db] seed_starter_custom_agents failed: {_e}", file=sys.stderr)
     return conn
 
 
@@ -730,3 +758,376 @@ def audit_facets() -> dict:
     results = [r[0] for r in db().execute(
         "SELECT DISTINCT result FROM audit_log ORDER BY result")]
     return {"users": users, "actions": actions, "results": results}
+
+
+# ---------------- user-wise custom agents ----------------
+
+STARTER_CUSTOM_AGENTS = [
+    {
+        "name": "Email Analyzer & Drafter",
+        "slug": "email-analyzer",
+        "icon": "📧",
+        "description": "Analyzes email threads, assesses urgency/sentiment, extracts action items, and drafts responses.",
+        "system_prompt": (
+            "You are an expert Email Analyzer and Executive Assistant Agent.\n\n"
+            "Your workflow:\n"
+            "1. Read and analyze the input email message or thread:\n"
+            "   - Core sender, recipient(s), context, and subject.\n"
+            "   - Sentiment & tone (e.g. appreciative, frustrated, formal, inquiring).\n"
+            "   - Urgency rating: Low, Medium, High, or Urgent/Time-Sensitive.\n"
+            "2. Extract explicit deliverables, deadlines, questions asked, and action items for each participant.\n"
+            "3. Draft tailored, professional reply options (e.g., Option A: Formal & Detailed, Option B: Concise Acknowledgement).\n"
+            "4. Format the final output with clean Markdown headings, bulleted lists, and clear next steps."
+        ),
+        "tool_allowlist": ["read_file", "doc_inspect", "read_file_chunk", "web_search", "web_fetch"],
+        "input_template": "Please analyze this email message or thread:\n\n{input}",
+        "preferred_lane": "auto",
+        "reasoning_effort": "medium",
+        "temperature": 0.3,
+        "is_public": 1,
+    },
+    {
+        "name": "System & Metric Reporter",
+        "slug": "system-reporter",
+        "icon": "📊",
+        "description": "Inspects system health, server logs, hardware telemetry, and formats structured status summaries.",
+        "system_prompt": (
+            "You are an autonomous System Telemetry and Technical Reporting Agent.\n\n"
+            "Your workflow:\n"
+            "1. Inspect relevant log files, system metrics, hardware status, or service health indicators.\n"
+            "2. Execute Python scripts using 'run_python' if data parsing, statistical calculation, or regex parsing is required.\n"
+            "3. Synthesize findings into an executive-ready System Report covering:\n"
+            "   - Executive Status (Operational / Degraded / Incident)\n"
+            "   - Core Metrics (Throughput, error rates, resource utilization)\n"
+            "   - Anomalies or Root Causes discovered\n"
+            "   - Actionable Mitigation or Next Steps."
+        ),
+        "tool_allowlist": ["read_file", "list_files", "grep", "run_python", "write_file"],
+        "input_template": "Generate a system report for:\n{input}",
+        "preferred_lane": "auto",
+        "reasoning_effort": "medium",
+        "temperature": 0.2,
+        "is_public": 1,
+    },
+    {
+        "name": "Code QA & Test Automator",
+        "slug": "test-qa-automator",
+        "icon": "🧪",
+        "description": "Inspects code, writes thorough unit and regression tests, executes test suites, and verifies fixes.",
+        "system_prompt": (
+            "You are an autonomous Code Quality & Test Engineering Agent.\n\n"
+            "Your workflow:\n"
+            "1. Inspect the target source code, boundary conditions, edge cases, and potential failure modes.\n"
+            "2. Write comprehensive unit or integration tests matching the project's testing conventions.\n"
+            "3. Run the tests using 'run_python' or 'run_shell' to ensure they pass and accurately catch edge cases.\n"
+            "4. If bugs are found, diagnose the root cause and provide targeted fixes using 'edit_file'."
+        ),
+        "tool_allowlist": ["read_file", "list_files", "grep", "write_file", "edit_file", "run_python", "run_shell"],
+        "input_template": "Inspect and create/run automated tests for:\n{input}",
+        "preferred_lane": "auto",
+        "reasoning_effort": "high",
+        "temperature": 0.2,
+        "is_public": 1,
+    },
+    {
+        "name": "Excel & Data Transformer",
+        "slug": "data-transformer",
+        "icon": "📈",
+        "description": "Ingests messy spreadsheets, CSVs or JSON files, cleans data, performs aggregations, and generates clean tables.",
+        "system_prompt": (
+            "You are an expert Data Wrangling and Spreadsheet Automation Agent.\n\n"
+            "Your workflow:\n"
+            "1. Inspect incoming data files (CSV, Excel, JSON, XML) using 'doc_inspect' or 'read_file'.\n"
+            "2. Write Python scripts with 'run_python' to clean, transform, deduplicate, and aggregate the records.\n"
+            "3. Generate cleaned output files (CSV or Excel) and present an executive data summary of findings."
+        ),
+        "tool_allowlist": ["read_file", "read_file_chunk", "doc_inspect", "doc_edit", "run_python", "write_file"],
+        "input_template": "Clean, transform, and analyze the following data:\n{input}",
+        "preferred_lane": "auto",
+        "reasoning_effort": "medium",
+        "temperature": 0.2,
+        "is_public": 1,
+    },
+    {
+        "name": "Release Notes & Changelog Synthesizer",
+        "slug": "release-notes-writer",
+        "icon": "📝",
+        "description": "Reviews git commits, file diffs, and feature updates to write categorized changelogs and release notes.",
+        "system_prompt": (
+            "You are a Technical Writer and Software Release Management Agent.\n\n"
+            "Your workflow:\n"
+            "1. Review recent project changes via 'list_diff', git logs, or user summaries.\n"
+            "2. Group changes into clear categories: Features, Bug Fixes, Performance Improvements, Breaking Changes, and Internal Tooling.\n"
+            "3. Write human-friendly, concise release notes highlighting impact for end users and developers."
+        ),
+        "tool_allowlist": ["list_diff", "read_file", "list_files", "grep", "write_file"],
+        "input_template": "Generate release notes for the following changes:\n{input}",
+        "preferred_lane": "auto",
+        "reasoning_effort": "medium",
+        "temperature": 0.4,
+        "is_public": 1,
+    }
+]
+
+
+def _custom_agent_row(r) -> dict:
+    if not r:
+        return {}
+    d = dict(r)
+    try:
+        if d.get("tool_allowlist"):
+            d["tool_allowlist"] = json.loads(d["tool_allowlist"])
+        else:
+            d["tool_allowlist"] = []
+    except Exception:
+        d["tool_allowlist"] = []
+    d["is_public"] = bool(d.get("is_public", 0))
+    return d
+
+
+def db_list_custom_agents(user_id: Optional[int] = None, include_public: bool = True) -> list[dict]:
+    """List custom agents accessible to user: user's own agents + system templates / public agents."""
+    conn = db()
+    if user_id is not None:
+        if include_public:
+            rows = conn.execute(
+                """SELECT * FROM user_custom_agents
+                   WHERE user_id = ? OR user_id IS NULL OR is_public = 1
+                   ORDER BY (CASE WHEN user_id = ? THEN 0 WHEN user_id IS NULL THEN 1 ELSE 2 END), name COLLATE NOCASE""",
+                (user_id, user_id)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM user_custom_agents WHERE user_id = ? ORDER BY name COLLATE NOCASE",
+                (user_id,)
+            ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM user_custom_agents WHERE user_id IS NULL OR is_public = 1 ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+    return [_custom_agent_row(r) for r in rows]
+
+
+def db_get_custom_agent(agent_id: int, user_id: Optional[int] = None) -> Optional[dict]:
+    """Get agent by id, checking access (owner, public, or system template)."""
+    conn = db()
+    row = conn.execute("SELECT * FROM user_custom_agents WHERE id = ?", (agent_id,)).fetchone()
+    if not row:
+        return None
+    agent = _custom_agent_row(row)
+    if user_id is not None:
+        # Accessible if owned by user, or public, or system template (user_id is None)
+        if agent.get("user_id") not in (user_id, None) and not agent.get("is_public"):
+            return None
+    return agent
+
+
+def db_get_custom_agent_by_slug(slug: str, user_id: Optional[int] = None) -> Optional[dict]:
+    """Find a custom agent by slug: the user's own first, then system templates.
+    Other users' public agents are never resolved by slug -- spawn_agent must not
+    run a prompt someone else published (they are usable only when picked in the UI)."""
+    conn = db()
+    s = (slug or "").strip().lower()
+    if user_id is not None:
+        row = conn.execute(
+            "SELECT * FROM user_custom_agents WHERE user_id = ? AND LOWER(slug) = ?",
+            (user_id, s)
+        ).fetchone()
+        if row:
+            return _custom_agent_row(row)
+    row = conn.execute(
+        "SELECT * FROM user_custom_agents WHERE user_id IS NULL AND LOWER(slug) = ?", (s,)
+    ).fetchone()
+    return _custom_agent_row(row) if row else None
+
+
+class CustomAgentSlugTaken(ValueError):
+    pass
+
+
+def slugify_custom_agent(text) -> str:
+    s = re.sub(r"[^a-z0-9_-]", "-", str(text or "").strip().lower())
+    return re.sub(r"-{2,}", "-", s).strip("-")
+
+
+def _slug_taken(conn, user_id: Optional[int], slug: str, exclude_id: Optional[int] = None) -> bool:
+    row = conn.execute(
+        "SELECT id FROM user_custom_agents WHERE COALESCE(user_id, 0) = ? AND LOWER(slug) = ? AND id != ?",
+        (user_id or 0, slug.lower(), exclude_id or 0)).fetchone()
+    return row is not None
+
+
+def _tools_json(tools) -> str:
+    return json.dumps([str(t) for t in tools]) if isinstance(tools, list) else "[]"
+
+
+def db_create_custom_agent(user_id: Optional[int], data: dict) -> dict:
+    """Create a new custom agent for a user."""
+    conn = db()
+    now = time.time()
+    name = (data.get("name") or "Custom Agent").strip()
+    slug = slugify_custom_agent(data.get("slug") or name) or "agent"
+    description = (data.get("description") or "").strip()
+    icon = (data.get("icon") or "🤖").strip()
+    system_prompt = (data.get("system_prompt") or "").strip()
+    tool_json = _tools_json(data.get("tool_allowlist") or [])
+    input_template = (data.get("input_template") or "").strip()
+    preferred_lane = (data.get("preferred_lane") or "auto").strip()
+    reasoning_effort = (data.get("reasoning_effort") or "medium").strip()
+    temp = data.get("temperature")
+    temperature = float(temp) if temp is not None else 0.4
+    is_public = 1 if data.get("is_public") else 0
+
+    base_slug = slug
+    counter = 1
+    while _slug_taken(conn, user_id, slug):
+        counter += 1
+        slug = f"{base_slug}-{counter}"
+
+    with transaction(conn) as c:
+        cursor = c.execute(
+            """INSERT INTO user_custom_agents (
+                user_id, name, slug, description, icon, system_prompt, tool_allowlist,
+                input_template, preferred_lane, reasoning_effort, temperature, is_public,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, name, slug, description, icon, system_prompt, tool_json,
+             input_template, preferred_lane, reasoning_effort, temperature, is_public,
+             now, now)
+        )
+        new_id = cursor.lastrowid
+    return db_get_custom_agent(new_id)
+
+
+def db_update_custom_agent(agent_id: int, user_id: int, data: dict) -> Optional[dict]:
+    """Update an agent owned by user (or admin updating any agent).
+    Raises CustomAgentSlugTaken if the new slug collides with another agent."""
+    conn = db()
+    row = conn.execute("SELECT * FROM user_custom_agents WHERE id = ?", (agent_id,)).fetchone()
+    if not row:
+        return None
+    # Only owner or super admin can edit
+    if row["user_id"] != user_id:
+        user_row = conn.execute("SELECT is_super_admin FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not (user_row and user_row["is_super_admin"]):
+            return None
+
+    # an explicit null means "leave unchanged", never the string "None"
+    data = {k: v for k, v in data.items() if v is not None}
+    now = time.time()
+    fields = []
+    args = []
+
+    for k in ("name", "description", "icon", "system_prompt", "input_template", "preferred_lane", "reasoning_effort"):
+        if k in data:
+            fields.append(f"{k} = ?")
+            args.append(str(data[k]).strip())
+    if "slug" in data:
+        slug = slugify_custom_agent(data["slug"])
+        if slug and slug != row["slug"]:
+            if _slug_taken(conn, row["user_id"], slug, exclude_id=agent_id):
+                raise CustomAgentSlugTaken(slug)
+            fields.append("slug = ?")
+            args.append(slug)
+    if "tool_allowlist" in data:
+        fields.append("tool_allowlist = ?")
+        args.append(_tools_json(data["tool_allowlist"]))
+    if "temperature" in data:
+        fields.append("temperature = ?")
+        args.append(float(data["temperature"]))
+    if "is_public" in data:
+        fields.append("is_public = ?")
+        args.append(1 if data["is_public"] else 0)
+
+    if not fields:
+        return _custom_agent_row(row)
+
+    fields.append("updated_at = ?")
+    args.append(now)
+    args.append(agent_id)
+
+    with transaction(conn) as c:
+        c.execute(f"UPDATE user_custom_agents SET {', '.join(fields)} WHERE id = ?", args)
+
+    # access was checked above; re-fetch unfiltered so a super admin editing
+    # someone's private agent gets the row back instead of a spurious 403
+    return db_get_custom_agent(agent_id)
+
+
+def db_delete_custom_agent(agent_id: int, user_id: int) -> bool:
+    """Delete an agent owned by user (or by super-admin)."""
+    conn = db()
+    row = conn.execute("SELECT * FROM user_custom_agents WHERE id = ?", (agent_id,)).fetchone()
+    if not row:
+        return False
+    if row["user_id"] != user_id:
+        user_row = conn.execute("SELECT is_super_admin FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not (user_row and user_row["is_super_admin"]):
+            return False
+
+    with transaction(conn) as c:
+        c.execute("DELETE FROM user_custom_agents WHERE id = ?", (agent_id,))
+    return True
+
+
+def db_fork_custom_agent(agent_id: int, user_id: int, new_name: Optional[str] = None) -> Optional[dict]:
+    """Clone an existing agent / template into user's own collection."""
+    source = db_get_custom_agent(agent_id, user_id)
+    if not source:
+        return None
+    now = time.time()
+    base_name = new_name or f"{source['name']} (Fork)"
+    base_slug = f"{source['slug']}-copy"
+    # Ensure unique slug for user
+    slug = base_slug
+    counter = 1
+    conn = db()
+    while _slug_taken(conn, user_id, slug):
+        counter += 1
+        slug = f"{base_slug}-{counter}"
+
+    data = {
+        "name": base_name,
+        "slug": slug,
+        "description": source["description"],
+        "icon": source["icon"],
+        "system_prompt": source["system_prompt"],
+        "tool_allowlist": source["tool_allowlist"],
+        "input_template": source["input_template"],
+        "preferred_lane": source["preferred_lane"],
+        "reasoning_effort": source["reasoning_effort"],
+        "temperature": source["temperature"],
+        "is_public": 0,
+    }
+    return db_create_custom_agent(user_id, data)
+
+
+_STARTER_FIELDS = ("name", "description", "icon", "system_prompt", "tool_allowlist", "input_template",
+                   "preferred_lane", "reasoning_effort", "temperature", "is_public")
+
+
+def _seed_starter_custom_agents(conn) -> None:
+    """Insert missing starter templates, and refresh ones nobody has edited
+    (updated_at == created_at) so template improvements ship with the code.
+    Runs from _init_auth_db, i.e. against whichever AUTH_DB_FILE is configured."""
+    now = time.time()
+    for ag in STARTER_CUSTOM_AGENTS:
+        vals = [_tools_json(ag[k]) if k == "tool_allowlist" else ag[k] for k in _STARTER_FIELDS]
+        existing = conn.execute(
+            "SELECT * FROM user_custom_agents WHERE user_id IS NULL AND slug = ?", (ag["slug"],)
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                f"INSERT INTO user_custom_agents (user_id, slug, {', '.join(_STARTER_FIELDS)}, created_at, updated_at) "
+                f"VALUES (NULL, ?, {', '.join('?' * len(_STARTER_FIELDS))}, ?, ?)",
+                (ag["slug"], *vals, now, now))
+        elif existing["updated_at"] == existing["created_at"] and \
+                [existing[k] for k in _STARTER_FIELDS] != vals:
+            conn.execute(
+                f"UPDATE user_custom_agents SET {', '.join(k + ' = ?' for k in _STARTER_FIELDS)} WHERE id = ?",
+                (*vals, existing["id"]))
+    conn.commit()
+
+
+def seed_starter_custom_agents() -> None:
+    _seed_starter_custom_agents(db())

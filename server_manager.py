@@ -60,6 +60,8 @@ from core.small_model import small_models
 from core.memory import memory_background_task
 from core.state import keepalive_loop, state
 from core.web_tools import register_web_tools
+from core.browser_tools import register_browser_tools
+from core.device_tools import register_device_tools
 from core.router_tuner import tuner_background_task
 from core.file_tools import register_file_tools
 from core.media_tools import register_media_tools
@@ -83,6 +85,7 @@ from routes import (
     customize_router,
     projects_router,
     proxy_router,
+    custom_agents_router,
 )
 from routes import common
 
@@ -192,6 +195,8 @@ async def lifespan(app: FastAPI):
     register_shell_tools()
     register_file_tools()
     register_media_tools()
+    register_browser_tools()
+    register_device_tools()
     load_plugins()
     print(f"[server_manager] runtime={ACTIVE_RUNTIME['name']} backend={ACTIVE_RUNTIME['backend']} "
           f"bin={ACTIVE_RUNTIME['llama_bin_dir']} devices={ACTIVE_RUNTIME['gpu_devices']}")
@@ -305,6 +310,7 @@ app.include_router(my_tokens_router, dependencies=_authed)
 app.include_router(knowledge_router, dependencies=_authed)
 app.include_router(input_guard_router, dependencies=_authed)
 app.include_router(db_explorer_router, dependencies=_authed)
+app.include_router(custom_agents_router, dependencies=_authed)
 # Own auth handling (session cookie checked inside the socket handler) since
 # Depends() on a websocket route doesn't compose with the HTTP auth flow above.
 # Must sit before the proxy catch-all, or /companion/pair and /companion/devices 404.

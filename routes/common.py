@@ -254,7 +254,9 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
 async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=None, temperature=0.4,
                                         max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None,
                                         grammar: Optional[str] = None, lane: str = "cloud",
-                                        extra: Optional[dict] = None, effort: Optional[str] = None):
+                                        extra: Optional[dict] = None, effort: Optional[str] = None,
+                                        top_p: Optional[float] = None, min_p: Optional[float] = None,
+                                        presence_penalty: Optional[float] = None, top_k: Optional[int] = None):
     """Stream from `primary` (usually a CloudClient); if it fails before emitting any
     content, retry the same request on `fallback` (the local lane) instead of failing
     the whole agent step. Yields ("fallback", reason) once before switching so callers
@@ -262,7 +264,8 @@ async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=No
     produced = False
     try:
         async for item in _llm_chat_stream(primary, msgs, tools, temperature, max_tokens,
-                                           repeat_penalty, rid, grammar, extra=extra, effort=effort):
+                                           repeat_penalty, rid, grammar, extra=extra, effort=effort,
+                                           top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
             produced = True
             yield item
         return
@@ -274,7 +277,8 @@ async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=No
               file=sys.stderr)
         yield ("fallback", reason)
     async for item in _llm_chat_stream(fallback, msgs, tools, temperature, max_tokens,
-                                       repeat_penalty, rid, grammar, extra=extra, effort=effort):
+                                       repeat_penalty, rid, grammar, extra=extra, effort=effort,
+                                       top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
         yield item
 
 
@@ -330,13 +334,14 @@ class _Admission:
 admission = _Admission()
 
 
-async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None):
+async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None):
     """Stream one completion. Requests to the local main llama-server first pass
     the fair-share admission gate; a ("queued", {"position": n}) item is yielded
     when the caller has to wait for a slot."""
     if client_or_state is not state.client or not admission.enabled():
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
-                                               repeat_penalty, rid, grammar, extra=extra, effort=effort):
+                                               repeat_penalty, rid, grammar, extra=extra, effort=effort,
+                                               top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
             yield item
         return
     glob, mine = admission._sems(get_current_user_id())
@@ -354,20 +359,29 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
         admission.waiting -= 1
     try:
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
-                                               repeat_penalty, rid, grammar, extra=extra, effort=effort):
+                                               repeat_penalty, rid, grammar, extra=extra, effort=effort,
+                                               top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
             yield item
     finally:
         glob.release()
         mine.release()
 
 
-async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None):
+async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None):
     payload = {
         "messages": msgs,
         "temperature": temperature,
         "repeat_penalty": repeat_penalty,
         "stream": True,
     }
+    if top_p is not None:
+        payload["top_p"] = float(top_p)
+    if min_p is not None and client_or_state is state.client:
+        payload["min_p"] = float(min_p)
+    if presence_penalty is not None:
+        payload["presence_penalty"] = float(presence_penalty)
+    if top_k is not None and int(top_k) > 0 and client_or_state is state.client:
+        payload["top_k"] = int(top_k)
     if client_or_state is state.client:
         payload.update(_main_slot_fields())
         # llama-server-only fields (e.g. chat_template_kwargs); never sent to

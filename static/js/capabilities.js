@@ -37,12 +37,16 @@ async function loadCapabilities() {
               <b>${esc(s.name)}</b> <span class="mcp-scope-badge ${s.scope === 'user' ? 'user' : ''}" title="${s.scope === 'user' ? 'Only you can use this server' : 'Available to every user'}">${s.scope === 'user' ? 'personal' : 'global'}</span>
               <span class="dim">(${esc(s.transport)}) · ${s.status === 'ready' ? s.tools.length + ' tool(s)' : esc(s.status)}</span>
               ${(s.scope === 'user' || canManageMcp) ? `<span style="margin-left:auto; display:flex; gap:4px;" data-stop>
+                ${(s.transport === 'http' && (s.auth || s.auth_required)) ? (s.signed_in
+                  ? `<button class="btn ghost mcp-srv-signout" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;" title="Forget the stored sign-in (you can revoke the app's access in your account settings too)">🔓 Sign out</button>`
+                  : `<button class="btn accent mcp-srv-oauth" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;" title="Sign in to this server's account (opens your browser)">🔑 Connect account</button>`) : ''}
                 <button class="btn ghost mcp-srv-reconnect" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;" title="Reconnect (e.g. after finishing an OAuth login)">↻</button>
                 <button class="btn ghost mcp-srv-edit" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">Edit</button>
                 <button class="btn ghost mcp-srv-del" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px; color:var(--red);">✕</button>
               </span>` : ''}
             </summary>
             ${s.error ? `<div class="dim" style="font-size:10px; color:var(--red); margin:4px 0 4px 18px;">${esc(s.error)}</div>` : ''}
+            ${(s.transport === 'http' && s.auth_required && !s.signed_in) ? `<div class="dim" style="font-size:10px; color:var(--amber, #d9a400); margin:4px 0 4px 18px;">Tool calls need a signed-in account: press 🔑 Connect account.</div>` : ''}
             <div class="mcp-tools-list">
               ${(s.tools || []).map(t => `
                 <div class="cap-tool-entry sub">
@@ -521,6 +525,26 @@ function mcpEditorHtml(canGlobal) {
       </div>
       <label id="mcp-f-http" style="display:none; gap:6px; align-items:center;"><span style="width:70px;">URL</span>
         <input type="text" id="mcp-f-url" placeholder="https://example.com/mcp" style="${MCP_INP} flex:1;"></label>
+      <div id="mcp-f-oauth-wrap" style="display:none; flex-direction:column; gap:5px;">
+        <label style="display:flex; gap:6px; align-items:center; cursor:pointer;">
+          <input type="checkbox" id="mcp-f-oauth" style="accent-color:var(--accent);"> Sign in with OAuth (Gmail, Google Workspace, most hosted MCP servers)</label>
+        <div id="mcp-f-oauth-fields" style="display:none; flex-direction:column; gap:5px; margin-left:18px;">
+          <label style="display:flex; gap:6px; align-items:center;"><span style="width:70px;">Client ID</span>
+            <input type="text" id="mcp-f-oauth-client" placeholder="blank = register automatically (if the server supports it)" style="${MCP_INP} flex:1;"></label>
+          <label style="display:flex; gap:6px; align-items:center;"><span style="width:70px;">Secret</span>
+            <input type="password" id="mcp-f-oauth-secret" autocomplete="new-password" placeholder="client secret (Google desktop clients) - stored in the OS keychain" style="${MCP_INP} flex:1;"></label>
+          <label style="display:flex; gap:6px; align-items:center;"><span style="width:70px;">Scopes</span>
+            <input type="text" id="mcp-f-oauth-scopes" placeholder="space-separated, least privilege" style="${MCP_INP} flex:1;"></label>
+          <details><summary class="dim" style="font-size:10px; cursor:pointer;">Advanced: endpoints</summary>
+            <div style="display:flex; flex-direction:column; gap:5px; margin-top:4px;">
+              <label style="display:flex; gap:6px; align-items:center;"><span style="width:70px;">Auth URL</span>
+                <input type="text" id="mcp-f-oauth-authurl" placeholder="auto-discovered" style="${MCP_INP} flex:1;"></label>
+              <label style="display:flex; gap:6px; align-items:center;"><span style="width:70px;">Token URL</span>
+                <input type="text" id="mcp-f-oauth-tokenurl" placeholder="auto-discovered" style="${MCP_INP} flex:1;"></label>
+            </div></details>
+          <div class="dim" style="font-size:9.5px;">After saving, press 🔑 Connect account. The sign-in opens in your browser through the companion app; tokens are kept per user in the OS keychain.</div>
+        </div>
+      </div>
       <div>
         <div style="display:flex; align-items:center; gap:6px;"><span style="width:70px;">Env vars</span>
           <button class="btn ghost" id="mcp-f-env-add" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">+ var</button>
@@ -617,8 +641,19 @@ function wireMcpEditor(box, canGlobal) {
     const http = $f('transport').value === 'http';
     $f('stdio').style.display = http ? 'none' : 'flex';
     $f('http').style.display = http ? 'flex' : 'none';
+    $f('oauth-wrap').style.display = http ? 'flex' : 'none';
+    $f('oauth-fields').style.display = (http && $f('oauth').checked) ? 'flex' : 'none';
   };
   $f('transport').onchange = syncTransport;
+  $f('oauth').onchange = syncTransport;
+  // known remote servers: sensible least-privilege defaults
+  $f('url').addEventListener('change', () => {
+    if (/gmailmcp\.googleapis\.com/.test($f('url').value) && !$f('oauth-scopes').value) {
+      $f('oauth').checked = true;
+      $f('oauth-scopes').value = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose';
+      syncTransport();
+    }
+  });
   $f('env-add').onclick = () => $f('env').appendChild(mcpEnvRow());
 
   const openForm = cfg => {
@@ -656,8 +691,20 @@ function wireMcpEditor(box, canGlobal) {
     $f('env').innerHTML = '';
     if (cfg) {
       Object.entries(cfg.env || {}).forEach(([k, v]) => $f('env').appendChild(mcpEnvRow(k, v, false)));
-      (cfg.secret_env_keys || []).forEach(k => $f('env').appendChild(mcpEnvRow(k, '', true, true)));
+      (cfg.secret_env_keys || []).filter(k => k !== 'OAUTH_CLIENT_SECRET')
+        .forEach(k => $f('env').appendChild(mcpEnvRow(k, '', true, true)));
     }
+    const au = (cfg && cfg.auth) || null;
+    $f('oauth').checked = !!au;
+    $f('oauth-client').value = au ? (au.client_id || '') : '';
+    $f('oauth-scopes').value = au ? (au.scopes || []).join(' ') : '';
+    $f('oauth-authurl').value = au ? (au.auth_url || '') : '';
+    $f('oauth-tokenurl').value = au ? (au.token_url || '') : '';
+    $f('oauth-secret').value = '';
+    const secretStored = !!(cfg && (cfg.secret_env_keys || []).includes('OAUTH_CLIENT_SECRET'));
+    $f('oauth-secret').placeholder = secretStored ? '•••• stored — leave blank to keep'
+      : 'client secret (Google desktop clients) - stored in the OS keychain';
+    $f('oauth-secret').dataset.stored = secretStored ? '1' : '';
     syncTransport();
     form.hidden = false;
     if (!cfg) $f('name').focus();
@@ -685,6 +732,19 @@ function wireMcpEditor(box, canGlobal) {
       if (row.querySelector('.mcp-env-secret').checked) secret_env[k] = v; else env[k] = v;
     }
     const from_scope = editing ? editing.scope : null;
+    let auth = null;
+    if ($f('transport').value === 'http' && $f('oauth').checked) {
+      auth = { type: 'oauth' };
+      const cid = $f('oauth-client').value.trim();
+      const scopes = $f('oauth-scopes').value.split(/\s+/).map(x => x.trim()).filter(Boolean);
+      if (cid) auth.client_id = cid;
+      if (scopes.length) auth.scopes = scopes;
+      if ($f('oauth-authurl').value.trim()) auth.auth_url = $f('oauth-authurl').value.trim();
+      if ($f('oauth-tokenurl').value.trim()) auth.token_url = $f('oauth-tokenurl').value.trim();
+      const sec = $f('oauth-secret').value;
+      if (sec) secret_env.OAUTH_CLIENT_SECRET = sec;
+      else if ($f('oauth-secret').dataset.stored) secret_env.OAUTH_CLIENT_SECRET = '';   // keep the stored one
+    }
     const body = {
       name,
       scope,
@@ -694,6 +754,7 @@ function wireMcpEditor(box, canGlobal) {
       args: $f('args').value.split('\n').map(a => a.trim()).filter(Boolean),
       url: $f('url').value.trim(),
       env, secret_env,
+      auth: auth || undefined,
       disabled: $f('disabled').checked,
     };
     try {
@@ -744,6 +805,45 @@ function wireMcpEditor(box, canGlobal) {
       if (!cfg) { toast('Config not loaded yet — try again', true); return; }
       if (cfg.managed) { toast('Catalog connector — use Connect / Disconnect above', true); return; }
       openForm(cfg);
+    };
+  });
+  box.querySelectorAll('.mcp-srv-oauth').forEach(btn => {
+    btn.onclick = async () => {
+      const name = btn.dataset.name, scope = btn.dataset.scope || 'global';
+      try {
+        const r = await fetch(`/mcp/servers/${encodeURIComponent(name)}/oauth/start`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || j.detail || r.status);
+        if (j.mode === 'redirect' && j.auth_url) window.open(j.auth_url, '_blank', 'noopener');
+        toast(j.message || 'Finish signing in in your browser…');
+        btn.disabled = true;
+        btn.textContent = '⏳ Waiting for sign-in…';
+        const t0 = Date.now();
+        const poll = async () => {
+          const s = await fetch(`/mcp/servers/${encodeURIComponent(name)}/oauth/status${scopeQ(scope)}`).then(x => x.json()).catch(() => ({}));
+          if (s.state === 'done' || s.signed_in && s.state !== 'pending') { toast(`Signed in to ${name} ✓`); loadCapabilities(); return; }
+          if (s.state === 'error') { toast(`Sign-in failed: ${s.error || 'unknown error'}`, true); loadCapabilities(); return; }
+          if (Date.now() - t0 > 330000) { toast('Sign-in timed out', true); loadCapabilities(); return; }
+          setTimeout(poll, 2000);
+        };
+        setTimeout(poll, 2000);
+      } catch (e) { toast('Sign-in failed: ' + e.message, true); }
+    };
+  });
+  box.querySelectorAll('.mcp-srv-signout').forEach(btn => {
+    btn.onclick = async () => {
+      const name = btn.dataset.name;
+      if (!confirm(`Forget the stored sign-in for '${name}'?`)) return;
+      try {
+        const r = await fetch(`/mcp/servers/${encodeURIComponent(name)}/oauth/disconnect`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: btn.dataset.scope || 'global' }),
+        });
+        if (!r.ok) throw new Error((await r.json()).error || r.status);
+        toast(`Signed out of ${name}`);
+        loadCapabilities();
+      } catch (e) { toast('Sign-out failed: ' + e.message, true); }
     };
   });
   box.querySelectorAll('.mcp-srv-reconnect').forEach(btn => {

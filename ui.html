@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Local Agent — Control Center</title>
 <script src="/static/js/theme-boot.js?v=1.0"></script>
-<link rel="stylesheet" href="/static/css/style.css?v=5.2">
+<link rel="stylesheet" href="/static/css/style.css?v=5.7">
 <link rel="stylesheet" href="/static/css/lanes.css?v=1.2">
 <link rel="stylesheet" href="/static/css/media.css?v=1.2">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
@@ -41,6 +41,17 @@
       <span>New Chat</span>
       <kbd class="kbd-hint">Ctrl K</kbd>
     </button>
+
+    <section id="custom-agents-card" class="card" style="padding:10px 8px; flex-shrink:0; display:flex; flex-direction:column; max-height:220px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding:0 4px;">
+        <span style="font-size:9.5px; color:var(--dim); letter-spacing:1.8px; font-weight:700; text-transform:uppercase;">Personal Agents</span>
+        <div style="display:flex; align-items:center; gap:4px;">
+          <button id="btn-new-custom-agent" class="btn ghost" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;" title="Create custom agent">＋ New</button>
+        </div>
+      </div>
+      <div id="custom-agents-sidebar-list" style="overflow-y:auto; display:flex; flex-direction:column; gap:3px; max-height:175px; padding-right:2px;">
+      </div>
+    </section>
 
     <section id="projects-card" class="card" style="padding:10px 8px; display:none; max-height:280px; flex-direction:column;">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding:0 4px;">
@@ -736,6 +747,103 @@ Full instructions the agent reads via read_skill.</pre>
   </div>
 </div>
 
+<div id="custom-agent-modal" class="ca-modal-overlay" style="display:none;">
+  <div class="ca-modal-box">
+    <div class="ca-modal-head">
+      <div class="ca-modal-title-wrap">
+        <span id="ca-modal-title">Create Custom Agent</span>
+      </div>
+      <button id="ca-modal-close" class="rep-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="ca-modal-body">
+      <div class="ca-form-row">
+        <div class="ca-field" style="flex:1;">
+          <label for="ca-name">Agent Name *</label>
+          <input type="text" id="ca-name" placeholder="e.g. Email Analyzer &amp; Drafter">
+        </div>
+        <div class="ca-field" style="width:130px;">
+          <label for="ca-slug">Slug / Tag</label>
+          <input type="text" id="ca-slug" placeholder="e.g. email-analyzer">
+        </div>
+        <div class="ca-field" style="width:80px;">
+          <label for="ca-icon">Icon</label>
+          <input type="text" id="ca-icon" value="🤖" style="text-align:center; font-size:16px;">
+        </div>
+      </div>
+
+      <div class="ca-icon-presets-row">
+        <span class="dim" style="font-size:11px;">Quick Icon:</span>
+        <button type="button" class="ca-icon-preset">📧</button>
+        <button type="button" class="ca-icon-preset">📊</button>
+        <button type="button" class="ca-icon-preset">🧪</button>
+        <button type="button" class="ca-icon-preset">📈</button>
+        <button type="button" class="ca-icon-preset">📝</button>
+        <button type="button" class="ca-icon-preset">🔍</button>
+        <button type="button" class="ca-icon-preset">🛡️</button>
+        <button type="button" class="ca-icon-preset">⚙️</button>
+        <button type="button" class="ca-icon-preset">💻</button>
+        <button type="button" class="ca-icon-preset">🧠</button>
+      </div>
+
+      <div class="ca-field">
+        <label for="ca-desc">Short Description *</label>
+        <input type="text" id="ca-desc" placeholder="e.g. Summarizes email threads and prepares draft replies">
+      </div>
+
+      <div class="ca-field">
+        <label for="ca-prompt">System Persona &amp; Directives (Instructions) *</label>
+        <textarea id="ca-prompt" rows="7" placeholder="Define this agent's domain expertise, procedure, instructions, and output format..."></textarea>
+      </div>
+
+      <div class="ca-field">
+        <label for="ca-template">Prompt Input Wrapper Template (Optional)</label>
+        <textarea id="ca-template" rows="3" placeholder="Wraps your first message; {input} = what you type. e.g.&#10;Analyze the following request:&#10;{input}"></textarea>
+        <span class="ca-field-hint">If provided, user's input will replace {input} before execution.</span>
+      </div>
+
+      <div class="ca-form-row">
+        <div class="ca-field" style="flex:1;">
+          <label for="ca-lane">Preferred Model Lane</label>
+          <select id="ca-lane">
+            <option value="auto">Auto (Runtime Default)</option>
+            <option value="main">Main LLM (Arc A770)</option>
+            <option value="executor">Fast Executor (Local 3B)</option>
+            <option value="cloud">Cloud Provider</option>
+          </select>
+        </div>
+        <div class="ca-field" style="flex:1;">
+          <label for="ca-effort">Reasoning Effort</label>
+          <select id="ca-effort">
+            <option value="none">None</option>
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+            <option value="extra">Extra (Deep)</option>
+          </select>
+        </div>
+        <div class="ca-field" style="flex:1;">
+          <label for="ca-temp">Temperature: <span id="ca-temp-val">0.4</span></label>
+          <input type="range" id="ca-temp" min="0.0" max="1.0" step="0.05" value="0.4">
+        </div>
+      </div>
+
+      <div class="ca-field">
+        <label>Tool Permissions &amp; Capabilities</label>
+        <div id="ca-tools-container"></div>
+      </div>
+
+      <div class="ca-field-check">
+        <label><input type="checkbox" id="ca-public"> Share with other users on this server (Public Template)</label>
+      </div>
+    </div>
+    <div class="ca-modal-foot">
+      <button type="button" class="btn red" id="ca-btn-delete" style="display:none; margin-right:auto;">Delete Agent</button>
+      <button type="button" class="btn ghost" id="ca-btn-cancel">Cancel</button>
+      <button type="button" class="btn blue" id="ca-btn-save">Save Agent</button>
+    </div>
+  </div>
+</div>
+
 <div id="settings-modal" hidden style="display:none;">
   <div id="settings-modal-box">
     <div id="settings-modal-head">
@@ -754,17 +862,17 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js" integrity="sha384-R63zfMfSwJF4xCR11wXii+QUsbiBIdiDzDbtxia72oGWfkT7WHJfmD/I/eeHPJyT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="/static/js/theme.js?v=2.8"></script>
-<script src="/static/js/utils.js?v=2.9"></script>
+<script src="/static/js/utils.js?v=3.0"></script>
 <script src="/static/js/sse-stream.js?v=1.3"></script>
 <script src="/static/js/answer-check.js?v=1.1"></script>
 <script src="/static/js/audio-wav.js?v=1.0"></script>
-<script src="/static/js/sampling.js?v=1.1"></script>
+<script src="/static/js/sampling.js?v=1.2"></script>
 <script src="/static/js/preview.js?v=2.8"></script>
 <script src="/static/js/gpu-status.js?v=3.4"></script>
-<script src="/static/js/chat.js?v=3.16"></script>
+<script src="/static/js/chat.js?v=3.17"></script>
 <script src="/static/js/controls.js?v=3.1"></script>
 <script src="/static/js/monitor.js?v=3.1"></script>
-<script src="/static/js/capabilities.js?v=2.9"></script>
+<script src="/static/js/capabilities.js?v=3.0"></script>
 <script src="/static/js/git.js?v=1.0"></script>
 <script src="/static/js/usage-report.js?v=2.5"></script>
 <script src="/static/js/audit-log.js?v=1.0"></script>
@@ -774,15 +882,16 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/config.js?v=3.2"></script>
 <script src="/static/js/cloud.js?v=3.1"></script>
 <script src="/static/js/attachments.js?v=2.8"></script>
-<script src="/static/js/projects.js?v=4.5"></script>
+<script src="/static/js/projects.js?v=4.6"></script>
 <script src="/static/js/workspace.js?v=2.9"></script>
 <script src="/static/js/dnd.js?v=1.0"></script>
-<script src="/static/js/agent-cmd.js?v=3.7"></script>
+<script src="/static/js/agent-cmd.js?v=3.8"></script>
 <script src="/static/js/media.js?v=1.6"></script>
-<script src="/static/js/agent-acts.js?v=3.0"></script>
-<script src="/static/js/agent-run.js?v=3.11"></script>
+<script src="/static/js/agent-acts.js?v=3.1"></script>
+<script src="/static/js/agent-run.js?v=3.12"></script>
 <script src="/static/js/compact.js?v=2.9"></script>
 <script src="/static/js/export.js?v=1.0"></script>
+<script src="/static/js/custom-agents.js?v=1.3"></script>
 <script src="/static/js/main.js?v=4.2"></script>
 
 </body>

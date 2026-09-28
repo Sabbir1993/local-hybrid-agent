@@ -64,6 +64,8 @@ class McpServer:
         self._rpc_id = 0
         self._lock = asyncio.Lock()
         self._session_header: Optional[str] = None   # streamable-http session id
+        self._protocol_version: Optional[str] = None  # negotiated in initialize (MCP-Protocol-Version header)
+        self.auth_required = False                    # last call hit 401: user must (re)connect via OAuth
         self._stderr_tail: collections.deque = collections.deque(maxlen=50)
 
     # ---------------- stdio plumbing ----------------
@@ -177,7 +179,8 @@ class McpServer:
     # ---------------- streamable-http plumbing ----------------
 
     async def _http_rpc(self, method: str, params: Optional[dict], notify: bool = False,
-                        timeout: float = RPC_TIMEOUT_S) -> Optional[dict]:
+                        timeout: float = RPC_TIMEOUT_S, _retry_auth: bool = True) -> Optional[dict]:
+        from . import mcp_oauth
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=RPC_TIMEOUT_S)
         self._rpc_id += 1
@@ -191,12 +194,46 @@ class McpServer:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
+        if isinstance(self.cfg.get("headers"), dict):
+            for k, v in self.cfg["headers"].items():
+                headers[str(k)] = str(v)
+        if isinstance(self.cfg.get("env"), dict):
+            for k, v in self.cfg["env"].items():
+                if k.upper() == "AUTHORIZATION":
+                    headers["Authorization"] = str(v)
+                elif k.upper() in ("BEARER_TOKEN", "ACCESS_TOKEN"):
+                    headers["Authorization"] = f"Bearer {str(v)}"
+                elif k.upper() == "API_KEY":
+                    headers["x-api-key"] = str(v)
+        if self.cfg.get("secret_env_keys"):
+            from . import credentials
+            for key in self.cfg["secret_env_keys"]:
+                val = credentials.get_token(secret_env_ref(self.name, key, self.owner))
+                if val:
+                    if key.upper() == "AUTHORIZATION":
+                        headers["Authorization"] = val
+                    elif key.upper() in ("BEARER_TOKEN", "ACCESS_TOKEN"):
+                        headers["Authorization"] = f"Bearer {val}"
+                    elif key.upper() == "API_KEY":
+                        headers["x-api-key"] = val
+        oauth_tok = await mcp_oauth.access_token(self.name, self.owner)
+        if oauth_tok:
+            headers["Authorization"] = f"Bearer {oauth_tok}"
         if self._session_header:
             headers["Mcp-Session-Id"] = self._session_header
+        if self._protocol_version:
+            headers["MCP-Protocol-Version"] = self._protocol_version
         if self.owner is not None:
             from .net_guard import check_url
             await asyncio.get_running_loop().run_in_executor(None, check_url, self.cfg["url"])
         r = await self._http.post(self.cfg["url"], json=msg, headers=headers, timeout=timeout)
+        if r.status_code == 401:
+            # expired/revoked token: one forced refresh, else the user must sign in again
+            if oauth_tok and _retry_auth and await mcp_oauth.access_token(self.name, self.owner, force_refresh=True):
+                return await self._http_rpc(method, params, notify, timeout, _retry_auth=False)
+            self.auth_required = True
+            raise mcp_oauth.McpAuthRequired(
+                f"'{self.name}' needs you to sign in: Settings -> Capabilities -> MCP -> {self.name} -> Connect account")
         if r.status_code >= 400:
             if self.owner is not None:   # don't echo arbitrary upstream bodies to a non-admin
                 raise RuntimeError(f"mcp http {r.status_code}")
@@ -238,7 +275,10 @@ class McpServer:
         if self.cfg.get("init_timeout"):
             return float(self.cfg["init_timeout"])
         cmd = Path(str(self.cfg.get("command") or "")).stem.lower()
-        return NPX_INIT_TIMEOUT_S if cmd in ("npx", "uvx") else INIT_TIMEOUT_S
+        # `cmd /c npx ...` wrappers: look at the first few args too
+        heads = [Path(str(a)).stem.lower() for a in (self.cfg.get("args") or [])[:3]]
+        slow = cmd in ("npx", "uvx") or (cmd in ("cmd", "powershell", "pwsh") and any(h in ("npx", "uvx") for h in heads))
+        return NPX_INIT_TIMEOUT_S if slow else INIT_TIMEOUT_S
 
     async def connect(self) -> list:
         """initialize handshake + tools/list. Returns tool list; sets .status."""
@@ -261,9 +301,10 @@ class McpServer:
             }, timeout=self._init_timeout())
             if not result:
                 raise RuntimeError("no initialize result")
+            if isinstance(result, dict) and result.get("protocolVersion"):
+                self._protocol_version = str(result["protocolVersion"])
             await self._rpc("notifications/initialized", notify=True)
-            tools_res = await self._rpc("tools/list", {})
-            self.tools = (tools_res or {}).get("tools", []) if isinstance(tools_res, dict) else []
+            self.tools = await self._list_tools()
             self.status = "ready"
             print(f"[mcp] server '{self.name}' ready with {len(self.tools)} tool(s)")
             return self.tools
@@ -276,6 +317,19 @@ class McpServer:
             self._cleanup()
             print(f"[mcp] server '{self.name}' failed: {e}", file=sys.stderr)
             return []
+
+    async def _list_tools(self) -> list:
+        """tools/list, following nextCursor pages (bounded)."""
+        tools, cursor = [], None
+        for _ in range(20):
+            res = await self._rpc("tools/list", {"cursor": cursor} if cursor else {})
+            if not isinstance(res, dict):
+                break
+            tools += res.get("tools") or []
+            cursor = res.get("nextCursor")
+            if not cursor:
+                break
+        return tools
 
     async def call_tool(self, tool_name: str, args: dict) -> str:
         async with self._lock:
@@ -290,7 +344,11 @@ class McpServer:
                     "arguments": _mask_args(args or {}),
                 })
         except Exception as e:
+            from .mcp_oauth import McpAuthRequired
+            if isinstance(e, McpAuthRequired):
+                return f"error: {e}"
             return f"error: mcp call failed: {type(e).__name__}: {e}"
+        self.auth_required = False
         return _stringify_content(result)
 
     def _cleanup(self) -> None:
@@ -325,12 +383,23 @@ class McpServer:
             "transport": self.transport,
             "status": self.status,
             "error": self.error,
+            "auth": "oauth" if (self.cfg.get("auth") or {}).get("type") == "oauth" else None,
+            "auth_required": self.auth_required,
+            "signed_in": self.transport == "http" and _signed_in(self.name, self.owner),
             "tools": [
                 {"name": t.get("name", "?"),
                  "description": (t.get("description") or "")[:120]}
                 for t in self.tools
             ],
         }
+
+
+def _signed_in(name: str, owner: Optional[int]) -> bool:
+    from . import mcp_oauth
+    try:
+        return mcp_oauth.has_token(name, owner)
+    except Exception:
+        return False
 
 
 def _mask_args(obj):
@@ -436,8 +505,36 @@ async def connect_all_mcp() -> dict:
     # concurrently: one slow npx/mcp-remote start must not hold up the others
     targets = [(n, s, None) for n, s in configured_servers(APP_CONFIG).items()]
     targets += [(n, s, uid) for uid, n, s in auth_db.list_user_mcp_servers()]
+    targets = [(n, _migrate_plain_oauth(n, s, uid), uid) for n, s, uid in targets]
     infos = await asyncio.gather(*(connect_one(n, s, uid) for n, s, uid in targets))
     return {server_key(n, uid): info for (n, _, uid), info in zip(targets, infos)}
+
+
+def _migrate_plain_oauth(name: str, cfg: dict, owner: Optional[int]) -> dict:
+    """Move a plaintext clientId/clientSecret env pair into an oauth auth block + keychain."""
+    from . import mcp_oauth
+    try:
+        new = mcp_oauth.migrate_plain_client(name, owner, cfg)
+        if new is None:
+            return cfg
+        if owner is None:
+            from .config import CONFIG_FILE, write_app_config
+            from .small_model import APP_CONFIG
+            disk = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            servers = disk.setdefault("capabilities", {}).setdefault("mcp_servers", {})
+            if name not in servers:
+                return cfg        # lives in a pasted mcpServers block: leave it to the admin
+            servers[name] = new
+            write_app_config(disk, CONFIG_FILE)
+            APP_CONFIG.setdefault("capabilities", {}).setdefault("mcp_servers", {})[name] = new
+        else:
+            from . import auth_db
+            auth_db.upsert_user_mcp_server(owner, name, new)
+        print(f"[mcp] '{name}': moved plaintext OAuth client credentials into the keychain")
+        return new
+    except Exception as e:
+        print(f"[mcp] '{name}': oauth credential migration failed: {type(e).__name__}", file=sys.stderr)
+        return cfg
 
 
 def ready_tool_schemas() -> list:
@@ -459,12 +556,15 @@ def _visible_servers() -> list:
             if s.owner is None or (s.owner == uid and uid is not None and s.name not in glob)]
 
 
-def chat_prompt() -> str:
+def chat_prompt(only_servers: Optional[set] = None) -> str:
     """Tells the model which MCP servers are connected and what they cover, so a short
-    server name like 'isms' isn't guessed from general knowledge (e.g. as an ISO 27001 ISMS)."""
+    server name like 'isms' isn't guessed from general knowledge (e.g. as an ISO 27001 ISMS).
+    only_servers limits the listing (a custom agent's allowlisted servers)."""
     lines = []
     for s in _visible_servers():
         if s.status != "ready" or not s.tools:
+            continue
+        if only_servers is not None and s.name not in only_servers:
             continue
         descs = "; ".join((t.get("description") or t.get("name", ""))[:110] for t in s.tools[:3])
         names = ", ".join(f"`mcp__{s.name}__{t.get('name')}`" for t in s.tools[:12])

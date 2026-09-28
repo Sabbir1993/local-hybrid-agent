@@ -59,6 +59,12 @@ function refreshInputPlaceholder() {
   if (armedCmd) {
     const h = CMD_HINTS[armedCmd.name] || {};
     input.placeholder = h.ph || (armedCmd.desc ? `${armedCmd.desc} — Enter to run` : `Instructions for /${armedCmd.name} — Enter to run`);
+  } else if (window.customAgents && typeof window.customAgents.getActive === 'function' && window.customAgents.getActive()) {
+    const a = window.customAgents.getActive();
+    input.placeholder = `${a.icon || '🤖'} ${a.name}: ${a.description || 'Describe your task for this agent…'}`;
+  } else if (typeof window.getActiveCustomAgent === 'function' && window.getActiveCustomAgent()) {
+    const a = window.getActiveCustomAgent();
+    input.placeholder = `${a.icon || '🤖'} ${a.name}: ${a.description || 'Describe your task for this agent…'}`;
   } else {
     input.placeholder = defaultInputPlaceholder();
   }
@@ -309,7 +315,7 @@ function cmdMenuClose() {
   if (m) { m.style.display = 'none'; m.innerHTML = ''; }
 }
 
-const CMD_GROUP_LABELS = { mode: 'Mode', utility: 'Utility', skills: 'Skills', library: 'Agent Library' };
+const CMD_GROUP_LABELS = { mode: 'Mode', utility: 'Utility', skills: 'Skills', library: 'Agent Library', custom_agents: 'Custom Agents' };
 
 function cmdMenuRender() {
   const m = $('cmd-menu');
@@ -400,6 +406,22 @@ async function cmdMenuOpen(kind, query) {
           }
         });
       }
+      // User Custom Agents
+      if (typeof window.customAgentsList === 'function') {
+        const caList = window.customAgentsList() || [];
+        caList.forEach(ca => {
+          if (!all.some(x => x.name.toLowerCase() === ca.slug.toLowerCase())) {
+            all.push({
+              icon: ca.icon || '🤖',
+              name: ca.slug,
+              desc: `${ca.name} — ${ca.description || 'Custom Agent'}`,
+              isCustomAgent: true,
+              agentObj: ca,
+              category: 'custom_agents'
+            });
+          }
+        });
+      }
     } catch (e) {}
     const q = query.toLowerCase();
     cmdMenu.items = all.filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 30);
@@ -463,6 +485,19 @@ function cmdMenuPick(i) {
       input.setSelectionRange(pos, pos);
       renderInputHighlights();
       toast(isPlan ? '📋 Switched to Plan mode' : '🔨 Switched to Build mode');
+      return;
+    }
+
+    if (it.isCustomAgent && it.agentObj) {
+      input.value = before + after.replace(/^\s?/, '');
+      if (typeof window.setActiveCustomAgent === 'function') {
+        window.setActiveCustomAgent(it.agentObj);
+      }
+      input.focus();
+      const pos = before.length;
+      input.setSelectionRange(pos, pos);
+      renderInputHighlights();
+      if (typeof toast === 'function') toast(`Active Agent: ${it.agentObj.icon || '🤖'} ${it.agentObj.name}`);
       return;
     }
 

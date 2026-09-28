@@ -29,7 +29,7 @@ from core.registry import registry
 from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch, tool_web_search_images
 from core import web_search as web_search_mod
 from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA, _common_resolve
-from core.request_context import run_in_executor_ctx
+from core.request_context import run_in_executor_ctx, set_tool_allowlist, tool_allowed
 from core.doc_tools import (DOC_EDIT_SCHEMA, DOC_INSPECT_SCHEMA, tool_doc_edit_common,
                             tool_doc_inspect_common)
 from core.agent_loop import (
@@ -280,13 +280,20 @@ class ChatRunRequest(BaseModel):
     messages: list
     web_search: bool = True
     deep_mode: bool = False
-    temperature: float = 0.7
+    temperature: Optional[float] = None   # None -> the custom agent's value, else 0.7
     max_tokens: int = -1
     system_prompt: Optional[str] = None
     # None (older clients) keeps the Deep-only behaviour; see core/reasoning.py
     reasoning_effort: Optional[Literal["none", "low", "medium", "high", "extra"]] = None
     # answer check for this request (shield toggle): off | badge | gate; None = saved setting
     verify: Optional[Literal["off", "badge", "gate"]] = None
+    top_p: Optional[float] = None
+    min_p: Optional[float] = None
+    repeat_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    top_k: Optional[int] = None
+    custom_agent_id: Optional[int] = None
+
 
 
 @router.post("/chat/run")
@@ -376,13 +383,45 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             chat_media_tools.add("generate_image")
     except Exception as e:
         print(f"[chat] image tool unavailable: {type(e).__name__}", file=sys.stderr)
-    # connected MCP servers (Settings -> Capabilities -> MCP); dispatched via run_tool -> registry
     mcp_prompt = ""
     if APP_CONFIG.get("capabilities", {}).get("mcp", False):
         chat_tools.extend(mcp_core.ready_tool_schemas())
         mcp_prompt = mcp_core.chat_prompt()
 
+    custom_agent = None
+    allowed_names = None
+    if req.custom_agent_id:
+        from core.auth_db import db_get_custom_agent
+        custom_agent = db_get_custom_agent(req.custom_agent_id, user.id)
+        if not custom_agent:
+            return JSONResponse({"error": "custom_agent_not_found",
+                                 "message": "The selected custom agent no longer exists or isn't shared with you."},
+                                status_code=404)
+        # the client sends null for values the user didn't change after picking the agent
+        if req.temperature is None and custom_agent.get("temperature") is not None:
+            req.temperature = float(custom_agent["temperature"])
+        if not req.reasoning_effort and custom_agent.get("reasoning_effort"):
+            req.reasoning_effort = custom_agent["reasoning_effort"]
+        if custom_agent.get("tool_allowlist"):
+            allowed_names = set(custom_agent["tool_allowlist"])
+            chat_tools = [t for t in chat_tools if t.get("function", {}).get("name") in allowed_names]
+            # only advertise the MCP servers that still have an allowed tool
+            allowed_srv = {n.split("__")[1] for n in allowed_names if n.startswith("mcp__") and n.count("__") >= 2}
+            mcp_prompt = mcp_core.chat_prompt(only_servers=allowed_srv) if (mcp_prompt and allowed_srv) else ""
+        from routes.custom_agents import apply_input_template
+        apply_input_template(msgs, custom_agent)
+    if req.temperature is None:
+        req.temperature = 0.7
+    # enforced again at dispatch (core.agent_loop.run_tool and the direct calls below)
+    set_tool_allowlist(allowed_names)
+
     sys_parts = [common.current_date_prompt()]
+    if custom_agent:
+        ca_prompt = (
+            f"YOU ARE A SPECIALIZED CUSTOM AGENT: {custom_agent['name']} ({custom_agent.get('icon', '🤖')})\n"
+            f"AGENT PERSONA & DIRECTIVES:\n{custom_agent.get('system_prompt', '')}\n"
+        )
+        sys_parts.append(ca_prompt)
     if req.system_prompt and req.system_prompt.strip():
         sys_parts.append(req.system_prompt.strip())
     if mcp_prompt:
@@ -592,6 +631,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         lane_info = {"lane": "main", "model": clean_model_name, "display": model_display,
                      "source": model_source, "provider": model_provider}
         yield f"event: lane\ndata: {json.dumps(lane_info)}\n\n"
+        if custom_agent:
+            yield f"event: custom_agent\ndata: {json.dumps({'id': custom_agent['id'], 'name': custom_agent['name'], 'icon': custom_agent.get('icon', '🤖')})}\n\n"
         if kb_blocked_reason:
             yield f"event: kb_blocked\ndata: {json.dumps({'message': kb_blocked_reason})}\n\n"
         chat_rid = monitor_begin("chat/run", True, n_msgs=len(msgs),
@@ -628,7 +669,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 if turn >= turn_limit:
                     break
                 # Turn 0 proactive URL fetch: if user specifically asks to summarize or inspect a URL
-                if turn == 0 and use_web and chat_tools and url_matches:
+                if turn == 0 and use_web and chat_tools and url_matches and tool_allowed("web_fetch"):
                     is_fetch_intent = any(w in last_query.lower() for w in (
                         "summarise", "summarize", "read", "fetch", "check", "browse", "what is on",
                         "site", "website", "page", "link", "article", "look at", "review", "tell me about"
@@ -665,7 +706,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     web_calls >= max_web_calls or turn >= turn_limit - 2)
                 if turn == turn_limit - 1 and msgs and msgs[-1].get("role") == "tool":
                     # final turn: must answer now; a requested file can still be written
-                    current_tools = [CHAT_WRITE_FILE_SCHEMA] if wants_file else None
+                    current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and tool_allowed("write_file")) else None
                 elif research_over:
                     current_tools = [t for t in chat_tools
                                      if t.get("function", {}).get("name") not in WEB_TOOL_NAMES]
@@ -691,11 +732,16 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             fb_local = state.client
                         except Exception as e:
                             print(f"[chat] local fallback unavailable: {e}", file=sys.stderr)
+                    chat_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
                     chat_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, current_tools, req.temperature,
-                        req.max_tokens, rid=chat_rid, lane="main", effort=effort)
+                        req.max_tokens, repeat_penalty=chat_rep, rid=chat_rid, lane="main", effort=effort,
+                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
                 else:
-                    chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid, effort=effort)
+                    chat_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
+                    chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature,
+                                                   max_tokens=req.max_tokens, repeat_penalty=chat_rep, rid=chat_rid, effort=effort,
+                                                   top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
                 async for ev, val in chat_stream:
                     if ev == "queued":
                         yield f"event: queued\ndata: {json.dumps(val)}\n\n"
@@ -790,7 +836,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     "i can't browse", "i cannot browse", "i don't have internet", "i lack internet",
                     "as an ai, i cannot access", "as an ai, i can't access", "i can't fetch the exact current content"
                 ))
-                if is_refusal and turn == 0 and chat_tools:
+                if is_refusal and turn == 0 and chat_tools and tool_allowed("web_fetch" if url_matches else "web_search"):
                     redactor.reset()
                     yield "event: delta_reset\ndata: {}\n\n"
                     if url_matches:
@@ -889,7 +935,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             missing_dl.append(clean_fname)
 
                         if cand_code:
-                            res_str = tool_write_file_common({"path": clean_fname, "content": cand_code})
+                            res_str = (tool_write_file_common({"path": clean_fname, "content": cand_code})
+                                       if tool_allowed("write_file") else "error: tool 'write_file' is not enabled for the active custom agent")
                             if res_str.startswith("error:"):
                                 # the write failed: keep the tag as a dead link so the
                                 # missing_dl pass below drops it instead of advertising it
@@ -944,7 +991,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         redactor.reset()
                         yield "event: delta_reset\ndata: {}\n\n"
                         yield sse("tool_call", {'id': tc_id, 'name': 'write_file', 'args': {'path': target_filename, 'content': data_to_save}})
-                        res_str = tool_write_file_common({"path": target_filename, "content": data_to_save})
+                        res_str = (tool_write_file_common({"path": target_filename, "content": data_to_save})
+                                   if tool_allowed("write_file") else "error: tool 'write_file' is not enabled for the active custom agent")
                         ok = not res_str.startswith("error:")
                         target_filename = _saved_filename(res_str, target_filename)
                         yield sse("tool_result", {'id': tc_id, 'name': 'write_file', 'ok': ok, 'result': res_str})
@@ -1084,7 +1132,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     yield sse("tool_call", {'id': tc_id, 'name': t_name, 'args': args})
 
                     try:
-                        if t_name in WEB_TOOL_NAMES and web_calls >= max_web_calls:
+                        if not tool_allowed(t_name):
+                            # text-parsed calls can name any tool; the schema filter isn't enough
+                            res_str = f"error: tool '{t_name}' is not enabled for the active custom agent"
+                        elif t_name in WEB_TOOL_NAMES and web_calls >= max_web_calls:
                             # text-emitted calls bypass the tools list; enforce the budget here too
                             res_str = ("error: web research budget used up - do not search again. "
                                        "Produce the final answer from the results you already have.")
@@ -1186,11 +1237,16 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             fb_local = state.client
                         except Exception:
                             pass
+                    final_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
                     final_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, None, req.temperature,
-                        req.max_tokens, rid=chat_rid, lane="main", effort=effort)
+                        req.max_tokens, repeat_penalty=final_rep, rid=chat_rid, lane="main", effort=effort,
+                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
                 else:
-                    final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature, max_tokens=req.max_tokens, rid=chat_rid, effort=effort)
+                    final_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
+                    final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature,
+                                                    max_tokens=req.max_tokens, repeat_penalty=final_rep, rid=chat_rid, effort=effort,
+                                                    top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
 
                 async for ev, val in final_stream:
                     if ev == "queued":

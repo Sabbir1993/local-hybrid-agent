@@ -145,6 +145,11 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
     names_ok = set(role_cfg.get("tools") or [t["function"]["name"] for t in all_schemas])
     if tool_allowlist:
         names_ok &= set(tool_allowlist)
+    # a sub-agent never gets more than the parent's custom-agent allowlist
+    from .request_context import get_tool_allowlist
+    parent_allow = get_tool_allowlist()
+    if parent_allow is not None:
+        names_ok &= parent_allow
     names_ok -= DENIED_TOOLS
     tools_for_subagent = [t for t in all_schemas if t["function"]["name"] in names_ok]
 
@@ -239,6 +244,9 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                     a = {}
                 if name in DENIED_TOOLS:
                     result = f"error: '{name}' is unavailable to sub-agents"
+                elif name not in names_ok:
+                    # the schema filter alone isn't enough: models can emit any name
+                    result = f"error: '{name}' is not enabled for this sub-agent"
                 else:
                     result = await run_tool(name, a)
                 msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": result})

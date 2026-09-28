@@ -649,6 +649,27 @@ def _at_rest(text):
     return pan.mask_pans(text)[0]
 
 
+def _meta_at_rest(obj):
+    """Mask PANs in a meta dict's string values only. Masking the serialized JSON
+    corrupts it when a number (e.g. a float like "secs") happens to look like a PAN."""
+    if isinstance(obj, str):
+        return _at_rest(obj)
+    if isinstance(obj, dict):
+        return {k: _meta_at_rest(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_meta_at_rest(v) for v in obj]
+    return obj
+
+
+def _load_meta(raw):
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
 def db_create_session(pid: Optional[int], title: str = None, owner_user_id: int = None) -> dict:
     if owner_user_id is None:
         raise ValueError("owner_user_id required")
@@ -686,7 +707,7 @@ def db_load_messages(sid: int, owner_user_id: int) -> list:
     if db_session_owner(sid) != owner_user_id:
         raise PermissionError("not your session")
     return [
-        {"role": r["role"], "content": r["content"], "meta": json.loads(r["meta"]) if r["meta"] else None}
+        {"role": r["role"], "content": r["content"], "meta": _load_meta(r["meta"])}
         for r in _projects_db.execute(
             "SELECT * FROM messages WHERE session_id = ? ORDER BY id", (sid,))
     ]
@@ -697,7 +718,7 @@ def db_append_message(sid: int, role: str, content: str, meta: dict = None, owne
         raise PermissionError("not your session")
     cur = _projects_db.execute(
         "INSERT INTO messages (session_id, role, content, meta, created_at) VALUES (?, ?, ?, ?, ?)",
-        (sid, role, _at_rest(content), _at_rest(json.dumps(meta)) if meta else None, time.time()))
+        (sid, role, _at_rest(content), json.dumps(_meta_at_rest(meta)) if meta else None, time.time()))
     _projects_db.commit()
     return cur.lastrowid
 

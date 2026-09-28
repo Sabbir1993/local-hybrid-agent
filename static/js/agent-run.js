@@ -134,17 +134,25 @@ async function runAgentSSE(text) {
           mode: engineMode,
           plan: planMode,
           session_id: sessionId || null,
-          temperature: getSamplingConfig().temp,
+          temperature: window.customAgentRequestOverrides ? window.customAgentRequestOverrides().temperature : getSamplingConfig().temp,
           max_tokens: (() => { const mt = getSamplingConfig().maxtok; return (isNaN(mt) || mt <= 0) ? -1 : mt; })(),
+          top_p: getSamplingConfig().topp,
+          min_p: getSamplingConfig().minp,
+          repeat_penalty: getSamplingConfig().rep,
+          presence_penalty: getSamplingConfig().presence,
+          top_k: getSamplingConfig().topk,
+          system_prompt: (getSamplingConfig().sysprompt || '').trim() || undefined,
           attachments: docAttachments,
           cloud_model_override: cloudModelOverride || undefined,
-          reasoning_effort: typeof getReasoningEffort === 'function' ? getReasoningEffort() : undefined,
+          reasoning_effort: window.customAgentRequestOverrides ? window.customAgentRequestOverrides().reasoning_effort : (typeof getReasoningEffort === 'function' ? getReasoningEffort() : undefined),
           verify: typeof answerCheckBegin === 'function' ? answerCheckBegin(job.assistantMsg) : undefined,
+          custom_agent_id: typeof getActiveCustomAgentId === 'function' ? getActiveCustomAgentId() : undefined,
         }),
         signal: jobCtrl.signal,
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
+        if (e.error === 'custom_agent_not_found' && typeof clearActiveCustomAgent === 'function') clearActiveCustomAgent();
         throw new Error(e.message || e.error || ('HTTP ' + res.status));
       }
       await readSSE(res, (ev, d) => {
@@ -153,7 +161,10 @@ async function runAgentSSE(text) {
           if (typeof scheduleRenderLast === 'function' && curSession && String(curSession.id) === String(sessionId)) scheduleRenderLast();
           return;
         }
-        if (ev === 'run') {
+        if (ev === 'custom_agent') {
+          L.customAgent = d;
+        }
+        else if (ev === 'run') {
           L.runId = d.run_id;   // routing telemetry id -> thumbs up/down feedback
         }
         else if (ev === 'step') {
@@ -316,7 +327,8 @@ async function runAgentSSE(text) {
         tps: targetAssistant.tps, ntok, secs: dt,
         promptTokens: targetAssistant.promptTokens || undefined,
         reasoning: targetAssistant.reasoning || undefined,
-        acts: targetAssistant.acts,
+        // screenshots stay in this browser tab: never written to the server's session history
+        acts: (targetAssistant.acts || []).map(a => (a && a.image) ? { ...a, image: undefined } : a),
         modelDisplay: targetAssistant.modelDisplay || undefined,
         modelSource: targetAssistant.modelSource || undefined,
         modelProvider: targetAssistant.modelProvider || undefined,

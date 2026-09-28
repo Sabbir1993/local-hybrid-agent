@@ -73,4 +73,18 @@ assert.strictEqual(ctx.esc(3), '3');
   assert.strictEqual(lctx.safeNext('/settings?tab=db#x'), '/settings?tab=db#x');
 }
 
+// fenced code blocks: Copy on every block, Preview only where the modal can render it
+{
+  const py = ctx.md('```python\nprint("<b>")\n```');
+  assert(/data-click="code-copy"/.test(py), py);
+  assert(!/code-preview/.test(py), 'python is not previewable: ' + py);
+  assert(/&lt;b&gt;/.test(py) && !/<b>/.test(py), 'code stays escaped: ' + py);
+  const html = ctx.md('```html\n<!DOCTYPE html><title>x</title>\n```');
+  assert(/data-click="code-preview" data-arg="html"/.test(html), html);
+  const bare = ctx.md('```\n<!DOCTYPE html>\n<html lang="en"></html>\n```');
+  assert(/data-arg="html"/.test(bare), 'unlabeled html page is previewable: ' + bare);
+  assert(/data-arg="md"/.test(ctx.md('```markdown\n# hi\n```')));
+  assert(!/onclick=/i.test(html + bare));
+}
+
 console.log('utils XSS tests: OK');

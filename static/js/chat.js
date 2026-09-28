@@ -957,17 +957,24 @@ async function send(inputText) {
         messages: msgs,
         web_search: !!chatWebSearch,
         deep_mode: !!chatDeepMode,
-        reasoning_effort: typeof getReasoningEffort === 'function' ? getReasoningEffort() : undefined,
+        reasoning_effort: window.customAgentRequestOverrides ? window.customAgentRequestOverrides().reasoning_effort : (typeof getReasoningEffort === 'function' ? getReasoningEffort() : undefined),
         verify: typeof answerCheckBegin === 'function' ? answerCheckBegin(job.assistantMsg) : undefined,
         system_prompt: sys || undefined,
-        temperature: samplingCfg.temp,
+        temperature: window.customAgentRequestOverrides ? window.customAgentRequestOverrides().temperature : samplingCfg.temp,
         max_tokens: (isNaN(samplingCfg.maxtok) || samplingCfg.maxtok <= 0) ? -1 : samplingCfg.maxtok,
+        top_p: samplingCfg.topp,
+        min_p: samplingCfg.minp,
+        repeat_penalty: samplingCfg.rep,
+        presence_penalty: samplingCfg.presence,
+        top_k: samplingCfg.topk,
+        custom_agent_id: (window.customAgents && typeof window.customAgents.getActiveId === 'function') ? window.customAgents.getActiveId() : undefined,
       }),
       signal: jobCtrl.signal,
     });
     if (!res.ok) {
       const e = await res.json().catch(() => ({}));
-      throw new Error(e.error || ('HTTP ' + res.status));
+      if (e.error === 'custom_agent_not_found' && typeof clearActiveCustomAgent === 'function') clearActiveCustomAgent();
+      throw new Error(e.message || e.error || ('HTTP ' + res.status));
     }
     await readSSE(res, (ev, d) => {
       const L = getJobAssistant();
@@ -977,6 +984,8 @@ async function send(inputText) {
         L.modelDisplay = d.display || d.model;
         L.modelSource = d.source;
         L.modelProvider = d.provider;
+      } else if (ev === 'custom_agent') {
+        L.customAgent = d;
       } else if (ev === 'queued') {
         // all local model slots busy: routes/common.py admission gate
         L.statusText = '⏳ Waiting for a free model slot' + (d.position ? ` (#${d.position} in queue)` : '') + '...';

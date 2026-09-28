@@ -28,8 +28,8 @@ from core.file_tools import extract_file_content, MIME_MAP, VIDEO_MIME
 from core.db import (
     db_record_request,
     db_add_project_allow_pattern,
-    db_get_plan_items,
     db_get_project_allow_patterns,
+    db_get_plan_items,
     db_owned_project_id,
     db_session_owner,
 )
@@ -76,6 +76,7 @@ from core.shell_tools import (
     add_allow_pattern,
     command_allowed,
     mark_approved,
+    mark_code_approved,
     shell_cfg,
     permission_callback,
 )
@@ -135,7 +136,7 @@ class AttachedFile(BaseModel):
 class AgentRequest(BaseModel):
     messages: list
     max_steps: Optional[int] = None   # None -> agent.max_steps from config/app.json
-    temperature: float = 0.4
+    temperature: Optional[float] = None   # None -> the custom agent's value, else 0.4
     max_tokens: int = -1
     large_model: Optional[str] = None
     mode: Optional[str] = "main"
@@ -143,8 +144,16 @@ class AgentRequest(BaseModel):
     session_id: Optional[int] = None
     attachments: list[AttachedFile] = []
     cloud_model_override: Optional[str] = None   # key of cloud model for executor/vision lanes
-    # composer effort level (None = model/template default); see core/reasoning.py
     reasoning_effort: Optional[Literal["none", "low", "medium", "high", "extra"]] = None
+    custom_agent_id: Optional[int] = None
+    top_p: Optional[float] = None
+    min_p: Optional[float] = None
+    repeat_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    top_k: Optional[int] = None
+    system_prompt: Optional[str] = None
+    verify: Optional[Literal["off", "badge", "gate"]] = None   # answer check (shield toggle)
+
 
 
 AGENT_MAX_STEPS = 60
@@ -192,6 +201,10 @@ def _executor_grammar(tools_for_lane: list) -> Optional[str]:
     global _executor_grammar_disabled
     if _executor_grammar_disabled or not APP_CONFIG.get("router", {}).get("executor_grammar", True):
         return None
+    if not tools_for_lane:
+        # nothing to constrain for this request (e.g. a custom agent's allowlist
+        # matched no registered tool) -- not a sign the server rejects grammars
+        return None
     g = build_tool_call_grammar(tools_for_lane)
     if g is None:
         _executor_grammar_disabled = True
@@ -215,11 +228,17 @@ def _strip_download_markers(text: str, was_synth: bool) -> tuple[str, bool]:
 
 
 def _with_diff(payload: dict, args) -> dict:
-    """Attach the per-call diff of a successful write_file/edit_file to its tool_result."""
+    """Attach the per-call diff of a successful write_file/edit_file to its tool_result,
+    and a screenshot thumbnail to browser/mobile screenshots (shown live, never persisted)."""
     if payload.get("ok") and payload.get("name") in ("write_file", "edit_file"):
         d = pop_file_diff(args if isinstance(args, dict) else {})
         if d:
             payload["diff"] = d
+    if payload.get("name") in ("browser_screenshot", "mobile_screenshot"):
+        from core.browser_tools import pop_thumbnail
+        img = pop_thumbnail(payload["name"], args if isinstance(args, dict) else {})
+        if img and payload.get("ok"):
+            payload["image"] = img
     return payload
 
 
@@ -298,7 +317,17 @@ async def _await_permission(req_id: str, ev: asyncio.Event):
 # Tools allowed in plan mode: read/explore only — nothing that mutates disk.
 # create_plan/get_plan ARE allowed: the deliverable of plan mode is the tracked plan itself.
 PLAN_MODE_TOOLS = {"list_files", "read_file", "grep", "search_memory", "list_skills", "read_skill",
-                   "analyze_image", "web_fetch", "web_search", "create_plan", "get_plan"}
+                   "analyze_image", "web_fetch", "web_search", "create_plan", "get_plan",
+                   # looking at the running app / device changes nothing in the project
+                   "browser_navigate", "browser_snapshot", "browser_console",
+                   "mobile_devices", "mobile_ui", "mobile_logs"}
+
+# look-at-what-you-built loop on the executor lane too (registered only when
+# capabilities.browser / capabilities.mobile are on)
+EXECUTOR_TEST_TOOLS = ("browser_navigate", "browser_snapshot", "browser_click", "browser_type",
+                       "browser_console", "browser_screenshot",
+                       "mobile_devices", "mobile_install", "mobile_launch", "mobile_ui", "mobile_tap",
+                       "mobile_type", "mobile_screenshot", "mobile_logs")
 
 PLAN_MODE_PROMPT = """
 
@@ -331,6 +360,29 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     from core.agent_tools import set_current_user
     set_current_user(user.id)
     effort = reasoning.resolve(req.reasoning_effort)
+
+    custom_agent = None
+    custom_agent_tools = None
+    if req.custom_agent_id:
+        from core.auth_db import db_get_custom_agent
+        custom_agent = db_get_custom_agent(req.custom_agent_id, user.id)
+        if not custom_agent:
+            return JSONResponse({"error": "custom_agent_not_found",
+                                 "message": "The selected custom agent no longer exists or isn't shared with you."},
+                                status_code=404)
+        if custom_agent.get("tool_allowlist"):
+            custom_agent_tools = set(custom_agent["tool_allowlist"])
+        # the client sends null for values the user didn't change after picking the agent
+        if req.reasoning_effort is None and custom_agent.get("reasoning_effort"):
+            effort = reasoning.resolve(custom_agent["reasoning_effort"])
+        if req.temperature is None and custom_agent.get("temperature") is not None:
+            req.temperature = float(custom_agent["temperature"])
+    if req.temperature is None:
+        req.temperature = 0.4
+    # enforced in core.agent_loop.run_tool for every lane (router, executor, main, sub-agents);
+    # set in the request context like set_current_user, so the stream task inherits it
+    from core.request_context import set_tool_allowlist
+    set_tool_allowlist(custom_agent_tools)
 
     if not companion_bridge.is_connected(user.id):
         return JSONResponse(
@@ -385,6 +437,13 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             cloud_exec = cloud.cloud_lane(_step, user.id)
             if _reg[_step]["local"] and small_models.instances.get(_step) is not None:
                 ex_inst = small_models.instances[_step]
+    # custom agent's preferred lane; the mode below can still force everything local
+    ca_lane = (custom_agent or {}).get("preferred_lane") or "auto"
+    if ca_lane == "main":
+        steps_on_main = True
+    elif ca_lane == "cloud" and not cloud_main:
+        # main isn't bound to a cloud model: use the user's first configured one
+        cloud_main = next(iter(cloud.cloud_models(user.id)), None)
     if mode in ("no-orchestration", "all-cloud", "direct"):
         # No Orchestration mode: run every request directly on the selected model.
         # Bypass executor tiered routing and router completely.
@@ -426,6 +485,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     cfg_steps = APP_CONFIG["agent"].get("max_steps", AGENT_MAX_STEPS)
     steps = max(1, min(req.max_steps or cfg_steps, cfg_steps))
     msgs = [dict(m) for m in req.messages]
+    if custom_agent:
+        from routes.custom_agents import apply_input_template
+        apply_input_template(msgs, custom_agent)
 
     # --- Input sanitizer (core/input_guard.py) -----------------------------
     # Runs after mode/lane resolution, so 'all-local' never trips cloud_only
@@ -470,6 +532,16 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
 
     ws_path = str(active_workspace())
     sys_prompt = AGENT_SYSTEM_PROMPT.format(workspace=ws_path)
+    if req.system_prompt and req.system_prompt.strip():
+        sys_prompt = f"{req.system_prompt.strip()}\n\n{sys_prompt}"
+
+    if custom_agent:
+        sys_prompt += (
+            f"\n\n--- ACTIVE CUSTOM AGENT DIRECTIVES: {custom_agent['name']} ({custom_agent.get('icon', '🤖')}) ---\n"
+            f"{custom_agent['system_prompt']}\n"
+            f"Follow the above custom directives, persona, and role instructions strictly as you complete the task.\n"
+            f"--- END CUSTOM AGENT DIRECTIVES ---\n"
+        )
     if APP_CONFIG.get("capabilities", {}).get("mcp", False):
         from core.mcp import chat_prompt as _mcp_prompt
         _mp = _mcp_prompt()
@@ -534,7 +606,14 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     # (its results would land in history that a cloud lane later reads)
     set_kb_cloud_blocked(bool(use_cloud_main or cloud_exec))
     # capability prompt fragments: skills listing + plugin guidance
-    for frag in (skills_prompt_fragment(), agent_library_prompt_fragment(), plugins_prompt_fragment()):
+    from core.roles import custom_agents_prompt_fragment
+    test_hint = ""
+    if not req.plan and (registry.get("browser_navigate") or registry.get("mobile_devices")):
+        test_hint = ("\nVERIFY WHAT YOU BUILD: after creating or changing something a browser or phone renders, "
+                     "run it and look at it before finishing - browser_navigate/browser_console/browser_screenshot "
+                     "for web apps, mobile_* tools for Android/iOS apps (skills: webapp-testing, mobile-testing).")
+    for frag in (skills_prompt_fragment(), agent_library_prompt_fragment(), custom_agents_prompt_fragment(),
+                 plugins_prompt_fragment(), test_hint):
         if frag:
             sys_prompt += "\n" + frag
     # executor lanes get the tool-call format few-shot (aligned with the GBNF grammar)
@@ -677,13 +756,17 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                      model=model_info.get("model"), source=model_info.get("source"),
                                      provider=model_info.get("provider_name"))
             try:
+                agent_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
                 if getattr(active_client, "is_cloud", False):
                     fb_client = await _local_fallback("main" if (use_cloud_main or main_ready) else "executor")
                     direct_stream = common._llm_chat_stream_with_fallback(
                         active_client, fb_client, msgs, None, req.temperature,
-                        req.max_tokens, rid=chat_rid, lane="direct", effort=effort)
+                        req.max_tokens, repeat_penalty=agent_rep, rid=chat_rid, lane="direct", effort=effort,
+                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
                 else:
-                    direct_stream = _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens, rid=chat_rid, effort=effort)
+                    direct_stream = _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens,
+                                                    repeat_penalty=agent_rep, rid=chat_rid, effort=effort,
+                                                    top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
                 _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
                 async for ev, val in direct_stream:
                     if ev == "queued":
@@ -731,6 +814,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         steps_run = 0
         route_log.run_start(run_id, user.id, mode, q_category)
         yield f"event: run\ndata: {json.dumps({'run_id': run_id})}\n\n"
+        if custom_agent:
+            yield f"event: custom_agent\ndata: {json.dumps({'id': custom_agent['id'], 'name': custom_agent['name'], 'icon': custom_agent.get('icon', '🤖')})}\n\n"
         if kb_blocked_reason:
             yield f"event: kb_blocked\ndata: {json.dumps({'message': kb_blocked_reason})}\n\n"
         try:
@@ -743,6 +828,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
 
                 executor_stuck = repeat_streak >= rpol["repeat_streak_limit"]
                 main_first = (step == 0 and use_executor and (use_cloud_main or main_ready)
+                              and ca_lane != "executor"
                               and router_policy.start_on_main(q_category, rpol))
                 lane_name = "main" if not use_executor or executor_stuck or main_first else "executor"
                 lane_reason = ("no_executor" if not use_executor else "repeat_streak" if executor_stuck
@@ -761,15 +847,20 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     nr = None
                     if not is_creation_or_code:
                         try:
+                            r_tools = all_tools()
+                            if custom_agent_tools:
+                                r_tools = [t for t in r_tools
+                                           if t.get("function", {}).get("name") in custom_agent_tools]
                             nr = await asyncio.get_event_loop().run_in_executor(
-                                None, router_route, last_query, all_tools())
+                                None, router_route, last_query, r_tools)
                         except Exception as e:
                             print(f"[agent] router error: {e}", file=sys.stderr)
 
                     r_duration = max(0.001, time.time() - r_start)
                     # the router lane has no approval modal / plan checks: it may only
                     # short-cut read-only tools; anything else goes through the main loop
-                    if nr and nr.get("name") not in PLAN_MODE_TOOLS:
+                    if nr and (nr.get("name") not in PLAN_MODE_TOOLS
+                               or (custom_agent_tools and nr.get("name") not in custom_agent_tools)):
                         nr = None
                     if nr:
                         r_c_toks = max(1, (len(nr.get("reasoning", "")) + len(json.dumps(nr.get("args", {})))) // 4)
@@ -847,17 +938,22 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     tools_for_lane = [t for t in all_tools()
                                      if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
                 else:
-                    if lane_name == "executor":
+                    if lane_name == "executor" and custom_agent_tools:
+                        # the custom agent's own selection, not intersected away by the core set
+                        tools_for_lane = all_tools()
+                    elif lane_name == "executor":
                         # core tools plus shell, skills and plan tracking so the
                         # executor can install packages, run commands, and tick plan items
                         # (+ connected MCP tools: the system prompt tells every lane about them)
                         tools_for_lane = [t for t in all_tools()
                                          if t.get("function", {}).get("name") in
                                          ("write_file", "read_file", "edit_file", "list_files", "run_python", "run_shell", "read_skill", "list_skills",
-                                          "create_plan", "update_plan_item", "get_plan")
+                                          "create_plan", "update_plan_item", "get_plan") + EXECUTOR_TEST_TOOLS
                                          or t.get("function", {}).get("name", "").startswith("mcp__")]
                     else:
                         tools_for_lane = all_tools()
+                if custom_agent_tools:
+                    tools_for_lane = [t for t in tools_for_lane if t.get("function", {}).get("name") in custom_agent_tools]
 
                 # Smart context truncation: mechanically compact history into the
                 # lane's window (keeps system prompt + recent tail, rolls older
@@ -897,15 +993,19 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 res_dict = None
                 streamed_content = []
                 try:
+                    agent_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
                     if getattr(active_client, "is_cloud", False):
                         fb_client = await _local_fallback(lane_name)
                         lane_stream = common._llm_chat_stream_with_fallback(
                             active_client, fb_client, msgs, tools_for_lane, req.temperature,
-                            req.max_tokens, rid=step_rid, grammar=step_grammar, lane=lane_name,
-                            effort=None if step_grammar else effort)
+                            req.max_tokens, repeat_penalty=agent_rep, rid=step_rid, grammar=step_grammar, lane=lane_name,
+                            effort=None if step_grammar else effort,
+                            top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
                     else:
-                        lane_stream = _llm_chat_stream(active_client, msgs, tools_for_lane, req.temperature, req.max_tokens, rid=step_rid, grammar=step_grammar,
-                                                       effort=None if step_grammar else effort)
+                        lane_stream = _llm_chat_stream(active_client, msgs, tools_for_lane, req.temperature, req.max_tokens,
+                                                       repeat_penalty=agent_rep, rid=step_rid, grammar=step_grammar,
+                                                       effort=None if step_grammar else effort,
+                                                       top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
                     _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
                     _cloud_out = bool(getattr(active_client, "is_cloud", False))
                     async for ev, val in lane_stream:
@@ -992,16 +1092,22 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     esc_tools = ([t for t in all_tools()
                                   if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
                                  if req.plan else all_tools())
+                    if custom_agent_tools:
+                        esc_tools = [t for t in esc_tools if t.get("function", {}).get("name") in custom_agent_tools]
                     res_dict = None
                     streamed_content = []
                     try:
+                        agent_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
                         if getattr(main_client, "is_cloud", False):
                             fb_main = await _local_fallback("main")
                             esc_stream = common._llm_chat_stream_with_fallback(
                                 main_client, fb_main, msgs, esc_tools, req.temperature,
-                                req.max_tokens, rid=esc_rid, lane="main", effort=effort)
+                                req.max_tokens, repeat_penalty=agent_rep, rid=esc_rid, lane="main", effort=effort,
+                                top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
                         else:
-                            esc_stream = _llm_chat_stream(main_client, msgs, esc_tools, req.temperature, req.max_tokens, rid=esc_rid, effort=effort)
+                            esc_stream = _llm_chat_stream(main_client, msgs, esc_tools, req.temperature, req.max_tokens,
+                                                          repeat_penalty=agent_rep, rid=esc_rid, effort=effort,
+                                                          top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
                         _red = output_guard.OutputRedactor(user, getattr(main_client, "is_cloud", False))
                         _cloud_out = bool(getattr(main_client, "is_cloud", False))
                         async for ev, val in esc_stream:
@@ -1198,7 +1304,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         continue
 
                     # run_python is arbitrary code on the user's machine: with ask_first on it
-                    # always needs a one-time approval here (no allow pattern can cover code)
+                    # always needs a one-time approval here (no allow pattern can cover code).
+                    # This card is the single approval: the companion then runs it without a
+                    # second local dialog (it gets approved_in_app, see companion/policy.js).
                     if name == "run_python" and shell_cfg().get("ask_first", True):
                         import uuid as _uuid
                         code = str((args or {}).get("code") or "")
@@ -1215,6 +1323,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                             msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                             continue
+                        mark_code_approved(code)
 
                     # cloud image/video generation can cost money: always ask first
                     if name in ("generate_image", "generate_video"):

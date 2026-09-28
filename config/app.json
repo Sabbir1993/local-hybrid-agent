@@ -63,7 +63,7 @@
       "kind": "image_gen",
       "engine": "sdcpp",
       "label": "Z-Image Turbo",
-      "default_size": "large"
+      "default_size": "medium"
     },
     "whisper-large-v3": {
       "model": "orchestrator/voice-models/ggml-large-v3-turbo-q5_0.bin",
@@ -168,6 +168,9 @@
   "capabilities": {
     "web": true,
     "web_search_api_key": "",
+    "browser": true,
+    "mobile": true,
+    "screenshot_cloud_vision": false,
     "skills": true,
     "mcp": true,
     "mcp_servers": {
@@ -202,7 +205,8 @@
       ]
     },
     "mcp_user_allowed_packages": [
-      "mcp-atlassian"
+      "mcp-atlassian",
+      "mcp-remote"
     ]
   },
   "input_guard": {

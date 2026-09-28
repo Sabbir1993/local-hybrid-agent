@@ -52,6 +52,8 @@ const CLICK_ACTIONS = {
   'submit-grill': (el) => submitGrillAnswers(parseInt(el.dataset.arg, 10)),
   'new-project': () => document.getElementById('btn-newproject').click(),
   'hud-close': () => setLiveHud(null),
+  'code-copy': (el) => copyCodeBlock(el),
+  'code-preview': (el) => previewCodeBlock(el),
   'mermaid-fullscreen': (el) => openFilePreview('diagram.mermaid', 'Mermaid Diagram',
     el.closest('.mermaid-box').querySelector('.mermaid-code-raw').textContent),
 };
@@ -111,7 +113,7 @@ function md(s) {
         </div>`;
       } else {
         const lang = hlLangFor(rawLang);
-        out += '<pre><code>' + (lang ? hlCode(code, lang) : esc(code)) + '</code></pre>';
+        out += codeBlockHtml(rawLang, code, lang ? hlCode(code, lang) : esc(code));
       }
     } else {
       // files shown as an inline image here: their download chips would repeat them
@@ -180,6 +182,69 @@ function md(s) {
     }
   }
   return out;
+}
+
+// Fenced code blocks get a header with Copy, plus Preview when the preview modal can
+// render that language (HTML/SVG go through the sandboxed /agent/preview-html frame).
+const CODE_PREVIEW_EXT = { html: 'html', htm: 'html', xhtml: 'html', svg: 'html',
+                           markdown: 'md', md: 'md', csv: 'csv' };
+
+function codeBlockHtml(rawLang, code, inner) {
+  let ext = CODE_PREVIEW_EXT[rawLang] || '';
+  // unlabeled fences that are clearly a whole HTML page / SVG are previewable too
+  if (!ext && !rawLang && /^\s*(<!doctype html|<html[\s>]|<svg[\s>])/i.test(code)) ext = 'html';
+  const label = rawLang ? esc(rawLang) : 'code';
+  const preview = ext
+    ? `<button type="button" class="code-block-btn" data-click="code-preview" data-arg="${ext}" title="Preview">👁️ Preview</button>`
+    : '';
+  return `<div class="code-block"><div class="code-block-head"><span class="code-block-lang">${label}</span>`
+    + `<span class="code-block-actions">${preview}`
+    + `<button type="button" class="code-block-btn" data-click="code-copy" title="Copy code">📋 Copy</button></span></div>`
+    + `<pre><code>${inner}</code></pre></div>`;
+}
+
+function _codeBlockText(btn) {
+  const c = btn.closest('.code-block');
+  const el = c && c.querySelector('pre code');
+  return el ? el.textContent : '';
+}
+
+function copyCodeBlock(btn) {
+  const text = _codeBlockText(btn);
+  const done = () => {
+    btn.textContent = '✓ Copied';
+    setTimeout(() => { btn.textContent = '📋 Copy'; }, 1200);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done, () => { _copyFallback(text); done(); });
+  } else {
+    _copyFallback(text); done();
+  }
+}
+
+// clipboard API needs a secure context; LAN http:// access falls back to execCommand
+function _copyFallback(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed; left:-9999px; top:0;';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch (_) {}
+  ta.remove();
+}
+
+function previewCodeBlock(btn) {
+  if (typeof openFilePreview !== 'function') return;
+  const ext = btn.dataset.arg || 'html';
+  const names = { html: 'snippet.html', md: 'snippet.md', csv: 'snippet.csv' };
+  let text = _codeBlockText(btn);
+  // a bare <svg> renders as a page in the sandboxed HTML frame
+  if (ext === 'html' && /^\s*<svg[\s>]/i.test(text)) {
+    text = `<!doctype html><meta charset="utf-8"><body style="margin:0;display:grid;place-items:center;min-height:100vh">${text}</body>`;
+  }
+  // no file on disk: '' path hides the Download / Raw buttons, content is passed directly
+  openFilePreview('', names[ext] || 'snippet.html', text);
 }
 
 // md() works on escaped text; compare file paths unescaped

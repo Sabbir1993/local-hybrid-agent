@@ -447,6 +447,9 @@ async function loadSessions(autoRestore = false) {
 async function openSession(s) {
   try {
     if (curSession && String(curSession.id) === String(s.id)) return;
+    if (window.customAgents && typeof window.customAgents.restoreForSession === 'function') {
+      window.customAgents.restoreForSession(s.id);
+    }
 
     // If target session is currently running in background, attach directly to live job state
     if (window.bgJobs && window.bgJobs.has(String(s.id))) {
@@ -661,6 +664,8 @@ $('btn-newchat').onclick = () => {
   try {
     localStorage.removeItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
   } catch (e) {}
+  if (typeof clearActiveCustomAgent === 'function') clearActiveCustomAgent();
+  else if (window.customAgents && typeof window.customAgents.clear === 'function') window.customAgents.clear();
   setGenUI(false);
   renderAll();
   loadSessions(false);

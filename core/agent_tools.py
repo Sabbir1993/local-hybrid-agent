@@ -1276,11 +1276,13 @@ async def tool_run_python(args: dict) -> str:
     raw_t = APP_CONFIG.get("agent", {}).get("exec_timeout_s", 0)
     from .shell_tools import DEFAULT_EXEC_TIMEOUT_S   # 0 = default, never unbounded on the device
     timeout = int(raw_t) if raw_t and int(raw_t) > 0 else DEFAULT_EXEC_TIMEOUT_S
+    from .shell_tools import take_code_approval
     try:
         data = await companion_bridge.call(
             # display: the companion shows (and checks against the file) the code itself, not the shim
+            # approved_in_app: this exact code was approved in the web app, so no second dialog
             uid, "shell.run", {"command": 'python "_agent_run.py"', "cwd": str(ws), "timeout": timeout,
-                               "display": code},
+                               "display": code, "approved_in_app": take_code_approval(code)},
             timeout=(timeout or 60) + 10)
     except TimeoutError:
         return f"error: timed out after {timeout}s (config agent.exec_timeout_s)"
