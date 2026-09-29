@@ -96,8 +96,7 @@ def _resolve_target(source: str, target: str) -> str:
     return posixpath.normpath(posixpath.join(posixpath.dirname(source), target))
 
 
-def canon_parts(parts: dict[str, bytes], rename: Optional[dict[str, str]] = None
-                ) -> tuple[dict[str, str], set[str]]:
+def canon_parts(parts: dict[str, bytes], rename: Optional[dict[str, str]] = None) -> tuple[dict[str, str], set[str]]:
     """({stable key: digest}, reachable keys). `rename` maps part names that a
     library may renumber on save (e.g. python-pptx slide parts) to stable keys."""
     rename = rename or {}

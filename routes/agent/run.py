@@ -793,12 +793,16 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     elif lane_name == "executor":
                         # core tools plus shell, skills and plan tracking so the
                         # executor can install packages, run commands, and tick plan items
-                        # (+ connected MCP tools: the system prompt tells every lane about them)
-                        tools_for_lane = [t for t in all_tools()
-                                         if t.get("function", {}).get("name") in
-                                         ("write_file", "read_file", "read_file_chunk", "edit_file", "list_files", "run_python", "run_shell", "read_skill", "list_skills",
-                                          "create_plan", "update_plan_item", "get_plan") + EXECUTOR_TEST_TOOLS
-                                         or t.get("function", {}).get("name", "").startswith("mcp__")]
+                        # (+ connected MCP tools: the system prompt tells every lane about them).
+                        # The browser/device test tools only when the request names them: their
+                        # 14 schemas are several thousand tokens of the executor's 32k window.
+                        tools_for_lane = tool_surface.filter_tools(
+                            [t for t in all_tools()
+                             if t.get("function", {}).get("name") in
+                             ("write_file", "read_file", "read_file_chunk", "edit_file", "list_files", "run_python", "run_shell", "read_skill", "list_skills",
+                              "create_plan", "update_plan_item", "get_plan") + EXECUTOR_TEST_TOOLS
+                             or t.get("function", {}).get("name", "").startswith("mcp__")],
+                            last_query, APP_CONFIG.get("tool_surface"))
                     else:
                         tools_for_lane = tool_surface.filter_tools(
                             all_tools(), last_query, APP_CONFIG.get("tool_surface"))

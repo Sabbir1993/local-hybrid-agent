@@ -43,6 +43,7 @@ shipping to non-technical users:
 - `fs.list` / `fs.grep` implement a minimal glob/regex, not full parity with
   Python's `pathlib.glob` — good enough for the common `*.py` / `**/*` cases
   the agent actually uses.
-- Binary document extraction (xlsx/pdf/docx via `core/file_tools.py`) still
-  runs server-side only; only plain-text read/write/edit/list/grep and shell
-  commands are remoted to the companion in this version.
+- Office documents in an agent project (xlsx/pptx/docx/pdf, `core/doc_tools/`)
+  are read from and written back to this device over `fs.read_b64` /
+  `fs.write_b64`; the server parses the bytes in memory and never stores them.
+  Only chat-mode attachments live in the user's common space on the server.
