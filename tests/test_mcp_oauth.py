@@ -209,7 +209,7 @@ class McpManagerAuthValidationTests(unittest.TestCase):
 
     def test_rejects_secret_in_auth_or_headers(self):
         from routes.mcp_manager import _validate
-        with mock.patch("routes.mcp_manager.check_url", lambda u: None):
+        with mock.patch("routes.mcp_manager.validation.check_url", lambda u: None):
             self.assertIn("OAUTH_CLIENT_SECRET", _validate(self._req(auth={"type": "oauth", "client_secret": "x"}), True))
             self.assertIn("can't be set", _validate(self._req(headers={"Authorization": "Bearer x"}), True))
             self.assertIsNone(_validate(self._req(auth={"type": "oauth", "client_id": "c", "scopes": ["s"]}), True))

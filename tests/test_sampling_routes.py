@@ -30,7 +30,7 @@ class SamplingRoutesTests(unittest.TestCase):
     def test_sampling_defaults_and_save(self):
         from core.deps import get_current_user
         self.app.dependency_overrides[get_current_user] = lambda: _principal()
-        with mock.patch.object(control, "SAMPLING_CONFIG_PATH", self.cfg_file):
+        with mock.patch.object(control.sampling, "SAMPLING_CONFIG_PATH", self.cfg_file):
             # 1. Fetch defaults
             r = self.client.get("/control/sampling")
             self.assertEqual(r.status_code, 200)

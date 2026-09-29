@@ -23,6 +23,9 @@ from core.auth import Principal
 from core.small_model import APP_CONFIG
 from routes import customize as cz
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _patching import patch_in_package  # noqa: E402
+
 SKILL_MD = "---\nname: demo\ndescription: d\ncategory: security\nauthor: t\n---\nbody\n"
 
 
@@ -46,7 +49,7 @@ class CustomizeRouteTests(unittest.TestCase):
             mock.patch.object(sk, "SKILLS_DIR", self.installed),
             mock.patch.object(pc, "CATALOG_DIR", root / "plugin_catalog"),
             mock.patch.object(pc, "PLUGINS_DIR", root / "plugins"),
-            mock.patch.object(cz, "audit_log", lambda *a, **k: None),
+            *patch_in_package(cz, "audit_log", lambda *a, **k: None),
             mock.patch.object(deps, "audit_log", lambda *a, **k: None),
         ]
         for p in self.patches:

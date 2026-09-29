@@ -21,6 +21,9 @@ from core.auth import Principal
 from core.small_model import APP_CONFIG
 from routes import mcp_manager as mm
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _patching import patch_in_package  # noqa: E402
+
 SECRET = "[PLACEHOLDER_API_KEY]"
 
 
@@ -49,9 +52,9 @@ class RouteTests(unittest.TestCase):
             return {"name": name, "status": "ready", "tools": []}
 
         self.patches = [
-            mock.patch.object(mm, "CONFIG_FILE", self.cfg_file),
-            mock.patch.object(mm, "audit_log", lambda *a, **k: None),
-            mock.patch.object(mm, "check_url", lambda u: u),   # no DNS in tests
+            *patch_in_package(mm, "CONFIG_FILE", self.cfg_file),
+            *patch_in_package(mm, "audit_log", lambda *a, **k: None),
+            *patch_in_package(mm, "check_url", lambda u: u),   # no DNS in tests
             mock.patch.object(deps, "audit_log", lambda *a, **k: None),
             mock.patch.object(mm.credentials, "set_token", lambda k, v: self.keychain.__setitem__(k, v)),
             mock.patch.object(mm.credentials, "get_token", lambda k: self.keychain.get(k)),

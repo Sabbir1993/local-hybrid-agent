@@ -26,6 +26,9 @@ from core.net_guard import FetchResult
 from core.small_model import APP_CONFIG
 from routes import customize as cz
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _patching import patch_in_package  # noqa: E402
+
 
 def _principal(perms):
     return Principal(id=1, username="t", display_name="t", is_super_admin=False,
@@ -63,9 +66,9 @@ class MarketplaceTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(pc, "CATALOG_DIR", root / "plugin_catalog"),
             mock.patch.object(pc, "PLUGINS_DIR", root / "plugins"),
-            mock.patch.object(cz, "audit_log", lambda *a, **k: None),
+            *patch_in_package(cz, "audit_log", lambda *a, **k: None),
             mock.patch.object(deps, "audit_log", lambda *a, **k: None),
-            mock.patch("routes.customize.guarded_get", side_effect=_fake_guarded),
+            mock.patch("routes.customize.marketplace.guarded_get", side_effect=_fake_guarded),
         ]
         for p in self.patches:
             p.start()
@@ -101,8 +104,8 @@ class MarketplaceTests(unittest.TestCase):
         local = Path(self.tmp.name) / "plugin_registry.json"
         local.write_text(json.dumps({"plugins": [{"name": "localdemo",
                                                   "manifest_url": "https://example.com/l.json"}]}))
-        with mock.patch.object(cz, "LOCAL_REGISTRY_FILE", local), \
-             mock.patch("routes.customize.guarded_get", side_effect=AssertionError("no network")):
+        with mock.patch.object(cz.marketplace_endpoints, "LOCAL_REGISTRY_FILE", local), \
+             mock.patch("routes.customize.marketplace.guarded_get", side_effect=AssertionError("no network")):
             d = self.client.get("/customize/plugins/registry").json()
         self.assertEqual([i["name"] for i in d["items"]], ["localdemo"])
 
