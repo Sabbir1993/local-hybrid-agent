@@ -1,13 +1,9 @@
-"""
-routes/common/sse_stream.py - SSE response parser / async generator.
-"""
-
 import json
 import re
 import time
 from typing import Optional
-
 from core.monitor import monitor_token
+
 from .think_splitter import ThinkSplitter, _emit_split
 
 

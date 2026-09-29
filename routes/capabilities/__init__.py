@@ -17,6 +17,8 @@ from .endpoints import (
 from .models import (
     AGENT_STEPS_MAX,
     AGENT_STEPS_MIN,
+    AGENT_TIMEOUT_MAX_S,
+    AGENT_TIMEOUT_MIN_S,
     AgentLibraryReq,
     AgentSettingsReq,
     CapToggleReq,
@@ -37,7 +39,8 @@ __all__ = [
     "router",
     # models
     "CapToggleReq", "LibraryListReq", "AgentLibraryReq", "ShellSettingsReq",
-    "AGENT_STEPS_MIN", "AGENT_STEPS_MAX", "AgentSettingsReq", "RouterSettingsReq",
+    "AGENT_STEPS_MIN", "AGENT_STEPS_MAX", "AGENT_TIMEOUT_MIN_S", "AGENT_TIMEOUT_MAX_S",
+    "AgentSettingsReq", "RouterSettingsReq",
     # router helpers
     "_LIST_KEYS", "_MAIN_CATEGORIES", "_validate_router_changes", "_router_settings",
     "_write_router", "_router_view",

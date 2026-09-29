@@ -1,8 +1,3 @@
-"""
-routes/common/think_splitter.py - ThinkSplitter: splits streamed content into
-answer text and inline <think> reasoning chunks.
-"""
-
 from core.monitor import monitor_token
 
 

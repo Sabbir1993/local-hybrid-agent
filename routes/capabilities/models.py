@@ -1,7 +1,7 @@
 """Pydantic request models for capabilities routes."""
 
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class CapToggleReq(BaseModel):
@@ -29,6 +29,8 @@ class ShellSettingsReq(BaseModel):
 
 
 AGENT_STEPS_MIN, AGENT_STEPS_MAX = 5, 200
+# 0 = no wall-clock ceiling; 24h is the practical upper bound
+AGENT_TIMEOUT_MIN_S, AGENT_TIMEOUT_MAX_S = 0, 86400
 
 
 class AgentSettingsReq(BaseModel):

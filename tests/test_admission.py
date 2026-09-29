@@ -12,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import request_context as rc
 from core.state import state
-from routes import common
+# the gate and the raw stream live together in routes/common/llm_stream.py
+from routes.common import llm_stream as common
 
 
 class AdmissionTests(unittest.TestCase):

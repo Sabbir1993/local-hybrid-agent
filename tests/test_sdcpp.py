@@ -14,6 +14,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from _patching import patch_in_package  # noqa: E402
+
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -413,9 +415,9 @@ class LoadRouteAndChatTests(ModelsDirBase):
         app.include_router(lanes_routes.router)
         app.include_router(media_routes.router)
         app.dependency_overrides[deps.get_current_user] = lambda: self.user
-        self.rp = [mock.patch.object(lanes_routes, "user_has_permission", lambda u, k: self.admin),
+        self.rp = [*patch_in_package(lanes_routes, "user_has_permission", lambda u, k: self.admin),
                    mock.patch.object(media_routes, "user_has_permission", lambda u, k: self.admin),
-                   mock.patch.object(lanes_routes, "audit_log", lambda *a, **k: None),
+                   *patch_in_package(lanes_routes, "audit_log", lambda *a, **k: None),
                    mock.patch.object(media_routes, "audit_log", lambda *a, **k: None),
                    mock.patch.object(small_model, "find_sd_server", lambda: Path("C:/sd/sd-server.exe"))]
         for p in self.rp:

@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from _patching import patch_in_package  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core import cloud, credentials, lanes, verifier  # noqa: E402
@@ -305,8 +307,8 @@ class LaneRouteTests(LaneTestBase):
         app = FastAPI()
         app.include_router(lanes_routes.router)
         app.dependency_overrides[deps.get_current_user] = lambda: mock.Mock(id=1, is_super_admin=False)
-        self.more = [mock.patch.object(lanes_routes, "user_has_permission", lambda u, k: self.admin),
-                     mock.patch.object(lanes_routes, "audit_log", lambda *a, **k: None)]
+        self.more = [*patch_in_package(lanes_routes, "user_has_permission", lambda u, k: self.admin),
+                     *patch_in_package(lanes_routes, "audit_log", lambda *a, **k: None)]
         for p in self.more:
             p.start()
         self.client = TestClient(app)

@@ -1,16 +1,5 @@
-"""
-routes/common/globals.py - Module-level variables and prompt/context helpers.
-"""
-
 from datetime import datetime
-from pathlib import Path
-from typing import Optional
-
-
-# Global CLI runtime overrides
-initial_profile_path: Optional[Path] = None
-models_dir: Optional[Path] = None
-curStatus_model_hint: Optional[str] = None
+from core.state import state
 
 
 def current_date_prompt() -> str:
@@ -27,7 +16,6 @@ def main_ctx_tokens(cloud_main=None) -> int:
     across -np slots unless the KV pool is unified (then --kv-unified-per-slot,
     if set, is the cap)."""
     from core.process import per_slot_cap
-    from core.state import state
     if cloud_main:
         return getattr(cloud_main, "ctx", 32768) or 32768
     p = state.profile if isinstance(state.profile, dict) else {}

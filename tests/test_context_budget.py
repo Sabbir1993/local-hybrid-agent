@@ -240,7 +240,9 @@ class TestOverflowRecovery(unittest.TestCase):
     grammar retry (executor default) and the JSON-repair retry raised first and
     the user saw `upstream 400: {...exceed_context_size_error...}` verbatim."""
 
-    SRC = Path(__file__).resolve().parents[1] / "routes" / "common.py"
+    # the streaming request (llm_stream) and its overflow recovery (overflow)
+    SRC_FILES = [Path(__file__).resolve().parents[1] / "routes" / "common" / f
+                 for f in ("llm_stream.py", "overflow.py")]
     YOUR_ERROR = (b'{"error":{"code":400,"message":"request (36350 tokens) exceeds the available '
                   b'context size (32768 tokens), try increasing it","type":"exceed_context_size_error",'
                   b'"n_prompt_tokens":36350,"n_ctx":32768}}')
@@ -272,7 +274,7 @@ class TestOverflowRecovery(unittest.TestCase):
         self.assertLess(len(out), len(msgs))
 
     def test_overflow_branch_precedes_every_other_retry(self):
-        src = self.SRC.read_text(encoding="utf-8")
+        src = "".join(f.read_text(encoding="utf-8") for f in self.SRC_FILES)
         handler = src.index("if response.status_code != 200:")
         overflow = src.index("_is_context_overflow(response.status_code, err_text)", handler)
         grammar = src.index("if grammar:", handler)
@@ -284,7 +286,7 @@ class TestOverflowRecovery(unittest.TestCase):
         """The regression that let the 400 through: the first attempt was covered,
         but the grammar and tool-call-repair *retries* raised on their own. Every
         place that sends another attempt must delegate instead."""
-        src = self.SRC.read_text(encoding="utf-8")
+        src = "".join(f.read_text(encoding="utf-8") for f in self.SRC_FILES)
         self.assertEqual(src.count("_recover_context("), 4,
                          "1 definition + 3 call sites (first attempt, grammar retry, repair retry)")
         for marker in ("if _is_context_overflow(response.status_code, err_text):",
@@ -297,7 +299,7 @@ class TestOverflowRecovery(unittest.TestCase):
         self.assertNotIn("_llm_chat_stream_raw(", body)
 
     def test_overflow_branch_uses_the_window_it_was_told(self):
-        src = self.SRC.read_text(encoding="utf-8")
+        src = "".join(f.read_text(encoding="utf-8") for f in self.SRC_FILES)
         body = src[src.index("def _recover_context("):src.index("def _ctx_from_error(")]
         self.assertIn("_emergency_compact(msgs, tools, _ctx_from_error(err_text))", body)
         self.assertIn('payload_notools.pop("tools", None)', body,

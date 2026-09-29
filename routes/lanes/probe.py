@@ -1,14 +1,11 @@
-"""
-routes/lanes/test_helpers.py - Plain-language error formatting and media model test logic.
-"""
-
 import re
 import time
-
-from core import cloud
+from fastapi import Depends
+from core import cloud, lanes
 from core.auth import Principal, user_has_permission
+from core.deps import get_current_user
 
-from .helpers import _LOCAL_PERM
+from .helpers import _err, router
 
 
 def _plain_error(e: Exception) -> str:
@@ -107,3 +104,39 @@ async def _test_media(name: str, d: dict, user: Principal, full: bool) -> dict:
         plain = (_plain_error(e) if isinstance(e, RuntimeError) and not isinstance(e, media.MediaError)
                  else media.plain_error(e))
         return {"ok": False, "error": plain, "where": where}
+
+
+@router.post("/control/lanes/{name}/test")
+async def lanes_test(name: str, full: bool = False, user: Principal = Depends(get_current_user)):
+    reg = lanes.registry(user.id)
+    d = reg.get(name)
+    if d is None:
+        return _err(f"there is no model called '{name}'", 404)
+    if d["kind"] in lanes.MEDIA_KINDS:
+        return await _test_media(name, d, user, full)
+    if d["cloud_key"]:
+        cm = cloud.cloud_lane(name, user.id)
+        r = await cloud.probe(cm, "Reply with the single word: ready")
+        if r.get("ok"):
+            return {"ok": True, "ms": r.get("ms"), "sample": r.get("sample"), "where": "cloud"}
+        return {"ok": False, "error": _plain_error(Exception(r.get("error") or "")), "where": "cloud"}
+    if d["local"] and name != "main" and not user_has_permission(user, "model.local.load"):
+        return _err("You don't have permission to start local models.", 403)
+    t = lanes.Target(name)
+    t0 = time.time()
+    try:
+        c = await t.client()
+        if d["kind"] == "embed":
+            r = await c.post("/v1/embeddings", json={"input": ["ready"]}, timeout=60)
+            r.raise_for_status()
+            dim = len(((r.json().get("data") or [{}])[0]).get("embedding") or [])
+            sample = f"embedding size {dim}"
+        else:
+            r = await c.post("/v1/chat/completions", json={
+                "messages": [{"role": "user", "content": "Reply with the single word: ready"}],
+                "max_tokens": 16, "temperature": 0}, timeout=60)
+            r.raise_for_status()
+            sample = lanes.message_text(r.json()).strip()[:200]
+    except Exception as e:
+        return {"ok": False, "error": _plain_error(e), "where": "local"}
+    return {"ok": True, "ms": int((time.time() - t0) * 1000), "sample": sample, "where": "local"}

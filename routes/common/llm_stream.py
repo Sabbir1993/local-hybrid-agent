@@ -1,19 +1,14 @@
-"""
-routes/common/llm_stream.py - LLM streaming helpers: slot fields, raw stream,
-gated stream, and fallback stream.
-"""
-
+import asyncio
 import json
 import sys
 from typing import Optional
-
 from core import reasoning
 from core.agent_loop import safe_parse_and_repair_args
 from core.request_context import get_current_user_id
 from core.small_model import APP_CONFIG
 from core.state import state
 
-from .admission import admission
+from .overflow import _is_context_overflow, _recover_context
 from .sse_stream import _process_sse_stream
 
 
@@ -27,6 +22,79 @@ def _main_slot_fields() -> dict:
     if n_slots > 1 and uid is not None and (APP_CONFIG.get("serving") or {}).get("slot_affinity", True):
         fields["id_slot"] = int(uid) % n_slots
     return fields
+
+
+class _Admission:
+    """Fair-share gate in front of the local main llama-server.
+
+    - global: at most n_slots generations in flight (one per llama-server slot),
+      so extra requests wait here -- where the UI can be told -- instead of
+      silently inside llama-server;
+    - per user: at most `max_inflight_per_user` (default 1), so one person's
+      agent loop / second tab can't occupy every slot while others wait.
+    Configured under app.json "serving"."""
+
+    def __init__(self):
+        self._global: Optional[asyncio.Semaphore] = None
+        self._global_n = 0
+        self._users: dict = {}
+        self._users_n = 0
+        self.waiting = 0
+
+    def _cfg(self) -> dict:
+        return APP_CONFIG.get("serving") or {}
+
+    def enabled(self) -> bool:
+        return bool(self._cfg().get("queue_enabled", True))
+
+    def _sems(self, uid):
+        n = max(1, int((state.profile or {}).get("n_slots") or 1))
+        if self._global is None or n != self._global_n:
+            # resized on model (re)load; holders of the old one release it harmlessly
+            self._global, self._global_n = asyncio.Semaphore(n), n
+        per_user = max(1, int(self._cfg().get("max_inflight_per_user", 1)))
+        if per_user != self._users_n:
+            self._users, self._users_n = {}, per_user
+        us = self._users.get(uid)
+        if us is None:
+            us = self._users[uid] = asyncio.Semaphore(per_user)
+        return self._global, us
+
+
+admission = _Admission()
+
+
+async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None):
+    """Stream one completion. Requests to the local main llama-server first pass
+    the fair-share admission gate; a ("queued", {"position": n}) item is yielded
+    when the caller has to wait for a slot."""
+    if client_or_state is not state.client or not admission.enabled():
+        async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
+                                               repeat_penalty, rid, grammar, extra=extra, effort=effort,
+                                               top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
+            yield item
+        return
+    glob, mine = admission._sems(get_current_user_id())
+    if glob.locked() or mine.locked():
+        yield ("queued", {"position": admission.waiting + 1})
+    admission.waiting += 1
+    try:
+        await mine.acquire()
+        try:
+            await glob.acquire()
+        except BaseException:
+            mine.release()
+            raise
+    finally:
+        admission.waiting -= 1
+    try:
+        async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
+                                               repeat_penalty, rid, grammar, extra=extra, effort=effort,
+                                               top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
+            yield item
+    finally:
+        glob.release()
+        mine.release()
 
 
 async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None):
@@ -73,6 +141,16 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
             err_text = await response.aread()
             err_msg = err_text.decode("utf-8", "replace")[:300]
             effort_keys = [k for k in reasoning.CLOUD_KEYS if k in payload]
+            # Context overflow is handled FIRST, ahead of the reasoning / grammar /
+            # JSON-repair retries below: each of those raises on its own non-200 and
+            # would otherwise swallow the only chance to compact and recover. This is
+            # the branch that used to sit last, which made it unreachable whenever a
+            # grammar was set - the executor lane's default.
+            if _is_context_overflow(response.status_code, err_text):
+                print(f"[common] context size exceeded upstream ({err_msg[:120]}) - auto-compacting and retrying", file=sys.stderr)
+                async for item in _recover_context(client_or_state, payload, msgs, tools, rid, err_text):
+                    yield item
+                return
             if effort_keys and response.status_code in (400, 422) and getattr(client_or_state, "is_cloud", False):
                 # Provider/build rejected the reasoning fields: retry once
                 # without them (model's default thinking) rather than failing.
@@ -89,6 +167,15 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
                 async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=None) as rg:
                     if rg.status_code != 200:
                         rg_err = await rg.aread()
+                        # The unconstrained retry can be the attempt that crosses the
+                        # context limit (the first one may have been refused for the
+                        # grammar alone) - recover instead of surfacing the 400.
+                        if _is_context_overflow(rg.status_code, rg_err):
+                            print(f"[common] context size exceeded on the grammar retry "
+                                  f"({rg_err.decode('utf-8', 'replace')[:120]}) - compacting", file=sys.stderr)
+                            async for item in _recover_context(client_or_state, payload, msgs, tools, rid, rg_err):
+                                yield item
+                            return
                         raise RuntimeError(f"upstream {rg.status_code}: {rg_err.decode('utf-8', 'replace')[:200]}")
                     async for item in _process_sse_stream(rg, rid=rid):
                         yield item
@@ -118,6 +205,14 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
                 async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=None) as retry_resp:
                     if retry_resp.status_code != 200:
                         re_err = await retry_resp.aread()
+                        # Same hole as the grammar retry: this sanitized attempt can be
+                        # the one that crosses the context limit.
+                        if _is_context_overflow(retry_resp.status_code, re_err):
+                            print(f"[common] context size exceeded on the tool-call repair retry "
+                                  f"({re_err.decode('utf-8', 'replace')[:120]}) - compacting", file=sys.stderr)
+                            async for item in _recover_context(client_or_state, payload, msgs, tools, rid, re_err):
+                                yield item
+                            return
                         payload_notools = dict(payload)
                         payload_notools.pop("tools", None)
                         try:
@@ -136,67 +231,3 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
 
         async for item in _process_sse_stream(response, rid=rid):
             yield item
-
-
-async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None):
-    """Stream one completion. Requests to the local main llama-server first pass
-    the fair-share admission gate; a ("queued", {"position": n}) item is yielded
-    when the caller has to wait for a slot."""
-    if client_or_state is not state.client or not admission.enabled():
-        async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
-                                               repeat_penalty, rid, grammar, extra=extra, effort=effort,
-                                               top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
-            yield item
-        return
-    glob, mine = admission._sems(get_current_user_id())
-    if glob.locked() or mine.locked():
-        yield ("queued", {"position": admission.waiting + 1})
-    admission.waiting += 1
-    try:
-        await mine.acquire()
-        try:
-            await glob.acquire()
-        except BaseException:
-            mine.release()
-            raise
-    finally:
-        admission.waiting -= 1
-    try:
-        async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
-                                               repeat_penalty, rid, grammar, extra=extra, effort=effort,
-                                               top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
-            yield item
-    finally:
-        glob.release()
-        mine.release()
-
-
-async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=None, temperature=0.4,
-                                        max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None,
-                                        grammar: Optional[str] = None, lane: str = "cloud",
-                                        extra: Optional[dict] = None, effort: Optional[str] = None,
-                                        top_p: Optional[float] = None, min_p: Optional[float] = None,
-                                        presence_penalty: Optional[float] = None, top_k: Optional[int] = None):
-    """Stream from `primary` (usually a CloudClient); if it fails before emitting any
-    content, retry the same request on `fallback` (the local lane) instead of failing
-    the whole agent step. Yields ("fallback", reason) once before switching so callers
-    can tell the UI which engine actually answered."""
-    produced = False
-    try:
-        async for item in _llm_chat_stream(primary, msgs, tools, temperature, max_tokens,
-                                           repeat_penalty, rid, grammar, extra=extra, effort=effort,
-                                           top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
-            produced = True
-            yield item
-        return
-    except Exception as e:
-        if produced or fallback is None:
-            raise
-        reason = f"{type(e).__name__}: {str(e)[:200]}"
-        print(f"[common] {lane} cloud lane failed ({reason}) - falling back to the local model",
-              file=sys.stderr)
-        yield ("fallback", reason)
-    async for item in _llm_chat_stream(fallback, msgs, tools, temperature, max_tokens,
-                                       repeat_penalty, rid, grammar, extra=extra, effort=effort,
-                                       top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
-        yield item

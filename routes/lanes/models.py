@@ -1,9 +1,4 @@
-"""
-routes/lanes/models.py - Pydantic request models for the lanes routes.
-"""
-
 from typing import Optional
-
 from pydantic import BaseModel, Field
 
 

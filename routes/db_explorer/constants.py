@@ -2,15 +2,12 @@
 routes/db_explorer/constants.py - Shared constants and models for the DB Explorer.
 """
 
-import hashlib
 import re
-import sqlite3
 
 from pydantic import BaseModel, Field
 
 from core.config import (
     AUTH_DB_FILE,
-    BASE_DIR,
     MEMORY_DB_FILE,
     PROJECTS_DB_FILE,
     USAGE_DB_FILE,

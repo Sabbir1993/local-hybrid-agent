@@ -1,14 +1,13 @@
-"""
-routes/lanes/helpers.py - Shared helpers: _view(), _FILES_CACHE, _helper_files(), _err().
-"""
-
 import time
-
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-
 from core import cloud, lanes, verifier
 from core.auth import Principal, user_has_permission
 from core.config import ACTIVE_RUNTIME
+
+
+router = APIRouter(tags=["lanes"])
+
 
 _LOCAL_PERM = "model.local.configure"
 
