@@ -865,20 +865,20 @@
 <rect x="1956" y="1212" width="598" height="10" fill="#993C1D"/>
 <text x="1968.0" y="1212.0" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="start">Main-model catalog — config/model_configs.json</text>
 <text x="2544.0" y="1212.0" font-size="11.5" font-weight="normal" fill="#FFFFFF" text-anchor="end">10 entries</text>
-<text x="1968.0" y="1239.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">GGUF (all gpu [1,2], layer)   ctx     ngl  split  KV   MTP</text>
-<text x="1968.0" y="1256.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">─────────────────────────────────────────────────────────</text>
-<text x="1968.0" y="1273.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">ornith-1.5-9b q4_k_m ★      131920   999  15,5  q8_0  -</text>
-<text x="1968.0" y="1290.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">qwen3.8-27b q4_k_m          131072    48  10,10 q8_0  3</text>
-<text x="1968.0" y="1307.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">qwen3.8-flash-next q2_k_xl   65536     -   -    f16   -</text>
-<text x="1968.0" y="1324.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">qwen3.5-9b-uncens q4_k_m    131072   999  9,11  q8_0  y</text>
-<text x="1968.0" y="1341.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">kat-coder-v2.5-dev q4_k_s   131072   999  9,11  q8_0  -</text>
-<text x="1968.0" y="1358.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">spark-x2.5-4b q4_k_m        231072   999  1,0   q8_0  y</text>
-<text x="1968.0" y="1375.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">bonsai-2-27b ptq1_0         132768    45  10,10 q8_0  y</text>
-<text x="1968.0" y="1392.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">qwen2.5-coder-14b q4_k_m    128000   999  9,11  q8_0  -</text>
-<text x="1968.0" y="1409.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">qwen3.8-9b-distill q4_k_m   132768   999  9,11  q8_0  - (vision)</text>
-<text x="1968.0" y="1426.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">neohorse-1-9b q4_k_m        132768   999  9,11  q8_0  - (kv_unified)</text>
-<text x="1968.0" y="1443.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace"></text>
-<text x="1968.0" y="1460.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace">★ default main (5-user plan) · n_slots 1 · batch 2048/512</text>
+<text x="1968.0" y="1239.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">GGUF (all gpu [1,2], layer)   ctx     ngl  split  KV   MTP</text>
+<text x="1968.0" y="1256.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">─────────────────────────────────────────────────────────</text>
+<text x="1968.0" y="1273.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">ornith-1.5-9b q4_k_m ★      131920   999  15,5  q8_0  -</text>
+<text x="1968.0" y="1290.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">qwen3.8-27b q4_k_m          131072    48  10,10 q8_0  3</text>
+<text x="1968.0" y="1307.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">qwen3.8-flash-next q2_k_xl   65536     -   -    f16   -</text>
+<text x="1968.0" y="1324.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">qwen3.5-9b-uncens q4_k_m    131072   999  9,11  q8_0  y</text>
+<text x="1968.0" y="1341.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">kat-coder-v2.5-dev q4_k_s   131072   999  9,11  q8_0  -</text>
+<text x="1968.0" y="1358.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">spark-x2.5-4b q4_k_m        231072   999  1,0   q8_0  y</text>
+<text x="1968.0" y="1375.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">bonsai-2-27b ptq1_0         132768    45  10,10 q8_0  y</text>
+<text x="1968.0" y="1392.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">qwen2.5-coder-14b q4_k_m    128000   999  9,11  q8_0  -</text>
+<text x="1968.0" y="1409.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">qwen3.8-9b-distill q4_k_m   132768   999  9,11  q8_0  - (vision)</text>
+<text x="1968.0" y="1426.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">neohorse-1-9b q4_k_m        132768   999  9,11  q8_0  - (kv_unified)</text>
+<text x="1968.0" y="1443.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve"></text>
+<text x="1968.0" y="1460.0" font-size="12" font-weight="normal" fill="#2C2C2A" text-anchor="start" font-family="Consolas, 'Courier New', monospace" xml:space="preserve">★ default main (5-user plan) · n_slots 1 · batch 2048/512</text>
 <rect x="1940" y="1168" width="630" height="326" rx="12" fill="none" stroke="#993C1D" stroke-width="1.5" stroke-dasharray="6 4"/>
 <rect x="1956" y="1156" width="171.6" height="24" rx="12" fill="#993C1D"/>
 <text x="1968.0" y="1173.0" font-size="13" font-weight="bold" fill="#FFFFFF" text-anchor="start">10 · MODEL CATALOG</text>

@@ -419,12 +419,14 @@ function bubbleHtml(m, idx) {
   }
   // pending compaction indicator
   if (m.compactPending) {
+    // beforeToks is a local estimate until the server returns authoritative
+    // before/after counts; the real reduction badge replaces this bubble on success.
     const bTok = m.beforeToks || 0;
-    const bTokStr = bTok ? ` (~${bTok >= 1000 ? (bTok / 1000).toFixed(1) + 'k' : bTok} tokens)` : '';
+    const bTokStr = bTok ? ` (~${bTok >= 1000 ? (bTok / 1000).toFixed(1) + 'k' : bTok} tokens, estimated)` : '';
     return `<div class="msg bot"><div class="bubble" style="border:1px dashed var(--accent, #6366f1); background:rgba(99,102,241,0.06); padding:12px 14px;">`
       + `<div style="display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; color:var(--accent, #6366f1); margin-bottom:4px;">`
       + `<span>🧹</span> <span>Compacting conversation${bTokStr}…</span> <span class="cursor">▍</span></div>`
-      + `<div class="dim" style="font-size:11px; line-height:1.4;">Distilling conversation context, key decisions, files, and next steps into a concise summary (~70–85% reduction expected).`
+      + `<div class="dim" style="font-size:11px; line-height:1.4;">Distilling conversation context, key decisions, files, and next steps into a concise summary.`
       + (m.content ? `<br><span style="color:var(--text); font-style:italic;">${esc(m.content)}</span>` : '')
       + `</div></div></div>`;
   }

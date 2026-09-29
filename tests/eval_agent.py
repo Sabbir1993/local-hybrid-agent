@@ -65,7 +65,13 @@ def check_compaction() -> tuple:
     assert est > 20000, f"synthetic history too small: {est}"
     out = compact_messages(msgs, 8000)
     assert out[0]["content"] == "SYS", "system prompt lost"
-    assert out[1]["role"] == "system" and "DIGEST" in out[1]["content"], "digest missing"
+    # The digest is folded into the first user turn rather than inserted as a new
+    # system message at index 1, so the system-prompt + tool-schema prefix stays
+    # byte-identical and llama.cpp can reuse that part of the KV cache
+    # (core/agent_loop.py::compact_messages).
+    assert any("DIGEST" in str(m.get("content") or "") for m in out[1:3]), "digest missing"
+    assert not any(m.get("role") == "system" for m in out[1:3]), \
+        "compaction must not insert a synthetic system message (it breaks the KV prefix)"
     assert out[-1]["content"] == "final question?", "last user message lost"
     # pairing invariant in the kept tail: no tool msg directly after system/user
     for prev, cur in zip(out[:-1], out[1:]):

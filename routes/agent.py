@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, UploadFile, File as FastAPIFile, Request
-from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, Response
 from pydantic import BaseModel, Field
 
 from core.auth import Principal, user_has_permission
@@ -21,6 +21,8 @@ from core.config import BASE_DIR, CONFIG_DEFAULTS
 from core.deps import get_current_user, require_permission
 from core.audit import audit_log
 from core import input_guard
+from core import context_budget
+from core import tool_surface
 from core.project_context import load_project_instructions, prompt_block as project_prompt_block, INIT_PROMPT
 from core.knowledge_access import allowed_source_ids_for, kb_local_only, set_kb_cloud_blocked
 from core.memory import search_memory_hybrid
@@ -80,6 +82,7 @@ from core.shell_tools import (
     shell_cfg,
     permission_callback,
 )
+from core.agent_loop.narration import _is_narration
 from core.agent_loop import (
     run_tool,
     AGENT_SYSTEM_PROMPT,
@@ -156,11 +159,34 @@ class AgentRequest(BaseModel):
 
 
 
-AGENT_MAX_STEPS = 60
+AGENT_MAX_STEPS = 200
 # identical-tool-call rounds after which a run is stopped (the executor escalates at 2)
 LOOP_STOP_STREAK = 3
-# times a run may be sent back to work when it answers with plan steps still pending
+# times a run may be sent back to work when it answers with plan steps still pending,
+# or with a bare announcement of work it never started (core/agent_loop/narration.py)
 MAX_PLAN_NUDGES = 3
+# consecutive executor steps that trip the SAME escalation reason before the run
+# commits to the main model. One forgiven failure keeps a single tutorialized or
+# degenerate reply from silently ending orchestration for the whole run.
+ESC_STREAK_LIMIT = 2
+
+# Wall-clock ceiling for one agent run. The step cap alone does not protect the
+# GPU: a model can make slow, novel, legitimate progress (or the loop detector can
+# miss a near-repeat) and hold the card - and the open SSE request - indefinitely.
+# 0 disables the ceiling. Overridable via config/app.json -> agent.run_timeout_s.
+DEFAULT_RUN_TIMEOUT_S = 1800
+# same tool called this many times inside NEAR_REPEAT_WINDOW steps, with
+# differing arguments, is treated as a thrash rather than progress
+NEAR_REPEAT_LIMIT = 6
+NEAR_REPEAT_WINDOW = 12
+
+
+def _run_timeout_s() -> int:
+    try:
+        v = int(APP_CONFIG.get("agent", {}).get("run_timeout_s", DEFAULT_RUN_TIMEOUT_S))
+        return max(0, v)
+    except (TypeError, ValueError):
+        return DEFAULT_RUN_TIMEOUT_S
 
 
 # answer check (shield toggle): SSE events come from core/verifier.py
@@ -482,9 +508,40 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     print(f"[agent] lanes: main={'cloud:' + cloud_main.key if use_cloud_main else 'local'} "
           f"executor={'cloud:' + cloud_exec.key if cloud_exec else 'local'} mode={mode}")
 
+    async def _lane_window(lane_name: str, cloud_client=None) -> int:
+        """Prompt window (tokens) for one lane, for compaction decisions.
+
+        Cloud lanes use the provider config. Local lanes prefer the window the
+        running llama-server advertises for a slot (`/slots` -> `n_ctx`, the very
+        number it quotes when it refuses an oversized request), which respects
+        -np / -kvu / --kv-unified-per-slot in a way profile math cannot. Falls back
+        to the config-derived window in core.context_budget."""
+        if cloud_client is not None:
+            return context_budget.window(lane_name, cfg_ctx=getattr(cloud_client, "ctx", 32768))
+        if lane_name == "executor":
+            cfg = (getattr(ex_inst, "cfg", None) or {}) if ex_inst else {}
+            n_slots = int(cfg.get("np") or 1)
+            win = context_budget.window(lane_name, cfg_ctx=cfg.get("ctx") or 16384,
+                                        n_slots=n_slots, kv_unified=n_slots > 1)
+            return (await context_budget.probe_window(lane_name, getattr(ex_inst, "client", None))) or win
+        win = common.main_ctx_tokens(None)
+        return (await context_budget.probe_window("main", getattr(state, "client", None))) or win
+
     cfg_steps = APP_CONFIG["agent"].get("max_steps", AGENT_MAX_STEPS)
     steps = max(1, min(req.max_steps or cfg_steps, cfg_steps))
     msgs = [dict(m) for m in req.messages]
+    # Early guard: the client-supplied history can already exceed the main lane's
+    # window before the loop starts. Per-step compaction below is authoritative once the
+    # lane and its tool surface are known; this only avoids a guaranteed overflow on the
+    # very first call - so it counts the tool schemas too, since that block (thousands of
+    # tokens) is what pushed these requests over the line in the first place.
+    if len(msgs) > 3:
+        _early_q = next((str(m.get("content") or "") for m in reversed(msgs)
+                         if m.get("role") == "user"), "")
+        _early_tools = tool_surface.filter_tools(all_tools(), _early_q, APP_CONFIG.get("tool_surface"))
+        _early_budget = context_budget.budget_for("main", await _lane_window("main", cloud_main))
+        if _early_budget and context_budget.prompt_tokens_for("main", msgs, _early_tools) > _early_budget:
+            msgs = compact_messages(msgs, _early_budget, tools=_early_tools)
     if custom_agent:
         from routes.custom_agents import apply_input_template
         apply_input_template(msgs, custom_agent)
@@ -652,7 +709,37 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         use_executor = False
     else:
         use_executor = bool(cloud_exec) or ex_inst.available
+        if not use_executor and not cloud_exec:
+            # The model is configured but not loaded. Try warming it once before
+            # declaring orchestration unavailable, so "executor never fired" is not
+            # a silent consequence of a cold lane. Failure here is not fatal: the
+            # run continues on main and the reason is surfaced below.
+            try:
+                await ex_inst.ensure_loaded()
+                use_executor = ex_inst.available
+            except Exception as _e:
+                print(f"[server_manager] executor could not be loaded: {_e}", file=sys.stderr)
+                use_executor = False
     main_client = cloud.CloudClient(cloud_main) if use_cloud_main else state.client
+
+    # Tell the user when orchestration was asked for but cannot happen, instead of
+    # silently running the whole task on one model (the symptom that made this hard
+    # to diagnose from the UI).
+    async def _lane_warnings():
+        if mode in ("no-orchestration", "all-cloud", "direct"):
+            return
+        if steps_on_main:
+            yield sse("lane_warning", {
+                "reason": "steps_on_main",
+                "message": "Routine tool steps are mapped to the main model in Settings → Models, "
+                           "so the executor is not being used."})
+        elif not use_executor:
+            why = getattr(ex_inst, "load_error", None) or (
+                "model file not found" if not ex_inst.available else "executor could not start")
+            yield sse("lane_warning", {
+                "reason": "executor_unavailable",
+                "message": f"The executor model could not be started ({why}); every step is "
+                           f"running on the main model."})
 
     # --- cloud fallback --------------------------------------------------
     # cloud.fallback_local (per-user binding): when a cloud lane dies before
@@ -806,20 +893,42 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         attempt_sigs: set = set()
         repeat_streak = 0
         plan_nudges = 0
+        narration_nudges = 0
         stop_reason = "max_steps"
+        # consecutive executor steps that tripped the same escalation reason
+        esc_streak = 0
+        esc_streak_reason = None
         # routing telemetry (core/route_log.py): category + lane/reason codes only, no text
         import uuid as _uuid
         run_id = _uuid.uuid4().hex
         run_outcome = "error"
         steps_run = 0
+        # wall-clock budget: the one bound that protects the GPU when the model is
+        # making slow-but-real progress that the step cap and loop detector miss
+        run_started = time.time()
+        run_limit_s = _run_timeout_s()
+        # (tool name, step) for the near-repeat window
+        tool_step_hist: list = []
+        # which tool tripped the near-repeat rule, for the stop summary
+        loop_detail = ""
         route_log.run_start(run_id, user.id, mode, q_category)
         yield f"event: run\ndata: {json.dumps({'run_id': run_id})}\n\n"
         if custom_agent:
             yield f"event: custom_agent\ndata: {json.dumps({'id': custom_agent['id'], 'name': custom_agent['name'], 'icon': custom_agent.get('icon', '🤖')})}\n\n"
         if kb_blocked_reason:
             yield f"event: kb_blocked\ndata: {json.dumps({'message': kb_blocked_reason})}\n\n"
+        # Orchestration was requested but cannot happen: say so up front rather than
+        # letting the user discover it from a transcript that only ever used one model.
+        async for _w in _lane_warnings():
+            yield _w
         try:
             for step in range(steps):
+                elapsed = time.time() - run_started
+                if run_limit_s and elapsed > run_limit_s:
+                    print(f"[agent] run {run_id[:8]} hit the {run_limit_s}s wall-clock budget "
+                          f"after {step} steps", file=sys.stderr)
+                    stop_reason = "timeout"
+                    break
                 steps_run = step + 1
                 yield f"event: step\ndata: {json.dumps({'step': step + 1, 'total': steps})}\n\n"
                 tool_calls = None
@@ -827,12 +936,21 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 reasoning = ""
 
                 executor_stuck = repeat_streak >= rpol["repeat_streak_limit"]
+                # Escalation is per-step, never permanent. `lane_name` is recomputed
+                # from scratch here every iteration, so a step that escalated to main
+                # does not disqualify the executor for the rest of the run - which is
+                # what silently turned orchestration into a main-model-only run.
+                # `esc_streak` counts consecutive executor steps that tripped the same
+                # escalation reason. The first one is forgiven (a single tutorialized or
+                # degenerate reply is usually just a bad step); a second one escalates.
+                esc_sustained = esc_streak >= ESC_STREAK_LIMIT
                 main_first = (step == 0 and use_executor and (use_cloud_main or main_ready)
                               and ca_lane != "executor"
                               and router_policy.start_on_main(q_category, rpol))
-                lane_name = "main" if not use_executor or executor_stuck or main_first else "executor"
+                lane_name = "main" if not use_executor or executor_stuck or main_first or esc_sustained else "executor"
                 lane_reason = ("no_executor" if not use_executor else "repeat_streak" if executor_stuck
-                               else "start_on_main" if main_first else "executor_default")
+                               else "start_on_main" if main_first
+                               else f"escalated_{esc_streak_reason}" if esc_sustained else "executor_default")
 
                 is_creation_or_code = router_policy.is_creation(last_query, rpol)
                 if (not req.plan) and step == 0 and mode not in ("no-orchestration", "all-cloud", "direct") and not cloud_exec and router_available() and not any(
@@ -932,7 +1050,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 model_info = get_model_info(lane_name)
                 yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
 
-                # executor lane gets the lean core set; main lane sees everything;
+                # executor lane gets the lean core set; the main lane gets the core set
+                # plus any situational family the request names (core/tool_surface.py:
+                # the full 48-tool surface costs ~8.5k tokens of schema on every step);
                 # plan mode restricts to read-only exploration tools
                 if req.plan:
                     tools_for_lane = [t for t in all_tools()
@@ -947,45 +1067,55 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         # (+ connected MCP tools: the system prompt tells every lane about them)
                         tools_for_lane = [t for t in all_tools()
                                          if t.get("function", {}).get("name") in
-                                         ("write_file", "read_file", "edit_file", "list_files", "run_python", "run_shell", "read_skill", "list_skills",
+                                         ("write_file", "read_file", "read_file_chunk", "edit_file", "list_files", "run_python", "run_shell", "read_skill", "list_skills",
                                           "create_plan", "update_plan_item", "get_plan") + EXECUTOR_TEST_TOOLS
                                          or t.get("function", {}).get("name", "").startswith("mcp__")]
                     else:
-                        tools_for_lane = all_tools()
+                        tools_for_lane = tool_surface.filter_tools(
+                            all_tools(), last_query, APP_CONFIG.get("tool_surface"))
                 if custom_agent_tools:
                     tools_for_lane = [t for t in tools_for_lane if t.get("function", {}).get("name") in custom_agent_tools]
+                # Situational families withheld from this step, surfaced on event: ctx so
+                # a "missing" tool is explainable. A child spawned via spawn_agent still
+                # receives the full set (core/subagent.py), so the orchestrator can
+                # delegate browser / device / document work it cannot call itself.
+                hidden_fams = tool_surface.hidden_families(last_query, APP_CONFIG.get("tool_surface"))
 
                 # Smart context truncation: mechanically compact history into the
                 # lane's window (keeps system prompt + recent tail, rolls older
-                # turns into a digest). Report it to the UI when it fires.
+                # turns into a digest). Window and size now come from
+                # core.context_budget (server-reported window + real prompt counts)
+                # rather than a chars//3 guess. Report it to the UI when it fires.
                 step_grammar = None
                 if lane_name == "executor":
                     # cloud executors are OpenAI-compatible: no GBNF grammar, and
                     # their window comes from the provider config (model ctx)
-                    ex_ctx = int(cloud_exec.ctx if cloud_exec else (ex_inst.cfg.get("ctx") or 16384))
-                    pre_tokens = estimate_prompt_tokens(msgs)
+                    ex_ctx = await _lane_window("executor", cloud_exec)
+                    pre_tokens = context_budget.prompt_tokens_for(lane_name, msgs, tools_for_lane)
                     # in-place slice assignment: must NOT rebind `msgs` here, or it
                     # becomes a local of event_stream() and earlier reads raise UnboundLocalError
-                    msgs[:] = compact_messages(msgs, int(ex_ctx * 0.7))
-                    post_tokens = estimate_prompt_tokens(msgs)
-                    if post_tokens < pre_tokens:
+                    msgs[:] = compact_messages(msgs, context_budget.budget_for(lane_name, ex_ctx),
+                                               tools=tools_for_lane)
+                    sent_tokens = context_budget.prompt_tokens_for(lane_name, msgs, tools_for_lane)
+                    if sent_tokens < pre_tokens:
                         yield (f"event: ctx\ndata: "
                                + json.dumps({'lane': lane_name, 'before_tokens': pre_tokens,
-                                             'after_tokens': post_tokens}) + "\n\n")
+                                             'after_tokens': sent_tokens, 'hidden': hidden_fams}) + "\n\n")
                     if not cloud_exec:
                         step_grammar = _executor_grammar(tools_for_lane)
                 else:
                     # Main lane context compaction: protect against context window explosion / VRAM demotion
-                    main_ctx = common.main_ctx_tokens(cloud_main)
-                    pre_tokens = estimate_prompt_tokens(msgs)
-                    budget = int(main_ctx * 0.7)
+                    main_ctx = await _lane_window("main", cloud_main)
+                    budget = context_budget.budget_for(lane_name, main_ctx)
+                    pre_tokens = context_budget.prompt_tokens_for(lane_name, msgs, tools_for_lane)
+                    sent_tokens = pre_tokens
                     if pre_tokens > budget:
-                        msgs[:] = compact_messages(msgs, budget)
-                        post_tokens = estimate_prompt_tokens(msgs)
-                        if post_tokens < pre_tokens:
+                        msgs[:] = compact_messages(msgs, budget, tools=tools_for_lane)
+                        sent_tokens = context_budget.prompt_tokens_for(lane_name, msgs, tools_for_lane)
+                        if sent_tokens < pre_tokens:
                             yield (f"event: ctx\ndata: "
                                    + json.dumps({'lane': lane_name, 'before_tokens': pre_tokens,
-                                                 'after_tokens': post_tokens}) + "\n\n")
+                                                 'after_tokens': sent_tokens, 'hidden': hidden_fams}) + "\n\n")
 
                 step_rid = monitor_begin(f"agent/{lane_name}", True, n_msgs=len(msgs),
                                          model=model_info.get("model"), source=model_info.get("source"),
@@ -1046,6 +1176,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     tim = (res_dict or {}).get("timings") or {}
                     pcached, ccached = parse_cache_tokens(u, tim)
                     ptoks = u.get("prompt_tokens") or (sum(len(m.get("content", "")) for m in msgs) // 4)
+                    # Feed the server's exact prompt count back into the budget
+                    # accounting. Only a real count from the server may anchor the
+                    # next step - the chars//4 fallback above is itself a guess.
+                    if u.get("prompt_tokens"):
+                        context_budget.record_usage(lane_name, sent_tokens, u["prompt_tokens"],
+                                                    msgs, tools_for_lane)
                     if not pcached and len(msgs) > 1:
                         pcached = sum(len(m.get("content", "")) for m in msgs[:-1]) // 4
                     ctoks = u.get("completion_tokens") or toks
@@ -1076,6 +1212,29 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                                             query=last_query, is_loop=is_loop, cfg=rpol)
                               if lane_name == "executor" and (use_cloud_main or main_ready) else "")
                 should_escalate = bool(esc_reason)
+                if should_escalate:
+                    # count consecutive trips of the SAME reason. The executor keeps its
+                    # slot until ESC_STREAK_LIMIT trips, so a single bad step escalates
+                    # this request but the executor is re-tried on the next step.
+                    if esc_reason == esc_streak_reason:
+                        esc_streak += 1
+                    else:
+                        esc_streak_reason = esc_reason
+                        esc_streak = 1
+                elif lane_name == "executor":
+                    esc_streak = 0
+                    esc_streak_reason = None
+                if should_escalate:
+                    esc_just_fired = esc_streak < ESC_STREAK_LIMIT
+                    if esc_just_fired:
+                        # first offence: this step falls back to main, but say so, and let
+                        # the next step give the executor another go.
+                        print(f"[server_manager] executor step {step+1} escalated ({esc_reason}); "
+                              f"retrying executor next step", file=sys.stderr)
+                        yield sse("lane_warning", {
+                            "reason": esc_reason, "retrying": True,
+                            "message": f"Executor needed the main model ({esc_reason}). Retrying it next step."})
+                        lane_reason = f"escalated_once_{esc_reason}"
                 route_log.event(run_id, step, q_category, lane_name, lane_reason, escalated=should_escalate,
                                 escalate_reason=esc_reason, duration_s=dt)
 
@@ -1091,11 +1250,19 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                             provider=model_info.get("provider_name"))
                     esc_tools = ([t for t in all_tools()
                                   if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
-                                 if req.plan else all_tools())
+                                 if req.plan else tool_surface.filter_tools(
+                                     all_tools(), last_query, APP_CONFIG.get("tool_surface")))
                     if custom_agent_tools:
                         esc_tools = [t for t in esc_tools if t.get("function", {}).get("name") in custom_agent_tools]
                     res_dict = None
                     streamed_content = []
+                    esc_ctx = await _lane_window("main", cloud_main)
+                    budget = context_budget.budget_for("main", esc_ctx)
+                    pre_tokens = context_budget.prompt_tokens_for("main", msgs, esc_tools)
+                    if pre_tokens > budget:
+                        msgs[:] = compact_messages(msgs, budget, tools=esc_tools)
+                    # estimate of what the escalated call actually sends (anchored below)
+                    sent_tokens = context_budget.prompt_tokens_for("main", msgs, esc_tools)
                     try:
                         agent_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
                         if getattr(main_client, "is_cloud", False):
@@ -1147,6 +1314,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         tim = (res_dict or {}).get("timings") or {}
                         pcached, ccached = parse_cache_tokens(u, tim)
                         ptoks = u.get("prompt_tokens") or (sum(len(m.get("content", "")) for m in msgs) // 4)
+                        # anchor the main lane on the escalated call's exact count
+                        if u.get("prompt_tokens"):
+                            context_budget.record_usage("main", sent_tokens, u["prompt_tokens"],
+                                                        msgs, esc_tools)
                         if not pcached and len(msgs) > 1:
                             pcached = sum(len(m.get("content", "")) for m in msgs[:-1]) // 4
                         ctoks = u.get("completion_tokens") or toks
@@ -1168,20 +1339,50 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 final_content = content
                 final_reasoning = reasoning
 
+                # The reply only announced the next step ("Let me read the file.") and
+                # called no tool. Without a plan the check below cannot catch this, and
+                # the announcement would end the run as its "answer".
+                if (not tool_calls and _is_narration(content) and narration_nudges < MAX_PLAN_NUDGES
+                        and step < steps - 1):
+                    narration_nudges += 1
+                    msgs.append({"role": "assistant", "content": content})
+                    msgs.append({"role": "user", "content": (
+                        "[continue] You described the next step but did not call a tool. "
+                        "Call the tool for that step now. Answer in plain text only once "
+                        "the work is actually done.")})
+                    yield f"event: delta\ndata: {json.dumps({'text': chr(10) + chr(10)})}\n\n"
+                    continue
+
                 # The model stopped calling tools but its own tracked plan still has
                 # pending steps: push it back to work instead of finalizing a half-done
                 # task. Bounded so a model that can't progress still ends normally.
-                if not tool_calls and req.session_id and not req.plan \
-                        and plan_nudges < MAX_PLAN_NUDGES and step < steps - 1:
+                #
+                # After the ordinary nudges are spent, one AUDIT nudge still fires - a
+                # repeated "keep going" gets ignored, but a forced status re-check does
+                # not. This is what makes Continue work on a run that was cut off with
+                # steps the model had optimistically marked done.
+                if not tool_calls and req.session_id and not req.plan and step < steps - 1:
                     pending = [i for i in db_get_plan_items(req.session_id) if i["status"] in ("pending", "in_progress")]
-                    if pending:
+                    if pending and (plan_nudges < MAX_PLAN_NUDGES or plan_nudges < MAX_PLAN_NUDGES + 1):
                         plan_nudges += 1
+                        audit = plan_nudges > MAX_PLAN_NUDGES
                         if content.strip():
                             msgs.append({"role": "assistant", "content": content})
-                        msgs.append({"role": "user", "content": (
-                            f"[plan incomplete] {len(pending)} plan step(s) are still unfinished: "
-                            + "; ".join(f"#{i['ord']} {i['text']}" for i in pending[:6])
-                            + ". Do not stop yet — continue with the next pending step using tools. "
+                        if audit:
+                            msgs.append({"role": "user", "content": (
+                                f"[plan audit required] You stopped, but {len(pending)} plan step(s) are "
+                                "still unfinished: "
+                                + "; ".join(f"#{i['ord']} {i['text']}" for i in pending[:6])
+                                + ". Before answering, re-check the plan: any step you marked 'done' that you "
+                                "did not actually finish must be reopened with "
+                                "update_plan_item(item=N, status='in_progress'). Then continue the first "
+                                "genuinely unfinished step using tools. Only answer once every step is "
+                                "really done or really impossible.")})
+                        else:
+                            msgs.append({"role": "user", "content": (
+                                f"[plan incomplete] {len(pending)} plan step(s) are still unfinished: "
+                                + "; ".join(f"#{i['ord']} {i['text']}" for i in pending[:6])
+                                + ". Do not stop yet — continue with the next pending step using tools. "
                             "Mark each step with update_plan_item as you finish it. If a step truly cannot "
                             "be done, mark it status='failed' with a note explaining why, then continue.")})
                         yield f"event: delta\ndata: {json.dumps({'text': chr(10) + chr(10)})}\n\n"
@@ -1279,6 +1480,29 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     print("[agent] identical tool calls repeated - stopping run", file=sys.stderr)
                     stop_reason = "loop"
                     break
+
+                # near-repeat detection: the same tool over and over with *different*
+                # arguments never trips the identical-args rule above, yet it is the
+                # same thrash - re-running `npm run build` after every edit, reading
+                # 60 different files without acting on any of them.
+                if sigs:
+                    for name, _tc_id, _args in parsed_actions:
+                        tool_step_hist.append((name, step))
+                    # keep only the trailing window
+                    if tool_step_hist and tool_step_hist[-1][1] - tool_step_hist[0][1] > NEAR_REPEAT_WINDOW:
+                        cut = next((i for i, (_n, st) in enumerate(tool_step_hist)
+                                    if step - st <= NEAR_REPEAT_WINDOW), len(tool_step_hist))
+                        tool_step_hist = tool_step_hist[cut:]
+                    names = [n for n, _s in tool_step_hist]
+                    if names:
+                        top_tool, top_n = max(((n, names.count(n)) for n in set(names)),
+                                              key=lambda p: p[1])
+                        if top_n >= NEAR_REPEAT_LIMIT:
+                            print(f"[agent] near-repeat: '{top_tool}' called {top_n}x in "
+                                  f"{NEAR_REPEAT_WINDOW} steps - stopping run", file=sys.stderr)
+                            stop_reason = "loop_near_repeat"
+                            loop_detail = top_tool
+                            break
 
                 history_content = sanitize_user_facing_content(content)
                 msgs.append({"role": "assistant", "content": history_content, "tool_calls": clean_tool_calls})
@@ -1432,19 +1656,56 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     msgs, main_client, req.verify, _cloud_out):
                 yield _vc
             yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
-            plan_note = ("stopped: repeating the same tool calls" if stop_reason == "loop"
-                         else f"max steps reached ({steps})")
+            plan_note = {
+                "max_steps": f"max steps reached ({steps})",
+                "timeout": f"wall-clock limit reached ({run_limit_s}s)",
+                "loop": "stopped: repeating the same tool calls",
+                "loop_near_repeat": f"stopped: `{loop_detail}` called repeatedly without progress",
+            }.get(stop_reason, "stopped")
+            # reason lets the UI offer "Continue" (the next run re-injects the tracked plan)
+            # Never emit an empty `text`: a step-cap stop used to yield text:'' and
+            # note:'max steps reached', so the user got a dead end with no idea what
+            # had actually been done.
+            plan_done_n = plan_failed_n = 0
             plan_total = plan_pending = 0
             if req.session_id:
                 pi = db_get_plan_items(req.session_id)
                 if pi:
-                    pd = sum(1 for i in pi if i["status"] == "done")
-                    pf = sum(1 for i in pi if i["status"] == "failed")
+                    plan_done_n = sum(1 for i in pi if i["status"] == "done")
+                    plan_failed_n = sum(1 for i in pi if i["status"] == "failed")
                     plan_total = len(pi)
                     plan_pending = sum(1 for i in pi if i["status"] in ("pending", "in_progress"))
-                    plan_note += f" — plan progress: {pd}/{len(pi)} done, {pf} failed"
-            # reason lets the UI offer "Continue" (the next run re-injects the tracked plan)
-            yield f"event: done\ndata: {json.dumps({'note': plan_note, 'text': '', 'reason': stop_reason, 'steps': steps, 'pending': plan_pending, 'plan_total': plan_total})}\n\n"
+                    plan_note += f" — plan progress: {plan_done_n}/{len(pi)} done, {plan_failed_n} failed"
+
+            elapsed_s = int(time.time() - run_started)
+            why = {
+                "max_steps": f"Reached the step limit ({steps} steps)",
+                "timeout": f"Ran for {elapsed_s // 60} min (wall-clock limit)",
+                "loop": "Kept repeating the same tool calls",
+                "loop_near_repeat": f"Called `{loop_detail}` repeatedly without making progress",
+            }.get(stop_reason, "Stopped")
+            did = [a["name"] for a in actions_taken]
+            summary = f"**{why}** after {steps_run} step{'s' if steps_run != 1 else ''}"
+            summary += f" ({elapsed_s // 60}m {elapsed_s % 60}s)." if elapsed_s >= 60 else "."
+            if plan_total:
+                summary += f"\n\nPlan: **{plan_done_n}/{plan_total}** done"
+                if plan_failed_n:
+                    summary += f", {plan_failed_n} failed"
+                if plan_pending:
+                    summary += f", **{plan_pending} still pending**."
+                else:
+                    summary += ". (No steps pending — check the work before continuing.)"
+            if did:
+                uniq, seen = [], set()
+                for n in did:
+                    if n not in seen:
+                        seen.add(n)
+                        uniq.append(n)
+                summary += f"\n\nTools used: {', '.join(uniq[:12])}"
+                summary += " …" if len(uniq) > 12 else "."
+            summary += "\n\n_Continue to resume._" if plan_pending else ""
+
+            yield (f"event: done\ndata: {json.dumps({'note': plan_note, 'text': summary, 'reason': stop_reason, 'steps': steps_run, 'pending': plan_pending, 'plan_total': plan_total, 'plan_done': plan_done_n, 'plan_failed': plan_failed_n, 'elapsed_s': elapsed_s})}\n\n")
         except asyncio.CancelledError:
             run_outcome = "cancelled"
         except Exception as e:
@@ -1955,6 +2216,89 @@ async def agent_ws_file(path: str, user: Principal = Depends(get_current_user)):
     elif changed and before is None:
         resp["diff"] = [{"t": "+", "s": ln} for ln in content.splitlines()]
     return resp
+
+
+# Text-ish extensions the preview can render directly; anything else goes to the
+# client as bytes so the modal can build an ArrayBuffer/object URL for it.
+_WS_RAW_TEXT_EXT = {
+    ".txt", ".md", ".markdown", ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".json",
+    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".html", ".htm", ".css", ".scss",
+    ".less", ".sql", ".sh", ".bash", ".ps1", ".bat", ".xml", ".csv", ".tsv", ".log", ".lua",
+    ".rb", ".go", ".rs", ".java", ".kt", ".swift", ".c", ".h", ".cpp", ".hpp", ".cs", ".php",
+    ".pl", ".r", ".dart", ".vue", ".svelte", ".gradle", ".dockerfile", ".gitignore", ".lock",
+    ".diff", ".patch", ".svg",
+}
+_WS_RAW_MAX = 12 * 1024 * 1024
+
+
+@router.get("/agent/ws/raw")
+async def agent_ws_raw(path: str, user: Principal = Depends(get_current_user)):
+    """Stream one workspace file verbatim, for the preview modal.
+
+    /agent/raw only serves the server-side common space, so a project file
+    (src/shop.js and friends) previewed from a tool card 404'd. This reads the
+    user's own machine through the companion, with the same workspace guards
+    agent_ws_file uses: the path can never escape the active workspace, and the
+    bytes never come from this server's disk.
+    """
+    curr_proj = get_active_project(user.id)
+    if not curr_proj or curr_proj in ("scratch", "default"):
+        return JSONResponse({"error": "No project selected"}, status_code=400)
+    uid = _remote_uid()
+    try:
+        p = _ws_resolve(path)
+    except WorkspaceAccessDenied:
+        raise
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+
+    from core.file_tools import MIME_MAP as _MM
+    ext = p.suffix.lower()
+    if ext in _MM:
+        media = _MM[ext]
+    elif ext in {".html", ".htm"}:
+        media = "text/html; charset=utf-8"
+    elif ext in _WS_RAW_TEXT_EXT:
+        media = "text/plain; charset=utf-8"
+    elif ext == ".svg":
+        media = "image/svg+xml"
+    elif ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico"}:
+        media = f"image/{ext.lstrip('.')}"
+    elif ext in VIDEO_MIME:
+        media = VIDEO_MIME[ext]
+    else:
+        media = "application/octet-stream"
+    is_text = ("." + ext.lstrip(".")) in _WS_RAW_TEXT_EXT
+    try:
+        if is_text:
+            data = await companion_bridge.call(uid, "fs.read", {"path": str(p)})
+            content = data.get("content")
+            if content is None:
+                return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+            body = content.encode("utf-8", errors="replace")
+            if len(body) > _WS_RAW_MAX:
+                body = body[:_WS_RAW_MAX]
+        else:
+            data = await companion_bridge.call(uid, "fs.read_b64", {"path": str(p)})
+            b64 = data.get("data")
+            if not b64:
+                return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+            import base64 as _b64
+            body = _b64.b64decode(b64)
+            if len(body) > _WS_RAW_MAX:
+                body = body[:_WS_RAW_MAX]
+    except (ConnectionError, TimeoutError, RuntimeError) as e:
+        return JSONResponse({"error": f"Companion app: {e}"}, status_code=502)
+    except ValueError as e:
+        return JSONResponse({"error": f"could not decode {path}: {e}"}, status_code=422)
+
+    # Never let the browser sniff or execute a workspace file in this origin.
+    return Response(content=body, media_type=media, headers={
+        "Content-Disposition": "inline",
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "sandbox",
+    })
 
 
 class VisionReq(BaseModel):

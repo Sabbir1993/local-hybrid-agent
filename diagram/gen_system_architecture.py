@@ -39,7 +39,7 @@ svg = []
 
 
 def t(x, y, s, size=FS, weight="normal", fill="#2C2C2A", anchor="start", family=None, style=""):
-    fam = f' font-family="{family}"' if family else ""
+    fam = f' font-family="{family}" xml:space="preserve"' if family else ""
     svg.append(f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size}" font-weight="{weight}" '
                f'fill="{fill}" text-anchor="{anchor}"{fam}{style}>{escape(s)}</text>')
 

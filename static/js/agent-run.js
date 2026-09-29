@@ -34,8 +34,9 @@ async function runAgentSSE(text) {
   // active project only (see autoCompactIfNeeded). Runs before the new turn so
   // the streaming placeholder below is preserved. Never blocks the run.
   if (typeof autoCompactIfNeeded === 'function') {
-    const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : messages;
-    await autoCompactIfNeeded(ctxMsgs.map(m => ({ role: m.role, content: m.content })));
+    // Pass the real message objects. This used to map to {role, content}, which
+    // dropped acts/ntok/images and under-counted an agent turn several-fold.
+    await autoCompactIfNeeded(buildContextMessages());
   }
 
   const userMsg = {
@@ -177,6 +178,9 @@ async function runAgentSSE(text) {
           L.modelDisplay = d.display || d.model;
           L.modelSource = d.source;
           L.modelProvider = d.provider;
+          // remember which lane is driving, so the context budget is measured
+          // against that lane's window (executor is much smaller than main)
+          if (d.lane) window.lastAgentLane = d.lane;
         }
         else if (ev === 'thought') {
           closeThought(L);
@@ -275,6 +279,7 @@ async function runAgentSSE(text) {
           if (pi >= 0) L.acts[pi] = planAct; else L.acts.push(planAct);
         }
         else if (ev === 'kb_blocked') sseKbBlocked(L, d);
+        else if (ev === 'lane_warning') sseLaneWarning(L, d);
         else if (ev === 'guard') {
           if (!L.acts) L.acts = [];
           L.acts.push({ type: 'guard', rule: d.rule, message: d.message });
@@ -291,7 +296,9 @@ async function runAgentSSE(text) {
           if (d.reason) {
             if (!L.acts) L.acts = [];
             L.acts.push({ type: 'stopped', reason: d.reason, note: d.note || '', steps: d.steps,
-                          pending: d.pending || 0, plan_total: d.plan_total || 0 });
+                          pending: d.pending || 0, plan_total: d.plan_total || 0,
+                          plan_done: d.plan_done || 0, plan_failed: d.plan_failed || 0,
+                          elapsed_s: d.elapsed_s || 0 });
           }
         }
         else if (ev === 'error') throw new Error(d.error);

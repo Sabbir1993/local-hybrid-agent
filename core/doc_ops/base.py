@@ -25,9 +25,7 @@ MAX_UNZIPPED_BYTES = 400 * 1024 * 1024    # zip-bomb guard
 MAX_ZIP_PARTS = 5000
 MAX_COMPRESSION_RATIO = 200
 
-# No DTD/entity resolution, no network: uploaded OOXML is untrusted input.
-XML_PARSER = etree.XMLParser(remove_blank_text=True, resolve_entities=False,
-                             no_network=True, huge_tree=False)
+XML_PARSER = etree.XMLParser(remove_blank_text=True, resolve_entities=False, no_network=True, huge_tree=False)
 
 MACRO_EXTS = {".pptm", ".xlsm", ".docm", ".potm", ".xltm", ".dotm", ".ppsm"}
 
@@ -96,8 +94,7 @@ def _resolve_target(source: str, target: str) -> str:
     return posixpath.normpath(posixpath.join(posixpath.dirname(source), target))
 
 
-def canon_parts(parts: dict[str, bytes], rename: Optional[dict[str, str]] = None
-                ) -> tuple[dict[str, str], set[str]]:
+def canon_parts(parts: dict[str, bytes], rename: Optional[dict[str, str]] = None) -> tuple[dict[str, str], set[str]]:
     """({stable key: digest}, reachable keys). `rename` maps part names that a
     library may renumber on save (e.g. python-pptx slide parts) to stable keys."""
     rename = rename or {}

@@ -229,22 +229,34 @@ document.addEventListener('click', (e) => {
   if (typeof wsShowFile === 'function') wsShowFile(path);
 });
 
-/* Run ended early (step cap / repeated calls): explain why and offer Continue.
-   The next run re-injects the tracked plan server-side, so it resumes the open steps. */
-const AGENT_CONTINUE_PROMPT = 'Continue with the remaining plan steps.';
-
+/* Run ended early (step cap / wall-clock / loop): explain why and offer Continue. */
 function agentStoppedHtml(acts, canContinue) {
   const s = [...acts].reverse().find(a => a.type === 'stopped');
   if (!s) return '';
   const left = s.plan_total ? ` — ${s.pending} of ${s.plan_total} plan step${s.plan_total !== 1 ? 's' : ''} left` : '';
-  const msg = s.reason === 'loop'
-    ? 'Stopped: the agent kept repeating the same tool calls.'
-    : `Paused after ${s.steps || 'the maximum'} steps${left}.`;
-  const btn = canContinue
+  const mins = s.elapsed_s ? ` (${Math.floor(s.elapsed_s / 60)}m)` : '';
+  let msg;
+  if (s.reason === 'loop') msg = 'Stopped: the agent kept repeating the same tool calls.';
+  else if (s.reason === 'loop_near_repeat') msg = 'Stopped: kept calling the same tool without making progress.';
+  else if (s.reason === 'timeout') msg = `Stopped: ran for ${Math.floor((s.elapsed_s || 0) / 60)} minutes.`;
+  else msg = `Paused after ${s.steps || 'the maximum'} steps${mins}${left}.`;
+  // plan marked complete but the run was cut off: say so rather than "0 left"
+  if (s.plan_total && !s.pending && (s.reason === 'max_steps' || s.reason === 'timeout')) {
+    msg = `Paused after ${s.steps || 'the maximum'} steps — the plan is marked complete, but the run was cut off. Verify the work before continuing.`;
+  }
+  // nothing left to resume: don't offer a button that cannot work
+  const btn = (canContinue && (s.pending > 0 || s.reason === 'loop' || s.reason === 'loop_near_repeat'))
     ? `<button type="button" class="btn accent agy-continue-btn" data-click="agent-continue">▶ Continue</button>`
     : '';
-  return `<div class="agy-stopped ${s.reason === 'loop' ? 'loop' : ''}"><span>${esc(msg)}</span>${btn}</div>`;
+  return `<div class="agy-stopped ${s.reason !== 'max_steps' ? 'loop' : ''}"><span>${esc(msg)}</span>${btn}</div>`;
 }
+
+/* Resume a paused run. Sent as a real turn, but the message is explicit that it
+   is a resume so the model treats the tracked plan as authoritative. */
+const AGENT_CONTINUE_PROMPT =
+  'Continue the previous task. The tracked plan is authoritative: re-check its ' +
+  'step statuses, reopen anything you marked done but did not actually finish, ' +
+  'and work the remaining steps in order.';
 
 function agentContinue() {
   if (typeof generating !== 'undefined' && generating) return;
@@ -393,7 +405,7 @@ function renderFileCard(t, isItemRunning) {
   const previewBtn = diff
     ? `<button type="button" class="btn ghost agy-open-btn" data-ws-open="${esc(p)}" title="Open in project panel">↗ Open</button>`
     : isPreviewable
-    ? `<button type="button" class="btn ghost codex-head-btn" data-preview-path="${esc(p)}" data-preview-title="${esc(filename)}" title="Preview file">👁️ Preview</button>`
+    ? `<button type="button" class="btn ghost codex-head-btn" data-preview-path="${esc(p)}" data-preview-title="${esc(filename)}" data-preview-source="ws" title="Preview file">👁️ Preview</button>`
     : '';
 
   const openByDefault = !isRunning;
@@ -438,7 +450,7 @@ function renderGenericToolCard(t, isItemRunning) {
 
   const isPreviewable = p && /\.(html|htm|csv|xlsx|xls|pdf|md|py|js|ts|json|txt|svg|png|jpg|jpeg|webp|pptx)$/i.test(p);
   const previewBtn = isPreviewable
-    ? `<button type="button" class="btn ghost codex-head-btn" data-preview-path="${esc(p)}" data-preview-title="${esc(p)}" title="Preview file">👁️ Preview</button>`
+    ? `<button type="button" class="btn ghost codex-head-btn" data-preview-path="${esc(p)}" data-preview-title="${esc(p)}" data-preview-source="ws" title="Preview file">👁️ Preview</button>`
     : '';
   const isMedia = meta.cls === 'media';
   const title = isMedia ? esc(String(t.args.prompt || '').slice(0, 90)) : label;

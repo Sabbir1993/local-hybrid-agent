@@ -48,8 +48,15 @@ async function renderInlineMermaid(container) {
   }
 }
 
-// Global modal preview opener
-async function openFilePreview(filePath, title = '', directContent = null) {
+// Global modal previewer.
+// opts.source selects which file space the path lives in:
+//   'ws'     - the user's device workspace (project files). /agent/raw only serves
+//              the server-side common space, so a project file previewed through it
+//              404s; workspace paths are read through /agent/ws/raw (the companion).
+//   'common' - server-side common space (default; chat [DOWNLOAD:] chips).
+// A 'ws' lookup that 404s falls back to common once, so a server-side file named in
+// a tool call still previews.
+async function openFilePreview(filePath, title = '', directContent = null, opts = {}) {
   const modal = $('preview-modal');
   const titleEl = $('preview-title');
   const iconEl = $('preview-icon');
@@ -59,6 +66,7 @@ async function openFilePreview(filePath, title = '', directContent = null) {
   const rawBtn = $('preview-raw-link');
   if (!modal || !contentEl) return;
 
+  const isWs = opts.source === 'ws';
   const fname = (filePath || title || 'file').split('\\').pop().split('/').pop();
   const ext = fname.includes('.') ? fname.split('.').pop().toLowerCase() : '';
   
@@ -67,8 +75,11 @@ async function openFilePreview(filePath, title = '', directContent = null) {
   controlsEl.innerHTML = '';
   contentEl.innerHTML = '<div style="display:flex; align-items:center; justify-content:center; height:100%; color:var(--dim); font-size:12px;">⏳ Loading preview...</div>';
   
-  const rawUrl = `/agent/raw?path=${encodeURIComponent(filePath)}`;
-  const dlUrl = `/agent/download?path=${encodeURIComponent(filePath)}`;
+  const enc = encodeURIComponent(filePath || '');
+  const rawUrl = isWs ? `/agent/ws/raw?path=${enc}` : `/agent/raw?path=${enc}`;
+  // downloads still go through the common-space endpoint: it is the only one that
+  // produces a save-as attachment for arbitrary paths
+  const dlUrl = `/agent/download?path=${enc}`;
   if (dlBtn) {
     dlBtn.href = dlUrl;
     dlBtn.download = fname;
@@ -78,6 +89,20 @@ async function openFilePreview(filePath, title = '', directContent = null) {
     rawBtn.href = rawUrl;
     rawBtn.style.display = filePath ? '' : 'none';
   }
+
+  // fetch through the workspace endpoint first, then fall back to common space
+  const fetchRaw = async () => {
+    let r = await fetch(rawUrl);
+    if (isWs && (!r.ok || r.status === 404 || r.status === 502)) {
+      const alt = await fetch(`/agent/raw?path=${enc}`).catch(() => null);
+      if (alt && alt.ok) return alt;
+    }
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.error || ('HTTP ' + r.status));
+    }
+    return r;
+  };
 
   // Choose icon based on filetype
   const iconMap = {
@@ -98,21 +123,21 @@ async function openFilePreview(filePath, title = '', directContent = null) {
     } else if (ext === 'mermaid' || ext === 'mmd') {
       let code = directContent;
       if (!code && filePath) {
-        const r = await fetch(rawUrl);
+        const r = await fetchRaw();
         code = await r.text();
       }
       renderMermaidModalPreview(code, contentEl, controlsEl);
     } else if (ext === 'csv') {
       let text = directContent;
       if (!text && filePath) {
-        const r = await fetch(rawUrl);
+        const r = await fetchRaw();
         text = await r.text();
       }
       renderCsvPreview(text, contentEl, controlsEl);
     } else if (ext === 'xlsx' || ext === 'xls') {
       let buf = (directContent instanceof ArrayBuffer) ? directContent : null;
       if (!buf && filePath) {
-        const r = await fetch(rawUrl);
+        const r = await fetchRaw();
         if (!r.ok) throw new Error('Failed to fetch Excel file (' + r.status + '): ' + r.statusText);
         buf = await r.arrayBuffer();
       }
@@ -131,7 +156,7 @@ async function openFilePreview(filePath, title = '', directContent = null) {
     } else if (ext === 'md') {
       let text = directContent;
       if (!text && filePath) {
-        const r = await fetch(rawUrl);
+        const r = await fetchRaw();
         text = await r.text();
       }
       renderMarkdownModalPreview(text, contentEl, controlsEl);
@@ -139,7 +164,7 @@ async function openFilePreview(filePath, title = '', directContent = null) {
       // Default: Code or text file
       let text = directContent;
       if (!text && filePath) {
-        const r = await fetch(rawUrl);
+        const r = await fetchRaw();
         text = await r.text();
       }
       renderCodePreview(text, ext, contentEl, controlsEl);

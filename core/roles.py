@@ -37,13 +37,53 @@ def resolve_role(name: Optional[str]) -> dict:
     except Exception:
         pass
 
+    # A skill name is a valid role. Skills and roles are advertised in the same
+    # system prompt, and models routinely pass one as the other ("role=
+    # webapp-testing" is a skill, not a role). Treat it as a role whose system
+    # prompt is the skill body, with no lane pin so normal selection applies.
+    skill = _resolve_skill(name)
+    if skill:
+        return skill
+
     # fall back to an admin-allowed Agent Library profile (.agents/agents/<name>.md)
     from .agent_library import profile_role
     return profile_role(name)
 
 
+# a skill body is instructions for a whole task, not a persona; keep it bounded so
+# it cannot crowd the sub-agent's window (cf. Claude Code's 5k-per-skill cap)
+MAX_ROLE_SKILL_CHARS = 6000
+
+
+def _resolve_skill(name: str) -> dict:
+    """An installed skill as a spawn_agent role, or {} if the name isn't one."""
+    try:
+        from .skills import load_skills
+        skills = load_skills()
+    except Exception:
+        return {}
+    want = (name or "").strip().lower()
+    if not want or want not in skills:
+        return {}
+    sk = skills[want]
+    body = sk.get("body") or ""
+    if len(body) > MAX_ROLE_SKILL_CHARS:
+        body = body[:MAX_ROLE_SKILL_CHARS] + "\n... (truncated)"
+    return {
+        "lane": None,               # no pin: the Sub-agents job mapping decides
+        "tools": None,              # the skill's own steps pick what they need
+        "system_prompt": (
+            f"You are running the '{sk['name']}' skill. "
+            f"{sk.get('description') or ''}\n\nFollow these instructions:\n\n{body}"
+        ),
+        "max_steps": 30,
+        "is_skill": True,
+    }
+
+
 def known_role_names() -> list:
-    """Built-in roles.json names + allowed Agent Library profiles + user custom agents."""
+    """Built-in roles.json names + allowed Agent Library profiles + user custom
+    agents + installed skills (a skill name is accepted as a role)."""
     from .small_model import APP_CONFIG
     from .agent_library import load_agent_profiles
     names = list(APP_CONFIG.get("roles", {}).keys())
@@ -52,6 +92,11 @@ def known_role_names() -> list:
         slug = ca.get("slug")
         if slug and slug not in names:
             names.append(slug)
+    try:
+        from .skills import load_skills
+        names += [n for n in load_skills() if n not in names]
+    except Exception:
+        pass
     return names
 
 

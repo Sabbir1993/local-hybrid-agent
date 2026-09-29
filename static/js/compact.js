@@ -39,11 +39,15 @@ async function doCompact(extraInstructions) {
     else toast('Please select a project first', true);
     return;
   }
-  const hist = messages.filter(m => (m.role === 'user' || m.role === 'assistant' || m.compact)
-    && (m.content || '').trim());
+  const hist = messages.filter(m => (m.role === 'user' || m.role === 'assistant' || m.role === 'tool' || m.compact)
+    && ((m.content || '').trim() || Array.isArray(m.acts)));
   if (hist.length < 2) { toast('Nothing to compact yet — send a few messages first', true); return; }
 
-  const beforeToks = hist.reduce((a, m) => a + (m.ntok || Math.round((m.content || '').length / 3.5)), 0);
+  // Shared estimator (static/js/gpu-status.js) — counts tool calls and results,
+  // so this agrees with the CTX chip instead of reporting a fraction of it.
+  const beforeToks = (typeof estimateSessionTokens === 'function')
+    ? estimateSessionTokens(buildContextMessages()).total
+    : hist.reduce((a, m) => a + (m.ntok || Math.round((m.content || '').length / 3.5)), 0);
   toast('🧹 Compacting conversation…');
 
   // Provide visible in-chat feedback that compaction is in progress
@@ -89,8 +93,21 @@ async function doCompact(extraInstructions) {
 /* Auto-compact: agent mode, active project, history close to the context limit. */
 async function autoCompactIfNeeded(hist) {
   if (!agentMode || !curProject || !curProject.id) return true;   // gate: needs a project
-  const est = hist.reduce((a, m) => a + Math.round((m.content || '').length / 3.5) + 8, 0);
-  if (est < curCtxMax * 0.85) return true;
+
+  // The window of the lane that will actually answer. In agent mode a step can
+  // run on the executor, whose context is a fraction of main's - judging it
+  // against the 261k main window would let it overflow silently.
+  const limit = (typeof activeLaneCtxMax === 'function') ? activeLaneCtxMax() : (curCtxMax || 32768);
+  const pct = (typeof CTX_COMPACT_PCT === 'number') ? CTX_COMPACT_PCT : 65;
+
+  // Estimate from the real message list, not the lossy {role, content} projection
+  // the caller used to hand us - that dropped tool traffic entirely.
+  const ctxMsgs = (typeof buildContextMessages === 'function') ? buildContextMessages() : messages;
+  const est = (typeof estimateSessionTokens === 'function')
+    ? estimateSessionTokens(ctxMsgs).total
+    : (hist || []).reduce((a, m) => a + Math.round((m.content || '').length / 3.5) + 12, 0);
+
+  if (est < limit * (pct / 100)) return true;
   try {
     const r = await fetch('/chat/compact', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

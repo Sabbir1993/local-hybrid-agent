@@ -105,7 +105,8 @@ function sseToolResult(L, d) {
   const verb = d.name === 'write_file' ? 'Saved' : 'Updated';
   const actions = [];
   if (p && isSuccess && typeof openFilePreview === 'function') {
-    actions.push({ label: '👁️ Preview', onClick: () => openFilePreview(p, filename) });
+    // a saved/edited file lives in the user's device workspace, not common space
+    actions.push({ label: '👁️ Preview', onClick: () => openFilePreview(p, filename, null, { source: 'ws' }) });
   }
   if (p && typeof wsShowFile === 'function') {
     actions.push({
@@ -142,6 +143,16 @@ function sseKbBlocked(L, d) {
 // guard: the output sanitizer redacted part of the response
 function sseGuardToast(d) {
   if (typeof toast === 'function') toast('🧼 ' + (d.message || ('Response filtered by policy: ' + (d.rule || ''))));
+}
+
+// lane_warning: the run asked for orchestration but the executor is not carrying
+// the work (unavailable, mapped away, or escalated). Without this the only clue
+// is a transcript where every step says the same model.
+function sseLaneWarning(L, d) {
+  if (typeof toast !== 'function') return;
+  const msg = d.message || 'The executor model is not being used for this run.';
+  if (d.retrying) toast('⚠️ ' + msg);           // transient: the executor is re-tried
+  else toast('⚠️ ' + msg, true);                 // persistent: every step is on main
 }
 
 // Split inline reasoning out of an answer: a leading <think>...</think> block, or

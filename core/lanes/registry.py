@@ -1,0 +1,182 @@
+from typing import Optional
+
+from .constants import (
+    _KIND_OK,
+    BUILTIN_LANES,
+    JOBS,
+    KIND_NEED,
+    MEDIA_KINDS,
+    SHARED_MEDIA_JOBS,
+    kind_ok,
+)
+from .target import _inst
+
+
+def registry(user_id: Optional[int] = None) -> dict:
+    """name -> {name, kind, label, fallback, builtin, local, cloud_key, owner}.
+    `local`: a local model backs it; `cloud_key`: its effective cloud binding."""
+    from .. import cloud
+    from ..small_model import APP_CONFIG, lane_engine_of, lane_kind_of
+    out = {}
+    sm = APP_CONFIG.get("small_models") or {}
+    for name, meta in BUILTIN_LANES.items():
+        cfg = sm.get(name) or {}
+        out[name] = {
+            "name": name,
+            "kind": meta["kind"],
+            "label": str(cfg.get("label") or meta["label"]),
+            "fallback": cfg.get("fallback") or (None if name == "main" else "main"),
+            "builtin": True,
+            "local": True,
+            "owner": "shared",
+        }
+    for name, cfg in sm.items():
+        if name in out or not isinstance(cfg, dict):
+            continue
+        kind = lane_kind_of(name, cfg)
+        out[name] = {
+            "name": name,
+            "kind": kind,
+            "label": str(cfg.get("label") or name),
+            "fallback": cfg.get("fallback") or (None if kind in MEDIA_KINDS else "main"),
+            "builtin": False,
+            "local": True,
+            "owner": "shared",
+            "engine": lane_engine_of(name, cfg),
+        }
+    for name, d in cloud.user_lanes(user_id).items():
+        if name in out:
+            continue
+        k = str(d.get("kind") or "chat")
+        k = k if k in _KIND_OK else "chat"
+        out[name] = {
+            "name": name,
+            "kind": k,
+            "label": str(d.get("label") or name),
+            "fallback": d.get("fallback") or (None if k in MEDIA_KINDS else "main"),
+            "builtin": False,
+            "local": False,
+            "owner": "user",
+            "engine": "cloud",
+        }
+    for name, d in out.items():
+        d.setdefault("engine", "llama")
+        cm = None
+        if d["kind"] != "embed":
+            try:
+                cm = cloud.cloud_lane(name, user_id)
+            except Exception:
+                cm = None
+        d["cloud_key"] = cm.key if cm else None
+        d["cloud_display"] = cm.display if cm else None
+    return out
+
+
+def _shared_media_lanes(job: str, reg: dict) -> list:
+    """Shared local lanes that can do a media job, the loaded (or loading) one first."""
+    if job not in SHARED_MEDIA_JOBS:
+        return []
+    need = JOBS[job]["kind"]
+    names = [n for n, d in reg.items()
+             if d["owner"] == "shared" and d["local"] and kind_ok(need, d["kind"])]
+    return sorted(names, key=lambda n: _load_rank(_inst(n)))
+
+
+def _load_rank(inst) -> int:
+    """0 loaded, 1 loading, 2 not loaded."""
+    if inst is None:
+        return 2
+    if inst.is_up():
+        return 0
+    return 1 if getattr(inst, "loading_since", None) else 2
+
+
+def default_lane(job: str, user_id: Optional[int] = None, reg: Optional[dict] = None) -> Optional[str]:
+    """A job's default lane; media jobs default to the shared model on this PC."""
+    spec = JOBS[job]
+    if spec["default"] or job not in SHARED_MEDIA_JOBS:
+        return spec["default"]
+    shared = _shared_media_lanes(job, reg if reg is not None else registry(user_id))
+    return shared[0] if shared else None
+
+
+def role_map(user_id: Optional[int] = None) -> dict:
+    """Effective job -> lane for every job (defaults filled in)."""
+    from .. import cloud
+    rm = cloud.role_map(user_id)
+    reg = None
+    out = {}
+    for job, spec in JOBS.items():
+        v = rm.get(job) or spec["default"]
+        if not v and job in SHARED_MEDIA_JOBS:
+            reg = reg if reg is not None else registry(user_id)
+            v = default_lane(job, user_id, reg)
+        out[job] = str(v) if v else None
+    return out
+
+
+def allow_cloud_audio() -> bool:
+    from ..small_model import APP_CONFIG
+    return bool((APP_CONFIG.get("media") or {}).get("allow_cloud_audio", False))
+
+
+def validate_mapping(job: str, lane: str, user_id: Optional[int] = None) -> Optional[str]:
+    """None when `lane` can do `job`, else a plain-language reason."""
+    spec = JOBS.get(job)
+    if spec is None:
+        return f"unknown job '{job}'"
+    d = registry(user_id).get(lane)
+    if d is None:
+        return f"there is no model called '{lane}'"
+    if not kind_ok(spec["kind"], d["kind"]):
+        return f"'{spec['label']}' needs {KIND_NEED[spec['kind']]}"
+    if spec.get("local_only") and not d["local"]:
+        return f"'{spec['label']}' always runs on this PC, and '{d['label']}' is a cloud model"
+    if spec.get("local_first") and not d["local"] and not allow_cloud_audio():
+        return (f"'{spec['label']}' stays on this PC until an admin allows cloud speech "
+                "(Settings -> Models & Jobs)")
+    if job == "agent.reason" and d["local"] and lane not in ("main",) and not d["cloud_key"]:
+        return "'Thinking & planning' needs the main model or a cloud model"
+    return None
+
+
+def _own_role_map(user_id: int) -> dict:
+    from .. import cloud
+    d = cloud._read_json(cloud._provider_file(user_id)).get("role_map")
+    return d if isinstance(d, dict) else {}
+
+
+def set_role_map(user_id: int, updates: dict, as_default: bool = False) -> dict:
+    """Map jobs to lanes. None / "" resets a job to its default."""
+    reg = registry(user_id)
+    for job, lane in updates.items():
+        if job not in JOBS:
+            raise ValueError(f"unknown job '{job}'")
+        if lane:
+            err = validate_mapping(job, lane, user_id)
+            if err:
+                raise ValueError(err)
+            if as_default and reg[lane]["owner"] == "user":
+                raise ValueError(f"'{reg[lane]['label']}' is your own cloud model, so it can't be "
+                                 "the default for everyone")
+    if as_default:
+        from ..config import update_app_config
+
+        def _mut(cfg):
+            rm = cfg.setdefault("role_map", {})
+            for job, lane in updates.items():
+                if lane:
+                    rm[job] = lane
+                else:
+                    rm.pop(job, None)
+        update_app_config(_mut)
+    else:
+        from .. import cloud
+        rm = dict(_own_role_map(user_id))
+        for job, lane in updates.items():
+            if lane:
+                rm[job] = lane
+            else:
+                rm.pop(job, None)
+        cloud.write_user_section(user_id, "role_map", rm)
+    return role_map(user_id)

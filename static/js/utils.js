@@ -33,7 +33,8 @@ document.addEventListener('click', (e) => {
   const prev = e.target.closest('[data-preview-path]');
   if (prev && typeof openFilePreview === 'function') {
     e.preventDefault();
-    openFilePreview(prev.dataset.previewPath, prev.dataset.previewTitle || '');
+    openFilePreview(prev.dataset.previewPath, prev.dataset.previewTitle || '', null,
+                    { source: prev.dataset.previewSource || 'common' });
     return;
   }
   const act = e.target.closest('[data-click]');

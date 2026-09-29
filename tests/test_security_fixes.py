@@ -46,8 +46,10 @@ class RbacEscalationTests(_TempAuthDb):
         self.mgr = auth_db.create_user(username="mgr", password_hash=None)
         self.victim = auth_db.create_user(username="victim", password_hash=None)
         self.root = auth_db.create_user(username="root", password_hash=None, is_super_admin=True)
-        self.patches = [mock.patch.object(admin_rbac, "audit_log", lambda *a, **k: None),
-                        mock.patch.object(deps, "audit_log", lambda *a, **k: None)]
+        # audit_log is imported into each endpoint module, so patch it where it is used
+        from routes.admin_rbac import audit_endpoints, role_endpoints, user_endpoints
+        self.patches = [mock.patch.object(m, "audit_log", lambda *a, **k: None)
+                        for m in (audit_endpoints, role_endpoints, user_endpoints, deps)]
         for p in self.patches:
             p.start()
         app = FastAPI()
@@ -143,7 +145,8 @@ class DbExplorerTests(unittest.TestCase):
             self.assertTrue(c.execute('PRAGMA table_info("users")').fetchall())
 
     def test_auth_db_never_writable_and_hides_hashes(self):
-        with mock.patch.object(self.dx, "AUTH_DB_FILE", self.path):
+        from routes.db_explorer import helpers as dx_helpers
+        with mock.patch.object(dx_helpers, "AUTH_DB_FILE", self.path):
             with self.dx._connect(self.path, 3.0, writable=True) as c:
                 self.assertEqual(c.execute("SELECT username, password_hash FROM users").fetchone(),
                                  ("alice", None))

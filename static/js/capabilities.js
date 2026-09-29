@@ -114,12 +114,18 @@ async function loadCapabilities() {
       <div class="cap-body">
         <div style="display:flex; align-items:center; gap:6px;">
           <span>Max steps per run</span>
-          <input type="number" id="agent-max-steps" min="${ag.min || 5}" max="${ag.max || 200}" value="${ag.max_steps || 60}"
+          <input type="number" id="agent-max-steps" min="${ag.min || 5}" max="${ag.max || 200}" value="${ag.max_steps || 200}"
             ${canManageMcp ? '' : 'disabled'} style="width:64px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:2px 6px; font-size:11px;">
-          ${canManageMcp ? '<button class="btn accent" id="agent-steps-save" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">Save</button>' : ''}
           <span class="dim" style="font-size:9.5px;">${ag.min || 5}–${ag.max || 200}</span>
         </div>
-        <div class="dim" style="font-size:9.5px; margin-top:4px;">At the cap a run pauses with a Continue button; runs repeating the same tool calls stop early.</div>
+        <div style="display:flex; align-items:center; gap:6px; margin-top:6px;">
+          <span>Wall-clock limit</span>
+          <input type="number" id="agent-run-timeout" min="0" max="1440" value="${Math.round((ag.run_timeout_s != null ? ag.run_timeout_s : 1800) / 60)}"
+            ${canManageMcp ? '' : 'disabled'} style="width:64px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:2px 6px; font-size:11px;">
+          <span class="dim" style="font-size:9.5px;">minutes (0 = off)</span>
+          ${canManageMcp ? '<button class="btn accent" id="agent-steps-save" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">Save</button>' : ''}
+        </div>
+        <div class="dim" style="font-size:9.5px; margin-top:4px;">At the cap a run pauses with a Continue button; runs repeating the same tool calls stop early. The wall-clock limit is what actually protects the GPU.</div>
       </div>
     </details>`;
 
@@ -163,12 +169,16 @@ async function loadCapabilities() {
       try {
         const r = await fetch('/control/agent_settings', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ max_steps: parseInt(box.querySelector('#agent-max-steps').value, 10) || 60 }),
+          body: JSON.stringify({
+            max_steps: parseInt(box.querySelector('#agent-max-steps').value, 10) || 200,
+            run_timeout_s: (parseInt(box.querySelector('#agent-run-timeout').value, 10) || 0) * 60,
+          }),
         });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || j.detail || r.status);
         box.querySelector('#agent-max-steps').value = j.max_steps;
-        toast(`Agent Task cap set to ${j.max_steps} steps ✓`);
+        box.querySelector('#agent-run-timeout').value = Math.round((j.run_timeout_s || 0) / 60);
+        toast(`Agent limits set: ${j.max_steps} steps, ${Math.round((j.run_timeout_s || 0) / 60)} min ✓`);
       } catch (e) { toast('Save failed: ' + e.message, true); }
     };
 

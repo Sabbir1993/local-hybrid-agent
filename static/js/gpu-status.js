@@ -162,6 +162,126 @@ function getMsgTokens(m) {
   return Math.max(1, Math.round(textLen / 3.5));
 }
 
+/* ---------------- shared context accounting ----------------
+   ONE estimator for the chip, the /compact bubble and the auto-compact trigger.
+   They used to disagree badly: the chip reported 32k/261k while the compact
+   bubble claimed ~4.9k, because it filtered to user|assistant only (dropping
+   every tool message - the bulk of an agent turn) and never looked at `acts`
+   (where tool calls live). Chip and bubble now cannot drift apart. */
+
+/* One chars-per-token divisor, replacing the /3.0 vs /3.5 split. */
+const CTX_CHARS_PER_TOK = 3.5;
+
+/* Tool results are truncated server-side; don't let a 2 MB read_file response
+   dominate the estimate. Mirrors how the prompt is actually assembled. */
+const CTX_TOOL_RESULT_CHARS = 4000;
+
+/* Tokens charged per tool call, for the name + argument envelope. */
+function actTokens(a) {
+  if (!a) return 0;
+  if (a.type === 'tool_call' || a.type === 'tool_result') {
+    const name = a.name || '';
+    let args = '';
+    try { args = a.args ? JSON.stringify(a.args) : ''; } catch (_) { args = String(a.args || ''); }
+    let body = '';
+    if (a.type === 'tool_call') body = args;
+    else {
+      const r = a.result;
+      body = (r && typeof r === 'object') ? (r.text || JSON.stringify(r) || '') : String(r == null ? '' : r);
+      if (body.length > CTX_TOOL_RESULT_CHARS) body = body.slice(0, CTX_TOOL_RESULT_CHARS);
+    }
+    return Math.max(1, Math.round((name.length + body.length) / CTX_CHARS_PER_TOK));
+  }
+  if (a.type === 'thought' || a.type === 'reasoning') return 0;  // already in reasoning
+  return 0;
+}
+
+/* Split one message's tokens into prompt-side and completion-side.
+   Tool RESULTS are prompt-side: they are sent back to the model on the next
+   turn, so charging them to "completion" would understate the real prompt and
+   make the chip's breakdown misleading. Tool calls stay completion-side. */
+function messageTokensSplit(m) {
+  if (!m) return { prompt: 0, completion: 0, total: 0 };
+  const own = getMsgTokens(m);
+  let actPrompt = 0, actCompletion = 0;
+  if (Array.isArray(m.acts)) {
+    for (const a of m.acts) {
+      if (a && a.type === 'tool_result') actPrompt += actTokens(a);
+      else actCompletion += actTokens(a);
+    }
+  }
+  const isAssistant = m.role === 'assistant';
+  return {
+    prompt: own + (isAssistant ? actPrompt : actCompletion),
+    completion: isAssistant ? own + actCompletion : 0,
+    total: own + actPrompt + actCompletion,
+  };
+}
+
+/* Total tokens one message contributes, including its tool calls. */
+function messageTokens(m) {
+  return messageTokensSplit(m).total;
+}
+
+/* The single source of truth. Covers every role (user/assistant/tool/system) and
+   counts tool activity, so agent turns are no longer under-counted.
+
+   Honours the compact-marker boundary: if the caller passes the raw transcript
+   and it opens with a compaction marker, only the marker + kept tail + what
+   follows are counted. Without this, everything the summary already replaced
+   would be counted a second time. */
+function estimateSessionTokens(msgs) {
+  if (!Array.isArray(msgs) || !msgs.length) return { total: 0, prompt: 0, completion: 0, msgs };
+
+  let list = msgs;
+  let markerAt = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i] && msgs[i].compact) { markerAt = i; break; }
+  }
+  if (markerAt >= 0) {
+    // the summary replaces everything before it, except the `kept` messages
+    // immediately preceding it, which survive verbatim
+    const kept = msgs[markerAt].compactKept || 0;
+    list = msgs.slice(Math.max(0, markerAt - kept), markerAt + 1)
+      .concat(msgs.slice(markerAt + 1));
+  }
+
+  let prompt = 0, completion = 0;
+  for (const m of list) {
+    const s = messageTokensSplit(m);
+    prompt += s.prompt;
+    completion += s.completion;
+  }
+  return { total: prompt + completion, prompt, completion, msgs: list };
+}
+
+const CTX_WARN_PCT = 70;
+const CTX_CRIT_PCT = 85;
+const CTX_COMPACT_PCT = 65;   // compact *before* the chip turns amber
+
+/* The context window of the lane that will actually answer the next step.
+   In agent mode a step may run on the executor, whose window is a fraction of
+   main's; budgeting against main's 261k would let an executor step overflow
+   without a single warning. Falls back to the main window when unknown. */
+function activeLaneCtxMax() {
+  try {
+    // last lane the run reported, e.g. "executor" / "main"
+    const lane = (typeof lastAgentLane !== 'undefined' && lastAgentLane) ? lastAgentLane : 'main';
+    if (lane !== 'executor') {
+      return (curStatus && curStatus.context && curStatus.context.n_ctx) ? curStatus.context.n_ctx : curCtxMax;
+    }
+    const ec = (typeof APP_MODELS !== 'undefined' && APP_MODELS.executor) ? APP_MODELS.executor.ctx : 0;
+    if (ec > 0) return ec;
+    const cfg = (typeof APP_MODELS !== 'undefined') ? APP_MODELS : null;
+    if (cfg && cfg.executor) {
+      const m = Object.values(cfg.executor.models || {})[0];
+      if (m && m.ctx > 0) return m.ctx;
+    }
+  } catch (_) { /* fall through */ }
+  return (curStatus && curStatus.context && curStatus.context.n_ctx) ? curStatus.context.n_ctx : curCtxMax;
+}
+
+
 function updateContextChip() {
   const cChip = $('chip-ctx');
   if (!cChip) return;
@@ -186,24 +306,22 @@ function updateContextChip() {
   }
   if (anchor >= 0) {
     promptToks = ctxMsgs[anchor].promptTokens;
-    compToks = getMsgTokens(ctxMsgs[anchor]);
+    compToks = messageTokens(ctxMsgs[anchor]);
     totalToks = promptToks + compToks;
     for (const m of ctxMsgs.slice(anchor + 1)) {
-      const tok = getMsgTokens(m);
+      const tok = messageTokens(m);
       if (m.role === 'assistant') compToks += tok;
       else promptToks += tok;
       totalToks += tok;
     }
-  } else if (Array.isArray(ctxMsgs) && ctxMsgs.length > 0) {
-    for (const m of ctxMsgs) {
-      const tok = getMsgTokens(m);
-      if (m.role === 'assistant') {
-        compToks += tok;
-      } else {
-        promptToks += tok;
-      }
-      totalToks += tok;
-    }
+  } else {
+    // no server anchor yet (fresh session, or before the first reply): use the
+    // shared estimator, which counts tool calls/results so agent turns aren't
+    // under-counted the way the old prose-only fallback was
+    const est = estimateSessionTokens(ctxMsgs);
+    promptToks = est.prompt;
+    compToks = est.completion;
+    totalToks = est.total;
   }
 
   const nCtx = (curStatus && curStatus.context && curStatus.context.n_ctx) ? curStatus.context.n_ctx : curCtxMax;
@@ -211,9 +329,13 @@ function updateContextChip() {
   const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
 
   cChip.innerHTML = `<svg class="ui-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04Z"/></svg> <span>${fmtK(totalToks)} / ${fmtK(nCtx)} (${pct}%)</span>`;
-  cChip.title = `Session Tokens: ${totalToks.toLocaleString()} / ${nCtx.toLocaleString()} tokens used (${pct}%) · Prompt: ${promptToks.toLocaleString()} · Completion: ${compToks.toLocaleString()} · ${ctxMsgs.length} messages`;
+  cChip.title = `Session Tokens: ${totalToks.toLocaleString()} / ${nCtx.toLocaleString()} tokens used (${pct}%)`
+    + ` · Prompt: ${promptToks.toLocaleString()} · Completion: ${compToks.toLocaleString()}`
+    + ` · ${ctxMsgs.length} messages`
+    + (anchor >= 0 ? '\nAnchored on the last server-reported prompt size.'
+                   : '\nEstimated locally (no server figure yet; tool calls counted).');
 
-  if (pct > 85) cChip.style.color = 'var(--red)';
-  else if (pct > 70) cChip.style.color = 'var(--amber)';
+  if (pct > CTX_CRIT_PCT) cChip.style.color = 'var(--red)';
+  else if (pct > CTX_WARN_PCT) cChip.style.color = 'var(--amber)';
   else cChip.style.color = 'var(--dim)';
 }

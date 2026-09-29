@@ -5,7 +5,7 @@
  */
 
 (function () {
-  const KIND_LABEL = { skills: 'skills', connectors: 'connectors', plugins: 'plugins', marketplace: 'marketplace plugins' };
+  const KIND_LABEL = { skills: 'skills', connectors: 'connectors', plugins: 'plugins' };
   const CAT_ICON = {
     security: '🛡️', compliance: '⚖️', engineering: '⌨️', operations: '🧰', finance: '💰',
     productivity: '✅', web: '🌐', tickets: '🎫', developer: '🧪', data: '🗃️', general: '🧩', custom: '🔧',
@@ -392,7 +392,6 @@
     });
     document.querySelectorAll('#cz-box .cz-tab').forEach(b => b.onclick = () => {
       S.kind = b.dataset.kind; S.category = null; S.detail = null; S.q = ''; render();
-      if (S.kind === 'marketplace' && !S.market) searchMarketplace('');
     });
     document.querySelectorAll('#cz-box .cz-view').forEach(b => b.onclick = () => {
       S.view = b.dataset.view; S.category = null; S.detail = null; render();
