@@ -20,9 +20,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import tool_surface as ts  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _source import module_source  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
-AGENT_SRC = REPO / "routes" / "agent.py"
 
 
 def _tool(name):
@@ -198,7 +199,7 @@ class TestWiring(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.src = AGENT_SRC.read_text(encoding="utf-8")
+        cls.src = module_source("routes/agent.py")
 
     def test_main_lane_goes_through_the_policy(self):
         self.assertIn("tools_for_lane = tool_surface.filter_tools(", self.src)

@@ -61,8 +61,9 @@ class SseMaskingTests(unittest.TestCase):
         self.assertEqual(data["n"], 3)
 
     def test_routes_use_helper_for_tool_events(self):
+        from _source import module_source
         for f in ("routes/agent.py", "routes/chat.py"):
-            src = (ROOT / f).read_text(encoding="utf-8")
+            src = module_source(f)
             self.assertNotRegex(src, r'f"event: (tool_call|tool_result|permission_request)', f)
 
 

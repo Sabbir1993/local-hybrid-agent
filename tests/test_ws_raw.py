@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core import agent_tools, companion_bridge  # noqa: E402
 from core.request_context import set_current_device, set_current_user  # noqa: E402
 from routes import agent as agent_routes  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _patching import patch_in_package  # noqa: E402
 
 USER = 5
 WS = Path(r"C:\Users\tester\proj")
@@ -72,9 +74,9 @@ class WsRawTests(unittest.TestCase):
             mock.patch.object(companion_bridge, "call", call or self._call),
             mock.patch.dict(agent_tools._active_project,
                             {f"{USER}:dev": proj} if proj else {}, clear=True),
-            mock.patch.object(agent_routes, "_remote_uid", lambda: USER),
-            mock.patch.object(agent_routes, "_ws_resolve", agent_tools._ws_resolve),
-            mock.patch.object(agent_routes, "get_active_project", lambda uid: proj),
+            *patch_in_package(agent_routes, "_remote_uid", lambda: USER),
+            *patch_in_package(agent_routes, "_ws_resolve", agent_tools._ws_resolve),
+            *patch_in_package(agent_routes, "get_active_project", lambda uid: proj),
         ]
         with _enter(patches):
             set_current_user(USER)

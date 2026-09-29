@@ -155,7 +155,7 @@ class TestAgentRunRegression(unittest.TestCase):
     referencing it earlier crashed /agent/run with a 500 (UnboundLocalError)."""
 
     def test_guard_hook_after_msgs_assignment(self):
-        src = (Path(__file__).resolve().parents[1] / "routes" / "agent.py").read_text(
+        src = (Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py").read_text(
             encoding="utf-8")
         msgs_line = src.find("msgs = [dict(m) for m in req.messages]")
         hook_line = src.find("input_guard.check_async")
@@ -164,7 +164,7 @@ class TestAgentRunRegression(unittest.TestCase):
                            "input-guard hook must come after the msgs assignment")
 
     def test_no_duplicate_knowledge_import(self):
-        src = (Path(__file__).resolve().parents[1] / "routes" / "agent.py").read_text(
+        src = (Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py").read_text(
             encoding="utf-8")
         self.assertEqual(
             len(re.findall(r"from core\.knowledge_access import allowed_source_ids_for", src)),

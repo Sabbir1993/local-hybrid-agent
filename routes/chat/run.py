@@ -1,19 +1,10 @@
-"""
-routes/chat.py - Fast chat endpoint with real-time web search and streaming tool use.
-"""
-
 import asyncio
 import json
-import re
 import sys
 import time
 from pathlib import Path
-from typing import Literal, Optional
-
-from fastapi import APIRouter, Depends
+from fastapi import Depends
 from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel
-
 from core.auth import Principal
 from core.deps import get_current_user
 from core.audit import audit_log
@@ -22,7 +13,7 @@ from core import mcp as mcp_core
 from core import output_guard
 from core import verifier
 from core.sse import sse
-from core.small_model import APP_CONFIG, small_models
+from core.small_model import APP_CONFIG
 from core import cloud
 from core.state import state
 from core.registry import registry
@@ -37,7 +28,6 @@ from core.agent_loop import (
     safe_parse_and_repair_args,
     _extract_text_tool_calls,
     estimate_prompt_tokens,
-    compact_messages,
 )
 from core.monitor import (
     _monitor_state,
@@ -45,255 +35,33 @@ from core.monitor import (
     monitor_end,
 )
 from core.knowledge_access import allowed_source_ids_for, kb_local_only, set_kb_cloud_blocked
-from core.memory import search_memory_hybrid
-from core.db import (
-    db_record_request,
-    db_load_messages,
-    db_append_message,
-)
-from . import common
+from core.db import db_record_request
+from .. import common
 from core import reasoning
-from .common import _llm_chat_stream
+from ..common import _llm_chat_stream
 
-router = APIRouter(tags=["chat"])
-
-
-def _saved_filename(res_str: str, fallback: str) -> str:
-    """tool_write_file_common() renames every file with a unique suffix; pull
-    the real on-disk name back out of its result string (via the [DOWNLOAD: ..]
-    tag it always includes) so callers don't keep referencing the pre-write name."""
-    m = re.search(r"\[DOWNLOAD:\s*([^\]]+)\]", res_str or "")
-    return m.group(1).strip() if m else fallback
-
-
-def _prompt_tokens_of(res_dict, msgs) -> int:
-    """Full prompt size of the last LLM call, cached tokens included.
-    llama.cpp's timings.prompt_n counts only freshly-evaluated tokens, so add
-    cache_n; a count far below the estimate is cache-excluded - use the estimate."""
-    est = estimate_prompt_tokens(msgs)
-    u = (res_dict or {}).get("usage") or {}
-    t = (res_dict or {}).get("timings") or {}
-    real = int(u.get("prompt_tokens") or 0)
-    if t:
-        real = max(real, int(t.get("prompt_n") or 0) + int(t.get("cache_n") or 0))
-    return real if real >= est * 0.5 else est
-
-_HELPER_EXTS = {".py", ".js", ".ts", ".sh", ".bat", ".ps1"}
-
-
-def _requested_exts(query: str) -> set[str]:
-    """File extensions the user's message asks for (empty = not stated)."""
-    q = (query or "").lower()
-    exts = {"." + e for e in re.findall(r"\.(pptx|ppt|xlsx|xls|csv|docx|pdf|html|json|txt|md|py)\b", q)}
-    if re.search(r"\bpdf\b", q):
-        exts.add(".pdf")
-    if re.search(r"\b(pptx?|powerpoint)\b", q) or (
-            re.search(r"\b(slides?|deck|presentation)\b", q) and ".pdf" not in exts):
-        exts.add(".pptx")
-    if re.search(r"\b(excel|spreadsheet|workbook)\b", q):
-        exts.add(".xlsx")
-    if re.search(r"\bcsv\b", q):
-        exts.add(".csv")
-    if re.search(r"\b(word|docx)\b", q):
-        exts.add(".docx")
-    if re.search(r"\b(html|dashboard|web ?page)\b", q):
-        exts.add(".html")
-    return {".pptx" if e == ".ppt" else ".xlsx" if e == ".xls" else e for e in exts}
-
-
-def _pick_deliverables(written: list[str], query: str) -> list[str]:
-    """A turn may write several drafts (v1, v2, _final, ...) and helper scripts
-    before it lands the file. Only the latest file of each requested type is the
-    deliverable; everything else stays on disk but gets no download badge."""
-    uniq = list(dict.fromkeys(written))
-    if len(uniq) <= 1:
-        return uniq
-    want = _requested_exts(query)
-    cands = [f for f in uniq if Path(f).suffix.lower() in want] if want else []
-    if not cands:
-        cands = [f for f in uniq if Path(f).suffix.lower() not in _HELPER_EXTS] or uniq
-    latest: dict[str, str] = {}
-    for f in cands:  # later writes supersede earlier ones of the same type
-        latest[Path(f).suffix.lower()] = f
-    return [f for f in cands if f in latest.values()]
-
-
-def _finalize_download_tags(content: str, written: list[str], query: str) -> tuple[str, bool]:
-    """Drop [DOWNLOAD:] tags for superseded files written this turn and append
-    tags for deliverables the reply doesn't link yet. Returns (content, changed)."""
-    keep = _pick_deliverables(written, query)
-    out = content or ""
-    for f in set(written) - set(keep):
-        out = re.sub(rf"[ \t]*\[DOWNLOAD:\s*{re.escape(f)}\s*\][ \t]*\n?", "", out)
-    out = re.sub(r"\n{3,}", "\n\n", out).rstrip()
-    for f in keep:
-        if f"[DOWNLOAD: {f}]" not in out and f"download?path={f}" not in out.lower():
-            out += f"\n\n[DOWNLOAD: {f}]"
-    return out, out != (content or "")
-
-def _finalize_media(content: str, made: list[str]) -> tuple[str, bool]:
-    """Pictures/videos made this turn are always shown: append each result's
-    markdown line (image / [VIDEO:] / [DOWNLOAD:]) the reply doesn't carry yet.
-    The model may drop or garble it, and it only saw a copy of the path."""
-    out = (content or "").rstrip()
-    for md in made:
-        for line in (ln.strip() for ln in md.split("\n")):
-            m = re.search(r"path=([^)\s]+)\)", line)          # an image: its path; a tag: the tag
-            if line and (m.group(1) if m else line) not in out:
-                out += "\n\n" + line
-    return out, out != (content or "")
-
-
-def _wraps_media(made: list[str], fname: str, query: str) -> bool:
-    """An HTML page written after an image this turn is the model wrapping the
-    picture (with a link it may have garbled) instead of showing it - unless the
-    user asked for a page."""
-    return bool(made) and Path(fname or "").suffix.lower() in (".html", ".htm") \
-        and ".html" not in _requested_exts(query)
-
-
-_WRAP_REFUSAL = ("error: the picture is already saved and shown to the user - don't put it in an HTML page "
-                 "or any other file. Reply with the markdown generate_image returned and one short sentence.")
-
-WEB_TOOL_NAMES = ("web_search", "web_fetch", "web_search_images")
-
-# A deliverable request: a creation verb near a file-format / artifact noun.
-_FILE_VERB_RE = r'(fill|write|save|create|generate|make|export|download|share|prepare|build|draft|compile)\w*'
-_FILE_NOUN_RE = (r'(excel|spreadsheet|workbook|csv|\.xlsx|\.xls|\.csv|\.json|\.py|\.html|html|\.txt|\.docx'
-                 r'|\.pptx|\.ppt|\.pdf|pdf|presentation|slides|deck|dashboard|web ?page)\b')
-
-# "Let me compile the HTML now:" - the model announced work it then didn't do.
-_ANNOUNCE_RE = re.compile(
-    r"\b(let me|i will|i'll|i am going to|i'm going to|now i(?:'ll| will)?)\s+(?:now\s+)?(?:actually\s+)?"
-    r"(compile|create|generate|write|prepare|build|put together|draft|make|produce"
-    r"|finali[sz]e|rebuild|redesign|polish|update|regenerate|redo|rewrite|call write_file)\b",
-    re.IGNORECASE)
-
-# Follow-ups about a file produced earlier in this chat. The frontend only
-# resends assistant text (big code blocks stubbed, tool args never sent), so
-# without help the model can't see the old file and invents a new one.
-_DL_TAG_RE = re.compile(r"\[DOWNLOAD:\s*([^\]]+)\]")
-_FILE_REF_RE = r"(file|report|html|page|dashboard|document|doc|pdf|sheet|excel|csv|deck|slides|presentation|link)"
-_FILE_WHERE_RE = re.compile(
-    r"\b(where(?:'s| is)?|link|download|re-?share|resend|send|give|share)\b.{0,30}\b" + _FILE_REF_RE + r"\b"
-    r"|\b" + _FILE_REF_RE + r"\b.{0,15}\b(where|link|missing|not (?:shared|found|there))\b",
-    re.IGNORECASE)
-_FILE_EDIT_RE = re.compile(
-    r"\b(edit|update|modify|change|improve|polish|fix|redesign|rebuild|redo|rewrite|restyle|revise|refine"
-    r"|add|remove|replace|rename|translate|enhance)\w*\b",
-    re.IGNORECASE)
-_TEXT_FILE_EXTS = {".html", ".htm", ".css", ".js", ".ts", ".json", ".csv", ".md", ".txt", ".py",
-                   ".xml", ".svg", ".sql", ".yaml", ".yml"}
-PRIOR_FILE_MAX_CHARS = 60000
-
-
-_ATTACHED_DOC_RE = re.compile(r"--- FILE:\s*([^\n]+?\.(?:pptx|xlsx|docx|csv|pdf))\s*---", re.IGNORECASE)
-# edited through doc_inspect/doc_edit (in place, by address) rather than rewritten
-_DOC_EDIT_EXTS = {".pptx", ".xlsx", ".docx", ".csv", ".pdf"}
-
-
-def session_files(msgs: list) -> list:
-    """Filenames the server delivered (or the user attached) in this conversation, oldest first."""
-    seen = []
-    for m in msgs:
-        role = m.get("role")
-        text = str(m.get("content") or "")
-        if role == "user":
-            names = _ATTACHED_DOC_RE.findall(text)
-        elif role == "assistant":
-            names = _DL_TAG_RE.findall(text)
-        else:
-            continue
-        for name in names:
-            n = Path(name.strip()).name
-            if n in seen:
-                seen.remove(n)
-            seen.append(n)
-    return seen
-
-
-def file_followup_intent(query: str, has_prior: bool) -> Optional[str]:
-    """'where' = user can't find / wants the existing file again;
-    'edit' = user wants the existing file changed. None otherwise."""
-    q = (query or "").strip()
-    if not has_prior or not q:
-        return None
-    if _FILE_WHERE_RE.search(q) and not _FILE_EDIT_RE.search(q):
-        return "where"
-    if _FILE_EDIT_RE.search(q) and re.search(
-            r"\b" + _FILE_REF_RE + r"\b|\b(it|this|that|previous|last|same|ui|design|style|colou?rs?|layout"
-            r"|section|chart|table|theme|font)\b|/frontend-design", q, re.IGNORECASE):
-        return "edit"
-    return None
-
-
-def load_prior_file(name: str, max_chars: int) -> Optional[str]:
-    """Text content of a common-space file this chat produced, or None
-    (missing, binary format, or too big to fit the context budget)."""
-    from core.agent_tools import _common_resolve
-    try:
-        p = _common_resolve(name)
-    except PermissionError:
-        return None
-    if p.suffix.lower() not in _TEXT_FILE_EXTS or not p.is_file():
-        return None
-    try:
-        text = p.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    return text if len(text) <= max_chars else None
-
-
-def wants_file_output(query: str) -> bool:
-    return bool(re.search(_FILE_VERB_RE + r'.{0,40}' + _FILE_NOUN_RE, query or "", re.IGNORECASE)
-                or re.search(_FILE_NOUN_RE + r'.{0,25}' + _FILE_VERB_RE, query or "", re.IGNORECASE))
-
-
-def looks_undelivered(content: str, wants_file: bool, delivered: bool) -> bool:
-    """True when a text-only reply promised a deliverable but contains none."""
-    if delivered:
-        return False
-    c = (content or "").strip()
-    if "```" in c or "<html" in c.lower():
-        return False
-    if wants_file:
-        return True
-    return c.endswith(":") or bool(_ANNOUNCE_RE.search(c[-300:]))
-
-
-def shrink_old_tool_results(msgs: list, budget_tokens: int, keep_last: int = 2, head_chars: int = 800) -> None:
-    """Research loops pile up 6-20 KB web results per call. Once the prompt
-    passes the budget, cut older tool results down to their head (the latest
-    `keep_last` stay whole), then fall back to digest compaction."""
-    if estimate_prompt_tokens(msgs) <= budget_tokens:
-        return
-    tool_idx = [i for i, m in enumerate(msgs) if m.get("role") == "tool"]
-    for i in tool_idx[:-keep_last] if keep_last else tool_idx:
-        c = str(msgs[i].get("content") or "")
-        if len(c) > head_chars:
-            msgs[i]["content"] = c[:head_chars] + f"\n...[{len(c) - head_chars} chars trimmed to fit context]"
-    if estimate_prompt_tokens(msgs) > budget_tokens:
-        msgs[:] = compact_messages(msgs, budget_tokens)
-
-
-class ChatRunRequest(BaseModel):
-    messages: list
-    web_search: bool = True
-    deep_mode: bool = False
-    temperature: Optional[float] = None   # None -> the custom agent's value, else 0.7
-    max_tokens: int = -1
-    system_prompt: Optional[str] = None
-    # None (older clients) keeps the Deep-only behaviour; see core/reasoning.py
-    reasoning_effort: Optional[Literal["none", "low", "medium", "high", "extra"]] = None
-    # answer check for this request (shield toggle): off | badge | gate; None = saved setting
-    verify: Optional[Literal["off", "badge", "gate"]] = None
-    top_p: Optional[float] = None
-    min_p: Optional[float] = None
-    repeat_penalty: Optional[float] = None
-    presence_penalty: Optional[float] = None
-    top_k: Optional[int] = None
-    custom_agent_id: Optional[int] = None
-
+from .base import router
+from .delivery import (
+    _WRAP_REFUSAL,
+    _finalize_download_tags,
+    _finalize_media,
+    _prompt_tokens_of,
+    _saved_filename,
+    _wraps_media,
+)
+from .file_intent import (
+    PRIOR_FILE_MAX_CHARS,
+    WEB_TOOL_NAMES,
+    _DL_TAG_RE,
+    _DOC_EDIT_EXTS,
+    file_followup_intent,
+    load_prior_file,
+    looks_undelivered,
+    session_files,
+    shrink_old_tool_results,
+    wants_file_output,
+)
+from .models import ChatRunRequest
 
 
 @router.post("/chat/run")
@@ -1347,163 +1115,3 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                               source=model_source, provider=model_provider)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-
-# ---------------- /compact — Claude-Code-style context compaction ----------------
-
-class CompactRequest(BaseModel):
-    messages: Optional[list] = None       # fallback when no session_id
-    session_id: Optional[int] = None
-    instructions: Optional[str] = None    # extra user instructions, e.g. "focus on the DB schema"
-    keep_last: int = 2                    # recent messages kept verbatim after the summary
-    use_executor: bool = False            # force the small executor model for the summary
-    agent_mode: bool = False              # agent mode: requires an active project (project_id)
-    project_id: Optional[int] = None
-
-
-_COMPACT_SYSTEM_PROMPT = (
-    "You are a conversation summarizer. Your task is to create a detailed summary of the "
-    "conversation so far, written so that a successor assistant can seamlessly continue the "
-    "work with full context. Produce a structured markdown summary with these sections:\n"
-    "1. **Primary Requests and Intent** — what the user asked for across the conversation, "
-    "including verbatim key phrases of the original asks.\n"
-    "2. **Key Technical Concepts & Details** — files, paths, function names, schemas, "
-    "commands, configuration values, and any errors encountered (with how they were resolved).\n"
-    "3. **Actions Taken & Results** — tools that were called, what succeeded or failed.\n"
-    "4. **Decisions & Open Questions** — choices made and their rationale; anything unresolved.\n"
-    "5. **Next Steps** — explicit, actionable continuation points.\n"
-    "Rules: be dense and factual; preserve exact names/paths/numbers; do not omit constraints "
-    "the user stated; do not add commentary or greet anyone; output ONLY the summary."
-)
-
-
-def _strip_think(text: str) -> str:
-    m = re.search(r"<think>[\s\S]*?</think>", text or "")
-    return (m.group(0)[7:-8] if m else (text or "")).strip()
-
-async def _summarize_history(convo: list, instructions: Optional[str], use_executor: bool,
-                              user_id: Optional[int] = None) -> str:
-    """One non-streaming LLM call that writes the conversation summary.
-    Main model when running, else the on-demand executor small model."""
-    transcript_lines = []
-    for m in convo:
-        c = str(m.get("content") or "").strip()
-        if len(c) > 4000:
-            c = c[:4000] + "\n... (truncated)"
-        transcript_lines.append(f"[{m.get('role', '?').upper()}]\n{c}")
-    user_payload = (
-        "Summarize the conversation below.\n\n"
-        + (f"Extra instructions from the user (honor these): {instructions}\n\n" if instructions else "")
-        + "CONVERSATION:\n" + "\n\n".join(transcript_lines)
-    )
-    payload = {
-        "messages": [
-            {"role": "system", "content": _COMPACT_SYSTEM_PROMPT},
-            {"role": "user", "content": user_payload},
-        ],
-        "max_tokens": 2048,
-        "temperature": 0.1,
-        "stream": False,
-    }
-
-    # "Summarizing chats" job (core/lanes.py). Unless the user mapped that job to
-    # a model in Settings -> Models, the main model goes first (then the helper),
-    # as before; use_executor forces the job's own route.
-    from core import lanes
-    if use_executor or "summarize" in cloud.role_map(user_id):
-        data, used = await lanes.post_chat("summarize", payload, user_id)
-    else:
-        try:
-            data, used = await lanes.post_chat("agent.reason", payload, user_id)
-        except RuntimeError:
-            data, used = await lanes.post_chat("summarize", payload, user_id)
-    source = used.describe()
-    summary = _strip_think(lanes.message_text(data))
-    # Output sanitizer: summaries are user-facing and may replay earlier chat
-    # content. user=None means role-targeted rules don't apply (global rules do).
-    summary, _og = output_guard.redact_full(summary, None, source.startswith("cloud"))
-    if not summary.strip():
-        raise RuntimeError(f"summarizer returned an empty response ({source})")
-    print(f"[chat/compact] summarized {len(convo)} messages via {source} "
-          f"({len(summary)} chars summary)")
-    return summary
-
-@router.post("/chat/compact")
-async def chat_compact(req: CompactRequest, user: Principal = Depends(get_current_user)):
-    # Project gate: in agent mode /compact only works with an active project
-    # (mirrors the frontend curProject gate — defense in depth).
-    if req.agent_mode and not req.project_id:
-        return JSONResponse(
-            {"error": "Select a project first — /compact in agent mode requires an active project"},
-            status_code=400)
-
-    # Source of truth: the DB session (preserves acts/reasoning meta); fallback
-    # to the posted messages for sessions that were never persisted.
-    if req.session_id:
-        try:
-            src = db_load_messages(req.session_id, owner_user_id=user.id)
-        except PermissionError:
-            return JSONResponse({"error": "session not found"}, status_code=404)
-    else:
-        src = [dict(m) for m in (req.messages or [])]
-    convo = [m for m in src
-             if m.get("role") in ("user", "assistant")
-             and str(m.get("content") or "").strip()]
-    if len(convo) < 2:
-        return JSONResponse({"error": "Nothing to compact yet — send a few messages first"},
-                            status_code=400)
-
-    # the whole history (+ instructions) goes to a model, possibly a cloud one:
-    # same input rules as /chat/run, or compaction is a way around them
-    _any_cloud = bool(cloud.cloud_lane("executor", user.id) or cloud.cloud_lane("main", user.id))
-    _hit = await input_guard.check_async(
-        input_guard.message_texts(convo) + [str(req.instructions or "")], user, any_cloud_lane=_any_cloud)
-    if _hit:
-        audit_log(user, action="input_guard.block", resource=_hit.get("name"),
-                  detail={"scope": _hit.get("scope"), "endpoint": "chat/compact",
-                          "pattern": _hit.get("_matched_pattern")}, result="deny")
-        return JSONResponse({"error": _hit.get("message")}, status_code=403)
-
-    before_tokens = estimate_prompt_tokens(convo)
-    try:
-        summary = await _summarize_history(convo, req.instructions, req.use_executor, user.id)
-    except Exception as e:
-        print(f"[chat/compact] failed: {type(e).__name__}: {e}", file=sys.stderr)
-        return JSONResponse({"error": "compact failed - see server log"}, status_code=500)
-
-    keep_n = max(0, min(int(req.keep_last or 0), len(convo) - 1))
-    kept = convo[-keep_n:] if keep_n else []
-
-    compact_message = {
-        "role": "system",
-        "content": "[COMPACTED CONTEXT SUMMARY]\n" + summary,
-        "meta": {"compact": True, "before_tokens": before_tokens,
-                 "kept_messages": keep_n},
-    }
-    # after_tokens reflects what future turns will actually send: the summary
-    # plus the verbatim kept tail (the tail isn't duplicated in storage — it
-    # already exists in its original position; this is only for the badge).
-    after_tokens = estimate_prompt_tokens([compact_message] + kept)
-    reduction_pct = max(0, round((1 - after_tokens / before_tokens) * 100)) if before_tokens > 0 else 0
-    compact_message["meta"]["after_tokens"] = after_tokens
-    compact_message["meta"]["reduction_pct"] = reduction_pct
-
-    if req.session_id:
-        # Append-only: the compact marker is a new row, nothing is deleted, so
-        # the full transcript stays visible/reloadable. See buildContextMessages()
-        # in static/js/compact.js for how future turns pick up only the marker
-        # forward instead of the full history.
-        db_append_message(req.session_id, compact_message["role"],
-                           compact_message["content"], compact_message["meta"],
-                           owner_user_id=user.id)
-
-    return {
-        "summary": summary,
-        "compact_message": compact_message,
-        "before_tokens": before_tokens,
-        "after_tokens": after_tokens,
-        "reduction_pct": reduction_pct,
-    }
-
-
-

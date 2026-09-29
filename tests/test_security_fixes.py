@@ -317,8 +317,11 @@ class SseHelperNotShadowedTests(unittest.TestCase):
     def test_no_local_sse_definition(self):
         import ast
         root = Path(__file__).resolve().parent.parent
-        for rel in ("routes/chat.py", "routes/agent.py"):
-            tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+        from _source import module_files
+        files = [f for rel in ("routes/chat.py", "routes/agent.py") for f in module_files(rel)]
+        for f in files:
+            rel = f.relative_to(root).as_posix()
+            tree = ast.parse(f.read_text(encoding="utf-8"))
             defs = [n.lineno for n in ast.walk(tree)
                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "sse"]
             self.assertEqual(defs, [], f"{rel} defines sse() at lines {defs}")

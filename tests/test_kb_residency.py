@@ -110,19 +110,19 @@ class ChatRunBlockedTests(unittest.TestCase):
         ], web_search=False)
 
         async def main():
-            with (mock.patch.object(chat_route.cloud, "cloud_lane", return_value=lane),
-                  mock.patch.object(chat_route.cloud, "CloudClient"),
-                  mock.patch.object(chat_route.input_guard, "check_async", mock.AsyncMock(return_value=None)),
-                  mock.patch.object(chat_route, "allowed_source_ids_for", return_value={1}),
+            with (mock.patch.object(chat_route.run.cloud, "cloud_lane", return_value=lane),
+                  mock.patch.object(chat_route.run.cloud, "CloudClient"),
+                  mock.patch.object(chat_route.run.input_guard, "check_async", mock.AsyncMock(return_value=None)),
+                  mock.patch.object(chat_route.run, "allowed_source_ids_for", return_value={1}),
                   mock.patch("core.knowledge_router.fetch_company_knowledge",
                              mock.AsyncMock(return_value=(hits, "KB BLOCK: " + self.SECRET))) as fck,
-                  mock.patch.object(chat_route.state, "ensure_running", side_effect=boom),
-                  mock.patch.object(chat_route.state, "is_running", return_value=False),
-                  mock.patch.object(chat_route.state, "profile_path", "profile.json"),
-                  mock.patch.object(chat_route, "audit_log") as audit,
-                  mock.patch.object(chat_route, "monitor_begin", return_value=1),
-                  mock.patch.object(chat_route, "monitor_end", create=True),
-                  mock.patch.object(chat_route, "_llm_chat_stream", fake_stream)):
+                  mock.patch.object(chat_route.run.state, "ensure_running", side_effect=boom),
+                  mock.patch.object(chat_route.run.state, "is_running", return_value=False),
+                  mock.patch.object(chat_route.run.state, "profile_path", "profile.json"),
+                  mock.patch.object(chat_route.run, "audit_log") as audit,
+                  mock.patch.object(chat_route.run, "monitor_begin", return_value=1),
+                  mock.patch.object(chat_route.run, "monitor_end", create=True),
+                  mock.patch.object(chat_route.run, "_llm_chat_stream", fake_stream)):
                 resp = await chat_route.chat_run(req, user)
                 events = []
                 try:
