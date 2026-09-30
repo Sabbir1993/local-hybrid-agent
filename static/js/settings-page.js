@@ -140,6 +140,7 @@ window.__sessionReady.then((data) => {
   if (document.getElementById('sec-users')) loadUsersPanel();
   if (document.getElementById('sec-knowledge')) loadKnowledgePanel();
   if (document.getElementById('sec-guard')) loadInputGuardPanel();
+  if (document.getElementById('sec-session') && window.loadSessionPolicyPanel) loadSessionPolicyPanel();
   if (document.getElementById('sec-db')) {
     fetch('/db/list').then(r => r.json()).then(d => {
       const box = document.getElementById('settings-db-summary');
@@ -227,3 +228,10 @@ async function loadDevicesPanel() {
     box.innerHTML = '<div class="dim" style="font-size:12px;">Failed to load devices: ' + esc(e.message) + '</div>';
   }
 }
+
+// Standalone page (opened by a direct link such as /settings#sec-lanes, e.g. in the companion window): offer a way back.
+// Inside the Settings modal the page is an iframe and the modal has its own close, so the button stays hidden there.
+(function () {
+  const home = document.getElementById('settings-home');
+  if (home && window.self === window.top) home.hidden = false;
+})();

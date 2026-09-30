@@ -39,6 +39,7 @@ from core.db import db_record_request
 from .. import common
 from core import reasoning
 from ..common import _llm_chat_stream
+from ..common.sampling_extra import sampler_extra
 
 from .base import router
 from .delivery import (
@@ -504,12 +505,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     chat_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, current_tools, req.temperature,
                         req.max_tokens, repeat_penalty=chat_rep, rid=chat_rid, lane="main", effort=effort,
-                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
+                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
                 else:
                     chat_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
                     chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature,
                                                    max_tokens=req.max_tokens, repeat_penalty=chat_rep, rid=chat_rid, effort=effort,
-                                                   top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
+                                                   top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
                 async for ev, val in chat_stream:
                     if ev == "queued":
                         yield f"event: queued\ndata: {json.dumps(val)}\n\n"
@@ -1009,12 +1010,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     final_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, None, req.temperature,
                         req.max_tokens, repeat_penalty=final_rep, rid=chat_rid, lane="main", effort=effort,
-                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
+                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
                 else:
                     final_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
                     final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature,
                                                     max_tokens=req.max_tokens, repeat_penalty=final_rep, rid=chat_rid, effort=effort,
-                                                    top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
+                                                    top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
 
                 async for ev, val in final_stream:
                     if ev == "queued":

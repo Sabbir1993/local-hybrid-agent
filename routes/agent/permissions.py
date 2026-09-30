@@ -55,7 +55,7 @@ async def agent_permission_answer(req: PermissionAnswerReq, user: Principal = De
         # Save to this user's own allow list -- never affects other users
         auth_db.add_user_allow_pattern(user.id, req.pattern)
         audit_log(user, action="shell.allow_pattern.add", resource=req.pattern, detail={"scope": "user"})
-    rec["result"] = {"allow": req.decision != "deny",
+    rec["result"] = {"allow": req.decision != "deny", "decision": req.decision,
                      "note": f"pattern allowed for {req.decision}" if req.decision in ("always", "project", "user") else ""}
     rec["event"].set()
     saved = req.decision in ("always", "project", "user") and bool(req.pattern)
@@ -108,3 +108,45 @@ async def _await_permission(req_id: str, ev: asyncio.Event):
     rec = _perm_pending.pop(req_id, None) or {}
     res = rec.get("result") or {"allow": False, "note": "no answer"}
     return res.get("allow", False), res.get("note", "")
+
+
+PERMISSION_WAIT_S = 180
+PING = ": ping\n\n"          # SSE comment: ignored by the client, keeps proxies and idle timers from cutting the stream
+
+
+async def _permission_stream(req_id: str, ev: asyncio.Event, ping_s: float = 15, wait_s: float = PERMISSION_WAIT_S):
+    """Like _await_permission, but an async generator so the agent stream stays alive while the user decides.
+    Yields ("ping", PING) every `ping_s`, then one ("done", (allowed, note, decision))."""
+    waited = 0.0
+    while waited < wait_s:
+        step = min(ping_s, wait_s - waited)
+        try:
+            await asyncio.wait_for(ev.wait(), timeout=step)
+            break
+        except asyncio.TimeoutError:
+            waited += step
+            yield "ping", PING
+    else:
+        _perm_pending.pop(req_id, None)
+        yield "done", (False, f"permission request timed out ({int(wait_s)}s)", "timeout")
+        return
+    rec = _perm_pending.pop(req_id, None) or {}
+    res = rec.get("result") or {"allow": False, "note": "no answer"}
+    yield "done", (res.get("allow", False), res.get("note", ""), res.get("decision", ""))
+
+
+async def keepalive(coro, interval: float = 15):
+    """Run `coro` as a task and yield ("ping", PING) while it is still running, then ("done", result).
+    An exception from `coro` is raised here; if this generator is closed first, the task is cancelled, so a
+    disconnected client never leaves a tool running unattended."""
+    task = asyncio.ensure_future(coro)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=interval)
+            if done:
+                break
+            yield "ping", PING
+        yield "done", task.result()
+    finally:
+        if not task.done():
+            task.cancel()

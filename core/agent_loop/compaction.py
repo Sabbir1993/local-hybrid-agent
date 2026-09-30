@@ -232,7 +232,7 @@ def _pinned_units(msgs: list, units: list, tail_start: int, calls: dict) -> list
     return out
 
 
-def _keep_recent_results(default: int = 6) -> int:
+def _keep_recent_results(default: int = 3) -> int:
     """How many tool results may stay verbatim in a compacted tail.
 
     Without a bound, "keep the most recent 60% of the budget" can still mean three

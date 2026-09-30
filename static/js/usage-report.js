@@ -31,6 +31,35 @@ function repSummaryHtml(d) {
       </div>`;
 }
 
+/* Heaviest agent runs: which task was expensive, how many steps, how big the prompt got, how it ended. */
+const REP_OUTCOMES = { answered: 'Answered', synthesized: 'Answered (summary)', max_steps: 'Step limit', timeout: 'Time limit',
+  budget: 'Token budget', loop: 'Loop stopped', loop_near_repeat: 'Loop stopped', no_progress: 'No progress',
+  cancelled: 'Stopped', error: 'Failed', filtered: 'Filtered' };
+async function repLoadRuns() {
+  const box = $('rep-runs');
+  if (!box) return;
+  try {
+    const j = await (await fetch('/control/report/runs?days=7&limit=10')).json();
+    const runs = j.runs || [];
+    if (!runs.length) {
+      box.innerHTML = '<div class="mon-empty">No runs yet. Agent tasks are attributed to a run from now on.</div>';
+      return;
+    }
+    const when = t => { const d = new Date(t * 1000); return `${repIso(d).slice(5)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+    box.innerHTML = `<table class="rep-table">
+      <tr><th>Started</th><th>Steps</th><th>Req</th><th>Prompt</th><th title="Largest single prompt in the run">Peak step</th>
+        <th title="Share of prompt tokens sent to a cloud provider">Cloud</th><th>How it ended</th></tr>
+      ${runs.map(r => `<tr>
+        <td>${esc(when(r.started))}</td><td>${r.steps == null ? '-' : repFmt(r.steps)}</td><td>${repFmt(r.requests)}</td>
+        ${repTokCell(r.prompt_tokens)}${repTokCell(r.peak_prompt_tokens)}
+        <td class="dim">${repPct(r.cloud_prompt_tokens, r.prompt_tokens)}</td>
+        <td>${esc(REP_OUTCOMES[r.outcome] || r.outcome || 'Running / unknown')}</td></tr>`).join('')}
+    </table>`;
+  } catch (e) {
+    box.innerHTML = '<div class="mon-empty">Could not load runs.</div>';
+  }
+}
+
 async function loadReport(days) {
   const box = $('rep-content');
   if (!$('rep-summary')) {
@@ -50,6 +79,7 @@ async function loadReport(days) {
       _repData = wide;
       _repModels = wide.by_model || [];
       $('rep-tables').innerHTML = repCardsHtml(wide);
+      repLoadRuns();
       if (REP.model.from || REP.model.to) await repFetchModels();
       repRenderModels();
       repRenderDays();
@@ -93,9 +123,10 @@ const repTokCell = (n, cls) => `<td${cls ? ` class="${cls}"` : ''} title="${repF
 
 /* ---- By model / By day: each table has its own filters, sort and pager (all in the browser: the
    report already carries every row) ---- */
-const REP_DEFAULTS = {
-  model: { q: '', role: 'all', source: 'all', sort: 'total', from: '', to: '', page: 0, size: 10 },
-  day: { from: '', to: '', minReq: 0, orch: false, sort: 'newest', page: 0, size: 10 },
+const REP_DEFAULT_PRESET = '7d';
+const REP_DEFAULTS = {          // getters: the date range is relative to today, so it is computed when used
+  get model() { return { q: '', role: 'all', source: 'all', sort: 'total', ...repPresetRange(REP_DEFAULT_PRESET), page: 0, size: 10 }; },
+  get day() { return { ...repPresetRange(REP_DEFAULT_PRESET), minReq: 0, orch: false, sort: 'newest', page: 0, size: 10 }; },
 };
 const REP = { model: Object.assign({}, REP_DEFAULTS.model), day: Object.assign({}, REP_DEFAULTS.day) };
 let _repData = null;
@@ -129,10 +160,16 @@ function repPresetRange(id) {
 }
 const REP_PRESETS = [['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['all', 'All']];
 
+/* a date range counts as a filter only when it differs from the default (last 7 days) */
+function repRangeChanged(s) {
+  const d = repPresetRange(REP_DEFAULT_PRESET);
+  return s.from !== d.from || s.to !== d.to;
+}
+
 function repActiveCount(card) {
   const s = REP[card];
-  if (card === 'model') return (s.q.trim() ? 1 : 0) + (s.role !== 'all' ? 1 : 0) + (s.source !== 'all' ? 1 : 0) + (s.from || s.to ? 1 : 0);
-  return (s.from || s.to ? 1 : 0) + (s.minReq > 0 ? 1 : 0) + (s.orch ? 1 : 0);
+  if (card === 'model') return (s.q.trim() ? 1 : 0) + (s.role !== 'all' ? 1 : 0) + (s.source !== 'all' ? 1 : 0) + (repRangeChanged(s) ? 1 : 0);
+  return (repRangeChanged(s) ? 1 : 0) + (s.minReq > 0 ? 1 : 0) + (s.orch ? 1 : 0);
 }
 
 function repSeg(card, f, options, cur) {
@@ -144,7 +181,7 @@ function repDateGroup(card, s) {
   const range = { from: s.from, to: s.to };
   const on = id => { const r = repPresetRange(id); return r.from === range.from && r.to === range.to; };
   return `<div class="rep-group"><span class="rep-glabel">Dates</span>
-    <div class="rep-range${s.from || s.to ? ' active' : ''}">
+    <div class="rep-range${repRangeChanged(s) ? ' active' : ''}">
       <input type="date" data-card="${card}" data-f="from" value="${esc(s.from)}" aria-label="From date">
       <span class="rep-dash" aria-hidden="true">to</span>
       <input type="date" data-card="${card}" data-f="to" value="${esc(s.to)}" aria-label="To date">
@@ -191,7 +228,7 @@ function repSyncBar(card) {
   const n = repActiveCount(card), b = bar.querySelector('[data-reset]');
   if (b) { b.hidden = !n; b.textContent = n ? `Clear filters (${n})` : 'Clear filters'; }
   const s = REP[card];
-  const rng = bar.querySelector('.rep-range'); if (rng) rng.classList.toggle('active', !!(s.from || s.to));
+  const rng = bar.querySelector('.rep-range'); if (rng) rng.classList.toggle('active', repRangeChanged(s));
   const q = bar.querySelector('.rep-search'); if (q) q.classList.toggle('active', !!(s.q || '').trim());
   const m = bar.querySelector('.rep-min'); if (m) m.classList.toggle('active', s.minReq > 0);
   bar.querySelectorAll('[data-preset]').forEach(c => {
@@ -207,7 +244,12 @@ function repRedrawBar(card) {
 }
 
 function repCardsHtml(d) {
-  let h = '';
+  let h = `
+      <div class="rep-sub">
+        <span>Heaviest runs</span>
+        <span style="font-size:9.5px; font-weight:normal; text-transform:none; color:var(--dim);">Agent tasks that used the most prompt tokens (last 7 days)</span>
+      </div>
+      <div id="rep-runs"><div class="mon-empty">Loading…</div></div>`;
   if (d.by_model && d.by_model.length) {
     h += `
       <div class="rep-sub">
@@ -401,11 +443,14 @@ function repOnClick(e) {
     const card = reset.dataset.reset;
     Object.assign(REP[card], REP_DEFAULTS[card]);
     if (_repData) {
-      _repModels = _repData.by_model || [];
-      // redraw the filter bars with their default values; the summary cards stay
-      $('rep-tables').innerHTML = repCardsHtml(_repData);
-      repRenderModels();
-      repRenderDays();
+      // the default date range (last 7 days) is a range: By Model asks the server for exactly those days
+      (card === 'model' ? repFetchModels() : Promise.resolve()).then(() => {
+        // redraw the filter bars with their default values; the summary cards stay
+        $('rep-tables').innerHTML = repCardsHtml(_repData);
+        repLoadRuns();
+        repRenderModels();
+        repRenderDays();
+      });
     }
     return;
   }
@@ -421,7 +466,11 @@ $('btn-report').onclick = () => {
   $('report-modal').hidden = false;
   _repData = null;                       // reread the tables' rows each time the report is opened
   $('rep-content').innerHTML = '';
-  loadReport(30);
+  // all three sections start on the last 7 days, whatever was picked last time
+  Object.assign(REP.model, REP_DEFAULTS.model);
+  Object.assign(REP.day, REP_DEFAULTS.day);
+  document.querySelectorAll('.rep-day').forEach(x => { x.className = (x.dataset.days === '7' ? 'btn blue' : 'btn ghost') + ' rep-day'; });
+  loadReport(7);
 };
 $('rep-close').onclick = () => { $('report-modal').hidden = true; };
 $('report-modal').onclick = e => { if (e.target.id === 'report-modal') $('report-modal').hidden = true; };

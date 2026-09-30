@@ -55,8 +55,8 @@ class DigestTests(unittest.TestCase):
         digest = out[1]["content"]
         self.assertIn("read_file(src/f0.js): line one of file 0", digest)
 
-    def test_recent_results_default_is_six(self):
-        self.assertEqual(C._keep_recent_results(), 6)
+    def test_recent_results_default_is_three(self):
+        self.assertEqual(C._keep_recent_results(), 3)
 
 
 if __name__ == "__main__":

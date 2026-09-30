@@ -117,7 +117,9 @@ async function runAgentSSE(text) {
     const t0 = performance.now();
     try {
       const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : job.messages;
-      const hist = ctxMsgs.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
+      const histFull = ctxMsgs.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
+      // earlier turns are sent shortened (attached file text, long answers): static/js/history-clip.js
+      const hist = typeof clipHistoryForRun === 'function' ? clipHistoryForRun(histFull) : histFull;
       const engineMode = $('agent-engine') ? $('agent-engine').value : 'all-local';
       const cloudModelOverride = (() => {
         const sel = $('cloud-model-sel');
@@ -143,6 +145,7 @@ async function runAgentSSE(text) {
           repeat_penalty: getSamplingConfig().rep,
           presence_penalty: getSamplingConfig().presence,
           top_k: getSamplingConfig().topk,
+          ...samplingExtraBody(),
           system_prompt: (getSamplingConfig().sysprompt || '').trim() || undefined,
           attachments: docAttachments,
           cloud_model_override: cloudModelOverride || undefined,
@@ -158,7 +161,7 @@ async function runAgentSSE(text) {
         if (e.error === 'custom_agent_not_found' && typeof clearActiveCustomAgent === 'function') clearActiveCustomAgent();
         throw new Error(typeof apiErrorText === 'function' ? apiErrorText(e, res.status) : (e.message || e.error || ('HTTP ' + res.status)));
       }
-      await readSSE(res, (ev, d) => {
+      const sseEnd = await readSSE(res, (ev, d) => {
         const L = getJobAssistant();
         if (typeof sseAnswerCheck === 'function' && sseAnswerCheck(L, ev, d)) {
           if (typeof scheduleRenderLast === 'function' && curSession && String(curSession.id) === String(sessionId)) scheduleRenderLast();
@@ -298,6 +301,8 @@ async function runAgentSSE(text) {
         }
         else if (ev === 'done') {
           closeThought(L);
+          // how the run ended: completed | stopped | failed | cancelled (older servers send none: a reason means stopped)
+          L.runState = d.state || (d.reason ? 'stopped' : 'completed');
           if (typeof answerCheckEnd === 'function') answerCheckEnd(L);
           // run ended early (step cap or loop stop): keep why, so the bubble can offer Continue
           if (d.reason) {
@@ -320,39 +325,33 @@ async function runAgentSSE(text) {
         if (!targetAssistant.content) targetAssistant.content = targetAssistant._resetPrev;
         targetAssistant._resetPrev = null;
       }
+      // A stream that ends without its `done` event did not finish (server stopped, connection dropped, proxy cut it):
+      // that is an interruption, never a success.
+      if (!(sseEnd && sseEnd.terminal)) {
+        sseInterrupt(targetAssistant, 'the connection to the server ended before the run finished', 'interrupted');
+      }
       const leaked = sseApplyThinkSplit(targetAssistant);
       if (leaked) (targetAssistant.acts = targetAssistant.acts || []).push({ type: 'thought', text: leaked, duration_s: 1 });
-      if (!targetAssistant.content && targetAssistant.acts && targetAssistant.acts.length > 0) {
+      const okEnd = targetAssistant.runState === 'completed';
+      if (!targetAssistant.content && okEnd && targetAssistant.acts && targetAssistant.acts.length > 0) {
         targetAssistant.content = 'Task completed. See tool operations above for details.';
       }
       targetAssistant.statusText = '';
       if (typeof window.setLiveHud === 'function') {
-        window.setLiveHud({ phase: 'done', text: 'Task completed' });
+        window.setLiveHud(okEnd ? { phase: 'done', text: 'Task completed' }
+          : { phase: 'error', text: targetAssistant.runState === 'stopped' ? 'Run stopped' : 'Run interrupted' });
       }
-      const dt = (performance.now() - t0) / 1000;
-      const fullLen = (targetAssistant.content || '').length + (targetAssistant.reasoning || '').length;
-      const ntok = Math.max(1, Math.round(fullLen / 3.5));
-      targetAssistant.tps = ntok / dt; targetAssistant.ntok = ntok; targetAssistant.secs = dt;
-      if (ntok > 1 && $('chip-ts') && curSession && String(curSession.id) === String(sessionId)) {
-        $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
-      }
-      if (typeof answerCheckEnd === 'function') answerCheckEnd(targetAssistant);
-      persistMsgForSession(sessionId, 'assistant', targetAssistant.content, {
-        tps: targetAssistant.tps, ntok, secs: dt,
-        promptTokens: targetAssistant.promptTokens || undefined,
-        reasoning: targetAssistant.reasoning || undefined,
-        // screenshots stay in this browser tab: never written to the server's session history
-        acts: (targetAssistant.acts || []).map(a => (a && a.image) ? { ...a, image: undefined } : a),
-        modelDisplay: targetAssistant.modelDisplay || undefined,
-        modelSource: targetAssistant.modelSource || undefined,
-        modelProvider: targetAssistant.modelProvider || undefined,
-        runId: targetAssistant.runId || undefined,
-        check: typeof _checkMeta === 'function' ? _checkMeta(targetAssistant) : undefined,
-      });
+      finishAgentMessage(sessionId, targetAssistant, t0);
     } catch (e) {
-      if (e.name !== 'AbortError') {
-        const L = getJobAssistant();
-        L.content += (L.content ? '\n\n' : '') + '⚠️ ' + e.message;
+      const L = getJobAssistant();
+      const started = !!(L.runId || (L.acts && L.acts.length));      // the server had accepted the run
+      if (e.name !== 'AbortError') L.content += (L.content ? '\n\n' : '') + '⚠️ ' + e.message;
+      if (started) {
+        sseInterrupt(L, e.name === 'AbortError' ? 'you stopped the run' : e.message,
+                     e.name === 'AbortError' ? 'cancelled' : 'interrupted');
+        L.statusText = '';
+        if (typeof window.setLiveHud === 'function') window.setLiveHud({ phase: 'error', text: e.name === 'AbortError' ? 'Run stopped' : 'Run interrupted' });
+        finishAgentMessage(sessionId, L, t0);   // keep what the run did, with its final state, so a reload shows the same thing
       }
     }
 
@@ -369,4 +368,30 @@ async function runAgentSSE(text) {
     }
     if (typeof updateBgIndicators === 'function') updateBgIndicators();
   })();
+}
+
+/* The tail of an agent run: timing, the t/s chip, and saving the message with the state the run ended in. */
+function finishAgentMessage(sessionId, L, t0) {
+  const dt = Math.max(0.001, (performance.now() - t0) / 1000);
+  const fullLen = (L.content || '').length + (L.reasoning || '').length;
+  const ntok = Math.max(1, Math.round(fullLen / 3.5));
+  L.tps = ntok / dt; L.ntok = ntok; L.secs = dt;
+  if (ntok > 1 && $('chip-ts') && curSession && String(curSession.id) === String(sessionId)) {
+    $('chip-ts').textContent = '⚡ ' + (ntok / dt).toFixed(1) + ' t/s';
+  }
+  if (typeof answerCheckEnd === 'function') answerCheckEnd(L);
+  const cut = L.runState === 'interrupted' || L.runState === 'cancelled' || L.runState === 'failed';
+  persistMsgForSession(sessionId, 'assistant', L.content || (cut ? '(run interrupted)' : ''), {
+    tps: L.tps, ntok, secs: dt,
+    promptTokens: L.promptTokens || undefined,
+    reasoning: L.reasoning || undefined,
+    // screenshots stay in this browser tab: never written to the server's session history
+    acts: (L.acts || []).map(a => (a && a.image) ? { ...a, image: undefined } : a),
+    modelDisplay: L.modelDisplay || undefined,
+    modelSource: L.modelSource || undefined,
+    modelProvider: L.modelProvider || undefined,
+    runId: L.runId || undefined,
+    runState: L.runState || undefined,
+    check: typeof _checkMeta === 'function' ? _checkMeta(L) : undefined,
+  });
 }

@@ -2903,6 +2903,7 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 
 /* Sampling controls: one control per row (label | input | value) */
 .smp-grid { display: flex; flex-direction: column; gap: 7px; margin-top: 8px; }
+.smp-sub { margin-top: 6px; font-weight: 600; }
 .smp-row {
   display: grid; grid-template-columns: 125px 1fr 44px; gap: 8px; align-items: center;
   padding: 2px 0;
@@ -5114,3 +5115,38 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 /* Write File / Edit File: on for every agent. Shown as normal, ticked options with a small tag, not greyed out */
 .ca-tool-on { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 9.5px; font-weight: 600; color: var(--green); background: rgba(63,185,80,.12); }
 .ca-tool-item input[aria-label="always on"] { cursor: default; }
+
+/* Customize > connectors: brand-neutral tiles, sign-in and admin setup */
+.cz-icon.cz-mono { color: #fff; font-weight: 700; font-size: 13px; letter-spacing: .3px; }
+.cz-icon.cz-mono.lg { font-size: 18px; }
+.cz-acts { flex: none; display: inline-flex; align-items: center; gap: 8px; }
+.cz-acts .ru-btn { white-space: nowrap; }
+.cz-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; font-size: 12px; margin: 4px 0 10px; }
+.cz-scope label, .cz-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; }
+.cz-toggle { margin: 4px 0 10px; }
+.cz-client { margin-top: 4px; }
+.cz-client .cz-note { margin: 0 0 8px; line-height: 1.5; }
+.cz-client .cz-fork-row { margin: 0 0 10px; }
+.cz-actions { flex-wrap: wrap; }
+.cz-banner code, .cz-client code, .cz-note code { font-size: 11px; }
+
+/* ---- prompt dots: one per prompt, above the chat ---- */
+#prompt-dots {
+  display: flex; align-items: center; justify-content: safe center; gap: 2px;
+  flex: 0 0 auto; padding: 4px 20px; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+#prompt-dots[hidden] { display: none; }
+#prompt-dots::-webkit-scrollbar { display: none; }
+.pd-dot {
+  position: relative; flex: 0 0 auto; width: 14px; height: 14px; padding: 0; border: 0;
+  background: transparent; cursor: pointer; border-radius: 50%;
+}
+.pd-dot::before {
+  content: ""; position: absolute; inset: 3px; border-radius: 50%;
+  background: var(--dim); opacity: 0.45; transition: transform .12s ease, opacity .12s ease, background .12s ease;
+}
+.pd-dot:hover::before { opacity: 1; background: var(--accent); transform: scale(1.25); }
+.pd-dot.on::before { opacity: 1; background: var(--accent); transform: scale(1.3); box-shadow: 0 0 6px var(--accent-glow, var(--accent)); }
+.pd-dot:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .pd-dot::before { transition: none; } }

@@ -35,23 +35,31 @@ def _load_meta(raw):
         return None
 
 
-def db_list_sessions(pid: Optional[int], owner_user_id: int) -> list:
+def db_list_sessions_page(pid: Optional[int], owner_user_id: int, limit: Optional[int] = None,
+                          before_id: Optional[int] = None) -> tuple:
+    """(sessions, has_more): newest first; `before_id` continues after the last id of the previous page."""
     if pid is None or pid == 0:
-        rows = _projects_db.execute(
-            "SELECT * FROM sessions WHERE project_id IS NULL AND user_id = ? ORDER BY id DESC",
-            (owner_user_id,),
-        )
+        where, args = "project_id IS NULL AND user_id = ?", [owner_user_id]
     else:
         if db_project_owner(pid) != owner_user_id:
             raise PermissionError("not your project")
-        rows = _projects_db.execute(
-            "SELECT * FROM sessions WHERE project_id = ? AND user_id = ? ORDER BY id DESC",
-            (pid, owner_user_id),
-        )
-    return [
-        {"id": r["id"], "title": r["title"], "created_at": r["created_at"]}
-        for r in rows
-    ]
+        where, args = "project_id = ? AND user_id = ?", [pid, owner_user_id]
+    if before_id is not None:
+        where += " AND id < ?"
+        args.append(int(before_id))
+    sql = f"SELECT * FROM sessions WHERE {where} ORDER BY id DESC"
+    if limit:
+        sql += " LIMIT ?"
+        args.append(int(limit) + 1)       # one extra row tells whether another page exists
+    rows = list(_projects_db.execute(sql, tuple(args)))
+    has_more = bool(limit) and len(rows) > int(limit)
+    if has_more:
+        rows = rows[:int(limit)]
+    return ([{"id": r["id"], "title": r["title"], "created_at": r["created_at"]} for r in rows], has_more)
+
+
+def db_list_sessions(pid: Optional[int], owner_user_id: int) -> list:
+    return db_list_sessions_page(pid, owner_user_id)[0]
 
 
 def db_create_session(pid: Optional[int], title: str = None, owner_user_id: int = None) -> dict:

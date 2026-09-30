@@ -62,8 +62,14 @@ async def verify_answer(question: str, draft: str, evidence: str = "",
 def revision_messages(msgs: list, draft: str, issues: list) -> list:
     """The generator's own conversation + its draft + the reviewer's issues."""
     listed = "\n".join(f"- ({i.get('severity', 'minor')}) {i.get('text')}" for i in issues) or "- (unspecified)"
-    base = [m for m in msgs if m.get("role") in ("system", "user", "assistant")
-            and not m.get("tool_calls")]
+    # Only what a rewrite needs: the system prompt and the request being answered (plus the draft and the issues).
+    # The whole conversation used to be re-sent here on the generator's (often cloud) client, for every attempt.
+    plain = [m for m in msgs if m.get("role") in ("system", "user", "assistant") and not m.get("tool_calls")]
+    sys_msg = next((m for m in plain if m.get("role") == "system"), None)
+    users = [m for m in plain if m.get("role") == "user"]
+    asked = next((m for m in reversed(users) if not str(m.get("content") or "").lstrip().startswith("[")),
+                 users[-1] if users else None)        # skip loop-injected "[continue]" style turns
+    base = [m for m in (sys_msg, asked) if m is not None]
     return base + [{"role": "assistant", "content": draft},
                    {"role": "user", "content": _REVISE.format(issues=listed)}]
 

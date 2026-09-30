@@ -23,6 +23,28 @@ SAMPLING_DEFAULTS = {
     "presence": 0.0,
     "topk": 20,
     "maxtok": -1,
+    "rlast": 64,
+    "freq": 0.0,
+    "seed": -1,
+    "drym": 0.0,
+    "dryb": 1.75,
+    "dryl": 2,
+    "dryn": 4096,
+    "dynr": 0.0,
+    "dyne": 1.0,
+}
+
+# key -> (kind, min, max); shared by the POST clamp and the chat/agent request path
+SAMPLING_EXTRA_LIMITS = {
+    "rlast": (int, -1, 8192),
+    "freq": (float, -2.0, 2.0),
+    "seed": (int, -1, 2147483647),
+    "drym": (float, 0.0, 5.0),
+    "dryb": (float, 1.0, 4.0),
+    "dryl": (int, 0, 64),
+    "dryn": (int, -1, 32768),
+    "dynr": (float, 0.0, 2.0),
+    "dyne": (float, 0.1, 5.0),
 }
 
 
@@ -35,6 +57,15 @@ class SamplingConfigRequest(BaseModel):
     presence: Optional[float] = 0.0
     topk: Optional[int] = 20
     maxtok: Optional[int] = -1
+    rlast: Optional[int] = 64
+    freq: Optional[float] = 0.0
+    seed: Optional[int] = -1
+    drym: Optional[float] = 0.0
+    dryb: Optional[float] = 1.75
+    dryl: Optional[int] = 2
+    dryn: Optional[int] = 4096
+    dynr: Optional[float] = 0.0
+    dyne: Optional[float] = 1.0
 
 
 @router.get("/control/sampling")
@@ -64,6 +95,10 @@ async def save_sampling_config(req: SamplingConfigRequest,
         "topk": max(0, min(1000, int(req.topk if req.topk is not None else 20))),
         "maxtok": int(req.maxtok if req.maxtok is not None else -1),
     }
+    for key, (kind, lo, hi) in SAMPLING_EXTRA_LIMITS.items():
+        val = getattr(req, key)
+        val = SAMPLING_DEFAULTS[key] if val is None else kind(val)
+        cfg[key] = max(lo, min(hi, val))
     SAMPLING_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(SAMPLING_CONFIG_PATH, cfg)
     audit_log(user, "sampling.update", f"Updated sampling config: temp={cfg['temp']}, topp={cfg['topp']}")

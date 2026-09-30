@@ -158,13 +158,26 @@ def factor(lane: str) -> float:
     return float(_state(lane)["factor"])
 
 
-def budget_for(lane: str, window_tokens: int) -> int:
+def cloud_cap() -> int:
+    """context.cloud_budget_tokens: the most a cloud lane's prompt may grow to. Cloud windows are huge (262k), so
+    0.7 x window (~183k) let a long run re-send 100k+ tokens on every step; 0 = no cap."""
+    try:
+        from .small_model import APP_CONFIG
+        return max(0, int((APP_CONFIG.get("context") or {}).get("cloud_budget_tokens", 60000)))
+    except Exception:
+        return 60000
+
+
+def budget_for(lane: str, window_tokens: int, cloud: bool = False) -> int:
     """Token budget for one request: MARGIN of the window, tightened by the
-    estimator's observed error so compaction fires before the server refuses."""
+    estimator's observed error so compaction fires before the server refuses.
+    `cloud`: the lane runs on a provider, where the window is not the limit that matters (cost is): cap it."""
     win = int(window_tokens or 0)
     if win <= 0:
         return 0
-    return max(1, int(win * MARGIN / max(SAFETY_MIN, factor(lane))))
+    b = max(1, int(win * MARGIN / max(SAFETY_MIN, factor(lane))))
+    cap = cloud_cap() if cloud else 0
+    return min(b, cap) if cap else b
 
 
 def prompt_tokens_for(lane: str, msgs: list, tools: Optional[list] = None) -> int:

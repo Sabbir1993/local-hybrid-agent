@@ -8,6 +8,7 @@ from .constants import (
     MAX_SUBAGENT_STEPS,
     SUBAGENT_SYSTEM_PROMPT,
 )
+from ..agent_loop.tool_output import cap_tool_result
 from .scope import _subagent_scope
 from .window import _subagent_window
 
@@ -187,7 +188,8 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                     result = f"error: '{name}' is not enabled for this sub-agent"
                 else:
                     result = await run_tool(name, a)
-                msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+                # a child re-sends its own history every step too: keep its tool results as small as the parent's
+                msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": cap_tool_result(result)})
         else:
             final_content = final_content or "(sub-agent reached its step limit without a final answer)"
 

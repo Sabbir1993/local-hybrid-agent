@@ -335,6 +335,27 @@ function showPermModal(reqId, cmd, kind, saveable) {
   if (!m) return;
   m.dataset.reqId = reqId;
   $('perm-cmd').textContent = cmd;
+  // page JavaScript / a new website / a device action: asked here instead of in a native companion dialog.
+  // Allow once, or for the rest of this run (the "project" button, relabelled), or deny.
+  const DEVICE_KINDS = {
+    browser_eval: ['🌐 Run JavaScript in the agent’s browser ', 'The agent wants to run this script in its test browser:'],
+    browser_open: ['🌐 Open a website ', 'The agent wants to open this site in its test browser:'],
+    device: ['📱 Device action ', 'The agent wants to do this on a phone / emulator:'],
+  };
+  const pb = $('perm-project');
+  if (DEVICE_KINDS[kind]) {
+    const hd = m.querySelector('h2');
+    if (hd && hd.firstChild && hd.firstChild.nodeType === 3) hd.firstChild.textContent = DEVICE_KINDS[kind][0];
+    const ld = m.querySelector('#perm-box > p.dim');
+    if (ld) ld.textContent = DEVICE_KINDS[kind][1];
+    $('perm-note').textContent = 'Allow it once, or for the rest of this run. Nothing is remembered after the run ends.';
+    if (pb) { pb.hidden = false; pb.textContent = '⏱ For this run'; }
+    ['perm-user', 'perm-always'].forEach(id => { const b = $(id); if (b) b.hidden = true; });
+    m.dataset.pattern = '';
+    m.hidden = false;
+    return;
+  }
+  if (pb) pb.textContent = '📁 For this project';
   // code and paid cloud media can only ever be allowed once: no saved patterns
   // a command with & | > ; or special options is asked about every time, so it cannot be remembered either
   const chained = kind !== 'python' && kind !== 'media' && saveable === false;

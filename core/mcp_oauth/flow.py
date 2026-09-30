@@ -80,6 +80,12 @@ async def begin(name: str, owner: Optional[int], cfg: dict, redirect_uri: Option
     port = int(a.get("redirect_port") or 0)
     client_id = a.get("client_id")
     client_secret = _client_secret(name, owner)
+    shared = None
+    if not client_id:
+        from .. import mcp_catalog
+        shared = mcp_catalog.shared_client(name, cfg)
+        if shared:
+            client_id, client_secret = shared["client_id"], shared["secret"] or client_secret
     if not client_id:
         reg = _dcr_client(name, owner)
         if not reg and meta.get("registration_endpoint"):
@@ -116,6 +122,7 @@ async def begin(name: str, owner: Optional[int], cfg: dict, redirect_uri: Option
         "name": name, "owner": owner, "verifier": verifier, "token_url": token_url,
         "client_id": client_id, "client_secret": client_secret, "redirect_uri": redirect_uri,
         "resource": params.get("resource"), "expires": time.time() + FLOW_TTL_S,
+        "shared_client": bool(shared),
     }
     return {"auth_url": f"{auth_url}{'&' if '?' in auth_url else '?'}{urlencode(params)}",
             "state": state, "loopback_port": port}

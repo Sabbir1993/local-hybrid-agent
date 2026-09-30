@@ -100,7 +100,7 @@ async function bootAvd(p) {
   const emu = findTool("emulator", "emulator");
   if (!emu) throw new Error("Android emulator not found - install it with Android Studio's SDK Manager");
   await policy.confirmAction("start emulator?", "The AI agent wants to start this Android emulator:",
-    `${avd}${p.cold ? " (cold boot)" : ""}`, `avd\n${avd}`);
+    `${avd}${p.cold ? " (cold boot)" : ""}`, `avd\n${avd}`, p.approved_in_app === true);
   const before = new Set((await listDevices().catch(() => [])).map((d) => d.serial));
   const args = ["-avd", avd, "-netdelay", "none", "-netspeed", "full"];
   if (p.cold) args.push("-no-snapshot-load");
@@ -130,7 +130,7 @@ async function pair(p) {
   const hp = String(p.host_port || "");
   if (!HOSTPORT_RX.test(hp)) throw new Error("host_port must look like 192.168.1.20:37123");
   if (!/^\d{6}$/.test(String(p.code || ""))) throw new Error("pairing code is the 6-digit code shown on the phone");
-  await policy.confirmAction("pair phone?", "The AI agent wants to pair with this phone for wireless debugging:", hp);
+  await policy.confirmAction("pair phone?", "The AI agent wants to pair with this phone for wireless debugging:", hp, undefined, p.approved_in_app === true);
   const { stdout } = await adb(["pair", hp, String(p.code)], { timeoutMs: 30000 });
   return { output: stdout.trim().slice(0, 500) };
 }
@@ -138,7 +138,7 @@ async function pair(p) {
 async function connect(p) {
   const hp = String(p.host_port || "");
   if (!HOSTPORT_RX.test(hp)) throw new Error("host_port must look like 192.168.1.20:5555");
-  await policy.confirmAction("connect phone?", "The AI agent wants to connect to this device over Wi-Fi:", hp, `connect\n${hp}`);
+  await policy.confirmAction("connect phone?", "The AI agent wants to connect to this device over Wi-Fi:", hp, `connect\n${hp}`, p.approved_in_app === true);
   const { stdout } = await adb(["connect", hp], { timeoutMs: 20000 });
   return { output: stdout.trim().slice(0, 500) };
 }
@@ -150,7 +150,7 @@ async function install(p) {
   if (/\.aab$/i.test(apk)) throw new Error(".aab bundles can't be installed directly - build an APK (e.g. assembleDebug)");
   await policy.ensurePath(apk, "install on a device");
   if (!fs.existsSync(apk)) throw new Error(`file not found: ${apk}`);
-  await policy.confirmAction("install app?", `The AI agent wants to install this app on ${serial}:`, apk, `install\n${serial}\n${apk}`);
+  await policy.confirmAction("install app?", `The AI agent wants to install this app on ${serial}:`, apk, `install\n${serial}\n${apk}`, p.approved_in_app === true);
   const { stdout } = await adb(["-s", serial, "install", "-r", "-t", apk], { timeoutMs: 240000 });
   return { serial, apk, output: stdout.trim().slice(-800) };
 }

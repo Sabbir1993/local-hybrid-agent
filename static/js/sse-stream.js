@@ -21,6 +21,7 @@ async function readSSE(res, onEvent) {
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
+  let terminal = false;      // a done / error event arrived: the server finished the stream on purpose
   const drain = (final) => {
     buf = buf.replace(/\r\n?/g, '\n');
     let i;
@@ -33,18 +34,40 @@ async function readSSE(res, onEvent) {
       let d;
       try { d = JSON.parse(frame[1]); }
       catch (e) { console.warn('[sse] skipped a malformed', frame[0], 'event'); continue; }
+      if (frame[0] === 'done' || frame[0] === 'error') terminal = true;
       onEvent(frame[0], d || {});
     }
   };
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    window.markActive && window.markActive();   // a running job keeps the session alive
-    buf += dec.decode(value, { stream: true });
-    drain(false);
+  const release = window.holdSession ? window.holdSession() : null;   // an open stream is not idle
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      drain(false);
+    }
+    buf += dec.decode();
+    drain(true);
+  } finally {
+    if (release) release();
   }
-  buf += dec.decode();
-  drain(true);
+  return { terminal };
+}
+
+// The run ended without a `done` event, or the request failed mid-run: close every tool call that never got its
+// result (so no card stays on "Executing..." and no "Working..." bar stays up) and record how the run ended, which
+// lets the bubble say so and offer Continue. state: interrupted | cancelled | failed
+function sseInterrupt(L, reason, state) {
+  if (!L.acts) L.acts = [];
+  const answered = new Set(L.acts.filter(a => a.type === 'tool_result').map(a => a.id));
+  L.acts.filter(a => a.type === 'tool_call' && !answered.has(a.id)).forEach(c => {
+    L.acts.push({ type: 'tool_result', id: c.id, name: c.name, ok: false, interrupted: true, result: 'interrupted: ' + reason });
+  });
+  L.runState = state || 'interrupted';
+  if (!L.acts.some(a => a.type === 'stopped')) {
+    L.acts.push({ type: 'stopped', reason: L.runState, note: reason, detail: '', steps: L.acts.filter(a => a.type === 'step').length,
+                  pending: 0, plan_total: 0, plan_done: 0, plan_failed: 0, elapsed_s: 0 });
+  }
 }
 
 function _sseHud(state) {

@@ -131,3 +131,17 @@ def set_personal_workspace(path: Optional[str]) -> contextvars.Token:
 
 def personal_workspace() -> Optional[str]:
     return _personal_workspace.get()
+
+
+# The user approved the device/browser action this tool call is about to make in the web app's permission card.
+# core.companion_bridge.call then tells the companion (`approved_in_app`), which skips its own native dialog
+# (unless "also confirm on this device" is on). Set by routes/agent/run.py around exactly one tool call.
+_device_approved: contextvars.ContextVar[bool] = contextvars.ContextVar("device_approved", default=False)
+
+
+def set_device_approved(on: bool) -> contextvars.Token:
+    return _device_approved.set(bool(on))
+
+
+def device_approved() -> bool:
+    return _device_approved.get()

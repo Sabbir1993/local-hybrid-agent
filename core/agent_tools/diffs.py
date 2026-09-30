@@ -15,6 +15,15 @@ def _pkg():
     return sys.modules.get("core.agent_tools")
 
 
+MAX_TRACKED_FILES = 50      # per user: each entry holds a whole before/after text, so a long session must not keep them all
+
+
+def _trim_changes(changes: dict) -> None:
+    """Drop the oldest tracked files beyond MAX_TRACKED_FILES (their 'revert' baseline goes with them)."""
+    while len(changes) > MAX_TRACKED_FILES:
+        changes.pop(next(iter(changes)))
+
+
 def _snapshot_change(p: Path) -> None:
     changes = _ws_changes.setdefault(get_current_user_id(), {})
     key = str(p)
@@ -25,6 +34,7 @@ def _snapshot_change(p: Path) -> None:
         except Exception:
             rec["before"] = None
     rec["after"] = "written"
+    _trim_changes(changes)
 
 
 async def _remote_read_or_none(uid: int, p: Path) -> Optional[str]:
@@ -62,10 +72,12 @@ def _record_diff(p: Path, before: Optional[str], after: str) -> None:
     """Track a companion-side write: session baseline for the workspace panel,
     plus this call's own diff for the activity feed."""
     uid = get_current_user_id()
-    rec = _ws_changes.setdefault(uid, {}).setdefault(str(p), {})
+    changes = _ws_changes.setdefault(uid, {})
+    rec = changes.setdefault(str(p), {})
     if "before" not in rec:
         rec["before"] = before
     rec["after"] = after
+    _trim_changes(changes)
     _file_diffs[(uid, str(p))] = diff_summary(before, after)
 
 

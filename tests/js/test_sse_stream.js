@@ -5,10 +5,10 @@ const path = require('path');
 const vm = require('vm');
 
 const src = fs.readFileSync(path.join(__dirname, '..', '..', 'static', 'js', 'sse-stream.js'), 'utf8');
-let active = 0;
+let active = 0, held = 0;
 const warnings = [];
 const ctx = {
-  window: { markActive: () => { active++; } },
+  window: { holdSession: () => { active++; held++; return () => { held--; }; } },
   TextDecoder, TextEncoder,
   console: { warn: (...a) => warnings.push(a.join(' ')), log: console.log },
 };
@@ -84,6 +84,7 @@ async function collect(chunks) {
   assert.strictEqual(ctx.sseDeltaToThought(L2), 'streamed reasoning');
   assert.deepStrictEqual(plain(L2), { content: '', reasoning: 'earlier\n\nstreamed reasoning' });
 
-  assert.ok(active > 0, 'markActive is called per chunk');
+  assert.ok(active > 0, 'every stream holds the session while it is read');
+  assert.strictEqual(held, 0, 'and releases it when the read ends');
   console.log('sse stream tests: OK');
 })().catch(e => { console.error(e); process.exit(1); });

@@ -12,6 +12,7 @@ from .constants import (
     CONNECT_WAIT_S,
     DEFAULT_TIMEOUT_S,
     DEVICE_KEY_PREFIX,
+    CONFIRM_OPS,
     READ_ONLY_OPS,
     _connections,
     _pending,
@@ -35,6 +36,9 @@ async def call(user_id: int, op: str, params: dict, timeout: float = DEFAULT_TIM
     comes back, or the frame's own "error" on failure (caller renders that as
     the tool's error string).
     """
+    from ..request_context import device_approved
+    if op in CONFIRM_OPS and device_approved():
+        params = {**params, "approved_in_app": True}      # approved in the web app's card: no second native dialog
     try:
         return await _call_once(user_id, op, params, timeout)
     except ConnectionError:

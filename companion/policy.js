@@ -240,8 +240,10 @@ async function confirmShell(command, cwd, display, approvedInApp) {
 // Allow per origin until the companion restarts.
 const trustedOrigins = new Set();
 
-async function confirmOrigin(origin) {
+async function confirmOrigin(origin, approvedInApp) {
   if (trustedOrigins.has(origin)) return;
+  // approved in the web app's card: no native dialog (unless "also confirm on this device" is on)
+  if (approvedInApp && !localConfirmEnabled()) { trustedOrigins.add(origin); return; }
   const { response } = await prompt({
     type: "question",
     buttons: ["Deny", "Allow this site"],
@@ -258,8 +260,9 @@ async function confirmOrigin(origin) {
 
 // Page JavaScript and device actions (install an app, boot an emulator, pair a phone)
 // are confirmed each time, with the same "don't ask again" option as shell commands.
-async function confirmAction(title, message, detail, trustKey) {
+async function confirmAction(title, message, detail, trustKey, approvedInApp) {
   if (trustKey && trustedCommands.has(trustKey)) return;
+  if (approvedInApp && !localConfirmEnabled()) return;     // approved in the web app's card
   const { response, checkboxChecked } = await prompt({
     type: "question",
     buttons: ["Deny", "Allow"],
@@ -275,9 +278,9 @@ async function confirmAction(title, message, detail, trustKey) {
   if (trustKey && checkboxChecked) trustedCommands.add(trustKey);
 }
 
-async function confirmScript(code, url) {
+async function confirmScript(code, url, approvedInApp) {
   await confirmAction("run page script?", "The AI agent wants to run this JavaScript in its test browser:",
-    `${code}\n\non: ${url}`, `js\n${url}\n${code}`);
+    `${code}\n\non: ${url}`, `js\n${url}\n${code}`, approvedInApp);
 }
 
 module.exports = { ensurePath, confirmShell, approveRoot, isApproved, confirmOrigin, confirmAction, confirmScript,

@@ -27,6 +27,7 @@ from typing import Callable, Optional
 from .registry import registry
 from .small_model import APP_CONFIG
 from .tool_args import shell_command
+from .text_clip import clip_head_tail
 from . import companion_bridge
 
 # Installed by server_manager at request time: async fn(cmd) -> tuple[bool, str]
@@ -119,17 +120,33 @@ _PERSONAL_WRITE_RE = re.compile(
     r"set-itemproperty|new-itemproperty|remove-itemproperty|invoke-expression|iex|invoke-webrequest|iwr|"
     r"invoke-restmethod|irm|start-process|stop-process|stop-service|start-service|set-service|"
     r"curl|wget|pip|pip3|npm|npx|yarn|pnpm|winget|choco|scoop|"
-    r"cmd|bash|sh|wsl|start|powershell|pwsh)\b"
+    r"cmd|bash|sh|wsl|start|powershell|pwsh)(?![\w-])"      # not the front of Format-Table, Sort-Object ...
     r"|\bsed\s+-i\b|\bgit\s+(?:commit|checkout|switch|reset|clean|add|apply|am|merge|pull|push|rebase|stash|"
     r"init|clone|rm|mv|restore|cherry-pick|revert|tag|branch\s+-[dD])\b", re.I)
 
 
+# `wmic <alias> where ProcessId > 0 get ...`: the > there is a comparison, not a redirect. Only the text between
+# where and get is ignored, so a real redirect after `get ...` is still caught.
+# `2>nul`, `>$null`, `2>&1` only discard or merge output; they write no file
+_HARMLESS_REDIRECT_RE = re.compile(r"\d?>>?\s*(?:nul|\$null|/dev/null)(?![\w.])|\d?>&\d", re.I)
+_WMIC_WHERE_RE =re.compile(r"^\s*wmic\b.*?\bwhere\b(.*?)\bget\b", re.I)
+
+
 def personal_write_violation(cmd: str) -> Optional[str]:
     """Why a Personal Agent may not run `cmd`, or None. Read-only inspection is what remains."""
-    if _PERSONAL_WRITE_RE.search(cmd or ""):
-        return ("a Personal Agent cannot run this command (it may not redirect output, change files, "
-                "install software or start a shell). To save results use write_file (it saves into "
-                "your work folder); to change a file use edit_file. Do not retry this command.")
+    cmd = cmd or ""
+    m = _WMIC_WHERE_RE.match(cmd)
+    if m:
+        cmd = cmd[:m.start(1)] + " " + cmd[m.end(1):]
+    cmd = _HARMLESS_REDIRECT_RE.sub(" ", cmd)
+    hit = _PERSONAL_WRITE_RE.search(cmd)
+    if hit:
+        found = hit.group(0).strip()
+        return (f"a Personal Agent cannot run this command: `{found}` is not allowed (it may not redirect output, "
+                "change files, install software or start a shell; any > or >> counts as a redirect, so filter "
+                "the output instead of comparing with >). To save results use "
+                "write_file (it saves into your work folder); to change a file use edit_file. "
+                "Do not retry this command or run the same thing through run_python.")
     return None
 
 
@@ -218,8 +235,9 @@ async def tool_run_shell(args: dict) -> str:
         return f"error: command timed out after {timeout}s"
     except Exception as e:
         return f"error: companion shell exec failed: {e}"
-    out = (data.get("stdout") or "")[-MAX_OUTPUT_CHARS:]
-    err_out = (data.get("stderr") or "")[-4000:]
+    # command output keeps its start and (mostly) its end, with a note: the result is usually the last lines
+    out = clip_head_tail(data.get("stdout") or "", MAX_OUTPUT_CHARS, head_frac=0.2)
+    err_out = clip_head_tail(data.get("stderr") or "", 4000, head_frac=0.2)
     result = f"exit code {data.get('exit_code')}"
     if out:
         result += f"\n--- stdout ---\n{out}"

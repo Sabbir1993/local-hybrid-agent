@@ -1,5 +1,7 @@
 """Session and message endpoints for projects."""
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
@@ -8,7 +10,7 @@ from core.db import (
     db_append_message,
     db_create_session,
     db_delete_session,
-    db_list_sessions,
+    db_list_sessions_page,
     db_load_messages,
     db_update_session_title,
 )
@@ -19,9 +21,15 @@ router = APIRouter()
 
 
 @router.get("/control/projects/{pid}/sessions")
-async def list_sessions(pid: int, user: Principal = Depends(get_current_user)):
+async def list_sessions(pid: int, limit: Optional[int] = None, before: Optional[int] = None,
+                        user: Principal = Depends(get_current_user)):
+    """Newest first. `limit` (1-100) + `before` (last id of the previous page) page the list; without them
+    every session is returned."""
+    if limit is not None:
+        limit = max(1, min(int(limit), 100))
     try:
-        return {"sessions": db_list_sessions(pid, owner_user_id=user.id)}
+        rows, has_more = db_list_sessions_page(pid, owner_user_id=user.id, limit=limit, before_id=before)
+        return {"sessions": rows, "has_more": has_more}
     except PermissionError:
         return JSONResponse({"error": "project not found"}, status_code=404)
 

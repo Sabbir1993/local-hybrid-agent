@@ -400,9 +400,16 @@ function toast(msg, isErrOrOptions) {
 window.toast = toast;
 
 let _hudFadeTimer = null;
+let _hudPhase = null;
+// Stop / finish: a HUD still showing a spinner (preparing, running...) belongs to a run that has ended
+function clearLiveHudIfBusy() {
+  if (_hudPhase && _hudPhase !== 'done' && _hudPhase !== 'error') setLiveHud(null);
+}
+window.clearLiveHudIfBusy = clearLiveHudIfBusy;
 function setLiveHud(state) {
   const hud = $('live-state-hud');
   if (!hud) return;
+  _hudPhase = state ? state.phase : null;
   if (!state) {
     if (hud.style.display !== 'none') {
       hud.style.opacity = '0';

@@ -10,6 +10,8 @@ from core import auth_db
 from core.audit import audit_log
 from core.auth import (
     CSRF_COOKIE,
+    IDLE_MAX_MINUTES,
+    IDLE_MIN_MINUTES,
     SESSION_ABSOLUTE_MAX_S,
     SESSION_COOKIE,
     Principal,
@@ -17,11 +19,13 @@ from core.auth import (
     new_csrf_token,
     password_policy_error,
     revoke_session,
-    session_idle_s,
+    session_policy,
     verify_session,
 )
 from core.auth_provider import get_auth_provider, hash_password, verify_password
-from core.deps import get_current_user
+from core.config import update_app_config
+from core.deps import get_current_user, require_permission
+from core.small_model import APP_CONFIG
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -123,8 +127,42 @@ async def me(user: Principal = Depends(get_current_user)):
                   "is_super_admin": user.is_super_admin, "must_change_password": user.must_change_password},
         "roles": user.role_names,
         "permissions": perms,
-        "idle_seconds": session_idle_s(),
+        "idle_enabled": session_policy()["enabled"],
+        "idle_seconds": session_policy()["minutes"] * 60,
     }
+
+
+class SessionPolicyBody(BaseModel):
+    enabled: bool
+    minutes: int
+
+
+@router.get("/session-policy")
+async def get_session_policy(user: Principal = Depends(require_permission("users.manage"))):
+    return {**session_policy(), "min": IDLE_MIN_MINUTES, "max": IDLE_MAX_MINUTES}
+
+
+@router.put("/session-policy")
+async def set_session_policy(body: SessionPolicyBody, request: Request,
+                             user: Principal = Depends(require_permission("users.manage"))):
+    """Admin: turn idle sign-out on/off and set the idle time. Takes effect for every user's next request
+    (the page re-reads it from /auth/me on load); the 7-day absolute session cap always applies."""
+    if not IDLE_MIN_MINUTES <= body.minutes <= IDLE_MAX_MINUTES:
+        raise HTTPException(status_code=400,
+                            detail=f"idle time must be {IDLE_MIN_MINUTES}-{IDLE_MAX_MINUTES} minutes")
+    before = session_policy()
+
+    def _apply(cfg):
+        sec = cfg.setdefault("security", {})
+        sec["session_idle_enabled"] = body.enabled
+        sec["session_idle_minutes"] = body.minutes
+    update_app_config(_apply)
+    APP_CONFIG.setdefault("security", {}).update(session_idle_enabled=body.enabled,
+                                                 session_idle_minutes=body.minutes)
+    audit_log(user, action="security.session_policy", resource="session_idle",
+              detail={"from": before, "to": session_policy()}, result="allow",
+              ip=request.client.host if request.client else None)
+    return {**session_policy(), "min": IDLE_MIN_MINUTES, "max": IDLE_MAX_MINUTES}
 
 
 @router.post("/change_password")

@@ -82,7 +82,7 @@ def _load_app_config() -> dict:
                 "preload": False,
             },
         },
-        "agent": {"exec_timeout_s": 120, "max_steps": 60, "idle_unload_s": 120},
+        "agent": {"exec_timeout_s": 120, "max_steps": 60, "idle_unload_s": 120, "run_token_budget": 2500000},
         # Per-lane tool surface (core/tool_surface.py). The full registry is 48 tools
         # / ~8.5k tokens of schema re-sent every step; the main lane starts from a core
         # set and only receives the situational families (browser / device / office
@@ -91,7 +91,12 @@ def _load_app_config() -> dict:
         # Context history shaping (core/agent_loop.py::compact_messages). At most
         # keep_recent_results tool results stay verbatim in a compacted tail; the rest
         # become digest lines. 0 keeps the old "60% of the budget" tail.
-        "context": {"aging": {"keep_recent_results": 6}},
+        "context": {"aging": {"keep_recent_results": 3},
+                    # cloud lanes have huge windows, so history is bounded by these instead (core/agent_loop/clearing.py,
+                    # core/context_budget.py): compact the prompt past cloud_budget_tokens; past clear_trigger_tokens
+                    # old tool results are replaced by a one-line placeholder (newest clear_keep_results stay)
+                    "cloud_budget_tokens": 60000, "clear_trigger_tokens": 30000,
+                    "clear_keep_results": 4, "clear_at_least_tokens": 8000},
         "roles": dict(_DEFAULT_ROLES),
         "provider": {},
         "cloud": {},

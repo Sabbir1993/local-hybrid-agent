@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -44,6 +45,8 @@ router = APIRouter(prefix="/customize", tags=["customize"])
 
 class InstallReq(BaseModel):
     secrets: dict = {}        # connectors only: {ENV_KEY: value} -> OS keychain
+    scope: Optional[str] = None   # connectors only: 'user' (just me) | 'global' (everyone); default = the preset's
+    fields: dict = {}         # connectors only: values for the preset url's {placeholders}
 
 
 class RemoteInspectReq(BaseModel):

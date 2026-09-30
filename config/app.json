@@ -26,8 +26,8 @@
       "model": "orchestrator/Spark-X2.5-4B-Q4_K_M.gguf",
       "port": 8091,
       "gpu": 1,
-      "ctx": 32768,
-      "np": 1,
+      "ctx": 65536,
+      "np": 2,
       "kv_cache_type": "q8_0",
       "label": "Fast helper",
       "fallback": "main"
@@ -159,9 +159,19 @@
   },
   "agent": {
     "exec_timeout_s": 0,
-    "max_steps": 200,
-    "run_timeout_s": 2700,
+    "max_steps": 60,
+    "run_timeout_s": 1200,
+    "run_token_budget": 2500000,
     "idle_unload_s": 0
+  },
+  "context": {
+    "cloud_budget_tokens": 60000,
+    "clear_trigger_tokens": 30000,
+    "clear_keep_results": 4,
+    "clear_at_least_tokens": 8000,
+    "aging": {
+      "keep_recent_results": 3
+    }
   },
   "preflight": {
     "mode": "block",

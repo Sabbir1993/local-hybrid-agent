@@ -122,7 +122,15 @@ def _is_internal_host(host: str) -> bool:
     return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified
 
 
-def _validate(req: McpServerReq, restricted: bool = False) -> Optional[str]:
+def _is_preset_command(req: McpServerReq, preset: Optional[dict]) -> bool:
+    if not preset or preset.get("transport") != "stdio":
+        return False
+    return (req.command, [str(a) for a in req.args]) == (preset.get("command"), [str(a) for a in preset.get("args", [])])
+
+
+def _validate(req: McpServerReq, restricted: bool = False, preset: Optional[dict] = None) -> Optional[str]:
+    """`preset`: the reviewed catalog entry this request was built from. A restricted user may then run that
+    entry's exact command without the package being on the personal allow-list; nothing else is relaxed."""
     if not _NAME_RX.match(req.name or ""):
         return "name must be 1-32 chars of a-z, 0-9, _ or -"
     if req.scope not in ("global", "user"):
@@ -130,7 +138,9 @@ def _validate(req: McpServerReq, restricted: bool = False) -> Optional[str]:
     if req.transport not in ("stdio", "http"):
         return "transport must be 'stdio' or 'http'"
     if req.transport == "stdio":
-        if restricted:
+        if restricted and _is_preset_command(req, preset):
+            pass     # exactly the reviewed catalog command
+        elif restricted:
             err = _validate_user_stdio(req)
             if err:
                 return err

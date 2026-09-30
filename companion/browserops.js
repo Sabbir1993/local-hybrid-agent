@@ -55,7 +55,7 @@ function isLocalHost(host) {
   return h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".localhost") || h.endsWith(".test");
 }
 
-async function checkUrl(raw) {
+async function checkUrl(raw, approvedInApp) {
   let u;
   try { u = new URL(String(raw || "")); } catch (_) { throw new Error(`not a valid URL: ${raw}`); }
   if (u.protocol === "about:" && u.href === "about:blank") return u;
@@ -65,7 +65,7 @@ async function checkUrl(raw) {
     return u;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error(`blocked URL scheme: ${u.protocol}`);
-  if (!isLocalHost(u.hostname)) await policy.confirmOrigin(u.origin);
+  if (!isLocalHost(u.hostname)) await policy.confirmOrigin(u.origin, approvedInApp === true);
   return u;
 }
 
@@ -172,7 +172,7 @@ async function assertTypable(loc, text) {
 // ---------------- ops ----------------
 
 async function navigate(p) {
-  const u = await checkUrl(p.url);
+  const u = await checkUrl(p.url, p.approved_in_app === true);
   const sess = await getSession(p);
   if ((p.device && p.device !== sess.device) || (p.headless !== undefined && (p.headless !== false) !== sess.headless)) {
     await sess.context.close().catch(() => {});
@@ -247,7 +247,7 @@ async function evaluate(p) {
   const sess = await getSession(p, false);
   const code = String(p.expression || "");
   if (!code.trim()) throw new Error("expression required");
-  await policy.confirmScript(code, sess.page.url());
+  await policy.confirmScript(code, sess.page.url(), p.approved_in_app === true);
   const out = await sess.page.evaluate(`(async () => (${code}))()`);
   let text;
   try { text = JSON.stringify(out, null, 1); } catch (_) { text = String(out); }

@@ -70,7 +70,11 @@ def _stringify_content(result) -> str:
                 if c.get("type") == "text":
                     parts.append(c.get("text", ""))
                 else:
-                    parts.append(json.dumps(c))
+                    # images / audio / blobs arrive as base64: a 100 KB screenshot is not something the model can read
+                    # and would sit in every later prompt. Say what it was instead.
+                    kind = str(c.get("type") or "content")
+                    size = len(str(c.get("data") or c.get("blob") or ""))
+                    parts.append(f"[{kind} content omitted{f', {size} base64 characters' if size else ''}]" if size > 2000 else json.dumps(c))
             else:
                 parts.append(str(c))
         out = "\n".join(p for p in parts if p)

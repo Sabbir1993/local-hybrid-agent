@@ -5,7 +5,18 @@
 const SAMPLING_DEFAULTS = {
   sysprompt: '', temp: 0.6, topp: 0.95, minp: 0.0, rep: 1.0,
   presence: 0.0, topk: 20, maxtok: -1,
+  rlast: 64, freq: 0.0, seed: -1,
+  drym: 0.0, dryb: 1.75, dryl: 2, dryn: 4096,
+  dynr: 0.0, dyne: 1.0,
 };
+
+/* Extra llama.cpp controls: [key, kind, min, max, label decimals].
+ * drym / dynr = 0 means the feature is off. seed < 0 means random. */
+const SAMPLING_EXTRA = [
+  ['rlast', 'int', -1, 8192], ['freq', 'float', -2, 2, 2], ['seed', 'int', -1, 2147483647],
+  ['drym', 'float', 0, 5, 2], ['dryb', 'float', 1, 4, 2], ['dryl', 'int', 0, 64], ['dryn', 'int', -1, 32768],
+  ['dynr', 'float', 0, 2, 2], ['dyne', 'float', 0.1, 5, 2],
+];
 
 function sanitizeSamplingConfig(raw) {
   const src = (raw && typeof raw === 'object') ? raw : {};
@@ -33,6 +44,18 @@ function sanitizeSamplingConfig(raw) {
     presence: num(src.presence, SAMPLING_DEFAULTS.presence, -2, 2),
     topk: intNum(src.topk, SAMPLING_DEFAULTS.topk, 0, 1000),
     maxtok: intNum(src.maxtok, SAMPLING_DEFAULTS.maxtok, -1, 1048576),
+    ...Object.fromEntries(SAMPLING_EXTRA.map(([k, kind, lo, hi]) =>
+      [k, (kind === 'int' ? intNum : num)(src[k], SAMPLING_DEFAULTS[k], lo, hi)])),
+  };
+}
+
+/* Request-body fields for the extra llama.cpp controls (server applies the off/random rules). */
+function samplingExtraBody(cfg) {
+  const c = cfg || getSamplingConfig();
+  return {
+    repeat_last_n: c.rlast, frequency_penalty: c.freq, seed: c.seed,
+    dry_multiplier: c.drym, dry_base: c.dryb, dry_allowed_length: c.dryl, dry_penalty_last_n: c.dryn,
+    dynatemp_range: c.dynr, dynatemp_exponent: c.dyne,
   };
 }
 
@@ -98,6 +121,11 @@ function initSamplingPanel() {
     if ($$('presence')) { $$('presence').value = c.presence; setLabel('presence', c.presence, v => parseFloat(v).toFixed(2)); }
     if ($$('topk')) $$('topk').value = c.topk;
     if ($$('maxtok')) $$('maxtok').value = c.maxtok;
+    SAMPLING_EXTRA.forEach(([k, kind, , , dec]) => {
+      if (!$$(k)) return;
+      $$(k).value = c[k];
+      if (kind === 'float') setLabel(k, c[k], v => parseFloat(v).toFixed(dec));
+    });
   };
 
   applyToUI(cfg);
@@ -123,6 +151,7 @@ function initSamplingPanel() {
     presence: $$('presence') ? $$('presence').value : SAMPLING_DEFAULTS.presence,
     topk: $$('topk') ? $$('topk').value : SAMPLING_DEFAULTS.topk,
     maxtok: $$('maxtok') ? $$('maxtok').value : SAMPLING_DEFAULTS.maxtok,
+    ...Object.fromEntries(SAMPLING_EXTRA.map(([k]) => [k, $$(k) ? $$(k).value : SAMPLING_DEFAULTS[k]])),
   });
 
   const showStatus = (msg = '✓ Saved') => {
@@ -155,6 +184,16 @@ function initSamplingPanel() {
   if ($$('minp')) $$('minp').addEventListener('input', () => { setLabel('minp', $$('minp').value, v => parseFloat(v).toFixed(3)); persist(false); });
   if ($$('rep')) $$('rep').addEventListener('input', () => { setLabel('rep', $$('rep').value, v => parseFloat(v).toFixed(2)); persist(false); });
   if ($$('presence')) $$('presence').addEventListener('input', () => { setLabel('presence', $$('presence').value, v => parseFloat(v).toFixed(2)); persist(false); });
+
+  SAMPLING_EXTRA.forEach(([k, kind, , , dec]) => {
+    const el = $$(k);
+    if (!el) return;
+    if (kind === 'float') {
+      el.addEventListener('input', () => { setLabel(k, el.value, v => parseFloat(v).toFixed(dec)); persist(false); });
+    } else {
+      ['input', 'change', 'blur'].forEach(ev => el.addEventListener(ev, () => persist(false)));
+    }
+  });
 
   // Explicit Save button
   const saveBtn = $$('btn-save-sampling');

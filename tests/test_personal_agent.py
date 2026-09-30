@@ -50,6 +50,26 @@ class ShellRuleTests(unittest.TestCase):
                   "reg add HKCU\\x", "Set-Content a.txt hi", "sed -i s/a/b/ f"):
             self.assertIsNotNone(personal_write_violation(c), c)
 
+    def test_wmic_where_comparison_is_not_a_redirect(self):
+        ok = "wmic process where ProcessId > 0 get Name,ProcessId,WorkingSetSize,Threads,CommandLine"
+        self.assertIsNone(personal_write_violation(ok))
+        self.assertIsNotNone(personal_write_violation(ok + " > procs.txt"))
+        self.assertIsNotNone(personal_write_violation("echo a > 0"))
+
+    def test_powershell_cmdlets_that_start_with_a_blocked_word_pass(self):
+        for c in ("Get-Process | Sort-Object CPU -Descending | Format-Table -AutoSize",
+                  "Get-Service | Where-Object Status -eq Running | Select-Object -First 5 | Format-List",
+                  "Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version"):
+            self.assertIsNone(personal_write_violation(c), c)
+        for c in ("format c:", "Copy-Item a b", "Remove-Item x", "Start-Process calc", "start calc"):
+            self.assertIsNotNone(personal_write_violation(c), c)
+
+    def test_discarding_output_is_fine_and_the_refusal_names_the_match(self):
+        self.assertIsNone(personal_write_violation("tasklist 2>nul"))
+        self.assertIsNone(personal_write_violation("dir 2>&1"))
+        self.assertIsNotNone(personal_write_violation("dir > nul.txt"))
+        self.assertIn("`net`", personal_write_violation("net user"))
+
 
 class RunToolTests(unittest.TestCase):
     def setUp(self):

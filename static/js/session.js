@@ -226,7 +226,24 @@
     setInterval(checkIdle, 10 * 1000);
   }
 
+  // A running job is not idle: a long agent step can go minutes without a byte on the stream, so a stream
+  // holds the session while it is open (markActive on a timer, which also refreshes the server session).
+  let holds = 0, holdTimer = null;
+  window.holdSession = function () {
+    if (++holds === 1) {
+      markActive(true);
+      holdTimer = setInterval(() => markActive(true), 30 * 1000);
+    }
+    let released = false;
+    return function release() {
+      if (released) return;
+      released = true;
+      if (--holds === 0) { clearInterval(holdTimer); holdTimer = null; markActive(false); }
+    };
+  };
+
   function checkIdle() {
+    if (holds > 0) return;
     const shared = Number(localStorage.getItem('a770_last_active') || 0);
     if (shared > lastActive) { lastActive = shared; hideIdleWarning(); }
     const idle = Date.now() - lastActive;
@@ -238,7 +255,8 @@
     if (!resp.ok) return null;
     const data = await resp.json();
     if (data.idle_seconds) idleMs = data.idle_seconds * 1000;
-    if (data.user) startIdleWatch();
+    // admin can turn idle sign-out off (Settings > Session security); the server then keeps the session to its absolute cap
+    if (data.user && data.idle_enabled !== false) startIdleWatch();
     window.__user = data.user;
     window.__perms = new Set(data.permissions || []);
     applyPermGating(data);

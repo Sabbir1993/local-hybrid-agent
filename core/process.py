@@ -9,6 +9,7 @@ from .backend import device_prefix
 from .config import ACTIVE_RUNTIME, CONFIG_DEFAULTS, LLAMA_SERVER_PORT, apply_runtime
 
 IS_WINDOWS = os.name == "nt"
+MAIN_CACHE_RAM_MB = 2048     # -cram when a profile sets none (llama's own default is 8192 MiB of host RAM)
 
 
 def kill_process_tree(proc: Optional[subprocess.Popen], timeout: float = 15) -> None:
@@ -132,8 +133,8 @@ def build_launch_command(profile: dict) -> list[str]:
             cmd += ["--kv-unified-per-slot", str(per_slot_cap(profile))]
     if profile.get("cache_reuse"):
         cmd += ["--cache-reuse", str(profile["cache_reuse"])]
-    if profile.get("cache_ram"):
-        cmd += ["-cram", str(profile["cache_ram"])]
+    # an unset/0 profile value used to mean llama's own 8192 MiB host-RAM prompt cache: bound it (-1 = no limit)
+    cmd += ["-cram", str(profile.get("cache_ram") or MAIN_CACHE_RAM_MB)]
     if profile.get("model_type") == "moe" and tuned.get("n_cpu_moe") is not None:
         cmd += ["-ncmoe", str(tuned["n_cpu_moe"])]
     cmd += ["--jinja"]

@@ -50,12 +50,15 @@ from core.agent_library import agent_library_prompt_fragment
 from core import router_policy, route_log
 from core.plugins import plugins_prompt_fragment, fire_hook
 from core.shell_tools import command_allowed, mark_approved, mark_code_approved, shell_cfg
+from core import device_approval
+from core.request_context import set_device_approved
 from core.agent_loop.narration import _is_narration
 from core.agent_loop.executor_view import build_executor_view
 from core.agent_loop.finish import apply_finish, without_finish
 from core.agent_loop import loop_guard as _lg
 from core.tool_args import shell_command
 from core.agent_loop.tool_output import cap_tool_result, cap_from_config
+from core.agent_loop.clearing import clear_old_results
 from core.agent_loop import (
     run_tool,
     AGENT_SYSTEM_PROMPT,
@@ -78,6 +81,7 @@ from core.monitor import (
 from .. import common
 from core import reasoning
 from ..common import _llm_chat_stream
+from ..common.sampling_extra import sampler_extra
 from core.verifier import sse_events as answer_check_events
 
 from .base import _executor_device_label, _main_device_label, router
@@ -103,7 +107,11 @@ from .guards import (
     _with_diff,
 )
 from .models import AgentRequest
-from .permissions import _await_permission, _perm_pending, can_save_pattern
+from .permissions import _await_permission, _perm_pending, _permission_stream, can_save_pattern, keepalive
+
+# appended to a declined command: the model otherwise retries the same thing through run_python
+_NO_WORKAROUND = (" The user said no to this command. Do not run the same thing another way (run_python, another "
+                  "shell, a different spelling). Use a simpler read-only command, or report what you could not collect.")
 
 
 def _describe_stop(detail: str) -> str:
@@ -302,7 +310,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     if len(msgs) > 3:
         _early_q = tool_surface.surface_query(msgs)
         _early_tools = tool_surface.filter_tools(all_tools(), _early_q, APP_CONFIG.get("tool_surface"))
-        _early_budget = context_budget.budget_for("main", await _lane_window("main", cloud_main))
+        _early_budget = context_budget.budget_for("main", await _lane_window("main", cloud_main), cloud=bool(cloud_main))
         if _early_budget and context_budget.prompt_tokens_for("main", msgs, _early_tools) > _early_budget:
             msgs = compact_messages(msgs, _early_budget, tools=_early_tools)
     if custom_agent:
@@ -646,11 +654,11 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     direct_stream = common._llm_chat_stream_with_fallback(
                         active_client, fb_client, msgs, None, req.temperature,
                         req.max_tokens, repeat_penalty=agent_rep, rid=chat_rid, lane="direct", effort=effort,
-                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
+                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
                 else:
                     direct_stream = _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens,
                                                     repeat_penalty=agent_rep, rid=chat_rid, effort=effort,
-                                                    top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k)
+                                                    top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
                 _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
                 async for ev, val in direct_stream:
                     if ev == "queued":
@@ -680,7 +688,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 tps = (toks / dt) if (toks and dt and dt > 0) else None
                 monitor_end(chat_rid, 200, completion_tokens=toks, tps=tps, duration=dt,
                            source=model_info.get("source"), provider=model_info.get("provider_name"))
-            yield f"event: done\ndata: {{}}\n\n"
+            yield f"event: done\ndata: {json.dumps({'state': 'completed'})}\n\n"
         return StreamingResponse(direct_chat(), media_type="text/event-stream")
 
     async def event_stream():
@@ -709,6 +717,22 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         run_id = _uuid.uuid4().hex
         run_outcome = "error"
         steps_run = 0
+        # tool calls announced to the client but not yet answered: closed explicitly if the run dies mid-tool
+        pending_tool: dict = {}
+        run_allow: set = set()      # device/browser approvals the user gave "for this run"
+        # prompt tokens this run has sent so far: agent.run_token_budget ends a run that keeps re-sending a big
+        # history (at 70% it clears old results harder and asks the model to wrap up; at 100% it stops with a summary)
+        run_prompt_tokens = 0
+        try:
+            run_token_budget = max(0, int((APP_CONFIG.get("agent") or {}).get("run_token_budget", 0) or 0))
+        except (TypeError, ValueError):
+            run_token_budget = 0
+        budget_squeeze = False
+
+        def _tool_result(payload):
+            pending_tool.pop(payload.get("id"), None)
+            return sse("tool_result", payload)
+
         # wall-clock budget: the one bound that protects the GPU when the model is
         # making slow-but-real progress that the step cap and loop detector miss
         run_started = time.time()
@@ -742,6 +766,15 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                           f"after {step} steps", file=sys.stderr)
                     stop_reason = "timeout"
                     break
+                if run_token_budget and run_prompt_tokens >= run_token_budget:
+                    print(f"[agent] run {run_id[:8]} used its {run_token_budget} token budget after {step} steps", file=sys.stderr)
+                    stop_reason = "budget"
+                    break
+                if run_token_budget and not budget_squeeze and run_prompt_tokens >= int(run_token_budget * 0.7):
+                    budget_squeeze = True
+                    msgs.append({"role": "user", "content": (
+                        "[budget] This run has used most of its token budget. Stop exploring: finish what is left in as "
+                        "few steps as possible and give the final answer.")})
                 steps_run = step + 1
                 yield f"event: step\ndata: {json.dumps({'step': step + 1, 'total': steps})}\n\n"
                 tool_calls = None
@@ -819,7 +852,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         yield sse("tool_call", {'id': tc_id, 'name': nr['name'], 'args': nr['args'], 'model': r_model_info['display'], 'device': r_model_info['device']})
                         result = await run_tool(nr["name"], nr["args"])
                         ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
-                        yield sse("tool_result", _with_diff({'id': tc_id, 'name': nr['name'], 'ok': ok, 'result': result, 'model': r_model_info['display']}, nr['args']))
+                        yield _tool_result(_with_diff({'id': tc_id, 'name': nr['name'], 'ok': ok, 'result': result, 'model': r_model_info['display']}, nr['args']))
                         actions_taken.append({"name": nr["name"], "args": nr["args"], "ok": ok, "result": result})
                         route_log.event(run_id, step, q_category, "router", "router_hit", router_tool=nr["name"],
                                         router_conf=nr.get("confidence"), duration_s=r_duration)
@@ -937,7 +970,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     # "truncated to fit the window" is only true of what compaction cuts from the
                     # view; the executor simply not being shown the old chat is by design
                     pre_tokens = context_budget.prompt_tokens_for(lane_name, step_msgs, tools_for_lane)
-                    step_msgs = compact_messages(step_msgs, context_budget.budget_for(lane_name, ex_ctx),
+                    step_msgs = compact_messages(step_msgs, context_budget.budget_for(lane_name, ex_ctx, cloud=bool(cloud_exec)),
                                                  tools=tools_for_lane)
                     sent_tokens = context_budget.prompt_tokens_for(lane_name, step_msgs, tools_for_lane)
                     if sent_tokens < pre_tokens:
@@ -949,8 +982,19 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 else:
                     # Main lane context compaction: protect against context window explosion / VRAM demotion
                     main_ctx = await _lane_window("main", cloud_main)
-                    budget = context_budget.budget_for(lane_name, main_ctx)
+                    budget = context_budget.budget_for(lane_name, main_ctx, cloud=bool(cloud_main))
                     pre_tokens = context_budget.prompt_tokens_for(lane_name, msgs, tools_for_lane)
+                    # first layer: old tool results become one-line placeholders (core/agent_loop/clearing.py)
+                    _freed = clear_old_results(msgs, pre_tokens, squeeze=budget_squeeze)
+                    if _freed:
+                        try:
+                            route_log.event(run_id, step, q_category, lane_name, "clear", outcome=f"cleared:{_freed}")
+                        except Exception:
+                            pass
+                        pre_tokens = context_budget.prompt_tokens_for(lane_name, msgs, tools_for_lane)
+                        yield (f"event: ctx\ndata: "
+                               + json.dumps({'lane': lane_name, 'cleared_tokens': _freed, 'after_tokens': pre_tokens,
+                                             'hidden': hidden_fams}) + "\n\n")
                     sent_tokens = pre_tokens
                     if pre_tokens > budget:
                         msgs[:] = compact_messages(msgs, budget, tools=tools_for_lane)
@@ -986,13 +1030,13 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             active_client, fb_client, step_msgs, tools_for_lane, req.temperature,
                             req.max_tokens, repeat_penalty=agent_rep, rid=step_rid, grammar=step_grammar, lane=lane_name,
                             effort=None if step_grammar else effort,
-                            top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k,
+                            top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
                             tool_choice=step_tool_choice)
                     else:
                         lane_stream = _llm_chat_stream(active_client, step_msgs, tools_for_lane, req.temperature, req.max_tokens,
                                                        repeat_penalty=agent_rep, rid=step_rid, grammar=step_grammar,
                                                        effort=None if step_grammar else effort,
-                                                       top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k,
+                                                       top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
                                                        tool_choice=step_tool_choice)
                     _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
                     _cloud_out = bool(getattr(active_client, "is_cloud", False))
@@ -1040,7 +1084,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     if u.get("prompt_tokens"):
                         context_budget.record_usage(lane_name, sent_tokens, u["prompt_tokens"],
                                                     step_msgs, tools_for_lane)
-                    if not pcached and len(step_msgs) > 1:
+                    # never invent a cache figure for a provider that did not report one (it read as a 90%+ hit rate)
+                    if not pcached and len(step_msgs) > 1 and model_info.get("source") != "cloud":
                         pcached = sum(len(m.get("content", "")) for m in step_msgs[:-1]) // 4
                     ctoks = u.get("completion_tokens") or toks
                     is_orch = (lane_name == "executor" or "orchestrator" in (model_info.get("model") or "").lower())
@@ -1049,8 +1094,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                 source=model_info.get("source"), provider=model_info.get("provider_name"))
                     db_record_request(f"agent/{lane_name}", model_info.get("model"), ptoks, ctoks, tps, dt, None, True, 200,
                                       prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=is_orch,
-                                      source=model_info.get("source"), provider=model_info.get("provider_name"))
-                yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks})}\n\n"
+                                      source=model_info.get("source"), provider=model_info.get("provider_name"),
+                                      run_id=run_id)
+                run_prompt_tokens += int(ptoks or 0)
+                yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks, 'run_prompt_tokens': run_prompt_tokens, 'run_token_budget': run_token_budget})}\n\n"
 
                 content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                 reasoning = res_dict.get("reasoning", "") if res_dict else ""
@@ -1139,7 +1186,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     res_dict = None
                     streamed_content = []
                     esc_ctx = await _lane_window("main", cloud_main)
-                    budget = context_budget.budget_for("main", esc_ctx)
+                    budget = context_budget.budget_for("main", esc_ctx, cloud=bool(cloud_main))
                     pre_tokens = context_budget.prompt_tokens_for("main", msgs, esc_tools)
                     if pre_tokens > budget:
                         msgs[:] = compact_messages(msgs, budget, tools=esc_tools)
@@ -1152,12 +1199,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             esc_stream = common._llm_chat_stream_with_fallback(
                                 main_client, fb_main, msgs, esc_tools, req.temperature,
                                 req.max_tokens, repeat_penalty=agent_rep, rid=esc_rid, lane="main", effort=effort,
-                                top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k,
+                                top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
                                 tool_choice=esc_tool_choice)
                         else:
                             esc_stream = _llm_chat_stream(main_client, msgs, esc_tools, req.temperature, req.max_tokens,
                                                           repeat_penalty=agent_rep, rid=esc_rid, effort=effort,
-                                                          top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k,
+                                                          top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
                                                           tool_choice=esc_tool_choice)
                         _red = output_guard.OutputRedactor(user, getattr(main_client, "is_cloud", False))
                         _cloud_out = bool(getattr(main_client, "is_cloud", False))
@@ -1202,7 +1249,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         if u.get("prompt_tokens"):
                             context_budget.record_usage("main", sent_tokens, u["prompt_tokens"],
                                                         msgs, esc_tools)
-                        if not pcached and len(msgs) > 1:
+                        if not pcached and len(msgs) > 1 and model_info.get("source") != "cloud":
                             pcached = sum(len(m.get("content", "")) for m in msgs[:-1]) // 4
                         ctoks = u.get("completion_tokens") or toks
                         monitor_end(esc_rid, 200, prompt_tokens=ptoks, completion_tokens=ctoks, tps=tps, duration=dt,
@@ -1210,8 +1257,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                     source=model_info.get("source"), provider=model_info.get("provider_name"))
                         db_record_request("agent/main-escalated", model_info.get("model"), ptoks, ctoks, tps, dt, None, True, 200,
                                           prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=False,
-                                          source=model_info.get("source"), provider=model_info.get("provider_name"))
-                    yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks})}\n\n"
+                                          source=model_info.get("source"), provider=model_info.get("provider_name"),
+                                          run_id=run_id)
+                    run_prompt_tokens += int(ptoks or 0)
+                    yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks, 'run_prompt_tokens': run_prompt_tokens, 'run_token_budget': run_token_budget})}\n\n"
                     content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                     reasoning = res_dict.get("reasoning", "") if res_dict else ""
                     tool_calls = res_dict.get("tool_calls", []) if res_dict else []
@@ -1297,7 +1346,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                           "semantic": True}, result="deny")
                         run_outcome = "filtered"
                         yield f"event: validated\ndata: {{}}\n\n"
-                        yield "event: done\ndata: {}\n\n"
+                        yield f"event: done\ndata: {json.dumps({'state': 'completed'})}\n\n"
                         return
                     val_text, was_synth, note = validate_and_finalize_response(
                         last_query, final_content, final_reasoning, actions_taken)
@@ -1316,7 +1365,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             msgs, main_client, req.verify, _cloud_out):
                         yield _vc
                     yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
-                    yield "event: done\ndata: {}\n\n"
+                    yield f"event: done\ndata: {json.dumps({'state': 'completed'})}\n\n"
                     return
 
                 yield f"event: lane\ndata: {json.dumps({'lane': lane_name})}\n\n"
@@ -1405,12 +1454,13 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     if personal and name in ("write_file", "doc_create"):
                         from core.agent_loop.execution import unique_create_args
                         args = unique_create_args(args or {})     # the card, the preview and the file all use this name
+                    pending_tool[tc_id] = name
                     yield sse("tool_call", {'id': tc_id, 'name': name, 'args': args})
 
                     if req.plan and name not in PLAN_MODE_TOOLS:
                         # plan mode: mutating tools are unavailable — hard block
                         result = f"error: plan mode is active — '{name}' is read-only-restricted. Produce the plan instead."
-                        yield sse("tool_result", {'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                        yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
                         actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                         continue
@@ -1419,7 +1469,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     yield sse("verify", {'id': tc_id, 'name': name, 'approved': approved, 'note': note})
                     if not approved:
                         result = f"error: sandbox violation — {note}"
-                        yield sse("tool_result", {'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                        yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
                         actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                         continue
@@ -1437,10 +1487,14 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         _perm_pending[preq_id] = {"cmd": shown, "event": ev, "result": None,
                                                   "user_id": user.id, "kind": "python"}
                         yield sse("permission_request", {'req_id': preq_id, 'cmd': shown, 'kind': 'python'})
-                        allowed, pnote = await _await_permission(preq_id, ev)
+                        async for _k, _v in _permission_stream(preq_id, ev):
+                            if _k == 'ping':
+                                yield _v
+                            else:
+                                allowed, pnote, _decision = _v
                         if not allowed:
                             result = "error: user denied run_python" + (f" ({pnote})" if pnote else "")
-                            yield sse("tool_result", {'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                            yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
                             actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                             msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                             continue
@@ -1460,10 +1514,14 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             _perm_pending[preq_id] = {"cmd": shown, "event": ev, "result": None,
                                                       "user_id": user.id, "kind": "media"}
                             yield sse("permission_request", {'req_id': preq_id, 'cmd': shown, 'kind': 'media'})
-                            allowed, pnote = await _await_permission(preq_id, ev)
+                            async for _k, _v in _permission_stream(preq_id, ev):
+                                if _k == 'ping':
+                                    yield _v
+                                else:
+                                    allowed, pnote, _decision = _v
                             if not allowed:
                                 result = f"error: the user declined making {what} in the cloud" + (f" ({pnote})" if pnote else "")
-                                yield sse("tool_result", {'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                                yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
                                 actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                                 msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                                 continue
@@ -1478,7 +1536,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             _why = personal_write_violation(cmd)
                             if _why:       # refused before it is offered for approval
                                 result = "error: " + _why
-                                yield sse("tool_result", {'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                                yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
                                 actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                                 msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                                 continue
@@ -1500,16 +1558,50 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             _perm_pending[preq_id] = {"cmd": cmd, "event": ev, "result": None,
                                                       "user_id": user.id}
                             yield sse("permission_request", {'req_id': preq_id, 'cmd': cmd, 'saveable': False if personal else can_save_pattern(cmd)})
-                            allowed, pnote = await _await_permission(preq_id, ev)
+                            async for _k, _v in _permission_stream(preq_id, ev):
+                                if _k == 'ping':
+                                    yield _v
+                                else:
+                                    allowed, pnote, _decision = _v
                             if not allowed:
-                                result = f"error: user denied shell command: {cmd}" + (f" ({pnote})" if pnote else "")
-                                yield sse("tool_result", {'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                                result = f"error: user denied shell command: {cmd}" + (f" ({pnote})" if pnote else "") + _NO_WORKAROUND
+                                yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
                                 actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                                 msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                                 continue
                         # approved via pattern or modal: tool skips its own gate for
                         # exactly this command line (a model-supplied flag can't)
                         mark_approved(cmd)
+
+                    # page JavaScript, new websites and device actions: asked in this app's permission card,
+                    # not in a native companion dialog (which looks unlike the app and can hide behind other windows)
+                    _dev = device_approval.request_for(name, args)
+                    _dev_ok = False
+                    if _dev:
+                        _dev_ok = True
+                        if _dev["key"] not in run_allow:
+                            import uuid as _uuid
+                            preq_id = _uuid.uuid4().hex[:12]
+                            ev = asyncio.Event()
+                            _perm_pending[preq_id] = {"cmd": _dev["text"], "event": ev, "result": None,
+                                                      "user_id": user.id, "kind": _dev["kind"]}
+                            yield sse("permission_request", {'req_id': preq_id, 'cmd': _dev["text"], 'kind': _dev["kind"],
+                                                             'saveable': False})
+                            allowed, pnote, _decision = False, "", ""
+                            async for _k, _v in _permission_stream(preq_id, ev):
+                                if _k == 'ping':
+                                    yield _v
+                                else:
+                                    allowed, pnote, _decision = _v
+                            if not allowed:
+                                result = (f"error: the user declined this action ({_dev['kind'].replace('_', ' ')})"
+                                          + (f" ({pnote})" if pnote else "") + _NO_WORKAROUND)
+                                yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                                actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                                msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                                continue
+                            if _decision == "project":      # "For this run" button
+                                run_allow.add(_dev["key"])
 
                     dup_key = (name, json.dumps(args, sort_keys=True, default=str)) if name in ("grep", "list_files") else None
                     if dup_key and seen_reads.get(dup_key, 0) >= 1:
@@ -1519,16 +1611,43 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                   "Do not repeat it: try a different pattern, read a specific file, run a command with "
                                   "run_shell, or answer with what you have.")
                     else:
-                        result = await run_tool(name, args, unique_done=personal)
+                        try:
+                            route_log.event(run_id, step, q_category, lane_name, "tool_start", tool_name=name)
+                        except Exception:
+                            pass
+                        set_device_approved(_dev_ok)      # read by core.companion_bridge.call for this one tool call
+                        try:
+                            # the tool runs as a task so the stream keeps a heartbeat during a long command, and a
+                            # disconnect cancels it instead of leaving it running unattended
+                            async for _k, _v in keepalive(run_tool(name, args, unique_done=personal)):
+                                if _k == 'ping':
+                                    yield _v
+                                else:
+                                    result = _v
+                        finally:
+                            set_device_approved(False)
+                            mark_approved("")             # the tool ran in a copy of this context: clear our copy too
+                            mark_code_approved("")
                         if dup_key:
                             seen_reads[dup_key] = 1
                         elif name in ("write_file", "edit_file", "run_shell", "run_python", "revert"):
                             seen_reads.clear()      # the folder may have changed: lookups are worth repeating
-                    await fire_hook("after_tool", name, args, result)
+                    try:
+                        await fire_hook("after_tool", name, args, result)
+                    except Exception as _he:          # a hook error must never swallow the tool's result
+                        print(f"[agent] after_tool hook failed: {_he}", file=sys.stderr)
                     ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
-                    route_log.event(run_id, step, q_category, lane_name, "tool", tool_name=name, tool_ok=ok)
-                    yield sse("tool_result", _with_diff({'id': tc_id, 'name': name, 'ok': ok, 'result': result}, args))
-                    actions_taken.append({"name": name, "args": args, "ok": ok, "result": result})
+                    try:
+                        route_log.event(run_id, step, q_category, lane_name, "tool", tool_name=name, tool_ok=ok)
+                    except Exception:
+                        pass
+                    try:
+                        _payload = _with_diff({'id': tc_id, 'name': name, 'ok': ok, 'result': result}, args)
+                    except Exception as _de:
+                        print(f"[agent] diff summary failed: {_de}", file=sys.stderr)
+                        _payload = {'id': tc_id, 'name': name, 'ok': ok, 'result': result}
+                    yield _tool_result(_payload)
+                    actions_taken.append({"name": name, "args": args, "ok": ok, "result": cap_tool_result(result, tool_result_cap)})
                     # what the model keeps re-reading every later step is capped once, here: an old
                     # result is never rewritten afterwards, so the provider's prompt cache stays valid
                     msgs.append({"role": "tool", "tool_call_id": tc_id,
@@ -1574,7 +1693,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             # Stopped by a limit with tool work behind it: one tool-free pass so the user
             # gets what was found instead of only a "stopped" notice. Best effort - any
             # failure keeps the plain stop summary below.
-            if stop_reason in ("loop", "loop_near_repeat", "no_progress", "max_steps", "timeout") and actions_taken:
+            if stop_reason in ("loop", "loop_near_repeat", "budget", "no_progress", "max_steps", "timeout") and actions_taken:
                 wrap_parts = []
                 _red = output_guard.OutputRedactor(user, bool(getattr(main_client, "is_cloud", False)))
                 try:
@@ -1609,7 +1728,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                   "semantic": True}, result="deny")
                 run_outcome = "filtered"
                 yield f"event: validated\ndata: {{}}\n\n"
-                yield f"event: done\ndata: {json.dumps({'note': 'response filtered by policy', 'text': ''})}\n\n"
+                yield f"event: done\ndata: {json.dumps({'state': 'completed', 'note': 'response filtered by policy', 'text': ''})}\n\n"
                 return
             val_text, was_synth, note = validate_and_finalize_response(
                 last_query, final_content, final_reasoning, actions_taken)
@@ -1630,6 +1749,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             plan_note = {
                 "max_steps": f"max steps reached ({steps})",
                 "timeout": f"wall-clock limit reached ({run_limit_s}s)",
+                "budget": f"token budget reached ({run_token_budget:,} prompt tokens)",
                 "loop": "stopped: repeating the same tool calls",
                 "loop_near_repeat": f"stopped: `{loop_detail}` called repeatedly without progress",
                 "no_progress": "stopped: no progress - " + _describe_stop(loop_detail),
@@ -1653,6 +1773,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             why = {
                 "max_steps": f"Reached the step limit ({steps} steps)",
                 "timeout": f"Ran for {elapsed_s // 60} min (wall-clock limit)",
+                "budget": f"Used the run's token budget ({run_prompt_tokens:,} prompt tokens)",
                 "loop": "Kept repeating the same tool calls",
                 "loop_near_repeat": f"Called `{loop_detail}` repeatedly without making progress",
                 "no_progress": "Stopped making progress: " + _describe_stop(loop_detail),
@@ -1678,13 +1799,20 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 summary += " …" if len(uniq) > 12 else "."
             summary += "\n\n_Continue to resume._" if plan_pending else ""
 
-            yield (f"event: done\ndata: {json.dumps({'note': plan_note, 'text': summary, 'reason': stop_reason, 'detail': loop_detail, 'steps': steps_run, 'pending': plan_pending, 'plan_total': plan_total, 'plan_done': plan_done_n, 'plan_failed': plan_failed_n, 'elapsed_s': elapsed_s})}\n\n")
+            yield (f"event: done\ndata: {json.dumps({'state': 'stopped', 'note': plan_note, 'text': summary, 'reason': stop_reason, 'detail': loop_detail, 'steps': steps_run, 'pending': plan_pending, 'plan_total': plan_total, 'plan_done': plan_done_n, 'plan_failed': plan_failed_n, 'elapsed_s': elapsed_s})}\n\n")
         except asyncio.CancelledError:
             run_outcome = "cancelled"
         except Exception as e:
+            # a tool that was announced but never answered would sit on "Executing..." forever in the client
+            for _tid, _tn in list(pending_tool.items()):
+                yield _tool_result({'id': _tid, 'name': _tn, 'ok': False, 'interrupted': True,
+                                    'result': f"interrupted: the run failed before {_tn} finished ({e})"})
             yield f"event: delta\ndata: {json.dumps({'text': f'⚠️ Agent loop error: {e}'})}\n\n"
-            yield "event: done\ndata: {}\n\n"
+            yield f"event: done\ndata: {json.dumps({'state': 'failed', 'reason': 'error'})}\n\n"
         finally:
-            route_log.run_end(run_id, steps_run, run_outcome, detail=loop_detail or None)
+            _detail = loop_detail or None
+            if pending_tool:       # disconnected / stopped / crashed while a tool was open: say which
+                _detail = "interrupted in " + ",".join(sorted(set(pending_tool.values())))
+            route_log.run_end(run_id, steps_run, run_outcome, detail=_detail)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

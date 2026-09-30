@@ -25,7 +25,8 @@ def _init_usage_db() -> ThreadLocalDB:
         completion_cached_tokens INTEGER DEFAULT 0,
         is_orchestrator INTEGER DEFAULT 0,
         source TEXT,
-        provider TEXT
+        provider TEXT,
+        run_id TEXT
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts)")
     # Schema migration for existing DB
@@ -40,6 +41,9 @@ def _init_usage_db() -> ThreadLocalDB:
         conn.execute("ALTER TABLE requests ADD COLUMN source TEXT")
     if "provider" not in cols:
         conn.execute("ALTER TABLE requests ADD COLUMN provider TEXT")
+    if "run_id" not in cols:                 # which agent run a request belongs to (per-run cost in the report)
+        conn.execute("ALTER TABLE requests ADD COLUMN run_id TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_run ON requests(run_id)")
     # Backfill source for older records logged before cloud lanes existed
     conn.execute("UPDATE requests SET source = 'cloud' WHERE source IS NULL AND model LIKE 'cloud:%'")
     conn.execute("UPDATE requests SET source = 'local' WHERE source IS NULL")
@@ -60,7 +64,8 @@ def db_record_request(endpoint: str, model: Optional[str], prompt_tokens: Option
                       completion_cached_tokens: Optional[int] = 0,
                       is_orchestrator: bool = False,
                       source: Optional[str] = None,
-                      provider: Optional[str] = None) -> None:
+                      provider: Optional[str] = None,
+                      run_id: Optional[str] = None) -> None:
     """Persist one completed request with input/output cache and orchestrator attribution."""
     try:
         m_lower = (model or "").lower()
@@ -70,13 +75,13 @@ def db_record_request(endpoint: str, model: Optional[str], prompt_tokens: Option
                 is_orchestrator = True
 
         _usage_db.execute(
-            "INSERT INTO requests (ts, endpoint, model, prompt_tokens, completion_tokens, total_tokens, tps, duration_s, prompt_tps, stream, status, prompt_cached_tokens, completion_cached_tokens, is_orchestrator, source, provider) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO requests (ts, endpoint, model, prompt_tokens, completion_tokens, total_tokens, tps, duration_s, prompt_tps, stream, status, prompt_cached_tokens, completion_cached_tokens, is_orchestrator, source, provider, run_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (time.time(), endpoint, model, prompt_tokens or 0, completion_tokens or 0,
              (prompt_tokens or 0) + (completion_tokens or 0), tps, duration_s,
              prompt_tps, 1 if stream else 0, status,
              prompt_cached_tokens or 0, completion_cached_tokens or 0, 1 if is_orchestrator else 0,
-             source or "local", provider),
+             source or "local", provider, run_id),
         )
         _usage_db.commit()
     except Exception as e:
@@ -234,3 +239,24 @@ def db_report(days: int = 30, model: Optional[str] = None,
             for d, c, p, pc, g, gc, t, orc in by_day_rows
         ],
     }
+
+
+def db_report_runs(days: int = 7, limit: int = 10) -> list:
+    """The agent runs that used the most prompt tokens in the window, with how each ended: the answer to
+    "which task was expensive?". Counts and codes only (no text). Only requests logged with a run_id."""
+    since = time.time() - max(1, int(days)) * 86400
+    try:
+        rows = _usage_db.execute(
+            "SELECT q.run_id, MIN(q.ts) AS started, COUNT(*) AS reqs, SUM(q.prompt_tokens) AS prompt, "
+            "SUM(q.completion_tokens) AS completion, SUM(q.prompt_cached_tokens) AS cached, MAX(q.prompt_tokens) AS peak, "
+            "SUM(CASE WHEN q.source = 'cloud' THEN q.prompt_tokens ELSE 0 END) AS cloud_prompt, "
+            "r.steps, r.outcome, r.mode "
+            "FROM requests q LEFT JOIN route_runs r ON r.run_id = q.run_id "
+            "WHERE q.run_id IS NOT NULL AND q.ts >= ? GROUP BY q.run_id ORDER BY prompt DESC LIMIT ?",
+            (since, max(1, min(50, int(limit))))).fetchall()
+    except Exception as e:
+        print(f"[usage] run report failed: {e}", file=sys.stderr)
+        return []
+    return [{"run_id": r[0], "started": r[1], "requests": r[2], "prompt_tokens": r[3] or 0,
+             "completion_tokens": r[4] or 0, "cached_tokens": r[5] or 0, "peak_prompt_tokens": r[6] or 0,
+             "cloud_prompt_tokens": r[7] or 0, "steps": r[8], "outcome": r[9], "mode": r[10]} for r in rows]

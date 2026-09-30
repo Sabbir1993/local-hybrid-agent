@@ -11,6 +11,7 @@ from .usage import (
     _usage_db,
     db_record_request,
     db_report,
+    db_report_runs,
 )
 from .projects import (
     _proj_row,
@@ -33,6 +34,7 @@ from .sessions import (
     _meta_at_rest,
     _load_meta,
     db_list_sessions,
+    db_list_sessions_page,
     db_create_session,
     db_update_session_title,
     db_delete_session,
@@ -56,6 +58,7 @@ __all__ = [
     "_usage_db",
     "db_record_request",
     "db_report",
+    "db_report_runs",
     "_proj_row",
     "_client_workspace_path",
     "db_list_projects",
@@ -74,6 +77,7 @@ __all__ = [
     "_meta_at_rest",
     "_load_meta",
     "db_list_sessions",
+    "db_list_sessions_page",
     "db_create_session",
     "db_update_session_title",
     "db_delete_session",

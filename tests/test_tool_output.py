@@ -15,9 +15,22 @@ class CapToolResultTests(unittest.TestCase):
         out = cap_tool_result(text, 2000)
         self.assertTrue(out.startswith("HEAD-"))
         self.assertTrue(out.endswith("-TAIL"))
-        self.assertLess(len(out), 2300)
+        self.assertLess(len(out), 2600)
         self.assertIn("characters omitted", out)
         self.assertIn("read_file_chunk", out)
+
+    def test_the_note_says_the_tool_finished_and_how_to_get_the_rest(self):
+        out = cap_tool_result("a" * 10000, 2000)
+        self.assertIn("finished normally", out)
+        self.assertIn("not a display problem", out)
+        self.assertIn("Select-String", out)
+
+    def test_command_output_keeps_mostly_its_end(self):
+        from core.text_clip import clip_head_tail
+        out = clip_head_tail("S" * 100 + "m" * 50000 + "E" * 3000, 4000, head_frac=0.2)
+        self.assertTrue(out.endswith("E" * 3000))            # the result line is at the end
+        self.assertTrue(out.startswith("S" * 100))
+        self.assertIn("characters omitted", out)
 
     def test_the_omitted_count_is_exact(self):
         text = "a" * 10000

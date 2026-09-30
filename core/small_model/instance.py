@@ -15,6 +15,10 @@ from .. import vram
 from .config import APP_CONFIG, lane_kind_of
 
 
+SMALL_CACHE_RAM_MB = 1024
+SMALL_CTX_CHECKPOINTS = 8
+
+
 class SmallModelInstance:
     """One on-demand llama-server child for a small model (executor/vision/embedder
     or a custom local lane)."""
@@ -52,6 +56,11 @@ class SmallModelInstance:
         # starve the other slots.
         self.kv_unified_per_slot = max(0, int(cfg.get("kv_unified_per_slot") or 0))
         self.kv_cache_type = str(cfg.get("kv_cache_type") or "")
+        # llama-server keeps saved prompt states in host RAM: -cram defaults to 8192 MiB and -ctxcp to 32 per slot,
+        # which is how an executor on a 3 GB model reached 7 GB resident. Bounded here; 0 disables, -1 = no limit.
+        default_cram = 0 if self.kind == "embed" else SMALL_CACHE_RAM_MB
+        self.cache_ram = int(cfg.get("cache_ram", default_cram))
+        self.ctx_checkpoints = max(0, int(cfg.get("ctx_checkpoints", SMALL_CTX_CHECKPOINTS)))
         self.process: Optional[subprocess.Popen] = None
         self.client = httpx.AsyncClient(base_url=f"http://127.0.0.1:{self.port}", timeout=None)
         self.last_used = 0.0
@@ -161,6 +170,7 @@ class SmallModelInstance:
                 cmd += ["--kv-unified-per-slot", str(cap)]
         if self.kv_cache_type:
             cmd += ["-ctk", self.kv_cache_type, "-ctv", self.kv_cache_type]
+        cmd += ["-cram", str(self.cache_ram), "-ctxcp", str(self.ctx_checkpoints)]   # 0 = none, not llama's default 32
         if self.mmproj_path and self.mmproj_path.exists():
             cmd += ["--mmproj", str(self.mmproj_path)]
         if self.kind == "embed":

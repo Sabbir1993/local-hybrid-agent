@@ -7,7 +7,9 @@ from ..config import CLOUD_TIMEOUT_S
 
 _LLAMA_ONLY_KEYS = (
     "repeat_penalty", "grammar", "min_p", "top_k", "typical_p",
-    "xtc_probability", "xtc_threshold", "n_keep", "cache_prompt"
+    "xtc_probability", "xtc_threshold", "n_keep", "cache_prompt",
+    "repeat_last_n", "dry_multiplier", "dry_base", "dry_allowed_length", "dry_penalty_last_n",
+    "dynatemp_range", "dynatemp_exponent",
 )
 
 

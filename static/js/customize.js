@@ -9,11 +9,12 @@
   const CAT_ICON = {
     security: '🛡️', compliance: '⚖️', engineering: '⌨️', operations: '🧰', finance: '💰',
     productivity: '✅', web: '🌐', tickets: '🎫', developer: '🧪', data: '🗃️', general: '🧩', custom: '🔧',
+    design: '🎨', communication: '💬', crm: '🤝', payments: '💳', cloud: '☁️', commerce: '🛍️',
   };
   const S = { kind: 'skills', view: 'discover', q: '', category: null, data: {}, detail: null,
               registry: null, registryQ: '', busy: false,
               market: null, marketQ: '', marketUrl: '', remote: null, remoteBusy: false,
-              agents: null, forkAgent: null, forkDir: '' };
+              agents: null, forkAgent: null, forkDir: '', connecting: {} };
 
   const $c = id => document.getElementById(id);
   const e = s => esc(String(s == null ? '' : s));
@@ -67,23 +68,57 @@
     return it.installed ? '<span class="cz-chip ok">installed</span>' : '';
   }
 
+  const SENS = { pii: 'Personal data', payments: 'Payments', data: 'Project data' };
+  const SENS_HINT = {
+    pii: 'Can reach personal or customer records. Each person signs in with their own account.',
+    payments: 'Can reach payment data. Test mode first; a PCI-DSS review is needed before real data.',
+    data: 'Can reach business or project data. Each person signs in with their own account.',
+  };
+
+  function connChips(it) {
+    if (S.kind !== 'connectors' || !it.in_catalog) return '';
+    let h = '';
+    if (it.sensitivity) h += ` <span class="cz-chip bad" title="${e(SENS_HINT[it.sensitivity] || '')}">${e(SENS[it.sensitivity] || it.sensitivity)}</span>`;
+    if (it.installed && it.installed_scope) h += ` <span class="cz-chip mid" title="${it.installed_scope === 'user' ? 'Only you can use its tools' : 'One shared account for everyone'}">${it.installed_scope === 'user' ? 'Just you' : 'Shared'}</span>`;
+    if (it.installed && it.oauth && !it.signed_in) h += ' <span class="cz-chip mid">Sign-in needed</span>';
+    if (!it.installed && !it.allowed) h += ' <span class="cz-chip mid" title="An administrator has to allow this connector first">Needs admin</span>';
+    return h;
+  }
+
+  /* brand-neutral monogram tile: no third-party logos are bundled or fetched */
+  function tile(it, lg) {
+    if (S.kind === 'connectors' && /^#[0-9a-f]{6}$/i.test(it.color || '')) {
+      const ini = String(it.title || it.id).replace(/[^A-Za-z0-9 ]/g, ' ').trim().split(/\s+/).slice(0, 2)
+        .map(w => w[0]).join('').toUpperCase();
+      return `<div class="cz-icon cz-mono${lg ? ' lg' : ''}" style="background:${it.color}" aria-hidden="true">${e(ini)}</div>`;
+    }
+    return `<div class="cz-icon${lg ? ' lg' : ''}">${catIcon(it.category)}</div>`;
+  }
+
+  const canRemove = it => it.can_uninstall && (S.kind === 'connectors' ? (it.installed_scope === 'user' || canInstall()) : canInstall());
+  const canConnect = it => S.kind === 'connectors' && it.installed && it.oauth && !it.signed_in &&
+                           (it.installed_scope === 'user' || canInstall());
+
   function card(it) {
     const noun = S.kind === 'connectors' ? 'Disconnect' : 'Remove';
+    const connect = canConnect(it)
+      ? (S.connecting[it.id] ? '<button class="ru-btn" disabled>Connecting…</button>'
+                             : `<button class="ru-btn primary" data-connect="${e(it.id)}" title="Sign in to ${e(it.title)}">Connect account</button>`) : '';
     const action = it.installed
-      ? (canInstall() && it.can_uninstall
+      ? (canRemove(it)
           ? `<span class="cz-swap"><span class="cz-plus done" title="Installed">✓</span><button class="cz-plus rm" data-remove="${e(it.id)}" title="${noun}" aria-label="${noun} ${e(it.title)}">✕</button></span>`
           : '<span class="cz-plus done" title="Installed">✓</span>')
-      : (canInstall() && it.in_catalog
+      : ((S.kind === 'connectors' ? (it.in_catalog && (it.allowed || canInstall())) : (canInstall() && it.in_catalog))
           ? `<button class="cz-plus" data-install="${e(it.id)}" title="Install">+</button>` : '');
     return `
       <div class="cz-card" data-open="${e(it.id)}" tabindex="0">
-        <div class="cz-icon">${catIcon(it.category)}</div>
+        ${tile(it)}
         <div class="cz-main">
-          <div class="cz-name">${e(it.title)}${it.in_catalog ? ' <span class="cz-verified" title="Reviewed, in-repo catalog entry">✓</span>' : ''} ${statusChip(it)}</div>
+          <div class="cz-name">${e(it.title)}${it.in_catalog ? ' <span class="cz-verified" title="Reviewed, in-repo catalog entry">✓</span>' : ''} ${statusChip(it)}${connChips(it)}</div>
           <div class="cz-desc">${e(it.description)}</div>
           <div class="cz-by">${it.author ? 'by ' + e(it.author) : ''}${it.egress ? ' · <span class="cz-egress" title="Tool calls send data to a third party">external</span>' : ''}</div>
         </div>
-        ${action}
+        <span class="cz-acts">${connect}${action}</span>
       </div>`;
   }
 
@@ -266,7 +301,9 @@
     if (it.error) rows.push(['Error', `<span class="cz-err">${e(it.error)}</span>`]);
 
     let actions = '';
-    if (canInstall()) {
+    if (S.kind === 'connectors' && it.in_catalog) {
+      actions = connectorActions(it);
+    } else if (canInstall()) {
       if (!it.installed && it.in_catalog) {
         const secrets = (it.secret_env || []).map(s => `
           <label class="cz-secret">${e(s.label || s.key)} <code>${e(s.key)}</code>
@@ -285,14 +322,16 @@
       <button class="cz-link cz-back" id="cz-back">← Back</button>
       <div class="cz-detail">
         <div class="cz-dhead">
-          <div class="cz-icon lg">${catIcon(it.category)}</div>
-          <div><div class="cz-dtitle">${e(it.title)}${it.in_catalog ? ' <span class="cz-verified">✓</span>' : ''} ${statusChip(it)}</div>
+          ${tile(it, true)}
+          <div><div class="cz-dtitle">${e(it.title)}${it.in_catalog ? ' <span class="cz-verified">✓</span>' : ''} ${statusChip(it)}${connChips(it)}</div>
                <div class="cz-desc full">${e(it.description)}</div></div>
         </div>
-        ${it.egress ? '<div class="cz-banner warn">⚠ This connector sends tool-call data to a third-party service outside this server. Tool <b>arguments</b> are not PAN-masked (results are), so keep cardholder data out of prompts that use it and confirm the vendor is approved for data egress under Bangladesh Bank data-localization rules.</div>' : ''}
+        ${it.egress ? '<div class="cz-banner warn">⚠ Tool calls go to a third-party service outside this server. Card numbers (PAN) are masked in tool <b>arguments</b> when the cloud-egress guard is on, and always in results. Keep other cardholder and customer data out of prompts that use it, and confirm the vendor is approved for data egress under Bangladesh Bank data-localization rules.</div>' : ''}
+        ${it.sensitivity ? `<div class="cz-banner warn"><b>${e(SENS[it.sensitivity] || '')}.</b> ${e(SENS_HINT[it.sensitivity] || '')} Only you can use the tools of your own connection.</div>` : ''}
+        ${it.note ? `<div class="cz-banner">${e(it.note)}</div>` : ''}
         <table class="cz-meta">${rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('')}</table>
         <div class="cz-actions">${actions}</div>
-        <div class="cz-sec"><span>${S.kind === 'connectors' ? 'Command' : 'Source'}</span> <span class="cz-dim">read-only, review before installing</span></div>
+        <div class="cz-sec"><span>${S.kind === 'connectors' ? (it.transport === 'http' ? 'Endpoint' : 'Command') : 'Source'}</span> <span class="cz-dim">read-only, review before installing</span></div>
         <div id="cz-preview" class="cz-preview"><div class="cz-empty">Loading…</div></div>
       </div>`;
     try {
@@ -304,6 +343,144 @@
       const box = $c('cz-preview');
       if (box) box.innerHTML = `<div class="cz-empty">${e(err.message)}</div>`;
     }
+  }
+
+  /* ---------------- connectors: install form, sign-in, admin setup ---------------- */
+
+  function connectorActions(it) {
+    const admin = canInstall();
+    let h = '';
+    if (!it.installed) {
+      if (!it.allowed && !admin) {
+        return '<span class="cz-dim">An administrator has to allow this connector before you can add it.</span>';
+      }
+      if (admin && !it.sensitivity) {
+        const g = it.scope_default === 'global';
+        h += `<div class="cz-scope" role="radiogroup" aria-label="Install for">Install for
+          <label><input type="radio" name="cz-scope" value="user" ${g ? '' : 'checked'}> Just me</label>
+          <label><input type="radio" name="cz-scope" value="global" ${g ? 'checked' : ''}> Everyone (one shared account)</label></div>`;
+      } else {
+        h += '<div class="cz-dim">Installs just for you: you sign in with your own account.</div>';
+      }
+      h += (it.fields || []).map(f => `
+        <label class="cz-secret">${e(f.label)}
+          <input type="text" data-field="${e(f.key)}" placeholder="${e(f.placeholder || '')}" autocomplete="off" spellcheck="false"></label>`).join('');
+      h += (it.secret_env || []).map(s => `
+        <label class="cz-secret">${e(s.label || s.key)} <code>${e(s.key)}</code>
+          <input type="password" data-secret="${e(s.key)}" autocomplete="off" placeholder="stored in the OS keychain"></label>`).join('');
+      if (it.needs_client && !admin) {
+        h += '<div class="cz-dim">This vendor needs a one-time app setup by an administrator before anyone can sign in.</div>';
+      }
+      h += '<button class="btn accent cz-act" id="cz-do-install">Install</button>';
+    } else {
+      if (it.oauth && (it.installed_scope === 'user' || admin)) {
+        h += S.connecting[it.id] ? '<button class="btn cz-act" disabled>Connecting…</button>'
+          : `<button class="btn accent cz-act" id="cz-do-connect">${it.signed_in ? 'Reconnect account' : 'Connect account'}</button>`;
+        if (it.signed_in) h += '<button class="btn ghost cz-act" id="cz-do-signout">Sign out</button>';
+      }
+      if (canRemove(it)) h += '<button class="btn red cz-act" id="cz-do-remove">Disconnect</button>';
+    }
+    return h + adminBlock(it);
+  }
+
+  function adminBlock(it) {
+    if (!canInstall()) return '';
+    let h = `<div class="cz-sec"><span>Administrator</span></div>
+      <label class="cz-toggle"><input type="checkbox" id="cz-allow" ${it.allowed ? 'checked' : ''}> Users may add this connector</label>`;
+    if (it.oauth && (it.client === 'preregistered' || it.client === 'auto')) {
+      h += `<div class="cz-client">
+        <div class="cz-note">${it.client === 'preregistered'
+          ? 'This vendor does not register apps automatically.'
+          : 'Sign-in tries automatic registration first; use this only if the vendor refuses it.'}
+          Create an OAuth app with them, add the redirect address <code>http://127.0.0.1:&lt;port&gt;/callback</code>
+          (or your <code>mcp_oauth_redirect_base</code> address when the vendor needs https), then paste its client ID and secret once.
+          The secret stays in the OS keychain and users never see it.</div>
+        <div class="cz-fork-row">
+          <input type="text" id="cz-client-id" class="cz-search" placeholder="${it.has_client ? 'Client ID saved - paste a new one to replace' : 'Client ID'}" autocomplete="off" spellcheck="false">
+          <input type="password" id="cz-client-secret" class="cz-search" placeholder="${it.has_client ? 'Secret saved (leave blank to keep)' : 'Client secret'}" autocomplete="off">
+        </div>
+        <div class="cz-actions"><button class="btn accent cz-act" id="cz-client-save">Save client</button>
+          ${it.has_client ? '<button class="btn ghost cz-act" id="cz-client-clear">Remove client</button>' : ''}</div>
+      </div>`;
+    }
+    return h;
+  }
+
+  async function connectAccount(id, scope) {
+    if (S.connecting[id]) return;
+    S.connecting[id] = true;
+    render();
+    try {
+      const start = await api(`/mcp/servers/${encodeURIComponent(id)}/oauth/start`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope }),
+      });
+      if (start.mode === 'redirect' && /^https:\/\//.test(start.auth_url || '')) window.open(start.auth_url, '_blank', 'noopener');
+      else toast('Finish signing in in the browser window that just opened.');
+      const t0 = Date.now();
+      for (;;) {
+        await new Promise(r => setTimeout(r, 2000));
+        const st = await api(`/mcp/servers/${encodeURIComponent(id)}/oauth/status?scope=${encodeURIComponent(scope)}`);
+        if (st.state === 'done') break;
+        if (st.state === 'error') throw new Error(st.error || 'sign-in failed');
+        if (Date.now() - t0 > 330000) throw new Error('timed out waiting for the sign-in');
+      }
+      toast(`Connected '${id}' ✓`);
+    } catch (err) {
+      toast('Sign-in failed: ' + err.message, true);
+    } finally {
+      delete S.connecting[id];
+      try { await load('connectors', true); } catch (_) {}
+      render();
+      setTimeout(() => load('connectors', true).then(() => { if (S.kind === 'connectors') render(); }).catch(() => {}), 3000);
+    }
+  }
+
+  async function signOut(id, scope) {
+    try {
+      await api(`/mcp/servers/${encodeURIComponent(id)}/oauth/disconnect`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope }),
+      });
+      toast(`Signed out of '${id}'`);
+      await load('connectors', true);
+      render();
+    } catch (err) { toast('Could not sign out: ' + err.message, true); }
+  }
+
+  async function saveClient(id) {
+    const cid = $c('cz-client-id').value.trim();
+    const secret = $c('cz-client-secret').value.trim();
+    if (!cid && !secret) { toast('Paste the client ID and secret first', true); return; }
+    const it = S.data.connectors.items.find(i => i.id === id) || {};
+    if (!cid && !it.has_client) { toast('The client ID is required', true); return; }
+    try {
+      await api(`/customize/connectors/${encodeURIComponent(id)}/oauth-client`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: cid, client_secret: secret }),
+      });
+      toast('Client saved. People can now press Connect account.');
+      await load('connectors', true);
+      render();
+    } catch (err) { toast(err.message, true); }
+  }
+
+  async function clearClient(id) {
+    if (!confirm('Remove the saved client? People who are signed in stay signed in, but no one can sign in again until you add one.')) return;
+    try {
+      await api(`/customize/connectors/${encodeURIComponent(id)}/oauth-client`, { method: 'DELETE' });
+      await load('connectors', true);
+      render();
+    } catch (err) { toast(err.message, true); }
+  }
+
+  async function setAllowed(id, on) {
+    try {
+      await api(`/customize/connectors/${encodeURIComponent(id)}/enabled`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on }),
+      });
+      toast(on ? 'Users can now add this connector' : 'Users can no longer add this connector');
+      await load('connectors', true);
+      render();
+    } catch (err) { toast(err.message, true); }
   }
 
   /* ---------------- agents: starter templates and agents other users shared ---------------- */
@@ -429,20 +606,24 @@
 
   /* ---------------- actions ---------------- */
 
-  async function install(id, secrets) {
+  async function install(id, secrets, extra) {
     if (S.busy) return;
     S.busy = true;
+    let installed = null;
     try {
-      await api(`/customize/${S.kind}/${encodeURIComponent(id)}/install`, {
+      const res = await api(`/customize/${S.kind}/${encodeURIComponent(id)}/install`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secrets: secrets || {} }),
+        body: JSON.stringify({ secrets: secrets || {}, ...(extra || {}) }),
       });
-      toast(`Installed '${id}' ✓` + (S.kind === 'connectors' ? ' (connecting…)' : ''));
+      installed = res.item || null;
+      toast(`Installed '${id}' ✓` + (S.kind === 'connectors' ? (installed && installed.oauth ? ' - sign in next' : ' (connecting…)') : ''));
       await load(S.kind, true);
       render();
       if (S.kind === 'connectors') setTimeout(() => load('connectors', true).then(render).catch(() => {}), 4000);
     } catch (err) { toast('Install failed: ' + err.message, true); }
     finally { S.busy = false; }
+    // a connector that needs a sign-in goes straight to it
+    if (installed && installed.oauth && installed.installed_scope) connectAccount(id, installed.installed_scope);
   }
 
   async function remove(id) {
@@ -458,7 +639,9 @@
 
   function needsForm(id) {
     const it = (S.data[S.kind] || { items: [] }).items.find(i => i.id === id);
-    return it && it.secret_env && it.secret_env.length;
+    if (!it) return false;
+    if (S.kind === 'connectors') return !!(it.oauth || it.sensitivity || it.note || (it.fields || []).length || (it.secret_env || []).length);
+    return it.secret_env && it.secret_env.length;
   }
 
   function onBodyClick(ev) {
@@ -484,12 +667,26 @@
     if (t.id === 'cz-clear-cat') { S.category = null; render(); return; }
     if (t.id === 'cz-back') { S.detail = null; render(); return; }
     if (t.id === 'cz-do-install') {
-      const secrets = {};
+      const secrets = {}, fields = {};
       document.querySelectorAll('#cz-body [data-secret]').forEach(i => { secrets[i.dataset.secret] = i.value; });
-      install(S.detail, secrets);
+      document.querySelectorAll('#cz-body [data-field]').forEach(i => { fields[i.dataset.field] = i.value.trim(); });
+      const picked = document.querySelector('#cz-body input[name="cz-scope"]:checked');
+      install(S.detail, secrets, S.kind === 'connectors' ? { fields, scope: picked ? picked.value : 'user' } : null);
       return;
     }
     if (t.id === 'cz-do-remove') { remove(S.detail); return; }
+    const cn = t.closest('[data-connect]');
+    if (cn) {
+      ev.stopPropagation();
+      const it = S.data.connectors.items.find(i => i.id === cn.dataset.connect);
+      if (it) connectAccount(it.id, it.installed_scope);
+      return;
+    }
+    const conn = (id => (S.data.connectors || { items: [] }).items.find(i => i.id === id))(S.detail);
+    if (t.id === 'cz-do-connect' && conn) { connectAccount(conn.id, conn.installed_scope); return; }
+    if (t.id === 'cz-do-signout' && conn) { signOut(conn.id, conn.installed_scope); return; }
+    if (t.id === 'cz-client-save' && conn) { saveClient(conn.id); return; }
+    if (t.id === 'cz-client-clear' && conn) { clearClient(conn.id); return; }
     const c = t.closest('[data-open]');
     if (c) { S.detail = c.dataset.open; render(); }
   }
@@ -536,6 +733,9 @@
     });
     const body = $c('cz-body');
     body.addEventListener('click', onBodyClick);
+    body.addEventListener('change', ev => {
+      if (ev.target.id === 'cz-allow' && S.detail) setAllowed(S.detail, ev.target.checked);
+    });
     body.addEventListener('input', ev => {
       if (ev.target.id !== 'cz-fork-dir') return;
       S.forkDir = ev.target.value;

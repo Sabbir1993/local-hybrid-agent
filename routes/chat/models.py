@@ -1,8 +1,9 @@
 from typing import Literal, Optional
 from pydantic import BaseModel
+from ..common.sampling_extra import SamplerFields
 
 
-class ChatRunRequest(BaseModel):
+class ChatRunRequest(SamplerFields):
     messages: list
     web_search: bool = True
     deep_mode: bool = False

@@ -172,13 +172,13 @@ class TestDigestPlacement(unittest.TestCase):
 class TestKeepRecentConfig(unittest.TestCase):
 
     def test_default_comes_from_config(self):
-        self.assertEqual(al._keep_recent_results(), 6)
+        self.assertEqual(al._keep_recent_results(), 3)
 
     def test_zero_and_junk_are_handled(self):
         for cfg, expected in (({"keep_recent_results": 0}, 0),
                               ({"keep_recent_results": 5}, 5),
-                              ({}, 6),
-                              ({"keep_recent_results": "nonsense"}, 6)):
+                              ({}, 3),
+                              ({"keep_recent_results": "nonsense"}, 3)):
             with mock.patch.dict("core.small_model.APP_CONFIG",
                                  {"context": {"aging": cfg}}, clear=False):
                 with self.subTest(cfg=cfg):
@@ -186,7 +186,7 @@ class TestKeepRecentConfig(unittest.TestCase):
 
     def test_missing_config_block_uses_the_default(self):
         with mock.patch.dict("core.small_model.APP_CONFIG", {}, clear=True):
-            self.assertEqual(al._keep_recent_results(), 6)
+            self.assertEqual(al._keep_recent_results(), 3)
 
 
 class TestReadFilePagingHint(unittest.TestCase):

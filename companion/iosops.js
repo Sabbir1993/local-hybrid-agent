@@ -53,7 +53,7 @@ async function devices() {
 async function boot(p) {
   ensureMac();
   const u = udid(p);
-  await policy.confirmAction("start simulator?", "The AI agent wants to boot this iOS simulator:", u, `ios-boot\n${u}`);
+  await policy.confirmAction("start simulator?", "The AI agent wants to boot this iOS simulator:", u, `ios-boot\n${u}`, p.approved_in_app === true);
   await simctl(["boot", u]).catch((e) => { if (!/current state: Booted/i.test(e.message)) throw e; });
   await run("open", ["-a", "Simulator"]).catch(() => {});
   await simctl(["bootstatus", u, "-b"], { timeoutMs: 240000 });
@@ -67,7 +67,7 @@ async function install(p) {
   if (!/\.app\/?$/.test(app)) throw new Error("app must be a simulator .app bundle (xcodebuild -sdk iphonesimulator)");
   await policy.ensurePath(app, "install on a simulator");
   if (!fs.existsSync(app)) throw new Error(`not found: ${app}`);
-  await policy.confirmAction("install app?", `The AI agent wants to install this app on simulator ${u}:`, app, `ios-install\n${u}\n${app}`);
+  await policy.confirmAction("install app?", `The AI agent wants to install this app on simulator ${u}:`, app, `ios-install\n${u}\n${app}`, p.approved_in_app === true);
   await simctl(["install", u, app], { timeoutMs: 240000 });
   return { udid: u, app };
 }

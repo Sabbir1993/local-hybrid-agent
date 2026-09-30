@@ -41,6 +41,25 @@
     flex-direction: column;
     overflow: hidden;
   }
+  .settings-home {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 12px 0;
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel2);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: none;
+    flex-shrink: 0;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .settings-home[hidden] { display: none; }
+  .settings-home:hover { border-color: var(--accent); background: var(--accent-bg, rgba(56, 189, 248, 0.12)); }
+  .settings-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .settings-search-wrap {
     padding: 10px 12px;
     border-bottom: 1px solid var(--border-subtle);
@@ -238,6 +257,10 @@
   <div id="settings-layout">
     <!-- Left Navigation Rail -->
     <aside id="settings-sidebar">
+      <!-- only for the standalone page (settings-page.js unhides it); inside the Settings modal the modal's own close is used -->
+      <a id="settings-home" class="settings-home" href="/" hidden>
+        <span class="tab-icon">←</span><span class="tab-label">Back to chat</span>
+      </a>
       <div class="settings-search-wrap">
         <input type="text" id="settings-tab-search" placeholder="Search settings…" autocomplete="off">
       </div>
@@ -300,6 +323,10 @@
         <button type="button" class="settings-tab-btn" data-tab="sec-users" data-perm="users.manage">
           <span class="tab-icon">👤</span>
           <span class="tab-label">Users &amp; Roles</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-session" data-perm="users.manage">
+          <span class="tab-icon">⏱️</span>
+          <span class="tab-label">Session Security</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-db" data-perm="database.manage">
           <span class="tab-icon">🗄️</span>
@@ -377,6 +404,53 @@
             <label for="maxtok">Max tokens <span class="info" title="Set -1 = no output limit: the model generates until EOS or you press Stop. Higher values need more KV cache (context_size). Leave 512 for chat; use -1 for long-form writing">ⓘ</span></label>
             <input type="number" id="maxtok" value="-1" min="-1" max="262144" title="Maximum generation tokens (-1 = unlimited)">
             <span class="mono smp-val"></span>
+          </div>
+          <div class="smp-row" title="Recent tokens considered by the repeat/frequency/presence penalties (-1 = whole context, 0 = off)">
+            <label for="rlast">Repeat last N <span class="info" title="Recent tokens considered by the repeat/frequency/presence penalties (-1 = whole context, 0 = off)">ⓘ</span></label>
+            <input type="number" id="rlast" value="64" min="-1" max="8192" title="Repeat last N (-1 to 8192)">
+            <span class="mono smp-val"></span>
+          </div>
+          <div class="smp-row" title="Penalizes tokens in proportion to how often they already appeared; 0.0 = off">
+            <label for="freq">Frequency penalty <span class="info" title="Penalizes tokens in proportion to how often they already appeared; 0.0 = off">ⓘ</span></label>
+            <input type="range" id="freq" min="-2" max="2" step="0.05" value="0" title="Frequency penalty slider (-2 to 2)">
+            <span class="mono smp-val" id="freqv">0.00</span>
+          </div>
+          <div class="smp-row" title="-1 = random each request. Use a fixed value for reproducible tests">
+            <label for="seed">Seed <span class="info" title="-1 = random each request. Use a fixed value for reproducible tests">ⓘ</span></label>
+            <input type="number" id="seed" value="-1" min="-1" max="2147483647" title="Seed (-1 to 2147483647)">
+            <span class="mono smp-val"></span>
+          </div>
+          <div class="cfg-note smp-sub">DRY repetition prevention (multiplier 0 = off)</div>
+          <div class="smp-row" title="Strength of DRY repetition prevention; 0 = off. Try 0.5 only if the model loops on code or phrases">
+            <label for="drym">DRY multiplier <span class="info" title="Strength of DRY repetition prevention; 0 = off. Try 0.5 only if the model loops on code or phrases">ⓘ</span></label>
+            <input type="range" id="drym" min="0" max="5" step="0.05" value="0" title="DRY multiplier slider (0 to 5)">
+            <span class="mono smp-val" id="drymv">0.00</span>
+          </div>
+          <div class="smp-row" title="Base of the DRY penalty growth for longer repeats">
+            <label for="dryb">DRY base <span class="info" title="Base of the DRY penalty growth for longer repeats">ⓘ</span></label>
+            <input type="range" id="dryb" min="1" max="4" step="0.05" value="1.75" title="DRY base slider (1 to 4)">
+            <span class="mono smp-val" id="drybv">1.75</span>
+          </div>
+          <div class="smp-row" title="Repeated sequences up to this length are not penalized">
+            <label for="dryl">DRY allowed length <span class="info" title="Repeated sequences up to this length are not penalized">ⓘ</span></label>
+            <input type="number" id="dryl" value="2" min="0" max="64" title="DRY allowed length (0 to 64)">
+            <span class="mono smp-val"></span>
+          </div>
+          <div class="smp-row" title="Recent tokens DRY looks at (-1 = whole context)">
+            <label for="dryn">DRY penalty last N <span class="info" title="Recent tokens DRY looks at (-1 = whole context)">ⓘ</span></label>
+            <input type="number" id="dryn" value="4096" min="-1" max="32768" title="DRY penalty last N (-1 to 32768)">
+            <span class="mono smp-val"></span>
+          </div>
+          <div class="cfg-note smp-sub">Dynamic temperature (range 0 = off)</div>
+          <div class="smp-row" title="Temperature varies within temp ± range based on model confidence; 0 = off">
+            <label for="dynr">Dynamic temp range <span class="info" title="Temperature varies within temp ± range based on model confidence; 0 = off">ⓘ</span></label>
+            <input type="range" id="dynr" min="0" max="2" step="0.05" value="0" title="Dynamic temp range slider (0 to 2)">
+            <span class="mono smp-val" id="dynrv">0.00</span>
+          </div>
+          <div class="smp-row" title="Shape of the dynamic temperature curve; 1.0 = linear">
+            <label for="dyne">Dynamic temp exponent <span class="info" title="Shape of the dynamic temperature curve; 1.0 = linear">ⓘ</span></label>
+            <input type="range" id="dyne" min="0.1" max="5" step="0.05" value="1" title="Dynamic temp exponent slider (0.1 to 5)">
+            <span class="mono smp-val" id="dynev">1.00</span>
           </div>
         </div>
         <div class="cfg-note" title="Where these values apply">Applied to every chat and agent request you send.</div>
@@ -601,6 +675,15 @@
         <div id="guard-content"><div class="mon-empty">Loading…</div></div>
       </div>
 
+      <!-- Section 10b: Session security -->
+      <div class="card settings-panel" id="sec-session" data-perm="users.manage">
+        <div class="settings-panel-head">
+          <h2>⏱️ Session Security</h2>
+          <p class="dim">Sign users out after a period of inactivity. A running chat or agent task counts as activity.</p>
+        </div>
+        <div id="session-policy-content"><div class="mon-empty">Loading…</div></div>
+      </div>
+
       <!-- Section 11: Database Explorer -->
       <div class="card settings-panel" id="sec-db" data-perm="database.manage">
         <div class="settings-panel-head">
@@ -738,10 +821,10 @@
 
 <div id="toast"></div>
 
-<script src="/static/js/session.js?v=1.3"></script>
+<script src="/static/js/session.js?v=1.4"></script>
 <script src="/static/js/theme.js?v=2.7"></script>
-<script src="/static/js/utils.js?v=3.0"></script>
-<script src="/static/js/sampling.js?v=1.2"></script>
+<script src="/static/js/utils.js?v=3.1"></script>
+<script src="/static/js/sampling.js?v=1.3"></script>
 <script src="/static/js/gpu-status.js?v=3.4"></script>
 <script src="/static/js/config.js?v=3.1"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
@@ -750,8 +833,9 @@
 <script src="/static/js/rbac.js?v=1.6"></script>
 <script src="/static/js/knowledge.js?v=1.1"></script>
 <script src="/static/js/input-guard.js?v=1.0"></script>
+<script src="/static/js/session-policy.js?v=1.0"></script>
 <script src="/static/js/lanes.js?v=1.10"></script>
 <script src="/static/js/custom-agents.js?v=1.9"></script>
-<script src="/static/js/settings-page.js?v=1.0"></script>
+<script src="/static/js/settings-page.js?v=1.2"></script>
 </body>
 </html>

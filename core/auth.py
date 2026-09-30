@@ -17,18 +17,32 @@ from .auth_provider import UserRecord
 
 SESSION_COOKIE = "a770_session"
 CSRF_COOKIE = "a770_csrf"
-SESSION_TTL_S = 15 * 60          # sliding idle timeout: PCI DSS 8.2.8 caps it at 15 minutes
+SESSION_TTL_S = 15 * 60          # default sliding idle timeout (PCI DSS 8.2.8 sets 15 minutes)
 SESSION_ABSOLUTE_MAX_S = 7 * 24 * 3600  # hard cap regardless of activity
+IDLE_MIN_MINUTES = 1
+IDLE_MAX_MINUTES = 24 * 60
+
+
+def session_policy() -> dict:
+    """Idle sign-out policy an admin sets in app.json security.session_idle_enabled / session_idle_minutes.
+    Defaults (on, 15 minutes) are the PCI DSS 8.2.8 value; the 7-day absolute cap applies either way."""
+    try:
+        from .small_model import APP_CONFIG
+        sec = APP_CONFIG.get("security") or {}
+    except Exception:
+        sec = {}
+    try:
+        mins = float(sec.get("session_idle_minutes") or 15)
+    except (TypeError, ValueError):
+        mins = 15.0
+    return {"enabled": bool(sec.get("session_idle_enabled", True)),
+            "minutes": int(max(IDLE_MIN_MINUTES, min(mins, IDLE_MAX_MINUTES)))}
 
 
 def session_idle_s() -> int:
-    """Idle timeout, from app.json security.session_idle_minutes; never above 15 min."""
-    try:
-        from .small_model import APP_CONFIG
-        mins = float((APP_CONFIG.get("security") or {}).get("session_idle_minutes") or 15)
-    except Exception:
-        mins = 15
-    return int(max(1.0, min(mins, 15.0)) * 60)
+    """Seconds until an idle session lapses; with idle sign-out off, the absolute cap."""
+    p = session_policy()
+    return p["minutes"] * 60 if p["enabled"] else SESSION_ABSOLUTE_MAX_S
 
 
 @dataclass

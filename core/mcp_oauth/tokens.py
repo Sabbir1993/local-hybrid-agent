@@ -35,7 +35,7 @@ def load_token(name: str, owner: Optional[int]) -> Optional[dict]:
 def save_token(name: str, owner: Optional[int], tok: dict) -> None:
     from .. import credentials
     keep = {k: tok.get(k) for k in ("access_token", "refresh_token", "expires_at", "token_type",
-                                    "scope", "token_endpoint", "client_id", "resource") if tok.get(k)}
+                                    "scope", "token_endpoint", "client_id", "resource", "shared_client") if tok.get(k)}
     credentials.set_token(_ref(name, owner, TOKEN_KEY), json.dumps(keep))
 
 
@@ -85,6 +85,8 @@ def _stamp(body: dict, flow_like: dict, prev: Optional[dict] = None) -> dict:
     tok["client_id"] = flow_like["client_id"]
     if flow_like.get("resource"):
         tok["resource"] = flow_like["resource"]
+    if flow_like.get("shared_client"):
+        tok["shared_client"] = True
     if prev and not tok.get("refresh_token") and prev.get("refresh_token"):
         tok["refresh_token"] = prev["refresh_token"]
     return tok
@@ -108,6 +110,9 @@ async def access_token(name: str, owner: Optional[int], force_refresh: bool = Fa
         data = {"grant_type": "refresh_token", "refresh_token": cur["refresh_token"],
                 "client_id": cur.get("client_id") or ""}
         secret = _client_secret(name, owner) or (_dcr_client(name, owner) or {}).get("client_secret")
+        if not secret and cur.get("shared_client"):
+            from .. import credentials, mcp_catalog
+            secret = credentials.get_token(mcp_catalog.shared_secret_ref(name))
         if secret:
             data["client_secret"] = secret
         if cur.get("resource"):
@@ -121,7 +126,7 @@ async def access_token(name: str, owner: Optional[int], force_refresh: bool = Fa
                 clear_token(name, owner)
             return None
         new = _stamp(body, {"token_url": cur["token_endpoint"], "client_id": cur.get("client_id"),
-                            "resource": cur.get("resource")}, prev=cur)
+                            "resource": cur.get("resource"), "shared_client": cur.get("shared_client")}, prev=cur)
         save_token(name, owner, new)
         return new["access_token"]
 

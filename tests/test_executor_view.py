@@ -51,9 +51,16 @@ class ExecutorViewTests(unittest.TestCase):
         view = ev.build_executor_view(msgs)
         tools = [m for m in view if m.get("role") == "tool"]
         self.assertEqual(len(tools), 2)
-        self.assertLess(len(tools[0]["content"]), 2200)
+        self.assertLess(len(tools[0]["content"]), ev.TOOL_RESULT_CHARS + 600)
+        self.assertIn("not a display problem", tools[0]["content"])   # a small model must not blame the screen
         self.assertEqual(tools[1]["content"], "short")
         self.assertEqual(sum(1 for m in view if m.get("tool_calls")), 2)   # call/reply pairs intact
+
+    def test_cut_tool_result_keeps_its_end(self):
+        msgs = [SYS, u("go"), call(), tool("HEAD-" + "m" * 30000 + "-TAIL")]
+        body = [m for m in ev.build_executor_view(msgs) if m.get("role") == "tool"][0]["content"]
+        self.assertTrue(body.startswith("HEAD-"))
+        self.assertTrue(body.endswith("-TAIL"))
 
     def test_loop_injected_control_turns_do_not_start_a_new_request(self):
         msgs = [SYS, u("old"), a("ok"), u("check the app"), a("Let me look."),

@@ -18,14 +18,16 @@ lane and any escalation still see everything.
 import json
 from typing import Optional
 
+from ..text_clip import clip_head_tail
+
 PRIOR_TURNS = 2            # prior user/assistant text messages kept
 PRIOR_CHARS = 400          # each, truncated
-TOOL_RESULT_CHARS = 2000   # tool results inside the current run
+TOOL_RESULT_CHARS = 6000   # tool results inside the current run (head + tail, with a note saying the tool finished normally)
 
 # Messages the loop injects into the conversation itself. They are role "user" but are not
 # something the person typed, so they never mark the start of the current request.
 _CONTROL_PREFIXES = ("[continue]", "[plan reminder]", "[plan incomplete]", "[plan audit required]",
-                     "[stopped]", "[stuck]", "[system]")
+                     "[stopped]", "[stuck]", "[system]", "[budget]")
 
 
 def _text(content) -> str:
@@ -87,9 +89,10 @@ def build_executor_view(msgs: list, prior_turns: int = PRIOR_TURNS, prior_chars:
     for m in msgs[idx:]:
         if m.get("role") == "tool":
             body = _text(m.get("content"))
-            if len(body) > tool_chars:
+            clipped = clip_head_tail(body, tool_chars)
+            if clipped is not body:
                 m = dict(m)
-                m["content"] = body[:tool_chars].rstrip() + f" … [{len(body) - tool_chars} more chars omitted]"
+                m["content"] = clipped
         current.append(m)
     return head + prior + current
 

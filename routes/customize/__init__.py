@@ -99,3 +99,5 @@ __all__ = [
     "_install_connector",
     "uninstall",
 ]
+
+from . import client_endpoints  # noqa: E402,F401  (registers the admin connector-setup routes)

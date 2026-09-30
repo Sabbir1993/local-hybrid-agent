@@ -388,59 +388,154 @@ async function deleteProject(pid, pname) {
   }
 }
 
-async function loadSessions(autoRestore = false) {
-  const list = $('session-list');
-  const url = agentMode
+/* Recent Chats: the first SESS_PAGE sessions load up front, the next chunk when the list is scrolled to the bottom.
+   `_sess` keeps what is loaded, so a refresh (openSession, delete, new chat all call loadSessions) re-requests that many
+   instead of collapsing back to one page. */
+const SESS_PAGE = 15;
+const SESS_MAX = 100;
+const _sess = { items: [], hasMore: false, loading: false, key: '', obs: null };
+
+const SESS_ICON_CHAT = '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.75;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+const SESS_ICON_AGENT = '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.75;"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>';
+
+function sessionsUrl() {
+  return agentMode
     ? (curProject ? `/control/projects/${curProject.id}/sessions` : null)
     : `/control/projects/0/sessions`;
+}
+
+function sessionRowEl(s) {
+  const row = document.createElement('div');
+  row.className = 'session-row' + (curSession && curSession.id === s.id ? ' cur' : '');
+  row.setAttribute('data-sid', String(s.id));
+  const icon = agentMode ? SESS_ICON_AGENT : SESS_ICON_CHAT;
+  const isRunning = window.bgJobs && window.bgJobs.has(String(s.id));
+  const bgBadge = isRunning ? '<span class="bg-session-indicator" title="Executing in background..."><span class="bg-pulse-dot"></span>⚡</span>' : '';
+  row.innerHTML = `<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; align-items:center;" title="${esc(s.title)}">${icon}<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(s.title)}</span></span>` +
+    bgBadge +
+    `<span class="s-menu-wrap"><span class="s-menu" title="Session options">⋮</span></span>`;
+  row.onclick = e => {
+    if (e.target.classList.contains('s-menu')) {
+      e.stopPropagation();
+      toggleSessionMenu(e.target, s);
+      return;
+    }
+    openSession(s);
+  };
+  return row;
+}
+
+function sessionsDisconnect() {
+  if (_sess.obs) { _sess.obs.disconnect(); _sess.obs = null; }
+}
+
+/* the "Loading more" line at the bottom of the list; scrolling it into view asks for the next chunk */
+function sessionsWatchBottom(list) {
+  sessionsDisconnect();
+  const old = $('session-more');
+  if (old) old.remove();
+  if (!_sess.hasMore) return;
+  const more = document.createElement('div');
+  more.id = 'session-more';
+  more.className = 'dim';
+  more.style.cssText = 'font-size:11px; text-align:center; padding:8px 4px;';
+  more.textContent = 'Loading more…';
+  list.appendChild(more);
+  if (typeof IntersectionObserver !== 'function') return;
+  _sess.obs = new IntersectionObserver(entries => {
+    if (entries.some(en => en.isIntersecting)) loadMoreSessions();
+  }, { root: list, rootMargin: '0px 0px 40px 0px' });
+  _sess.obs.observe(more);
+}
+
+/* scrolling near the bottom also asks for the next chunk (the observer above covers a list too short to scroll) */
+let _sessScrollBound = false;
+function sessionsBindScroll() {
+  const list = $('session-list');
+  if (_sessScrollBound || !list) return;
+  _sessScrollBound = true;
+  list.addEventListener('scroll', () => {
+    if (_sess.hasMore && list.scrollTop + list.clientHeight >= list.scrollHeight - 60) loadMoreSessions();
+  }, { passive: true });
+}
+
+async function sessionsFetch(qs) {
+  const r = await fetch(`${sessionsUrl()}?${qs}`, { headers: { ...getDeviceHeaders() } });
+  return r.json();
+}
+
+async function loadMoreSessions(silent = false) {
+  const list = $('session-list');
+  if (!list || _sess.loading || !_sess.hasMore || !_sess.items.length || !sessionsUrl()) return false;
+  _sess.loading = true;
+  try {
+    const last = _sess.items[_sess.items.length - 1];
+    const d = await sessionsFetch(`limit=${SESS_PAGE}&before=${last.id}`);
+    const known = new Set(_sess.items.map(x => x.id));
+    const fresh = (d.sessions || []).filter(x => !known.has(x.id));
+    _sess.items.push(...fresh);
+    _sess.hasMore = !!d.has_more && fresh.length > 0;
+    if (!silent) {       // silent: the caller redraws the whole list itself (auto-restore search)
+      const more = $('session-more');
+      fresh.forEach(s => list.insertBefore(sessionRowEl(s), more));
+      if (typeof updateBgIndicators === 'function') updateBgIndicators();
+      sessionsWatchBottom(list);
+    }
+    return fresh.length > 0;
+  } catch (e) {
+    return false;
+  } finally {
+    _sess.loading = false;
+  }
+}
+
+async function loadSessions(autoRestore = false) {
+  const list = $('session-list');
+  const base = sessionsUrl();
 
   if (agentMode && !curProject) {
+    _sess.items = []; _sess.hasMore = false; _sess.key = '';
+    sessionsDisconnect();
     list.innerHTML = '<div class="dim" style="font-size:11.5px; padding:8px 4px;">No project selected.<br>Pick or create a project above for agent tasks.</div>';
     return;
   }
   try {
-    const d = await (await fetch(url, { headers: { ...getDeviceHeaders() } })).json();
-    if (!d.sessions || !d.sessions.length) {
+    if (_sess.key !== base) { _sess.items = []; _sess.hasMore = false; _sess.key = base; }   // another project / mode
+    const limit = Math.min(SESS_MAX, Math.max(SESS_PAGE, _sess.items.length));
+    const d = await sessionsFetch(`limit=${limit}`);
+    _sess.items = d.sessions || [];
+    _sess.hasMore = !!d.has_more;
+    if (!_sess.items.length) {
+      sessionsDisconnect();
       const emptyMsg = agentMode
         ? 'No task sessions in this project.<br>Type a prompt to start an agent task.'
         : 'No chats yet.<br>Type a message to start chatting.';
       list.innerHTML = `<div class="dim" style="font-size:11.5px; padding:8px 4px;">${emptyMsg}</div>`;
       return;
     }
-    list.innerHTML = '';
-    d.sessions.forEach(s => {
-      const row = document.createElement('div');
-      row.className = 'session-row' + (curSession && curSession.id === s.id ? ' cur' : '');
-      row.setAttribute('data-sid', String(s.id));
-      const icon = agentMode
-        ? '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.75;"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>'
-        : '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.75;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
-      const isRunning = window.bgJobs && window.bgJobs.has(String(s.id));
-      const bgBadge = isRunning ? '<span class="bg-session-indicator" title="Executing in background..."><span class="bg-pulse-dot"></span>⚡</span>' : '';
-      row.innerHTML = `<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; align-items:center;" title="${esc(s.title)}">${icon}<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(s.title)}</span></span>` +
-        bgBadge +
-        `<span class="s-menu-wrap"><span class="s-menu" title="Session options">⋮</span></span>`;
-      row.onclick = e => {
-        if (e.target.classList.contains('s-menu')) {
-          e.stopPropagation();
-          toggleSessionMenu(e.target, s);
-          return;
-        }
-        openSession(s);
-      };
-      list.appendChild(row);
-    });
 
-    if (typeof updateBgIndicators === 'function') updateBgIndicators();
-
-    // Auto-restore active session on initial load / refresh if saved
-    if (autoRestore && !curSession && d.sessions && d.sessions.length) {
+    // Auto-restore active session on initial load / refresh if saved: it may sit beyond the first page
+    let target = null;
+    if (autoRestore && !curSession) {
       const savedSid = localStorage.getItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
-      const target = savedSid ? d.sessions.find(x => String(x.id) === String(savedSid)) : null;
-      if (target) {
-        openSession(target);
+      if (savedSid) {
+        const find = () => _sess.items.find(x => String(x.id) === String(savedSid));
+        target = find();
+        for (let i = 0; !target && _sess.hasMore && i < 10; i++) {
+          if (!(await loadMoreSessions(true))) break;
+          target = find();
+        }
       }
     }
+
+    sessionsBindScroll();
+    const top = list.scrollTop;
+    list.innerHTML = '';
+    _sess.items.forEach(s => list.appendChild(sessionRowEl(s)));
+    sessionsWatchBottom(list);
+    list.scrollTop = top;
+    if (typeof updateBgIndicators === 'function') updateBgIndicators();
+    if (target) openSession(target);
   } catch (e) {}
 }
 

@@ -35,4 +35,5 @@ Multi-Agent Orchestration — 'spawn_agent':
 
 Efficiency:
 21. Parallel Calls: When several tool calls do not depend on each other (reading several files, running several searches), issue them together in one step instead of one per step.
-22. Skills And Finishing: A skill is not a tool - load one with read_skill(name). When the task is complete, give the final answer as plain text (or call finish(answer))."""
+22. Skills And Finishing: A skill is not a tool - load one with read_skill(name). When the task is complete, give the final answer as plain text (or call finish(answer)).
+23. Keep The Context Small: every tool result stays in the prompt for all later steps, and long results are shortened (the note says the tool finished normally). Find first (grep, list_files), then read only the part you need with read_file_chunk. Do not print whole files or long logs through run_python or run_shell, and do not re-read what an earlier step already showed you. Old results may be replaced by a short "[cleared to save context ...]" line: call the tool again only if you really need that content."""

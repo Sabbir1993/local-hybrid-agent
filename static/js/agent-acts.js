@@ -149,7 +149,7 @@ function toggleAllCodex(btn) {
   const cards = container.querySelectorAll('.codex-action-card, .codex-thought-card');
   // the label follows what the cards actually are, so it stays right after a card is opened by hand
   const isExpanding = ![...cards].some(c => c.open);
-  cards.forEach(c => { c.open = isExpanding; });
+  cards.forEach(c => { c.open = isExpanding; if (window._rememberCardOpen) window._rememberCardOpen(c, isExpanding); });
   btn.textContent = isExpanding ? '⤡ Collapse All' : '⤢ Expand All';
 }
 const toggleAllSteps = toggleAllCodex;
@@ -241,6 +241,10 @@ function agentStoppedHtml(acts, canContinue) {
   else if (s.reason === 'loop_near_repeat') msg = 'Stopped: kept calling the same tool without making progress.';
   else if (s.reason === 'no_progress') msg = 'Stopped: ' + stopDetailText(s.detail);
   else if (s.reason === 'timeout') msg = `Stopped: ran for ${Math.floor((s.elapsed_s || 0) / 60)} minutes.`;
+  else if (s.reason === 'interrupted') msg = `Interrupted: ${s.note || 'the connection ended before the run finished'}. Work done so far is kept.`;
+  else if (s.reason === 'cancelled') msg = 'Stopped by you. Work done so far is kept.';
+  else if (s.reason === 'failed') msg = `The run failed${s.note ? ': ' + s.note : ''}. Work done so far is kept.`;
+  else if (s.reason === 'budget') msg = 'Stopped: this run used its token budget.';
   else msg = `Paused after ${s.steps || 'the maximum'} steps${mins}${left}.`;
   // plan marked complete but the run was cut off: say so rather than "0 left"
   if (s.plan_total && !s.pending && (s.reason === 'max_steps' || s.reason === 'timeout')) {
@@ -248,7 +252,8 @@ function agentStoppedHtml(acts, canContinue) {
   }
   // nothing left to resume: don't offer a button that cannot work
   window._agentLastStop = s;   // agentContinue() tells the model why the last run stopped
-  const btn = (canContinue && (s.pending > 0 || s.reason === 'loop' || s.reason === 'loop_near_repeat' || s.reason === 'no_progress'))
+  const btn = (canContinue && (s.pending > 0 || s.reason === 'loop' || s.reason === 'loop_near_repeat' || s.reason === 'no_progress' ||
+                       s.reason === 'interrupted' || s.reason === 'cancelled' || s.reason === 'failed' || s.reason === 'budget'))
     ? `<button type="button" class="btn accent agy-continue-btn" data-click="agent-continue">▶ Continue</button>`
     : '';
   return `<div class="agy-stopped ${s.reason !== 'max_steps' ? 'loop' : ''}"><span>${esc(msg)}</span>${btn}</div>`;
@@ -526,10 +531,17 @@ function mediaProgressHtml(pr) {
   </div>`;
 }
 
-function agentActsHtml(acts) {
+// live: this message is the run still streaming. Anything else (a finished or reloaded message) cannot have a tool
+// still executing, so a call with no result is shown as interrupted instead of "Executing..." forever.
+function agentActsHtml(acts, live = true) {
   if (!acts || !acts.length) return '';
   const stream = buildChronologicalStream(acts);
   if (!stream.length) return '';
+  if (!live) {
+    stream.forEach(it => {
+      if (it.type === 'tool' && it.result === null) { it.result = 'interrupted: the run ended before this finished'; it.ok = false; }
+    });
+  }
 
   const toolOps = stream.filter(s => s.type === 'tool');
   const isAllDone = toolOps.length === 0 || toolOps.every(t => t.result !== null);

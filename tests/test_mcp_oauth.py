@@ -133,6 +133,45 @@ class OAuthFlowTests(unittest.TestCase):
         self.assertEqual(start["loopback_port"], mcp_oauth.DEFAULT_DCR_PORT)
         self.assertEqual(q["resource"], ["https://mcp.example.com/mcp"])   # RFC 8707 for non-Google
 
+    def test_begin_uses_the_admins_shared_client_for_the_real_connector(self):
+        self.kc.d["oauthapp:gmail:secret"] = "shared-secret"
+        cfg = {"transport": "http", "url": GMAIL_URL, "auth": {"type": "oauth"}}     # no client id of its own
+        with mock.patch("core.mcp_catalog.shared_client_id", return_value="shared-cid"), \
+                mock.patch.object(mcp_oauth, "discover", mock.AsyncMock(return_value=GOOGLE_META)):
+            start = run(mcp_oauth.begin("gmail", 7, cfg))
+        self.assertEqual(parse_qs(urlparse(start["auth_url"]).query)["client_id"], ["shared-cid"])
+        flow = mcp_oauth._flows[start["state"]]
+        self.assertEqual(flow["client_secret"], "shared-secret")
+        self.assertTrue(flow["shared_client"])
+        # the stored token remembers it, so a later refresh can use the shared secret
+        with mock.patch.object(mcp_oauth, "_token_request",
+                               mock.AsyncMock(return_value={"access_token": "AT", "refresh_token": "RT", "expires_in": 3600})):
+            run(mcp_oauth.complete(start["state"], "the-code", "http://127.0.0.1:1/callback"))
+        self.assertTrue(mcp_oauth.load_token("gmail", 7)["shared_client"])
+        tok = mcp_oauth.load_token("gmail", 7)
+        tok["expires_at"] = time.time() - 5
+        mcp_oauth.save_token("gmail", 7, tok)
+        seen = {}
+
+        async def fake(url, data, owner):
+            seen.update(data)
+            return {"access_token": "AT2", "expires_in": 3600}
+        with mock.patch.object(mcp_oauth, "_token_request", fake):
+            run(mcp_oauth.access_token("gmail", 7))
+        self.assertEqual(seen["client_secret"], "shared-secret")
+        self.assertTrue(mcp_oauth.load_token("gmail", 7)["shared_client"])
+
+    def test_a_same_named_personal_server_elsewhere_never_gets_the_shared_secret(self):
+        self.kc.d["oauthapp:gmail:secret"] = "shared-secret"
+        evil = {"transport": "http", "url": "https://attacker.example/mcp", "auth": {"type": "oauth"}}
+        meta = {**GOOGLE_META, "resource": "https://attacker.example/mcp",
+                "authorization_endpoint": "https://as.attacker.example/authorize",
+                "token_endpoint": "https://as.attacker.example/token"}
+        with mock.patch("core.mcp_catalog.shared_client_id", return_value="shared-cid"), \
+                mock.patch.object(mcp_oauth, "discover", mock.AsyncMock(return_value=meta)):
+            with self.assertRaises(RuntimeError):          # no client id, no registration: refuses rather than borrowing
+                run(mcp_oauth.begin("gmail", 9, evil))
+
     def test_migrates_plaintext_client_credentials(self):
         cfg = {"transport": "http", "url": GMAIL_URL, "env": {"clientId": "cid", "clientSecret": "s3cret", "X": "1"}}
         new = mcp_oauth.migrate_plain_client("gmail", 1, cfg)

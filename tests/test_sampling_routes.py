@@ -75,3 +75,26 @@ class SamplingRoutesTests(unittest.TestCase):
             self.assertEqual(r_clamp.json()["config"]["temp"], 2.0)
             self.assertEqual(r_clamp.json()["config"]["topp"], 0.0)
             self.assertEqual(r_clamp.json()["config"]["topk"], 1000)
+
+    def test_extra_llama_params_defaults_roundtrip_and_clamp(self):
+        from core.deps import get_current_user
+        self.app.dependency_overrides[get_current_user] = lambda: _principal()
+        with mock.patch.object(control.sampling, "SAMPLING_CONFIG_PATH", self.cfg_file):
+            d = self.client.get("/control/sampling").json()
+            self.assertEqual((d["rlast"], d["freq"], d["seed"]), (64, 0.0, -1))
+            self.assertEqual((d["drym"], d["dryb"], d["dryl"], d["dryn"]), (0.0, 1.75, 2, 4096))
+            self.assertEqual((d["dynr"], d["dyne"]), (0.0, 1.0))
+
+            ok = {"rlast": 128, "freq": 0.3, "seed": 42, "drym": 0.5, "dryb": 2.0,
+                  "dryl": 3, "dryn": 2048, "dynr": 0.1, "dyne": 1.5}
+            cfg = self.client.post("/control/sampling", json=ok).json()["config"]
+            for k, v in ok.items():
+                self.assertEqual(cfg[k], v)
+            self.assertEqual(self.client.get("/control/sampling").json()["seed"], 42)
+
+            bad = {"rlast": 99999, "freq": -9, "seed": -5, "drym": 99, "dryb": 0,
+                   "dryl": 999, "dryn": -50, "dynr": 9, "dyne": 0}
+            cfg = self.client.post("/control/sampling", json=bad).json()["config"]
+            self.assertEqual((cfg["rlast"], cfg["freq"], cfg["seed"]), (8192, -2.0, -1))
+            self.assertEqual((cfg["drym"], cfg["dryb"], cfg["dryl"], cfg["dryn"]), (5.0, 1.0, 64, -1))
+            self.assertEqual((cfg["dynr"], cfg["dyne"]), (2.0, 0.1))

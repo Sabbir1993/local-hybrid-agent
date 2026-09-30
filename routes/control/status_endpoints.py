@@ -1,9 +1,10 @@
+import asyncio
 import time
 from typing import Optional
 from fastapi import Depends
 from core.auth import Principal
 from core.deps import get_current_user, require_permission
-from core.db import db_report
+from core.db import db_report, db_report_runs
 from core.gpu import get_gpu_stats, get_hardware_engine_summary, refresh_hw_async
 from core.monitor import (
     _monitor_state,
@@ -84,6 +85,36 @@ async def gpu(user: Principal = Depends(require_permission("settings.runtime.vie
     return await get_gpu_stats()
 
 
+def _memory_report() -> dict:
+    """System RAM plus resident memory of this server and every child it started (llama-server lanes, whisper,
+    sd-server), labelled by --port, so a session that keeps growing shows which process it is."""
+    try:
+        import psutil
+    except ImportError:
+        return {"error": "psutil is not installed (pip install psutil)"}
+    import re
+    vm = psutil.virtual_memory()
+    me = psutil.Process()
+    rows = []
+    for p in [me] + me.children(recursive=True):
+        try:
+            cmd = " ".join(p.cmdline())
+            m = re.search(r"--port\s+(\d+)", cmd)
+            rows.append({"pid": p.pid, "name": p.name(), "port": int(m.group(1)) if m else None,
+                         "rss_mb": round(p.memory_info().rss / 1048576),
+                         "self": p.pid == me.pid})
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    rows.sort(key=lambda r: -r["rss_mb"])
+    return {"total_mb": round(vm.total / 1048576), "used_mb": round((vm.total - vm.available) / 1048576),
+            "processes": rows}
+
+
+@router.get("/control/memory")
+async def memory(user: Principal = Depends(require_permission("settings.runtime.view"))):
+    return await asyncio.get_running_loop().run_in_executor(None, _memory_report)
+
+
 @router.get("/control/monitor")
 async def monitor(user: Principal = Depends(require_permission("monitor.view"))):
     now = time.time()
@@ -134,6 +165,13 @@ async def monitor(user: Principal = Depends(require_permission("monitor.view")))
         "llama_pid": state.process.pid if state.process and state.process.poll() is None else None,
         "keepalive": state.keepalive_enabled,
     }
+
+
+@router.get("/control/report/runs")
+async def report_runs(days: int = 7, limit: int = 10,
+                      user: Principal = Depends(require_permission("usage.report.view"))):
+    """Heaviest agent runs (prompt tokens, peak step, steps, how each ended)."""
+    return {"days": max(1, min(365, days)), "runs": db_report_runs(days, limit)}
 
 
 @router.get("/control/report")

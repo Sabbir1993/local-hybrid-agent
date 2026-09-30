@@ -1,5 +1,6 @@
 from typing import Literal, Optional, Union
 from pydantic import BaseModel, Field
+from ..common.sampling_extra import SamplerFields
 
 
 class AttachedFile(BaseModel):
@@ -9,7 +10,7 @@ class AttachedFile(BaseModel):
     truncated: bool = False
 
 
-class AgentRequest(BaseModel):
+class AgentRequest(SamplerFields):
     messages: list
     max_steps: Optional[int] = None   # None -> agent.max_steps from config/app.json
     temperature: Optional[float] = None   # None -> the custom agent's value, else 0.4

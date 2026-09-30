@@ -1,0 +1,10 @@
+{
+  "sysprompt": "",
+  "temp": 0.25,
+  "topp": 0.9,
+  "minp": 0.05,
+  "rep": 1.05,
+  "presence": 0.0,
+  "topk": 40,
+  "maxtok": -1
+}

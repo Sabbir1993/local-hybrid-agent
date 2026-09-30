@@ -55,7 +55,7 @@ CONFIG_DEFAULTS = {
     "kv_unified": False,       # -kvu: one KV pool shared by all slots (idle slots reserve nothing)
     "kv_unified_per_slot": 0,  # cap one conversation's share of the unified pool (0 = no cap)
     "cache_reuse": 256,        # --cache-reuse: min chunk to reuse from cache via KV shifting
-    "cache_ram": 0,            # -cram MiB host-RAM prompt cache (0 = llama default 8192)
+    "cache_ram": 0,            # -cram MiB host-RAM prompt cache (0 = 2048 default, see process.MAIN_CACHE_RAM_MB; -1 = no limit)
     "keepalive_interval_s": 25,
     "gpu_devices": [1, 2],
     "llama_bin_dir": "E:\\AI\\vulkan-arc\\llama-vulkan",

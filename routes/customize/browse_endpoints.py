@@ -1,5 +1,8 @@
 from typing import Optional
+from fastapi import Depends
 from core import mcp_catalog
+from core.auth import Principal
+from core.deps import get_current_user
 from core import plugins as plugins_core
 from core import skills as skills_core
 
@@ -30,10 +33,10 @@ async def registry_search(q: Optional[str] = None):
 
 
 @router.get("/{kind}")
-async def list_kind(kind: str):
+async def list_kind(kind: str, user: Principal = Depends(get_current_user)):
     if kind not in KINDS:
         return _err(f"unknown kind '{kind}'", 404)
-    items = _LISTERS[kind]()
+    items = _LISTERS[kind](user.id)
     categories: dict = {}
     for it in items:
         if it["in_catalog"]:
@@ -62,7 +65,15 @@ async def preview(kind: str, item_id: str):
     elif kind == "connectors":
         pre = mcp_catalog.get_preset(item_id)
         if pre:
-            return {"format": "text", "text": " ".join([pre["command"], *pre.get("args", [])])}
+            if pre.get("command"):
+                text = " ".join([pre["command"], *pre.get("args", [])])
+            else:
+                how = ("sign-in happens in your browser; tokens are kept in the OS keychain"
+                       if pre.get("auth") else "no sign-in")
+                text = f"{pre.get('url')}\n(remote MCP server over HTTPS; {how})"
+                if (pre.get("auth") or {}).get("scopes"):
+                    text += "\nRequested access: " + ", ".join(pre["auth"]["scopes"])
+            return {"format": "text", "text": text}
     else:
         return _err(f"unknown kind '{kind}'", 404)
     return _err(f"'{item_id}' not found", 404)
