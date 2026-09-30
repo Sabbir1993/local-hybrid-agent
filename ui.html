@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Local Agent — Control Center</title>
 <script src="/static/js/theme-boot.js?v=1.0"></script>
-<link rel="stylesheet" href="/static/css/style.css?v=5.7">
+<link rel="stylesheet" href="/static/css/style.css?v=5.11">
 <link rel="stylesheet" href="/static/css/lanes.css?v=1.2">
 <link rel="stylesheet" href="/static/css/media.css?v=1.2">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
@@ -42,7 +42,7 @@
       <kbd class="kbd-hint">Ctrl K</kbd>
     </button>
 
-    <section id="custom-agents-card" class="card" style="padding:10px 8px; flex-shrink:0; display:flex; flex-direction:column; max-height:220px;">
+    <section id="custom-agents-card" class="card" style="padding:10px 8px; flex-shrink:0; display:none; flex-direction:column; max-height:220px;">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding:0 4px;">
         <span style="font-size:9.5px; color:var(--dim); letter-spacing:1.8px; font-weight:700; text-transform:uppercase;">Personal Agents</span>
         <div style="display:flex; align-items:center; gap:4px;">
@@ -464,6 +464,7 @@
         <button class="cz-tab" data-kind="skills" role="tab">Skills</button>
         <button class="cz-tab" data-kind="connectors" role="tab">Connectors</button>
         <button class="cz-tab" data-kind="plugins" role="tab">Plugins</button>
+        <button class="cz-tab" data-kind="agents" role="tab">Agents</button>
       </div>
       <span class="cz-sep"></span>
       <div class="cz-seg">
@@ -827,12 +828,22 @@ Full instructions the agent reads via read_skill.</pre>
       </div>
 
       <div class="ca-field">
+        <label for="ca-workdir">Work folder on your computer (Optional)</label>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="ca-workdir" placeholder="D:/reports/weekly" autocomplete="off" spellcheck="false" style="flex:1;">
+          <button type="button" class="ca-browse" id="ca-workdir-browse"><span aria-hidden="true">📁</span> Browse…</button>
+        </div>
+        <span class="ca-field-hint">With a folder set, this agent can read, write and analyse files there when you chat with it in the desktop app, and repeat the same task from the same place every time. It cannot leave the folder. Without one it only chats. The folder is private to you and is never shared or copied to forks.</span>
+      </div>
+
+      <div class="ca-field">
         <label>Tool Permissions &amp; Capabilities</label>
         <div id="ca-tools-container"></div>
       </div>
 
       <div class="ca-field-check">
-        <label><input type="checkbox" id="ca-public"> Share with other users on this server (Public Template)</label>
+        <label><input type="checkbox" id="ca-public"> Ask to share with all users on this server</label>
+        <span class="ca-field-hint" id="ca-share-hint">Someone with approval rights reviews it first. Once approved it appears in Customize → Agents, without your folder, and others fork it and choose their own. Editing it later sends it for review again.</span>
       </div>
     </div>
     <div class="ca-modal-foot">
@@ -855,7 +866,7 @@ Full instructions the agent reads via read_skill.</pre>
   </div>
 </div>
 
-<script src="/static/js/session.js?v=1.2"></script>
+<script src="/static/js/session.js?v=1.3"></script>
 <script src="/static/js/highlight.js"></script>
 <!-- pinned exact versions; SheetJS 0.18.5 (last npm build) has CVE-2023-30533 / CVE-2024-22363 -->
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js" integrity="sha384-R63zfMfSwJF4xCR11wXii+QUsbiBIdiDzDbtxia72oGWfkT7WHJfmD/I/eeHPJyT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -866,32 +877,32 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/answer-check.js?v=1.1"></script>
 <script src="/static/js/audio-wav.js?v=1.0"></script>
 <script src="/static/js/sampling.js?v=1.2"></script>
-<script src="/static/js/preview.js?v=2.8"></script>
+<script src="/static/js/preview.js?v=2.9"></script>
 <script src="/static/js/gpu-status.js?v=3.4"></script>
 <script src="/static/js/chat.js?v=3.17"></script>
 <script src="/static/js/controls.js?v=3.1"></script>
 <script src="/static/js/monitor.js?v=3.1"></script>
-<script src="/static/js/capabilities.js?v=3.0"></script>
+<script src="/static/js/capabilities.js?v=3.1"></script>
 <script src="/static/js/git.js?v=1.0"></script>
-<script src="/static/js/usage-report.js?v=2.5"></script>
+<script src="/static/js/usage-report.js?v=2.10"></script>
 <script src="/static/js/audit-log.js?v=1.0"></script>
 <script src="/static/js/db-explorer.js?v=1.0"></script>
-<script src="/static/js/customize.js?v=1.1"></script>
+<script src="/static/js/customize.js?v=1.2"></script>
 <script src="/static/js/effort.js?v=1.1"></script>
 <script src="/static/js/config.js?v=3.2"></script>
 <script src="/static/js/cloud.js?v=3.1"></script>
 <script src="/static/js/attachments.js?v=2.8"></script>
 <script src="/static/js/projects.js?v=4.6"></script>
-<script src="/static/js/workspace.js?v=2.9"></script>
+<script src="/static/js/workspace.js?v=2.11"></script>
 <script src="/static/js/dnd.js?v=1.0"></script>
-<script src="/static/js/agent-cmd.js?v=3.8"></script>
+<script src="/static/js/agent-cmd.js?v=4.1"></script>
 <script src="/static/js/media.js?v=1.6"></script>
-<script src="/static/js/agent-acts.js?v=3.1"></script>
-<script src="/static/js/agent-run.js?v=3.12"></script>
+<script src="/static/js/agent-acts.js?v=3.2"></script>
+<script src="/static/js/agent-run.js?v=3.15"></script>
 <script src="/static/js/compact.js?v=2.9"></script>
 <script src="/static/js/export.js?v=1.0"></script>
-<script src="/static/js/custom-agents.js?v=1.3"></script>
-<script src="/static/js/main.js?v=4.2"></script>
+<script src="/static/js/custom-agents.js?v=1.9"></script>
+<script src="/static/js/main.js?v=4.4"></script>
 
 </body>
 </html>

@@ -8,7 +8,7 @@ from core.audit import audit_log
 from core.db import db_add_project_allow_pattern, db_owned_project_id
 from core import auth_db
 from core.agent_tools import get_active_project
-from core.shell_tools import add_allow_pattern
+from core.shell_tools import add_allow_pattern, command_allowed
 
 from .base import router
 from .models import PermissionAnswerReq
@@ -49,13 +49,38 @@ async def agent_permission_answer(req: PermissionAnswerReq, user: Principal = De
             if pid is None:
                 return JSONResponse({"error": "project not found"}, status_code=404)
             db_add_project_allow_pattern(pid, req.pattern)
+            audit_log(user, action="shell.allow_pattern.add", resource=req.pattern,
+                      detail={"scope": "project", "project_id": pid})
     elif req.decision == "user" and req.pattern:
         # Save to this user's own allow list -- never affects other users
         auth_db.add_user_allow_pattern(user.id, req.pattern)
+        audit_log(user, action="shell.allow_pattern.add", resource=req.pattern, detail={"scope": "user"})
     rec["result"] = {"allow": req.decision != "deny",
                      "note": f"pattern allowed for {req.decision}" if req.decision in ("always", "project", "user") else ""}
     rec["event"].set()
-    return {"ok": True, "decision": req.decision}
+    saved = req.decision in ("always", "project", "user") and bool(req.pattern)
+    return {"ok": True, "decision": req.decision, "saved": saved}
+
+
+def can_save_pattern(cmd: str) -> bool:
+    """A saved '<first word> *' only auto-approves a *single, plain* command (core/shell_tools.py
+    command_allowed): a command with & | > ; or risky options is asked about every time, so
+    offering to remember it would be a promise the app cannot keep."""
+    parts = (cmd or "").strip().split()
+    return bool(parts) and command_allowed(cmd, [f"{parts[0]} *"])
+
+
+@router.get("/agent/allowed-commands")
+async def my_allowed_commands(user: Principal = Depends(get_current_user)):
+    """The commands this user chose to always allow ('Always allow for me')."""
+    return {"patterns": auth_db.get_user_allow_patterns(user.id)}
+
+
+@router.delete("/agent/allowed-commands")
+async def forget_allowed_command(pattern: str, user: Principal = Depends(get_current_user)):
+    auth_db.remove_user_allow_pattern(user.id, pattern)
+    audit_log(user, action="shell.allow_pattern.remove", resource=pattern, detail={"scope": "user"})
+    return {"ok": True}
 
 
 def _pattern_error(pattern: str, rec: dict) -> Optional[str]:

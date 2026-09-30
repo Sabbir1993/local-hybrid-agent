@@ -71,7 +71,17 @@ class BrowserToolTests(unittest.TestCase):
         op, params = comp.calls[0]
         self.assertEqual(op, "browser.navigate")
         self.assertEqual(params["device"], "pixel-7")
-        self.assertTrue(params["headless"])
+        self.assertFalse(params["headless"])          # a visible window is the default
+
+    def test_navigate_headless_only_when_asked_or_configured(self):
+        for args, cfg, expect in (({"show": False}, None, True), ({"show": True}, {"visible": False}, False),
+                                  ({}, {"visible": False}, True), ({}, None, False)):
+            comp, p = self._with({"browser.navigate": {"url": "http://localhost:3000/", "title": "t", "status": 200,
+                                                       "snapshot": ""}})
+            caps = {"browser": cfg} if cfg is not None else {}
+            with p, mock.patch.dict("core.browser_tools.tools.APP_CONFIG", {"capabilities": caps}):
+                run(browser_tools.tool_browser_navigate({"url": "http://localhost:3000/", **args}))
+            self.assertEqual(comp.calls[0][1]["headless"], expect, (args, cfg))
 
     def test_screenshot_saved_on_device_described_locally_and_thumbnailed(self):
         png = _png()

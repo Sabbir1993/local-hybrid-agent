@@ -56,7 +56,7 @@
     dd.className = 'user-menu-dropdown';
     dd.innerHTML = `
       <div class="user-menu-email"></div>
-      <button type="button" class="user-menu-item" data-action="change-pwd">🔑 Change Password</button>
+      <button type="button" class="user-menu-item" data-action="change-pwd"><svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/></svg><span>Change password</span></button>
       <div class="user-menu-pwd-form" style="display:none">
         <input type="password" placeholder="Current password" data-field="current" autocomplete="current-password">
         <input type="password" placeholder="New password" data-field="new" autocomplete="new-password">
@@ -67,7 +67,8 @@
           <button type="button" class="btn accent" data-action="pwd-save">Save</button>
         </div>
       </div>
-      <button type="button" class="user-menu-item danger" data-action="logout">🚪 Logout</button>
+      <div class="user-menu-sep"></div>
+      <button type="button" class="user-menu-item danger" data-action="logout"><svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg><span>Log out</span></button>
     `;
     trigger.parentElement.style.position = 'relative';
     trigger.parentElement.classList.add('user-menu');

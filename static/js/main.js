@@ -90,7 +90,7 @@ function submitPrompt() {
     return;
   }
 
-  if (agentMode) runAgentSSE(text); else send(text);
+  dispatchPrompt(text);
 }
 $('input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitPrompt(); }
@@ -304,6 +304,15 @@ if ($('btn-chat-cfg')) $('btn-chat-cfg').onclick = () => setSettings();
 if ($('settings-close')) $('settings-close').onclick = () => setSettings(false);
 if ($('btn-settings')) $('btn-settings').onclick = () => openSettingsModal();
 if ($('settings-modal-close')) $('settings-modal-close').onclick = () => closeSettingsModal();
+
+/* header buttons are icon-only: the label becomes the accessible name, the long description a
+   fast CSS tooltip (data-tip) instead of the slow native title */
+document.querySelectorAll('header .icon-btn').forEach(b => {
+  const label = b.querySelector('.btn-label');
+  const tip = b.getAttribute('title') || (label ? label.textContent : '');
+  if (label) b.setAttribute('aria-label', label.textContent.trim());
+  if (tip) { b.dataset.tip = label ? label.textContent.trim() + ' - ' + tip.replace(/^[^:]+:\s*/, '') : tip; b.removeAttribute('title'); }
+});
 
 /* boot */
 try {

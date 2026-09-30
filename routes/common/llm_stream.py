@@ -64,14 +64,15 @@ class _Admission:
 admission = _Admission()
 
 
-async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None):
+async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None, tool_choice: Optional[str] = None):
     """Stream one completion. Requests to the local main llama-server first pass
     the fair-share admission gate; a ("queued", {"position": n}) item is yielded
     when the caller has to wait for a slot."""
     if client_or_state is not state.client or not admission.enabled():
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
                                                repeat_penalty, rid, grammar, extra=extra, effort=effort,
-                                               top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
+                                               top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k,
+                                               tool_choice=tool_choice):
             yield item
         return
     glob, mine = admission._sems(get_current_user_id())
@@ -90,14 +91,26 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
     try:
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
                                                repeat_penalty, rid, grammar, extra=extra, effort=effort,
-                                               top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
+                                               top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k,
+                                               tool_choice=tool_choice):
             yield item
     finally:
         glob.release()
         mine.release()
 
 
-async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None):
+# clients (by base URL / cloud model key) that rejected a tool_choice field
+_TOOL_CHOICE_UNSUPPORTED: set = set()
+
+
+def _tool_choice_key(client_or_state) -> str:
+    cm = getattr(client_or_state, "cm", None)
+    if cm is not None:
+        return f"cloud:{cm.key}"
+    return f"local:{getattr(client_or_state, 'base_url', '') or id(client_or_state)}"
+
+
+async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None, tool_choice: Optional[str] = None):
     payload = {
         "messages": msgs,
         "temperature": temperature,
@@ -127,12 +140,20 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
                 payload[k] = v
     elif getattr(client_or_state, "is_cloud", False):
         payload.update(reasoning.cloud_fields(effort, getattr(client_or_state, "cm", None)))
+    else:
+        # helper lanes (executor, vision): reuse the KV cache for the stable prompt prefix
+        # (system prompt + tools) between steps - the request is otherwise reprocessed each step
+        payload["cache_prompt"] = True
     if max_tokens is not None and int(max_tokens) > 0:
         payload["max_tokens"] = int(max_tokens)
     else:
         payload["max_tokens"] = -1
     if tools:
         payload["tools"] = tools
+        # "required" makes a tool call the only possible reply. Servers/providers that
+        # rejected it once are remembered and not asked again (see the retry below).
+        if tool_choice and _tool_choice_key(client_or_state) not in _TOOL_CHOICE_UNSUPPORTED:
+            payload["tool_choice"] = tool_choice
     if grammar:
         payload["grammar"] = grammar
 
@@ -151,12 +172,25 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
                 async for item in _recover_context(client_or_state, payload, msgs, tools, rid, err_text):
                     yield item
                 return
+            if "tool_choice" in payload and (response.status_code in (400, 422)
+                                             or (response.status_code == 500 and "tool_choice" in err_msg.lower())):
+                # this server/provider does not accept tool_choice: remember it and
+                # retry the same request once without it
+                _TOOL_CHOICE_UNSUPPORTED.add(_tool_choice_key(client_or_state))
+                print(f"[common] tool_choice rejected ({response.status_code}: {err_msg[:120]}) - retrying without it",
+                      file=sys.stderr)
+                async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
+                                                       repeat_penalty, rid, grammar, extra=extra, effort=effort,
+                                                       top_p=top_p, min_p=min_p, presence_penalty=presence_penalty,
+                                                       top_k=top_k):
+                    yield item
+                return
             if effort_keys and response.status_code in (400, 422) and getattr(client_or_state, "is_cloud", False):
                 # Provider/build rejected the reasoning fields: retry once
                 # without them (model's default thinking) rather than failing.
                 print(f"[common] reasoning fields {effort_keys} rejected ({response.status_code}: {err_msg[:120]}) - retrying without them", file=sys.stderr)
                 async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
-                                                       repeat_penalty, rid, grammar, extra=extra):
+                                                       repeat_penalty, rid, grammar, extra=extra, tool_choice=tool_choice):
                     yield item
                 return
             if grammar:

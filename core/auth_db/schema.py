@@ -167,6 +167,8 @@ CREATE TABLE IF NOT EXISTS user_custom_agents (
     reasoning_effort TEXT DEFAULT 'medium',
     temperature REAL DEFAULT 0.4,
     is_public INTEGER DEFAULT 0,
+    work_dir TEXT DEFAULT '',
+    share_status TEXT DEFAULT '',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -219,6 +221,14 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
 def init_tables(conn) -> None:
     conn.executescript(SCHEMA_SCRIPT)
     conn.commit()
+    if "work_dir" not in {r[1] for r in conn.execute("PRAGMA table_info(user_custom_agents)")}:
+        conn.execute("ALTER TABLE user_custom_agents ADD COLUMN work_dir TEXT DEFAULT ''")
+        conn.commit()
+    if "share_status" not in {r[1] for r in conn.execute("PRAGMA table_info(user_custom_agents)")}:
+        # sharing now needs approval; agents that were already public keep their approved standing
+        conn.execute("ALTER TABLE user_custom_agents ADD COLUMN share_status TEXT DEFAULT ''")
+        conn.execute("UPDATE user_custom_agents SET share_status = 'approved' WHERE is_public = 1 AND user_id IS NOT NULL")
+        conn.commit()
     _seed_defaults(conn)
     try:
         from .custom_agents_seed import _seed_starter_custom_agents

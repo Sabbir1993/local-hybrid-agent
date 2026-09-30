@@ -330,13 +330,15 @@ updateWsRail();
 document.addEventListener('DOMContentLoaded', updateWsRail);
 
 /* ---------------- shell permission modal ---------------- */
-function showPermModal(reqId, cmd, kind) {
+function showPermModal(reqId, cmd, kind, saveable) {
   const m = $('perm-modal');
   if (!m) return;
   m.dataset.reqId = reqId;
   $('perm-cmd').textContent = cmd;
   // code and paid cloud media can only ever be allowed once: no saved patterns
-  const onceOnly = kind === 'python' || kind === 'media';
+  // a command with & | > ; or special options is asked about every time, so it cannot be remembered either
+  const chained = kind !== 'python' && kind !== 'media' && saveable === false;
+  const onceOnly = kind === 'python' || kind === 'media' || chained;
   ['perm-project', 'perm-user', 'perm-always'].forEach(id => { const b = $(id); if (b) b.hidden = onceOnly; });
   const h = m.querySelector('h2');
   if (h && h.firstChild && h.firstChild.nodeType === 3) {
@@ -349,6 +351,7 @@ function showPermModal(reqId, cmd, kind) {
   if (onceOnly) {
     $('perm-note').textContent = kind === 'media'
       ? 'Allow it just this once, or deny. The agent asks again next time.'
+      : chained ? 'This command chains steps or uses special options (& | > ;), so it can only be allowed once. Run each step as its own command to be able to remember it.'
       : 'Code can only be allowed once.';
     m.dataset.pattern = '';
     m.hidden = false;
@@ -376,7 +379,7 @@ async function answerPermission(decision) {
   const p = getActiveProject();
   const projectId = (p && p.id) ? p.id : null;
   try {
-    await fetch('/agent/permission', {
+    const r = await fetch('/agent/permission', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         req_id: reqId,
@@ -385,20 +388,16 @@ async function answerPermission(decision) {
         project_id: projectId
       }),
     });
+    // an answer that did not go through (or a remembered choice that was not saved) must not pass silently
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      toast('Could not save your answer: ' + (j.error || ('HTTP ' + r.status)), true);
+    } else if (pattern && (decision === 'always' || decision === 'project' || decision === 'user')) {
+      const j = await r.json().catch(() => ({}));
+      if (j.saved === false) toast('Allowed this time, but it was not remembered', true);
+    }
   } catch (e) { /* stream may have ended */ }
-
-  if (decision === 'always') {
-    toast(`✓ Pattern "${m.dataset.pattern}" allow-listed globally`);
-  } else if (decision === 'project') {
-    const pName = p ? p.name : 'project';
-    toast(`✓ Pattern "${m.dataset.pattern}" allowed for ${pName}`);
-  } else if (decision === 'user') {
-    toast(`✓ Pattern "${m.dataset.pattern}" always allowed for your account`);
-  } else if (decision === 'allow') {
-    toast('▶ Shell command approved once');
-  } else if (decision === 'deny') {
-    toast('✕ Shell command denied');
-  }
+  // no toast here: the approval box closes and the action card shows whether the command ran or was denied
 }
 
 if ($('perm-allow')) $('perm-allow').onclick = () => answerPermission('allow');

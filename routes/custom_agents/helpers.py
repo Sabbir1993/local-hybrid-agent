@@ -22,15 +22,16 @@ def _decorate(agent: dict, user: Principal) -> dict:
     uid = agent.get("user_id")
     agent["owned"] = uid == user.id
     agent["scope"] = "mine" if uid == user.id else ("template" if uid is None else "shared")
+    if not agent["owned"]:
+        agent["work_dir"] = ""       # a path on someone else's machine means nothing here and is theirs to keep
     agent["can_edit"] = agent["owned"] or bool(user.is_super_admin)
     agent["subagent_warnings"] = [t for t in (agent.get("tool_allowlist") or []) if t in _SUBAGENT_DENIED]
     return agent
 
 
-def _check_publish(user: Principal, is_public) -> Optional[JSONResponse]:
-    if is_public and not user_has_permission(user, PUBLISH_PERMISSION):
-        return JSONResponse({"error": f"missing permission: {PUBLISH_PERMISSION}"}, status_code=403)
-    return None
+def can_approve(user: Principal) -> bool:
+    """Whoever holds the publish permission reviews shared agents (and may share without a review)."""
+    return bool(user.is_super_admin) or user_has_permission(user, PUBLISH_PERMISSION)
 
 
 def _check_slug(slug: Optional[str], name: Optional[str] = None) -> Optional[JSONResponse]:

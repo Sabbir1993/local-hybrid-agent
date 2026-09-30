@@ -185,6 +185,7 @@ async function navigate(p) {
     const resp = await sess.page.goto(u.href, { waitUntil: "domcontentloaded", timeout: Math.min(Number(p.timeout_ms) || 30000, 90000) });
     status = resp ? resp.status() : null;
     await sess.page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+    if (!sess.headless) await sess.page.bringToFront().catch(() => {});   // so the test window is actually seen
   } catch (e) {
     return { ...(await pageInfo(sess)), error: String(e.message || e).split("\n")[0] };
   }

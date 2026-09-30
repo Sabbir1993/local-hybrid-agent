@@ -1,6 +1,10 @@
 /* ---------------- users & roles panel (settings.html only) ---------------- */
 let _rbacRoles = [];
 let _rbacPerms = [];
+let _rbacModules = [];
+let _rbacTab = 'users';
+
+const _RB_INP = 'background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11.5px;';
 
 async function loadUsersPanel() {
   const box = $('users-content');
@@ -16,40 +20,58 @@ async function loadUsersPanel() {
     }
     const users = (await usersRes.json()).users || [];
     _rbacRoles = (await rolesRes.json()).roles || [];
-    _rbacPerms = permsRes.ok ? ((await permsRes.json()).permissions || []) : [];
+    const pj = permsRes.ok ? await permsRes.json() : {};
+    _rbacPerms = pj.permissions || [];
+    _rbacModules = pj.modules || [];
     renderUsersPanel(box, users);
-    loadApiTokens(box, users);
+    loadApiTokens(box.querySelector('#ru-pane-tokens'), users);
   } catch (e) {
     box.innerHTML = '<div class="mon-empty">Failed to load: ' + esc(e.message) + '</div>';
   }
 }
 
+function _rbacShowTab(box, tab) {
+  _rbacTab = tab;
+  box.querySelectorAll('.ru-tab').forEach(b => {
+    const on = b.dataset.tab === tab;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  box.querySelectorAll('.ru-pane').forEach(p => { p.style.display = p.dataset.pane === tab ? '' : 'none'; });
+}
+
 function renderUsersPanel(box, users) {
   const roleOpts = _rbacRoles.map(r => `<option value="${esc(r.name)}">${esc(r.name)}</option>`).join('');
+  const tabBtn = (id, label) => `<button type="button" role="tab" class="ru-tab btn ghost" data-tab="${id}"
+    style="width:auto; margin:0; padding:6px 16px; font-size:12px; border-radius:6px 6px 0 0;">${label}</button>`;
   box.innerHTML = `
-    <div class="cap-item" style="margin-bottom:10px;">
-      <b>Create user</b>
-      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
-        <input type="text" id="ru-username" placeholder="username" style="flex:1; min-width:120px; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11.5px;">
-        <input type="password" id="ru-password" placeholder="password" style="flex:1; min-width:120px; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11.5px;">
-        <select id="ru-role" style="background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11.5px;">${roleOpts}</select>
-        <button class="btn accent" id="ru-create" style="width:auto; margin:0; padding:5px 12px; font-size:11.5px;">+ Create</button>
+    <div role="tablist" class="ru-tabs" style="display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:12px;">
+      ${tabBtn('users', 'Users')}${tabBtn('roles', 'Roles')}${tabBtn('tokens', 'Tokens')}
+    </div>
+    <div class="ru-pane" data-pane="users">
+      <div class="cap-item" style="margin-bottom:10px;">
+        <b>Create user</b>
+        <div class="ru-create">
+          <input type="text" id="ru-username" placeholder="username" autocomplete="off">
+          <input type="password" id="ru-password" placeholder="password (8+ characters, letters and digits)" autocomplete="new-password">
+          <select id="ru-role" aria-label="Role for the new user">${roleOpts}</select>
+          <button class="ru-btn primary" id="ru-create" type="button">+ Create</button>
+        </div>
+      </div>
+      <div id="ru-list" style="display:flex; flex-direction:column; gap:4px;">
+        ${users.map(u => userRow(u)).join('') || '<div class="dim" style="font-size:11px;">No users yet.</div>'}
       </div>
     </div>
-    <div id="ru-list" style="display:flex; flex-direction:column; gap:4px; margin-bottom:12px;">
-      ${users.map(u => userRow(u)).join('') || '<div class="dim" style="font-size:11px;">No users yet.</div>'}
-    </div>
-    <div class="cap-item">
-      <b>Role permissions</b>
-      <div id="rp-roles" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;">
-        ${_rbacRoles.map(r => roleBlock(r)).join('')}
-      </div>
-      <div style="display:flex; gap:6px; margin-top:8px;">
-        <input type="text" id="new-role-name" placeholder="new role name" style="flex:1; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11.5px;">
-        <button class="btn ghost" id="new-role-add" style="width:auto; margin:0; padding:5px 10px; font-size:11.5px;">+ Add role</button>
-      </div>
-    </div>`;
+    <div class="ru-pane" data-pane="roles"></div>
+    <div class="ru-pane" data-pane="tokens" id="ru-pane-tokens"></div>`;
 
+  box.querySelectorAll('.ru-tab').forEach(b => { b.onclick = () => _rbacShowTab(box, b.dataset.tab); });
+  renderRolesPane(box);
+  _rbacShowTab(box, _rbacTab);
+  _rbacWire(box);
+}
+
+function _rbacWire(box) {
   $('ru-create').onclick = async () => {
     const username = $('ru-username').value.trim();
     const password = $('ru-password').value;
@@ -103,9 +125,138 @@ function renderUsersPanel(box, users) {
       } catch (e) { toast('Update failed', true); }
     };
   });
+}
 
-  if ($('new-role-add')) $('new-role-add').onclick = async () => {
-    const name = $('new-role-name').value.trim();
+function userRow(u) {
+  const roleSel = _rbacRoles.map(r =>
+    `<option value="${esc(r.name)}" ${u.roles.includes(r.name) ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
+  const state = u.is_active ? '' : '<span class="ru-state">disabled</span>';
+  const actions = u.is_super_admin
+    ? '<span class="ru-role-fixed dim">all permissions</span>'
+    : `<select class="ru-role-select" data-id="${u.id}" aria-label="Role for ${esc(u.username)}">${roleSel}</select>
+       <button type="button" class="ru-btn ru-toggle-active" data-id="${u.id}" data-active="${u.is_active ? '1' : '0'}">${u.is_active ? 'Disable' : 'Enable'}</button>
+       <button type="button" class="ru-btn ru-delete" data-id="${u.id}">Delete</button>`;
+  return `<div class="ru-row${u.is_active ? '' : ' off'}">
+    <span class="ru-name" title="${esc(u.username)}">${esc(u.username)}${u.is_super_admin ? '<span class="ru-badge">super admin</span>' : ''}${state}</span>
+    <span class="ru-actions">${actions}</span>
+  </div>`;
+}
+
+/* ---------------- roles: list on the left, the chosen role's permissions on the right ---------------- */
+let _rbacRoleId = null;
+
+const _RL_KIND = {
+  read: { label: 'View', hint: 'Can look but not change anything' },
+  write: { label: 'Change', hint: 'Can edit settings or data' },
+  action: { label: 'Use', hint: 'Can start something or use a feature' },
+};
+
+/* Older servers send bare keys: group by the part before the first dot and make the key readable. */
+function _rlPerms() {
+  return _rbacPerms.map(p => p.module ? p : Object.assign({}, p, {
+    module: (p.key.split('.')[0] || 'other'),
+    kind: /\.view$/.test(p.key) ? 'read' : /\.(manage|configure|input_guard)$/.test(p.key) ? 'write' : 'action',
+    title: p.key.replace(/[._]/g, ' ').replace(/^./, c => c.toUpperCase()),
+    help: p.description || '',
+  }));
+}
+
+function _rlModules(perms) {
+  if (_rbacModules.length) return _rbacModules;
+  return [...new Set(perms.map(p => p.module))].map(id => ({ id, label: id.replace(/^./, c => c.toUpperCase()) }));
+}
+
+function renderRolesPane(box) {
+  const pane = box.querySelector('[data-pane="roles"]');
+  if (!pane) return;
+  if (!_rbacRoles.some(r => r.id === _rbacRoleId)) _rbacRoleId = (_rbacRoles[0] || {}).id;
+  const role = _rbacRoles.find(r => r.id === _rbacRoleId);
+  const perms = _rlPerms();
+  const granted = new Set((role && role.permissions) || []);
+
+  const rail = _rbacRoles.map(r => {
+    const on = (r.permissions || []).length;
+    return `<button type="button" class="rl-role${r.id === _rbacRoleId ? ' on' : ''}" data-role-pick="${r.id}">
+      <span class="rl-role-name">${esc(r.name)}</span>
+      <span class="rl-role-meta">${r.is_builtin ? 'Built in' : 'Custom'} · ${on} of ${perms.length} allowed</span>
+    </button>`;
+  }).join('');
+
+  const sections = _rlModules(perms).map(m => {
+    const inMod = perms.filter(p => p.module === m.id);
+    if (!inMod.length) return '';
+    const n = inMod.filter(p => granted.has(p.key)).length;
+    const all = n === inMod.length;
+    const rows = inMod.map(p => {
+      const k = _RL_KIND[p.kind] || _RL_KIND.action;
+      return `<label class="rl-perm">
+        <input type="checkbox" class="rp-perm" data-role="${role.id}" data-perm="${esc(p.key)}" ${granted.has(p.key) ? 'checked' : ''}>
+        <span class="rl-switch" aria-hidden="true"></span>
+        <span class="rl-perm-text">
+          <span class="rl-perm-title">${esc(p.title || p.key)}<span class="rl-tag rl-${esc(p.kind || 'action')}" title="${esc(k.hint)}">${k.label}</span></span>
+          <span class="rl-perm-help">${esc(p.help || p.description || '')}</span>
+        </span>
+      </label>`;
+    }).join('');
+    return `<section class="rl-mod">
+      <div class="rl-mod-head">
+        <h4>${esc(m.label)}</h4>
+        <span class="rl-count">${n} of ${inMod.length} allowed</span>
+        <button type="button" class="rl-link" data-mod-toggle="${esc(m.id)}" data-all="${all ? '1' : '0'}">${all ? 'Clear all' : 'Allow all'}</button>
+      </div>${rows}</section>`;
+  }).join('');
+
+  pane.innerHTML = `
+    <div class="rl-layout">
+      <nav class="rl-rail" aria-label="Roles">
+        ${rail}
+        <div class="rl-add">
+          <input type="text" id="new-role-name" placeholder="New role name" maxlength="40">
+          <button type="button" class="ru-btn" id="new-role-add">Add</button>
+        </div>
+      </nav>
+      <div class="rl-detail">
+        ${role ? `<div class="rl-detail-head">
+          <h3>${esc(role.name)}</h3>
+          <p>${role.is_builtin ? 'A built-in role. ' : ''}Switch on what people with this role may do. Changes save as you click.</p>
+        </div>${sections}` : '<div class="dim">No roles yet.</div>'}
+      </div>
+    </div>`;
+
+  pane.querySelectorAll('[data-role-pick]').forEach(b => {
+    b.onclick = () => { _rbacRoleId = parseInt(b.dataset.rolePick); renderRolesPane(box); };
+  });
+
+  const patch = async (keys, on) => {
+    const r = await fetch(`/admin/roles/${role.id}/permissions`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(on ? { grant: keys } : { revoke: keys }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const set = new Set(role.permissions || []);
+    keys.forEach(k => (on ? set.add(k) : set.delete(k)));
+    role.permissions = [...set];
+  };
+
+  pane.querySelectorAll('.rp-perm').forEach(cb => {
+    cb.onchange = async () => {
+      try { await patch([cb.dataset.perm], cb.checked); renderRolesPane(box); }
+      catch (e) { toast('Could not save that change', true); cb.checked = !cb.checked; }
+    };
+  });
+
+  pane.querySelectorAll('[data-mod-toggle]').forEach(b => {
+    b.onclick = async () => {
+      const keys = perms.filter(p => p.module === b.dataset.modToggle).map(p => p.key);
+      const on = b.dataset.all !== '1';
+      try { await patch(keys, on); renderRolesPane(box); }
+      catch (e) { toast('Could not save that change', true); }
+    };
+  });
+
+  const add = pane.querySelector('#new-role-add');
+  if (add) add.onclick = async () => {
+    const name = pane.querySelector('#new-role-name').value.trim();
     if (!name) return;
     try {
       const r = await fetch('/admin/roles', {
@@ -113,50 +264,10 @@ function renderUsersPanel(box, users) {
         body: JSON.stringify({ name }),
       });
       if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail || 'failed'); }
-      toast(`Role '${name}' created ✓`);
+      toast(`Role '${name}' added`);
       loadUsersPanel();
-    } catch (e) { toast('Add role failed: ' + e.message, true); }
+    } catch (e) { toast('Could not add the role: ' + e.message, true); }
   };
-
-  box.querySelectorAll('.rp-perm').forEach(cb => {
-    cb.onchange = async () => {
-      const roleId = parseInt(cb.dataset.role);
-      const key = cb.dataset.perm;
-      const body = cb.checked ? { grant: [key] } : { revoke: [key] };
-      try {
-        await fetch(`/admin/roles/${roleId}/permissions`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-      } catch (e) { toast('Permission update failed', true); cb.checked = !cb.checked; }
-    };
-  });
-}
-
-function userRow(u) {
-  const roleSel = _rbacRoles.map(r =>
-    `<option value="${esc(r.name)}" ${u.roles.includes(r.name) ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
-  return `<div class="cap-item" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-    <span style="flex:1; min-width:100px;"><b>${esc(u.username)}</b>${u.is_super_admin ? ' <span class="dim">(super admin)</span>' : ''}
-      ${!u.is_active ? ' <span style="color:var(--red);">disabled</span>' : ''}</span>
-    ${u.is_super_admin ? '' : `<select class="ru-role-select" data-id="${u.id}" style="background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 6px; font-size:10.5px;">${roleSel}</select>
-    <button class="btn ghost ru-toggle-active" data-id="${u.id}" data-active="${u.is_active ? '1' : '0'}" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;">${u.is_active ? 'Disable' : 'Enable'}</button>
-    <button class="btn ghost ru-delete" data-id="${u.id}" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px; color:var(--red);">Delete</button>`}
-  </div>`;
-}
-
-function roleBlock(role) {
-  const perms = new Set(role.permissions || []);
-  return `<div class="cap-item">
-    <b>${esc(role.name)}</b>${role.is_builtin ? ' <span class="dim">(builtin)</span>' : ''}
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; margin-top:5px;">
-      ${_rbacPerms.map(p => `
-        <label style="display:flex; align-items:center; gap:5px; font-size:10.5px; cursor:pointer;">
-          <input type="checkbox" class="rp-perm" data-role="${role.id}" data-perm="${esc(p.key)}" ${perms.has(p.key) ? 'checked' : ''}>
-          <span title="${esc(p.description || '')}">${esc(p.key)}</span>
-        </label>`).join('')}
-    </div>
-  </div>`;
 }
 
 
@@ -166,14 +277,14 @@ const _TOK_INP = 'background:var(--panel2); color:var(--text); border:1px solid 
 async function loadApiTokens(box, users) {
   const sec = document.createElement('div');
   sec.className = 'cap-item';
-  sec.style.marginTop = '12px';
+  if (!box) return;
   box.appendChild(sec);
   let data;
   try {
     const r = await fetch('/admin/api-tokens');
-    if (!r.ok) { sec.remove(); return; }
+    if (!r.ok) { sec.textContent = 'You do not have access to API tokens.'; return; }
     data = await r.json();
-  } catch (e) { sec.remove(); return; }
+  } catch (e) { sec.textContent = 'Could not load tokens.'; return; }
   const fmt = t => t ? new Date(t * 1000).toLocaleString() : '—';
   const now = Date.now() / 1000;
   const userOpts = users.filter(u => u.is_active).map(u =>

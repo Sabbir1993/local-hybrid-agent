@@ -31,7 +31,7 @@ class CloudModel:
 
     @property
     def base_url(self) -> str:
-        url = str(self.options.get("baseURL") or "").strip()
+        url = str(self.options.get("baseURL") or self.options.get("base_url") or "").strip()
         return url.rstrip("/")
 
     @property
@@ -40,16 +40,28 @@ class CloudModel:
 
     @property
     def chat_path(self) -> str:
-        p = str(self.options.get("chat_path") or "/v1/chat/completions").strip()
-        return ("/" + p.lstrip("/")) if p else "/v1/chat/completions"
+        return str(self.options.get("chat_path") or "").strip()
 
     def endpoint(self) -> str:
-        return f"{self.base_url}{self.chat_path}"
+        """Absolute chat-completions URL for this provider.
+
+        Handles the two common baseURL shapes:
+          https://openrouter.ai/api/v1  -> .../api/v1/chat/completions
+          https://api.groq.com/openai   -> .../openai/v1/chat/completions
+        """
+        base = self.base_url.rstrip("/")
+        if self.chat_path:
+            return base + "/" + self.chat_path.lstrip("/")
+        if not base:
+            return ""
+        if re.search(r"/v\d+$", base):
+            return base + "/chat/completions"
+        return base + "/v1/chat/completions"
 
     @property
     def timeout_s(self) -> float:
         try:
-            return float(self.options.get("timeout_s", CLOUD_TIMEOUT_S))
+            return float(self.options.get("timeout_s") or CLOUD_TIMEOUT_S)
         except (TypeError, ValueError):
             return CLOUD_TIMEOUT_S
 
@@ -69,11 +81,18 @@ class CloudModel:
 
     @property
     def context_length(self) -> int:
-        ctx = self.model_cfg.get("ctx") or self.model_cfg.get("context_size")
+        """Window in tokens: the model's ctx, else the provider's, else 32768 - deliberately small,
+        so a model with no configured window is not given a budget the provider may reject."""
+        ctx = (self.model_cfg.get("ctx") or self.model_cfg.get("context_size")
+               or self.provider_cfg.get("ctx"))
         try:
-            return int(ctx) if ctx else 128000
+            return int(ctx) if ctx else 32768
         except (TypeError, ValueError):
-            return 128000
+            return 32768
+
+    @property
+    def ctx(self) -> int:
+        return self.context_length
 
     @property
     def display_name(self) -> str:
@@ -90,10 +109,11 @@ class CloudModel:
 
     @property
     def display(self) -> str:
-        return f"{self.provider_display}: {self.display_name}"
+        """The model's own name (the UI groups models under their provider)."""
+        return self.display_name
 
     def label(self) -> str:
-        return f"cloud:{self.provider}:{self.display_name}"
+        return f"{self.display} ({self.provider_name})"
 
     def to_dict(self) -> dict:
         return {
@@ -123,6 +143,13 @@ class CloudModel:
         return (urlparse(self.base_url).hostname or "").endswith("generativelanguage.googleapis.com")
 
     def info(self, lane: Optional[str] = None) -> dict:
+        """Lane descriptor sent to the UI ("lane" SSE event) and used for usage records."""
+        out = self._info_base(lane)
+        out.update({"role": "Cloud lane", "source": "cloud", "provider": self.provider,
+                    "provider_name": self.provider_name, "key": self.key})
+        return out
+
+    def _info_base(self, lane: Optional[str] = None) -> dict:
         return {
             "lane": lane,
             "model": self.model_id,

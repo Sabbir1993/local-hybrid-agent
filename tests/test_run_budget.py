@@ -83,15 +83,16 @@ class _Window:
 
 class NearRepeatTests(unittest.TestCase):
     def test_rebuilding_with_different_args_is_caught(self):
-        """The case the identical-args rule completely misses."""
+        """The case the identical-args rule completely misses. Now only a high backstop: the
+        progress-aware guard (tests/test_loop_guard.py) is what judges normal runs."""
         w = _Window()
-        for step in range(6):
+        for step in range(A.NEAR_REPEAT_LIMIT):
             w.feed("run_command", step)   # same tool, args differ each time
         self.assertEqual(w.tripped, "run_command")
 
     def test_reading_many_different_files_is_caught(self):
         w = _Window()
-        for step in range(6):
+        for step in range(A.NEAR_REPEAT_LIMIT):
             w.feed("read_file", step)
         self.assertEqual(w.tripped, "read_file")
 

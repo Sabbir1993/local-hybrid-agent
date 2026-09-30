@@ -976,7 +976,7 @@ async function send(inputText) {
     if (!res.ok) {
       const e = await res.json().catch(() => ({}));
       if (e.error === 'custom_agent_not_found' && typeof clearActiveCustomAgent === 'function') clearActiveCustomAgent();
-      throw new Error(e.message || e.error || ('HTTP ' + res.status));
+      throw new Error(typeof apiErrorText === 'function' ? apiErrorText(e, res.status) : (e.message || e.error || ('HTTP ' + res.status)));
     }
     await readSSE(res, (ev, d) => {
       const L = getJobAssistant();

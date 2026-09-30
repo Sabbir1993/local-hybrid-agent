@@ -138,11 +138,13 @@ def user_has_permission(principal: Principal, key: str) -> bool:
     return key in principal.permission_keys
 
 
-MIN_PASSWORD_LEN = 12
+# PCI DSS v4.0 8.3.6 asks for 12 (8 only where a system cannot support 12); 8 is a deliberate
+# owner decision for this deployment. Letters + digits are still required below.
+MIN_PASSWORD_LEN = 8
 
 
 def password_policy_error(password: str, username: str = "") -> Optional[str]:
-    """PCI DSS 8.3.6: at least 12 characters with both letters and digits."""
+    """At least MIN_PASSWORD_LEN characters with both letters and digits."""
     pw = password or ""
     if len(pw) < MIN_PASSWORD_LEN:
         return f"password must be at least {MIN_PASSWORD_LEN} characters"

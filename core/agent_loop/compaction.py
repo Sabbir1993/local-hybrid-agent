@@ -23,9 +23,38 @@ def estimate_prompt_tokens(msgs: list, tools: Optional[list] = None) -> int:
     return total
 
 
-def _digest_message(m: dict) -> str:
+def _call_index(msgs: list) -> dict:
+    """tool_call_id -> (tool name, arguments dict) for every assistant tool call."""
+    out = {}
+    for m in msgs:
+        for tc in (m.get("tool_calls") or []):
+            fn = tc.get("function") or {}
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except Exception:
+                args = {}
+            out[tc.get("id")] = (str(fn.get("name") or "?"), args if isinstance(args, dict) else {})
+    return out
+
+
+def _call_label(name: str, args: dict) -> str:
+    """'read_file(src/app.js)': the tool and its most telling argument."""
+    for k in ("path", "file_path", "name", "query", "url", "command", "pattern"):
+        v = args.get(k)
+        if isinstance(v, str) and v.strip():
+            v = v.strip().replace("\n", " ")
+            return f"{name}({v[:80]})"
+    return name
+
+
+def _digest_message(m: dict, calls: Optional[dict] = None) -> str:
     role = str(m.get("role") or "?")
     content = str(m.get("content") or "").strip()
+    if role == "tool" and calls and m.get("tool_call_id") in calls:
+        # say what was read and what it started with, so the model does not have to re-run the call
+        label = _call_label(*calls[m.get("tool_call_id")])
+        first = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")
+        return f"tool {label}: " + first[:140] + ("..." if len(first) > 140 or len(content) > len(first) else "")
     if role == "user":
         return "user: " + content[:240] + ("..." if len(content) > 240 else "")
     if role == "assistant":
@@ -131,15 +160,21 @@ def compact_messages(msgs: list, budget_tokens: int, tools: Optional[list] = Non
                 pruned_msgs.append(m_copy)
         return pruned_msgs
 
+    calls = _call_index(msgs)
+    pinned = _pinned_units(msgs, units, tail_start, calls)
+    pinned_set = set(pinned)
     digest_lines = []
     for start, end in units:
         if start >= tail_start:
             break
+        if (start, end) in pinned_set:
+            continue
         for m in msgs[start:end + 1]:
-            digest_lines.append(_digest_message(m))
+            digest_lines.append(_digest_message(m, calls))
     digest = ("[CONVERSATION DIGEST - earlier steps were compacted to fit the "
               "context window. Tool results are summarized; call read_file / "
-              "list_files again if you need exact content.]\n" + "\n".join(digest_lines))
+              "list_files again if you need exact content. Skill instructions you loaded "
+              "are kept in full below.]\n" + "\n".join(digest_lines))
     if len(digest) > 6000:
         digest = digest[:6000] + "\n..."
     # Fold the digest into the first digested user turn instead of inserting a new
@@ -148,7 +183,8 @@ def compact_messages(msgs: list, budget_tokens: int, tools: Optional[list] = Non
     # instead of reprocessing everything from message 1 on every compacted step.
     # msgs[0] is never touched, and the digest is still visible ahead of the tail.
     head = list(msgs[1:tail_start])
-    body = list(msgs[tail_start:])
+    keep = [m for s, e in pinned for m in msgs[s:e + 1]]      # loaded skills stay verbatim
+    body = keep + list(msgs[tail_start:])
     for m in head:
         if m.get("role") == "user":
             merged = dict(m)
@@ -159,7 +195,44 @@ def compact_messages(msgs: list, budget_tokens: int, tools: Optional[list] = Non
     return [msgs[0], {"role": "system", "content": digest}] + body
 
 
-def _keep_recent_results(default: int = 2) -> int:
+PIN_TOOLS = ("read_skill",)
+PIN_MAX_SKILLS = 3          # newest distinct skills kept
+PIN_MAX_CHARS = 12000       # a skill longer than this is not pinned (it would crowd out the run)
+
+
+def _pinned_units(msgs: list, units: list, tail_start: int, calls: dict) -> list:
+    """Old (assistant + tool reply) units whose tool result is a loaded skill.
+
+    A skill's instructions are what the model works from for the rest of the run. Digested to one
+    line they were re-read, digested again, and re-read (the "read_skill ran 3 times with the same
+    result" loop). The newest copy of each of up to PIN_MAX_SKILLS skills is kept in full; one
+    already in the recent tail is not duplicated."""
+    seen, out = set(), []
+    def skill_key(start, end):
+        for m in msgs[start:end + 1]:
+            if m.get("role") == "tool":
+                name, args = calls.get(m.get("tool_call_id"), ("", {}))
+                if name in PIN_TOOLS:
+                    return (name, str(args.get("name") or ""), len(str(m.get("content") or "")))
+        return None
+    for start, end in units:                     # what the tail already carries is not pinned twice
+        if start >= tail_start:
+            k = skill_key(start, end)
+            if k:
+                seen.add(k[:2])
+    for start, end in reversed(units):
+        if start >= tail_start:
+            continue
+        k = skill_key(start, end)
+        if not k or k[:2] in seen or k[2] > PIN_MAX_CHARS or len(out) >= PIN_MAX_SKILLS:
+            continue
+        seen.add(k[:2])
+        out.append((start, end))
+    out.reverse()
+    return out
+
+
+def _keep_recent_results(default: int = 6) -> int:
     """How many tool results may stay verbatim in a compacted tail.
 
     Without a bound, "keep the most recent 60% of the budget" can still mean three

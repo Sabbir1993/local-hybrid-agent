@@ -43,6 +43,8 @@
 /* who handles what */
 .ln-map { margin-top: 14px; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px 12px;
           background: var(--panel2); }
+.ln-map > summary { cursor: pointer; margin: 0; }
+.ln-map[open] > summary { margin-bottom: 8px; }
 .ln-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .ln-chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 10px;
            font-size: 10.5px; border: 1px solid var(--border); background: var(--panel); }

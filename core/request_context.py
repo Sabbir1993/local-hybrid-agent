@@ -105,3 +105,29 @@ def get_tool_allowlist() -> Optional[frozenset]:
 def tool_allowed(name: str) -> bool:
     allow = _tool_allowlist.get()
     return allow is None or name in allow
+
+
+# A Personal Agent run (started from Chat, not Agent Task): the agent works in ONE folder on the user's machine,
+# set on the agent itself. It can read, write and analyse there; code execution and sub-agents stay off and
+# shell commands must be read-only (core.shell_tools.personal_write_violation). Enforced in
+# core.agent_loop.run_tool; the folder replaces the project folder in core.agent_tools.workspace.
+_personal_scope: contextvars.ContextVar[bool] = contextvars.ContextVar("personal_scope", default=False)
+_personal_workspace: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("personal_workspace", default=None)
+
+PERSONAL_BLOCKED_TOOLS = frozenset({"spawn_agent"})
+
+
+def set_personal_scope(on: bool) -> contextvars.Token:
+    return _personal_scope.set(bool(on))
+
+
+def personal_scope() -> bool:
+    return _personal_scope.get()
+
+
+def set_personal_workspace(path: Optional[str]) -> contextvars.Token:
+    return _personal_workspace.set(path or None)
+
+
+def personal_workspace() -> Optional[str]:
+    return _personal_workspace.get()

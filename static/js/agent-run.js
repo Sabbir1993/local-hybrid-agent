@@ -1,5 +1,6 @@
 /* ---------------- agent SSE runner ---------------- */
 async function runAgentSSE(text) {
+  let ctxToastShown = false;   // the context-trim toast shows once per run
   // Agent tasks are project-scoped (like Claude Code): no project -> refuse.
   if (agentMode && (!curProject || !curProject.id)) {
     if (typeof flashProjectsCard === 'function') flashProjectsCard();
@@ -133,7 +134,7 @@ async function runAgentSSE(text) {
         body: JSON.stringify({
           messages: hist,
           mode: engineMode,
-          plan: planMode,
+          plan: agentMode ? planMode : false,
           session_id: sessionId || null,
           temperature: window.customAgentRequestOverrides ? window.customAgentRequestOverrides().temperature : getSamplingConfig().temp,
           max_tokens: (() => { const mt = getSamplingConfig().maxtok; return (isNaN(mt) || mt <= 0) ? -1 : mt; })(),
@@ -148,13 +149,14 @@ async function runAgentSSE(text) {
           reasoning_effort: window.customAgentRequestOverrides ? window.customAgentRequestOverrides().reasoning_effort : (typeof getReasoningEffort === 'function' ? getReasoningEffort() : undefined),
           verify: typeof answerCheckBegin === 'function' ? answerCheckBegin(job.assistantMsg) : undefined,
           custom_agent_id: typeof getActiveCustomAgentId === 'function' ? getActiveCustomAgentId() : undefined,
+          personal: !agentMode || undefined,   // Personal Agent run from Chat: server confines writes to the common folder
         }),
         signal: jobCtrl.signal,
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
         if (e.error === 'custom_agent_not_found' && typeof clearActiveCustomAgent === 'function') clearActiveCustomAgent();
-        throw new Error(e.message || e.error || ('HTTP ' + res.status));
+        throw new Error(typeof apiErrorText === 'function' ? apiErrorText(e, res.status) : (e.message || e.error || ('HTTP ' + res.status)));
       }
       await readSSE(res, (ev, d) => {
         const L = getJobAssistant();
@@ -236,7 +238,7 @@ async function runAgentSSE(text) {
             window.setLiveHud({ phase: 'running', text: 'Verifying tool changes...' });
           }
         }
-        else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd, d.kind);
+        else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd, d.kind, d.saveable);
         else if (ev === 'delta') {
           closeThought(L);
           if (L._resetPrev != null) {
@@ -268,8 +270,13 @@ async function runAgentSSE(text) {
         }
         else if (ev === 'ctx') {
           // Smart context truncation fired on the backend — surface it
-          const kb = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
-          toast(`🧹 Context truncated to fit the window: ${kb(d.before_tokens)} → ${kb(d.after_tokens)} tokens`);
+          // once per run: a long run trims a little on every step, and a toast each time is noise
+          if (!ctxToastShown) {
+            ctxToastShown = true;
+            const kb = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+            const who = d.lane === 'executor' ? 'Helper model' : 'Main model';
+            toast(`🧹 ${who}: older steps summarised to fit its window (${kb(d.before_tokens)} → ${kb(d.after_tokens)} tokens)`);
+          }
         }
         else if (ev === 'plan') {
           // structured plan checklist — keep only the latest snapshot in acts
@@ -295,7 +302,7 @@ async function runAgentSSE(text) {
           // run ended early (step cap or loop stop): keep why, so the bubble can offer Continue
           if (d.reason) {
             if (!L.acts) L.acts = [];
-            L.acts.push({ type: 'stopped', reason: d.reason, note: d.note || '', steps: d.steps,
+            L.acts.push({ type: 'stopped', reason: d.reason, note: d.note || '', detail: d.detail || '', steps: d.steps,
                           pending: d.pending || 0, plan_total: d.plan_total || 0,
                           plan_done: d.plan_done || 0, plan_failed: d.plan_failed || 0,
                           elapsed_s: d.elapsed_s || 0 });

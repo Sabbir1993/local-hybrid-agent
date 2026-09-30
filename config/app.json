@@ -132,7 +132,8 @@
       "hi there"
     ],
     "repeat_streak_limit": 2,
-    "start_on_main_categories": []
+    "start_on_main_categories": [],
+    "auto_apply": false
   },
   "provider": {},
   "cloud": {
@@ -159,7 +160,7 @@
   "agent": {
     "exec_timeout_s": 0,
     "max_steps": 200,
-    "run_timeout_s": 1800,
+    "run_timeout_s": 2700,
     "idle_unload_s": 0
   },
   "preflight": {
@@ -189,6 +190,22 @@
           "-y",
           "mcp-remote",
           "https://isms-mcp.sslwireless.com/mcp"
+        ]
+      },
+      "sequential-thinking": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-sequential-thinking"
+        ]
+      },
+      "time": {
+        "transport": "stdio",
+        "command": "uvx",
+        "args": [
+          "mcp-server-time",
+          "--local-timezone=Asia/Dhaka"
         ]
       }
     },
@@ -329,5 +346,10 @@
     "voice_models": "E:\\AI\\Models\\orchestrator\\voice-models",
     "image_models": "E:\\AI\\Models\\orchestrator\\image-models",
     "video_models": "E:\\AI\\Models\\orchestrator\\video-models"
+  },
+  "media": {
+    "limits": {
+      "image_per_day": 10
+    }
   }
 }

@@ -19,6 +19,21 @@ from core import companion_bridge
 from .base import router
 
 
+def _personal_folder(agent: Optional[int], user: Principal):
+    """Preview of a Personal Agent's file: read the agent's own work folder, not the selected project.
+    Only the agent's owner, only a folder set on that agent. Returns (folder or None, error response or None)."""
+    if not agent:
+        return None, None
+    from core.auth_db import db_get_custom_agent
+    from core.request_context import set_personal_workspace
+    a = db_get_custom_agent(agent, user.id)
+    folder = (a or {}).get("work_dir") if (a or {}).get("user_id") == user.id else ""
+    if not folder:
+        return None, JSONResponse({"error": "This agent has no work folder"}, status_code=400)
+    set_personal_workspace(folder)
+    return folder, None
+
+
 async def _ws_tree_scan(rel_dir: str) -> list:
     """One level of the workspace tree from the agent tools module."""
     ignored = {".git", "__pycache__", "node_modules", ".venv", "venv", "_agent_run.py"}
@@ -90,9 +105,12 @@ async def agent_ws_tree(path: str = "", user: Principal = Depends(get_current_us
 
 
 @router.get("/agent/ws/file")
-async def agent_ws_file(path: str, user: Principal = Depends(get_current_user)):
+async def agent_ws_file(path: str, user: Principal = Depends(get_current_user), agent: Optional[int] = None):
+    folder, bad = _personal_folder(agent, user)
+    if bad:
+        return bad
     curr_proj = get_active_project(user.id)
-    if not curr_proj or curr_proj in ("scratch", "default"):
+    if not folder and (not curr_proj or curr_proj in ("scratch", "default")):
         return JSONResponse({"error": "No project selected"}, status_code=400)
 
     # read from the user's machine via the companion (never the server's disk)
@@ -141,7 +159,7 @@ _WS_RAW_MAX = 12 * 1024 * 1024
 
 
 @router.get("/agent/ws/raw")
-async def agent_ws_raw(path: str, user: Principal = Depends(get_current_user)):
+async def agent_ws_raw(path: str, user: Principal = Depends(get_current_user), agent: Optional[int] = None):
     """Stream one workspace file verbatim, for the preview modal.
 
     /agent/raw only serves the server-side common space, so a project file
@@ -150,8 +168,11 @@ async def agent_ws_raw(path: str, user: Principal = Depends(get_current_user)):
     agent_ws_file uses: the path can never escape the active workspace, and the
     bytes never come from this server's disk.
     """
+    folder, bad = _personal_folder(agent, user)
+    if bad:
+        return bad
     curr_proj = get_active_project(user.id)
-    if not curr_proj or curr_proj in ("scratch", "default"):
+    if not folder and (not curr_proj or curr_proj in ("scratch", "default")):
         return JSONResponse({"error": "No project selected"}, status_code=400)
     uid = _remote_uid()
     try:

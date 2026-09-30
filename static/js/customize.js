@@ -5,14 +5,15 @@
  */
 
 (function () {
-  const KIND_LABEL = { skills: 'skills', connectors: 'connectors', plugins: 'plugins' };
+  const KIND_LABEL = { skills: 'skills', connectors: 'connectors', plugins: 'plugins', agents: 'agents' };
   const CAT_ICON = {
     security: '🛡️', compliance: '⚖️', engineering: '⌨️', operations: '🧰', finance: '💰',
     productivity: '✅', web: '🌐', tickets: '🎫', developer: '🧪', data: '🗃️', general: '🧩', custom: '🔧',
   };
   const S = { kind: 'skills', view: 'discover', q: '', category: null, data: {}, detail: null,
               registry: null, registryQ: '', busy: false,
-              market: null, marketQ: '', marketUrl: '', remote: null, remoteBusy: false };
+              market: null, marketQ: '', marketUrl: '', remote: null, remoteBusy: false,
+              agents: null, forkAgent: null, forkDir: '' };
 
   const $c = id => document.getElementById(id);
   const e = s => esc(String(s == null ? '' : s));
@@ -40,6 +41,8 @@
     document.querySelectorAll('#cz-box .cz-tab').forEach(b => b.classList.toggle('on', b.dataset.kind === S.kind));
     document.querySelectorAll('#cz-box .cz-view').forEach(b => b.classList.toggle('on', b.dataset.view === S.view));
     $c('cz-q').placeholder = 'Search ' + KIND_LABEL[S.kind];
+    const seg = document.querySelector('#cz-box .cz-seg');
+    if (seg) seg.style.display = S.kind === 'agents' ? 'none' : '';
     $c('cz-q').value = S.q;
   }
 
@@ -65,8 +68,11 @@
   }
 
   function card(it) {
+    const noun = S.kind === 'connectors' ? 'Disconnect' : 'Remove';
     const action = it.installed
-      ? '<span class="cz-plus done" title="Installed">✓</span>'
+      ? (canInstall() && it.can_uninstall
+          ? `<span class="cz-swap"><span class="cz-plus done" title="Installed">✓</span><button class="cz-plus rm" data-remove="${e(it.id)}" title="${noun}" aria-label="${noun} ${e(it.title)}">✕</button></span>`
+          : '<span class="cz-plus done" title="Installed">✓</span>')
       : (canInstall() && it.in_catalog
           ? `<button class="cz-plus" data-install="${e(it.id)}" title="Install">+</button>` : '');
     return `
@@ -96,6 +102,7 @@
     syncBar();
     const body = $c('cz-body');
     if (S.kind === 'marketplace') { renderMarketplace(body); return; }
+    if (S.kind === 'agents') { renderAgents(body); return; }
     if (S.detail) return renderDetail();
     let d;
     try { d = await load(S.kind); }
@@ -266,7 +273,7 @@
             <input type="password" data-secret="${e(s.key)}" autocomplete="off" placeholder="stored in the OS keychain"></label>`).join('');
         actions = secrets + `<button class="btn accent cz-act" id="cz-do-install">Install</button>`;
       } else if (it.installed && it.can_uninstall) {
-        actions = `<button class="btn red cz-act" id="cz-do-remove">Remove</button>`;
+        actions = `<button class="btn red cz-act" id="cz-do-remove">${S.kind === 'connectors' ? 'Disconnect' : 'Remove'}</button>`;
       } else if (it.installed) {
         actions = `<span class="cz-dim">${it.modified ? 'Locally modified: remove it from disk manually.' : 'Hand-written: managed outside this page.'}</span>`;
       }
@@ -299,6 +306,127 @@
     }
   }
 
+  /* ---------------- agents: starter templates and agents other users shared ---------------- */
+
+  const canReview = () => !!(window.__user && window.__user.is_super_admin) ||
+                          (window.hasPerm && window.hasPerm('custom_agents.publish'));
+
+  async function loadAgents(force) {
+    if (S.agents && !force) return S.agents;
+    const all = (await api('/custom-agents')).agents || [];
+    let pending = [];
+    if (canReview()) { try { pending = (await api('/custom-agents/pending')).agents || []; } catch (_) {} }
+    S.agents = { templates: all.filter(a => a.scope === 'template'),
+                 shared: all.filter(a => a.scope === 'shared'), pending };
+    return S.agents;
+  }
+
+  function agentMatches(a) {
+    if (!S.q) return true;
+    const q = S.q.toLowerCase();
+    return [a.name, a.slug, a.description].some(v => String(v || '').toLowerCase().includes(q));
+  }
+
+  function agentCard(a, kind) {
+    const tools = (a.tool_allowlist && a.tool_allowlist.length) ? a.tool_allowlist.length + ' tools' : 'all tools';
+    const who = kind === 'pending' ? 'shared by ' + e(a.owner_name || 'a user') : kind === 'shared' ? 'shared by another user' : 'starter template';
+    const btns = kind === 'pending'
+      ? `<button class="ru-btn primary" data-agent-approve="${a.id}">Approve</button><button class="ru-btn" data-agent-reject="${a.id}">Reject</button>`
+      : `<button class="ru-btn primary" data-agent-fork="${a.id}">Fork</button>`;
+    return `<div class="cz-card static cz-agent">
+      <div class="cz-icon">${e(a.icon || '🤖')}</div>
+      <div class="cz-main">
+        <div class="cz-name">${e(a.name)} <span class="cz-chip mid">${e(tools)}</span></div>
+        <div class="cz-desc">${e(a.description)}</div>
+        <div class="cz-by">${who} · <code>/${e(a.slug)}</code></div>
+      </div>
+      <div class="cz-agent-btns">${btns}</div>
+    </div>`;
+  }
+
+  function agentSection(title, list, kind, empty) {
+    const items = list.filter(agentMatches);
+    return `<div class="cz-sec"><span>${e(title)}</span> <span class="cz-count">${items.length}</span></div>` +
+      (items.length ? `<div class="cz-grid">${items.map(a => agentCard(a, kind)).join('')}</div>` : `<div class="cz-empty">${empty}</div>`);
+  }
+
+  function forkForm(a) {
+    return `<button class="cz-link cz-back" id="cz-agent-back">← Back</button>
+      <div class="cz-detail">
+        <div class="cz-dhead"><div class="cz-icon lg">${e(a.icon || '🤖')}</div>
+          <div><div class="cz-dtitle">${e(a.name)}</div><div class="cz-desc full">${e(a.description)}</div></div></div>
+        <div class="cz-sec"><span>Where should it work?</span></div>
+        <p class="cz-note">A copy of this agent is added to your Personal Agents. Pick the folder on your computer it works in. It can read, write and analyse files there, and nothing outside it. You can change the folder later.</p>
+        <div class="cz-fork-row">
+          <input type="text" id="cz-fork-dir" class="cz-search" placeholder="D:/reports/weekly" value="${e(S.forkDir)}" autocomplete="off" spellcheck="false">
+          <button type="button" class="ru-btn browse" id="cz-fork-browse">📁 Browse…</button>
+        </div>
+        <div class="cz-actions"><button class="btn accent cz-act" id="cz-fork-go" ${S.forkDir.trim() ? '' : 'disabled'}>Add to my agents</button></div>
+      </div>`;
+  }
+
+  async function renderAgents(body) {
+    let d;
+    try { d = await loadAgents(); }
+    catch (err) { body.innerHTML = `<div class="cz-empty">Failed to load: ${e(err.message)}</div>`; return; }
+    if (S.forkAgent) {
+      const a = [...d.templates, ...d.shared].find(x => String(x.id) === String(S.forkAgent));
+      if (a) { body.innerHTML = forkForm(a); return; }
+      S.forkAgent = null;
+    }
+    let h = '<div class="cz-note">Fork an agent to use it. You choose the folder it works in. Create your own from the Personal Agents card in Chat.</div>';
+    if (canReview()) h += agentSection('Waiting for approval', d.pending, 'pending', 'Nothing is waiting for approval.');
+    h += agentSection('Shared by users', d.shared, 'shared', 'No one has shared an agent yet.');
+    h += agentSection('Starter templates', d.templates, 'template', 'No templates match your search.');
+    body.innerHTML = h;
+  }
+
+  async function reviewAgent(id, approve) {
+    try {
+      await api(`/custom-agents/${encodeURIComponent(id)}/${approve ? 'approve' : 'reject'}`, { method: 'POST' });
+      toast(approve ? 'Approved: everyone can now fork it' : 'Rejected: it stays private to its owner');
+      await loadAgents(true);
+      render();
+    } catch (err) { toast('Could not review that agent: ' + err.message, true); }
+  }
+
+  async function forkIntoMine() {
+    const dir = S.forkDir.trim();
+    if (!dir || S.busy) return;
+    S.busy = true;
+    try {
+      const made = await api(`/custom-agents/${encodeURIComponent(S.forkAgent)}/fork`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ work_dir: dir }),
+      });
+      toast(`Added '${made.name}' to your Personal Agents`);
+      S.forkAgent = null; S.forkDir = '';
+      if (window.loadCustomAgents) window.loadCustomAgents();
+      render();
+    } catch (err) { toast(err.message, true); }
+    finally { S.busy = false; }
+  }
+
+  /* returns true when the click was an agents-tab action */
+  function onAgentsClick(ev, t) {
+    if (S.kind !== 'agents') return false;
+    const f = t.closest('[data-agent-fork]');
+    if (f) { S.forkAgent = f.dataset.agentFork; S.forkDir = ''; render(); return true; }
+    const ap = t.closest('[data-agent-approve]');
+    if (ap) { reviewAgent(ap.dataset.agentApprove, true); return true; }
+    const rj = t.closest('[data-agent-reject]');
+    if (rj) { reviewAgent(rj.dataset.agentReject, false); return true; }
+    if (t.id === 'cz-agent-back') { S.forkAgent = null; render(); return true; }
+    if (t.id === 'cz-fork-go') { forkIntoMine(); return true; }
+    if (t.id === 'cz-fork-browse') {
+      const cur = $c('cz-fork-dir').value.trim();
+      (window.pickFolder ? window.pickFolder(cur) : Promise.resolve('')).then(p => {
+        if (p) { S.forkDir = p; render(); }
+      });
+      return true;
+    }
+    return !!t.closest('.cz-agent');
+  }
+
   /* ---------------- actions ---------------- */
 
   async function install(id, secrets) {
@@ -318,10 +446,11 @@
   }
 
   async function remove(id) {
-    if (!confirm(`Remove '${id}'? Its tools are removed right away; you can reinstall it from the catalog.`)) return;
+    const verb = S.kind === 'connectors' ? 'Disconnect' : 'Remove';
+    if (!confirm(`${verb} '${id}'? Its tools are removed right away; you can add it again from the catalog.`)) return;
     try {
       await api(`/customize/${S.kind}/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      toast(`Removed '${id}'`);
+      toast(S.kind === 'connectors' ? `Disconnected '${id}'` : `Removed '${id}'`);
       await load(S.kind, true);
       render();
     } catch (err) { toast('Remove failed: ' + err.message, true); }
@@ -338,6 +467,9 @@
     if (rv) { reviewRemote(rv.dataset.review, rv.dataset.code || ''); return; }
     if (t.id === 'cz-remote-install') { installRemote(); return; }
     if (t.id === 'cz-remote-clear') { S.remote = null; S.marketUrl = ''; render(); return; }
+    const rm = t.closest('[data-remove]');
+    if (rm) { ev.stopPropagation(); remove(rm.dataset.remove); return; }
+    if (onAgentsClick(ev, t)) return;
     const inst = t.closest('[data-install]');
     if (inst) {
       ev.stopPropagation();
@@ -376,6 +508,7 @@
     S.data = {};            // always show fresh install state
     S.detail = null;
     S.market = null; S.remote = null; S.remoteBusy = false; S.marketUrl = '';
+    S.agents = null; S.forkAgent = null; S.forkDir = '';
     render();
     $c('cz-q').focus();
   }
@@ -391,7 +524,7 @@
       if (S.detail) { S.detail = null; render(); } else close();
     });
     document.querySelectorAll('#cz-box .cz-tab').forEach(b => b.onclick = () => {
-      S.kind = b.dataset.kind; S.category = null; S.detail = null; S.q = ''; render();
+      S.kind = b.dataset.kind; S.category = null; S.detail = null; S.q = ''; S.forkAgent = null; render();
     });
     document.querySelectorAll('#cz-box .cz-view').forEach(b => b.onclick = () => {
       S.view = b.dataset.view; S.category = null; S.detail = null; render();
@@ -403,6 +536,12 @@
     });
     const body = $c('cz-body');
     body.addEventListener('click', onBodyClick);
+    body.addEventListener('input', ev => {
+      if (ev.target.id !== 'cz-fork-dir') return;
+      S.forkDir = ev.target.value;
+      const go = $c('cz-fork-go');
+      if (go) go.disabled = !S.forkDir.trim();
+    });
     body.addEventListener('keydown', ev => {
       if (ev.key === 'Enter' && ev.target.matches('.cz-card[data-open]')) { S.detail = ev.target.dataset.open; render(); }
     });

@@ -7,6 +7,9 @@ import re
 
 NARRATION_MAX_CHARS = 240
 
+# small models wrap the announcement: "[Let me ...]", "*Let me ...*", '"Let me ..."', "(Let me ...)"
+_WRAP_RX = re.compile(r"^[\[\(\*_`\"'>\s]+|[\]\)\*_`\"'\s]+$")
+
 # lead-ins that can precede the announcement itself: "Okay, let me ...", "Next I will ..."
 _LEAD_IN_RX = re.compile(
     r"^(?:(?:okay|ok|sure|alright|all right|great|now|next|then|first(?:ly)?|"
@@ -23,15 +26,19 @@ _GERUND_RX = re.compile(
 # "First the server, then the browser." - a sequence with no action verb
 _SEQUENCE_RX = re.compile(r"^first\b[^.!?]*\bthen\b", re.IGNORECASE)
 _SENTENCE_END_RX = re.compile(r"[.!?]+(?:\s+|$)")
+# a reply that is only a tool call written out as text ("Tool Call: read_skill(...)")
+_TOOLCALL_TEXT_RX = re.compile(r"^\s*[`*_>-]*(?:tool[ _-]?call|calling(?: tool)?)\b", re.IGNORECASE)
 
 
 def _is_narration(text) -> bool:
     """True when a reply only announces work it has not done yet: short, one
     paragraph, one sentence, and opening with "let me" / "I will" / a gerund.
     Any real content (a second sentence, a list, a long answer) is not narration."""
-    t = (text or "").strip()
+    t = _WRAP_RX.sub("", (text or "").strip()).strip()
     if not t or len(t) > NARRATION_MAX_CHARS or "\n\n" in t:
         return False
+    if _TOOLCALL_TEXT_RX.match(t):
+        return True
     if _SEQUENCE_RX.match(t):
         return True
     sentences = [s for s in _SENTENCE_END_RX.split(t) if s.strip()]

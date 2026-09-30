@@ -32,10 +32,10 @@ BROWSER_TOOLS = [
         "Open a URL in a real browser on the user's machine and return the page's accessibility snapshot "
         "(roles, names, [ref=eN] handles). Use it to check a web app you built or changed: start its dev server "
         "with run_shell first, then open http://localhost:<port>. Local dev hosts open directly; other sites ask "
-        "the user. 'device' emulates a phone/tablet viewport (mobile web / responsive testing).",
+        "the user. A browser window opens on the user's screen and stays open until browser_close. 'device' emulates a phone/tablet viewport (mobile web / responsive testing).",
         {"url": {"type": "string", "description": "e.g. http://localhost:5173/login"},
          "device": {"type": "string", "enum": DEVICES, "description": "viewport preset (default desktop)"},
-         "show": {"type": "boolean", "description": "open a visible window the user can watch (default headless)"}},
+         "show": {"type": "boolean", "description": "default: a visible window opens on the user's screen so they can watch; pass false to run headless"}},
         ["url"])),
     ("browser_snapshot", tool_browser_snapshot, _fn(
         "browser_snapshot", "Re-read the current page's accessibility snapshot (after it changed on its own).", {})),

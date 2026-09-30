@@ -76,7 +76,10 @@ async function openFilePreview(filePath, title = '', directContent = null, opts 
   contentEl.innerHTML = '<div style="display:flex; align-items:center; justify-content:center; height:100%; color:var(--dim); font-size:12px;">⏳ Loading preview...</div>';
   
   const enc = encodeURIComponent(filePath || '');
-  const rawUrl = isWs ? `/agent/ws/raw?path=${enc}` : `/agent/raw?path=${enc}`;
+  // a Personal Agent chat reads from that agent's own work folder, not the selected project
+  const pa = (typeof agentMode !== 'undefined' && !agentMode && window.getActiveCustomAgent) ? window.getActiveCustomAgent() : null;
+  const agentQ = (isWs && pa && pa.scope === 'mine' && pa.work_dir) ? `&agent=${encodeURIComponent(pa.id)}` : '';
+  const rawUrl = isWs ? `/agent/ws/raw?path=${enc}${agentQ}` : `/agent/raw?path=${enc}`;
   // downloads still go through the common-space endpoint: it is the only one that
   // produces a save-as attachment for arbitrary paths
   const dlUrl = `/agent/download?path=${enc}`;

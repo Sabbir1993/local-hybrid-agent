@@ -26,7 +26,61 @@ PERMISSIONS = {
     "settings.router.configure": "Edit agent routing rules and apply/dismiss usage-based router suggestions (router)",
     "git.push": "Push to git remotes / open pull requests (uses the server's git & GitHub credentials)",
     "capabilities.install": "Install/remove skills, plugins and connectors from the Customize catalog (shared by every user)",
-    "custom_agents.publish": "Share custom agents with every user (public agents)",
+    "custom_agents.publish": "Approve custom agents that users want to share with everyone",
+}
+
+# How the Users & Roles screen presents each permission: a module (the part of the product it
+# belongs to), a kind (read = look only, write = change settings or data, action = do something
+# with effects) and plain-language wording for people who are not engineers. Keys and enforcement
+# are unchanged; anything not listed falls under "Other".
+PERMISSION_MODULES = (
+    ("chat", "Chat & Agent"),
+    ("models", "Models"),
+    ("behaviour", "Agent behaviour"),
+    ("knowledge", "Knowledge & safety"),
+    ("insight", "Monitoring & audit"),
+    ("access", "People & access"),
+    ("sharing", "Sharing & code"),
+)
+PERMISSION_META = {
+    "chat.use": ("chat", "action", "Use chat and the agent",
+                 "Lets the person talk to the assistant and run agent tasks. Without this they can sign in but cannot use it."),
+    "model.local.load": ("models", "action", "Start and stop the local model",
+                         "Loads or unloads the AI model that runs on this computer. Takes GPU memory while loaded."),
+    "model.local.configure": ("models", "write", "Change local model settings",
+                              "Edits how the local model starts (memory use, context size, GPU split). A wrong value can make it fail to start."),
+    "settings.orchestration.configure": ("models", "write", "Choose which model does which job",
+                                         "Sets the main model, helper model and cloud providers. Affects cost and where data is sent."),
+    "settings.runtime.view": ("models", "read", "See hardware and runtime settings",
+                              "Shows GPU status, speed defaults and keep-alive timing. View only."),
+    "settings.router.configure": ("behaviour", "write", "Change routing rules",
+                                  "Edits how requests are sent to the fast or the strong model and applies suggested improvements."),
+    "settings.agents.configure": ("behaviour", "write", "Allow or block agent profiles",
+                                  "Decides which built-in agent profiles and shortcut commands people can use."),
+    "settings.shell.configure": ("behaviour", "write", "Set which commands the agent may run",
+                                 "Edits the list of computer commands the agent can run without asking. Powerful - grant with care."),
+    "capabilities.install": ("behaviour", "action", "Install skills, plugins and connectors",
+                             "Adds or removes extras from the catalog for everyone who uses this system."),
+    "knowledge.manage": ("knowledge", "write", "Manage the company knowledge base",
+                         "Adds, edits and deletes company documents and decides which roles can read them."),
+    "settings.input_guard": ("knowledge", "write", "Manage the safety filter",
+                             "Sets what text is blocked or hidden before it goes to a cloud model (for example card numbers)."),
+    "monitor.view": ("insight", "read", "Watch live activity",
+                     "Shows requests as they happen with speed and size. View only."),
+    "usage.report.view": ("insight", "read", "See usage and cost reports",
+                          "Shows how much each model and day was used. View only."),
+    "audit.view": ("insight", "read", "Read the audit log",
+                   "Shows who did what and when, including denied actions. View only."),
+    "database.manage": ("insight", "write", "Open the database and run queries",
+                        "Lets the person read and change the system's stored data directly. Very powerful - admins only."),
+    "users.manage": ("access", "write", "Create and manage users and tokens",
+                     "Adds people, disables them, changes their role and issues API tokens."),
+    "roles.manage": ("access", "write", "Edit roles and their permissions",
+                     "Changes what each role is allowed to do. Whoever holds this can grant themselves more access."),
+    "custom_agents.publish": ("sharing", "action", "Approve shared agents",
+                              "Reviews agents that users ask to share, and makes approved ones available to everyone in Customize."),
+    "git.push": ("sharing", "action", "Push code and open pull requests",
+                 "Sends code to remote repositories using this system's saved git credentials."),
 }
 
 _RETIRED_PERMISSIONS = ("settings.integrations.configure",)

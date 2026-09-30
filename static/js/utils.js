@@ -469,3 +469,19 @@ function fmtUptime(s) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return h ? `${h}h ${m}m` : (m ? `${m}m ${sec}s` : `${sec}s`);
 }
+
+
+/* Message for a failed API response body: our own {message|error}, else FastAPI's validation
+   detail ([{loc, msg}, ...]) as "field: reason", else the bare status. */
+function apiErrorText(body, status) {
+  const b = body || {};
+  if (b.message || b.error) return b.message || b.error;
+  if (Array.isArray(b.detail) && b.detail.length) {
+    return b.detail.slice(0, 3).map(d => {
+      const where = Array.isArray(d.loc) ? d.loc.filter(x => x !== 'body').join('.') : '';
+      return (where ? where + ': ' : '') + (d.msg || 'invalid');
+    }).join('; ');
+  }
+  if (typeof b.detail === 'string' && b.detail) return b.detail;
+  return 'HTTP ' + status;
+}

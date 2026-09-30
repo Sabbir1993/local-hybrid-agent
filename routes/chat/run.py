@@ -171,7 +171,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if not req.reasoning_effort and custom_agent.get("reasoning_effort"):
             req.reasoning_effort = custom_agent["reasoning_effort"]
         if custom_agent.get("tool_allowlist"):
-            allowed_names = set(custom_agent["tool_allowlist"])
+            allowed_names = set(custom_agent["tool_allowlist"]) | {"write_file"}   # saving files is never withheld
             chat_tools = [t for t in chat_tools if t.get("function", {}).get("name") in allowed_names]
             # only advertise the MCP servers that still have an allowed tool
             allowed_srv = {n.split("__")[1] for n in allowed_names if n.startswith("mcp__") and n.count("__") >= 2}

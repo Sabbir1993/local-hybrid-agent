@@ -26,6 +26,7 @@ from typing import Callable, Optional
 
 from .registry import registry
 from .small_model import APP_CONFIG
+from .tool_args import shell_command
 from . import companion_bridge
 
 # Installed by server_manager at request time: async fn(cmd) -> tuple[bool, str]
@@ -106,6 +107,32 @@ def take_code_approval(code: str) -> bool:
     return approved == (code or "") or not shell_cfg().get("ask_first", True)
 
 
+# Personal Agent shell commands: anything that redirects output, changes files, installs software or starts a
+# shell/script host is refused before it is even offered for approval. python / py / node are NOT refused:
+# they run only after the user approves that exact command (the card shows it), because a one-liner is how an
+# agent checks a runtime or parses a log. Such code can reach beyond the work folder, so approval is the gate.
+_PERSONAL_WRITE_RE = re.compile(
+    r"(?<![<>=-])>|\|\s*tee\b"
+    r"|(?:^|[\s&|;(])(?:del|erase|rd|rmdir|rm|mv|move|ren|rename|copy|cp|xcopy|robocopy|mkdir|md|touch|ln|"
+    r"chmod|chown|attrib|icacls|takeown|format|diskpart|shutdown|taskkill|kill|reg|sc|net|netsh|schtasks|"
+    r"new-item|set-content|add-content|out-file|clear-content|remove-item|move-item|copy-item|rename-item|"
+    r"set-itemproperty|new-itemproperty|remove-itemproperty|invoke-expression|iex|invoke-webrequest|iwr|"
+    r"invoke-restmethod|irm|start-process|stop-process|stop-service|start-service|set-service|"
+    r"curl|wget|pip|pip3|npm|npx|yarn|pnpm|winget|choco|scoop|"
+    r"cmd|bash|sh|wsl|start|powershell|pwsh)\b"
+    r"|\bsed\s+-i\b|\bgit\s+(?:commit|checkout|switch|reset|clean|add|apply|am|merge|pull|push|rebase|stash|"
+    r"init|clone|rm|mv|restore|cherry-pick|revert|tag|branch\s+-[dD])\b", re.I)
+
+
+def personal_write_violation(cmd: str) -> Optional[str]:
+    """Why a Personal Agent may not run `cmd`, or None. Read-only inspection is what remains."""
+    if _PERSONAL_WRITE_RE.search(cmd or ""):
+        return ("a Personal Agent cannot run this command (it may not redirect output, change files, "
+                "install software or start a shell). To save results use write_file (it saves into "
+                "your work folder); to change a file use edit_file. Do not retry this command.")
+    return None
+
+
 def _sanity(cmd: str) -> Optional[str]:
     """Blatantly destructive commands are always refused, even with '*'."""
     c = cmd.strip().lower()
@@ -114,10 +141,29 @@ def _sanity(cmd: str) -> Optional[str]:
     return None
 
 
+def _background_args(args: dict) -> dict:
+    """{"background": True, "wait_for_port": N, "wait": secs} for a dev-server style command, else {}."""
+    truthy = lambda v: v is True or str(v).strip().lower() in ("1", "true", "yes")
+    if not isinstance(args, dict) or not truthy(args.get("background")):
+        return {}
+    out = {"background": True}
+    try:
+        port = int(args.get("wait_for_port") or 0)
+    except (TypeError, ValueError):
+        port = 0
+    if 0 < port < 65536:
+        out["wait_for_port"] = port
+    try:
+        out["wait"] = min(max(int(args.get("wait") or 30), 1), 120)
+    except (TypeError, ValueError):
+        out["wait"] = 30
+    return out
+
+
 async def tool_run_shell(args: dict) -> str:
-    cmd = (args.get("command") or args.get("cmd") or "").strip()
+    cmd = shell_command(args)
     if not cmd:
-        raise ValueError("command required")
+        raise ValueError('command required - pass the shell command line as "command", e.g. {"command": "dir"}')
     cfg = shell_cfg()
     if not cfg.get("enabled", False):
         return "error: shell execution is disabled in capabilities (config/app.json -> capabilities.shell.enabled)"
@@ -145,11 +191,15 @@ async def tool_run_shell(args: dict) -> str:
     # 0 = "default", not "forever": the server stops waiting after this, so the
     # companion must kill the process then too instead of leaving it running
     timeout = int(raw_t) if raw_t and int(raw_t) > 0 else DEFAULT_EXEC_TIMEOUT_S
+    bg = _background_args(args)
     from .agent_tools import require_device_workspace
     # Agent shell commands run ONLY on the user's machine via the companion.
     # (Skill installs used to run server-side in BASE_DIR -- that was agent
     # code execution on the server, so they now run in the user's project too.)
-    uid, ws = require_device_workspace()
+    try:
+        uid, ws = require_device_workspace()
+    except PermissionError as e:       # WorkspaceAccessDenied: no device / project - a result the model can act on
+        return f"error: {e}"
     target_cwd = str(ws)
 
     # Automatically add -y / --yes for npx / npm commands if not present so skills installation doesn't hang
@@ -162,8 +212,8 @@ async def tool_run_shell(args: dict) -> str:
             # the gate above passed (web-app card, allow rule or ask_first off): the
             # companion skips its own dialog unless the user turned local confirmation on
             uid, "shell.run", {"command": exec_cmd, "cwd": target_cwd, "timeout": timeout,
-                               "approved_in_app": True},
-            timeout=(timeout or 60) + 10)
+                               "approved_in_app": True, **bg},
+            timeout=(timeout or 60) + (bg.get("wait", 0) if bg else 0) + 10)
     except TimeoutError:
         return f"error: command timed out after {timeout}s"
     except Exception as e:
@@ -212,9 +262,13 @@ def register_shell_tools() -> None:
             "name": "run_shell",
             "description": ("Run a shell command in the workspace directory (Windows). "
                             "Returns stdout/stderr + exit code. Use for git, npm/npx, pip, "
-                            "build tools, directory listings. Avoid for anything destructive."),
+                            "build tools, directory listings. Avoid for anything destructive. "
+                            "A command that never exits (a dev server) must be started with "
+                            "background=true, otherwise it is killed after the timeout."),
             "parameters": {"type": "object",
-                           "properties": {"command": {"type": "string", "description": "the shell command line to run"}},
+                           "properties": {"command": {"type": "string", "description": "the shell command line to run"},
+                                          "background": {"type": "boolean", "description": "start detached and return once it is listening (dev servers); result gives the pid - stop it with taskkill /PID <pid> /T /F"},
+                                          "wait_for_port": {"type": "integer", "description": "with background: return when this local port accepts connections"}},
                            "required": ["command"]},
         }},
         source="shell", meta={"label": "Shell execution"}, replace=True)

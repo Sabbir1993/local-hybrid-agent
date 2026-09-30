@@ -101,7 +101,7 @@ class CustomAgentsDBTests(_TempAuthDb):
         self.assertAlmostEqual(updated["temperature"], 0.2)
 
         # public -> forkable by others
-        db_update_custom_agent(agent_id, 1, {"is_public": True})
+        db_update_custom_agent(agent_id, 1, {"share": True, "can_approve": True})
         forked = db_fork_custom_agent(agent_id, user_id=2, new_name="My Invoices")
         self.assertEqual(forked["user_id"], 2)
 
@@ -135,7 +135,7 @@ class CustomAgentsDBTests(_TempAuthDb):
         self.assertEqual(upd["name"], "renamed by admin")
 
     def test_public_agents_never_resolve_by_slug_for_other_users(self):
-        a = db_create_custom_agent(1, {"name": "p", "slug": "shared-thing", "system_prompt": "evil", "is_public": True})
+        a = db_create_custom_agent(1, {"name": "p", "slug": "shared-thing", "system_prompt": "evil", "share_status": "approved"})
         self.assertIsNotNone(db_get_custom_agent(a["id"], 2))            # pickable in the UI
         self.assertIsNone(db_get_custom_agent_by_slug("shared-thing", 2))  # but not via spawn_agent
         set_current_user(2)
@@ -244,10 +244,51 @@ class CustomAgentsAPITests(_TempAuthDb):
             res = self._create(slug="coder")
         self.assertEqual(res.status_code, 409)
 
-    def test_publish_needs_permission(self):
-        self.assertEqual(self._create(is_public=True).status_code, 403)
+    def test_sharing_waits_for_approval(self):
+        body = self._create(is_public=True).json()
+        self.assertEqual(body["share_status"], "pending")
+        self.assertFalse(body["is_public"])
+        # nobody else can see it yet
+        self.assertIsNone(db_get_custom_agent(body["id"], 2))
+        # an ordinary user cannot review
+        self.assertEqual(self.client.get("/custom-agents/pending").status_code, 403)
+        self.assertEqual(self.client.post(f"/custom-agents/{body['id']}/approve").status_code, 403)
+        # someone with the publish permission can
+        self.current_user = _make_principal(5, "carol", perms=("chat.use", "custom_agents.publish"))
+        pending = self.client.get("/custom-agents/pending").json()["agents"]
+        self.assertEqual([a["id"] for a in pending], [body["id"]])
+        self.assertEqual(pending[0]["owner_name"], "alice")
+        self.assertEqual(self.client.post(f"/custom-agents/{body['id']}/approve").status_code, 200)
+        self.assertIsNotNone(db_get_custom_agent(body["id"], 2))
+
+    def test_editing_an_approved_agent_needs_approval_again(self):
         self.current_user = _make_principal(1, "alice", perms=("chat.use", "custom_agents.publish"))
-        self.assertEqual(self._create(is_public=True).status_code, 200)
+        aid = self._create(is_public=True).json()["id"]              # a reviewer sharing is approved at once
+        self.assertEqual(self.client.get(f"/custom-agents/{aid}").json()["share_status"], "approved")
+        self.current_user = _make_principal(1, "alice")
+        same = self.client.put(f"/custom-agents/{aid}", json={"is_public": True, "work_dir": "D:/a/b"}).json()
+        self.assertEqual(same["share_status"], "approved")           # a folder change alone is not a content change
+        changed = self.client.put(f"/custom-agents/{aid}", json={"is_public": True, "system_prompt": "new"}).json()
+        self.assertEqual(changed["share_status"], "pending")
+        self.assertFalse(changed["is_public"])
+
+    def test_unsharing_and_rejection(self):
+        aid = self._create(is_public=True).json()["id"]
+        self.current_user = _make_principal(5, "carol", perms=("chat.use", "custom_agents.publish"))
+        self.assertEqual(self.client.post(f"/custom-agents/{aid}/reject").json()["share_status"], "rejected")
+        self.assertEqual(self.client.post(f"/custom-agents/{aid}/reject").status_code, 404)   # no longer pending
+        self.current_user = _make_principal(1, "alice")
+        self.assertEqual(self.client.put(f"/custom-agents/{aid}", json={"is_public": False}).json()["share_status"], "")
+
+    def test_fork_takes_only_the_forkers_folder(self):
+        other = db_create_custom_agent(2, {"name": "bob", "system_prompt": "p", "share_status": "approved",
+                                           "work_dir": "D:/bob/stuff"})
+        f = self.client.post(f"/custom-agents/{other['id']}/fork", json={"work_dir": "D:/alice/mine"}).json()
+        self.assertEqual(f["work_dir"].replace("\\", "/"), "D:/alice/mine")
+        seen = self.client.get(f"/custom-agents/{other['id']}").json()
+        self.assertEqual(seen["work_dir"], "")                          # bob's path is never shown to alice
+        bad = self.client.post(f"/custom-agents/{other['id']}/fork", json={"work_dir": "C:/"})
+        self.assertEqual(bad.status_code, 400)
 
     def test_update_missing_is_404_and_foreign_is_403(self):
         self.assertEqual(self.client.put("/custom-agents/99999", json={"name": "x"}).status_code, 404)

@@ -46,3 +46,12 @@ class RouterSettingsReq(BaseModel):
     repeat_streak_limit: Optional[int] = None
     start_on_main_categories: Optional[list] = None
     confidence_threshold: Optional[float] = None
+    tool_choice_required: Optional[bool] = None
+    executor_fresh_context: Optional[bool] = None
+    finish_tool: Optional[bool] = None
+    adaptive: Optional[bool] = None
+    min_executor_success: Optional[float] = None
+    adaptive_min_samples: Optional[int] = None
+    adaptive_cooldown_s: Optional[int] = None
+    auto_apply: Optional[bool] = None
+    classifier: Optional[dict] = None

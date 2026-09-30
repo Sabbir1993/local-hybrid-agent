@@ -50,8 +50,16 @@ async def list_roles(user: Principal = Depends(require_permission("roles.manage"
 async def list_permissions(user: Principal = Depends(get_current_user)):
     # Any authenticated user can see the static catalogue (needed to render admin UI checkboxes);
     # actually editing grants still requires roles.manage.
+    from core.auth_db.common import PERMISSION_META, PERMISSION_MODULES
     rows = auth_db.db().execute("SELECT key, description FROM permissions ORDER BY key").fetchall()
-    return {"permissions": [dict(r) for r in rows]}
+    perms = []
+    for r in rows:
+        d = dict(r)
+        module, kind, title, help_ = PERMISSION_META.get(d["key"], ("other", "action", d["key"], d.get("description") or ""))
+        d.update({"module": module, "kind": kind, "title": title, "help": help_})
+        perms.append(d)
+    return {"permissions": perms,
+            "modules": [{"id": m, "label": l} for m, l in PERMISSION_MODULES] + [{"id": "other", "label": "Other"}]}
 
 
 @router.post("/roles")

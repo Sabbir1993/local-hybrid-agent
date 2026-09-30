@@ -26,12 +26,29 @@ ESC_STREAK_LIMIT = 2
 DEFAULT_RUN_TIMEOUT_S = 1800
 
 
-# same tool called this many times inside NEAR_REPEAT_WINDOW steps, with
-# differing arguments, is treated as a thrash rather than progress
-NEAR_REPEAT_LIMIT = 6
+# The progress-aware guard (core/agent_loop/loop_guard.py) is the loop detector. This name-count
+# rule is only a high backstop for a run that thrashes without ever repeating a (call, result)
+# pair: one tool this many times inside the window, whatever its arguments returned.
+NEAR_REPEAT_LIMIT = 25
 
 
-NEAR_REPEAT_WINDOW = 12
+NEAR_REPEAT_WINDOW = 30
+
+
+# Tools that are driven step by step with different arguments each time (a shell session, a
+# browser or device test) get the whole window before the backstop applies.
+NEAR_REPEAT_ITERATIVE_PREFIXES = ("run_shell", "browser_", "mobile_")
+NEAR_REPEAT_ITERATIVE_LIMIT = 30
+
+
+# The Continue button sends this prompt (static/js/agent-acts.js). A run that starts with it is a
+# resume: it stays on the main model, because the previous run already showed the helper model
+# could not carry this task.
+AGENT_RESUME_PREFIX = "Continue the previous task"
+
+
+def near_repeat_limit(tool: str) -> int:
+    return NEAR_REPEAT_ITERATIVE_LIMIT if tool.startswith(NEAR_REPEAT_ITERATIVE_PREFIXES) else NEAR_REPEAT_LIMIT
 
 
 def _run_timeout_s() -> int:
@@ -55,6 +72,7 @@ PLAN_MODE_TOOLS = {"list_files", "read_file", "grep", "search_memory", "list_ski
 # capabilities.browser / capabilities.mobile are on)
 EXECUTOR_TEST_TOOLS = ("browser_navigate", "browser_snapshot", "browser_click", "browser_type",
                        "browser_console", "browser_screenshot",
+                       "browser_wait", "browser_press", "browser_select", "browser_eval", "browser_close",
                        "mobile_devices", "mobile_install", "mobile_launch", "mobile_ui", "mobile_tap",
                        "mobile_type", "mobile_screenshot", "mobile_logs")
 

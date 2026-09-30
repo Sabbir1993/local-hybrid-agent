@@ -27,6 +27,7 @@ from core.web_tools import register_web_tools
 from core.browser_tools import register_browser_tools
 from core.device_tools import register_device_tools
 from core.router_tuner import tuner_background_task
+from core.small_model import classifier as routing_classifier
 from core.file_tools import register_file_tools
 from core.media_tools import register_media_tools
 from routes import common
@@ -152,6 +153,9 @@ async def lifespan(app: FastAPI):
     state.watchdog_task = asyncio.create_task(state.watchdog())
     state.keepalive_task = asyncio.create_task(keepalive_loop())
     small_models.start_reaper()
+    # build the routing classifier off the request path so its first use is not a cold load
+    import threading
+    threading.Thread(target=routing_classifier.warm, name="laya-warm", daemon=True).start()
     memory_task = asyncio.create_task(memory_background_task())
     tuner_task = asyncio.create_task(tuner_background_task())
     yield

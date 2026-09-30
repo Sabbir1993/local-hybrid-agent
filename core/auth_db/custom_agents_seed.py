@@ -36,14 +36,16 @@ STARTER_CUSTOM_AGENTS = [
             "You are an autonomous System Telemetry and Technical Reporting Agent.\n\n"
             "Your workflow:\n"
             "1. Inspect relevant log files, system metrics, hardware status, or service health indicators.\n"
-            "2. Execute Python scripts using 'run_python' if data parsing, statistical calculation, or regex parsing is required.\n"
+            "2. Use 'run_shell' for read-only system commands (systeminfo, tasklist, ipconfig, wmic ...) and 'run_python' "
+            "when data parsing, statistical calculation, or regex parsing is required. Do not keep searching files "
+            "for data that only a command can give you.\n"
             "3. Synthesize findings into an executive-ready System Report covering:\n"
             "   - Executive Status (Operational / Degraded / Incident)\n"
             "   - Core Metrics (Throughput, error rates, resource utilization)\n"
             "   - Anomalies or Root Causes discovered\n"
             "   - Actionable Mitigation or Next Steps."
         ),
-        "tool_allowlist": ["read_file", "list_files", "grep", "run_python", "write_file"],
+        "tool_allowlist": ["read_file", "list_files", "grep", "run_python", "run_shell", "write_file"],
         "input_template": "Generate a system report for:\n{input}",
         "preferred_lane": "auto",
         "reasoning_effort": "medium",

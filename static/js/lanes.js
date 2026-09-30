@@ -169,6 +169,10 @@ function lanesRender() {
         <button type="button" class="btn ghost ln-small" data-ln="intro-ok">Got it</button></div>`;
     }
   } catch (_) {}
+  if (lanesRestricted()) {   // a person who cannot change models sees only the recommended-setup choice
+    box.innerHTML = presetsHtml();
+    return;
+  }
   const simple = LN.view !== 'advanced';
   box.innerHTML = `${intro}
     <div class="ln-top">
@@ -178,8 +182,15 @@ function lanesRender() {
       </div>
       <span class="dim ln-top-hint">${simple ? 'The three choices most people need.' : 'Every model and every job.'}</span>
     </div>
-    ${mapHtml()}
-    ${simple ? simpleHtml() : advancedHtml()}`;
+    ${simple ? simpleHtml() : advancedHtml()}
+    ${mapHtml()}`;
+}
+
+/* People without a model/orchestration permission only choose *where the agent runs* (a preset,
+   stored in this browser); the per-model cards and the job map are for those who manage models. */
+function lanesRestricted() {
+  if (typeof window.hasPerm !== 'function') return false;
+  return !(window.hasPerm('model.local.configure') || window.hasPerm('settings.orchestration.configure'));
 }
 
 function mapHtml() {
@@ -202,9 +213,9 @@ function mapHtml() {
       ${pending ? '<span class="ln-chip-tag">not saved</span>' : ''}
     </li>`;
   }).join('');
-  return `<section class="ln-map" aria-label="Who handles what">
-    <div class="ln-sec-title">Who handles what <span class="dim">· <span class="ln-legend ln-local">🖥 on this PC</span> <span class="ln-legend ln-cloud">☁ cloud</span> <span class="ln-legend ln-off">○ not set up</span></span></div>
-    <ul class="ln-chips">${chips}</ul></section>`;
+  return `<details class="ln-map" aria-label="Who handles what">
+    <summary class="ln-sec-title">See who does each job <span class="dim">· a read-only summary of the choices above · <span class="ln-legend ln-local">🖥 on this PC</span> <span class="ln-legend ln-cloud">☁ cloud</span> <span class="ln-legend ln-off">○ not set up</span></span></summary>
+    <ul class="ln-chips">${chips}</ul></details>`;
 }
 
 /* ---------- simple view ---------- */
@@ -212,13 +223,12 @@ function curPreset() {
   try { return localStorage.getItem('agent_engine') || 'all-local'; } catch (_) { return 'all-local'; }
 }
 
-function simpleHtml() {
-  const d = LN.d;
+function presetsHtml() {
   const main = laneByName('main') || {};
   const exec = laneByName('executor') || {};
-  const cms = textCloudModels();
   const cur = curPreset();
   const pv = LN.presetPreview;
+  const restricted = lanesRestricted();
   const presetCards = PRESETS.map(p => `
     <button type="button" role="radio" aria-checked="${cur === p.mode}" class="ln-preset${cur === p.mode ? ' on' : ''}${pv === p.mode ? ' preview' : ''}" data-ln="preset" data-mode="${p.mode}">
       <span class="ln-preset-icon" aria-hidden="true">${p.icon}</span>
@@ -229,7 +239,8 @@ function simpleHtml() {
   let preview = '';
   if (pv && pv !== cur) {
     const p = PRESETS.find(x => x.mode === pv);
-    const missing = (p.needs === 'main' && !main.cloud_key) ? 'Pick a cloud <b>Main model</b> below first, or it will use the one on this PC.'
+    const missing = restricted ? ''
+      : (p.needs === 'main' && !main.cloud_key) ? 'Pick a cloud <b>Main model</b> below first, or it will use the one on this PC.'
       : (p.needs === 'helper' && !(exec.cloud_key)) ? 'Pick a cloud <b>Helper model</b> below first, or helpers will stay on this PC.' : '';
     preview = `<div class="ln-preview" role="region" aria-label="What changes">
       <div class="ln-sec-title">What changes with “${esc(p.name)}”</div>
@@ -240,6 +251,20 @@ function simpleHtml() {
         <button type="button" class="btn ghost ln-small" data-ln="preset-cancel">Cancel</button>
       </div></div>`;
   }
+  return `
+    <section class="ln-sec" aria-labelledby="ln-p-title">
+      <div class="ln-sec-title" id="ln-p-title">Where should the agent run?</div>
+      <div class="ln-hint dim">A ready-made setup. The two model cards below let you fine-tune it.</div>
+      <div class="ln-presets" role="radiogroup" aria-labelledby="ln-p-title">${presetCards}</div>
+      ${preview}
+    </section>`;
+}
+
+function simpleHtml() {
+  const d = LN.d;
+  const main = laneByName('main') || {};
+  const exec = laneByName('executor') || {};
+  const cms = textCloudModels();
   const opt = (v, label, sel, dis) => `<option value="${esc(v)}"${sel ? ' selected' : ''}${dis ? ' disabled' : ''}>${esc(label)}</option>`;
   const cloudOpts = sel => cms.map(c => opt(c.key, `☁ ${c.display} · ${c.provider}`, sel === c.key)).join('');
   const noCloud = !cms.length
@@ -252,15 +277,11 @@ function simpleHtml() {
   const vmode = vf.mode || 'off';
   const radio = (v, label, hint) => `<label class="ln-radio"><input type="radio" name="ln-vmode" value="${v}"${vmode === v ? ' checked' : ''} data-ln="vmode"> <span><b>${label}</b><small>${hint}</small></span></label>`;
   return `
-    <section class="ln-sec" aria-labelledby="ln-p-title">
-      <div class="ln-sec-title" id="ln-p-title">Where should the agent run?</div>
-      <div class="ln-presets" role="radiogroup" aria-labelledby="ln-p-title">${presetCards}</div>
-      ${preview}
-    </section>
+    ${presetsHtml()}
     <div class="ln-cards">
       <section class="ln-card" aria-labelledby="ln-main-t">
-        <div class="ln-card-t" id="ln-main-t">🧠 Main model</div>
-        <div class="ln-hint dim">Does the thinking: chat answers and the agent's hard steps.</div>
+        <div class="ln-card-t" id="ln-main-t">🧠 Main model - thinks &amp; plans</div>
+        <div class="ln-hint dim">Writes chat answers and does the agent's hard steps.</div>
         <label class="sr-only" for="ln-main-sel">Main model</label>
         <select id="ln-main-sel" data-ln="main-sel">
           ${opt('local', '🖥 On this PC — ' + (main.model ? String(main.model).split(/[\\/]/).pop() : 'model from the top bar'), !main.cloud_key)}
@@ -269,8 +290,8 @@ function simpleHtml() {
         ${statusLine(main)}
       </section>
       <section class="ln-card" aria-labelledby="ln-exec-t">
-        <div class="ln-card-t" id="ln-exec-t">⚡ Helper model</div>
-        <div class="ln-hint dim">Quick jobs: routine tool calls, summaries, commit messages.</div>
+        <div class="ln-card-t" id="ln-exec-t">⚡ Helper model - quick jobs</div>
+        <div class="ln-hint dim">Takes the routine agent steps, summaries and commit messages so the main model is not used for them.</div>
         <label class="sr-only" for="ln-exec-sel">Helper model</label>
         <select id="ln-exec-sel" data-ln="exec-sel">
           ${opt('auto', 'Same place as the main model', helperAuto && !!main.cloud_key)}

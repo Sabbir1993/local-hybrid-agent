@@ -1,0 +1,93 @@
+{"q": "request_profile", "text": "can you test this app on my browser ? and check is there any issues exist's or not", "label": "tools"}
+{"q": "request_profile", "text": "run the unit tests and tell me what fails", "label": "tools"}
+{"q": "request_profile", "text": "open README.md and summarize the setup steps", "label": "tools"}
+{"q": "request_profile", "text": "list the files in the routes folder", "label": "tools"}
+{"q": "request_profile", "text": "find where the cloud endpoint URL is built", "label": "tools"}
+{"q": "request_profile", "text": "check the server logs for errors from the last hour", "label": "tools"}
+{"q": "request_profile", "text": "install the requests package and verify it imports", "label": "tools"}
+{"q": "request_profile", "text": "see if the login page loads and the button works", "label": "tools"}
+{"q": "request_profile", "text": "grep the codebase for TODO comments", "label": "tools"}
+{"q": "request_profile", "text": "why is my build failing? look at the output and fix it", "label": "tools"}
+{"q": "request_profile", "text": "read config/app.json and tell me which model is the executor", "label": "tools"}
+{"q": "request_profile", "text": "restart the dev server and confirm it is healthy", "label": "tools"}
+{"q": "request_profile", "text": "look at the screenshot on my desktop and describe the error", "label": "tools"}
+{"q": "request_profile", "text": "take a screenshot of the dashboard page and check the layout", "label": "tools"}
+{"q": "request_profile", "text": "search the web for the latest Python release and its date", "label": "tools"}
+{"q": "request_profile", "text": "edit main.py so the port comes from an environment variable", "label": "tools"}
+{"q": "request_profile", "text": "delete the temp files in the scratch folder", "label": "tools"}
+{"q": "request_profile", "text": "run the linter over the project and list the warnings", "label": "tools"}
+{"q": "request_profile", "text": "inspect the database and show me how many users there are", "label": "tools"}
+{"q": "request_profile", "text": "debug why the upload endpoint returns 500", "label": "tools"}
+{"q": "request_profile", "text": "verify the website is reachable and report the response time", "label": "tools"}
+{"q": "request_profile", "text": "open the settings page in the browser and tell me if anything looks broken", "label": "tools"}
+{"q": "request_profile", "text": "compare the two config files and show the differences", "label": "tools"}
+{"q": "request_profile", "text": "profile the slow query and suggest an index", "label": "tools"}
+{"q": "request_profile", "text": "write a python script that renames all photos by date", "label": "create"}
+{"q": "request_profile", "text": "create a landing page for a coffee shop", "label": "create"}
+{"q": "request_profile", "text": "generate a README for this project", "label": "create"}
+{"q": "request_profile", "text": "write a short story about a lighthouse keeper", "label": "create"}
+{"q": "request_profile", "text": "draft an email asking my manager for a day off", "label": "create"}
+{"q": "request_profile", "text": "make a todo app in html and javascript", "label": "create"}
+{"q": "request_profile", "text": "write a poem about the monsoon", "label": "create"}
+{"q": "request_profile", "text": "build a REST API for a book library in FastAPI", "label": "create"}
+{"q": "request_profile", "text": "compose a product description for a steel water bottle", "label": "create"}
+{"q": "request_profile", "text": "generate a SQL schema for an online store", "label": "create"}
+{"q": "request_profile", "text": "create a bash script that backs up my documents folder", "label": "create"}
+{"q": "request_profile", "text": "write a cover letter for a backend developer job", "label": "create"}
+{"q": "request_profile", "text": "design a logo concept description for a bakery", "label": "create"}
+{"q": "request_profile", "text": "write unit tests for a function that parses dates", "label": "create"}
+{"q": "request_profile", "text": "make a simple calculator in python", "label": "create"}
+{"q": "request_profile", "text": "write a speech for my sister's wedding", "label": "create"}
+{"q": "request_profile", "text": "what is the capital of Bangladesh?", "label": "chat"}
+{"q": "request_profile", "text": "how does a hash map work?", "label": "chat"}
+{"q": "request_profile", "text": "explain the difference between TCP and UDP", "label": "chat"}
+{"q": "request_profile", "text": "hi there, how are you?", "label": "chat"}
+{"q": "request_profile", "text": "what does idempotent mean?", "label": "chat"}
+{"q": "request_profile", "text": "how do I read a file in python?", "label": "chat"}
+{"q": "request_profile", "text": "why is the sky blue?", "label": "chat"}
+{"q": "request_profile", "text": "thanks, that was helpful", "label": "chat"}
+{"q": "request_profile", "text": "what is the difference between a process and a thread?", "label": "chat"}
+{"q": "request_profile", "text": "who wrote the novel Pather Panchali?", "label": "chat"}
+{"q": "request_profile", "text": "explain how to check disk usage on linux", "label": "chat"}
+{"q": "request_profile", "text": "is python faster than javascript?", "label": "chat"}
+{"q": "request_profile", "text": "what are the benefits of unit testing?", "label": "chat"}
+{"q": "request_profile", "text": "tell me about the history of the internet", "label": "chat"}
+{"q": "request_profile", "text": "can you explain what a REST API is?", "label": "chat"}
+{"q": "request_profile", "text": "good morning", "label": "chat"}
+{"q": "request_profile", "text": "what is the time complexity of quicksort?", "label": "chat"}
+{"q": "request_profile", "text": "how many bytes are in a kilobyte?", "label": "chat"}
+{"q": "request_profile", "text": "what should I name my new puppy?", "label": "chat"}
+{"q": "request_profile", "text": "do you think microservices are overrated?", "label": "chat"}
+{"q": "reply_state", "text": "Let me start by reading the webapp-testing skill, then navigate to the app and check for issues.", "label": "announced"}
+{"q": "reply_state", "text": "[Let me start by reading the webapp-testing skill and checking the workspace structure.]", "label": "announced"}
+{"q": "reply_state", "text": "I'll begin by listing the files in the project.", "label": "announced"}
+{"q": "reply_state", "text": "First, I will open the app in the browser and take a snapshot.", "label": "announced"}
+{"q": "reply_state", "text": "Now let me run the test suite to see what fails.", "label": "announced"}
+{"q": "reply_state", "text": "Okay, I need to check the configuration file first. Let me read it.", "label": "announced"}
+{"q": "reply_state", "text": "Let me look at the server logs to find the error.", "label": "announced"}
+{"q": "reply_state", "text": "I am going to install the dependency and then rerun the build.", "label": "announced"}
+{"q": "reply_state", "text": "Sure, I can do that. I'll start by searching the codebase for the function.", "label": "announced"}
+{"q": "reply_state", "text": "Next I will navigate to the settings page and check the console.", "label": "announced"}
+{"q": "reply_state", "text": "To begin, let me inspect the project structure.", "label": "announced"}
+{"q": "reply_state", "text": "Alright, first I'll read the README and then look at the entry point.", "label": "announced"}
+{"q": "reply_state", "text": "Which file would you like me to check?", "label": "other"}
+{"q": "reply_state", "text": "Could you tell me the URL of the app you want tested?", "label": "other"}
+{"q": "reply_state", "text": "I need more details: which environment should I run this against, staging or production?", "label": "other"}
+{"q": "reply_state", "text": "Do you want me to overwrite the existing file or create a new one?", "label": "other"}
+{"q": "reply_state", "text": "What version of Python are you using?", "label": "other"}
+{"q": "reply_state", "text": "Can you share the error message you see when it fails?", "label": "other"}
+{"q": "reply_state", "text": "Before I continue, should I keep the old configuration as a backup?", "label": "other"}
+{"q": "reply_state", "text": "Please provide the API key name you would like me to use.", "label": "other"}
+{"q": "reply_state", "text": "Which of the two databases should I connect to?", "label": "other"}
+{"q": "reply_state", "text": "I found 3 failing tests: test_login, test_upload and test_export. The login test fails because the session cookie is missing.", "label": "other"}
+{"q": "reply_state", "text": "The app loads correctly and all five pages render without console errors. No issues were found.", "label": "other"}
+{"q": "reply_state", "text": "The capital of Bangladesh is Dhaka.", "label": "other"}
+{"q": "reply_state", "text": "Done. I updated main.py to read the port from the PORT environment variable and verified the server starts on port 9000.", "label": "other"}
+{"q": "reply_state", "text": "There are 42 users in the database, 5 of them created this week.", "label": "other"}
+{"q": "reply_state", "text": "A hash map stores key-value pairs by hashing the key to an index, which gives average constant-time lookups.", "label": "other"}
+{"q": "reply_state", "text": "I ran the linter and it reported 7 warnings, mostly unused imports in routes/agent/run.py.", "label": "other"}
+{"q": "reply_state", "text": "The build failed because the lockfile is out of date. I regenerated it and the build now passes.", "label": "other"}
+{"q": "reply_state", "text": "Here is the summary of the README: install the requirements, set the config path, then start server_manager.py.", "label": "other"}
+{"q": "reply_state", "text": "The endpoint returned 500 because the upload directory does not exist. Creating it fixed the problem.", "label": "other"}
+{"q": "reply_state", "text": "Your site responded in 240 ms and returned status 200.", "label": "other"}
+{"q": "reply_state", "text": "Both files are identical except for the port value, which is 8080 in the first and 9090 in the second.", "label": "other"}

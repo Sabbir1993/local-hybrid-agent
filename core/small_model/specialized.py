@@ -22,17 +22,18 @@ def _get_whisper_server():
     return fn()
 
 
+LANE_KINDS = ("chat", "vision", "embed", "image_gen", "video_gen", "stt")
+
+
 def lane_kind_of_spec(name: str, cfg: Optional[dict] = None) -> str:
     """Return 'chat' / 'embed' / 'vision' / 'image_gen' / 'video_gen' / 'stt'."""
     c = cfg if isinstance(cfg, dict) else (APP_CONFIG.get("small_models", {}).get(name) or {})
-    k = c.get("kind")
-    if k:
-        return str(k).strip()
-    if name == "embedder":
-        return "embed"
-    if name == "vision":
-        return "vision"
-    return "chat"
+    k = str(c.get("kind") or "").strip().lower()
+    if not k:
+        k = "embed" if name == "embedder" else "vision" if name == "vision" else "chat"
+    # an unknown kind ("IMAGE_GEN" is fine, "foo" is not) must not leak through as its own
+    # engine/kind: treat it as a chat lane
+    return k if k in LANE_KINDS else "chat"
 
 
 def lane_engine_of_spec(name: str, cfg: Optional[dict] = None) -> str:

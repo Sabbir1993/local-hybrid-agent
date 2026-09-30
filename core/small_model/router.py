@@ -161,7 +161,8 @@ def laya_route(query: str, tools: list) -> Optional[dict]:
 
         ans = pred.get("answers", {}).get("selected_tool", {})
         chosen = ans.get("choice") or ans.get("answer")
-        conf = float(ans.get("confidence") or ans.get("probability") or 0.0)
+        # the chosen option's probability: `confidence` in Laya's reply is a separate, far lower score
+        conf = float(ans.get("answer_confidence") or ans.get("probability") or ans.get("confidence") or 0.0)
 
         threshold = float(APP_CONFIG.get("router", {}).get("confidence_threshold", 0.75))
         if not chosen or chosen == "none" or chosen not in criteria or conf < threshold:

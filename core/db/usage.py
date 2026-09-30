@@ -83,9 +83,28 @@ def db_record_request(endpoint: str, model: Optional[str], prompt_tokens: Option
         print(f"[server_manager] usage db insert failed: {e}", file=sys.stderr)
 
 
-def db_report(days: int = 30, model: Optional[str] = None) -> dict:
-    """Aggregate token usage report including prompt/completion cache hits and orchestrator counts."""
+def _day_bounds(start: Optional[str], end: Optional[str]):
+    """(since, until) epoch seconds for local dates 'YYYY-MM-DD' (end day included); None when unusable."""
+    def parse(v):
+        try:
+            return time.mktime(time.strptime(str(v).strip()[:10], "%Y-%m-%d"))
+        except (ValueError, TypeError, OverflowError):
+            return None
+    a, b = parse(start) if start else None, parse(end) if end else None
+    return a, (b + 86400 if b is not None else None)
+
+
+def db_report(days: int = 30, model: Optional[str] = None,
+              start: Optional[str] = None, end: Optional[str] = None) -> dict:
+    """Aggregate token usage report including prompt/completion cache hits and orchestrator counts.
+
+    `start` / `end` (local dates, inclusive) replace the rolling `days` window when given."""
     since = time.time() - days * 86400
+    a, until = _day_bounds(start, end)
+    if a is not None:
+        since = a
+    until_given = until is not None
+    until = until if until_given else time.time() + 86400 * 366
     q = """
         SELECT
             COUNT(*),
@@ -96,11 +115,12 @@ def db_report(days: int = 30, model: Optional[str] = None) -> dict:
             COALESCE(AVG(duration_s), 0),
             COALESCE(SUM(prompt_cached_tokens), 0),
             COALESCE(SUM(completion_cached_tokens), 0),
-            COALESCE(SUM(is_orchestrator), 0)
+            COALESCE(SUM(is_orchestrator), 0),
+            COALESCE(SUM(CASE WHEN is_orchestrator = 1 THEN total_tokens ELSE 0 END), 0)
         FROM requests
-        WHERE ts >= ?
+        WHERE ts >= ? AND ts < ?
     """
-    params = [since]
+    params = [since, until]
     if model:
         q += " AND model = ?"
         params.append(model)
@@ -116,6 +136,7 @@ def db_report(days: int = 30, model: Optional[str] = None) -> dict:
     completion_cached = row[7] or 0
     total_cached = prompt_cached + completion_cached
     orchestrator_reqs = row[8] or 0
+    orchestrator_total_tokens = row[9] or 0
 
     prompt_hit_rate = (prompt_cached / prompt_tokens) if prompt_tokens > 0 else 0.0
     completion_hit_rate = (completion_cached / completion_tokens) if completion_tokens > 0 else 0.0
@@ -134,11 +155,11 @@ def db_report(days: int = 30, model: Optional[str] = None) -> dict:
             COALESCE(source, 'local'),
             provider
         FROM requests
-        WHERE ts >= ?
+        WHERE ts >= ? AND ts < ?
         GROUP BY model, COALESCE(source, 'local'), provider
         ORDER BY SUM(total_tokens) DESC
     """
-    by_model_rows = _usage_db.execute(by_model_q, [since]).fetchall()
+    by_model_rows = _usage_db.execute(by_model_q, [since, until]).fetchall()
 
     by_day_q = """
         SELECT
@@ -151,18 +172,24 @@ def db_report(days: int = 30, model: Optional[str] = None) -> dict:
             COALESCE(SUM(total_tokens), 0),
             COALESCE(SUM(is_orchestrator), 0)
         FROM requests
-        WHERE ts >= ?
+        WHERE ts >= ? AND ts < ?
     """
-    by_day_params = [since]
+    by_day_params = [since, until]
     if model:
         by_day_q += " AND model = ?"
         by_day_params.append(model)
-    by_day_q += " GROUP BY day ORDER BY day ASC"
+    by_day_q += " GROUP BY day ORDER BY day DESC"       # newest first, as the report table shows it
     by_day_rows = _usage_db.execute(by_day_q, by_day_params).fetchall()
 
     return {
         "days": days,
+        # the window actually applied, so a client can tell a server that ignored start/end
+        "range": {"start": start if a is not None else None, "end": end if until_given else None},
         "total_requests": total_reqs,
+        # names static/js/usage-report.js reads (kept next to the newer ones)
+        "requests": total_reqs,
+        "cache_hit_rate": round(prompt_hit_rate * 100, 1),
+        "orchestrator_total_tokens": orchestrator_total_tokens,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
@@ -186,6 +213,7 @@ def db_report(days: int = 30, model: Optional[str] = None) -> dict:
                 "total_cached_tokens": pc + gc,
                 "avg_tps": round(s, 2),
                 "orchestrator_requests": orc,
+                "is_orchestrator": bool(orc or "orchestrator" in (m or "").lower()),
                 "source": src,
                 "provider": prov,
             }

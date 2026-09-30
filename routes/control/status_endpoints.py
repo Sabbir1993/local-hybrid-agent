@@ -138,9 +138,10 @@ async def monitor(user: Principal = Depends(require_permission("monitor.view")))
 
 @router.get("/control/report")
 async def report(days: int = 30, model: Optional[str] = None,
+                  start: Optional[str] = None, end: Optional[str] = None,
                   user: Principal = Depends(require_permission("usage.report.view"))):
     try:
         days = max(1, min(365, int(days)))
     except ValueError:
         days = 30
-    return db_report(days, model)
+    return db_report(days, model, start, end)

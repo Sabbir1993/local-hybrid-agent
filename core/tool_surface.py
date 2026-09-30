@@ -89,6 +89,32 @@ def _matches(query: str, keyword: str) -> bool:
     return re.search(rf"\b{re.escape(k)}", q) is not None
 
 
+def surface_query(msgs: Iterable[dict], recent_user_turns: int = 3) -> str:
+    """The wording the tool surface is decided on: the latest user turns plus the names of tools
+    already called in this conversation.
+
+    Deciding on the last message alone hid `browser_*` on a follow-up such as "yes, go ahead"
+    or "fix it", in the middle of a browser task. A family the conversation has already used
+    stays available.
+    """
+    parts, users, used = [], 0, []
+    for m in reversed(list(msgs or [])):
+        role = m.get("role")
+        if role == "user" and users < recent_user_turns:
+            c = m.get("content")
+            if not isinstance(c, str):
+                c = " ".join(str(p.get("text", "")) for p in c if isinstance(p, dict)) if isinstance(c, list) else ""
+            if not c.lstrip().startswith("["):      # skip [continue]/[stuck] style control turns
+                parts.append(c)
+            users += 1
+        elif role == "assistant":
+            for tc in m.get("tool_calls") or []:
+                n = (tc.get("function") or {}).get("name") or ""
+                if n and _family_of(n):
+                    used.append(n)
+    return "\n".join(parts + sorted(set(used)))
+
+
 def needed_families(query: str, cfg: Optional[dict] = None) -> set:
     """Situational families named by this request. Never raises: an empty set just
     means the core set is used."""

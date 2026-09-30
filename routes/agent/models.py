@@ -22,6 +22,7 @@ class AgentRequest(BaseModel):
     cloud_model_override: Optional[str] = None   # key of cloud model for executor/vision lanes
     reasoning_effort: Optional[Literal["none", "low", "medium", "high", "extra"]] = None
     custom_agent_id: Optional[int] = None
+    personal: bool = False   # a Personal Agent run from Chat: read/run on the device, write only to the common folder
     top_p: Optional[float] = None
     min_p: Optional[float] = None
     repeat_penalty: Optional[float] = None

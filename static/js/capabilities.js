@@ -98,6 +98,9 @@ async function loadCapabilities() {
         </div>
         <button class="btn accent" id="shell-pats-save" style="width:auto; margin:6px 0 0; padding:4px 12px; font-size:10.5px;">💾 Save patterns</button>
         ` : `<p class="dim" style="font-size:10px; margin:5px 0 0;">Only an admin can edit the global list. Use the shell permission prompt's "Always allow for me" to add your own.</p>`}
+        <div style="margin-top:10px;"><b>Allowed for me</b>
+          <span class="dim" style="font-size:10px;"> - commands you chose to always allow (your account only)</span>
+          <div id="shell-my-pats" class="dim" style="font-size:10.5px; margin-top:4px;">Loading...</div></div>
       </div>`;
     h += capSection('shell', '⌨️ Shell Execution', sh.enabled, shellInner,
       'run_shell tool — agent runs commands like "npx skills add …" in the workspace');
@@ -183,6 +186,25 @@ async function loadCapabilities() {
     };
 
     // shell section controls
+    const myPats = box.querySelector('#shell-my-pats');
+    const loadMyPats = async () => {
+      if (!myPats) return;
+      try {
+        const j = await (await fetch('/agent/allowed-commands')).json();
+        const list = j.patterns || [];
+        myPats.innerHTML = list.length ? list.map(p => `<div style="display:flex; gap:6px; align-items:center; margin:2px 0;">
+            <code style="flex:1;">${esc(p)}</code>
+            <button class="btn ghost my-pat-del" data-p="${esc(p)}" style="width:auto; margin:0; padding:2px 8px; font-size:10px; color:var(--red);">Forget</button></div>`).join('')
+          : 'None yet. Choose "Always allow for me" in a command prompt to add one.';
+        myPats.querySelectorAll('.my-pat-del').forEach(b => {
+          b.onclick = async () => {
+            const r = await fetch('/agent/allowed-commands?pattern=' + encodeURIComponent(b.dataset.p), { method: 'DELETE' });
+            if (r.ok) loadMyPats(); else toast('Could not remove it', true);
+          };
+        });
+      } catch (e) { myPats.textContent = 'Could not load your allowed commands.'; }
+    };
+    loadMyPats();
     const askEl = box.querySelector('#shell-ask');
     if (askEl) askEl.onchange = async () => {
       try {
@@ -392,6 +414,31 @@ function routerHtml(rt, canEdit) {
   const mainCats = (rt.categories || []).filter(c => c !== 'greeting');
   const hist = (rt.history || []).slice(0, 8).map(h =>
     `<div class="dim" style="font-size:9.5px;">${esc(h.status)} · <code>${esc(h.key)}</code> → ${fmtVal(h.proposed)} · ${esc(h.decided_by || '')} · ${h.decided_at ? new Date(h.decided_at * 1000).toLocaleString() : ''}</div>`).join('');
+  // lane health: rolling success of recent turns per lane and request type (core/lane_health.py)
+  const healthRows = Object.entries(rt.lane_health || {}).map(([lane, h]) => {
+    const cells = Object.entries(h.categories || {}).map(([c, x]) => {
+      const r = x.success_rate;
+      const col = r == null ? 'var(--text-dim)' : r >= 0.85 ? 'var(--ok, #3fb950)' : r >= 0.7 ? '#d29922' : '#f85149';
+      return `<span style="margin-right:10px;"><code>${esc(c)}</code> <b style="color:${col};">${pct(r)}</b> <span class="dim">(${x.turns})</span></span>`;
+    }).join('');
+    const brk = h.breaker_open
+      ? `<span style="color:#f85149; margin-left:6px;" title="Recent turns kept failing; requests go to main and this lane is re-tried periodically">● breaker open</span>`
+      : (h.consecutive_failures ? `<span class="dim" style="margin-left:6px;">${h.consecutive_failures} failed in a row</span>` : '');
+    return `<div style="font-size:10.5px; margin-top:2px;"><code>${esc(lane)}</code>${brk}<div>${cells}</div></div>`;
+  }).join('') || '<div class="dim" style="font-size:10.5px;">No turns recorded since start-up.</div>';
+  const applied = (rt.applied || []).slice(0, 6).map(a => {
+    const badge = { watching: '👀 watching', kept: '✅ kept', rolled_back: '↩ rolled back', superseded: '⚠ superseded' }[a.status] || esc(a.status);
+    const res = a.result || {};
+    const rates = (res.before_rate != null || res.after_rate != null)
+      ? ` · bad runs ${pct(res.before_rate)} → ${pct(res.after_rate)}` : '';
+    const canUndo = canEdit && (a.status === 'watching' || a.status === 'kept');
+    return `<div class="cap-tool-entry" style="flex-wrap:wrap; font-size:10px;">
+      <span>${badge}</span> <code>${esc(a.key)}</code> ${fmtVal(a.old)} → <b>${fmtVal(a.new)}</b>
+      <span class="dim">${a.category ? '· ' + esc(a.category) : ''}${rates}${res.reason ? ' · ' + esc(res.reason) : ''}</span>
+      ${canUndo ? `<button class="btn ghost rt-undo" data-id="${a.id}" style="width:auto; margin:0 0 0 auto; padding:1px 8px; font-size:10px;">Roll back</button>` : ''}
+    </div>`;
+  }).join('');
+  const chk = (k, label, tip) => `<label style="margin-right:12px;" title="${esc(tip)}"><input type="checkbox" class="rt-flag" data-key="${k}" ${s[k] ? 'checked' : ''} ${dis}> ${label}</label>`;
   return `<details class="cap-group fold">
     <summary class="cap-head">
       <span class="cap-head-title" style="display:flex; align-items:center; gap:6px;">
@@ -409,15 +456,37 @@ function routerHtml(rt, canEdit) {
         ${lanes ? `<div style="font-size:10px; margin-top:4px;">${lanes}</div>` : ''}
         ${outcomes ? `<div class="dim" style="font-size:9.5px; margin-top:2px;">outcomes: ${outcomes}</div>` : ''}
       </div>
+      <div class="cap-item"><b>Lane health</b> <span class="dim" style="font-size:10px;">(recent turns; a failing lane hands requests to main and is re-tried later)</span>
+        ${healthRows}
+      </div>
       <div class="cap-item"><b>Suggestions</b>
         ${canEdit ? '<button class="btn ghost" id="rt-tune" style="width:auto; margin:0 0 0 8px; padding:1px 8px; font-size:10px;">↻ Analyze now</button>' : ''}
         <div style="margin-top:4px;">${sugg}</div>
         ${hist ? `<details style="margin-top:4px;"><summary class="dim" style="font-size:10px;">decision history</summary>${hist}</details>` : ''}
+        <div style="margin-top:6px; font-size:10.5px;">
+          ${chk('auto_apply', 'Apply safe suggestions automatically', 'Applies one suggestion at a time, watches the runs that follow, and rolls it back by itself if they end badly more often. Every step is audited.')}
+        </div>
+        ${applied ? `<div style="margin-top:4px;"><b style="font-size:10.5px;">Automatic changes</b>${applied}</div>` : ''}
       </div>
       <details class="cap-item"><summary><b>Routing rules</b> <span class="dim">(${canEdit ? 'editable' : 'admin-only'})</span></summary>
         <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:4px; font-size:10.5px;">
           <label>router confidence ≥ <input type="number" id="rt-thresh" min="0.5" max="0.99" step="0.01" value="${s.confidence_threshold}" ${dis} style="width:58px; ${inp}"></label>
           <label>escalate after <input type="number" id="rt-streak" min="1" max="5" value="${s.repeat_streak_limit}" ${dis} style="width:44px; ${inp}"> repeats</label>
+        </div>
+        <div style="margin-top:6px; font-size:10.5px; line-height:1.9;">
+          ${chk('adaptive', 'Adaptive routing', 'Send a request type to main while the executor is failing on it (see Lane health)')}
+          ${chk('tool_choice_required', 'Require a tool call on action requests', 'Ask the model server to make the first step of an action request a tool call')}
+          ${chk('executor_fresh_context', 'Executor sees only the current request', 'The small executor gets this request and this run, not the whole chat')}
+          ${chk('finish_tool', 'Offer the finish tool', 'An explicit end-of-run signal the model can call with its final answer')}
+          <label>executor success ≥ <input type="number" id="rt-minsucc" min="0.1" max="0.99" step="0.05" value="${s.min_executor_success}" ${dis} style="width:58px; ${inp}"></label>
+        </div>
+        <div style="margin-top:6px; font-size:10.5px;"><b>Request classifier (Laya)</b>
+          <label style="margin-left:8px;"><input type="checkbox" id="rt-clf-on" ${(s.classifier || {}).enabled ? 'checked' : ''} ${dis}> on</label>
+          <select id="rt-clf-mode" ${dis} style="${inp} margin-left:6px;">
+            <option value="shadow" ${(s.classifier || {}).mode !== 'active' ? 'selected' : ''}>shadow (log only)</option>
+            <option value="active" ${(s.classifier || {}).mode === 'active' ? 'selected' : ''}>active (refines request type)</option>
+          </select>
+          <div class="dim" style="font-size:9.5px;">Shadow mode records what it would decide next to each run so you can compare it with the rules; active mode lets it correct the keyword-based request type when it is confident. Check it with <code>python scripts/eval_classifier.py</code> first.</div>
         </div>
         <div style="margin-top:4px; font-size:10.5px;"><b>Start on main (skip executor) for:</b>
           ${mainCats.map(c => `<label style="margin-right:8px;"><input type="checkbox" class="rt-cat" value="${c}" ${(s.start_on_main_categories || []).includes(c) ? 'checked' : ''} ${dis}> ${c}</label>`).join('')}
@@ -428,7 +497,7 @@ function routerHtml(rt, canEdit) {
         ${listField('greetings', 'Greetings (answered directly, no tools)')}
         ${canEdit ? '<button class="btn accent" id="rt-save" style="width:auto; margin:6px 0 0; padding:4px 12px; font-size:10.5px;">💾 Save rules</button>' : ''}
       </details>
-      <div class="dim" style="font-size:9.5px; margin-top:4px;">Only request types, lanes and tool outcomes are recorded (no prompt text) and kept 90 days. Suggestions never apply themselves; every change is audited.</div>
+      <div class="dim" style="font-size:9.5px; margin-top:4px;">Only request types, lanes and tool outcomes are recorded (no prompt text) and kept 90 days. Suggestions apply only when you approve them, or when automatic tuning is on (one change at a time, rolled back if runs get worse); every change is audited.</div>
     </div>
   </details>`;
 }
@@ -447,13 +516,22 @@ function wireRouter(box, rt) {
     d => (d.new_or_updated || []).length ? `${d.new_or_updated.length} suggestion(s) ready for review` : 'No changes suggested yet');
   box.querySelectorAll('.rt-decide').forEach(b => b.onclick = () =>
     call(`/control/router/suggestions/${b.dataset.id}/${b.dataset.d}`, null, b.dataset.d === 'apply' ? 'Suggestion applied ✓' : 'Suggestion dismissed'));
+  box.querySelectorAll('.rt-undo').forEach(b => b.onclick = () =>
+    call(`/control/router/applied/${b.dataset.id}/rollback`, null, 'Change rolled back ✓'));
+  // the auto-apply switch sits outside "Routing rules" and saves on its own
+  const auto = box.querySelector('.rt-flag[data-key="auto_apply"]');
+  if (auto) auto.onchange = () => call('/control/router', { auto_apply: auto.checked },
+    auto.checked ? 'Automatic tuning on ✓' : 'Automatic tuning off ✓');
   const save = box.querySelector('#rt-save');
   if (save) save.onclick = () => {
     const body = {
       confidence_threshold: parseFloat(box.querySelector('#rt-thresh').value),
       repeat_streak_limit: parseInt(box.querySelector('#rt-streak').value, 10),
+      min_executor_success: parseFloat(box.querySelector('#rt-minsucc').value),
       start_on_main_categories: [...box.querySelectorAll('.rt-cat:checked')].map(x => x.value),
     };
+    box.querySelectorAll('.rt-flag').forEach(f => { if (f.dataset.key !== 'auto_apply') body[f.dataset.key] = f.checked; });
+    body.classifier = { enabled: box.querySelector('#rt-clf-on').checked, mode: box.querySelector('#rt-clf-mode').value };
     box.querySelectorAll('.rt-list').forEach(i => {
       body[i.dataset.key] = i.value.split(',').map(x => x.trim()).filter(Boolean);
     });

@@ -30,6 +30,8 @@ from .custom_agents import (
     db_get_custom_agent,
     db_get_custom_agent_by_slug,
     db_list_custom_agents,
+    db_list_pending_agents,
+    db_set_share_status,
     db_update_custom_agent,
     slugify_custom_agent,
 )
@@ -158,6 +160,8 @@ __all__ = [
     "slugify_custom_agent",
     "db_create_custom_agent",
     "db_update_custom_agent",
+    "db_list_pending_agents",
+    "db_set_share_status",
     "db_delete_custom_agent",
     "db_fork_custom_agent",
     "seed_starter_custom_agents",

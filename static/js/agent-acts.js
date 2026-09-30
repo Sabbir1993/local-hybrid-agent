@@ -144,10 +144,11 @@ function toolMeta(name) {
 }
 
 function toggleAllCodex(btn) {
-  const container = btn.closest('.codex-container');
+  const container = btn.closest('.agy-agent-container') || btn.closest('.agy-stream-timeline');
   if (!container) return;
   const cards = container.querySelectorAll('.codex-action-card, .codex-thought-card');
-  const isExpanding = btn.textContent.includes('Expand');
+  // the label follows what the cards actually are, so it stays right after a card is opened by hand
+  const isExpanding = ![...cards].some(c => c.open);
   cards.forEach(c => { c.open = isExpanding; });
   btn.textContent = isExpanding ? '⤡ Collapse All' : '⤢ Expand All';
 }
@@ -238,6 +239,7 @@ function agentStoppedHtml(acts, canContinue) {
   let msg;
   if (s.reason === 'loop') msg = 'Stopped: the agent kept repeating the same tool calls.';
   else if (s.reason === 'loop_near_repeat') msg = 'Stopped: kept calling the same tool without making progress.';
+  else if (s.reason === 'no_progress') msg = 'Stopped: ' + stopDetailText(s.detail);
   else if (s.reason === 'timeout') msg = `Stopped: ran for ${Math.floor((s.elapsed_s || 0) / 60)} minutes.`;
   else msg = `Paused after ${s.steps || 'the maximum'} steps${mins}${left}.`;
   // plan marked complete but the run was cut off: say so rather than "0 left"
@@ -245,7 +247,8 @@ function agentStoppedHtml(acts, canContinue) {
     msg = `Paused after ${s.steps || 'the maximum'} steps — the plan is marked complete, but the run was cut off. Verify the work before continuing.`;
   }
   // nothing left to resume: don't offer a button that cannot work
-  const btn = (canContinue && (s.pending > 0 || s.reason === 'loop' || s.reason === 'loop_near_repeat'))
+  window._agentLastStop = s;   // agentContinue() tells the model why the last run stopped
+  const btn = (canContinue && (s.pending > 0 || s.reason === 'loop' || s.reason === 'loop_near_repeat' || s.reason === 'no_progress'))
     ? `<button type="button" class="btn accent agy-continue-btn" data-click="agent-continue">▶ Continue</button>`
     : '';
   return `<div class="agy-stopped ${s.reason !== 'max_steps' ? 'loop' : ''}"><span>${esc(msg)}</span>${btn}</div>`;
@@ -258,9 +261,31 @@ const AGENT_CONTINUE_PROMPT =
   'step statuses, reopen anything you marked done but did not actually finish, ' +
   'and work the remaining steps in order.';
 
+/* 'identical_result:run_python:3' -> the sentence the server's loop guard uses (core/agent_loop/loop_guard.py). */
+function stopDetailText(detail) {
+  const [rule, tool, n] = String(detail || '').split(':');
+  if (rule === 'identical_result') return `\`${tool}\` ran ${n} times with the same arguments and gave the same result.`;
+  if (rule === 'error_streak') return `the last ${n} tool calls all failed.`;
+  if (rule === 'cycle') return `it kept going back and forth between the same calls (starting with \`${tool}\`).`;
+  return 'it stopped making progress.';
+}
+
+function agentContinuePrompt() {
+  const s = window._agentLastStop;
+  if (!s || s.reason !== 'no_progress') return AGENT_CONTINUE_PROMPT;
+  return AGENT_CONTINUE_PROMPT + ' The last run stopped because ' + stopDetailText(s.detail) +
+    ' Do not repeat those calls: try a different approach, read the actual error, or tell me what you need.';
+}
+
 function agentContinue() {
   if (typeof generating !== 'undefined' && generating) return;
-  if (typeof send === 'function') send(AGENT_CONTINUE_PROMPT);
+  // A resume belongs to the agent: sending it through the chat sender starts a plain chat
+  // turn with the chat toolset (no shell, browser or plan tools), which cannot do the work.
+  if (typeof agentMode !== 'undefined' && agentMode && typeof runAgentSSE === 'function') {
+    runAgentSSE(agentContinuePrompt());
+  } else if (typeof send === 'function') {
+    send(agentContinuePrompt());
+  }
 }
 
 function buildChronologicalStream(acts) {

@@ -10,6 +10,7 @@
   let customAgentsList = [];
   let availableToolsList = [];
   let activeCustomAgent = null;
+  let agentGridFilter = '';
 
   const $ = id => document.getElementById(id);
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -142,7 +143,7 @@
   function restoreSavedAgent() {
     const savedId = localStorage.getItem('active_custom_agent_id');
     if (savedId) {
-      const found = customAgentsList.find(a => String(a.id) === String(savedId));
+      const found = customAgentsList.find(a => String(a.id) === String(savedId) && a.scope === 'mine');
       if (found) {
         setActiveCustomAgent(found);
       }
@@ -212,14 +213,12 @@
     const list = $('custom-agents-sidebar-list');
     if (!list) return;
 
-    if (!customAgentsList.length) {
-      list.innerHTML = `<div class="dim" style="font-size:11px; padding:6px 4px;">No agents found</div>`;
+    if (!customAgentsList.some(a => a.scope === 'mine')) {
+      list.innerHTML = `<div class="dim" style="font-size:11px; padding:6px 4px; line-height:1.45;">No agents yet. Create one with ＋ New, or fork a starter from Customize → Agents.</div>`;
       return;
     }
 
     const myAgents = customAgentsList.filter(a => a.scope === 'mine');
-    const sharedAgents = customAgentsList.filter(a => a.scope === 'shared');
-    const starterAgents = customAgentsList.filter(a => a.scope === 'template');
 
     let html = '';
 
@@ -232,7 +231,7 @@
             <span class="sidebar-agent-icon">${esc(a.icon || '🤖')}</span>
             <div class="sidebar-agent-info">
               <div class="sidebar-agent-name">${esc(a.name)}</div>
-              <div class="sidebar-agent-desc">${esc(a.description || a.preferred_lane || '')}</div>
+              <div class="sidebar-agent-desc">${esc(a.description || a.preferred_lane || '')}${shareChip(a)}</div>
             </div>
             <div class="sidebar-agent-actions">
               <button type="button" class="btn ghost btn-icon-xs edit-agent-btn" data-edit-id="${a.id}" title="Edit Agent">✏️</button>
@@ -241,28 +240,6 @@
         `;
       }
     }
-
-    const forkable = (label, items) => {
-      if (!items.length) return;
-      html += `<div style="font-size:8.5px; color:var(--dim); font-weight:700; letter-spacing:0.8px; text-transform:uppercase; padding:5px 4px 1px;">${label}</div>`;
-      for (const a of items) {
-        const isSel = activeCustomAgent && activeCustomAgent.id === a.id;
-        html += `
-          <div class="sidebar-agent-row ${isSel ? 'selected' : ''}" data-agent-id="${a.id}" title="${esc(a.name)}: ${esc(a.description)}">
-            <span class="sidebar-agent-icon">${esc(a.icon || '🤖')}</span>
-            <div class="sidebar-agent-info">
-              <div class="sidebar-agent-name">${esc(a.name)}</div>
-              <div class="sidebar-agent-desc">${esc(a.description || '')}</div>
-            </div>
-            <div class="sidebar-agent-actions">
-              <button type="button" class="btn ghost btn-icon-xs fork-agent-btn" data-fork-id="${a.id}" title="Fork / customize">🍴</button>
-            </div>
-          </div>
-        `;
-      }
-    };
-    forkable('Shared with me', sharedAgents);
-    forkable('Starter Templates', starterAgents);
 
     list.innerHTML = html;
 
@@ -300,6 +277,12 @@
     });
   }
 
+  /* where an agent stands with sharing: waiting for a reviewer, shared, or not approved */
+  function shareChip(a) {
+    const t = { pending: 'waiting for approval', approved: 'shared with everyone', rejected: 'sharing not approved' }[a.share_status];
+    return t ? ` <span class="ca-share ca-share-${esc(a.share_status)}">${t}</span>` : '';
+  }
+
   function renderAgentChip() {
     const bar = $('cmd-chip-bar');
     if (!bar) return;
@@ -313,6 +296,7 @@
     if (!input || window.armedCmd) return;
     if (activeCustomAgent) {
       input.placeholder = `${activeCustomAgent.icon || '🤖'} ${activeCustomAgent.name}: ${activeCustomAgent.description || 'Describe your task for this agent…'}`;
+      if (activeCustomAgent.work_dir && activeCustomAgent.scope === 'mine') input.placeholder += `  (📁 works in ${activeCustomAgent.work_dir})`;
     } else {
       if (typeof window.refreshInputPlaceholder === 'function') {
         window.refreshInputPlaceholder();
@@ -343,7 +327,7 @@
 
     // Group: User's Own Agents
     const myAgents = customAgentsList.filter(a => a.scope === 'mine');
-    const starterAgents = customAgentsList.filter(a => a.scope !== 'mine');
+    const starterAgents = [];
 
     if (myAgents.length) {
       html += `<div class="agent-dropdown-section-label">My Custom Agents</div>`;
@@ -478,6 +462,7 @@
     $('ca-temp').value = agent ? String(agent.temperature != null ? agent.temperature : 0.4) : '0.4';
     $('ca-temp-val').textContent = $('ca-temp').value;
     $('ca-public').checked = agent ? !!agent.is_public : false;
+    $('ca-workdir').value = agent ? (agent.work_dir || '') : '';
 
     // Render tool checkboxes
     renderToolCheckboxes(agent ? (agent.tool_allowlist || []) : []);
@@ -523,6 +508,7 @@
         <label><input type="radio" name="ca-tool-scope" value="all" ${isAllSelected ? 'checked' : ''}> All Available Tools</label>
         <label><input type="radio" name="ca-tool-scope" value="custom" ${!isAllSelected ? 'checked' : ''}> Restricted Toolset</label>
       </div>
+      <input type="search" id="ca-tool-filter" class="ca-filter" placeholder="Filter tools, e.g. file, web, browser" autocomplete="off" style="display:${isAllSelected ? 'none' : 'block'};">
       <div id="ca-tools-list-wrap" style="display:${isAllSelected ? 'none' : 'grid'};">
     `;
 
@@ -531,11 +517,12 @@
         <div class="ca-tool-group-title">${esc(cat)}</div>
         <div class="ca-tool-group-items">`;
       for (const t of tools) {
-        const checked = selectedTools.includes(t.name);
+        const always = t.name === 'write_file' || t.name === 'edit_file';   // never withheld from an agent
+        const checked = always || selectedTools.includes(t.name);
         html += `
-          <label class="ca-tool-item" title="${esc(t.description)}">
-            <input type="checkbox" class="ca-tool-cb" value="${esc(t.name)}" ${checked ? 'checked' : ''}>
-            <span class="ca-tool-label">${esc(t.label || t.name)}</span>
+          <label class="ca-tool-item" title="${esc(always ? 'Every agent can write files, so this stays on' : t.description)}">
+            <input type="checkbox" class="ca-tool-cb" value="${esc(t.name)}" ${checked ? 'checked' : ''} ${always ? 'onclick="return false" tabindex="-1" aria-label="always on"' : ''}>
+            <span class="ca-tool-label">${esc(t.label || t.name)}</span>${always ? '<span class="ca-tool-on">always on</span>' : ''}
           </label>
         `;
       }
@@ -549,8 +536,23 @@
       radio.onchange = () => {
         const wrap = $('ca-tools-list-wrap');
         if (wrap) wrap.style.display = radio.value === 'custom' ? 'grid' : 'none';
+        const tf = $('ca-tool-filter');
+        if (tf) tf.style.display = radio.value === 'custom' ? 'block' : 'none';
       };
     });
+    const tf = $('ca-tool-filter');
+    if (tf) tf.oninput = () => {
+      const q = tf.value.trim().toLowerCase();
+      container.querySelectorAll('.ca-tool-group').forEach(g => {
+        let any = false;
+        g.querySelectorAll('.ca-tool-item').forEach(it => {
+          const hit = !q || (it.textContent + ' ' + (it.title || '') + ' ' + g.querySelector('.ca-tool-group-title').textContent).toLowerCase().includes(q);
+          it.style.display = hit ? '' : 'none';
+          any = any || hit;
+        });
+        g.style.display = any ? '' : 'none';
+      });
+    };
   }
 
   async function saveCustomAgent() {
@@ -594,6 +596,7 @@
       reasoning_effort: $('ca-effort').value,
       temperature: Number.isFinite(tempNum) ? tempNum : 0.4,
       is_public: $('ca-public').checked,
+      work_dir: $('ca-workdir').value.trim(),
     };
 
     try {
@@ -603,7 +606,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
-        if (typeof toast === 'function') toast(`Updated agent "${name}"`);
+        if (typeof toast === 'function') toast(payload.is_public ? `Updated "${name}". Sharing needs approval before others see it.` : `Updated agent "${name}"`);
       } else {
         const created = await api('/custom-agents', {
           method: 'POST',
@@ -662,6 +665,34 @@
     }
   }
 
+  /* pick a folder with the desktop app's own dialog, else through the companion; '' when cancelled */
+  async function pickFolder(cur) {
+    try {
+      if (window.electronAPI && typeof window.electronAPI.browseFolder === 'function') {
+        return (await window.electronAPI.browseFolder(cur || '')) || '';
+      }
+      const r = await fetch('/control/browse_folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(typeof getDeviceHeaders === 'function' ? getDeviceHeaders() : {}) },
+        body: JSON.stringify({ initial_dir: cur || '' }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok && d.path) return d.path;
+      if (!r.ok) throw new Error(d.error || d.detail || ('HTTP ' + r.status));
+      return '';
+    } catch (e) {
+      if (typeof toast === 'function') toast('Could not open the folder picker. Type the full path instead.', true);
+      return '';
+    }
+  }
+  window.pickFolder = pickFolder;
+
+  async function browseWorkDir() {
+    const field = $('ca-workdir');
+    const picked = await pickFolder(field.value.trim());
+    if (picked) field.value = picked;
+  }
+
   function initUI() {
     const btn = $('btn-agent-picker');
     if (btn) {
@@ -716,6 +747,9 @@
       };
     });
 
+    const browseBtn = $('ca-workdir-browse');
+    if (browseBtn) browseBtn.onclick = browseWorkDir;
+
     const saveBtn = $('ca-btn-save');
     if (saveBtn) saveBtn.onclick = saveCustomAgent;
 
@@ -756,18 +790,19 @@
     const grid = $('settings-agents-content');
     if (!grid) return;
 
-    if (!customAgentsList.length) {
-      grid.innerHTML = '<div class="mon-empty">No custom agents found. Click "+ New Custom Agent" to create one.</div>';
+    const mine = customAgentsList.filter(a => a.scope === 'mine');
+    if (!mine.length) {
+      grid.innerHTML = '<div class="mon-empty">You have no agents yet. Click "+ New Custom Agent", or fork a starter from Customize → Agents.</div>';
       return;
     }
 
     let html = '';
-    for (const a of customAgentsList) {
+    for (const a of mine) {
       const isStarter = a.scope === 'template';
       const canEdit = !!a.can_edit && !isStarter;
       const toolsCount = (a.tool_allowlist && a.tool_allowlist.length) ? a.tool_allowlist.length : 'All';
       html += `
-        <div class="card agent-card" style="display:flex; flex-direction:column; gap:8px; padding:12px; border-radius:8px; background:var(--panel2); border:1px solid var(--border);">
+        <div class="card agent-card" data-q="${esc([a.name, a.slug, a.description, a.work_dir, a.share_status].join(' ').toLowerCase())}" style="display:flex; flex-direction:column; gap:8px; padding:12px; border-radius:8px; background:var(--panel2); border:1px solid var(--border);">
           <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:8px;">
             <div style="display:flex; align-items:center; gap:8px;">
               <span style="font-size:22px; line-height:1;">${esc(a.icon || '🤖')}</span>
@@ -786,21 +821,31 @@
 
           <div style="display:flex; flex-wrap:wrap; gap:4px; font-size:10px; color:var(--dim);">
             <span class="chip" style="font-size:9.5px;">🛠️ Tools: ${toolsCount}</span>
+            ${a.work_dir ? `<span class="chip" style="font-size:9.5px;" title="${esc(a.work_dir)}">📁 ${esc(a.work_dir.split(/[\\/]/).filter(Boolean).pop() || a.work_dir)}</span>` : ''}
+            ${a.share_status ? `<span class="chip ca-share-chip ca-share-${esc(a.share_status)}" style="font-size:9.5px;">${{ pending: 'Waiting for approval', approved: 'Shared', rejected: 'Not approved' }[a.share_status] || ''}</span>` : ''}
             <span class="chip" style="font-size:9.5px;">⚡ Effort: ${esc(a.reasoning_effort || 'medium')}</span>
             <span class="chip" style="font-size:9.5px;">🌡️ ${a.temperature != null ? a.temperature : 0.4}</span>
           </div>
 
-          <div style="display:flex; align-items:center; justify-content:flex-end; gap:6px; margin-top:4px; border-top:1px solid var(--border-subtle); padding-top:8px;">
-            <button class="btn ghost btn-sm btn-settings-fork" data-id="${a.id}" title="Clone into your personal agents">Fork</button>
-            ${canEdit ? `<button class="btn ghost btn-sm btn-settings-edit" data-id="${a.id}">Edit</button>` : ''}
-            ${canEdit ? `<button class="btn red btn-sm btn-settings-del" data-id="${a.id}">Delete</button>` : ''}
-            <button class="btn blue btn-sm btn-settings-run" data-id="${a.id}">Select</button>
+          <div class="ca-actions">
+            <button class="ca-act btn-settings-fork" data-id="${a.id}" title="Clone into your personal agents">Fork</button>
+            ${canEdit ? `<button class="ca-act btn-settings-edit" data-id="${a.id}">Edit</button>` : ''}
+            ${canEdit ? `<button class="ca-act danger btn-settings-del" data-id="${a.id}">Delete</button>` : ''}
+            <button class="ca-act primary btn-settings-run" data-id="${a.id}">Select</button>
           </div>
         </div>
       `;
     }
 
-    grid.innerHTML = html;
+    grid.innerHTML = `<input type="search" id="ca-grid-filter" class="ca-filter" placeholder="Filter your agents by name, folder or status" autocomplete="off" value="${esc(agentGridFilter)}">` + html;
+    const gf = grid.querySelector('#ca-grid-filter');
+    const applyGridFilter = () => {
+      agentGridFilter = gf.value;
+      const q = gf.value.trim().toLowerCase();
+      grid.querySelectorAll('.agent-card').forEach(card => { card.style.display = !q || card.dataset.q.includes(q) ? '' : 'none'; });
+    };
+    gf.oninput = applyGridFilter;
+    applyGridFilter();
 
     grid.querySelectorAll('.btn-settings-fork').forEach(b => {
       b.onclick = async () => { await forkCustomAgent(b.dataset.id); };

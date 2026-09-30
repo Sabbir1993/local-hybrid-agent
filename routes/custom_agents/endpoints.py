@@ -9,12 +9,14 @@ from core.auth_db import (
     db_fork_custom_agent,
     db_get_custom_agent,
     db_list_custom_agents,
+    db_list_pending_agents,
+    db_set_share_status,
     db_update_custom_agent,
 )
 from core.deps import get_current_user
 from core.registry import registry
 from .helpers import (
-    _check_publish,
+    can_approve,
     _check_slug,
     _decorate,
 )
@@ -38,15 +40,50 @@ async def list_custom_agents(user: Principal = Depends(get_current_user)):
 async def create_custom_agent(req: CustomAgentCreateReq, user: Principal = Depends(get_current_user)):
     """Create a new custom agent for the signed-in user."""
     data = req.model_dump()
-    err = _check_publish(user, data.get("is_public")) or _check_slug(data.get("slug"), data.get("name"))
+    err = _check_slug(data.get("slug"), data.get("name"))
     if err:
         return err
+    # sharing waits for approval unless the author can approve it themselves
+    data["share_status"] = ("approved" if can_approve(user) else "pending") if data.pop("is_public", False) else ""
     try:
         new_agent = db_create_custom_agent(user.id, data)
         audit_log(user, action="custom_agent.create", resource=new_agent.get("slug"))
         return _decorate(new_agent, user)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@router.get("/pending")
+async def pending_custom_agents(user: Principal = Depends(get_current_user)):
+    """Agents waiting to be shared with everyone (needs the publish permission)."""
+    if not can_approve(user):
+        return JSONResponse({"error": "missing permission: custom_agents.publish"}, status_code=403)
+    out = []
+    for a in db_list_pending_agents():
+        _decorate(a, user)
+        a["work_dir"] = ""
+        out.append(a)
+    return {"agents": out}
+
+
+@router.post("/{agent_id}/approve")
+async def approve_custom_agent(agent_id: int, user: Principal = Depends(get_current_user)):
+    return _review(agent_id, user, True)
+
+
+@router.post("/{agent_id}/reject")
+async def reject_custom_agent(agent_id: int, user: Principal = Depends(get_current_user)):
+    return _review(agent_id, user, False)
+
+
+def _review(agent_id: int, user: Principal, approved: bool):
+    if not can_approve(user):
+        return JSONResponse({"error": "missing permission: custom_agents.publish"}, status_code=403)
+    agent = db_set_share_status(agent_id, approved)
+    if not agent:
+        return JSONResponse({"error": "That agent is not waiting for approval"}, status_code=404)
+    audit_log(user, action="custom_agent.approve" if approved else "custom_agent.reject", resource=agent.get("slug"))
+    return _decorate(agent, user)
 
 
 @router.get("/tools/available")
@@ -132,15 +169,20 @@ async def get_custom_agent(agent_id: int, user: Principal = Depends(get_current_
 async def update_custom_agent(agent_id: int, req: CustomAgentUpdateReq, user: Principal = Depends(get_current_user)):
     """Update a custom agent owned by user."""
     data = req.model_dump(exclude_unset=True)
-    err = _check_publish(user, data.get("is_public")) or (_check_slug(data["slug"]) if data.get("slug") else None)
+    err = _check_slug(data["slug"]) if data.get("slug") else None
     if err:
         return err
+    if "is_public" in data:
+        data["share"] = bool(data.pop("is_public"))
+    data["can_approve"] = can_approve(user)
     if not db_get_custom_agent(agent_id):
         return JSONResponse({"error": "Agent not found"}, status_code=404)
     try:
         updated = db_update_custom_agent(agent_id, user.id, data)
     except CustomAgentSlugTaken as e:
         return JSONResponse({"error": f"slug '{e}' is already used by another agent"}, status_code=409)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     if not updated:
         return JSONResponse({"error": "permission denied"}, status_code=403)
     audit_log(user, action="custom_agent.update", resource=updated.get("slug"))
@@ -160,7 +202,10 @@ async def delete_custom_agent(agent_id: int, user: Principal = Depends(get_curre
 @router.post("/{agent_id}/fork")
 async def fork_custom_agent(agent_id: int, req: ForkReq, user: Principal = Depends(get_current_user)):
     """Clone an agent or starter template into user's own custom agents."""
-    forked = db_fork_custom_agent(agent_id, user.id, req.name)
+    try:
+        forked = db_fork_custom_agent(agent_id, user.id, req.name, req.work_dir or "")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     if not forked:
         return JSONResponse({"error": "Source agent not found"}, status_code=404)
     audit_log(user, action="custom_agent.fork", resource=forked.get("slug"))

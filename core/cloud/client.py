@@ -49,6 +49,11 @@ class CloudClient:
         self.base_url = cm.key
 
     @property
+    def ctx(self) -> int:
+        """The model's window in tokens (provider config), which lane compaction budgets against."""
+        return self.cm.ctx
+
+    @property
     def label(self) -> str:
         return self.cm.label()
 

@@ -91,29 +91,51 @@ def _load_app_config() -> dict:
         # Context history shaping (core/agent_loop.py::compact_messages). At most
         # keep_recent_results tool results stay verbatim in a compacted tail; the rest
         # become digest lines. 0 keeps the old "60% of the budget" tail.
-        "context": {"aging": {"keep_recent_results": 2}},
+        "context": {"aging": {"keep_recent_results": 6}},
         "roles": dict(_DEFAULT_ROLES),
         "provider": {},
         "cloud": {},
+        "capabilities": {
+            "web": True, "web_search_api_key": "", "skills": True,
+            "mcp": True, "mcp_servers": {}, "plugins": True,
+            "shell": {"enabled": True, "ask_first": True, "timeout_s": 60,
+                      "allow_patterns": ["git *", "npx *", "npm *", "pip *", "python *"]},
+        },
+        "input_guard": {"enabled": False, "rules": []},
+        "output_guard": {"enabled": False, "rules": []},
+        # images / videos / speech (core/media). Audio can't be scanned for card numbers,
+        # so cloud speech-to-text is off until an admin allows it.
+        "media": {
+            "allow_cloud_audio": False,
+            "limits": {"image_per_day": 50, "video_per_day": 5},
+            "max_audio_mb": 25,
+        },
     }
-    if cfg.exists():
-        try:
+    # Role definitions live in config/roles.json: they merge over the built-in defaults.
+    try:
+        if ROLES_FILE.exists():
+            roles_d = json.loads(ROLES_FILE.read_text())
+            if isinstance(roles_d, dict):
+                base["roles"].update(roles_d)
+    except Exception as e:
+        print(f"[server_manager] roles.json unreadable: {e}", file=sys.stderr)
+
+    try:
+        if cfg.exists():
             user = json.loads(cfg.read_text())
             for k, v in user.items():
-                if isinstance(v, dict) and k in base and isinstance(base[k], dict):
-                    base[k].update(v)
+                if k == "small_models" and isinstance(v, dict):
+                    # a built-in lane merges over its defaults (port, gpu, ctx survive a
+                    # partial entry); any other entry is a custom local lane
+                    for lane, lane_cfg in v.items():
+                        if isinstance(lane_cfg, dict):
+                            base["small_models"].setdefault(lane, {}).update(lane_cfg)
+                elif isinstance(v, dict) and k in base and isinstance(base[k], dict):
+                    base[k].update(v)     # includes a legacy "roles" block, which wins over roles.json
                 else:
                     base[k] = v
-        except Exception:
-            pass
-    rf = ROLES_FILE
-    if rf.exists():
-        try:
-            roles = json.loads(rf.read_text())
-            if isinstance(roles, dict):
-                base["roles"] = roles
-        except Exception:
-            pass
+    except Exception as e:
+        print(f"[server_manager] config.json unreadable: {e}", file=sys.stderr)
     return base
 
 

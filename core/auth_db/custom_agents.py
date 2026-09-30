@@ -11,6 +11,28 @@ class CustomAgentSlugTaken(ValueError):
     pass
 
 
+# folders a Personal Agent may never be pointed at: a whole drive, the OS, installed programs
+_BAD_DIR_PARTS = tuple("\\" + n for n in ("windows", "program files", "programdata", "system32", "appdata"))
+
+
+def clean_work_dir(value) -> str:
+    """The agent's work folder on the user's machine: '' (none) or a normalised absolute path.
+    A drive root, a system folder or a relative path is refused (ValueError)."""
+    import ntpath
+    raw = str(value or "").strip().strip('"')
+    if not raw:
+        return ""
+    if not (ntpath.isabs(raw) or raw.startswith("/")) or ".." in raw.replace("/", "\\").split("\\"):
+        raise ValueError("work folder must be a full path, for example D:\\reports\\weekly")
+    path = ntpath.normpath(raw) if ntpath.splitdrive(raw)[0] else raw.rstrip("/") or "/"
+    if path in ("/", "") or ntpath.splitdrive(path)[1] in ("\\", ""):
+        raise ValueError("pick a folder, not a whole drive")
+    low = path.lower()
+    if any(part in low for part in _BAD_DIR_PARTS):
+        raise ValueError("that is a system or program folder; pick a folder of your own")
+    return path
+
+
 def _custom_agent_row(r) -> dict:
     if not r:
         return {}
@@ -110,7 +132,10 @@ def db_create_custom_agent(user_id: Optional[int], data: dict) -> dict:
     reasoning_effort = (data.get("reasoning_effort") or "medium").strip()
     temp = data.get("temperature")
     temperature = float(temp) if temp is not None else 0.4
-    is_public = 1 if data.get("is_public") else 0
+    # is_public = visible to everyone = approved; a request from someone who cannot approve waits as 'pending'
+    share_status = str(data.get("share_status") or "")
+    is_public = 1 if share_status == "approved" else 0
+    work_dir = clean_work_dir(data.get("work_dir"))
 
     base_slug = slug
     counter = 1
@@ -122,11 +147,11 @@ def db_create_custom_agent(user_id: Optional[int], data: dict) -> dict:
         cursor = c.execute(
             """INSERT INTO user_custom_agents (
                 user_id, name, slug, description, icon, system_prompt, tool_allowlist,
-                input_template, preferred_lane, reasoning_effort, temperature, is_public,
+                input_template, preferred_lane, reasoning_effort, temperature, is_public, work_dir, share_status,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (user_id, name, slug, description, icon, system_prompt, tool_json,
-             input_template, preferred_lane, reasoning_effort, temperature, is_public,
+             input_template, preferred_lane, reasoning_effort, temperature, is_public, work_dir, share_status,
              now, now)
         )
         new_id = cursor.lastrowid
@@ -144,7 +169,11 @@ def db_update_custom_agent(agent_id: int, user_id: int, data: dict) -> Optional[
         if not (user_row and user_row["is_super_admin"]):
             return None
 
-    data = {k: v for k, v in data.items() if v is not None}
+    share = data.get("share")                       # owner's checkbox: True / False / not sent
+    can_approve = bool(data.get("can_approve"))
+    data = {k: v for k, v in data.items() if v is not None and k not in ("share", "can_approve", "is_public")}
+    if "work_dir" in data:
+        data["work_dir"] = clean_work_dir(data["work_dir"])
     now = time.time()
     fields = []
     args = []
@@ -166,9 +195,27 @@ def db_update_custom_agent(agent_id: int, user_id: int, data: dict) -> Optional[
     if "temperature" in data:
         fields.append("temperature = ?")
         args.append(float(data["temperature"]))
-    if "is_public" in data:
-        fields.append("is_public = ?")
-        args.append(1 if data["is_public"] else 0)
+    # Sharing: a change to what an approved agent says or does needs approval again, so a reviewed
+    # agent cannot be swapped for another after the fact. Editing only the work folder never does.
+    changed = any(k in data and str(data[k]).strip() != str(row[k] or "").strip()
+                  for k in ("name", "description", "icon", "system_prompt", "input_template",
+                            "preferred_lane", "reasoning_effort", "temperature")) or         ("tool_allowlist" in data and _tools_json(data["tool_allowlist"]) != (row["tool_allowlist"] or "[]"))
+    if row["user_id"] is not None:
+        if share is False:
+            new_status = ""
+        elif share is True or row["is_public"]:
+            keep = bool(row["is_public"]) and not changed
+            new_status = "approved" if (can_approve or keep) else "pending"
+        else:
+            new_status = row["share_status"] or ""
+        if new_status != (row["share_status"] or "") or (new_status == "approved") != bool(row["is_public"]):
+            fields.append("share_status = ?")
+            args.append(new_status)
+            fields.append("is_public = ?")
+            args.append(1 if new_status == "approved" else 0)
+    if "work_dir" in data:
+        fields.append("work_dir = ?")
+        args.append(data["work_dir"])
 
     if not fields:
         return _custom_agent_row(row)
@@ -180,6 +227,28 @@ def db_update_custom_agent(agent_id: int, user_id: int, data: dict) -> Optional[
     with transaction(conn) as c:
         c.execute(f"UPDATE user_custom_agents SET {', '.join(fields)} WHERE id = ?", args)
 
+    return db_get_custom_agent(agent_id)
+
+
+def db_list_pending_agents() -> list[dict]:
+    """Agents waiting for someone with the publish permission to approve sharing them, with the owner's name."""
+    rows = db().execute(
+        """SELECT a.*, u.username AS owner_name FROM user_custom_agents a
+           LEFT JOIN users u ON u.id = a.user_id
+           WHERE a.share_status = 'pending' AND a.user_id IS NOT NULL ORDER BY a.updated_at""").fetchall()
+    return [_custom_agent_row(r) for r in rows]
+
+
+def db_set_share_status(agent_id: int, approved: bool) -> Optional[dict]:
+    """Approve (visible to all) or reject (back to private, marked rejected) a pending agent."""
+    conn = db()
+    row = conn.execute("SELECT * FROM user_custom_agents WHERE id = ? AND share_status = 'pending'",
+                       (agent_id,)).fetchone()
+    if not row:
+        return None
+    with transaction(conn) as c:
+        c.execute("UPDATE user_custom_agents SET share_status = ?, is_public = ?, updated_at = updated_at WHERE id = ?",
+                  ("approved" if approved else "rejected", 1 if approved else 0, agent_id))
     return db_get_custom_agent(agent_id)
 
 
@@ -199,7 +268,8 @@ def db_delete_custom_agent(agent_id: int, user_id: int) -> bool:
     return True
 
 
-def db_fork_custom_agent(agent_id: int, user_id: int, new_name: Optional[str] = None) -> Optional[dict]:
+def db_fork_custom_agent(agent_id: int, user_id: int, new_name: Optional[str] = None,
+                         work_dir: str = "") -> Optional[dict]:
     """Clone an existing agent / template into user's own collection."""
     source = db_get_custom_agent(agent_id, user_id)
     if not source:
@@ -224,6 +294,6 @@ def db_fork_custom_agent(agent_id: int, user_id: int, new_name: Optional[str] = 
         "preferred_lane": source["preferred_lane"],
         "reasoning_effort": source["reasoning_effort"],
         "temperature": source["temperature"],
-        "is_public": 0,
+        "work_dir": work_dir,          # never copied from the source: a path on someone else's machine
     }
     return db_create_custom_agent(user_id, data)

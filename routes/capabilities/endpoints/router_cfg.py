@@ -5,7 +5,7 @@ from core import route_log
 from core.audit import audit_log
 from core.auth import Principal
 from core.deps import require_permission
-from core.router_tuner import run_tuner
+from core.router_tuner import rollback_applied, run_tuner
 from ..models import RouterSettingsReq
 from ..router_helpers import _router_settings, _router_view, _validate_router_changes, _write_router
 
@@ -72,4 +72,15 @@ async def router_suggestion_decide(sid: int, decision: str,
     route_log.decide_suggestion(sid, "applied", who)
     audit_log(user, action="router.tune.apply", resource=sug["key"], permission_key="settings.router.configure",
               detail={"suggestion": sid, "from": old, "to": changes, "evidence": sug["evidence"]})
+    return {"ok": True, **_router_view()}
+
+
+@router.post("/control/router/applied/{aid}/rollback")
+async def router_applied_rollback(aid: int,
+                                  user: Principal = Depends(require_permission("settings.router.configure"))):
+    """Undo a change the tuner applied on its own (restores the value it replaced)."""
+    who = getattr(user, "username", None) or str(user.id)
+    ok, msg = rollback_applied(aid, who, "manual")
+    if not ok:
+        return JSONResponse({"error": msg}, status_code=409)
     return {"ok": True, **_router_view()}

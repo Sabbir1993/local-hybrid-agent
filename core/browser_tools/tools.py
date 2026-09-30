@@ -1,3 +1,4 @@
+from ..small_model import APP_CONFIG
 from .bridge import (
     _base,
     _clip,
@@ -10,6 +11,16 @@ from .bridge import (
 )
 
 
+def _headless(args: dict) -> bool:
+    """Tests open a window the user can watch by default; `show: false` or
+    capabilities.browser.visible = false makes them headless."""
+    show = args.get("show")
+    if show is None:
+        cfg = (APP_CONFIG.get("capabilities") or {}).get("browser")
+        show = cfg.get("visible", True) if isinstance(cfg, dict) else True
+    return not (show is True or str(show).strip().lower() in ("1", "true", "yes"))
+
+
 async def tool_browser_navigate(args: dict) -> str:
     url = str(args.get("url") or "").strip()
     if not url:
@@ -17,7 +28,7 @@ async def tool_browser_navigate(args: dict) -> str:
     try:
         d = await call_companion("browser.navigate", {
             **_base(args), "url": url, "device": args.get("device"),
-            "headless": not bool(args.get("show")), "timeout_ms": 30000}, timeout=120)
+            "headless": _headless(args), "timeout_ms": 30000}, timeout=120)
     except Exception as e:
         return _err(e)
     return _page_text(d)

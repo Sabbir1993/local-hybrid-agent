@@ -180,7 +180,7 @@ function runArmedCmd(cmd, text) {
     disarmCmd();
     if (window._setPlanMode) window._setPlanMode(true);
     if (arg) {
-      if (agentMode) runAgentSSE(arg); else send(arg);
+      dispatchPrompt(arg);
     }
     return;
   }
@@ -188,7 +188,7 @@ function runArmedCmd(cmd, text) {
     disarmCmd();
     if (window._setPlanMode) window._setPlanMode(false);
     if (arg) {
-      if (agentMode) runAgentSSE(arg); else send(arg);
+      dispatchPrompt(arg);
     }
     return;
   }
@@ -209,7 +209,7 @@ function runArmedCmd(cmd, text) {
   }
   const line = arg ? ('/' + cmd.name + ' ' + arg).trim() : ('/' + cmd.name);
   disarmCmd();
-  if (agentMode) runAgentSSE(line); else send(line);
+  dispatchPrompt(line);
 }
 
 /* ---- Agent Library prompt commands (.agents/commands, admin-allowed) ----
@@ -408,7 +408,7 @@ async function cmdMenuOpen(kind, query) {
       }
       // User Custom Agents
       if (typeof window.customAgentsList === 'function') {
-        const caList = window.customAgentsList() || [];
+        const caList = (window.customAgentsList() || []).filter(x => x.scope === 'mine');
         caList.forEach(ca => {
           if (!all.some(x => x.name.toLowerCase() === ca.slug.toLowerCase())) {
             all.push({
@@ -591,8 +591,29 @@ async function expandAtTags(text) {
 /* mode switcher: Chat vs Agent */
 let companionConnected = false;
 
+/* A Personal Agent picked in Chat, with the companion connected and a work folder set on the agent, runs
+   through the agent loop so it can read, write and analyse files in that folder on this device. An agent
+   without a folder (or one shared with you) stays a plain chat. */
+function personalAgentRun() {
+  if (agentMode || !companionConnected) return false;
+  const a = window.getActiveCustomAgent ? window.getActiveCustomAgent() : null;
+  return !!(a && a.scope === 'mine' && a.work_dir);
+}
+
+function dispatchPrompt(text) {
+  if (agentMode || personalAgentRun()) runAgentSSE(text); else send(text);
+}
+
+/* Personal Agents live in the Chat sidebar and only make sense with a native companion connected:
+   hidden in Agent Task mode and in the plain web app. */
+function updatePersonalAgentsCard() {
+  const card = $('custom-agents-card');
+  if (card) card.style.display = (companionConnected && !agentMode) ? 'flex' : 'none';
+}
+
 function updateAgentModeAvailability(connected, hostname) {
   companionConnected = !!connected;
+  updatePersonalAgentsCard();
   const isNative = typeof isNativeAppClient === 'function' ? isNativeAppClient() : (
     (typeof window !== 'undefined' && window.electronAPI && window.electronAPI.isNativeApp) ||
     (typeof navigator !== 'undefined' && (navigator.userAgent.includes("A770NativeApp") || navigator.userAgent.includes("Electron")))
@@ -652,6 +673,7 @@ function setAppMode(isAgent, isUserSwitch = false) {
   if (banner) banner.style.display = 'none';
   const projCard = $('projects-card');
   if (projCard) projCard.style.display = agentMode ? 'block' : 'none';
+  updatePersonalAgentsCard();
   // plan/build select + engine select only in agent mode
   const planSel = $('agent-plan-sel');
   if (planSel) planSel.style.display = agentMode ? 'inline-block' : 'none';

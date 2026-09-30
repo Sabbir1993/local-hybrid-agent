@@ -18,6 +18,7 @@ class CustomAgentCreateReq(BaseModel):
     reasoning_effort: Optional[str] = Field("medium", max_length=16)
     temperature: Optional[float] = Field(0.4, ge=0.0, le=2.0)
     is_public: Optional[bool] = False
+    work_dir: Optional[str] = Field("", max_length=500)   # folder on the owner's machine the agent works in
 
 
 class CustomAgentUpdateReq(BaseModel):
@@ -32,7 +33,9 @@ class CustomAgentUpdateReq(BaseModel):
     reasoning_effort: Optional[str] = Field(None, max_length=16)
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     is_public: Optional[bool] = None
+    work_dir: Optional[str] = Field(None, max_length=500)
 
 
 class ForkReq(BaseModel):
     name: Optional[str] = None
+    work_dir: Optional[str] = Field("", max_length=500)   # the forker's own folder; nothing is copied from the source

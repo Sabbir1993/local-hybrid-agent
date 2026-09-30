@@ -30,6 +30,18 @@ DEFAULTS = {
     "repeat_streak_limit": 2,
     # categories whose step 0 skips the executor and starts on main
     "start_on_main_categories": [],
+    # ask the model server to REQUIRE a tool call on the first step of action requests
+    "tool_choice_required": True,
+    # the executor sees this request + this run's steps, not the whole chat
+    "executor_fresh_context": True,
+    # offer the finish(answer) tool: an unambiguous end-of-run signal (core/agent_loop/finish.py)
+    "finish_tool": True,
+    # learn from recent turns (core/lane_health.py): send a category to main while the
+    # executor's success rate on it is below min_executor_success, or its breaker is open
+    "adaptive": True,
+    "min_executor_success": 0.7,
+    "adaptive_min_samples": 10,
+    "adaptive_cooldown_s": 300,
 }
 
 # keys an admin may edit through POST /control/router (plus confidence_threshold)
@@ -51,6 +63,23 @@ def rcfg() -> dict:
     except (TypeError, ValueError):
         out["repeat_streak_limit"] = DEFAULTS["repeat_streak_limit"]
     return out
+
+
+_KNOWLEDGE_RX = re.compile(r"^\W*(what|why|how|when|where|who|which|explain|describe|tell me about)\b")
+
+
+def force_tool_call(category: str, step: int, nudges: int, query: str = "", cfg: dict = None) -> bool:
+    """True when this model turn must be a tool call: an action request, on its
+    first step or on the retry right after a nudge. Only the "action" category:
+    a creation request may legitimately be answered in text (a poem, an essay),
+    and "how do I read a file?" is a knowledge question that merely contains an
+    action word."""
+    cfg = cfg or rcfg()
+    if not cfg.get("tool_choice_required", True):
+        return False
+    if _KNOWLEDGE_RX.match((query or "").strip().lower()):
+        return False
+    return category == "action" and (step == 0 or nudges > 0)
 
 
 def _has_any(text: str, words) -> bool:
@@ -96,21 +125,53 @@ def start_on_main(category: str, cfg: dict = None) -> bool:
     return category in ((cfg or rcfg()).get("start_on_main_categories") or [])
 
 
+# Escalation reasons that mean "the executor did not act on this request". Retrying the executor
+# later in the same run only repeats the failure (and can end the run on its narration), so a run
+# that escalated for one of these stays on main. A "loop" is different - a transient degenerate
+# reply - and keeps its one forgiven retry (ESC_STREAK_LIMIT in routes/agent/constants.py).
+SUSTAIN_REASONS = ("no_tool_call", "empty", "creation_no_tool", "refused", "tutorial_code")
+
+
+def main_first_reason(category: str, cfg: dict = None, lane: str = "executor") -> str:
+    """'' to let the executor take step 0, else why main should: the category is on the
+    configured list, or recent turns show `lane` failing on it (core/lane_health.py)."""
+    cfg = cfg or rcfg()
+    if category in (cfg.get("start_on_main_categories") or []):
+        return "start_on_main"
+    if not cfg.get("adaptive", True):
+        return ""
+    from . import lane_health
+    lane_health.ensure_hydrated()
+    return lane_health.health.prefer_main(
+        lane, category, min_success=float(cfg.get("min_executor_success", 0.7)),
+        min_samples=int(cfg.get("adaptive_min_samples", 10)),
+        cooldown_s=float(cfg.get("adaptive_cooldown_s", 300)))
+
+
 def escalate_reason(*, step: int, content: str, tool_calls, query: str, is_loop: bool,
-                    cfg: dict = None) -> str:
+                    cfg: dict = None, category: str = None) -> str:
     """Why an executor step should be re-run on main ('' = keep the executor's answer).
-    Same triggers, same order as the original inline should_escalate."""
+
+    `category` is the request's category when the caller already resolved it (the classifier may
+    have refined the keyword rules); without it the keyword rules decide, as before."""
     cfg = cfg or rcfg()
     if is_loop:
         return "loop"
     if step == 0 and not tool_calls:
-        if is_creation(query, cfg):
+        creation = (category == "creation") if category else is_creation(query, cfg)
+        action = (category == "action") if category else wants_action(query, cfg)
+        if creation:
             return "creation_no_tool"
-        if wants_action(query, cfg):
+        if action:
             if "```" in (content or ""):
                 return "tutorial_code"
             if is_refusal(content, cfg):
                 return "refused"
         if not (content or "").strip():
             return "empty"
+        if action and not _KNOWLEDGE_RX.match((query or "").strip().lower()):
+            # judged by what the turn did, not how it reads: an action request that
+            # ended without a tool call was not acted on, whatever the text says
+            # ("[Let me ...]", a plan, a guess). The small executor gets no second try.
+            return "no_tool_call"
     return ""

@@ -9,7 +9,8 @@ async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=No
                                         grammar: Optional[str] = None, lane: str = "cloud",
                                         extra: Optional[dict] = None, effort: Optional[str] = None,
                                         top_p: Optional[float] = None, min_p: Optional[float] = None,
-                                        presence_penalty: Optional[float] = None, top_k: Optional[int] = None):
+                                        presence_penalty: Optional[float] = None, top_k: Optional[int] = None,
+                                        tool_choice: Optional[str] = None):
     """Stream from `primary` (usually a CloudClient); if it fails before emitting any
     content, retry the same request on `fallback` (the local lane) instead of failing
     the whole agent step. Yields ("fallback", reason) once before switching so callers
@@ -18,7 +19,8 @@ async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=No
     try:
         async for item in _llm_chat_stream(primary, msgs, tools, temperature, max_tokens,
                                            repeat_penalty, rid, grammar, extra=extra, effort=effort,
-                                           top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
+                                           top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k,
+                                           tool_choice=tool_choice):
             produced = True
             yield item
         return
@@ -31,5 +33,6 @@ async def _llm_chat_stream_with_fallback(primary, fallback, msgs: list, tools=No
         yield ("fallback", reason)
     async for item in _llm_chat_stream(fallback, msgs, tools, temperature, max_tokens,
                                        repeat_penalty, rid, grammar, extra=extra, effort=effort,
-                                       top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k):
+                                       top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k,
+                                           tool_choice=tool_choice):
         yield item

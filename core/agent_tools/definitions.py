@@ -1,3 +1,4 @@
+from .finish import tool_finish
 from .common_writer import tool_write_file_common
 from .diffs import tool_list_diff, tool_revert
 from .file_ops import (
@@ -32,6 +33,7 @@ TOOL_IMPLS = {
     "create_plan": tool_create_plan,
     "update_plan_item": tool_update_plan_item,
     "get_plan": tool_get_plan,
+    "finish": tool_finish,
 }
 
 __all__ = [

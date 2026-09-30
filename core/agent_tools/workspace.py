@@ -5,7 +5,7 @@ from typing import Optional
 
 from .. import companion_bridge
 from ..db import _projects_db
-from ..request_context import get_current_device_id, get_current_user_id
+from ..request_context import get_current_device_id, get_current_user_id, personal_workspace
 from ..small_model import COMMON_ROOT
 
 MAX_TOOL_OUTPUT = 20000
@@ -50,6 +50,14 @@ def require_device_workspace() -> tuple[int, Path]:
     did = get_current_device_id()
     if uid is None:
         raise WorkspaceAccessDenied("not signed in")
+    own = personal_workspace()
+    if own:
+        # a Personal Agent's own folder (set on the agent) stands in for the project folder
+        cb = getattr(_pkg(), "companion_bridge", companion_bridge)
+        if not cb.is_available(uid):
+            raise WorkspaceAccessDenied(
+                "the A770 Companion app is not connected - open it on your machine and try again")
+        return uid, Path(own)
     proj = _active_project.get(_user_device_key(uid, did))
     if not proj:
         raise WorkspaceAccessDenied(
