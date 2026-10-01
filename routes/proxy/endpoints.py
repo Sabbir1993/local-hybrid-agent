@@ -14,6 +14,7 @@ from core.audit import audit_log
 from core.auth import Principal, user_has_permission
 from core.db import db_record_request
 from core.deps import require_permission
+from core.limits import check_cloud_request_quota
 from core.monitor import (
     _monitor_state,
     extract_usage_from_stream,
@@ -21,6 +22,7 @@ from core.monitor import (
     monitor_end,
     parse_cache_tokens,
 )
+from routes.common.llm_stream import admission
 from core.state import state
 from .cloud_proxy import _proxy_cloud
 from .constants import _ALLOWED_PATHS, _CHAT_PATHS, _upstream_headers
@@ -59,6 +61,14 @@ async def proxy(path: str, request: Request, user: Principal = Depends(require_p
                                                "type": "input_guard_block"}}, status_code=403)
 
     if cloud_main is not None:
+        # A cloud call costs money and the audit log is the only per-user record we have:
+        # core/db/usage.py's requests table carries no user_id, so a token/spend cap cannot be
+        # computed yet (see core/limits.py::daily_cloud_requests).
+        if (why := check_cloud_request_quota(user.id)) is not None:
+            audit_log(user, action="cloud.quota", resource=path, result="deny",
+                      detail={"reason": why})
+            return JSONResponse({"error": {"message": why, "type": "cloud_quota_exceeded"}},
+                                status_code=429)
         try:
             return await _proxy_cloud(cloud_main, path, request, body, user)
         except Exception as e:
@@ -114,48 +124,58 @@ async def proxy(path: str, request: Request, user: Principal = Depends(require_p
             status = 500
             usage = None
             sse = _SSERedactor(user, False)
+            # The gate is held for the life of the stream. llama-server queues by slot, but the
+            # number of *requests* waiting on it was previously unbounded through /v1/*, so one
+            # user could occupy every slot through the raw API. Released in `finally`, so a
+            # client that disconnects mid-stream hands the slot back.
+            sem = admission.hold()
+            await sem.__aenter__()
             try:
-                async with state.client.stream(
-                    request.method, f"/{path}", content=body,
-                    headers=_upstream_headers(request),
-                    params=request.query_params,
-                ) as r:
-                    status = r.status_code
-                    async for chunk in r.aiter_bytes():
-                        u = extract_usage_from_stream(chunk.decode("utf-8", "replace"), rid)
-                        if u:
-                            usage = u
-                        yield sse.feed(chunk) if sse.active else chunk
-                    if sse.active:
-                        yield sse.close()
-                _audit_redaction(user, sse.red.matched, path, sse.red.hits)
+                try:
+                    async with state.client.stream(
+                        request.method, f"/{path}", content=body,
+                        headers=_upstream_headers(request),
+                        params=request.query_params,
+                    ) as r:
+                        status = r.status_code
+                        async for chunk in r.aiter_bytes():
+                            u = extract_usage_from_stream(chunk.decode("utf-8", "replace"), rid)
+                            if u:
+                                usage = u
+                            yield sse.feed(chunk) if sse.active else chunk
+                        if sse.active:
+                            yield sse.close()
+                    _audit_redaction(user, sse.red.matched, path, sse.red.hits)
+                    dt = time.time() - t0
+                except (asyncio.CancelledError, GeneratorExit):
+                    dt = time.time() - t0
+                    req = _monitor_state["active"].get(rid)
+                    ptoks = usage.get("prompt_tokens") if usage else None
+                    ctoks = usage.get("completion_tokens") if usage else (req["gen_tokens"] if req else None)
+                    tps = (ctoks / dt) if ctoks else None
+                    monitor_end(rid, 499, ptoks, ctoks, tps, dt, source="local")
+                    db_record_request(path, clean_model_name, ptoks, ctoks, tps, dt, None, True, 499, source="local")
+                    return
                 dt = time.time() - t0
-            except (asyncio.CancelledError, GeneratorExit):
-                dt = time.time() - t0
-                req = _monitor_state["active"].get(rid)
                 ptoks = usage.get("prompt_tokens") if usage else None
-                ctoks = usage.get("completion_tokens") if usage else (req["gen_tokens"] if req else None)
-                tps = (ctoks / dt) if ctoks else None
-                monitor_end(rid, 499, ptoks, ctoks, tps, dt, source="local")
-                db_record_request(path, clean_model_name, ptoks, ctoks, tps, dt, None, True, 499, source="local")
-                return
-            dt = time.time() - t0
-            ptoks = usage.get("prompt_tokens") if usage else None
-            ctoks = usage.get("completion_tokens") if usage else None
-            tps = (ctoks / dt) if usage and ctoks else None
-            u = usage or {}
-            pcached, ccached = parse_cache_tokens(u)
-            is_orch = bool("orchestrator" in (clean_model_name or "").lower() or "orchestrator" in path.lower())
-            print(f"[server_manager] {path} streamed in {dt:.2f}s "
-                  f"({ctoks or '?'} tok{'' if ctoks is None else ''})")
-            monitor_end(rid, status, ptoks, ctoks, tps, dt, prompt_cached=pcached, completion_cached=ccached, source="local")
-            db_record_request(path, clean_model_name, ptoks, ctoks, tps, dt, None, True, status,
-                              prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=is_orch,
-                              source="local")
+                ctoks = usage.get("completion_tokens") if usage else None
+                tps = (ctoks / dt) if usage and ctoks else None
+                u = usage or {}
+                pcached, ccached = parse_cache_tokens(u)
+                is_orch = bool("orchestrator" in (clean_model_name or "").lower() or "orchestrator" in path.lower())
+                print(f"[server_manager] {path} streamed in {dt:.2f}s "
+                      f"({ctoks or '?'} tok{'' if ctoks is None else ''})")
+                monitor_end(rid, status, ptoks, ctoks, tps, dt, prompt_cached=pcached, completion_cached=ccached, source="local")
+                db_record_request(path, clean_model_name, ptoks, ctoks, tps, dt, None, True, status,
+                                  prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=is_orch,
+                                  source="local")
+            finally:
+                await sem.__aexit__(None, None, None)
         return StreamingResponse(stream_gen(), media_type="text/event-stream")
 
     try:
-        r = await do_request()
+        async with admission.hold():
+            r = await do_request()
     except Exception as e:
         monitor_end(rid, 502, duration=time.time() - t0)
         return JSONResponse({"error": {"message": f"llama-server request failed: {e}",

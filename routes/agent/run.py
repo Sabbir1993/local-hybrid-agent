@@ -74,6 +74,7 @@ from core.agent_loop import (
     validate_and_repair_tool_args,
     fast_sandbox_check,
     validate_and_finalize_response,
+    PASSIVE_REFUSAL_NOTE,
     safe_parse_and_repair_args,
     MAX_CUTOFF_RETRIES,
     CUT_CALL_NOTICE,
@@ -89,7 +90,7 @@ from core.monitor import (
     parse_cache_tokens,
 )
 from .. import common
-from core import reasoning
+from core import reasoning as reasoning_mod
 from ..common import _llm_chat_stream
 from ..common.sampling_extra import sampler_extra
 from core.verifier import sse_events as answer_check_events
@@ -133,6 +134,26 @@ def _describe_stop(detail: str) -> str:
         return "the run repeated itself"
 
 
+def _classify_step_error(e: Exception) -> tuple[str, str]:
+    """(message for the user, outcome kind) for a failure inside a step.
+
+    The client must never see the raw exception: httpx transport errors carry local file
+    paths and driver messages, and this stream goes to a browser. Keep the wording to what
+    the user can act on and let the operator find the detail in the server log."""
+    import httpx
+    if isinstance(e, httpx.TimeoutException):
+        return ("⚠️ The model stopped responding and the request timed out. "
+                "The run has ended — try again, or switch to a smaller model in "
+                "Settings → Models & Jobs if this happens often."), "timeout"
+    if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError)):
+        return ("⚠️ Lost the connection to the local model server. The run has ended — "
+                "check that it is still loaded in Settings → Models & Jobs, then try again."), "error"
+    if isinstance(e, OSError):
+        return ("⚠️ A local operation failed and the run has ended. "
+                "See the server log for the detail."), "error"
+    return (f"⚠️ Agent loop error: {type(e).__name__}. See the server log for the detail."), "error"
+
+
 @router.post("/agent/run")
 async def agent_run(req: AgentRequest, request: Request, user: Principal = Depends(get_current_user)):
     # Standard web browsers are restricted to Chat mode only; Agent Task requires the native app
@@ -151,7 +172,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             return JSONResponse({"error": "session not found"}, status_code=404)
     from core.agent_tools import set_current_user
     set_current_user(user.id)
-    effort = reasoning.resolve(req.reasoning_effort)
+    effort = reasoning_mod.resolve(req.reasoning_effort)
 
     custom_agent = None
     custom_agent_tools = None
@@ -167,7 +188,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             custom_agent_tools = set(custom_agent["tool_allowlist"]) | {"write_file", "edit_file", "append_file"}
         # the client sends null for values the user didn't change after picking the agent
         if req.reasoning_effort is None and custom_agent.get("reasoning_effort"):
-            effort = reasoning.resolve(custom_agent["reasoning_effort"])
+            effort = reasoning_mod.resolve(custom_agent["reasoning_effort"])
         if req.temperature is None and custom_agent.get("temperature") is not None:
             req.temperature = float(custom_agent["temperature"])
     if req.temperature is None:
@@ -850,7 +871,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 yield f"event: step\ndata: {json.dumps({'step': step + 1, 'total': steps})}\n\n"
                 tool_calls = None
                 content = ""
-                reasoning = ""
+                step_reasoning = ""
 
                 executor_stuck = repeat_streak >= rpol["repeat_streak_limit"]
                 # Escalation is per-step, never permanent. `lane_name` is recomputed
@@ -1140,7 +1161,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     step_max_tokens = effective_max_tokens(req.max_tokens, lane_name, cloud=bool(getattr(active_client, "is_cloud", False)))
                     # thinking counts against that cap: a small executor gets a short thinking budget however high the
                     # user set the effort for the main model (agent.executor_max_effort, default "low")
-                    step_effort = (reasoning.cap(effort, executor_effort_ceiling()) if lane_name == "executor" else effort)
+                    step_effort = (reasoning_mod.cap(effort, executor_effort_ceiling()) if lane_name == "executor" else effort)
                     if getattr(active_client, "is_cloud", False):
                         fb_client = await _local_fallback(lane_name)
                         lane_stream = common._llm_chat_stream_with_fallback(
@@ -1217,12 +1238,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks, 'run_prompt_tokens': run_prompt_tokens, 'run_token_budget': run_token_budget})}\n\n"
 
                 content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
-                reasoning = res_dict.get("reasoning", "") if res_dict else ""
+                step_reasoning = res_dict.get("reasoning", "") if res_dict else ""
                 tool_calls = res_dict.get("tool_calls", []) if res_dict else []
                 if not tool_calls:
                     # a model that wrote its call out as text (<tool_call>, a json block, "Tool Call: x(...)")
                     # instead of using the API field: recover it so the step still acts
-                    parsed_tc = _extract_text_tool_calls(content or reasoning)
+                    parsed_tc = _extract_text_tool_calls(content or step_reasoning)
                     if parsed_tc:
                         tool_calls = parsed_tc
                         content = ""
@@ -1244,7 +1265,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
 
                 if not tool_calls:
                     final_content = carried_text + content
-                    final_reasoning = reasoning
+                    final_reasoning = step_reasoning
 
                 # Auto-escalation heuristics:
                 # If the executor lane degraded into an infinite repeat loop, refused,
@@ -1393,10 +1414,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     run_prompt_tokens += int(ptoks or 0)
                     yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks, 'run_prompt_tokens': run_prompt_tokens, 'run_token_budget': run_token_budget})}\n\n"
                     content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
-                    reasoning = res_dict.get("reasoning", "") if res_dict else ""
+                    step_reasoning = res_dict.get("reasoning", "") if res_dict else ""
                     tool_calls = res_dict.get("tool_calls", []) if res_dict else []
                     if not tool_calls:
-                        parsed_tc = _extract_text_tool_calls(content or reasoning)
+                        parsed_tc = _extract_text_tool_calls(content or step_reasoning)
                         if parsed_tc:
                             tool_calls = parsed_tc
                     content, tool_calls, step_finished = apply_finish(content, tool_calls)
@@ -1416,7 +1437,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     continue
 
                 final_content = carried_text + content
-                final_reasoning = reasoning
+                final_reasoning = step_reasoning
 
                 # The reply only announced the next step ("Let me read the file.") and
                 # called no tool. Without a plan the check below cannot catch this, and
@@ -1507,7 +1528,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         else:
                             yield "event: delta_reset\ndata: {}\n\n"
                             yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
-                    run_outcome = "synthesized" if was_synth else "answered"
+                    run_outcome = "synthesized" if was_synth else (
+                        "passive_refusal" if note == PASSIVE_REFUSAL_NOTE else "answered")
                     async for _vc in answer_check_events(
                             user, "agent", last_query, val_text if was_synth else final_content,
                             msgs, main_client, req.verify, _cloud_out):
@@ -1520,15 +1542,19 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 
                 clean_tool_calls = []
                 parsed_actions = []
+                arg_errors = {}
                 for tc in tool_calls:
                     fn = tc.get("function", {})
                     name = fn.get("name", "?")
                     tc_id = tc.get("id") or f"call_{step}_{name}"
                     args_raw = fn.get("arguments") or {}
                     args = safe_parse_and_repair_args(args_raw, name, last_query)
-                    repaired_args, val_err = validate_and_repair_tool_args(name, args, last_query)
-                    if not val_err:
-                        args = repaired_args
+                    args, val_err = validate_and_repair_tool_args(name, args, last_query)
+                    if val_err:
+                        # the call cannot be executed as written (missing field, or arguments cut
+                        # off mid-JSON). Keep the reason: nothing runs, and the model is told why
+                        # instead of being asked to approve a call that was never valid.
+                        arg_errors[tc_id] = val_err
                     
                     # For history retention in msgs, prune large payloads to lightweight stubs
                     # so future turns do not re-ingest tens of thousands of raw code characters
@@ -1600,12 +1626,43 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 msgs.append({"role": "assistant", "content": history_content, "tool_calls": clean_tool_calls})
 
                 n_actions_before = len(actions_taken)
+                parallel_results = {}
+                if len(parsed_actions) > 1 and all(a[0] == "spawn_agent" for a in parsed_actions):
+                    # Pre-emit all tool_call events so the UI displays all subagent cards concurrently
+                    for name, tc_id, args in parsed_actions:
+                        pending_tool[tc_id] = name
+                        yield sse("tool_call", {'id': tc_id, 'name': name, 'args': args})
+                    valid_coros = []
+                    valid_ids = []
+                    for name, tc_id, args in parsed_actions:
+                        approved, _ = fast_sandbox_check(name, args)
+                        if approved:
+                            valid_ids.append(tc_id)
+                            valid_coros.append(run_tool(name, args, unique_done=personal))
+                    if valid_coros:
+                        async for _k, _v in keepalive(asyncio.gather(*valid_coros, return_exceptions=True)):
+                            if _k == 'ping':
+                                yield _v
+                            else:
+                                for tid, res in zip(valid_ids, _v):
+                                    parallel_results[tid] = res
+
                 for name, tc_id, args in parsed_actions:
                     if personal and name in ("write_file", "doc_create"):
                         from core.agent_loop.execution import unique_create_args
                         args = unique_create_args(args or {})     # the card, the preview and the file all use this name
                     pending_tool[tc_id] = name
-                    yield sse("tool_call", {'id': tc_id, 'name': name, 'args': args})
+                    if tc_id not in parallel_results:
+                        yield sse("tool_call", {'id': tc_id, 'name': name, 'args': args})
+
+                    # Arguments never validated. Stop here: no sandbox check, no plan gate and no
+                    # permission card for a call that was never executable.
+                    bad_args = arg_errors.get(tc_id)
+                    if bad_args:
+                        yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': bad_args})
+                        actions_taken.append({"name": name, "args": args, "ok": False, "result": bad_args})
+                        msgs.append({"role": "tool", "tool_call_id": tc_id, "content": bad_args})
+                        continue
 
                     if req.plan and name not in PLAN_MODE_TOOLS:
                         # plan mode: mutating tools are unavailable — hard block
@@ -1780,18 +1837,22 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         except Exception:
                             pass
                         set_device_approved(_dev_ok)      # read by core.companion_bridge.call for this one tool call
-                        try:
-                            # the tool runs as a task so the stream keeps a heartbeat during a long command, and a
-                            # disconnect cancels it instead of leaving it running unattended
-                            async for _k, _v in keepalive(run_tool(name, args, unique_done=personal)):
-                                if _k == 'ping':
-                                    yield _v
-                                else:
-                                    result = _v
-                        finally:
-                            set_device_approved(False)
-                            mark_approved("")             # the tool ran in a copy of this context: clear our copy too
-                            mark_code_approved("")
+                        if tc_id in parallel_results:
+                            _pres = parallel_results[tc_id]
+                            result = f"error: {type(_pres).__name__}: {_pres}" if isinstance(_pres, Exception) else _pres
+                        else:
+                            try:
+                                # the tool runs as a task so the stream keeps a heartbeat during a long command, and a
+                                # disconnect cancels it instead of leaving it running unattended
+                                async for _k, _v in keepalive(run_tool(name, args, unique_done=personal)):
+                                    if _k == 'ping':
+                                        yield _v
+                                    else:
+                                        result = _v
+                            finally:
+                                set_device_approved(False)
+                                mark_approved("")             # the tool ran in a copy of this context: clear our copy too
+                                mark_code_approved("")
                         if dup_key:
                             seen_reads[dup_key] = 1
                         elif name in FILE_WRITE_TOOLS or name in ("run_shell", "run_python", "revert"):
@@ -1986,12 +2047,20 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         except asyncio.CancelledError:
             run_outcome = "cancelled"
         except Exception as e:
-            # a tool that was announced but never answered would sit on "Executing..." forever in the client
+            # A local-lane transport failure used to lose the whole run at step 40 because of
+            # one socket hiccup, and the raw exception string was sent to the client -- httpx
+            # errors carry local file paths and driver messages. Say something the user can act
+            # on, log the detail for the operator, and keep the type (never the text) in route_log.
+            friendly, kind = _classify_step_error(e)
+            print(f"[agent] run {run_id[:8]} failed on step {steps_run}: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
+            run_outcome = "timeout" if kind == "timeout" else "error"
+            # a tool that was announced but never answered would sit on "Executing..." forever
             for _tid, _tn in list(pending_tool.items()):
                 yield _tool_result({'id': _tid, 'name': _tn, 'ok': False, 'interrupted': True,
-                                    'result': f"interrupted: the run failed before {_tn} finished ({e})"})
-            yield f"event: delta\ndata: {json.dumps({'text': f'⚠️ Agent loop error: {e}'})}\n\n"
-            yield f"event: done\ndata: {json.dumps({'state': 'failed', 'reason': 'error'})}\n\n"
+                                    'result': f"interrupted: the run failed before {_tn} finished ({friendly})"})
+            yield f"event: delta\ndata: {json.dumps({'text': friendly})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'state': 'failed', 'reason': kind})}\n\n"
         finally:
             _detail = loop_detail or None
             if pending_tool:       # disconnected / stopped / crashed while a tool was open: say which

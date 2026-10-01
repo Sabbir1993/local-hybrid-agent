@@ -1,4 +1,10 @@
 /* ---------------- organizational knowledge base panel (settings.html only) ---------------- */
+/* Card numbers in an uploaded document are masked to their last 4 digits before the text is
+   chunked and embedded (server-side, core/pan.py). Say so out loud: a redaction the admin
+   cannot see is indistinguishable from a silent one. */
+function panNote(j) {
+  return j && j.pans_masked ? `, ${j.pans_masked} card number(s) redacted` : '';
+}
 /* ---- reusable role tag-picker: chips + "+ role" dropdown, backed by an array ---- */
 function initTagPicker(container, allRoles, initialSelected) {
   let selected = [...(initialSelected || [])].filter(r => allRoles.includes(r));
@@ -226,7 +232,7 @@ function renderKnowledgePanel(box, sources) {
           body: JSON.stringify({ roles }),
         });
       }
-      toast(`'${title}' indexed ✓ (${j.chunks || 0} chunks)`);
+      toast(`'${title}' indexed ✓ (${j.chunks || 0} chunks${panNote(j)})`);
       loadKnowledgePanel();
     } catch (e) {
       toast('Add failed: ' + e.message, true);
@@ -254,7 +260,7 @@ function renderKnowledgePanel(box, sources) {
         const r = await fetch(`/knowledge/${btn.dataset.id}/reindex`, { method: 'POST' });
         const j = await r.json().catch(() => ({}));
         if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
-        toast(`Reindexed ✓ (${j.chunks || 0} chunks)`);
+        toast(`Reindexed ✓ (${j.chunks || 0} chunks${panNote(j)})`);
         loadKnowledgePanel();
       } catch (e) { toast('Reindex failed: ' + e.message, true); }
     };

@@ -1,9 +1,12 @@
 import asyncio
 import json
 import sys
+import time
+from contextlib import asynccontextmanager
 from typing import Optional
 from core import reasoning
 from core.agent_loop import safe_parse_and_repair_args
+from core.limits import cloud_gate
 from core.request_context import get_current_user_id
 from core.small_model import APP_CONFIG
 from core.state import state
@@ -38,14 +41,28 @@ class _Admission:
         self._global: Optional[asyncio.Semaphore] = None
         self._global_n = 0
         self._users: dict = {}
+        self._users_seen: dict = {}          # uid -> last request time, for pruning
         self._users_n = 0
         self.waiting = 0
+
+    # a per-user semaphore is tiny, but _users was never pruned: one entry per user id that
+    # ever made a request, kept for the life of the process. Pruned on access, so an idle app
+    # never grows and a busy one cannot outrun its own cleanup.
+    _USER_IDLE_S = 3600.0
 
     def _cfg(self) -> dict:
         return APP_CONFIG.get("serving") or {}
 
     def enabled(self) -> bool:
         return bool(self._cfg().get("queue_enabled", True))
+
+    def _prune_users(self, now: float) -> None:
+        stale = [uid for uid, seen in self._users_seen.items()
+                 if now - seen > self._USER_IDLE_S and not self._users[uid].locked()]
+        for uid in stale:
+            if not self._users[uid].locked() and not self._users[uid]._waiters:
+                self._users.pop(uid, None)
+                self._users_seen.pop(uid, None)
 
     def _sems(self, uid):
         n = max(1, int((state.profile or {}).get("n_slots") or 1))
@@ -54,11 +71,38 @@ class _Admission:
             self._global, self._global_n = asyncio.Semaphore(n), n
         per_user = max(1, int(self._cfg().get("max_inflight_per_user", 1)))
         if per_user != self._users_n:
-            self._users, self._users_n = {}, per_user
+            self._users, self._users_n, self._users_seen = {}, per_user, {}
+        now = time.time()
+        self._prune_users(now)
         us = self._users.get(uid)
         if us is None:
             us = self._users[uid] = asyncio.Semaphore(per_user)
+        self._users_seen[uid] = now
         return self._global, us
+
+    @asynccontextmanager
+    async def hold(self):
+        """Hold both semaphores for the length of a block.
+
+        For callers that forward raw bytes instead of going through _llm_chat_stream -- the
+        OpenAI-compatible /v1/* proxy did exactly that, so it bypassed the gate completely and
+        one user could occupy every llama-server slot through the raw API. There is no SSE
+        channel here to report a queue position on, so a wait is simply a wait."""
+        if not self.enabled():
+            yield
+            return
+        glob, mine = self._sems(get_current_user_id())
+        await mine.acquire()
+        try:
+            await glob.acquire()
+        except BaseException:
+            mine.release()
+            raise
+        try:
+            yield
+        finally:
+            glob.release()
+            mine.release()
 
 
 admission = _Admission()
@@ -67,8 +111,29 @@ admission = _Admission()
 async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None, tool_choice: Optional[str] = None):
     """Stream one completion. Requests to the local main llama-server first pass
     the fair-share admission gate; a ("queued", {"position": n}) item is yielded
-    when the caller has to wait for a slot."""
-    if client_or_state is not state.client or not admission.enabled():
+    when the caller has to wait for a slot.
+
+    Cloud lanes pass a cloud concurrency gate instead (core/limits.py). They used to pass
+    through unthrottled entirely, and cloud calls cost money."""
+    if client_or_state is not state.client:
+        if cloud_gate.enabled():
+            await cloud_gate.sem().acquire()
+            try:
+                async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
+                                                       repeat_penalty, rid, grammar, extra=extra, effort=effort,
+                                                       top_p=top_p, min_p=min_p, presence_penalty=presence_penalty,
+                                                       top_k=top_k, tool_choice=tool_choice):
+                    yield item
+            finally:
+                cloud_gate.sem().release()
+        else:
+            async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
+                                                   repeat_penalty, rid, grammar, extra=extra, effort=effort,
+                                                   top_p=top_p, min_p=min_p, presence_penalty=presence_penalty,
+                                                   top_k=top_k, tool_choice=tool_choice):
+                yield item
+        return
+    if not admission.enabled():
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
                                                repeat_penalty, rid, grammar, extra=extra, effort=effort,
                                                top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k,

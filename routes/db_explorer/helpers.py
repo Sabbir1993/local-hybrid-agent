@@ -7,7 +7,7 @@ import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
@@ -36,8 +36,15 @@ def _sanitize_cell_value(val: Any) -> Any:
     return str(val)
 
 
-def _discover_workspace_dbs() -> Dict[str, Dict[str, Any]]:
-    """Scan active project and registered project directories for SQLite database files."""
+def _discover_workspace_dbs(user_id: Optional[int]) -> Dict[str, Dict[str, Any]]:
+    """Scan the requesting user's active project and registered project directories for
+    SQLite database files.
+
+    `user_id` has no default on purpose. The previous version called db_list_projects() with no
+    arguments, which raises TypeError, and the bare `except Exception` swallowed it -- so
+    registered project workspaces were never scanned at all. Defaulting this argument to None
+    would have turned that silent no-op into a cross-tenant scan of every workspace on the
+    machine, so the compiler now enforces that a caller names a user."""
     found: Dict[str, Dict[str, Any]] = {}
     searched_dirs = set()
 
@@ -49,10 +56,9 @@ def _discover_workspace_dbs() -> Dict[str, Dict[str, Any]]:
     except Exception:
         pass
 
-    # 2. Registered projects in database
+    # 2. This user's registered projects, in the database
     try:
-        projects = db_list_projects()
-        for p in projects:
+        for p in db_list_projects(user_id):
             ws = p.get("workspace_dir")
             if ws:
                 p_path = Path(ws).resolve()
@@ -93,7 +99,7 @@ def _discover_workspace_dbs() -> Dict[str, Dict[str, Any]]:
     return found
 
 
-def _resolve_db(db_id: str) -> Path:
+def _resolve_db(db_id: str, user_id: Optional[int]) -> Path:
     """Resolve database ID to verified path, protecting against path traversal."""
     if db_id in SYSTEM_DBS:
         p = SYSTEM_DBS[db_id]["path"]
@@ -103,7 +109,7 @@ def _resolve_db(db_id: str) -> Path:
             p.touch(exist_ok=True)
         return p
 
-    ws_dbs = _discover_workspace_dbs()
+    ws_dbs = _discover_workspace_dbs(user_id)
     if db_id in ws_dbs:
         p = ws_dbs[db_id]["path"]
         if p.exists() and p.is_file():

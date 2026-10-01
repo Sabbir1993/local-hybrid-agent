@@ -9,6 +9,7 @@
     "dist": "node build-icon.js && electron-builder"
   },
   "author": "SSLWIRELESS",
+  "license": "MIT",
   "build": {
     "appId": "com.local-agent.companion",
     "productName": "Local Agent",

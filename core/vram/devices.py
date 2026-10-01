@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ..backend import DEVICE_PREFIX
 from ..config import CONFIG_DEFAULTS
-from .constants import GB, MIB, VRAM_WALL_FREE_B
+from .constants import GB, MIB
 
 _DEV_PREFIXES = "|".join(DEVICE_PREFIX.values())  # Vulkan, CUDA, ...
 _LIST_DEV_RE = re.compile(
@@ -69,10 +69,16 @@ def query_devices(llama_bin_dir=None, force: bool = False) -> list:
 
 def wall_check(target_indices, devices: list) -> "int | None":
     """Called from state._wait_healthy while llama-server is loading.
-    Returns the Vulkan index that hit the VRAM wall, or None."""
+    Returns the Vulkan index that hit the VRAM wall, or None.
+
+    The threshold was a module constant with no way to change it, even though it is the knob
+    that decides whether a load is aborted: a card with a lot of shared/unaccounted usage may
+    trip it on a model that would actually have fit. Now runtime.vram_wall_free_mb."""
+    from ..supervision import vram_wall_free_b
+    threshold = vram_wall_free_b()
     if not devices:
         return None
     for d in devices:
-        if d["index"] in target_indices and d["free_b"] <= VRAM_WALL_FREE_B:
+        if d["index"] in target_indices and d["free_b"] <= threshold:
             return d["index"]
     return None

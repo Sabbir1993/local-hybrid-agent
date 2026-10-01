@@ -19,7 +19,8 @@ function toolIcon(name) {
     case 'create_plan': return '📋';
     case 'update_plan_item': return '✔️';
     case 'get_plan': return '🗒️';
-    case 'spawn_agent': return '🤖';
+    case 'spawn_agent':
+    case 'spawn_parallel_agents': return '🤖';
     case 'web_search_images': return '🖼️';
     default:
       if (/^browser_/.test(name)) return '🌐';
@@ -137,6 +138,7 @@ function toolMeta(name) {
     case 'grep': return { icon: '🔍', label: 'grep', verb: 'Searched', cls: 'grep' };
     case 'revert': return { icon: '↩️', label: 'revert', verb: 'Reverted', cls: 'revert' };
     case 'spawn_agent': return { icon: '🤖', label: 'spawn_agent', verb: 'Delegated', cls: 'subagent' };
+    case 'spawn_parallel_agents': return { icon: '👥', label: 'spawn_parallel_agents', verb: 'Delegated (Parallel)', cls: 'subagent' };
     case 'generate_image': return { icon: '🎨', label: 'generate_image', verb: 'Made image', running: 'Making image', cls: 'media' };
     case 'generate_video': return { icon: '🎬', label: 'generate_video', verb: 'Made video', running: 'Making video', cls: 'media' };
     case 'browser_navigate': return { icon: '🌐', label: name, verb: 'Opened', running: 'Opening', cls: 'default' };

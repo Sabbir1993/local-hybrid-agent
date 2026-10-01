@@ -382,6 +382,7 @@ async function cmdMenuOpen(kind, query) {
       { icon: '🧭', name: 'init', desc: 'scan the project and write AGENTS.md (auto-loaded into agent tasks)', category: 'utility' },
       { icon: '🧹', name: 'compact', desc: 'compress conversation history (needs an active project)', category: 'utility' },
       { icon: '🤖', name: 'subagent', desc: 'delegate a sub-task to a focused sub-agent', category: 'utility', template: true },
+      { icon: '👥', name: 'parallel', desc: 'dispatch multiple independent sub-agents concurrently in parallel', category: 'utility', template: true },
       ..._mediaSlashItems(),
       { icon: '🧑‍🤝‍🧑', name: 'multiagent', desc: 'delegate multiple roles (planner/coder/reviewer) in one prompt', category: 'utility', template: true },
     ] : [
@@ -461,8 +462,10 @@ function cmdMenuPick(i) {
   } else if (kind === 'slash' && it.template) {
     // Structured-arg commands (e.g. subagent/multiagent) don't fit the arm-and-type-argument
     // pattern, so insert an editable prompt skeleton instead of arming a chip.
-    const skeleton = it.name === 'multiagent'
-      ? 'Please delegate this task to multiple sub-agents in order:\n1. planner: \n2. coder: \n3. reviewer: '
+    const skeleton = it.name === 'parallel'
+      ? 'Please dispatch parallel sub-agents to investigate simultaneously:\n1. Audit: \n2. Audit: '
+      : it.name === 'multiagent'
+      ? 'Please delegate this task to multiple sub-agents (use parallel dispatch if independent):\n1. planner: \n2. coder: \n3. reviewer: '
       : 'Please delegate the following to a sub-agent: ';
     input.value = before + skeleton + after.replace(/^\s?/, '');
     input.focus();

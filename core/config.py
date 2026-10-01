@@ -6,12 +6,26 @@ import time
 from pathlib import Path
 
 # Port & Network Settings
-PROXY_HOST = "0.0.0.0"
+# Loopback by default. This platform holds cloud API keys, org knowledge and an agent that can
+# run shell commands, and it was binding every interface: over plain HTTP the session cookie
+# is sniffable by anything on the LAN (PCI DSS 4.2.1). Reach it from another machine with
+# --host 0.0.0.0 or A770_HOST=0.0.0.0, deliberately, with TLS in front.
+PROXY_HOST = "127.0.0.1"
 PROXY_PORT = 8000
 LLAMA_SERVER_PORT = 8090  # internal port, not exposed directly
 HEALTH_TIMEOUT_S = 120
 WATCHDOG_INTERVAL_S = 5
 MAX_RESTART_BACKOFF_S = 60
+# Crash-loop ceiling (core/state.py watchdog). Previously there was none at all: a model that
+# could not launch retried once a minute for the life of the process, each attempt burning up
+# to HEALTH_TIMEOUT_S. Hitting this sets `degraded`, which stops the retries and is cleared by
+# the next successful load or a manual model switch.
+MAX_RESTART_COUNT = 5
+# How long a process must stay up before its death stops counting toward the crash-loop
+# breaker. Reaching /health is not enough: a model that is too big for the card reports
+# healthy and then OOM-crashes on the first real generation, so resetting the counter there
+# would mean the breaker never trips in precisely the case it exists for.
+RESTART_RESET_AFTER_S = 300
 
 # File Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -36,6 +50,36 @@ CLOUD_PROBE_TIMEOUT_S = 45.0
 
 KEEPALIVE_INTERVAL_S = 25   # 1-token ping while idle; WDDM demotes VRAM ~70s after idle
 GPU_QUERY_INTERVAL_S = 4.0  # perf-counter queries are slow; cache results
+
+# llama-server logging. The main model's stdout used to go to print() and nowhere else, so the
+# OOM/allocator trace from a failed load existed only in console scrollback and was gone on
+# restart. Small-model lanes already kept a ring buffer and surfaced the error; this does the
+# same for the main server, plus an on-disk daily log.
+LOG_DIR = BASE_DIR / "logs"
+LOG_TAIL_LINES = 2000        # in-memory ring, what /control/status greps for the failure reason
+LOG_KEEP_DAYS = 7            # how many daily log files to retain
+LOG_WRITE_FILE = True         # set false to keep the ring buffer only and stay print-only
+
+# httpx timeouts for the local llama-server clients (core/state.py, core/small_model/instance.py).
+# These were timeout=None, which meant a wedged generation held the SSE stream and a GPU slot
+# for as long as it liked: the agent's wall-clock budget is only checked between steps, so
+# nothing downstream could ever end an in-flight request.
+#
+# httpx applies `read` per chunk, not to the whole stream, so it fires only when the server
+# goes SILENT. A generation that is still producing tokens never trips it, however long it
+# takes -- so this is a wedge detector, not a throughput cap, and it does not make slow
+# models look broken. 600s of complete silence is far past any legitimate pause.
+LOCAL_HTTP_CONNECT_TIMEOUT_S = 5.0
+LOCAL_HTTP_READ_TIMEOUT_S = 600.0
+LOCAL_HTTP_WRITE_TIMEOUT_S = 30.0
+LOCAL_HTTP_POOL_TIMEOUT_S = 10.0
+
+# Upper bound on a single tool call inside an agent step (routes/agent/permissions.py keepalive).
+# Generous enough for a long shell command or a media job; finite so a tool that never returns
+# releases its slot instead of pinning it for the rest of the run.
+TOOL_MAX_S = 1800
+# How long to wait for a cancelled tool task to actually land before giving up on it.
+TOOL_CANCEL_GRACE_S = 5
 
 IGNORED_IGPU_LUIDS = {"0x000165f7", "0x0001665a"}
 

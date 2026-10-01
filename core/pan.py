@@ -6,8 +6,13 @@ Applied to chat / agent traffic, independent of the admin-defined guard rules:
   - output:       PANs in model responses are masked (output_guard)
   - cloud egress: PANs in anything sent to a cloud provider (history, tool
                   results, KB context) are masked (cloud.CloudClient._prepare)
+  - KB ingest:    PANs in uploaded knowledge-base documents are masked before
+                  the text is chunked and embedded
+                  (routes/knowledge/helpers.py::_finish_ingest)
 
-Knowledge-base uploads are deliberately NOT scanned (knowledge_ingest).
+Knowledge-base uploads are masked rather than rejected: a document that
+legitimately discusses card handling must stay ingestible, and masking already
+prevents a PAN from ever entering the shared vector index.
 
 Config: config/app.json "pci" block, e.g.
   {"pan_input": "block", "pan_output": "mask", "pan_cloud_egress": "mask"}

@@ -31,12 +31,19 @@ class PreviewHtmlReq(BaseModel):
     html: str = Field(max_length=_PREVIEW_MAX_BYTES)
 
 
+def _prune_previews(now: float) -> None:
+    """Drop expired previews. Called from both the write and the read path: cleanup used to
+    run only on POST, so a user's HTML sat in a module global until that same user previewed
+    something else. Capped per user, but never collected for anyone who stops previewing."""
+    for k in [k for k, (_uid, ts, _h) in _previews.items() if now - ts > _PREVIEW_TTL_S]:
+        _previews.pop(k, None)
+
+
 @router.post("/agent/preview-html")
 async def put_preview_html(req: PreviewHtmlReq, user: Principal = Depends(get_current_user)):
     import secrets
     now = time.time()
-    for k in [k for k, (_, ts, _h) in _previews.items() if now - ts > _PREVIEW_TTL_S]:
-        _previews.pop(k, None)
+    _prune_previews(now)
     mine = sorted((ts, k) for k, (uid, ts, _h) in _previews.items() if uid == user.id)
     for _ts, k in mine[:max(0, len(mine) - _PREVIEW_MAX_PER_USER + 1)]:
         _previews.pop(k, None)
@@ -48,6 +55,7 @@ async def put_preview_html(req: PreviewHtmlReq, user: Principal = Depends(get_cu
 @router.get("/agent/preview-html/{pid}")
 async def get_preview_html(pid: str, user: Principal = Depends(get_current_user)):
     from fastapi.responses import HTMLResponse
+    _prune_previews(time.time())
     hit = _previews.get(pid)
     if not hit or hit[0] != user.id or time.time() - hit[1] > _PREVIEW_TTL_S:
         return JSONResponse({"error": "preview expired - reopen it"}, status_code=404)

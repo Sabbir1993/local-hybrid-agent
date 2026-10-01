@@ -59,7 +59,7 @@ async def list_databases(user: Principal = Depends(require_permission("database.
 @router.get("/{db_id}/schema")
 async def get_schema(db_id: str, user: Principal = Depends(require_permission("database.manage"))):
     """Retrieve schema, table list, column types, and DDL for the specified database."""
-    path = _resolve_db(db_id)
+    path = _resolve_db(db_id, user.id)
     tables = []
 
     try:
@@ -127,7 +127,7 @@ async def get_table_data(
     user: Principal = Depends(require_permission("database.manage")),
 ):
     """Quick paginated view of a specific table's contents."""
-    path = _resolve_db(db_id)
+    path = _resolve_db(db_id, user.id)
     audit_log(user, action="database.read", resource=f"{db_id}:{table_name}", permission_key="database.manage",
               detail={"limit": limit, "offset": offset})
 

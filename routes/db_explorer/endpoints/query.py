@@ -17,7 +17,7 @@ async def execute_query(
     user: Principal = Depends(require_permission("database.manage")),
 ):
     """Execute a raw SQL query against the specified database with safety guards and auditing."""
-    path = _resolve_db(db_id)
+    path = _resolve_db(db_id, user.id)
     sql = body.sql.strip()
     if not sql:
         raise HTTPException(status_code=400, detail="SQL query cannot be empty")

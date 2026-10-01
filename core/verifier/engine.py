@@ -3,7 +3,7 @@ import re
 import sys
 from typing import Optional
 from .config import _parse, effective_mode, evidence_from, settings
-from .constants import MAX_DRAFT_CHARS, VERIFY_TIMEOUT_S, _REVISE, _SYSTEM
+from .constants import MAX_DRAFT_CHARS, REVISE_TIMEOUT_S, VERIFY_TIMEOUT_S, _REVISE, _SYSTEM
 
 
 def _checker_label(t) -> str:
@@ -79,7 +79,7 @@ async def revise(client, msgs: list, draft: str, issues: list, max_tokens: int =
     try:
         r = await client.post("/v1/chat/completions", json={
             "messages": revision_messages(msgs, draft, issues),
-            "temperature": 0.2, "max_tokens": max_tokens, "stream": False}, timeout=None)
+            "temperature": 0.2, "max_tokens": max_tokens, "stream": False}, timeout=REVISE_TIMEOUT_S)
         r.raise_for_status()
         from ..lanes import message_text
         text = re.sub(r"<think>[\s\S]*?</think>", "", message_text(r.json())).strip()

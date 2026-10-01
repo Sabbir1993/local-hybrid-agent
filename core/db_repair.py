@@ -29,6 +29,10 @@ from pathlib import Path
 from .config import BASE_DIR
 
 BACKUP_DIR = BASE_DIR / "db_backups"
+# How many snapshots to keep per database. These exist to recover from a botched migration, so
+# a handful of recent ones is the useful amount; the directory used to grow without bound
+# because every repair wrote one and nothing ever pruned.
+BACKUP_KEEP = 5
 _REF_RX = re.compile(r'(REFERENCES\s+)(["`\[]?)(\w+)(["`\]]?)', re.I)
 
 
@@ -88,6 +92,32 @@ def inspect(path) -> dict:
             "clean": not broken and not orphans}
 
 
+def prune_backups(keep: int = BACKUP_KEEP) -> int:
+    """Trim the backup directory to the `keep` newest files per database stem.
+
+    Without this the directory grew without bound: every repair wrote a snapshot and nothing
+    ever removed one, which is how it reached 50+ files / 31 MB. These are a safety net for a
+    botched migration, not an archive -- a handful of recent ones is what actually helps.
+    Returns how many were removed."""
+    if keep <= 0 or not BACKUP_DIR.is_dir():
+        return 0
+    removed = 0
+    by_stem: dict = {}
+    for f in BACKUP_DIR.glob("*.db"):
+        # "<stem>.<tag>-<YYYYmmdd-HHMMSS>.db" -> group by the stem, newest first
+        stem = f.name.split(".")[0]
+        by_stem.setdefault(stem, []).append(f)
+    for files in by_stem.values():
+        files.sort(key=lambda p: p.name, reverse=True)     # the timestamp is zero-padded, so name order == age
+        for old in files[keep:]:
+            try:
+                old.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
+
+
 def backup(path, tag: str = "pre-fk") -> Path:
     """Consistent copy via the SQLite backup API. With WAL on, copying just the
     .db file can miss recent commits that are still in the -wal file."""
@@ -100,6 +130,7 @@ def backup(path, tag: str = "pre-fk") -> Path:
     finally:
         dst.close()
         src.close()
+    prune_backups()
     return dest
 
 

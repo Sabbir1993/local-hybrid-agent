@@ -2,7 +2,7 @@ MAX_SUBAGENT_STEPS = 15
 DEFAULT_SUBAGENT_STEPS = 8
 # run_python: sub-agents have no SSE stream to raise the approval modal on
 # media tools: cost money / long GPU jobs - only the main agent may use them
-DENIED_TOOLS = {"run_shell", "run_python", "spawn_agent", "generate_image", "generate_video"}
+DENIED_TOOLS = {"run_shell", "run_python", "spawn_agent", "spawn_parallel_agents", "generate_image", "generate_video"}
 
 SUBAGENT_SYSTEM_PROMPT = """You are a focused sub-agent delegated a single, self-contained task \
 by a parent AI coding agent. Workspace: {workspace}
@@ -54,6 +54,56 @@ SPAWN_AGENT_SCHEMA = {
                 },
             },
             "required": ["task"],
+        },
+    },
+}
+
+SPAWN_PARALLEL_AGENTS_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "spawn_parallel_agents",
+        "description": (
+            "Dispatch 2 or more independent sub-agents to run concurrently in parallel. "
+            "Use this when investigating multiple separate modules, test files, "
+            "code paths, or research topics simultaneously to save time. "
+            "All sub-agents run at the same time and return their combined findings."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "agents": {
+                    "type": "array",
+                    "description": "List of sub-agent specifications to execute concurrently in parallel.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "task": {
+                                "type": "string",
+                                "description": "Full, self-contained instructions for this sub-agent.",
+                            },
+                            "role": {
+                                "type": "string",
+                                "description": "Optional role name: planner, coder, reviewer, explorer, skill name, or custom-agent slug.",
+                            },
+                            "lane": {
+                                "type": "string",
+                                "description": "Optional model (lane) override, e.g. main or executor.",
+                            },
+                            "tools": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Optional tool allowlist for this sub-agent.",
+                            },
+                            "max_steps": {
+                                "type": "integer",
+                                "description": f"Step budget (default {DEFAULT_SUBAGENT_STEPS}, max {MAX_SUBAGENT_STEPS}).",
+                            },
+                        },
+                        "required": ["task"],
+                    },
+                },
+            },
+            "required": ["agents"],
         },
     },
 }

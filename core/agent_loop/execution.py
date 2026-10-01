@@ -21,7 +21,19 @@ async def run_tool(name: str, args: dict, unique_done: bool = False) -> str:
             return refusal
         if name in ("write_file", "doc_create") and not unique_done:   # the agent route renames up front so the UI shows the real name
             args = _unique_create(args or {})
-    approved, note = fast_sandbox_check(name, args or {})
+    # Argument validation runs BEFORE the registry dispatch, so it covers every tool on every
+    # lane -- builtin, web, skill, mcp, plugin alike. The registry mirrors every builtin
+    # (bootstrap_builtin_tools, called at startup), so validating after that branch would have
+    # been unreachable for builtins and nothing would have stood between the model's output and a
+    # tool that writes to disk. A call with missing fields, or one whose arguments were cut off
+    # mid-JSON, is never executed.
+    repaired_args, val_err = validate_and_repair_tool_args(name, args)
+    if val_err:
+        return val_err
+    args = repaired_args
+    # The sandbox check reads args["path"], which validation is what normalises from
+    # file/filename and what guarantees exists -- so it runs second, on the normalised path.
+    approved, note = fast_sandbox_check(name, args)
     if not approved:
         return f"error: sandbox violation — {note}"
     # registry first (covers builtin + web + skills + mcp + plugins);
@@ -34,10 +46,6 @@ async def run_tool(name: str, args: dict, unique_done: bool = False) -> str:
     if not impl:
         return _unknown_tool(name)
     try:
-        repaired, val_err = validate_and_repair_tool_args(name, args)
-        if val_err:
-            return val_err
-        args = repaired
         if inspect.iscoroutinefunction(impl):
             return await impl(args)
         return await run_in_executor_ctx(impl, args)

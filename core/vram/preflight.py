@@ -66,8 +66,18 @@ def plan_launch(profile: dict, overrides: dict | None = None,
     if info is None:
         plan["message"] = f"could not stat model file: {mp}"
         return plan
+    if info.get("stat_ok") is False:
+        # The file exists but could not be read. The estimate would come out near zero and the
+        # verdict "fit", which is the opposite of what an unreadable model file means.
+        plan["status"] = "unknown"
+        plan["allow"] = False
+        plan["message"] = (f"could not read model file: {mp} ({info.get('error') or 'unknown error'}) - "
+                           "not launching, because an unreadable model cannot be sized.")
+        return plan
     fp = estimate_footprint(info, eff["context_size"], eff["kv_cache_type"],
-                            eff["ubatch_size"], eff["flash_attn"])
+                            eff["ubatch_size"], eff["flash_attn"],
+                            n_cpu_moe=eff.get("n_cpu_moe", 0),
+                            n_expert_used=info.get("n_expert") or 0)
     weights_b = fp["weights_b"] + eff["draft_b"]
     fp["total_b"] = weights_b + fp["kv_total_b"] + fp["compute_b"]
     plan["estimate"] = {"weights_gb": round(weights_b / GB, 2),

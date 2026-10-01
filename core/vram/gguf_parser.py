@@ -82,9 +82,13 @@ def parse_gguf_info(model_path) -> "dict | None":
     try:
         total_b, first = _gguf_files(p)
     except OSError as e:
+        # stat_ok False is load-bearing. This dict carries file_bytes 0, which used to make the
+        # footprint estimate ~0 and the verdict "fit" - so a model file the server could not
+        # read was treated as the one thing it was certain would not fail. Callers must treat
+        # stat_ok False as "unknown, do not launch".
         return {"arch": "llama", "n_layer": 32, "n_head": 32, "n_head_kv": 8,
                 "n_embd": None, "head_dim": 128, "ctx_train": 0, "n_expert": 0,
-                "n_vocab": None, "file_bytes": 0, "complete": False,
+                "n_vocab": None, "file_bytes": 0, "complete": False, "stat_ok": False,
                 "model_path": str(p), "error": str(e)}
     try:
         with open(first, "rb") as fh:

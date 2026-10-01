@@ -13,7 +13,36 @@ companion/dist/
 config/providers.json
 config/providers.json.migrated
 config/providers/
-/.agents
+# NOTE: /.agents was previously listed here while 69 of its files were still tracked, which
+# made the rule a no-op and hid the real state. It stays tracked on purpose: 8 installed
+# skills (code-review, commit-style, docx, frontend-design, goal, grill-me, pdf, web-research)
+# exist ONLY here and are not in skill_catalog/, so untracking it would drop them from every
+# fresh clone. The duplicates that ARE safe to drop - .claude/skills, a byte-identical copy of
+# .agents/skills - are removed instead.
+# Agent-tool worktrees and state. These were only excluded via .git/info/exclude, which is a
+# LOCAL file that is never committed - so a fresh clone showed a whole duplicate tree as
+# untracked, including a stale 100 KB server_manager.py.bak.
+/.kilo/
+/.kilocode/
+/.claude/worktrees/
+/.claude/scheduled_tasks.lock
+/.claude/scheduled_tasks.json
+/.claude/routines/.state/
+/.claude/checkpoints/
+/.claude/mailbox/
+# Installed copies, not sources. plugin_catalog/ is the tracked, reviewed set; the Customize
+# page copies a folder into plugins/ to activate it (core/plugins/catalog.py) and load_plugins()
+# already tolerates the directory being absent. Tracking the copies made a local edit
+# indistinguishable from an install in a diff - all 10 files were byte-identical to the catalog.
+/plugins/
+# Schema-repair snapshots (core/db_repair.py). Trimmed to DB_BACKUP_KEEP newest on each backup;
+# they are a safety net for a botched migration, not an archive.
+db_backups/
+# llama-server daily logs (core/state.py). Machine-local diagnostics, rotated by LOG_KEEP_DAYS.
+/logs/
+# The 737 KB PNG is a manual screenshot of the SVG next to it (see
+# diagram/gen_system_architecture.py, which writes the SVG). The SVG is the source of truth.
+diagram/*.png
 # companion runtime config (server URL) - keep out of git
 companion/.env
 # SQLite sidecars can hold recent rows (sessions, chat text) just like the .db

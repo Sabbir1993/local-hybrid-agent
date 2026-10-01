@@ -1,48 +1,24 @@
 """
 core/knowledge_ingest.py - text extraction for the organizational knowledge base.
 
-PCI-DSS note: this runtime is not the cardholder-data environment, but as
-security-adjacent internal tooling it must not let payment card numbers slip
-into an internally-shared RAG index. _reject_pan() runs on every extracted
-text before it reaches the caller -- ingestion fails closed (rejected, not
-silently scrubbed) so the uploading admin sees exactly what to fix.
+This module is extraction only: no PCI logic lives here.
+
+PAN handling for the knowledge base is done by the caller
+(routes/knowledge/helpers.py::_finish_ingest) using core/pan.py, the single
+canonical detector -- the one used for chat input, model output and cloud
+egress. It MASKS card numbers to their last 4 digits before the text is
+chunked and embedded, rather than rejecting the upload: a document that
+legitimately discusses card handling must still be ingestible, and masking
+already achieves the goal that matters, which is that no card number ever
+enters the shared vector index and therefore can never be retrieved into a
+prompt or sent to a cloud lane.
 """
 
 import re
 from pathlib import Path
-from typing import Optional
 
-
-_PAN_CANDIDATE = re.compile(r"(?:\d[ -]?){13,19}")
 MAX_URL_BYTES = 2 * 1024 * 1024
 URL_TIMEOUT_S = 15.0
-
-
-def _luhn_ok(digits: str) -> bool:
-    total = 0
-    for i, ch in enumerate(reversed(digits)):
-        d = int(ch)
-        if i % 2 == 1:
-            d *= 2
-            if d > 9:
-                d -= 9
-        total += d
-    return total % 10 == 0
-
-
-def find_pan_like(text: str) -> Optional[str]:
-    """First Luhn-valid 13-19 digit run, or None. Card-shaped junk (random
-    digit runs that fail Luhn) is left alone -- only real-looking PANs block."""
-    for m in _PAN_CANDIDATE.finditer(text):
-        digits = re.sub(r"[ -]", "", m.group(0))
-        if 13 <= len(digits) <= 19 and _luhn_ok(digits):
-            return digits[:6] + "…" + digits[-4:]
-    return None
-
-
-def reject_if_pan(text: str) -> None:
-    """Disabled: knowledge uploads are not blocked for payment card numbers."""
-    pass
 
 
 def extract_pdf(path: Path) -> str:

@@ -99,9 +99,20 @@ from .workspace import (
 # Registered last, after AGENT_TOOLS/TOOL_IMPLS/active_workspace exist: core.subagent
 # imports back from this module and from core.agent_loop, so wiring it in here (rather
 # than at the top of the file) avoids a circular import during startup.
-from ..subagent import SPAWN_AGENT_SCHEMA, tool_spawn_agent  # noqa: E402
+from ..subagent.constants import SPAWN_AGENT_SCHEMA, SPAWN_PARALLEL_AGENTS_SCHEMA  # noqa: E402
 AGENT_TOOLS.append(SPAWN_AGENT_SCHEMA)
-TOOL_IMPLS["spawn_agent"] = tool_spawn_agent
+AGENT_TOOLS.append(SPAWN_PARALLEL_AGENTS_SCHEMA)
+
+async def _tool_spawn_agent(args: dict) -> str:
+    from ..subagent.runner import tool_spawn_agent
+    return await tool_spawn_agent(args)
+
+async def _tool_spawn_parallel_agents(args: dict) -> str:
+    from ..subagent.runner import tool_spawn_parallel_agents
+    return await tool_spawn_parallel_agents(args)
+
+TOOL_IMPLS["spawn_agent"] = _tool_spawn_agent
+TOOL_IMPLS["spawn_parallel_agents"] = _tool_spawn_parallel_agents
 
 # Document tools (doc_inspect / doc_edit / doc_create): same late wiring, since
 # core.doc_tools imports the workspace helpers from this module.

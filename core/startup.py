@@ -114,6 +114,11 @@ def _shutdown_cleanup() -> None:
         stop_all_mcp()
     except Exception as e:
         print(f"[server_manager] mcp cleanup error: {e}", file=sys.stderr)
+    try:
+        from .state import close_log_file
+        close_log_file()
+    except Exception as e:
+        print(f"[server_manager] log close error: {e}", file=sys.stderr)
     print("[server_manager] shutdown cleanup complete")
 
 
@@ -141,7 +146,9 @@ async def lifespan(app: FastAPI):
     if (kr_warn := keyring_backend_warning()):
         print(f"[server_manager] WARNING: {kr_warn}", file=sys.stderr)
     await asyncio.get_event_loop().run_in_executor(None, kill_orphan_llama_servers)
-    asyncio.create_task(connect_all_mcp())
+    # keep the handle: this spawns npx/uvx children for stdio MCP servers, so on shutdown it
+    # has to be cancelled and awaited rather than left to fire while the loop is closing
+    mcp_task = asyncio.create_task(connect_all_mcp())
     if common.initial_profile_path is not None and common.initial_profile_path.exists():
         try:
             state.profile_path = common.initial_profile_path
@@ -160,9 +167,21 @@ async def lifespan(app: FastAPI):
     tuner_task = asyncio.create_task(tuner_background_task())
     yield
     # Fast, cancellable: stop background loops first
-    for task in (state.watchdog_task, state.keepalive_task, small_models.reaper_task, memory_task, tuner_task):
+    background = (state.watchdog_task, state.keepalive_task, small_models.reaper_task,
+                  memory_task, tuner_task, mcp_task)
+    for task in background:
         if task:
             task.cancel()
+    # cancel() only requests: await them so a half-written memory row or an in-flight tuner
+    # query cannot race the teardown below
+    await asyncio.gather(*[t for t in background if t], return_exceptions=True)
+    # release HTTP connection pools before the blocking teardown (which runs off-loop and
+    # therefore cannot await): state.client and one client per small-model lane
+    try:
+        await state.client.aclose()
+        await small_models.aclose_all()
+    except Exception as e:
+        print(f"[server_manager] client close error: {e}", file=sys.stderr)
     # Blocking process teardown runs off the loop thread
     try:
         await asyncio.shield(asyncio.to_thread(_shutdown_cleanup))

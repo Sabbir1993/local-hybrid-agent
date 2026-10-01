@@ -9,6 +9,8 @@ from core.config import (
     CONFIG_TARGETS,
     MODEL_CONFIG_KEYS,
 )
+from core import supervision
+from core.supervision import SUPERVISION_LIMITS
 from core import reasoning
 from core.profiles import companions, in_models_dir, load_model_configs, _model_key
 from core.state import state
@@ -17,6 +19,8 @@ from core.state import state
 def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
     if profile is None:
         return "No profile loaded to update"
+    if key in SUPERVISION_LIMITS:
+        return _apply_supervision_update(key, value)
     if key == "keepalive_interval_s":
         try:
             state.keepalive_interval_s = max(5, min(600, int(value)))
@@ -79,6 +83,32 @@ def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
     return f"unknown config field: {key}"
 
 
+def _apply_supervision_update(key: str, value) -> Optional[str]:
+    """Persist one llama-server supervision limit to config/app.json's "supervision" block.
+
+    These are process-level, not per-model, so they must not go through the profile path:
+    a health timeout is the same whichever GGUF is loaded. Clamped here with the same bounds
+    core/supervision.py reads, so the stored value and the effective value cannot disagree.
+    """
+    from core.config import update_app_config
+    from core.small_model import APP_CONFIG
+
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return f"{key} must be an integer"
+    default, lo, hi = SUPERVISION_LIMITS[key]
+    v = max(lo, min(hi, v))
+
+    def _mutate(cfg):
+        cfg.setdefault("supervision", {})[key] = v
+
+    update_app_config(_mutate)
+    # keep the in-memory copy in step so the next read sees it without a restart
+    APP_CONFIG["supervision"] = {**(APP_CONFIG.get("supervision") or {}), key: v}
+    return None
+
+
 def check_tool_calling(filename: str) -> bool:
     nl = str(filename or "").lower()
     tool_keywords = [
@@ -97,6 +127,9 @@ def _reasoning_caps(mode: str) -> dict:
 
 def _config_for_profile(p: dict) -> dict:
     return {
+        # process supervision, not per-model: shown in the same drawer so the two knobs that
+        # decide whether a big model loads at all are reachable without editing app.json
+        **supervision.view(),
         "context_size": p.get("context_size", CONFIG_DEFAULTS["context_size"]),
         "n_gpu_layers": p.get("tuned", {}).get("n_gpu_layers", p.get("n_gpu_layers", CONFIG_DEFAULTS["n_gpu_layers"])),
         "tensor_split": p.get("tuned", {}).get("tensor_split", p.get("tensor_split", CONFIG_DEFAULTS["tensor_split"])),

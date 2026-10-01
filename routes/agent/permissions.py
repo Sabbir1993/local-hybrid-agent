@@ -8,6 +8,7 @@ from core.audit import audit_log
 from core.db import db_add_project_allow_pattern, db_owned_project_id
 from core import auth_db
 from core.agent_tools import get_active_project
+from core.config import TOOL_CANCEL_GRACE_S, TOOL_MAX_S
 from core.shell_tools import add_allow_pattern, command_allowed
 
 from .base import router
@@ -118,35 +119,71 @@ async def _permission_stream(req_id: str, ev: asyncio.Event, ping_s: float = 15,
     """Like _await_permission, but an async generator so the agent stream stays alive while the user decides.
     Yields ("ping", PING) every `ping_s`, then one ("done", (allowed, note, decision))."""
     waited = 0.0
-    while waited < wait_s:
-        step = min(ping_s, wait_s - waited)
-        try:
-            await asyncio.wait_for(ev.wait(), timeout=step)
-            break
-        except asyncio.TimeoutError:
-            waited += step
-            yield "ping", PING
-    else:
+    try:
+        while waited < wait_s:
+            step = min(ping_s, wait_s - waited)
+            try:
+                await asyncio.wait_for(ev.wait(), timeout=step)
+                break
+            except asyncio.TimeoutError:
+                waited += step
+                yield "ping", PING
+        else:
+            yield "done", (False, f"permission request timed out ({int(wait_s)}s)", "timeout")
+            return
+        rec = _perm_pending.get(req_id) or {}
+        res = rec.get("result") or {"allow": False, "note": "no answer"}
+        yield "done", (res.get("allow", False), res.get("note", ""), res.get("decision", ""))
+    finally:
+        # Every pop used to sit inline, and both were skipped when the client disconnected and
+        # GeneratorExit was thrown at the ping yield. Each abandoned run then left its entry
+        # -- holding the full command or script text -- in a module global for the life of the
+        # process, with no other code path to reclaim it.
         _perm_pending.pop(req_id, None)
-        yield "done", (False, f"permission request timed out ({int(wait_s)}s)", "timeout")
-        return
-    rec = _perm_pending.pop(req_id, None) or {}
-    res = rec.get("result") or {"allow": False, "note": "no answer"}
-    yield "done", (res.get("allow", False), res.get("note", ""), res.get("decision", ""))
 
 
-async def keepalive(coro, interval: float = 15):
+async def keepalive(coro, interval: float = 15, max_s: float = TOOL_MAX_S):
     """Run `coro` as a task and yield ("ping", PING) while it is still running, then ("done", result).
-    An exception from `coro` is raised here; if this generator is closed first, the task is cancelled, so a
-    disconnected client never leaves a tool running unattended."""
+    An exception from `coro` is raised here; if this generator is closed first, the task is cancelled and
+    then awaited, so a disconnected client does not leave a tool running unattended.
+
+    `max_s` bounds one tool call. It was unbounded: a tool that never returned held its slot for
+    the rest of the run, and since the agent's wall-clock budget is only checked between steps
+    nothing else could end it. On expiry the task is cancelled and the timeout is reported to the
+    caller like any other result, so the model gets told what happened instead of the stream dying."""
     task = asyncio.ensure_future(coro)
+    waited = 0.0
     try:
         while True:
+            if max_s and waited >= max_s:
+                task.cancel()
+                await _drain(task)
+                yield "done", ("error: the tool was cancelled: it ran for longer than "
+                               f"{int(max_s)}s without finishing ({_task_desc(task)})")
+                return
             done, _ = await asyncio.wait({task}, timeout=interval)
             if done:
                 break
+            waited += interval
             yield "ping", PING
         yield "done", task.result()
     finally:
         if not task.done():
             task.cancel()
+            # cancelling is a request, not a fact. Without awaiting it, a tool that ignores
+            # cancellation keeps running on the user's device after the client is gone.
+            await _drain(task)
+
+
+async def _drain(task) -> None:
+    """Best-effort: wait for a cancelled task to actually finish, bounded by a grace period."""
+    try:
+        await asyncio.wait({task}, timeout=TOOL_CANCEL_GRACE_S)
+    except Exception:
+        pass
+
+
+def _task_desc(task) -> str:
+    """A tool name for the cancellation message. Never the args: they can hold user code."""
+    fn = getattr(task, "get_coro", lambda: None)()
+    return getattr(fn, "__qualname__", None) or getattr(fn, "__name__", None) or "the tool"

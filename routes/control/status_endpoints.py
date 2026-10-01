@@ -10,6 +10,8 @@ from core.monitor import (
     _monitor_state,
     MONITOR_RECENT_MAX,
 )
+from core.config import LOCAL_HTTP_READ_TIMEOUT_S
+from core.supervision import health_timeout_s, max_restart_count, supervision_limit
 from core.state import state
 from core import cloud
 
@@ -61,6 +63,15 @@ async def status(user: Principal = Depends(get_current_user)):
                                        if state.profile else None),
         "uptime_s": time.time() - state.started_at if state.started_at else None,
         "restart_count": state.restart_count,
+        "max_restart_count": max_restart_count(),
+        "health_timeout_s": health_timeout_s(),
+        "vram_wall_free_mb": supervision_limit("vram_wall_free_mb"),
+        # set when the crash-loop breaker trips, so the UI can say why nothing is running
+        # instead of just showing no pid
+        "degraded": state.degraded,
+        "last_load_error": state.last_load_error,
+        "log_tail": state.log_tail(20),
+        "log_tail_lines": len(state._log_tail),
         "pid": state.process.pid if state.process and state.process.poll() is None else None,
         "keepalive": state.keepalive_enabled,
         "mtp_enabled": bool(state.profile.get("mtp_enabled")) if state.profile else False,
@@ -118,19 +129,22 @@ async def memory(user: Principal = Depends(require_permission("settings.runtime.
 @router.get("/control/monitor")
 async def monitor(user: Principal = Depends(require_permission("monitor.view"))):
     now = time.time()
-    # Stale watchdog: -1 disables the timeout so long generations/summaries are never reaped as 499
-    STALE_S = -1
-    if STALE_S > 0:
-        for rid in list(_monitor_state["active"].keys()):
-            req = _monitor_state["active"][rid]
-            if now - req["last_token_s"] > STALE_S:
-                _monitor_state["active"].pop(rid, None)
-                req.update({
-                    "status": 499, "completion_tokens": req.get("gen_tokens"),
-                    "duration_s": round(now - req["start"], 2), "tps": None,
-                    "prompt_tps": None, "end": now, "stale": True,
-                })
-                _monitor_state["recent"].append(req)
+    # Stale watchdog. This was hardcoded to -1 ("disabled") because a long generation or a
+    # summary could be reaped as 499 while it was still working. Now that a request cannot go
+    # silent for longer than the local read timeout (core/config.py), a threshold above that
+    # cannot reap live work -- and it does collect the entries an aborted run leaves behind,
+    # since a client disconnect skips every monitor_end() on the way out.
+    stale_s = int(LOCAL_HTTP_READ_TIMEOUT_S) + 60
+    for rid in list(_monitor_state["active"].keys()):
+        req = _monitor_state["active"][rid]
+        if now - req["last_token_s"] > stale_s:
+            _monitor_state["active"].pop(rid, None)
+            req.update({
+                "status": 499, "completion_tokens": req.get("gen_tokens"),
+                "duration_s": round(now - req["start"], 2), "tps": None,
+                "prompt_tps": None, "end": now, "stale": True,
+            })
+            _monitor_state["recent"].append(req)
     if len(_monitor_state["recent"]) > MONITOR_RECENT_MAX:
         _monitor_state["recent"] = _monitor_state["recent"][-MONITOR_RECENT_MAX:]
     active = []

@@ -2,6 +2,10 @@ DEFAULTS = {"mode": "off", "apply_to": "both", "max_rounds": 1, "min_length": 12
 MODES = ("off", "badge", "gate")
 APPLY_TO = ("both", "chat", "agent")
 VERIFY_TIMEOUT_S = 90
+# A rewrite emits up to MAX_DRAFT_CHARS of answer, so it gets a little more than the check
+# does. It was timeout=None -- the only unbounded await left in the gate path, so a stalled
+# generator could hang a run that had already paid for its verdict.
+REVISE_TIMEOUT_S = 120
 MAX_EVIDENCE_CHARS = 6000
 MAX_DRAFT_CHARS = 12000
 

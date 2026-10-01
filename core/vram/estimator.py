@@ -7,8 +7,22 @@ from .gguf_parser import parse_gguf_info
 
 def estimate_footprint(info: dict, ctx: int, kv_type: str = "f16",
                        ubatch: int = 512, flash_attn: str = "auto",
-                       headroom_gb: float | None = None) -> dict:
-    """bytes for {weights, kv_total, compute, headroom} + confidence label."""
+                       headroom_gb: float | None = None,
+                       n_cpu_moe: int = 0, n_expert_used: int | None = None) -> dict:
+    """bytes for {weights, kv_total, compute, headroom} + confidence label.
+
+    The compute buffer used to be `0.30 GB + 2048 * 8 * ubatch`, which models llama.cpp's
+    dominant compute tensor - the logits, sized n_vocab x n_ubatch x sizeof(float) - as about
+    8 MB. For a 128k-vocabulary model at ubatch=512 that term is ~263 MB, so the estimate was
+    low by roughly 30x. n_vocab was already parsed by gguf_parser and carried in `info`, and
+    read by nothing. It is used here now.
+
+    `--n-cpu-moe` is modelled as an advisory figure only. Expert tensors that llama-server
+    keeps in host RAM are genuinely not in VRAM, so a tuned MoE config is over-estimated - but
+    the header does not break weights down finely enough to size that, and subtracting a guess
+    would under-estimate, which is the direction that hangs the desktop. The per-token cost of
+    streaming offloaded experts is a throughput question, not a fit one.
+    """
     cfg = _preflight_cfg()
     if headroom_gb is None:
         headroom_gb = cfg["headroom_gb"]
@@ -16,13 +30,43 @@ def estimate_footprint(info: dict, ctx: int, kv_type: str = "f16",
     kv_pe = _KV_BYTES_PER_ELEM.get(kv_type, 2.0)
     kv_per_token_b = info["n_layer"] * info["n_head_kv"] * info["head_dim"] * 2 * kv_pe
     kv_total_b = int(kv_per_token_b * max(0, int(ctx)))
-    compute_b = int(0.30 * GB + 2048 * 8 * max(0, int(ubatch or 512)))
+
+    ub = max(0, int(ubatch or 512))
+    n_vocab = int(info.get("n_vocab") or 0)
+    if n_vocab > 0:
+        # f32 logits for every ubatch row, plus ~15% for the softmax/scratch llama.cpp
+        # allocates alongside it
+        compute_b = int(n_vocab * ub * 4 * 1.15) + int(0.30 * GB)
+    else:
+        # no vocab count (sharded or unreadable header): fall back to the old flat estimate
+        # and say so via confidence, rather than pretending to a precision we do not have
+        compute_b = int(0.30 * GB + 2048 * 8 * ub)
+
+    # flash_attn "auto" may resolve either way. Only an explicit "off" is certain, so only an
+    # explicit "off" is charged the extra attention buffer.
     if str(flash_attn).lower() == "off":
         compute_b += int(0.25 * GB)
+
+    moe_offloaded_b = 0
+    if n_cpu_moe > 0 and n_expert_used:
+        # Reported, not subtracted. `--n-cpu-moe N` keeps the last N expert tensors of each
+        # layer in host RAM, so the real VRAM figure IS lower - but how much depends on how
+        # many bytes those tensors are, and the GGUF header does not break weights down that
+        # finely here. Subtracting a guessed fraction would push the estimate DOWN, and
+        # under-estimating is the direction that hangs the desktop on Arc. So the figure is
+        # surfaced as an advisory and the fit verdict stays conservative.
+        moe_offloaded_b = int(weights_b * min(n_cpu_moe, max(1, n_expert_used))
+                              / max(1, n_expert_used))
+
+    confidence = "high" if info.get("complete") else "low"
+    if not n_vocab:
+        confidence = "low"
     return {"weights_b": weights_b, "kv_per_token_b": int(kv_per_token_b),
             "kv_total_b": kv_total_b, "compute_b": compute_b,
             "headroom_b": int(headroom_gb * GB),
-            "confidence": "high" if info.get("complete") else "low"}
+            "moe_offloaded_b": moe_offloaded_b,
+            "n_vocab": n_vocab,
+            "confidence": confidence}
 
 
 def effective_params(profile: dict, overrides: dict | None = None) -> dict:
@@ -72,12 +116,20 @@ def effective_params(profile: dict, overrides: dict | None = None) -> dict:
                 except OSError:
                     pass
 
+    # mirrors core/process.py: -ncmoe is only emitted for a model typed as MoE
+    n_cpu_moe = 0
+    if profile.get("model_type") == "moe" and tuned.get("n_cpu_moe") is not None:
+        try:
+            n_cpu_moe = max(0, int(tuned["n_cpu_moe"]))
+        except (TypeError, ValueError):
+            n_cpu_moe = 0
+
     return {"n_gpu_layers": n_gpu_layers, "tensor_split": tensor_split,
             "context_size": context_size, "kv_cache_type": kv_cache_type,
             "flash_attn": flash_attn, "ubatch_size": ubatch,
             "gpu_devices": gpu_devices, "split_mode": split_mode,
             "model_path": model_path, "llama_bin_dir": llama_bin_dir,
-            "draft_b": draft_b}
+            "draft_b": draft_b, "n_cpu_moe": n_cpu_moe}
 
 
 def _shares_for(target_devs: list, tensor_split: str) -> list:

@@ -349,5 +349,93 @@ class LaneCapTests(unittest.TestCase):
         self.assertEqual(effective_max_tokens(500, "direct"), 500)
 
 
+class ToolArgValidationTests(Base):
+    """run_tool() is the single choke point every lane passes through (main loop, router,
+    sub-agents, chat), so argument validation belongs there -- before the registry dispatch.
+
+    The registry mirrors every builtin (core/registry.py:bootstrap_builtin_tools, called at
+    startup), so validating after the registry branch made the check unreachable for every
+    builtin tool: a call whose arguments were cut off mid-JSON reached the file tools anyway
+    and could create an empty file, defeating the 'nothing was changed' promise. These tests
+    drive run_tool() rather than TOOL_IMPLS directly, and assert the registry really does hold
+    the builtins, so the old ordering cannot come back unnoticed.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from core.registry import bootstrap_builtin_tools, registry
+        bootstrap_builtin_tools()
+
+    def call_tool(self, name, **args):
+        from core.agent_loop.execution import run_tool
+        return self.run_(run_tool(name, args))
+
+    def test_builtins_are_registered_so_this_test_covers_the_registry_path(self):
+        # if this fails, run_tool() would have taken the TOOL_IMPLS fallback instead and
+        # these tests would no longer prove anything about the registry dispatch
+        from core.registry import registry
+        for name in ("write_file", "append_file", "edit_file", "insert_at_line"):
+            self.assertIsNotNone(registry.get(name), f"{name} must be registered for this test to mean anything")
+
+    def test_arguments_cut_off_mid_json_change_nothing(self):
+        from core.agent_loop.repair import INVALID_JSON_KEY
+        out = self.call_tool("write_file", **{INVALID_JSON_KEY: '{"path": "cut.py", "content": "def f()'})
+        self.assertTrue(out.startswith("error:"), out)
+        self.assertIn("Nothing was changed", out)
+        self.assertNotIn(full("cut.py"), self.fc.files)
+        self.assertEqual([op for op in self.fc.ops if op == "fs.write"], [])
+
+    def test_missing_path_is_reported_rather_than_written(self):
+        # read_file and revert have no content-shape guess (repair.py only guesses for
+        # write_file), so a missing path is a hard error naming the field
+        for tool in ("read_file", "revert"):
+            out = self.call_tool(tool)
+            self.assertTrue(out.startswith("error:"), out)
+            self.assertIn("path required", out)
+            self.assertIn(tool, out)
+
+    def test_write_file_filename_guess_is_visible_not_silent(self):
+        # repair.py:26-33 does guess a name from the content shape when write_file has no
+        # path, because the agent targets small local models that routinely omit it. That is
+        # only acceptable because the chosen name is reported back in the tool result, so the
+        # model and the user both see which file was created. Pinned here so it can never
+        # become a silent write. Whether the guess should exist at all is a measurement
+        # question, not a correctness one -- see the eval harness phase.
+        out = self.call_tool("write_file", content="x = 1\n")
+        self.assertEqual(self.fc.files[full("output.txt")], "x = 1\n")
+        self.assertIn("output.txt", out)
+        self.assertIn("created", out)
+
+    def test_missing_content_is_reported(self):
+        out = self.call_tool("write_file", path="empty.py")
+        self.assertTrue(out.startswith("error:"), out)
+        self.assertIn("content required", out)
+        self.assertNotIn(full("empty.py"), self.fc.files)
+
+    def test_edit_file_missing_new_string_is_reported(self):
+        self.call_tool("write_file", path="e.py", content="a = 1\n")
+        out = self.call_tool("edit_file", path="e.py", old_string="a = 1")
+        self.assertTrue(out.startswith("error:"), out)
+        self.assertIn("new_string required", out)
+        self.assertEqual(self.fc.files[full("e.py")], "a = 1\n")
+
+    def test_traversal_is_refused_at_the_choke_point(self):
+        out = self.call_tool("write_file", path="../escape.py", content="x = 1\n")
+        self.assertTrue(out.startswith("error:"), out)
+        self.assertIn("traverse", out)
+
+    def test_a_valid_call_still_executes(self):
+        out = self.call_tool("write_file", path="ok.py", content="x = 1\n")
+        self.assertIn("verify: OK", out)
+        self.assertEqual(self.fc.files[full("ok.py")], "x = 1\n")
+
+    def test_aliases_are_still_normalised(self):
+        # validate_and_repair_tool_args is what collapses file->path and code->content;
+        # the fix must not have made it a reject-only check
+        out = self.call_tool("write_file", file="alias.py", code="y = 2\n")
+        self.assertIn("verify: OK", out)
+        self.assertEqual(self.fc.files[full("alias.py")], "y = 2\n")
+
+
 if __name__ == "__main__":
     unittest.main()

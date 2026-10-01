@@ -4,6 +4,7 @@ Run: python -m unittest tests.test_pan_guard -v
 Test numbers are the public issuer test PANs, not real cards.
 """
 
+import asyncio
 import sys
 import unittest
 from pathlib import Path
@@ -84,6 +85,76 @@ class PanGuardTests(unittest.TestCase):
         self.assertEqual(sent["messages"][0]["content"], "row: [card ****1111]")
         self.assertEqual(sent["messages"][1]["content"][0]["text"], "[card ****4444]")
         self.assertEqual(msgs[0]["content"], f"row: {VISA_TEST}")   # caller untouched
+
+
+class KbIngestPanTests(unittest.TestCase):
+    """Knowledge-base ingestion used to carry reject_if_pan(), a `pass` stub, behind a
+    docstring that claimed ingestion "fails closed". helpers.py caught the ValueError it
+    could never raise, so the call site looked like a live control while masking nothing --
+    card numbers went straight into the shared vector index, from where they could be
+    retrieved into a prompt and sent to a cloud lane.
+
+    It is masked now, before chunking, so a document that legitimately discusses card
+    handling stays ingestible and no PAN ever reaches the index.
+    """
+
+    def _run(self, text, empty=False):
+        from unittest import mock
+        from routes.knowledge import helpers
+        seen = {}
+
+        async def fake_index(source_id, txt):
+            seen["text"] = txt
+            return 3
+
+        with mock.patch.object(helpers, "index_knowledge_source", fake_index), \
+             mock.patch.object(helpers.auth_db, "update_knowledge_source_status"), \
+             mock.patch.object(helpers, "audit_log") as audit:
+            out = asyncio.run(helpers._finish_ingest(7, text, mock.Mock()))
+        return out, seen.get("text"), audit
+
+    def test_card_numbers_are_masked_before_chunking(self):
+        out, indexed, audit = self._run(f"Customer {VISA_TEST} holds an account.")
+        self.assertTrue(out["ok"])
+        self.assertEqual(indexed, "Customer [card ****1111] holds an account.")
+        self.assertNotIn("4111 1111", indexed)          # never enters the vector index
+        self.assertEqual(out["pans_masked"], 1)
+
+    def test_masking_is_audited(self):
+        out, _indexed, audit = self._run(f"card {MC_TEST} on file")
+        detail = audit.call_args.kwargs["detail"]
+        self.assertEqual(detail["pans_masked"], 1)
+        self.assertEqual(detail["chunks"], 3)
+
+    def test_a_clean_document_is_untouched(self):
+        out, indexed, _audit = self._run("Refund policy: 30 days from delivery.")
+        self.assertEqual(indexed, "Refund policy: 30 days from delivery.")
+        self.assertEqual(out["pans_masked"], 0)
+
+    def test_ingest_is_not_rejected(self):
+        # rejecting would make a document *about* card handling impossible to upload,
+        # which is why masking replaced rejection rather than implementing it
+        out, indexed, _audit = self._run(f"PCI guidance: never store {VISA_TEST} unencrypted.")
+        self.assertTrue(out["ok"], out)
+        self.assertIn("[card ****1111]", indexed)
+
+    def test_empty_text_is_still_reported_as_empty(self):
+        out, _indexed, _audit = self._run("   \n  ")
+        self.assertFalse(out["ok"])
+        self.assertIn("no extractable text", out["error"])
+
+    def test_ingest_module_has_no_dead_pan_code(self):
+        # it used to keep a second, weaker PAN detector (_PAN_CANDIDATE/_luhn_ok/
+        # find_pan_like) that nothing called; core/pan.py is now the only detector
+        import core.knowledge_ingest as ki
+        for name in ("reject_if_pan", "find_pan_like", "_PAN_CANDIDATE", "_luhn_ok"):
+            self.assertFalse(hasattr(ki, name), f"{name} must not come back")
+
+    def test_pan_module_docstring_matches_behaviour(self):
+        import core.pan as p
+        doc = p.__doc__
+        self.assertIn("KB ingest", doc)
+        self.assertNotIn("deliberately NOT scanned", doc)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse
 from core.config import PROXY_HOST, PROXY_PORT
 from core.csrf import CSRFMiddleware, SecurityHeadersMiddleware
 from core.deps import get_current_user, require_permission
+from core.limits import RequestLimitsMiddleware
 from core.agent_tools import WorkspaceAccessDenied
 from core.companion_bridge import router as companion_router
 from routes.api_docs import router as api_docs_router
@@ -66,6 +67,9 @@ from core.startup import lifespan
 
 # built-in docs are unauthenticated; routes/api_docs.py serves them behind login / API token
 app = FastAPI(title="Local Agent", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+# Innermost of the three: body size and request rate are cheap rejections, so they run before
+# the CSRF check and the security headers rather than after
+app.add_middleware(RequestLimitsMiddleware)
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 

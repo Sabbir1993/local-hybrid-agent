@@ -1,0 +1,22 @@
+{
+  "source": "anthropics/skills",
+  "upstream_path": "skills/pdf",
+  "commit": null,
+  "plugin_license": "Proprietary - (c) 2025 Anthropic, PBC. All rights reserved",
+  "license_file": "LICENSE.txt",
+  "notes": "Not an open-source licence. Use is governed by the user's agreement with Anthropic regarding use of Anthropic's services; absent a separate agreement, Anthropic's Consumer Terms of Service apply. Redistributed here unmodified and under its own terms - it is NOT covered by this project's MIT LICENSE.",
+  "files": {
+    "forms.md": "5415f531c0137e821dc44369f0f7354a8bc29abb26d2a5ccdfe5bef355f32124",
+    "LICENSE.txt": "6f8bd7f4d8ec5cb52b7a59ccb9e8c14c2a4ba529cb5adfc5e0bc676892b8ca79",
+    "reference.md": "16fbf406156feb08e2951403c03b1bfd76be5f2bc6bed1eed0d70c25954ab562",
+    "scripts/check_bounding_boxes.py": "da8ef6c5dac036b39636b1e9b89600f87791190873d21adbf518023deea49a0a",
+    "scripts/check_fillable_fields.py": "6575c07d6c687483013f5bcf429264d63639d4690279fb235cb01859c257a6aa",
+    "scripts/convert_pdf_to_images.py": "489abb23e89417d58b344c19a4cd6f846b6a79a1d453aa9349cc295339846838",
+    "scripts/create_validation_image.py": "7086c2951718080c74034ebbec31f2be136645a968674f0053e484138e7d94c8",
+    "scripts/extract_form_field_info.py": "1fd07e40d6ce7417df142e397da2036449b50a0d22e86ccb555cda3f145afb9a",
+    "scripts/extract_form_structure.py": "e81c6f43e3c253c8f5edaf277bbcdec70e1b5e133b675c6dbd35471438a5f550",
+    "scripts/fill_fillable_fields.py": "6691ee0fd6944a333e81c588bb53f07aa8a838ca6e1116ce7861677f348f2b52",
+    "scripts/fill_pdf_form_with_annotations.py": "a91969ba615747a32222aa3627cf0d4af70ad021bed440baac3707daab34a08f",
+    "SKILL.md": "2fb99531c779b5b045594ce4f53557b4f0c00034576af9e24d018983c262e011"
+  }
+}

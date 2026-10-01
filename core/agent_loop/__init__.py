@@ -25,6 +25,7 @@ from .truncation import (
 from .sandbox import (
     fast_sandbox_check,
     validate_and_finalize_response,
+    PASSIVE_REFUSAL_NOTE,
 )
 from .compaction import (
     estimate_prompt_tokens,
@@ -53,6 +54,7 @@ __all__ = [
     "_extract_text_tool_calls",
     "fast_sandbox_check",
     "validate_and_finalize_response",
+    "PASSIVE_REFUSAL_NOTE",
     "estimate_prompt_tokens",
     "_digest_message",
     "compact_messages",

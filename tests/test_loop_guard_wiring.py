@@ -4,9 +4,66 @@ import unittest
 from pathlib import Path
 
 from core import route_log
-from core.agent_loop import loop_guard as lg
+from core.agent_loop import PASSIVE_REFUSAL_NOTE, loop_guard as lg
+from core.agent_loop.sandbox import validate_and_finalize_response
 
 RUN_PY = Path(__file__).resolve().parent.parent / "routes" / "agent" / "run.py"
+
+
+class PassiveRefusalIsRecorded(unittest.TestCase):
+    """The model was asked to build something and replied by asking the user for the path
+    or the code -- the stall small local models fall into. The detector existed but its
+    result was returned as a `note` that no caller read, so a stalled run was indistinguishable
+    from a normal answer in route_log. The text is still passed through unchanged; only the
+    outcome code differs, which is what makes the signal measurable."""
+
+    STALL = "Sure, I can do that. Please specify the exact file path you would like."
+
+    def test_stall_is_flagged_when_the_user_asked_for_a_build(self):
+        text, was_synth, note = validate_and_finalize_response(
+            "create a landing page for my shop", self.STALL, "", [])
+        self.assertEqual(note, PASSIVE_REFUSAL_NOTE)
+        self.assertFalse(was_synth)
+        self.assertEqual(text, self.STALL)          # the model's words are never rewritten
+
+    def test_not_flagged_when_the_user_did_not_ask_for_a_build(self):
+        _t, _s, note = validate_and_finalize_response(
+            "what is the capital of France?", "Please specify the exact file path.", "", [])
+        self.assertEqual(note, "validated")
+
+    def test_not_flagged_when_the_agent_already_wrote_something(self):
+        _t, _s, note = validate_and_finalize_response(
+            "create a landing page", self.STALL, "",
+            [{"name": "write_file", "ok": True, "args": {"path": "index.html"}}])
+        self.assertNotEqual(note, PASSIVE_REFUSAL_NOTE)
+
+    def test_a_normal_answer_is_untouched(self):
+        text, was_synth, note = validate_and_finalize_response("what is 2+2?", "4", "", [])
+        self.assertEqual((text, was_synth, note), ("4", False, "validated"))
+
+    def test_run_end_records_the_stall_as_its_own_outcome(self):
+        orig = route_log._usage_db
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE route_runs (run_id TEXT PRIMARY KEY, ts REAL NOT NULL, user_id INTEGER, "
+                   "mode TEXT, category TEXT, steps INTEGER DEFAULT 0, outcome TEXT, "
+                   "rating INTEGER, detail TEXT)")
+        route_log._usage_db = db
+        try:
+            route_log.run_start("r1", None, "agent", "creation")
+            # the code run.py runs once the answer is validated
+            _text, was_synth, note = validate_and_finalize_response(
+                "create a landing page", self.STALL, "", [])
+            outcome = "synthesized" if was_synth else (
+                "passive_refusal" if note == PASSIVE_REFUSAL_NOTE else "answered")
+            route_log.run_end("r1", 2, outcome)
+            got = db.execute("SELECT outcome FROM route_runs WHERE run_id='r1'").fetchone()[0]
+            self.assertEqual(got, "passive_refusal")
+            # and it stays out of the quality rollup's bad bucket: a stall is its own
+            # signal, not a hard failure, and must not pollute the tuner's baseline
+            self.assertNotIn("passive_refusal", route_log.BAD_OUTCOMES)
+        finally:
+            route_log._usage_db = orig
 
 
 class StopDetailIsStored(unittest.TestCase):

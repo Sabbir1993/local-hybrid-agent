@@ -21,8 +21,7 @@ from .models import KeepaliveRequest, SwitchRequest
 @router.post("/control/stop")
 async def stop_server(user: Principal = Depends(require_permission("model.local.load"))):
     was = state.profile.get("name") if state.profile else None
-    await state.stop()
-    state.profile = None
+    await state.stop(clear_profile=True)
     audit_log(user, action="model.stop", resource=was, result="allow")
     return {"ok": True, "stopped": True}
 

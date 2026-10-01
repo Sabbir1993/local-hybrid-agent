@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 import time
@@ -212,3 +213,52 @@ async def tool_spawn_agent(args: dict) -> str:
         tool_allowlist=args.get("tools"),
         max_steps=args.get("max_steps"),
     )
+
+
+async def run_parallel_subagents(agent_specs: list, max_concurrency: int = 4) -> str:
+    if not agent_specs or not isinstance(agent_specs, list):
+        return "error: 'agents' must be a non-empty list of agent specifications"
+
+    sem = asyncio.Semaphore(max(1, max_concurrency))
+
+    async def _run_one(idx: int, spec: dict) -> str:
+        if not isinstance(spec, dict):
+            return f"[Sub-agent #{idx+1}]: error: invalid specification format"
+        task = str(spec.get("task") or "").strip()
+        if not task:
+            return f"[Sub-agent #{idx+1}]: error: task is required"
+        role = spec.get("role")
+        lane = spec.get("lane")
+        tools = spec.get("tools")
+        max_steps = spec.get("max_steps")
+        async with sem:
+            res = await run_subagent(
+                task=task,
+                role=role,
+                lane_override=lane,
+                tool_allowlist=tools,
+                max_steps=max_steps,
+            )
+            title = f"Sub-agent #{idx+1}" + (f" (role={role})" if role else "")
+            return f"=== {title} ===\n{res}"
+
+    tasks = [_run_one(i, spec) for i, spec in enumerate(agent_specs)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    formatted = []
+    for i, r in enumerate(results):
+        if isinstance(r, Exception):
+            formatted.append(f"=== Sub-agent #{i+1} ===\nerror: {type(r).__name__}: {r}")
+        else:
+            formatted.append(str(r))
+
+    header = f"[parallel sub-agents · {len(agent_specs)} spawned concurrently]"
+    return f"{header}\n\n" + "\n\n".join(formatted)
+
+
+async def tool_spawn_parallel_agents(args: dict) -> str:
+    agents = args.get("agents")
+    if not agents or not isinstance(agents, list):
+        return "error: 'agents' is required and must be a list of agent specifications"
+    return await run_parallel_subagents(agents)
+

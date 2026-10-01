@@ -9,7 +9,13 @@ from typing import Optional
 import httpx
 
 from ..backend import device_prefix
-from ..config import ACTIVE_RUNTIME
+from ..config import (
+    ACTIVE_RUNTIME,
+    LOCAL_HTTP_CONNECT_TIMEOUT_S,
+    LOCAL_HTTP_POOL_TIMEOUT_S,
+    LOCAL_HTTP_READ_TIMEOUT_S,
+    LOCAL_HTTP_WRITE_TIMEOUT_S,
+)
 from ..process import find_llama_server, kill_process_tree
 from .. import vram
 from .config import APP_CONFIG, lane_kind_of
@@ -62,11 +68,19 @@ class SmallModelInstance:
         self.cache_ram = int(cfg.get("cache_ram", default_cram))
         self.ctx_checkpoints = max(0, int(cfg.get("ctx_checkpoints", SMALL_CTX_CHECKPOINTS)))
         self.process: Optional[subprocess.Popen] = None
-        self.client = httpx.AsyncClient(base_url=f"http://127.0.0.1:{self.port}", timeout=None)
+        self.client = httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{self.port}",
+            # was timeout=None, same reason as core/state.py: nothing upstream could end a
+            # hung lane generation, and idle_unload_s=0 means it holds its VRAM for good
+            timeout=httpx.Timeout(LOCAL_HTTP_CONNECT_TIMEOUT_S,
+                                  read=LOCAL_HTTP_READ_TIMEOUT_S,
+                                  write=LOCAL_HTTP_WRITE_TIMEOUT_S,
+                                  pool=LOCAL_HTTP_POOL_TIMEOUT_S))
         self.last_used = 0.0
         self.lock = asyncio.Lock()
         self.load_error: Optional[str] = None
         self._log_tail = collections.deque(maxlen=60)
+        self._log_tasks: set = set()
 
     @property
     def available(self) -> bool:
@@ -105,7 +119,11 @@ class SmallModelInstance:
             )
             self.load_error = None
             self._log_tail.clear()
-            asyncio.create_task(self._pump_logs())
+            # keep the handle: the pump read the process pipe forever and nothing held a
+            # reference, so every load cycle added an untracked task
+            task = asyncio.create_task(self._pump_logs())
+            self._log_tasks.add(task)
+            task.add_done_callback(self._log_tasks.discard)
 
             deadline = time.time() + self._start_timeout
             while time.time() < deadline:
@@ -178,9 +196,25 @@ class SmallModelInstance:
         return cmd, None
 
     def _stop(self) -> None:
+        self._cancel_log_pump()
         if self.process and self.process.poll() is None:
             kill_process_tree(self.process, timeout=10)
         self.process = None
+
+    def _cancel_log_pump(self) -> None:
+        for task in list(self._log_tasks):
+            if not task.done():
+                task.cancel()
+        self._log_tasks.clear()
+
+    async def aclose(self) -> None:
+        """Release the HTTP connection pool. httpx clients keep sockets open until closed, so
+        dropping an instance without this orphaned a pool (and its fds) per reconfigure."""
+        self._cancel_log_pump()
+        try:
+            await self.client.aclose()
+        except Exception:
+            pass
 
     async def unload_if_idle(self) -> bool:
         if not self.is_up():

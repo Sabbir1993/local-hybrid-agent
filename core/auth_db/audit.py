@@ -82,6 +82,19 @@ def query_audit(page: int = 1, page_size: int = 50, **filters) -> dict:
     return {"entries": [dict(r) for r in rows], "total": total}
 
 
+def count_audit(since: float = 0.0, user_id: Optional[int] = None, action: Optional[str] = None,
+                result: Optional[str] = None) -> int:
+    """How many audit entries match, without fetching any of them.
+
+    For quota checks (core/limits.py). Runs its own COUNT rather than len(list_audit(...)),
+    which is capped and would under-report."""
+    where, args = _audit_where(since=since, user_id=user_id, action=action, result=result)
+    try:
+        return int(db().execute("SELECT COUNT(*) FROM audit_log" + where, args).fetchone()[0] or 0)
+    except Exception:
+        return 0
+
+
 def iter_audit(max_rows: int = 50000, **filters) -> list:
     """All entries matching the filters (newest first), capped — for CSV export."""
     where, args = _audit_where(**filters)

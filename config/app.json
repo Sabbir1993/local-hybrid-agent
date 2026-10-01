@@ -77,7 +77,7 @@
   },
   "router": {
     "enabled": true,
-    "confidence_threshold": 0.85,
+    "confidence_threshold": 0.75,
     "engine": "laya",
     "executor_grammar": true,
     "laya": {
@@ -87,53 +87,66 @@
       "preload": false
     },
     "creation_keywords": [
-      "make",
-      "create",
-      "generate",
-      "write",
+      "add",
       "build",
       "code",
-      "add",
+      "create",
       "fix",
+      "generate",
       "html",
+      "make",
+      "page",
       "script",
-      "page"
+      "write"
     ],
     "action_keywords": [
-      "run",
-      "install",
-      "test",
       "check",
       "exec",
+      "find",
+      "grep",
+      "install",
       "open",
       "read",
-      "view",
-      "find",
-      "grep"
+      "run",
+      "test",
+      "view"
     ],
     "refusal_phrases": [
-      "i cannot",
-      "i can't",
-      "i am unable",
       "as an ai",
+      "i am unable",
+      "i can't",
+      "i cannot",
       "i don't have access"
     ],
     "greetings": [
-      "hi",
-      "hello",
-      "hey",
-      "help",
-      "who are you",
-      "what can you do",
-      "good morning",
       "good evening",
+      "good morning",
+      "hello",
+      "help",
+      "hey",
+      "hi",
+      "hi there",
       "how are you",
       "test",
-      "hi there"
+      "what can you do",
+      "who are you"
     ],
-    "repeat_streak_limit": 2,
+    "repeat_streak_limit": 5,
     "start_on_main_categories": [],
-    "auto_apply": false
+    "auto_apply": false,
+    "plan_first_categories": [
+      "creation"
+    ],
+    "plan_first_max_steps": 3,
+    "tool_choice_required": true,
+    "executor_fresh_context": true,
+    "finish_tool": true,
+    "adaptive": true,
+    "min_executor_success": 0.7,
+    "classifier": {
+      "enabled": false,
+      "mode": "shadow"
+    }
   },
   "provider": {},
   "cloud": {
@@ -170,19 +183,20 @@
     "chunk_target_tokens": 3000,
     "read_file_default_limit": 200,
     "read_file_max_chars": 20000,
-    "verify_max_retries": 3,
+    "verify_max_retries": 5,
     "plan_max_items": 20,
     "plan_item_max_chars": 300,
-    "plan_item_max_steps": 25,
+    "plan_item_max_steps": 50,
     "python_prompt_nudge": 4,
     "plan_required": "auto",
-    "mirror_to_workspace": false
+    "mirror_to_workspace": true,
+    "executor_max_effort": "medium"
   },
   "memory": {
     "enabled": true,
     "allow_cloud": false,
-    "file_max_bytes": 8192,
-    "max_files": 60
+    "file_max_bytes": 16384,
+    "max_files": 100
   },
   "context": {
     "compaction_threshold": 0.7,
@@ -197,6 +211,14 @@
   "preflight": {
     "mode": "block",
     "headroom_gb": 1.0
+  },
+  "supervision": {
+    "health_timeout_s": 120,
+    "watchdog_interval_s": 5,
+    "max_restart_backoff_s": 60,
+    "max_restart_count": 5,
+    "restart_reset_after_s": 300,
+    "vram_wall_free_mb": 256
   },
   "capabilities": {
     "web": true,
@@ -296,7 +318,30 @@
   "serving": {
     "slot_affinity": true,
     "queue_enabled": true,
-    "max_inflight_per_user": 1
+    "max_inflight_per_user": 1,
+    "max_body_bytes": 8388608,
+    "body_limit_paths": {
+      "/knowledge/upload": 54525952,
+      "/knowledge/upload/chunk": 9437184,
+      "/agent/upload": 67108864,
+      "/agent/vision": 25165824,
+      "/media/generate": 25165824,
+      "/media/transcribe": 25165824,
+      "/agent/preview-html": 4194304
+    },
+    "rate_limit_per_min": 60,
+    "rate_limit_paths": [
+      "/agent/run",
+      "/chat/run",
+      "/chat/compact",
+      "/chat/completions",
+      "/completions",
+      "/v1/chat/completions",
+      "/v1/completions",
+      "/agent/vision"
+    ],
+    "max_inflight_cloud": 4,
+    "cloud_requests_per_day": 500
   },
   "knowledge": {
     "cloud_policy": "local_only",

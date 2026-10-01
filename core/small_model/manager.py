@@ -17,13 +17,33 @@ class SmallModelManager:
     def reconfigure(self, name: str, cfg: Optional[dict]) -> None:
         """Apply an edited/added/removed local lane live."""
         old = self.instances.pop(name, None)
-        if old is not None and old.is_up():
-            old._stop()
+        if old is not None:
+            if old.is_up():
+                old._stop()
+            # close the old HTTP pool too: popping the instance used to orphan its client,
+            # so every lane edit leaked a connection pool and its file descriptors
+            self._close_later(old)
         if cfg is None:
             APP_CONFIG["small_models"].pop(name, None)
             return
         APP_CONFIG["small_models"][name] = dict(cfg)
         self.instances[name] = make_instance(name, APP_CONFIG["small_models"][name])
+
+    @staticmethod
+    def _close_later(inst) -> None:
+        """Close an instance's client from sync code. Reconfigure is called from request
+        handlers on a running loop, so schedule the close; if there is no loop the process is
+        already shutting down and lifespan's aclose_all() gets it."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(inst.aclose())
+
+    async def aclose_all(self) -> None:
+        """Release every lane's HTTP pool at shutdown."""
+        for inst in list(self.instances.values()):
+            await inst.aclose()
 
     def start_reaper(self) -> None:
         if self.reaper_task is None:

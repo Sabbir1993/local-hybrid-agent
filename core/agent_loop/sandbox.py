@@ -1,5 +1,9 @@
 from .degeneration import sanitize_user_facing_content
 
+# outcome code for a run where the model was asked to build something and replied by asking
+# the user for the path or the code instead of doing the work
+PASSIVE_REFUSAL_NOTE = "passive_refusal_detected"
+
 
 def fast_sandbox_check(tool_name: str, args: dict) -> tuple[bool, str]:
     if tool_name not in ("write_file", "edit_file", "append_file", "insert_at_line"):
@@ -96,6 +100,12 @@ def validate_and_finalize_response(last_query: str, content: str, reasoning: str
         )
         content_low = clean_content.lower()
         if any(rp in content_low for rp in refusal_phrases):
-            return clean_content, False, "passive_refusal_detected"
+            # The user asked for something to be built and the model replied by asking them
+            # for the path/code instead of picking one and doing the work -- the stall small
+            # local models fall into. The text is returned unchanged on purpose: only the
+            # outcome code changes, so the caller can record this run as a stall rather than
+            # as a normal answer. Acting on it (auto-picking a path, nudging the model) is a
+            # behaviour change that needs the eval harness to justify, so it is not done here.
+            return clean_content, False, PASSIVE_REFUSAL_NOTE
 
     return clean_content, False, "validated"

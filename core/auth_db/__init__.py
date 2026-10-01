@@ -3,6 +3,7 @@ from .audit import (
     _audit_where,
     _like_escape,
     audit_facets,
+    count_audit,
     insert_audit,
     iter_audit,
     list_audit,
