@@ -147,7 +147,19 @@ class RoutingTests(LaneTestBase):
         # even when the executor itself is cloud-bound, policy checks stay local
         cloud.set_lanes(1, {"executor": key, "routing_mode": "custom"})
         self.assertFalse(any(t.is_cloud for t in lanes.targets("input_guard", 1)))
-        self.assertTrue(lanes.targets("commit_msg", 1)[0].is_cloud)
+        # diffs may contain secrets/credentials: the commit-message job stays
+        # local too, even when the executor lane itself is cloud-bound
+        self.assertTrue(lanes.targets("commit_msg", 1))
+        self.assertFalse(any(t.is_cloud for t in lanes.targets("commit_msg", 1)))
+        with self.assertRaises(ValueError):
+            lanes.set_role_map(1, {"commit_msg": "c1"})
+
+    def test_commit_msg_job_is_pinned_local(self):
+        """Tripwire on the JOBS spec itself: the flag is what keeps raw diffs
+        (which may contain secrets) off cloud models. If this fails, the
+        local_only test above fails next, and git_ai.py is exfiltrating."""
+        from core.lanes.constants import JOBS
+        self.assertTrue(JOBS["commit_msg"].get("local_only"))
 
     def test_force_local_skips_cloud(self):
         key = self.add_cloud()
@@ -173,7 +185,10 @@ class RoutingTests(LaneTestBase):
     def test_delete_moves_jobs(self):
         key = self.add_cloud()
         lanes.save_user_lane(1, "c1", {"kind": "chat", "cloud": key})
-        lanes.set_role_map(1, {"summarize": "c1", "commit_msg": "c1"})
+        lanes.set_role_map(1, {"summarize": "c1"})
+        # commit_msg is local_only (diffs may contain secrets): a cloud mapping
+        # is refused here, so map it to main and check the move covers both jobs
+        lanes.set_role_map(1, {"commit_msg": "main"})
         lanes.delete_user_lane(1, "c1", move_jobs_to="main")
         rm = lanes.role_map(1)
         self.assertEqual(rm["summarize"], "main")

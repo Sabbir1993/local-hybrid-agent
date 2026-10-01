@@ -101,7 +101,6 @@ async def set_keepalive(req: KeepaliveRequest, user: Principal = Depends(require
 
 @router.post("/control/switch")
 async def switch(req: SwitchRequest, user: Principal = Depends(get_current_user)):
-    # global common.curStatus_model_hint
     target = req.target or req.profile
     if not target:
         return JSONResponse({"error": "No profile or model target specified"}, status_code=400)
@@ -114,7 +113,7 @@ async def switch(req: SwitchRequest, user: Principal = Depends(get_current_user)
         if cm is None:
             return JSONResponse({"error": f"cloud model not configured: {target[6:]}"}, status_code=404)
         cloud.set_lanes(user.id, {"main": cm.key})
-        common.curStatus_model_hint = target
+        common.set_model_hint(user.id, target)
         print(f"[server_manager] main lane -> cloud {cm.key} ({cm.provider_name}); "
               f"local llama-server not started")
         audit_log(user, action="model.load", resource=cm.key, detail={"cloud": True}, result="allow")
@@ -142,6 +141,6 @@ async def switch(req: SwitchRequest, user: Principal = Depends(get_current_user)
     except Exception as e:
         audit_log(user, action="model.load", resource=str(path), result="error", detail={"error": str(e)})
         return JSONResponse({"error": str(e)}, status_code=500)
-    common.curStatus_model_hint = state.profile.get("model_path") if state.profile else None
+    common.set_model_hint(user.id, state.profile.get("model_path") if state.profile else None)
     audit_log(user, action="model.load", resource=state.profile.get("name", path.stem), result="allow")
     return {"ok": True, "profile": state.profile.get("name", path.stem)}

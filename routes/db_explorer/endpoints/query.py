@@ -3,7 +3,7 @@ import time
 from fastapi import Depends, HTTPException
 from core.audit import audit_log
 from core.auth import Principal
-from core.deps import require_permission
+from core.deps import require_verified
 from ..constants import QueryRequest, _VACUUM_RE
 from ..helpers import _connect, _resolve_db, _sanitize_cell_value
 
@@ -14,7 +14,7 @@ from .base import router
 async def execute_query(
     db_id: str,
     body: QueryRequest,
-    user: Principal = Depends(require_permission("database.manage")),
+    user: Principal = Depends(require_verified("database.manage")),
 ):
     """Execute a raw SQL query against the specified database with safety guards and auditing."""
     path = _resolve_db(db_id, user.id)

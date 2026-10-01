@@ -68,17 +68,18 @@
   #settings-tab-search {
     width: 100%;
     box-sizing: border-box;
-    padding: 6px 10px;
-    border-radius: 6px;
-    font-size: 11.5px;
-    background: var(--panel2);
+    padding: 7px 10px;
+    border-radius: 7px;
+    font-size: 12px;
+    background: var(--bg-input);
     border: 1px solid var(--border);
     color: var(--text);
     outline: none;
-    transition: border-color 0.15s ease;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
   #settings-tab-search:focus {
     border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
   }
   #settings-nav {
     flex: 1;
@@ -219,7 +220,79 @@
   details.mcp-server-fold[open] > summary.mcp-server-head .mcp-chevron { transform: rotate(90deg); }
   details.mcp-server-fold .mcp-tools-list {
     padding: 4px 8px 8px 18px; display: flex; flex-direction: column; gap: 3px;
-    border-top: 1px dashed var(--border-subtle);
+  }
+
+  /* ================= UNIFIED SETTINGS INPUT DESIGN PATTERN ================= */
+  .settings-panel input[type="text"],
+  .settings-panel input[type="password"],
+  .settings-panel input[type="number"],
+  .settings-panel input[type="search"],
+  .settings-panel input[type="url"],
+  .settings-panel input[type="email"],
+  .settings-panel input:not([type]),
+  .settings-panel select,
+  .settings-panel textarea,
+  .ca-modal-box input[type="text"],
+  .ca-modal-box input[type="password"],
+  .ca-modal-box input[type="number"],
+  .ca-modal-box input[type="search"],
+  .ca-modal-box input[type="url"],
+  .ca-modal-box input[type="email"],
+  .ca-modal-box input:not([type]),
+  .ca-modal-box select,
+  .ca-modal-box textarea {
+    box-sizing: border-box !important;
+    background: var(--bg-input) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 7px !important;
+    padding: 7px 10px !important;
+    font-size: 12px !important;
+    font-family: inherit;
+    outline: none !important;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  }
+
+  .settings-panel input[type="text"]:focus,
+  .settings-panel input[type="password"]:focus,
+  .settings-panel input[type="number"]:focus,
+  .settings-panel input[type="search"]:focus,
+  .settings-panel input[type="url"]:focus,
+  .settings-panel input[type="email"]:focus,
+  .settings-panel input:not([type]):focus,
+  .settings-panel select:focus,
+  .settings-panel textarea:focus,
+  .ca-modal-box input:focus,
+  .ca-modal-box select:focus,
+  .ca-modal-box textarea:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 2px var(--accent-glow) !important;
+    outline: none !important;
+  }
+
+  .settings-panel input::placeholder,
+  .settings-panel textarea::placeholder,
+  .ca-modal-box input::placeholder,
+  .ca-modal-box textarea::placeholder {
+    color: var(--dim) !important;
+    opacity: 0.65 !important;
+  }
+
+  .settings-panel select,
+  .ca-modal-box select {
+    cursor: pointer !important;
+  }
+
+  .settings-panel select option,
+  .ca-modal-box select option {
+    background: var(--panel) !important;
+    color: var(--text) !important;
+  }
+
+  .settings-panel label:not(.switch):not(.ln-radio):not(.ln-check):not(.ca-tool-item):not(.ca-field-check label):not(.tagpicker label):not(.mcp-env-secret) {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--dim);
   }
 
   @media (max-width: 768px) {
@@ -327,6 +400,10 @@
         <button type="button" class="settings-tab-btn" data-tab="sec-session" data-perm="users.manage">
           <span class="tab-icon">⏱️</span>
           <span class="tab-label">Session Security</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-mfa">
+          <span class="tab-icon">🔐</span>
+          <span class="tab-label">Two-Factor Auth</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-db" data-perm="database.manage">
           <span class="tab-icon">🗄️</span>
@@ -684,6 +761,15 @@
         <div id="session-policy-content"><div class="mon-empty">Loading…</div></div>
       </div>
 
+      <!-- Section 10c: Two-factor authentication (personal; admins also get the enforcement toggle) -->
+      <div class="card settings-panel" id="sec-mfa">
+        <div class="settings-panel-head">
+          <h2>🔐 Two-Factor Authentication</h2>
+          <p class="dim">Authenticator-app codes at sign-in, plus single-use backup codes. Admins can require it for everyone.</p>
+        </div>
+        <div id="mfa-content"><div class="mon-empty">Loading…</div></div>
+      </div>
+
       <!-- Section 11: Database Explorer -->
       <div class="card settings-panel" id="sec-db" data-perm="database.manage">
         <div class="settings-panel-head">
@@ -835,6 +921,7 @@
 <script src="/static/js/knowledge.js?v=1.1"></script>
 <script src="/static/js/input-guard.js?v=1.0"></script>
 <script src="/static/js/session-policy.js?v=1.0"></script>
+<script src="/static/js/mfa-panel.js?v=1.0"></script>
 <script src="/static/js/lanes.js?v=1.10"></script>
 <script src="/static/js/custom-agents.js?v=1.9"></script>
 <script src="/static/js/settings-page.js?v=1.2"></script>

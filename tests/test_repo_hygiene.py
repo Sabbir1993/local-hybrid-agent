@@ -49,11 +49,30 @@ class GitignoreCoversLocalOnlyState(unittest.TestCase):
 
 
 class NoDuplicatedSkillTrees(unittest.TestCase):
-    """.claude/skills held 65 byte-identical copies of .agents/skills - the same skill content
-    committed twice. Only .claude/launch.json is unique."""
+    """.claude/skills mirrors .agents/skills (symlinks on disk, materialized as real files
+    in git on Windows). Both trees are tracked, so the invariant that matters is not "one of
+    them is absent" but "they can never diverge silently"."""
 
-    def test_claude_skills_are_untracked(self):
-        self.assertEqual(tracked(".claude/skills"), [])
+    def test_claude_skills_match_agents_skills(self):
+        import hashlib
+
+        def tree(root: Path):
+            out = {}
+            for f in sorted(root.rglob("*")):
+                if f.is_file() and f.name != "PROVENANCE.json":
+                    out[str(f.relative_to(root)).replace("\\", "/")] = \
+                        hashlib.sha256(f.read_bytes()).hexdigest()
+            return out
+
+        agents = tree(ROOT / ".agents" / "skills")
+        claude = tree(ROOT / ".claude" / "skills")
+        names_a = {p.split("/")[0] for p in agents}
+        names_c = {p.split("/")[0] for p in claude}
+        # every skill present in one tree must read identically in the other
+        for name in sorted(names_a & names_c):
+            fa = {p.split("/", 1)[1]: h for p, h in agents.items() if p.startswith(name + "/")}
+            fc = {p.split("/", 1)[1]: h for p, h in claude.items() if p.startswith(name + "/")}
+            self.assertEqual(fa, fc, f"skill {name} diverged between .agents and .claude")
 
     def test_launch_json_is_kept(self):
         self.assertIn(".claude/launch.json", tracked(".claude"))

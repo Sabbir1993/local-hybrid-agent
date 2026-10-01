@@ -272,7 +272,7 @@ function renderRolesPane(box) {
 
 
 /* ---------------- API tokens (admin-issued, users.manage) ---------------- */
-const _TOK_INP = 'background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11.5px;';
+const _TOK_INP = 'background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:7px; padding:7px 10px; font-size:12px; box-sizing:border-box;';
 
 async function loadApiTokens(box, users) {
   const sec = document.createElement('div');

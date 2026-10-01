@@ -1,7 +1,6 @@
 """tool_choice: when the loop asks for a required tool call, and how the request
 layer sends it and recovers when a server or provider rejects the field."""
 import asyncio
-import json
 import unittest
 
 from core import router_policy as rp

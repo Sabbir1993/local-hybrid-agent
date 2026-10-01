@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import Depends, HTTPException, Query
 from core.audit import audit_log
 from core.auth import Principal
-from core.deps import require_permission
+from core.deps import require_verified
 from ..constants import SYSTEM_DBS
 from ..helpers import (
     _connect,
@@ -17,7 +17,7 @@ from .base import router
 
 
 @router.get("/list")
-async def list_databases(user: Principal = Depends(require_permission("database.manage"))):
+async def list_databases(user: Principal = Depends(require_verified("database.manage"))):
     """List all available system and workspace SQLite databases."""
     out = []
     # 1. System DBs
@@ -36,8 +36,8 @@ async def list_databases(user: Principal = Depends(require_permission("database.
             "is_system": True,
         })
 
-    # 2. Workspace DBs
-    ws_dbs = _discover_workspace_dbs()
+    # 2. This caller's workspace DBs (user-scoped; unscoped call 500s here)
+    ws_dbs = _discover_workspace_dbs(user.id)
     for d in ws_dbs.values():
         p: Path = d["path"]
         size = p.stat().st_size if p.exists() else 0
@@ -57,7 +57,7 @@ async def list_databases(user: Principal = Depends(require_permission("database.
 
 
 @router.get("/{db_id}/schema")
-async def get_schema(db_id: str, user: Principal = Depends(require_permission("database.manage"))):
+async def get_schema(db_id: str, user: Principal = Depends(require_verified("database.manage"))):
     """Retrieve schema, table list, column types, and DDL for the specified database."""
     path = _resolve_db(db_id, user.id)
     tables = []
@@ -124,7 +124,7 @@ async def get_table_data(
     table_name: str,
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    user: Principal = Depends(require_permission("database.manage")),
+    user: Principal = Depends(require_verified("database.manage")),
 ):
     """Quick paginated view of a specific table's contents."""
     path = _resolve_db(db_id, user.id)

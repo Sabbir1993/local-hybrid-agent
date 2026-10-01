@@ -28,3 +28,8 @@ class CompleteUploadBody(BaseModel):
 
 class RoleAccessBody(BaseModel):
     roles: list[str]
+
+
+class BulkDeleteBody(BaseModel):
+    ids: list[int]
+

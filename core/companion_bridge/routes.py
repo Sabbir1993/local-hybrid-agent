@@ -112,9 +112,12 @@ class PairReq(BaseModel):
 @router.post("/companion/pair")
 async def pair_device(req: PairReq, request: Request, user: Principal = Depends(get_current_user)):
     """Called by the companion right after the user signs in inside it: returns a device
-    key (shown once) that replaces the browser session on the companion socket."""
+    key (shown once) that replaces the browser session on the companion socket.
+    Binding a new device is persistent access: MFA-enrolled users need a verified session."""
     if user.via_token:
         raise HTTPException(status_code=403, detail="API tokens cannot pair devices")
+    if not user.mfa_verified and auth_db.totp_enabled(user.id):
+        raise HTTPException(status_code=403, detail="mfa_step_up_required")
     dev = normalize_device_id(req.device_id.strip())
     auth_db.revoke_companion_devices(user.id, dev)      # re-pairing retires older keys
     raw = DEVICE_KEY_PREFIX + secrets.token_urlsafe(32)

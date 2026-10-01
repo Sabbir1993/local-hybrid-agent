@@ -144,7 +144,8 @@ def _markdown_to_html_dom(content: str, title: str = "", is_slides: bool = False
             flush_table()
             if in_code_block:
                 escaped_code = esc("\n".join(code_buf))
-                body_elements.append(f'<pre class="code-block"><code>{escaped_code}</code></pre>')
+                lang = f' class="language-{code_lang}"' if code_lang else ""
+                body_elements.append(f'<pre class="code-block"><code{lang}>{escaped_code}</code></pre>')
                 code_buf = []
                 in_code_block = False
             else:

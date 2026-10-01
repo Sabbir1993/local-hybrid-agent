@@ -83,6 +83,21 @@ from core.agent_loop import (
     _extract_text_tool_calls,
     compact_messages,
 )
+from core.agent_loop.policy import (
+    LaneInputs,
+    StopContext,
+    decide_lane,
+    describe_stop as _describe_stop,
+    parallel_spawn_eligible,
+    stop_headline,
+    stop_note,
+)
+from core.agent_loop.stream import (
+    DrainResult,
+    StreamSpec,
+    account_llm_result,
+    drain_llm_stream,
+)
 from core.monitor import (
     _monitor_state,
     monitor_begin,
@@ -110,9 +125,9 @@ from .constants import (
     PLAN_MODE_TOOLS,
     _run_timeout_s,
 )
+from .setup import SetupError, setup_run
 from .guards import (
     _executor_grammar,
-    _guard_audit,
     _guard_flush_events,
     _strip_download_markers,
     _with_diff,
@@ -125,13 +140,8 @@ _NO_WORKAROUND = (" The user said no to this command. Do not run the same thing 
                   "shell, a different spelling). Use a simpler read-only command, or report what you could not collect.")
 
 
-def _describe_stop(detail: str) -> str:
-    """'identical_result:run_python:3' -> a sentence (the guard's own wording)."""
-    try:
-        rule, tool, count = (detail or "").split(":")
-        return _lg.describe(rule, tool, int(count))
-    except ValueError:
-        return "the run repeated itself"
+# _describe_stop lives in core.agent_loop.policy (imported above) so the stop-summary
+# text is unit-tested without importing this route module.
 
 
 def _classify_step_error(e: Exception) -> tuple[str, str]:
@@ -156,416 +166,41 @@ def _classify_step_error(e: Exception) -> tuple[str, str]:
 
 @router.post("/agent/run")
 async def agent_run(req: AgentRequest, request: Request, user: Principal = Depends(get_current_user)):
-    # Standard web browsers are restricted to Chat mode only; Agent Task requires the native app
-    ua = request.headers.get("user-agent", "")
-    is_browser = any(b in ua for b in ("Mozilla/", "Chrome/", "Safari/", "Firefox/", "Edg/")) and not ("A770NativeApp" in ua or "Electron" in ua)
-    if is_browser:
-        return JSONResponse(
-            {"error": "agent_native_only",
-             "message": "Agent Task mode is only enabled in the desktop native app. In web browser, only Chat is enabled."},
-            status_code=403,
-        )
-    # Strict per-user isolation: a session_id belongs to exactly one user.
-    if req.session_id:
-        owner = db_session_owner(req.session_id)
-        if owner is not None and owner != user.id:
-            return JSONResponse({"error": "session not found"}, status_code=404)
-    from core.agent_tools import set_current_user
-    set_current_user(user.id)
-    effort = reasoning_mod.resolve(req.reasoning_effort)
-
-    custom_agent = None
-    custom_agent_tools = None
-    if req.custom_agent_id:
-        from core.auth_db import db_get_custom_agent
-        custom_agent = db_get_custom_agent(req.custom_agent_id, user.id)
-        if not custom_agent:
-            return JSONResponse({"error": "custom_agent_not_found",
-                                 "message": "The selected custom agent no longer exists or isn't shared with you."},
-                                status_code=404)
-        if custom_agent.get("tool_allowlist"):
-            # writing files is never withheld from an agent: a restricted set always keeps write_file / edit_file
-            custom_agent_tools = set(custom_agent["tool_allowlist"]) | {"write_file", "edit_file", "append_file"}
-        # the client sends null for values the user didn't change after picking the agent
-        if req.reasoning_effort is None and custom_agent.get("reasoning_effort"):
-            effort = reasoning_mod.resolve(custom_agent["reasoning_effort"])
-        if req.temperature is None and custom_agent.get("temperature") is not None:
-            req.temperature = float(custom_agent["temperature"])
-    if req.temperature is None:
-        req.temperature = 0.4
-    # enforced in core.agent_loop.run_tool for every lane (router, executor, main, sub-agents);
-    # set in the request context like set_current_user, so the stream task inherits it
-    from core.request_context import (PERSONAL_BLOCKED_TOOLS, set_personal_scope, set_personal_workspace,
-                                      set_tool_allowlist)
-    set_tool_allowlist(custom_agent_tools)
-    personal = bool(req.personal)
-    if personal:
-        # tools only run in the folder the agent's OWNER set on it, and only for that owner: a shared or
-        # template agent has no folder on this machine
-        folder = (custom_agent or {}).get("work_dir") if (custom_agent or {}).get("user_id") == user.id else ""
-        if not folder:
-            return JSONResponse({"error": "personal_needs_folder",
-                                 "message": "This Personal Agent has no work folder. Edit the agent and pick one "
-                                            "to let it use tools on your machine."}, status_code=400)
-        set_personal_workspace(folder)
-    set_personal_scope(personal)
-    hidden_tools = PERSONAL_BLOCKED_TOOLS if personal else frozenset()
-
-    if not companion_bridge.is_connected(user.id):
-        return JSONResponse(
-            {"error": "agent_requires_companion",
-             "message": "Agent Task mode requires the A770 Companion app. Install and open it, then try again."},
-            status_code=403,
-        )
-    # Agent tools only ever touch the user's own machine: resolve this device's
-    # project folder up front (strict user+device match, no server fallback).
     try:
-        require_device_workspace()
-    except WorkspaceAccessDenied as e:
-        audit_log(user, action="agent.workspace", resource=get_active_project(), result="deny",
-                  detail={"reason": str(e)}, ip=request.client.host if request.client else None)
-        return JSONResponse({"error": "agent_workspace_unavailable", "message": f"Agent task refused: {e}"},
-                            status_code=403)
+        ctx = await setup_run(req, request, user)
+    except SetupError as e:
+        return JSONResponse(e.payload, status_code=e.status_code)
+    # Unpacked for the closures below (direct_chat, event_stream, helpers), which
+    # keep referencing these names unchanged. Ruff F841 flags any entry that stops
+    # being read, so this list cannot silently rot.
+    effort = ctx.effort
+    custom_agent = ctx.custom_agent
+    custom_agent_tools = ctx.custom_agent_tools
+    personal = ctx.personal
+    hidden_tools = ctx.hidden_tools
+    ex_inst = ctx.ex_inst
+    mode = ctx.mode
+    cloud_main = ctx.cloud_main
+    cloud_exec = ctx.cloud_exec
+    use_cloud_main = ctx.use_cloud_main
+    steps_on_main = ctx.steps_on_main
+    ca_lane = ctx.ca_lane
+    main_ready = ctx.main_ready
+    main_client = ctx.main_client
+    steps = ctx.steps
+    msgs = ctx.msgs
+    last_query = ctx.last_query
+    surface_q = ctx.surface_q
+    rpol = ctx.rpol
+    q_category = ctx.q_category
+    clf_profile = ctx.clf_profile
+    kb_ids = ctx.kb_ids
+    kb_blocked_reason = ctx.kb_blocked_reason
+    ws_path = ctx.ws_path
+    use_executor = ctx.use_executor
+    fb_enabled = ctx.fb_enabled
 
-    # route through the registry so web/skills/mcp/plugin/shell tools are visible
-    ex_inst = small_models.instances["executor"]
 
-    # --- lane resolution -------------------------------------------------
-    # mode is one of: all-local | main-local-rest-cloud | main-cloud-rest-local
-    #                 | all-cloud (legacy: "main" == all-local, "tiered" ==
-    #                 main-local-rest-cloud).
-    # A lane is served by the cloud when its binding resolves in core.cloud;
-    # otherwise it stays local (llama-server), and the mode decides whether the
-    # client is forced local even when a cloud binding exists.
-    mode = (req.mode or "all-local").strip().lower()
-    if mode in ("main", ""):
-        mode = "all-local"
-    elif mode == "tiered":
-        mode = "main-local-rest-cloud"
-    elif mode == "agent":
-        mode = "all-local"
-    cloud_main = cloud.cloud_lane("main", user.id)
-    cloud_exec = cloud.cloud_lane("executor", user.id)
-    # Jobs mapped in Settings -> Models (core/lanes.py): "Thinking & planning" may
-    # point at a cloud model, "Routine tool calls" at any text model. Unmapped
-    # jobs keep main / executor. The mode below still forces local when asked.
-    from core import lanes
-    _rm = cloud.role_map(user.id)
-    _reg = lanes.registry(user.id)
-    _reason = _rm.get("agent.reason")
-    if _reason and _reason != "main" and not lanes.validate_mapping("agent.reason", _reason, user.id):
-        cloud_main = cloud.cloud_lane(_reason, user.id) or cloud_main
-    _step = _rm.get("agent.tool_step")
-    steps_on_main = False
-    if _step and _step != "executor" and not lanes.validate_mapping("agent.tool_step", _step, user.id):
-        if _step == "main":
-            steps_on_main = True
-        else:
-            cloud_exec = cloud.cloud_lane(_step, user.id)
-            if _reg[_step]["local"] and small_models.instances.get(_step) is not None:
-                ex_inst = small_models.instances[_step]
-    # custom agent's preferred lane; the mode below can still force everything local
-    ca_lane = (custom_agent or {}).get("preferred_lane") or "auto"
-    if ca_lane == "main":
-        steps_on_main = True
-    elif ca_lane == "cloud" and not cloud_main:
-        # main isn't bound to a cloud model: use the user's first configured one
-        cloud_main = next(iter(cloud.cloud_models(user.id)), None)
-    if mode in ("no-orchestration", "all-cloud", "direct"):
-        # No Orchestration mode: run every request directly on the selected model.
-        # Bypass executor tiered routing and router completely.
-        cloud_exec = None
-    elif mode == "all-local":
-        cloud_main = None
-        cloud_exec = None
-    elif mode == "main-cloud-rest-local":
-        cloud_exec = None       # executor stays local in this mode
-    # When user picked an explicit cloud model for executor/vision lanes, use it
-    # (applies to main-local-rest-cloud and similar modes that need a cloud executor)
-    if req.cloud_model_override and mode not in ("all-local", "main-cloud-rest-local", "no-orchestration", "all-cloud", "direct"):
-        override_cm = cloud.get_cloud(req.cloud_model_override, user.id)
-        if override_cm:
-            cloud_exec = override_cm
-        else:
-            print(f"[agent] cloud_model_override '{req.cloud_model_override}' not found - using default lane", file=sys.stderr)
-    use_cloud_main = bool(cloud_main)
-    if not use_cloud_main and mode == "main-cloud-rest-local":
-        print("[agent] mode=main-cloud-rest-local but no cloud main lane is configured "
-              "- falling back to the local main model")
-
-    main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
-    if not main_ready and not use_cloud_main and mode != "main-local-rest-cloud":
-        target = state.profile_path or state.profile or common.initial_profile_path
-        if target:
-            try:
-                print(f"[server_manager] agent/run: model not running — auto-starting on demand...")
-                await state.ensure_running(target)
-                main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
-            except Exception as e:
-                print(f"[server_manager] auto-start main model failed: {e}", file=sys.stderr)
-    if not main_ready and not use_cloud_main and not ex_inst.available:
-        return JSONResponse({"error": "No model loaded. Please load or start a model from the top toolbar first."}, status_code=400)
-
-    print(f"[agent] lanes: main={'cloud:' + cloud_main.key if use_cloud_main else 'local'} "
-          f"executor={'cloud:' + cloud_exec.key if cloud_exec else 'local'} mode={mode}")
-
-    async def _lane_window(lane_name: str, cloud_client=None) -> int:
-        """Prompt window (tokens) for one lane, for compaction decisions.
-
-        Cloud lanes use the provider config. Local lanes prefer the window the
-        running llama-server advertises for a slot (`/slots` -> `n_ctx`, the very
-        number it quotes when it refuses an oversized request), which respects
-        -np / -kvu / --kv-unified-per-slot in a way profile math cannot. Falls back
-        to the config-derived window in core.context_budget."""
-        if cloud_client is not None:
-            # the provider's configured window, read fresh: context_budget.window() remembers the
-            # first value per lane, which would pin a switched-to model to the previous one's window
-            return int(getattr(cloud_client, "ctx", 0) or 32768)
-        if lane_name == "executor":
-            cfg = (getattr(ex_inst, "cfg", None) or {}) if ex_inst else {}
-            n_slots = int(cfg.get("np") or 1)
-            win = context_budget.window(lane_name, cfg_ctx=cfg.get("ctx") or 16384,
-                                        n_slots=n_slots, kv_unified=n_slots > 1)
-            return (await context_budget.probe_window(lane_name, getattr(ex_inst, "client", None))) or win
-        win = common.main_ctx_tokens(None)
-        return (await context_budget.probe_window("main", getattr(state, "client", None))) or win
-
-    cfg_steps = APP_CONFIG["agent"].get("max_steps", AGENT_MAX_STEPS)
-    steps = max(1, min(req.max_steps or cfg_steps, cfg_steps))
-    msgs = [dict(m) for m in req.messages]
-    # Early guard: the client-supplied history can already exceed the main lane's
-    # window before the loop starts. Per-step compaction below is authoritative once the
-    # lane and its tool surface are known; this only avoids a guaranteed overflow on the
-    # very first call - so it counts the tool schemas too, since that block (thousands of
-    # tokens) is what pushed these requests over the line in the first place.
-    if len(msgs) > 3:
-        _early_q = tool_surface.surface_query(msgs)
-        _early_tools = tool_surface.filter_tools(all_tools(), _early_q, APP_CONFIG.get("tool_surface"))
-        _early_budget = context_budget.budget_for("main", await _lane_window("main", cloud_main), cloud=bool(cloud_main))
-        if _early_budget and context_budget.prompt_tokens_for("main", msgs, _early_tools) > _early_budget:
-            msgs = compact_messages(msgs, _early_budget, tools=_early_tools)
-    if custom_agent:
-        from routes.custom_agents import apply_input_template
-        apply_input_template(msgs, custom_agent)
-
-    # --- Input sanitizer (core/input_guard.py) -----------------------------
-    # Runs after mode/lane resolution, so 'all-local' never trips cloud_only
-    # rules. Scans all user messages plus attachment names/previews (a pasted
-    # invoice is caught even when the regex only exists inside the file text).
-    # NOTE: must stay AFTER the `msgs = ...` assignment above (it reads msgs).
-    _any_cloud = bool(cloud_main) or bool(cloud_exec)
-    _scan_texts = input_guard.message_texts(msgs)   # every client-supplied role
-    _scan_texts += [f"{att.name} {att.preview or ''}" for att in req.attachments]
-    _hit = await input_guard.check_async(_scan_texts, user, any_cloud_lane=_any_cloud)
-    if _hit:
-        audit_log(user, action="input_guard.block", resource=_hit.get("name"),
-                  detail={"scope": _hit.get("scope"), "endpoint": "agent/run",
-                          "pattern": _hit.get("_matched_pattern")}, result="deny")
-        return JSONResponse({"error": _hit.get("message")}, status_code=403)
-
-    # --- Inject attached file content into the last user message ---
-    if req.attachments:
-        file_context_parts = []
-        for att in req.attachments:
-            header = f"--- ATTACHED FILE: {att.name} (workspace path: {att.path}) ---"
-            preview = att.preview or "(no content extracted)"
-            footer = (
-                f"--- END {att.name} ---\n"
-                f"[NOTE: This file was truncated at 12,000 chars. "
-                f"Use read_file_chunk('{att.path}', offset_chars=12000) to read more.]"
-                if att.truncated else
-                f"--- END {att.name} ---"
-            )
-            file_context_parts.append(f"{header}\n{preview}\n{footer}")
-        file_context = "\n\n".join(file_context_parts)
-        # Inject into last user message
-        injected = False
-        for m in reversed(msgs):
-            if m.get("role") == "user":
-                existing = m.get("content") or ""
-                m["content"] = f"{existing}\n\n[Attached Files]\n{file_context}" if existing else f"[Attached Files]\n{file_context}"
-                injected = True
-                break
-        if not injected and file_context:
-            msgs.append({"role": "user", "content": f"[Attached Files]\n{file_context}"})
-
-    ws_path = str(active_workspace())
-    sys_prompt = AGENT_SYSTEM_PROMPT.format(workspace=ws_path)
-    if req.system_prompt and req.system_prompt.strip():
-        sys_prompt = f"{req.system_prompt.strip()}\n\n{sys_prompt}"
-
-    if custom_agent:
-        sys_prompt += (
-            f"\n\n--- ACTIVE CUSTOM AGENT DIRECTIVES: {custom_agent['name']} ({custom_agent.get('icon', '🤖')}) ---\n"
-            f"{custom_agent['system_prompt']}\n"
-            f"Follow the above custom directives, persona, and role instructions strictly as you complete the task.\n"
-            f"--- END CUSTOM AGENT DIRECTIVES ---\n"
-        )
-    if personal:
-        sys_prompt += (
-            "\n\n--- PERSONAL AGENT RULES ---\n"
-            f"You work in one folder on the user's machine: {ws_path}. You may list, read, search, create and edit "
-            "files there, run shell commands, and run python or node code; the user is asked to approve each one and "
-            "sees the exact command or code. Redirects (>), installs, shells (cmd, powershell) and deleting or moving "
-            "files by command are refused: use write_file and edit_file for files. Stay inside this folder.\n"
-            "Answer greetings and general questions directly; use tools only when the request needs them. "
-            "Every file you create is saved with a unique id added to its name (report.md becomes report_1a2b3c4d.md) "
-            "so nothing old is overwritten: use the exact name write_file reports when you mention or reopen it. "
-            "Save reports and results as files in the folder, then tell the user, in plain language, what you "
-            "found or made and where the file is - the user reads your answer, not the tool output.\n"
-            "--- END PERSONAL AGENT RULES ---\n")
-    if APP_CONFIG.get("capabilities", {}).get("mcp", False):
-        from core.mcp import chat_prompt as _mcp_prompt
-        _mp = _mcp_prompt()
-        if _mp:
-            sys_prompt += "\n\n" + _mp
-    # project instructions (AGENTS.md written by /init) -- already PAN/secret
-    # masked by the loader; admin output-guard rules applied on top because the
-    # text can reach a cloud lane
-    try:
-        _pi = await load_project_instructions()
-        if _pi:
-            _pi_text, _ = output_guard.redact_full(_pi[1], user, _any_cloud)
-            sys_prompt += project_prompt_block((_pi[0], _pi_text))
-    except Exception as e:
-        print(f"[agent] project instructions load failed: {e}", file=sys.stderr)
-    # Organizational knowledge base: permission-scoped retrieval (see routes/chat.py
-    # for the rationale -- gating the candidate pool before scoring is what makes
-    # "nothing found" safe for users without access to a document).
-    _kb_query = ""
-    for _m in reversed(msgs):
-        if _m.get("role") == "user":
-            _kb_query = str(_m.get("content", ""))
-            break
-    # Long-term memory (what the user told the agent before) and, when a task is resumed, its working
-    # memory. Both are data for the model, not instructions. Cloud lanes get neither unless the admin
-    # allowed it (memory.allow_cloud): the text is personal and would leave the building.
-    _mem_cfg = APP_CONFIG.get("memory") or {}
-    _mem_on = bool(_mem_cfg.get("enabled", True)) and (not _any_cloud or bool(_mem_cfg.get("allow_cloud", False)))
-    if not _mem_on:
-        hidden_tools = frozenset(hidden_tools) | MEMORY_TOOL_NAMES
-    else:
-        agent_memory.set_user_request(_kb_query)
-        try:
-            _blk = agent_memory.session_block(user.id)
-            if _blk:
-                _blk, _ = output_guard.redact_full(_blk, user, _any_cloud)
-                sys_prompt += "\n\n" + _blk
-            if req.session_id:
-                _wm = working_memory.load(req.session_id, user.id)
-                if _wm:
-                    _wm, _ = output_guard.redact_full(_wm, user, _any_cloud)
-                    sys_prompt += "\n\n" + working_memory.prompt_block(_wm)
-        except Exception as e:
-            print(f"[agent] memory load failed: {e}", file=sys.stderr)
-    kb_ids = allowed_source_ids_for(user)
-    kb_hits = []
-    kb_blocked_reason = ""
-    kb_prompt = ""
-    if kb_ids and _kb_query.strip():
-        try:
-            from core.knowledge_router import fetch_company_knowledge, kb_routing_query, is_company_or_kb_query
-            _kb_route_q = kb_routing_query(msgs, _kb_query)
-            kb_hits, kb_prompt = await fetch_company_knowledge(_kb_route_q, kb_ids, k=6)
-            if kb_hits:
-                # same gate as chat: a task like "test this app in my browser" must not pull in (or
-                # be blocked by) company documents just because one chunk is vaguely similar
-                _auto_cos = float((APP_CONFIG.get("knowledge") or {}).get("auto_inject_cos", 0.55))
-                _top_cos = max(float(h.get("cos") or 0.0) for h in kb_hits)
-                if not (is_company_or_kb_query(_kb_route_q, kb_ids) or _top_cos >= _auto_cos):
-                    kb_hits, kb_prompt = [], ""
-        except Exception as e:
-            print(f"[agent] knowledge retrieval failed: {e}", file=sys.stderr)
-    # Data residency (core/knowledge_access.py): internal knowledge never goes
-    # to a cloud provider. A run whose question hits the KB is moved onto the
-    # local lanes; if the local main model can't run, the KB context is withheld.
-    if kb_hits and (use_cloud_main or cloud_exec) and kb_local_only():
-        target = state.profile_path or state.profile or common.initial_profile_path
-        local_err = "" if target else "no local model profile is configured"
-        try:
-            if target:
-                await state.ensure_running(target)
-        except Exception as e:
-            local_err = str(e).strip().splitlines()[0][:160] if str(e).strip() else type(e).__name__
-            print(f"[agent] local model for knowledge query unavailable: {e}", file=sys.stderr)
-        if state.is_running():
-            cloud_main, cloud_exec, use_cloud_main, main_ready = None, None, False, True
-            audit_log(user, action="knowledge.local_only", resource="agent/run",
-                      detail={"reason": "kb hits on a cloud lane", "hits": len(kb_hits)})
-        else:
-            kb_hits = []
-            kb_blocked_reason = ("Company knowledge base is local-only and this run uses a cloud model. "
-                                 f"The local model could not start ({local_err or 'unknown error'}). "
-                                 "Start a local model or switch the lanes to local, then ask again.")
-            audit_log(user, action="knowledge.blocked_cloud", resource="agent/run",
-                      detail={"reason": local_err or "local model not running"}, result="deny")
-            sys_prompt += ("\n\nNOTE: The company knowledge base is restricted to local models and no "
-                           "local model is loaded, so internal company data is not available for this "
-                           "answer. Tell the user this instead of guessing.")
-    if kb_hits:
-        sys_prompt += "\n\n" + kb_prompt
-    # the search_knowledge_base tool refuses while any cloud lane is in play
-    # (its results would land in history that a cloud lane later reads)
-    set_kb_cloud_blocked(bool(use_cloud_main or cloud_exec))
-    # capability prompt fragments: skills listing + plugin guidance
-    from core.roles import custom_agents_prompt_fragment
-    test_hint = ""
-    if not req.plan and (registry.get("browser_navigate") or registry.get("mobile_devices")):
-        test_hint = ("\nVERIFY WHAT YOU BUILD: after creating or changing something a browser or phone renders, "
-                     "run it and look at it before finishing - browser_navigate/browser_console/browser_screenshot "
-                     "for web apps, mobile_* tools for Android/iOS apps (skills: webapp-testing, mobile-testing).")
-    for frag in (skills_prompt_fragment(), agent_library_prompt_fragment(), custom_agents_prompt_fragment(),
-                 plugins_prompt_fragment(), test_hint):
-        if frag:
-            sys_prompt += "\n" + frag
-    # executor lanes get the tool-call format few-shot (aligned with the GBNF grammar)
-    if cloud_exec or ex_inst.available:
-        sys_prompt += envelope_examples()
-    if req.plan:
-        sys_prompt += PLAN_MODE_PROMPT
-    # point the plan tools at this session; in Build mode, inject the tracked plan
-    # so the agent continues it step by step and keeps statuses up to date
-    set_plan_context(req.session_id)
-    if req.session_id and not req.plan:
-        plan_items = db_get_plan_items(req.session_id)
-        if plan_items:
-            done_n = sum(1 for i in plan_items if i["status"] == "done")
-            fail_n = sum(1 for i in plan_items if i["status"] == "failed")
-            sys_prompt += (
-                "\n\nACTIVE PLAN — tracked with create_plan / update_plan_item. Work through the "
-                "pending or failed steps in order, and call update_plan_item(item=N, status='done' "
-                "or 'failed') immediately after each step finishes or fails:\n"
-                + "\n".join(
-                    f"{i['ord']}. [{i['status']}] {i['text']}" + (f" — {i['note']}" if i.get("note") else "")
-                    for i in plan_items)
-                + f"\n({done_n}/{len(plan_items)} done, {fail_n} failed)"
-            )
-    sys_prompt = common.current_date_prompt() + "\n\n" + sys_prompt
-    has_sys = False
-    for m in msgs:
-        if m.get("role") == "system":
-            has_sys = True
-            m["content"] = (m.get("content") or "").strip() + "\n\n" + sys_prompt
-            break
-    if not has_sys:
-        msgs.insert(0, {"role": "system", "content": sys_prompt})
-
-    if mode in ("no-orchestration", "all-cloud", "direct") or steps_on_main:
-        use_executor = False
-    else:
-        use_executor = bool(cloud_exec) or ex_inst.available
-        if not use_executor and not cloud_exec:
-            # The model is configured but not loaded. Try warming it once before
-            # declaring orchestration unavailable, so "executor never fired" is not
-            # a silent consequence of a cold lane. Failure here is not fatal: the
-            # run continues on main and the reason is surfaced below.
-            try:
-                await ex_inst.ensure_loaded()
-                use_executor = ex_inst.available
-            except Exception as _e:
-                print(f"[server_manager] executor could not be loaded: {_e}", file=sys.stderr)
-                use_executor = False
-    main_client = cloud.CloudClient(cloud_main) if use_cloud_main else state.client
 
     # Tell the user when orchestration was asked for but cannot happen, instead of
     # silently running the whole task on one model (the symptom that made this hard
@@ -620,12 +255,6 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         except Exception as e:
             print(f"[agent] local fallback for {lane} unavailable: {e}", file=sys.stderr)
         return None
-    last_query = ""
-    for m in reversed(msgs):
-        if m.get("role") == "user":
-            last_query = str(m.get("content", ""))
-            break
-    surface_q = tool_surface.surface_query(msgs) or last_query
 
     def _task_summary(snapshot: list):
         """A callable that builds the structured task summary when compaction actually happens."""
@@ -690,19 +319,6 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             }
         return {"lane": lane, "model": lane, "display": lane, "device": _main_device_label(), "role": "Agent", "source": "local"}
 
-    rpol = router_policy.rcfg()
-    q_category = router_policy.classify_query(last_query, rpol)
-    # Laya request profile (core/small_model/classifier.py): logged whenever the classifier is on,
-    # and it refines the rule-based category only in active mode, only when confident, and never
-    # over a greeting. It runs on a worker thread with a hard timeout, so a slow model just
-    # means the rules decide.
-    clf_profile = None
-    if classifier.enabled() and q_category != "greeting":
-        clf_profile = await asyncio.get_event_loop().run_in_executor(
-            None, classifier.request_profile, last_query)
-        if (clf_profile and clf_profile["confident"] and clf_profile.get("category")
-                and classifier.active("request_profile")):
-            q_category = clf_profile["category"]
     if q_category == "greeting":
         async def direct_chat():
             model_info = get_model_info("main" if (use_cloud_main or main_ready) else "executor")
@@ -731,35 +347,20 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     direct_stream = _llm_chat_stream(active_client, msgs, None, req.temperature, req.max_tokens,
                                                     repeat_penalty=agent_rep, rid=chat_rid, effort=effort,
                                                     top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
-                _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
-                async for ev, val in direct_stream:
-                    if ev == "queued":
-                        yield f"event: queued\ndata: {json.dumps(val)}\n\n"
-                        continue
-                    if ev == "fallback":
-                        yield f"event: lane\ndata: {json.dumps(_local_model_info('main' if (use_cloud_main or main_ready) else 'executor'))}\n\n"
-                        _red = output_guard.OutputRedactor(user, False)   # lane now local
-                        continue
-                    if ev == "thought_delta":
-                        yield f"event: thought_delta\ndata: {json.dumps({'step': 1, 'delta': val, 'model': model_info['display']})}\n\n"
-                    elif ev == "content_to_thought":
-                        # forced-open <think>: the text streamed as the answer was reasoning
-                        _red.reset()
-                        yield f"event: delta_to_thought\ndata: {json.dumps({'step': 1, 'model': model_info['display']})}\n\n"
-                    elif ev == "content_delta":
-                        _safe = _red.feed(val)
-                        if _safe:
-                            yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
-                for _c in _guard_flush_events(_red, []):
-                    yield _c
-                _guard_audit(_red, user, "agent/direct")
+                _drain = DrainResult()
+                async for chunk in drain_llm_stream(
+                        direct_stream, user,
+                        StreamSpec(step=1, model_display=model_info["display"],
+                                   audit_label="agent/direct", collect=[],
+                                   forward_preparing=False,
+                                   fallback_payload=_local_model_info('main' if (use_cloud_main or main_ready) else 'executor')),
+                        model_info, getattr(active_client, "is_cloud", False), _drain):
+                    yield chunk
+                model_info = _drain.model_info
             finally:
-                req_mon = _monitor_state["active"].get(chat_rid)
-                toks = req_mon.get("gen_tokens") if req_mon else None
-                dt = (time.time() - req_mon["start"]) if req_mon else None
-                tps = (toks / dt) if (toks and dt and dt > 0) else None
-                monitor_end(chat_rid, 200, completion_tokens=toks, tps=tps, duration=dt,
-                           source=model_info.get("source"), provider=model_info.get("provider_name"))
+                account_llm_result(
+                    rid=chat_rid, res_dict=None, streamed=None,
+                    msgs=msgs, model_info=model_info, endpoint=None)
             yield f"event: done\ndata: {json.dumps({'state': 'completed'})}\n\n"
         return StreamingResponse(direct_chat(), media_type="text/event-stream")
 
@@ -895,13 +496,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 forced_main = step < force_main_until
                 plan_first = (plan_first_on and step < plan_first_max
                               and not (step > 0 and db_get_plan_items(req.session_id)))
-                lane_name = ("main" if not use_executor or executor_stuck or main_first or esc_sustained
-                             or forced_main or plan_first else "executor")
-                lane_reason = ("no_executor" if not use_executor else "repeat_streak" if executor_stuck
-                               else "plan_first" if plan_first and not forced_main and not main_first and not esc_sustained
-                               else force_main_why if forced_main
-                               else main_first_why if main_first
-                               else f"escalated_{esc_streak_reason}" if esc_sustained else "executor_default")
+                lane_name, lane_reason = decide_lane(LaneInputs(
+                    use_executor=use_executor, executor_stuck=executor_stuck,
+                    main_first=main_first, main_first_why=main_first_why,
+                    esc_sustained=esc_sustained, esc_streak_reason=esc_streak_reason,
+                    forced_main=forced_main, force_main_why=force_main_why,
+                    plan_first=plan_first))
 
                 is_creation_or_code = router_policy.is_creation(last_query, rpol)
                 # Off by default: over the logged runs the classifier never produced a
@@ -1082,7 +682,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 if lane_name == "executor":
                     # cloud executors are OpenAI-compatible: no GBNF grammar, and
                     # their window comes from the provider config (model ctx)
-                    ex_ctx = await _lane_window("executor", cloud_exec)
+                    ex_ctx = await ctx.lane_window("executor", cloud_exec)
                     # The executor sees this request and this run's steps, not the whole chat
                     # (core/agent_loop/executor_view.py). `msgs` stays the full history for main
                     # and for escalation, so it is never compacted on the executor's behalf.
@@ -1104,7 +704,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         step_grammar = _executor_grammar(tools_for_lane)
                 else:
                     # Main lane context compaction: protect against context window explosion / VRAM demotion
-                    main_ctx = await _lane_window("main", cloud_main)
+                    main_ctx = await ctx.lane_window("main", cloud_main)
                     budget = context_budget.budget_for(lane_name, main_ctx, cloud=bool(cloud_main))
                     pre_tokens = context_budget.prompt_tokens_for(lane_name, msgs, tools_for_lane)
                     # first layer: old tool results become one-line placeholders (core/agent_loop/clearing.py)
@@ -1176,64 +776,29 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                                        effort=None if step_grammar else step_effort,
                                                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
                                                        tool_choice=step_tool_choice)
-                    _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
                     _cloud_out = bool(getattr(active_client, "is_cloud", False))
-                    async for ev, val in lane_stream:
-                        if ev == "queued":
-                            yield f"event: queued\ndata: {json.dumps(val)}\n\n"
-                            continue
-                        if ev == "fallback":
-                            model_info = _local_model_info(lane_name)
-                            yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
-                            _red = output_guard.OutputRedactor(user, False)   # lane now local
-                            _cloud_out = False
-                            continue
-                        if ev == "thought_delta":
-                            yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
-                        elif ev == "content_to_thought":
-                            # forced-open <think>: the text streamed as the answer was reasoning
-                            _red.reset()
-                            streamed_content.clear()
-                            yield f"event: delta_to_thought\ndata: {json.dumps({'step': step + 1, 'model': model_info['display']})}\n\n"
-                        elif ev == "content_delta":
-                            _safe = _red.feed(val)
-                            streamed_content.append(_safe)
-                            if _safe:
-                                yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
-                        elif ev == "tool_preparing":
-                            yield sse("tool_preparing", {'step': step + 1, **val})
-                        elif ev == "result":
-                            res_dict = val
-                    for _c in _guard_flush_events(_red, streamed_content):
-                        yield _c
-                    _guard_audit(_red, user, f"agent/{lane_name}")
+                    _drain = DrainResult()
+                    async for chunk in drain_llm_stream(
+                            lane_stream, user,
+                            StreamSpec(step=step + 1, model_display=model_info["display"],
+                                       audit_label=f"agent/{lane_name}", collect=streamed_content,
+                                       fallback_payload=_local_model_info(lane_name)),
+                            model_info, getattr(active_client, "is_cloud", False), _drain):
+                        yield chunk
+                    if _drain.fell_back:
+                        _cloud_out = False
+                    model_info = _drain.model_info
+                    _red = _drain.redactor
+                    res_dict = _drain.res_dict
                 finally:
-                    req_mon = _monitor_state["active"].get(step_rid)
-                    toks = req_mon.get("gen_tokens") if req_mon else len(streamed_content)
-                    dt = (time.time() - req_mon["start"]) if req_mon else None
-                    tps = (toks / dt) if (toks and dt and dt > 0) else None
-                    u = (res_dict or {}).get("usage") or {}
-                    tim = (res_dict or {}).get("timings") or {}
-                    pcached, ccached = parse_cache_tokens(u, tim)
-                    ptoks = u.get("prompt_tokens") or (sum(len(m.get("content", "")) for m in step_msgs) // 4)
-                    # Feed the server's exact prompt count back into the budget
-                    # accounting. Only a real count from the server may anchor the
-                    # next step - the chars//4 fallback above is itself a guess.
-                    if u.get("prompt_tokens"):
-                        context_budget.record_usage(lane_name, sent_tokens, u["prompt_tokens"],
-                                                    step_msgs, tools_for_lane)
-                    # never invent a cache figure for a provider that did not report one (it read as a 90%+ hit rate)
-                    if not pcached and len(step_msgs) > 1 and model_info.get("source") != "cloud":
-                        pcached = sum(len(m.get("content", "")) for m in step_msgs[:-1]) // 4
-                    ctoks = u.get("completion_tokens") or toks
                     is_orch = (lane_name == "executor" or "orchestrator" in (model_info.get("model") or "").lower())
-                    monitor_end(step_rid, 200, prompt_tokens=ptoks, completion_tokens=ctoks, tps=tps, duration=dt,
-                                model=model_info.get("model"), prompt_cached=pcached, completion_cached=ccached,
-                                source=model_info.get("source"), provider=model_info.get("provider_name"))
-                    db_record_request(f"agent/{lane_name}", model_info.get("model"), ptoks, ctoks, tps, dt, None, True, 200,
-                                      prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=is_orch,
-                                      source=model_info.get("source"), provider=model_info.get("provider_name"),
-                                      run_id=run_id)
+                    acct = account_llm_result(
+                        rid=step_rid, res_dict=_drain.res_dict, streamed=streamed_content,
+                        msgs=step_msgs, model_info=model_info, endpoint=f"agent/{lane_name}",
+                        usage_lane=lane_name, usage_tools=tools_for_lane,
+                        sent_tokens=sent_tokens, is_orchestrator=is_orch,
+                        run_id=run_id)
+                    ptoks, ctoks, dt = acct.ptoks, acct.ctoks, acct.dt
                 run_prompt_tokens += int(ptoks or 0)
                 yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks, 'run_prompt_tokens': run_prompt_tokens, 'run_token_budget': run_token_budget})}\n\n"
 
@@ -1318,7 +883,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
 
                 if should_escalate:
                     print(f"[server_manager] Executor failed/tutorialized on step {step+1}; auto-escalating to Main Model.", file=sys.stderr)
-                    _red.reset()
+                    # (no redactor reset here: the step's redactor was consumed by the drain
+                    # above and a fresh one is created for the replay stream below. The old
+                    # `_red.reset()` cleared buf on an instance that was immediately discarded -
+                    # reset() touches no shared state - so dropping it changes nothing.)
                     yield "event: delta_reset\ndata: {}\n\n"
                     lane_name = "main"
                     model_info = get_model_info("main")
@@ -1337,7 +905,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                        else None)
                     res_dict = None
                     streamed_content = []
-                    esc_ctx = await _lane_window("main", cloud_main)
+                    esc_ctx = await ctx.lane_window("main", cloud_main)
                     budget = context_budget.budget_for("main", esc_ctx, cloud=bool(cloud_main))
                     pre_tokens = context_budget.prompt_tokens_for("main", msgs, esc_tools)
                     if pre_tokens > budget:
@@ -1358,59 +926,30 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                                           repeat_penalty=agent_rep, rid=esc_rid, effort=effort,
                                                           top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
                                                           tool_choice=esc_tool_choice)
-                        _red = output_guard.OutputRedactor(user, getattr(main_client, "is_cloud", False))
                         _cloud_out = bool(getattr(main_client, "is_cloud", False))
-                        async for ev, val in esc_stream:
-                            if ev == "queued":
-                                yield f"event: queued\ndata: {json.dumps(val)}\n\n"
-                                continue
-                            if ev == "fallback":
-                                yield f"event: lane\ndata: {json.dumps(_local_model_info('main'))}\n\n"
-                                _red = output_guard.OutputRedactor(user, False)   # lane now local
-                                _cloud_out = False
-                                continue
-                            if ev == "thought_delta":
-                                yield f"event: thought_delta\ndata: {json.dumps({'step': step + 1, 'delta': val, 'model': model_info['display']})}\n\n"
-                            elif ev == "content_to_thought":
-                                # forced-open <think>: the text streamed as the answer was reasoning
-                                _red.reset()
-                                streamed_content.clear()
-                                yield f"event: delta_to_thought\ndata: {json.dumps({'step': step + 1, 'model': model_info['display']})}\n\n"
-                            elif ev == "content_delta":
-                                _safe = _red.feed(val)
-                                streamed_content.append(_safe)
-                                if _safe:
-                                    yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
-                            elif ev == "tool_preparing":
-                                yield sse("tool_preparing", {'step': step + 1, **val})
-                            elif ev == "result":
-                                res_dict = val
-                        for _c in _guard_flush_events(_red, streamed_content):
-                            yield _c
-                        _guard_audit(_red, user, "agent/main-escalated")
+                        _drain = DrainResult()
+                        async for chunk in drain_llm_stream(
+                                esc_stream, user,
+                                StreamSpec(step=step + 1, model_display=model_info["display"],
+                                           audit_label="agent/main-escalated",
+                                           collect=streamed_content,
+                                           adopt_fallback_model=False,
+                                           fallback_payload=_local_model_info('main')),
+                                model_info, getattr(main_client, "is_cloud", False), _drain):
+                            yield chunk
+                        if _drain.fell_back:
+                            _cloud_out = False
+                        model_info = _drain.model_info
+                        _red = _drain.redactor
+                        res_dict = _drain.res_dict
                     finally:
-                        req_mon = _monitor_state["active"].get(esc_rid)
-                        toks = req_mon.get("gen_tokens") if req_mon else len(streamed_content)
-                        dt = (time.time() - req_mon["start"]) if req_mon else None
-                        tps = (toks / dt) if (toks and dt and dt > 0) else None
-                        u = (res_dict or {}).get("usage") or {}
-                        tim = (res_dict or {}).get("timings") or {}
-                        pcached, ccached = parse_cache_tokens(u, tim)
-                        ptoks = u.get("prompt_tokens") or (sum(len(m.get("content", "")) for m in msgs) // 4)
-                        # anchor the main lane on the escalated call's exact count
-                        if u.get("prompt_tokens"):
-                            context_budget.record_usage("main", sent_tokens, u["prompt_tokens"],
-                                                        msgs, esc_tools)
-                        if not pcached and len(msgs) > 1 and model_info.get("source") != "cloud":
-                            pcached = sum(len(m.get("content", "")) for m in msgs[:-1]) // 4
-                        ctoks = u.get("completion_tokens") or toks
-                        monitor_end(esc_rid, 200, prompt_tokens=ptoks, completion_tokens=ctoks, tps=tps, duration=dt,
-                                    model=model_info.get("model"), prompt_cached=pcached, completion_cached=ccached,
-                                    source=model_info.get("source"), provider=model_info.get("provider_name"))
-                        db_record_request("agent/main-escalated", model_info.get("model"), ptoks, ctoks, tps, dt, None, True, 200,
-                                          prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=False,
-                                          source=model_info.get("source"), provider=model_info.get("provider_name"),
-                                          run_id=run_id)
+                        acct = account_llm_result(
+                            rid=esc_rid, res_dict=_drain.res_dict, streamed=streamed_content,
+                            msgs=msgs, model_info=model_info, endpoint="agent/main-escalated",
+                            usage_lane="main", usage_tools=esc_tools,
+                            sent_tokens=sent_tokens, is_orchestrator=False,
+                            run_id=run_id)
+                        ptoks, ctoks = acct.ptoks, acct.ctoks
                     run_prompt_tokens += int(ptoks or 0)
                     yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks, 'run_prompt_tokens': run_prompt_tokens, 'run_token_budget': run_token_budget})}\n\n"
                     content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
@@ -1628,13 +1167,21 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 n_actions_before = len(actions_taken)
                 parallel_results = {}
                 if len(parsed_actions) > 1 and all(a[0] == "spawn_agent" for a in parsed_actions):
-                    # Pre-emit all tool_call events so the UI displays all subagent cards concurrently
+                    # Pre-emit all tool_call events so the UI displays all subagent cards concurrently.
+                    # Calls the plan gates would stop are not pre-emitted: the sequential
+                    # loop below emits their card together with the plan-mode error.
                     for name, tc_id, args in parsed_actions:
                         pending_tool[tc_id] = name
-                        yield sse("tool_call", {'id': tc_id, 'name': name, 'args': args})
+                        if parallel_spawn_eligible(name, bool(req.plan or plan_gate), PLAN_MODE_TOOLS):
+                            yield sse("tool_call", {'id': tc_id, 'name': name, 'args': args})
                     valid_coros = []
                     valid_ids = []
                     for name, tc_id, args in parsed_actions:
+                        if not parallel_spawn_eligible(name, bool(req.plan or plan_gate), PLAN_MODE_TOOLS):
+                            # plan mode / plan-first would stop this call in the
+                            # sequential gauntlet below: leave it out of the fast
+                            # path so it lands there and is reported, not run
+                            continue
                         approved, _ = fast_sandbox_check(name, args)
                         if approved:
                             valid_ids.append(tc_id)
@@ -1990,14 +1537,13 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     msgs, main_client, req.verify, _cloud_out):
                 yield _vc
             yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
-            plan_note = {
-                "max_steps": f"max steps reached ({steps})",
-                "timeout": f"wall-clock limit reached ({run_limit_s}s)",
-                "budget": f"token budget reached ({run_token_budget:,} prompt tokens)",
-                "loop": "stopped: repeating the same tool calls",
-                "loop_near_repeat": f"stopped: `{loop_detail}` called repeatedly without progress",
-                "no_progress": "stopped: no progress - " + _describe_stop(loop_detail),
-            }.get(stop_reason, "stopped")
+            # elapsed_s is computed below; stop_note never uses it, so pass 0 rather
+            # than moving existing code around for an unused field.
+            _stop_ctx = StopContext(
+                steps=steps, steps_run=steps_run, run_limit_s=run_limit_s,
+                run_token_budget=run_token_budget, run_prompt_tokens=run_prompt_tokens,
+                loop_detail=loop_detail, elapsed_s=0)
+            plan_note = stop_note(stop_reason, _stop_ctx)
             # reason lets the UI offer "Continue" (the next run re-injects the tracked plan)
             # Never emit an empty `text`: a step-cap stop used to yield text:'' and
             # note:'max steps reached', so the user got a dead end with no idea what
@@ -2014,14 +1560,11 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     plan_note += f" — plan progress: {plan_done_n}/{len(pi)} done, {plan_failed_n} failed"
 
             elapsed_s = int(time.time() - run_started)
-            why = {
-                "max_steps": f"Reached the step limit ({steps} steps)",
-                "timeout": f"Ran for {elapsed_s // 60} min (wall-clock limit)",
-                "budget": f"Used the run's token budget ({run_prompt_tokens:,} prompt tokens)",
-                "loop": "Kept repeating the same tool calls",
-                "loop_near_repeat": f"Called `{loop_detail}` repeatedly without making progress",
-                "no_progress": "Stopped making progress: " + _describe_stop(loop_detail),
-            }.get(stop_reason, "Stopped")
+            _stop_ctx = StopContext(
+                steps=steps, steps_run=steps_run, run_limit_s=run_limit_s,
+                run_token_budget=run_token_budget, run_prompt_tokens=run_prompt_tokens,
+                loop_detail=loop_detail, elapsed_s=elapsed_s)
+            why = stop_headline(stop_reason, _stop_ctx)
             did = [a["name"] for a in actions_taken]
             summary = f"**{why}** after {steps_run} step{'s' if steps_run != 1 else ''}"
             summary += f" ({elapsed_s // 60}m {elapsed_s % 60}s)." if elapsed_s >= 60 else "."

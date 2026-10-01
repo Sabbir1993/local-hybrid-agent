@@ -14,6 +14,22 @@ from core import input_guard
 from routes import proxy
 
 
+def setUpModule():
+    # set_output_rules() below disables the built-in PAN rule process-wide so these tests
+    # exercise proxy wiring in isolation. Snapshot first: without a restore, every test
+    # file running after this one inherits pan_output=off (suite order-dependent redaction).
+    from core import small_model
+    setUpModule._saved = {k: dict(v) if isinstance(v, dict) else v
+                          for k, v in small_model.APP_CONFIG.items()
+                          if k in ("pci", "output_guard")}
+
+
+def tearDownModule():
+    from core import small_model
+    for k, v in setUpModule._saved.items():
+        small_model.APP_CONFIG[k] = v
+
+
 class FakePrincipal:
     def __init__(self):
         self.id = 1

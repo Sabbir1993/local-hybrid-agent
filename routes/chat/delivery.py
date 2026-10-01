@@ -11,11 +11,14 @@ def _saved_filename(res_str: str, fallback: str) -> str:
     return m.group(1).strip() if m else fallback
 
 
-def _prompt_tokens_of(res_dict, msgs) -> int:
+def _prompt_tokens_of(res_dict, msgs, tools=None) -> int:
     """Full prompt size of the last LLM call, cached tokens included.
     llama.cpp's timings.prompt_n counts only freshly-evaluated tokens, so add
-    cache_n; a count far below the estimate is cache-excluded - use the estimate."""
-    est = estimate_prompt_tokens(msgs)
+    cache_n; a count far below the estimate is cache-excluded - use the estimate.
+    tools are the schemas sent with that call: omitting them undercounts by the
+    thousands of tokens the schema block costs (the exact tool-blind bug
+    core/context_budget.py exists to eliminate)."""
+    est = estimate_prompt_tokens(msgs, tools)
     u = (res_dict or {}).get("usage") or {}
     t = (res_dict or {}).get("timings") or {}
     real = int(u.get("prompt_tokens") or 0)

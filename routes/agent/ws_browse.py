@@ -43,7 +43,7 @@ async def _ws_tree_scan(rel_dir: str) -> list:
     changed_keys = [k.replace("\\", "/") for k in (_ws_changes.get(uid) or {})]
     out = []
     for n in (data.get("nodes") or []):
-        if n.get("name") in ignored:
+        if n.get("name") in ignored or str(n.get("name") or "").startswith("_agent_run_"):
             continue
         rel = n.get("path", "")
         if n.get("dir"):

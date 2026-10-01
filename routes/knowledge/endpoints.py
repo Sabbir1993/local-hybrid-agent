@@ -18,6 +18,7 @@ from .helpers import (
 )
 from .models import (
     MAX_KB_FILE_BYTES,
+    BulkDeleteBody,
     RoleAccessBody,
     TextBody,
     UrlBody,
@@ -124,6 +125,25 @@ async def reindex_source(source_id: int, user: Principal = Depends(require_permi
         return JSONResponse({"error": "this source kind cannot be reindexed automatically (re-add pasted text instead)"}, status_code=400)
     result = await _finish_ingest(source_id, text, user)
     return {**result, "source": _source_public(auth_db.get_knowledge_source(source_id))}
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_sources(body: BulkDeleteBody, user: Principal = Depends(require_permission("knowledge.manage"))):
+    deleted = 0
+    for source_id in body.ids:
+        row = auth_db.get_knowledge_source(source_id)
+        if not row:
+            continue
+        if row["kind"] == "file" and row["stored_path"]:
+            try:
+                Path(row["stored_path"]).unlink(missing_ok=True)
+            except Exception:
+                pass
+        delete_knowledge_chunks(source_id)
+        auth_db.delete_knowledge_source(source_id)
+        audit_log(user, action="knowledge.delete", resource=row["title"], result="allow")
+        deleted += 1
+    return {"ok": True, "deleted": deleted}
 
 
 @router.delete("/{source_id}")

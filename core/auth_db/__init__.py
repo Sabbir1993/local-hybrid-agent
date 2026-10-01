@@ -61,6 +61,18 @@ from .knowledge_acl import (
     set_source_role_access,
     update_knowledge_source_status,
 )
+from .mfa import (
+    admin_reset_mfa,
+    consume_backup_code,
+    disable_totp,
+    enable_totp,
+    get_totp,
+    record_totp_counter,
+    remaining_backup_codes,
+    set_totp_secret,
+    store_backup_codes,
+    totp_enabled,
+)
 from .schema import _seed_defaults, init_tables
 from .tokens import (
     create_api_token_row,
@@ -72,6 +84,7 @@ from .tokens import (
     revoke_all_sessions_for_user,
     revoke_api_token,
     revoke_session_row,
+    set_session_mfa_verified,
     touch_api_token,
     touch_session,
 )
@@ -135,6 +148,7 @@ __all__ = [
     "create_session_row",
     "get_session_row",
     "touch_session",
+    "set_session_mfa_verified",
     "revoke_session_row",
     "revoke_all_sessions_for_user",
     "create_api_token_row",
@@ -150,6 +164,16 @@ __all__ = [
     "revoke_companion_devices",
     "revoke_companion_device",
     "touch_companion_device",
+    "admin_reset_mfa",
+    "consume_backup_code",
+    "disable_totp",
+    "enable_totp",
+    "get_totp",
+    "record_totp_counter",
+    "remaining_backup_codes",
+    "set_totp_secret",
+    "store_backup_codes",
+    "totp_enabled",
     "insert_audit",
     "list_audit",
     "query_audit",

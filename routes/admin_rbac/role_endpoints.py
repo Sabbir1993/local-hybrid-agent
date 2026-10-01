@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from core import auth_db
 from core.audit import audit_log
 from core.auth import Principal, user_has_permission
-from core.deps import get_current_user, require_permission
+from core.deps import get_current_user, require_verified
 from .helpers import _check_assignable_roles
 from .models import CreateRoleBody, RolePermissionsBody
 
@@ -33,7 +33,7 @@ async def list_user_names(user: Principal = Depends(get_current_user)):
 
 
 @router.get("/roles")
-async def list_roles(user: Principal = Depends(require_permission("roles.manage"))):
+async def list_roles(user: Principal = Depends(require_verified("roles.manage"))):
     roles = auth_db.db().execute("SELECT * FROM roles ORDER BY name").fetchall()
     out = []
     for r in roles:
@@ -63,7 +63,7 @@ async def list_permissions(user: Principal = Depends(get_current_user)):
 
 
 @router.post("/roles")
-async def create_role(body: CreateRoleBody, user: Principal = Depends(require_permission("roles.manage"))):
+async def create_role(body: CreateRoleBody, user: Principal = Depends(require_verified("roles.manage"))):
     existing = auth_db.db().execute("SELECT id FROM roles WHERE name = ?", (body.name,)).fetchone()
     if existing:
         raise HTTPException(status_code=409, detail="role already exists")
@@ -76,7 +76,7 @@ async def create_role(body: CreateRoleBody, user: Principal = Depends(require_pe
 
 @router.patch("/roles/{role_id}/permissions")
 async def update_role_permissions(role_id: int, body: RolePermissionsBody,
-                                  user: Principal = Depends(require_permission("roles.manage"))):
+                                  user: Principal = Depends(require_verified("roles.manage"))):
     role = auth_db.db().execute("SELECT * FROM roles WHERE id = ?", (role_id,)).fetchone()
     if not role:
         raise HTTPException(status_code=404, detail="role not found")

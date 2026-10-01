@@ -155,7 +155,9 @@ class TestAgentRunRegression(unittest.TestCase):
     referencing it earlier crashed /agent/run with a 500 (UnboundLocalError)."""
 
     def test_guard_hook_after_msgs_assignment(self):
-        src = (Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py").read_text(
+        # Both lines moved to routes/agent/setup.py in the C1 setup extraction;
+        # the ordering invariant (guard reads msgs) is unchanged, only its file.
+        src = (Path(__file__).resolve().parents[1] / "routes" / "agent" / "setup.py").read_text(
             encoding="utf-8")
         msgs_line = src.find("msgs = [dict(m) for m in req.messages]")
         hook_line = src.find("input_guard.check_async")

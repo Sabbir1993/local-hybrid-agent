@@ -29,6 +29,8 @@ async def clear_all_data(body: ClearAllDataBody, user: Principal = Depends(get_c
     directly."""
     if not user.is_super_admin:
         raise HTTPException(status_code=403, detail="super admin only")
+    if not user.mfa_verified and auth_db.totp_enabled(user.id):
+        raise HTTPException(status_code=403, detail="mfa_step_up_required")
     if body.confirm != "DELETE":
         raise HTTPException(status_code=400, detail='type "DELETE" to confirm')
 

@@ -571,7 +571,7 @@ function capSection(id, title, enabled, innerHtml, note) {
 }
 
 /* ---------------- MCP custom servers: add / edit / remove / paste JSON ---------------- */
-const MCP_INP = 'background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;';
+const MCP_INP = 'background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:7px; padding:7px 10px; font-size:12px; box-sizing:border-box; font-family:inherit;';
 let _mcpStatusTimer = null;
 let _mcpConfigs = {};   // "scope:name" -> public config from /mcp/servers (no secret values)
 

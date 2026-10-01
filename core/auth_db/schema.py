@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS users (
     must_change_password INTEGER NOT NULL DEFAULT 0,
     failed_login_count INTEGER NOT NULL DEFAULT 0,
     locked_until REAL,
+    totp_secret TEXT,
+    totp_enabled INTEGER NOT NULL DEFAULT 0,
+    totp_last_counter INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     last_login_at REAL
@@ -67,6 +70,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     expires_at REAL NOT NULL,
     ip TEXT,
     user_agent TEXT,
+    mfa_verified INTEGER NOT NULL DEFAULT 0,
     revoked_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
@@ -164,6 +168,16 @@ CREATE TABLE IF NOT EXISTS companion_devices (
 );
 CREATE INDEX IF NOT EXISTS idx_companion_devices_user ON companion_devices(user_id);
 
+CREATE TABLE IF NOT EXISTS user_totp_backup (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    used_at REAL,
+    UNIQUE(user_id, code_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_user_totp_backup_user ON user_totp_backup(user_id);
+
 CREATE TABLE IF NOT EXISTS user_custom_agents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -232,6 +246,17 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
 def init_tables(conn) -> None:
     conn.executescript(SCHEMA_SCRIPT)
     conn.commit()
+    _cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
+    for col, ddl in (("totp_secret", "TEXT"),
+                     ("totp_enabled", "INTEGER NOT NULL DEFAULT 0"),
+                     ("totp_last_counter", "INTEGER NOT NULL DEFAULT 0")):
+        if col not in _cols:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
+            conn.commit()
+    _sess_cols = {r[1] for r in conn.execute("PRAGMA table_info(auth_sessions)")}
+    if "mfa_verified" not in _sess_cols:
+        conn.execute("ALTER TABLE auth_sessions ADD COLUMN mfa_verified INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
     if "work_dir" not in {r[1] for r in conn.execute("PRAGMA table_info(user_custom_agents)")}:
         conn.execute("ALTER TABLE user_custom_agents ADD COLUMN work_dir TEXT DEFAULT ''")
         conn.commit()

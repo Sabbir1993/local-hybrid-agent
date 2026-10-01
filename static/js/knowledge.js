@@ -123,20 +123,20 @@ function renderKnowledgePanel(box, sources) {
   box.innerHTML = `
     <div class="cap-item" style="margin-bottom:10px;">
       <b>Add source</b>
-      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
-        <select id="kb-add-kind" style="background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11.5px;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
+        <select id="kb-add-kind" style="flex:0 0 160px;">
           <option value="text">📝 Pasted text</option>
           <option value="url">🔗 URL</option>
           <option value="file">📄 File (PDF/DOCX/XLSX)</option>
         </select>
-        <input type="text" id="kb-add-title" placeholder="Title" style="flex:1; min-width:120px; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11.5px;">
+        <input type="text" id="kb-add-title" placeholder="Title" style="flex:1; min-width:140px;">
       </div>
-      <div id="kb-add-body" style="margin-top:6px;"></div>
+      <div id="kb-add-body" style="margin-top:8px;"></div>
       <div style="margin-top:8px;">
-        <label class="dim" style="font-size:10.5px; display:block; margin-bottom:4px;">Roles allowed to query</label>
+        <label class="dim" style="font-size:11px; font-weight:600; display:block; margin-bottom:4px;">Roles allowed to query</label>
         <div style="display:flex; gap:6px; align-items:flex-start;">
           <div id="kb-add-roles" class="tagpicker" style="flex:1;"></div>
-          <button class="btn accent" id="kb-add-submit" style="width:auto; margin:0; padding:5px 12px; font-size:11.5px;">+ Add</button>
+          <button class="btn accent" id="kb-add-submit" style="width:auto; margin:0; padding:6px 14px; font-size:12px; height:34px;">+ Add</button>
         </div>
       </div>
       <div id="kb-upload-progress" style="display:none; margin-top:8px; padding:8px 10px; background:var(--panel2); border-radius:6px; border:1px solid var(--border);">
@@ -150,6 +150,21 @@ function renderKnowledgePanel(box, sources) {
       </div>
       <div class="cfg-note" style="margin-top:6px;">Large files are uploaded in 5 MB chunks to safely bypass server size limits. Ingestion is not blocked.</div>
     </div>
+    ${sources.length ? `
+    <div id="kb-toolbar" style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:14px; margin-bottom:8px; padding:8px 12px; background:var(--panel2); border:1px solid var(--border); border-radius:7px; flex-wrap:wrap;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; font-weight:600; color:var(--text); margin:0; user-select:none;">
+          <input type="checkbox" id="kb-select-all" style="cursor:pointer; accent-color:var(--accent); width:15px; height:15px; margin:0;">
+          <span>Select all</span>
+        </label>
+        <span id="kb-selected-count" class="dim" style="font-size:11px;">(0 of ${sources.length} selected)</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <button type="button" class="btn red" id="kb-bulk-delete" disabled style="width:auto; margin:0; padding:5px 12px; font-size:11.5px; opacity:0.5; cursor:not-allowed; display:inline-flex; align-items:center; gap:5px;">
+          🗑️ Delete Selected
+        </button>
+      </div>
+    </div>` : ''}
     <div id="kb-list" style="display:flex; flex-direction:column; gap:4px;">
       ${sources.map(s => sourceRow(s)).join('') || '<div class="dim" style="font-size:11px;">No knowledge sources yet.</div>'}
     </div>`;
@@ -158,11 +173,11 @@ function renderKnowledgePanel(box, sources) {
   const bodyBox = $('kb-add-body');
   const renderBody = () => {
     if (kindSel.value === 'text') {
-      bodyBox.innerHTML = '<textarea id="kb-add-text" rows="4" placeholder="Paste text…" style="width:100%; box-sizing:border-box; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:6px 8px; font-size:11.5px;"></textarea>';
+      bodyBox.innerHTML = '<textarea id="kb-add-text" rows="4" placeholder="Paste text…" style="width:100%; box-sizing:border-box;"></textarea>';
     } else if (kindSel.value === 'url') {
-      bodyBox.innerHTML = '<input type="text" id="kb-add-url" placeholder="https://…" style="width:100%; box-sizing:border-box; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:6px 8px; font-size:11.5px;">';
+      bodyBox.innerHTML = '<input type="text" id="kb-add-url" placeholder="https://…" style="width:100%; box-sizing:border-box;">';
     } else {
-      bodyBox.innerHTML = '<input type="file" id="kb-add-file" accept=".pdf,.docx,.pptx,.xlsx,.xls,.csv" style="font-size:11.5px;">';
+      bodyBox.innerHTML = '<input type="file" id="kb-add-file" accept=".pdf,.docx,.pptx,.xlsx,.xls,.csv" style="font-size:12px; padding:6px 0; color:var(--text);">';
     }
   };
   renderBody();
@@ -243,6 +258,79 @@ function renderKnowledgePanel(box, sources) {
     }
   };
 
+  const bulkBtn = box.querySelector('#kb-bulk-delete');
+  const selectAll = box.querySelector('#kb-select-all');
+  const selectedCount = box.querySelector('#kb-selected-count');
+  const rowCheckboxes = box.querySelectorAll('.kb-row-select');
+
+  const getSelectedIds = () => {
+    return Array.from(box.querySelectorAll('.kb-row-select:checked')).map(cb => parseInt(cb.dataset.id, 10));
+  };
+
+  const updateBulkState = () => {
+    const selected = getSelectedIds();
+    const count = selected.length;
+    const total = rowCheckboxes.length;
+    if (selectedCount) {
+      selectedCount.textContent = `(${count} of ${total} selected)`;
+    }
+    if (selectAll) {
+      selectAll.checked = total > 0 && count === total;
+      selectAll.indeterminate = count > 0 && count < total;
+    }
+    if (bulkBtn) {
+      bulkBtn.disabled = count === 0;
+      bulkBtn.style.opacity = count > 0 ? '1' : '0.5';
+      bulkBtn.style.cursor = count > 0 ? 'pointer' : 'not-allowed';
+      bulkBtn.innerHTML = count > 0 ? `🗑️ Delete Selected (${count})` : '🗑️ Delete Selected';
+    }
+  };
+
+  if (selectAll) {
+    selectAll.onchange = () => {
+      rowCheckboxes.forEach(cb => { cb.checked = selectAll.checked; });
+      updateBulkState();
+    };
+  }
+
+  rowCheckboxes.forEach(cb => {
+    cb.onchange = () => updateBulkState();
+  });
+
+  if (bulkBtn) {
+    bulkBtn.onclick = async () => {
+      const ids = getSelectedIds();
+      if (!ids.length) return;
+      const count = ids.length;
+      if (!confirm(`Permanently delete ${count} selected knowledge source(s)? This removes them from the index.`)) return;
+
+      bulkBtn.disabled = true;
+      bulkBtn.textContent = 'Deleting...';
+
+      try {
+        const res = await fetch('/knowledge/bulk-delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        });
+        if (res.ok) {
+          toast(`Deleted ${count} knowledge source(s) ✓`);
+        } else {
+          let done = 0;
+          await Promise.all(ids.map(async (id) => {
+            const r = await fetch(`/knowledge/${id}`, { method: 'DELETE' });
+            if (r.ok) done++;
+          }));
+          toast(`Deleted ${done} knowledge source(s) ✓`);
+        }
+        loadKnowledgePanel();
+      } catch (e) {
+        toast('Bulk delete failed: ' + e.message, true);
+        loadKnowledgePanel();
+      }
+    };
+  }
+
   box.querySelectorAll('.kb-delete').forEach(btn => {
     btn.onclick = async () => {
       if (!confirm('Delete this knowledge source? This removes it from the index permanently.')) return;
@@ -301,11 +389,14 @@ function renderKnowledgePanel(box, sources) {
 
 function sourceRow(s) {
   const statusColor = s.status === 'ready' ? 'var(--green)' : (s.status === 'error' ? 'var(--red)' : (s.status === 'processing' ? 'var(--accent)' : 'var(--dim)'));
-  return `<div class="cap-item">
+  return `<div class="cap-item kb-item" data-id="${s.id}">
     <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
-      <span><b>${esc(s.title)}</b> <span class="dim">(${esc(s.kind)})</span>
-        <span style="color:${statusColor};"> · ${esc(s.status)}</span></span>
-      <div style="display:flex; gap:4px;">
+      <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
+        <input type="checkbox" class="kb-row-select" data-id="${s.id}" aria-label="Select ${esc(s.title)}" style="cursor:pointer; accent-color:var(--accent); width:15px; height:15px; flex-shrink:0; margin:0;">
+        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><b>${esc(s.title)}</b> <span class="dim">(${esc(s.kind)})</span>
+          <span style="color:${statusColor};"> · ${esc(s.status)}</span></span>
+      </div>
+      <div style="display:flex; gap:4px; flex-shrink:0;">
         ${s.kind === 'file' ? `<a class="btn ghost" href="/knowledge/${s.id}/file" target="_blank" rel="noopener" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px; text-decoration:none;">👁 View</a>` : ''}
         <button class="btn ghost kb-reindex" data-id="${s.id}" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;">⟳ Reindex</button>
         <button class="btn ghost kb-delete" data-id="${s.id}" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px; color:var(--red);">Delete</button>

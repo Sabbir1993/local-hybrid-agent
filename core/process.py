@@ -95,11 +95,14 @@ def build_launch_command(profile: dict) -> list[str]:
     backend = profile.get("backend", CONFIG_DEFAULTS["backend"])
     prefix = device_prefix(backend)
 
-    # Zero-share segments disable that GPU: "0,1" -> only GPU #2 runs, "1,0" -> only GPU #1
+    # Zero-share segments disable that GPU: "0,1" -> only GPU #2 runs, "1,0" -> only GPU #1.
+    # Non-numeric segments are dropped like the zero-shares are (same guard as the line
+    # above): a hand-edited "9," used to die here on int("") while the device list built
+    # one line up silently dropped the same segment.
     shares = [s.strip() for s in str(tensor_split).split(",")]
     if len(shares) == len(gpu_devices) and len(shares) > 1:
         gpu_devices = [d for d, s in zip(gpu_devices, shares) if s.isdigit() and int(s) > 0]
-        tensor_split = ",".join(s for s in shares if int(s) > 0)
+        tensor_split = ",".join(s for s in shares if s.isdigit() and int(s) > 0)
 
     cmd = [
         str(server_bin),

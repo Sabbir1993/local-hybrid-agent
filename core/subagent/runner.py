@@ -14,6 +14,34 @@ from .scope import _subagent_scope
 from .window import _subagent_window
 
 
+def resolve_subagent_tools(all_names, role_tools=None, tool_allowlist=None, parent_allowlist=None) -> set:
+    """Tool names a sub-agent may execute. The caller's allowlist and the
+    parent's custom-agent allowlist can only narrow (never widen: a child never
+    gets more than its parent), and DENIED_TOOLS are stripped last so no
+    combination of role + explicit list + parent scope can re-admit them.
+    Pure: unit-tested without a model, a registry, or a database."""
+    names_ok = set(role_tools or all_names)
+    if tool_allowlist:
+        names_ok &= set(tool_allowlist)
+    if parent_allowlist is not None:
+        names_ok &= set(parent_allowlist)
+    names_ok -= DENIED_TOOLS
+    return names_ok
+
+
+def subagent_call_verdict(name: str, names_ok) -> Optional[str]:
+    """Refusal text when a sub-agent must not run an emitted `name`, else None.
+    The schema filter above only withholds tools from the offer; models can
+    emit any name, so the denied list is enforced here again at execution --
+    before the allowlist check, so a forbidden tool is refused as forbidden
+    rather than merely unlisted."""
+    if name in DENIED_TOOLS:
+        return f"error: '{name}' is unavailable to sub-agents"
+    if name not in names_ok:
+        return f"error: '{name}' is not enabled for this sub-agent"
+    return None
+
+
 async def run_subagent(task: str, role: Optional[str] = None, lane_override: Optional[str] = None,
                         tool_allowlist: Optional[list] = None, max_steps: Optional[int] = None) -> str:
     from ..roles import resolve_role
@@ -61,15 +89,11 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
     steps = min(MAX_SUBAGENT_STEPS, max(1, int(max_steps or role_cfg.get("max_steps") or DEFAULT_SUBAGENT_STEPS)))
 
     all_schemas = [t for t in registry.schemas() if t.get("function", {}).get("name") not in DENIED_TOOLS]
-    names_ok = set(role_cfg.get("tools") or [t["function"]["name"] for t in all_schemas])
-    if tool_allowlist:
-        names_ok &= set(tool_allowlist)
     # a sub-agent never gets more than the parent's custom-agent allowlist
     from ..request_context import get_tool_allowlist
-    parent_allow = get_tool_allowlist()
-    if parent_allow is not None:
-        names_ok &= parent_allow
-    names_ok -= DENIED_TOOLS
+    names_ok = resolve_subagent_tools(
+        [t["function"]["name"] for t in all_schemas],
+        role_cfg.get("tools"), tool_allowlist, get_tool_allowlist())
     tools_for_subagent = [t for t in all_schemas if t["function"]["name"] in names_ok]
 
     sys_prompt = SUBAGENT_SYSTEM_PROMPT.format(workspace=str(active_workspace()))
@@ -182,11 +206,9 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                     a = json.loads(tc["function"]["arguments"])
                 except Exception:
                     a = {}
-                if name in DENIED_TOOLS:
-                    result = f"error: '{name}' is unavailable to sub-agents"
-                elif name not in names_ok:
-                    # the schema filter alone isn't enough: models can emit any name
-                    result = f"error: '{name}' is not enabled for this sub-agent"
+                refused = subagent_call_verdict(name, names_ok)
+                if refused is not None:
+                    result = refused
                 else:
                     result = await run_tool(name, a)
                 # a child re-sends its own history every step too: keep its tool results as small as the parent's

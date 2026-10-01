@@ -127,16 +127,19 @@ def looks_undelivered(content: str, wants_file: bool, delivered: bool) -> bool:
     return c.endswith(":") or bool(_ANNOUNCE_RE.search(c[-300:]))
 
 
-def shrink_old_tool_results(msgs: list, budget_tokens: int, keep_last: int = 2, head_chars: int = 800) -> None:
+def shrink_old_tool_results(msgs: list, budget_tokens: int, keep_last: int = 2, head_chars: int = 800,
+                            tools=None) -> None:
     """Research loops pile up 6-20 KB web results per call. Once the prompt
     passes the budget, cut older tool results down to their head (the latest
-    `keep_last` stay whole), then fall back to digest compaction."""
-    if estimate_prompt_tokens(msgs) <= budget_tokens:
+    `keep_last` stay whole), then fall back to digest compaction.
+    tools are the schemas sent with the next call: every estimate here must see
+    them, or the schema block (thousands of tokens) is invisible to the budget."""
+    if estimate_prompt_tokens(msgs, tools) <= budget_tokens:
         return
     tool_idx = [i for i, m in enumerate(msgs) if m.get("role") == "tool"]
     for i in tool_idx[:-keep_last] if keep_last else tool_idx:
         c = str(msgs[i].get("content") or "")
         if len(c) > head_chars:
             msgs[i]["content"] = c[:head_chars] + f"\n...[{len(c) - head_chars} chars trimmed to fit context]"
-    if estimate_prompt_tokens(msgs) > budget_tokens:
-        msgs[:] = compact_messages(msgs, budget_tokens)
+    if estimate_prompt_tokens(msgs, tools) > budget_tokens:
+        msgs[:] = compact_messages(msgs, budget_tokens, tools)

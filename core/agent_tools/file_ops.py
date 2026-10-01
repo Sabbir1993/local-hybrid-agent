@@ -1,5 +1,6 @@
 import fnmatch
 import sys
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -284,17 +285,29 @@ async def tool_run_python(args: dict) -> str:
     req_fn = getattr(_pkg(), "require_device_workspace", require_device_workspace)
     uid, ws = req_fn()
     cb = getattr(_pkg(), "companion_bridge", companion_bridge)
-    script = ws / "_agent_run.py"
+    # one script per call: concurrent runs sharing a workspace must never share
+    # a filename. The old fixed `_agent_run.py` let a second run overwrite the
+    # first run's code between write and execute -- and raced the companion's
+    # on-disk approval check (script bytes == approved code) the same way.
+    script_name = f"_agent_run_{uuid.uuid4().hex[:8]}.py"
+    script = ws / script_name
     await cb.call(uid, "fs.write", {"path": str(script), "content": code, "append": False})
     raw_t = APP_CONFIG.get("agent", {}).get("exec_timeout_s", 0)
     from ..shell_tools import DEFAULT_EXEC_TIMEOUT_S, take_code_approval
     timeout = int(raw_t) if raw_t and int(raw_t) > 0 else DEFAULT_EXEC_TIMEOUT_S
     try:
         data = await cb.call(
-            uid, "shell.run", {"command": 'python "_agent_run.py"', "cwd": str(ws), "timeout": timeout,
+            uid, "shell.run", {"command": f'python "{script_name}"', "cwd": str(ws), "timeout": timeout,
                                "display": code, "approved_in_app": take_code_approval(code)},
             timeout=(timeout or 60) + 10)
     except TimeoutError:
+        data = None
+    finally:
+        try:
+            await cb.call(uid, "fs.remove", {"path": str(script)})
+        except Exception:
+            pass
+    if data is None:
         return f"error: timed out after {timeout}s (config agent.exec_timeout_s)"
     out = (data.get("stdout") or "")[-MAX_TOOL_OUTPUT:]
     err = (data.get("stderr") or "")[-4000:]

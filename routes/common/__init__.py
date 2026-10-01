@@ -2,12 +2,32 @@
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 # Global CLI runtime overrides
 initial_profile_path: Optional[Path] = None
 models_dir: Optional[Path] = None
-curStatus_model_hint: Optional[str] = None
+# Per-user model-selection hint (who answers you). This used to be a single
+# process-global string, so one user's cloud switch changed the Settings
+# drawer fallback and status display for everyone else on the box.
+_model_hints: Dict[int, str] = {}
+
+
+def get_model_hint(user_id: Optional[int]) -> Optional[str]:
+    """This user's dropdown-selected model, or None if they never picked one."""
+    if user_id is None:
+        return None
+    return _model_hints.get(int(user_id))
+
+
+def set_model_hint(user_id: Optional[int], value: Optional[str]) -> None:
+    """Record this user's selection without touching anyone else's."""
+    if user_id is None:
+        return
+    if value:
+        _model_hints[int(user_id)] = value
+    else:
+        _model_hints.pop(int(user_id), None)
 
 from .globals import (
     current_date_prompt,
@@ -59,5 +79,6 @@ __all__ = [
     "_llm_chat_stream_raw",
     "initial_profile_path",
     "models_dir",
-    "curStatus_model_hint",
+    "get_model_hint",
+    "set_model_hint",
 ]

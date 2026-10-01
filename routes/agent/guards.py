@@ -1,33 +1,15 @@
-import json
 import re
 from typing import Optional
-from core.audit import audit_log
 from core.small_model import APP_CONFIG
 from core.agent_tools import FILE_WRITE_TOOLS, pop_file_diff
 from core.grammar import build_tool_call_grammar
 
 
 # ---------------- output sanitizer helpers ----------------
-def _guard_flush_events(redactor, streamed_content) -> list:
-    """Flush the output-guard holdback at end of a lane stream. Returns SSE
-    chunks the caller must yield (tail delta + one-time guard notice)."""
-    chunks = []
-    _tail = redactor.flush()
-    if _tail:
-        streamed_content.append(_tail)
-        chunks.append(f"event: delta\ndata: {json.dumps({'text': _tail})}\n\n")
-    if redactor.matched:
-        chunks.append(f"event: guard\ndata: "
-                      + json.dumps({"rule": redactor.matched.get("name"),
-                                    "message": redactor.matched.get("message")}) + "\n\n")
-    return chunks
-
-
-def _guard_audit(redactor, user, endpoint: str) -> None:
-    if redactor.matched:
-        audit_log(user, action="output_guard.redact", resource=redactor.matched.get("name"),
-                  detail={"endpoint": endpoint, "scope": redactor.matched.get("scope"),
-                          "hits": redactor.hits}, result="deny")
+# Moved to core/agent_loop/stream.py (single copy used by every lane stream).
+# Re-exported here so existing importers (routes/agent/__init__.py, run.py) keep working.
+from core.agent_loop.stream import guard_audit as _guard_audit
+from core.agent_loop.stream import guard_flush_events as _guard_flush_events
 
 
 # Grammar-constrained tool calls for the executor lane (small-model reliability).

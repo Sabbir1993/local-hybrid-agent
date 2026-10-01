@@ -56,15 +56,18 @@ class Principal:
     permission_keys: set
     via_token: bool = False           # authenticated by an API token, not a browser session
     token_id: Optional[int] = None
+    mfa_verified: bool = False        # this session proved the TOTP second factor
 
 
 def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def create_session(user: UserRecord, ip: Optional[str], user_agent: Optional[str]) -> str:
+def create_session(user: UserRecord, ip: Optional[str], user_agent: Optional[str],
+                   mfa_verified: bool = False) -> str:
     raw = secrets.token_urlsafe(32)
-    auth_db.create_session_row(_hash_token(raw), user.id, time.time() + session_idle_s(), ip, user_agent)
+    auth_db.create_session_row(_hash_token(raw), user.id, time.time() + session_idle_s(), ip, user_agent,
+                               mfa_verified=mfa_verified)
     return raw
 
 
@@ -98,7 +101,14 @@ def verify_session(raw_token: Optional[str], touch: bool = True) -> Optional[Pri
         return None
     if touch:
         auth_db.touch_session(token_hash, now + session_idle_s())
-    return _to_principal(row["user_id"])
+    principal = _to_principal(row["user_id"])
+    if principal is not None:
+        try:
+            verified = bool(row["mfa_verified"])
+        except (IndexError, KeyError):
+            verified = False
+        principal.mfa_verified = verified
+    return principal
 
 
 # ---------------- API tokens ----------------
@@ -171,3 +181,16 @@ def password_policy_error(password: str, username: str = "") -> Optional[str]:
 
 def new_csrf_token() -> str:
     return secrets.token_urlsafe(24)
+
+
+def mfa_required_policy() -> bool:
+    """Whether every local-password account must enroll a TOTP second factor
+    (app.json security.mfa_required, flipped by an MFA-verified admin in
+    Settings). Off by default: MFA is opt-in, with step-up on the fenced
+    endpoints either way. Takes effect on next login / next sensitive request."""
+    try:
+        from .small_model import APP_CONFIG
+        sec = APP_CONFIG.get("security") or {}
+    except Exception:
+        sec = {}
+    return bool(sec.get("mfa_required", False))

@@ -1,0 +1,38 @@
+# Tool configuration only (this repo is not a distributed package).
+# CI pins: ruff==0.16.9, Python 3.11, node 24 - see .github/workflows/ci.yml.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+# Day-one gate: rules with ZERO violations on 2026-10-01. Each catches real bugs
+# (undefined names fail only where tests don't reach; syntax rules are free).
+# Ratchet path, in order: F401 (needs per-file ignores for re-export modules like
+# core/db/__init__.py) -> E741 (23 ambiguous `l` names) -> I001 (292 files; autofixable).
+lint.select = ["F821", "F822", "E9", "W6", "F841", "F811"]
+lint.ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# none yet - add alongside the fix, never to silence a new violation
+
+[tool.coverage.run]
+source = ["core", "routes"]
+branch = true
+omit = [
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+# Measured 58% with branch coverage (2026-10-01, Windows, full unittest suite).
+# Branch arcs are the point: partial branches are the untested error paths, and this
+# codebase's risk lives in error paths, not happy paths. Floor sits below the measured
+# number for win/linux branch variance (os.name-gated code covers one platform at a time).
+# Ratchet: raise toward the measured number as coverage improves, never lower it.
+fail_under = 55
+show_missing = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

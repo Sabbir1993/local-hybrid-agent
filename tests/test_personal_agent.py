@@ -84,7 +84,7 @@ class RunToolTests(unittest.TestCase):
         self.assertTrue(personal_scope())
 
     def test_code_execution_and_sub_agents_are_refused(self):
-        self.assertEqual(PERSONAL_BLOCKED_TOOLS, {"spawn_agent"})
+        self.assertEqual(PERSONAL_BLOCKED_TOOLS, {"spawn_agent", "spawn_parallel_agents"})
         for name in sorted(PERSONAL_BLOCKED_TOOLS):
             out = run(execution.run_tool(name, {"code": "print(1)"}))
             self.assertTrue(out.startswith("error:"), name)
@@ -136,9 +136,12 @@ class WiringTests(unittest.TestCase):
         self.assertFalse(AgentRequest(messages=[]).personal)
 
     def test_run_route_needs_an_owned_agent_with_a_folder(self):
+        # Setup guards moved to routes/agent/setup.py in the C1 setup extraction;
+        # loop-gate strings stay in run.py. Both files are checked.
+        setup_src = Path("routes/agent/setup.py").read_text(encoding="utf-8")
+        self.assertIn("personal_needs_folder", setup_src)
+        self.assertIn("set_personal_scope(ctx.personal)", setup_src)
         src = Path("routes/agent/run.py").read_text(encoding="utf-8")
-        self.assertIn("personal_needs_folder", src)
-        self.assertIn("set_personal_scope(personal)", src)
         self.assertIn("not in hidden_tools", src)
         self.assertIn("(cfg.get(\"ask_first\", True) or personal)", src)
         self.assertIn("'saveable': False if personal", src)
@@ -169,8 +172,9 @@ if __name__ == "__main__":
 
 class FileWritingNeverWithheldTests(unittest.TestCase):
     def test_restricted_agents_keep_the_file_write_tools(self):
-        agent_run = Path("routes/agent/run.py").read_text(encoding="utf-8")
-        self.assertIn('set(custom_agent["tool_allowlist"]) | {"write_file", "edit_file", "append_file"}', agent_run)
+        # The allowlist union moved to routes/agent/setup.py in the C1 setup extraction.
+        setup_src = Path("routes/agent/setup.py").read_text(encoding="utf-8")
+        self.assertIn('set(ctx.custom_agent["tool_allowlist"]) | {"write_file", "edit_file", "append_file"}', setup_src)
         chat_run = Path("routes/chat/run.py").read_text(encoding="utf-8")
         self.assertIn('set(custom_agent["tool_allowlist"]) | {"write_file"}', chat_run)
         builder = Path("static/js/custom-agents.js").read_text(encoding="utf-8")

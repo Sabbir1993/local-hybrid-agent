@@ -8,6 +8,7 @@ path-to-permission map.
 
 from fastapi import Depends, HTTPException, Request
 
+from . import auth_db
 from .audit import audit_log
 from .auth import (API_TOKEN_PREFIX, SESSION_COOKIE, Principal, user_has_permission,
                    verify_api_token, verify_session)
@@ -56,5 +57,45 @@ def require_permission(key: str):
         if not user_has_permission(user, key):
             audit_log(user, action=key, permission_key=key, result="deny", ip=ip)
             raise HTTPException(status_code=403, detail=f"missing permission: {key}")
+        return user
+    # Marker for the auth-invariant test (tests/test_auth_invariant.py): lets it tell a
+    # permission gate apart from a bare session check when walking the route tree.
+    _dep._require_permission_key = key
+    return _dep
+
+
+def _ensure_step_up(user: Principal, request: Request, action: str) -> None:
+    """Step-up: an MFA-enrolled user on an unverified session stops here.
+    Users without MFA pass through unchanged (opt-in era); API tokens never
+    reach the fenced endpoints (their scopes exclude them). The UI catches
+    `mfa_step_up_required` and prompts for a code -> POST /auth/mfa/step-up."""
+    if user.via_token or user.mfa_verified:
+        return
+    if auth_db.totp_enabled(user.id):
+        ip = request.client.host if request.client else None
+        audit_log(user, action=action, permission_key=None, result="deny",
+                   detail={"reason": "mfa_step_up_required"}, ip=ip)
+        raise HTTPException(status_code=403, detail="mfa_step_up_required")
+
+
+def require_verified(key: str):
+    """require_permission + step-up for the fenced endpoints (account/role/DB
+    administration, token minting): a stolen session cookie alone must not be
+    enough to mint admins, persistent tokens, or read auth.db."""
+    base = require_permission(key)
+
+    async def _dep(request: Request, user: Principal = Depends(base)) -> Principal:
+        _ensure_step_up(user, request, action=key)
+        return user
+    _dep._require_permission_key = key
+    return _dep
+
+
+def require_verified_session():
+    """Step-up without a permission key, for session-only sensitive endpoints
+    (pairing, MFA management, policy toggles)."""
+
+    async def _dep(request: Request, user: Principal = Depends(get_current_user)) -> Principal:
+        _ensure_step_up(user, request, action="mfa.step_up_required")
         return user
     return _dep

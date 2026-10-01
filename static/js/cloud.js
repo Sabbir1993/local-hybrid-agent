@@ -64,34 +64,34 @@ function renderCloudCard(d) {
 
     // ---- add / edit provider form ----
   h += `<div id="cloud-form" hidden style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px;">
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-      <div><label style="font-size:10px; color:var(--dim);">Provider id *</label>
-        <input type="text" id="cf-prov" placeholder="open router" style="width:100%;"></div>
-      <div><label style="font-size:10px; color:var(--dim);">Display name</label>
-        <input type="text" id="cf-name" placeholder="open router" style="width:100%;"></div>
-      <div style="grid-column:span 2;"><label style="font-size:10px; color:var(--dim);">Base URL *</label>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+      <div><label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Provider id *</label>
+        <input type="text" id="cf-prov" placeholder="openrouter" style="width:100%;"></div>
+      <div><label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Display name</label>
+        <input type="text" id="cf-name" placeholder="OpenRouter" style="width:100%;"></div>
+      <div style="grid-column:span 2;"><label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Base URL *</label>
         <input type="text" id="cf-url" placeholder="https://openrouter.ai/api/v1" style="width:100%; font-family:monospace;"></div>
-      <div style="grid-column:span 2;"><label style="font-size:10px; color:var(--dim);">API key</label>
+      <div style="grid-column:span 2;"><label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">API key</label>
         <input type="password" id="cf-key" placeholder="sk-or-v1-..." style="width:100%; font-family:monospace;"></div>
-      <div style="grid-column:span 2;"><label style="font-size:10px; color:var(--dim);">npm package (whole provider — stored for reference, not used at runtime)</label>
+      <div style="grid-column:span 2;"><label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">npm package (whole provider — stored for reference, not used at runtime)</label>
         <input type="text" id="cf-npm" placeholder="@ai-sdk/openai-compatible" style="width:100%; font-family:monospace;"></div>
-      <div style="grid-column:span 2; border-top:1px dashed var(--border); padding-top:8px; font-size:10px; color:var(--dim); font-weight:700; text-transform:uppercase; letter-spacing:0.5px;">
+      <div style="grid-column:span 2; border-top:1px dashed var(--border); padding-top:8px; font-size:10.5px; color:var(--dim); font-weight:700; text-transform:uppercase; letter-spacing:0.5px;">
         Model(s) for this provider
       </div>
-      <div><label style="font-size:10px; color:var(--dim);">Model id(s) *</label>
+      <div><label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Model id(s) *</label>
         <input type="text" id="cf-mid" placeholder="stealth/union-alpha" style="width:100%; font-family:monospace;"></div>
-      <div><label style="font-size:10px; color:var(--dim);">Model label(s)</label>
+      <div><label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Model label(s)</label>
         <input type="text" id="cf-mlabel" placeholder="union-alpha" style="width:100%;"></div>
-      <div><label style="font-size:10px; color:var(--dim);">Context (tokens)</label>
+      <div><label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Context (tokens)</label>
         <input type="number" id="cf-mctx" placeholder="262144" style="width:100%;"></div>
-      <div style="grid-column:span 2; font-size:10px; color:var(--dim);">
+      <div style="grid-column:span 2; font-size:10.5px; color:var(--dim); line-height:1.4;">
         Add more models to this same provider by separating ids (and labels) with commas,
         e.g. <code>stealth/union-alpha, stealth/vision</code> — existing models are kept, these are merged in.
       </div>
       <div style="grid-column:span 2;">
-        <label style="font-size:10px; color:var(--dim);">Extra request headers (optional)</label>
-        <input type="text" id="cf-headers" placeholder='HTTP-Referer=https://myapp.com, X-Title=My App' style="width:100%; font-family:monospace; font-size:10.5px;">
-        <div style="font-size:8.5px; color:var(--dim); margin-top:2px;">Comma-separated key=value pairs sent with every request. A default HTTP-Referer/X-Title is sent automatically (many OpenAI-compatible gateways reject requests without one) — override it here if needed.</div>
+        <label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Extra request headers (optional)</label>
+        <input type="text" id="cf-headers" placeholder='HTTP-Referer=https://myapp.com, X-Title=My App' style="width:100%; font-family:monospace;">
+        <div style="font-size:9.5px; color:var(--dim); margin-top:3px; line-height:1.4;">Comma-separated key=value pairs sent with every request. A default HTTP-Referer/X-Title is sent automatically (many OpenAI-compatible gateways reject requests without one) — override it here if needed.</div>
       </div>
     </div>
     <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:9px;">

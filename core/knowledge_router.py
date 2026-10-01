@@ -114,7 +114,9 @@ async def fetch_company_knowledge(query: str, allowed_source_ids: Set[int], k: i
     await ensure_knowledge_vectors()
 
     from .small_model import APP_CONFIG
-    min_cos = float((APP_CONFIG.get("knowledge") or {}).get("min_cos", 0.45))
+    # R4-calibrated fallback (grid knee: real fallout 0.771 -> 0.407). An
+    # explicit config value still wins; the fallback is the measured default.
+    min_cos = float((APP_CONFIG.get("knowledge") or {}).get("min_cos", 0.55))
     hits = await search_knowledge_hybrid(query, k=k, allowed_knowledge_source_ids=allowed_source_ids,
                                          min_cos=min_cos)
     if not hits:

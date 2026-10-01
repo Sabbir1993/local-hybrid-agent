@@ -37,6 +37,25 @@ from .execution import (
     run_tool,
     all_tools,
 )
+from .policy import (
+    Lane,
+    LaneInputs,
+    StopContext,
+    StopReason,
+    decide_lane,
+    describe_stop,
+    stop_headline,
+    stop_note,
+)
+from .stream import (
+    AccountResult,
+    DrainResult,
+    StreamSpec,
+    account_llm_result,
+    drain_llm_stream,
+    guard_audit,
+    guard_flush_events,
+)
 
 __all__ = [
     "AGENT_CORE_TOOLS",
@@ -65,4 +84,19 @@ __all__ = [
     "was_cut_off",
     "run_tool",
     "all_tools",
+    "Lane",
+    "LaneInputs",
+    "StopContext",
+    "StopReason",
+    "decide_lane",
+    "describe_stop",
+    "stop_headline",
+    "stop_note",
+    "AccountResult",
+    "DrainResult",
+    "StreamSpec",
+    "account_llm_result",
+    "drain_llm_stream",
+    "guard_audit",
+    "guard_flush_events",
 ]

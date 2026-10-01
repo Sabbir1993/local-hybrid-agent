@@ -299,8 +299,9 @@ add a branch in `_apply_config_update()` if it needs special parsing.
 
 If `?model=` names a *different* model than the one in VRAM, the endpoint builds
 a **standalone profile** from `model_configs.json` + defaults so the drawer edits
-the dropdown-selected model rather than the loaded one. `curStatus_model_hint`
-makes the saved config survive an unload/refresh.
+the dropdown-selected model rather than the loaded one. The per-user
+`routes/common.get_model_hint(user.id)` map makes the saved config survive
+an unload/refresh without leaking one user's selection to anyone else.
 
 ---
 
@@ -389,7 +390,7 @@ the executor lane's lean tool set keeps working if the registry isn't bootstrapp
 | `grep` | regex over workspace, skips files >2MB, 100 hit cap |
 | `write_file` | auto-infers a path from content if omitted (HTML→`index.html`, code→`main.py`); `MAX_EDIT_BYTES` = 512KB |
 | `edit_file` | exact-string replace; **errors if `old_string` matches more than once** unless `replace_all` |
-| `run_python` | writes `_agent_run.py` in the workspace and runs it; timeout `agent.exec_timeout_s` |
+| `run_python` | writes a unique `_agent_run_<hex8>.py` per call in the workspace, runs it, removes it; timeout `agent.exec_timeout_s` |
 | `list_diff` | files created/modified this session (from `_ws_changes`) |
 | `revert` | restores pre-session content, or deletes if newly created |
 | `analyze_image` | async → routes to the vision small model |
@@ -959,6 +960,67 @@ output so you can diff against `RESULT_FIELDS`.
 curl -X POST http://localhost:8000/control/switch -d '{"profile":"profiles/qwen3.8-flash-next.json"}'
 ```
 
+### Run the live eval (manual)
+The mock suite gates loop behaviour; live tasks measure whether the agent is
+any good with a real model. Run these after a model swap, prompt change, or
+router tuning — not on every commit.
+
+One-time setup: create a dedicated `eval` user (no MFA — the runner cannot
+answer TOTP) owning a project pointed at a **throwaway workspace**, and
+activate it. Never point live runs at a real project: `escalation_task`
+writes files (bounded to `eval_tmp/`, but still).
+
+```
+python tests/eval_agent.py --live --live-user eval --live-password '...'
+```
+
+Every record carries `env` (git sha, model/profile from `/control/status`,
+lane mode, temperature), so runs weeks apart stay comparable. Without
+`--live-user` the tasks 401 (all routes need a principal) and the failure
+says so. Soft tasks (`memory_search`, `escalation_task`) report but never fail.
+
+### Deferred: nightly live benchmark (full F1)
+
+Deliberately not built yet: a cron-driven nightly with 3 repeats per task,
+Wilson bands (reuse `wilson_ci`), `eval_live_baseline.json` with the same
+compare semantics as mock, and **report-only for 2 weeks, then gate non-soft
+tasks**. Flaky quarantine: 2 consecutive nightly fails before a gate fires,
+with auto-rerun on first failure. Budget ≈ 45 min GPU/night, local lanes only
+(zero cloud spend), local cron (GitHub runners have no GPU). Revisit when a
+second user/machine exists, a release cadence starts, or a model swap needs
+overnight measurement. The F1-lite pieces above (auth, sandbox project, env
+record, bounded tasks) are the prerequisites, so the nightly is additive,
+not a rewrite.
+
+### Corporate directory login (LDAP/AD)
+
+Off by default. `config/app.json` → add:
+
+```
+"auth": {"provider": "ldap", "ldap": {
+  "host": "ad.example.com", "use_ssl": true,
+  "user_dn_template": "uid={username},ou=people,dc=example,dc=com"}}
+```
+
+- Template mode (above) binds as the user directly. Without `{username}` in
+  the template, add `bind_dn` + `bind_password` + `search_base` (+ optional
+  `search_filter`, default `(uid={username})`) for a service-account lookup.
+- Plaintext binds are refused in code unless the host is loopback — directory
+  credentials never cross the LAN in the clear. Empty passwords are rejected
+  before dialling (some servers succeed an unauthenticated bind).
+- First successful bind provisions a local row (`auth_provider='ldap'`,
+  `external_id`=DN, no password, default `user` role — never admin).
+  A changed DN denies rather than re-links; the admin clears `external_id`.
+- A row with a local password always verifies locally first: break-glass and
+  pre-provisioned accounts survive any provider setting. Keep one local
+  super-admin for IdP outages.
+- LDAP accounts keep local TOTP (enroll/disable re-check the directory
+  password live; change-password stays local-only). Failed directory binds do
+  NOT count locally the way passwords do — watch the directory's own lockout
+  policy, since every typo is a bind attempt against it.
+- Needs `ldap3` (in `requirements.txt`/lock). Tests use a faked
+  `ldap3.Connection` (`tests/test_ldap_auth.py`) — zero network.
+
 ### Diagnose: generation is slow
 
 1. `GET /control/status` → compare `measured_tg_tokens_per_sec` with the live monitor rate.
@@ -1158,6 +1220,82 @@ databases and read `config.json` as import-time side effects.
   - iOS shares the `capabilities.mobile` flag
   - the session↔agent binding is localStorage-only, not on the session row
 - Work is uncommitted on `fine_tune_2`.
+
+---
+
+## 18. Deployment envelope (G2: documented, not engineered)
+
+Single box, single process, SQLite, TLS-terminates-elsewhere. Verified against
+the working tree; revisit before any second-machine or internet-facing deploy.
+
+- **Process:** one `server_manager.py`. Background tasks (tuner, memory index,
+  monitor) run on the loop thread. A restart drops SSE streams, the IP-failure
+  table, and MFA tickets/fail counters (sessions and audit rows survive).
+- **Ports (localhost by default):** manager `PROXY_PORT` 8000, llama-server
+  8090, small models 8091–8093. `PROXY_HOST` defaults to `127.0.0.1`
+  (`A770_HOST` overrides); anything off-box must go through a TLS tunnel/VPN —
+  the server speaks plain HTTP and sets no HSTS/security headers itself.
+- **Trust root:** `auth.db` holds argon2 password hashes, sha256 session/token/
+  backup-code hashes, and TOTP secrets (plaintext-equivalent — see R2 below).
+  Filesystem read of the DB directory bypasses every control in this document.
+- **Other state:** `projects.db` (projects/sessions/chats), `memory.db`
+  (chunks + vectors), `usage.db` (requests, telemetry, tuner tables).
+  `db_backups/` retention is bounded; restores are manual file copies.
+- **Sessions:** 15-min sliding idle (toggleable), 7-day absolute cap. MFA TOTP
+  is per-user opt-in plus admin-enforceable; the fenced endpoints
+  (users/roles/database.manage, token mint, pairing, MFA management) need a
+  verified session from MFA-enrolled accounts.
+- **Companion (user devices):** device keys replace the browser session on the
+  socket; file ops stay inside user-approved folders (symlink-resolved);
+  `approved_in_app` skips the native dialog unless "also confirm on this
+  device" is on — a compromised server can execute within approved folders
+  without a second prompt (see R9).
+
+## 19. Residual risk register (G3)
+
+Reviewed as a set 2026-10-01. Each item is accepted with a reason, not
+overlooked. Revisit when the deployment envelope (§18) changes.
+
+- **R1 — 8-char minimum passwords (PCI DSS asks 12).** Deliberate owner
+  decision. Compensated by argon2, per-account lockout (10/30min), per-IP
+  throttle (30/15min), and MFA availability. Revisit for regulated data.
+- **R2 — TOTP secrets stored decryptable in `auth.db`.** No KEK
+  infrastructure exists; encrypting with a key on the same disk adds theatre,
+  not security. The DB directory is the trust root (§18).
+- **R3 — API tokens live up to 90 days.** Fenced perms can never attach to a
+  token, scopes intersect current rights at every use, and minting needs a
+  verified session. Revocation is one click; expiry is a backstop, not the control.
+- **R4 — Throttles and MFA tickets are in-memory.** A restart zeroes the IP
+  table (fresh 30 guesses) and voids tickets (fail-closed: re-login). Acceptable
+  for a single-tenant box; a shared/multi-process deploy must externalise these.
+- **R5 — `eval_results.json` is tracked and rewritten per run.** Permanent
+  dirty tree. Harmless but noisy; split to ignored output or accept explicitly.
+- **R6 — No HA.** One process: restart drops streams and watches (tuner
+  `watching` rows resume judging on next tick; nothing is lost but time).
+- **R7 — SQLite single-writer.** Fits current load (one box, one team).
+  Concurrent-write errors would surface first in usage.db telemetry writes.
+- **R8 — Plain HTTP on the wire.** Covered by §18: bind to loopback, tunnel
+  for anything remote. Binding `0.0.0.0` on an untrusted LAN without a tunnel
+  voids the session-security assumptions (cookies, no HSTS).
+- **R9 — Server-trusting companion.** By design the server decides *what* and
+  the device decides *whether* — but `approved_in_app` means a compromised
+  server skips the second prompt. Contained to approved folders; "also confirm
+  on this device" exists for high-risk machines.
+- **R10 — Sub-agent change-sets are shared.** `_subagent_scope` restores the
+  project pointer but not `_ws_changes`: a child's file writes pollute the
+  parent's UI diff set. Correctness wart, not a security boundary;
+  context-local tracking is the fix if it ever matters.
+- **R11 — No OCR engine (added R7, 2026-10-02).** Image-only PDFs fail closed
+  with a specific error naming the cause (re-uploading the same scan changes
+  nothing); mixed PDFs ingest their text pages and silently skip image-only
+  ones (no per-page signal). No OCR binaries exist in this pipeline by design
+  (supply-chain surface). Revisit when corpuses arrive as scans: evaluate an
+  OCR stage, with the same lock/audit bar as any new native dependency.
+- **R12 — Footnotes/endnotes/comments and embedded images/charts have no
+  extraction path (added R7, 2026-10-02).** DOCX body + tables +
+  headers/footers are covered and pinned by `tests/test_ingest_fidelity.py`;
+  everything else non-text is silently absent from the index. Revisit when a
+  corpus keeps decisions in footnotes rather than body text.
 
 ---
 

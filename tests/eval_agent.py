@@ -1,11 +1,15 @@
 """
 tests/eval_agent.py - Quality eval harness for the A770 agent runtime.
 
-Two modes:
+Three modes:
 
   offline (default)  Pure-function checks: GBNF grammar build, message
                      compaction, loop detection, JSON repair, needle router.
                      No server or GPU needed - run anywhere.
+  --mock             Scripted-model agent runs: the REAL /agent/run loop with a
+                     deterministic fake LLM at the httpx transport level
+                     (tests/eval_mock.py). No server, GPU or network needed.
+                     Repeats measure loop determinism, not model variance.
   --live             Runs scripted agent tasks against a running manager
                      (default http://127.0.0.1:8000) via POST /agent/run SSE
                      and scores: expected tools called, forbidden tools,
@@ -13,9 +17,16 @@ Two modes:
 
 Usage:
   python tests/eval_agent.py                 # offline suite
+  python tests/eval_agent.py --mock          # mock suite (N=3 repeats)
+  python tests/eval_agent.py --mock --repeats 1 --tasks smoke_list_files,compute_only
+  python tests/eval_agent.py --mock --regression     # fail if worse than baseline
+  python tests/eval_agent.py --mock --update-baseline  # record a new baseline (review the diff!)
   python tests/eval_agent.py --live          # live tasks (mode=auto lane)
   python tests/eval_agent.py --live --mode main
   python tests/eval_agent.py --live --base http://127.0.0.1:8000
+  python tests/eval_agent.py --live --live-user eval --live-password '...'  # sign in first
+                                                             # (eval account: dedicated project on a
+                                                             #  throwaway workspace, never MFA)
 
 Results are printed as a scorecard and saved to tests/eval_results.json.
 """
@@ -247,50 +258,95 @@ LIVE_TASKS = [
     {"name": "write_and_verify", "prompt": "Create a file eval_tmp/hello.py that contains print('hello eval'), then run it with run_python to prove it works.",
      "expect_tools": ["write_file", "run_python"], "soft": False},
     {"name": "compute_only", "prompt": "Use run_python to compute 137*29 and reply with just the number.",
-     "expect_tools": ["run_python"], "forbid_tools": ["write_file"], "soft": False},
+     "expect_tools": ["run_python"], "forbid_tools": ["write_file"],
+     "expect_final_contains": ["3973"], "soft": False},
     {"name": "memory_search", "prompt": "Search your memory for anything related to llama or vulkan and summarize what you find.",
      "expect_tools": ["search_memory"], "soft": True},
-    {"name": "escalation_task", "prompt": "Refactor every python file in the workspace to use async I/O end-to-end and write a migration report to eval_tmp/MIGRATION.md.",
+    {"name": "escalation_task", "prompt": "In eval_tmp/pkg there are no files yet. First create a.py, b.py and c.py there, each with one blocking requests.get call. Then convert all three to async httpx end-to-end, and write eval_tmp/MIGRATION.md describing the change.",
      "expect_escalation": True, "soft": True},
 ]
 
 
-def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600) -> dict:
+def _live_login(base: str, username: str, password: str, timeout_s: float = 60):
+    """Session login for live runs (mirrors a real user; API tokens are fenced
+    off admin perms). The eval account must NOT have MFA: a benchmark runner
+    cannot answer a TOTP prompt, so it fails fast instead of hanging."""
+    import httpx
+    client = httpx.Client(timeout=httpx.Timeout(timeout_s))
+    r = client.post(f"{base}/auth/login", json={"username": username, "password": password})
+    data = r.json() if r.status_code == 200 else {}
+    if r.status_code != 200 or "user" not in data:
+        if data.get("mfa_required"):
+            raise SystemExit("live eval user must not have MFA enabled (runner cannot answer TOTP)")
+        raise SystemExit(f"live login failed: HTTP {r.status_code} {str(data)[:150]}")
+    return client
+
+
+def _live_env(base: str, client, mode: str, temperature) -> dict:
+    """Best-effort environment record so runs weeks apart stay comparable."""
+    env = {"mode": mode, "temperature": temperature, "ts": round(time.time())}
+    try:
+        import subprocess
+        env["git_sha"] = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                                        capture_output=True, text=True, timeout=15,
+                                        cwd=str(BASE_DIR)).stdout.strip() or None
+    except Exception:
+        env["git_sha"] = None
+    try:
+        st = client.get(f"{base}/control/status", timeout=15).json() if client else {}
+        for k in ("profile", "model", "model_path", "loaded", "degraded", "lane"):
+            if isinstance(st, dict) and st.get(k) is not None:
+                env[k] = st[k]
+    except Exception:
+        pass
+    return env
+
+
+def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, client=None) -> dict:
     import httpx
     rec = {"name": task["name"], "tools": [], "lanes": [], "escalated": False,
-           "final_len": 0, "ok": False, "soft": task.get("soft", False), "error": None,
-           "duration_s": None}
+           "final_len": 0, "final_text": "", "ok": False, "soft": task.get("soft", False),
+           "error": None, "duration_s": None}
     payload = {"messages": [{"role": "user", "content": task["prompt"]}],
                "mode": mode, "max_steps": 12, "temperature": 0.3}
     t0 = time.time()
+    own_client = client is None
+    if own_client:
+        client = httpx.Client(timeout=httpx.Timeout(timeout_s))
     try:
-        with httpx.Client(timeout=httpx.Timeout(timeout_s)) as client:
-            with client.stream("POST", f"{base}/agent/run", json=payload) as resp:
-                if resp.status_code != 200:
-                    rec["error"] = f"HTTP {resp.status_code}"
-                    return rec
-                event = None
-                for line in resp.iter_lines():
-                    line = line.strip()
-                    if line.startswith("event: "):
-                        event = line[7:].strip()
-                    elif line.startswith("data: ") and event:
-                        try:
-                            data = json.loads(line[6:])
-                        except Exception:
-                            continue
-                        if event == "lane":
-                            rec["lanes"].append(data.get("lane"))
-                        elif event == "tool_call":
-                            rec["tools"].append(data.get("name"))
-                        elif event == "delta":
-                            rec["final_len"] += len(data.get("text") or "")
-                        elif event == "done":
-                            break
+        with client.stream("POST", f"{base}/agent/run", json=payload) as resp:
+            if resp.status_code == 401:
+                rec["error"] = "HTTP 401 - sign in first (--live-user/--live-password)"
+                return rec
+            if resp.status_code != 200:
+                rec["error"] = f"HTTP {resp.status_code}"
+                return rec
+            event = None
+            for line in resp.iter_lines():
+                line = line.strip()
+                if line.startswith("event: "):
+                    event = line[7:].strip()
+                elif line.startswith("data: ") and event:
+                    try:
+                        data = json.loads(line[6:])
+                    except Exception:
+                        continue
+                    if event == "lane":
+                        rec["lanes"].append(data.get("lane"))
+                    elif event == "tool_call":
+                        rec["tools"].append(data.get("name"))
+                    elif event == "delta":
+                        rec["final_len"] += len(data.get("text") or "")
+                        rec["final_text"] += data.get("text") or ""
+                    elif event == "done":
+                        break
     except Exception as e:
         rec["error"] = f"{type(e).__name__}: {e}"
         rec["duration_s"] = round(time.time() - t0, 1)
         return rec
+    finally:
+        if own_client:
+            client.close()
     rec["duration_s"] = round(time.time() - t0, 1)
     lanes = rec["lanes"]
     rec["escalated"] = ("executor" in lanes and "main" in lanes
@@ -307,6 +363,12 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600) -> d
         problems.append("expected escalation to main lane did not happen")
     if not rec["tools"] and rec["final_len"] < 10:
         problems.append("no tools and no answer")
+    # Answer grading, not just tool plumbing: compute_only passes only if the model
+    # actually replied 3973, not for calling run_python and answering a haiku.
+    final_text = rec.get("final_text") or ""
+    for want in task.get("expect_final_contains", []):
+        if want.lower() not in final_text.lower():
+            problems.append(f"final answer missing {want!r} (got {final_text[:120]!r})")
     rec["problems"] = problems
     rec["ok"] = not problems
     return rec
@@ -315,14 +377,35 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600) -> d
 def main() -> int:
     ap = argparse.ArgumentParser(description="A770 agent eval harness")
     ap.add_argument("--live", action="store_true", help="run live agent tasks")
+    ap.add_argument("--mock", action="store_true",
+                    help="run the hermetic mock suite (scripted model, no server/GPU/network)")
+    ap.add_argument("--repeats", type=int, default=3,
+                    help="mock repeats per task (fresh env each; default 3)")
+    ap.add_argument("--tasks", default=None,
+                    help="comma-separated mock task names (default: all)")
+    ap.add_argument("--no-retrieval", action="store_true", help="skip the retrieval slice")
+    ap.add_argument("--embedder", default="fake", choices=["fake", "real"],
+                    help="retrieval slice vectors: fake BoW stand-in (hermetic, default) "
+                         "or cached nomic vectors (tests/.eval_vec_cache.json, report-only "
+                         "hybrid_real_* keys, GPU-free reruns)")
+    ap.add_argument("--no-router", action="store_true", help="skip the router slice")
+    ap.add_argument("--no-offline", action="store_true",
+                    help="skip the offline pure-function suite (stages CI: unit vs loop)")
+    ap.add_argument("--regression", action="store_true",
+                    help="compare mock results against tests/eval_baseline.json, exit 1 on drop")
+    ap.add_argument("--update-baseline", action="store_true",
+                    help="write current mock results to tests/eval_baseline.json (review the diff!)")
     ap.add_argument("--base", default="http://127.0.0.1:8000", help="manager base URL")
     ap.add_argument("--mode", default="auto", choices=["auto", "main"], help="agent lane mode")
+    ap.add_argument("--live-user", default=None,
+                    help="username to sign in with for --live (dedicated eval account, no MFA)")
+    ap.add_argument("--live-password", default=None, help="password for --live-user")
     args = ap.parse_args()
 
     results = {"ts": time.time(), "offline": [], "live": []}
     failed = 0
 
-    if not args.live:
+    if not args.live and not args.no_offline:
         print("=" * 60)
         print(" OFFLINE SUITE (pure functions, no server needed)")
         print("=" * 60)
@@ -330,16 +413,21 @@ def main() -> int:
             try:
                 ok, note = fn()
                 status = "PASS" if ok else "SKIP"
-                if ok is False:
+                if ok is False and not args.regression:
+                    # Under --regression the compare owns the verdict (it knows the
+                    # baseline): a standing FAIL is recorded, not re-failed. Without it,
+                    # a failure fails the run directly.
                     failed += 1
                 print(f"  [{status}] {name:16s} {note}")
                 results["offline"].append({"name": name, "status": status, "note": note})
             except AssertionError as e:
-                failed += 1
+                if not args.regression:
+                    failed += 1
                 print(f"  [FAIL] {name:16s} {e}")
                 results["offline"].append({"name": name, "status": "FAIL", "note": str(e)})
             except Exception as e:
-                failed += 1
+                if not args.regression:
+                    failed += 1
                 print(f"  [FAIL] {name:16s} {type(e).__name__}: {e}")
                 results["offline"].append({"name": name, "status": "FAIL", "note": f"{type(e).__name__}: {e}"})
 
@@ -347,8 +435,17 @@ def main() -> int:
         print("=" * 60)
         print(f" LIVE SUITE (base={args.base}, mode={args.mode})")
         print("=" * 60)
+        session = None
+        if args.live_user:
+            if not args.live_password:
+                print("live eval needs --live-password with --live-user")
+                return 2
+            session = _live_login(args.base, args.live_user, args.live_password)
+        env = _live_env(args.base, session, args.mode, 0.3)
+        print(f"  env: {json.dumps(env)}")
         for task in LIVE_TASKS:
-            rec = run_live_task(args.base, task, args.mode)
+            rec = run_live_task(args.base, task, args.mode, client=session)
+            rec["env"] = env
             status = "PASS" if rec["ok"] else ("SOFT-FAIL" if rec.get("soft") else "FAIL")
             if not rec["ok"] and not rec.get("soft"):
                 failed += 1
@@ -360,6 +457,124 @@ def main() -> int:
             print(f"  [{status}] {rec['name']:18s} tools={rec['tools'] or '-'} "
                   f"lanes={','.join(rec['lanes']) or '-'} {rec['duration_s']}s{extra}")
             results["live"].append(rec)
+        if session is not None:
+            session.close()
+
+    if args.mock:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from eval_mock import (BASELINE_FILE, MOCK_TASKS, compare_baseline, run_mock_suite)
+        task_filter = ([t.strip() for t in args.tasks.split(",") if t.strip()]
+                       if args.tasks else None)
+        if task_filter:
+            unknown = [t for t in task_filter if t not in {m["name"] for m in MOCK_TASKS}]
+            if unknown:
+                print(f"unknown mock tasks: {unknown}")
+                return 2
+        print("=" * 60)
+        print(f" MOCK SUITE ({len(MOCK_TASKS) if not task_filter else len(task_filter)} tasks x "
+              f"{args.repeats}, hermetic: scripted model, no server/GPU/network)")
+        print("=" * 60)
+        t0 = time.time()
+        suite = run_mock_suite(
+            repeats=args.repeats, task_filter=task_filter,
+            include_retrieval=not args.no_retrieval, include_router=not args.no_router,
+            retrieval_embedder=args.embedder,
+            progress=lambda name, ok: print(f"  [{'PASS' if ok else 'FAIL'}] {name}"))
+        print(f"  aggregate: {suite['aggregate']['pass_rate']} "
+              f"({suite['aggregate']['passes']}/{suite['aggregate']['total']}) "
+              f"ci95={suite['aggregate']['ci95']}")
+        if suite.get("retrieval") is not None:
+            r = suite["retrieval"]
+            if r.get("recall_at_k") is not None:
+                print(f"  retrieval: recall@6={r.get('recall_at_k')} "
+                      f"(lexical {r.get('lexical_recall_at_k')}, lexonly "
+                      f"{r.get('lexonly_recall_at_k')}, paraphrase "
+                      f"{r.get('paraphrase_recall_at_k')}) rank~{r.get('mean_rank')}")
+            if r.get("hybrid_real_recall_at_k") is not None:
+                print(f"  retrieval-real: recall@6={r.get('hybrid_real_recall_at_k')} "
+                      f"@1={r.get('hybrid_real_recall_at_1')} "
+                      f"(lexical {r.get('hybrid_real_lexical_recall_at_k')}, paraphrase "
+                      f"{r.get('hybrid_real_paraphrase_recall_at_k')}) "
+                      f"rank~{r.get('hybrid_real_mean_rank')} "
+                      f"fallout~{r.get('hybrid_real_fallout_at_k')}")
+            if r.get("fallout_at_k") is not None:
+                print(f"  retrieval fallout: hybrid~{r.get('fallout_at_k')} "
+                      f"(lexical {r.get('lexical_fallout_at_k')}, paraphrase "
+                      f"{r.get('paraphrase_fallout_at_k')}) "
+                      f"lexonly~{r.get('lexonly_fallout_at_k')}")
+            if r.get("problems"):
+                for p in r["problems"][:3]:
+                    print(f"  retrieval problem: {p}")
+        if suite.get("router") is not None:
+            print(f"  router: shortcut_on={suite['router']['shortcut_on']['ok']} "
+                  f"shortcut_off={suite['router']['shortcut_off']['ok']}")
+        print(f"  mock suite took {time.time() - t0:.1f}s")
+        # live array carries harness-marked records: mock regressions today, real-server
+        # runs tomorrow. Never conflate the two when reading this file back.
+        for name, t in suite["tasks"].items():
+            results["live"].append({
+                "name": name, "harness": "mock", "ok": t["pass_rate"] == 1.0,
+                "pass_rate": t["pass_rate"], "n": t["n"], "ci95": t["ci95"],
+                "stable": t["stable"],
+                "problems": [p for run in t["runs"] for p in run["problems"]][:5],
+            })
+        if suite.get("retrieval") is not None:
+            results["retrieval"] = suite["retrieval"]
+        if suite.get("router") is not None:
+            results["router"] = {k: {"ok": v["ok"], "problems": v["problems"]}
+                                 for k, v in suite["router"].items() if isinstance(v, dict)}
+        if not args.regression:
+            # Raw verdict (no baseline to compare against): any failing task, slice, or
+            # a retrieval/router slice that reports not-ok fails the run directly.
+            for name, t in suite["tasks"].items():
+                if t["pass_rate"] < 1.0:
+                    failed += 1
+            if suite.get("retrieval") is not None and not suite["retrieval"].get("ok", True):
+                failed += 1
+            if suite.get("router") is not None and not suite["router"].get("ok", True):
+                failed += 1
+        if args.update_baseline:
+            from eval_mock import _summarize_suite
+            # offline records only exist when that suite ran in this invocation
+            # (--no-offline leaves results["offline"] empty: baseline keeps no offline key)
+            summary = _summarize_suite(
+                suite, results["offline"] or None)
+            if BASELINE_FILE.is_file():
+                # Merge, don't clobber: a real-mode update must keep the fake
+                # hybrid keys (and vice versa) - each mode gates only what it
+                # measured, and overwrite would silently un-gate the other.
+                prior = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
+                merged_ret = dict((prior.get("retrieval") or {}))
+                merged_ret.update(summary.get("retrieval") or {})
+                summary["retrieval"] = merged_ret or None
+            BASELINE_FILE.write_text(json.dumps(summary, indent=2),
+                                     encoding="utf-8")
+            print(f"\nbaseline written -> {BASELINE_FILE} (review the diff before committing)")
+        if args.regression:
+            from eval_mock import compare_baseline as _compare
+            if not BASELINE_FILE.is_file():
+                print(f"\nno baseline at {BASELINE_FILE} - run --update-baseline first")
+                failed += 1
+            else:
+                from eval_mock import _summarize_suite as _sum
+                baseline = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
+                if args.mock:
+                    current = _sum(suite, results["offline"] or None)
+                else:
+                    # offline-only invocation: compare just the offline section. Everything
+                    # else stays None, which compare_baseline reads as "not measured".
+                    current = {"tasks": {}, "aggregate_rate": None, "retrieval": None,
+                               "router": None,
+                               "offline": ({r["name"]: r["status"] for r in results["offline"]}
+                                          or None)}
+                problems = _compare(current, baseline)
+                if problems:
+                    failed += len(problems)
+                    print("\nREGRESSIONS vs baseline:")
+                    for p in problems:
+                        print(f"  - {p}")
+                else:
+                    print("\nno regressions vs baseline")
 
     RESULTS_FILE.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(f"\nresults saved -> {RESULTS_FILE}")

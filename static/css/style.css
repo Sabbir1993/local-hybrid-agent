@@ -924,11 +924,11 @@ header .icon-btn[data-tip]:focus-visible::after {
 .guard-rule input[type="text"],
 .guard-rule textarea,
 .guard-rule select {
-  background: var(--bg-input, var(--panel2)) !important;
+  background: var(--bg-input) !important;
   color: var(--text) !important;
   border: 1px solid var(--border) !important;
-  border-radius: 6px !important;
-  padding: 6px 10px !important;
+  border-radius: 7px !important;
+  padding: 7px 10px !important;
   font-size: 12px !important;
   font-family: inherit !important;
   box-sizing: border-box !important;
@@ -940,7 +940,7 @@ header .icon-btn[data-tip]:focus-visible::after {
 .guard-rule select:focus {
   outline: none !important;
   border-color: var(--accent) !important;
-  box-shadow: 0 0 0 2px var(--accent-bg) !important;
+  box-shadow: 0 0 0 2px var(--accent-glow) !important;
 }
 .guard-rule textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
@@ -1110,18 +1110,21 @@ header .icon-btn[data-tip]:focus-visible::after {
 }
 .guard-ms-search {
   width: 100%;
-  padding: 4px 7px;
-  font-size: 11px;
-  border-radius: 4px;
-  background: var(--bg-input, var(--panel2));
+  padding: 7px 10px;
+  font-size: 12px;
+  border-radius: 7px;
+  background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text);
   margin-bottom: 6px;
   box-sizing: border-box;
+  outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
 .guard-ms-search:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 .guard-ms-actions {
   display: flex;
@@ -2884,14 +2887,28 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 .g-bot { display: flex; justify-content: space-between; font-size: 10px; color: var(--dim); margin-top: 4px; }
 .g-bot .hot { color: var(--green); font-weight: 700; }
 
-/* Settings form fields */
-.card textarea, .card input[type=number], .card input[type=text], .card select {
-  width: 100%; background: var(--bg-input); color: var(--text); border: 1px solid var(--border);
+.card textarea,
+.card input[type=number],
+.card input[type=text],
+.card input[type=password],
+.card input[type=search],
+.card input[type=url],
+.card input[type=email],
+.card input:not([type]),
+.card select {
+  width: 100%; box-sizing: border-box; background: var(--bg-input); color: var(--text); border: 1px solid var(--border);
   border-radius: 7px; padding: 7px 10px; font-size: 12px; font-family: inherit; resize: vertical;
-  transition: all .15s ease;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
 }
-.card textarea:focus, .card input:focus, .card select:focus {
+.card textarea:focus,
+.card input:focus,
+.card select:focus {
   outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.card input::placeholder,
+.card textarea::placeholder {
+  color: var(--dim);
+  opacity: 0.65;
 }
 .cfg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
 .cfg-grid .cfg-item label { margin: 6px 0 3px; font-size: 10.5px; color: var(--dim); font-weight: 600; }
@@ -2909,11 +2926,70 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
   padding: 2px 0;
 }
 .smp-row label { font-size: 10.5px; color: var(--dim); font-weight: 600; line-height: 1.3; white-space: nowrap; }
-.smp-row input[type=range] { width: 100%; margin: 0; }
+.smp-row input[type=range],
+.settings-panel input[type=range],
+.card input[type=range] {
+  width: 100%; margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--panel2);
+  height: 6px;
+  border-radius: 3px;
+  outline: none;
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: border-color .15s ease;
+}
+.smp-row input[type=range]:focus,
+.settings-panel input[type=range]:focus,
+.card input[type=range]:focus {
+  border-color: var(--accent);
+}
+.smp-row input[type=range]::-webkit-slider-thumb,
+.settings-panel input[type=range]::-webkit-slider-thumb,
+.card input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  box-shadow: 0 0 0 2px var(--panel), 0 0 4px rgba(0,0,0,0.4);
+  transition: transform .1s ease, box-shadow .1s ease;
+}
+.smp-row input[type=range]::-webkit-slider-thumb:hover,
+.settings-panel input[type=range]::-webkit-slider-thumb:hover,
+.card input[type=range]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent-glow);
+}
+.smp-row input[type=range]::-moz-range-thumb,
+.settings-panel input[type=range]::-moz-range-thumb,
+.card input[type=range]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 0 0 2px var(--panel), 0 0 4px rgba(0,0,0,0.4);
+  transition: transform .1s ease, box-shadow .1s ease;
+}
+.smp-row input[type=range]::-moz-range-thumb:hover,
+.settings-panel input[type=range]::-moz-range-thumb:hover,
+.card input[type=range]::-moz-range-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent-glow);
+}
 .smp-row input[type=number] {
   width: 100%; margin: 0; background: var(--bg-input); color: var(--text);
-  border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px;
-  font-size: 11.5px; font-family: inherit;
+  border: 1px solid var(--border); border-radius: 7px; padding: 6px 8px;
+  font-size: 12px; font-family: inherit; box-sizing: border-box;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.smp-row input[type=number]:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow);
 }
 .smp-val { font-size: 10.5px; color: var(--text); text-align: right; white-space: nowrap; }
 .smp-footer {
@@ -4784,13 +4860,19 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
   cursor: pointer;
 }
 .ca-field input[type=text],
+.ca-field input[type=password],
+.ca-field input[type=number],
+.ca-field input[type=search],
+.ca-field input[type=url],
+.ca-field input:not([type]),
 .ca-field select,
 .ca-field textarea {
-  background: var(--bg-input, rgba(0,0,0,0.35)) !important;
-  border: 1px solid var(--border, rgba(255,255,255,0.18)) !important;
-  border-radius: 6px;
+  box-sizing: border-box;
+  background: var(--bg-input) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 7px;
   padding: 7px 10px;
-  color: var(--text, #f0f6fc) !important;
+  color: var(--text) !important;
   font-size: 12px;
   font-family: inherit;
   outline: none;
@@ -4803,17 +4885,17 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 .ca-field select {
   cursor: pointer !important;
 }
-.ca-field input[type=text]:focus,
+.ca-field input:focus,
 .ca-field select:focus,
 .ca-field textarea:focus {
-  border-color: var(--accent, #38bdf8) !important;
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25) !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-glow) !important;
 }
 .ca-field input::placeholder,
 .ca-field textarea::placeholder {
-  color: var(--dim, #8b949e) !important;
-  opacity: 0.55 !important;
-  font-style: italic;
+  color: var(--dim) !important;
+  opacity: 0.65 !important;
+  font-style: normal;
   user-select: none;
 }
 .ca-field textarea {
@@ -4920,12 +5002,16 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 .ru-create { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
 .ru-create input { flex: 1 1 0; min-width: 0; }
 .ru-create select { flex: 0 0 110px; }
-.ru-create input, .ru-create select, .ru-row select {
-  width: auto; margin: 0; height: 32px; box-sizing: border-box; padding: 0 10px; font-size: 12px;
-  background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+.ru-create input, .ru-create select, .ru-row select, #new-role-name {
+  width: auto; margin: 0; height: 34px; box-sizing: border-box; padding: 7px 10px; font-size: 12px;
+  background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 7px;
+  outline: none; transition: border-color .15s ease, box-shadow .15s ease;
+}
+.ru-create input:focus, .ru-create select:focus, .ru-row select:focus, #new-role-name:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow);
 }
 .ru-btn {
-  width: auto; margin: 0; height: 32px; padding: 0 12px; font-size: 12px; border-radius: 6px; cursor: pointer;
+  width: auto; margin: 0; height: 34px; padding: 0 12px; font-size: 12px; border-radius: 7px; cursor: pointer;
   background: transparent; color: var(--text); border: 1px solid var(--border); font-family: inherit;
   transition: background .12s ease, border-color .12s ease;
 }
@@ -5106,10 +5192,11 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 
 /* filter boxes in the agents grid and the tool picker */
 .ca-filter {
-  width: 100%; box-sizing: border-box; height: 32px; margin: 0 0 8px; padding: 0 10px; font: inherit; font-size: 12px;
-  color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; outline: none;
+  width: 100%; box-sizing: border-box; height: 34px; margin: 0 0 8px; padding: 7px 10px; font: inherit; font-size: 12px;
+  color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 7px; outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
-.ca-filter:focus { border-color: var(--accent); }
+.ca-filter:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
 #settings-agents-content .ca-filter { grid-column: 1 / -1; }
 
 /* Write File / Edit File: on for every agent. Shown as normal, ticked options with a small tag, not greyed out */

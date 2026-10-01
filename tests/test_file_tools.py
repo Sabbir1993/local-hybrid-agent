@@ -257,6 +257,20 @@ class ToolTests(Base):
 
 
 class VerifyAndUndoTests(Base):
+    def setUp(self):
+        super().setUp()
+        # These tests assert "Attempt N/M" wording, so they pin the M they count against.
+        # Reading ambient config here made them fail when the shipped default moved 3 -> 5;
+        # product config must never be dictated by test wording.
+        from core.small_model import APP_CONFIG
+        self._agent_saved = dict(APP_CONFIG.get("agent") or {})
+        APP_CONFIG.setdefault("agent", {})["verify_max_retries"] = 3
+
+    def tearDown(self):
+        from core.small_model import APP_CONFIG
+        APP_CONFIG["agent"] = self._agent_saved
+        super().tearDown()
+
     def test_syntax_error_reported_and_fixed(self):
         out = self.call("write_file", path="bad.py", content="def f(:\n    pass\n")
         self.assertIn("verify: FAILED", out)
@@ -336,7 +350,10 @@ class LaneCapTests(unittest.TestCase):
     def test_executor_thinking_is_capped(self):
         from core import reasoning
         from core.agent_tools.limits import executor_effort_ceiling
-        self.assertEqual(executor_effort_ceiling(), "low")
+        from core.small_model import APP_CONFIG
+        # pin the default: ambient config now ships "medium", which is a product choice
+        with mock.patch.dict(APP_CONFIG, {"agent": {}}):
+            self.assertEqual(executor_effort_ceiling(), "low")
         self.assertEqual(reasoning.cap("high", "low"), "low")
         self.assertEqual(reasoning.cap("none", "low"), "none")
         self.assertEqual(reasoning.cap("low", "medium"), "low")
@@ -435,6 +452,66 @@ class ToolArgValidationTests(Base):
         out = self.call_tool("write_file", file="alias.py", code="y = 2\n")
         self.assertIn("verify: OK", out)
         self.assertEqual(self.fc.files[full("alias.py")], "y = 2\n")
+
+
+class RunPythonIsolationTests(Base):
+    """D5: run_python wrote every script to ws/_agent_run.py, so two concurrent
+    runs in one workspace overwrote each other's code -- and the companion's
+    on-disk approval check (script bytes == approved code) raced the overwrite.
+    Each call now gets its own script, and the script is removed afterwards."""
+
+    def setUp(self):
+        super().setUp()
+        self.shell_cmds = []
+
+        async def fake_call(uid, op, params, timeout=None):
+            self.fc.ops.append(op)
+            if op == "fs.write":
+                self.fc.files[params["path"]] = params["content"]
+                return {"existed": True}
+            if op == "fs.remove":
+                self.fc.files.pop(params["path"], None)
+                return {"removed": True}
+            if op == "shell.run":
+                self.shell_cmds.append(params["command"])
+                return {"stdout": "ok", "stderr": "", "exit_code": 0}
+            raise RuntimeError(f"unknown op {op}")
+
+        self._bridge = mock.patch.object(companion_bridge, "call", fake_call)
+        self._bridge.start()
+
+    def tearDown(self):
+        # inner patch off FIRST (restores Base's file-ops fake), then Base's own
+        # teardown. Stopping in the other order (addCleanup runs after tearDown)
+        # would resurrect this test's fake under later test modules.
+        self._bridge.stop()
+        super().tearDown()
+
+    def test_concurrent_calls_get_distinct_scripts(self):
+        from core.agent_tools.file_ops import tool_run_python
+
+        async def both():
+            return await asyncio.gather(
+                tool_run_python({"code": "print('aaa')"}),
+                tool_run_python({"code": "print('bbb')"}),
+            )
+        a, b = self.run_(both())
+        self.assertIn("exit code 0", a)
+        self.assertIn("exit code 0", b)
+        # the fixed shared name must never be written anymore
+        self.assertNotIn(full("_agent_run.py"), self.fc.files)
+        # each shell.run names its own script, and the two differ
+        self.assertEqual(len(self.shell_cmds), 2)
+        self.assertNotEqual(self.shell_cmds[0], self.shell_cmds[1])
+        for cmd in self.shell_cmds:
+            self.assertRegex(cmd, r'^python "_agent_run_[0-9a-f]{8}\.py"$')
+
+    def test_script_removed_after_run(self):
+        from core.agent_tools.file_ops import tool_run_python
+        self.run_(tool_run_python({"code": "print('x')"}))
+        leftovers = [p for p in self.fc.files if Path(p).name.startswith("_agent_run_")]
+        self.assertEqual(leftovers, [], f"script litter left behind: {leftovers}")
+        self.assertIn("fs.remove", self.fc.ops)
 
 
 if __name__ == "__main__":

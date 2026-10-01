@@ -47,6 +47,12 @@ async def _summarize_history(convo: list, instructions: Optional[str], use_execu
         if len(c) > 4000:
             c = c[:4000] + "\n... (truncated)"
         transcript_lines.append(f"[{m.get('role', '?').upper()}]\n{c}")
+    # Total cap: per-message truncation above is not enough, since a 500-message history at
+    # 4000 chars each is still a multi-megabyte summarizer prompt. Drop oldest first (the
+    # summary needs recent context most), keeping at least the last few turns whole.
+    total = sum(len(t) for t in transcript_lines)
+    while len(transcript_lines) > 4 and total > 100000:
+        total -= len(transcript_lines.pop(0))
     user_payload = (
         "Summarize the conversation below.\n\n"
         + (f"Extra instructions from the user (honor these): {instructions}\n\n" if instructions else "")

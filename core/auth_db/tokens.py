@@ -12,13 +12,21 @@ _TOKEN_COLS = (
 
 
 def create_session_row(session_id_hash: str, user_id: int, expires_at: float,
-                       ip: Optional[str], user_agent: Optional[str]) -> None:
+                       ip: Optional[str], user_agent: Optional[str], mfa_verified: bool = False) -> None:
     now = time.time()
     db().execute(
-        "INSERT INTO auth_sessions (id, user_id, created_at, last_seen_at, expires_at, ip, user_agent) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (session_id_hash, user_id, now, now, expires_at, ip, user_agent),
+        "INSERT INTO auth_sessions (id, user_id, created_at, last_seen_at, expires_at, ip, user_agent, "
+        "mfa_verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (session_id_hash, user_id, now, now, expires_at, ip, user_agent, 1 if mfa_verified else 0),
     )
+    db().commit()
+
+
+def set_session_mfa_verified(session_id_hash: str) -> None:
+    """Step-up: this session proved the second factor (one-way; a verified
+    session never drops back)."""
+    db().execute("UPDATE auth_sessions SET mfa_verified = 1 WHERE id = ? AND revoked_at IS NULL",
+                 (session_id_hash,))
     db().commit()
 
 

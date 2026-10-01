@@ -9,9 +9,9 @@ from .constants import (
     CHUNK_OVERLAP,
     EMBED_BATCH,
     EMBEDDER_RETRY_S,
-    MAX_CHUNKS_PER_DOC,
     MAX_FILE_BYTES,
     MAX_FILES,
+    MAX_KB_CHUNKS_PER_DOC,
     MAX_SESSIONS,
     SKIP_DIRS,
     TEXT_EXTS,
@@ -147,7 +147,8 @@ async def index_knowledge_source(source_id: int, text: str, version: Optional[fl
     version = version if version is not None else time.time()
     _db().execute("DELETE FROM chunks WHERE source='knowledge' AND path=?", (path,))
     _db().commit()
-    rows = [("knowledge", path, idx, part, version) for idx, part in enumerate(_chunk_text(text))]
+    rows = [("knowledge", path, idx, part, version)
+            for idx, part in enumerate(_chunk_text(text, MAX_KB_CHUNKS_PER_DOC))]
     if rows:
         embed_fn = getattr(sys.modules.get("core.memory"), "_embed_texts", _embed_texts)
         vecs = await embed_fn([r[3] for r in rows])

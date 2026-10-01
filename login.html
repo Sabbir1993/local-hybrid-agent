@@ -22,14 +22,36 @@
   <h1>⬡ LOCAL AGENT</h1>
   <p class="sub">Sign in to continue</p>
   <form id="login-form">
-    <label for="username">Username</label>
-    <input id="username" name="username" autocomplete="username" required>
-    <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
-    <div id="login-err"></div>
-    <button id="login-submit" class="btn accent" type="submit">Sign in</button>
+    <div id="step-password">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button id="login-submit" class="btn accent" type="submit" style="width:100%;margin-top:16px;padding:10px;">Sign in</button>
+    </div>
   </form>
+  <form id="mfa-form" style="display:none">
+    <div id="step-mfa" style="display:none">
+      <label for="mfa-code">Authenticator code</label>
+      <input id="mfa-code" name="mfa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" required>
+      <button class="btn accent" type="submit" style="width:100%;margin-top:16px;padding:10px;">Verify</button>
+    </div>
+  </form>
+  <form id="enroll-form" style="display:none">
+    <div id="step-enroll" style="display:none">
+      <label>Secret (type into your authenticator app)</label>
+      <code id="enroll-secret" style="display:block;word-break:break-all;font-size:12px;margin:4px 0;"></code>
+      <label>Setup URI (copy into the app if it supports it)</label>
+      <code id="enroll-uri" style="display:block;word-break:break-all;font-size:10px;margin:4px 0;"></code>
+      <label>Backup codes (save these — each works once)</label>
+      <code id="enroll-codes" style="display:block;word-break:break-all;font-size:12px;margin:4px 0;"></code>
+      <label for="enroll-code">Authenticator code</label>
+      <input id="enroll-code" name="enroll-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" required>
+      <button class="btn accent" type="submit" style="width:100%;margin-top:16px;padding:10px;">Enable &amp; sign in</button>
+    </div>
+  </form>
+  <div id="login-err"></div>
 </div>
-<script src="/static/js/login.js?v=1.0"></script>
+<script src="/static/js/login.js?v=1.1"></script>
 </body>
 </html>

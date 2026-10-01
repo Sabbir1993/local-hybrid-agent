@@ -7,11 +7,16 @@
 
 #lanes-content { font-size: 12px; color: var(--text); }
 #lanes-content select, #ln-modal select, #ln-modal input[type=text], #ln-modal input:not([type]),
-#ln-modal input[type=number] {
-  width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px;
+#ln-modal input[type=number], #ln-modal input[type=password], #ln-modal input[type=search] {
+  width: 100%; box-sizing: border-box; padding: 7px 10px; border-radius: 7px;
   background: var(--bg-input); color: var(--text); border: 1px solid var(--border); font-size: 12px;
+  font-family: inherit; outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
-#lanes-content select:focus-visible, #ln-modal select:focus-visible, #ln-modal input:focus-visible,
+#lanes-content select:focus, #ln-modal select:focus, #ln-modal input:focus,
+#lanes-content select:focus-visible, #ln-modal select:focus-visible, #ln-modal input:focus-visible {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow);
+}
 #lanes-content button:focus-visible, #ln-modal button:focus-visible, .ln-info:focus-visible,
 .ac-btn:focus-visible, .comp-ac-btn:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;

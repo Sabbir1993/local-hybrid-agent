@@ -431,6 +431,7 @@
   },
   "security": {
     "session_idle_enabled": true,
-    "session_idle_minutes": 1440
+    "session_idle_minutes": 1440,
+    "mfa_required": false
   }
 }

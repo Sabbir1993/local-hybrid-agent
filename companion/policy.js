@@ -195,7 +195,7 @@ function setLocalConfirm(on) {
 }
 
 // `display` is what actually runs when `command` is only a wrapper (run_python sends
-// `python "_agent_run.py"` plus the script body): the user approves the code, not the shim.
+// `python "_agent_run_<hex8>.py"` plus the script body): the user approves the code, not the shim.
 // `approvedInApp`: the server says the user approved it in the web app's card (or an allow
 // rule / ask_first=off covered it) - no second dialog unless local confirmation is on.
 // The folder check above still applies either way.
@@ -283,5 +283,14 @@ async function confirmScript(code, url, approvedInApp) {
     `${code}\n\non: ${url}`, `js\n${url}\n${code}`, approvedInApp);
 }
 
+// run_python scripts are unique per call (`_agent_run_<hex8>.py`; older servers
+// send the fixed `_agent_run.py`). Returns the script filename the command names,
+// or null when the command is not a run_python invocation -- so shell.run can
+// verify the file on disk is exactly the approved code, and only then.
+function runPythonScript(command) {
+  const m = typeof command === "string" && command.match(/^python "(_agent_run(?:_[0-9a-f]{8})?\.py)"$/);
+  return m ? m[1] : null;
+}
+
 module.exports = { ensurePath, confirmShell, approveRoot, isApproved, confirmOrigin, confirmAction, confirmScript,
-                   alwaysAllowedCount, forgetAlwaysAllowed, localConfirmEnabled, setLocalConfirm };
+                   alwaysAllowedCount, forgetAlwaysAllowed, localConfirmEnabled, setLocalConfirm, runPythonScript };

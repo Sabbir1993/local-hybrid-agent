@@ -1,0 +1,69 @@
+# CI: unit tests, JS tests, lint, coverage, eval gates, dependency audit.
+#
+# Stage order is feedback order: the cheapest signal that can fail the build runs first.
+# The eval mock gate (loop behaviour) runs after unit tests because a red unit suite
+# usually explains a red eval. The pip-audit gate runs last: it needs the network for
+# the vulnerability database and is the slowest step.
+#
+# Windows + Linux matrix: os.name branches (process kill, GPU panel, folder picker) are
+# only exercised on their own platform. fail-fast is false so one platform's signal is
+# never hidden by the other's.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install locked dependencies
+        run: pip install --require-hashes -r requirements.lock
+
+      - name: Install CI tools (unpinned from app deps by design)
+        run: pip install "ruff==0.16.9" coverage pip-audit pip-tools
+
+      - name: Lint (undefined names, syntax, dead code - pyproject.toml)
+        run: python -m ruff check core routes tests server_manager.py autotune.py
+
+      - name: Unit tests
+        run: python -m unittest discover tests
+
+      - name: JS tests
+        run: node tests/js/run_all.js
+
+      - name: Coverage gate (floor in pyproject.toml, ratchet only upward)
+        run: |
+          python -m coverage run -m unittest discover tests
+          python -m coverage report --include="core/*,routes/*"
+
+      - name: Eval loop gate (mock harness vs committed baseline)
+        # Greedy, hermetic, ~20s: scripted model, no server/GPU/network.
+        # Fails on any task going pass->fail, retrieval recall dropping, or a
+        # broken router slice - with the diff in the log.
+        run: python tests/eval_agent.py --mock --no-offline --regression --repeats 3
+
+      - name: Eval offline gate (pure-function checks vs baseline)
+        # Compares only PASS -> FAIL transitions: the standing compact_endpoint
+        # FAIL recorded in the baseline is not a gate failure, a new one is.
+        run: python tests/eval_agent.py --regression
+
+      - name: Dependency audit (CVE gate + lock-drift check)
+        run: |
+          python scripts/audit_deps.py --check-lock
+          python scripts/audit_deps.py

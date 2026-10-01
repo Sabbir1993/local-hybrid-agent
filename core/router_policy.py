@@ -45,8 +45,12 @@ DEFAULTS = {
     # executor's success rate on it is below min_executor_success, or its breaker is open
     "adaptive": True,
     "min_executor_success": 0.7,
-    "adaptive_min_samples": 10,
     "adaptive_cooldown_s": 300,
+    # CPU-flavored tool shortcut on step 0 (Needle/Laya). Off because the classifier never
+    # produced a tool call in the logged runs and cost 10-40s per request - but it MUST be
+    # present here: rcfg() only carries DEFAULTS keys, so without this entry the flag an
+    # admin sets in app.json never reaches the loop and the shortcut is silently dead.
+    "tool_shortcut": False,
 }
 
 # keys an admin may edit through POST /control/router (plus confidence_threshold)

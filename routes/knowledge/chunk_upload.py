@@ -13,6 +13,7 @@ from .models import (
     CHUNKS_TEMP_DIR,
     MAX_KB_CHUNK_BYTES,
     MAX_KB_CHUNKS,
+    MAX_KB_FILE_BYTES,
     CompleteUploadBody,
 )
 
@@ -69,6 +70,17 @@ async def complete_chunked_upload(
         part_path = upload_dir / f"{idx}.part"
         if not part_path.exists():
             return JSONResponse({"error": f"missing chunk {idx} of {body.total_chunks}"}, status_code=400)
+
+    # Chunked upload bypasses proxy size limits, not the file ceiling: cap the
+    # assembled total at the same MAX_KB_FILE_BYTES as a single-shot upload,
+    # or parts summing past it fill the disk (200 x 8MB = 1.6GB).
+    total = sum((upload_dir / f"{idx}.part").stat().st_size for idx in range(body.total_chunks))
+    if total > MAX_KB_FILE_BYTES:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        return JSONResponse(
+            {"error": f"assembled file too large ({total} bytes, max {MAX_KB_FILE_BYTES}) - "
+                      "split it into smaller source files"},
+            status_code=413)
 
     KNOWLEDGE_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     stored_name = f"{uuid.uuid4().hex}{ext}"

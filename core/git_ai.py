@@ -2,8 +2,10 @@
 
 Uses the "Commit & PR messages" job (core/lanes.py; the fast executor lane by default) (same pattern as routes/chat.py::_summarize_history) -
 a short, low-temperature, non-streaming completion. Never calls out to GitHub/MCP;
-this only talks to the app's own configured model. Diffs stay on the executor lane by
-default (prefer local) since they may contain secrets/credentials - see generate().
+this only talks to the app's own configured model. The job is local_only
+(core/lanes/constants.py JOBS): diffs may contain secrets/credentials, so they
+are never sent to a cloud model even when the executor lane is cloud-bound -
+the lane picker refuses a cloud mapping with a plain-language reason.
 """
 
 import re
@@ -53,8 +55,9 @@ async def _complete(system_prompt: str, diff_text: str, user_id: Optional[int] =
         "stream": False,
     }
 
-    # "Commit & PR messages" job: the fast helper by default, remappable in
-    # Settings -> Models (core/lanes.py walks the fallback chain)
+    # "Commit & PR messages" job: the fast helper by default. The job is
+    # local_only, so a cloud remap is refused at the lane picker (with a reason)
+    # and stale cloud mappings fall back to the default lane in targets().
     data, _t = await lanes.post_chat("commit_msg", payload, user_id)
     text = lanes.message_text(data)
     return _strip_think(text)

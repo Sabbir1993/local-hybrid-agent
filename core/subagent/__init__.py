@@ -7,8 +7,10 @@ from .constants import (
     SUBAGENT_SYSTEM_PROMPT,
 )
 from .runner import (
+    resolve_subagent_tools,
     run_subagent,
     run_parallel_subagents,
+    subagent_call_verdict,
     tool_spawn_agent,
     tool_spawn_parallel_agents,
 )
@@ -25,6 +27,8 @@ __all__ = [
     "_subagent_scope",
     "SUBAGENT_FALLBACK_CTX",
     "_subagent_window",
+    "resolve_subagent_tools",
+    "subagent_call_verdict",
     "run_subagent",
     "run_parallel_subagents",
     "tool_spawn_agent",

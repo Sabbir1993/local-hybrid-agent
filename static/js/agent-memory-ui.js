@@ -32,11 +32,11 @@ const AGENT_LIMIT_FIELDS = [
 ];
 
 function agentLimitsHtml(d) {
-  const v = d.values, r = d.ranges, inp = 'width:78px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:2px 6px; font-size:11px;';
+  const v = d.values, r = d.ranges, inp = 'width:84px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:7px; padding:6px 10px; font-size:12px; box-sizing:border-box;';
   const sel = ([key, label, help]) => `
     <div style="display:flex; align-items:center; gap:6px; margin-top:6px; flex-wrap:wrap;" title="${esc(help)}">
       <span style="min-width:230px;">${esc(label)}</span>
-      <select class="al-sel" data-key="${key.slice(1)}" style="margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:2px 6px; font-size:11px;">
+      <select class="al-sel" data-key="${key.slice(1)}" style="margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:7px; padding:6px 10px; font-size:12px; box-sizing:border-box;">
         ${(key === '@plan_required' ? ['auto', 'always', 'off'] : ['none', 'low', 'medium', 'high', 'extra']).map(o => `<option value="${o}" ${v[key.slice(1)] === o ? 'selected' : ''}>${o}</option>`).join('')}
       </select>
       <span class="dim" style="font-size:9.5px;">${esc(help)}</span>

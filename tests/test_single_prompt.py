@@ -59,7 +59,8 @@ class SinglePromptTests(unittest.TestCase):
             shell_tools.mark_code_approved("print(1)")
             await agent_tools.tool_run_python({"code": "import os; os.remove('x')"})
         asyncio.run(go())
-        self.assertFalse(self.comp.calls[-1][1]["approved_in_app"])
+        runs = [c[1] for c in self.comp.calls if c[0] == "shell.run"]
+        self.assertFalse(runs[-1]["approved_in_app"])
 
     def test_ask_first_off_counts_as_approved(self):
         with mock.patch.object(shell_tools, "shell_cfg", return_value={"enabled": True, "ask_first": False}):

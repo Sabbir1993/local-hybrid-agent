@@ -23,7 +23,9 @@ JOBS = {
         "kind": "chat",
         "default": "executor",
         "label": "Commit & PR messages",
-        "hint": "Writes git commit messages and pull-request descriptions from a diff.",
+        "hint": "Writes git commit messages and pull-request descriptions from a diff. "
+                "Always on this PC: diffs may contain secrets, so they are never sent to a cloud model.",
+        "local_only": True,
     },
     "subagent": {
         "kind": "chat",

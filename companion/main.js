@@ -416,9 +416,12 @@ const OPS = {
   "shell.run": async (p) => {
     await policy.confirmShell(p.command, p.cwd, p.display, p.approved_in_app === true);
     // run_python: the script was written before approval -- run it only if it is
-    // exactly the code that was approved
-    if (p.display != null && p.command === 'python "_agent_run.py"') {
-      const script = require("path").join(p.cwd || "", "_agent_run.py");
+    // exactly the code that was approved. Scripts are unique per call
+    // (`_agent_run_<hex8>.py`; older servers send the fixed `_agent_run.py`),
+    // so verify whichever file the command names.
+    const scriptName = policy.runPythonScript(p.command);
+    if (p.display != null && scriptName) {
+      const script = require("path").join(p.cwd || "", scriptName);
       const onDisk = require("fs").existsSync(script) ? require("fs").readFileSync(script, "utf-8") : null;
       if (onDisk !== p.display) throw new Error("script on disk does not match the approved code");
     }

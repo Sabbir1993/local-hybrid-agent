@@ -15,6 +15,7 @@ from core import verifier
 from core.sse import sse
 from core.small_model import APP_CONFIG
 from core import cloud
+from core import context_budget
 from core.state import state
 from core.registry import registry
 from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch, tool_web_search_images
@@ -63,6 +64,18 @@ from .file_intent import (
     wants_file_output,
 )
 from .models import ChatRunRequest
+
+
+def _record_chat_usage(res_dict, sent_tokens, msgs, tools) -> None:
+    """Feed one real usage count back into the shared budget accounting.
+
+    Only server-reported counts may anchor the learner: a fallback guess would teach
+    it fiction. record_usage re-checks this, but the call site must still pass the
+    exact post-shrink msgs and tools of the request the count came from.
+    """
+    u = (res_dict or {}).get("usage") or {}
+    if u.get("prompt_tokens"):
+        context_budget.record_usage("main", sent_tokens, u["prompt_tokens"], msgs, tools)
 
 
 @router.post("/chat/run")
@@ -415,7 +428,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         written_files = []
         made_media = []              # markdown of pictures/videos generate_image made this turn
         final_prompt_toks = None     # same figure goes to the done event and the monitor
-        ctx_budget = int(common.main_ctx_tokens(cloud_main) * 0.7)
+        # Budget from the shared accounting, not a hardcoded fraction: the probed window
+        # when the server reports one (falling back to config), tightened by the learned
+        # estimator error. The old `* 0.7` ignored the margin config, the safety factor,
+        # and cloud cost caps - the three things context_budget exists to enforce.
+        ctx_window = await context_budget.probe_window("main", main_client)
+        if not ctx_window:
+            ctx_window = int(common.main_ctx_tokens(cloud_main))
+        ctx_budget = context_budget.budget_for("main", ctx_window, cloud=bool(cloud_main))
         # --- Output sanitizer: redact model deltas before they reach the
         # client (cloud_only rules only fire while the lane is cloud; the
         # fallback event recreates the redactor for the local lane).
@@ -489,7 +509,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         + (" and call write_file with the full file content." if wants_file else ".")
                         + " Do not announce what you will do; just do it.")})
 
-                shrink_old_tool_results(msgs, ctx_budget)
+                shrink_old_tool_results(msgs, ctx_budget, tools=current_tools)
 
                 if cloud_main and cloud.cloud_bindings(user.id).get("fallback_local", True):
                     fb_local = None
@@ -511,6 +531,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature,
                                                    max_tokens=req.max_tokens, repeat_penalty=chat_rep, rid=chat_rid, effort=effort,
                                                    top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
+                # Estimate of what this turn actually sends, for anchoring below. Must be
+                # taken post-shrink with the exact tools of this turn - an estimate from
+                # before compaction, or without the schemas, would teach the budget learner
+                # the wrong ratio.
+                sent_tokens = context_budget.prompt_tokens_for("main", msgs, current_tools)
                 async for ev, val in chat_stream:
                     if ev == "queued":
                         yield f"event: queued\ndata: {json.dumps(val)}\n\n"
@@ -788,7 +813,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": res_str})
 
                         gen_toks = max(1, round(len(content) / 3.5))
-                        prompt_toks = final_prompt_toks = _prompt_tokens_of(None, msgs)
+                        prompt_toks = final_prompt_toks = _prompt_tokens_of(None, msgs, current_tools)
+                        _record_chat_usage(None, sent_tokens, msgs, current_tools)
                         yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
                         return
 
@@ -875,7 +901,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         gen_toks = req_mon.get("gen_tokens", 0) if req_mon else 0
                     if not gen_toks and content:
                         gen_toks = max(1, round(len(content) / 3.5))
-                    prompt_toks = final_prompt_toks = _prompt_tokens_of(res_dict, msgs)
+                    prompt_toks = final_prompt_toks = _prompt_tokens_of(res_dict, msgs, current_tools)
+                    _record_chat_usage(res_dict, sent_tokens, msgs, current_tools)
                     async for _vc in verifier.sse_events(user, "chat", last_query, content, msgs,
                                                          main_client, req.verify, model_source == "cloud"):
                         yield _vc
@@ -1086,7 +1113,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 gen_toks = req_mon.get("gen_tokens", 0) if req_mon else 0
             if not gen_toks and content:
                 gen_toks = max(1, round(len(content) / 3.5))
-            prompt_toks = final_prompt_toks = _prompt_tokens_of(res_dict, msgs)
+            prompt_toks = final_prompt_toks = _prompt_tokens_of(res_dict, msgs, current_tools)
+            _record_chat_usage(res_dict, sent_tokens, msgs, current_tools)
 
             async for _vc in verifier.sse_events(user, "chat", last_query, content, msgs,
                                                  main_client, req.verify, model_source == "cloud"):

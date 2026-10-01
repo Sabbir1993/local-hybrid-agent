@@ -15,6 +15,7 @@ python-multipart>=0.0.18   # CVE-2024-53981
 # --- Auth / credentials ---
 keyring>=25.0
 argon2-cffi>=23.1
+ldap3>=2.9                # corporate SSO (core/auth_provider.py LdapAuthProvider); pure-Python, no system libs
 
 # --- Document parsing & generation (file tools, knowledge ingest, agent tools) ---
 openpyxl>=3.1

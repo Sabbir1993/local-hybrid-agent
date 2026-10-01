@@ -23,6 +23,7 @@ _USER_OWNED = (
     "api_tokens",
     "companion_devices",
     "agent_memory",
+    "user_totp_backup",
 )
 
 

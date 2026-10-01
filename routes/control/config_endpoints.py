@@ -48,7 +48,7 @@ async def get_config(model: Optional[str] = None, user: Principal = Depends(get_
         loaded_key = _model_key(state.profile.get("model_path") or "")
         if not model or _model_key(model) == loaded_key:
             return _config_for_profile(state.profile)
-    target = model or common.curStatus_model_hint
+        target = model or common.get_model_hint(user.id)
     if target:
         prof = _standalone_profile(target)
         if prof:
@@ -61,7 +61,6 @@ async def get_config(model: Optional[str] = None, user: Principal = Depends(get_
 @router.post("/control/config")
 async def set_config(req: ConfigRequest, model: Optional[str] = None,
                       user: Principal = Depends(require_permission("model.local.configure"))):
-    # global common.curStatus_model_hint
     # validate + persist against the live profile when it matches the request
     # target (or no target); otherwise against a temp profile built from the
     # selected model's saved config
@@ -74,7 +73,7 @@ async def set_config(req: ConfigRequest, model: Optional[str] = None,
             if prof is None:
                 return JSONResponse({"error": f"model file not found: {model}"}, status_code=404)
     else:
-        target = model or common.curStatus_model_hint
+        target = model or common.get_model_hint(user.id)
         if not target:
             return JSONResponse({"error": "no profile loaded"}, status_code=400)
         prof = _standalone_profile(target)
@@ -90,7 +89,7 @@ async def set_config(req: ConfigRequest, model: Optional[str] = None,
     m_id = prof.get("model_path") or prof.get("name")
     if req.persist and m_id:
         save_model_config(m_id, prof)
-        common.curStatus_model_hint = m_id
+        common.set_model_hint(user.id, m_id)
     was_running = state.process is not None and state.process.poll() is None
     if req.restart and was_running and state.profile is not None:
         try:

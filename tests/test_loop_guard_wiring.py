@@ -118,8 +118,11 @@ class LoopIsWiredToTheGuard(unittest.TestCase):
         self.assertRegex(self.src, r"if main_first and force_main_until < steps:")
 
     def test_stop_reason_has_a_banner_summary_and_wrapup(self):
-        self.assertRegex(self.src, r'"no_progress": "stopped: no progress')
-        self.assertRegex(self.src, r'"no_progress", "max_steps", "timeout"\) and actions_taken')
+        # Was a source-text assertion on the two stop_reason->text dicts in run.py.
+        # Those dicts moved to core/agent_loop/policy.py (stop_note/stop_headline) and are
+        # now covered behaviorally in tests/test_policy.py:StopReasons (every member has
+        # note+headline text, numbers interpolated, banner/summary agree). What remains
+        # here is the wiring: the stopped-done event carries the loop detail through.
         self.assertIn("'detail': loop_detail", self.src)
 
     def test_the_continue_prompt_matches_the_resume_prefix(self):
@@ -131,7 +134,7 @@ class LoopIsWiredToTheGuard(unittest.TestCase):
 
 class StopTextRoundTrips(unittest.TestCase):
     def test_server_and_banner_use_the_same_wording(self):
-        from routes.agent.run import _describe_stop
+        from core.agent_loop.policy import describe_stop as _describe_stop
         v = lg.Verdict(lg.STOP, "identical_result", "run_python", 3)
         self.assertEqual(_describe_stop(v.detail), lg.describe("identical_result", "run_python", 3))
         self.assertEqual(_describe_stop("garbage"), "the run repeated itself")

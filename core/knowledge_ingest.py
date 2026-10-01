@@ -24,18 +24,67 @@ URL_TIMEOUT_S = 15.0
 def extract_pdf(path: Path) -> str:
     import pdfplumber
     parts = []
+    n_pages = 0
+    image_only_pages = 0
     with pdfplumber.open(str(path)) as pdf:
         for page in pdf.pages:
+            n_pages += 1
             t = page.extract_text() or ""
             if t.strip():
                 parts.append(t)
-    return "\n\n".join(parts)
+            elif page.images:
+                image_only_pages += 1
+    text = "\n\n".join(parts)
+    if not text.strip() and n_pages:
+        # Not silent: an image-only scan re-uploaded unchanged extracts
+        # nothing again, and the admin has to know WHY (OCR is not available
+        # in this pipeline) rather than retrying the same file. Partial
+        # PDFs (some text pages) still ingest their text.
+        if image_only_pages:
+            raise ValueError(
+                f"PDF has {n_pages} page(s) but no extractable text "
+                f"({image_only_pages} image-only page(s)): scanned document, "
+                "OCR is not available - re-upload a text PDF instead")
+        raise ValueError(f"PDF has {n_pages} page(s) but no extractable text")
+    return text
 
 
 def extract_docx(path: Path) -> str:
+    """Body paragraphs AND tables, in document order.
+
+    The old version read d.paragraphs only, silently dropping every table in
+    the corpus (company knowledge loves tables). Table rows join with " | ",
+    the same convention as the xlsx/csv extractors, so downstream chunking
+    and lexical scoring see one consistent shape.
+    """
     import docx
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
     d = docx.Document(str(path))
-    return "\n".join(p.text for p in d.paragraphs if p.text.strip())
+    blocks = []
+    for child in d.element.body:
+        if child.tag.endswith("}p"):
+            t = Paragraph(child, d).text
+            if t.strip():
+                blocks.append(t)
+        elif child.tag.endswith("}tbl"):
+            for row in Table(child, d).rows:
+                cells = [c.text.strip() for c in row.cells]
+                cells = [c for c in cells if c]
+                if cells:
+                    blocks.append(" | ".join(cells))
+    # Headers/footers: same silent-drop class as tables were. Deduped and
+    # appended once - a "Company Name" repeated on 200 pages would otherwise
+    # inflate every chunk's lexical counts with zero signal.
+    seen = set(blocks)
+    for section in d.sections:
+        for part in (section.header, section.footer):
+            for p in part.paragraphs:
+                t = p.text.strip()
+                if t and t not in seen:
+                    seen.add(t)
+                    blocks.append(t)
+    return "\n".join(blocks)
 
 
 def extract_pptx(path: Path) -> str:

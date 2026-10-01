@@ -14,10 +14,10 @@ from core import auth_db
 from core.audit import audit_log
 from core.auth import (API_TOKEN_FORBIDDEN_PERMS, API_TOKEN_MAX_DAYS, Principal,
                        create_api_token, user_has_permission)
-from core.deps import get_current_user, require_permission
+from core.deps import get_current_user, require_verified
 
 router = APIRouter(prefix="/admin/api-tokens", tags=["admin"],
-                   dependencies=[Depends(require_permission("users.manage"))])
+                   dependencies=[Depends(require_verified("users.manage"))])
 self_router = APIRouter(prefix="/auth/tokens", tags=["auth"])
 
 

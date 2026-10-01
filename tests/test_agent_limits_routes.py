@@ -117,7 +117,11 @@ class MemoryRoutesTests(unittest.TestCase):
         r = self.put("preferences.md", "---\ndescription: How I like answers\n---\n- short answers\n")
         self.assertEqual(r.status_code, 200, r.text)
         ver = r.json()["version"]
-        listing = self.client.get("/agent/memory").json()
+        # pin the limit under test: the shipped default has moved before (8192 -> 16384) and
+        # the endpoint must report whatever is configured, not a hardcoded number
+        from core.small_model import APP_CONFIG
+        with mock.patch.dict(APP_CONFIG.setdefault("memory", {}), {"file_max_bytes": 8192}):
+            listing = self.client.get("/agent/memory").json()
         self.assertEqual([f["path"] for f in listing["files"]], ["preferences.md"])
         self.assertEqual(listing["limits"]["file_max_bytes"], 8192)
         got = self.client.get("/agent/memory/preferences.md").json()

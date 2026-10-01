@@ -8,7 +8,7 @@ from core import auth_db
 from core.audit import audit_log
 from core.auth import Principal, password_policy_error
 from core.auth_provider import hash_password
-from core.deps import require_permission
+from core.deps import require_verified
 from .helpers import _check_assignable_roles, _check_can_modify, _user_public
 from .models import CreateUserBody, UpdateUserBody
 
@@ -16,13 +16,13 @@ router = APIRouter()
 
 
 @router.get("/users")
-async def list_users(user: Principal = Depends(require_permission("users.manage"))):
+async def list_users(user: Principal = Depends(require_verified("users.manage"))):
     rows = auth_db.db().execute("SELECT * FROM users ORDER BY username").fetchall()
     return {"users": [_user_public(r) for r in rows]}
 
 
 @router.post("/users")
-async def create_user(body: CreateUserBody, user: Principal = Depends(require_permission("users.manage"))):
+async def create_user(body: CreateUserBody, user: Principal = Depends(require_verified("users.manage"))):
     if auth_db.get_user_by_username(body.username):
         raise HTTPException(status_code=409, detail="username already exists")
     _check_assignable_roles(user, body.roles or ["user"])
@@ -44,7 +44,7 @@ async def create_user(body: CreateUserBody, user: Principal = Depends(require_pe
 
 @router.patch("/users/{user_id}")
 async def update_user(user_id: int, body: UpdateUserBody,
-                      user: Principal = Depends(require_permission("users.manage"))):
+                      user: Principal = Depends(require_verified("users.manage"))):
     target = auth_db.get_user_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="user not found")
@@ -84,7 +84,7 @@ async def update_user(user_id: int, body: UpdateUserBody,
 
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: int, user: Principal = Depends(require_permission("users.manage"))):
+async def delete_user(user_id: int, user: Principal = Depends(require_verified("users.manage"))):
     if user_id == user.id:
         raise HTTPException(status_code=400, detail="cannot delete your own account")
     target = auth_db.get_user_by_id(user_id)
@@ -93,4 +93,25 @@ async def delete_user(user_id: int, user: Principal = Depends(require_permission
     _check_can_modify(user, target)
     auth_db.delete_user(user_id)
     audit_log(user, action="users.manage", resource=target["username"], detail={"deleted": True}, result="allow")
+    return {"ok": True}
+
+
+@router.post("/users/{user_id}/mfa/reset")
+async def reset_user_mfa(user_id: int, user: Principal = Depends(require_verified("users.manage"))):
+    """Lost-authenticator recovery: wipe the target's secret + backup codes.
+    They re-enroll at next login (or immediately in Settings when enforcement
+    is off). Mirrors the touch-super-admin rule: only a super admin may reset
+    a super admin's second factor. Never usable on yourself -- use /mfa/disable."""
+    target = auth_db.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="user not found")
+    if user_id == user.id:
+        raise HTTPException(status_code=400, detail="reset your own MFA via /auth/mfa/disable")
+    _check_can_modify(user, target)
+    if target["is_super_admin"] and not user.is_super_admin:
+        raise HTTPException(status_code=403, detail="only a super admin can reset a super admin's MFA")
+    was_on = auth_db.totp_enabled(user_id)
+    auth_db.admin_reset_mfa(user_id)
+    audit_log(user, action="mfa.admin_reset", resource=target["username"],
+              detail={"was_enabled": was_on}, result="allow")
     return {"ok": True}

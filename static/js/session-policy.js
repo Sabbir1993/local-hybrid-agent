@@ -20,10 +20,10 @@ async function loadSessionPolicyPanel() {
         <input type="checkbox" id="sp-enabled" ${p.enabled ? 'checked' : ''}>
         <span>Sign users out after inactivity</span>
       </label>
-      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:600;color:var(--dim);margin-bottom:2px">
         <span>Idle time (minutes)</span>
-        <input type="number" id="sp-minutes" min="${p.min}" max="${p.max}" value="${p.minutes}" style="width:120px">
-        <span class="dim" style="font-size:11px">${p.min}-${p.max} minutes. Typing, clicking and scrolling count as activity, and so does an open chat or agent run.</span>
+        <input type="number" id="sp-minutes" min="${p.min}" max="${p.max}" value="${p.minutes}" style="width:140px;">
+        <span class="dim" style="font-size:10.5px;font-weight:normal;line-height:1.4">${p.min}-${p.max} minutes. Typing, clicking and scrolling count as activity, and so does an open chat or agent run.</span>
       </label>
       <div id="sp-warn" class="dim" style="font-size:12px;line-height:1.5"></div>
       <div style="display:flex;align-items:center;gap:10px">

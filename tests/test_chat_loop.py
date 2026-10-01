@@ -129,6 +129,63 @@ class ShrinkToolResultsTests(unittest.TestCase):
         shrink_old_tool_results(msgs, budget_tokens=10000)
         self.assertEqual(msgs[1]["content"], "short")
 
+    def test_tool_schemas_count_against_the_budget(self):
+        # the tool-blind bug: without the schemas, an 8.5k-token tool block is invisible
+        # and compaction fires thousands of tokens too late (or never)
+        from unittest import mock
+        from core.agent_loop import estimate_prompt_tokens
+        import routes.chat.file_intent as fi
+        big = "x" * 20000
+        msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}]
+        for i in range(2):
+            msgs.append({"role": "assistant", "content": "", "tool_calls": [
+                {"id": f"c{i}", "type": "function",
+                 "function": {"name": "web_search", "arguments": "{}"}}]})
+            msgs.append({"role": "tool", "tool_call_id": f"c{i}", "content": big})
+        tools = [{"type": "function", "function": {"name": f"t{i}", "description": "d" * 2000,
+                                                   "parameters": {"type": "object", "properties": {}}}}
+                 for i in range(10)]
+        blind, aware = estimate_prompt_tokens(msgs), estimate_prompt_tokens(msgs, tools)
+        self.assertGreater(aware, blind + 5000)
+        # and shrink must actually forward the schemas instead of dropping them: spy on
+        # both estimate calls it makes (pre-check and post-trim check)
+        seen = []
+        real_est = fi.estimate_prompt_tokens
+        real_compact = fi.compact_messages
+
+        def spy_est(m, t=None):
+            seen.append(t)
+            return real_est(m, t)
+
+        def spy_compact(m, b, t=None):
+            seen.append(t)
+            return real_compact(m, b, t)
+
+        with mock.patch.object(fi, "estimate_prompt_tokens", spy_est), \
+             mock.patch.object(fi, "compact_messages", spy_compact):
+            shrink_old_tool_results([dict(m) for m in msgs], budget_tokens=10 ** 9,
+                                    tools=tools)
+            # tiny budget as well: exercises the post-trim estimate and the compact
+            # fallback paths, which must also see the schemas
+            shrink_old_tool_results([dict(m) for m in msgs], budget_tokens=1,
+                                    tools=tools)
+        self.assertTrue(seen, "shrink made no estimate calls")
+        self.assertTrue(all(t == tools for t in seen),
+                        "shrink estimated or compacted without the schemas")
+
+    def test_prompt_tokens_of_counts_schemas(self):
+        from routes.chat.delivery import _prompt_tokens_of
+        msgs = [{"role": "user", "content": "hi"}]
+        tools = [{"type": "function", "function": {"name": "web_search",
+                                                   "description": "d" * 3000,
+                                                   "parameters": {"type": "object", "properties": {}}}},
+                 {"type": "function", "function": {"name": "x",
+                                                   "description": "e" * 3000,
+                                                   "parameters": {"type": "object", "properties": {}}}}]
+        blind = _prompt_tokens_of(None, msgs)
+        aware = _prompt_tokens_of(None, msgs, tools)
+        self.assertGreater(aware, blind + 1000)
+
 
 class KBGateTests(unittest.TestCase):
     """search_knowledge_hybrid used to min-max normalise and always return
