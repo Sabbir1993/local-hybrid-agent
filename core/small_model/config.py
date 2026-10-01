@@ -39,7 +39,7 @@ _DEFAULT_ROLES = {
     },
     "coder": {
         "lane": "executor", "max_steps": 10,
-        "tools": ["write_file", "read_file", "edit_file", "list_files", "grep", "run_python"],
+        "tools": ["write_file", "append_file", "read_file", "edit_file", "list_files", "grep", "run_python"],
         "system_prompt": "You are a focused implementation sub-agent. Make the exact edits described in your task, then report what changed.",
     },
     "reviewer": {

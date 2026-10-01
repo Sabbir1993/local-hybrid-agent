@@ -106,19 +106,62 @@ def tool_list_diff(args: dict) -> str:
     return "\n".join(out)
 
 
+async def _restore(uid: int, path: str, content: Optional[str]) -> Optional[str]:
+    """Put `content` back on the device (None = the file did not exist: delete it).
+    Returns an error text, or None on success."""
+    cb = getattr(_pkg(), "companion_bridge", companion_bridge)
+    if content is None:
+        try:
+            await cb.call(uid, "fs.remove", {"path": path})
+        except Exception:
+            return ("the file was created this session and this companion version cannot delete files - "
+                    "ask the user to remove it (or update the companion)")
+        return None
+    await cb.call(uid, "fs.write", {"path": path, "content": content, "append": False})
+    return None
+
+
 async def tool_revert(args: dict) -> str:
-    target = args.get("path", "")
+    """Undo the agent's last edit(s) to one file. steps=N undoes N edits; to_start=true goes back
+    to the file as it was before the agent touched it this session."""
+    from . import file_state
+    target = str(args.get("path", "")).strip()
+    if not target:
+        return "error: path required"
     uid_fn = getattr(_pkg(), "_remote_uid", _remote_uid)
     uid = uid_fn()
-    cb = getattr(_pkg(), "companion_bridge", companion_bridge)
+    try:
+        full = str(getattr(_pkg(), "_ws_resolve", _ws_resolve)(target))
+    except Exception:
+        full = ""
     changes = _ws_changes.get(uid) or {}
-    for path, rec in changes.items():
-        if Path(path).name == target or path.endswith(target):
-            before = rec.get("before")
-            if before is None:
-                return (f"error: {target} was created this session; the companion cannot delete "
-                        "files -- ask the user to remove it")
-            await cb.call(uid, "fs.write", {"path": path, "content": before, "append": False})
-            del changes[path]
-            return f"reverted {target}"
-    return f"error: no tracked change for {target}"
+    key = next((k for k in changes if k == full), None) or next(
+        (k for k in changes if Path(k).name == target or k.endswith(target)), None)
+    key = key or full
+    to_start = bool(args.get("to_start"))
+    steps = args.get("steps") or 1
+
+    if not to_start and key and file_state.undo_depth(key):
+        found, content, n = file_state.pop_undo(key, steps)
+        err = await _restore(uid, key, content)
+        if err:
+            return f"error: {err}"
+        rec = changes.get(key)
+        if rec is not None:
+            if rec.get("before") == content and not file_state.undo_depth(key):
+                del changes[key]
+            else:
+                rec["after"] = content
+        file_state.clear_verify(key)
+        left = file_state.undo_depth(key)
+        return f"reverted {target} ({n} edit(s) undone; {left} earlier version(s) still available)"
+
+    rec = changes.get(key)
+    if rec is None:
+        return f"error: no tracked change for {target}"
+    err = await _restore(uid, key, rec.get("before"))
+    if err:
+        return f"error: {err}"
+    del changes[key]
+    file_state.clear_verify(key)
+    return f"reverted {target} to its state before this session"

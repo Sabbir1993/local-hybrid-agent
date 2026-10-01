@@ -211,6 +211,8 @@ def db_delete_project(pid: int, owner_user_id: int) -> None:
     with transaction(pdb) as c:
         c.execute("DELETE FROM plan_items WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
                   (pid,))
+        c.execute("DELETE FROM session_working_memory WHERE session_id IN "
+                  "(SELECT id FROM sessions WHERE project_id = ?)", (pid,))
         c.execute("DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
                   (pid,))
         c.execute("DELETE FROM sessions WHERE project_id = ?", (pid,))

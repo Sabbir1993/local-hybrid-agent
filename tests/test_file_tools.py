@@ -1,0 +1,353 @@
+"""tests/test_file_tools.py - read/write/append/edit/insert tools, verify loop and undo.
+
+Covers brief acceptance cases 1-4, 11, 12. Run: python -m unittest tests.test_file_tools -v
+"""
+
+import asyncio
+import sqlite3
+import sys
+import unittest
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core import agent_tools, companion_bridge
+from core.agent_tools import edit_engine, file_state
+from core.agent_tools.limits import effective_max_tokens
+from core.request_context import set_current_device, set_current_user
+
+WS = r"C:\Users\[PLACEHOLDER]\projects\demo"
+
+
+def full(name):
+    return str(Path(WS) / name)
+
+
+class FakeCompanion:
+    def __init__(self):
+        self.files = {}
+        self.ops = []
+        self.js_ok = True
+
+    async def call(self, uid, op, params, timeout=None):
+        self.ops.append(op)
+        if op == "fs.read":
+            return {"content": self.files.get(params["path"])}
+        if op == "fs.write":
+            self.files[params["path"]] = params["content"]
+            return {"existed": True}
+        if op == "fs.remove":
+            self.files.pop(params["path"], None)
+            return {"removed": True}
+        if op == "fs.verify":
+            return {"checked": True, "ok": self.js_ok, "detail": "SyntaxError: Unexpected token"}
+        if op == "fs.list":
+            return {"files": ["a.py"]}
+        if op == "fs.grep":
+            return {"hits": ["src/a.py:3: needle", "src/b.js:9: needle"]}
+        raise RuntimeError(f"unknown op {op}")
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE projects (name TEXT, user_id INTEGER, device_id TEXT, workspace_dir TEXT)")
+        db.execute("INSERT INTO projects VALUES ('demo', 7, 'dev1', ?)", (WS,))
+        self.fc = FakeCompanion()
+        self._patches = [
+            mock.patch.object(agent_tools, "_projects_db", db),
+            mock.patch.object(companion_bridge, "is_connected", lambda uid: uid == 7),
+            mock.patch.object(companion_bridge, "call", self.fc.call),
+            mock.patch.dict(agent_tools._active_project, {"7:dev1": "demo"}, clear=True),
+            mock.patch.dict(agent_tools._ws_changes, {}, clear=True),
+            mock.patch.dict(agent_tools._file_diffs, {}, clear=True),
+            mock.patch.dict(file_state._read_sets, {}, clear=True),
+            mock.patch.dict(file_state._undo, {}, clear=True),
+            mock.patch.dict(file_state._verify, {}, clear=True),
+        ]
+        for p in self._patches:
+            p.start()
+        set_current_user(7)
+        set_current_device("dev1")
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+        set_current_user(None)
+        set_current_device(None)
+
+    def run_(self, coro):
+        return asyncio.run(coro)
+
+    def call(self, name, **args):
+        return self.run_(agent_tools.TOOL_IMPLS[name](args))
+
+
+class EngineTests(unittest.TestCase):
+    def test_prefixes_stripped_only_when_every_line_has_one(self):
+        s, hit = edit_engine.strip_line_prefixes("    12\tfoo\n    13\tbar")
+        self.assertEqual((s, hit), ("foo\nbar", True))
+        s, hit = edit_engine.strip_line_prefixes("12 apples\nthree")
+        self.assertFalse(hit)
+
+    def test_unique_and_ambiguous_and_missing(self):
+        text = "a = 1\nb = 2\na = 1\n"
+        with self.assertRaises(edit_engine.EditError) as cm:
+            edit_engine.apply_edit(text, "a = 1", "a = 9")
+        self.assertIn("2 times", str(cm.exception))
+        self.assertIn("lines 1, 3", str(cm.exception))
+        self.assertEqual(edit_engine.apply_edit(text, "a = 1", "a = 9", True)["count"], 2)
+        with self.assertRaises(edit_engine.EditError) as cm:
+            edit_engine.apply_edit(text, "b = 3", "b = 4")
+        self.assertIn("not found", str(cm.exception))
+        self.assertIn("line 2", str(cm.exception), "closest candidate is suggested")
+
+    def test_noop_rejected(self):
+        with self.assertRaises(edit_engine.EditError):
+            edit_engine.apply_edit("x\n", "x", "x")
+
+    def test_whitespace_fallback_reindents(self):
+        text = "class A:\n    def f(self):\n        return 1\n"
+        # the model dropped the indentation of the block it copied
+        res = edit_engine.apply_edit(text, "def f(self):\n    return 1", "def f(self):\n    return 2")
+        self.assertEqual(res["method"], "whitespace")
+        self.assertEqual(res["text"], "class A:\n    def f(self):\n        return 2\n")
+
+    def test_whitespace_fallback_refuses_ambiguity(self):
+        text = "  x = 1\n\tx = 1\n"
+        with self.assertRaises(edit_engine.EditError) as cm:
+            edit_engine.apply_edit(text, "x  =  1", "x = 2")
+        self.assertIn("matches 2 places", str(cm.exception))
+
+    def test_crlf_files_keep_their_endings(self):
+        text = "one\r\ntwo\r\nthree\r\n"
+        res = edit_engine.apply_edit(text, "one\ntwo", "ONE\nTWO")
+        self.assertEqual(res["text"], "ONE\r\nTWO\r\nthree\r\n")
+
+    def test_numbered_window_and_cap(self):
+        text = "\n".join(f"line {i}" for i in range(1, 501)) + "\n"
+        v = edit_engine.numbered(text, 1, 200, 20000)
+        self.assertEqual((v["first"], v["last"], v["total"], v["next_offset"]), (1, 200, 500, 201))
+        self.assertTrue(v["text"].startswith("     1\tline 1"))
+        v = edit_engine.numbered(text, 481, 200, 20000)
+        self.assertEqual((v["last"], v["next_offset"]), (500, None))
+        v = edit_engine.numbered(text, 1, 200, 300)
+        self.assertLess(v["last"], 200, "size cap shortens the window")
+        self.assertEqual(v["next_offset"], v["last"] + 1)
+
+    def test_append_boundary(self):
+        self.assertEqual(edit_engine.append_text("a", "b"), "a\nb")
+        self.assertEqual(edit_engine.append_text("a\n", "b"), "a\nb")
+        self.assertEqual(edit_engine.append_text(None, "b"), "b")
+
+    def test_insert_positions(self):
+        self.assertEqual(edit_engine.insert_at_line("a\nb\n", 1, "X")["text"], "X\na\nb\n")
+        self.assertEqual(edit_engine.insert_at_line("a\nb\n", 3, "X")["text"], "a\nb\nX\n")
+        with self.assertRaises(edit_engine.EditError):
+            edit_engine.insert_at_line("a\nb\n", 9, "X")
+
+
+class ToolTests(Base):
+    def test_write_refuses_existing_unless_overwrite(self):
+        self.call("write_file", path="a.py", content="x = 1\n")
+        out = self.call("write_file", path="a.py", content="x = 2\n")
+        self.assertTrue(out.startswith("error:"))
+        self.assertIn("append_file", out)
+        self.assertEqual(self.fc.files[full("a.py")], "x = 1\n")
+        self.assertIn("overwrote", self.call("write_file", path="a.py", content="x = 2\n", overwrite=True))
+
+    def test_write_size_cap_points_to_skeleton(self):
+        out = self.call("write_file", path="big.py", content="x = 1\n" * 4000)
+        self.assertTrue(out.startswith("error:"))
+        self.assertIn("skeleton", out)
+        self.assertNotIn(full("big.py"), self.fc.files)
+
+    def test_chunked_build_of_a_large_file(self):
+        # acceptance 1: a 1500-line file built only from small calls
+        self.call("write_file", path="app.py", content="import os\n\n\n# TODO: body\n")
+        for i in range(30):
+            body = "".join(f"def f{i}_{j}():\n    return {j}\n\n" for j in range(17))
+            out = self.call("append_file", path="app.py", content=body)
+            self.assertIn("verify: OK", out)
+        text = self.fc.files[full("app.py")]
+        self.assertGreater(text.count("\n"), 1500)
+        compile(text, "app.py", "exec")
+
+    def test_append_needs_existing_file(self):
+        out = self.call("append_file", path="nope.py", content="x = 1\n")
+        self.assertTrue(out.startswith("error:"))
+        self.assertIn("write_file", out)
+
+    def test_legacy_append_flag_still_builds_files(self):
+        self.call("write_file", path="l.txt", content="one")
+        self.call("write_file", path="l.txt", content="two", append=True)
+        self.assertEqual(self.fc.files[full("l.txt")], "one\ntwo")
+
+    def test_edit_requires_read_first(self):
+        self.fc.files[full("old.py")] = "x = 1\n"
+        out = self.call("edit_file", path="old.py", old_string="x = 1", new_string="x = 2")
+        self.assertTrue(out.startswith("error:"))
+        self.assertIn("read", out)
+        self.call("read_file", path="old.py")
+        out = self.call("edit_file", path="old.py", old_string="x = 1", new_string="x = 2")
+        self.assertIn("edited old.py", out)
+        self.assertEqual(self.fc.files[full("old.py")], "x = 2\n")
+
+    def test_file_created_this_session_can_be_edited(self):
+        self.call("write_file", path="n.py", content="a = 1\n")
+        self.assertIn("edited", self.call("edit_file", path="n.py", old_string="a = 1", new_string="a = 2"))
+
+    def test_edit_in_5000_line_file_stays_small(self):
+        # acceptance 2: the tool result for one edit is a few lines, not the file
+        self.fc.files[full("big.py")] = "".join(f"v{i} = {i}\n" for i in range(5000))
+        self.call("read_file", path="big.py", offset=2500, limit=5)
+        out = self.call("edit_file", path="big.py", old_string="v2501 = 2501", new_string="v2501 = 0")
+        self.assertLess(len(out), 1500)
+        self.assertIn("line 2502", out)
+
+    def test_non_unique_edit_recovers(self):
+        # acceptance 3
+        self.fc.files[full("d.py")] = "x = 1\ny = 2\nx = 1\n"
+        self.call("read_file", path="d.py")
+        out = self.call("edit_file", path="d.py", old_string="x = 1", new_string="x = 5")
+        self.assertIn("2 times", out)
+        out = self.call("edit_file", path="d.py", old_string="y = 2\nx = 1", new_string="y = 2\nx = 5")
+        self.assertIn("edited", out)
+        self.assertEqual(self.fc.files[full("d.py")], "x = 1\ny = 2\nx = 5\n")
+
+    def test_wrong_indentation_edit_succeeds(self):
+        # acceptance 4
+        self.fc.files[full("i.py")] = "def f():\n    if x:\n        return 1\n"
+        self.call("read_file", path="i.py")
+        out = self.call("edit_file", path="i.py", old_string="if x:\n    return 1", new_string="if x:\n    return 2")
+        self.assertIn("ignoring whitespace", out)
+        self.assertEqual(self.fc.files[full("i.py")], "def f():\n    if x:\n        return 2\n")
+
+    def test_read_pagination_footer(self):
+        self.fc.files[full("r.txt")] = "".join(f"l{i}\n" for i in range(1, 451))
+        out = self.call("read_file", path="r.txt")
+        self.assertIn("lines 1-200 of 450", out)
+        self.assertIn("offset=201", out)
+        out = self.call("read_file", path="r.txt", offset=401)
+        self.assertIn("lines 401-450 of 450", out)
+        self.assertNotIn("more", out.rsplit("[", 1)[1])
+
+    def test_traversal_rejected(self):
+        # acceptance 11
+        for name in ("write_file", "append_file", "read_file", "insert_at_line"):
+            with self.assertRaises(PermissionError):
+                self.call(name, path="../../etc/passwd", content="x", text="x", line=1)
+        self.assertFalse([k for k in self.fc.files if "passwd" in k])
+
+    def test_insert_at_line(self):
+        self.fc.files[full("t.txt")] = "a\nb\n"
+        self.call("read_file", path="t.txt")
+        out = self.call("insert_at_line", path="t.txt", line=2, text="X")
+        self.assertIn("inserted 1 line", out)
+        self.assertEqual(self.fc.files[full("t.txt")], "a\nX\nb\n")
+
+    def test_list_and_grep_take_path_and_glob(self):
+        out = self.call("grep", pattern="needle", glob="*.py")
+        self.assertEqual(out, "src/a.py:3: needle")
+        out = self.call("grep", pattern="needle", path="pkg", glob="*.js")
+        self.assertEqual(out, "pkg/src/b.js:9: needle")
+        self.assertEqual(self.call("list_files", path="sub"), "sub/a.py")
+
+
+class VerifyAndUndoTests(Base):
+    def test_syntax_error_reported_and_fixed(self):
+        out = self.call("write_file", path="bad.py", content="def f(:\n    pass\n")
+        self.assertIn("verify: FAILED", out)
+        self.assertIn("line 1", out)
+        out = self.call("edit_file", path="bad.py", old_string="def f(:", new_string="def f():")
+        self.assertIn("verify: OK", out)
+
+    def test_json_checked(self):
+        self.assertIn("verify: FAILED", self.call("write_file", path="c.json", content='{"a": 1,}'))
+        self.assertIn("verify: OK", self.call("write_file", path="d.json", content='{"a": 1}'))
+
+    def test_javascript_uses_companion(self):
+        self.fc.js_ok = False
+        self.assertIn("verify: FAILED", self.call("write_file", path="a.js", content="function ("))
+        self.assertIn("fs.verify", self.fc.ops)
+
+    def test_unknown_types_are_not_checked(self):
+        self.assertNotIn("verify", self.call("write_file", path="n.txt", content="hello"))
+
+    def test_stops_after_max_retries_and_restores_last_good(self):
+        self.call("write_file", path="g.py", content="x = 1\n")
+        outs = []
+        for i in range(3):
+            outs.append(self.call("edit_file", path="g.py", old_string="x = 1" if i == 0 else f"x = ({i}",
+                                  new_string=f"x = ({i + 1}"))
+        self.assertIn("Attempt 1/3", outs[0])
+        self.assertIn("Attempt 2/3", outs[1])
+        self.assertIn("restored", outs[2])
+        self.assertEqual(self.fc.files[full("g.py")], "x = 1\n")
+
+    def test_no_auto_restore_for_chunked_writes(self):
+        self.call("write_file", path="h.py", content="class A:\n")           # incomplete but only a first chunk
+        out = ""
+        for _ in range(3):
+            out = self.call("append_file", path="h.py", content="    def f(self):")
+        self.assertIn("Stop and tell the user", out)
+        self.assertIn("def f", self.fc.files[full("h.py")])
+
+    def test_revert_undoes_last_edit_then_earlier_ones(self):
+        # acceptance 12
+        self.call("write_file", path="u.py", content="a = 1\n")
+        self.call("edit_file", path="u.py", old_string="a = 1", new_string="a = 2")
+        self.call("edit_file", path="u.py", old_string="a = 2", new_string="a = 3")
+        self.assertIn("reverted", self.call("revert", path="u.py"))
+        self.assertEqual(self.fc.files[full("u.py")], "a = 2\n")
+        self.assertIn("reverted", self.call("revert", path="u.py", steps=2))
+        self.assertNotIn(full("u.py"), self.fc.files, "a file the agent created is deleted by undoing its creation")
+
+    def test_revert_to_start(self):
+        self.fc.files[full("s.py")] = "orig = 1\n"
+        self.call("read_file", path="s.py")
+        self.call("edit_file", path="s.py", old_string="orig = 1", new_string="orig = 2")
+        self.call("edit_file", path="s.py", old_string="orig = 2", new_string="orig = 3")
+        self.assertIn("before this session", self.call("revert", path="s.py", to_start=True))
+        self.assertEqual(self.fc.files[full("s.py")], "orig = 1\n")
+
+    def test_undo_stack_is_bounded(self):
+        for i in range(file_state.MAX_UNDO_PER_FILE + 10):
+            file_state.push_undo("p", f"v{i}")
+        self.assertEqual(file_state.undo_depth("p"), file_state.MAX_UNDO_PER_FILE)
+
+
+class LaneCapTests(unittest.TestCase):
+    def test_executor_is_capped_even_when_settings_are_unlimited(self):
+        self.assertEqual(effective_max_tokens(-1, "executor"), 4096)
+        self.assertEqual(effective_max_tokens(0, "executor"), 4096)
+
+    def test_user_limit_can_only_lower_the_cap(self):
+        self.assertEqual(effective_max_tokens(2000, "executor"), 2000)
+        self.assertEqual(effective_max_tokens(30000, "executor"), 4096)
+        self.assertEqual(effective_max_tokens(-1, "main"), 16000)
+
+    def test_cloud_models_are_left_as_set(self):
+        self.assertEqual(effective_max_tokens(-1, "main", cloud=True), -1)
+        self.assertEqual(effective_max_tokens(8000, "executor", cloud=True), 8000)
+
+    def test_executor_thinking_is_capped(self):
+        from core import reasoning
+        from core.agent_tools.limits import executor_effort_ceiling
+        self.assertEqual(executor_effort_ceiling(), "low")
+        self.assertEqual(reasoning.cap("high", "low"), "low")
+        self.assertEqual(reasoning.cap("none", "low"), "none")
+        self.assertEqual(reasoning.cap("low", "medium"), "low")
+        self.assertIsNone(reasoning.cap(None, "low"))
+        with mock.patch.dict("core.small_model.APP_CONFIG", {"agent": {"executor_max_effort": "bogus"}}):
+            self.assertEqual(executor_effort_ceiling(), "low")
+
+    def test_unknown_lane_is_untouched(self):
+        self.assertEqual(effective_max_tokens(-1, "direct"), -1)
+        self.assertEqual(effective_max_tokens(500, "direct"), 500)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -42,6 +42,13 @@ def budget(level: str) -> int:
         return _DEFAULT_BUDGETS.get(level, -1)
 
 
+def cap(level: Optional[str], ceiling: Optional[str]) -> Optional[str]:
+    """`level`, but never above `ceiling` (both from LEVELS). Unknown values pass through unchanged."""
+    if level not in LEVELS or ceiling not in LEVELS:
+        return level
+    return level if LEVELS.index(level) <= LEVELS.index(ceiling) else ceiling
+
+
 def resolve(level: Optional[str], deep: bool = False) -> Optional[str]:
     """Effective level. An explicit level always wins (Deep research and effort
     are independent switches in the composer); None (older clients that don't

@@ -193,14 +193,16 @@ class TestReadFilePagingHint(unittest.TestCase):
     """A truncated result must tell the model how to get the rest, otherwise the
     truncation is silent information loss."""
 
-    def test_both_branches_advertise_read_file_chunk(self):
+    def test_read_file_advertises_the_next_offset(self):
+        # read_file pages by line: a window that does not reach the end names where to continue
+        from core.agent_tools import edit_engine
+        text = "".join(f"l{i}\n" for i in range(1, 1001))
+        view = edit_engine.numbered(text, 1, 200, 20000)
+        self.assertEqual(view["next_offset"], 201)
         src = (REPO / "core" / "agent_tools" / "file_ops.py").read_text(encoding="utf-8")
         start = src.index("async def tool_read_file(")
-        nxt = [i for i in (src.find("\nasync def ", start + 1), src.find("\ndef ", start + 1)) if i > 0]
-        block = src[start:min(nxt) if nxt else len(src)]
-        self.assertEqual(block.count("read_file_chunk("), 2,
-                         "the remote and local truncation branches both need the hint")
-        self.assertIn("offset_chars={MAX_TOOL_OUTPUT}", block)
+        block = src[start:src.index("\nasync def ", start + 1)]
+        self.assertIn("call read_file with offset=", block)
 
 
 if __name__ == "__main__":

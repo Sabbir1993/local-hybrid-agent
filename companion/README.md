@@ -35,6 +35,14 @@ shipping to non-technical users:
   GitHub Releases) so installed copies auto-update.
 - Code-sign the build so Windows SmartScreen doesn't warn on install.
 
+## File operations added in 0.2.103
+
+- `fs.remove` deletes one file (never a folder); the server uses it to undo a file the agent created.
+- `fs.verify` runs `node --check` on a `.js/.mjs/.cjs` file and reports the syntax error, if any. Other
+  file types are checked by the server.
+- Both go through the same approved-folder check as `fs.write`. An older companion answers "unknown op" and the
+  server carries on without them.
+
 ## Known limitations (MVP)
 
 - Only one companion per user account at a time — a second login replaces

@@ -8,6 +8,7 @@ AGENT_TOOLS = [
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string", "description": "glob pattern, e.g. * or **/* or **/*.py"},
+                    "path": {"type": "string", "description": "optional sub-folder to list instead of the workspace root"},
                 },
                 "required": [],
             },
@@ -17,10 +18,14 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read a text file's content from the workspace",
+            "description": "Read a slice of a text file. Returns numbered lines (the numbers are not part of the file), the total line count and, when more remains, the offset to continue from. Read only the part you need.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "workspace-relative path"}},
+                "properties": {
+                    "path": {"type": "string", "description": "workspace-relative path"},
+                    "offset": {"type": "integer", "description": "first line to read (1-based, default 1)"},
+                    "limit": {"type": "integer", "description": "number of lines (default 200)"},
+                },
                 "required": ["path"],
             },
         },
@@ -29,10 +34,14 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "grep",
-            "description": "Search all workspace files with a regex; returns file:line: match",
+            "description": "Search workspace files with a regex; returns file:line: match. Use it to locate code before reading.",
             "parameters": {
                 "type": "object",
-                "properties": {"pattern": {"type": "string", "description": "regex to search"}},
+                "properties": {
+                    "pattern": {"type": "string", "description": "regex to search"},
+                    "path": {"type": "string", "description": "optional sub-folder to search in"},
+                    "glob": {"type": "string", "description": "optional file filter, e.g. *.py"},
+                },
                 "required": ["pattern"],
             },
         },
@@ -41,13 +50,28 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Create or overwrite a file in the workspace. For large files (roughly 150+ lines), write it in several shorter calls: first call with append=false (or omitted) to create the file with the first chunk, then further calls with append=true to add the rest in order — this avoids output truncation/corruption on very long single-shot generations.",
+            "description": "Create a NEW file (fails if it exists unless overwrite=true). One call carries at most a few thousand tokens: for anything longer than ~150 lines write a skeleton (imports, signatures, TODO markers) first, then add sections with append_file or edit_file.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
                     "content": {"type": "string"},
-                    "append": {"type": "boolean", "description": "If true, append content to the end of the existing file instead of overwriting it. Use this to build a large file across multiple calls."},
+                    "overwrite": {"type": "boolean", "description": "replace an existing file completely (rarely needed - prefer edit_file)"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "append_file",
+            "description": "Add text to the end of an existing file. Use it to build a large file section by section after write_file created the skeleton.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string", "description": "the next section (about 2-3k tokens at most)"},
                 },
                 "required": ["path", "content"],
             },
@@ -57,7 +81,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "Replace an exact string in a file. old_string must match the file exactly and be unique (or set replace_all)",
+            "description": "Replace an exact string in a file you have read. old_string must be unique (add surrounding lines) or set replace_all. Whitespace/indentation differences are tolerated. Returns the edited lines.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -73,8 +97,24 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "insert_at_line",
+            "description": "Insert text so its first line becomes line N of a file you have read (1 = top, total_lines+1 = end).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "line": {"type": "integer", "description": "1-based line number the inserted text starts at"},
+                    "text": {"type": "string"},
+                },
+                "required": ["path", "line", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_python",
-            "description": "Run Python code in the active project workspace. Returns stdout/stderr. Use to test fixes.",
+            "description": "Run a Python script on the user's machine; it needs the user's approval every time. Use it to run or test code you wrote. NEVER use it to read, search or list files - use grep, read_file and list_files (no approval needed).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -96,10 +136,14 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "revert",
-            "description": "Revert one file to its pre-session content",
+            "description": "Undo your last edit to one file (steps=N undoes N edits; to_start=true goes back to the file as it was before you touched it this session). Also deletes a file you created.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
+                "properties": {
+                    "path": {"type": "string"},
+                    "steps": {"type": "integer", "description": "how many edits to undo (default 1)"},
+                    "to_start": {"type": "boolean"},
+                },
                 "required": ["path"],
             },
         },
@@ -135,7 +179,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_plan",
-            "description": "Create the tracked task plan for this session: an ordered list of concrete steps. Call it once after exploring, before starting the work. Replaces any previous plan.",
+            "description": "Create the tracked task plan for this session: an ordered list of concrete steps. Call it first for any multi-step job, before changing files. 3-12 short steps, each one checkable outcome or one file section (never a whole large file in one step). Steps are done in order, one at a time.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -144,6 +188,7 @@ AGENT_TOOLS = [
                         "items": {"type": "string"},
                         "description": "Ordered step descriptions, e.g. ['inspect config.py', 'add retry helper to client.py', 'verify with run_python']",
                     },
+                    "replace": {"type": "boolean", "description": "Only to discard a plan that is already in progress because the task changed."},
                 },
                 "required": ["items"],
             },
@@ -198,7 +243,7 @@ AGENT_TOOLS.append(FINISH_SCHEMA)
 
 AGENT_CORE_TOOLS = [
     t for t in AGENT_TOOLS
-    if t["function"]["name"] in ("write_file", "read_file", "edit_file", "list_files", "run_python", "search_knowledge_base")
+    if t["function"]["name"] in ("write_file", "append_file", "read_file", "edit_file", "list_files", "run_python", "search_knowledge_base")
 ]
 
 CHAT_WRITE_FILE_SCHEMA = {

@@ -27,7 +27,7 @@ TOOL_RESULT_CHARS = 6000   # tool results inside the current run (head + tail, w
 # Messages the loop injects into the conversation itself. They are role "user" but are not
 # something the person typed, so they never mark the start of the current request.
 _CONTROL_PREFIXES = ("[continue]", "[plan reminder]", "[plan incomplete]", "[plan audit required]",
-                     "[stopped]", "[stuck]", "[system]", "[budget]")
+                     "[stopped]", "[stuck]", "[system]", "[budget]", "[plan first]", "[cut off]")
 
 
 def _text(content) -> str:

@@ -59,6 +59,13 @@ from .meta_endpoints import (
     agent_command_expand,
     agent_workspace,
 )
+from .memory_endpoints import (
+    memory_list,
+    memory_get,
+    memory_put,
+    memory_remove,
+    memory_remove_all,
+)
 from .upload import (
     agent_upload,
     _unique_dest,

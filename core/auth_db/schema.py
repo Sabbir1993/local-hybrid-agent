@@ -125,6 +125,17 @@ CREATE TABLE IF NOT EXISTS user_mcp_servers (
     PRIMARY KEY (user_id, name)
 );
 
+CREATE TABLE IF NOT EXISTS agent_memory (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    version TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (user_id, path)
+);
+
 CREATE TABLE IF NOT EXISTS api_tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     token_hash TEXT UNIQUE NOT NULL,

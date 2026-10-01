@@ -3,12 +3,20 @@ import re
 from typing import Optional, Union
 
 from ..tool_args import SHELL_COMMAND_KEYS, shell_command
+from .truncation import INVALID_ARGS_ERROR
+
+# marks arguments of a file-writing call that could not be parsed; never executed
+INVALID_JSON_KEY = "__invalid_json__"
+# these calls must arrive whole: salvaging a cut-off one would write a partial file
+_WHOLE_CALL_ONLY = ("write_file", "edit_file", "append_file", "insert_at_line")
 
 
 def validate_and_repair_tool_args(tool_name: str, args: dict, query_hint: str = "") -> tuple[dict, Optional[str]]:
     repaired = dict(args) if isinstance(args, dict) else {}
+    if repaired.get(INVALID_JSON_KEY):
+        return repaired, INVALID_ARGS_ERROR
 
-    if tool_name in ("write_file", "edit_file", "read_file", "revert"):
+    if tool_name in ("write_file", "edit_file", "append_file", "insert_at_line", "read_file", "revert"):
         p = repaired.get("path") or repaired.get("file") or repaired.get("filename")
         if not p:
             if query_hint:
@@ -53,6 +61,22 @@ def validate_and_repair_tool_args(tool_name: str, args: dict, query_hint: str = 
             return repaired, "error: content required for write_file"
         repaired["content"] = str(repaired["content"])
 
+    if tool_name == "append_file":
+        if "content" not in repaired:
+            for alt in ("text", "code", "body", "source"):
+                if alt in repaired:
+                    repaired["content"] = repaired[alt]
+                    break
+        if not repaired.get("content"):
+            return repaired, "error: content required for append_file"
+        repaired["content"] = str(repaired["content"])
+
+    if tool_name == "insert_at_line":
+        if "text" not in repaired and "content" in repaired:
+            repaired["text"] = repaired["content"]
+        if not repaired.get("text"):
+            return repaired, "error: text required for insert_at_line"
+
     if tool_name == "edit_file":
         if not repaired.get("old_string"):
             return repaired, "error: old_string required for edit_file"
@@ -94,6 +118,13 @@ def safe_parse_and_repair_args(raw: Union[str, dict], tool_name: str = "", query
                     out = res
             except Exception:
                 pass
+
+        if out is None and tool_name in _WHOLE_CALL_ONLY:
+            out = {INVALID_JSON_KEY: True}
+            m_path = re.search(r'"(?:path|file|filename)"\s*:\s*"([^"]+)"', raw)
+            if m_path:
+                out["path"] = m_path.group(1)
+            return out
 
         if out is None:
             for suffix in ['"}', '"\n}', '}', '"]}', '"]', '"']:
@@ -150,18 +181,6 @@ def safe_parse_and_repair_args(raw: Union[str, dict], tool_name: str = "", query
                 out["path"] = "index.html"
             elif "def " in c_low or "import " in c_low:
                 out["path"] = "main.py"
-
-    if out.get("content") and isinstance(out["content"], str):
-        c_text = out["content"]
-        c_low = c_text.lower()
-        if "<!doctype html" in c_low or "<html" in c_low:
-            if "<script" in c_low and "</script>" not in c_low.split("<script")[-1]:
-                c_text += "\n</script>"
-            if "</body>" not in c_low:
-                c_text += "\n</body>"
-            if "</html>" not in c_low:
-                c_text += "\n</html>"
-            out["content"] = c_text
 
     return out
 

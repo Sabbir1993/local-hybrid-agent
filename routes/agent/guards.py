@@ -3,7 +3,7 @@ import re
 from typing import Optional
 from core.audit import audit_log
 from core.small_model import APP_CONFIG
-from core.agent_tools import pop_file_diff
+from core.agent_tools import FILE_WRITE_TOOLS, pop_file_diff
 from core.grammar import build_tool_call_grammar
 
 
@@ -68,7 +68,7 @@ def _strip_download_markers(text: str, was_synth: bool) -> tuple[str, bool]:
 def _with_diff(payload: dict, args) -> dict:
     """Attach the per-call diff of a successful write_file/edit_file to its tool_result,
     and a screenshot thumbnail to browser/mobile screenshots (shown live, never persisted)."""
-    if payload.get("ok") and payload.get("name") in ("write_file", "edit_file"):
+    if payload.get("ok") and payload.get("name") in FILE_WRITE_TOOLS:
         d = pop_file_diff(args if isinstance(args, dict) else {})
         if d:
             payload["diff"] = d

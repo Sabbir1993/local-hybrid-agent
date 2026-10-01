@@ -132,6 +132,14 @@ async function loadCapabilities() {
       </div>
     </details>`;
 
+    // Output caps, file-tool limits, compaction threshold and memory switches (admin), and the user's own memory
+    let limits = null;
+    if (canManageMcp) {
+      try { const lr = await fetch('/control/agent_limits'); if (lr.ok) limits = await lr.json(); } catch (e) {}
+    }
+    if (limits) h += agentLimitsHtml(limits);
+    h += agentMemoryHtml();
+
     // Agent Library (.agents/agents + .agents/commands), admin-managed allow/deny
     let lib = null;
     try { lib = await (await fetch('/control/agent_library')).json(); } catch (e) {}
@@ -145,6 +153,8 @@ async function loadCapabilities() {
     if (rt) h += routerHtml(rt, canManageRouter);
 
     box.innerHTML = h;
+    if (limits) wireAgentLimits(box);
+    wireAgentMemory(box);
     if (lib && !lib.error && canManageLib) wireAgentLibrary(box, lib);
     if (rt && canManageRouter) wireRouter(box, rt);
     if (canAddMcp) wireMcpEditor(box, canManageMcp);
@@ -491,6 +501,11 @@ function routerHtml(rt, canEdit) {
         <div style="margin-top:4px; font-size:10.5px;"><b>Start on main (skip executor) for:</b>
           ${mainCats.map(c => `<label style="margin-right:8px;"><input type="checkbox" class="rt-cat" value="${c}" ${(s.start_on_main_categories || []).includes(c) ? 'checked' : ''} ${dis}> ${c}</label>`).join('')}
         </div>
+        <div style="margin-top:4px; font-size:10.5px;"><b>Main plans first for:</b>
+          ${mainCats.map(c => `<label style="margin-right:8px;"><input type="checkbox" class="rt-plan-cat" value="${c}" ${(s.plan_first_categories || []).includes(c) ? 'checked' : ''} ${dis}> ${c}</label>`).join('')}
+          <label style="margin-left:6px;">up to <input type="number" id="rt-plan-steps" min="0" max="6" value="${s.plan_first_max_steps}" ${dis} style="width:44px; ${inp}"> planning steps</label>
+          <div class="dim" style="font-size:9.5px;">Main reasons and writes the plan, then the executor carries it out. Unlike "Start on main", main is used only for the planning steps. 0 or no type ticked = off.</div>
+        </div>
         ${listField('creation_keywords', 'Creation keywords (→ creation type, escalate if no tool call)')}
         ${listField('action_keywords', 'Action keywords (→ action type)')}
         ${listField('refusal_phrases', 'Refusal phrases (executor refusal → escalate)')}
@@ -529,6 +544,8 @@ function wireRouter(box, rt) {
       repeat_streak_limit: parseInt(box.querySelector('#rt-streak').value, 10),
       min_executor_success: parseFloat(box.querySelector('#rt-minsucc').value),
       start_on_main_categories: [...box.querySelectorAll('.rt-cat:checked')].map(x => x.value),
+      plan_first_categories: [...box.querySelectorAll('.rt-plan-cat:checked')].map(x => x.value),
+      plan_first_max_steps: parseInt(box.querySelector('#rt-plan-steps').value, 10) || 0,
     };
     box.querySelectorAll('.rt-flag').forEach(f => { if (f.dataset.key !== 'auto_apply') body[f.dataset.key] = f.checked; });
     body.classifier = { enabled: box.querySelector('#rt-clf-on').checked, mode: box.querySelector('#rt-clf-mode').value };

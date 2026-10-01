@@ -13,7 +13,13 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import project_context, agent_tools
+from core import project_context, agent_tools, companion_bridge
+
+
+async def _device_call(uid, op, params, timeout=None):
+    """The user's machine, backed by a temp folder: fs.read returns the file's text or None."""
+    p = Path(params["path"])
+    return {"content": p.read_text(encoding="utf-8") if p.is_file() else None}
 
 
 class LoaderTests(unittest.TestCase):
@@ -22,7 +28,8 @@ class LoaderTests(unittest.TestCase):
         self.ws = Path(self._tmp.name).resolve()
         self._patches = [
             mock.patch.object(agent_tools, "active_workspace", lambda: self.ws),
-            mock.patch.object(agent_tools, "_remote_uid", lambda: None),
+            mock.patch.object(agent_tools, "_remote_uid", lambda: 7),
+            mock.patch.object(companion_bridge, "call", _device_call),
         ]
         for p in self._patches:
             p.start()

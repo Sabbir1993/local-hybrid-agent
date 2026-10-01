@@ -1,10 +1,15 @@
-import re as _re
+import fnmatch
 import sys
 from pathlib import Path
+from typing import Optional
 
 from .. import companion_bridge
+from . import edit_engine
 from ..small_model import APP_CONFIG
-from .diffs import _record_diff, _remote_read_or_none, _snapshot_change
+from . import file_state
+from .diffs import _record_diff
+from .limits import agent_limit, est_tokens
+from .verify_loop import verify_after
 from .workspace import (
     DOCUMENT_EXTS,
     MAX_EDIT_BYTES,
@@ -15,88 +20,146 @@ from .workspace import (
     require_device_workspace,
 )
 
+# every tool that changes a file's text; shared with the loop, the sandbox check and the UI
+FILE_WRITE_TOOLS = ("write_file", "edit_file", "append_file", "insert_at_line")
+
 
 def _pkg():
     return sys.modules.get("core.agent_tools")
 
 
+def _cb():
+    return getattr(_pkg(), "companion_bridge", companion_bridge)
+
+
+def _path_arg(args: dict) -> str:
+    p = args.get("path") or args.get("file") or args.get("filename")
+    if not p:
+        raise ValueError("path required")
+    return p
+
+
+def _resolve(path_arg: str):
+    """(uid, absolute path on the user's device). Raises when no device workspace is selected."""
+    p = getattr(_pkg(), "_ws_resolve", _ws_resolve)(path_arg)
+    uid = getattr(_pkg(), "_remote_uid", _remote_uid)()
+    return uid, p
+
+
+async def _read_existing(uid: int, p: Path) -> Optional[str]:
+    """The file's text on the device, or None when it does not exist."""
+    data = await _cb().call(uid, "fs.read", {"path": str(p)})
+    c = data.get("content")
+    return c if isinstance(c, str) else None
+
+
+async def _store(uid: int, p: Path, before: Optional[str], after: str) -> None:
+    """Write `after` (whole file), remember `before` for undo and the diff view."""
+    await _cb().call(uid, "fs.write", {"path": str(p), "content": after, "append": False})
+    file_state.push_undo(str(p), before)
+    file_state.mark_read(str(p))
+    _record_diff(p, before, after)
+
+
+def _lines(text: str) -> int:
+    return text.count("\n") + (0 if not text or text.endswith("\n") else 1)
+
+
+def _too_big(content: str, tool: str) -> Optional[str]:
+    cap = agent_limit("write_file_max_tokens")
+    n = est_tokens(content)
+    if n > cap:
+        return (f"error: this {tool} content is about {n} tokens; one call may carry at most {cap}. "
+                "Write a short skeleton first (imports, class/function signatures, TODO markers) with "
+                "write_file, then add each section with append_file or replace a TODO with edit_file - "
+                "one section per call, about "
+                f"{agent_limit('chunk_target_tokens')} tokens each.")
+    return None
+
+
 async def tool_list_files(args: dict) -> str:
-    ws_fn = getattr(_pkg(), "active_workspace", active_workspace)
-    ws = ws_fn()
+    ws = getattr(_pkg(), "active_workspace", active_workspace)()
+    sub = str(args.get("path") or "").strip().strip("/\\")
+    root = getattr(_pkg(), "_ws_resolve", _ws_resolve)(sub) if sub else ws
     pat = (args.get("pattern") or "").strip() or "**/*"
-    uid_fn = getattr(_pkg(), "_remote_uid", _remote_uid)
-    uid = uid_fn()
-    cb = getattr(_pkg(), "companion_bridge", companion_bridge)
-    if uid is not None:
-        data = await cb.call(uid, "fs.list", {"root": str(ws), "pattern": pat})
-        return "\n".join(data.get("files") or []) or "(no files matched)"
-    hits = ws.glob(pat)
-    out = []
-    for h in sorted(hits)[:200]:
-        if h.is_file():
-            out.append(str(h.relative_to(ws)))
-    return "\n".join(out) or "(no files matched)"
+    uid = getattr(_pkg(), "_remote_uid", _remote_uid)()
+    data = await _cb().call(uid, "fs.list", {"root": str(root), "pattern": pat})
+    files = data.get("files") or []
+    if sub:
+        files = [f"{sub.replace(chr(92), '/')}/{f}" for f in files]
+    if not files:
+        return "(no files matched)"
+    out = "\n".join(files)
+    if len(files) >= 200:
+        out += "\n(first 200 shown - narrow with path or pattern)"
+    return out
+
+
+async def read_raw(path_arg: str) -> Optional[str]:
+    """The file's exact text on the user's device (no line numbers, not marked as read), or None when it
+    does not exist. For server code that needs the content itself, e.g. AGENTS.md for the system prompt."""
+    uid, p = _resolve(path_arg)
+    return await _read_existing(uid, p)
 
 
 async def tool_read_file(args: dict) -> str:
-    path_arg = args.get("path") or args.get("file") or args.get("filename")
-    if not path_arg:
-        raise ValueError("path required")
-    res_fn = getattr(_pkg(), "_ws_resolve", _ws_resolve)
-    p = res_fn(path_arg)
-    uid_fn = getattr(_pkg(), "_remote_uid", _remote_uid)
-    uid = uid_fn()
-    cb = getattr(_pkg(), "companion_bridge", companion_bridge)
-    if uid is not None:
-        data = await cb.call(uid, "fs.read", {"path": str(p)})
-        data_text = data.get("content")
-        if data_text is None:
-            return f"error: File not found: '{path_arg}'. It does not exist yet. Use 'write_file' to create it."
-        if len(data_text) > MAX_TOOL_OUTPUT:
-            return (data_text[:MAX_TOOL_OUTPUT]
-                    + f"\n... (truncated, {len(data_text)} chars total - call "
-                      f"read_file_chunk('{path_arg}', offset_chars={MAX_TOOL_OUTPUT}) "
-                      f"to read the rest)")
-        return data_text
-    if not p.is_file():
+    path_arg = _path_arg(args)
+    uid, p = _resolve(path_arg)
+    if p.suffix.lower() in DOCUMENT_EXTS:
+        return (f"error: {path_arg} is a binary document - use doc_inspect (outline) or "
+                f"read_file_chunk('{path_arg}') instead of read_file.")
+    text = await _read_existing(uid, p)
+    if text is None:
         return f"error: File not found: '{path_arg}'. It does not exist yet. Use 'write_file' to create it."
-    data = p.read_text(encoding="utf-8", errors="replace")
-    if len(data) > MAX_TOOL_OUTPUT:
-        return (data[:MAX_TOOL_OUTPUT]
-                + f"\n... (truncated, {len(data)} chars total - call "
-                  f"read_file_chunk('{path_arg}', offset_chars={MAX_TOOL_OUTPUT}) "
-                  f"to read the rest)")
-    return data
+    file_state.mark_read(str(p))
+    if not text:
+        return f"({path_arg} is empty)"
+    limit = args.get("limit")
+    try:
+        limit = int(limit) if limit not in (None, "") else agent_limit("read_file_default_limit")
+    except (TypeError, ValueError):
+        limit = agent_limit("read_file_default_limit")
+    try:
+        offset = int(args.get("offset") or args.get("start_line") or 1)
+    except (TypeError, ValueError):
+        offset = 1
+    view = edit_engine.numbered(text, offset, limit, agent_limit("read_file_max_chars"))
+    if view["first"] is None:
+        return f"error: offset {offset} is past the end - {path_arg} has {view['total']} lines."
+    foot = f"[{path_arg}: lines {view['first']}-{view['last']} of {view['total']}"
+    if view["next_offset"]:
+        foot += f"; {view['total'] - view['last']} more - call read_file with offset={view['next_offset']}, or grep for a name"
+    foot += "]"
+    return f"{view['text']}\n{foot}"
 
 
 async def tool_grep(args: dict) -> str:
     pat = (args.get("pattern") or args.get("query") or "").strip()
     if not pat:
         raise ValueError("pattern required")
-    rx = _re.compile(pat, _re.IGNORECASE)
-    ws_fn = getattr(_pkg(), "active_workspace", active_workspace)
-    ws = ws_fn()
-    uid_fn = getattr(_pkg(), "_remote_uid", _remote_uid)
-    uid = uid_fn()
-    cb = getattr(_pkg(), "companion_bridge", companion_bridge)
-    if uid is not None:
-        data = await cb.call(uid, "fs.grep", {"root": str(ws), "pattern": pat})
-        return "\n".join(data.get("hits") or []) or "(no matches)"
-    hits = []
-    for f in ws.rglob("*"):
-        if not f.is_file() or f.stat().st_size > 2_000_000:
-            continue
-        try:
-            for i, line in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
-                if rx.search(line):
-                    hits.append(f"{f.relative_to(ws)}:{i}: {line.strip()[:200]}")
-                    if len(hits) >= 100:
-                        break
-        except Exception:
-            continue
-        if len(hits) >= 100:
-            break
-    return "\n".join(hits) or "(no matches)"
+    import re as _re
+    _re.compile(pat, _re.IGNORECASE)
+    ws = getattr(_pkg(), "active_workspace", active_workspace)()
+    sub = str(args.get("path") or "").strip().strip("/\\")
+    root = getattr(_pkg(), "_ws_resolve", _ws_resolve)(sub) if sub else ws
+    uid = getattr(_pkg(), "_remote_uid", _remote_uid)()
+    data = await _cb().call(uid, "fs.grep", {"root": str(root), "pattern": pat})
+    hits = data.get("hits") or []
+    glob = str(args.get("glob") or "").strip()
+    if glob:
+        def _match(h: str) -> bool:
+            rel = h.split(":", 1)[0]
+            return fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch(rel.rsplit("/", 1)[-1], glob)
+        hits = [h for h in hits if _match(h)]
+    if sub:
+        prefix = sub.replace("\\", "/") + "/"
+        hits = [prefix + h for h in hits]
+    if not hits:
+        return "(no matches)"
+    out = "\n".join(hits)
+    if len(data.get("hits") or []) >= 100:
+        out += "\n(100 matches shown - narrow with path or glob)"
+    return out
 
 
 async def tool_write_file(args: dict) -> str:
@@ -109,16 +172,12 @@ async def tool_write_file(args: dict) -> str:
             path_arg = "main.py"
     if not path_arg:
         raise ValueError("path required")
-    res_fn = getattr(_pkg(), "_ws_resolve", _ws_resolve)
-    p = res_fn(path_arg)
+    uid, p = _resolve(path_arg)
     content = args.get("content", "")
     if len(content) > MAX_EDIT_BYTES:
         raise ValueError("content too large")
     append = bool(args.get("append"))
 
-    uid_fn = getattr(_pkg(), "_remote_uid", _remote_uid)
-    uid = uid_fn()
-    cb = getattr(_pkg(), "companion_bridge", companion_bridge)
     if p.suffix.lower() in DOCUMENT_EXTS:
         if append:
             raise ValueError(
@@ -126,63 +185,96 @@ async def tool_write_file(args: dict) -> str:
                 "write_file call, or change an existing document with doc_edit")
         from ..doc_tools import tool_doc_create
         return await tool_doc_create({"file": path_arg, "content": content})
-    if uid is not None:
-        before = await _remote_read_or_none(uid, p)
-        data = await cb.call(
-            uid, "fs.write", {"path": str(p), "content": content, "append": append})
-        _record_diff(p, before, (before or "") + content if append else content)
-        existed = bool(data.get("existed"))
-        verb = "appended" if append and existed else "wrote"
-        return f"{verb} {len(content)} chars to {path_arg} ({'overwrote' if existed and not append else 'created' if not existed else 'appended'})"
+    if append:
+        return await tool_append_file({"path": path_arg, "content": content, "_create": True})
+    big = _too_big(content, "write_file")
+    if big:
+        return big
 
-    p.parent.mkdir(parents=True, exist_ok=True)
-    existed = p.exists()
-    if append and existed:
-        with p.open("a", encoding="utf-8") as f:
-            f.write(content)
-        _snapshot_change(p)
-        return f"appended {len(content)} chars to {path_arg} (total {p.stat().st_size} bytes)"
+    before = await _read_existing(uid, p)
+    if before and not args.get("overwrite"):
+        return (f"error: {path_arg} already exists ({_lines(before)} lines). Change part of it with edit_file "
+                "(after read_file), add to the end with append_file, or pass overwrite=true to replace the "
+                "whole file.")
+    await _store(uid, p, before, content)
+    verb = "overwrote" if before is not None else "created"
+    msg = f"wrote {len(content)} chars ({_lines(content)} lines) to {path_arg} ({verb})"
+    return msg + await verify_after(uid, p, path_arg, content, before, can_autorevert=False)
 
-    p.write_text(content, encoding="utf-8")
-    _snapshot_change(p)
-    return f"wrote {len(content)} chars to {path_arg} ({'overwrote' if existed else 'created'})"
+
+async def tool_append_file(args: dict) -> str:
+    path_arg = _path_arg(args)
+    uid, p = _resolve(path_arg)
+    content = args.get("content", args.get("text", ""))
+    if not isinstance(content, str) or not content:
+        return "error: content required for append_file"
+    if p.suffix.lower() in DOCUMENT_EXTS:
+        return (f"error: cannot append to a {p.suffix.lower()} document - use doc_edit to change it.")
+    big = _too_big(content, "append_file")
+    if big:
+        return big
+    before = await _read_existing(uid, p)
+    if before is None:
+        if not args.get("_create"):
+            return (f"error: {path_arg} does not exist yet. Create it with write_file (a skeleton or the "
+                    "first section), then use append_file for the rest.")
+        before = None
+    after = edit_engine.append_text(before, content)
+    if len(after) > MAX_EDIT_BYTES * 4:
+        return f"error: {path_arg} would grow past {MAX_EDIT_BYTES * 4 // 1024} KB - split it into several files."
+    await _store(uid, p, before, after)
+    msg = (f"appended {len(content)} chars to {path_arg} (now {_lines(after)} lines, "
+           f"{len(after)} bytes)")
+    return msg + await verify_after(uid, p, path_arg, after, before, can_autorevert=False)
 
 
 async def tool_edit_file(args: dict) -> str:
-    path_arg = args.get("path") or args.get("file") or args.get("filename")
-    if not path_arg:
-        raise ValueError("path required")
-    res_fn = getattr(_pkg(), "_ws_resolve", _ws_resolve)
-    p = res_fn(path_arg)
+    path_arg = _path_arg(args)
+    uid, p = _resolve(path_arg)
     old, new = args.get("old_string", ""), args.get("new_string", "")
     if not old:
         raise ValueError("old_string required")
     replace_all = bool(args.get("replace_all"))
-
-    uid_fn = getattr(_pkg(), "_remote_uid", _remote_uid)
-    uid = uid_fn()
-    cb = getattr(_pkg(), "companion_bridge", companion_bridge)
-    if uid is not None:
-        before = await _remote_read_or_none(uid, p)
-        data = await cb.call(
-            uid, "fs.edit", {"path": str(p), "old_string": old, "new_string": new, "replace_all": replace_all})
-        n = int(data.get("count") or 0)
-        if before is not None:
-            _record_diff(p, before, before.replace(old, new) if replace_all else before.replace(old, new, 1))
-        return f"edited {path_arg} ({n} replacement(s))"
-
-    if not p.is_file():
+    if not file_state.was_read(str(p)):
+        return (f"error: read {path_arg} before editing it - call read_file (with offset/limit for the part "
+                "you will change) so old_string is copied from the real text.")
+    before = await _read_existing(uid, p)
+    if before is None:
         raise FileNotFoundError(f"File not found: {path_arg}")
-    text = p.read_text(encoding="utf-8", errors="replace")
-    n = text.count(old)
-    if n == 0:
-        raise FileNotFoundError(f"old_string not found in file: {path_arg}")
-    if n > 1 and not replace_all:
-        raise ValueError(f"old_string appears {n}x - add replace_all or more context")
-    text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
-    p.write_text(text, encoding="utf-8")
-    _snapshot_change(p)
-    return f"edited {path_arg} ({n} replacement(s))"
+    try:
+        res = edit_engine.apply_edit(before, old, new, replace_all)
+    except edit_engine.EditError as e:
+        return f"error: {e}"
+    after = res["text"]
+    await _store(uid, p, before, after)
+    where = f"line {res['first_line']}" if res["first_line"] == res["last_line"] else \
+        f"lines {res['first_line']}-{res['last_line']}"
+    note = " (matched ignoring whitespace differences; indentation adjusted)" if res["method"] == "whitespace" else ""
+    msg = f"edited {path_arg} at {where}: {res['count']} replacement(s){note}\n{res['snippet']}"
+    return msg + await verify_after(uid, p, path_arg, after, before, can_autorevert=True)
+
+
+async def tool_insert_at_line(args: dict) -> str:
+    path_arg = _path_arg(args)
+    uid, p = _resolve(path_arg)
+    text = args.get("text", args.get("content", ""))
+    if not isinstance(text, str) or not text:
+        return "error: text required for insert_at_line"
+    if not file_state.was_read(str(p)):
+        return f"error: read {path_arg} before inserting into it - line numbers must come from read_file."
+    big = _too_big(text, "insert_at_line")
+    if big:
+        return big
+    before = await _read_existing(uid, p)
+    if before is None:
+        raise FileNotFoundError(f"File not found: {path_arg}")
+    try:
+        res = edit_engine.insert_at_line(before, args.get("line"), text)
+    except edit_engine.EditError as e:
+        return f"error: {e}"
+    await _store(uid, p, before, res["text"])
+    msg = f"inserted {res['last_line'] - res['first_line'] + 1} line(s) at line {res['first_line']} of {path_arg}\n{res['snippet']}"
+    return msg + await verify_after(uid, p, path_arg, res["text"], before, can_autorevert=True)
 
 
 async def tool_run_python(args: dict) -> str:

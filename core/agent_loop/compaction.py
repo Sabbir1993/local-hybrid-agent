@@ -1,5 +1,5 @@
 import json
-from typing import Optional
+from typing import Callable, Optional
 
 
 def estimate_prompt_tokens(msgs: list, tools: Optional[list] = None) -> int:
@@ -43,6 +43,13 @@ def _call_label(name: str, args: dict) -> str:
         v = args.get(k)
         if isinstance(v, str) and v.strip():
             v = v.strip().replace("\n", " ")
+            if name == "read_file" and k == "path" and ("offset" in args or "limit" in args):
+                try:
+                    a = int(args.get("offset") or 1)
+                    b = a + int(args.get("limit") or 200) - 1
+                    return f"{name}({v[:80]} lines {a}-{b})"
+                except (TypeError, ValueError):
+                    pass
             return f"{name}({v[:80]})"
     return name
 
@@ -67,7 +74,8 @@ def _digest_message(m: dict, calls: Optional[dict] = None) -> str:
     return f"{role}: {content[:200]}"
 
 
-def compact_messages(msgs: list, budget_tokens: int, tools: Optional[list] = None) -> list:
+def compact_messages(msgs: list, budget_tokens: int, tools: Optional[list] = None,
+                     summary_fn: Optional[Callable[[], str]] = None, summary_out: Optional[list] = None) -> list:
     """Mechanical context compaction for agent and chat lanes.
 
     Keeps the system prompt and the most recent ~60% of the token budget
@@ -75,6 +83,10 @@ def compact_messages(msgs: list, budget_tokens: int, tools: Optional[list] = Non
     turns into a compact deterministic digest. If the tail alone
     exceeds the budget, aggressively prunes oversized tool and message contents
     to guarantee the prompt stays within the model's context window.
+
+    `summary_fn` (optional) builds a structured summary of the run - goal, files touched, open
+    problems, plan, next step - only when compaction really happens; it is placed at the top of
+    the digest and also handed back through `summary_out` so the caller can persist it.
     """
     if budget_tokens <= 0 or len(msgs) < 2:
         return msgs
@@ -171,12 +183,22 @@ def compact_messages(msgs: list, budget_tokens: int, tools: Optional[list] = Non
             continue
         for m in msgs[start:end + 1]:
             digest_lines.append(_digest_message(m, calls))
+    summary = ""
+    if summary_fn is not None:
+        try:
+            summary = (summary_fn() or "").strip()
+        except Exception:
+            summary = ""
+    if summary and summary_out is not None:
+        summary_out.append(summary)
     digest = ("[CONVERSATION DIGEST - earlier steps were compacted to fit the "
               "context window. Tool results are summarized; call read_file / "
               "list_files again if you need exact content. Skill instructions you loaded "
-              "are kept in full below.]\n" + "\n".join(digest_lines))
-    if len(digest) > 6000:
-        digest = digest[:6000] + "\n..."
+              "are kept in full below.]\n"
+              + (f"[TASK STATE]\n{summary}\n[EARLIER STEPS]\n" if summary else "")
+              + "\n".join(digest_lines))
+    if len(digest) > 6000 + len(summary):
+        digest = digest[:6000 + len(summary)] + "\n..."
     # Fold the digest into the first digested user turn instead of inserting a new
     # system message at index 1. The system prompt + tool schemas prefix then stays
     # byte-identical, so llama.cpp can reuse that part of the KV cache (--cache-reuse)

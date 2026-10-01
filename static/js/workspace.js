@@ -361,6 +361,8 @@ function showPermModal(reqId, cmd, kind, saveable) {
   const chained = kind !== 'python' && kind !== 'media' && saveable === false;
   const onceOnly = kind === 'python' || kind === 'media' || chained;
   ['perm-project', 'perm-user', 'perm-always'].forEach(id => { const b = $(id); if (b) b.hidden = onceOnly; });
+  // code cannot be remembered, but the user may allow scripts for the rest of THIS run (nothing is saved)
+  if (kind === 'python' && pb) { pb.hidden = false; pb.textContent = '⏱ For this run'; }
   const h = m.querySelector('h2');
   if (h && h.firstChild && h.firstChild.nodeType === 3) {
     h.firstChild.textContent = kind === 'media' ? '💳 Cloud media — may cost money ' :
@@ -373,7 +375,7 @@ function showPermModal(reqId, cmd, kind, saveable) {
     $('perm-note').textContent = kind === 'media'
       ? 'Allow it just this once, or deny. The agent asks again next time.'
       : chained ? 'This command chains steps or uses special options (& | > ;), so it can only be allowed once. Run each step as its own command to be able to remember it.'
-      : 'Code can only be allowed once.';
+      : 'Code is never remembered. Allow it once, or allow Python scripts for the rest of this run (nothing is saved after the run ends).';
     m.dataset.pattern = '';
     m.hidden = false;
     return;

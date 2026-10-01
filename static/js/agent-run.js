@@ -228,7 +228,7 @@ async function runAgentSSE(text) {
         else if (ev === 'tool_result') {
           sseToolResult(L, d);
           // agent changed a file -> refresh the workspace side panel if active
-          if (wsPanelOpen && (d.name === 'write_file' || d.name === 'edit_file' || d.name === 'revert')) {
+          if (wsPanelOpen && ['write_file', 'edit_file', 'append_file', 'insert_at_line', 'revert'].includes(d.name)) {
             if (curSession && String(curSession.id) === String(sessionId)) {
               wsRefreshTree();
             }

@@ -82,6 +82,6 @@ def clear_old_results(msgs: list, prompt_tokens: int, squeeze: bool = False) -> 
         body = str(m.get("content") or "")
         call = calls.get(m.get("tool_call_id"))
         label = _call_label(*call) if call else "tool result"
-        msgs[i] = {**m, "content": f"{CLEARED_PREFIX}: {label}, {len(body)} characters. "
+        msgs[i] = {**m, "content": f"{CLEARED_PREFIX}: {label}, about {len(body) // 4} tokens omitted. "
                                    "Call the tool again if you need it.]"}
     return freed_chars // 4

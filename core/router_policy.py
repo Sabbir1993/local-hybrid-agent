@@ -30,6 +30,11 @@ DEFAULTS = {
     "repeat_streak_limit": 2,
     # categories whose step 0 skips the executor and starts on main
     "start_on_main_categories": [],
+    # categories whose step 0 runs on main to think and write the plan (create_plan); the
+    # executor then carries the plan out. Unlike start_on_main_categories, main is held only
+    # for the planning steps, not the whole run.
+    "plan_first_categories": ["creation"],
+    "plan_first_max_steps": 3,
     # ask the model server to REQUIRE a tool call on the first step of action requests
     "tool_choice_required": True,
     # the executor sees this request + this run's steps, not the whole chat
@@ -130,6 +135,14 @@ def start_on_main(category: str, cfg: dict = None) -> bool:
 # that escalated for one of these stays on main. A "loop" is different - a transient degenerate
 # reply - and keeps its one forgiven retry (ESC_STREAK_LIMIT in routes/agent/constants.py).
 SUSTAIN_REASONS = ("no_tool_call", "empty", "creation_no_tool", "refused", "tutorial_code")
+
+
+def plan_first_reason(category: str, cfg: dict = None) -> str:
+    """'plan_first' when main should reason and plan before the executor starts, else ''."""
+    cfg = cfg or rcfg()
+    if category in (cfg.get("plan_first_categories") or []) and int(cfg.get("plan_first_max_steps") or 0) > 0:
+        return "plan_first"
+    return ""
 
 
 def main_first_reason(category: str, cfg: dict = None, lane: str = "executor") -> str:

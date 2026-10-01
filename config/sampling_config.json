@@ -5,6 +5,6 @@
   "minp": 0.05,
   "rep": 1.05,
   "presence": 0.0,
-  "topk": 40,
+  "topk": 30,
   "maxtok": -1
 }

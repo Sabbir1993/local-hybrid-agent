@@ -170,7 +170,7 @@ if __name__ == "__main__":
 class FileWritingNeverWithheldTests(unittest.TestCase):
     def test_restricted_agents_keep_the_file_write_tools(self):
         agent_run = Path("routes/agent/run.py").read_text(encoding="utf-8")
-        self.assertIn('set(custom_agent["tool_allowlist"]) | {"write_file", "edit_file"}', agent_run)
+        self.assertIn('set(custom_agent["tool_allowlist"]) | {"write_file", "edit_file", "append_file"}', agent_run)
         chat_run = Path("routes/chat/run.py").read_text(encoding="utf-8")
         self.assertIn('set(custom_agent["tool_allowlist"]) | {"write_file"}', chat_run)
         builder = Path("static/js/custom-agents.js").read_text(encoding="utf-8")

@@ -122,6 +122,43 @@ serving a single-page web UI (`ui.html` + `static/js/`) with:
   `memory.db`), a live request monitor, and a token-usage report.
 - **Fast CPU Routing Layer (0 MB VRAM)**: Optional sub-step router on CPU for zero-VRAM tool dispatch. Supports both **Cactus Needle-2** and **Convai Laya**, switchable via `config/app.json` (`"engine": "cactus_needle"` or `"engine": "laya"`).
 
+### Agent: large files, verification, undo and memory
+
+The agent works on the user's device through the companion and is built for a small local model with a
+limited output size (see `core/agent_tools/`, `core/agent_loop/`):
+
+- **Files are built in pieces.** `write_file` creates a *new* file (it refuses an existing one unless
+  `overwrite=true`) and rejects a single call over `agent.write_file_max_tokens`; `append_file` adds sections,
+  `edit_file` replaces exact text, `insert_at_line` inserts by line number. `read_file(path, offset, limit)`
+  returns numbered lines plus the total and the next offset. `edit_file` needs the file to have been read (or
+  created) in the session, tolerates indentation/whitespace differences when exactly one place matches, keeps
+  CRLF endings, and returns the edited lines. `grep` / `list_files` take `path` (sub-folder) and `glob`.
+- **Output is capped per lane** (`agent.executor_max_tokens`, `main_max_tokens`, `vision_max_tokens`); the
+  Chat & Sampling "max tokens" can only lower a cap. A reply cut off by the cap discards its tool call, nothing is
+  written, and the model is told to send a smaller piece.
+- **Verify loop.** After a write the server checks syntax (Python, JSON, YAML, TOML, XML; JavaScript through the
+  companion's `fs.verify`) and appends `verify: OK/FAILED - ...` to the tool result. After
+  `agent.verify_max_retries` failures in a row the agent stops; an *edit* that broke a file that used to pass is
+  undone automatically.
+- **Undo.** Every write keeps the previous content (bounded per file and per user). `revert(path)` undoes the last
+  edit, `steps=N` undoes N, `to_start=true` goes back to the state before the session; undoing a creation deletes
+  the file (`fs.remove`).
+- **Context.** History is compacted at `context.compaction_threshold` of the window (default 0.70). The digest
+  starts with a structured task state (goal, files touched, open problems, plan, next step) that is stored per
+  session (`session_working_memory`) and shown again when the task is resumed. With `agent.mirror_to_workspace`
+  it is also written to `PLAN.md` and `.agent/working_memory.md` in the project folder.
+- **Long-term memory** (`core/agent_memory.py`): small markdown files per user (`profile.md`, `preferences.md`,
+  `lessons.md`, `projects/<name>.md`) stored in the auth database, so they follow the user and are erased with the
+  account. Tools: `memory_list/read/write/str_replace/append/delete` with version tokens. Writes are refused in
+  code when they contain card numbers, credentials, tokens, bank or ID numbers (`core/memory_guard.py`);
+  `memory_delete` only runs when the user's message asks to forget/delete. Preferences and profile are put in the
+  system prompt each session, framed as data, not instructions. **Memory is not sent to cloud models unless
+  `memory.allow_cloud` is on**, and users can view, edit and erase their files in Settings → Capabilities → My
+  agent memory. Limits live in `memory.*`.
+- **Everything above is configurable** in Settings → Capabilities → Agent limits & memory (or `config/app.json`:
+  `agent.*`, `context.compaction_threshold`, `memory.*`). The companion must be version 0.2.103 or newer for
+  JavaScript syntax checks and for undoing a created file; an older one simply skips those two.
+
 ### Fast CPU Routing Layer: Switching Needle-2 and Laya
 
 In `config/app.json`:

@@ -16,9 +16,9 @@ TOOL_MAP = {
     "grep": ["grep"],
     "glob": ["list_files"],
     "ls": ["list_files"],
-    "write": ["write_file"],
-    "edit": ["edit_file"],
-    "multiedit": ["edit_file"],
+    "write": ["write_file", "append_file"],
+    "edit": ["edit_file", "insert_at_line"],
+    "multiedit": ["edit_file", "insert_at_line"],
     "webfetch": ["web_fetch"],
     "websearch": ["web_search"],
 }

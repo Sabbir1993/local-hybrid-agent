@@ -22,6 +22,7 @@ _USER_OWNED = (
     "user_mcp_servers",
     "api_tokens",
     "companion_devices",
+    "agent_memory",
 )
 
 

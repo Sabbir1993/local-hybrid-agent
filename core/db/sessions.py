@@ -91,6 +91,7 @@ def db_delete_session(sid: int, owner_user_id: int) -> None:
     pdb = _get_projects_db()
     with transaction(pdb) as c:
         c.execute("DELETE FROM plan_items WHERE session_id = ?", (sid,))
+        c.execute("DELETE FROM session_working_memory WHERE session_id = ?", (sid,))
         c.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
         c.execute("DELETE FROM sessions WHERE id = ?", (sid,))
     _forget_session_memory([sid])
@@ -128,7 +129,7 @@ def db_set_plan_items(sid: int, texts: list) -> list:
         c.executemany(
             "INSERT INTO plan_items (session_id, ord, text, status, created_at, updated_at) "
             "VALUES (?, ?, ?, 'pending', ?, ?)",
-            [(sid, i, str(t)[:300], now, now) for i, t in enumerate(texts, start=1)])
+            [(sid, i, str(t)[:1000], now, now) for i, t in enumerate(texts, start=1)])
     return db_get_plan_items(sid)
 
 

@@ -38,6 +38,30 @@ class AgentSettingsReq(BaseModel):
     run_timeout_s: Optional[int] = None
 
 
+class AgentLimitsReq(BaseModel):
+    """Every field is optional; only the ones sent are changed (and clamped to their range)."""
+    write_file_max_tokens: Optional[int] = None
+    chunk_target_tokens: Optional[int] = None
+    read_file_default_limit: Optional[int] = None
+    read_file_max_chars: Optional[int] = None
+    verify_max_retries: Optional[int] = None
+    executor_max_tokens: Optional[int] = None
+    main_max_tokens: Optional[int] = None
+    vision_max_tokens: Optional[int] = None
+    plan_max_items: Optional[int] = None
+    plan_item_max_chars: Optional[int] = None
+    plan_item_max_steps: Optional[int] = None
+    plan_required: Optional[str] = None
+    python_prompt_nudge: Optional[int] = None
+    executor_max_effort: Optional[str] = None
+    mirror_to_workspace: Optional[bool] = None
+    compaction_threshold: Optional[float] = None
+    memory_enabled: Optional[bool] = None
+    memory_allow_cloud: Optional[bool] = None
+    memory_file_max_bytes: Optional[int] = None
+    memory_max_files: Optional[int] = None
+
+
 class RouterSettingsReq(BaseModel):
     creation_keywords: Optional[list] = None
     action_keywords: Optional[list] = None
@@ -45,6 +69,8 @@ class RouterSettingsReq(BaseModel):
     greetings: Optional[list] = None
     repeat_streak_limit: Optional[int] = None
     start_on_main_categories: Optional[list] = None
+    plan_first_categories: Optional[list] = None
+    plan_first_max_steps: Optional[int] = None
     confidence_threshold: Optional[float] = None
     tool_choice_required: Optional[bool] = None
     executor_fresh_context: Optional[bool] = None

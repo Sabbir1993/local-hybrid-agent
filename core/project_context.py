@@ -7,9 +7,7 @@ AGENTS.md; every later agent / sub-agent run in that project gets the file
 injected into its system prompt, so the agent starts out knowing the build
 commands, architecture and conventions instead of re-exploring each time.
 
-The file is read through tool_read_file, so a companion-backed workspace is
-read on the user's machine (policy-gated fs.read) and a server-local one from
-disk. It is user-editable and may reach a cloud lane, so card numbers and
+The file is read on the user's machine through the companion (policy-gated fs.read). It is user-editable and may reach a cloud lane, so card numbers and
 obvious credentials are masked before it enters a prompt.
 """
 
@@ -64,13 +62,13 @@ def _clip(text: str) -> str:
 
 async def load_project_instructions() -> Optional[tuple[str, str]]:
     """(filename, sanitized text) for the active project, or None."""
-    from .agent_tools import tool_read_file
+    from .agent_tools import read_raw
     for name in INSTRUCTION_FILES:
         try:
-            raw = await tool_read_file({"path": name})
+            raw = await read_raw(name)
         except Exception:
             continue
-        if not raw or raw.startswith("error:"):
+        if not raw:
             continue
         text = raw.strip()
         if text:

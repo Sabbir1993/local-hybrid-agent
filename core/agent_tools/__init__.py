@@ -27,7 +27,11 @@ from .diffs import (
 from .dom_convert import _markdown_to_html_dom
 from .dom_theme import DOC_CSS, SLIDES_CSS, render_doc_page, render_slides_page
 from .file_ops import (
+    FILE_WRITE_TOOLS,
+    read_raw,
+    tool_append_file,
     tool_edit_file,
+    tool_insert_at_line,
     tool_grep,
     tool_list_files,
     tool_read_file,
@@ -153,6 +157,10 @@ __all__ = [
     "tool_write_file",
     "tool_write_file_common",
     "tool_edit_file",
+    "tool_append_file",
+    "tool_insert_at_line",
+    "FILE_WRITE_TOOLS",
+    "read_raw",
     "tool_run_python",
     "_snapshot_change",
     "_file_diffs",

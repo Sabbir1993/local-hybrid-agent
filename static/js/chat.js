@@ -281,6 +281,10 @@ function formatToolStatus(name, args) {
       return p ? `Writing ${p}...` : 'Writing file...';
     case 'edit_file':
       return p ? `Editing ${p}...` : 'Editing file...';
+    case 'append_file':
+      return p ? `Adding to ${p}...` : 'Adding to file...';
+    case 'insert_at_line':
+      return p ? `Editing ${p}...` : 'Editing file...';
     case 'run_python':
       return 'Running Python script...';
     case 'grep': {

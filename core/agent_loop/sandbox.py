@@ -2,7 +2,7 @@ from .degeneration import sanitize_user_facing_content
 
 
 def fast_sandbox_check(tool_name: str, args: dict) -> tuple[bool, str]:
-    if tool_name not in ("write_file", "edit_file"):
+    if tool_name not in ("write_file", "edit_file", "append_file", "insert_at_line"):
         return True, "tool does not modify files"
     target = args.get("path") or ""
     if not target:
@@ -38,9 +38,9 @@ def validate_and_finalize_response(last_query: str, content: str, reasoning: str
         args = act.get("args") or {}
         p = args.get("path") or args.get("file") or ""
         if ok:
-            if name == "write_file":
+            if name in ("write_file", "append_file"):
                 successful_writes.append(p)
-            elif name == "edit_file":
+            elif name in ("edit_file", "insert_at_line"):
                 successful_edits.append(p)
             elif name == "run_python":
                 python_runs.append(act.get("result", ""))

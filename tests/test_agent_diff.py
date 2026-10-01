@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import agent_tools, companion_bridge
+from core.agent_tools import file_state
 from core.request_context import set_current_user, set_current_device
 
 USER_DIR = r"C:\Users\[PLACEHOLDER]\projects\ui-inspector"
@@ -58,6 +59,9 @@ class AgentWriteTests(unittest.TestCase):
             mock.patch.dict(agent_tools._active_project, {"7:dev_laptop": "ui-inspector"}, clear=True),
             mock.patch.dict(agent_tools._ws_changes, {}, clear=True),
             mock.patch.dict(agent_tools._file_diffs, {}, clear=True),
+            mock.patch.dict(file_state._read_sets, {}, clear=True),
+            mock.patch.dict(file_state._undo, {}, clear=True),
+            mock.patch.dict(file_state._verify, {}, clear=True),
         ]
         for p in self._patches:
             p.start()
@@ -111,7 +115,7 @@ class AgentWriteTests(unittest.TestCase):
     def test_revert_goes_through_companion_not_server_disk(self):
         target = str(Path(USER_DIR) / "a.js")
         self.fc.files[target] = "orig\n"
-        self.run_(agent_tools.tool_write_file({"path": "a.js", "content": "changed\n"}))
+        self.run_(agent_tools.tool_write_file({"path": "a.js", "content": "changed\n", "overwrite": True}))
         with mock.patch("pathlib.Path.write_text") as wt, mock.patch("pathlib.Path.unlink") as ul:
             out = self.run_(agent_tools.tool_revert({"path": "a.js"}))
         self.assertIn("reverted", out)

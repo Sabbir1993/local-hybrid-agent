@@ -168,6 +168,16 @@ def cloud_cap() -> int:
         return 60000
 
 
+def margin() -> float:
+    """Fraction of the window a prompt may fill before compaction (config: context.compaction_threshold)."""
+    try:
+        from .small_model import APP_CONFIG
+        v = float((APP_CONFIG.get("context") or {}).get("compaction_threshold", MARGIN))
+        return min(max(v, 0.3), 0.95)
+    except Exception:
+        return MARGIN
+
+
 def budget_for(lane: str, window_tokens: int, cloud: bool = False) -> int:
     """Token budget for one request: MARGIN of the window, tightened by the
     estimator's observed error so compaction fires before the server refuses.
@@ -175,7 +185,7 @@ def budget_for(lane: str, window_tokens: int, cloud: bool = False) -> int:
     win = int(window_tokens or 0)
     if win <= 0:
         return 0
-    b = max(1, int(win * MARGIN / max(SAFETY_MIN, factor(lane))))
+    b = max(1, int(win * margin() / max(SAFETY_MIN, factor(lane))))
     cap = cloud_cap() if cloud else 0
     return min(b, cap) if cap else b
 

@@ -35,12 +35,17 @@ from core.state import state
 from core import cloud
 from core import output_guard
 from core.sse import sse
+from core.agent_tools.limits import agent_limit, effective_max_tokens, executor_effort_ceiling
+from core.agent_tools.memory_tools import MEMORY_TOOL_NAMES
+from core import agent_memory, working_memory
 from core.agent_tools import (
+    FILE_WRITE_TOOLS,
     active_workspace,
     get_active_project,
     require_device_workspace,
     WorkspaceAccessDenied,
     set_plan_context,
+    tool_update_plan_item,
 )
 from core import companion_bridge
 from core.registry import registry
@@ -55,6 +60,7 @@ from core.request_context import set_device_approved
 from core.agent_loop.narration import _is_narration
 from core.agent_loop.executor_view import build_executor_view
 from core.agent_loop.finish import apply_finish, without_finish
+from core.agent_loop import plan_guard, script_nudge
 from core.agent_loop import loop_guard as _lg
 from core.tool_args import shell_command
 from core.agent_loop.tool_output import cap_tool_result, cap_from_config
@@ -69,6 +75,10 @@ from core.agent_loop import (
     fast_sandbox_check,
     validate_and_finalize_response,
     safe_parse_and_repair_args,
+    MAX_CUTOFF_RETRIES,
+    CUT_CALL_NOTICE,
+    CUT_TEXT_NOTICE,
+    was_cut_off,
     _extract_text_tool_calls,
     compact_messages,
 )
@@ -154,7 +164,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                 status_code=404)
         if custom_agent.get("tool_allowlist"):
             # writing files is never withheld from an agent: a restricted set always keeps write_file / edit_file
-            custom_agent_tools = set(custom_agent["tool_allowlist"]) | {"write_file", "edit_file"}
+            custom_agent_tools = set(custom_agent["tool_allowlist"]) | {"write_file", "edit_file", "append_file"}
         # the client sends null for values the user didn't change after picking the agent
         if req.reasoning_effort is None and custom_agent.get("reasoning_effort"):
             effort = reasoning.resolve(custom_agent["reasoning_effort"])
@@ -406,6 +416,27 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         if _m.get("role") == "user":
             _kb_query = str(_m.get("content", ""))
             break
+    # Long-term memory (what the user told the agent before) and, when a task is resumed, its working
+    # memory. Both are data for the model, not instructions. Cloud lanes get neither unless the admin
+    # allowed it (memory.allow_cloud): the text is personal and would leave the building.
+    _mem_cfg = APP_CONFIG.get("memory") or {}
+    _mem_on = bool(_mem_cfg.get("enabled", True)) and (not _any_cloud or bool(_mem_cfg.get("allow_cloud", False)))
+    if not _mem_on:
+        hidden_tools = frozenset(hidden_tools) | MEMORY_TOOL_NAMES
+    else:
+        agent_memory.set_user_request(_kb_query)
+        try:
+            _blk = agent_memory.session_block(user.id)
+            if _blk:
+                _blk, _ = output_guard.redact_full(_blk, user, _any_cloud)
+                sys_prompt += "\n\n" + _blk
+            if req.session_id:
+                _wm = working_memory.load(req.session_id, user.id)
+                if _wm:
+                    _wm, _ = output_guard.redact_full(_wm, user, _any_cloud)
+                    sys_prompt += "\n\n" + working_memory.prompt_block(_wm)
+        except Exception as e:
+            print(f"[agent] memory load failed: {e}", file=sys.stderr)
     kb_ids = allowed_source_ids_for(user)
     kb_hits = []
     kb_blocked_reason = ""
@@ -575,6 +606,26 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             break
     surface_q = tool_surface.surface_query(msgs) or last_query
 
+    def _task_summary(snapshot: list):
+        """A callable that builds the structured task summary when compaction actually happens."""
+        return lambda: working_memory.build_summary(
+            snapshot, db_get_plan_items(req.session_id) if req.session_id else [])
+
+    _wm_last: dict = {}
+
+    async def _keep_working_memory(summaries: list) -> None:
+        """Persist the summary of a compaction as the session's working memory (and mirror it to the device
+        when agent.mirror_to_workspace is on)."""
+        if not summaries or not req.session_id or summaries[-1] == _wm_last.get("text"):
+            return
+        _wm_last["text"] = summaries[-1]
+        try:
+            working_memory.save(req.session_id, user.id, summaries[-1])
+            if (APP_CONFIG.get("agent") or {}).get("mirror_to_workspace"):
+                await working_memory.mirror_to_device(user.id, ws_path, summaries[-1], db_get_plan_items(req.session_id))
+        except Exception as e:
+            print(f"[agent] working memory save failed: {e}", file=sys.stderr)
+
     def get_model_info(lane: str) -> dict:
         # cloud-bound lanes report ☁️ + provider so the UI badge is truthful
         if lane == "main" and use_cloud_main:
@@ -708,6 +759,26 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         force_main_why = "resume"
         plan_nudges = 0
         narration_nudges = 0
+        # main reasons and writes the plan first, then the executor carries it out
+        # (router.plan_first_categories; ends once a plan exists or after plan_first_max_steps)
+        plan_first_on = bool(
+            router_policy.plan_first_reason(q_category, rpol) and req.session_id and not req.plan
+            and use_executor and (use_cloud_main or main_ready) and ca_lane != "executor"
+            and force_main_until < 0 and not db_get_plan_items(req.session_id))
+        plan_first_max = int(rpol.get("plan_first_max_steps") or 0)
+        plan_first_told = False
+        # plan discipline (core/agent_loop/plan_guard.py): plan first on any multi-step job, then one
+        # step at a time; finishing is blocked while steps are open
+        _agent_cfg = APP_CONFIG.get("agent") or {}
+        plan_required = bool(req.session_id and not req.plan
+                             and plan_guard.needs_plan(q_category, last_query, _agent_cfg)
+                             and not plan_guard.open_items(db_get_plan_items(req.session_id)))
+        plan_required_steps = 0     # steps spent asking for the plan (gives up after 2, never stalls)
+        py_calls = 0                        # run_python scripts so far (each one needs the user's approval)
+        item_key, item_steps = None, 0      # current plan step and the steps spent on it
+        item_nudges = 0                     # "do not stop" nudges since the last status change
+        cutoff_retries = 0     # replies cut off by the output limit (core/agent_loop/truncation.py)
+        carried_text = ""       # text of cut-off replies, joined to the final answer
         stop_reason = "max_steps"
         # consecutive executor steps that tripped the same escalation reason
         esc_streak = 0
@@ -801,9 +872,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 if main_first and force_main_until < steps:
                     force_main_until, force_main_why = steps, main_first_why
                 forced_main = step < force_main_until
+                plan_first = (plan_first_on and step < plan_first_max
+                              and not (step > 0 and db_get_plan_items(req.session_id)))
                 lane_name = ("main" if not use_executor or executor_stuck or main_first or esc_sustained
-                             or forced_main else "executor")
+                             or forced_main or plan_first else "executor")
                 lane_reason = ("no_executor" if not use_executor else "repeat_streak" if executor_stuck
+                               else "plan_first" if plan_first and not forced_main and not main_first and not esc_sustained
                                else force_main_why if forced_main
                                else main_first_why if main_first
                                else f"escalated_{esc_streak_reason}" if esc_sustained else "executor_default")
@@ -913,9 +987,15 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 # plus any situational family the request names (core/tool_surface.py:
                 # the full 48-tool surface costs ~8.5k tokens of schema on every step);
                 # plan mode restricts to read-only exploration tools
-                if req.plan:
+                if req.plan or (plan_first and lane_name == "main"):
                     tools_for_lane = [t for t in all_tools()
                                      if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
+                    if plan_first and not plan_first_told:
+                        plan_first_told = True
+                        msgs.append({"role": "user", "content": (
+                            "[plan first] Think through the design, then call create_plan with concrete steps "
+                            "(the files to create, in what order, and how to check each). Do not write files "
+                            "yet - a smaller model will carry the plan out.")})
                 else:
                     if lane_name == "executor" and custom_agent_tools:
                         # the custom agent's own selection, not intersected away by the core set
@@ -929,7 +1009,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         tools_for_lane = tool_surface.filter_tools(
                             [t for t in all_tools()
                              if t.get("function", {}).get("name") in
-                             ("write_file", "read_file", "read_file_chunk", "edit_file", "list_files", "run_python", "run_shell", "read_skill", "list_skills",
+                             ("write_file", "append_file", "read_file", "read_file_chunk", "edit_file", "list_files", "grep", "run_python", "run_shell", "read_skill", "list_skills",
+                              "memory_read", "memory_append", "memory_str_replace",
                               "create_plan", "update_plan_item", "get_plan", "finish") + EXECUTOR_TEST_TOOLS
                              or t.get("function", {}).get("name", "").startswith("mcp__")],
                             surface_q, APP_CONFIG.get("tool_surface"))
@@ -951,6 +1032,25 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 # delegate browser / device / document work it cannot call itself.
                 hidden_fams = tool_surface.hidden_families(surface_q, APP_CONFIG.get("tool_surface"))
 
+                # A multi-step job starts with the todo list: until create_plan has run, only it and the
+                # read-only tools are offered (create_plan alone from the second try; it gives up after
+                # 3 tries so a model that cannot plan never stalls the run).
+                plan_gate = bool(plan_required and plan_required_steps < 3
+                                 and not plan_guard.open_items(db_get_plan_items(req.session_id)))
+                if plan_gate:
+                    plan_required_steps += 1
+                    tools_for_lane = [t for t in tools_for_lane if t.get("function", {}).get("name")
+                                      in (("create_plan",) if plan_required_steps >= 2 else PLAN_MODE_TOOLS)]
+                    if plan_required_steps == 1 and not plan_first_told:
+                        msgs.append({"role": "user", "content": (
+                            "[plan first] This is a multi-step job. Before changing anything, call create_plan with "
+                            "3-12 short steps (each one checkable outcome or one file section). Then do them one at "
+                            "a time.")})
+
+                # no finish(answer) shortcut while the plan has open steps
+                if req.session_id and not req.plan and plan_guard.open_items(db_get_plan_items(req.session_id)):
+                    tools_for_lane = without_finish(tools_for_lane)
+
                 # Smart context truncation: mechanically compact history into the
                 # lane's window (keeps system prompt + recent tail, rolls older
                 # turns into a digest). Window and size now come from
@@ -970,8 +1070,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     # "truncated to fit the window" is only true of what compaction cuts from the
                     # view; the executor simply not being shown the old chat is by design
                     pre_tokens = context_budget.prompt_tokens_for(lane_name, step_msgs, tools_for_lane)
+                    _sum_out = []
                     step_msgs = compact_messages(step_msgs, context_budget.budget_for(lane_name, ex_ctx, cloud=bool(cloud_exec)),
-                                                 tools=tools_for_lane)
+                                                 tools=tools_for_lane, summary_fn=_task_summary(step_msgs), summary_out=_sum_out)
+                    await _keep_working_memory(_sum_out)
                     sent_tokens = context_budget.prompt_tokens_for(lane_name, step_msgs, tools_for_lane)
                     if sent_tokens < pre_tokens:
                         yield (f"event: ctx\ndata: "
@@ -997,7 +1099,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                              'hidden': hidden_fams}) + "\n\n")
                     sent_tokens = pre_tokens
                     if pre_tokens > budget:
-                        msgs[:] = compact_messages(msgs, budget, tools=tools_for_lane)
+                        _sum_out = []
+                        msgs[:] = compact_messages(msgs, budget, tools=tools_for_lane,
+                                                   summary_fn=_task_summary(list(msgs)), summary_out=_sum_out)
+                        await _keep_working_memory(_sum_out)
                         sent_tokens = context_budget.prompt_tokens_for(lane_name, msgs, tools_for_lane)
                         if sent_tokens < pre_tokens:
                             yield (f"event: ctx\ndata: "
@@ -1012,6 +1117,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 step_tool_choice = ("required" if tools_for_lane and not req.plan and not actions_taken
                                     and router_policy.force_tool_call(q_category, step, narration_nudges, last_query, rpol)
                                     else None)
+                # A multi-step job starts with the todo list: until create_plan has run, only it and the
+                # read-only tools are offered; from the second try on, create_plan alone is required.
+                if plan_gate and tools_for_lane:
+                    step_tool_choice = "required"
+                    step_grammar = None
+                    tools_for_lane = without_finish(tools_for_lane)
                 if step_tool_choice:
                     step_grammar = None
                     # finish is not the tool call this step is waiting for
@@ -1024,18 +1135,24 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 streamed_content = []
                 try:
                     agent_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
+                    # one generation is capped per lane: a 4B executor that runs on for 8k tokens holds a GPU slot
+                    # for minutes and fills its context; a cut-off call is retried smaller (see truncation.py)
+                    step_max_tokens = effective_max_tokens(req.max_tokens, lane_name, cloud=bool(getattr(active_client, "is_cloud", False)))
+                    # thinking counts against that cap: a small executor gets a short thinking budget however high the
+                    # user set the effort for the main model (agent.executor_max_effort, default "low")
+                    step_effort = (reasoning.cap(effort, executor_effort_ceiling()) if lane_name == "executor" else effort)
                     if getattr(active_client, "is_cloud", False):
                         fb_client = await _local_fallback(lane_name)
                         lane_stream = common._llm_chat_stream_with_fallback(
                             active_client, fb_client, step_msgs, tools_for_lane, req.temperature,
-                            req.max_tokens, repeat_penalty=agent_rep, rid=step_rid, grammar=step_grammar, lane=lane_name,
-                            effort=None if step_grammar else effort,
+                            step_max_tokens, repeat_penalty=agent_rep, rid=step_rid, grammar=step_grammar, lane=lane_name,
+                            effort=None if step_grammar else step_effort,
                             top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
                             tool_choice=step_tool_choice)
                     else:
-                        lane_stream = _llm_chat_stream(active_client, step_msgs, tools_for_lane, req.temperature, req.max_tokens,
+                        lane_stream = _llm_chat_stream(active_client, step_msgs, tools_for_lane, req.temperature, step_max_tokens,
                                                        repeat_penalty=agent_rep, rid=step_rid, grammar=step_grammar,
-                                                       effort=None if step_grammar else effort,
+                                                       effort=None if step_grammar else step_effort,
                                                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
                                                        tool_choice=step_tool_choice)
                     _red = output_guard.OutputRedactor(user, getattr(active_client, "is_cloud", False))
@@ -1111,8 +1228,22 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         content = ""
                 content, tool_calls, step_finished = apply_finish(content, tool_calls)
 
+                if was_cut_off(res_dict) and cutoff_retries < MAX_CUTOFF_RETRIES and step < steps - 1 and (tool_calls or content.strip()):
+                    cutoff_retries += 1
+                    if tool_calls:
+                        # a call cut off mid-arguments is dropped whole, never repaired and run
+                        if content.strip():
+                            msgs.append({"role": "assistant", "content": content})
+                        msgs.append({"role": "user", "content": CUT_CALL_NOTICE})
+                    else:
+                        carried_text += content
+                        msgs.append({"role": "assistant", "content": content})
+                        msgs.append({"role": "user", "content": CUT_TEXT_NOTICE})
+                    print(f"[agent] step {step+1} cut off by the output limit ({'tool call' if tool_calls else 'text'}); retry {cutoff_retries}", file=sys.stderr)
+                    continue
+
                 if not tool_calls:
-                    final_content = content
+                    final_content = carried_text + content
                     final_reasoning = reasoning
 
                 # Auto-escalation heuristics:
@@ -1198,11 +1329,11 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             fb_main = await _local_fallback("main")
                             esc_stream = common._llm_chat_stream_with_fallback(
                                 main_client, fb_main, msgs, esc_tools, req.temperature,
-                                req.max_tokens, repeat_penalty=agent_rep, rid=esc_rid, lane="main", effort=effort,
+                                effective_max_tokens(req.max_tokens, "main", cloud=bool(getattr(main_client, "is_cloud", False))), repeat_penalty=agent_rep, rid=esc_rid, lane="main", effort=effort,
                                 top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
                                 tool_choice=esc_tool_choice)
                         else:
-                            esc_stream = _llm_chat_stream(main_client, msgs, esc_tools, req.temperature, req.max_tokens,
+                            esc_stream = _llm_chat_stream(main_client, msgs, esc_tools, req.temperature, effective_max_tokens(req.max_tokens, "main", cloud=bool(getattr(main_client, "is_cloud", False))),
                                                           repeat_penalty=agent_rep, rid=esc_rid, effort=effort,
                                                           top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
                                                           tool_choice=esc_tool_choice)
@@ -1270,7 +1401,21 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             tool_calls = parsed_tc
                     content, tool_calls, step_finished = apply_finish(content, tool_calls)
 
-                final_content = content
+                if was_cut_off(res_dict) and cutoff_retries < MAX_CUTOFF_RETRIES and step < steps - 1 and (tool_calls or content.strip()):
+                    cutoff_retries += 1
+                    if tool_calls:
+                        # a call cut off mid-arguments is dropped whole, never repaired and run
+                        if content.strip():
+                            msgs.append({"role": "assistant", "content": content})
+                        msgs.append({"role": "user", "content": CUT_CALL_NOTICE})
+                    else:
+                        carried_text += content
+                        msgs.append({"role": "assistant", "content": content})
+                        msgs.append({"role": "user", "content": CUT_TEXT_NOTICE})
+                    print(f"[agent] step {step+1} cut off by the output limit ({'tool call' if tool_calls else 'text'}); retry {cutoff_retries}", file=sys.stderr)
+                    continue
+
+                final_content = carried_text + content
                 final_reasoning = reasoning
 
                 # The reply only announced the next step ("Let me read the file.") and
@@ -1304,9 +1449,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 # steps the model had optimistically marked done.
                 if not tool_calls and req.session_id and not req.plan and step < steps - 1:
                     pending = [i for i in db_get_plan_items(req.session_id) if i["status"] in ("pending", "in_progress")]
-                    if pending and (plan_nudges < MAX_PLAN_NUDGES or plan_nudges < MAX_PLAN_NUDGES + 1):
+                    # the budget is per step of the plan: it resets whenever a step changes status, so a model
+                    # that is making progress is never cut short, and one that is not is still released
+                    if pending and item_nudges < MAX_PLAN_NUDGES + 1:
                         plan_nudges += 1
-                        audit = plan_nudges > MAX_PLAN_NUDGES
+                        item_nudges += 1
+                        audit = item_nudges > MAX_PLAN_NUDGES
                         if content.strip():
                             msgs.append({"role": "assistant", "content": content})
                         if audit:
@@ -1385,7 +1533,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     # For history retention in msgs, prune large payloads to lightweight stubs
                     # so future turns do not re-ingest tens of thousands of raw code characters
                     hist_args = dict(args)
-                    if name in ("write_file", "edit_file"):
+                    if name in FILE_WRITE_TOOLS:
+                        if "text" in hist_args and len(str(hist_args["text"])) > 400:
+                            hist_args["text"] = f"<{len(str(hist_args['text']))} chars inserted in {hist_args.get('path') or 'file'}>"
                         if "content" in hist_args and len(str(hist_args["content"])) > 400:
                             f_path = hist_args.get("path") or hist_args.get("file") or "file"
                             c_len = len(str(hist_args["content"]))
@@ -1465,6 +1615,13 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                         continue
 
+                    if plan_gate and name not in PLAN_MODE_TOOLS:
+                        result = "error: make the plan first - call create_plan with the steps, then do them one at a time."
+                        yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                        actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                        msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                        continue
+
                     approved, note = fast_sandbox_check(name, args)
                     yield sse("verify", {'id': tc_id, 'name': name, 'approved': approved, 'note': note})
                     if not approved:
@@ -1478,7 +1635,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     # always needs a one-time approval here (no allow pattern can cover code).
                     # This card is the single approval: the companion then runs it without a
                     # second local dialog (it gets approved_in_app, see companion/policy.js).
-                    if name == "run_python" and (shell_cfg().get("ask_first", True) or personal):
+                    if name == "run_python" and (shell_cfg().get("ask_first", True) or personal) and "run_python" not in run_allow:
                         import uuid as _uuid
                         code = str((args or {}).get("code") or "")
                         shown = "run_python:\n" + (code if len(code) <= 4000 else code[:4000] + "\n… (truncated)")
@@ -1493,12 +1650,19 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             else:
                                 allowed, pnote, _decision = _v
                         if not allowed:
-                            result = "error: user denied run_python" + (f" ({pnote})" if pnote else "")
+                            result = ("error: user denied run_python" + (f" ({pnote})" if pnote else "")
+                                      + " The user said no to this script. Do not run a similar one. To look at files use "
+                                        "grep / read_file / list_files, or ask the user what they want.")
                             yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
                             actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                             msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                             continue
                         mark_code_approved(code)
+                        if _decision == "project":      # "For this run" button: later scripts in this run skip the prompt
+                            run_allow.add("run_python")
+                    elif name == "run_python":
+                        # allowed for this run by the user: approve this script without asking again
+                        mark_code_approved(str((args or {}).get("code") or ""))
 
                     # cloud image/video generation can cost money: always ask first
                     if name in ("generate_image", "generate_video"):
@@ -1630,7 +1794,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             mark_code_approved("")
                         if dup_key:
                             seen_reads[dup_key] = 1
-                        elif name in ("write_file", "edit_file", "run_shell", "run_python", "revert"):
+                        elif name in FILE_WRITE_TOOLS or name in ("run_shell", "run_python", "revert"):
                             seen_reads.clear()      # the folder may have changed: lookups are worth repeating
                     try:
                         await fire_hook("after_tool", name, args, result)
@@ -1677,18 +1841,37 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     loop_detail = _v.detail
                     break
 
+                # many separate scripts = many approval prompts: steer to grep/read_file or one script
+                _py_new = sum(1 for a in actions_taken[n_actions_before:] if a.get("name") == "run_python")
+                if _py_new:
+                    _lim = agent_limit("python_prompt_nudge")
+                    if script_nudge.should_nudge(py_calls, py_calls + _py_new, _lim):
+                        msgs.append({"role": "user", "content": script_nudge.message(py_calls + _py_new)})
+                    py_calls += _py_new
+
                 # re-assert the plan-tracking reminder every step (not just once at
                 # turn start) so a long tool-call run doesn't drift away from calling
                 # update_plan_item once the initial system-prompt nudge scrolls out of focus
                 if req.session_id and not req.plan:
                     plan_items_now = db_get_plan_items(req.session_id)
-                    if plan_items_now and any(i["status"] in ("pending", "in_progress") for i in plan_items_now):
-                        done_n = sum(1 for i in plan_items_now if i["status"] == "done")
-                        fail_n = sum(1 for i in plan_items_now if i["status"] == "failed")
-                        msgs.append({"role": "user", "content": (
-                            f"[plan reminder] {done_n}/{len(plan_items_now)} steps done, {fail_n} failed. "
-                            "If a step you just performed matches a pending plan item, call "
-                            "update_plan_item(item=N, status='done' or 'failed') now before continuing.")})
+                    if plan_items_now and plan_guard.open_items(plan_items_now):
+                        # one step at a time: name the current step, and count the steps spent on it
+                        sig = tuple(i["status"] for i in plan_items_now)
+                        made_progress = any(a.get("ok") and a.get("name") in FILE_WRITE_TOOLS
+                                            for a in actions_taken[n_actions_before:])
+                        if sig != item_key or made_progress:
+                            item_key, item_steps, item_nudges = sig, 0, 0
+                        else:
+                            item_steps += 1
+                        limit = agent_limit("plan_item_max_steps")
+                        act = plan_guard.stuck_action(item_steps, limit)
+                        cur_item = plan_guard.current_item(plan_items_now)
+                        if plan_guard.open_items(plan_items_now):
+                            msgs[:] = [m for m in msgs if not (m.get("role") == "user"
+                                       and str(m.get("content") or "").startswith("[plan reminder]"))]
+                            msgs.append({"role": "user", "content": (
+                                plan_guard.stuck_message(cur_item, item_steps) if act == "warn" and item_steps % limit == 0
+                                else plan_guard.focus_message(plan_items_now, agent_limit("chunk_target_tokens")))})
 
             # Stopped by a limit with tool work behind it: one tool-free pass so the user
             # gets what was found instead of only a "stopped" notice. Best effort - any

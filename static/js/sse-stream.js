@@ -81,7 +81,7 @@ function _ssePath(d) {
 // tool_preparing: the model is still streaming a tool call's arguments
 function sseToolPreparing(L, d) {
   const p = d.path ? d.path.split(/[\\/]/).pop() : '';
-  const actionVerb = d.name === 'write_file' ? 'Preparing to write' : (d.name === 'edit_file' ? 'Preparing to edit' : `Preparing ${d.name}`);
+  const actionVerb = d.name === 'write_file' ? 'Preparing to write' : (d.name === 'append_file' ? 'Preparing to append to' : ((d.name === 'edit_file' || d.name === 'insert_at_line') ? 'Preparing to edit' : `Preparing ${d.name}`));
   const label = p ? `${actionVerb} ${p}...` : `${actionVerb}...`;
   L.statusText = label;
   const bytesStr = d.bytes ? ` (~${Math.round(d.bytes / 4)} tokens)` : '';
@@ -95,7 +95,7 @@ function sseToolCall(L, d) {
   L.acts.push({ type: 'tool_call', ...d });
   L.statusText = (typeof formatToolStatus === 'function') ? formatToolStatus(d.name, d.args) : `Running ${d.name}...`;
   _sseHud({
-    phase: (d.name === 'write_file' || d.name === 'edit_file') ? 'writing' : 'running',
+    phase: ['write_file', 'edit_file', 'append_file', 'insert_at_line'].includes(d.name) ? 'writing' : 'running',
     name: d.name,
     path: _ssePath(d),
     text: L.statusText
@@ -121,7 +121,7 @@ function sseToolResult(L, d) {
   if (!L.acts) L.acts = [];
   L.acts.push({ type: 'tool_result', ...d });
   L.statusText = 'Crunching tool results...';
-  if (d.name !== 'write_file' && d.name !== 'edit_file') return;
+  if (!['write_file', 'edit_file', 'append_file', 'insert_at_line'].includes(d.name)) return;
   const p = _ssePath(d);
   const filename = p ? p.split(/[\\/]/).pop() : 'file';
   const isSuccess = d.ok !== false;

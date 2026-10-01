@@ -44,7 +44,7 @@ def validate(changes: dict) -> tuple:
             if not 1 <= n <= 5:
                 return None, "repeat_streak_limit must be between 1 and 5"
             out[k] = n
-        elif k == "start_on_main_categories":
+        elif k in ("start_on_main_categories", "plan_first_categories"):
             vals = sorted({str(x).strip().lower() for x in (v or [])})
             bad = [x for x in vals if x not in MAIN_CATEGORIES]
             if bad:
@@ -60,6 +60,11 @@ def validate(changes: dict) -> tuple:
             if err:
                 return None, err
             out[k] = round(n, 2)
+        elif k == "plan_first_max_steps":
+            n, err = _num(k, v, 0, 6, int)
+            if err:
+                return None, err
+            out[k] = n
         elif k == "adaptive_min_samples":
             n, err = _num(k, v, 3, 200, int)
             if err:

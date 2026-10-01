@@ -6,6 +6,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const childProcess = require("child_process");
 const { dialog, BrowserWindow } = require("electron");
 
 const SKIP_DIR_NAMES = new Set([".git", "node_modules", "__pycache__", ".venv", "venv"]);
@@ -165,6 +166,35 @@ function edit({ path: p, old_string, new_string, replace_all }) {
   return { count };
 }
 
+// Delete one file (used to undo a file the agent created). Never a directory.
+function remove({ path: p }) {
+  if (!fs.existsSync(p)) return { removed: false };
+  if (!fs.statSync(p).isFile()) throw new Error("not a file: " + p);
+  fs.unlinkSync(p);
+  return { removed: true };
+}
+
+// Syntax check after the agent writes a file. Only JavaScript needs the device (the server
+// checks Python/JSON/YAML/TOML/XML itself). `node --check` parses without running the file.
+const CHECKABLE = new Set([".js", ".mjs", ".cjs"]);
+
+function verify({ path: p }) {
+  const ext = path.extname(p || "").toLowerCase();
+  if (!CHECKABLE.has(ext) || !fs.existsSync(p)) return Promise.resolve({ checked: false });
+  return new Promise((resolve) => {
+    childProcess.execFile(process.execPath, ["--check", p], {
+      timeout: 15000, windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    }, (err, _out, stderr) => {
+      if (!err) return resolve({ checked: true, ok: true });
+      if (err.code === "ENOENT" || err.killed) return resolve({ checked: false });
+      const lines = String(stderr || err.message).split(/\r?\n/).filter(Boolean);
+      const msg = lines.find((l) => /Error/.test(l)) || lines[0] || "syntax error";
+      const at = lines.find((l) => /:\d+$/.test(l.trim()));
+      resolve({ checked: true, ok: false, detail: (at ? path.basename(at.trim()) + " " : "") + msg.slice(0, 200) });
+    });
+  });
+}
+
 function list({ root, pattern }) {
   const rx = globToRegExp(pattern || "**/*");
   const files = [];
@@ -236,4 +266,4 @@ function grep({ root, pattern }) {
   return { hits };
 }
 
-module.exports = { browseFolder, browse, mkdir, read, write, readB64, writeB64, edit, list, grep, tree };
+module.exports = { browseFolder, browse, mkdir, read, write, readB64, writeB64, edit, remove, verify, list, grep, tree };

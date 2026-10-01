@@ -6,6 +6,10 @@ function toolIcon(name) {
     case 'grep': return '🔍';
     case 'write_file': return '💾';
     case 'edit_file': return '✏️';
+    case 'append_file': return '➕';
+    case 'insert_at_line': return '✏️';
+    case 'memory_list': case 'memory_read': case 'memory_write': case 'memory_str_replace':
+    case 'memory_append': case 'memory_delete': return '🧠';
     case 'run_python': return '🐍';
     case 'list_diff': return '📊';
     case 'revert': return '↩️';
@@ -125,6 +129,8 @@ function toolMeta(name) {
   switch (name) {
     case 'write_file': return { icon: '📄', label: 'write_file', verb: 'Saved', cls: 'write' };
     case 'edit_file': return { icon: '✏️', label: 'edit_file', verb: 'Edited', cls: 'edit' };
+    case 'append_file': return { icon: '➕', label: 'append_file', verb: 'Appended to', cls: 'write' };
+    case 'insert_at_line': return { icon: '✏️', label: 'insert_at_line', verb: 'Inserted into', cls: 'edit' };
     case 'read_file': return { icon: '📖', label: 'read_file', verb: 'Read', cls: 'read' };
     case 'run_python': return { icon: '⚡', label: 'run_python', verb: 'Executed', cls: 'run' };
     case 'list_files': return { icon: '📁', label: 'list_files', verb: 'Listed', cls: 'list' };
@@ -181,8 +187,9 @@ function planPanelHtml(acts) {
   const failed = items.filter(i => i.status === 'failed').length;
   const total = items.length;
   const pct = total ? Math.round(((done + failed) / total) * 100) : 0;
+  const cur = items.find(i => i.status === 'in_progress');
   let h = '<div class="plan-panel">';
-  h += `<div class="plan-head"><span class="plan-title">📋 Task Plan</span><span class="plan-progress">${done}/${total} done${failed ? ` · ${failed} failed` : ''}</span></div>`;
+  h += `<div class="plan-head"><span class="plan-title">📋 Task Plan</span><span class="plan-progress">${cur ? `step ${cur.ord || items.indexOf(cur) + 1} of ${total} · ` : ''}${done}/${total} done${failed ? ` · ${failed} failed` : ''}</span></div>`;
   h += `<div class="plan-bar"><div class="plan-bar-fill${failed ? ' has-failed' : ''}" style="width:${pct}%"></div></div>`;
   h += '<ol class="plan-items">';
   items.forEach(it => {
@@ -419,9 +426,9 @@ function renderCommandCard(t, isItemRunning) {
 function renderFileCard(t, isItemRunning) {
   const p = t.args.path || t.args.file || t.args.filename || '';
   const filename = p ? p.split(/[\\/]/).pop() : 'file';
-  const diff = (t.diff && (t.name === 'write_file' || t.name === 'edit_file')) ? t.diff : null;
+  const diff = (t.diff && ['write_file', 'edit_file', 'append_file', 'insert_at_line'].includes(t.name)) ? t.diff : null;
   const isRunning = t.result === null;
-  const isEdit = t.name === 'edit_file' || (diff && !diff.created);
+  const isEdit = t.name === 'edit_file' || t.name === 'insert_at_line' || t.name === 'append_file' || (diff && !diff.created);
   const verb = isRunning ? (isEdit ? 'Editing file' : 'Writing file') : (isEdit ? 'Edited file' : 'Created file');
   const icon = isEdit ? '✏️' : '💾';
 
@@ -562,7 +569,7 @@ function agentActsHtml(acts, live = true) {
       h += renderThoughtCard(item, isItemRunning);
     } else if (item.type === 'tool') {
       const isCmd = ['run_python', 'run_command', 'shell', 'exec', 'terminal'].includes(item.name);
-      const isFile = ['edit_file', 'write_file'].includes(item.name);
+      const isFile = ['edit_file', 'write_file', 'append_file', 'insert_at_line'].includes(item.name);
       if (isCmd) {
         h += renderCommandCard(item, isItemRunning);
       } else if (isFile) {
