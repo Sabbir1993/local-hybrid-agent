@@ -38,10 +38,13 @@ def report(con, since, until, label=""):
     for r in q("""SELECT outcome, COUNT(*), ROUND(AVG(steps),1) FROM route_runs
                   WHERE ts>=? AND ts<? GROUP BY outcome ORDER BY 2 DESC""", since, until):
         print("  ", r)
-    print("\nStops by detail  (outcome, detail, n)")
+    print("\nRun detail codes  (outcome, code, n)")
+    # detail carries the cause codes, not free text: err:<ExceptionType> for a
+    # crashed run, synth:<why> for a synthesized answer, stall:<why> for a model
+    # that refused to act, identical_result:<tool>:<n> for loop-guard stops.
     try:
         for r in q("""SELECT outcome, detail, COUNT(*) FROM route_runs WHERE ts>=? AND ts<? AND detail IS NOT NULL
-                      GROUP BY outcome, detail ORDER BY 3 DESC LIMIT 8""", since, until):
+                      GROUP BY outcome, detail ORDER BY 3 DESC LIMIT 14""", since, until):
             print("  ", r)
     except sqlite3.OperationalError:
         print("   (no detail column yet: it appears after the server restarts)")
@@ -50,11 +53,26 @@ def report(con, since, until, label=""):
                                FROM route_events WHERE ts>=? AND ts<? AND lane='executor' AND step=0
                                AND tool_name IS NULL""", since, until)[0]
     print(f"\nExecutor step 0: {n} steps, {esc} escalated, avg {avg}s, {wasted}s spent on steps that were thrown away")
-    print("\nTools  (tool, calls, ok %)")
-    for r in q("""SELECT tool_name, COUNT(*), ROUND(100.0*SUM(tool_ok)/COUNT(*)) FROM route_events
-                  WHERE ts>=? AND ts<? AND tool_name IS NOT NULL GROUP BY tool_name ORDER BY 2 DESC LIMIT 8""",
+    print("\nTools  (tool, completed calls, ok %, fail %)")
+    # reason='tool_start' rows are the START of a call, not its outcome: counting
+    # them (and the NULL tool_ok that comes with them) as failures is what turned
+    # a 6% edit_file failure rate into the phantom 44% figure.
+    for r in q("""SELECT tool_name, COUNT(*),
+                         ROUND(100.0*SUM(tool_ok)/COUNT(*)),
+                         ROUND(100.0*SUM(CASE WHEN tool_ok=0 THEN 1 ELSE 0 END)/COUNT(*))
+                  FROM route_events
+                  WHERE ts>=? AND ts<? AND tool_name IS NOT NULL AND reason<>'tool_start'
+                  GROUP BY tool_name ORDER BY 2 DESC LIMIT 8""",
                since, until):
         print("  ", r)
+    try:
+        print("\nTool failure codes  (code, n)")
+        for r in q("""SELECT tool_err, COUNT(*) FROM route_events
+                      WHERE ts>=? AND ts<? AND tool_ok=0 AND tool_err IS NOT NULL
+                      GROUP BY tool_err ORDER BY 2 DESC LIMIT 10""", since, until):
+            print("  ", r)
+    except sqlite3.OperationalError:
+        print("   (no tool_err column yet: it appears after the server restarts)")
 
 
 def main():

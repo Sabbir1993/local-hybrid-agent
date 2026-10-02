@@ -78,10 +78,13 @@ def validate_and_repair_tool_args(tool_name: str, args: dict, query_hint: str = 
             return repaired, "error: text required for insert_at_line"
 
     if tool_name == "edit_file":
-        if not repaired.get("old_string"):
-            return repaired, "error: old_string required for edit_file"
-        if "new_string" not in repaired or repaired["new_string"] is None:
-            return repaired, "error: new_string required for edit_file"
+        # a unified diff replaces the old/new pair entirely; accepting it here
+        # keeps repair from rejecting a valid call before the tool sees it
+        if not (repaired.get("diff") or repaired.get("patch")):
+            if not repaired.get("old_string"):
+                return repaired, "error: old_string required for edit_file"
+            if "new_string" not in repaired or repaired["new_string"] is None:
+                return repaired, "error: new_string required for edit_file"
 
     if tool_name == "run_python":
         if not repaired.get("code"):

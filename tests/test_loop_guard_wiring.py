@@ -79,6 +79,30 @@ class StopDetailIsStored(unittest.TestCase):
     def tearDown(self):
         route_log._usage_db = self._orig
 
+    def test_error_class_is_recorded_for_crashed_runs(self):
+        # 15% of recorded runs end outcome='error' (median step 1) with NO
+        # recorded cause: _classify_step_error tells the user what happened but
+        # route_runs.detail only ever carried loop detail, so the crash class of
+        # the largest early-exit population was unmeasurable. The class is the
+        # exception TYPE only - never the message, which carries paths.
+        from routes.agent.run import _error_class
+        route_log.run_start("r1", 1, "m", "action")
+        route_log.run_end("r1", 1, "error", detail=_error_class(ValueError("boom at /etc/app.ini")))
+        detail = route_log._usage_db.execute(
+            "SELECT detail FROM route_runs WHERE run_id='r1'").fetchone()[0]
+        self.assertEqual(detail, "err:ValueError")
+        self.assertNotIn("etc", detail)
+
+    def test_error_class_is_bounded_and_never_leaks_the_message(self):
+        from routes.agent.run import _error_class
+        long_name = type("AVeryLongCustomExceptionName" + "X" * 60, (Exception,), {})
+        code = _error_class(long_name("secret text /home/alice/token"))
+        self.assertTrue(code.startswith("err:"))
+        self.assertLessEqual(len(code), 45)
+        self.assertNotIn("alice", code)
+        self.assertNotIn("secret", code)
+        self.assertIsNone(_error_class(None))
+
     def test_column_is_added_and_written(self):
         route_log.run_start("r1", 1, "m", "action")
         route_log.run_end("r1", 12, "no_progress", detail="identical_result:run_python:3")

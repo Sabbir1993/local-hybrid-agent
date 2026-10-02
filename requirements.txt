@@ -30,6 +30,13 @@ pandas>=2.2
 # --- Memory / embeddings ---
 numpy>=1.26
 
+# --- Code intelligence (core/code_intel/ast_index.py; R9 symbol search) ---
+# tree-sitter is a native extension (wheels for win64 ship); language packs
+# are separate wheels. Same bar as every dep: floor here, hash-lock, audit.
+tree-sitter>=0.25
+tree-sitter-python>=0.25
+tree-sitter-javascript>=0.25
+
 # --- CPU tool routers (core/small_model.py; engine chosen in config/app.json "router.engine") ---
 # both installed from PyPI (Apache-2.0); laya by Convai Innovations, cactus-needle lists no author - review before upgrading
 cactus-needle>=2.0

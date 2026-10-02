@@ -164,6 +164,47 @@ def _classify_step_error(e: Exception) -> tuple[str, str]:
     return (f"⚠️ Agent loop error: {type(e).__name__}. See the server log for the detail."), "error"
 
 
+def _error_class(e: BaseException | None) -> str | None:
+    """route_runs.detail code for a crashed run: the exception TYPE, never the message.
+
+    outcome='error' is 15% of recorded runs (median step 1) and used to carry no
+    cause at all, which made the largest early-exit population unmeasurable. Type
+    names are code-like; messages carry local paths, so the message never goes in.
+    Bounded length: custom exception names can be arbitrarily long.
+    """
+    if e is None:
+        return None
+    name = type(e).__name__[:40] or "Exception"
+    return f"err:{name}"
+
+
+_SYNTH_NOTE_CODES = {
+    "synthesized response from successful tool actions": "synth:tool_actions",
+    "synthesized web search results": "synth:web_results",
+    "synthesized execution output": "synth:execution",
+    "extracted answer from model reasoning": "synth:reasoning_answer",
+    "extracted full model reasoning": "synth:reasoning_full",
+    "fallback confirmation": "synth:fallback_confirmation",
+    PASSIVE_REFUSAL_NOTE: "stall:passive_refusal",
+}
+
+
+def _synth_detail(note: str | None) -> str | None:
+    """route_runs.detail code for why a run ended synthesized (or stalled).
+
+    validate_and_finalize_response already names the cause (core/agent_loop/
+    sandbox.py) and run.py streams it to the client, but it never reached the
+    database - so all 16 recorded synthesized runs were one indistinguishable
+    bucket. Fixed vocabulary, looked up by value: the note itself is never
+    copied into the code, so a future note carrying user text cannot leak into
+    retained storage. "validated" (a real answer) records nothing, so the
+    interesting rows stay visible.
+    """
+    if not note or note == "validated":
+        return None
+    return _SYNTH_NOTE_CODES.get(note, "synth:other")
+
+
 @router.post("/agent/run")
 async def agent_run(req: AgentRequest, request: Request, user: Principal = Depends(get_current_user)):
     try:
@@ -410,6 +451,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         run_id = _uuid.uuid4().hex
         run_outcome = "error"
         steps_run = 0
+        _err_class = None      # exception TYPE of a crashed run, stored as detail (see _error_class)
+        _outcome_detail = None  # why a run ended synthesized / stalled (see _synth_detail)
         # tool calls announced to the client but not yet answered: closed explicitly if the run dies mid-tool
         pending_tool: dict = {}
         run_allow: set = set()      # device/browser approvals the user gave "for this run"
@@ -1069,6 +1112,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                             yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
                     run_outcome = "synthesized" if was_synth else (
                         "passive_refusal" if note == PASSIVE_REFUSAL_NOTE else "answered")
+                    _outcome_detail = _synth_detail(note)
                     async for _vc in answer_check_events(
                             user, "agent", last_query, val_text if was_synth else final_content,
                             msgs, main_client, req.verify, _cloud_out):
@@ -1410,7 +1454,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         print(f"[agent] after_tool hook failed: {_he}", file=sys.stderr)
                     ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
                     try:
-                        route_log.event(run_id, step, q_category, lane_name, "tool", tool_name=name, tool_ok=ok)
+                        route_log.event(run_id, step, q_category, lane_name, "tool", tool_name=name, tool_ok=ok,
+                                        tool_err=None if ok else route_log.classify_tool_result(result))
                     except Exception:
                         pass
                     try:
@@ -1525,6 +1570,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                 last_query, final_content, final_reasoning, actions_taken)
             val_text, was_synth = _strip_download_markers(val_text, was_synth)
             run_outcome = stop_reason   # "max_steps" | "loop"
+            # A synthesis on this path is invisible in `outcome` (it keeps the stop
+            # reason), so the cause code is the only record that the user got an
+            # answer the model never actually wrote.
+            _outcome_detail = _synth_detail(note)
 
             if not final_content.strip():
                 yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
@@ -1598,6 +1647,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             print(f"[agent] run {run_id[:8]} failed on step {steps_run}: "
                   f"{type(e).__name__}: {e}", file=sys.stderr)
             run_outcome = "timeout" if kind == "timeout" else "error"
+            _err_class = _error_class(e)
             # a tool that was announced but never answered would sit on "Executing..." forever
             for _tid, _tn in list(pending_tool.items()):
                 yield _tool_result({'id': _tid, 'name': _tn, 'ok': False, 'interrupted': True,
@@ -1605,8 +1655,10 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             yield f"event: delta\ndata: {json.dumps({'text': friendly})}\n\n"
             yield f"event: done\ndata: {json.dumps({'state': 'failed', 'reason': kind})}\n\n"
         finally:
-            _detail = loop_detail or None
-            if pending_tool:       # disconnected / stopped / crashed while a tool was open: say which
+            _detail = _outcome_detail or loop_detail or None
+            if _err_class:
+                _detail = _err_class
+            if pending_tool:       # disconnected / stopped / crashed while a tool is open: say which
                 _detail = "interrupted in " + ",".join(sorted(set(pending_tool.values())))
             route_log.run_end(run_id, steps_run, run_outcome, detail=_detail)
 

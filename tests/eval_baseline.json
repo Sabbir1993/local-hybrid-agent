@@ -2,115 +2,115 @@
   "tasks": {
     "smoke_list_files": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "write_and_verify": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "compute_only": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "read_after_write": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "edit_flow": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "append_build": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "grep_search": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "json_repair_truncated": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "unknown_tool_graceful": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "missing_arg_recovery": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "missing_arg_hard_error": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "escalation_on_repeat": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "loop_thrash_uses_budget": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "refusal_graceful": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "parallel_reads": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "cutoff_write_recovery": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "insert_flow": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "revert_flow": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "pan_masked_output": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "traversal_blocked": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "forbidden_name_blocked": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "shell_refused_cleanly": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "memory_write_read": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "memory_delete_allowed": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "memory_delete_refused": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "subagent_delegate": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "plan_complete": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     },
     "plan_guard_violation": {
       "pass_rate": 1.0,
-      "n": 1
+      "n": 3
     }
   },
   "aggregate_rate": 1.0,
@@ -134,6 +134,19 @@
     "hybrid_real_lexical_fallout_at_k": 0.397,
     "hybrid_real_paraphrase_fallout_at_k": 0.55
   },
-  "router": null,
-  "offline": null
+  "router": {
+    "ok": true
+  },
+  "code": {
+    "recall": 1.0
+  },
+  "offline": {
+    "grammar": "PASS",
+    "compaction": "PASS",
+    "loop_detection": "PASS",
+    "escalation_policy": "PASS",
+    "json_repair": "PASS",
+    "needle_router": "PASS",
+    "compact_endpoint": "FAIL"
+  }
 }

@@ -1188,6 +1188,84 @@ def run_router_scenario(shortcut_on: bool) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Part 6b: code-intel slice (R9 symbol search over a staged fixture repo)
+# ---------------------------------------------------------------------------
+
+CODE_FIXTURE = BASE_DIR / "tests" / "fixtures" / "code_repo"
+
+# (kind, name, kwargs, expected_files). expected_files is the SET that must be
+# covered: definitions return every match, callers every site. The fixture is
+# fixed, the index is exact - so the gate is recall == 1.0, not a tripwire.
+CODE_QUESTIONS = [
+    ("def", "authenticate", {"path_hint": "auth.py"}, {"auth.py"}),
+    ("def", "authenticate", {}, {"auth.py", "legacy_auth.py"}),
+    ("def", "login", {}, {"auth.py"}),
+    ("def", "lookupRecord", {}, {"helpers.js"}),
+    ("def", "nonexistent_xyz", {}, set()),
+    ("callers", "get_user", {}, {"routes.py", "admin.py"}),
+    ("callers", "fetch_record", {}, {"db.py", "routes.py"}),
+    ("outline", "auth.py", {}, {"authenticate", "AuthManager", "login", "logout"}),
+]
+
+
+def run_code_slice() -> dict:
+    """Symbol lookup over the staged fixture: recall + latency, no server.
+
+    Measures the index, not judgement: definitions (with path-hint narrowing),
+    caller sets, file outlines. Deterministic on a fixed fixture, so recall
+    below 1.0 is a regression, not noise. Latency is report-only (machine
+    variance must never gate CI); the <50ms acceptance is verified from the
+    printed p95 plus the scale probe below, not from the gate.
+    """
+    import time
+
+    rec = {"n_questions": len(CODE_QUESTIONS), "recall": 0.0,
+           "latency_ms_p95": None, "ok": False, "problems": []}
+    if not CODE_FIXTURE.is_dir():
+        rec["problems"].append(f"fixture missing: {CODE_FIXTURE}")
+        return rec
+    try:
+        from core.code_intel import ast_index as idx
+    except Exception as e:
+        rec["problems"].append(f"code_intel unavailable: {type(e).__name__}: {e}")
+        return rec
+    lat, hits = [], 0
+    try:
+        for kind, name, kw, want in CODE_QUESTIONS:
+            t0 = time.perf_counter()
+            try:
+                if kind == "def":
+                    got = {h["file"] for h in idx.find_symbol_definition(
+                        name, CODE_FIXTURE, **kw)}
+                elif kind == "callers":
+                    got = {c["file"] for c in idx.find_symbol_callers(
+                        name, CODE_FIXTURE)}
+                else:
+                    got = {e["name"] for e in idx.get_file_outline(
+                        CODE_FIXTURE / name)}
+            except Exception as e:
+                rec["problems"].append(f"{kind} {name} raised {type(e).__name__}: {e}")
+                continue
+            finally:
+                lat.append((time.perf_counter() - t0) * 1000.0)
+            if want <= got:
+                hits += 1
+            else:
+                rec["problems"].append(
+                    f"{kind} {name}: want {sorted(want)} got {sorted(got)}")
+    except Exception as e:
+        rec["problems"].append(f"slice failed: {type(e).__name__}: {e}")
+        return rec
+    lat.sort()
+    rec["latency_ms_p95"] = round(lat[max(0, int(len(lat) * 0.95) - 1)], 2) if lat else None
+    rec["recall"] = round(hits / len(CODE_QUESTIONS), 3)
+    rec["ok"] = not rec["problems"] and rec["recall"] == 1.0
+    if rec["recall"] < 1.0:
+        rec["problems"].append(f"code recall = {rec['recall']} < 1.0")
+    return rec
+
+
+# ---------------------------------------------------------------------------
 # Part 7: retrieval slice (fake embedder, real hybrid path) - next
 # ---------------------------------------------------------------------------
 
@@ -1511,12 +1589,12 @@ def wilson_ci(passes: int, n: int, z: float = 1.96) -> tuple:
 
 def run_mock_suite(repeats: int = 3, task_filter: "list | None" = None,
                    include_retrieval: bool = True, include_router: bool = True,
-                   retrieval_embedder: str = "fake",
+                   retrieval_embedder: str = "fake", include_code: bool = True,
                    progress=None) -> dict:
     """The whole mock suite. Every repeat gets a fresh hermetic env."""
     tasks = [t for t in MOCK_TASKS if task_filter is None or t["name"] in task_filter]
     suite = {"harness": "mock", "repeats": repeats, "tasks": {}, "aggregate": {},
-             "retrieval": None, "router": None}
+             "retrieval": None, "router": None, "code": None}
     passes = 0
     for task in tasks:
         runs = []
@@ -1555,6 +1633,8 @@ def run_mock_suite(repeats: int = 3, task_filter: "list | None" = None,
                              "tools": off["tools"], "router_calls": off.get("router_calls")},
             "ok": on["ok"] and off["ok"],
         }
+    if include_code:
+        suite["code"] = run_code_slice()
     return suite
 
 
@@ -1577,6 +1657,7 @@ def _summarize_suite(suite: dict, offline: "list | None" = None) -> dict:
         "aggregate_rate": (suite.get("aggregate") or {}).get("pass_rate"),
         "retrieval": None,
         "router": None,
+        "code": None,
     }
     if suite.get("retrieval") is not None:
         out["retrieval"] = {k: suite["retrieval"].get(k)
@@ -1596,6 +1677,9 @@ def _summarize_suite(suite: dict, offline: "list | None" = None) -> dict:
                             if suite["retrieval"].get(k) is not None}
     if suite.get("router") is not None:
         out["router"] = {"ok": suite["router"].get("ok")}
+    out["code"] = None
+    if suite.get("code") is not None:
+        out["code"] = {"recall": suite["code"].get("recall")}
     out["offline"] = None
     if offline is not None:
         out["offline"] = {r["name"]: r["status"] for r in offline}
@@ -1610,8 +1694,8 @@ def compare_baseline(current: dict, baseline: dict, tolerance: float = 0.001) ->
     which used to disable those two checks silently. Callers pass the summary.
     Fails on: any task going pass->fail (pass_rate drop beyond tolerance), retrieval
     lexical-only or hybrid-real recall dropping, retrieval fallout RISING (more
-    noise per hit than the baseline tolerated), the router slice breaking,
-    aggregate drop beyond tolerance.
+    noise per hit than the baseline tolerated), the router slice breaking, the
+    code slice recall dropping below 1.0, aggregate drop beyond tolerance.
     New tasks absent from the baseline are informational only - they cannot regress
     something that was never measured.
     """
@@ -1654,6 +1738,12 @@ def compare_baseline(current: dict, baseline: dict, tolerance: float = 0.001) ->
         pass  # slice skipped (--no-router): absence is not a regression
     elif (base.get("router") or {}).get("ok") and not (cur.get("router") or {}).get("ok", True):
         problems.append("REGRESSION router slice: was ok, now failing")
+    if cur.get("code") is not None:
+        # Deterministic fixture, exact index: recall below 1.0 is breakage.
+        # Latency is report-only (machine variance must never gate CI).
+        was, now = (base.get("code") or {}).get("recall"), (cur.get("code") or {}).get("recall")
+        if was is not None and now is not None and now < was - tolerance:
+            problems.append(f"REGRESSION code.recall: {was} -> {now}")
     for name, was in (base.get("offline") or {}).items():
         now = (cur.get("offline") or {}).get(name)
         if now is None or was == "SKIP" or now == "SKIP":

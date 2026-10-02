@@ -62,7 +62,8 @@ def _init() -> None:
     if "detail" not in have_runs:
         c.execute("ALTER TABLE route_runs ADD COLUMN detail TEXT")     # e.g. identical_result:run_python:3
     have = {r[1] for r in c.execute("PRAGMA table_info(route_events)")}
-    for col, decl in (("outcome", "TEXT"), ("model", "TEXT"), ("clf", "TEXT")):
+    for col, decl in (("outcome", "TEXT"), ("model", "TEXT"), ("clf", "TEXT"),
+                      ("tool_err", "TEXT")):
         if col not in have:
             c.execute(f"ALTER TABLE route_events ADD COLUMN {col} {decl}")
     # changes the tuner applied on its own, watched against a before/after quality window
@@ -99,6 +100,60 @@ def _exec(sql: str, params: tuple = ()) -> None:
         print(f"[route_log] write failed: {e}", file=sys.stderr)
 
 
+# Failure taxonomy for tool results: a FIXED code vocabulary, ordered most
+# specific first. Codes, never text - error strings carry file paths and
+# content snippets, and usage.db is retained data. Without this, "edit_file
+# fails 6% of the time" is unactionable: the number never says which of
+# no-match / ambiguous / drift / verify-failed the model actually hit.
+_TOOL_ERR_RULES = (
+    ("hunk", "drifted", "diff_drift"),
+    ("hunk", "match", "ambiguous"),
+    ("hunks overlap", None, "diff_malformed"),
+    ("no hunks", None, "diff_malformed"),
+    ("diff is empty", None, "diff_malformed"),
+    ("not part of a unified diff", None, "diff_malformed"),
+    ("inserts at line", None, "diff_malformed"),
+    ("either diff or", None, "invalid_args"),
+    ("not found in the file", None, "no_match"),
+    ("appears", "times", "ambiguous"),
+    ("matches", "places", "ambiguous"),
+    ("close to the text at", None, "ambiguous"),
+    ("is empty", None, "invalid_args"),
+    ("are identical", None, "invalid_args"),
+    ("sandbox violation", None, "sandbox"),
+    ("traverse", None, "sandbox"),
+    ("before editing", None, "not_read"),
+    ("before inserting", None, "not_read"),
+    ("does not exist", None, "not_found"),
+    ("File not found", None, "not_found"),
+    ("already exists", None, "exists"),
+    ("verify: FAILED", None, "verify_failed"),
+    ("must be an integer", None, "invalid_args"),
+)
+
+
+def classify_tool_result(result) -> Optional[str]:
+    """Fixed failure code for a tool result string, or None when it succeeded.
+
+    Ordered substring rules, most specific first. Unknown failures collapse to
+    "error" rather than inventing a code per message: the vocabulary has to stay
+    small enough to group 1000s of rows, and the raw text is never stored.
+    """
+    if not isinstance(result, str):
+        return None
+    if result.startswith("verify: OK"):
+        return None
+    if not result:
+        return "error"        # a successful tool never returns nothing
+    if not (result.startswith("error:") or result.startswith("File not found")):
+        return None
+    for rule in _TOOL_ERR_RULES:
+        first, second, code = rule
+        if first in result and (second is None or second in result):
+            return code
+    return "error"
+
+
 # ---------------------------------------------------------------- writes
 
 def run_start(run_id: str, user_id: Optional[int], mode: str, category: str) -> None:
@@ -117,13 +172,13 @@ def event(run_id: str, step: int, category: str, lane: str, reason: str, *,
           tool_name: Optional[str] = None, tool_ok: Optional[bool] = None,
           duration_s: Optional[float] = None,
           outcome: Optional[str] = None, model: Optional[str] = None,
-          clf: Optional[str] = None) -> None:
+          clf: Optional[str] = None, tool_err: Optional[str] = None) -> None:
     _exec("INSERT INTO route_events (ts, run_id, step, category, lane, reason, router_tool, router_conf, "
-          "escalated, escalate_reason, tool_name, tool_ok, duration_s, outcome, model, clf) "
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "escalated, escalate_reason, tool_name, tool_ok, duration_s, outcome, model, clf, tool_err) "
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           (time.time(), run_id, step, category, lane, reason, router_tool, router_conf,
            1 if escalated else 0, escalate_reason or None, tool_name,
-           None if tool_ok is None else (1 if tool_ok else 0), duration_s, outcome, model, clf))
+           None if tool_ok is None else (1 if tool_ok else 0), duration_s, outcome, model, clf, tool_err))
 
 
 def rate(run_id: str, user_id: int, rating: int) -> bool:

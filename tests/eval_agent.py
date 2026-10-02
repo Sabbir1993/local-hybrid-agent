@@ -384,6 +384,7 @@ def main() -> int:
     ap.add_argument("--tasks", default=None,
                     help="comma-separated mock task names (default: all)")
     ap.add_argument("--no-retrieval", action="store_true", help="skip the retrieval slice")
+    ap.add_argument("--no-code", action="store_true", help="skip the code-intel slice")
     ap.add_argument("--embedder", default="fake", choices=["fake", "real"],
                     help="retrieval slice vectors: fake BoW stand-in (hermetic, default) "
                          "or cached nomic vectors (tests/.eval_vec_cache.json, report-only "
@@ -478,7 +479,7 @@ def main() -> int:
         suite = run_mock_suite(
             repeats=args.repeats, task_filter=task_filter,
             include_retrieval=not args.no_retrieval, include_router=not args.no_router,
-            retrieval_embedder=args.embedder,
+            retrieval_embedder=args.embedder, include_code=not args.no_code,
             progress=lambda name, ok: print(f"  [{'PASS' if ok else 'FAIL'}] {name}"))
         print(f"  aggregate: {suite['aggregate']['pass_rate']} "
               f"({suite['aggregate']['passes']}/{suite['aggregate']['total']}) "
@@ -508,6 +509,13 @@ def main() -> int:
         if suite.get("router") is not None:
             print(f"  router: shortcut_on={suite['router']['shortcut_on']['ok']} "
                   f"shortcut_off={suite['router']['shortcut_off']['ok']}")
+        if suite.get("code") is not None:
+            c = suite["code"]
+            print(f"  code: recall={c.get('recall')} "
+                  f"p95={c.get('latency_ms_p95')}ms")
+            if c.get("problems"):
+                for p in c["problems"][:3]:
+                    print(f"  code problem: {p}")
         print(f"  mock suite took {time.time() - t0:.1f}s")
         # live array carries harness-marked records: mock regressions today, real-server
         # runs tomorrow. Never conflate the two when reading this file back.
@@ -523,9 +531,11 @@ def main() -> int:
         if suite.get("router") is not None:
             results["router"] = {k: {"ok": v["ok"], "problems": v["problems"]}
                                  for k, v in suite["router"].items() if isinstance(v, dict)}
+        if suite.get("code") is not None:
+            results["code"] = suite["code"]
         if not args.regression:
             # Raw verdict (no baseline to compare against): any failing task, slice, or
-            # a retrieval/router slice that reports not-ok fails the run directly.
+            # a retrieval/router/code slice that reports not-ok fails the run directly.
             for name, t in suite["tasks"].items():
                 if t["pass_rate"] < 1.0:
                     failed += 1
@@ -533,20 +543,29 @@ def main() -> int:
                 failed += 1
             if suite.get("router") is not None and not suite["router"].get("ok", True):
                 failed += 1
+            if suite.get("code") is not None and not suite["code"].get("ok", True):
+                failed += 1
         if args.update_baseline:
             from eval_mock import _summarize_suite
-            # offline records only exist when that suite ran in this invocation
-            # (--no-offline leaves results["offline"] empty: baseline keeps no offline key)
             summary = _summarize_suite(
                 suite, results["offline"] or None)
             if BASELINE_FILE.is_file():
-                # Merge, don't clobber: a real-mode update must keep the fake
-                # hybrid keys (and vice versa) - each mode gates only what it
-                # measured, and overwrite would silently un-gate the other.
+                # Merge, don't clobber: each section gates only what it measured,
+                # and an overwrite would silently un-gate the other mode/section.
+                # - retrieval: --embedder fake must keep hybrid_real keys and
+                #   vice versa (they gate at different tolerances).
+                # - code: --no-code must not erase the measured recall.
+                # - offline: --no-offline must not erase the standing records
+                #   (CI's offline gate compares PASS->FAIL against them; a null
+                #   offline section makes the gate inert).
                 prior = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
                 merged_ret = dict((prior.get("retrieval") or {}))
                 merged_ret.update(summary.get("retrieval") or {})
                 summary["retrieval"] = merged_ret or None
+                if summary.get("code") is None and prior.get("code") is not None:
+                    summary["code"] = prior["code"]
+                if summary.get("offline") is None and prior.get("offline") is not None:
+                    summary["offline"] = prior["offline"]
             BASELINE_FILE.write_text(json.dumps(summary, indent=2),
                                      encoding="utf-8")
             print(f"\nbaseline written -> {BASELINE_FILE} (review the diff before committing)")
@@ -564,7 +583,7 @@ def main() -> int:
                     # offline-only invocation: compare just the offline section. Everything
                     # else stays None, which compare_baseline reads as "not measured".
                     current = {"tasks": {}, "aggregate_rate": None, "retrieval": None,
-                               "router": None,
+                               "router": None, "code": None,
                                "offline": ({r["name"]: r["status"] for r in results["offline"]}
                                           or None)}
                 problems = _compare(current, baseline)

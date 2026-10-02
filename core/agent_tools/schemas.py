@@ -81,16 +81,19 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "Replace an exact string in a file you have read. old_string must be unique (add surrounding lines) or set replace_all. Whitespace/indentation differences are tolerated. Returns the edited lines.",
+            "description": "Change a file you have read, either way: old_string/new_string replaces one block (old_string must be unique (add surrounding lines) or set replace_all; whitespace/indentation differences and slightly drifted lines are tolerated), or diff accepts a unified diff (@@ hunks with -/+ lines) and applies every hunk atomically. Send one form per call, not both.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
                     "old_string": {"type": "string"},
                     "new_string": {"type": "string"},
+                    "diff": {"type": "string",
+                             "description": "unified diff to apply (diff -u or git patch format). Use instead of old_string/new_string when changing several places at once."},
                     "replace_all": {"type": "boolean"},
                 },
-                "required": ["path", "old_string", "new_string"],
+                # only path is required: either old_string+new_string or diff
+                "required": ["path"],
             },
         },
     },

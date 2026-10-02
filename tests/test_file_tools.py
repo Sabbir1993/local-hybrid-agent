@@ -149,6 +149,242 @@ class EngineTests(unittest.TestCase):
             edit_engine.insert_at_line("a\nb\n", 9, "X")
 
 
+class DiffEngineTests(unittest.TestCase):
+    """E-edit tier 4: models write unified diffs more reliably than they copy
+    blocks. apply_diff parses diff -u / git patches and applies each hunk; it
+    never falls back silently - a hunk that does not apply fails the WHOLE
+    call (atomicity), telling the model which hunk drifted."""
+
+    FILE = ("import os\n"
+            "import sys\n"
+            "\n"
+            "def alpha():\n"
+            "    return 1\n"
+            "\n"
+            "def beta():\n"
+            "    return 2\n"
+            "\n"
+            "def gamma():\n"
+            "    return 3\n")
+
+    DIFF = ("--- a/m.py\n"
+            "+++ b/m.py\n"
+            "@@ -1,5 +1,5 @@\n"
+            " import os\n"
+            "-import sys\n"
+            "+import math\n"
+            " \n"
+            " def alpha():\n"
+            "     return 1\n"
+            "@@ -7,3 +7,4 @@\n"
+            " def beta():\n"
+            "     return 2\n"
+            "+    return 21\n")
+
+    def test_simple_diff_applies(self):
+        res = edit_engine.apply_diff(self.FILE, self.DIFF)
+        self.assertIn("import math", res["text"])
+        self.assertNotIn("import sys", res["text"])
+        self.assertIn("return 21", res["text"])
+        self.assertEqual(res["hunks"], 2)
+        self.assertEqual(res["method"], "diff")
+
+    def test_diff_without_file_headers_applies(self):
+        # models routinely omit the ---/+++ lines; @@ hunks alone are enough
+        res = edit_engine.apply_diff(self.FILE, "@@ -2 +2 @@\n-import sys\n+import math\n")
+        self.assertIn("import math", res["text"])
+
+    def test_diff_crlf_file_keeps_endings(self):
+        crlf = self.FILE.replace("\n", "\r\n")
+        res = edit_engine.apply_diff(crlf, self.DIFF)
+        self.assertIn("import math\r\n", res["text"])
+        # every CR must be part of a CRLF pair: no stray \r left from a
+        # LF-joined edit spliced into a CRLF file (blank lines legitimately
+        # read "\r\n\r\n", so the invariant is per-CR, not per-substring)
+        self.assertEqual(res["text"].count("\r"), res["text"].count("\r\n"))
+
+    def test_diff_context_drift_fails_loudly(self):
+        # the file changed since the model read it (line drifted): the hunk's
+        # context lines don't match. Must raise, never guess.
+        drifted = self.FILE.replace("    return 1\n", "    return 100\n")
+        with self.assertRaises(edit_engine.EditError) as cm:
+            edit_engine.apply_diff(drifted, self.DIFF)
+        self.assertIn("hunk 1", str(cm.exception))
+        self.assertIn("drifted", str(cm.exception))
+
+    def test_diff_partial_failure_is_atomic(self):
+        # the two clean hunks verify, the appended garbage hunk does not: the
+        # call fails as a whole, so the file is never left half-patched
+        bad = self.DIFF + "@@ -99,2 +99,2 @@\n totally\n absent\n"
+        before = self.FILE
+        with self.assertRaises(edit_engine.EditError) as cm:
+            edit_engine.apply_diff(self.FILE, bad)
+        self.assertIn("hunk 3", str(cm.exception))
+        self.assertEqual(self.FILE, before, "atomic: failure leaves the input untouched")
+
+    def test_diff_rejects_empty_and_non_diff(self):
+        with self.assertRaises(edit_engine.EditError):
+            edit_engine.apply_diff(self.FILE, "")
+        with self.assertRaises(edit_engine.EditError) as cm:
+            edit_engine.apply_diff(self.FILE, "just some text\nwith no hunks\n")
+        self.assertIn("no hunks", str(cm.exception))
+
+    def test_diff_rejects_hunk_that_only_adds_without_context(self):
+        # a hunk with zero context and zero removed lines is an insert at a
+        # line number - supported via context verification; garbage numbers fail
+        with self.assertRaises(edit_engine.EditError):
+            edit_engine.apply_diff(self.FILE, "@@ -99,0 +99,1 @@\n+ghost\n")
+
+    def test_diff_hunk_at_exact_line_without_full_context(self):
+        # hunk claims to start at line 4 but context is only 1 line: line
+        # numbers verify the anchor when the trimmed context is short
+        res = edit_engine.apply_diff(self.FILE, "@@ -4,2 +4,2 @@\n def alpha():\n-    return 1\n+    return 10\n")
+        self.assertIn("return 10", res["text"])
+
+    def test_diff_strips_line_number_prefixes(self):
+        # model pasted read_file output as the diff; prefix stripper already
+        # exists for old_string - the diff path must benefit too
+        prefixed = "\n".join(f"  {i + 1}\t{ln}" for i, ln in enumerate(self.DIFF.split("\n")))
+        res = edit_engine.apply_diff(self.FILE, prefixed)
+        self.assertIn("import math", res["text"])
+
+
+class FuzzyTierTests(unittest.TestCase):
+    """E-edit tier 3: whitespace tolerance already exists; CONTENT drift is the
+    44% failure mode. A near-miss block (line changed since the model read it)
+    applies when exactly one candidate is close enough (>= 0.85) - and fails
+    LOUDLY when candidates are ambiguous or nothing is close."""
+
+    FILE = ("def handler(req):\n"
+            "    user = db.get_user(req.id)\n"
+            "    if not user:\n"
+            "        raise HttpError(404)\n"
+            "    return render(user)\n")
+
+    OLD = ("user = db.get_user(req.id)\n"
+           "if not user:\n"
+           "    raise HttpError(404, 'no user')\n")  # model misremembered the raise line
+
+    def test_drifted_block_applies_with_similarity(self):
+        res = edit_engine.apply_edit(self.FILE, self.OLD,
+                                     "user = db.get_user(req.id)\n"
+                                     "if not user:\n"
+                                     "    raise HttpError(404)\n"
+                                     "    log.warning('missing')\n")
+        self.assertEqual(res["method"], "fuzzy")
+        self.assertIn("log.warning", res["text"])
+        self.assertNotIn("'no user'", res["text"], "the drifted old line is replaced, not kept")
+        self.assertIn("        log.warning('missing')", res["text"],
+                      "replacement is reindented into the file's block")
+
+    def test_fuzzy_refuses_two_similar_candidates(self):
+        twin = ("def handler(req):\n"
+                "    user = db.get_user(req.id)\n"
+                "    if not user:\n"
+                "        raise HttpError(404)\n"
+                "    return render(user)\n"
+                "def handler2(req):\n"
+                "    user = db.get_user(req.id)\n"
+                "    if not user:\n"
+                "        raise HttpError(404)\n"
+                "    return render(user)\n")
+        with self.assertRaises(edit_engine.EditError) as cm:
+            edit_engine.apply_edit(twin, self.OLD, "replaced\n")
+        self.assertIn("2 places", str(cm.exception))
+
+    def test_fuzzy_refuses_distant_block(self):
+        with self.assertRaises(edit_engine.EditError) as cm:
+            edit_engine.apply_edit(self.FILE, "def totally_other(a, b, c):\n    return zzz\n", "x\n")
+        self.assertIn("not found", str(cm.exception))
+        self.assertIn("read_file", str(cm.exception), "the message says how to recover")
+
+    def test_near_miss_below_threshold_suggests_close_lines(self):
+        # right shape, wrong code: mean similarity well under the 0.85 gate, so
+        # NOT applied - but the closest real lines are named so the model can
+        # copy them verbatim instead of guessing again
+        with self.assertRaises(edit_engine.EditError) as cm:
+            edit_engine.apply_edit(self.FILE,
+                                   "def handler(req):\n"
+                                   "    account = db.lookup(req.owner)\n"
+                                   "    if account is None:\n"
+                                   "    return render(account)\n",
+                                   "x\n")
+        msg = str(cm.exception)
+        self.assertIn("not found", msg)
+        self.assertIn("Closest lines", msg)
+
+    def test_fuzzy_never_applies_to_single_line_drift_silently(self):
+        # single-line old_string has no structure: typo tolerance on one line
+        # would silently corrupt code. Only >=2-line blocks qualify.
+        with self.assertRaises(edit_engine.EditError):
+            edit_engine.apply_edit(self.FILE, "user = db.get_user(req.ids)\n", "x = 1\n")
+
+    def test_fuzzy_reindents_like_whitespace_tier(self):
+        # the model wrote the block unindented AND drifted the last line:
+        # whitespace tier can't match (content), fuzzy must, and reindent
+        res = edit_engine.apply_edit(self.FILE,
+                                     "user = db.get_user(req.id)\nif not user:\n    raise HttpError(404, 'gone')\n",
+                                     "user = db.get_user(req.id)\nif not user:\n    raise PermissionError()\n")
+        self.assertEqual(res["method"], "fuzzy")
+        self.assertIn("        raise PermissionError()", res["text"],
+                      "replacement lands inside the file's indentation")
+
+
+class DiffToolTests(Base):
+    def test_edit_file_accepts_diff_argument(self):
+        self.fc.files[full("m.py")] = "a = 1\nb = 2\n"
+        self.call("read_file", path="m.py")
+        out = self.call("edit_file", path="m.py",
+                        diff="--- a/m.py\n+++ b/m.py\n@@ -1,2 +1,2 @@\n-a = 1\n+a = 11\n b = 2\n")
+        self.assertIn("edited", out)
+        self.assertEqual(self.fc.files[full("m.py")], "a = 11\nb = 2\n")
+
+    def test_edit_file_diff_and_old_string_are_exclusive(self):
+        self.fc.files[full("m.py")] = "a = 1\nb = 2\n"
+        self.call("read_file", path="m.py")
+        out = self.call("edit_file", path="m.py", old_string="a = 1", new_string="a = 2",
+                        diff="@@ -1 +1 @@\n-a = 1\n+a = 11\n")
+        self.assertTrue(out.startswith("error:"))
+        self.assertIn("either", out)
+
+    def test_edit_file_diff_requires_read_first(self):
+        self.fc.files[full("m.py")] = "a = 1\n"
+        out = self.call("edit_file", path="m.py", diff="@@ -1 +1 @@\n-a = 1\n+a = 2\n")
+        self.assertTrue(out.startswith("error:"))
+        self.assertIn("read", out)
+
+    def test_edit_file_diff_error_is_reported_not_raised(self):
+        self.fc.files[full("m.py")] = "a = 1\nb = 2\n"
+        self.call("read_file", path="m.py")
+        out = self.call("edit_file", path="m.py", diff="@@ -9 +9 @@\n-ghost\n+x\n")
+        self.assertTrue(out.startswith("error:"))
+        self.assertIn("hunk", out)
+
+
+class SchemaContractTests(unittest.TestCase):
+    def test_edit_file_schema_documents_diff(self):
+        schema = next(t for t in agent_tools.AGENT_TOOLS
+                      if t["function"]["name"] == "edit_file")
+        props = schema["function"]["parameters"]["properties"]
+        self.assertIn("diff", props, "diff must be an advertised argument")
+        self.assertNotIn("diff", schema["function"]["parameters"].get("required", []),
+                         "diff is optional - old/new path must keep working")
+        self.assertIn("diff", schema["function"]["description"])
+
+    def test_repair_accepts_diff_only_edit(self):
+        from core.agent_loop.repair import validate_and_repair_tool_args
+        args, err = validate_and_repair_tool_args(
+            "edit_file", {"path": "m.py", "diff": "@@ -1 +1 @@\n-a\n+b\n"})
+        self.assertIsNone(err)
+        self.assertEqual(args["diff"], "@@ -1 +1 @@\n-a\n+b\n")
+
+    def test_repair_still_requires_content_without_diff(self):
+        from core.agent_loop.repair import validate_and_repair_tool_args
+        _, err = validate_and_repair_tool_args("edit_file", {"path": "m.py"})
+        self.assertIsNotNone(err)
+        self.assertIn("old_string", err)
+
+
 class ToolTests(Base):
     def test_write_refuses_existing_unless_overwrite(self):
         self.call("write_file", path="a.py", content="x = 1\n")

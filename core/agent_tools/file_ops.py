@@ -233,7 +233,11 @@ async def tool_edit_file(args: dict) -> str:
     path_arg = _path_arg(args)
     uid, p = _resolve(path_arg)
     old, new = args.get("old_string", ""), args.get("new_string", "")
-    if not old:
+    diff = args.get("diff") or args.get("patch")
+    if diff and (old or new):
+        return ("error: pass either diff or old_string/new_string, not both - one edit per call "
+                "(a diff can carry several hunks).")
+    if not diff and not old:
         raise ValueError("old_string required")
     replace_all = bool(args.get("replace_all"))
     if not file_state.was_read(str(p)):
@@ -242,6 +246,20 @@ async def tool_edit_file(args: dict) -> str:
     before = await _read_existing(uid, p)
     if before is None:
         raise FileNotFoundError(f"File not found: {path_arg}")
+    if diff:
+        big = _too_big(diff, "edit_file")
+        if big:
+            return big
+        try:
+            res = edit_engine.apply_diff(before, diff)
+        except edit_engine.EditError as e:
+            return f"error: {e}"
+        after = res["text"]
+        await _store(uid, p, before, after)
+        where = f"line {res['first_line']}" if res["first_line"] == res["last_line"] else \
+            f"lines {res['first_line']}-{res['last_line']}"
+        return f"edited {path_arg} at {where}: {res['hunks']} hunk(s) from diff\n{res['snippet']}" + \
+            await verify_after(uid, p, path_arg, after, before, can_autorevert=True)
     try:
         res = edit_engine.apply_edit(before, old, new, replace_all)
     except edit_engine.EditError as e:
@@ -250,7 +268,9 @@ async def tool_edit_file(args: dict) -> str:
     await _store(uid, p, before, after)
     where = f"line {res['first_line']}" if res["first_line"] == res["last_line"] else \
         f"lines {res['first_line']}-{res['last_line']}"
-    note = " (matched ignoring whitespace differences; indentation adjusted)" if res["method"] == "whitespace" else ""
+    note = {"whitespace": " (matched ignoring whitespace differences; indentation adjusted)",
+            "fuzzy": " (block had drifted; matched the closest text and indentation adjusted - verify this line)"}.get(
+        res["method"], "")
     msg = f"edited {path_arg} at {where}: {res['count']} replacement(s){note}\n{res['snippet']}"
     return msg + await verify_after(uid, p, path_arg, after, before, can_autorevert=True)
 

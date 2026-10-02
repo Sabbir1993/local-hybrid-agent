@@ -3,6 +3,14 @@
 They work on strings only (no disk, no companion), so the rules are unit-testable and the
 same for every device. Files are handled with "\\n" line endings internally and converted back
 to the file's own ending (CRLF on Windows) when the result is written.
+
+E-edit matching tiers for old/new edits (attempted in order, all loud on failure):
+  1. exact substring
+  2. whitespace/indentation-normalized block
+  3. fuzzy block: >= 2-line blocks with similarity >= FUZZY_THRESHOLD at exactly
+     ONE location (content drift - the dominant edit_file failure mode)
+  4. unified diff input via apply_diff (models write diffs more reliably than
+     they copy blocks); hunks are verified against the file and applied atomically
 """
 import difflib
 import re
@@ -13,6 +21,15 @@ _PREFIX_RX = re.compile(r"^ *\d+[\t→]")
 SNIPPET_CONTEXT = 3
 SNIPPET_MAX_LINES = 30
 CANDIDATES = 3
+# Tier-3 gate: a drifted block must still be recognizably the same code. Below
+# this, "close" lines are treated as not-found (the close-candidates hint is
+# the response). 0.85 keeps typos/reworded comments in, different logic out.
+FUZZY_THRESHOLD = 0.85
+# Blocks shorter than this have no structure to be fuzzy about: one drifted
+# line matching at 0.9 could be a genuinely different line. Exact/whitespace
+# tiers still handle them.
+FUZZY_MIN_LINES = 2
+_HUNK_RX = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
 class EditError(ValueError):
@@ -91,6 +108,32 @@ def _find_fuzzy(file_lines: list, old_lines: list) -> list:
     return hits
 
 
+def _find_similar(file_lines: list, old_lines: list) -> list:
+    """Tier-3 candidates: [(start_index, score)] where the mean per-line
+    SequenceMatcher ratio against the whitespace-normalized block clears
+    FUZZY_THRESHOLD. Window equals the block length - no reordering, so a
+    match still has the same shape as what the model copied."""
+    old = [ln for ln in old_lines if ln.strip()]
+    if len(old) < FUZZY_MIN_LINES:
+        return []
+    n = len(old)
+    norm_file = [_norm_ws(x) for x in file_lines]
+    norm_old = [_norm_ws(x) for x in old]
+    hits = []
+    for i in range(0, len(file_lines) - n + 1):
+        total = 0.0
+        for k in range(n):
+            f, o = norm_file[i + k], norm_old[k]
+            if f == o:
+                total += 1.0
+            else:
+                total += difflib.SequenceMatcher(None, f, o).ratio()
+        score = total / n
+        if score >= FUZZY_THRESHOLD:
+            hits.append((i, score))
+    return hits
+
+
 def _reindent(new: str, old_first_indent: str, file_first_indent: str) -> str:
     if old_first_indent == file_first_indent:
         return new
@@ -130,11 +173,28 @@ def snippet(text: str, first_line: int, last_line: int) -> str:
     return "\n".join(f"{i:>6}\t{lines[i - 1]}" for i in range(a, b + 1))
 
 
-def apply_edit(text: str, old: str, new: str, replace_all: bool = False) -> dict:
-    """Exact replacement with a whitespace-tolerant fallback.
+def _apply_block(src_lines: list, old_lines: list, new: str, start: int) -> tuple[str, int, int]:
+    """Replace src_lines[start:start+len(old_lines)] with `new`, reindented from the
+    old block's first non-empty line to the file's actual first-line indent."""
+    trimmed = list(old_lines)
+    while trimmed and not trimmed[0].strip():
+        trimmed.pop(0)
+    while trimmed and not trimmed[-1].strip():
+        trimmed.pop()
+    n = len(trimmed)
+    new_txt = _reindent(new.strip("\n") if new.strip() else new,
+                        _indent(trimmed[0]), _indent(src_lines[start]))
+    src_lines[start:start + n] = new_txt.split("\n") if new_txt != "" else []
+    out = "\n".join(src_lines)
+    first = start + 1
+    return out, first, first + max(new_txt.count("\n"), 0)
 
-    Returns {text, count, method, first_line, last_line}. Raises EditError with a message that
-    tells the model what to do next.
+
+def apply_edit(text: str, old: str, new: str, replace_all: bool = False) -> dict:
+    """Replace `old` with `new` in `text`, tiered: exact -> whitespace -> fuzzy.
+
+    Returns {text, count, method, first_line, last_line, snippet}. Raises EditError with a
+    message that tells the model what to do next.
     """
     eol = detect_eol(text)
     src = to_lf(text)
@@ -152,27 +212,28 @@ def apply_edit(text: str, old: str, new: str, replace_all: bool = False) -> dict
     if count == 0:
         src_lines = src.split("\n")
         old_lines = old.split("\n")
+        # Tier 2: whitespace/indentation tolerance (exact modulo whitespace runs).
         hits = _find_fuzzy(src_lines, old_lines)
         if len(hits) == 1:
-            i = hits[0]
-            trimmed = [ln for ln in old_lines]
-            while trimmed and not trimmed[0].strip():
-                trimmed.pop(0)
-            while trimmed and not trimmed[-1].strip():
-                trimmed.pop()
-            n = len(trimmed)
-            new_txt = _reindent(new.strip("\n") if new.strip() else new,
-                                _indent(trimmed[0]), _indent(src_lines[i]))
-            src_lines[i:i + n] = new_txt.split("\n") if new_txt != "" else []
-            out = "\n".join(src_lines)
-            first = i + 1
+            out, first, last = _apply_block(src_lines, old_lines, new, hits[0])
             return {"text": from_lf(out, eol), "count": 1, "method": "whitespace",
-                    "first_line": first, "last_line": first + max(new_txt.count("\n"), 0),
-                    "snippet": snippet(out, first, first + new_txt.count("\n"))}
+                    "first_line": first, "last_line": last, "snippet": snippet(out, first, last)}
         if len(hits) > 1:
             where = ", ".join(str(h + 1) for h in hits[:5])
             raise EditError(f"old_string matches {len(hits)} places once whitespace is ignored "
                             f"(lines {where}) - include more surrounding lines to make it unique")
+        # Tier 3: content drift. The block is almost right - apply at the one
+        # location that is recognizably the same code, or stay loud.
+        sim = _find_similar(src_lines, old_lines)
+        if len(sim) == 1:
+            out, first, last = _apply_block(src_lines, old_lines, new, sim[0][0])
+            return {"text": from_lf(out, eol), "count": 1, "method": "fuzzy",
+                    "first_line": first, "last_line": last, "snippet": snippet(out, first, last)}
+        if len(sim) > 1:
+            where = ", ".join(str(h + 1) for h, _s in sim[:5])
+            raise EditError(f"old_string is close to the text at {len(sim)} places "
+                            f"(lines {where}) - the block drifted or is ambiguous; include "
+                            "more surrounding lines so the target is unique")
         cand = closest_lines(src, old)
         msg = "old_string not found in the file."
         if cand:
@@ -198,6 +259,147 @@ def apply_edit(text: str, old: str, new: str, replace_all: bool = False) -> dict
     return {"text": from_lf(out, eol), "count": count if replace_all else 1, "method": method,
             "first_line": first_line, "last_line": last_line,
             "snippet": snippet(out, first_line, last_line)}
+
+
+def _parse_hunks(diff: str) -> list:
+    """Parse a unified diff into hunks: [{old_start, old_count, old, new}] where old/new are
+    plain content lines. Tolerant of the model's usual shortcuts: missing ---/+++ headers,
+    missing line counts, and missing leading space on context lines. Loud about everything
+    else - a malformed hunk fails the whole diff before anything is applied."""
+    diff, _ = strip_line_prefixes(diff)
+    diff = to_lf(diff)
+    if diff.endswith("\n"):
+        diff = diff[:-1]
+    hunks, cur = [], None
+    for ln in diff.split("\n") if diff else []:
+        m = _HUNK_RX.match(ln)
+        if m:
+            if cur:
+                hunks.append(cur)
+            cur = {"old_start": int(m.group(1)), "old_count": 1 if m.group(2) is None else int(m.group(2)),
+                   "old": [], "new": []}
+            continue
+        if cur is None:
+            continue  # preamble: ---/+++/diff --git/index lines before the first hunk
+        if ln.startswith("\\"):
+            continue      # "\ No newline at end of file"
+        if ln.startswith("+"):
+            cur["new"].append(ln[1:])
+        elif ln.startswith("-"):
+            cur["old"].append(ln[1:])
+        elif ln.startswith(" ") or ln == "":
+            body = ln[1:] if ln else ""
+            cur["old"].append(body)
+            cur["new"].append(body)
+        else:
+            raise EditError(f"diff line {ln[:60]!r} is not part of a unified diff - "
+                            "send standard @@ -a,b +c,d @@ hunks with -/+ lines")
+    if cur:
+        hunks.append(cur)
+    if not hunks:
+        raise EditError("no hunks found in diff - send a unified diff (@@ hunks with -/+ lines), "
+                        "or use old_string/new_string instead")
+    return hunks
+
+
+def _locate(old_block: list, file_lines: list, declared_start: int, hunk_no: int) -> tuple[int, bool]:
+    """Where the hunk's old lines live in the file: (start_index, fuzzy_match).
+
+    Order: exact at the declared line, then exact anywhere (line drift), then
+    whitespace-normalized anywhere. CONTENT drift is refused - a diff whose
+    context no longer matches means the model's view is stale, and the honest
+    response is re-read + regenerate, never fuzzy-application.
+    """
+    n = len(old_block)
+    total = len(file_lines)
+    declared = declared_start - 1
+    if 0 <= declared <= total - n and file_lines[declared:declared + n] == old_block:
+        return declared, False
+    exact = [i for i in range(total - n + 1) if file_lines[i:i + n] == old_block]
+    if len(exact) == 1:
+        return exact[0], False
+    if len(exact) > 1:
+        where = ", ".join(str(i + 1) for i in exact[:5])
+        raise EditError(f"hunk {hunk_no}: its lines match {len(exact)} places (lines {where}) - "
+                        "add surrounding context lines to pin the location")
+    want = [_norm_ws(x) for x in old_block]
+    ws = [i for i in range(total - n + 1)
+          if all(_norm_ws(file_lines[i + k]) == want[k] for k in range(n))]
+    if len(ws) == 1:
+        return ws[0], True
+    if len(ws) > 1:
+        where = ", ".join(str(i + 1) for i in ws[:5])
+        raise EditError(f"hunk {hunk_no}: its lines match {len(ws)} places once whitespace is "
+                        f"ignored (lines {where}) - add context lines to pin the location")
+    return -1, False
+
+
+def apply_diff(text: str, diff: str) -> dict:
+    """Apply a unified diff (diff -u / git patch) to `text`, atomically.
+
+    Every hunk is located and verified against the file BEFORE anything is
+    applied; any failure (drifted context, ambiguity, garbage hunk) raises
+    EditError and the text is untouched. Returns {text, hunks, method,
+    first_line, last_line, snippet}.
+    """
+    if not diff or not diff.strip():
+        raise EditError("diff is empty")
+    eol = detect_eol(text)
+    src = to_lf(text)
+    file_lines = src.split("\n")
+    trailing = src.endswith("\n")
+    if trailing:
+        file_lines.pop()                  # the newline that ends the file is not a line
+    total = len(file_lines) if src else 0
+
+    hunks = _parse_hunks(diff)
+    edits = []                            # (start_index, old_len, new_lines)
+    for hno, h in enumerate(hunks, 1):
+        old_block, new_block = h["old"], h["new"]
+        if h["old_count"] == 0:
+            if old_block:
+                raise EditError(f"hunk {hno}: header says it removes nothing but the hunk "
+                                "contains - lines - regenerate it with correct counts")
+            if not new_block:
+                raise EditError(f"hunk {hno}: adds nothing (no + lines) - nothing to apply")
+            start = h["old_start"]        # insert BEFORE this original line (unified diff: -L,0)
+            if start < 1 or start > total + 1:
+                raise EditError(f"hunk {hno}: inserts at line {start} but the file has "
+                                f"{total} lines (use 1..{total + 1})")
+            edits.append((start - 1, 0, list(new_block)))
+            continue
+        if not old_block:
+            raise EditError(f"hunk {hno}: header declares {h['old_count']} old line(s) but the "
+                            "hunk has no context or - lines - include the context to locate it")
+        start, fuzzy = _locate(old_block, file_lines, h["old_start"], hno)
+        if start < 0:
+            probe = next((ln for ln in old_block if ln.strip()), "")
+            cand = closest_lines(src, probe) if probe else []
+            hint = (" Closest lines: " + "; ".join(f"line {ln}: {t[:80]!r}" for ln, t in cand)) if cand else ""
+            raise EditError(f"hunk {hno} drifted: its context lines no longer match the file "
+                            f"(expected around line {h['old_start']}).{hint} re-read the file "
+                            "and regenerate the diff")
+        if fuzzy:
+            first_nonempty = next((ln for ln in old_block if ln.strip()), "")
+            new_txt = _reindent("\n".join(new_block), _indent(first_nonempty),
+                                _indent(file_lines[start]))
+            new_lines = new_txt.split("\n") if new_txt != "" else []
+        else:
+            new_lines = list(new_block)
+        edits.append((start, len(old_block), new_lines))
+
+    edits.sort(key=lambda e: e[0])
+    for a, b in zip(edits, edits[1:]):
+        if b[0] < a[0] + a[1]:
+            raise EditError("hunks overlap - the diff modifies the same lines twice; regenerate it")
+    for start, n, new_lines in reversed(edits):
+        file_lines[start:start + n] = new_lines
+    out = "\n".join(file_lines) + ("\n" if trailing or not src else "")
+    first = edits[0][0] + 1
+    last = first + max(len(edits[0][2]) - edits[0][1], 0) + max(edits[0][1] - len(edits[0][2]), 0)
+    last = max(last, first)
+    return {"text": from_lf(out, eol), "hunks": len(hunks), "method": "diff",
+            "first_line": first, "last_line": last, "snippet": snippet(out, first, last)}
 
 
 def append_text(text: Optional[str], chunk: str) -> str:
