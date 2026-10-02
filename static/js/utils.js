@@ -14,6 +14,17 @@ function externalImageButton(url, alt) {
   return `<button type="button" class="file-action-badge" data-load-src="${url}" data-load-alt="${alt || 'Image'}" title="${url}">🖼️ Load image from ${host}</button>`;
 }
 
+function extractDomain(url) {
+  try {
+    const raw = _unesc(url);
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : ('https://' + raw));
+    return u.hostname.replace(/^www\./i, '');
+  } catch (_) {
+    const m = String(url).match(/https?:\/\/([^/?#&;]+)/i);
+    return m ? m[1].replace(/^www\./i, '') : '';
+  }
+}
+
 // Delegated handlers for markup produced by md() / renderMediaPreviewSection():
 // values arrive via dataset (already decoded), never through inline JS.
 document.addEventListener('click', (e) => {
@@ -147,7 +158,7 @@ function md(s) {
         return `<span class="chat-inline-media"><img src="${url}" alt="${alt}" class="chat-inline-img" loading="lazy" title="Click to enlarge" /></span>`;
       });
 
-      // 2. Render links & file download buttons
+      // 2. Render links, file download buttons & SEO favicon citation pills
       t = t.replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/agent\/download|\/download)[^)]+)\)/g, (match, text, url) => {
         if (url.startsWith('/agent/download') || url.startsWith('/download')) {
           const m = url.match(/[?&]path=([^&]+)/);
@@ -158,6 +169,16 @@ function md(s) {
             <button type="button" class="file-action-badge primary" data-preview-path="${fpath}" data-preview-title="${text}" title="Preview ${text}">👁️ Preview ${text}</button>
             <a href="${url}" class="file-action-badge" download title="Download ${text}">⬇</a>
           </span>`;
+        }
+        const isNumericCitation = /^(\d+|\[\d+\]|ref\.?\s*\d+|\^?\d+\^?)$/i.test(text.trim());
+        const domain = extractDomain(url);
+        if (isNumericCitation && domain) {
+          const safeDomain = esc(domain);
+          const safeFavicon = esc(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`);
+          return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="citation-pill" title="${safeDomain} - Click to open source">`
+            + `<img src="${safeFavicon}" class="citation-favicon" alt="" loading="lazy" />`
+            + `<span class="citation-host">${safeDomain}</span>`
+            + `</a>`;
         }
         return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
       });

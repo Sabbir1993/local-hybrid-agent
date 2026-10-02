@@ -1,5 +1,30 @@
 # PROJECT KNOWLEDGE — Local Agent
 
+> ## ⚠️ READ THE STALENESS NOTICE FIRST
+>
+> This file has **two halves written at different times**:
+>
+> - **§1–§17 (lines 1–1225) — STALE.** Written from a read of the tree at commit `c334c28`,
+>   when the codebase was roughly **13× smaller**. File names, line counts, module layout and the
+>   entire "where do I change X?" table (§17) were invalidated by the 2026-09-29→10-02 package
+>   split (`e584ca8`, `08097fd`, `6b79a6c`, `21ac609`, `58f4681`). Treat it as **history**, not
+>   as a map. Known-false examples: `server_manager.py` "1693 L" (now 129), `core/` "2847 L
+>   across 17 modules" (now ~28,500 across 86), `static/js/app.js` (file deleted),
+>   `core/agent_loop.py` / `core/agent_tools.py` (both now packages), `config.json` and
+>   `profiles/*.json` (now `config/app.json`, no profiles dir), "452 Python tests plus 6 JS
+>   tests" (now 1,596 test methods and 15 JS files).
+>
+> - **§18–§19 — CURRENT (2026-10-01/02).** The deployment envelope and the residual risk
+>   register. These are accurate and worth reading.
+>
+> Nothing below has a freshness marker of its own, which is why the notice is here instead.
+> When you update one section, update this notice.
+
+---
+
+<details>
+<summary>§1–§17 — archived architecture snapshot at commit c334c28 (expand only for history)</summary>
+
 > Internal architecture & maintenance reference. Written from a full read of the
 > codebase (commit `c334c28` + working-tree changes). This is the *why* and the
 > *how it fits together* document. For first-time setup see `README.md`; for
@@ -1220,6 +1245,8 @@ databases and read `config.json` as import-time side effects.
   - iOS shares the `capabilities.mobile` flag
   - the session↔agent binding is localStorage-only, not on the session row
 - Work is uncommitted on `fine_tune_2`.
+
+</details>
 
 ---
 

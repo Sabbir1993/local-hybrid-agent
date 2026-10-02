@@ -1,5 +1,33 @@
 # Agent Gap Analysis — Local Agent
 
+> ## ⛔ SUPERSEDED — DO NOT ACT ON THIS DOCUMENT
+>
+> **Written 2026-09-21 against branch `excel_support` / HEAD `2cd8162`. Every headline finding
+> below has since been fixed, and the document is now actively misleading.** It is kept only as
+> a record of what the audit found in September.
+>
+> Verified stale as of 2026-10-02:
+>
+> | This document claims | Actual |
+> |---|---|
+> | "Zero tests", "zero automated testing — the agent loop has no tests at all" | **1,596** test methods; `test_loop_guard.py`, `test_loop_guard_wiring.py`, `test_plan_adherence.py`, `test_agent_diff.py`, `test_eval_isolation.py` all cover the loop |
+> | "No sandbox or auth — every HTTP endpoint is unauthenticated" | Argon2id, TOTP/MFA, LDAP, 20-permission RBAC, API tokens, CSRF; 22 routers mounted behind `dependencies=_authed` |
+> | "Memory is fake — embedder configured but never called"; "Learn missing" | `core/agent_memory.py` + `core/memory/` with real nomic embeddings, hybrid retrieval and an RRF fusion stage |
+> | "No conversation compaction" | `core/context_budget.py` + a 22 KB `test_context_budget.py` |
+> | "Plan weak — no structured plan object, no progress tracking" | `plan_items`, `core/agent_loop/plan_guard.py`, `test_plan_first.py` |
+> | "No pinned dependencies" | 128 KB `requirements.lock`, SHA-256 hashed, drift-checked in CI |
+> | P1 roadmap item: *"pytest suite for the agent loop"* | Shipped (on unittest) |
+>
+> The only reason this file has not been deleted is that the September audit was a good
+> exercise and the reasoning is worth keeping. **For current status read `README.md` and
+> `IMPROVEMENT_PLAN_TO_SOTA.md`.** For current known defects read `PROJECT_KNOWLEDGE.md` §19
+> (risk register).
+
+---
+
+<details>
+<summary>Archived content (2026-09-21) — expand only if you want the historical audit</summary>
+
 > **What this document is:** an evidence-based review of the codebase answering
 > three questions — (1) how close is this to being a real AI *agent* today,
 > (2) what's still missing, and (3) what's good and bad about the current design.
@@ -425,3 +453,5 @@ may shift as it evolves.*
 
 
 
+
+</details>

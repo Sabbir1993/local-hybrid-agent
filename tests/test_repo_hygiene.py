@@ -251,5 +251,28 @@ class NoSecretsOrDatabasesTracked(unittest.TestCase):
         self.assertEqual([f for f in git("ls-files", "config/providers").split() if f.strip()], [])
 
 
+class NoBuildArtifactsTracked(unittest.TestCase):
+    """.coverage was a 975 KB machine-local binary snapshot tracked in git, rewritten by every
+    `coverage run`, so the tree was never clean. Generated coverage state is machine-local; the
+    pyproject ratchet reads fail_under, not the file."""
+
+    def test_coverage_report_is_not_committed(self):
+        for pat in (".coverage", ".coverage.*"):
+            found = [f for f in git("ls-files", pat).split() if f.strip()]
+            self.assertEqual(found, [], f"{pat} is tracked")
+
+    def test_git_actually_ignores_it_now(self):
+        rc = subprocess.run(["git", "check-ignore", "-q", ".coverage"], cwd=ROOT).returncode
+        self.assertEqual(rc, 0, ".coverage is not in the committed .gitignore")
+
+    def test_the_eval_vector_fixture_stays_tracked(self):
+        """The inverse guard. tests/.eval_vec_cache.json LOOKS like a build artifact and is not:
+        tests/test_knowledge_recall.py asserts it exists and matches the current chunk params, and
+        CI cannot regenerate it (scripts/embed_eval_corpus.py needs a local embedder on :8093).
+        A future "tidy up the repo" pass must not gitignore it and break CI."""
+        self.assertTrue([f for f in git("ls-files", "tests/.eval_vec_cache.json").split() if f.strip()],
+                        "tests/.eval_vec_cache.json must stay tracked - test_knowledge_recall needs it")
+
+
 if __name__ == "__main__":
     unittest.main()

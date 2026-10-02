@@ -55,9 +55,21 @@ class QueryRequest(BaseModel):
     max_rows: int = Field(500, ge=1, le=5000, description="Maximum number of rows to return")
 
 
-# auth.db columns nobody should read through the console: credential hashes
-# and live session ids (the sha256 is enough to hijack if the DB is copied).
-_HIDDEN_COLUMNS = {("users", "password_hash"), ("auth_sessions", "id")}
+# auth.db columns nobody should read through the console.
+#   password_hash    - credential hash (the whole point of storing it hashed)
+#   totp_secret      - the TOTP SEED. core/totp.py turns any seed into a valid 6-digit code for
+#                      any user at any time, so exposing this is a complete MFA bypass: no second
+#                      factor, no rate limit, and no audit row, because it is a SELECT and not a
+#                      login (routes/auth.py's _mfa_throttled never fires).
+#   auth_sessions.id - live session token; the sha256 is enough to hijack if the DB is copied.
+# database.manage is granted to every admin (core/auth_db/schema.py seeds the admin role with all
+# permissions), so "hidden here" is the only thing standing between an ordinary admin and every
+# enrolled account's second factor.
+_HIDDEN_COLUMNS = {
+    ("users", "password_hash"),
+    ("users", "totp_secret"),
+    ("auth_sessions", "id"),
+}
 # Introspection pragmas take a table/index argument; settable ones must be bare (no "= v").
 _INTROSPECT_PRAGMAS = {"table_info", "table_xinfo", "index_list", "index_info", "index_xinfo",
                        "foreign_key_list", "database_list", "compile_options", "page_count"}

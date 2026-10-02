@@ -38,6 +38,16 @@ config/providers/
 # Schema-repair snapshots (core/db_repair.py). Trimmed to DB_BACKUP_KEEP newest on each backup;
 # they are a safety net for a botched migration, not an archive.
 db_backups/
+# coverage.py's binary SQLite report. A 975 KB machine-local snapshot of one developer's run,
+# rewritten by every `coverage run` (pyproject ratchets fail_under off it), which is why the
+# working tree was permanently dirty. Regenerate with `coverage run -m unittest discover tests`.
+.coverage
+.coverage.*
+htmlcov/
+# NOTE: tests/.eval_vec_cache.json is deliberately NOT ignored. It looks like a build artifact
+# but tests/test_knowledge_recall.py asserts it exists and matches the current chunk params, and
+# CI never regenerates it - scripts/embed_eval_corpus.py needs a local embedder on :8093. It is a
+# golden fixture, like tests/eval_baseline.json.
 # llama-server daily logs (core/state.py). Machine-local diagnostics, rotated by LOG_KEEP_DAYS.
 /logs/
 # The 737 KB PNG is a manual screenshot of the SVG next to it (see

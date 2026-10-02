@@ -63,7 +63,7 @@ async def set_config(req: ConfigRequest, model: Optional[str] = None,
                       user: Principal = Depends(require_permission("model.local.configure"))):
     # validate + persist against the live profile when it matches the request
     # target (or no target); otherwise against a temp profile built from the
-    # selected model's saved config
+    # selected model's saved config.
     if state.profile is not None:
         loaded_key = _model_key(state.profile.get("model_path") or "")
         if not model or _model_key(model) == loaded_key:
@@ -73,6 +73,12 @@ async def set_config(req: ConfigRequest, model: Optional[str] = None,
             if prof is None:
                 return JSONResponse({"error": f"model file not found: {model}"}, status_code=404)
     else:
+        # `target` used to be missing here, so this branch raised NameError instead of
+        # returning the 400 below - F821 caught it. Resolved exactly as get_config does
+        # (line 47): the ?model= query param, else the user's saved hint, so a cold start
+        # with nothing in VRAM can still be configured. Resolved lazily because the branch
+        # above never needs it and get_model_hint hits the DB.
+        target = model or common.get_model_hint(user.id)
         if not target:
             return JSONResponse({"error": "no profile loaded"}, status_code=400)
         prof = _standalone_profile(target)

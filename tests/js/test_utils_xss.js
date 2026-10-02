@@ -87,4 +87,19 @@ assert.strictEqual(ctx.esc(3), '3');
   assert(!/onclick=/i.test(html + bare));
 }
 
+// citation pills: numeric citations become rich SEO favicon pills, non-numeric links stay plain
+{
+  const cite = ctx.md('Found at [1](https://wanderlog.com/place/123) and [2](https://www.trip.com/travel)');
+  assert(/class="citation-pill"/.test(cite), 'must render citation-pill: ' + cite);
+  assert(/class="citation-favicon"/.test(cite), 'must render citation-favicon: ' + cite);
+  assert(/domain=wanderlog\.com/.test(cite), 'must query wanderlog.com favicon: ' + cite);
+  assert(/<span class="citation-host">wanderlog\.com<\/span>/.test(cite), 'must display wanderlog.com: ' + cite);
+  assert(/domain=trip\.com/.test(cite), 'must query trip.com favicon: ' + cite);
+  assert(/<span class="citation-host">trip\.com<\/span>/.test(cite), 'must display trip.com: ' + cite);
+
+  const plain = ctx.md('Visit [Wanderlog Official](https://wanderlog.com)');
+  assert(!/citation-pill/.test(plain), 'plain text links should not be citation-pill: ' + plain);
+  assert(/<a href="https:\/\/wanderlog\.com" target="_blank" rel="noopener noreferrer">Wanderlog Official<\/a>/.test(plain), plain);
+}
+
 console.log('utils XSS tests: OK');

@@ -209,5 +209,8 @@
     "kv_unified_per_slot": 0,
     "cache_reuse": 256,
     "cache_ram": 0
-  }
+  },
+  "explicit.gguf": {},
+  "live.gguf": {},
+  "hint.gguf": {}
 }

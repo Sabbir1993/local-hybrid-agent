@@ -127,8 +127,8 @@ class DbExplorerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / "t.db"
         c = sqlite3.connect(self.path)
-        c.execute("CREATE TABLE users (id INTEGER, username TEXT, password_hash TEXT)")
-        c.execute("INSERT INTO users VALUES (1, 'alice', '[PLACEHOLDER_HASH]')")
+        c.execute("CREATE TABLE users (id INTEGER, username TEXT, password_hash TEXT, totp_secret TEXT)")
+        c.execute("INSERT INTO users VALUES (1, 'alice', '[PLACEHOLDER_HASH]', 'JBSWY3DPEHPK3PXP')")
         c.commit()
         c.close()
 
@@ -152,6 +152,44 @@ class DbExplorerTests(unittest.TestCase):
                                  ("alice", None))
                 with self.assertRaises(sqlite3.Error):
                     c.execute("UPDATE users SET username = 'x'")
+
+    def test_auth_db_hides_the_totp_seed(self):
+        """users.totp_secret is a raw seed, not a hash: core/totp.py turns it into a valid
+        6-digit code for that user at any time. Because database.manage is auto-granted to
+        every admin role (core/auth_db/schema.py seeds admin with ALL permissions), leaving it
+        readable is a total MFA bypass with no rate limit and no audit row - a SELECT is not a
+        login, so routes/auth.py's _mfa_throttled never fires. Read must come back NULL."""
+        from routes.db_explorer import helpers as dx_helpers
+        with mock.patch.object(dx_helpers, "AUTH_DB_FILE", self.path):
+            with self.dx._connect(self.path, 3.0) as c:
+                row = c.execute("SELECT username, totp_secret FROM users").fetchone()
+                self.assertEqual(row, ("alice", None),
+                                 "totp_seed leaked through the DB console")
+
+    def test_every_raw_secret_column_in_auth_db_is_hidden(self):
+        """Guard the whole set, not just today's find. Introspect the REAL auth.db schema and
+        assert that every column whose NAME implies a raw secret is in _HIDDEN_COLUMNS. Hashed
+        columns (token_hash, code_hash, key_hash, password_hash) are fine to leave visible;
+        auth_sessions.id is a live token and is already listed."""
+        import re
+        from core import auth_db as _adb
+        from routes.db_explorer import constants as dx_constants
+        raw_secret = re.compile(r"(secret|(?<!_hash)_token)$")
+        watched = ("users", "auth_sessions", "api_tokens", "user_totp_backup", "companion_devices")
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(_adb, "AUTH_DB_FILE", Path(tmp) / "auth.db"):
+                conn = _adb._init_auth_db()
+                try:
+                    for table in watched:
+                        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+                        self.assertTrue(cols, f"{table} missing from the real schema - test is stale")
+                        for col in cols:
+                            if not raw_secret.search(col):
+                                continue
+                            self.assertIn((table, col), dx_constants._HIDDEN_COLUMNS,
+                                          f"{table}.{col} is a raw secret and is readable in the console")
+                finally:
+                    conn.close()
 
     def test_vacuum_rejected(self):
         self.assertTrue(self.dx._VACUUM_RE.search("vacuum into 'C:/x.db'"))
