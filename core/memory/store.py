@@ -14,13 +14,38 @@ except Exception:
 _conn: Optional[ThreadLocalDB] = None
 
 
+def _init_memory_conn(conn: sqlite3.Connection) -> None:
+    try:
+        conn.enable_load_extension(True)
+        import sqlite_vec
+        sqlite_vec.load(conn)
+    except Exception:
+        pass
+
+
+def has_sqlite_vec() -> bool:
+    try:
+        row = _db().execute("SELECT vec_version()").fetchone()
+        return bool(row and row[0])
+    except Exception:
+        return False
+
+
+def has_fts5() -> bool:
+    try:
+        row = _db().execute("SELECT count(*) FROM chunks_fts").fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
 def _db() -> ThreadLocalDB:
     global _conn
     pkg = sys.modules.get("core.memory")
     conn = getattr(pkg, "_conn", None) if pkg else _conn
     if conn is None:
         db_file = getattr(pkg, "MEMORY_DB_FILE", MEMORY_DB_FILE) if pkg else MEMORY_DB_FILE
-        conn = ThreadLocalDB(db_file)
+        conn = ThreadLocalDB(db_file, initializer=_init_memory_conn)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS chunks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,6 +65,41 @@ def _db() -> ThreadLocalDB:
             conn.execute(f"""CREATE TRIGGER IF NOT EXISTS chunks_gen_{ev.lower()} AFTER {ev} ON chunks
                 BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'chunks_gen'; END""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_novec ON chunks(source) WHERE vec IS NULL")
+
+        # FTS5 Full-Text Search virtual table & synchronization triggers
+        try:
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                    text,
+                    path UNINDEXED,
+                    source UNINDEXED,
+                    content='chunks',
+                    content_rowid='id'
+                )
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_ai AFTER INSERT ON chunks BEGIN
+                    INSERT INTO chunks_fts(rowid, text, path, source) VALUES (new.id, new.text, new.path, new.source);
+                END
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_ad AFTER DELETE ON chunks BEGIN
+                    INSERT INTO chunks_fts(chunks_fts, rowid, text, path, source) VALUES ('delete', old.id, old.text, old.path, old.source);
+                END
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_au AFTER UPDATE ON chunks BEGIN
+                    INSERT INTO chunks_fts(chunks_fts, rowid, text, path, source) VALUES ('delete', old.id, old.text, old.path, old.source);
+                    INSERT INTO chunks_fts(rowid, text, path, source) VALUES (new.id, new.text, new.path, new.source);
+                END
+            """)
+            fts_count = conn.execute("SELECT count(*) FROM chunks_fts").fetchone()[0]
+            chunks_count = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
+            if fts_count == 0 and chunks_count > 0:
+                conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+        except Exception:
+            pass
+
         conn.commit()
         if pkg:
             pkg._conn = conn

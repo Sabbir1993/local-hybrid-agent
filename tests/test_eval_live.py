@@ -282,6 +282,376 @@ class StatisticsAreHonest(unittest.TestCase):
         self.assertEqual(s["problems"].count("missing tool: write_file"), 1)
 
 
+class LivePreflightFailsFast(unittest.TestCase):
+    """The two most common invocation mistakes must cost a second, not a 90-minute run.
+
+    Before this existed, a server that was not listening raised an unhandled
+    httpx.ConnectError traceback out of _live_login, and a server that was listening but
+    rejecting the session made all 22 tasks x 5 repeats fail one timeout at a time.
+
+    The preflight is reachability-only BY DESIGN: a 401 on an anonymous probe is expected
+    (the probe carries no credentials) and says nothing about whether the supplied login
+    will work. Gating on it here rejected every correctly-configured run.
+    """
+
+    def _patch_get(self, side_effect=None, status=None):
+        from unittest import mock
+        if side_effect is not None:
+            return mock.patch("httpx.get", side_effect=side_effect)
+        return mock.patch("httpx.get", return_value=mock.Mock(status_code=status))
+
+    def test_connection_refused_gives_an_actionable_message_not_a_traceback(self):
+        import httpx
+        import eval_agent
+        with self._patch_get(side_effect=httpx.ConnectError("refused")):
+            with self.assertRaises(SystemExit) as cm:
+                eval_agent._live_preflight("http://127.0.0.1:8000")
+        self.assertEqual(cm.exception.code, 2,
+                         "exit 2 = invocation error; exit 1 is reserved for agent task failure")
+
+    def test_401_does_not_abort_the_preflight(self):
+        """Regression guard: the preflight used to treat 401 as 'pass credentials', which is
+        wrong for an anonymous probe. Credentials are the login step's business."""
+        import eval_agent
+        with self._patch_get(status=401):
+            self.assertIsNone(eval_agent._live_preflight("http://127.0.0.1:8000"))
+        with self._patch_get(status=403):
+            self.assertIsNone(eval_agent._live_preflight("http://127.0.0.1:8000"))
+
+    def test_other_http_errors_are_reported_not_swallowed(self):
+        import httpx
+        import eval_agent
+        with self._patch_get(side_effect=httpx.ReadTimeout("slow")):
+            with self.assertRaises(SystemExit) as cm:
+                eval_agent._live_preflight("http://127.0.0.1:8000")
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_reachable_server_passes(self):
+        import eval_agent
+        with self._patch_get(status=200):
+            self.assertIsNone(eval_agent._live_preflight("http://127.0.0.1:8000"))
+
+    def test_abort_prints_to_stderr_and_exits_2(self):
+        import eval_agent
+        with self.assertRaises(SystemExit) as cm:
+            eval_agent._abort("boom")
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_login_refused_does_not_leak_a_client_or_traceback(self):
+        import httpx
+        import eval_agent
+        from unittest import mock
+        with mock.patch.object(httpx, "Client") as C:
+            C.return_value.post.side_effect = httpx.ConnectError("refused")
+            with self.assertRaises(SystemExit) as cm:
+                eval_agent._live_login("http://127.0.0.1:8000", "u", "p")
+        self.assertEqual(cm.exception.code, 2)
+        C.return_value.close.assert_called_once()
+
+
+class LiveMfaLogin(unittest.TestCase):
+    """The ticket flow (password -> single-use ticket -> ticket + code -> session), tested
+    against scripted responses that mirror routes/auth.py. A benchmark runner cannot answer a
+    TOTP prompt, which is why this fails fast with wiring for --live-totp / --live-totp-cmd
+    rather than hanging."""
+
+    def _client(self, posts):
+        """httpx.Client stand-in whose post() returns canned responses in order.
+
+        MagicMock, not Mock: _live_login arms the CSRF header via `client.headers[...] =`,
+        which a bare Mock does not support - and that is exactly the surface under test.
+        The cookie jar carries the CSRF cookie the real login would set.
+        """
+        import httpx
+        from unittest import mock
+
+        def _mk(status, body):
+            r = mock.Mock()
+            r.status_code = status
+            r.json.return_value = body
+            r.text = __import__("json").dumps(body)
+            return r
+
+        it = iter([_mk(s, b) for s, b in posts])
+        C = mock.MagicMock()
+        C.post.side_effect = lambda *a, **k: next(it)
+        C.cookies.get.side_effect = lambda k: {"a770_csrf": "tok123"}.get(k)
+        C.headers = {}
+        return C
+
+    def _login(self, client, totp=None):
+        import eval_agent
+        from unittest import mock
+        import httpx
+        with mock.patch.object(httpx, "Client", return_value=client):
+            return eval_agent._live_login("http://x", "u", "p", totp=totp)
+
+    def test_plain_login_without_mfa(self):
+        c = self._client([(200, {"user": {"id": 1, "username": "u"}})])
+        self.assertIs(self._login(c), c)
+
+    def test_mfa_challenge_without_a_code_aborts_with_wiring(self):
+        c = self._client([(200, {"mfa_required": True, "ticket": "mfa_abc"})])
+        with self.assertRaises(SystemExit) as cm:
+            self._login(c)
+        self.assertEqual(cm.exception.code, 2)
+        c.close.assert_called_once()
+
+    def test_mfa_challenge_with_a_code_verifies_the_ticket(self):
+        import json
+        c = self._client([(200, {"mfa_required": True, "ticket": "mfa_abc"}),
+                          (200, {"user": {"id": 1}, "ok": True})])
+        self.assertIs(self._login(c, totp="123456"), c)
+        verify = c.post.call_args_list[1]
+        self.assertEqual(verify[0][0], "http://x/auth/mfa/verify")
+        self.assertEqual(json.loads(json.dumps(verify[1]["json"])),
+                         {"ticket": "mfa_abc", "code": "123456"})
+
+    def test_wrong_code_aborts_without_retrying(self):
+        """A wrong guess burns one of the ticket's 5 guesses server-side. The harness must
+        NOT retry into the same ticket - it tells the operator to fetch a fresh code."""
+        c = self._client([(200, {"mfa_required": True, "ticket": "mfa_abc"}),
+                          (401, {"detail": "invalid code"})])
+        with self.assertRaises(SystemExit) as cm:
+            self._login(c, totp="000000")
+        self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(c.post.call_count, 2)
+
+    def test_enroll_required_points_at_the_ui(self):
+        c = self._client([(200, {"mfa_required": True, "enroll_required": True,
+                                 "ticket": "mfa_xyz"})])
+        with self.assertRaises(SystemExit):
+            self._login(c, totp="123456")
+
+    def test_bad_password_aborts(self):
+        c = self._client([(401, {"detail": "bad credentials"})])
+        with self.assertRaises(SystemExit) as cm:
+            self._login(c)
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_no_user_and_no_challenge_is_impossible(self):
+        c = self._client([(200, {})])
+        with self.assertRaises(SystemExit):
+            self._login(c)
+
+
+class LiveTotpCommand(unittest.TestCase):
+    def test_digits_are_extracted_and_padded(self):
+        import eval_agent
+        self.assertEqual(eval_agent._totp_code("echo 12345"), "012345")
+        self.assertEqual(eval_agent._totp_code("echo code: 987654!"), "987654")
+
+    def test_no_digits_aborts(self):
+        import eval_agent
+        with self.assertRaises(SystemExit) as cm:
+            eval_agent._totp_code("echo nothing-here")
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_unrunnable_command_aborts(self):
+        import eval_agent
+        with self.assertRaises(SystemExit) as cm:
+            eval_agent._totp_code("definitely-not-a-real-command-xyz")
+        # Windows runs through cmd: unknown command exits nonzero with empty stdout,
+        # so this surfaces as "printed no digits" rather than a spawn error.
+        self.assertEqual(cm.exception.code, 2)
+
+
+class LiveCsrfArming(unittest.TestCase):
+    """The first live smoke test read 0/3 because MFA worked and every task still 403'd:
+    the harness logged in and then POSTed without the X-CSRF-Token echo the frontend
+    sends. core/csrf.py rejects that. A benchmark client must behave like the browser."""
+
+    def test_login_arms_the_csrf_header(self):
+        import eval_agent
+        from unittest import mock
+        jar = {"a770_csrf": "tok123"}
+        client = mock.Mock()
+        client.cookies.get.side_effect = lambda k: jar.get(k)
+        client.headers = {}
+        eval_agent._arm_csrf(client, "http://x")
+        self.assertEqual(client.headers.get("X-CSRF-Token"), "tok123")
+
+    def test_missing_csrf_cookie_aborts_loudly(self):
+        """A 200 without the cookie is an incomplete session. Proceeding would turn every
+        task into a 403; aborting here names the actual problem."""
+        import eval_agent
+        from unittest import mock
+        client = mock.Mock()
+        client.cookies.get.return_value = None
+        client.headers = {}
+        with self.assertRaises(SystemExit) as cm:
+            eval_agent._arm_csrf(client, "http://x")
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_both_login_paths_arm_csrf(self):
+        """Plain and MFA logins must both leave the client able to POST."""
+        import eval_agent
+        from unittest import mock
+        with mock.patch.object(eval_agent, "_arm_csrf") as arm:
+            c = mock.Mock()
+            c.post.return_value = mock.Mock(
+                status_code=200, json=lambda: {"user": {"id": 1}}, text="{}")
+            import httpx
+            with mock.patch.object(httpx, "Client", return_value=c):
+                eval_agent._live_login("http://x", "u", "p")
+            arm.assert_called_once_with(c, "http://x")
+
+            c2 = mock.Mock()
+            c2.post.side_effect = [
+                mock.Mock(status_code=200,
+                          json=lambda: {"mfa_required": True, "ticket": "mfa_t"}, text="{}"),
+                mock.Mock(status_code=200, json=lambda: {"user": {"id": 1}}, text="{}"),
+            ]
+            with mock.patch.object(httpx, "Client", return_value=c2):
+                eval_agent._live_login("http://x", "u", "p", totp="123456")
+            arm.assert_called_with(c2, "http://x")
+            self.assertEqual(arm.call_count, 2)
+
+
+class LiveHttpErrorsDiagnoseThemselves(unittest.TestCase):
+    """The second defect the smoke test exposed: HTTP-error exits `return rec` directly,
+    skipping duration_s and the problems computation, so the run printed `Nones` and the
+    operator had to read eval_results_live.json to learn it was a 403."""
+
+    def _task(self):
+        return {"name": "t", "prompt": "x"}
+
+    def test_401_names_the_likely_causes(self):
+        import eval_agent
+        from unittest import mock
+        resp = mock.Mock(status_code=401)
+        stream = mock.MagicMock()
+        stream.__enter__.return_value = resp
+        client = mock.Mock()
+        client.stream.return_value = stream
+        rec = eval_agent.run_live_task("http://x", self._task(), "auto", client=client)
+        self.assertTrue(rec["error"].startswith("HTTP 401"), rec["error"])
+        self.assertIn("CSRF", rec["error"])
+        self.assertIsNotNone(rec["duration_s"])
+        self.assertTrue(rec["problems"])
+        self.assertFalse(rec["ok"])
+
+    def test_403_distinguishes_eval_bug_from_account_permissions(self):
+        import eval_agent
+        from unittest import mock
+        resp = mock.Mock(status_code=403)
+        stream = mock.MagicMock()
+        stream.__enter__.return_value = resp
+        client = mock.Mock()
+        client.stream.return_value = stream
+        rec = eval_agent.run_live_task("http://x", self._task(), "auto", client=client)
+        self.assertIn("CSRF", rec["error"])
+        self.assertIn("permission", rec["error"])
+        self.assertIsNotNone(rec["duration_s"])
+
+    def test_other_statuses_carry_duration_and_problems(self):
+        import eval_agent
+        from unittest import mock
+        for status in (500, 502):
+            with self.subTest(status):
+                resp = mock.Mock(status_code=status)
+                stream = mock.MagicMock()
+                stream.__enter__.return_value = resp
+                client = mock.Mock()
+                client.stream.return_value = stream
+                rec = eval_agent.run_live_task("http://x", self._task(), "auto", client=client)
+                self.assertEqual(rec["error"], f"HTTP {status}")
+                self.assertIsNotNone(rec["duration_s"])
+
+
+class LiveStreamFailuresAreVisible(unittest.TestCase):
+    """The third defect the smoke test exposed: the parser dropped the `done` payload, so a
+    run that died in setup (done: failed) looked identical to a run where the model said
+    nothing - `0.0s`, no tools, empty answer, no explanation. The failure reason must be
+    captured, not just the fact of failure."""
+
+    def _stream(self, frames):
+        """A canned SSE stream: list of (event, data-dict) pairs."""
+        import json
+        from unittest import mock
+        lines = []
+        for event, data in frames:
+            lines.append(f"event: {event}")
+            lines.append(f"data: {json.dumps(data)}")
+            lines.append("")
+        resp = mock.Mock(status_code=200)
+        resp.iter_lines.return_value = iter(lines)
+        stream = mock.MagicMock()
+        stream.__enter__.return_value = resp
+        client = mock.Mock()
+        client.stream.return_value = stream
+        return client
+
+    def _task(self):
+        return {"name": "t", "prompt": "x"}
+
+    def test_done_failed_captures_the_reason(self):
+        import eval_agent
+        client = self._stream([
+            ("lane", {"lane": "executor"}),
+            ("done", {"state": "failed", "reason": "timeout"}),
+        ])
+        rec = eval_agent.run_live_task("http://x", self._task(), "auto", client=client)
+        self.assertEqual(rec["done_state"], "failed")
+        self.assertIn("timeout", rec["error"])
+        self.assertFalse(rec["ok"])
+
+    def test_done_completed_with_no_tools_is_a_model_result_not_a_crash(self):
+        import eval_agent
+        client = self._stream([
+            ("lane", {"lane": "executor"}),
+            ("delta", {"text": "The answer is 42."}),
+            ("done", {"state": "completed"}),
+        ])
+        rec = eval_agent.run_live_task("http://x", self._task(), "auto", client=client)
+        self.assertEqual(rec["done_state"], "completed")
+        self.assertIsNone(rec["error"])
+        self.assertEqual(rec["final_text"], "The answer is 42.")
+
+    def test_events_seen_records_the_stream_shape(self):
+        import eval_agent
+        client = self._stream([
+            ("run", {"run_id": "abc"}),
+            ("lane", {"lane": "executor"}),
+            ("thought", {"text": "hmm"}),
+            ("done", {"state": "completed"}),
+        ])
+        rec = eval_agent.run_live_task("http://x", self._task(), "auto", client=client)
+        for e in ("run", "lane", "thought", "done"):
+            self.assertIn(e, rec["events_seen"])
+
+    def test_tool_call_events_are_counted(self):
+        import eval_agent
+        client = self._stream([
+            ("lane", {"lane": "executor"}),
+            ("tool_call", {"id": "t1", "name": "run_python", "args": {}}),
+            ("delta", {"text": "3973"}),
+            ("done", {"state": "completed"}),
+        ])
+        rec = eval_agent.run_live_task("http://x", self._task(), "auto", client=client)
+        self.assertEqual(rec["tools"], ["run_python"])
+
+    def test_guard_event_is_recorded(self):
+        import eval_agent
+        client = self._stream([
+            ("lane", {"lane": "executor"}),
+            ("guard", {"rule": "Never share personal info", "message": "blocked"}),
+            ("done", {"state": "completed", "note": "response filtered by policy", "text": ""}),
+        ])
+        rec = eval_agent.run_live_task("http://x", self._task(), "auto", client=client)
+        self.assertEqual(rec["guard_hits"], ["Never share personal info"])
+        self.assertIn("filtered by policy", rec["error"])
+
+    def test_kb_blocked_is_recorded(self):
+        import eval_agent
+        client = self._stream([
+            ("kb_blocked", {"message": "cloud lane blocked"}),
+            ("done", {"state": "completed"}),
+        ])
+        rec = eval_agent.run_live_task("http://x", self._task(), "auto", client=client)
+        self.assertEqual(rec["kb_blocked"], "cloud lane blocked")
+
+
 class SelfCheckRuns(unittest.TestCase):
     def test_module_self_check_passes(self):
         import subprocess

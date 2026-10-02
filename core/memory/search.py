@@ -214,7 +214,17 @@ async def search_knowledge_hybrid(query: str, k: int = 6,
     results.sort(key=lambda r: r["score"], reverse=True)
     if rerank and len(results) > 2:
         cands = results[:max(rerank_candidates, k)]
-        fused = _rrf_reorder(cands, has_cos=qvec is not None)
+        bm25_map = {}
+        try:
+            from .store import has_fts5
+            if has_fts5():
+                fts_hits = search_fts5(query, k=max(rerank_candidates, k * 2), sources={"knowledge"},
+                                       allowed_knowledge_source_ids=allowed_knowledge_source_ids)
+                for fh in fts_hits:
+                    bm25_map[fh["text"]] = fh["bm25"]
+        except Exception:
+            pass
+        fused = _rrf_reorder(cands, has_cos=qvec is not None, bm25_scores=bm25_map if bm25_map else None)
         if rerank_floor:
             # Same gate as stage 0: the fused order decides RANKING, the gate
             # decides MEMBERSHIP. Without this the loose stage-1 gate floods
@@ -240,11 +250,12 @@ async def search_knowledge_hybrid(query: str, k: int = 6,
     return results[:max(1, k)]
 
 
-def _rrf_reorder(cands: list, has_cos: bool = True, k_rrf: int = 60) -> list:
+def _rrf_reorder(cands: list, has_cos: bool = True, k_rrf: int = 60,
+                 bm25_scores: Optional[dict] = None) -> list:
     """Reciprocal-rank fusion over independent orderings (web rerank.py pattern).
 
-    Each ordering (cosine desc, lexical desc, title-boost desc) votes
-    1/(k_rrf + rank); the fused order is the second opinion on a candidate
+    Each ordering (cosine desc, lexical desc, title-boost desc, optional FTS5 BM25)
+    votes 1/(k_rrf + rank); the fused order is the second opinion on a candidate
     set the weighted sum already produced. Pure-python over <= 20 items:
     microseconds, no fresh embeddings (query + stored chunk vecs reused).
     Without a query vector the cosine ordering drops out, mirroring the web
@@ -254,8 +265,135 @@ def _rrf_reorder(cands: list, has_cos: bool = True, k_rrf: int = 60) -> list:
                  [id(c) for c in sorted(cands, key=lambda c: -c["_boost"])]]
     if has_cos:
         orderings.append([id(c) for c in sorted(cands, key=lambda c: -c["cos"])])
+    if bm25_scores:
+        # FTS5 BM25: more negative is better rank, so sort by bm25 ascending (lower is better)
+        orderings.append([id(c) for c in sorted(cands, key=lambda c: bm25_scores.get(c.get("text"), 0.0))])
     rrf = {}
     for ordering in orderings:
         for rank, key in enumerate(ordering):
             rrf[key] = rrf.get(key, 0.0) + 1.0 / (k_rrf + rank)
     return sorted(cands, key=lambda c: -rrf[id(c)])
+
+
+def search_fts5(query: str, k: int = 20, sources: Optional[set] = None,
+                allowed_knowledge_source_ids: Optional[set] = None) -> list:
+    """Query chunks_fts via SQLite FTS5 BM25.
+    Returns list of dicts: {'id': int, 'source': str, 'path': str, 'text': str, 'bm25': float}.
+    """
+    try:
+        from .store import _db
+        db = _db()
+        norm_words_fn = getattr(_pkg(), "_normalize_query_words", _normalize_query_words)
+        tokens = norm_words_fn(query) if norm_words_fn else re.findall(r"\w{2,}", query)
+        if not tokens:
+            tokens = re.findall(r"\w{2,}", query)
+        if not tokens:
+            return []
+        match_expr = " OR ".join(f'"{t}"' for t in tokens[:12])
+        sql = """
+            SELECT rowid, source, path, text, bm25(chunks_fts) as rank
+            FROM chunks_fts
+            WHERE chunks_fts MATCH ?
+            ORDER BY rank ASC
+            LIMIT ?
+        """
+        rows = db.execute(sql, (match_expr, max(k * 3, 50))).fetchall()
+        kid_fn = getattr(_pkg(), "_knowledge_id_from_path", _knowledge_id_from_path)
+        out = []
+        for rowid, source, path, text, bm25_rank in rows:
+            if sources is not None and source not in sources:
+                continue
+            if source == "knowledge" and allowed_knowledge_source_ids is not None:
+                kid = kid_fn(path)
+                if kid is None or kid not in allowed_knowledge_source_ids:
+                    continue
+            out.append({
+                "id": rowid,
+                "source": source,
+                "path": path,
+                "text": text,
+                "bm25": float(bm25_rank),
+            })
+            if len(out) >= k:
+                break
+        return out
+    except Exception:
+        return []
+
+
+def search_vec_sqlite(qvec: list, k: int = 20, sources: Optional[set] = None,
+                      allowed_knowledge_source_ids: Optional[set] = None) -> list:
+    """Execute native vector cosine search via sqlite-vec if available.
+    Returns list of dicts: {'id': int, 'source': source, 'path': path, 'text': text, 'cos': float}.
+    """
+    if qvec is None:
+        return []
+    try:
+        from .store import _db, has_sqlite_vec
+        if not has_sqlite_vec():
+            return []
+        import numpy as np
+        import sqlite3
+        db = _db()
+        q_bytes = sqlite3.Binary(np.asarray(qvec, dtype=np.float32).tobytes())
+        sql = """
+            SELECT id, source, path, text, vec_distance_cosine(vec, ?) as dist
+            FROM chunks
+            WHERE vec IS NOT NULL
+            ORDER BY dist ASC
+            LIMIT ?
+        """
+        rows = db.execute(sql, (q_bytes, max(k * 3, 50))).fetchall()
+        kid_fn = getattr(_pkg(), "_knowledge_id_from_path", _knowledge_id_from_path)
+        out = []
+        for cid, source, path, text, dist in rows:
+            if dist is None:
+                continue
+            if sources is not None and source not in sources:
+                continue
+            if source == "knowledge" and allowed_knowledge_source_ids is not None:
+                kid = kid_fn(path)
+                if kid is None or kid not in allowed_knowledge_source_ids:
+                    continue
+            cos_sim = max(0.0, 1.0 - float(dist))
+            out.append({
+                "id": cid,
+                "source": source,
+                "path": path,
+                "text": text,
+                "cos": cos_sim,
+            })
+            if len(out) >= k:
+                break
+        return out
+    except Exception:
+        return []
+
+
+def reciprocal_rank_fusion(dense_ranks: list, sparse_ranks: list, k: int = 60,
+                           weight_dense: float = 0.5, weight_sparse: float = 0.5) -> list:
+    """Fuse dense and sparse rank results using Reciprocal Rank Fusion (Cormack et al., 2009)."""
+    scores = {}
+    items = {}
+
+    for rank, item in enumerate(dense_ranks):
+        key = (item.get("source"), item.get("path"), item.get("text"))
+        scores[key] = scores.get(key, 0.0) + (weight_dense / (k + rank))
+        if key not in items:
+            items[key] = dict(item)
+
+    for rank, item in enumerate(sparse_ranks):
+        key = (item.get("source"), item.get("path"), item.get("text"))
+        scores[key] = scores.get(key, 0.0) + (weight_sparse / (k + rank))
+        if key not in items:
+            items[key] = dict(item)
+
+    fused = []
+    for key, rrf_score in scores.items():
+        entry = dict(items[key])
+        entry["score"] = rrf_score
+        fused.append(entry)
+
+    fused.sort(key=lambda x: x["score"], reverse=True)
+    return fused
+

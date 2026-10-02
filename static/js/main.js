@@ -270,18 +270,34 @@ window.addEventListener('keydown', e => {
 });
 
 /* settings in-page modal to keep background tasks alive without page reload */
-function openSettingsModal() {
+function openSettingsModal(targetTab) {
   const m = $('settings-modal');
   const frame = $('settings-frame');
+  const tabHash = targetTab ? (targetTab.startsWith('sec-') ? targetTab : ('sec-' + targetTab)) : '';
+  const targetUrl = tabHash ? `/settings#${tabHash}` : '/settings';
   if (m) {
     m.hidden = false;
     m.removeAttribute('hidden');
     m.style.display = 'flex';
-    if (frame && (!frame.src || frame.src === 'about:blank' || frame.src.endsWith('/'))) {
-      frame.src = '/settings';
+    if (frame) {
+      if (frame.contentWindow && frame.src && frame.src !== 'about:blank' && !frame.src.endsWith('about:blank')) {
+        if (tabHash) {
+          try {
+            if (typeof frame.contentWindow.switchSettingsTab === 'function') {
+              frame.contentWindow.switchSettingsTab(tabHash);
+            } else {
+              frame.contentWindow.location.hash = '#' + tabHash;
+            }
+          } catch (_) {
+            frame.src = targetUrl;
+          }
+        }
+      } else {
+        frame.src = targetUrl;
+      }
     }
   } else {
-    location.href = '/settings';
+    location.href = targetUrl;
   }
 }
 

@@ -20,9 +20,10 @@ BUSY_TIMEOUT_MS = 10000
 
 
 class ThreadLocalDB:
-    def __init__(self, path, row_factory=None):
+    def __init__(self, path, row_factory=None, initializer=None):
         self.path = str(path)
         self._row_factory = row_factory
+        self._initializer = initializer
         self._local = threading.local()
         self._all = {}              # thread ident -> connection, so close() can reach them all
         self._lock = threading.Lock()
@@ -33,6 +34,11 @@ class ThreadLocalDB:
     def _open(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
         conn.row_factory = self._row_factory
+        if self._initializer:
+            try:
+                self._initializer(conn)
+            except Exception:
+                pass
         conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         with self._lock:
             if not self._wal_checked:

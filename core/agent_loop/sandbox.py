@@ -86,26 +86,46 @@ def validate_and_finalize_response(last_query: str, content: str, reasoning: str
 
         return "Task completed. All requested operations have been processed in the workspace.", True, "fallback confirmation"
 
-    creation_keywords = ("make", "create", "generate", "write", "build", "code", "landing page", "script")
+    creation_keywords = ("make", "create", "generate", "write", "build", "code", "landing page", "script", "implement", "add", "setup")
     query_wants_creation = any(w in last_query.lower() for w in creation_keywords)
-    if query_wants_creation and not successful_writes and not successful_edits:
-        refusal_phrases = (
-            "please specify the exact file path",
-            "please provide the code",
-            "please provide the content",
-            "specify the exact file",
-            "provide the html",
-            "provide the python",
-            "what content would you like",
-        )
-        content_low = clean_content.lower()
-        if any(rp in content_low for rp in refusal_phrases):
-            # The user asked for something to be built and the model replied by asking them
-            # for the path/code instead of picking one and doing the work -- the stall small
-            # local models fall into. The text is returned unchanged on purpose: only the
-            # outcome code changes, so the caller can record this run as a stall rather than
-            # as a normal answer. Acting on it (auto-picking a path, nudging the model) is a
-            # behaviour change that needs the eval harness to justify, so it is not done here.
-            return clean_content, False, PASSIVE_REFUSAL_NOTE
+    if is_passive_refusal(clean_content, last_query, actions_taken):
+        return clean_content, False, PASSIVE_REFUSAL_NOTE
 
     return clean_content, False, "validated"
+
+
+def is_passive_refusal(content: str, last_query: str, actions_taken: list) -> bool:
+    """True when the user asked for something to be built/coded, but the model responded
+    passively asking the user for paths/starter-code instead of calling tools."""
+    if not content or not last_query:
+        return False
+
+    creation_keywords = ("make", "create", "generate", "write", "build", "code", "landing page", "script", "implement", "add", "setup")
+    if not any(w in last_query.lower() for w in creation_keywords):
+        return False
+
+    successful_mutations = any(
+        act.get("ok") and act.get("name") in ("write_file", "edit_file", "append_file", "insert_at_line")
+        for act in (actions_taken or [])
+    )
+    if successful_mutations:
+        return False
+
+    refusal_phrases = (
+        "please specify the exact file path",
+        "please specify the file path",
+        "specify the exact file path",
+        "please provide the code",
+        "please provide the content",
+        "specify the exact file",
+        "provide the html",
+        "provide the python",
+        "what content would you like",
+        "where would you like me to save",
+        "where should i save",
+        "which file would you like",
+        "what would you like the file to be named",
+        "please provide more details about the file",
+    )
+    content_low = content.lower()
+    return any(rp in content_low for rp in refusal_phrases)

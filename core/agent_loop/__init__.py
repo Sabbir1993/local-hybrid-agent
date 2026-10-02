@@ -26,6 +26,7 @@ from .sandbox import (
     fast_sandbox_check,
     validate_and_finalize_response,
     PASSIVE_REFUSAL_NOTE,
+    is_passive_refusal,
 )
 from .compaction import (
     estimate_prompt_tokens,
@@ -74,6 +75,7 @@ __all__ = [
     "fast_sandbox_check",
     "validate_and_finalize_response",
     "PASSIVE_REFUSAL_NOTE",
+    "is_passive_refusal",
     "estimate_prompt_tokens",
     "_digest_message",
     "compact_messages",

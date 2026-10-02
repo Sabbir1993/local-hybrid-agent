@@ -75,6 +75,7 @@ from core.agent_loop import (
     validate_and_repair_tool_args,
     fast_sandbox_check,
     validate_and_finalize_response,
+    is_passive_refusal,
     PASSIVE_REFUSAL_NOTE,
     safe_parse_and_repair_args,
     MAX_CUTOFF_RETRIES,
@@ -118,6 +119,7 @@ from .constants import (
     EXECUTOR_TEST_TOOLS,
     LOOP_STOP_STREAK,
     MAX_PLAN_NUDGES,
+    MAX_PASSIVITY_NUDGES,
     NEAR_REPEAT_LIMIT,
     AGENT_RESUME_PREFIX,
     NEAR_REPEAT_WINDOW,
@@ -204,6 +206,20 @@ def _synth_detail(note: str | None) -> str | None:
     if not note or note == "validated":
         return None
     return _SYNTH_NOTE_CODES.get(note, "synth:other")
+
+
+async def _get_workspace_tree_summary() -> str:
+    """Compact directory overview to ground the model during directive nudging."""
+    try:
+        from core.agent_tools.file_ops import tool_list_files
+        res = await tool_list_files({"pattern": "*"})
+        if res and not str(res).startswith("error:"):
+            lines = [l.strip() for l in str(res).split("\n") if l.strip()][:30]
+            if lines and lines != ["(no files matched)"]:
+                return "\n".join(lines)
+    except Exception:
+        pass
+    return "(workspace directory is ready for new files)"
 
 
 def _tool_failure_code(name: str, result) -> str | None:
@@ -439,6 +455,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
         force_main_why = "resume"
         plan_nudges = 0
         narration_nudges = 0
+        passivity_nudges = 0
         # main reasons and writes the plan first, then the executor carries it out
         # (router.plan_first_categories; ends once a plan exists or after plan_first_max_steps)
         plan_first_on = bool(
@@ -1103,6 +1120,22 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                 + ". Do not stop yet — continue with the next pending step using tools. "
                             "Mark each step with update_plan_item as you finish it. If a step truly cannot "
                             "be done, mark it status='failed' with a note explaining why, then continue.")})
+                        yield f"event: delta\ndata: {json.dumps({'text': chr(10) + chr(10)})}\n\n"
+                        continue
+
+                if not tool_calls and passivity_nudges < MAX_PASSIVITY_NUDGES and step < steps - 1:
+                    if is_passive_refusal(final_content, last_query, actions_taken):
+                        passivity_nudges += 1
+                        tree_text = await _get_workspace_tree_summary()
+                        if final_content.strip():
+                            msgs.append({"role": "assistant", "content": final_content})
+                        msgs.append({"role": "user", "content": (
+                            "[directive action required] Do not ask the user for file paths or starter code. "
+                            "You are an autonomous coding agent with full workspace write permissions to execute this task.\n"
+                            f"Current workspace files:\n{tree_text}\n\n"
+                            "Pick the standard target file path (e.g., 'index.html', 'src/main.py', etc.) and call "
+                            "write_file now to create the code. Answer in plain text only after the work is written."
+                        )})
                         yield f"event: delta\ndata: {json.dumps({'text': chr(10) + chr(10)})}\n\n"
                         continue
 

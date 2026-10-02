@@ -476,7 +476,7 @@ $('rep-close').onclick = () => { $('report-modal').hidden = true; };
 $('report-modal').onclick = e => { if (e.target.id === 'report-modal') $('report-modal').hidden = true; };
 
 /* ---------------- agent docs modal ---------------- */
-$('btn-docs').onclick = () => {
+function openDocsModal() {
   // fill in the currently loaded model's exact ID (what agents must use)
   const mid = $('doc-model-id');
   if (curStatus && curStatus.pid && curStatus.model) {
@@ -494,8 +494,11 @@ $('btn-docs').onclick = () => {
   } else if (selected) {
     ex.textContent = ex.textContent.replace(/model="[^"]*"/, `model="E:\\AI\\Models\\${selected}"`);
   }
-  $('docs-modal').hidden = false;
-};
+  const dm = $('docs-modal');
+  if (dm) { dm.hidden = false; dm.style.display = 'flex'; }
+}
+window.openDocsModal = openDocsModal;
+if ($('btn-docs')) $('btn-docs').onclick = openDocsModal;
 $('docs-close').onclick = () => { $('docs-modal').hidden = true; };
 $('docs-modal').onclick = e => { if (e.target.id === 'docs-modal') $('docs-modal').hidden = true; };
 document.querySelectorAll('.doc-copy-btn').forEach(b => {

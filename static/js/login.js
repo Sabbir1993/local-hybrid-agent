@@ -56,6 +56,11 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
           errBox.textContent = en.data.detail || 'Could not start MFA enrollment';
           return;
         }
+        const qrImg = document.getElementById('enroll-qr');
+        if (qrImg && en.data.otpauth_uri) {
+          qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(en.data.otpauth_uri)}`;
+          qrImg.style.display = 'block';
+        }
         document.getElementById('enroll-secret').textContent = en.data.secret;
         document.getElementById('enroll-uri').textContent = en.data.otpauth_uri;
         document.getElementById('enroll-codes').textContent = (en.data.backup_codes || []).join('  ');

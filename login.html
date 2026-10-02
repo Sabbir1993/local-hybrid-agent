@@ -39,6 +39,9 @@
   </form>
   <form id="enroll-form" style="display:none">
     <div id="step-enroll" style="display:none">
+      <div style="display:flex;justify-content:center;margin:12px 0;">
+        <img id="enroll-qr" src="" alt="TOTP QR Code" width="160" height="160" style="display:none;background:#fff;padding:8px;border-radius:6px;border:1px solid var(--border);" />
+      </div>
       <label>Secret (type into your authenticator app)</label>
       <code id="enroll-secret" style="display:block;word-break:break-all;font-size:12px;margin:4px 0;"></code>
       <label>Setup URI (copy into the app if it supports it)</label>

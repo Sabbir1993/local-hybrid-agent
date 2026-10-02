@@ -1,39 +1,43 @@
 {
-  "ts": 1790956257.1120994,
+  "ts": 1790963922.3100631,
   "offline": [],
   "live": [],
   "live_summary": {
-    "tasks": 1,
-    "hard_tasks": 1,
-    "runs": 1,
+    "tasks": 3,
+    "hard_tasks": 3,
+    "runs": 3,
     "pass_rate": 0.0,
     "ci95": [
       0.0,
-      0.793
+      0.562
     ],
     "hard_pass_rate": 0.0,
     "hard_ci95": [
       0.0,
-      0.793
+      0.562
     ],
-    "stable_tasks": 1,
+    "stable_tasks": 3,
     "flaky_tasks": [],
     "failing_tasks": [
-      "compute_arithmetic"
+      "compute_arithmetic",
+      "compute_no_fabrication",
+      "compute_string_work"
     ],
     "by_category": {
       "compute": {
-        "n": 1,
+        "n": 3,
         "n_pass": 0,
-        "tasks": 1,
+        "tasks": 3,
         "failing": [
-          "compute_arithmetic"
+          "compute_arithmetic",
+          "compute_no_fabrication",
+          "compute_string_work"
         ],
         "flaky": [],
         "pass_rate": 0.0
       }
     },
-    "wall_clock_s": 0.2
+    "wall_clock_s": 0.0
   },
   "live_records": [
     {
@@ -50,18 +54,98 @@
       "stable": true,
       "flaky": false,
       "problems": [
-        "transport error: HTTP 401 - sign in first (--live-user/--live-password)"
+        "transport error: HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI).",
+        "missing tool: run_python",
+        "answer missing '3973' (got '')",
+        "no tools and no answer"
       ],
       "tools_seen": [],
       "lanes_seen": [],
-      "duration_s": null,
+      "duration_s": {
+        "min": 0.0,
+        "max": 0.0,
+        "mean": 0.0
+      },
       "runs": [
         {
           "ok": false,
-          "duration_s": null,
+          "duration_s": 0.0,
           "tools": [],
           "lanes": [],
-          "error": "HTTP 401 - sign in first (--live-user/--live-password)"
+          "error": "HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI)."
+        }
+      ]
+    },
+    {
+      "name": "compute_no_fabrication",
+      "category": "compute",
+      "soft": false,
+      "n": 1,
+      "n_pass": 0,
+      "pass_rate": 0.0,
+      "ci95": [
+        0.0,
+        0.793
+      ],
+      "stable": true,
+      "flaky": false,
+      "problems": [
+        "transport error: HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI).",
+        "missing tool: run_python",
+        "answer missing '1079' (got '')",
+        "answer missing '80' (got '')",
+        "no tools and no answer"
+      ],
+      "tools_seen": [],
+      "lanes_seen": [],
+      "duration_s": {
+        "min": 0.0,
+        "max": 0.0,
+        "mean": 0.0
+      },
+      "runs": [
+        {
+          "ok": false,
+          "duration_s": 0.0,
+          "tools": [],
+          "lanes": [],
+          "error": "HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI)."
+        }
+      ]
+    },
+    {
+      "name": "compute_string_work",
+      "category": "compute",
+      "soft": false,
+      "n": 1,
+      "n_pass": 0,
+      "pass_rate": 0.0,
+      "ci95": [
+        0.0,
+        0.793
+      ],
+      "stable": true,
+      "flaky": false,
+      "problems": [
+        "transport error: HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI).",
+        "missing tool: run_python",
+        "answer missing '3' (got '')",
+        "no tools and no answer"
+      ],
+      "tools_seen": [],
+      "lanes_seen": [],
+      "duration_s": {
+        "min": 0.0,
+        "max": 0.0,
+        "mean": 0.0
+      },
+      "runs": [
+        {
+          "ok": false,
+          "duration_s": 0.0,
+          "tools": [],
+          "lanes": [],
+          "error": "HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI)."
         }
       ]
     }
@@ -70,7 +154,8 @@
   "env": {
     "mode": "auto",
     "temperature": 0.3,
-    "ts": 1790956257,
-    "git_sha": "91f1dd5"
+    "ts": 1790963923,
+    "git_sha": "33c58cb",
+    "degraded": false
   }
 }

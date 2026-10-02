@@ -11,6 +11,7 @@ LOOP_STOP_STREAK = 3
 # times a run may be sent back to work when it answers with plan steps still pending,
 # or with a bare announcement of work it never started (core/agent_loop/narration.py)
 MAX_PLAN_NUDGES = 3
+MAX_PASSIVITY_NUDGES = 2
 
 
 # consecutive executor steps that trip the SAME escalation reason before the run

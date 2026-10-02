@@ -648,11 +648,12 @@ header .icon-btn[data-tip]:focus-visible::after {
 
 .user-menu { position: relative; display: inline-flex; }
 .user-menu-dropdown {
-  position: absolute; top: calc(100% + 8px); right: 0; width: 280px; z-index: 500;
+  position: absolute; top: calc(100% + 8px); right: 0; width: 280px; z-index: 1200;
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   box-shadow: 0 12px 32px rgba(0,0,0,.4); padding: 8px; display: none;
 }
 .user-menu-dropdown.open { display: block; }
+.user-menu:has(.user-menu-dropdown.open) #btn-user-menu::after { display: none !important; }
 .user-menu-email {
   font-size: 12.5px; color: var(--text); font-family: var(--mono, monospace);
   padding: 8px 10px 10px; margin-bottom: 4px; word-break: break-all; line-height: 1.5;

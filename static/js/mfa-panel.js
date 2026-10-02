@@ -95,10 +95,16 @@ async function loadMfaPanel() {
       msg.textContent = '';
       const show = personal.querySelector('#mfa-enroll-show');
       show.innerHTML = `
-        <div class="dim" style="font-size:12px">Type this secret into your authenticator app (or copy the setup URI):</div>
-        <code style="display:block;word-break:break-all;font-size:12px;margin:4px 0;">${d.secret}</code>
-        <code style="display:block;word-break:break-all;font-size:10px;margin:4px 0;">${d.otpauth_uri}</code>
-        <div class="dim" style="font-size:12px">Backup codes — save these now, each works once:</div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin:12px 0;">
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&amp;data=${encodeURIComponent(d.otpauth_uri)}" alt="TOTP QR Code" width="160" height="160" style="background:#fff;padding:8px;border-radius:6px;border:1px solid var(--border);display:block;" />
+          <div style="flex:1;min-width:200px;">
+            <div class="dim" style="font-size:12px">Scan the QR code with Google Authenticator, 1Password, etc. or enter secret:</div>
+            <code style="display:block;word-break:break-all;font-size:13px;font-weight:600;margin:6px 0;letter-spacing:1px;">${d.secret}</code>
+            <div class="dim" style="font-size:11px">Setup URI:</div>
+            <code style="display:block;word-break:break-all;font-size:10px;margin:2px 0;">${d.otpauth_uri}</code>
+          </div>
+        </div>
+        <div class="dim" style="font-size:12px;margin-top:10px">Backup codes — save these now, each works once:</div>
         <code style="display:block;word-break:break-all;font-size:12px;margin:4px 0;">${d.backup_codes.join('  ')}</code>
         <label style="display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:600;color:var(--dim);margin-top:10px;margin-bottom:4px">Code from the app
           <input type="text" id="mfa-confirm-code" inputmode="numeric" placeholder="123456" style="width:140px;"></label>

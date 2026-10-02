@@ -39,8 +39,11 @@ from .indexing import (
     memory_background_task,
 )
 from .search import (
+    reciprocal_rank_fusion,
+    search_fts5,
     search_knowledge_hybrid,
     search_memory_hybrid,
+    search_vec_sqlite,
 )
 from .store import (
     _already_indexed,
@@ -51,6 +54,8 @@ from .store import (
     clear_chat_history_chunks,
     delete_knowledge_chunks,
     delete_session_chunks,
+    has_fts5,
+    has_sqlite_vec,
 )
 
 __all__ = [
@@ -98,4 +103,9 @@ __all__ = [
     "memory_background_task",
     "search_memory_hybrid",
     "search_knowledge_hybrid",
+    "search_fts5",
+    "search_vec_sqlite",
+    "reciprocal_rank_fusion",
+    "has_fts5",
+    "has_sqlite_vec",
 ]

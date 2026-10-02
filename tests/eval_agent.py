@@ -341,18 +341,136 @@ LIVE_TASKS = [
 LIVE_WORKSPACE = None
 
 
-def _live_login(base: str, username: str, password: str, timeout_s: float = 60):
+def _abort(msg: str) -> None:
+    """Print and exit 2. Exit 2 means 'you invoked this wrong'; exit 1 is reserved for 'the
+    agent failed a task'. Those are different problems and should not look the same."""
+    print("\n" + msg, file=sys.stderr)
+    raise SystemExit(2)
+
+
+def _live_preflight(base: str, timeout_s: float = 10) -> None:
+    """Fail in under a second if the server is not reachable at all.
+
+    Reachability ONLY. This deliberately does not treat 401 as a problem: an anonymous probe
+    against an auth-required server returns 401 whether or not you went on to supply valid
+    credentials, so gating on it here rejected every correctly-configured run. Credentials are
+    the login step's business, and a wrong guess there is reported against the account, not
+    the server.
+
+    Before this existed, a server that was not listening raised an unhandled
+    httpx.ConnectError traceback out of _live_login, and a server that was listening but
+    rejecting the session made all 22 tasks x 5 repeats fail one 45s timeout at a time -
+    roughly 90 minutes to learn you were not signed in.
+    """
+    import httpx
+    try:
+        httpx.get(f"{base}/control/status", timeout=timeout_s)
+    except httpx.ConnectError:
+        _abort(f"live eval: nothing is listening on {base}.\n"
+               "  Start the app first, e.g.  python server_manager.py --port 8000\n"
+               "  then re-run with --base <url> if it is on a different port.")
+    except httpx.HTTPError as e:
+        _abort(f"live eval: could not reach {base} ({type(e).__name__}: {e})")
+    # Any HTTP status means the server answered. 401/403 here is expected and fine.
+
+
+def _arm_csrf(client, base: str) -> None:
+    """Echo the CSRF cookie as the X-CSRF-Token header, exactly the way the frontend does.
+
+    core/csrf.py rejects every mutating request that carries a session cookie without a
+    matching header (403 "csrf token missing or invalid"). A benchmark harness that logs in
+    and then POSTs without it measures nothing - every task fails identically before the
+    agent loop ever sees the prompt. This was the actual cause of the first live smoke test
+    reading 0/3: MFA worked, the session was valid, and every task still 403'd.
+
+    Set as a client-level default header so client.stream() inherits it.
+    """
+    csrf = client.cookies.get("a770_csrf")
+    if csrf:
+        client.headers["X-CSRF-Token"] = csrf
+    else:
+        _abort(f"live eval: login to {base} returned 200 but set no CSRF cookie. "
+               "The session is incomplete - this is a server bug, not an eval bug.")
+
+
+def _totp_code(cmd: str) -> str:
+    """Run a user-supplied command and take its stdout as the current TOTP code.
+
+    Deliberately NOT a --live-totp-secret option that reads users.totp_secret out of auth.db.
+    That is the same move as the db_explorer hole this repo just closed: the seed turns into
+    a valid code for the account forever, and a benchmark harness is exactly where you do not
+    want a credential-persistence path. This keeps the secret inside whatever the user already
+    trusts (oathtool, a password-manager CLI, an authenticator bridge).
+    """
+    import subprocess
+    try:
+        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        _abort(f"live eval: --live-totp-cmd failed to run ({type(e).__name__}: {e})")
+    digits = "".join(ch for ch in (out.stdout or "") if ch.isdigit())
+    if not digits:
+        _abort(f"live eval: --live-totp-cmd printed no digits (stdout={out.stdout!r}, "
+               f"stderr={(out.stderr or '')[:80]!r})")
+    return digits[:6].rjust(6, "0")
+
+
+def _live_login(base: str, username: str, password: str, totp: str = None,
+                timeout_s: float = 60):
     """Session login for live runs (mirrors a real user; API tokens are fenced
-    off admin perms). The eval account must NOT have MFA: a benchmark runner
-    cannot answer a TOTP prompt, so it fails fast instead of hanging."""
+    off admin perms).
+
+    MFA is supported through the real two-step flow the UI uses: the password buys a
+    short-lived, single-use, IP-bound ticket (never a session), and /auth/mfa/verify trades
+    ticket + code for the session cookies. A static `totp` works because login happens once
+    per run, not once per task.
+    """
     import httpx
     client = httpx.Client(timeout=httpx.Timeout(timeout_s))
-    r = client.post(f"{base}/auth/login", json={"username": username, "password": password})
+    try:
+        r = client.post(f"{base}/auth/login", json={"username": username, "password": password})
+    except httpx.ConnectError:
+        client.close()
+        _abort(f"live eval: nothing is listening on {base} (connection refused during login).\n"
+               "  Start the app first, e.g.  python server_manager.py --port 8000")
+    except httpx.HTTPError as e:
+        client.close()
+        _abort(f"live eval: login transport error: {type(e).__name__}: {e}")
     data = r.json() if r.status_code == 200 else {}
-    if r.status_code != 200 or "user" not in data:
-        if data.get("mfa_required"):
-            raise SystemExit("live eval user must not have MFA enabled (runner cannot answer TOTP)")
-        raise SystemExit(f"live login failed: HTTP {r.status_code} {str(data)[:150]}")
+    if r.status_code != 200:
+        client.close()
+        _abort(f"live login failed: HTTP {r.status_code} {str(data)[:150]}")
+
+    if data.get("mfa_required"):
+        if data.get("enroll_required"):
+            client.close()
+            _abort("live eval: this account is required to enrol MFA but has not. Enrol in the "
+                   "UI first, or point --live-user at a dedicated non-MFA eval account.")
+        if not totp:
+            client.close()
+            _abort("live eval: this account has TOTP enabled and the harness cannot answer a "
+                   "prompt.\n"
+                   "  Either pass --live-totp <6-digit code>, or --live-totp-cmd '<command that "
+                   "prints it>' (e.g. 'oathtool --totp -b <secret>'),\n"
+                   "  or --live-user a dedicated account with MFA off. A dedicated account is "
+                   "recommended: this suite writes files into the workspace.")
+        ticket = data.get("ticket") or ""
+        try:
+            v = client.post(f"{base}/auth/mfa/verify", json={"ticket": ticket, "code": totp})
+        except httpx.HTTPError as e:
+            client.close()
+            _abort(f"live eval: MFA verify transport error: {type(e).__name__}: {e}")
+        if v.status_code != 200:
+            client.close()
+            _abort(f"live MFA verify failed: HTTP {v.status_code} {v.text[:150]}\n"
+                   "  A wrong code burns one of 5 guesses on the ticket and the ticket then "
+                   "expires after 5 minutes, so re-fetch a fresh code and log in again.")
+        _arm_csrf(client, base)
+        return client
+
+    if "user" not in data:
+        client.close()
+        _abort(f"live login returned no user and no MFA challenge: {str(data)[:150]}")
+    _arm_csrf(client, base)
     return client
 
 
@@ -376,11 +494,26 @@ def _live_env(base: str, client, mode: str, temperature) -> dict:
     return env
 
 
+def _finish_early(task: dict, rec: dict, t0: float) -> dict:
+    """Shared tail for every run_live_task exit that happens before the stream is consumed.
+
+    These exits used to `return rec` directly, which skipped both duration_s and the problems
+    computation - so an HTTP error surfaced as `run 1/1 Nones` with no explanation attached,
+    and the operator had to read eval_results_live.json to learn it was a 403. A failed run
+    must always carry its duration and its reasons.
+    """
+    rec["duration_s"] = round(time.time() - t0, 1)
+    rec["problems"] = eval_tasks.check_record(task, rec, workspace=LIVE_WORKSPACE or None)
+    rec["ok"] = not rec["problems"]
+    return rec
+
+
 def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, client=None) -> dict:
     import httpx
     rec = {"name": task["name"], "tools": [], "lanes": [], "escalated": False,
            "final_len": 0, "final_text": "", "ok": False, "soft": task.get("soft", False),
-           "error": None, "duration_s": None}
+           "error": None, "duration_s": None, "events_seen": [], "done_state": None,
+           "guard_hits": [], "kb_blocked": None}
     payload = {"messages": [{"role": "user", "content": task["prompt"]}],
                "mode": mode, "max_steps": 12, "temperature": 0.3}
     t0 = time.time()
@@ -390,11 +523,18 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, clie
     try:
         with client.stream("POST", f"{base}/agent/run", json=payload) as resp:
             if resp.status_code == 401:
-                rec["error"] = "HTTP 401 - sign in first (--live-user/--live-password)"
-                return rec
+                rec["error"] = ("HTTP 401 - session missing or expired. If you logged in, the "
+                                "CSRF header may be missing: the harness now mirrors the "
+                                "frontend's X-CSRF-Token echo, so report this as an eval bug.")
+                return _finish_early(task, rec, t0)
+            if resp.status_code == 403:
+                rec["error"] = ("HTTP 403 - forbidden. Either the CSRF header is missing "
+                                "(eval bug - report it) or the account lacks the agent "
+                                "permission (check Users/Roles in the UI).")
+                return _finish_early(task, rec, t0)
             if resp.status_code != 200:
                 rec["error"] = f"HTTP {resp.status_code}"
-                return rec
+                return _finish_early(task, rec, t0)
             event = None
             for line in resp.iter_lines():
                 line = line.strip()
@@ -405,18 +545,38 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, clie
                         data = json.loads(line[6:])
                     except Exception:
                         continue
+                    if event not in rec["events_seen"]:
+                        rec["events_seen"].append(event)
                     if event == "lane":
                         rec["lanes"].append(data.get("lane"))
                     elif event == "tool_call":
                         rec["tools"].append(data.get("name"))
+                    elif event == "tool_result":
+                        pass    # counted via tool_call; kept here so it is not "unknown"
                     elif event == "delta":
                         rec["final_len"] += len(data.get("text") or "")
                         rec["final_text"] += data.get("text") or ""
+                    elif event == "guard":
+                        rec["guard_hits"].append(data.get("rule") or data.get("message"))
+                    elif event == "kb_blocked":
+                        rec["kb_blocked"] = data.get("message")
                     elif event == "done":
+                        # The payload names the outcome: completed, stopped (with a reason
+                        # like max_steps / loop / budget), failed (with a reason kind), or
+                        # filtered. Dropping it is how a run that died in setup looked
+                        # identical to a run where the model said nothing.
+                        rec["done_state"] = data.get("state")
+                        if data.get("state") == "failed":
+                            rec["error"] = (f"agent run failed: "
+                                            f"{data.get('reason') or data}")
+                        elif data.get("note") == "response filtered by policy":
+                            rec["error"] = "response filtered by policy"
                         break
     except Exception as e:
         rec["error"] = f"{type(e).__name__}: {e}"
         rec["duration_s"] = round(time.time() - t0, 1)
+        rec["problems"] = eval_tasks.check_record(task, rec, workspace=LIVE_WORKSPACE or None)
+        rec["ok"] = not rec["problems"]
         return rec
     finally:
         if own_client:
@@ -455,9 +615,16 @@ def run_live_suite(base: str, tasks, mode: str, repeats: int, session=None,
                 run_live_task(base, bare, mode, timeout_s=timeout_s, client=session)
             rec = run_live_task(base, task, mode, timeout_s=timeout_s, client=session)
             runs.append(rec)
+            why = ""
+            if not rec["ok"]:
+                bits = list((rec.get("problems") or [])[:2])
+                if not bits and rec.get("done_state") not in (None, "completed"):
+                    bits = [f"done={rec['done_state']}"]
+                if not bits and rec.get("events_seen"):
+                    bits = [f"events={','.join(rec['events_seen'])}"]
+                why = "  " + ";".join(bits) if bits else ""
             print(f"    [{'PASS' if rec['ok'] else 'FAIL'}] {task['name']} "
-                  f"run {i + 1}/{repeats} {rec['duration_s']}s"
-                  + ("  " + ";".join(rec['problems'][:2]) if rec.get("problems") else ""))
+                  f"run {i + 1}/{repeats} {rec['duration_s']}s{why}")
         records.append(eval_stats.summarize_task(
             task["name"], runs, category=task.get("category", "misc"),
             soft=task.get("soft", False)))
@@ -514,6 +681,14 @@ def main() -> int:
                     help="drop tasks marked soft, so every task in the run gates")
     ap.add_argument("--live-timeout", type=float, default=600.0,
                     help="per-run timeout in seconds (default 600)")
+    ap.add_argument("--live-totp", default=None,
+                    help="6-digit TOTP code for an MFA-enabled account. Only needed once per "
+                         "run (login happens before the first task), not once per task")
+    ap.add_argument("--live-totp-cmd", default=None,
+                    help="command that prints the current TOTP code, e.g. "
+                         "'oathtool --totp -b <secret>'. Preferred over --live-totp for a "
+                         "long run. The harness deliberately has no option to read "
+                         "users.totp_secret out of auth.db")
     args = ap.parse_args()
 
     results = {"ts": time.time(), "offline": [], "live": []}
@@ -560,17 +735,48 @@ def main() -> int:
         print(f" LIVE SUITE ({len(tasks)} tasks x {args.live_repeats} repeats, {gating} gating)")
         print(f" base={args.base} mode={args.mode} workspace={args.live_workspace or '(remote)'}")
         print("=" * 60)
+        # Reachability + auth first, before any task runs. Both failure modes used to surface
+        # as per-task timeouts across the whole suite, which is a 90-minute way to learn you
+        # forgot to start the server.
+        _live_preflight(args.base)
         session = None
+        totp = args.live_totp
+        if args.live_totp_cmd:
+            totp = _totp_code(args.live_totp_cmd)
         if args.live_user:
             if not args.live_password:
                 print("live eval needs --live-password with --live-user")
                 return 2
-            session = _live_login(args.base, args.live_user, args.live_password)
+            session = _live_login(args.base, args.live_user, args.live_password, totp=totp)
+            if totp:
+                print("  MFA: second factor supplied")
+        else:
+            print("  NOTE: no --live-user given. If the server requires a session every task "
+                  "will fail with HTTP 401 - that is an auth problem, not an agent result.")
         env = _live_env(args.base, session, args.mode, 0.3)
         print(f"  env: {json.dumps(env)}")
         if not args.live_workspace and any(t.get("expect_files") for t in tasks):
-            print("  NOTE: no --live-workspace, so expect_files checks will be reported as "
-                  "skipped, not passed")
+            print("  NOTE: no --live-workspace, so expect_files checks will report as skipped, "
+                  "not passed - the files/docs categories measure little without it.")
+        # Safety notice, not a disclaimer. Two tasks deliberately ask the agent to do
+        # destructive or overreaching things (delete every file in the workspace; echo a
+        # secret back). They exist to prove the guard/refusal behaviour. If the agent gets
+        # one wrong AND --live-workspace is your real working folder, the eval is the thing
+        # that deletes it. A scratch directory is the cheap insurance.
+        destructive = [t["name"] for t in tasks
+                       if t.get("category") in ("guard", "restraint")]
+        if destructive:
+            print(f"  NOTE: {len(destructive)} task(s) probe refusal behaviour "
+                  f"({', '.join(destructive[:4])}{'...' if len(destructive) > 4 else ''}). "
+                  "Run --live-repeats against a scratch workspace first.")
+        if args.live_workspace:
+            from pathlib import Path as _P
+            ws = _P(args.live_workspace)
+            if not ws.is_dir():
+                print(f"  WARNING: --live-workspace {ws} is not a directory; file checks will "
+                      "report as skipped.")
+            else:
+                print(f"  workspace: {ws.resolve()}")
         suite = run_live_suite(args.base, tasks, args.mode, args.live_repeats,
                                session=session, timeout_s=args.live_timeout)
         if session is not None:

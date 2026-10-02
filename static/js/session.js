@@ -48,15 +48,78 @@
     return resp;
   };
 
+  function esc(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function navigateSettings(tab) {
+    if (typeof window.openSettingsModal === 'function') {
+      window.openSettingsModal(tab);
+    } else if (typeof window.switchSettingsTab === 'function') {
+      window.switchSettingsTab(tab);
+    } else {
+      location.href = tab ? `/settings#${tab}` : '/settings';
+    }
+  }
+
   function buildUserMenu(user) {
     const trigger = document.getElementById('btn-user-menu');
     if (!trigger) return;
 
+    // Clean up any previously attached dropdown
+    const existing = trigger.parentElement ? trigger.parentElement.querySelector('.user-menu-dropdown') : null;
+    if (existing) existing.remove();
+
     const dd = document.createElement('div');
     dd.className = 'user-menu-dropdown';
+
+    const label = user.display_name || user.username || 'User';
+    const isSuper = !!user.is_super_admin;
+    const canManageUsers = isSuper || (window.__perms && window.__perms.has('users.manage'));
+
     dd.innerHTML = `
-      <div class="user-menu-email"></div>
-      <button type="button" class="user-menu-item" data-action="change-pwd"><svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/></svg><span>Change password</span></button>
+      <div class="user-menu-email">
+        <div style="font-weight:600; font-size:13px; color:var(--text);">${esc(label)}</div>
+        ${isSuper ? '<span class="user-menu-badge">super admin</span>' : ''}
+        ${user.username && user.display_name && user.display_name !== user.username ? `<div class="dim" style="font-size:11px; margin-top:2px;">@${esc(user.username)}</div>` : ''}
+      </div>
+
+      <button type="button" class="user-menu-item" data-action="theme" title="Quick cycle color theme">
+        <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.563-2.512 5.563-5.563C22 6.5 17.5 2 12 2z"/></svg>
+        <span>Theme</span>
+      </button>
+
+      <button type="button" class="user-menu-item" data-action="docs" title="Connect external agents, view OpenAI API compatibility &amp; examples">
+        <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M6 6h10"/><path d="M6 10h10"/></svg>
+        <span>Docs &amp; Guide</span>
+      </button>
+
+      <button type="button" class="user-menu-item" data-action="nav-settings" title="System Settings and Preferences">
+        <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span>Settings</span>
+      </button>
+
+      <button type="button" class="user-menu-item" data-action="nav-mfa" title="Configure Two-Factor Authentication (TOTP)">
+        <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <span>Two-Factor Auth (2FA)</span>
+      </button>
+
+      ${canManageUsers ? `
+      <button type="button" class="user-menu-item" data-action="nav-users" title="Manage Users and RBAC Roles">
+        <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span>Users &amp; Roles</span>
+      </button>
+      <button type="button" class="user-menu-item" data-action="nav-session" title="Manage Session Expiry &amp; Security Policy">
+        <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <span>Session Security</span>
+      </button>` : ''}
+
+      <div class="user-menu-sep"></div>
+
+      <button type="button" class="user-menu-item" data-action="change-pwd">
+        <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/></svg>
+        <span>Change password</span>
+      </button>
       <div class="user-menu-pwd-form" style="display:none">
         <input type="password" placeholder="Current password" data-field="current" autocomplete="current-password">
         <input type="password" placeholder="New password" data-field="new" autocomplete="new-password">
@@ -68,23 +131,19 @@
         </div>
       </div>
       <div class="user-menu-sep"></div>
-      <button type="button" class="user-menu-item danger" data-action="logout"><svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg><span>Log out</span></button>
+      <button type="button" class="user-menu-item danger" data-action="logout">
+        <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+        <span>Log out</span>
+      </button>
     `;
+
     trigger.parentElement.style.position = 'relative';
     trigger.parentElement.classList.add('user-menu');
     trigger.parentElement.appendChild(dd);
 
-    const emailEl = dd.querySelector('.user-menu-email');
-    const label = user.display_name || user.username;
-    emailEl.textContent = label;
-    if (user.is_super_admin) {
-      emailEl.innerHTML = esc(label) + '<br><span class="user-menu-badge">super admin</span>';
-    }
-
     const pwdForm = dd.querySelector('.user-menu-pwd-form');
     const pwdMsg = dd.querySelector('.user-menu-msg');
     if (user.must_change_password) {
-      // first sign-in / admin reset: open the form straight away (PCI DSS 8.3.5)
       setTimeout(() => {
         dd.classList.add('open');
         pwdForm.style.display = 'flex';
@@ -100,22 +159,50 @@
     };
 
     const closeMenu = () => {
-      if (user.must_change_password) return;   // the server refuses everything else until it's done
-      dd.classList.remove('open'); resetPwdForm();
+      if (user.must_change_password) return;
+      dd.classList.remove('open');
+      resetPwdForm();
     };
 
-    trigger.addEventListener('click', (e) => {
+    trigger.onclick = (e) => {
       e.stopPropagation();
       dd.classList.toggle('open');
-    });
+    };
+
     document.addEventListener('click', (e) => {
-      if (dd.classList.contains('open') && !dd.contains(e.target) && e.target !== trigger) closeMenu();
+      if (dd.classList.contains('open') && !dd.contains(e.target) && !trigger.contains(e.target)) {
+        closeMenu();
+      }
     });
 
     dd.addEventListener('click', (e) => {
-      const action = e.target.getAttribute('data-action');
-      if (!action) return;
-      if (action === 'change-pwd') {
+      const item = e.target.closest('[data-action]');
+      if (!item) return;
+      const action = item.getAttribute('data-action');
+
+      if (action === 'theme') {
+        if (typeof cycleTheme === 'function') cycleTheme();
+      } else if (action === 'docs') {
+        closeMenu();
+        if (typeof window.openDocsModal === 'function') {
+          window.openDocsModal();
+        } else {
+          const dm = document.getElementById('docs-modal');
+          if (dm) { dm.hidden = false; dm.style.display = 'flex'; }
+        }
+      } else if (action === 'nav-settings') {
+        closeMenu();
+        navigateSettings('sec-theme');
+      } else if (action === 'nav-mfa') {
+        closeMenu();
+        navigateSettings('sec-mfa');
+      } else if (action === 'nav-users') {
+        closeMenu();
+        navigateSettings('sec-users');
+      } else if (action === 'nav-session') {
+        closeMenu();
+        navigateSettings('sec-session');
+      } else if (action === 'change-pwd') {
         pwdForm.style.display = pwdForm.style.display === 'none' ? 'flex' : 'none';
       } else if (action === 'pwd-cancel') {
         if (user.must_change_password) return;
@@ -249,6 +336,19 @@
     const idle = Date.now() - lastActive;
     if (idle >= idleMs) idleLogout();
     else if (idle >= idleMs - 60 * 1000) showIdleWarning();
+  }
+
+  const earlyTrigger = document.getElementById('btn-user-menu');
+  if (earlyTrigger) {
+    earlyTrigger.onclick = (e) => {
+      e.stopPropagation();
+      const dd = document.querySelector('.user-menu-dropdown');
+      if (dd) {
+        dd.classList.toggle('open');
+      } else {
+        navigateSettings('sec-mfa');
+      }
+    };
   }
 
   window.__sessionReady = fetch('/auth/me').then(async (resp) => {

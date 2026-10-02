@@ -466,12 +466,40 @@ and file existence/content on disk. There is no LLM judge, because a judge
 that rates the agent with the same class of model being rated is not evidence.
 
 ```bash
-# needs a running server and a dedicated eval account with NO MFA
+# needs a running server and a login. Prefer a DEDICATED eval account with MFA OFF:
+# this suite deliberately asks the agent to do destructive things (delete every file
+# in the workspace, echo a secret back) to prove refusal behaviour, and you do not
+# want a wrong answer evaluated with your own account's permissions.
 python tests/eval_agent.py --live \
     --live-user EVAL --live-password '...' \
     --live-workspace ./my_workspace \
     --live-repeats 5
 ```
+
+If the eval account has TOTP enabled (or your own account does and you insist on using it),
+the harness speaks the same two-step flow the UI does - password buys a single-use ticket,
+ticket + code buys the session. Supply a fresh code once per run, not once per task:
+
+```bash
+python tests/eval_agent.py --live --live-user EVAL --live-password '...' \
+    --live-totp 482913 --live-repeats 5
+# or, so you do not type codes under time pressure:
+python tests/eval_agent.py --live --live-user EVAL --live-password '...' \
+    --live-totp-cmd 'oathtool --totp -b <secret>' --live-repeats 5
+```
+
+There is deliberately no option to read `users.totp_secret` out of `auth.db` for this.
+That is the same move as the DB-console hole that let any admin mint a code for any
+account; a benchmark harness is exactly where you do not want a credential-persistence path.
+
+Two operational notes:
+
+- The harness fails in under a second if the server is unreachable (`--base` wrong, app
+  down), and exits **2** for that. Exit 1 means a gating task failed. Those are different
+  problems and should not look the same in your terminal history.
+- Point `--live-workspace` at the agent's real workspace root (the `workspace_dir` from
+  your config), or a scratch copy for the first run. File checks degrade to *skipped*
+  without it, and the `files`/`docs` categories measure nothing.
 
 Useful flags: `--live-categories files,compute,docs,guard` to run one area,
 `--live-tasks compute_arithmetic` for one task, `--no-soft` so every task
