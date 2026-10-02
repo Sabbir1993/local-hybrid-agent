@@ -106,6 +106,9 @@ def _exec(sql: str, params: tuple = ()) -> None:
 # fails 6% of the time" is unactionable: the number never says which of
 # no-match / ambiguous / drift / verify-failed the model actually hit.
 _TOOL_ERR_RULES = (
+    ("no model is available", None, "no_model"),
+    ("unknown role", None, "unknown_role"),
+    ("requires a non-empty task", None, "invalid_args"),
     ("hunk", "drifted", "diff_drift"),
     ("hunk", "match", "ambiguous"),
     ("hunks overlap", None, "diff_malformed"),

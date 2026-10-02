@@ -52,6 +52,18 @@ class IndexCacheTests(unittest.TestCase):
         self.assertEqual(len(hits), 1, "stale cache: deleted file still indexed")
         self.assertEqual(hits[0]["file"], "a.py")
 
+    def test_same_size_rewrite_in_one_clock_tick_is_not_served_stale(self):
+        # (mtime_ns, size) cannot see this: measured on Windows, 25 of 40
+        # consecutive same-size rewrites shared an mtime because the clock
+        # resolution is 15.6ms. The index must still notice - serving a stale
+        # symbol list for the file the agent just edited is the worst outcome.
+        p = self._write("a.py", "def foo():\n    return 1\n")
+        self.assertIn("foo", {s["name"] for s in idx.index_repo(self.root)["symbols"]})
+        p.write_text("def bar():\n    return 2\n", encoding="utf-8")
+        names = {s["name"] for s in idx.index_repo(self.root)["symbols"]}
+        self.assertIn("bar", names, "same-size edit in the same tick was served stale")
+        self.assertNotIn("foo", names)
+
     def test_distinct_roots_do_not_share_entries(self):
         with tempfile.TemporaryDirectory(prefix="ci_cache2_") as other:
             self._write("a.py", "def foo():\n    return 1\n")

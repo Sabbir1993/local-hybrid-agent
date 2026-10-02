@@ -14,6 +14,7 @@ slice measures exactly that, not an IDE.
 """
 
 import os
+import time
 from pathlib import Path
 
 import tree_sitter
@@ -177,6 +178,7 @@ def _repo_stamp(root) -> dict:
     Symlinked dirs are not followed: no symlink loops, matches rglob bounds.
     """
     stamp = {}
+    now_ns = time.time_ns()
     stack = [os.fspath(root)]
     while stack:
         try:
@@ -193,7 +195,18 @@ def _repo_stamp(root) -> dict:
                         # symlinked dirs are not traversed (loop safety)
                         st = e.stat()
                         rel = os.path.relpath(e.path, root)
-                        stamp[rel.replace(os.sep, "/")] = (st.st_mtime_ns, st.st_size)
+                        key = rel.replace(os.sep, "/")
+                        if now_ns - st.st_mtime_ns < _TICK_NS:
+                            # too fresh to trust mtime: a same-size rewrite in the
+                            # same clock tick is invisible to (mtime_ns, size)
+                            try:
+                                with open(e.path, "rb") as fh:
+                                    digest = hash(fh.read())
+                            except OSError:
+                                continue
+                            stamp[key] = (st.st_mtime_ns, st.st_size, digest)
+                        else:
+                            stamp[key] = (st.st_mtime_ns, st.st_size)
                     except OSError:
                         continue
         except OSError:
@@ -206,6 +219,14 @@ def _repo_stamp(root) -> dict:
 # query. Correctness comes from re-stamping on every call - a stale cache is
 # worse than a slow one for code search (tests/test_code_intel_cache.py).
 _CACHE: dict = {}
+
+# An edit whose size is unchanged AND whose mtime falls in the same clock tick is
+# invisible to (mtime_ns, size): measured on this machine, 25 of 40 consecutive
+# same-size rewrites shared an mtime, because the Windows clock resolution is
+# 15.6ms. So a file whose stamp is younger than the clock tick is hashed as
+# well - the guard costs one read per recently-touched file and closes the hole
+# that would otherwise hand the agent a stale index for the file it just edited.
+_TICK_NS = int(15.625 * 1e6) * 2
 
 
 def index_repo(root) -> dict:

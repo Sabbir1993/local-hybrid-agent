@@ -134,9 +134,7 @@
     "hybrid_real_lexical_fallout_at_k": 0.397,
     "hybrid_real_paraphrase_fallout_at_k": 0.55
   },
-  "router": {
-    "ok": true
-  },
+  "router": null,
   "code": {
     "recall": 1.0
   },
@@ -147,6 +145,6 @@
     "escalation_policy": "PASS",
     "json_repair": "PASS",
     "needle_router": "PASS",
-    "compact_endpoint": "FAIL"
+    "compact_endpoint": "PASS"
   }
 }

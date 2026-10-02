@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import sys
 import time
 from typing import Optional
@@ -40,6 +41,46 @@ def subagent_call_verdict(name: str, names_ok) -> Optional[str]:
     if name not in names_ok:
         return f"error: '{name}' is not enabled for this sub-agent"
     return None
+
+
+# The child's outcome, machine-readable in the header the parent already sees.
+# The parent's tool verdict is `ok = not result.startswith("error:")`
+# (routes/agent/run.py), and this header means a result NEVER starts with
+# "error:" - so a child that ran out of steps used to be recorded as a SUCCESS.
+# Closed set, and deliberately no "refusal": deciding that from prose is the
+# same guess that produced this bug, and nothing measures it. Statuses are
+# structural facts (did the loop finish, did the model answer), not readings of
+# the answer's tone.
+SUBAGENT_STATUSES = ("success", "step_exhausted", "no_response")
+SUBAGENT_TOOLS = ("spawn_agent", "spawn_parallel_agents")
+
+
+def _envelope_header(role: Optional[str], lane: Optional[str], n_msgs: int, status: str) -> str:
+    return ("[sub-agent" + (f" · role={role}" if role else "")
+            + f" · {n_msgs} msgs · lane={lane} · status={status}]")
+
+
+def subagent_result_verdict(tool_name: str, result) -> Optional[bool]:
+    """True/False when the sub-agent envelope states an outcome, else None.
+
+    None means "this result does not speak for itself": a non-subagent tool, a
+    bare "error: ..." early return (the parent already fails those on the
+    prefix), or a header whose status is not one this build knows. The caller
+    keeps its own rule in that case rather than inheriting a guess.
+    """
+    if tool_name not in SUBAGENT_TOOLS or not isinstance(result, str):
+        return None
+    # spawn_parallel_agents interleaves envelopes with body lines
+    # ("[Sub-agent #2]: [sub-agent ...]" then the child's text), so every envelope
+    # line is collected rather than only the leading ones.
+    statuses = set()
+    for line in result.splitlines():
+        if line.startswith(("[sub-agent", "[Sub-agent")):
+            statuses.update(re.findall(r"status=([a-z_]+)", line))
+    if not statuses or not statuses <= set(SUBAGENT_STATUSES):
+        return None
+    # any child that did not finish makes the whole delegation a failure
+    return all(s == "success" for s in statuses)
 
 
 async def run_subagent(task: str, role: Optional[str] = None, lane_override: Optional[str] = None,
@@ -147,6 +188,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
         src = lane_used.source
         model_name = f"subagent:{role or 'generic'}:{lane}"
         final_content = ""
+        status = "step_exhausted"          # unless a branch below says otherwise
         # The sub-agent's prompt window: the real per-request window of the lane it
         # actually landed on, not a hardcoded guess. A fixed 16k under-counted a
         # cloud/main lane and, more importantly, ignored the tool-schema block
@@ -182,11 +224,13 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
 
             if res is None:
                 final_content = "(sub-agent got no response from the model)"
+                status = "no_response"
                 break
             content = res.get("content", "")
             tool_calls = res.get("tool_calls", [])
             if not tool_calls:
                 final_content = content
+                status = "success"
                 break
 
             history_content = sanitize_user_facing_content(content)
@@ -220,7 +264,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
     # card numbers here so they never reach the parent context in the clear
     from ..pan import mask_pans
     final_content, _ = mask_pans(final_content)
-    header = f"[sub-agent" + (f" · role={role}" if role else "") + f" · {len(msgs) - 2} msgs · lane={lane}]"
+    header = _envelope_header(role=role, lane=lane, n_msgs=len(msgs) - 2, status=status)
     return f"{header}\n{final_content.strip()}"
 
 

@@ -142,9 +142,25 @@ def check_compact_endpoint() -> tuple:
         warnings.simplefilter("ignore")          # httpx2 deprecation notice
         from starlette.testclient import TestClient
     from routes import chat as chat_routes
-    from core import db
+    from core import db, deps
 
     app = FastAPI()
+
+    def _eval_principal():
+        # The endpoint enforces auth (Depends(get_current_user)), so an
+        # unauthenticated TestClient call is refused with 401 at dependency
+        # resolution and this check never reaches the project gate it exists to
+        # make - it stood red in every offline run. Inject a principal so the
+        # check tests the project gate, the same shape the rest of the suite uses
+        # (tests/test_agent_limits_routes.py:30). Auth itself stays covered:
+        # tests/test_eval_compact_auth.py pins that the same route still answers
+        # 401 without this injection.
+        from core.auth import Principal
+        return Principal(id=1, username="eval", display_name="eval", is_super_admin=False,
+                         must_change_password=False, role_names=["user"],
+                         permission_keys={"chat.use"})
+
+    app.dependency_overrides[deps.get_current_user] = _eval_principal
     app.include_router(chat_routes.router)
     client = TestClient(app)
 
@@ -159,23 +175,56 @@ def check_compact_endpoint() -> tuple:
     r = client.post("/chat/compact", json={"messages": [{"role": "user", "content": "hi"}]})
     assert r.status_code == 400, "single message must not compact"
 
-    proj = db.db_create_project("__eval_compact__")
-    sid = db.db_create_session(proj["id"], "eval compact")["id"]
-    archive = None
-    orig = chat_routes._summarize_history
+    # This check writes to the real projects DB, so it owns its cleanup. The
+    # long-standing 401 masked three defects in this block (db_create_project
+    # needs owner_user_id AND an absolute workspace_dir, db_create_session needs
+    # the owner, db_delete_project needs the owner) - each failure left rows and
+    # a temp folder behind, because creation happened before the try. Creation
+    # now happens inside the try, and a leftover project from an older run is
+    # cleared first so the check is re-runnable.
+    import shutil
+    import tempfile
+    for stale in [p for p in db.db_list_projects(1) if p["name"] == "__eval_compact__"]:
+        try:
+            db.db_delete_project(stale["id"], 1)
+        except Exception as e:                      # a locked row must not block the check
+            print(f"[eval] stale project {stale['id']} not removed: {e}", file=sys.stderr)
+    ws_dir = tempfile.mkdtemp(prefix="eval_compact_ws_")
+    proj = sid = None
+    # Patch the DEFINING module, not the package: routes/chat/__init__.py:48
+    # re-exports _summarize_history, so patching `chat_routes._summarize_history`
+    # set an unused package attribute while compact.py:132 kept calling the real
+    # one - which then blocked on a model server that is not running, and the
+    # check hung instead of failing.
+    from routes.chat import compact as compact_mod
+    orig = compact_mod._summarize_history
+    # input_guard.check_async runs semantic rules through the local classifier,
+    # which auto-loads the executor model. This check is part of the OFFLINE
+    # suite ("pure functions, no server needed") and the compact route's guard
+    # behaviour is not what it tests, so the guard is stubbed here - without it a
+    # fixed auth path makes CI reach for a model it does not have.
+    from core import input_guard
+    orig_guard = input_guard.check_async
+
+    async def _no_guard(texts, user, any_cloud_lane):
+        return None
+
+    input_guard.check_async = _no_guard
     seen = []
 
-    async def fake_summary(convo, instructions, use_executor):
+    async def fake_summary(convo, instructions, use_executor, user_id=None):
         assert convo and convo[0]["role"] == "user", "conversation not passed to summarizer"
         seen.append(instructions)
         return "## 1. Primary Requests\nbuild the thing\n\n## 5. Next Steps\ncontinue"
 
-    chat_routes._summarize_history = fake_summary
+    compact_mod._summarize_history = fake_summary
     try:
-        db.db_append_message(sid, "user", "please build the thing")
-        db.db_append_message(sid, "assistant", "ok " + "y" * 6000, {"ntok": 1500})
-        db.db_append_message(sid, "user", "now the schema")
-        db.db_append_message(sid, "assistant", "here " + "z" * 3000, {"ntok": 800})
+        proj = db.db_create_project("__eval_compact__", workspace_dir=ws_dir, owner_user_id=1)
+        sid = db.db_create_session(proj["id"], "eval compact", owner_user_id=1)["id"]
+        db.db_append_message(sid, "user", "please build the thing", owner_user_id=1)
+        db.db_append_message(sid, "assistant", "ok " + "y" * 6000, {"ntok": 1500}, owner_user_id=1)
+        db.db_append_message(sid, "user", "now the schema", owner_user_id=1)
+        db.db_append_message(sid, "assistant", "here " + "z" * 3000, {"ntok": 800}, owner_user_id=1)
         r = client.post("/chat/compact", json={
             "session_id": sid, "instructions": "focus on the schema",
             "agent_mode": True, "project_id": proj["id"], "keep_last": 2})
@@ -183,34 +232,43 @@ def check_compact_endpoint() -> tuple:
         j = r.json()
         assert j["summary"].startswith("## 1."), "summary not returned"
         assert j["after_tokens"] < j["before_tokens"], "compaction did not shrink context"
-        assert j["archive_path"] and Path(j["archive_path"]).exists(), "transcript not archived"
-        archive = j["archive_path"]
-        head = j["messages"][0]
-        assert head["role"] == "system" and "[COMPACTED CONTEXT SUMMARY]" in head["content"]
-        assert head["meta"]["compact"] is True and head["meta"]["before_tokens"] == j["before_tokens"]
-        assert len(j["messages"]) == 3, f"expected summary + 2 kept, got {len(j['messages'])}"
-        stored = db.db_load_messages(sid)
-        assert len(stored) == 3 and stored[0]["role"] == "system", "DB history not replaced"
-        assert stored[-1]["meta"] and stored[-1]["meta"].get("ntok") == 800, \
-            "message meta lost on rewrite"
+        assert j["reduction_pct"] > 0, "reduction not reported"
+        # The endpoint is append-only (routes/chat/compact.py:154-169): it returns
+        # a compact marker to insert and writes NOTHING to the transcript. This
+        # check used to assert an archive_path, a rewritten `messages` list and a
+        # replaced DB history - a design that no longer exists. Those assertions
+        # never ran: the 401 above hid all of it.
+        marker = j["compact_message"]
+        assert marker["role"] == "system" and "[COMPACTED CONTEXT SUMMARY]" in marker["content"]
+        assert marker["meta"]["compact"] is True and marker["meta"]["before_tokens"] == j["before_tokens"]
+        assert marker["meta"]["after_tokens"] == j["after_tokens"]
+        stored = db.db_load_messages(sid, owner_user_id=1)
+        assert len(stored) == 5, f"append-only: 4 original + 1 marker expected, got {len(stored)}"
+        assert stored[0]["role"] == "user", "original history must survive compaction"
+        assert stored[-1]["role"] == "system", "compact marker must be the last row"
+        assert stored[-1]["meta"].get("compact") is True, "marker meta not persisted"
+        assert stored[3]["meta"] and stored[3]["meta"].get("ntok") == 800, \
+            "pre-existing message meta lost"
 
-        # 3) message-fallback path (no session) -- no archive, still compacts
+        # 3) message-fallback path (no session) -- still compacts, writes nothing
         r2 = client.post("/chat/compact", json={"messages": [
             {"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]})
         assert r2.status_code == 200, "message-fallback compaction failed"
-        assert r2.json()["archive_path"] is None, "no session must mean no archive"
+        j2 = r2.json()
+        assert j2["compact_message"]["role"] == "system", "fallback must still return a marker"
+        assert len(db.db_load_messages(sid, owner_user_id=1)) == 5, \
+            "a request without session_id must not touch any transcript"
         assert seen[0] == "focus on the schema", "extra instructions dropped"
         assert len(seen) == 2, f"summarizer called {len(seen)}x, expected 2"
     finally:
-        chat_routes._summarize_history = orig
-        db.db_delete_session(sid)
-        db.db_delete_project(proj["id"])
-        if archive:
-            try:
-                Path(archive).unlink()
-            except OSError:
-                pass
-    return True, f"compact endpoint ok ({j['before_tokens']} -> {j['after_tokens']} tokens)"
+        compact_mod._summarize_history = orig
+        input_guard.check_async = orig_guard
+        if sid is not None:
+            db.db_delete_session(sid, owner_user_id=1)
+        if proj is not None:
+            db.db_delete_project(proj["id"], 1)
+        shutil.rmtree(ws_dir, ignore_errors=True)
+    return True, f"compact endpoint ok ({j['before_tokens']} -> {j['after_tokens']} tokens, append-only)"
 
 
 def check_escalation_policy() -> tuple:
@@ -545,55 +603,73 @@ def main() -> int:
                 failed += 1
             if suite.get("code") is not None and not suite["code"].get("ok", True):
                 failed += 1
-        if args.update_baseline:
-            from eval_mock import _summarize_suite
-            summary = _summarize_suite(
-                suite, results["offline"] or None)
-            if BASELINE_FILE.is_file():
-                # Merge, don't clobber: each section gates only what it measured,
-                # and an overwrite would silently un-gate the other mode/section.
-                # - retrieval: --embedder fake must keep hybrid_real keys and
-                #   vice versa (they gate at different tolerances).
-                # - code: --no-code must not erase the measured recall.
-                # - offline: --no-offline must not erase the standing records
-                #   (CI's offline gate compares PASS->FAIL against them; a null
-                #   offline section makes the gate inert).
-                prior = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
-                merged_ret = dict((prior.get("retrieval") or {}))
-                merged_ret.update(summary.get("retrieval") or {})
-                summary["retrieval"] = merged_ret or None
-                if summary.get("code") is None and prior.get("code") is not None:
-                    summary["code"] = prior["code"]
-                if summary.get("offline") is None and prior.get("offline") is not None:
-                    summary["offline"] = prior["offline"]
-            BASELINE_FILE.write_text(json.dumps(summary, indent=2),
-                                     encoding="utf-8")
-            print(f"\nbaseline written -> {BASELINE_FILE} (review the diff before committing)")
-        if args.regression:
-            from eval_mock import compare_baseline as _compare
-            if not BASELINE_FILE.is_file():
-                print(f"\nno baseline at {BASELINE_FILE} - run --update-baseline first")
-                failed += 1
+
+    # Baseline update and regression compare run for BOTH modes. They used to sit
+    # inside `if args.mock:`, which made two CI commands silently no-ops:
+    #   * `--update-baseline` on its own wrote nothing (the documented way to
+    #     re-baseline the offline suite), and
+    #   * `--regression` on its own - CI's offline gate - counted no failures
+    #     (the raw verdict is suppressed by --regression) and compared nothing,
+    #     so it could not fail however badly the offline checks degraded. That is
+    #     how compact_endpoint stayed FAIL in the baseline unnoticed.
+    from eval_mock import BASELINE_FILE
+    if args.update_baseline:
+        from eval_mock import _summarize_suite
+        summary = _summarize_suite(
+            suite if args.mock else {}, results["offline"] or None)
+        if BASELINE_FILE.is_file():
+            # Merge, don't clobber: each section gates only what it measured,
+            # and an overwrite would silently un-gate the other mode/section.
+            # - retrieval: --embedder fake must keep hybrid_real keys and
+            #   vice versa (they gate at different tolerances).
+            # - code: --no-code must not erase the measured recall.
+            # - offline: --no-offline must not erase the standing records
+            #   (CI's offline gate compares PASS->FAIL against them; a null
+            #   offline section makes the gate inert).
+            prior = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
+            merged_ret = dict((prior.get("retrieval") or {}))
+            merged_ret.update(summary.get("retrieval") or {})
+            summary["retrieval"] = merged_ret or None
+            # tasks and the aggregate are mock-owned: an offline-only update
+            # measures neither, and dropping them would silently un-gate the
+            # mock suite until someone remembered to re-run it.
+            merged_tasks = dict((prior.get("tasks") or {}))
+            merged_tasks.update(summary.get("tasks") or {})
+            summary["tasks"] = merged_tasks
+            if summary.get("aggregate_rate") is None and prior.get("aggregate_rate") is not None:
+                summary["aggregate_rate"] = prior["aggregate_rate"]
+            if summary.get("code") is None and prior.get("code") is not None:
+                summary["code"] = prior["code"]
+            if summary.get("offline") is None and prior.get("offline") is not None:
+                summary["offline"] = prior["offline"]
+        BASELINE_FILE.write_text(json.dumps(summary, indent=2),
+                                 encoding="utf-8")
+        print(f"\nbaseline written -> {BASELINE_FILE} (review the diff before committing)")
+    if args.regression:
+        from eval_mock import compare_baseline as _compare
+        if not BASELINE_FILE.is_file():
+            print(f"\nno baseline at {BASELINE_FILE} - run --update-baseline first")
+            failed += 1
+        else:
+            from eval_mock import _summarize_suite as _sum
+            baseline = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
+            if args.mock:
+                current = _sum(suite, results["offline"] or None)
             else:
-                from eval_mock import _summarize_suite as _sum
-                baseline = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
-                if args.mock:
-                    current = _sum(suite, results["offline"] or None)
-                else:
-                    # offline-only invocation: compare just the offline section. Everything
-                    # else stays None, which compare_baseline reads as "not measured".
-                    current = {"tasks": {}, "aggregate_rate": None, "retrieval": None,
-                               "router": None, "code": None,
-                               "offline": ({r["name"]: r["status"] for r in results["offline"]}
-                                          or None)}
-                problems = _compare(current, baseline)
-                if problems:
-                    failed += len(problems)
-                    print("\nREGRESSIONS vs baseline:")
-                    for p in problems:
-                        print(f"  - {p}")
-                else:
-                    print("\nno regressions vs baseline")
+                # offline-only invocation: compare just the offline section. Everything
+                # else stays None, which compare_baseline reads as "not measured".
+                current = {"tasks": {}, "aggregate_rate": None, "retrieval": None,
+                           "router": None, "code": None,
+                           "offline": ({r["name"]: r["status"] for r in results["offline"]}
+                                      or None)}
+            problems = _compare(current, baseline)
+            if problems:
+                failed += len(problems)
+                print("\nREGRESSIONS vs baseline:")
+                for p in problems:
+                    print(f"  - {p}")
+            else:
+                print("\nno regressions vs baseline")
 
     RESULTS_FILE.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(f"\nresults saved -> {RESULTS_FILE}")

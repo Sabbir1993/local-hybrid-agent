@@ -13,6 +13,7 @@ from core import context_budget
 from core import lane_health
 from core.small_model import classifier
 from core import step_outcome
+from core.subagent.runner import subagent_result_verdict as _subagent_verdict
 from core import tool_surface
 from core.project_context import load_project_instructions, prompt_block as project_prompt_block
 from core.knowledge_access import allowed_source_ids_for, kb_local_only, set_kb_cloud_blocked
@@ -203,6 +204,22 @@ def _synth_detail(note: str | None) -> str | None:
     if not note or note == "validated":
         return None
     return _SYNTH_NOTE_CODES.get(note, "synth:other")
+
+
+def _tool_failure_code(name: str, result) -> str | None:
+    """The route_events.tool_err code for a failed tool call.
+
+    A sub-agent reports failure in its envelope, not with an "error:" prefix, so
+    the text classifier cannot see it: without this, every exhausted child would
+    be recorded as one anonymous failure - the same blind spot the plan's
+    spawn_agent diagnosis ran into.
+    """
+    import re as _re
+    if isinstance(result, str):
+        statuses = set(_re.findall(r"status=([a-z_]+)", result)) if _subagent_verdict(name, result) is False else set()
+        if statuses:
+            return "subagent:" + ",".join(sorted(statuses))
+    return route_log.classify_tool_result(result)
 
 
 @router.post("/agent/run")
@@ -590,6 +607,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         yield sse("tool_call", {'id': tc_id, 'name': nr['name'], 'args': nr['args'], 'model': r_model_info['display'], 'device': r_model_info['device']})
                         result = await run_tool(nr["name"], nr["args"])
                         ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
+                        # A sub-agent's result is prefixed with its envelope, so it never starts
+                        # with "error:" and a child that ran out of steps counted as a SUCCESS here.
+                        # The envelope states its own structural outcome; believe that instead.
+                        _sub_ok = _subagent_verdict(nr["name"], result)
+                        if _sub_ok is False:
+                            ok = False
                         yield _tool_result(_with_diff({'id': tc_id, 'name': nr['name'], 'ok': ok, 'result': result, 'model': r_model_info['display']}, nr['args']))
                         actions_taken.append({"name": nr["name"], "args": nr["args"], "ok": ok, "result": result})
                         route_log.event(run_id, step, q_category, "router", "router_hit", router_tool=nr["name"],
@@ -1453,9 +1476,15 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     except Exception as _he:          # a hook error must never swallow the tool's result
                         print(f"[agent] after_tool hook failed: {_he}", file=sys.stderr)
                     ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
+                    # A sub-agent's result is prefixed with its envelope, so it never starts
+                    # with "error:" and a child that ran out of steps counted as a SUCCESS here.
+                    # The envelope states its own structural outcome; believe that instead.
+                    _sub_ok = _subagent_verdict(name, result)
+                    if _sub_ok is False:
+                        ok = False
                     try:
                         route_log.event(run_id, step, q_category, lane_name, "tool", tool_name=name, tool_ok=ok,
-                                        tool_err=None if ok else route_log.classify_tool_result(result))
+                                        tool_err=None if ok else _tool_failure_code(name, result))
                     except Exception:
                         pass
                     try:
