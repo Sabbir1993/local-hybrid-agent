@@ -8,6 +8,52 @@ const net = require("net");
 
 const MAX_OUTPUT_CHARS = 20000;
 
+// What a command the AGENT wrote is allowed to see in the environment.
+// Both spawn sites used to pass `env: { ...process.env }`, so every secret in
+// the user's session environment (cloud keys, GITHUB_TOKEN, DB passwords) was
+// readable by code the model wrote - and run_python is arbitrary Python.
+// See TIER1_SANDBOX_SPIKE.md §6.
+//
+// Two policies, because both have real users:
+//   deny  (default) an explicit deny-list of secret-shaped names; everything
+//         else is dropped too, so a secret nobody thought to list does not pass
+//   allow            an explicit allow-list - nothing is inherited by accident
+// Either way CI=1 is injected (npm/pytest behaviour the caller relies on) and
+// an `allow` list overrides both, so `git push` can be given GITHUB_TOKEN
+// without re-enabling the rest.
+const SECRET_NAME_RX = /(SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY|PRIVATE|CREDENTIAL|SESSION_KEY|ACCESS_KEY|_KEY$|^KEY$)/i;
+// Vars a build cannot run without: dropping these breaks npm/pip/git/ssl.
+const ALWAYS_KEEP = ["PATH", "HOME", "SYSTEMROOT", "HOMEDRIVE", "HOMEPATH", "TEMP", "TMP",
+  "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMDATA", "USERPROFILE",
+  "COMSPEC", "PATHEXT", "SYSTEMDRIVE", "WINDIR", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+  "LANG", "LC_ALL", "TZ", "PYTHONPATH", "VIRTUAL_ENV"];
+
+function buildChildEnv(sourceEnv, opts = {}) {
+  const src = sourceEnv || opts.parentEnv || {};
+  const mode = opts.mode === "allow" ? "allow" : "deny";   // unknown mode -> deny
+  const allow = new Set((opts.allow || []).map((n) => String(n).toUpperCase()));
+  const out = {};
+  for (const [key, value] of Object.entries(src)) {
+    const upper = key.toUpperCase();
+    if (value === undefined) continue;
+    if (allow.has(upper)) { out[key] = value; continue; }     // explicit escape hatch
+    if (mode === "allow") continue;                           // ONLY what was named
+    // deny mode: keep the build-critical names, never a secret-shaped one
+    if (ALWAYS_KEEP.includes(upper) && !SECRET_NAME_RX.test(upper)) out[key] = value;
+  }
+  out.CI = "1";
+  return out;
+}
+
+// The live policy: env var COMPANION_ENV_POLICY=allow switches the companion to
+// allow-list mode; COMPANION_ENV_ALLOW=NAME,NAME re-admits individual vars.
+function activeEnvPolicy() {
+  const mode = process.env.COMPANION_ENV_POLICY === "allow" ? "allow" : "deny";
+  const allow = (process.env.COMPANION_ENV_ALLOW || "").split(",").map((s) => s.trim()).filter(Boolean);
+  return { mode, allow };
+}
+
 function portOpen(port) {
   return new Promise((resolve) => {
     const sock = net.connect({ port, host: "127.0.0.1" });
@@ -25,7 +71,7 @@ function runBackground({ command, cwd, wait_for_port, wait }) {
     let out = "";
     const child = spawn(command, {
       cwd: cwd || undefined, shell: true, detached: true, windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CI: "1" },
+      stdio: ["ignore", "pipe", "pipe"], env: buildChildEnv(process.env, activeEnvPolicy()),
     });
     const grab = (d) => { out = (out + d).slice(-4000); };
     child.stdout.on("data", grab);
@@ -63,7 +109,7 @@ function run({ command, cwd, timeout, background, wait_for_port, wait }) {
         cwd: cwd || undefined,
         timeout: timeout ? timeout * 1000 : undefined,
         maxBuffer: 1024 * 1024 * 20,
-        env: { ...process.env, CI: "1" },
+        env: buildChildEnv(process.env, activeEnvPolicy()),
       },
       (error, stdout, stderr) => {
         resolve({
@@ -76,4 +122,4 @@ function run({ command, cwd, timeout, background, wait_for_port, wait }) {
   });
 }
 
-module.exports = { run };
+module.exports = { run, buildChildEnv };

@@ -1684,7 +1684,17 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
             yield f"event: delta\ndata: {json.dumps({'text': friendly})}\n\n"
             yield f"event: done\ndata: {json.dumps({'state': 'failed', 'reason': kind})}\n\n"
         finally:
-            _detail = _outcome_detail or loop_detail or None
+            # Codes compose rather than shadow each other: a run can be both a
+            # synthesis and an unfinished plan, and the degeneration signal must
+            # not be hidden by either. `plan:` comes from plan_guard.run_summary,
+            # the first measurement of whether runs finish the plan they create.
+            _plan_detail = None
+            if req.session_id:
+                try:
+                    _plan_detail = plan_guard.run_summary(db_get_plan_items(req.session_id))
+                except Exception:
+                    _plan_detail = None
+            _detail = "|".join(c for c in (_outcome_detail, _plan_detail, loop_detail) if c) or None
             if _err_class:
                 _detail = _err_class
             if pending_tool:       # disconnected / stopped / crashed while a tool is open: say which

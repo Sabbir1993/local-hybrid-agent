@@ -78,24 +78,52 @@ Sandboxing only the shell would leave these on the host, all reachable by an age
 So "isolate the shell" is not "isolate the agent". Any threat model must say which
 of these it covers; the document's does not.
 
-## 6. Cheap win available today, independent of any container
+## 6. Cheap win available today, independent of any container — SHIPPED
 
-Both spawn sites pass the companion's **entire** environment to agent-run
+Both spawn sites passed the companion's **entire** environment to agent-run
 commands (`shellops.js:28`, `:66`). Whatever secrets exist in the user's session
-environment — cloud keys, `GITHUB_TOKEN`, proxy credentials — are readable by any
-command the model writes, and `run_python` is arbitrary Python. This is a real
-exposure today, fixable at the same seam, with no new dependency.
+environment — cloud keys, `GITHUB_TOKEN`, proxy credentials — were readable by
+any command the model wrote, and `run_python` is arbitrary Python. This was a
+live exposure, fixable at the same seam with no new dependency.
 
-The tradeoff, stated honestly: an **allowlist** of env vars is safer but will break
-tooling that needs `HOME`, `PATH`, proxies, `NODE_*`, `SSL_CERT_FILE`; a
-**denylist** of secret-shaped names is cheap and breaks nothing, but misses
-unknown-named secrets. This is a product decision, not a spike finding — it needs
-a deliberate choice, and it is a change to the companion package, so it is not
-done here unasked.
+**Implemented** (`companion/shellops.js: buildChildEnv`, used by both spawn
+sites). Rather than force the allowlist-vs-denylist choice, both ship:
+
+- **deny mode (default)** — keeps only the vars a build cannot run without
+  (`PATH`, `HOME`, proxies, cert bundles, `TEMP`, `SYSTEMROOT`, `NODE_*`,
+  `VIRTUAL_ENV`, …) and always drops secret-shaped names (`*TOKEN*`, `*SECRET*`,
+  `*PASSWORD*`, `*API_KEY*`, `*CREDENTIAL*`, `*ACCESS_KEY*`, …). Anything not on
+  the keep-list is dropped too, so a secret nobody thought to list does not pass
+  through by default.
+- **allow mode** (`COMPANION_ENV_POLICY=allow`) — *only* the named variables, plus
+  the injected `CI=1`. Nothing inherited by accident.
+- **escape hatch** (`COMPANION_ENV_ALLOW=GITHUB_TOKEN,FOO`) — re-admits specific
+  variables under either mode, so `git push` with credentials is a config change,
+  not a fork.
+- Unknown mode fails closed to deny. Name matching is case-insensitive (Windows).
+
+**Diagnosability, because a narrowed env fails opaquely.** Windows reports a
+missing binary as `'npm' is not recognized as an internal or external command` on
+stderr with exit code 1 — an agent would retry that forever without being told why.
+`core/shell_tools.py` now appends an `[env]` line naming `COMPANION_ENV_ALLOW`
+when it sees that signature, and a companion test pins that an ordinary test
+failure is *not* misdiagnosed as an env problem.
+
+**Validation:** `tests/js/test_companion_shell_env.js` (deny keeps build vars and
+drops secrets; escape hatch is per-variable; allow mode passes only what is
+named; unknown mode fails closed; case-insensitivity; empty input does not throw)
+and `tests/test_shell_gate.py::MissingEnvIsDiagnosableTests` (cause explained;
+no false blame). Full JS suite 16/16, Python 1575 OK, ruff clean, both CI eval
+gates green.
+
+**Still worth a product decision:** deny mode drops unlisted vars, so a legitimate
+workflow that reads an oddly-named env var now needs `COMPANION_ENV_ALLOW`. That
+is a deliberate trade (secure by default, escapable), not a free win — tell me if
+the default should go the other way.
 
 ## 7. Recommendation (ordered, with what would falsify each)
 
-1. **Decide the env policy** (§6) — days, no dependencies, removes a live exposure.
+1. **~~Decide the env policy~~ — done (§6), both modes shipped.**
 2. **Record the isolation mode in telemetry** — the server cannot know how the
    companion executed a command; a `mode` field alongside `shell.run` results is
    what makes any future claim ("we now sandbox X% of commands") measurable

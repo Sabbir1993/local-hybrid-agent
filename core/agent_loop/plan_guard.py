@@ -4,6 +4,7 @@ Pure functions over the plan rows (db_get_plan_items): routes/agent/run.py calls
 on their own because the loop itself cannot be driven without servers.
 """
 import re
+from typing import Optional
 
 OPEN = ("pending", "in_progress")
 
@@ -79,6 +80,41 @@ def check_update(items: list, item: int, status: str):
             return (f"step #{earlier['ord']} ({earlier['text'][:80]}) is not finished. Do the steps in order: "
                     f"finish #{earlier['ord']} first, or mark it failed with a note.")
     return None
+
+
+def run_summary(items: list) -> Optional[str]:
+    """A bounded code for how a run ended against its plan, or None if there was no plan.
+
+    Nothing measured this before: route_events.outcome says what a turn did,
+    never whether the plan finished. Without it, "should a plan be a DAG?" has no
+    number on either side of the question.
+
+      plan:done            every step reached a terminal success
+      plan:open:N/M        N steps still pending/in_progress out of M
+      plan:failed:N        N steps failed
+      plan:failed:N/open:K/M   both, which is the case that actually matters
+
+    Codes only - counts, never step text (a step can quote a file path).
+    An unrecognised status counts as open, so a new status can never read as done.
+    """
+    if not items:
+        return None
+    total = len(items)
+    done = failed = 0
+    for it in items:
+        status = str(it.get("status") or "pending")
+        if status == "done":
+            done += 1
+        elif status == "failed":
+            failed += 1
+    open_n = total - done - failed
+    if failed and open_n:
+        return f"plan:failed:{failed}/open:{open_n}/{total}"
+    if failed:
+        return f"plan:failed:{failed}"
+    if open_n:
+        return f"plan:open:{open_n}/{total}"
+    return "plan:done"
 
 
 def stuck_action(steps_on_item: int, limit: int) -> str:

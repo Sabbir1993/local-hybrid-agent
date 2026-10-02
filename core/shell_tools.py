@@ -238,6 +238,17 @@ async def tool_run_shell(args: dict) -> str:
     # command output keeps its start and (mostly) its end, with a note: the result is usually the last lines
     out = clip_head_tail(data.get("stdout") or "", MAX_OUTPUT_CHARS, head_frac=0.2)
     err_out = clip_head_tail(data.get("stderr") or "", 4000, head_frac=0.2)
+    # A command broken by the filtered environment reports it in stderr only
+    # (Windows: "'x' is not recognized as an internal or external command", exit
+    # code 1). Spell that case out: the companion now hands agent commands a
+    # filtered env (companion/shellops.js: buildChildEnv), and a silently
+    # narrowed one is the kind of breakage a model retries forever.
+    _err_low = (data.get("stderr") or "").lower()
+    if ("is not recognized as an internal" in _err_low
+            or "is not defined" in _err_low or "command not found" in _err_low):
+        err_out += ("\n[env] the companion runs agent commands with a filtered environment "
+                    "(secrets removed); if this command needs one, re-run it with the value "
+                    "passed explicitly, or set COMPANION_ENV_ALLOW for that variable.")
     result = f"exit code {data.get('exit_code')}"
     if out:
         result += f"\n--- stdout ---\n{out}"

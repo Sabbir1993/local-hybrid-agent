@@ -83,5 +83,56 @@ class ApprovalTokenTests(unittest.TestCase):
         self.assertIn("denied", second)
 
 
+class MissingEnvIsDiagnosableTests(unittest.TestCase):
+    """A command broken by the companion's filtered env must be told WHY.
+
+    companion/shellops.js now hands agent-run commands a filtered environment
+    (secrets removed). Windows reports a missing binary as
+    "'X' is not recognized as an internal or external command" on stderr with no
+    exit-code clue, so without this the agent sees an opaque failure and retries
+    the same broken command forever.
+    """
+
+    def setUp(self):
+        self._cfg = st.APP_CONFIG.get("capabilities")
+        st.APP_CONFIG["capabilities"] = {"shell": {"enabled": True, "ask_first": False,
+                                                   "allow_patterns": ["*"]}}
+        self._cb = st.permission_callback
+        st.permission_callback = None
+
+        async def fake_call(uid, op, params, timeout=None):
+            return {"exit_code": 1, "stdout": "",
+                    "stderr": "'npm' is not recognized as an internal or external command,\n"
+                              "operable program or batch file.\n"}
+        self._patches = [
+            mock.patch("core.agent_tools.require_device_workspace",
+                       lambda: (7, Path(r"C:\Users\dev\proj"))),
+            mock.patch.object(st.companion_bridge, "call", fake_call),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        st.APP_CONFIG["capabilities"] = self._cfg
+        st.permission_callback = self._cb
+        for p in self._patches:
+            p.stop()
+
+    def test_env_cause_is_explained(self):
+        out = asyncio.run(st.tool_run_shell({"command": "npm test"}))
+        self.assertIn("not recognized", out, "the raw OS message must still be shown")
+        self.assertIn("COMPANION_ENV_ALLOW", out,
+                      "the fix must be named, or the model retries the same call forever")
+
+    def test_a_normal_failure_is_not_blamed_on_the_environment(self):
+        async def failing(uid, op, params, timeout=None):
+            return {"exit_code": 1, "stdout": "", "stderr": "2 tests failed\n"}
+        with mock.patch.object(st.companion_bridge, "call", failing):
+            out = asyncio.run(st.tool_run_shell({"command": "npm test"}))
+        self.assertIn("2 tests failed", out)
+        self.assertNotIn("COMPANION_ENV_ALLOW", out,
+                         "an ordinary test failure must not be misdiagnosed as an env problem")
+
+
 if __name__ == "__main__":
     unittest.main()

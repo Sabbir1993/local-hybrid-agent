@@ -100,7 +100,7 @@ flowchart TD
     - Python execution encounters severe unrecoverable syntax errors.
     - The model explicitly requests a rollback to try an alternate approach.
 
-### 2.2 Structured Task DAG vs Prose Plan Mode
+### 2.2 Structured Task DAG vs Prose Plan Mode — PREMISE PARTLY FALSE; instrumentation shipped 2026-10-02
 * **Problem:** Plan tracking exists (`create_plan` / `get_plan` / `update_plan_item` — all live in telemetry) but items are prose status strings. The model cannot programmatically verify progress against planned tasks.
 * **Implementation:**
   - Upgrade `set_plan_context` and `db_get_plan_items` to enforce a structured JSON task graph:
@@ -114,6 +114,12 @@ flowchart TD
     }
     ```
   - Invalidate and fail step completions if the model claims completion while dependent task nodes remain in `pending` or `failed` state.
+- **Verification result:** "the model cannot verify progress" is only half true, and the second bullet is **already implemented**. `plan_guard.check_update` refuses to mark a step done while an earlier one is open (`plan_guard.py:76-80`) and refuses two steps in progress at once (`:71-75`); `tool_update_plan_item` refuses out-of-range and bad statuses; `focus_message` re-injects the current step each turn. That is a **stricter** constraint than a DAG with `deps` — a linear chain cannot express parallel branches, it only guarantees order. Pinned by `tests/test_plan_adherence.py::ExistingEnforcementIsRealTests` so a future DAG change cannot quietly drop it.
+- **What was genuinely missing: any measurement of whether runs finish their plans.** `route_events.outcome` records what a turn *did*; nothing recorded whether the plan was completed. So "should plans become a DAG?" had no number on either side.
+- **Shipped instead** (`plan_guard.run_summary` + `routes/agent/run.py`): a run-level code in `route_runs.detail` — `plan:done`, `plan:open:N/M`, `plan:failed:N`, `plan:failed:N/open:K/M`. Counts only, never step text (a step can quote a path); an unrecognised status counts as open so a new status can never read as done. `detail` now **composes** codes (`synth:…|plan:open:1/3|identical_result:…`) instead of first-wins, so a synthesis and an unfinished plan can both be visible.
+- **Validation:** `tests/test_plan_adherence.py` (13 tests: every code shape, bounded/no-text, unknown-status, existing enforcement, DB write) plus an end-to-end probe over the real mock harness — 28 tasks, `run_end` spied: `write_and_verify → plan:done`, `plan_complete → plan:done`, and `append_build` / `forbidden_name_blocked` / `plan_guard_violation → plan:open:2/2`. 1588 tests OK, ruff clean, JS 16/16, both CI eval gates green.
+- **Honest caveat:** those three `plan:open:2/2` results are artifacts of *scripted* turns that simply never call `update_plan_item` — they are not evidence that real runs abandon plans. The measurement exists now; the number needs live traffic.
+- **Still open, deliberately:** the `deps` graph itself. Adding it would mean a DB column plus API/tool/UI surface, and it would *relax* the ordering that currently guarantees correctness. Do it only if the live `plan:open` rate says linear order is what is holding runs back — and not before.
 
 ---
 

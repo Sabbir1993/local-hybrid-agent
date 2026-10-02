@@ -75,8 +75,13 @@ class SynthDetailIsWiredTests(unittest.TestCase):
         self.assertGreaterEqual(self.src.count("_outcome_detail = _synth_detail("), 2,
                                 "a synthesized run that does not record its cause is the bug")
 
-    def test_the_stored_detail_prefers_the_cause_over_loop_detail(self):
-        self.assertRegex(self.src, r"_detail = _outcome_detail or loop_detail or None")
+    def test_the_stored_detail_composes_rather_than_shadowing(self):
+        # Codes must COMPOSE: a run can be both a synthesis and an unfinished
+        # plan, and the degeneration signal must not be hidden by either. The
+        # earlier `a or b or None` chain could only ever keep one of them.
+        self.assertRegex(self.src, r"_detail = \"\|\"\.join\(",
+                         "detail codes must be joined, not first-wins")
+        self.assertIn("_outcome_detail, _plan_detail, loop_detail", self.src)
 
     def test_detail_reaches_the_database(self):
         orig = route_log._usage_db
