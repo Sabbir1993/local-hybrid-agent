@@ -56,10 +56,52 @@ SUBAGENT_TOOLS = ("spawn_agent", "spawn_parallel_agents", "spawn_reviewed_coder"
 
 
 def _envelope_header(role: Optional[str], lane: Optional[str], n_msgs: int, status: str,
-                     posted: Optional[list] = None) -> str:
+                     posted: Optional[list] = None, files: Optional[list] = None) -> str:
     posted_part = f" · posted={','.join(posted)}" if posted else ""
+    files_part = f" · files={','.join(files)}" if files else ""
     return ("[sub-agent" + (f" · role={role}" if role else "")
-            + f" · {n_msgs} msgs · lane={lane} · status={status}{posted_part}]")
+            + f" · {n_msgs} msgs · lane={lane} · status={status}{posted_part}{files_part}]")
+
+
+def parse_subagent_envelope(text: str) -> dict:
+    """Parse a subagent output envelope into a typed structured contract."""
+    if not isinstance(text, str):
+        return {"status": "error", "content": str(text), "files_modified": [], "posted": []}
+
+    first_line = text.splitlines()[0] if text else ""
+    if not first_line.startswith(("[sub-agent", "[Sub-agent", "[critic-actor")):
+        return {
+            "status": "raw" if not text.startswith("error:") else "error",
+            "content": text,
+            "files_modified": [],
+            "posted": [],
+        }
+
+    status_match = re.search(r"status=([a-z_]+)", first_line)
+    status = status_match.group(1) if status_match else "unknown"
+
+    role_match = re.search(r"role=([^·\s\]]+)", first_line)
+    role = role_match.group(1) if role_match else None
+
+    lane_match = re.search(r"lane=([^·\s\]]+)", first_line)
+    lane = lane_match.group(1) if lane_match else None
+
+    posted_match = re.search(r"posted=([^·\]]+)", first_line)
+    posted = [k.strip() for k in posted_match.group(1).split(",")] if posted_match else []
+
+    files_match = re.search(r"files=([^·\]]+)", first_line)
+    files = [f.strip() for f in files_match.group(1).split(",")] if files_match else []
+
+    body = "\n".join(text.splitlines()[1:]).strip()
+
+    return {
+        "status": status,
+        "role": role,
+        "lane": lane,
+        "posted": posted,
+        "files_modified": files,
+        "content": body,
+    }
 
 
 
@@ -161,7 +203,13 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
 
     msgs = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": task}]
 
-    from .blackboard import _active_scope_writes
+    from .blackboard import (
+        _active_scope_writes,
+        acquire_file_lock,
+        release_all_file_locks_for_holder,
+    )
+    subagent_id = f"sub_{int(time.time() * 1000)}_{role or 'generic'}"
+    files_modified: set = set()
     token = _active_scope_writes.set([])
     try:
         async with _subagent_scope():
@@ -268,6 +316,16 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                     refused = subagent_call_verdict(name, names_ok)
                     if refused is not None:
                         result = refused
+                    elif name in ("write_file", "edit_file", "append_file"):
+                        target_p = a.get("path") or a.get("file_path") or ""
+                        lock_ok, lock_holder = acquire_file_lock(target_p, subagent_id) if target_p else (True, subagent_id)
+                        if not lock_ok:
+                            result = (f"error: file '{target_p}' is currently locked for editing by sibling "
+                                      f"agent '{lock_holder}'. Choose another task or wait.")
+                        else:
+                            result = await run_tool(name, a)
+                            if not str(result).startswith("error:"):
+                                files_modified.add(target_p)
                     else:
                         result = await run_tool(name, a)
                     # a child re-sends its own history every step too: keep its tool results as small as the parent's
@@ -277,6 +335,8 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
 
         posted_keys = _active_scope_writes.get() or []
     finally:
+        # Always release any advisory file locks acquired by this subagent
+        release_all_file_locks_for_holder(subagent_id)
         # Always restore the parent's scope list. This used to be a bare reset()
         # after the block, so the early `return "error: no model is available"`
         # skipped it: because run_subagent is awaited in the CALLER's context
@@ -291,7 +351,14 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
     # card numbers here so they never reach the parent context in the clear
     from ..pan import mask_pans
     final_content, _ = mask_pans(final_content)
-    header = _envelope_header(role=role, lane=lane, n_msgs=len(msgs) - 2, status=status, posted=posted_keys)
+    header = _envelope_header(
+        role=role,
+        lane=lane,
+        n_msgs=len(msgs) - 2,
+        status=status,
+        posted=posted_keys,
+        files=sorted(files_modified) if files_modified else None,
+    )
     return f"{header}\n{final_content.strip()}"
 
 

@@ -67,6 +67,14 @@ class Order(unittest.TestCase):
         self.assertEqual([pg.stuck_action(n, 8) for n in (0, 7, 8, 40)], ["ok", "ok", "warn", "warn"])
         self.assertEqual(pg.stuck_action(99, 0), "ok")
 
+    def test_execution_receipt_required(self):
+        plan_items = items("in_progress", "pending")
+        plan_items[0]["text"] = "Implement and test auth endpoint"
+        # Zero actions performed -> receipt missing
+        self.assertIn("receipt missing", pg.check_update(plan_items, 1, "done", actions=[]))
+        # With successful write action -> receipt accepted
+        self.assertIsNone(pg.check_update(plan_items, 1, "done", actions=[{"name": "write_file", "ok": True}]))
+
 
 class PlanTools(unittest.TestCase):
     """create_plan / update_plan_item against an in-memory stand-in for the plan table."""

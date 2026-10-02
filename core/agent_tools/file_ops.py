@@ -197,6 +197,11 @@ async def tool_write_file(args: dict) -> str:
         return (f"error: {path_arg} already exists ({_lines(before)} lines). Change part of it with edit_file "
                 "(after read_file), add to the end with append_file, or pass overwrite=true to replace the "
                 "whole file.")
+    if args.get("pre_save_check") or args.get("pre_validate"):
+        from .verify import validate_code_syntax
+        is_ok, err = validate_code_syntax(path_arg, content)
+        if not is_ok:
+            return f"error: pre-save syntax validation failed for {path_arg}: {err} (file was not written)"
     await _store(uid, p, before, content)
     verb = "overwrote" if before is not None else "created"
     msg = f"wrote {len(content)} chars ({_lines(content)} lines) to {path_arg} ({verb})"
@@ -255,6 +260,11 @@ async def tool_edit_file(args: dict) -> str:
         except edit_engine.EditError as e:
             return f"error: {e}"
         after = res["text"]
+        if args.get("pre_save_check") or args.get("pre_validate"):
+            from .verify import validate_code_syntax
+            is_ok, err = validate_code_syntax(path_arg, after)
+            if not is_ok:
+                return f"error: pre-save syntax validation failed for {path_arg}: {err} (file was not modified)"
         await _store(uid, p, before, after)
         where = f"line {res['first_line']}" if res["first_line"] == res["last_line"] else \
             f"lines {res['first_line']}-{res['last_line']}"
@@ -265,6 +275,11 @@ async def tool_edit_file(args: dict) -> str:
     except edit_engine.EditError as e:
         return f"error: {e}"
     after = res["text"]
+    if args.get("pre_save_check") or args.get("pre_validate"):
+        from .verify import validate_code_syntax
+        is_ok, err = validate_code_syntax(path_arg, after)
+        if not is_ok:
+            return f"error: pre-save syntax validation failed for {path_arg}: {err} (file was not modified)"
     await _store(uid, p, before, after)
     where = f"line {res['first_line']}" if res["first_line"] == res["last_line"] else \
         f"lines {res['first_line']}-{res['last_line']}"

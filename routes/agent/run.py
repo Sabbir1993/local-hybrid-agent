@@ -472,6 +472,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                              and not plan_guard.open_items(db_get_plan_items(req.session_id)))
         plan_required_steps = 0     # steps spent asking for the plan (gives up after 2, never stalls)
         py_calls = 0                        # run_python scripts so far (each one needs the user's approval)
+        consecutive_inspect_steps = 0       # read-only inspection steps without progress
         item_key, item_steps = None, 0      # current plan step and the steps spent on it
         item_nudges = 0                     # "do not stop" nudges since the last status change
         cutoff_retries = 0     # replies cut off by the output limit (core/agent_loop/truncation.py)
@@ -580,7 +581,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     forced_main=forced_main, force_main_why=force_main_why,
                     plan_first=plan_first))
 
-                is_creation_or_code = router_policy.is_creation(last_query, rpol)
+                is_creation_or_code = router_policy.is_creation(last_query, rpol, msgs=msgs)
                 # Off by default: over the logged runs the classifier never produced a
                 # tool call (0 hits) and cost 10-40s per request. router.tool_shortcut=true re-enables it.
                 if (not req.plan) and step == 0 and rpol.get("tool_shortcut", False) and mode not in ("no-orchestration", "all-cloud", "direct") and not cloud_exec and router_available() and not any(
@@ -1329,6 +1330,20 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                         continue
 
+                    if name == "update_plan_item" and (args or {}).get("status") == "done" and req.session_id:
+                        try:
+                            _no = int((args or {}).get("item", 0))
+                            _pi = db_get_plan_items(req.session_id)
+                            _rec_err = plan_guard.check_execution_receipt(_pi, _no, actions_taken)
+                            if _rec_err:
+                                result = f"error: {_rec_err}"
+                                yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                                actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                                msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                                continue
+                        except Exception:
+                            pass
+
                     approved, note = fast_sandbox_check(name, args)
                     yield sse("verify", {'id': tc_id, 'name': name, 'approved': approved, 'note': note})
                     if not approved:
@@ -1566,6 +1581,22 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     if script_nudge.should_nudge(py_calls, py_calls + _py_new, _lim):
                         msgs.append({"role": "user", "content": script_nudge.message(py_calls + _py_new)})
                     py_calls += _py_new
+
+                # Anti-thrash stagnation watchdog: detect loops of read-only exploration
+                _step_acts = actions_taken[n_actions_before:]
+                if _step_acts and all(a.get("name") in ("read_file", "read_file_chunk", "grep", "list_files", "search_memory", "get_plan") for a in _step_acts):
+                    consecutive_inspect_steps += 1
+                    if consecutive_inspect_steps >= 3:
+                        msgs.append({
+                            "role": "user",
+                            "content": (
+                                "[stagnation guard] You have inspected files across multiple consecutive steps without modifying code or running verification tests. "
+                                "You have sufficient context. Formulate your solution now using write_file/edit_file, run verification tests, or state what is blocking you."
+                            )
+                        })
+                        consecutive_inspect_steps = 0
+                elif any(a.get("ok") and (a.get("name") in FILE_WRITE_TOOLS or a.get("name") in ("run_python", "run_shell", "update_plan_item")) for a in _step_acts):
+                    consecutive_inspect_steps = 0
 
                 # re-assert the plan-tracking reminder every step (not just once at
                 # turn start) so a long tool-call run doesn't drift away from calling

@@ -130,11 +130,38 @@ async function snapshotText(sess) {
   return snap;
 }
 
+function getTargetLocators(sess, p) {
+  const locs = [];
+  if (p.ref) {
+    const cleanRef = String(p.ref).replace(/^\[?ref=/, "").replace(/\]$/, "");
+    locs.push(sess.page.locator(`aria-ref=${cleanRef}`));
+  }
+  if (p.role) {
+    const roleOpts = p.name ? { name: String(p.name), exact: false } : undefined;
+    locs.push(sess.page.getByRole(String(p.role), roleOpts).first());
+  }
+  if (p.test_id || p.testid) {
+    locs.push(sess.page.getByTestId(String(p.test_id || p.testid)).first());
+  }
+  if (p.label) {
+    locs.push(sess.page.getByLabel(String(p.label), { exact: false }).first());
+  }
+  if (p.placeholder) {
+    locs.push(sess.page.getByPlaceholder(String(p.placeholder), { exact: false }).first());
+  }
+  if (p.selector) {
+    locs.push(sess.page.locator(String(p.selector)).first());
+  }
+  if (p.text) {
+    locs.push(sess.page.getByText(String(p.text), { exact: false }).first());
+  }
+  return locs;
+}
+
 function target(sess, p) {
-  if (p.ref) return sess.page.locator(`aria-ref=${String(p.ref).replace(/^\[?ref=/, "").replace(/\]$/, "")}`);
-  if (p.selector) return sess.page.locator(String(p.selector)).first();
-  if (p.text) return sess.page.getByText(String(p.text), { exact: false }).first();
-  throw new Error("give ref (from browser_snapshot), selector or text");
+  const locs = getTargetLocators(sess, p);
+  if (locs.length > 0) return locs[0];
+  throw new Error("give ref (from browser_snapshot), role, selector, label or text");
 }
 
 // ---------------- card / password guard ----------------
@@ -160,7 +187,7 @@ async function assertTypable(loc, text) {
     type: (el.getAttribute("type") || "").toLowerCase(),
     ac: (el.getAttribute("autocomplete") || "").toLowerCase(),
     name: `${el.getAttribute("name") || ""} ${el.id || ""} ${el.getAttribute("aria-label") || ""}`.toLowerCase(),
-  })).catch(() => ({ type: "", ac: "", name: "" }));
+  }), undefined, { timeout: 1500 }).catch(() => ({ type: "", ac: "", name: "" }));
   if (info.type === "password" || info.ac.includes("password")) {
     throw new Error("refused: the agent never types into password fields - enter test credentials yourself");
   }
@@ -197,23 +224,106 @@ async function snapshot(p) {
   return { ...(await pageInfo(sess)), snapshot: await snapshotText(sess) };
 }
 
+async function executeClick(loc, p) {
+  await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+  try {
+    await loc.click({
+      timeout: 5000,
+      button: p.button === "right" ? "right" : "left",
+      clickCount: p.double ? 2 : 1,
+    });
+  } catch (err) {
+    try {
+      await loc.click({
+        force: true,
+        timeout: 3000,
+        button: p.button === "right" ? "right" : "left",
+        clickCount: p.double ? 2 : 1,
+      });
+    } catch (_) {
+      await loc.evaluate((el) => {
+        if (el.scrollIntoView) el.scrollIntoView({ block: "center", inline: "center" });
+        if (el.click) el.click();
+        else el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      }, undefined, { timeout: 1500 });
+    }
+  }
+}
+
 async function click(p) {
   const sess = await getSession(p, false);
-  await target(sess, p).click({ timeout: 10000, button: p.button === "right" ? "right" : "left",
-                                clickCount: p.double ? 2 : 1 });
+  const locs = getTargetLocators(sess, p);
+  if (locs.length === 0) {
+    throw new Error("give ref (from browser_snapshot), role, selector, label or text");
+  }
+  let lastErr = null;
+  for (const loc of locs) {
+    try {
+      if (locs.length > 1) {
+        await loc.waitFor({ state: "attached", timeout: 1500 });
+      }
+      await executeClick(loc, p);
+      lastErr = null;
+      break;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (lastErr) throw lastErr;
   await sess.page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
   await sess.page.waitForTimeout(300);
   return { ...(await pageInfo(sess)), snapshot: await snapshotText(sess) };
 }
 
+async function executeType(loc, text, p) {
+  await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+  try {
+    if (p.clear !== false) await loc.fill(text, { timeout: 5000 });
+    else await loc.pressSequentially(text, { timeout: 5000 });
+  } catch (err) {
+    try {
+      await loc.focus({ timeout: 2000 });
+      if (p.clear !== false) {
+        await loc.evaluate((el) => { el.value = ""; }, undefined, { timeout: 1500 });
+      }
+      await loc.pressSequentially(text, { timeout: 3000 });
+    } catch (_) {
+      await loc.evaluate((el, val) => {
+        el.focus();
+        el.value = val;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }, text, { timeout: 1500 });
+    }
+  }
+  if (p.submit) await loc.press("Enter").catch(() => {});
+}
+
 async function type(p) {
   const sess = await getSession(p, false);
-  const loc = target(sess, p);
+  const locs = getTargetLocators(sess, p);
+  if (locs.length === 0) {
+    throw new Error("give ref (from browser_snapshot), role, selector, label or text");
+  }
   const text = String(p.text_value != null ? p.text_value : p.value || "");
-  await assertTypable(loc, text);
-  if (p.clear !== false) await loc.fill(text, { timeout: 10000 });
-  else await loc.pressSequentially(text, { timeout: 10000 });
-  if (p.submit) await loc.press("Enter");
+  let lastErr = null;
+  for (const loc of locs) {
+    try {
+      if (locs.length > 1) {
+        await loc.waitFor({ state: "attached", timeout: 1500 });
+      }
+      await assertTypable(loc, text);
+      await executeType(loc, text, p);
+      lastErr = null;
+      break;
+    } catch (e) {
+      if (/refused:/.test(String(e && e.message))) {
+        throw e;
+      }
+      lastErr = e;
+    }
+  }
+  if (lastErr) throw lastErr;
   await sess.page.waitForTimeout(300);
   return { ...(await pageInfo(sess)), snapshot: await snapshotText(sess) };
 }
@@ -227,7 +337,23 @@ async function press(p) {
 
 async function select(p) {
   const sess = await getSession(p, false);
-  await target(sess, p).selectOption(Array.isArray(p.values) ? p.values.map(String) : String(p.values || p.value_option || ""));
+  const locs = getTargetLocators(sess, p);
+  if (locs.length === 0) {
+    throw new Error("give ref (from browser_snapshot), role, selector, label or text");
+  }
+  const opts = Array.isArray(p.values) ? p.values.map(String) : String(p.values || p.value_option || "");
+  let lastErr = null;
+  for (const loc of locs) {
+    try {
+      await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+      await loc.selectOption(opts, { timeout: 5000 });
+      lastErr = null;
+      break;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (lastErr) throw lastErr;
   return { ...(await pageInfo(sess)), snapshot: await snapshotText(sess) };
 }
 
@@ -257,8 +383,22 @@ async function evaluate(p) {
 async function waitFor(p) {
   const sess = await getSession(p, false);
   const ms = Math.min(Number(p.timeout_ms) || 10000, 60000);
-  if (p.text) await sess.page.getByText(String(p.text)).first().waitFor({ timeout: ms });
-  else await sess.page.waitForTimeout(Math.min(ms, 10000));
+  const locs = getTargetLocators(sess, p);
+  if (locs.length > 0) {
+    let ok = false;
+    for (const loc of locs) {
+      try {
+        await loc.waitFor({ timeout: ms, state: p.state || "visible" });
+        ok = true;
+        break;
+      } catch (_) {}
+    }
+    if (!ok) {
+      await locs[0].waitFor({ timeout: 1000, state: p.state || "attached" }).catch(() => {});
+    }
+  } else {
+    await sess.page.waitForTimeout(Math.min(ms, 10000));
+  }
   return { ...(await pageInfo(sess)), snapshot: await snapshotText(sess) };
 }
 
@@ -277,5 +417,6 @@ async function close(p) {
 module.exports = {
   navigate, snapshot, click, type, press, select, screenshot,
   console: consoleLog, evaluate, waitFor, close,
+  target, getTargetLocators,
   DEVICE_PRESETS: Object.keys(DEVICE_PRESETS),
 };

@@ -102,29 +102,71 @@ def is_greeting(query: str, cfg: dict = None) -> bool:
     return q in {str(g).lower() for g in cfg["greetings"]} or (len(q) <= 3 and not q.startswith("/"))
 
 
-def is_creation(query: str, cfg: dict = None) -> bool:
-    return _has_any(query, (cfg or rcfg())["creation_keywords"])
+CONTINUATION_PHRASES = (
+    "go for it", "proceed", "continue", "yes", "do it", "do that",
+    "go ahead", "start", "sure", "sounds good", "make plan", "start phase",
+    "apply", "ok", "okay", "yep", "all right", "alright"
+)
 
 
-def wants_action(query: str, cfg: dict = None) -> bool:
-    return _has_any(query, (cfg or rcfg())["action_keywords"])
+def is_continuation(query: str) -> bool:
+    """True when the user query is an affirmative continuation or brief follow-up."""
+    q = (query or "").strip().lower()
+    return any(q == p or q.startswith(p + " ") or q.startswith(p + "!") or q.startswith(p + ".")
+               for p in CONTINUATION_PHRASES)
+
+
+def contextual_query(msgs: list, query: str) -> str:
+    """Synthesize active conversational intent for short or anaphoric follow-up queries.
+    Prevents intent amnesia on follow-ups like 'yes', 'go for it', 'proceed'.
+    """
+    q = (query or "").strip()
+    words = q.split()
+    if len(words) > 6 and not is_continuation(q):
+        return q
+
+    # Find the last assistant message before this turn to extract the active proposal
+    last_assistant_content = ""
+    for m in reversed(msgs or []):
+        if m.get("role") == "assistant" and (m.get("content") or m.get("tool_calls")):
+            text = str(m.get("content") or "").strip()
+            if text:
+                last_assistant_content = text
+                break
+    if not last_assistant_content:
+        return q
+
+    first_para = [p.strip() for p in last_assistant_content.split("\n\n") if p.strip()]
+    anchor = (first_para[0] if first_para else last_assistant_content)[:300]
+    return f"{anchor} {q}"
+
+
+def is_creation(query: str, cfg: dict = None, msgs: list = None) -> bool:
+    eff = contextual_query(msgs, query) if msgs else query
+    return _has_any(eff, (cfg or rcfg())["creation_keywords"])
+
+
+def wants_action(query: str, cfg: dict = None, msgs: list = None) -> bool:
+    eff = contextual_query(msgs, query) if msgs else query
+    return _has_any(eff, (cfg or rcfg())["action_keywords"])
 
 
 def is_refusal(content: str, cfg: dict = None) -> bool:
     return _has_any(content, (cfg or rcfg())["refusal_phrases"])
 
 
-def classify_query(query: str, cfg: dict = None) -> str:
+def classify_query(query: str, cfg: dict = None, msgs: list = None) -> str:
     """Coarse query category used for routing stats and start_on_main_categories.
     Only the category is ever stored -- never the query text."""
     cfg = cfg or rcfg()
-    if is_greeting(query, cfg):
+    eff = contextual_query(msgs, query) if msgs else query
+    if is_greeting(query, cfg) and not is_continuation(query):
         return "greeting"
-    if is_creation(query, cfg):
+    if is_creation(eff, cfg):
         return "creation"
-    if wants_action(query, cfg):
+    if wants_action(eff, cfg):
         return "action"
-    q = (query or "").strip().lower()
+    q = (eff or "").strip().lower()
     if q.endswith("?") or _QUESTION_RX.match(q):
         return "question"
     return "other"

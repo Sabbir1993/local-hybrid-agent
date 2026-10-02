@@ -754,5 +754,24 @@ class RunPythonIsolationTests(Base):
         self.assertIn("fs.remove", self.fc.ops)
 
 
+class PreSaveSyntaxValidationTests(Base):
+    def test_pre_save_syntax_validation_rejects_broken_python(self):
+        res = self.call("write_file", path="broken.py", content="def invalid(:\n  pass", pre_save_check=True)
+        self.assertIn("error: pre-save syntax validation failed", res)
+        self.assertNotIn(full("broken.py"), self.fc.files, "broken file must not be committed to disk")
+
+    def test_pre_save_syntax_validation_passes_valid_code(self):
+        res = self.call("write_file", path="valid.py", content="def valid():\n  pass\n", pre_save_check=True)
+        self.assertIn("wrote", res)
+        self.assertIn(full("valid.py"), self.fc.files)
+
+    def test_pre_save_syntax_validation_rejects_broken_edit(self):
+        self.call("write_file", path="test_edit.py", content="a = 1\nb = 2\n")
+        res = self.call("edit_file", path="test_edit.py", old_string="b = 2", new_string="b = (", pre_save_check=True)
+        self.assertIn("error: pre-save syntax validation failed", res)
+        self.assertEqual(self.fc.files[full("test_edit.py")], "a = 1\nb = 2\n", "file on disk must remain pristine")
+
+
 if __name__ == "__main__":
     unittest.main()
+

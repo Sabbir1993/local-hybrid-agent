@@ -94,11 +94,127 @@ def blackboard_read(key: Optional[str] = None, session_id: Optional[str] = None)
         return dict(sess_dict)
 
 
+_locks_store: Dict[str, Dict[str, dict]] = {}
+DEFAULT_FILE_LOCK_TIMEOUT_S = 120.0
+
+
+def _norm_path(path: str) -> str:
+    """Normalize file paths across platforms so locks match reliably."""
+    p = str(path or "").strip().replace("\\", "/")
+    while "//" in p:
+        p = p.replace("//", "/")
+    if len(p) >= 2 and p[1] == ":" and p[0].isalpha():
+        p = p[0].lower() + p[1:]
+    return p
+
+
+def acquire_file_lock(file_path: str, holder_id: str, timeout_s: float = DEFAULT_FILE_LOCK_TIMEOUT_S,
+                      session_id: Optional[str] = None) -> tuple[bool, Optional[str]]:
+    """Advisory write lock on a workspace file for a subagent.
+    Returns (success, current_holder).
+    """
+    clean_p = _norm_path(file_path)
+    clean_holder = str(holder_id or "").strip()
+    if not clean_p or not clean_holder:
+        return False, None
+
+    sid = session_id or _current_session_id()
+    now = time.time()
+    dur = float(timeout_s) if timeout_s and float(timeout_s) > 0 else DEFAULT_FILE_LOCK_TIMEOUT_S
+    expires_at = now + max(0.01, dur)
+
+    with _lock:
+        if sid not in _locks_store:
+            _locks_store[sid] = {}
+        sess_locks = _locks_store[sid]
+
+        cur = sess_locks.get(clean_p)
+        if cur is not None:
+            # Check if expired
+            if cur.get("expires_at", 0) <= now:
+                sess_locks[clean_p] = {"holder": clean_holder, "acquired_at": now, "expires_at": expires_at}
+                return True, clean_holder
+            # Already held by this holder: refresh expiry
+            if cur.get("holder") == clean_holder:
+                cur["expires_at"] = expires_at
+                return True, clean_holder
+            # Held by another holder
+            return False, cur.get("holder")
+
+        # Free: acquire
+        sess_locks[clean_p] = {"holder": clean_holder, "acquired_at": now, "expires_at": expires_at}
+        return True, clean_holder
+
+
+def release_file_lock(file_path: str, holder_id: str, session_id: Optional[str] = None) -> bool:
+    """Release a file lock held by holder_id. Returns True if released."""
+    clean_p = _norm_path(file_path)
+    clean_holder = str(holder_id or "").strip()
+    if not clean_p or not clean_holder:
+        return False
+
+    sid = session_id or _current_session_id()
+    with _lock:
+        sess_locks = _locks_store.get(sid, {})
+        cur = sess_locks.get(clean_p)
+        if cur and cur.get("holder") == clean_holder:
+            sess_locks.pop(clean_p, None)
+            return True
+        return False
+
+
+def release_all_file_locks_for_holder(holder_id: str, session_id: Optional[str] = None) -> list[str]:
+    """Release all locks held by a specific subagent on exit. Returns list of freed paths."""
+    clean_holder = str(holder_id or "").strip()
+    if not clean_holder:
+        return []
+
+    sid = session_id or _current_session_id()
+    freed = []
+    with _lock:
+        sess_locks = _locks_store.get(sid, {})
+        for p, info in list(sess_locks.items()):
+            if info.get("holder") == clean_holder:
+                sess_locks.pop(p, None)
+                freed.append(p)
+    return freed
+
+
+def get_file_lock_holder(file_path: str, session_id: Optional[str] = None) -> Optional[str]:
+    """Return active lock holder if file is currently locked and not expired."""
+    clean_p = _norm_path(file_path)
+    if not clean_p:
+        return None
+
+    sid = session_id or _current_session_id()
+    now = time.time()
+    with _lock:
+        sess_locks = _locks_store.get(sid, {})
+        cur = sess_locks.get(clean_p)
+        if cur and cur.get("expires_at", 0) > now:
+            return cur.get("holder")
+        return None
+
+
+def list_file_locks(session_id: Optional[str] = None) -> dict[str, dict]:
+    """List all active unexpired file locks in the session."""
+    sid = session_id or _current_session_id()
+    now = time.time()
+    with _lock:
+        sess_locks = _locks_store.get(sid, {})
+        return {
+            p: dict(info)
+            for p, info in sess_locks.items()
+            if info.get("expires_at", 0) > now
+        }
+
+
 def blackboard_clear(session_id: Optional[str] = None) -> None:
-    """Clear blackboard entries for a session."""
+    """Clear blackboard entries and active file locks for a session."""
     sid = session_id or _current_session_id()
     with _lock:
         _store.pop(sid, None)
+        _locks_store.pop(sid, None)
 
 
 def blackboard_summary(session_id: Optional[str] = None, max_chars: int = 1500) -> str:

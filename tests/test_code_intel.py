@@ -82,5 +82,33 @@ class OutlineTests(unittest.TestCase):
         self.assertNotIn("start_session", blob)  # bodies stay out of context
 
 
+class CallHierarchyTests(unittest.TestCase):
+    def test_caller_symbol_identified_in_calls(self):
+        from core.code_intel import ast_index as idx
+        calls = idx.find_symbol_callers("get_user", REPO)
+        callers = sorted({c.get("caller") for c in calls if c.get("caller")})
+        self.assertIn("admin_lookup", callers)
+        self.assertIn("user_profile", callers)
+        self.assertIn("user_settings", callers)
+
+    def test_find_symbol_callees(self):
+        from core.code_intel import ast_index as idx
+        callees = idx.find_symbol_callees("user_profile", REPO)
+        names = [c["name"] for c in callees]
+        self.assertIn("get_user", names)
+        # target definition resolved across repo
+        get_user_callee = [c for c in callees if c["name"] == "get_user"][0]
+        def_files = [d["file"] for d in get_user_callee["definitions"]]
+        self.assertIn("db.py", def_files)
+
+    def test_get_call_hierarchy_graph(self):
+        from core.code_intel import ast_index as idx
+        graph = idx.get_call_hierarchy("get_user", REPO)
+        self.assertEqual(graph["symbol"], "get_user")
+        incoming_callers = {c.get("caller") for c in graph["incoming_callers"]}
+        self.assertTrue({"admin_lookup", "user_profile", "user_settings"}.issubset(incoming_callers))
+
+
 if __name__ == "__main__":
     unittest.main()
+

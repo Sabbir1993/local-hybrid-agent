@@ -67,8 +67,21 @@ def focus_message(items: list, chunk_tokens: int = 3000) -> str:
             + (f" Do not start step #{nxt['ord']} first." if nxt else ""))
 
 
-def check_update(items: list, item: int, status: str):
-    """Error text when the status change breaks the one-step-at-a-time rule, else None."""
+def check_execution_receipt(items: list, item: int, actions: list) -> Optional[str]:
+    """Verify that a step marked 'done' has an execution receipt or successful tool evidence.
+    Prevents empty/hallucinated instant completions without executing any actions.
+    """
+    if not actions:
+        target = next((i for i in items if i["ord"] == item), None)
+        step_text = target.get("text", "") if target else f"step #{item}"
+        if any(w in step_text.lower() for w in ("create", "write", "build", "implement", "test", "verify", "run", "fix", "edit", "add")):
+            return (f"execution receipt missing for step #{item} ('{step_text[:60]}'): no tool actions "
+                    "have been performed yet. Execute the required file writes or tests before marking done.")
+    return None
+
+
+def check_update(items: list, item: int, status: str, actions: Optional[list] = None):
+    """Error text when the status change breaks the one-step-at-a-time rule or lacks verification receipt, else None."""
     if status == "in_progress":
         other = next((i for i in items if i.get("status") == "in_progress" and i["ord"] != item), None)
         if other:
@@ -79,6 +92,10 @@ def check_update(items: list, item: int, status: str):
         if earlier:
             return (f"step #{earlier['ord']} ({earlier['text'][:80]}) is not finished. Do the steps in order: "
                     f"finish #{earlier['ord']} first, or mark it failed with a note.")
+        if actions is not None:
+            err = check_execution_receipt(items, item, actions)
+            if err:
+                return err
     return None
 
 

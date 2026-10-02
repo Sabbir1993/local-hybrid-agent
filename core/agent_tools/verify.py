@@ -76,3 +76,39 @@ def verify_text(path: str, text: str) -> tuple[str, str]:
     except Exception as e:
         return "fail", _short(f"{type(e).__name__}: {e}")
     return "skip", ""
+
+
+def validate_code_syntax(path: str, text: str) -> tuple[bool, str]:
+    """Validate syntax in-memory before committing changes to disk.
+    Supports Python (ast), JSON, TOML, YAML, XML/SVG, and JavaScript/JSX (tree-sitter).
+    Returns (True, '') when valid or skipped, (False, error_msg) when invalid syntax.
+    """
+    ext = PurePath(path).suffix.lower()
+    if ext in (".js", ".mjs", ".cjs"):
+        try:
+            import tree_sitter
+            import tree_sitter_javascript as _tsjs
+            lang = tree_sitter.Language(_tsjs.language())
+            p = tree_sitter.Parser(lang)
+            tree = p.parse(text.encode("utf-8"))
+            if tree.root_node.has_error:
+                def _find_err(n):
+                    if n.is_missing or n.type == "ERROR":
+                        return n
+                    for c in n.children:
+                        if c.has_error:
+                            res = _find_err(c)
+                            if res:
+                                return res
+                    return None
+                err = _find_err(tree.root_node)
+                where = f"line {err.start_point[0] + 1}" if err else "unknown line"
+                return False, f"JavaScript syntax error at {where}"
+            return True, ""
+        except Exception:
+            return True, ""
+    status, detail = verify_text(path, text)
+    if status == "fail":
+        return False, detail
+    return True, ""
+

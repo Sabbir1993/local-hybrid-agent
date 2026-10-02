@@ -10,6 +10,7 @@ from .constants import (
     SUBAGENT_SYSTEM_PROMPT,
 )
 from .runner import (
+    parse_subagent_envelope,
     resolve_subagent_tools,
     run_subagent,
     run_parallel_subagents,
@@ -18,10 +19,15 @@ from .runner import (
     tool_spawn_parallel_agents,
 )
 from .blackboard import (
+    acquire_file_lock,
     blackboard_clear,
     blackboard_read,
     blackboard_summary,
     blackboard_write,
+    get_file_lock_holder,
+    list_file_locks,
+    release_all_file_locks_for_holder,
+    release_file_lock,
     tool_blackboard_post,
     tool_blackboard_read,
 )
@@ -53,12 +59,18 @@ __all__ = [
     "run_parallel_subagents",
     "tool_spawn_agent",
     "tool_spawn_parallel_agents",
+    "parse_subagent_envelope",
     "blackboard_clear",
     "blackboard_read",
     "blackboard_summary",
     "blackboard_write",
     "tool_blackboard_post",
     "tool_blackboard_read",
+    "acquire_file_lock",
+    "release_file_lock",
+    "release_all_file_locks_for_holder",
+    "get_file_lock_holder",
+    "list_file_locks",
     "get_workspace_changes_diff",
     "parse_reviewer_verdict",
     "run_critic_actor_cycle",

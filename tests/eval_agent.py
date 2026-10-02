@@ -527,10 +527,22 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, clie
                                 "CSRF header may be missing: the harness now mirrors the "
                                 "frontend's X-CSRF-Token echo, so report this as an eval bug.")
                 return _finish_early(task, rec, t0)
-            if resp.status_code == 403:
-                rec["error"] = ("HTTP 403 - forbidden. Either the CSRF header is missing "
-                                "(eval bug - report it) or the account lacks the agent "
-                                "permission (check Users/Roles in the UI).")
+            if resp.status_code in (403, 400, 422):
+                # The body names WHICH server-side gate fired: agent_native_only (browser
+                # User-Agent), agent_requires_companion (Companion app not connected for this
+                # user), agent_workspace_unavailable (no device workspace), or a validation
+                # error. Without it every one of those reads as an identical bare 403.
+                body = ""
+                try:
+                    body = resp.read().decode("utf-8", "replace")[:500]
+                except Exception:
+                    pass
+                detail = f" body={body[:300]!r}" if body.strip() else " (empty body)"
+                if resp.status_code == 403:
+                    rec["error"] = (f"HTTP 403{detail}. The session is valid; the app refused "
+                                    "the run itself.")
+                else:
+                    rec["error"] = f"HTTP {resp.status_code}{detail}"
                 return _finish_early(task, rec, t0)
             if resp.status_code != 200:
                 rec["error"] = f"HTTP {resp.status_code}"

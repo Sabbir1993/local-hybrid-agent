@@ -522,15 +522,16 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     ctx.surface_q = tool_surface.surface_query(ctx.msgs) or ctx.last_query
 
     ctx.rpol = router_policy.rcfg()
-    ctx.q_category = router_policy.classify_query(ctx.last_query, ctx.rpol)
+    ctx.q_category = router_policy.classify_query(ctx.last_query, ctx.rpol, msgs=ctx.msgs)
     # Laya request profile (core/small_model/classifier.py): logged whenever the classifier is on,
     # and it refines the rule-based category only in active mode, only when confident, and never
     # over a greeting. It runs on a worker thread with a hard timeout, so a slow model just
     # means the rules decide.
     ctx.clf_profile = None
     if classifier.enabled() and ctx.q_category != "greeting":
+        clf_q = router_policy.contextual_query(ctx.msgs, ctx.last_query) if router_policy.is_continuation(ctx.last_query) else ctx.last_query
         ctx.clf_profile = await asyncio.get_event_loop().run_in_executor(
-            None, classifier.request_profile, ctx.last_query)
+            None, classifier.request_profile, clf_q)
         if (ctx.clf_profile and ctx.clf_profile["confident"] and ctx.clf_profile.get("category")
                 and classifier.active("request_profile")):
             ctx.q_category = ctx.clf_profile["category"]

@@ -1,5 +1,5 @@
 {
-  "ts": 1790963922.3100631,
+  "ts": 1790964976.9784389,
   "offline": [],
   "live": [],
   "live_summary": {
@@ -54,7 +54,7 @@
       "stable": true,
       "flaky": false,
       "problems": [
-        "transport error: HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI).",
+        "transport error: HTTP 403 body='{\"error\":\"agent_workspace_unavailable\",\"message\":\"Agent task refused: no project is selected on this device - select a project from your machine first\"}'. The session is valid; the app refused the run itself.",
         "missing tool: run_python",
         "answer missing '3973' (got '')",
         "no tools and no answer"
@@ -72,7 +72,7 @@
           "duration_s": 0.0,
           "tools": [],
           "lanes": [],
-          "error": "HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI)."
+          "error": "HTTP 403 body='{\"error\":\"agent_workspace_unavailable\",\"message\":\"Agent task refused: no project is selected on this device - select a project from your machine first\"}'. The session is valid; the app refused the run itself."
         }
       ]
     },
@@ -90,7 +90,7 @@
       "stable": true,
       "flaky": false,
       "problems": [
-        "transport error: HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI).",
+        "transport error: HTTP 403 body='{\"error\":\"agent_workspace_unavailable\",\"message\":\"Agent task refused: no project is selected on this device - select a project from your machine first\"}'. The session is valid; the app refused the run itself.",
         "missing tool: run_python",
         "answer missing '1079' (got '')",
         "answer missing '80' (got '')",
@@ -109,7 +109,7 @@
           "duration_s": 0.0,
           "tools": [],
           "lanes": [],
-          "error": "HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI)."
+          "error": "HTTP 403 body='{\"error\":\"agent_workspace_unavailable\",\"message\":\"Agent task refused: no project is selected on this device - select a project from your machine first\"}'. The session is valid; the app refused the run itself."
         }
       ]
     },
@@ -127,7 +127,7 @@
       "stable": true,
       "flaky": false,
       "problems": [
-        "transport error: HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI).",
+        "transport error: HTTP 403 body='{\"error\":\"agent_workspace_unavailable\",\"message\":\"Agent task refused: no project is selected on this device - select a project from your machine first\"}'. The session is valid; the app refused the run itself.",
         "missing tool: run_python",
         "answer missing '3' (got '')",
         "no tools and no answer"
@@ -145,7 +145,7 @@
           "duration_s": 0.0,
           "tools": [],
           "lanes": [],
-          "error": "HTTP 403 - forbidden. Either the CSRF header is missing (eval bug - report it) or the account lacks the agent permission (check Users/Roles in the UI)."
+          "error": "HTTP 403 body='{\"error\":\"agent_workspace_unavailable\",\"message\":\"Agent task refused: no project is selected on this device - select a project from your machine first\"}'. The session is valid; the app refused the run itself."
         }
       ]
     }
@@ -154,8 +154,8 @@
   "env": {
     "mode": "auto",
     "temperature": 0.3,
-    "ts": 1790963923,
-    "git_sha": "33c58cb",
+    "ts": 1790964977,
+    "git_sha": "30f83eb",
     "degraded": false
   }
 }

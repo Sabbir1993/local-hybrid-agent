@@ -35,5 +35,26 @@ class EscalateOnWhatTheTurnDidTests(unittest.TestCase):
                                             is_loop=True), "loop")
 
 
+class ContinuationAndContextualQueryTests(unittest.TestCase):
+    def test_is_continuation(self):
+        for phrase in ("go for it", "proceed", "continue", "yes", "sure", "start phase 1"):
+            self.assertTrue(rp.is_continuation(phrase), f"expected continuation for '{phrase}'")
+        for non_phrase in ("what is python", "hello", "write a flask api"):
+            self.assertFalse(rp.is_continuation(non_phrase), f"not continuation: '{non_phrase}'")
+
+    def test_contextual_query_synthesizes_intent(self):
+        msgs = [
+            {"role": "user", "content": "How do I add authentication?"},
+            {"role": "assistant", "content": "I recommend we build and implement a JWT auth system in auth.py with tests."},
+        ]
+        ctx_q = rp.contextual_query(msgs, "go for it")
+        self.assertIn("JWT auth", ctx_q)
+        self.assertIn("go for it", ctx_q)
+
+        # classify_query recognizes creation/action intent from context instead of 'other'
+        cat = rp.classify_query("go for it", msgs=msgs)
+        self.assertIn(cat, ("creation", "action"))
+
+
 if __name__ == "__main__":
     unittest.main()

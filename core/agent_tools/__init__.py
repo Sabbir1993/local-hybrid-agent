@@ -59,6 +59,8 @@ from .plans import (
 )
 from .search_tools import (
     MAX_IMAGE_BYTES,
+    MAX_IMAGE_DIM,
+    optimize_image_bytes,
     tool_analyze_image,
     tool_search_knowledge_base,
     tool_search_memory,
@@ -208,6 +210,8 @@ __all__ = [
     "tool_list_diff",
     "tool_revert",
     "MAX_IMAGE_BYTES",
+    "MAX_IMAGE_DIM",
+    "optimize_image_bytes",
     "tool_analyze_image",
     "tool_search_memory",
     "tool_search_knowledge_base",

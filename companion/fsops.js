@@ -8,6 +8,7 @@ const path = require("path");
 const os = require("os");
 const childProcess = require("child_process");
 const { dialog, BrowserWindow } = require("electron");
+const { buildChildEnv } = require("./shellops");
 
 const SKIP_DIR_NAMES = new Set([".git", "node_modules", "__pycache__", ".venv", "venv"]);
 
@@ -183,7 +184,7 @@ function verify({ path: p }) {
   if (!CHECKABLE.has(ext) || !fs.existsSync(p)) return Promise.resolve({ checked: false });
   return new Promise((resolve) => {
     childProcess.execFile(process.execPath, ["--check", p], {
-      timeout: 15000, windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      timeout: 15000, windowsHide: true, env: { ...buildChildEnv(process.env), ELECTRON_RUN_AS_NODE: "1" },
     }, (err, _out, stderr) => {
       if (!err) return resolve({ checked: true, ok: true });
       if (err.code === "ENOENT" || err.killed) return resolve({ checked: false });

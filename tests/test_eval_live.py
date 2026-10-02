@@ -531,17 +531,42 @@ class LiveHttpErrorsDiagnoseThemselves(unittest.TestCase):
         self.assertTrue(rec["problems"])
         self.assertFalse(rec["ok"])
 
-    def test_403_distinguishes_eval_bug_from_account_permissions(self):
+    def test_403_carries_the_gate_name_from_the_body(self):
+        """The third defect the smoke test exposed: three different server-side gates return
+        403 (native-app UA, Companion-app requirement, device workspace), and the harness
+        dropped the body naming which one. Now it is captured."""
+        import eval_agent
+        import json
+        from unittest import mock
+        for gate in ("agent_native_only", "agent_requires_companion",
+                     "agent_workspace_unavailable"):
+            with self.subTest(gate):
+                body = json.dumps({"error": gate,
+                                   "message": f"refused: {gate}"}).encode()
+                resp = mock.Mock(status_code=403)
+                resp.read.return_value = body
+                stream = mock.MagicMock()
+                stream.__enter__.return_value = resp
+                client = mock.Mock()
+                client.stream.return_value = stream
+                rec = eval_agent.run_live_task("http://x", self._task(), "auto",
+                                               client=client)
+                self.assertIn(gate, rec["error"], rec["error"])
+                self.assertIsNotNone(rec["duration_s"])
+                self.assertTrue(rec["problems"])
+                self.assertFalse(rec["ok"])
+
+    def test_403_with_empty_body_still_reports_duration(self):
         import eval_agent
         from unittest import mock
         resp = mock.Mock(status_code=403)
+        resp.read.return_value = b""
         stream = mock.MagicMock()
         stream.__enter__.return_value = resp
         client = mock.Mock()
         client.stream.return_value = stream
         rec = eval_agent.run_live_task("http://x", self._task(), "auto", client=client)
-        self.assertIn("CSRF", rec["error"])
-        self.assertIn("permission", rec["error"])
+        self.assertIn("empty body", rec["error"])
         self.assertIsNotNone(rec["duration_s"])
 
     def test_other_statuses_carry_duration_and_problems(self):

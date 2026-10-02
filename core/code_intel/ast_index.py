@@ -67,9 +67,10 @@ def _docstring_of(body, src: bytes) -> str:
 
 
 def _walk_py(root, src: bytes, rel: str, syms: list, calls: list) -> None:
-    def visit(node, klass: str = ""):
+    def visit(node, klass: str = "", enclosing: str = ""):
         if node.type == "function_definition":
             name = _name_of(node, src)
+            fn_sym = f"{klass}.{name}" if klass else name
             params = next((c for c in node.children if c.type == "parameters"), None)
             body = next((c for c in node.children if c.type == "block"), None)
             syms.append({
@@ -80,6 +81,10 @@ def _walk_py(root, src: bytes, rel: str, syms: list, calls: list) -> None:
                 "signature": _text(params, src) if params is not None else "()",
                 "docstring": _docstring_of(body, src) if body is not None else "",
             })
+            if body is not None:
+                for c in node.children:
+                    visit(c, klass=klass, enclosing=fn_sym)
+            return
         elif node.type == "class_definition":
             name = _name_of(node, src)
             body = next((c for c in node.children if c.type == "block"), None)
@@ -87,14 +92,12 @@ def _walk_py(root, src: bytes, rel: str, syms: list, calls: list) -> None:
                 "name": name, "kind": "class", "class": None, "file": rel,
                 "line": node.start_point[0] + 1,
                 "end_line": node.end_point[0] + 1,
-                "signature": _text(next((c for c in node.children
-                                         if c.type == "argument_list"), node), src)
-                if False else "",
+                "signature": "",
                 "docstring": _docstring_of(body, src) if body is not None else "",
             })
             if body is not None:
                 for c in _named(body):
-                    visit(c, klass=name)
+                    visit(c, klass=name, enclosing=enclosing)
             return
         elif node.type == "call":
             fn = next((c for c in node.children
@@ -106,10 +109,14 @@ def _walk_py(root, src: bytes, rel: str, syms: list, calls: list) -> None:
                     attr = fn.child_by_field_name("attribute")
                     called = _text(attr, src) if attr is not None else ""
                 if called:
-                    calls.append({"name": called, "file": rel,
-                                  "line": node.start_point[0] + 1})
+                    calls.append({
+                        "name": called,
+                        "file": rel,
+                        "line": node.start_point[0] + 1,
+                        "caller": enclosing or None,
+                    })
         for c in node.children:
-            visit(c, klass=klass)
+            visit(c, klass=klass, enclosing=enclosing)
 
     visit(root)
 
@@ -126,9 +133,13 @@ def _walk_js(root, src: bytes, rel: str, syms: list, calls: list) -> None:
             "docstring": "",
         })
 
-    def visit(node, klass: str = ""):
+    def visit(node, klass: str = "", enclosing: str = ""):
         if node.type in ("function_declaration", "generator_function_declaration"):
-            _record_fn(node, _name_of(node, src))
+            name = _name_of(node, src)
+            _record_fn(node, name, klass=klass)
+            for c in node.children:
+                visit(c, klass=klass, enclosing=name)
+            return
         elif node.type == "class_declaration":
             name = _name_of(node, src)
             body = next((c for c in node.children if c.type == "class_body"), None)
@@ -140,15 +151,24 @@ def _walk_js(root, src: bytes, rel: str, syms: list, calls: list) -> None:
             })
             if body is not None:
                 for c in _named(body):
-                    visit(c, klass=name)
+                    visit(c, klass=name, enclosing=enclosing)
             return
         elif node.type == "method_definition":
-            _record_fn(node, _name_of(node, src), klass=klass)
+            name = _name_of(node, src)
+            fn_sym = f"{klass}.{name}" if klass else name
+            _record_fn(node, name, klass=klass)
+            for c in node.children:
+                visit(c, klass=klass, enclosing=fn_sym)
+            return
         elif node.type == "variable_declarator":
             val = node.child_by_field_name("value")
             if val is not None and val.type in ("arrow_function", "function_expression",
                                                 "function"):
-                _record_fn(val, _name_of(node, src))
+                name = _name_of(node, src)
+                _record_fn(val, name, klass=klass)
+                for c in val.children:
+                    visit(c, klass=klass, enclosing=name)
+                return
         elif node.type == "call_expression":
             fn = node.child_by_field_name("function")
             called = ""
@@ -159,10 +179,14 @@ def _walk_js(root, src: bytes, rel: str, syms: list, calls: list) -> None:
                     prop = fn.child_by_field_name("property")
                     called = _text(prop, src) if prop is not None else ""
             if called:
-                calls.append({"name": called, "file": rel,
-                              "line": node.start_point[0] + 1})
+                calls.append({
+                    "name": called,
+                    "file": rel,
+                    "line": node.start_point[0] + 1,
+                    "caller": enclosing or None,
+                })
         for c in node.children:
-            visit(c, klass=klass)
+            visit(c, klass=klass, enclosing=enclosing)
 
     visit(root)
 
@@ -285,8 +309,50 @@ def find_symbol_definition(name: str, root, path_hint: str = None) -> list:
 
 
 def find_symbol_callers(name: str, root) -> list:
-    """Every syntactic call site of `name`, with file + line."""
+    """Every syntactic call site of `name`, with file, line, and caller function."""
     return [c for c in index_repo(root)["calls"] if c["name"] == name]
+
+
+def find_symbol_callees(name: str, root, path_hint: str = None) -> list:
+    """Every symbol called inside the body of `name`.
+    Cross-references targets with their definitions across the workspace.
+    """
+    data = index_repo(root)
+    defs = find_symbol_definition(name, root, path_hint=path_hint)
+    if not defs:
+        return []
+    callees = []
+    seen = set()
+    for d in defs:
+        d_file = d["file"]
+        start_l = d["line"]
+        end_l = d.get("end_line", start_l)
+        for c in data["calls"]:
+            if c["file"] == d_file and start_l <= c["line"] <= end_l:
+                key = (c["name"], c["file"], c["line"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                targets = [t for t in data["symbols"] if t["name"] == c["name"]]
+                callees.append({
+                    "name": c["name"],
+                    "caller": name,
+                    "file": d_file,
+                    "line": c["line"],
+                    "definitions": [{"file": t["file"], "line": t["line"], "kind": t["kind"]} for t in targets],
+                })
+    return callees
+
+
+def get_call_hierarchy(name: str, root, path_hint: str = None) -> dict:
+    """Directed cross-file call hierarchy for `name`: incoming callers and outgoing callees."""
+    incoming = find_symbol_callers(name, root)
+    outgoing = find_symbol_callees(name, root, path_hint=path_hint)
+    return {
+        "symbol": name,
+        "incoming_callers": incoming,
+        "outgoing_callees": outgoing,
+    }
 
 
 def get_file_outline(path) -> list:
@@ -310,3 +376,4 @@ def get_file_outline(path) -> list:
              "line": s["line"], "end_line": s["end_line"],
              "signature": s["signature"], "docstring": s["docstring"]}
             for s in syms]
+

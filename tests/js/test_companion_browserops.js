@@ -82,6 +82,18 @@ console.error('boom from page');</script>`;
     const ev = await ops.evaluate({ ...S, expression: 'document.title' });
     assert.match(ev.result, /Todo/);
     assert.ok(asked.some(a => a[0] === 'script'));
+
+    // resilient multi-tier targeting & self-healing fallback tests
+    // 1. role + name locator
+    await ops.click({ ...S, role: 'button', name: 'Add' });
+    // 2. placeholder targeting
+    await ops.type({ ...S, placeholder: 'new todo', text_value: 'clean room' });
+    // 3. stale/invalid ref with fallback selector succeeds
+    d = await ops.click({ ...S, ref: 'e9999', selector: '#add' });
+    assert.match(d.snapshot, /clean room/);
+    // 4. waitFor with selector locator
+    await ops.waitFor({ ...S, selector: '#list' });
+
     console.log('ok - companion browserops');
   } finally {
     await ops.close(S);
