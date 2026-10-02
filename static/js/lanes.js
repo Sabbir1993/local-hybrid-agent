@@ -957,16 +957,18 @@ function wizardWhisperHtml() {
     ${models.length ? '' : `<div class="dim ln-hint">No whisper models in <code>${esc(voiceDir)}</code>. Download e.g. <code>ggml-large-v3-turbo-q5_0.bin</code> (about 550 MB) into it, then reopen this.</div>`}
     <label class="ln-lbl" for="wz-gpu">Run it on</label>
     <select id="wz-gpu" data-wz="gpu">${gpuOpts}</select>
+    <div class="dim ln-hint">This whisper build runs on CPU (BLAS) — CPU threads below is the speed lever, not the GPU choice.</div>
     <label class="ln-lbl" for="wz-lang">Usual language</label>
     <select id="wz-lang" data-wz="language">${langs.map(([v, t]) => `<option value="${v}"${(D.language || 'auto') === v ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>
-    <div class="dim ln-hint">People can still pick a language each time they record.</div>
+    <div class="dim ln-hint">A fixed language skips auto-detect on every request, so English / বাংলা is faster than Auto. People can still pick a language each time they record.</div>
     <label class="ln-lbl" for="wz-label">Name it</label>
     <input id="wz-label" data-wz="label" maxlength="40" value="${esc(D.label || '')}" placeholder="e.g. Whisper" autocomplete="off">
     <details class="ln-adv"><summary>More settings</summary>
       <label class="ln-lbl" for="wz-port">Port</label>
       <input id="wz-port" data-wz="port" type="number" min="1025" max="65535" value="${esc(D.port || LN.d.suggested_port)}">
       <label class="ln-lbl" for="wz-threads">CPU threads</label>
-      <input id="wz-threads" data-wz="threads" type="number" min="1" max="64" value="${esc(D.threads || 4)}">
+      <input id="wz-threads" data-wz="threads" type="number" min="1" max="64" value="${esc(D.threads ?? '')}" placeholder="auto">
+      <div class="dim ln-hint">Empty = use the server's CPU count (this box: 20). Large models need 8+ to stay near realtime; for live mic prefer a small/base model lane, keep large-turbo for files.</div>
       <label class="ln-lbl" for="wz-idle">Unload after idle (seconds, 0 = never)</label>
       <input id="wz-idle" data-wz="idle_unload_s" type="number" min="0" max="86400" value="${esc(D.idle_unload_s ?? '')}" placeholder="default">
     </details>`;

@@ -131,7 +131,12 @@ async def generate(kind: str, user, prompt: str, opts: Optional[dict] = None,
 
 
 async def transcribe(user, wav: bytes, language: Optional[str] = None) -> dict:
-    """-> {text, model, source, ms}."""
+    """-> {text, model, source, ms, audio_s, rtf}.
+
+    audio_s = spoken seconds (from the WAV header), rtf = wall_time /
+    audio_s (< 1 means faster than realtime - the number Phase 1 chunk
+    sizing is tuned against).
+    """
     check_wav(wav)
     uid = getattr(user, "id", None)
     lang = (language or "").strip().lower() or None
@@ -153,11 +158,55 @@ async def transcribe(user, wav: bytes, language: Optional[str] = None) -> dict:
                 if inst is None or not hasattr(inst, "transcribe"):
                     raise MediaError(f"'{label}' isn't a speech-to-text model")
                 text = await inst.transcribe(wav, lang)
-            return {"text": _clean_transcript(text), "model": label, "source": t.source,
-                    "ms": int((time.time() - t0) * 1000)}
+            wall = time.time() - t0
+            out = {"text": _clean_transcript(text), "model": label, "source": t.source,
+                   "ms": int(wall * 1000)}
+            secs = wav_seconds(wav)
+            if secs:
+                out["audio_s"] = round(secs, 1)
+                out["rtf"] = round(wall / secs, 2)
+            return out
         except asyncio.CancelledError:
             raise
         except Exception as e:
             errors.append(f"{label}: {plain_error(e)}")
             print(f"[media] transcribe via {t.describe()} failed: {type(e).__name__}", file=sys.stderr)
     raise MediaError(" / ".join(errors))
+
+
+def wav_seconds(wav: bytes) -> Optional[float]:
+    """Spoken seconds from a WAV header (None when unreadable)."""
+    try:
+        import struct
+        if len(wav) < 44 or wav[:4] != b"RIFF" or wav[8:12] != b"WAVE":
+            return None
+        channels = struct.unpack("<H", wav[22:24])[0]
+        rate = struct.unpack("<I", wav[24:28])[0]
+        bits = struct.unpack("<H", wav[34:36])[0]
+        pos = wav.find(b"data", 12)   # extra chunks (LIST, bext, …) may precede data
+        if pos < 0 or not rate or not channels or not bits:
+            return None
+        size = struct.unpack("<I", wav[pos + 4:pos + 8])[0]
+        secs = size / (rate * channels * (bits / 8))
+        return secs if secs > 0 else None
+    except Exception:
+        return None
+
+
+async def warmup(user) -> dict:
+    """Pre-load the local speech-to-text server so the first real recording
+    skips the model-load wait. -> {model, source, already_loaded}."""
+    uid = getattr(user, "id", None)
+    route = [t for t in lanes.targets("transcribe", uid)
+             if not t.is_cloud and t.available()]
+    if not route:
+        raise MediaError("Speech to text isn't set up yet - add a model in Settings -> Models & Jobs.")
+    t = route[0]
+    inst = t.inst
+    if inst is None or not hasattr(inst, "ensure_loaded"):
+        raise MediaError("Speech to text isn't set up yet - add a model in Settings -> Models & Jobs.")
+    already = inst.is_up()
+    await inst.ensure_loaded()
+    reg = lanes.registry(uid)
+    return {"model": reg.get(t.lane, {}).get("label") or t.lane, "source": t.source,
+            "already_loaded": bool(already), "warmed": True}

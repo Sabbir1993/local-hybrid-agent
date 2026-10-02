@@ -8,25 +8,6 @@
                           background: color-mix(in srgb, var(--red) 14%, transparent); }
 .comp-mic-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* recording / transcribing strip above the composer buttons */
-.mic-pill { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 2px;
-            padding: 6px 10px; border-radius: 10px; font-size: 12px;
-            border: 1px solid var(--border); background: var(--panel2); }
-.mic-pill[hidden] { display: none; }
-.mic-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); flex-shrink: 0;
-           animation: micPulse 1s ease-in-out infinite; }
-@keyframes micPulse { 50% { opacity: .35; } }
-.mic-time { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 36px; }
-.mic-level { width: 70px; height: 6px; border-radius: 3px; background: var(--panel); overflow: hidden;
-             border: 1px solid var(--border-subtle); }
-.mic-level > span { display: block; height: 100%; width: 0; background: var(--green); transition: width .08s linear; }
-.mic-label { color: var(--dim); }
-.mic-lang select { font-size: 11.5px; padding: 2px 4px; background: var(--bg-input); color: var(--text);
-                   border: 1px solid var(--border); border-radius: 6px; }
-.mic-btn { width: auto !important; margin: 0 !important; padding: 3px 10px !important; font-size: 11.5px !important; }
-.mic-pill .btn:first-of-type { margin-left: auto !important; }
-@media (prefers-reduced-motion: reduce) { .mic-dot { animation: none; } }
-
 /* options row under the armed <image> / <video> chip */
 .media-opts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 11.5px; }
 .media-seg { border: 1px solid var(--border); background: var(--panel2); color: var(--text); border-radius: 999px;

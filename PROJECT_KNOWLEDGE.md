@@ -826,7 +826,12 @@ and `revert`. **Not persisted** — cleared by `set_active_project()` and lost o
 | POST | `/media/generate` | `{kind, prompt, aspect?, seconds?, seed?, negative?, lane?, confirm_cost?}` → `{job_id, on_pc}`; 409 `not_setup`, 409 `needs_confirm` (cloud video), 409 `not_loaded {lane, label, can_load}` (local sd.cpp model not loaded, no backup), 429 busy |
 | GET | `/media/jobs/{id}` | SSE `queued` → `progress {text, pct}` → `done {files, markdown, model, where}` / `error {message}`; owner only, kept 30 min |
 | DELETE | `/media/jobs/{id}` | stop waiting (the service may still finish) |
-| POST | `/media/transcribe` | multipart 16 kHz WAV + `language` → `{text, model, source, ms}` (cap `media.max_audio_mb`) |
+| POST | `/media/transcribe` | multipart 16 kHz WAV + `language` → `{text, model, source, ms, audio_s, rtf}` (cap `media.max_audio_mb`) |
+| POST | `/media/transcribe/warmup` | pre-load the local STT server → `{model, already_loaded}` (the lane test warms it too) |
+| POST | `/media/transcribe_stream/start` | open a live session `{language?}` → `{stream_id}` (must have a transcribe lane) |
+| POST | `/media/transcribe_stream/chunk` | multipart 16 kHz WAV window + `stream_id` + `seq` (in order) → `{seq, text, interim}` (cap 2 MB/window, 200 windows, 11 min session) |
+| POST | `/media/transcribe_stream/finish` | close the session → `{text, chunks, ms, audio_s, rtf}` (overlap repeats stripped at window boundaries) |
+| POST | `/media/transcribe_stream/cancel` | discard a session → `{ok}` |
 | POST | `/control/media-settings` | admin: `allow_cloud_audio`, `image_per_day`, `video_per_day` (cloud-only daily limits) |
 | POST | `/control/lanes/{name}/load` | load an sd.cpp image/video model (`model.local.load`); returns at once, the page polls `state` (`not_loaded` / `loading` / `loaded` / `failed`) |
 | GET | `/control/lanes/files` | admin: model files under `Models/orchestrator` - `{folder, models, mmproj, whisper, image, video}` (`core/profiles.discover_helper_files`) |

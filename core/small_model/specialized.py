@@ -46,6 +46,20 @@ def lane_engine_of_spec(name: str, cfg: Optional[dict] = None) -> str:
     return "llama"
 
 
+def default_whisper_threads() -> int:
+    """CPU threads for whisper.cpp when the lane doesn't set any.
+
+    The old default of 4 left most machines idle (this box has 20 CPUs).
+    Capped at 32: beyond that whisper.cpp gains little and steals from
+    the chat lanes sharing the box.
+    """
+    try:
+        n = int(os.cpu_count() or 4)
+    except Exception:
+        n = 4
+    return max(1, min(n, 32))
+
+
 class WhisperInstance(SmallModelInstance):
     """On-demand whisper.cpp server (speech to text) for an "stt" lane."""
 
@@ -53,7 +67,11 @@ class WhisperInstance(SmallModelInstance):
         super().__init__(role, cfg)
         if int(cfg.get("gpu", 0) if cfg.get("gpu") is not None else 0) < 0:
             self.gpu = -1
-        self.threads = int(cfg.get("threads") or 4)
+        try:
+            threads = int(cfg.get("threads") or 0)
+        except (TypeError, ValueError):
+            threads = 0
+        self.threads = threads if 1 <= threads <= 64 else default_whisper_threads()
         self.language = str(cfg.get("language") or "auto")
 
     @property

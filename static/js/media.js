@@ -1,7 +1,8 @@
 /* ---------------- media.js: 🎤 dictation, audio attachments, /image and /video ----------------
  * Server side: routes/media.py + core/media.py. Each feature appears only once
  * a model is set up for it in Settings -> Models & Jobs (GET /media/status).
- *   🎤 button   record -> 16 kHz WAV (audio-wav.js) -> /media/transcribe -> text at the cursor
+ *   🎤 button   toggle: click to record, click again to stop — words appear live
+ *               in the prompt box (/media/transcribe_stream/*, full-record fallback)
  *   audio file  attached like a document, as its transcript
  *   /image, /video <description>  -> a progress card in the chat, then the result
  *   composer select "🖼 Image"     -> Send makes an image from the typed text
@@ -11,7 +12,14 @@
 const MEDIA = { status: null, rec: null, timer: 0, live: new Set() };
 const MEDIA_SETUP_URL = '/settings#sec-lanes';
 const MIC_MAX_S = 10 * 60;
-const STT_LANGS = [['auto', 'Auto'], ['en', 'English'], ['bn', 'বাংলা']];
+/* live streaming: PCM windows sent while talking (server joins them) */
+const STREAM_WIN_S = 4;
+const STREAM_OVERLAP_S = 0.75;   // re-sent tail so a cut never eats a word
+const STREAM_KEEP_S = 8;         // PCM seconds kept in RAM; older audio is dropped, never queued
+const STREAM_MIN_TAIL_S = 0.5;   // shorter remainders aren't worth a request
+const STREAM_SILENCE_PEAK = 0.02;  // windows quieter than this are room noise, not
+                                   // speech: skipped, never sent (whisper invents
+                                   // "Thank you"/"Hello" on silence)
 
 function _mediaSetupToast(what) {
   if (typeof toast !== 'function') return;
@@ -74,9 +82,9 @@ function _paintMic() {
   const recording = !!MEDIA.rec;
   b.classList.toggle('recording', recording);
   b.setAttribute('aria-pressed', recording ? 'true' : 'false');
-  const label = recording ? 'Stop recording and turn it into text'
-    : `Dictate — speak and it's typed for you${st && st.ready ? ' · ' + _whereText(st) : ''}`;
-  b.title = label + (recording ? ' (Esc cancels)' : '');
+  const label = recording ? 'Stop recording and keep the text'
+    : `Dictate — click to record, click again to stop${st && st.ready ? ' · ' + _whereText(st) : ''}`;
+  b.title = label;
   b.setAttribute('aria-label', label);
 }
 
@@ -84,40 +92,113 @@ function _sttLang() {
   try { return localStorage.getItem('stt_lang') || 'auto'; } catch (_) { return 'auto'; }
 }
 
-function _pill() {
-  let p = $('mic-pill');
-  if (!p) {
-    p = document.createElement('div');
-    p.id = 'mic-pill';
-    p.className = 'mic-pill';
-    p.setAttribute('role', 'status');
-    p.setAttribute('aria-live', 'polite');
-    const comp = document.querySelector('.composer');
-    const actions = comp && comp.querySelector('.comp-actions');
-    if (comp && actions) comp.insertBefore(p, actions); else document.body.appendChild(p);
-  }
-  return p;
-}
-
-function _pillShow(html) { const p = _pill(); p.innerHTML = html; p.hidden = false; }
-function _pillHide() { const p = $('mic-pill'); if (p) { p.hidden = true; p.innerHTML = ''; } }
-
 function _fmtClock(s) {
   s = Math.max(0, Math.floor(s));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-function _recPillHtml() {
-  const lang = _sttLang();
-  const opts = STT_LANGS.map(([v, l]) => `<option value="${v}"${v === lang ? ' selected' : ''}>${l}</option>`).join('');
-  return `<span class="mic-dot" aria-hidden="true"></span>
-    <span class="mic-time" data-mic-time>0:00</span>
-    <span class="mic-level" aria-hidden="true"><span data-mic-level></span></span>
-    <span class="mic-label">Listening…</span>
-    <label class="mic-lang"><span class="sr-only">Language</span>
-      <select data-mic-lang aria-label="Language you're speaking">${opts}</select></label>
-    <button type="button" class="btn accent mic-btn" data-mic="stop">■ Done</button>
-    <button type="button" class="btn ghost mic-btn" data-mic="cancel">Cancel</button>`;
+/* ---------------- live streaming: interim text while talking ----------------
+ * MediaRecorder can't slice overlap, so a parallel ScriptProcessor taps PCM
+ * (16 kHz WAV via audio-wav.js) into 4s windows with a 0.75s re-sent tail.
+ * The server transcribes each window and returns the joined interim text.
+ * MediaRecorder keeps running untouched: if streaming fails at any point,
+ * Done falls back to transcribing the full recording as before. */
+
+function _streamCaptureStart(stream, actx) {
+  if (!actx || typeof actx.createScriptProcessor !== 'function') return null;
+  try {
+    const src = actx.createMediaStreamSource(stream);
+    const proc = actx.createScriptProcessor(4096, 1, 1);
+    const sink = actx.createGain();
+    sink.gain.value = 0;   // the tap must flow somewhere to run; stay silent
+    src.connect(proc); proc.connect(sink); sink.connect(actx.destination);
+    const cap = { rate: actx.sampleRate, buf: new Float32Array(0), total: 0, consumed: 0 };
+    proc.onaudioprocess = e => {
+      const ch = e.inputBuffer.getChannelData(0);
+      const keep = Math.floor(cap.rate * STREAM_KEEP_S);
+      const have = cap.buf.length + ch.length;
+      const drop = Math.max(0, have - keep);
+      let nb;
+      if (drop <= cap.buf.length) {
+        nb = new Float32Array(cap.buf.length - drop + ch.length);
+        nb.set(cap.buf.subarray(drop), 0);
+        nb.set(ch, cap.buf.length - drop);
+      } else {
+        nb = ch.slice(drop - cap.buf.length);
+      }
+      cap.buf = nb;
+      cap.total += ch.length;
+    };
+    return cap;
+  } catch (_) { return null; }
+}
+
+/* next window as 16 kHz WAV bytes, or null when there's nothing new worth sending.
+ * Anything older than one window is dropped, never queued (no request storms
+ * after a backgrounded tab). */
+function _streamTakeWindow(cap, force) {
+  const fresh = cap.total - cap.consumed;
+  if (fresh <= 0) return null;
+  if (!force && fresh < Math.floor(cap.rate * STREAM_MIN_TAIL_S)) return null;
+  const maxWin = Math.floor(cap.rate * (STREAM_WIN_S + STREAM_OVERLAP_S));
+  const n = Math.min(cap.buf.length, maxWin);
+  if (n <= 0 || typeof audioToSttWav !== 'function') { cap.consumed = cap.total; return null; }
+  const pcm = cap.buf.slice(cap.buf.length - n);
+  cap.consumed = cap.total;   // inspected: never re-sent, shipped or not
+  let peak = 0;
+  for (let i = 0; i < pcm.length; i += 7) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; }
+  if (peak < STREAM_SILENCE_PEAK) return null;
+  try {
+    return audioToSttWav([pcm], cap.rate);
+  } catch (_) { return null; }
+}
+
+function _streamInterimShow(s, text) {
+  _streamRenderInput(s, text || '', false);
+}
+
+/* live transcript straight into the prompt box: before + new words + after.
+ * If the user typed meanwhile (value differs from our last write), rebase so
+ * their keystrokes are kept and dictation continues at the end. */
+function _streamRenderInput(s, text, commit) {
+  const input = $('input');
+  if (!input) return;
+  if (input.value !== s.lastRendered) { s.before = input.value; s.after = ''; }
+  const mid = text ? s.pad + text : '';
+  input.value = s.before + mid + (s.after && text && !/^\s/.test(s.after) ? ' ' : '') + s.after;
+  s.lastRendered = input.value;
+  if (commit) {
+    const pos = (s.before + mid).length;
+    input.focus();
+    try { input.setSelectionRange(pos, pos); } catch (_) {}
+  }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function _streamQueueWindow(s, force) {
+  if (!s.cap || s.streamDead) return;
+  const bytes = _streamTakeWindow(s.cap, force);
+  if (!bytes) return;
+  const seq = s.seq++;
+  s.chain = s.chain.then(async () => {
+    if (s.streamDead || MEDIA.rec !== s || !s.streamId) return;
+    const fd = new FormData();
+    fd.append('file', new Blob([bytes], { type: 'audio/wav' }), 'win.wav');
+    fd.append('stream_id', s.streamId);
+    fd.append('seq', String(seq));
+    const r = await fetch('/media/transcribe_stream/chunk', { method: 'POST', body: fd });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    _streamInterimShow(s, j.interim || '');
+  }).catch(() => { s.streamDead = true; _streamInterimShow(s, ''); });
+}
+
+async function mediaStreamFinish(streamId) {
+  const r = await fetch('/media/transcribe_stream/finish', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stream_id: streamId }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
 }
 
 async function micStart() {
@@ -141,43 +222,55 @@ async function micStart() {
   const rec = new MediaRecorder(stream);
   const Ctx = window.AudioContext || window.webkitAudioContext;
   const actx = Ctx ? new Ctx() : null;
-  let analyser = null;
-  if (actx) {
-    analyser = actx.createAnalyser();
-    analyser.fftSize = 512;
-    actx.createMediaStreamSource(stream).connect(analyser);
-  }
-  const state = { rec, stream, actx, analyser, chunks, t0: Date.now(), cancelled: false, raf: 0 };
+  const state = { rec, stream, actx, chunks, t0: Date.now(), raf: 0 };
   MEDIA.rec = state;
+  // insert position: where the caret was before the mic button took focus
+  const input = $('input');
+  if (input) {
+    const sel = MEDIA.sel && MEDIA.sel[2] === input.value ? MEDIA.sel : [input.value.length, input.value.length];
+    state.before = input.value.slice(0, sel[0]);
+    state.after = input.value.slice(sel[1]);
+    state.pad = state.before && !/\s$/.test(state.before) ? ' ' : '';
+    state.lastRendered = input.value;
+  } else {
+    state.before = ''; state.after = ''; state.pad = ''; state.lastRendered = '';
+  }
   rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
   rec.onstop = () => _recFinished(state);
   rec.start(1000);
-  _pillShow(_recPillHtml());
+  // live path: parallel PCM tap + a server session; any failure keeps streamDead
+  // and stopping falls back to the full MediaRecorder audio exactly as before
+  Object.assign(state, { seq: 0, chain: Promise.resolve(), streamDead: true, streamId: null,
+                         cap: _streamCaptureStart(stream, actx), lastWin: Date.now() });
+  if (state.cap) {
+    try {
+      const sr = await fetch('/media/transcribe_stream/start', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: _sttLang() }) });
+      const sj = await sr.json().catch(() => ({}));
+      if (sr.ok && sj.stream_id) { state.streamId = sj.stream_id; state.streamDead = false; }
+    } catch (_) {}
+  }
   _paintMic();
-  const buf = analyser ? new Uint8Array(analyser.fftSize) : null;
-  // a timer, not requestAnimationFrame: it keeps counting (and stops at the
-  // limit) while the tab is in the background
+  toast('Listening — click 🎤 again to stop.');
+  // a timer, not requestAnimationFrame: it keeps shipping windows (and stops at
+  // the limit) while the tab is in the background
   const tick = () => {
     if (MEDIA.rec !== state) { clearInterval(state.raf); return; }
-    const secs = (Date.now() - state.t0) / 1000;
-    const t = document.querySelector('[data-mic-time]');
-    if (t) t.textContent = _fmtClock(secs);
-    if (analyser) {
-      analyser.getByteTimeDomainData(buf);
-      let peak = 0;
-      for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128));
-      const lv = document.querySelector('[data-mic-level]');
-      if (lv) lv.style.width = Math.min(100, Math.round(peak / 128 * 180)) + '%';
+    if (Date.now() - state.t0 >= MIC_MAX_S * 1000) { toast('Stopped after 10 minutes.'); micStop(); return; }
+    // live path: ship a window every few seconds while talking
+    if (state.streamId && !state.streamDead && Date.now() - state.lastWin >= STREAM_WIN_S * 1000) {
+      state.lastWin = Date.now();
+      _streamQueueWindow(state, false);
     }
-    if (secs >= MIC_MAX_S) { toast('Stopped after 10 minutes.'); micStop(); }
   };
-  state.raf = setInterval(tick, 150);
+  state.raf = setInterval(tick, 500);
 }
 
-function micStop(cancel) {
+/* the mic button toggles: click to record, click again to stop and keep the text */
+function micStop() {
   const s = MEDIA.rec;
   if (!s) return;
-  s.cancelled = !!cancel;
   try { s.rec.stop(); } catch (_) { _recFinished(s); }
 }
 window.micStart = micStart;
@@ -190,17 +283,30 @@ async function _recFinished(s) {
   s.stream.getTracks().forEach(t => t.stop());
   try { s.actx && s.actx.close(); } catch (_) {}
   _paintMic();
-  if (s.cancelled || !s.chunks.length) { _pillHide(); return; }
+  if (s.streamId && !s.streamDead) {
+    // live path: flush the tail (<1 window), then commit the joined transcript
+    try {
+      _streamQueueWindow(s, true);
+      const fin = await s.chain.then(() => mediaStreamFinish(s.streamId));
+      if (!fin.text) { toast('No speech was heard. Try again a little closer to the microphone.'); return; }
+      _streamRenderInput(s, fin.text, true);
+    } catch (e) {
+      await _recTranscribeBlob(s);   // live path broke mid-flight: use the full recording
+    }
+    return;
+  }
+  await _recTranscribeBlob(s);
+}
+
+/* the full-recording path: also the fallback when live streaming fails */
+async function _recTranscribeBlob(s) {
+  if (!s.chunks.length) return;
   const blob = new Blob(s.chunks, { type: s.rec.mimeType || 'audio/webm' });
-  const st = MEDIA.status && MEDIA.status.transcribe;
-  _pillShow(`<span class="ac-shimmer"></span><span>Turning speech into text with <b>${esc(_whereText(st))}</b>…</span>`);
   try {
     const text = await mediaTranscribeBlob(blob);
-    _pillHide();
     if (!text) { toast('No speech was heard. Try again a little closer to the microphone.'); return; }
     _insertAtCursor(text);
   } catch (e) {
-    _pillHide();
     toast(`Couldn’t turn the recording into text: ${e.message}`, true);
   }
 }
@@ -492,9 +598,6 @@ document.addEventListener('change', e => {
     const o = mediaOpts(kind);
     o[s.dataset.mopt] = s.value;
     _saveOpts(kind, o);
-  }
-  if (s && s.matches && s.matches('select[data-mic-lang]')) {
-    try { localStorage.setItem('stt_lang', s.value); } catch (_) {}
   }
 });
 
@@ -837,11 +940,7 @@ window.mediaBusy = mediaBusy;
 
 document.addEventListener('click', async e => {
   const b = e.target.closest && e.target.closest('[data-media]');
-  if (!b || typeof messages === 'undefined') {
-    const mb = e.target.closest && e.target.closest('[data-mic]');
-    if (mb) micStop(mb.dataset.mic === 'cancel');
-    return;
-  }
+  if (!b || typeof messages === 'undefined') return;   // no mic buttons: the 🎤 button toggles
   const list = messages;
   const m = list[+b.dataset.idx];
   if (!m || !m.media) return;
@@ -890,11 +989,11 @@ document.addEventListener('click', async e => {
 /* ---------------- init ---------------- */
 (function initMedia() {
   const b = $('btn-mic');
-  if (b) b.addEventListener('click', () => { if (MEDIA.rec) micStop(false); else micStart(); });
+  if (b) b.addEventListener('click', () => { if (MEDIA.rec) micStop(); else micStart(); });
   const input = $('input');
   if (input) input.addEventListener('blur', () => { MEDIA.sel = [input.selectionStart, input.selectionEnd, input.value]; });
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && MEDIA.rec) { e.preventDefault(); micStop(true); }
+    if (e.key === 'Escape' && MEDIA.rec) { e.preventDefault(); micStop(); }
   });
   const cm = $('comp-mode');
   if (cm) {

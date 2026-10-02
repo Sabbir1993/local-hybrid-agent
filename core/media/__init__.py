@@ -59,6 +59,16 @@ from .service import (
     generate,
     status,
     transcribe,
+    warmup,
+    wav_seconds,
+)
+from .streaming import (
+    MAX_CHUNK_B,
+    join_interims,
+    stream_cancel,
+    stream_chunk,
+    stream_finish,
+    stream_start,
 )
 from .storage import (
     _clean_transcript,
@@ -113,6 +123,14 @@ __all__ = [
     "_fetch_public",
     "check_wav",
     "transcribe",
+    "warmup",
+    "wav_seconds",
+    "join_interims",
+    "MAX_CHUNK_B",
+    "stream_start",
+    "stream_chunk",
+    "stream_finish",
+    "stream_cancel",
     "_clean_transcript",
     "_cloud_transcribe",
     "Job",

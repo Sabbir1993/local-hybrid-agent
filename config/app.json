@@ -68,7 +68,8 @@
     "whisper-large-v3": {
       "model": "orchestrator/voice-models/ggml-large-v3-turbo-q5_0.bin",
       "port": 8096,
-      "gpu": -1,
+      "gpu": 1,
+      "threads": 8,
       "engine": "whisper",
       "language": "auto",
       "label": "Whisper large-v3",

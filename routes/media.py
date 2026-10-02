@@ -5,7 +5,12 @@ routes/media.py - images, videos and speech to text (core/media.py).
   POST   /media/generate          start an image or video job -> {job_id}
   GET    /media/jobs/{id}         SSE: queued -> progress -> done | error
   DELETE /media/jobs/{id}         cancel (stops waiting; the service may finish anyway)
-  POST   /media/transcribe        multipart WAV -> {text}
+  POST   /media/transcribe        multipart WAV -> {text, model, source, ms, audio_s, rtf}
+  POST   /media/transcribe/warmup   pre-load the local STT server -> {model, already_loaded}
+  POST   /media/transcribe_stream/start   {language?} -> {stream_id}
+  POST   /media/transcribe_stream/chunk   multipart WAV + stream_id + seq -> {seq, text, interim}
+  POST   /media/transcribe_stream/finish  {stream_id} -> {text, chunks, ms, audio_s, rtf}
+  POST   /media/transcribe_stream/cancel  {stream_id} -> {ok}
 
 A cloud video can cost money, so the first request for one answers 409
 {needs_confirm} and the client asks the user before sending confirm_cost.
@@ -140,6 +145,74 @@ async def media_job_cancel(job_id: str, user: Principal = Depends(get_current_us
     return {"ok": media.cancel_job(job_id, user.id)}
 
 
+@router.post("/media/transcribe/warmup")
+async def media_transcribe_warmup(user: Principal = Depends(get_current_user)):
+    """Pre-load the local speech-to-text server (skips the model-load wait on
+    the first real recording). The lane test warms it too."""
+    try:
+        res = await media.warmup(user)
+    except media.MediaError as e:
+        return _err(str(e), 409 if "isn't set up" in str(e) else 400)
+    audit_log(user, action="media.transcribe.warmup", resource=res["source"],
+              detail={"already_loaded": res["already_loaded"]}, result="allow")
+    return res
+
+
+class StreamStartReq(BaseModel):
+    language: Optional[str] = Field(default=None, max_length=8)
+
+
+class StreamIdReq(BaseModel):
+    stream_id: str = Field(min_length=8, max_length=64)
+
+
+@router.post("/media/transcribe_stream/start")
+async def media_stream_start(req: StreamStartReq, user: Principal = Depends(get_current_user)):
+    try:
+        res = await media.stream_start(user, req.language)
+    except media.MediaError as e:
+        return _err(str(e), 409 if "isn't set up" in str(e) else 400)
+    audit_log(user, action="media.stream.start", resource="local",
+              detail={"stream": res["stream_id"][:8]}, result="allow")
+    return res
+
+
+@router.post("/media/transcribe_stream/chunk")
+async def media_stream_chunk(file: UploadFile = FastAPIFile(...), stream_id: str = Form(...),
+                             seq: str = Form(...), user: Principal = Depends(get_current_user)):
+    try:
+        n = int(seq)
+    except (TypeError, ValueError):
+        return _err("Window number must be a number.", 400)
+    data = await file.read(media.MAX_CHUNK_B + 1)
+    try:
+        res = await media.stream_chunk(user, stream_id, n, data)
+    except media.MediaError as e:
+        msg = str(e)
+        code = 404 if "isn't here any more" in msg else 413 if "too big" in msg else 400
+        return _err(msg, code)
+    return res
+
+
+@router.post("/media/transcribe_stream/finish")
+async def media_stream_finish(req: StreamIdReq, user: Principal = Depends(get_current_user)):
+    try:
+        res = await media.stream_finish(user, req.stream_id)
+    except media.MediaError as e:
+        msg = str(e)
+        return _err(msg, 404 if "isn't here any more" in msg else 400)
+    # metadata only: never the audio or the words
+    audit_log(user, action="media.stream.finish", resource="local",
+              detail={"chunks": res["chunks"], "chars": len(res["text"]),
+                      "ms": res["ms"], "rtf": res.get("rtf")}, result="allow")
+    return res
+
+
+@router.post("/media/transcribe_stream/cancel")
+async def media_stream_cancel(req: StreamIdReq, user: Principal = Depends(get_current_user)):
+    return await media.stream_cancel(user, req.stream_id)
+
+
 @router.post("/media/transcribe")
 async def media_transcribe(file: UploadFile = FastAPIFile(...), language: Optional[str] = Form(default=None),
                            user: Principal = Depends(get_current_user)):
@@ -153,5 +226,6 @@ async def media_transcribe(file: UploadFile = FastAPIFile(...), language: Option
         return _err(str(e), 409 if "isn't set up" in str(e) else 400)
     # metadata only: never the audio or the words
     audit_log(user, action="media.transcribe", resource=res["source"],
-              detail={"bytes": len(data), "chars": len(res["text"]), "ms": res["ms"]}, result="allow")
+              detail={"bytes": len(data), "chars": len(res["text"]), "ms": res["ms"],
+                      "audio_s": res.get("audio_s"), "rtf": res.get("rtf")}, result="allow")
     return res

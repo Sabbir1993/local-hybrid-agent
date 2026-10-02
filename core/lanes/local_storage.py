@@ -184,12 +184,20 @@ def save_local_lane(name: str, data: dict) -> dict:
 
     _set_port_gpu(name, cur, data, sm, cpu_ok=(kind == "stt"))   # whisper can also run on the CPU
     for k, lo, hi in (("ctx", 512, 262144), ("idle_unload_s", 0, 86400), ("np", 1, 16),
-                      ("threads", 1, 64), ("kv_unified_per_slot", 0, 262144)):
+                      ("kv_unified_per_slot", 0, 262144)):
         if data.get(k) is not None:
             v = int(data[k])
             if not lo <= v <= hi:
                 raise ValueError(f"{k} must be between {lo} and {hi}")
             cur[k] = v
+    # whisper CPU threads: empty/cleared = auto (server CPU count), not "keep the old value"
+    if "threads" in data and (data.get("threads") is None or data.get("threads") == ""):
+        cur.pop("threads", None)
+    elif data.get("threads") is not None:
+        v = int(data["threads"])
+        if not 1 <= v <= 64:
+            raise ValueError("threads must be between 1 and 64")
+        cur["threads"] = v
     if kind == "stt":
         cur["engine"] = "whisper"
         cur.pop("ctx", None)
