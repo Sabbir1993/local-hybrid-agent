@@ -1,5 +1,5 @@
 {
-  "ts": 1790966405.7063031,
+  "ts": 1790968765.908246,
   "offline": [
     {
       "name": "grammar",
@@ -913,7 +913,7 @@
   "code": {
     "n_questions": 8,
     "recall": 1.0,
-    "latency_ms_p95": 0.48,
+    "latency_ms_p95": 0.36,
     "ok": true,
     "problems": []
   }

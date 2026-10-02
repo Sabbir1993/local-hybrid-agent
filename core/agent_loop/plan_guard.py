@@ -80,6 +80,26 @@ def check_execution_receipt(items: list, item: int, actions: list) -> Optional[s
     return None
 
 
+def check_syntax_before_done(actions: list) -> Optional[str]:
+    """Return an error string if any file written in `actions` has a syntax error.
+
+    Called by check_update() before allowing a step to be marked 'done'.
+    Delegates to patch_verifier.syntax_check_actions so that write_file calls
+    producing a SyntaxError or IndentationError are caught before the plan moves on.
+
+    Returns None when all written files parse cleanly (or no Python/JS files were written).
+    """
+    try:
+        from .patch_verifier import syntax_check_actions
+        failures = syntax_check_actions(actions)
+        if failures:
+            first = failures[0]
+            return first.as_receipt_error()
+    except Exception:
+        pass   # never block the plan on an unexpected verifier failure
+    return None
+
+
 def check_update(items: list, item: int, status: str, actions: Optional[list] = None):
     """Error text when the status change breaks the one-step-at-a-time rule or lacks verification receipt, else None."""
     if status == "in_progress":
@@ -96,7 +116,11 @@ def check_update(items: list, item: int, status: str, actions: Optional[list] = 
             err = check_execution_receipt(items, item, actions)
             if err:
                 return err
+            err = check_syntax_before_done(actions)
+            if err:
+                return err
     return None
+
 
 
 def run_summary(items: list) -> Optional[str]:

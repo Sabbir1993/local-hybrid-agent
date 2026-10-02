@@ -256,5 +256,123 @@ def snapshot() -> dict:
             "chars_per_token": round(float(st["ratio"]), 3),
             "last_prompt_tokens": st["last_actual"], "budget": budget_for(lane, st["window"] or 0),
         }
+        # Include TPS if recorded
+        tps = _TPS_STATE.get(lane)
+        if tps and tps.get("ema_tps") is not None:
+            out[lane]["ema_tps"] = round(tps["ema_tps"], 1)
+            out[lane]["last_tps"] = round(tps.get("last_tps", 0.0), 1)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Real tok/s EMA tracking & latency advisor
+# ---------------------------------------------------------------------------
+# lane -> {ema_tps, last_tps, n_samples, last_recorded_at}
+_TPS_STATE: dict = {}
+
+# Latency targets
+_TTFT_TARGET_MS = 800    # first token budget
+_TBT_TARGET_TPS = 20.0  # minimum acceptable tok/s for smooth UI
+
+
+def _tps_state(lane: str) -> dict:
+    st = _TPS_STATE.get(lane)
+    if st is None:
+        st = _TPS_STATE[lane] = {
+            "ema_tps": None, "last_tps": 0.0,
+            "n_samples": 0, "last_recorded_at": 0.0,
+        }
+    return st
+
+
+def record_tps(lane: str, tokens_generated: int, elapsed_s: float) -> None:
+    """Record one generation's real tok/s into the per-lane EMA.
+
+    Args:
+        lane: lane name (e.g. "main", "executor").
+        tokens_generated: completion_tokens from usage or the actual count from
+            the SSE stream (not prompt_tokens — those are prefill throughput).
+        elapsed_s: wall-clock seconds from first to last token in the response.
+            Callers can measure this from SSE timing or from
+            ``usage.completion_tokens / (tg_ts reported by server)`` when the
+            server embeds timing in the final SSE chunk.
+    """
+    if elapsed_s <= 0 or tokens_generated <= 0:
+        return
+    tps = tokens_generated / elapsed_s
+    st = _tps_state(lane)
+    if st["ema_tps"] is None:
+        # cold start: seed with the first observation
+        st["ema_tps"] = tps
+    else:
+        # Use a faster alpha for the first 10 samples (converge faster from cold)
+        alpha = 0.40 if st["n_samples"] < 10 else 0.20
+        st["ema_tps"] = (1 - alpha) * st["ema_tps"] + alpha * tps
+    st["last_tps"] = tps
+    st["n_samples"] += 1
+    st["last_recorded_at"] = time.time()
+
+
+def tps_snapshot() -> dict:
+    """Per-lane tok/s EMA snapshot. Safe to call from any thread."""
+    return {
+        lane: {
+            "ema_tps": round(float(st["ema_tps"]), 1) if st["ema_tps"] is not None else None,
+            "last_tps": round(float(st["last_tps"]), 1),
+            "n_samples": st["n_samples"],
+        }
+        for lane, st in _TPS_STATE.items()
+    }
+
+
+def reset_tps(lane: Optional[str] = None) -> None:
+    """Forget TPS observations (on model reload or manual reset)."""
+    if lane is None:
+        _TPS_STATE.clear()
+    else:
+        _TPS_STATE.pop(lane, None)
+
+
+def budget_latency_advice(lane: str, profile: Optional[dict] = None,
+                          system_prompt: str = "",
+                          tools_json: str = "",
+                          prompt_tokens: int = 2048,
+                          task_type: str = "coding") -> dict:
+    """Return latency tuning advice for a lane based on observed tok/s.
+
+    Integrates the EMA tok/s observed on this lane with the streaming_profile
+    advisor.  Never mutates the profile; advisory-only.
+
+    Returns:
+        {
+          "ema_tps": float | None,  # observed generation speed
+          "target_tps": float,      # minimum acceptable
+          "below_target": bool,     # True when tuning is needed
+          "advice": dict,           # from streaming_profile.full_latency_profile()
+        }
+    """
+    tps_st = _tps_state(lane)
+    ema_tps = tps_st.get("ema_tps")
+    below_target = (ema_tps is not None) and (ema_tps < _TBT_TARGET_TPS)
+
+    try:
+        from .streaming_profile import full_latency_profile
+        advice = full_latency_profile(
+            profile=profile or {},
+            system_prompt=system_prompt,
+            tools_json=tools_json,
+            prompt_tokens=prompt_tokens,
+            task_type=task_type,
+        )
+    except Exception:
+        advice = {}
+
+    return {
+        "lane": lane,
+        "ema_tps": round(ema_tps, 1) if ema_tps is not None else None,
+        "target_tps": _TBT_TARGET_TPS,
+        "below_target": below_target,
+        "advice": advice,
+    }
+
 

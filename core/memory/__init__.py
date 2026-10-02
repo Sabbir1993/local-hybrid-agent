@@ -39,6 +39,7 @@ from .indexing import (
     memory_background_task,
 )
 from .search import (
+    expand_query,
     reciprocal_rank_fusion,
     search_fts5,
     search_knowledge_hybrid,
@@ -105,6 +106,7 @@ __all__ = [
     "search_knowledge_hybrid",
     "search_fts5",
     "search_vec_sqlite",
+    "expand_query",
     "reciprocal_rank_fusion",
     "has_fts5",
     "has_sqlite_vec",

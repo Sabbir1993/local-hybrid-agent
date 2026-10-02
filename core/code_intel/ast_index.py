@@ -16,6 +16,7 @@ slice measures exactly that, not an IDE.
 import os
 import time
 from pathlib import Path
+from typing import Optional
 
 import tree_sitter
 import tree_sitter_javascript as _tsjs
@@ -253,19 +254,140 @@ _CACHE: dict = {}
 _TICK_NS = int(15.625 * 1e6) * 2
 
 
+def _sqlite_cache_path(root) -> "Path":
+    return Path(root) / ".ast_cache.db"
+
+
+def _open_sqlite_cache(root) -> "Optional[object]":
+    """Return a sqlite3 connection to the persistent AST cache, or None on failure."""
+    import sqlite3
+    try:
+        db_path = _sqlite_cache_path(root)
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS symbols (
+                name TEXT, kind TEXT, class_ TEXT, file TEXT,
+                line INTEGER, end_line INTEGER,
+                signature TEXT, docstring TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS calls (
+                name TEXT, file TEXT, line INTEGER, caller TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS stats (
+                files INTEGER, skipped TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sym_name ON symbols(name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sym_file ON symbols(file)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_call_name ON calls(name)")
+        conn.commit()
+        return conn
+    except Exception:
+        return None
+
+
+def _load_sqlite_cache(conn, stamp: dict) -> "Optional[dict]":
+    """Return cached data if the persisted stamp matches, else None."""
+    import json
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key='stamp'").fetchone()
+        if row is None:
+            return None
+        stored_stamp = json.loads(row[0])
+        if stored_stamp != stamp:
+            return None
+        syms = [
+            {"name": r[0], "kind": r[1], "class": r[2], "file": r[3],
+             "line": r[4], "end_line": r[5], "signature": r[6], "docstring": r[7]}
+            for r in conn.execute(
+                "SELECT name, kind, class_, file, line, end_line, signature, docstring FROM symbols"
+            ).fetchall()
+        ]
+        calls = [
+            {"name": r[0], "file": r[1], "line": r[2], "caller": r[3]}
+            for r in conn.execute("SELECT name, file, line, caller FROM calls").fetchall()
+        ]
+        stats_row = conn.execute("SELECT files, skipped FROM stats").fetchone()
+        files = stats_row[0] if stats_row else 0
+        skipped = json.loads(stats_row[1]) if stats_row else []
+        return {"symbols": syms, "calls": calls, "files": files, "skipped": skipped}
+    except Exception:
+        return None
+
+
+def _write_sqlite_cache(conn, stamp: dict, data: dict) -> None:
+    """Persist parsed symbol+call data to SQLite for warm-start on next run."""
+    import json
+    try:
+        conn.execute("DELETE FROM meta")
+        conn.execute("DELETE FROM symbols")
+        conn.execute("DELETE FROM calls")
+        conn.execute("DELETE FROM stats")
+        conn.execute("INSERT INTO meta VALUES ('stamp', ?)", (json.dumps(stamp),))
+        conn.executemany(
+            "INSERT INTO symbols VALUES (?,?,?,?,?,?,?,?)",
+            [(s["name"], s["kind"], s.get("class"), s["file"],
+              s["line"], s.get("end_line", s["line"]), s.get("signature", ""),
+              s.get("docstring", ""))
+             for s in data["symbols"]]
+        )
+        conn.executemany(
+            "INSERT INTO calls VALUES (?,?,?,?)",
+            [(c["name"], c["file"], c["line"], c.get("caller")) for c in data["calls"]]
+        )
+        conn.execute("INSERT INTO stats VALUES (?, ?)",
+                     (data["files"], json.dumps(data.get("skipped", []))))
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
 def index_repo(root) -> dict:
     """Parse every supported file under root. Returns symbols, calls, stats.
 
-    First call per repo parses; later calls re-stat (~ms for 1,000 files)
-    and reuse the parsed data when the stamp matches. The scale probe
-    reports cold index time separately from warm query p95.
+    Cache hierarchy:
+    1. Hot in-process dict (_CACHE): microseconds, same Python session.
+    2. Persistent SQLite (.ast_cache.db): ~3ms warm-start across sessions /
+       server restarts. Written after every cold parse; invalidated when any
+       tracked file's (mtime_ns, size) changes.
+    3. Cold parse: tree-sitter walks all files; result written to both layers.
+
+    The stamp IS the invalidation key — additions, deletions, and edits all
+    alter it. Correctness is identical to the previous in-memory-only path.
     """
     root = Path(root)
     key = str(root)
     stamp = _repo_stamp(root)
+
+    # Layer 1: hot in-process dict
     hit = _CACHE.get(key)
     if hit is not None and hit["stamp"] == stamp:
         return hit["data"]
+
+    # Layer 2: persistent SQLite warm-start
+    conn = _open_sqlite_cache(root)
+    if conn is not None:
+        cached = _load_sqlite_cache(conn, stamp)
+        if cached is not None:
+            _CACHE[key] = {"stamp": stamp, "data": cached}
+            conn.close()
+            return cached
+
+    # Layer 3: cold parse
     syms, calls = [], []
     files, skipped = 0, []
     for rel in sorted(stamp):
@@ -291,6 +413,12 @@ def index_repo(root) -> dict:
     calls.sort(key=lambda c: (c["file"], c["line"]))
     data = {"symbols": syms, "calls": calls, "files": files, "skipped": skipped}
     _CACHE[key] = {"stamp": stamp, "data": data}
+
+    # Persist to SQLite for next session warm-start
+    if conn is not None:
+        _write_sqlite_cache(conn, stamp, data)
+        conn.close()
+
     return data
 
 
