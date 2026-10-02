@@ -17,6 +17,7 @@ from .devices import (
     _dev_cache,
     _dev_lock,
     _run_list_devices,
+    DeviceQueryError,
     query_devices,
     wall_check,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "_dev_cache",
     "_dev_lock",
     "_run_list_devices",
+    "DeviceQueryError",
     "query_devices",
     "wall_check",
     "_GGUF_FMT",

@@ -44,10 +44,14 @@ db_backups/
 .coverage
 .coverage.*
 htmlcov/
-# NOTE: tests/.eval_vec_cache.json is deliberately NOT ignored. It looks like a build artifact
-# but tests/test_knowledge_recall.py asserts it exists and matches the current chunk params, and
-# CI never regenerates it - scripts/embed_eval_corpus.py needs a local embedder on :8093. It is a
-# golden fixture, like tests/eval_baseline.json.
+# Live agent eval output (tests/eval_agent.py --live). Machine-local: it records which model
+# was loaded, free VRAM and wall-clock timings on one box, so it is a measurement to keep
+# locally and compare against, not an artifact to commit. The task set (tests/eval_tasks.py)
+# and the mock baseline (tests/eval_baseline.json) ARE committed - those are the thing you
+# review. NOTE: tests/.eval_vec_cache.json is deliberately NOT ignored. It looks like a build
+# artifact but tests/test_knowledge_recall.py asserts it exists and matches the current chunk
+# params, and CI never regenerates it - scripts/embed_eval_corpus.py needs a local embedder on
+# :8093. It is a golden fixture, like tests/eval_baseline.json.
 # llama-server daily logs (core/state.py). Machine-local diagnostics, rotated by LOG_KEEP_DAYS.
 /logs/
 # The 737 KB PNG is a manual screenshot of the SVG next to it (see

@@ -163,119 +163,128 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
 
     from .blackboard import _active_scope_writes
     token = _active_scope_writes.set([])
-    async with _subagent_scope():
-        # sub-agents stay local, as before, unless they're pointed at a cloud model
-        # on purpose: a user's own cloud lane, or the job mapped in Settings
-        from .. import cloud
-        if lane:
-            d = reg[lane]
-            route = [lanes_mod.Target(lane) if d["local"] else lanes_mod.Target(lane, cloud.cloud_lane(lane))]
-        else:
-            route = lanes_mod.targets("subagent", force_local="subagent" not in cloud.role_map())
-        route = [t for t in route if t.is_cloud or t.lane == "main" or t.lane in reg]
-        # Guarantee a route. With the local main model (the common case) the
-        # executor is the only mapped step, so a run that escalated orchestration
-        # to a cloud main left the sub-agent with nothing to call. Append the main
-        # lane's *effective* target - cloud binding included - as the last resort.
-        if not any(t.is_cloud for t in route):
-            _cm = cloud.cloud_lane("main")
-            if _cm:
-                route.append(lanes_mod.Target("main", _cm))
-        client, lane_used = None, None
-        tried = []
-        for t in route:
-            tried.append(t.describe())
-            if not t.available():
-                continue
-            try:
-                client, lane_used = await t.client(), t
-                break
-            except Exception as e:
-                print(f"[subagent] {t.describe()} unavailable: {e}", file=sys.stderr)
-        if client is None:
-            # Name what was tried: the bare "no model is available" gave the user no
-            # way to tell a missing model file from an unstarted local server.
-            return ("error: no model is available for this sub-agent task "
-                    f"(role={role or 'generic'}). Tried: {', '.join(tried) or 'no lanes mapped'}. "
-                    "Load a model from the top toolbar, or map a Sub-agents model in Settings → Models.")
-        lane = lane_used.lane
-        src = lane_used.source
-        model_name = f"subagent:{role or 'generic'}:{lane}"
-        final_content = ""
-        status = "step_exhausted"          # unless a branch below says otherwise
-        # The sub-agent's prompt window: the real per-request window of the lane it
-        # actually landed on, not a hardcoded guess. A fixed 16k under-counted a
-        # cloud/main lane and, more importantly, ignored the tool-schema block
-        # (several thousand tokens), so compaction thought it fit and the server
-        # refused the prompt.
-        sub_win = await _subagent_window(lane_used)
-        for _ in range(steps):
-            sub_budget = context_budget.budget_for(lane, sub_win)
-            if sub_budget:
-                msgs[:] = compact_messages(msgs, sub_budget, tools=tools_for_subagent)
-
-            rid = monitor_begin("agent/subagent", True, n_msgs=len(msgs),
-                                 model=model_name, source=src)
-            res = None
-            try:
-                async for ev, val in _llm_chat_stream(client, msgs, tools_for_subagent, 0.3, -1, rid=rid):
-                    if ev == "result":
-                        res = val
-            finally:
-                req_mon = _monitor_state["active"].get(rid)
-                dt = (time.time() - req_mon["start"]) if req_mon else None
-                u = (res or {}).get("usage") or {}
-                tim = (res or {}).get("timings") or {}
-                pcached, ccached = parse_cache_tokens(u, tim)
-                ptoks = u.get("prompt_tokens") or (sum(len(m.get("content") or "") for m in msgs) // 4)
-                ctoks = u.get("completion_tokens") or (req_mon.get("gen_tokens") if req_mon else 0)
-                tps = (ctoks / dt) if (ctoks and dt and dt > 0) else None
-                monitor_end(rid, 200, prompt_tokens=ptoks, completion_tokens=ctoks, tps=tps, duration=dt,
-                            model=model_name, prompt_cached=pcached, completion_cached=ccached, source=src)
-                db_record_request("agent/subagent", model_name, ptoks, ctoks, tps, dt, None, True, 200,
-                                   prompt_cached_tokens=pcached, completion_cached_tokens=ccached,
-                                   is_orchestrator=True, source=src)
-
-            if res is None:
-                final_content = "(sub-agent got no response from the model)"
-                status = "no_response"
-                break
-            content = res.get("content", "")
-            tool_calls = res.get("tool_calls", [])
-            if not tool_calls:
-                final_content = content
-                status = "success"
-                break
-
-            history_content = sanitize_user_facing_content(content)
-            clean_tcs = []
-            for tc in tool_calls:
-                fn = tc.get("function", {})
-                name = fn.get("name", "?")
-                a = safe_parse_and_repair_args(fn.get("arguments") or {}, name, task)
-                a, _err = validate_and_repair_tool_args(name, a, task)
-                clean_tcs.append({"id": tc.get("id") or f"sub_{name}", "type": "function",
-                                   "function": {"name": name, "arguments": json.dumps(a)}})
-            msgs.append({"role": "assistant", "content": history_content, "tool_calls": clean_tcs})
-
-            for tc in clean_tcs:
-                name = tc["function"]["name"]
+    try:
+        async with _subagent_scope():
+            # sub-agents stay local, as before, unless they're pointed at a cloud model
+            # on purpose: a user's own cloud lane, or the job mapped in Settings
+            from .. import cloud
+            if lane:
+                d = reg[lane]
+                route = [lanes_mod.Target(lane) if d["local"] else lanes_mod.Target(lane, cloud.cloud_lane(lane))]
+            else:
+                route = lanes_mod.targets("subagent", force_local="subagent" not in cloud.role_map())
+            route = [t for t in route if t.is_cloud or t.lane == "main" or t.lane in reg]
+            # Guarantee a route. With the local main model (the common case) the
+            # executor is the only mapped step, so a run that escalated orchestration
+            # to a cloud main left the sub-agent with nothing to call. Append the main
+            # lane's *effective* target - cloud binding included - as the last resort.
+            if not any(t.is_cloud for t in route):
+                _cm = cloud.cloud_lane("main")
+                if _cm:
+                    route.append(lanes_mod.Target("main", _cm))
+            client, lane_used = None, None
+            tried = []
+            for t in route:
+                tried.append(t.describe())
+                if not t.available():
+                    continue
                 try:
-                    a = json.loads(tc["function"]["arguments"])
-                except Exception:
-                    a = {}
-                refused = subagent_call_verdict(name, names_ok)
-                if refused is not None:
-                    result = refused
-                else:
-                    result = await run_tool(name, a)
-                # a child re-sends its own history every step too: keep its tool results as small as the parent's
-                msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": cap_tool_result(result)})
-        else:
-            final_content = final_content or "(sub-agent reached its step limit without a final answer)"
+                    client, lane_used = await t.client(), t
+                    break
+                except Exception as e:
+                    print(f"[subagent] {t.describe()} unavailable: {e}", file=sys.stderr)
+            if client is None:
+                # Name what was tried: the bare "no model is available" gave the user no
+                # way to tell a missing model file from an unstarted local server.
+                return ("error: no model is available for this sub-agent task "
+                        f"(role={role or 'generic'}). Tried: {', '.join(tried) or 'no lanes mapped'}. "
+                        "Load a model from the top toolbar, or map a Sub-agents model in Settings → Models.")
+            lane = lane_used.lane
+            src = lane_used.source
+            model_name = f"subagent:{role or 'generic'}:{lane}"
+            final_content = ""
+            status = "step_exhausted"          # unless a branch below says otherwise
+            # The sub-agent's prompt window: the real per-request window of the lane it
+            # actually landed on, not a hardcoded guess. A fixed 16k under-counted a
+            # cloud/main lane and, more importantly, ignored the tool-schema block
+            # (several thousand tokens), so compaction thought it fit and the server
+            # refused the prompt.
+            sub_win = await _subagent_window(lane_used)
+            for _ in range(steps):
+                sub_budget = context_budget.budget_for(lane, sub_win)
+                if sub_budget:
+                    msgs[:] = compact_messages(msgs, sub_budget, tools=tools_for_subagent)
 
-    posted_keys = _active_scope_writes.get() or []
-    _active_scope_writes.reset(token)
+                rid = monitor_begin("agent/subagent", True, n_msgs=len(msgs),
+                                     model=model_name, source=src)
+                res = None
+                try:
+                    async for ev, val in _llm_chat_stream(client, msgs, tools_for_subagent, 0.3, -1, rid=rid):
+                        if ev == "result":
+                            res = val
+                finally:
+                    req_mon = _monitor_state["active"].get(rid)
+                    dt = (time.time() - req_mon["start"]) if req_mon else None
+                    u = (res or {}).get("usage") or {}
+                    tim = (res or {}).get("timings") or {}
+                    pcached, ccached = parse_cache_tokens(u, tim)
+                    ptoks = u.get("prompt_tokens") or (sum(len(m.get("content") or "") for m in msgs) // 4)
+                    ctoks = u.get("completion_tokens") or (req_mon.get("gen_tokens") if req_mon else 0)
+                    tps = (ctoks / dt) if (ctoks and dt and dt > 0) else None
+                    monitor_end(rid, 200, prompt_tokens=ptoks, completion_tokens=ctoks, tps=tps, duration=dt,
+                                model=model_name, prompt_cached=pcached, completion_cached=ccached, source=src)
+                    db_record_request("agent/subagent", model_name, ptoks, ctoks, tps, dt, None, True, 200,
+                                       prompt_cached_tokens=pcached, completion_cached_tokens=ccached,
+                                       is_orchestrator=True, source=src)
+
+                if res is None:
+                    final_content = "(sub-agent got no response from the model)"
+                    status = "no_response"
+                    break
+                content = res.get("content", "")
+                tool_calls = res.get("tool_calls", [])
+                if not tool_calls:
+                    final_content = content
+                    status = "success"
+                    break
+
+                history_content = sanitize_user_facing_content(content)
+                clean_tcs = []
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "?")
+                    a = safe_parse_and_repair_args(fn.get("arguments") or {}, name, task)
+                    a, _err = validate_and_repair_tool_args(name, a, task)
+                    clean_tcs.append({"id": tc.get("id") or f"sub_{name}", "type": "function",
+                                       "function": {"name": name, "arguments": json.dumps(a)}})
+                msgs.append({"role": "assistant", "content": history_content, "tool_calls": clean_tcs})
+
+                for tc in clean_tcs:
+                    name = tc["function"]["name"]
+                    try:
+                        a = json.loads(tc["function"]["arguments"])
+                    except Exception:
+                        a = {}
+                    refused = subagent_call_verdict(name, names_ok)
+                    if refused is not None:
+                        result = refused
+                    else:
+                        result = await run_tool(name, a)
+                    # a child re-sends its own history every step too: keep its tool results as small as the parent's
+                    msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": cap_tool_result(result)})
+            else:
+                final_content = final_content or "(sub-agent reached its step limit without a final answer)"
+
+        posted_keys = _active_scope_writes.get() or []
+    finally:
+        # Always restore the parent's scope list. This used to be a bare reset()
+        # after the block, so the early `return "error: no model is available"`
+        # skipped it: because run_subagent is awaited in the CALLER's context
+        # (not its own task), the orphaned empty list stayed installed for the rest
+        # of the parent run, and blackboard_post - which is deliberately NOT in
+        # DENIED_TOOLS - would keep appending into it, dead-retaining memory and
+        # corrupting the posted= field of the NEXT subagent.
+        _active_scope_writes.reset(token)
 
 
     # the child's answer returns as a tool result, bypassing output_guard -- mask

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ..config import CONFIG_DEFAULTS
+from ..config import CONFIG_DEFAULTS, normalize_tensor_split
 from .constants import GB, _KV_BYTES_PER_ELEM, _preflight_cfg
 from .gguf_parser import parse_gguf_info
 
@@ -22,6 +22,13 @@ def estimate_footprint(info: dict, ctx: int, kv_type: str = "f16",
     the header does not break weights down finely enough to size that, and subtracting a guess
     would under-estimate, which is the direction that hangs the desktop. The per-token cost of
     streaming offloaded experts is a throughput question, not a fit one.
+
+    Sliding-window attention: a layer with `attention.sliding_window = W` only ever keeps W
+    tokens of KV, no matter how large -c is. Charging the full context to every layer was the
+    single most damaging error in this module: the configured executor (spark2_5, window 512,
+    ctx 65536) was sized at 8.8 GB against a real ~3.1 GB, and the main profile (ctx 231072)
+    came out "nofit" on a 15.1 GB card and could not be loaded at all, for a model whose real
+    KV cache is tens of MB. Every 2024+ hybrid-attention GGUFs ship with this key.
     """
     cfg = _preflight_cfg()
     if headroom_gb is None:
@@ -29,7 +36,20 @@ def estimate_footprint(info: dict, ctx: int, kv_type: str = "f16",
     weights_b = int(info["file_bytes"] * 1.01)
     kv_pe = _KV_BYTES_PER_ELEM.get(kv_type, 2.0)
     kv_per_token_b = info["n_layer"] * info["n_head_kv"] * info["head_dim"] * 2 * kv_pe
-    kv_total_b = int(kv_per_token_b * max(0, int(ctx)))
+
+    # Effective per-layer cache length. min(ctx, window) for a windowed model, ctx otherwise.
+    # Normalised here as well as in the parser: 0 and -1 both mean "no window" in GGUF, and a
+    # caller may hand us a raw header value rather than the parser's normalised one. Only a
+    # positive window bounds the cache.
+    ctx_i = max(0, int(ctx))
+    try:
+        sw = int(info.get("sliding_window") or 0)
+    except (TypeError, ValueError):
+        sw = 0
+    if sw <= 0:
+        sw = 0
+    effective_ctx = min(ctx_i, sw) if sw else ctx_i
+    kv_total_b = int(kv_per_token_b * effective_ctx)
 
     ub = max(0, int(ubatch or 512))
     n_vocab = int(info.get("n_vocab") or 0)
@@ -65,6 +85,7 @@ def estimate_footprint(info: dict, ctx: int, kv_type: str = "f16",
             "kv_total_b": kv_total_b, "compute_b": compute_b,
             "headroom_b": int(headroom_gb * GB),
             "moe_offloaded_b": moe_offloaded_b,
+            "sliding_window": sw or None, "effective_ctx": effective_ctx,
             "n_vocab": n_vocab,
             "confidence": confidence}
 
@@ -99,12 +120,7 @@ def effective_params(profile: dict, overrides: dict | None = None) -> dict:
     model_path = profile.get("model_path")
     llama_bin_dir = profile.get("llama_bin_dir") or CONFIG_DEFAULTS["llama_bin_dir"]
 
-    shares = [s.strip() for s in tensor_split.split(",") if s.strip().isdigit()]
-    if len(shares) == len(gpu_devices) and len(shares) > 1:
-        pairs = [(d, int(s)) for d, s in zip(gpu_devices, shares) if int(s) > 0]
-        if pairs:
-            gpu_devices = [d for d, _ in pairs]
-            tensor_split = ",".join(str(s) for _, s in pairs)
+    gpu_devices, tensor_split = normalize_tensor_split(tensor_split, gpu_devices)
 
     draft_b = 0
     for flag, key in (("mtp_enabled", "mtp_draft_path"), ("vision_capable", "mmproj_path")):

@@ -878,6 +878,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     if parsed_tc:
                         tool_calls = parsed_tc
                         content = ""
+                        yield "event: delta_reset\ndata: {}\n\n"
                 content, tool_calls, step_finished = apply_finish(content, tool_calls)
 
                 if was_cut_off(res_dict) and cutoff_retries < MAX_CUTOFF_RETRIES and step < steps - 1 and (tool_calls or content.strip()):
@@ -1025,6 +1026,8 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                         parsed_tc = _extract_text_tool_calls(content or step_reasoning)
                         if parsed_tc:
                             tool_calls = parsed_tc
+                            content = ""
+                            yield "event: delta_reset\ndata: {}\n\n"
                     content, tool_calls, step_finished = apply_finish(content, tool_calls)
 
                 if was_cut_off(res_dict) and cutoff_retries < MAX_CUTOFF_RETRIES and step < steps - 1 and (tool_calls or content.strip()):

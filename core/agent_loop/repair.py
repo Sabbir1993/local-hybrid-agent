@@ -209,6 +209,18 @@ _KV_PAIR_RX = re.compile(r"<arg_key>([\s\S]*?)</arg_key>\s*<arg_value>([\s\S]*?)
 _BARE_CALL_RX = re.compile(r"(?m)^[ \t]*`?([A-Za-z_][\w.\-]*)`?\(\s*(\{[^\n]*\})?\s*\)[ \t]*$")
 
 
+# XML-style function call: Hermes <function=name><parameter=k>v</parameter></function>,
+# attribute <function name="name"><param name="k">v</param>, or colon <function:name>...
+_XML_FUNC_RX = re.compile(
+    r"<function[=:\s](?:name=[\"'])?([A-Za-z0-9_\.\-]+)[\"']?>([\s\S]*?)(?:</function(?::[A-Za-z0-9_\.\-]+)?>|$)",
+    re.IGNORECASE,
+)
+_XML_PARAM_RX = re.compile(
+    r"<(?:parameter|param)[=:\s](?:name=[\"'])?([A-Za-z0-9_\.\-]+)[\"']?>([\s\S]*?)(?:</(?:parameter|param)(?::[A-Za-z0-9_\.\-]+)?>|$)",
+    re.IGNORECASE,
+)
+
+
 def _extract_text_tool_calls(text: str, known: set = None) -> list:
     if not text:
         return []
@@ -244,12 +256,21 @@ def _extract_text_tool_calls(text: str, known: set = None) -> list:
                 })
 
     if not calls:
-        for m in re.finditer(r'<function\s+name=["\']([^"\']+)["\']>([\s\S]*?)</function>', text):
-            fname = m.group(1).strip()
-            body = m.group(2).strip()
+        names = known if known is not None else _registered_tool_names()
+        for fm in _XML_FUNC_RX.finditer(text):
+            fname = fm.group(1).strip()
+            if fname not in names:
+                continue
+            body = fm.group(2).strip()
             args = {}
-            for pm in re.finditer(r'<param\s+name=["\']([^"\']+)["\']>(.*?)</param>', body):
-                args[pm.group(1).strip()] = pm.group(2).strip()
+            for pm in _XML_PARAM_RX.finditer(body):
+                k = pm.group(1).strip()
+                v = pm.group(2).strip()
+                try:
+                    val = json.loads(v) if (v[:1] in "{[" or v in ("true", "false", "null") or re.fullmatch(r"-?\d+(\.\d+)?", v)) else v
+                except Exception:
+                    val = v
+                args[k] = val
             calls.append({
                 "id": f"call_txt_{len(calls)}",
                 "type": "function",

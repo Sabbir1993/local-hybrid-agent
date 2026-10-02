@@ -44,6 +44,17 @@ def check(texts: list, user, any_cloud_lane: bool) -> Optional[dict]:
     if pan.enabled("pan_input") and any(pan.contains_pan(t) for t in texts):
         return {"name": pan.RULE_NAME, "scope": "block_all",
                 "message": pan.BLOCK_MESSAGE, "_matched_pattern": "builtin:pan"}
+    # Built-in credential floor. Same deal, and it exists because the shipped rule set had
+    # zero regex patterns, which left a single fail-open 4-token LLM call as the entire input
+    # policy. Runs before `enabled()` on purpose: this is not an admin-tunable rule set.
+    from .. import secrets
+    for t in texts:
+        hit = secrets.scan(t, any_cloud_lane=any_cloud_lane)
+        if hit:
+            scope = "cloud_only" if hit["mode"] == "cloud_only" else "block_all"
+            return {"name": f"{secrets.RULE_NAME}: {hit['label']}", "scope": scope,
+                    "message": secrets.BLOCK_MESSAGE.format(label=hit["label"]),
+                    "_matched_pattern": f"builtin:secret:{hit['tier']}"}
     if not enabled():
         return None
     for rule in guard_cfg().get("rules") or []:

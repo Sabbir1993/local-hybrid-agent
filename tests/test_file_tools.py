@@ -523,6 +523,10 @@ class VerifyAndUndoTests(Base):
         self.assertIn("verify: FAILED", self.call("write_file", path="a.js", content="function ("))
         self.assertIn("fs.verify", self.fc.ops)
 
+    def test_jsx_checked(self):
+        self.assertIn("verify: FAILED", self.call("write_file", path="b.jsx", content="function B() { return <button>; }"))
+        self.assertIn("verify: OK", self.call("write_file", path="c.jsx", content="function B() { return <button>OK</button>; }"))
+
     def test_unknown_types_are_not_checked(self):
         self.assertNotIn("verify", self.call("write_file", path="n.txt", content="hello"))
 

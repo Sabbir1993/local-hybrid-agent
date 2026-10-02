@@ -1,0 +1,76 @@
+{
+  "ts": 1790956257.1120994,
+  "offline": [],
+  "live": [],
+  "live_summary": {
+    "tasks": 1,
+    "hard_tasks": 1,
+    "runs": 1,
+    "pass_rate": 0.0,
+    "ci95": [
+      0.0,
+      0.793
+    ],
+    "hard_pass_rate": 0.0,
+    "hard_ci95": [
+      0.0,
+      0.793
+    ],
+    "stable_tasks": 1,
+    "flaky_tasks": [],
+    "failing_tasks": [
+      "compute_arithmetic"
+    ],
+    "by_category": {
+      "compute": {
+        "n": 1,
+        "n_pass": 0,
+        "tasks": 1,
+        "failing": [
+          "compute_arithmetic"
+        ],
+        "flaky": [],
+        "pass_rate": 0.0
+      }
+    },
+    "wall_clock_s": 0.2
+  },
+  "live_records": [
+    {
+      "name": "compute_arithmetic",
+      "category": "compute",
+      "soft": false,
+      "n": 1,
+      "n_pass": 0,
+      "pass_rate": 0.0,
+      "ci95": [
+        0.0,
+        0.793
+      ],
+      "stable": true,
+      "flaky": false,
+      "problems": [
+        "transport error: HTTP 401 - sign in first (--live-user/--live-password)"
+      ],
+      "tools_seen": [],
+      "lanes_seen": [],
+      "duration_s": null,
+      "runs": [
+        {
+          "ok": false,
+          "duration_s": null,
+          "tools": [],
+          "lanes": [],
+          "error": "HTTP 401 - sign in first (--live-user/--live-password)"
+        }
+      ]
+    }
+  ],
+  "harness": "live",
+  "env": {
+    "mode": "auto",
+    "temperature": 0.3,
+    "ts": 1790956257,
+    "git_sha": "91f1dd5"
+  }
+}

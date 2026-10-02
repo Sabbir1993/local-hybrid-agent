@@ -285,6 +285,25 @@
     "enabled": true,
     "rules": [
       {
+        "id": "input_guard-2-secret-egress",
+        "name": "Credential material to a cloud model",
+        "type": "regex",
+        "patterns": [
+          "-----BEGIN\\s+(?:RSA|DSA|EC|OPENSSH|PGP)?\\s*PRIVATE KEY",
+          "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b",
+          "\\bgh[pousr]_[A-Za-z0-9]{36,}\\b",
+          "\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b",
+          "\\bAIza[0-9A-Za-z_-]{35}\\b",
+          "\\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\\b"
+        ],
+        "scope": "cloud_only",
+        "roles": [],
+        "users": [],
+        "message": "Credential material must not be sent to a cloud model. Use a local lane or load the value from the environment.",
+        "replacement": "",
+        "enabled": true
+      },
+      {
         "id": "input_guard-1-1790051263397",
         "name": "Block sensitive attachment to cloud",
         "type": "semantic",
@@ -301,14 +320,28 @@
     "enabled": true,
     "rules": [
       {
+        "id": "output_guard-2-kb-leak",
+        "name": "Knowledge base content echoed verbatim",
+        "type": "regex",
+        "patterns": [
+          "(?i)according to (?:our|the) (?:internal )?(?:knowledge base|policy document|handbook)",
+          "(?i)\\[source:\\s*kb:[0-9]+",
+          "(?i)\\bORG(?:ANIZATIONAL)?[-_ ]KNOWLEDGE[-_ ]BASE\\b"
+        ],
+        "scope": "block_all",
+        "roles": [],
+        "users": [],
+        "message": "That content came from the organizational knowledge base and is restricted to the roles cleared for it. Answer the question without reproducing it.",
+        "replacement": "",
+        "enabled": true
+      },
+      {
         "id": "output_guard-1-1790054059571",
-        "name": "Neve share personal info",
+        "name": "Never share personal info from the knowledge base",
         "type": "semantic",
         "description": "Never share personal information from organizational knowledge base if user asks.",
         "scope": "block_all",
-        "roles": [
-          "user"
-        ],
+        "roles": [],
         "users": [],
         "message": "This data is confidential. Failed to share",
         "enabled": true

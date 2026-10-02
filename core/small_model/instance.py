@@ -155,11 +155,17 @@ class SmallModelInstance:
         return r.status_code == 200
 
     async def _preflight(self, loop) -> None:
+        # Pass the SAME values _launch_cmd() will use. The preflight used to invent its own
+        # (kv_cache_type "f16" while the executor runs q8_0, ubatch 512 regardless of config,
+        # and mmproj accepted but never counted), so the estimate and the launch disagreed.
         await loop.run_in_executor(
             None,
             lambda: vram.check_small_model_or_raise(
                 self.role, self.model_path, self.ctx, self.gpu,
-                mmproj_path=self.mmproj_path),
+                mmproj_path=self.mmproj_path,
+                kv_cache_type=self.kv_cache_type or "f16",
+                n_slots=self.n_slots,
+                ubatch_size=int(self.cfg.get("ubatch_size", 512) or 512)),
         )
 
     def _launch_cmd(self) -> tuple:

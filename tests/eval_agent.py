@@ -37,10 +37,18 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
-
 RESULTS_FILE = Path(__file__).resolve().parent / "eval_results.json"
+# Live runs write their own file. They used to share eval_results.json with the mock suite,
+# so a 30-minute GPU run silently replaced the mock artifact that CI's gate reads - and the
+# committed file then carried "live: harness mock" records from a run that never happened.
+LIVE_RESULTS_FILE = Path(__file__).resolve().parent / "eval_results_live.json"
+
+import eval_stats   # noqa: E402
+import eval_tasks   # noqa: E402
 
 
 # ---------------- offline checks ----------------
@@ -310,19 +318,27 @@ OFFLINE_CHECKS = [
 
 # ---------------- live agent tasks ----------------
 
+# Kept for backwards compatibility: the historical five, now expressed in the eval_tasks
+# vocabulary. The real set is tests/eval_tasks.py TASKS - larger, categorised, and graded by
+# the same deterministic checkers.
 LIVE_TASKS = [
     {"name": "direct_tool_list", "prompt": "List the files in the workspace root.",
-     "expect_tools": ["list_files"], "soft": False},
+     "expect_tools": ["list_files"], "soft": False, "category": "files"},
     {"name": "write_and_verify", "prompt": "Create a file eval_tmp/hello.py that contains print('hello eval'), then run it with run_python to prove it works.",
-     "expect_tools": ["write_file", "run_python"], "soft": False},
+     "expect_tools": ["write_file", "run_python"], "soft": False, "category": "files"},
     {"name": "compute_only", "prompt": "Use run_python to compute 137*29 and reply with just the number.",
      "expect_tools": ["run_python"], "forbid_tools": ["write_file"],
-     "expect_final_contains": ["3973"], "soft": False},
+     "expect_final_contains": ["3973"], "soft": False, "category": "compute"},
     {"name": "memory_search", "prompt": "Search your memory for anything related to llama or vulkan and summarize what you find.",
-     "expect_tools": ["search_memory"], "soft": True},
+     "expect_tools": ["search_memory"], "soft": True, "category": "retrieval"},
     {"name": "escalation_task", "prompt": "In eval_tmp/pkg there are no files yet. First create a.py, b.py and c.py there, each with one blocking requests.get call. Then convert all three to async httpx end-to-end, and write eval_tmp/MIGRATION.md describing the change.",
-     "expect_escalation": True, "soft": True},
+     "expect_escalation": True, "soft": True, "category": "planning"},
 ]
+
+# Local workspace root, when set. Only needed for expect_files checks; a remote server
+# cannot be checked from here and the omission is reported per task rather than counted
+# as a pass.
+LIVE_WORKSPACE = None
 
 
 def _live_login(base: str, username: str, password: str, timeout_s: float = 60):
@@ -410,26 +426,48 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, clie
     rec["escalated"] = ("executor" in lanes and "main" in lanes
                         and (lanes.index("main") > lanes.index("executor")
                              or lanes[-1] == "main"))
-    problems = []
-    for want in task.get("expect_tools", []):
-        if want not in rec["tools"]:
-            problems.append(f"missing tool: {want}")
-    for ban in task.get("forbid_tools", []):
-        if ban in rec["tools"]:
-            problems.append(f"forbidden tool used: {ban}")
-    if task.get("expect_escalation") and not rec["escalated"]:
-        problems.append("expected escalation to main lane did not happen")
-    if not rec["tools"] and rec["final_len"] < 10:
-        problems.append("no tools and no answer")
-    # Answer grading, not just tool plumbing: compute_only passes only if the model
-    # actually replied 3973, not for calling run_python and answering a haiku.
-    final_text = rec.get("final_text") or ""
-    for want in task.get("expect_final_contains", []):
-        if want.lower() not in final_text.lower():
-            problems.append(f"final answer missing {want!r} (got {final_text[:120]!r})")
-    rec["problems"] = problems
-    rec["ok"] = not problems
+    # Grading lives in tests/eval_tasks.check_record so the checker vocabulary is defined in
+    # one place and reviewable on its own. It grades the ANSWER, not just tool plumbing:
+    # compute_only passes only if the model actually replied 3973, not for calling run_python
+    # and answering a haiku. expect_final_lacks is the negative half - without it a task
+    # passes on a model that blurts a value it should have withheld.
+    rec["problems"] = eval_tasks.check_record(task, rec, workspace=LIVE_WORKSPACE or None)
+    rec["ok"] = not rec["problems"]
     return rec
+
+
+def run_live_suite(base: str, tasks, mode: str, repeats: int, session=None,
+                   timeout_s: float = 600) -> dict:
+    """Run every task `repeats` times and summarize with Wilson intervals.
+
+    Repeats are the whole point: a single run cannot tell "this works" from "this worked
+    once", and cannot tell you a task is flaky, which is usually a prompt or tool-schema
+    problem rather than a capability limit. Setup prompts are re-run per repeat and are not
+    scored, so a repeat never inherits the previous repeat's files.
+    """
+    records = []
+    t_all = time.time()
+    for task in tasks:
+        runs = []
+        for i in range(max(1, repeats)):
+            for s in task.get("setup", []) or []:
+                bare = {"name": task["name"] + "#setup", "prompt": s, "soft": True}
+                run_live_task(base, bare, mode, timeout_s=timeout_s, client=session)
+            rec = run_live_task(base, task, mode, timeout_s=timeout_s, client=session)
+            runs.append(rec)
+            print(f"    [{'PASS' if rec['ok'] else 'FAIL'}] {task['name']} "
+                  f"run {i + 1}/{repeats} {rec['duration_s']}s"
+                  + ("  " + ";".join(rec['problems'][:2]) if rec.get("problems") else ""))
+        records.append(eval_stats.summarize_task(
+            task["name"], runs, category=task.get("category", "misc"),
+            soft=task.get("soft", False)))
+        r = records[-1]
+        print(f"  [{'PASS' if r['n_pass'] == r['n'] else ('FLAKY' if r['flaky'] else 'FAIL')}]"
+              f" {r['name']:26s} {r['n_pass']}/{r['n']} "
+              f"ci95[{r['ci95'][0]:.2f},{r['ci95'][1]:.2f}]")
+    summary = eval_stats.rollup(records)
+    summary["wall_clock_s"] = round(time.time() - t_all, 1)
+    return {"records": records, "summary": summary}
 
 
 def main() -> int:
@@ -459,6 +497,23 @@ def main() -> int:
     ap.add_argument("--live-user", default=None,
                     help="username to sign in with for --live (dedicated eval account, no MFA)")
     ap.add_argument("--live-password", default=None, help="password for --live-user")
+    ap.add_argument("--live-repeats", type=int, default=5,
+                    help="runs per live task (default 5). Repeatability and Wilson intervals "
+                         "are the point of the live suite; 1 gives you no information "
+                         "beyond 'it worked once'")
+    ap.add_argument("--live-tasks", default=None,
+                    help="comma-separated live task names (default: all of eval_tasks.TASKS)")
+    ap.add_argument("--live-categories", default=None,
+                    help="comma-separated categories to run, e.g. files,compute,docs,guard")
+    ap.add_argument("--live-workspace", default=None,
+                    help="local workspace root, enabling expect_files checks. Omit when the "
+                         "server is remote; file checks are then reported as skipped")
+    ap.add_argument("--legacy-tasks", action="store_true",
+                    help="run the historical five LIVE_TASKS instead of eval_tasks.TASKS")
+    ap.add_argument("--no-soft", action="store_true",
+                    help="drop tasks marked soft, so every task in the run gates")
+    ap.add_argument("--live-timeout", type=float, default=600.0,
+                    help="per-run timeout in seconds (default 600)")
     args = ap.parse_args()
 
     results = {"ts": time.time(), "offline": [], "live": []}
@@ -491,8 +546,19 @@ def main() -> int:
                 results["offline"].append({"name": name, "status": "FAIL", "note": f"{type(e).__name__}: {e}"})
 
     if args.live:
+        global LIVE_WORKSPACE
+        LIVE_WORKSPACE = args.live_workspace
+        tasks = LIVE_TASKS if args.legacy_tasks else eval_tasks.select(
+            (args.live_tasks.split(",") if args.live_tasks else None),
+            (args.live_categories.split(",") if args.live_categories else None),
+            include_soft=not args.no_soft)
+        if not tasks:
+            print("no live tasks selected")
+            return 2
+        gating = sum(1 for t in tasks if not t.get("soft"))
         print("=" * 60)
-        print(f" LIVE SUITE (base={args.base}, mode={args.mode})")
+        print(f" LIVE SUITE ({len(tasks)} tasks x {args.live_repeats} repeats, {gating} gating)")
+        print(f" base={args.base} mode={args.mode} workspace={args.live_workspace or '(remote)'}")
         print("=" * 60)
         session = None
         if args.live_user:
@@ -502,22 +568,32 @@ def main() -> int:
             session = _live_login(args.base, args.live_user, args.live_password)
         env = _live_env(args.base, session, args.mode, 0.3)
         print(f"  env: {json.dumps(env)}")
-        for task in LIVE_TASKS:
-            rec = run_live_task(args.base, task, args.mode, client=session)
-            rec["env"] = env
-            status = "PASS" if rec["ok"] else ("SOFT-FAIL" if rec.get("soft") else "FAIL")
-            if not rec["ok"] and not rec.get("soft"):
-                failed += 1
-            extra = ""
-            if rec["error"]:
-                extra = f" err={rec['error']}"
-            elif rec.get("problems"):
-                extra = " problems=" + ";".join(rec["problems"])
-            print(f"  [{status}] {rec['name']:18s} tools={rec['tools'] or '-'} "
-                  f"lanes={','.join(rec['lanes']) or '-'} {rec['duration_s']}s{extra}")
-            results["live"].append(rec)
+        if not args.live_workspace and any(t.get("expect_files") for t in tasks):
+            print("  NOTE: no --live-workspace, so expect_files checks will be reported as "
+                  "skipped, not passed")
+        suite = run_live_suite(args.base, tasks, args.mode, args.live_repeats,
+                               session=session, timeout_s=args.live_timeout)
         if session is not None:
             session.close()
+        print()
+        print(eval_stats.format_report(suite["summary"], suite["records"]))
+        results["live_summary"] = suite["summary"]
+        results["live_records"] = suite["records"]
+        results["harness"] = "live"
+        results["env"] = env
+        # Only gating tasks with every run passing fail the run. A flaky task is reported as
+        # flaky rather than failed: at temperature 0.3 a flaky task means the prompt or the
+        # tool schema is underspecified, which is a different fix from "the model cannot".
+        for r in suite["records"]:
+            if r["soft"]:
+                continue
+            if r["n_pass"] == 0 or r["flaky"]:
+                failed += 1
+        live_out = {"ts": time.time(), "env": env, "repeats": args.live_repeats,
+                    "tasks": args.legacy_tasks and "legacy" or "eval_tasks",
+                    "summary": suite["summary"], "records": suite["records"]}
+        LIVE_RESULTS_FILE.write_text(json.dumps(live_out, indent=2), encoding="utf-8")
+        print(f"\nlive results -> {LIVE_RESULTS_FILE}")
 
     if args.mock:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -584,6 +660,14 @@ def main() -> int:
                 "stable": t["stable"],
                 "problems": [p for run in t["runs"] for p in run["problems"]][:5],
             })
+        results["harness"] = "mock"
+        # Make the mislabelling impossible to read past: the "live" key holds mock records,
+        # which is confusing enough on its own. If a real live suite also ran, this run's
+        # live numbers went to eval_results_live.json and the summary is here.
+        if "live_summary" not in results:
+            results["live_note"] = ("these records are from the MOCK harness: a scripted model "
+                                    "replaying canned SSE bytes, not the agent. Use --live "
+                                    "against a running server for a real measurement")
         if suite.get("retrieval") is not None:
             results["retrieval"] = suite["retrieval"]
         if suite.get("router") is not None:
@@ -671,8 +755,9 @@ def main() -> int:
             else:
                 print("\nno regressions vs baseline")
 
-    RESULTS_FILE.write_text(json.dumps(results, indent=2), encoding="utf-8")
-    print(f"\nresults saved -> {RESULTS_FILE}")
+    out_file = LIVE_RESULTS_FILE if (args.live and not args.mock) else RESULTS_FILE
+    out_file.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    print(f"\nresults saved -> {out_file}")
     print("SUITE:", "FAILED" if failed else "ALL OK")
     return 1 if failed else 0
 

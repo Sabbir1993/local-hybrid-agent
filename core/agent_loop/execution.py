@@ -7,6 +7,7 @@ from ..agent_tools import TOOL_IMPLS
 from ..registry import registry
 from ..request_context import PERSONAL_BLOCKED_TOOLS, personal_scope, run_in_executor_ctx, tool_allowed
 from .repair import validate_and_repair_tool_args
+from . import schema_check
 from .sandbox import fast_sandbox_check
 
 
@@ -27,10 +28,22 @@ async def run_tool(name: str, args: dict, unique_done: bool = False) -> str:
     # been unreachable for builtins and nothing would have stood between the model's output and a
     # tool that writes to disk. A call with missing fields, or one whose arguments were cut off
     # mid-JSON, is never executed.
+    #
+    # Two layers, because neither covers the other:
+    #   1. repair.validate_and_repair_tool_args - hand-written, path-aware normalisation and
+    #      repair for the eight tools that read or write files or run code. It fixes things
+    #      (file/filename -> path, trailing-quote salvage) that a generic check cannot.
+    #   2. schema_check.check_required - generic `required` + `type` enforcement for every
+    #      tool, read from the schema the registry already holds. This is what makes the claim
+    #      above true; before it, ~40 tools executed with whatever the model emitted and this
+    #      comment overstated its own coverage.
     repaired_args, val_err = validate_and_repair_tool_args(name, args)
     if val_err:
         return val_err
     args = repaired_args
+    schema_err = schema_check.check_required(name, args, schema_check.registered_schema(name))
+    if schema_err:
+        return schema_err
     # The sandbox check reads args["path"], which validation is what normalises from
     # file/filename and what guarantees exists -- so it runs second, on the normalised path.
     approved, note = fast_sandbox_check(name, args)

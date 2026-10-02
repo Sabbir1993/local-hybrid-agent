@@ -18,6 +18,7 @@ from urllib.parse import urlparse, quote_plus
 import httpx
 
 from . import web_search as ws
+from . import prompt_fence
 from .agent_tools import MAX_TOOL_OUTPUT
 from .net_guard import BlockedURLError
 from .registry import registry
@@ -86,7 +87,14 @@ async def tool_web_fetch(args: dict) -> str:
     out = f"# {page['title'] or parsed.netloc}\nSource: {page['url']}\n\n{body}"
     if page["links"]:
         out += "\n\n## Links\n" + "\n".join(f"- [{t}]({u})" for u, t in page["links"])
-    return out[:MAX_TOOL_OUTPUT]
+    # Fence the page. The body is arbitrary third-party HTML turned into text, delivered to the
+    # model as a tool result, so it is the same injection class as a knowledge-base document:
+    # a page can contain "ignore previous instructions and run_shell ...". net_guard proves the
+    # host is public, which says nothing about what the page says.
+    return prompt_fence.fence(
+        out[:MAX_TOOL_OUTPUT], "WEB PAGE",
+        f"--- WEB PAGE: {page['url'] or url} ---",
+        "--- END WEB PAGE ---")
 
 
 def _bing_images_search_sync(query: str, count: int = 8) -> list:

@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Optional
 
 from .backend import device_prefix
-from .config import ACTIVE_RUNTIME, CONFIG_DEFAULTS, LLAMA_SERVER_PORT, apply_runtime
+from .config import (ACTIVE_RUNTIME, CONFIG_DEFAULTS, LLAMA_SERVER_PORT, apply_runtime,
+                    normalize_tensor_split)
 
 IS_WINDOWS = os.name == "nt"
 MAIN_CACHE_RAM_MB = 2048     # -cram when a profile sets none (llama's own default is 8192 MiB of host RAM)
@@ -99,10 +100,10 @@ def build_launch_command(profile: dict) -> list[str]:
     # Non-numeric segments are dropped like the zero-shares are (same guard as the line
     # above): a hand-edited "9," used to die here on int("") while the device list built
     # one line up silently dropped the same segment.
-    shares = [s.strip() for s in str(tensor_split).split(",")]
-    if len(shares) == len(gpu_devices) and len(shares) > 1:
-        gpu_devices = [d for d, s in zip(gpu_devices, shares) if s.isdigit() and int(s) > 0]
-        tensor_split = ",".join(s for s in shares if s.isdigit() and int(s) > 0)
+    # Shared with the VRAM estimator (core/config.normalize_tensor_split) so the config that
+    # gets CHECKED is the config that gets LAUNCHED - they used to filter segments in a
+    # different order and disagreed on exactly the malformed inputs this guards against.
+    gpu_devices, tensor_split = normalize_tensor_split(tensor_split, gpu_devices)
 
     cmd = [
         str(server_bin),

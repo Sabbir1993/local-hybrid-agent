@@ -12,6 +12,14 @@ def parse_reviewer_verdict(reviewer_text: str) -> tuple[bool, str]:
 
     Looks for an explicit 'VERDICT: APPROVED' or 'VERDICT: REJECTED - <reason>' line.
     Falls back to semantic keyword detection if no explicit VERDICT prefix exists.
+
+    FAILS CLOSED when nothing is parseable. This used to end with
+    `return True, "No critical defects flagged by reviewer"`, which meant any reviewer output
+    that matched none of the four defect phrases and none of the approval keywords was
+    APPROVED - a 500-word critique that never typed "VERDICT:" and never said the word
+    "regression" sailed through the gate. For a verification gate, "could not tell" is not
+    "fine": the correct outcome is a rejection carrying the reason, so the loop retries with a
+    stricter reviewer prompt instead of accepting code nobody checked.
     """
     text = (reviewer_text or "").strip()
     if not text:
@@ -43,21 +51,36 @@ def parse_reviewer_verdict(reviewer_text: str) -> tuple[bool, str]:
         return False, reason or ("Rejected" if v_type == "REJECTED" else "Fail")
 
     upper = text.upper()
-    # Check for approval keywords without rejection keywords
+    # Check for approval keywords without rejection keywords. The "VERDICT: X" members are
+    # redundant - they are substrings of "APPROVED"/"REJECTED" - but they are kept because
+    # they document the intended vocabulary and cost nothing.
     has_approval = any(w in upper for w in ("APPROVED", "VERDICT: APPROVED", "LOOKS GOOD TO ME", "LGTM"))
     has_rejection = any(w in upper for w in ("REJECTED", "VERDICT: REJECTED", "CHANGES REQUIRED", "DISAPPROVED", "FAIL"))
 
-    if has_approval and not has_rejection:
-        return True, "Reviewer approved changes"
+    # Precedence is rejection > explicit defect term > approval.
+    #
+    # Rejection first: a reviewer that says both has raised a concern, and resolving that
+    # ambiguity towards "ship it" is the wrong direction for a gate.
+    #
+    # Defect terms are checked BEFORE approval because they are the stronger signal. This
+    # ordering was previously approval-first, which made the defect heuristic unreachable
+    # whenever the review also contained the word "APPROVED" - so "Mostly APPROVED, but this
+    # is a regression" passed the gate.
     if has_rejection:
         return False, "Reviewer requested changes or rejected the diff"
 
-    # Defect heuristic
     lower = text.lower()
-    if any(crit in lower for crit in ("syntax error", "vulnerability", "regression", "broken test", "fatal defect")):
-        return False, "Reviewer identified critical defects in code"
+    defects = ("syntax error", "vulnerability", "regression", "broken test", "fatal defect")
+    named = [d for d in defects if d in lower]
+    if named:
+        return False, f"Reviewer identified critical defects in code ({', '.join(named)})"
 
-    return True, "No critical defects flagged by reviewer"
+    if has_approval:
+        return True, "Reviewer approved changes"
+
+    # Unparseable and silent: fail closed.
+    return False, ("Reviewer gave no APPROVED/REJECTED verdict and no recognised defect term, "
+                   "so the review cannot be trusted; rejected for retry")
 
 
 def get_workspace_changes_diff(baseline_changes: Optional[dict] = None) -> tuple[list[str], str]:

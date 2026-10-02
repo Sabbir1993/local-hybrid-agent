@@ -12,7 +12,7 @@ import json
 import xml.etree.ElementTree as ET
 from pathlib import PurePath
 
-SERVER_CHECKED = {".py", ".pyw", ".json", ".toml", ".yaml", ".yml", ".xml", ".svg"}
+SERVER_CHECKED = {".py", ".pyw", ".json", ".toml", ".yaml", ".yml", ".xml", ".svg", ".jsx"}
 COMPANION_CHECKED = {".js", ".mjs", ".cjs"}
 
 
@@ -43,6 +43,29 @@ def verify_text(path: str, text: str) -> tuple[str, str]:
         if ext in (".xml", ".svg"):
             ET.fromstring(text)
             return "ok", "xml"
+        if ext == ".jsx":
+            try:
+                import tree_sitter
+                import tree_sitter_javascript as _tsjs
+                lang = tree_sitter.Language(_tsjs.language())
+                p = tree_sitter.Parser(lang)
+                tree = p.parse(text.encode("utf-8"))
+                if tree.root_node.has_error:
+                    def _find_err(n):
+                        if n.is_missing or n.type == "ERROR":
+                            return n
+                        for c in n.children:
+                            if c.has_error:
+                                res = _find_err(c)
+                                if res:
+                                    return res
+                        return None
+                    err = _find_err(tree.root_node)
+                    where = f"line {err.start_point[0] + 1}" if err else "unknown line"
+                    return "fail", f"JSX syntax error at {where}"
+                return "ok", "jsx syntax"
+            except ImportError:
+                return "skip", ""
     except SyntaxError as e:
         where = f"line {e.lineno}" if e.lineno else "unknown line"
         return "fail", _short(f"{type(e).__name__} at {where}: {e.msg}")

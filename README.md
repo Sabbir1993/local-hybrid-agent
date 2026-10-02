@@ -444,3 +444,56 @@ against real NVIDIA hardware yet. If you try it on NVIDIA and `-dev CUDA0,…`
 or `CUDA_VISIBLE_DEVICES` don't behave as documented, `llama-bench --help`
 and `--list-devices` on your build will tell you immediately, and the fix is
 localized to `core/backend.py`.
+
+## Evaluating the agent
+
+There are two eval harnesses and they measure different things. Do not
+conflate them.
+
+**Mock suite (hermetic, runs in CI).** A scripted model replays canned SSE
+bytes and the loop is checked for executing the right tool sequence. It is a
+good integration test and it says nothing about whether the agent works.
+
+```bash
+python tests/eval_agent.py --mock --no-offline --regression --repeats 3
+python tests/eval_agent.py --regression          # offline pure-function gate
+```
+
+**Live suite (real model, opt-in, NOT in CI).** This is the one that answers
+"does the agent work". Tasks are graded by deterministic checkers only -
+required/forbidden tools, required/forbidden substrings in the final answer,
+and file existence/content on disk. There is no LLM judge, because a judge
+that rates the agent with the same class of model being rated is not evidence.
+
+```bash
+# needs a running server and a dedicated eval account with NO MFA
+python tests/eval_agent.py --live \
+    --live-user EVAL --live-password '...' \
+    --live-workspace ./my_workspace \
+    --live-repeats 5
+```
+
+Useful flags: `--live-categories files,compute,docs,guard` to run one area,
+`--live-tasks compute_arithmetic` for one task, `--no-soft` so every task
+gates, `--legacy-tasks` for the original five.
+
+Read the output like this:
+
+- **pass rate with a ci95 next to it.** A bare percentage invites
+  over-reading. At n=5 a 4/5 result carries an interval roughly [0.47, 0.94].
+- **flaky is not "mostly working".** A task at 3/5 is not a 60% task; it is a
+  task whose outcome depends on sampling temperature, which usually means the
+  prompt or the tool schema is underspecified. That is a different fix from
+  "the model cannot do this", and the report lists flaky tasks separately from
+  failing ones for exactly that reason.
+- **by-category rollup** is where the attribution is. A drop in `docs` is a
+  different investigation from a drop in `compute`.
+
+Results go to `tests/eval_results_live.json` (gitignored - it records which
+model was loaded and how long it took on one machine). The task set
+(`tests/eval_tasks.py`) is committed, because that is the thing worth
+reviewing: it is the definition of what "working" means.
+
+The live suite cannot gate CI because CI has no GPU and no model files. Run it
+locally before and after a change that touches prompts, tool schemas, or the
+agent loop, and keep the numbers.

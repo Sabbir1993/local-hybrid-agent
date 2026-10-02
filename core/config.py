@@ -116,6 +116,33 @@ CONFIG_DEFAULTS = {
 RUNTIME_KEYS = ("llama_bin_dir", "backend", "gpu_devices")
 
 
+def normalize_tensor_split(tensor_split, gpu_devices) -> tuple:
+    """(gpu_devices, tensor_split) with zero-share and non-numeric segments removed.
+
+    ONE implementation, because the estimator and the launcher used to disagree about it and
+    the disagreement was invisible: preflight dropped non-numeric segments BEFORE comparing
+    lengths, the launcher compared lengths FIRST. So for a hand-edited "9,,11" on two GPUs,
+    preflight normalised to "9,11" and approved, while llama-server was handed
+    `--tensor-split 9,,11`. The model that was checked is not the model that launched.
+
+    Rule: the segment count is compared against the device count BEFORE any filtering, because
+    filtering first is the bug. A count mismatch means the split and the device list genuinely
+    disagree ("9,,11" on two GPUs is ambiguous - dropping either GPU is a guess), so both are
+    passed through untouched for llama.cpp to reject loudly. A zero or non-numeric segment in
+    an otherwise-aligned split disables that GPU, which is the documented "0,1" behaviour.
+    """
+    devs = list(gpu_devices or [])
+    parts = [s.strip() for s in str(tensor_split or "").split(",")]
+    if len(devs) > 1 and len(parts) == len(devs):
+        # No "if kept" guard: an all-zero split ("0,0") filters every device and takes the
+        # single-device path, which is the behaviour core/process.py always had and which
+        # tests/test_launch_command.py::test_all_zero_shares_leave_no_devices pins. Guarding
+        # it would silently fall through to launching both GPUs with --tensor-split 0,0.
+        kept = [(d, s) for d, s in zip(devs, parts) if s.isdigit() and int(s) > 0]
+        return [d for d, _ in kept], ",".join(s for _, s in kept)
+    return devs, str(tensor_split)
+
+
 def _load_runtime() -> dict:
     name, preset = CONFIG_DEFAULTS["backend"], {}
     try:

@@ -96,11 +96,27 @@ class TestGuardPersistence(unittest.TestCase):
         # config/app.json already contains the user's stored rules
         self.assertTrue(inp["enabled"])
         self.assertTrue(len(inp["rules"]) >= 1)
-        self.assertEqual(inp["rules"][0]["name"], "Block sensitive attachment to cloud")
-
         self.assertTrue(out["enabled"])
         self.assertTrue(len(out["rules"]) >= 1)
-        self.assertEqual(out["rules"][0]["name"], "Neve share personal info")
+
+        # Assert the STRUCTURE of the shipped rule set, not the name of whichever rule
+        # happens to be first. Both guards must carry a deterministic regex rule as well as
+        # the semantic one: the semantic classifier is a fail-open 4-token local LLM call, so
+        # a config with no regex rules leaves it as the only control (see core/secrets.py).
+        for label, block in (("input_guard", inp), ("output_guard", out)):
+            types = [str(r.get("type") or "regex").lower() for r in block["rules"]]
+            with self.subTest(label):
+                self.assertIn("regex", types,
+                              f"{label} ships no regex rule - the semantic classifier is "
+                              "fail-open and prompt-injectable, so it cannot be the only check")
+                self.assertIn("semantic", types)
+
+        # No rule may be scoped to a subset of roles that excludes administrators: an
+        # admin-only account slipping past the data-sharing policy is not a useful default.
+        for label, block in (("input_guard", inp), ("output_guard", out)):
+            for r in block["rules"]:
+                with self.subTest(f"{label}:{r.get('name')}"):
+                    self.assertEqual(r.get("roles") or [], [])
 
     def test_guard_fallback_when_app_config_missing_keys(self):
         # Simulate edge case: APP_CONFIG has no input_guard or output_guard keys

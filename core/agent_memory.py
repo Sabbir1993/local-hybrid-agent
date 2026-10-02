@@ -240,7 +240,11 @@ def delete_all(uid: int) -> int:
 
 
 def _neutralize(text: str) -> str:
-    return text.replace(BLOCK_CLOSE, "[end marker removed]").replace(BLOCK_OPEN, "[marker removed]")
+    # Framing lives in core/prompt_fence so the knowledge-base sink (a far more dangerous
+    # injection target, since it is third-party document text rather than the user's own notes)
+    # cannot end up with weaker framing than memory does.
+    from . import prompt_fence
+    return prompt_fence._neutralize(text, BLOCK_OPEN, BLOCK_CLOSE)
 
 
 def session_block(uid: int) -> str:

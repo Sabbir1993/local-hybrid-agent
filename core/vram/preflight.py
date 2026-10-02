@@ -3,7 +3,7 @@ from pathlib import Path
 
 from ..config import CONFIG_DEFAULTS
 from .constants import GB, PreflightError, _preflight_cfg
-from .devices import query_devices
+from .devices import DeviceQueryError, query_devices
 from .estimator import (
     _build_suggestions,
     _eval_fit,
@@ -41,9 +41,31 @@ def _human_msg(plan: dict) -> str:
     return "\n".join(lines)
 
 
+def _devices_or_fail(eff: dict, plan: dict) -> list:
+    """Device list for the verdict, or [] with the plan marked not-allowed.
+
+    strict=True is the point of this function: an absent/failed/unparseable
+    `llama-bench --list-devices` is "we cannot tell", not "zero devices", and it must not
+    produce a verdict the gate will trust. mode="warn"/"off" still lets the load through
+    (with a loud message), because a driver hiccup should not brick the box.
+    """
+    try:
+        return query_devices(eff["llama_bin_dir"], strict=True)
+    except DeviceQueryError as e:
+        plan["status"] = "unknown"
+        plan["allow"] = False
+        plan["message"] = (f"[vram] {plan.get('model') or 'model'}: cannot verify VRAM - {e} - "
+                           "not launching, because a fit that cannot be checked is not a fit.")
+        return []
+
+
 def plan_launch(profile: dict, overrides: dict | None = None,
                 devices: list | None = None) -> dict:
-    """Full preflight plan: verdict, per-device numbers, suggestions, message."""
+    """Full preflight plan: verdict, per-device numbers, suggestions, message.
+
+    Fail-closed contract: every path that returns without a verdict sets allow=False, because
+    "we could not size this" is not the same as "this fits". check_or_raise enforces allow.
+    """
     cfg = _preflight_cfg()
     plan = {"status": "unknown", "allow": True, "mode": cfg["mode"],
             "model": None, "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -52,19 +74,24 @@ def plan_launch(profile: dict, overrides: dict | None = None,
     try:
         eff = effective_params(profile, overrides)
     except Exception as e:
-        plan["message"] = f"could not resolve launch params: {e}"
+        plan["allow"] = False
+        plan["message"] = (f"[vram] could not resolve launch params: {e} - "
+                           "not launching, because an unsized launch cannot be checked.")
         return plan
     plan["effective"] = {k: eff[k] for k in (
         "n_gpu_layers", "tensor_split", "context_size", "kv_cache_type",
         "flash_attn", "gpu_devices", "ubatch_size")}
     mp = eff["model_path"]
     if not mp or not Path(str(mp)).exists():
-        plan["message"] = f"model file missing: {mp}"
+        plan["allow"] = False
+        plan["message"] = f"[vram] model file missing: {mp} - not launching."
         return plan
     plan["model"] = Path(str(mp)).name
     info = parse_gguf_info(mp)
     if info is None:
-        plan["message"] = f"could not stat model file: {mp}"
+        plan["allow"] = False
+        plan["message"] = (f"[vram] could not stat model file: {mp} - "
+                           "not launching, because an unreadable model cannot be sized.")
         return plan
     if info.get("stat_ok") is False:
         # The file exists but could not be read. The estimate would come out near zero and the
@@ -90,21 +117,21 @@ def plan_launch(profile: dict, overrides: dict | None = None,
                         "layers": info["n_layer"] + 1,
                         "n_expert": info.get("n_expert", 0)}
 
-    devs = devices if devices is not None else query_devices(eff["llama_bin_dir"])
+    devs = devices if devices is not None else _devices_or_fail(eff, plan)
+    if not devs:
+        return plan
     plan["devices"] = [{"index": d["index"], "name": d["name"],
                         "total_gb": round(d["total_b"] / GB, 2),
                         "free_gb": round(d["free_b"] / GB, 2),
                         "used_gb": round(d["used_b"] / GB, 2),
                         "target": False} for d in devs]
-    if not devs:
-        plan["message"] = ("no Vulkan device info (llama-bench --list-devices "
-                           "missing/failed) - cannot verify VRAM")
-        return plan
     tmap = {d["index"]: d for d in devs}
     targets = [tmap.get(i) for i in eff["gpu_devices"]]
     if any(t is None for t in targets):
-        plan["message"] = (f"target device(s) {eff['gpu_devices']} not present in "
-                           f"Vulkan device list {[d['index'] for d in devs]}")
+        plan["allow"] = False
+        plan["message"] = (f"[vram] {plan['model']}: target device(s) {eff['gpu_devices']} not "
+                           f"present in Vulkan device list {[d['index'] for d in devs]} - "
+                           "not launching; fix the device index or the iGPU skip list.")
         return plan
     units = info["n_layer"] + 1
     s_norm = _shares_for(targets, eff["tensor_split"])
@@ -129,16 +156,28 @@ def plan_launch(profile: dict, overrides: dict | None = None,
     return plan
 
 
+def enforce(plan: dict) -> dict:
+    """The single launch gate. Enforces plan["allow"], not plan["status"].
+
+    This used to test `status == "nofit"`, which is why three of the four ways plan_launch
+    can fail to produce a verdict (unreadable model, unresolvable params, absent or
+    unparseable device list) printed a message and launched anyway. plan["allow"] is set
+    False by every one of those paths; nothing read it until here. mode="warn"/"off" still
+    lets the load through, loudly, which is the documented escape hatch.
+    """
+    if plan["allow"]:
+        if plan["status"] in ("tight", "unknown"):
+            print(plan["message"])
+        return plan
+    if plan["mode"] == "block":
+        raise PreflightError(plan["message"], plan)
+    print(plan["message"])
+    return plan
+
+
 def check_or_raise(profile: dict) -> dict:
     """Preflight for the main llama-server launch."""
-    plan = plan_launch(profile)
-    if plan["status"] == "nofit":
-        if plan["mode"] == "block":
-            raise PreflightError(plan["message"], plan)
-        print(plan["message"])
-    elif plan["status"] in ("tight", "unknown"):
-        print(plan["message"])
-    return plan
+    return enforce(plan_launch(profile))
 
 
 def _main_model_suggestion(plan: dict, target_idx: int) -> dict | None:
@@ -160,17 +199,37 @@ def _main_model_suggestion(plan: dict, target_idx: int) -> dict | None:
 
 
 def check_small_model_or_raise(role: str, model_path, ctx: int,
-                               vulkan_index: int, mmproj_path=None) -> dict:
-    """Preflight for a small-model launch on a single Vulkan device."""
+                               vulkan_index: int, mmproj_path=None,
+                               kv_cache_type: str = "f16",
+                               n_slots: int = 1,
+                               ubatch_size: int = 512) -> dict:
+    """Preflight for a small-model launch on a single Vulkan device.
+
+    kv_cache_type / n_slots / ubatch_size used to be guessed here rather than read from the
+    lane config, which made every estimate disagree with the launcher: the configured executor
+    runs -ctk q8_0 while this charged f16 bytes (a ~2x overestimate of KV), and the vision
+    lane's --mmproj file (1.2 GB) was accepted in the signature and then never counted at all.
+    Callers now pass the real launch values.
+
+    mmproj goes in as profile["mmproj_path"] + ["vision_capable"], NOT as a post-hoc addition
+    to the estimate. effective_params already folds a vision_capable mmproj into `draft_b`
+    (same path as the MTP draft model), and preflight adds draft_b into weights_b BEFORE
+    computing the verdict - so the projector participates in the fit decision. Adding it to
+    the number afterwards would have let a model pass the gate and then fail to allocate,
+    which is the exact failure this function exists to prevent.
+    """
     profile = {"model_path": str(model_path), "context_size": int(ctx),
                "n_gpu_layers": 999, "gpu_devices": [int(vulkan_index)],
-               "tensor_split": "1", "kv_cache_type": "f16",
-               "flash_attn": "on", "ubatch_size": 512,
+               "tensor_split": "1", "kv_cache_type": str(kv_cache_type or "f16"),
+               "flash_attn": "on", "ubatch_size": int(ubatch_size),
+               "n_slots": int(n_slots),
                "llama_bin_dir": CONFIG_DEFAULTS["llama_bin_dir"]}
+    if mmproj_path and Path(str(mmproj_path)).exists():
+        profile["mmproj_path"] = str(mmproj_path)
+        profile["vision_capable"] = True
     plan = plan_launch(profile)
+    enforce(plan)
     if plan["status"] != "nofit":
-        if plan["status"] in ("tight", "unknown"):
-            print(plan["message"])
         return plan
 
     eff = plan.get("effective") or {}
@@ -190,7 +249,7 @@ def check_small_model_or_raise(role: str, model_path, ctx: int,
                 + fp.get("compute_gb", 0) + fp.get("headroom_gb", 0))
         extra.append({"type": "config_small_model_gpu", "value": best["index"],
                       "fits_after": best["free_gb"] >= need,
-                      "desc": f"set config.json small_models.{role}.gpu = "
+                      "desc": f"set app.json small_models.{role}.gpu = "
                               f"{best['index']} (Vulkan{best['index']} has "
                               f"{best['free_gb']} GB free)"})
 

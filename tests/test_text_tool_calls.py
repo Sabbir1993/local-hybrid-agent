@@ -94,3 +94,54 @@ class UnknownToolTests(unittest.TestCase):
         out = self._run("read_fil")
         self.assertTrue(out.startswith("error: unknown tool read_fil."))
         self.assertIn("read_file", out)
+
+
+class HermesXmlToolCallTests(unittest.TestCase):
+    """The exact reply from Ornith/Hermes: <function=list_files><parameter=pattern>..."""
+
+    SCREENSHOT_REPLY = (
+        "There are existing report-related files. Let me explore further to find actual telemetry/log/metric data sources I can analyze.\n\n"
+        "<tool_call>\n"
+        "<function=list_files>\n"
+        "<parameter=pattern>\n"
+        "{*.log,*.csv,*.jsonl,**/*.txt}\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
+
+    def test_screenshot_payload_extracts_list_files(self):
+        calls = _extract_text_tool_calls(self.SCREENSHOT_REPLY, {"list_files", "read_file"})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["function"]["name"], "list_files")
+        args = json.loads(calls[0]["function"]["arguments"])
+        self.assertEqual(args, {"pattern": "{*.log,*.csv,*.jsonl,**/*.txt}"})
+
+    def test_multi_param_with_typed_numbers(self):
+        text = (
+            "<tool_call>\n"
+            "<function=read_file>\n"
+            "<parameter=path>src/index.js</parameter>\n"
+            "<parameter=offset>10</parameter>\n"
+            "<parameter=limit>50</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        calls = _extract_text_tool_calls(text, {"read_file"})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["function"]["name"], "read_file")
+        args = json.loads(calls[0]["function"]["arguments"])
+        self.assertEqual(args, {"path": "src/index.js", "offset": 10, "limit": 50})
+
+    def test_colon_and_param_variants(self):
+        text = "<function:read_file><param:path>README.md</param:path></function:read_file>"
+        calls = _extract_text_tool_calls(text, {"read_file"})
+        self.assertEqual(len(calls), 1)
+        args = json.loads(calls[0]["function"]["arguments"])
+        self.assertEqual(args, {"path": "README.md"})
+
+    def test_unknown_tool_ignored(self):
+        text = "<function=format_c_drive><parameter=force>true</parameter></function>"
+        calls = _extract_text_tool_calls(text, {"read_file", "list_files"})
+        self.assertEqual(calls, [])
+

@@ -179,12 +179,32 @@ def parse_gguf_info(model_path) -> "dict | None":
     if n_layer is None:
         n_layer, complete = 32, False
     ctx_train = scalar(f"{arch}.context_length", default=0)
+    # Sliding-window (hybrid attention) and the routed expert count. Both are read
+    # OPPORTUNISTICALLY: they are in the same {arch}.attention.* / {arch}.feed_forward.* groups
+    # the loop above already scans, so they are normally captured before the early exit. They
+    # are deliberately NOT added to `needed`, because a model without them would then never
+    # satisfy it and the header scan would run to completion - including the ~150k-entry
+    # tokenizer string array below, one Python iteration per entry.
+    #
+    # Failing to read them is the SAFE direction: None means "charge the full context", which
+    # over-estimates and can only produce a false "tight"/"nofit", never a false "fit".
+    sliding_window = scalar(f"{arch}.attention.sliding_window")
+    if sliding_window is not None:
+        try:
+            sliding_window = int(sliding_window)
+        except (TypeError, ValueError):
+            sliding_window = None
+        if sliding_window is not None and sliding_window <= 0:
+            sliding_window = None  # 0/-1 mean "no window", i.e. full attention
+    n_expert_used = scalar(f"{arch}.expert_used_count")
 
     info = {"arch": arch,
             "n_layer": int(n_layer), "n_head": int(n_head) if n_head else None,
             "n_head_kv": int(n_kv), "n_embd": int(n_embd) if n_embd else None,
             "head_dim": int(head_dim), "ctx_train": int(ctx_train or 0),
+            "sliding_window": sliding_window,
             "n_expert": int(scalar(f"{arch}.expert_count", default=0) or 0),
+            "n_expert_used": int(n_expert_used or 0),
             "n_vocab": raw.get("n_vocab"), "file_bytes": total_b,
             "complete": complete, "model_path": str(p), "error": parse_err}
     with _gguf_lock:
