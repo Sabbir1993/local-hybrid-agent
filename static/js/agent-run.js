@@ -103,6 +103,7 @@ async function runAgentSSE(text) {
   };
   window.bgJobs.set(String(sessionId), job);
   if (typeof updateBgIndicators === 'function') updateBgIndicators();
+  if (typeof requestNotificationPermission === 'function') requestNotificationPermission();
 
   const getJobAssistant = () => job.assistantMsg;
   // End the thought card that is still streaming, keeping how long it ran
@@ -367,6 +368,21 @@ async function runAgentSSE(text) {
       toast(`⚡ Agent task "${job.title}" finished`);
     }
     if (typeof updateBgIndicators === 'function') updateBgIndicators();
+
+    const finAssistant = getJobAssistant ? getJobAssistant() : null;
+    if (typeof notifyTaskFinished === 'function') {
+      const okEnd = finAssistant && finAssistant.runState === 'completed';
+      const taskTitle = (job && job.title) || 'Agent task';
+      let bodyPreview = '';
+      if (finAssistant && finAssistant.content) {
+        bodyPreview = finAssistant.content.replace(/```[\s\S]*?```/g, '').trim().slice(0, 140);
+      }
+      notifyTaskFinished({
+        title: okEnd ? `Task Completed: ${taskTitle}` : `Task Finished: ${taskTitle}`,
+        body: bodyPreview || (okEnd ? 'Task completed successfully.' : 'The agent task has ended.'),
+        status: finAssistant ? finAssistant.runState : 'done'
+      });
+    }
   })();
 }
 

@@ -51,13 +51,16 @@ def subagent_call_verdict(name: str, names_ok) -> Optional[str]:
 # same guess that produced this bug, and nothing measures it. Statuses are
 # structural facts (did the loop finish, did the model answer), not readings of
 # the answer's tone.
-SUBAGENT_STATUSES = ("success", "step_exhausted", "no_response")
-SUBAGENT_TOOLS = ("spawn_agent", "spawn_parallel_agents")
+SUBAGENT_STATUSES = ("success", "step_exhausted", "no_response", "critic_rejected")
+SUBAGENT_TOOLS = ("spawn_agent", "spawn_parallel_agents", "spawn_reviewed_coder")
 
 
-def _envelope_header(role: Optional[str], lane: Optional[str], n_msgs: int, status: str) -> str:
+def _envelope_header(role: Optional[str], lane: Optional[str], n_msgs: int, status: str,
+                     posted: Optional[list] = None) -> str:
+    posted_part = f" · posted={','.join(posted)}" if posted else ""
     return ("[sub-agent" + (f" · role={role}" if role else "")
-            + f" · {n_msgs} msgs · lane={lane} · status={status}]")
+            + f" · {n_msgs} msgs · lane={lane} · status={status}{posted_part}]")
+
 
 
 def subagent_result_verdict(tool_name: str, result) -> Optional[bool]:
@@ -75,7 +78,7 @@ def subagent_result_verdict(tool_name: str, result) -> Optional[bool]:
     # line is collected rather than only the leading ones.
     statuses = set()
     for line in result.splitlines():
-        if line.startswith(("[sub-agent", "[Sub-agent")):
+        if line.startswith(("[sub-agent", "[Sub-agent", "[critic-actor")):
             statuses.update(re.findall(r"status=([a-z_]+)", line))
     if not statuses or not statuses <= set(SUBAGENT_STATUSES):
         return None
@@ -127,7 +130,8 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
     lane = lane_override or role_cfg.get("lane") or None
     if lane and (lane not in reg or not lanes_mod.kind_ok("chat", reg[lane]["kind"])):
         lane = None
-    steps = min(MAX_SUBAGENT_STEPS, max(1, int(max_steps or role_cfg.get("max_steps") or DEFAULT_SUBAGENT_STEPS)))
+    default_steps = 10 if (lane_override or role_cfg.get("lane")) == "main" else DEFAULT_SUBAGENT_STEPS
+    steps = min(MAX_SUBAGENT_STEPS, max(1, int(max_steps or role_cfg.get("max_steps") or default_steps)))
 
     all_schemas = [t for t in registry.schemas() if t.get("function", {}).get("name") not in DENIED_TOOLS]
     # a sub-agent never gets more than the parent's custom-agent allowlist
@@ -140,6 +144,14 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
     sys_prompt = SUBAGENT_SYSTEM_PROMPT.format(workspace=str(active_workspace()))
     if role_cfg.get("system_prompt"):
         sys_prompt += "\n\n" + role_cfg["system_prompt"]
+    # session blackboard (facts posted by sibling subagents), PAN masked
+    try:
+        from .blackboard import blackboard_summary
+        bb_summary = blackboard_summary()
+        if bb_summary:
+            sys_prompt += "\n\n" + bb_summary
+    except Exception:
+        pass
     # project instructions (AGENTS.md from /init), PAN/secret masked by the loader
     try:
         from ..project_context import load_project_instructions, prompt_block
@@ -149,6 +161,8 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
 
     msgs = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": task}]
 
+    from .blackboard import _active_scope_writes
+    token = _active_scope_writes.set([])
     async with _subagent_scope():
         # sub-agents stay local, as before, unless they're pointed at a cloud model
         # on purpose: a user's own cloud lane, or the job mapped in Settings
@@ -260,12 +274,17 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
         else:
             final_content = final_content or "(sub-agent reached its step limit without a final answer)"
 
+    posted_keys = _active_scope_writes.get() or []
+    _active_scope_writes.reset(token)
+
+
     # the child's answer returns as a tool result, bypassing output_guard -- mask
     # card numbers here so they never reach the parent context in the clear
     from ..pan import mask_pans
     final_content, _ = mask_pans(final_content)
-    header = _envelope_header(role=role, lane=lane, n_msgs=len(msgs) - 2, status=status)
+    header = _envelope_header(role=role, lane=lane, n_msgs=len(msgs) - 2, status=status, posted=posted_keys)
     return f"{header}\n{final_content.strip()}"
+
 
 
 async def tool_spawn_agent(args: dict) -> str:

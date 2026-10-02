@@ -13,4 +13,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   browseFolder: (initialDir) => ipcRenderer.invoke("dialog:browseFolder", initialDir),
   browseDir: (targetPath) => ipcRenderer.invoke("fs:browse", targetPath),
   mkdir: (basePath, name) => ipcRenderer.invoke("fs:mkdir", { path: basePath, name }),
+  isMinimized: () => ipcRenderer.invoke("window:isMinimized"),
+  flashFrame: (flag) => ipcRenderer.invoke("window:flashFrame", flag),
+  notify: (opts) => ipcRenderer.invoke("window:notify", opts || {}),
 });
+

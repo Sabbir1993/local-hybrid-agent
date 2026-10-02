@@ -4,7 +4,7 @@
 // unauthenticated), and holds a WebSocket to core/companion_bridge.py to
 // execute fs/shell RPCs from fsops.js / shellops.js on this machine.
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, session: electronSession, dialog, ipcMain, shell, safeStorage } = require("electron");
+const { app, BrowserWindow, Tray, Menu, nativeImage, session: electronSession, dialog, ipcMain, shell, safeStorage, Notification: NativeNotification } = require("electron");
 const crypto = require("crypto");
 const WebSocket = require("ws");
 const os = require("os");
@@ -191,8 +191,35 @@ function openExternally(url) {
 
 function showMainWindow() {
   if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+  try {
+    if (typeof mainWindow.flashFrame === "function") mainWindow.flashFrame(false);
+  } catch (_) {}
+}
+
+function showCompanionNotification(title, body) {
+  try {
+    if (NativeNotification && NativeNotification.isSupported()) {
+      const notif = new NativeNotification({
+        title: title || "Local Agent",
+        body: body || "Task completed.",
+        icon: appIcon,
+      });
+      notif.on("click", () => {
+        showMainWindow();
+      });
+      notif.show();
+    }
+  } catch (e) {
+    console.error("[showCompanionNotification] error:", e);
+  }
+  try {
+    if (mainWindow && typeof mainWindow.flashFrame === "function") {
+      mainWindow.flashFrame(true);
+    }
+  } catch (_) {}
 }
 
 function createMainWindow() {
@@ -206,6 +233,36 @@ function createMainWindow() {
       nodeIntegration: false,
       preload: path.resolve(__dirname, "preload.js"),
     },
+  });
+
+  win.on("focus", () => {
+    try {
+      if (typeof win.flashFrame === "function") win.flashFrame(false);
+    } catch (_) {}
+  });
+
+  // Context menu for input fields (Cut/Copy/Paste/Undo/Redo/SelectAll)
+  win.webContents.on("context-menu", (e, params) => {
+    const items = [];
+    if (params.isEditable) {
+      items.push(
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" }
+      );
+    } else if (params.selectionText) {
+      items.push(
+        { role: "copy" },
+        { role: "selectAll" }
+      );
+    }
+    if (items.length > 0) {
+      Menu.buildFromTemplate(items).popup({ window: win });
+    }
   });
 
   try {
@@ -308,6 +365,29 @@ ipcMain.handle("fs:mkdir", async (event, args) => {
     console.error("[ipcMain fs:mkdir] error:", e);
     return { ok: false, error: String(e) };
   }
+});
+
+ipcMain.handle("window:isMinimized", (event) => {
+  if (!fromServer(event)) return false;
+  if (!mainWindow) return false;
+  return mainWindow.isMinimized() || !mainWindow.isVisible() || !mainWindow.isFocused();
+});
+
+ipcMain.handle("window:flashFrame", (event, flag) => {
+  if (!fromServer(event)) return false;
+  try {
+    if (mainWindow && typeof mainWindow.flashFrame === "function") {
+      mainWindow.flashFrame(flag !== false);
+    }
+  } catch (_) {}
+  return true;
+});
+
+ipcMain.handle("window:notify", (event, args) => {
+  if (!fromServer(event)) return false;
+  const opts = args || {};
+  showCompanionNotification(opts.title, opts.body);
+  return true;
 });
 
 // One-way hash of the hardware id: identical to the server's normalize_device_id, so
@@ -626,7 +706,44 @@ if (!app.requestSingleInstanceLock()) {
   app.on("second-instance", showMainWindow);
 }
 
+function setupApplicationMenu() {
+  const isMac = process.platform === "darwin";
+  const template = [
+    ...(isMac ? [{ role: "appMenu" }] : []),
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "pasteAndMatchStyle" },
+        { role: "delete" },
+        { role: "selectAll" }
+      ]
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" }
+      ]
+    }
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 app.whenReady().then(() => {
+  setupApplicationMenu();
   if (!SERVER_URL) {
     dialog.showErrorBox("A770 Companion — not configured",
       `${SERVER_URL_ERROR}.

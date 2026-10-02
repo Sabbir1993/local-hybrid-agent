@@ -44,11 +44,11 @@ async def get_config(model: Optional[str] = None, user: Principal = Depends(get_
                     "vision_capable": any(k in (cm_bound.model_id or "").lower() for k in ["vision", "4o", "gemini", "claude-3", "vl"])}
     # The ?model= target wins when it names a different model than the one
     # loaded — the drawer edits the dropdown-selected model, not what's in VRAM.
+    target = model or common.get_model_hint(user.id)
     if state.profile is not None:
         loaded_key = _model_key(state.profile.get("model_path") or "")
         if not model or _model_key(model) == loaded_key:
             return _config_for_profile(state.profile)
-        target = model or common.get_model_hint(user.id)
     if target:
         prof = _standalone_profile(target)
         if prof:
@@ -73,7 +73,6 @@ async def set_config(req: ConfigRequest, model: Optional[str] = None,
             if prof is None:
                 return JSONResponse({"error": f"model file not found: {model}"}, status_code=404)
     else:
-        target = model or common.get_model_hint(user.id)
         if not target:
             return JSONResponse({"error": "no profile loaded"}, status_code=400)
         prof = _standalone_profile(target)

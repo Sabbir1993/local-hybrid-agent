@@ -2,7 +2,7 @@ MAX_SUBAGENT_STEPS = 15
 DEFAULT_SUBAGENT_STEPS = 8
 # run_python: sub-agents have no SSE stream to raise the approval modal on
 # media tools: cost money / long GPU jobs - only the main agent may use them
-DENIED_TOOLS = {"run_shell", "run_python", "spawn_agent", "spawn_parallel_agents", "generate_image", "generate_video"}
+DENIED_TOOLS = {"run_shell", "run_python", "spawn_agent", "spawn_parallel_agents", "spawn_reviewed_coder", "generate_image", "generate_video"}
 
 SUBAGENT_SYSTEM_PROMPT = """You are a focused sub-agent delegated a single, self-contained task \
 by a parent AI coding agent. Workspace: {workspace}
@@ -107,3 +107,70 @@ SPAWN_PARALLEL_AGENTS_SCHEMA = {
         },
     },
 }
+
+BLACKBOARD_POST_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "blackboard_post",
+        "description": "Post a verified discovery, key fact, or schema to the session blackboard for sibling subagents and the parent to read.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Short topic key, e.g. 'auth_db_schema' or 'endpoint_path'"},
+                "value": {"type": "string", "description": "The verified finding or content"},
+            },
+            "required": ["key", "value"],
+        },
+    },
+}
+
+BLACKBOARD_READ_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "blackboard_read",
+        "description": "Read verified findings posted by other sub-agents or tasks from the session blackboard.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Optional specific key to read. If omitted, returns all findings on the blackboard."},
+            },
+        },
+    },
+}
+
+SPAWN_REVIEWED_CODER_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "spawn_reviewed_coder",
+        "description": (
+            "Execute a coding task with an automated Critic-Actor verification loop. "
+            "A coder sub-agent writes/edits code and tests, then a reviewer sub-agent "
+            "critiques the diff and either approves (VERDICT: APPROVED) or rejects with "
+            "actionable feedback (VERDICT: REJECTED). If rejected, the coder is re-dispatched "
+            "with feedback until approved or max iterations reached."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "Full, self-contained coding instructions for the coder sub-agent.",
+                },
+                "max_iterations": {
+                    "type": "integer",
+                    "description": "Maximum number of critique/fix cycles (default 2, min 1, max 3).",
+                },
+                "coder_lane": {
+                    "type": "string",
+                    "description": "Optional model lane override for the coder (e.g. 'executor' or 'main').",
+                },
+                "reviewer_lane": {
+                    "type": "string",
+                    "description": "Optional model lane override for the reviewer (e.g. 'main').",
+                },
+            },
+            "required": ["task"],
+        },
+    },
+}
+

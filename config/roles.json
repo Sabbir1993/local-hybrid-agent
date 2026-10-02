@@ -34,7 +34,8 @@
     "tools": [
       "list_files",
       "read_file",
-      "grep"
+      "grep",
+      "list_diff"
     ],
     "system_prompt": "You are a code-review sub-agent. Read the referenced files/diff and report concrete issues found -- do not modify anything."
   },

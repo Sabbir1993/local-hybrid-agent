@@ -173,7 +173,14 @@ def _standalone_profile(target: str) -> Optional[dict]:
     # only model files under a models root: ?model= is caller-supplied, and an
     # arbitrary path would reveal whether files exist anywhere on the server
     if not in_models_dir(p) or not p.exists():
-        return None
+        from core.profiles.paths import models_roots
+        for r in models_roots():
+            candidate = (r / target).resolve()
+            if in_models_dir(candidate) and candidate.exists():
+                p = candidate
+                break
+        else:
+            return None
     saved = load_model_configs().get(_model_key(p)) or {}
     prof = {"name": p.stem, "model_path": str(p)}
     for k, v in CONFIG_DEFAULTS.items():

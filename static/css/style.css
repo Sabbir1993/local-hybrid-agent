@@ -2316,7 +2316,7 @@ a.download-link:hover {
 /* closed panel sits just off-screen; its grip would poke 8px back in and cover the chat scrollbar */
 #ws-panel:not(.open) #ws-grip { display: none; }
 body.ws-resizing,
-body.ws-resizing * {
+body.ws-resizing *:not(input):not(textarea):not(select) {
   cursor: ew-resize !important;
   user-select: none !important;
   -webkit-user-select: none !important;

@@ -969,6 +969,7 @@ async function send(inputText) {
   };
   window.bgJobs.set(String(sessionId), job);
   if (typeof updateBgIndicators === 'function') updateBgIndicators();
+  if (typeof requestNotificationPermission === 'function') requestNotificationPermission();
 
   const samplingCfg = getSamplingConfig();
   const sys = (samplingCfg.sysprompt || '').trim();
@@ -1141,4 +1142,17 @@ async function send(inputText) {
     toast(`⚡ Chat "${job.title}" finished generating`);
   }
   if (typeof updateBgIndicators === 'function') updateBgIndicators();
+
+  if (typeof notifyTaskFinished === 'function') {
+    const chatTitle = (job && job.title) || 'Chat';
+    let bodyPreview = '';
+    if (targetAssistant && targetAssistant.content) {
+      bodyPreview = targetAssistant.content.replace(/```[\s\S]*?```/g, '').trim().slice(0, 140);
+    }
+    notifyTaskFinished({
+      title: `Response Ready: ${chatTitle}`,
+      body: bodyPreview || 'Generation complete.',
+      status: 'done'
+    });
+  }
 }

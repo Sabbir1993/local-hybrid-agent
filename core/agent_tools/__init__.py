@@ -99,9 +99,18 @@ from .workspace import (
 # Registered last, after AGENT_TOOLS/TOOL_IMPLS/active_workspace exist: core.subagent
 # imports back from this module and from core.agent_loop, so wiring it in here (rather
 # than at the top of the file) avoids a circular import during startup.
-from ..subagent.constants import SPAWN_AGENT_SCHEMA, SPAWN_PARALLEL_AGENTS_SCHEMA  # noqa: E402
+from ..subagent.constants import (  # noqa: E402
+    BLACKBOARD_POST_SCHEMA,
+    BLACKBOARD_READ_SCHEMA,
+    SPAWN_AGENT_SCHEMA,
+    SPAWN_PARALLEL_AGENTS_SCHEMA,
+    SPAWN_REVIEWED_CODER_SCHEMA,
+)
 AGENT_TOOLS.append(SPAWN_AGENT_SCHEMA)
 AGENT_TOOLS.append(SPAWN_PARALLEL_AGENTS_SCHEMA)
+AGENT_TOOLS.append(SPAWN_REVIEWED_CODER_SCHEMA)
+AGENT_TOOLS.append(BLACKBOARD_POST_SCHEMA)
+AGENT_TOOLS.append(BLACKBOARD_READ_SCHEMA)
 
 async def _tool_spawn_agent(args: dict) -> str:
     from ..subagent.runner import tool_spawn_agent
@@ -111,8 +120,24 @@ async def _tool_spawn_parallel_agents(args: dict) -> str:
     from ..subagent.runner import tool_spawn_parallel_agents
     return await tool_spawn_parallel_agents(args)
 
+async def _tool_spawn_reviewed_coder(args: dict) -> str:
+    from ..subagent.critic import tool_spawn_reviewed_coder
+    return await tool_spawn_reviewed_coder(args)
+
+async def _tool_blackboard_post(args: dict) -> str:
+    from ..subagent.blackboard import tool_blackboard_post
+    return await tool_blackboard_post(args)
+
+async def _tool_blackboard_read(args: dict) -> str:
+    from ..subagent.blackboard import tool_blackboard_read
+    return await tool_blackboard_read(args)
+
 TOOL_IMPLS["spawn_agent"] = _tool_spawn_agent
 TOOL_IMPLS["spawn_parallel_agents"] = _tool_spawn_parallel_agents
+TOOL_IMPLS["spawn_reviewed_coder"] = _tool_spawn_reviewed_coder
+TOOL_IMPLS["blackboard_post"] = _tool_blackboard_post
+TOOL_IMPLS["blackboard_read"] = _tool_blackboard_read
+
 
 # Document tools (doc_inspect / doc_edit / doc_create): same late wiring, since
 # core.doc_tools imports the workspace helpers from this module.

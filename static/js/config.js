@@ -385,8 +385,16 @@ async function loadConfig() {
     const target = (sel && sel.value) ? sel.value : (curStatus && curStatus.model);
     let url = '/control/config';
     if (target) url += '?model=' + encodeURIComponent(target);
-    const c = await (await fetch(url)).json();
-    if (c.error) return;
+    const r = await fetch(url);
+    if (!r.ok) {
+      clearCloudConfigUI();
+      return;
+    }
+    const c = await r.json();
+    if (!c || c.error) {
+      clearCloudConfigUI();
+      return;
+    }
     if (c.cloud) {
       applyCloudConfigUI(c);
       updateModelCapabilitiesBar(c);
@@ -395,7 +403,9 @@ async function loadConfig() {
     clearCloudConfigUI();
     fillConfigForm(c);
     updateModelCapabilitiesBar(c);
-  } catch (e) {}
+  } catch (e) {
+    clearCloudConfigUI();
+  }
 }
 
 /* Cloud model selected: llama-server launch params are meaningless -> banner + disabled */

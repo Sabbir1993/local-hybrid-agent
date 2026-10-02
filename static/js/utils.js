@@ -492,3 +492,146 @@ function apiErrorText(body, status) {
   if (typeof b.detail === 'string' && b.detail) return b.detail;
   return 'HTTP ' + status;
 }
+
+/* ---------------- task completion notifications ---------------- */
+let _titleFlashTimer = null;
+let _originalDocTitle = '';
+
+function requestNotificationPermission() {
+  const Notif = (typeof window !== 'undefined' && window.Notification) || (typeof Notification !== 'undefined' ? Notification : null);
+  if (Notif && Notif.permission === 'default') {
+    try {
+      Notif.requestPermission().catch(() => {});
+    } catch (_) {}
+  }
+}
+window.requestNotificationPermission = requestNotificationPermission;
+
+async function isUserAwayOrCompanionMinimized() {
+  // 1. Electron Companion check (minimized, hidden, or not focused)
+  if (typeof window !== 'undefined' && window.electronAPI && typeof window.electronAPI.isMinimized === 'function') {
+    try {
+      const min = await window.electronAPI.isMinimized();
+      if (min) return true;
+    } catch (_) {}
+  }
+  // 2. Browser tab visibility & focus
+  if (typeof document !== 'undefined') {
+    if (document.hidden) return true;
+    if (typeof document.hasFocus === 'function' && !document.hasFocus()) return true;
+  }
+  return false;
+}
+window.isUserAwayOrCompanionMinimized = isUserAwayOrCompanionMinimized;
+
+function playNotificationChime() {
+  try {
+    const AudioCtx = (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)) || (typeof AudioContext !== 'undefined' ? AudioContext : null);
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+
+    // Pleasant 2-tone chime: E5 (659.25Hz) -> B5 (987.77Hz)
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(659.25, now);
+    gain1.gain.setValueAtTime(0.08, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.2);
+
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(987.77, now + 0.12);
+    gain2.gain.setValueAtTime(0.08, now + 0.12);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(now + 0.12);
+    osc2.stop(now + 0.38);
+
+    setTimeout(() => { ctx.close().catch(() => {}); }, 500);
+  } catch (_) {}
+}
+window.playNotificationChime = playNotificationChime;
+
+function flashTabTitle(alertText) {
+  if (typeof document === 'undefined') return;
+  if (_titleFlashTimer) clearInterval(_titleFlashTimer);
+  _originalDocTitle = (document.title || '').replace(/^🔔\s*/, '');
+  let toggle = false;
+  const tag = alertText ? `🔔 ${alertText}` : '🔔 Task Finished!';
+  document.title = tag;
+
+  _titleFlashTimer = setInterval(() => {
+    toggle = !toggle;
+    document.title = toggle ? tag : (_originalDocTitle || 'Local Agent');
+  }, 1000);
+
+  const restore = () => {
+    if (_titleFlashTimer) {
+      clearInterval(_titleFlashTimer);
+      _titleFlashTimer = null;
+    }
+    if (_originalDocTitle && typeof document !== 'undefined') document.title = _originalDocTitle;
+    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') window.removeEventListener('focus', restore);
+    if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') document.removeEventListener('visibilitychange', restore);
+  };
+
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('focus', restore);
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') document.addEventListener('visibilitychange', restore);
+}
+window.flashTabTitle = flashTabTitle;
+
+async function notifyTaskFinished(opts = {}) {
+  const away = await isUserAwayOrCompanionMinimized();
+  if (!away) return false;
+
+  const title = opts.title || 'Task Finished';
+  const body = opts.body || 'Your task has completed.';
+
+  // 1. Companion native desktop notification & taskbar frame flashing
+  if (typeof window !== 'undefined' && window.electronAPI) {
+    if (typeof window.electronAPI.notify === 'function') {
+      try {
+        window.electronAPI.notify({ title, body });
+      } catch (_) {}
+    }
+    if (typeof window.electronAPI.flashFrame === 'function') {
+      try {
+        window.electronAPI.flashFrame(true);
+      } catch (_) {}
+    }
+  }
+
+  // 2. Web Notification API (Browser Desktop Notification)
+  const Notif = (typeof window !== 'undefined' && window.Notification) || (typeof Notification !== 'undefined' ? Notification : null);
+  if (Notif && Notif.permission === 'granted') {
+    try {
+      const notif = new Notif(title, {
+        body,
+        icon: 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>',
+        tag: 'local-agent-task',
+        renotify: true,
+      });
+      notif.onclick = () => {
+        try { if (typeof window !== 'undefined' && typeof window.focus === 'function') window.focus(); } catch (_) {}
+        try { if (typeof notif.close === 'function') notif.close(); } catch (_) {}
+      };
+    } catch (_) {}
+  }
+
+  // 3. Tab title indicator
+  flashTabTitle(title);
+
+  // 4. Pleasant audio chime
+  playNotificationChime();
+
+  return true;
+}
+window.notifyTaskFinished = notifyTaskFinished;
+
