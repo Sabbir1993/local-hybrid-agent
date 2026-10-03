@@ -77,18 +77,22 @@ async def get_schema(db_id: str, user: Principal = Depends(require_verified("dat
                 sql = r["sql"] or ""
 
                 # Get columns
-                col_rows = conn.execute(f"PRAGMA table_info(\"{tbl_name}\")").fetchall()
-                columns = [
-                    {
-                        "cid": c["cid"],
-                        "name": c["name"],
-                        "type": c["type"] or "TEXT",
-                        "notnull": bool(c["notnull"]),
-                        "dflt_value": c["dflt_value"],
-                        "pk": bool(c["pk"]),
-                    }
-                    for c in col_rows
-                ]
+                columns = []
+                try:
+                    col_rows = conn.execute(f"PRAGMA table_info(\"{tbl_name}\")").fetchall()
+                    columns = [
+                        {
+                            "cid": c["cid"],
+                            "name": c["name"],
+                            "type": c["type"] or "TEXT",
+                            "notnull": bool(c["notnull"]),
+                            "dflt_value": c["dflt_value"],
+                            "pk": bool(c["pk"]),
+                        }
+                        for c in col_rows
+                    ]
+                except Exception:
+                    pass
 
                 # Estimated count
                 row_count = 0

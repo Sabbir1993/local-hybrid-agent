@@ -5,8 +5,9 @@
     python scripts/perf_report.py --since 2026-09-30 --label after   # window starting at a date
 
 Reports what actually costs time and money: per-model request time and prompt size (with the share
-served from the provider/KV cache), steps per run, how runs ended, what the executor wasted before
-escalating, and tool success. Run it before and after a change (or a config edit) and compare.
+served from the provider/KV cache), prompt leanness against the S3 budgets, steps per run, how runs
+ended, what the executor wasted before escalating, and tool success. Run it before and after a change
+(or a config edit) and compare.
 """
 import argparse
 import datetime as dt
@@ -29,6 +30,25 @@ def report(con, since, until, label=""):
                   ROUND(100.0*SUM(prompt_cached_tokens)/MAX(1,SUM(prompt_tokens)))
                   FROM requests WHERE ts>=? AND ts<? AND status=200 GROUP BY endpoint, model, source
                   ORDER BY COUNT(*) DESC LIMIT 12""", since, until):
+        print("  ", r)
+    print("\nPrompt leanness  (endpoint, n, avg prompt tok, lean % <=1.5k)")
+    # S3 budgets: trivial turns should stay under ~1.5k prompt tokens. A shrinking
+    # average and a growing lean share after a prompt change is the win; run with
+    # --since <change-date> --label after to compare windows.
+    for r in q("""SELECT endpoint, COUNT(*), ROUND(AVG(prompt_tokens)),
+                  ROUND(100.0*SUM(CASE WHEN prompt_tokens<=1500 THEN 1 ELSE 0 END)/COUNT(*))
+                  FROM requests WHERE ts>=? AND ts<? AND status=200
+                  AND endpoint IN ('chat/run','agent/main','agent/executor','agent/main-escalated',
+                                   'agent/Lane.MAIN','agent/Lane.EXECUTOR',
+                                   'agent/router','v1/chat/completions')
+                  GROUP BY endpoint ORDER BY 3 DESC""", since, until):
+        print("  ", r)
+    print("\nchat/run prompt buckets  (bucket, n)")
+    for r in q("""SELECT CASE WHEN prompt_tokens<=1500 THEN '<=1.5k (lean)'
+                  WHEN prompt_tokens<=3000 THEN '1.5-3k'
+                  WHEN prompt_tokens<=6000 THEN '3-6k' ELSE '>6k' END, COUNT(*)
+                  FROM requests WHERE ts>=? AND ts<? AND status=200 AND endpoint='chat/run'
+                  GROUP BY 1 ORDER BY MIN(prompt_tokens)""", since, until):
         print("  ", r)
     print("\nRuns by category  (n, avg steps, max steps)")
     for r in q("""SELECT category, COUNT(*), ROUND(AVG(steps),1), MAX(steps) FROM route_runs

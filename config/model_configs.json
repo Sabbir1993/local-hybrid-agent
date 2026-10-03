@@ -57,7 +57,7 @@
     "batch_size": 2048,
     "ubatch_size": 512,
     "n_slots": 1,
-    "tensor_split": "9,11",
+    "tensor_split": "11,9",
     "split_mode": "layer",
     "flash_attn": "auto",
     "kv_cache_type": "q8_0",
@@ -69,10 +69,11 @@
       2
     ],
     "vision_capable": false,
-    "kv_unified": false,
-    "kv_unified_per_slot": 131072,
+    "kv_unified": true,
+    "kv_unified_per_slot": 0,
     "cache_reuse": 256,
-    "cache_ram": 0
+    "cache_ram": 2048,
+    "use_mmap": false
   },
   "spark-x2.5-4b-q4_k_m.gguf": {
     "context_size": 231072,
@@ -208,7 +209,7 @@
     "kv_unified": true,
     "kv_unified_per_slot": 0,
     "cache_reuse": 256,
-    "cache_ram": 0
+    "cache_ram": 1048
   },
   "explicit.gguf": {},
   "live.gguf": {},

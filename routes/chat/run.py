@@ -30,6 +30,7 @@ from core.agent_loop import (
     _extract_text_tool_calls,
     estimate_prompt_tokens,
 )
+from core import prompt_scope
 from core.monitor import (
     _monitor_state,
     monitor_begin,
@@ -141,13 +142,21 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             yield f"event: done\ndata: {json.dumps({'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0})}\n\n"
         return StreamingResponse(_where_sse(), media_type="text/event-stream")
 
-    # Tools for Chat Mode: Always equip write_file (saves to shared common space)
-    chat_tools = [CHAT_WRITE_FILE_SCHEMA, DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
+    # Prompt scope S1: intent first, manuals only on intent. wants_file is
+    # reused below for the tool loop (same inputs, same answer).
+    wants_file = wants_file_output(last_query) or file_followup == "edit"
+    has_file = bool(file_followup or wants_file)
+    has_web = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs))
+
+    # Tools for Chat Mode: write_file always (core), the rest on intent.
+    chat_tools = [CHAT_WRITE_FILE_SCHEMA]
+    if has_file:
+        chat_tools += [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
     from core.agent_tools import AGENT_TOOLS
     skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
     if skb:
         chat_tools.append(skb)
-    if use_web:
+    if has_web:
         register_web_tools()
         for t_name in ("web_search", "web_fetch", "web_search_images"):
             rt = registry.get(t_name)
@@ -166,9 +175,17 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     except Exception as e:
         print(f"[chat] image tool unavailable: {type(e).__name__}", file=sys.stderr)
     mcp_prompt = ""
+    mcp_servers = set()
     if APP_CONFIG.get("capabilities", {}).get("mcp", False):
-        chat_tools.extend(mcp_core.ready_tool_schemas())
-        mcp_prompt = mcp_core.chat_prompt()
+        from core.mcp.constants import configured_servers
+        mcp_names = set(configured_servers(APP_CONFIG))
+        # on-mention (S1): full schemas + prompt only for named servers.
+        # A custom agent's explicit allowlist below merges in (admin config wins).
+        mcp_servers = prompt_scope.mcp_mentions(last_query, mcp_names, msgs)
+        if mcp_servers:
+            chat_tools.extend(prompt_scope.mcp_schemas_for(
+                mcp_core.ready_tool_schemas(), mcp_servers))
+            mcp_prompt = mcp_core.chat_prompt(only_servers=mcp_servers)
 
     custom_agent = None
     allowed_names = None
@@ -187,9 +204,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if custom_agent.get("tool_allowlist"):
             allowed_names = set(custom_agent["tool_allowlist"]) | {"write_file"}   # saving files is never withheld
             chat_tools = [t for t in chat_tools if t.get("function", {}).get("name") in allowed_names]
-            # only advertise the MCP servers that still have an allowed tool
+            # only advertise the MCP servers that still have an allowed tool;
+            # explicit admin config wins over mention-gating (S1)
             allowed_srv = {n.split("__")[1] for n in allowed_names if n.startswith("mcp__") and n.count("__") >= 2}
-            mcp_prompt = mcp_core.chat_prompt(only_servers=allowed_srv) if (mcp_prompt and allowed_srv) else ""
+            mcp_servers = set(allowed_srv)
+            mcp_prompt = mcp_core.chat_prompt(only_servers=mcp_servers) if mcp_servers else ""
         from routes.custom_agents import apply_input_template
         apply_input_template(msgs, custom_agent)
     if req.temperature is None:
@@ -198,16 +217,20 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     set_tool_allowlist(allowed_names)
 
     sys_parts = [common.current_date_prompt()]
+    sys_labels = ["date"]   # parallel to sys_parts: P0 breakdown ruler (S5)
     if custom_agent:
         ca_prompt = (
             f"YOU ARE A SPECIALIZED CUSTOM AGENT: {custom_agent['name']} ({custom_agent.get('icon', '🤖')})\n"
             f"AGENT PERSONA & DIRECTIVES:\n{custom_agent.get('system_prompt', '')}\n"
         )
         sys_parts.append(ca_prompt)
+        sys_labels.append("custom-agent")
     if req.system_prompt and req.system_prompt.strip():
         sys_parts.append(req.system_prompt.strip())
+        sys_labels.append("request-system")
     if mcp_prompt:
         sys_parts.append(mcp_prompt)
+        sys_labels.append("mcp")
 
     # Organizational knowledge base: permission-scoped routing & retrieval.
     # Injected only for company-directed queries or strongly matching chunks -
@@ -232,6 +255,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             if kb_hits:
                 kb_used = True
                 sys_parts.append(kb_prompt_block)
+                sys_labels.append("kb")
         except Exception as e:
             print(f"[chat] knowledge retrieval failed: {e}", file=sys.stderr)
 
@@ -264,39 +288,18 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 sys_parts.append("NOTE: The company knowledge base is restricted to local models and no "
                                  "local model is loaded, so internal company data is not available for "
                                  "this answer. Tell the user this instead of guessing.")
+                sys_labels.append("kb-note")
         if cloud_main and skb in chat_tools:
             chat_tools.remove(skb)
     set_kb_cloud_blocked(cloud_main is not None)
 
-    file_prompt = (
-        "FILE CREATION & DOWNLOAD SYSTEM (COMMON STORAGE):\n"
-        "You have the capability to create, write, generate, or fill files using the `write_file(path, content)` tool.\n"
-        "All files you write are automatically saved to the shared common storage space and made available as direct download links.\n\n"
-        "RULES FOR FILES:\n"
-        "1. When the user asks to create, fill, write, generate, or share a file (e.g. 'fill data on that excel file and share with me', 'create data.csv', 'make a script', 'create resume.pdf', 'make a presentation', 'create an HTML dashboard'):\n"
-        "   - NEVER refuse by saying 'I don't have the ability to directly edit or open local files on your computer'.\n"
-        "   - Call `write_file(path=..., content=...)` immediately with the complete content, code, or data rows.\n"
-        "   - If not calling `write_file`, you MUST provide the complete, rich, runnable code inside a markdown code block (e.g. ```html ... ```). NEVER output `[DOWNLOAD: filename]` alone without either calling `write_file` or outputting the complete code block.\n"
-        "2. For Excel spreadsheets (.xlsx) or CSV files, provide the tabular data rows in `content` with a descriptive filename. It will automatically be created as a real, valid spreadsheet workbook.\n"
-        "3. For PDF files (.pdf) and presentations (.pptx), provide clean, well-structured document or presentation content using `write_file(path='filename.pdf', content=...)`. It will automatically be compiled into a publication-ready PDF or presentation. CRITICAL: NEVER mention, display, or acknowledge to the user that any intermediate HTML generation or conversion is happening under the hood. Present it strictly as direct PDF or presentation creation.\n"
-        "4. All files generated in common storage automatically append a unique revision ID to ensure media and documents are never duplicated or overwritten.\n"
-        "5. When you generate or write a file, you MUST include a download link in your final response using this exact syntax:\n"
-        "   [DOWNLOAD: filename]\n"
-        "   The user interface will automatically convert `[DOWNLOAD: filename]` into a clickable download and preview button.\n"
-        "6. ANTI-HALLUCINATION POLICY FOR COMPANY & INTERNAL DATA:\n"
-        "   When the user asks questions about the company, employee records, internal policies, or company knowledge base, "
-        "NEVER invent fake employee names, placeholder records, or fictional datasets. NEVER call `write_file` to create "
-        "sample or dummy CSV/Excel spreadsheets unless the user explicitly requested a file export (e.g. 'export this to CSV' or 'save as Excel file'). "
-        "Answer with the authentic internal company knowledge base data provided in the prompt.\n"
-        "7. CHANGING AN EXISTING DOCUMENT (.pptx, .xlsx, .docx, .csv, .pdf - one you created or one the user attached): "
-        "never regenerate it with write_file. Call `doc_inspect(file)` for its outline, then `doc_edit(file, ops)` "
-        "targeting only what the user asked to change; everything else stays exactly as it was, and a new "
-        "version is saved with its own [DOWNLOAD: ...] link.\n"
-        "8. ONE DELIVERABLE PER REQUEST: write exactly one file in the format the user asked for (a PDF request "
-        "gets one .pdf, a slide request gets one .pptx). Never save drafts or numbered versions (v2, _final, "
-        "_proper), never write helper/generator scripts (.py) to build a document, and link only that one file."
-    )
-    sys_parts.append(file_prompt)
+    # S1: the full manual only on file intent, else a lean pointer (S4).
+    if has_file:
+        sys_parts.append(prompt_scope.FILE_MANUAL)
+        sys_labels.append("file-manual")
+    else:
+        sys_parts.append(prompt_scope.FILE_MANUAL_LEAN)
+        sys_labels.append("file-lean")
 
     if prior_files:
         latest = prior_files[-1]
@@ -340,37 +343,19 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     "this conversation, call write_file with the complete file, and tell the user it was "
                     "regenerated.")
         sys_parts.append(prior_block)
+        sys_labels.append("prior-files")
 
-    if use_web:
-        web_prompt = (
-            "You are a helpful, knowledgeable, and accurate AI assistant equipped with LIVE REAL-TIME INTERNET BROWSING & SEARCH.\n"
-            "You have access to web tools:\n"
-            "- `web_search(query)`: Search the live web to retrieve up-to-date facts, current news, documentation, releases, or any information you are uncertain about or do not know.\n"
-            "- `web_search_images(query)`: Search the live web specifically for photos, pictures, portraits, logos, diagrams, and images. Returns image URLs and thumbnails.\n"
-            "- `web_fetch(url)`: Fetch and read the full readable text content of any website or page URL.\n\n"
-            "CRITICAL OPERATING RULES:\n"
-            "1. YOU HAVE ACTIVE REAL-TIME INTERNET ACCESS. NEVER say 'I cannot browse the live internet' or 'I don't have internet access'.\n"
-            "2. When the user provides a URL or asks to inspect, read, browse, or summarize a website (e.g. 'summarise https://...'), call `web_fetch(url=...)` immediately.\n"
-            "3. When the user asks about recent events, real-time facts, current versions, weather, or anything outside your certain knowledge, call `web_search(query=...)` immediately.\n"
-            "4. When the user asks for a photo, picture, image, or portrait (e.g. 'Can you give his photo?', 'show a picture of...'), call `web_search_images(query=...)` immediately, and in your final answer include the image links using markdown image syntax `![Description](URL)`.\n"
-            "5. If you are confident in your knowledge (e.g. general explanations, basic math, creative writing, common programming concepts), answer directly without calling tools.\n"
-            "6. When answering based on web search or fetch results, synthesize a clear, helpful response and cite each fact inline with the source number and link from the results, e.g. [1](URL), or `![Title](URL)` for images. Prefer the page excerpts (lines starting with '>') over snippets, and say so when the sources disagree or don't answer the question.\n"
-            "7. Never put personal data (names of customers, emails, phone or account numbers) into search queries.\n"
-            "8. COMPANY / ORGANIZATION OVERVIEW ('summarize X', 'what does X do', X's products): search the plain "
-            "name first (e.g. `web_search(query='<name> official website')`, no recency, no extra product names), "
-            "identify the official domain from the results, then `web_fetch` its homepage and its About / Products / "
-            "Services pages (up to 3 pages) and base the summary on them; use other sources only for news or "
-            "third-party facts. Never add product, server or tool names from this system prompt to a search query "
-            "unless the user wrote them."
-        )
-        sys_parts.append(web_prompt)
+    # S1: the full web manual + schemas only on web intent; otherwise the
+    # model answers from knowledge (old rule 5) and spends nothing on browsing.
+    if has_web:
+        sys_parts.append(prompt_scope.WEB_MANUAL)
+        sys_labels.append("web-manual")
 
     # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat"
     chat_cfg = APP_CONFIG.get("chat") or {}
     deep = bool(req.deep_mode)
     max_turns = int(chat_cfg.get("deep_max_tool_rounds" if deep else "max_tool_rounds", 25 if deep else 15)) if chat_tools else 1
     max_web_calls = int(chat_cfg.get("deep_max_web_calls" if deep else "max_web_calls", 16 if deep else 8))
-    wants_file = wants_file_output(last_query) or file_followup == "edit"
     if deep:
         sys_parts.append(
             "DEEP RESEARCH MODE:\n"
@@ -378,6 +363,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             f"2. Research each one with targeted web searches (use the current year; you have up to {max_web_calls} web calls).\n"
             "3. Stop searching as soon as you have enough data, then write the complete deliverable in one go. "
             "Cite sources, and label any figure you could not verify as an estimate.")
+        sys_labels.append("deep")
     # How much the model reasons: the composer's effort level, independent of
     # Deep research; mapped per local/cloud target in common._llm_chat_stream_raw
     effort = reasoning.resolve(req.reasoning_effort, deep)
@@ -392,6 +378,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 break
         if not has_sys:
             msgs.insert(0, {"role": "system", "content": combined_sys})
+
+    # P0 ruler (S5): per-section sizes, only with PROMPT_BREAKDOWN=1 or
+    # app.json debug.prompt_breakdown. Never logs user text.
+    prompt_scope.maybe_log("chat/run", list(zip(sys_labels, sys_parts)), chat_tools,
+                           extra=f"hist={len(msgs)}")
 
     # Report the model actually answering: cloud model when the main lane is
     # cloud-bound, else the loaded local gguf (fallback label matches the old

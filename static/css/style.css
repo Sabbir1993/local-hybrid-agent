@@ -273,6 +273,12 @@ body.sidebar-collapsed aside {
 .logo-mark {
   color: var(--accent);
   flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  object-fit: cover;
+  display: inline-block;
+  vertical-align: middle;
 }
 [data-theme="ssl"] .logo-mark,
 [data-theme="ssl-light"] .logo-mark {

@@ -15,6 +15,7 @@ from core.small_model import classifier
 from core import step_outcome
 from core.subagent.runner import subagent_result_verdict as _subagent_verdict
 from core import tool_surface
+from core import prompt_scope
 from core.project_context import load_project_instructions, prompt_block as project_prompt_block
 from core.knowledge_access import allowed_source_ids_for, kb_local_only, set_kb_cloud_blocked
 from core.db import (
@@ -596,7 +597,11 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     nr = None
                     if not is_creation_or_code:
                         try:
-                            r_tools = all_tools()
+                            # S1: the router may only short-cut read-only plan
+                            # tools (enforced below), so it is only shown those -
+                            # never the full ~8.5k registry on every step.
+                            r_tools = [t for t in all_tools()
+                                       if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
                             if custom_agent_tools:
                                 r_tools = [t for t in r_tools
                                            if t.get("function", {}).get("name") in custom_agent_tools]
@@ -708,7 +713,7 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     elif lane_name == "executor":
                         # core tools plus shell, skills and plan tracking so the
                         # executor can install packages, run commands, and tick plan items
-                        # (+ connected MCP tools: the system prompt tells every lane about them).
+                        # (+ mentioned MCP tools, filtered below with the rest).
                         # The browser/device test tools only when the request names them: their
                         # 14 schemas are several thousand tokens of the executor's 32k window.
                         tools_for_lane = tool_surface.filter_tools(
@@ -726,6 +731,12 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                     tools_for_lane = [t for t in tools_for_lane if t.get("function", {}).get("name") in custom_agent_tools]
                 if hidden_tools:
                     tools_for_lane = [t for t in tools_for_lane if t.get("function", {}).get("name") not in hidden_tools]
+                # S1: MCP schemas only for mentioned/used servers (+ explicit
+                # custom-agent allowlist). A lane that needs a hidden family
+                # delegates via spawn_agent (full set), per the escape hatch.
+                tools_for_lane = prompt_scope.hide_unmentioned_mcp(
+                    tools_for_lane, prompt_scope.agent_mcp_servers(
+                        getattr(ctx, "mcp_servers", None), custom_agent_tools))
                 if not kb_ids:      # nothing to search: do not offer the tool (it only invites a pointless first call)
                     tools_for_lane = [t for t in tools_for_lane
                                       if t.get("function", {}).get("name") != "search_knowledge_base"]
@@ -985,6 +996,9 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
                                      all_tools(), surface_q, APP_CONFIG.get("tool_surface")))
                     if custom_agent_tools:
                         esc_tools = [t for t in esc_tools if t.get("function", {}).get("name") in custom_agent_tools]
+                    esc_tools = prompt_scope.hide_unmentioned_mcp(
+                        esc_tools, prompt_scope.agent_mcp_servers(
+                            getattr(ctx, "mcp_servers", None), custom_agent_tools))
                     esc_tool_choice = ("required" if esc_tools and not req.plan and not actions_taken
                                        and router_policy.force_tool_call(q_category, step, narration_nudges, last_query, rpol)
                                        else None)

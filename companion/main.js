@@ -5,6 +5,7 @@
 // execute fs/shell RPCs from fsops.js / shellops.js on this machine.
 
 const { app, BrowserWindow, Tray, Menu, nativeImage, session: electronSession, dialog, ipcMain, shell, safeStorage, Notification: NativeNotification } = require("electron");
+const fs = require("fs");
 const crypto = require("crypto");
 const WebSocket = require("ws");
 const os = require("os");
@@ -23,7 +24,19 @@ const browserops = () => (_browserops = _browserops || require("./browserops"));
 const androidops = require("./androidops");
 const iosops = require("./iosops");
 
-const APP_ICON_PATH = path.join(__dirname, "build", "icon.png");
+// Relative icon resolution — portable across clones on any machine
+const STATIC_LOGO_PATH = path.join(__dirname, "..", "static", "logo", "logo.jpg");
+const BUILD_ICON_PNG = path.join(__dirname, "build", "icon.png");
+const BUILD_ICON_ICO = path.join(__dirname, "build", "icon.ico");
+
+let APP_ICON_PATH = BUILD_ICON_PNG;
+if (process.platform === "win32" && fs.existsSync(BUILD_ICON_ICO)) {
+  APP_ICON_PATH = BUILD_ICON_ICO;
+} else if (fs.existsSync(BUILD_ICON_PNG)) {
+  APP_ICON_PATH = BUILD_ICON_PNG;
+} else if (fs.existsSync(STATIC_LOGO_PATH)) {
+  APP_ICON_PATH = STATIC_LOGO_PATH;
+}
 const appIcon = nativeImage.createFromPath(APP_ICON_PATH);
 const trayIconImage = appIcon.resize({ width: 32, height: 32 });
 

@@ -136,8 +136,9 @@ def _name(tool: dict) -> str:
 def filter_tools(tools: Iterable[dict], query: str = "", cfg: Optional[dict] = None) -> list:
     """Core tools plus the families this request names.
 
-    MCP tools are never hidden: the system prompt advertises them to every lane, and
-    they are registered per user rather than shipped in the base image.
+    MCP tools pass through here untouched: the agent/chat lanes re-hide
+    unmentioned servers per step (core/prompt_scope.hide_unmentioned_mcp),
+    which this family filter knows nothing about.
     """
     wanted = needed_families(query, cfg)
     out = []

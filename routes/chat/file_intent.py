@@ -2,9 +2,7 @@ import re
 from pathlib import Path
 from typing import Optional
 from core.agent_loop import estimate_prompt_tokens, compact_messages
-
-
-WEB_TOOL_NAMES = ("web_search", "web_fetch", "web_search_images")
+from core.prompt_scope import WEB_TOOL_NAMES
 
 
 # A deliverable request: a creation verb near a file-format / artifact noun.

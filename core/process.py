@@ -141,6 +141,8 @@ def build_launch_command(profile: dict) -> list[str]:
     cmd += ["-cram", str(profile.get("cache_ram") or MAIN_CACHE_RAM_MB)]
     if profile.get("model_type") == "moe" and tuned.get("n_cpu_moe") is not None:
         cmd += ["-ncmoe", str(tuned["n_cpu_moe"])]
+    if profile.get("use_mmap") is False:
+        cmd += ["--load-mode", "none"]
     cmd += ["--jinja"]
     if profile.get("mtp_enabled") and profile.get("mtp_draft_path"):
         draft = Path(profile["mtp_draft_path"])

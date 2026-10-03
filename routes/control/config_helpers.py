@@ -46,6 +46,11 @@ def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
             value = value.strip().lower() in ("true", "1", "on", "yes")
         profile["vision_capable"] = bool(value)
         return None
+    if key == "use_mmap":
+        if isinstance(value, str):
+            value = value.strip().lower() in ("true", "1", "on", "yes")
+        profile["use_mmap"] = bool(value)
+        return None
     if key in CONFIG_INT_FIELDS:
         lo, hi = CONFIG_INT_FIELDS[key]
         try:
@@ -145,6 +150,7 @@ def _config_for_profile(p: dict) -> dict:
         "kv_unified_per_slot": p.get("kv_unified_per_slot", CONFIG_DEFAULTS["kv_unified_per_slot"]),
         "cache_reuse": p.get("cache_reuse", CONFIG_DEFAULTS["cache_reuse"]),
         "cache_ram": p.get("cache_ram", CONFIG_DEFAULTS["cache_ram"]),
+        "use_mmap": bool(p.get("use_mmap", CONFIG_DEFAULTS.get("use_mmap", True))),
         "keepalive_interval_s": state.keepalive_interval_s,
         "llama_bin_dir": p.get("llama_bin_dir", CONFIG_DEFAULTS["llama_bin_dir"]),
         "gpu_devices": p.get("gpu_devices", CONFIG_DEFAULTS["gpu_devices"]),

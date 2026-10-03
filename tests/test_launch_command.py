@@ -178,6 +178,14 @@ class OptionalFlags(unittest.TestCase):
         cmd = _cmd(server_extra_args=["--temp", "0.7"])
         self.assertEqual(cmd[-2:], ["--temp", "0.7"])
 
+    def test_load_mode_none_when_mmap_disabled(self):
+        cmd = _cmd(use_mmap=False)
+        self.assertEqual(_flag(cmd, "--load-mode"), "none")
+
+    def test_load_mode_omitted_by_default(self):
+        self.assertNotIn("--load-mode", _cmd())
+        self.assertNotIn("--load-mode", _cmd(use_mmap=True))
+
 
 class TunedOverridesProfile(unittest.TestCase):
     def test_tuned_wins_for_split_and_layers(self):

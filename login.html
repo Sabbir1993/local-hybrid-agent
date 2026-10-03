@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sign in — Local Agent</title>
 <script src="/static/js/theme-boot.js?v=1.0"></script>
+<link rel="icon" href="/static/logo/logo.jpg">
 <link rel="stylesheet" href="/static/css/style.css?v=3.0">
 <style>
   body { display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; background:var(--bg); }
@@ -19,7 +20,10 @@
 </head>
 <body>
 <div id="login-box" class="card">
-  <h1>⬡ LOCAL AGENT</h1>
+  <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+    <img src="/static/logo/logo.jpg" alt="Logo" width="28" height="28" style="border-radius:6px; object-fit:cover;">
+    <h1 style="margin:0;">LOCAL AGENT</h1>
+  </div>
   <p class="sub">Sign in to continue</p>
   <form id="login-form">
     <div id="step-password">

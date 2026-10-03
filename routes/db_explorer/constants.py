@@ -71,7 +71,10 @@ _HIDDEN_COLUMNS = {
     ("auth_sessions", "id"),
 }
 # Introspection pragmas take a table/index argument; settable ones must be bare (no "= v").
-_INTROSPECT_PRAGMAS = {"table_info", "table_xinfo", "index_list", "index_info", "index_xinfo",
-                       "foreign_key_list", "database_list", "compile_options", "page_count"}
+_INTROSPECT_PRAGMAS = {
+    "table_info", "table_xinfo", "index_list", "index_info", "index_xinfo",
+    "foreign_key_list", "database_list", "compile_options", "page_count",
+    "data_version", "table_list", "encoding", "collation_list", "freelist_count"
+}
 _SETTABLE_PRAGMAS = {"page_size", "user_version", "schema_version", "journal_mode"}
 _VACUUM_RE = re.compile(r"\bVACUUM\b", re.IGNORECASE)

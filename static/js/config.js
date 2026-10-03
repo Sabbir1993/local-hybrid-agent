@@ -2,7 +2,7 @@
 const CFG_DEFAULTS = {
   ctx: 32768, ngl: 999, threads: 0, tb: 0, batch: 2048, ubatch: 512,
   np: 1, kai: 25, ts: '9,11', sm: 'layer', fa: 'auto', ct: 'f16',
-  kvps: 0, cru: 256, cram: 0,
+  kvps: 0, cru: 256, cram: 0, mmap: true,
 };
 
 async function loadProfiles() {
@@ -468,6 +468,7 @@ function fillConfigForm(c) {
     $('cfg-fa').value = c.flash_attn || CFG_DEFAULTS.fa;
     $('cfg-ct').value = c.kv_cache_type || CFG_DEFAULTS.ct;
     if ($('cfg-kvu')) $('cfg-kvu').checked = !!c.kv_unified;
+    if ($('cfg-mmap')) $('cfg-mmap').checked = (c.use_mmap !== undefined) ? !!c.use_mmap : true;
     if ($('cfg-kvps')) $('cfg-kvps').value = c.kv_unified_per_slot ?? CFG_DEFAULTS.kvps;
     if ($('cfg-cru')) $('cfg-cru').value = c.cache_reuse ?? CFG_DEFAULTS.cru;
     if ($('cfg-cram')) $('cfg-cram').value = c.cache_ram ?? CFG_DEFAULTS.cram;
@@ -539,6 +540,7 @@ if ($('btn-apply')) $('btn-apply').onclick = async () => {
     flash_attn: $('cfg-fa').value,
     kv_cache_type: $('cfg-ct').value,
     kv_unified: !!($('cfg-kvu') && $('cfg-kvu').checked),
+    use_mmap: $('cfg-mmap') ? $('cfg-mmap').checked : true,
     kv_unified_per_slot: parseInt($('cfg-kvps') && $('cfg-kvps').value) || 0,
     cache_reuse: parseInt($('cfg-cru') && $('cfg-cru').value) || 0,
     cache_ram: parseInt($('cfg-cram') && $('cfg-cram').value) || 0,

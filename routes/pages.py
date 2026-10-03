@@ -13,15 +13,34 @@ LOGIN_FILE = BASE_DIR / "login.html"
 SETTINGS_FILE = BASE_DIR / "settings.html"
 
 
-# --- Static assets (unauthenticated: CSS/JS carry no sensitive data) ---
+# --- Static assets (unauthenticated: CSS/JS/images carry no sensitive data) ---
 @router.get("/static/{file_path:path}")
 async def serve_static(file_path: str):
     p = (STATIC_DIR / file_path).resolve()
     if p.exists() and p.is_file() and p.is_relative_to(STATIC_DIR.resolve()):
-        media = "text/css" if p.suffix == ".css" else ("application/javascript" if p.suffix == ".js" else None)
+        media_types = {
+            ".css": "text/css",
+            ".js": "application/javascript",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".svg": "image/svg+xml",
+            ".ico": "image/x-icon",
+            ".webp": "image/webp",
+        }
+        media = media_types.get(p.suffix.lower())
         return FileResponse(p, media_type=media,
                             headers={"Cache-Control": "no-cache, must-revalidate"})
     return JSONResponse({"error": "file not found"}, status_code=404)
+
+
+@router.get("/favicon.ico")
+async def favicon():
+    p = (STATIC_DIR / "logo" / "logo.jpg").resolve()
+    if p.exists() and p.is_file():
+        return FileResponse(p, media_type="image/jpeg",
+                            headers={"Cache-Control": "public, max-age=86400"})
+    return JSONResponse({"error": "favicon not found"}, status_code=404)
 
 
 @router.get("/login")

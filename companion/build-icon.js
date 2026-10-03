@@ -153,6 +153,25 @@ function buildIco(pngsBySize) {
 const buildDir = path.join(__dirname, "build");
 fs.mkdirSync(buildDir, { recursive: true });
 
+// Check if static/logo/logo.jpg exists (relative path)
+const staticLogoPath = path.join(__dirname, "..", "static", "logo", "logo.jpg");
+if (fs.existsSync(staticLogoPath)) {
+  const { execSync } = require("child_process");
+  try {
+    const outPng = path.join(buildDir, "icon.png");
+    const outIco = path.join(buildDir, "icon.ico");
+    const pyCmd = `from PIL import Image; img=Image.open(r'${staticLogoPath}').convert('RGBA'); img.resize((256,256), Image.Resampling.LANCZOS).save(r'${outPng}'); img.save(r'${outIco}', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])`;
+    execSync(`python -c "${pyCmd}"`, { stdio: "inherit" });
+    console.log("Generated icon.png and icon.ico from static logo:", staticLogoPath);
+    process.exit(0);
+  } catch (err) {
+    if (fs.existsSync(path.join(buildDir, "icon.png")) && fs.existsSync(path.join(buildDir, "icon.ico"))) {
+      console.log("Using existing build icons from static logo.");
+      process.exit(0);
+    }
+  }
+}
+
 const icoSizes = [16, 32, 48, 64, 128, 256];
 const pngsBySize = {};
 for (const size of icoSizes) {

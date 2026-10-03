@@ -1058,6 +1058,7 @@ Off by default. `config/app.json` → add:
 3. Check **Dedicated GPU memory *during* a request**, not after.
 4. If only one card is hot: verify the launch line printed at startup contains `-dev Vulkan1,Vulkan2`, and that `GET /control/gpu` shows the llama-server pid on **both** A770 LUIDs.
 5. Prompt-eval stable at ~35 t/s while generation decays is the signature of the demotion bug, **not** thermal throttling.
+6. Slow first token on a trivial message is usually prompt bloat, not the model: check the turn's `prompt_tokens` in `usage.db` (or `scripts/perf_report.py` → Prompt leanness), then `PROMPT_BREAKDOWN=1` for the per-section sizes and gate the fat block per the standard above.
 
 ### Enable/disable capabilities
 
@@ -1119,6 +1120,17 @@ skills-consolidation logic, and the grill-me skill are part of that unshipped wo
 - Config keys are always validated through the `CONFIG_INT_FIELDS` clamp or `CONFIG_CHOICE_FIELDS` whitelist, never trusted raw.
 - Logging is plain `print()` prefixed with `[server_manager]`, `[plugins]`, `[skills]`, or the role name; real errors go to `sys.stderr`.
 - Deliberate "cheap first" bias: greetings short-circuit, Needle routes without a GPU, skills inject only names until asked, tool outputs truncate at 20k.
+
+### Prompt-efficiency standard (tiers + budgets)
+
+Every prompt-building endpoint follows `core/prompt_scope.py`:
+
+- **S1 — Tiered capabilities.** System blocks and tools are `always` (identity, date, safety), `on-intent` (file/web/doc/media manuals + schemas), `on-mention` (MCP servers, KB context) or `on-first-use` (long how-tos move into the first tool result). Guards, KB permission scoping and cloud-egress rules are `always` and are never gated.
+- **S2 — Stable prefix first** (date, always-manuals, gated manuals, dynamic last) so prefix caching reuses the most tokens across turns.
+- **S3 — Budgets**, enforced in `tests/test_prompt_scope.py`: trivial `chat/run` turn ≤ 1500 estimator tokens (`CHAT_LEAN_BUDGET`); agent system prompt ≤ 2700 (`AGENT_SYSTEM_BUDGET`).
+- **S4 — Tool-schema diet** (short descriptions, no examples in schemas); situational agent families live in `core/tool_surface.py`, MCP servers are re-hidden per step (`hide_unmentioned_mcp`) with `spawn_agent` as the escape hatch.
+- **S5 — Measure first.** `PROMPT_BREAKDOWN=1` (env) or `debug.prompt_breakdown` logs one `[prompt] <endpoint>` stderr line per turn with per-section sizes; `scripts/perf_report.py` has a Prompt leanness section (endpoint averages + `chat/run` buckets). Prove cuts in `usage.db` before/after.
+- **S6 — History hygiene** (compaction/clearing) is unchanged.
 
 ### Recipe: add a builtin tool
 

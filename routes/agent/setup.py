@@ -44,6 +44,7 @@ from core.skills import skills_prompt_fragment
 from core.small_model import APP_CONFIG, classifier, small_models
 from core import agent_memory
 from core.state import state
+from core import prompt_scope
 from core import tool_surface
 from .. import common
 from .constants import AGENT_MAX_STEPS, PLAN_MODE_PROMPT
@@ -338,8 +339,10 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
 
     ctx.ws_path = str(active_workspace())
     ctx.sys_prompt = AGENT_SYSTEM_PROMPT.format(workspace=ctx.ws_path)
+    sys_labels = ["system"]   # parallel to ctx.sys_prompt blocks: P0 ruler (S5)
     if req.system_prompt and req.system_prompt.strip():
         ctx.sys_prompt = f"{req.system_prompt.strip()}\n\n{ctx.sys_prompt}"
+        sys_labels.append("request-system")
 
     if ctx.custom_agent:
         ctx.sys_prompt += (
@@ -348,6 +351,7 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             f"Follow the above custom directives, persona, and role instructions strictly as you complete the task.\n"
             f"--- END CUSTOM AGENT DIRECTIVES ---\n"
         )
+        sys_labels.append("custom-agent")
     if ctx.personal:
         ctx.sys_prompt += (
             "\n\n--- PERSONAL AGENT RULES ---\n"
@@ -361,11 +365,20 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             "Save reports and results as files in the folder, then tell the user, in plain language, what you "
             "found or made and where the file is - the user reads your answer, not the tool output.\n"
             "--- END PERSONAL AGENT RULES ---\n")
+        sys_labels.append("personal")
+    # S1: MCP prompt only for mentioned servers (schemas gated per step in run).
+    ctx.mcp_servers = set()
     if APP_CONFIG.get("capabilities", {}).get("mcp", False):
         from core.mcp import chat_prompt as _mcp_prompt
-        _mp = _mcp_prompt()
-        if _mp:
-            ctx.sys_prompt += "\n\n" + _mp
+        from core.mcp.constants import configured_servers
+        ctx.mcp_servers = prompt_scope.mcp_mentions(
+            tool_surface.surface_query(ctx.msgs),
+            set(configured_servers(APP_CONFIG)), ctx.msgs)
+        if ctx.mcp_servers:
+            _mp = _mcp_prompt(only_servers=ctx.mcp_servers)
+            if _mp:
+                ctx.sys_prompt += "\n\n" + _mp
+                sys_labels.append("mcp")
     # project instructions (AGENTS.md written by /init) -- already PAN/secret
     # masked by the loader; admin output-guard rules applied on top because the
     # text can reach a cloud lane
@@ -374,6 +387,7 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
         if _pi:
             _pi_text, _ = output_guard.redact_full(_pi[1], user, ctx.any_cloud)
             ctx.sys_prompt += project_prompt_block((_pi[0], _pi_text))
+            sys_labels.append("project")
     except Exception as e:
         print(f"[agent] project instructions load failed: {e}", file=sys.stderr)
     # Organizational knowledge base: permission-scoped retrieval (see routes/chat.py
@@ -398,11 +412,13 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             if _blk:
                 _blk, _ = output_guard.redact_full(_blk, user, ctx.any_cloud)
                 ctx.sys_prompt += "\n\n" + _blk
+                sys_labels.append("memory")
             if req.session_id:
                 _wm = working_memory.load(req.session_id, user.id)
                 if _wm:
                     _wm, _ = output_guard.redact_full(_wm, user, ctx.any_cloud)
                     ctx.sys_prompt += "\n\n" + working_memory.prompt_block(_wm)
+                    sys_labels.append("working-memory")
         except Exception as e:
             print(f"[agent] memory load failed: {e}", file=sys.stderr)
     ctx.kb_ids = allowed_source_ids_for(user)
@@ -449,8 +465,10 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             ctx.sys_prompt += ("\n\nNOTE: The company knowledge base is restricted to local models and no "
                                "local model is loaded, so internal company data is not available for this "
                                "answer. Tell the user this instead of guessing.")
+            sys_labels.append("kb-note")
     if kb_hits:
         ctx.sys_prompt += "\n\n" + kb_prompt
+        sys_labels.append("kb")
     # the search_knowledge_base tool refuses while any cloud lane is in play
     # (its results would land in history that a cloud lane later reads)
     set_kb_cloud_blocked(bool(ctx.use_cloud_main or ctx.cloud_exec))
@@ -465,11 +483,14 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
                  plugins_prompt_fragment(), test_hint):
         if frag:
             ctx.sys_prompt += "\n" + frag
+            sys_labels.append("fragments")
     # executor lanes get the tool-call format few-shot (aligned with the GBNF grammar)
     if ctx.cloud_exec or ctx.ex_inst.available:
         ctx.sys_prompt += envelope_examples()
+        sys_labels.append("envelope")
     if req.plan:
         ctx.sys_prompt += PLAN_MODE_PROMPT
+        sys_labels.append("plan-mode")
     # point the plan tools at this session; in Build mode, inject the tracked plan
     # so the agent continues it step by step and keeps statuses up to date
     set_plan_context(req.session_id)
@@ -487,6 +508,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
                     for i in plan_items)
                 + f"\n({done_n}/{len(plan_items)} done, {fail_n} failed)"
             )
+            sys_labels.append("plan")
+    sys_labels.insert(0, "date")
     ctx.sys_prompt = common.current_date_prompt() + "\n\n" + ctx.sys_prompt
     has_sys = False
     for m in ctx.msgs:
@@ -520,6 +543,9 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             ctx.last_query = str(m.get("content", ""))
             break
     ctx.surface_q = tool_surface.surface_query(ctx.msgs) or ctx.last_query
+    # P0 ruler (S5): composition via labels; per-lane tool counts vary per step.
+    prompt_scope.maybe_log("agent/setup", [("system", ctx.sys_prompt)], None,
+                           extra=f"blocks={'+'.join(sys_labels)} msgs={len(ctx.msgs)}")
 
     ctx.rpol = router_policy.rcfg()
     ctx.q_category = router_policy.classify_query(ctx.last_query, ctx.rpol, msgs=ctx.msgs)

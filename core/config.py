@@ -100,6 +100,7 @@ CONFIG_DEFAULTS = {
     "kv_unified_per_slot": 0,  # cap one conversation's share of the unified pool (0 = no cap)
     "cache_reuse": 256,        # --cache-reuse: min chunk to reuse from cache via KV shifting
     "cache_ram": 0,            # -cram MiB host-RAM prompt cache (0 = 2048 default, see process.MAIN_CACHE_RAM_MB; -1 = no limit)
+    "use_mmap": True,          # memory-map model file (True = default/auto, False = --load-mode none to free system RAM)
     "keepalive_interval_s": 25,
     "gpu_devices": [1, 2],
     "llama_bin_dir": "E:\\AI\\vulkan-arc\\llama-vulkan",
@@ -281,4 +282,5 @@ MODEL_CONFIG_KEYS = (
     "flash_attn", "kv_cache_type", "mtp_enabled", "mtp_draft_n_max",
     "keepalive_interval_s", "gpu_devices", "vision_capable",
     "kv_unified", "kv_unified_per_slot", "cache_reuse", "cache_ram",
+    "use_mmap",
 )

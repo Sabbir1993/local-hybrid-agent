@@ -616,10 +616,12 @@ async function notifyTaskFinished(opts = {}) {
   const body = opts.body || 'Your task has completed.';
 
   // 1. Companion native desktop notification & taskbar frame flashing
+  let handledByElectron = false;
   if (typeof window !== 'undefined' && window.electronAPI) {
     if (typeof window.electronAPI.notify === 'function') {
       try {
         window.electronAPI.notify({ title, body });
+        handledByElectron = true;
       } catch (_) {}
     }
     if (typeof window.electronAPI.flashFrame === 'function') {
@@ -630,20 +632,23 @@ async function notifyTaskFinished(opts = {}) {
   }
 
   // 2. Web Notification API (Browser Desktop Notification)
-  const Notif = (typeof window !== 'undefined' && window.Notification) || (typeof Notification !== 'undefined' ? Notification : null);
-  if (Notif && Notif.permission === 'granted') {
-    try {
-      const notif = new Notif(title, {
-        body,
-        icon: 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>',
-        tag: 'local-agent-task',
-        renotify: true,
-      });
-      notif.onclick = () => {
-        try { if (typeof window !== 'undefined' && typeof window.focus === 'function') window.focus(); } catch (_) {}
-        try { if (typeof notif.close === 'function') notif.close(); } catch (_) {}
-      };
-    } catch (_) {}
+  // Only trigger when NOT already dispatched by Electron companion to avoid duplicate notifications.
+  if (!handledByElectron) {
+    const Notif = (typeof window !== 'undefined' && window.Notification) || (typeof Notification !== 'undefined' ? Notification : null);
+    if (Notif && Notif.permission === 'granted') {
+      try {
+        const notif = new Notif(title, {
+          body,
+          icon: '/static/logo/logo.jpg',
+          tag: 'local-agent-task',
+          renotify: true,
+        });
+        notif.onclick = () => {
+          try { if (typeof window !== 'undefined' && typeof window.focus === 'function') window.focus(); } catch (_) {}
+          try { if (typeof notif.close === 'function') notif.close(); } catch (_) {}
+        };
+      } catch (_) {}
+    }
   }
 
   // 3. Tab title indicator
