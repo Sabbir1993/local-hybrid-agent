@@ -78,6 +78,21 @@ EXECUTOR_TEST_TOOLS = ("browser_navigate", "browser_snapshot", "browser_click", 
                        "mobile_type", "mobile_screenshot", "mobile_logs")
 
 
+# Tools safe to dispatch CONCURRENTLY in one step: they read independent state
+# and never mutate disk/DB/context or need an interactive permission card.
+# Deliberately an allow-list, so every new tool is sequential until reviewed.
+# Missing on purpose: write tools, run_python/run_shell (arbitrary code +
+# per-call permission cards), create_plan/update_plan_item (ordered state),
+# finish (terminal), spawn_agent (handled by its own fan-out below), media
+# generation (GPU/expensive), browser/mobile (stateful sessions, self-ordered).
+PARALLEL_READ_TOOLS = frozenset({
+    "read_file", "read_file_chunk", "grep", "list_files", "list_diff",
+    "get_plan", "search_memory", "search_knowledge_base",
+    "memory_read", "list_skills", "read_skill",
+    "web_search", "web_fetch", "analyze_image", "doc_inspect",
+})
+
+
 PLAN_MODE_PROMPT = """
 
 PLAN MODE ACTIVE — READ-ONLY.

@@ -269,7 +269,6 @@ def _check_js_syntax_heuristic(source: str, path: str) -> SyntaxCheckResult:
     in_str_single = False
     in_str_double = False
     in_template = False
-    i = 0
     lines = source.split("\n")
     for line_no, line in enumerate(lines, 1):
         # Skip single-line comments

@@ -483,9 +483,7 @@ async function saveCurrentGuard(box) {
     if (j.problems && j.problems.length) msg += ' Skipped: ' + j.problems.join(' | ');
     result.textContent = msg;
 
-    if (typeof showToast === 'function') {
-      showToast(`${isOutput ? 'Output' : 'Input'} sanitizer rules saved`);
-    }
+  toast(`${isOutput ? 'Output' : 'Input'} sanitizer rules saved`);
 
     setTimeout(() => {
       renderSanitizerPanel(box);

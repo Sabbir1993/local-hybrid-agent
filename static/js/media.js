@@ -749,7 +749,7 @@ async function _mediaWaitLoaded(list, m) {
   const md_ = m.media;
   const kind = md_.kind;
   for (let i = 0; i < 400 && md_.state === 'not_loaded'; i++) {       // up to ~20 minutes
-    await new Promise(res => setTimeout(res, 3000));
+    await new Promise(res => { setTimeout(res, 3000); });
     const st = await mediaLoadStatus();
     const s = st && st[kind];
     if (!s) continue;

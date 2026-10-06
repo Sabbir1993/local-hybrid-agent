@@ -8,6 +8,8 @@ from core.agent_loop import PASSIVE_REFUSAL_NOTE, loop_guard as lg
 from core.agent_loop.sandbox import validate_and_finalize_response
 
 RUN_PY = Path(__file__).resolve().parent.parent / "routes" / "agent" / "run.py"
+STREAM_PY = Path(__file__).resolve().parent.parent / "routes" / "agent" / "stream.py"
+RUN_SRC = "\n".join(p.read_text(encoding="utf-8") for p in (RUN_PY, STREAM_PY))
 
 
 class PassiveRefusalIsRecorded(unittest.TestCase):
@@ -121,7 +123,9 @@ class StopDetailIsStored(unittest.TestCase):
 class LoopIsWiredToTheGuard(unittest.TestCase):
     """Source-level checks that the pieces of the loop are connected (the loop itself is an async
     generator too entangled with servers to drive in a unit test)."""
-    src = RUN_PY.read_text(encoding="utf-8")
+
+    def setUp(self):
+        self.src = RUN_SRC
 
     def test_every_executed_call_is_recorded_and_the_verdict_acted_on(self):
         self.assertIn("guard.record(", self.src)

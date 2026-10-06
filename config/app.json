@@ -380,7 +380,16 @@
   "knowledge": {
     "cloud_policy": "local_only",
     "min_cos": 0.45,
-    "auto_inject_cos": 0.55
+    "auto_inject_cos": 0.55,
+    "company_keywords": [
+      "ssl wireless",
+      "sslwireless",
+      "ssl",
+      "ushop",
+      "miot",
+      "health facility"
+    ],
+    "synonyms": {}
   },
   "pci": {
     "pan_input": "block",

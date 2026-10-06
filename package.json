@@ -1,0 +1,1 @@
+{"name":"local-agent-ui","private":true,"description":"Local Agent web UI tooling (lint) - app runs on plain node, no build step.","type":"commonjs","scripts":{"lint":"eslint static/js"},"devDependencies":{"eslint":"^10.12.0"}}

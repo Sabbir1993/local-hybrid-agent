@@ -3,9 +3,10 @@
 grep answers "where is this string"; the agent needs "where is this SYMBOL
 defined, what calls it, what does this file contain" - cross-file, with line
 numbers, without reading bodies into context. Pure functions over a repo
-root; no server, no network, no model. Python + JavaScript grammars
-(tree-sitter-python/-javascript, hash-locked). TypeScript (.ts/.tsx) has no
-grammar in the lock and is SKIPPED - counted, never silently half-parsed.
+root; no server, no network, no model. Python + JavaScript + TypeScript/TSX
+grammars (tree-sitter-python/-javascript/-typescript, hash-locked). TS reuses
+the JS walker (the TS grammar is a superset of JS node names); see tests/
+fixtures/code_repo/types.ts + widget.tsx and the eval code slice for coverage.
 
 Scope honesty: callers are syntactic call sites (identifier/attribute match),
 not type-resolved references. A rename pair, overloads-by-module, and dynamic
@@ -21,12 +22,17 @@ from typing import Optional
 import tree_sitter
 import tree_sitter_javascript as _tsjs
 import tree_sitter_python as _tspy
+import tree_sitter_typescript as _tsts
 
 _PY = tree_sitter.Language(_tspy.language())
 _JS = tree_sitter.Language(_tsjs.language())
+_TS = tree_sitter.Language(_tsts.language_typescript())
+_TSX = tree_sitter.Language(_tsts.language_tsx())
 
 _LANGS = {".py": _PY, ".js": _JS, ".jsx": _JS, ".mjs": _JS, ".cjs": _JS}
-_SKIPPED_SUFFIXES = {".ts", ".tsx"}  # no grammar locked; counted, not parsed
+_LANGS[".ts"] = _TS
+_LANGS[".tsx"] = _TSX
+_SKIPPED_SUFFIXES = set()  # py, js, ts, tsx all have locked grammars now
 
 _PARSERS = {}
 
@@ -49,7 +55,12 @@ def _named(node, *kinds) -> list:
 
 def _name_of(node, src: bytes) -> str:
     for c in node.children:
-        if c.type == "identifier":
+        # JS calls the class/method name node `identifier`; TS calls the class
+        # name `type_identifier` and method names `property_identifier`. The
+        # extra names do not occur in the JS grammar, so matching them changes
+        # nothing for .js/.jsx while making .ts/.tsx extract class + method
+        # names instead of empty strings.
+        if c.type in ("identifier", "type_identifier", "property_identifier"):
             return _text(c, src)
     return ""
 

@@ -135,10 +135,11 @@
       2
     ],
     "vision_capable": false,
-    "kv_unified": false,
+    "kv_unified": true,
     "kv_unified_per_slot": 131920,
     "cache_reuse": 256,
-    "cache_ram": 1024
+    "cache_ram": 1024,
+    "use_mmap": false
   },
   "qwen2.5-coder-14b-instruct-q4_k_m.gguf": {
     "context_size": 128000,

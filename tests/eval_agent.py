@@ -46,6 +46,7 @@ RESULTS_FILE = Path(__file__).resolve().parent / "eval_results.json"
 # so a 30-minute GPU run silently replaced the mock artifact that CI's gate reads - and the
 # committed file then carried "live: harness mock" records from a run that never happened.
 LIVE_RESULTS_FILE = Path(__file__).resolve().parent / "eval_results_live.json"
+LIVE_BASELINE_FILE = Path(__file__).resolve().parent / "eval_live_baseline.json"
 
 import eval_stats   # noqa: E402
 import eval_tasks   # noqa: E402
@@ -393,6 +394,73 @@ def _arm_csrf(client, base: str) -> None:
                "The session is incomplete - this is a server bug, not an eval bug.")
 
 
+def _live_ensure_project(base: str, client, name: str, workspace_dir: str) -> int:
+    """Create (or reuse) and activate the eval project for the logged-in user.
+
+    The agent loop refuses every run with 403 agent_workspace_unavailable when no
+    project is selected on the device (core/agent_tools/workspace.py:
+    require_device_workspace). The harness must do what the UI does after login:
+    create a project pointing at the workspace, then activate it. If activation
+    fails, every task would 403 identically - the exact 0/3 result this fix
+    replaces - so each step aborts with the server's own reason instead.
+    """
+    import httpx
+    r = client.get(f"{base}/control/projects")
+    if r.status_code != 200:
+        _abort(f"live eval: could not list projects: HTTP {r.status_code}")
+    data = r.json()
+    proj = next((p for p in data.get("projects", []) if p.get("name") == name), None)
+    if proj is None:
+        r = client.post(f"{base}/control/projects",
+                        json={"name": name, "workspace_dir": workspace_dir})
+        if r.status_code not in (200, 201):
+            _abort(f"live eval: project create failed: HTTP {r.status_code} {r.text[:200]!r}")
+        proj = r.json().get("project") or {}
+        pid = proj.get("id")
+        if not pid:
+            _abort(f"live eval: project create returned no id: {str(r.json())[:200]}")
+        print(f"  project: created '{name}' (id={pid}, workspace={workspace_dir})")
+    else:
+        pid = proj.get("id")
+        need_workspace = not proj.get("workspace_dir")
+        if workspace_dir and need_workspace:
+            r = client.patch(f"{base}/control/projects/{pid}/workspace",
+                             json={"workspace_dir": workspace_dir})
+            if r.status_code != 200:
+                _abort(f"live eval: project workspace update failed: "
+                       f"HTTP {r.status_code} {r.text[:200]!r}")
+        print(f"  project: reusing '{name}' (id={pid})")
+    r = client.post(f"{base}/control/projects/{pid}/activate")
+    if r.status_code != 200:
+        _abort(f"live eval: project activation failed: HTTP {r.status_code} {r.text[:200]!r}")
+    print(f"  project: activated '{name}'")
+    return pid
+
+
+def _live_preflight_companion(base: str, client, username: str) -> None:
+    """Fail fast when the user's Companion app is not connected.
+
+    require_device_workspace gates on companion_bridge.is_available after the
+    project check, and every file tool (read/write/grep/edit) routes through the
+    companion websocket. Without it each task 403s or errors per-tool - a whole
+    suite of indistinguishable failures. Naming it before any task runs turns
+    90 minutes of noise into one line.
+    """
+    r = client.get(f"{base}/control/companion/status")
+    if r.status_code != 200:
+        print(f"  WARNING: companion status unavailable (HTTP {r.status_code}) - "
+              "file tools may fail per-task; expected on a headless server.")
+        return
+    info = r.json() or {}
+    if not info.get("connected"):
+        _abort("live eval: the A770 Companion app is not connected for user "
+               f"'{username}'.\n"
+               "  File tools run on the user's machine through the Companion, so the "
+               "agent loop refuses runs (or fails every file tool) without it.\n"
+               "  Open the Companion app, pair/approve this user, then re-run.")
+    print(f"  companion: connected ({info.get('device_name') or 'device'})")
+
+
 def _totp_code(cmd: str) -> str:
     """Run a user-supplied command and take its stdout as the current TOTP code.
 
@@ -649,6 +717,13 @@ def run_live_suite(base: str, tasks, mode: str, repeats: int, session=None,
     return {"records": records, "summary": summary}
 
 
+def _live_compare_summary(records: list) -> dict:
+    """Per-task {pass_rate, n} from live records, shaped for compare_baseline."""
+    return {"tasks": {r["name"]: {"pass_rate": r["pass_rate"], "n": r["n"]}
+                      for r in records},
+            "aggregate_rate": None, "retrieval": None, "router": None, "code": None}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="A770 agent eval harness")
     ap.add_argument("--live", action="store_true", help="run live agent tasks")
@@ -671,6 +746,12 @@ def main() -> int:
                     help="compare mock results against tests/eval_baseline.json, exit 1 on drop")
     ap.add_argument("--update-baseline", action="store_true",
                     help="write current mock results to tests/eval_baseline.json (review the diff!)")
+    ap.add_argument("--live-regression", action="store_true",
+                    help="compare live results against tests/eval_live_baseline.json, exit 1 on "
+                         "pass-rate drop (report-only until a committed baseline exists)")
+    ap.add_argument("--update-live-baseline", action="store_true",
+                    help="write current live results to tests/eval_live_baseline.json "
+                         "(review the diff!)")
     ap.add_argument("--base", default="http://127.0.0.1:8000", help="manager base URL")
     ap.add_argument("--mode", default="auto", choices=["auto", "main"], help="agent lane mode")
     ap.add_argument("--live-user", default=None,
@@ -687,6 +768,10 @@ def main() -> int:
     ap.add_argument("--live-workspace", default=None,
                     help="local workspace root, enabling expect_files checks. Omit when the "
                          "server is remote; file checks are then reported as skipped")
+    ap.add_argument("--live-project", default="__eval__",
+                    help="project name to create/activate on the server for --live "
+                         "(default '__eval__'). The agent loop refuses runs without an "
+                         "active project.")
     ap.add_argument("--legacy-tasks", action="store_true",
                     help="run the historical five LIVE_TASKS instead of eval_tasks.TASKS")
     ap.add_argument("--no-soft", action="store_true",
@@ -762,6 +847,22 @@ def main() -> int:
             session = _live_login(args.base, args.live_user, args.live_password, totp=totp)
             if totp:
                 print("  MFA: second factor supplied")
+            _live_preflight_companion(args.base, session, args.live_user)
+            # require_device_workspace() runs unconditionally in agent setup
+            # (routes/agent/setup.py) and needs a project folder on the user's
+            # machine, so the loop refuses every run without a real workspace.
+            # The old guidance "omit --live-workspace for a remote server" only
+            # affected file GRADING; the loop itself 403'd after the project
+            # gate and produced exactly the 0/3 this bootstrap replaces.
+            ws_dir = args.live_workspace
+            if not ws_dir:
+                print("live eval needs --live-workspace <absolute path> so the agent loop "
+                      "has a project folder (require_device_workspace is unconditional).")
+                return 2
+            if not Path(ws_dir).is_absolute():
+                print(f"--live-workspace must be an absolute path, got: {ws_dir!r}")
+                return 2
+            _live_ensure_project(args.base, session, args.live_project, ws_dir)
         else:
             print("  NOTE: no --live-user given. If the server requires a session every task "
                   "will fail with HTTP 401 - that is an auth problem, not an agent result.")
@@ -972,6 +1073,41 @@ def main() -> int:
                     print(f"  - {p}")
             else:
                 print("\nno regressions vs baseline")
+
+    # Live baseline (mirror of the mock one, for pass-rate drops only). A live
+    # baseline is a measurement of one model on one machine on one day, so it is
+    # report-only until someone runs --update-live-baseline deliberately and
+    # reviews the diff. Soft and flaky tasks are compared the same way the mock
+    # suite compares them: a drop is a drop, and the record shows the CI.
+    if args.live:
+        if args.update_live_baseline:
+            summary = _live_compare_summary(results["live_records"])
+            if LIVE_BASELINE_FILE.is_file():
+                prior = json.loads(LIVE_BASELINE_FILE.read_text(encoding="utf-8"))
+                merged_tasks = dict((prior.get("tasks") or {}))
+                merged_tasks.update(summary.get("tasks") or {})
+                summary["tasks"] = merged_tasks
+            LIVE_BASELINE_FILE.write_text(json.dumps(summary, indent=2),
+                                          encoding="utf-8")
+            print(f"\nlive baseline written -> {LIVE_BASELINE_FILE} "
+                  "(review the diff before committing)")
+        if args.live_regression:
+            from eval_mock import compare_baseline as _live_compare
+            if not LIVE_BASELINE_FILE.is_file():
+                print(f"\nno live baseline at {LIVE_BASELINE_FILE} - "
+                      "run --update-live-baseline after a good live run first")
+                failed += 1
+            else:
+                live_base = json.loads(LIVE_BASELINE_FILE.read_text(encoding="utf-8"))
+                problems = _live_compare(_live_compare_summary(results["live_records"]),
+                                         live_base)
+                if problems:
+                    failed += len(problems)
+                    print("\nLIVE REGRESSIONS vs baseline:")
+                    for p in problems:
+                        print(f"  - {p}")
+                else:
+                    print("\nno live regressions vs baseline")
 
     out_file = LIVE_RESULTS_FILE if (args.live and not args.mock) else RESULTS_FILE
     out_file.write_text(json.dumps(results, indent=2), encoding="utf-8")

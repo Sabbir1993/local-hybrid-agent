@@ -686,5 +686,116 @@ class SelfCheckRuns(unittest.TestCase):
         self.assertIn("self-check OK", r.stdout)
 
 
+class LiveProjectBootstrap(unittest.TestCase):
+    """The 0/3 smoke-test defect: every task 403'd with
+    agent_workspace_unavailable because no project was selected on the device.
+    The harness must create + activate the eval project after login, exactly as
+    the UI does, or every task fails identically before the loop starts."""
+
+    def _client(self, projects=None, create_resp=None, activate_resp=None):
+        import json
+        from unittest import mock
+        calls = []
+
+        def _req(method, url, **kw):
+            calls.append((method, url, kw.get("json")))
+            if url.endswith("/control/projects") and method == "get":
+                body = mock.Mock()
+                body.status_code = 200
+                body.json.return_value = {"projects": projects or []}
+                return body
+            if url.endswith("/control/projects") and method == "post":
+                body = mock.Mock()
+                body.status_code = 200
+                body.json.return_value = create_resp or {"ok": True,
+                                                         "project": {"id": 7, "name": "__eval__"}}
+                return body
+            if "/activate" in url and method == "post":
+                body = mock.Mock()
+                body.status_code = 200
+                body.json.return_value = {"ok": True, "active": "__eval__"}
+                return body
+            if "/workspace" in url and method == "patch":
+                body = mock.Mock()
+                body.status_code = 200
+                body.json.return_value = {"ok": True}
+                return body
+            body = mock.Mock()
+            body.status_code = 404
+            body.text = '{"error":"unseen ' + method + " " + url + '"}'
+            return body
+
+        client = mock.Mock()
+        client.get.side_effect = lambda u, **kw: _req("get", u, **kw)
+        client.post.side_effect = lambda u, **kw: _req("post", u, **kw)
+        client.patch.side_effect = lambda u, **kw: _req("patch", u, **kw)
+        return client, calls
+
+    def test_creates_and_activates_project_when_missing(self):
+        import eval_agent
+        client, calls = self._client(projects=[])
+        pid = eval_agent._live_ensure_project("http://x", client, "__eval__", "C:/eval_ws")
+        self.assertEqual(pid, 7)
+        self.assertIn(("post", "http://x/control/projects"),
+                      [(m, u) for m, u, _ in calls])
+        self.assertIn("__eval__", [q.get("name") for m, u, q in calls if q])
+        self.assertIn("C:/eval_ws", [q.get("workspace_dir") for m, u, q in calls if q])
+        self.assertIn(("post", "http://x/control/projects/7/activate"),
+                      [(m, u) for m, u, _ in calls])
+
+    def test_reuses_and_activates_existing_project(self):
+        import eval_agent
+        existing = [{"id": 7, "name": "__eval__", "workspace_dir": "C:/eval_ws"}]
+        client, calls = self._client(projects=existing)
+        pid = eval_agent._live_ensure_project("http://x", client, "__eval__", "C:/eval_ws")
+        self.assertEqual(pid, 7)
+        self.assertNotIn(("post", "http://x/control/projects"),
+                         [(m, u) for m, u, _ in calls])
+        self.assertIn(("post", "http://x/control/projects/7/activate"),
+                      [(m, u) for m, u, _ in calls])
+
+    def test_update_workspace_only_when_folder_missing_and_path_given(self):
+        import eval_agent
+        existing = [{"id": 7, "name": "__eval__", "workspace_dir": None}]
+        client, calls = self._client(projects=existing)
+        eval_agent._live_ensure_project("http://x", client, "__eval__", "C:/eval_ws")
+        self.assertIn(("patch", "http://x/control/projects/7/workspace"),
+                      [(m, u) for m, u, _ in calls])
+
+    def test_activation_failure_aborts(self):
+        import eval_agent
+        from unittest import mock
+        client = mock.Mock()
+        client.get.return_value = mock.Mock(status_code=200,
+                                            json=lambda: {"projects": [{"id": 7, "name": "__eval__",
+                                                                        "workspace_dir": "C:/eval_ws"}]})
+        client.post.return_value = mock.Mock(status_code=403, text='{"error":"no"}')
+        with self.assertRaises(SystemExit) as e:
+            eval_agent._live_ensure_project("http://x", client, "__eval__", "C:/eval_ws")
+        # the message goes to stdout; SystemExit carries the code
+        self.assertEqual(e.exception.code, 2)
+
+
+class LiveBaselineCompare(unittest.TestCase):
+    def test_compare_summary_shapes_records_for_compare_baseline(self):
+        import eval_agent
+        records = [{"name": "a", "pass_rate": 0.8, "n": 5},
+                   {"name": "b", "pass_rate": 1.0, "n": 3}]
+        s = eval_agent._live_compare_summary(records)
+        self.assertEqual(s["tasks"], {"a": {"pass_rate": 0.8, "n": 5},
+                                      "b": {"pass_rate": 1.0, "n": 3}})
+        self.assertIsNone(s["aggregate_rate"])
+        self.assertIsNone(s["retrieval"])
+
+    def test_pass_rate_drop_is_a_regression(self):
+        from eval_mock import compare_baseline
+        cur = {"tasks": {"a": {"pass_rate": 0.6, "n": 5}},
+               "aggregate_rate": None, "retrieval": None,
+               "router": None, "code": None}
+        base = {"tasks": {"a": {"pass_rate": 1.0, "n": 5}}}
+        problems = compare_baseline(cur, base)
+        self.assertTrue(any("REGRESSION a" in p for p in problems))
+
+
 if __name__ == "__main__":
     unittest.main()

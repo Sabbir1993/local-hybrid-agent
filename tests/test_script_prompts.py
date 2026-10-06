@@ -13,7 +13,9 @@ from core.agent_loop import script_nudge
 from core.agent_loop.executor_view import _CONTROL_PREFIXES
 from core.agent_tools import limits
 
-RUN = (ROOT / "routes" / "agent" / "run.py").read_text(encoding="utf-8")
+RUN = "\n".join(p.read_text(encoding="utf-8")
+                for p in (ROOT / "routes" / "agent" / "run.py",
+                          ROOT / "routes" / "agent" / "stream.py"))
 JS = (ROOT / "static" / "js" / "workspace.js").read_text(encoding="utf-8")
 
 

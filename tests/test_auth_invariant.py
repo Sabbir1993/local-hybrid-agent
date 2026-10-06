@@ -27,6 +27,7 @@ from core.deps import get_current_user
 PUBLIC_HTTP = {
     # static assets carry no sensitive data
     ("GET", "/static/{file_path:path}"),
+    ("GET", "/favicon.ico"),
     # the login page itself
     ("GET", "/login"),
     # shell pages that check the session inside the handler (redirect to /login)

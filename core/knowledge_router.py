@@ -14,6 +14,11 @@ from .auth_db import list_knowledge_sources
 from .memory import search_knowledge_hybrid, _db, _embed_texts, _store_vecs
 from . import prompt_fence
 
+# Default trigger vocabulary for the internal/organizational knowledge base:
+# generic organization + HR terms, machine-independent. A deployment's own
+# product/company names (e.g. "ssl wireless", "ushop", "miot") belong in
+# config/app.json -> knowledge.company_keywords, which REPLACES this set so no
+# company vocabulary ships in source.
 COMPANY_KEYWORDS = {
     "company", "companies", "knowledge base", "knowledgebase", "kb",
     "organization", "organisational", "organizational", "corporate",
@@ -23,11 +28,26 @@ COMPANY_KEYWORDS = {
     "salary", "salaries", "compensation", "benefit", "benefits",
     "designation", "designations", "manager", "management", "lead",
     "policy", "policies", "handbook", "leave", "holiday", "attendance",
-    "headquarters", "office", "founder", "ceo", "director", "ssl wireless",
-    "sslwireless", "ssl", "ushop", "miot", "health facility",
+    "headquarters", "office", "founder", "ceo", "director",
     "engineering", "software analyst", "app analyst", "solution architect",
     "database administrator", "qa", "developer", "accounts", "finance"
 }
+
+
+def active_company_keywords() -> set:
+    """The trigger set in effect: generic defaults UNION the deployment's own
+    config knowledge.company_keywords (a deployment adds its product/company
+    names, never has to re-list the generic vocabulary)."""
+    out = set(COMPANY_KEYWORDS)
+    try:
+        from .small_model import APP_CONFIG
+        extra = (APP_CONFIG.get("knowledge") or {}).get("company_keywords")
+        if isinstance(extra, (list, tuple, set)) and extra:
+            out.update(str(k).strip().lower() for k in extra if str(k).strip())
+    except Exception as e:
+        print(f"[knowledge_router] company_keywords config unreadable: {e}",
+              file=sys.stderr)
+    return out
 
 
 def _get_active_source_titles(allowed_source_ids: Optional[Set[int]] = None) -> Dict[int, str]:
@@ -72,7 +92,7 @@ def is_company_or_kb_query(query: str, allowed_source_ids: Optional[Set[int]] = 
         return phrase in q_words
 
     # Check for direct company keywords/phrases
-    for kw in COMPANY_KEYWORDS:
+    for kw in active_company_keywords():
         if _has(kw):
             return True
 

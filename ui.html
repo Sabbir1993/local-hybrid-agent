@@ -856,9 +856,12 @@ Full instructions the agent reads via read_skill.</pre>
 
 <script src="/static/js/session.js?v=1.4"></script>
 <script src="/static/js/highlight.js"></script>
-<!-- pinned exact versions; SheetJS 0.18.5 (last npm build) has CVE-2023-30533 / CVE-2024-22363 -->
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js" integrity="sha384-R63zfMfSwJF4xCR11wXii+QUsbiBIdiDzDbtxia72oGWfkT7WHJfmD/I/eeHPJyT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<!-- Vendored copies of the CDN-pinned versions so the app works fully offline
+     (this is a local-first product; diagrams and spreadsheets must not need the
+     internet). Same exact bytes as the CDN builds - the SRI below is unchanged:
+     mermaid@10.9.3, SheetJS 0.20.3 (0.18.5 has CVE-2023-30533 / CVE-2024-22363). -->
+<script src="/static/vendor/mermaid.min.js" integrity="sha384-R63zfMfSwJF4xCR11wXii+QUsbiBIdiDzDbtxia72oGWfkT7WHJfmD/I/eeHPJyT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="/static/vendor/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="/static/js/theme.js?v=2.8"></script>
 <script src="/static/js/utils.js?v=3.1"></script>
 <script src="/static/js/sse-stream.js?v=1.6"></script>

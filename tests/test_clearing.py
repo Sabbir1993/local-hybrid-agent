@@ -109,7 +109,11 @@ class CloudCap(unittest.TestCase):
 
 
 class RunWiring(unittest.TestCase):
-    src = Path("routes/agent/run.py").read_text(encoding="utf-8")
+    # the loop body lives in stream.py since 2026-10-06; scan both modules so a
+    # regression that removes the wiring from either file still fails
+    src = "\n".join(p.read_text(encoding="utf-8")
+                    for p in (Path("routes/agent/run.py"),
+                              Path("routes/agent/stream.py")))
 
     def test_budget_and_clearing_are_wired(self):
         for needle in ("clear_old_results(msgs, pre_tokens, squeeze=budget_squeeze)", 'stop_reason = "budget"',

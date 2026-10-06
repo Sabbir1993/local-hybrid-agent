@@ -145,7 +145,10 @@ class PlanTools(unittest.TestCase):
 
 
 class RunIsWired(unittest.TestCase):
-    src = (Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py").read_text(encoding="utf-8")
+    src = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in (Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py",
+                  Path(__file__).resolve().parents[1] / "routes" / "agent" / "stream.py"))
 
     def test_hooks_present(self):
         for needle in ("plan_guard.needs_plan(", "plan_gate = bool(", "plan_guard.focus_message(",

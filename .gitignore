@@ -18,7 +18,9 @@ config/providers/
 # skills (code-review, commit-style, docx, frontend-design, goal, grill-me, pdf, web-research)
 # exist ONLY here and are not in skill_catalog/, so untracking it would drop them from every
 # fresh clone. The duplicates that ARE safe to drop - .claude/skills, a byte-identical copy of
-# .agents/skills - are removed instead.
+# .agents/skills - are untracked (git rm --cached 2026-10-06) and ignored here so a fresh
+# clone gets only the .agents/skills copy that the runtime actually loads (core/skills.py).
+/.claude/skills/
 # Agent-tool worktrees and state. These were only excluded via .git/info/exclude, which is a
 # LOCAL file that is never committed - so a fresh clone showed a whole duplicate tree as
 # untracked, including a stale 100 KB server_manager.py.bak.
@@ -44,14 +46,18 @@ db_backups/
 .coverage
 .coverage.*
 htmlcov/
-# Live agent eval output (tests/eval_agent.py --live). Machine-local: it records which model
-# was loaded, free VRAM and wall-clock timings on one box, so it is a measurement to keep
-# locally and compare against, not an artifact to commit. The task set (tests/eval_tasks.py)
-# and the mock baseline (tests/eval_baseline.json) ARE committed - those are the thing you
-# review. NOTE: tests/.eval_vec_cache.json is deliberately NOT ignored. It looks like a build
-# artifact but tests/test_knowledge_recall.py asserts it exists and matches the current chunk
-# params, and CI never regenerates it - scripts/embed_eval_corpus.py needs a local embedder on
-# :8093. It is a golden fixture, like tests/eval_baseline.json.
+# Eval RUN output (tests/eval_agent.py --mock / --live). Machine-local: records the model,
+# free VRAM and wall-clock timings of one box on one day, and is rewritten by every run - so
+# tracking it left the working tree permanently dirty (risk-register R5). The parts that are
+# committed are the ones worth reviewing: the task set (tests/eval_tasks.py), the mock
+# baseline (tests/eval_baseline.json) and the live baseline you deliberately write with
+# --update-live-baseline (tests/eval_live_baseline.json). NOTE: tests/.eval_vec_cache.json is
+# deliberately NOT ignored. It looks like a build artifact but tests/test_knowledge_recall.py
+# asserts it exists and matches the current chunk params, and CI never regenerates it -
+# scripts/embed_eval_corpus.py needs a local embedder on :8093. It is a golden fixture, like
+# tests/eval_baseline.json.
+tests/eval_results.json
+tests/eval_results_live.json
 # llama-server daily logs (core/state.py). Machine-local diagnostics, rotated by LOG_KEEP_DAYS.
 /logs/
 # The 737 KB PNG is a manual screenshot of the SVG next to it (see

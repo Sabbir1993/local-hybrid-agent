@@ -9,7 +9,10 @@ from core.agent_loop.loop_guard import LoopGuard
 
 class NearRepeatOffTests(unittest.TestCase):
     def test_run_gates_the_rule_on_config(self):
-        src = Path("routes/agent/run.py").read_text(encoding="utf-8")
+        # loop body moved to stream.py (2026-10-06); scan both modules
+        src = "\n".join(p.read_text(encoding="utf-8")
+                        for p in (Path("routes/agent/run.py"),
+                                  Path("routes/agent/stream.py")))
         self.assertRegex(src, r"near_repeat_on = bool\(.*\"near_repeat\", False\)")
         self.assertIn("if sigs and near_repeat_on:", src)
 

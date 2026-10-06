@@ -47,6 +47,11 @@ jobs:
       - name: JS tests
         run: node tests/js/run_all.js
 
+      - name: JS lint (no-undef etc.; globals from source, pinned like ruff)
+        run: |
+          npm ci --ignore-scripts
+          npm run lint -- --no-color
+
       - name: Coverage gate (floor in pyproject.toml, ratchet only upward)
         run: |
           python -m coverage run -m unittest discover tests

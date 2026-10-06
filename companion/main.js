@@ -16,6 +16,7 @@ const { autoUpdater } = require("electron-updater");
 const { SERVER_URL, SERVER_URL_ERROR } = require("./config");
 const fsops = require("./fsops");
 const shellops = require("./shellops");
+const gitops = require("./gitops");
 const policy = require("./policy");
 const oauthops = require("./oauthops");
 // loaded on first use: playwright-core is only needed once the agent opens a browser
@@ -519,6 +520,13 @@ const OPS = {
       if (onDisk !== p.display) throw new Error("script on disk does not match the approved code");
     }
     return shellops.run(p);
+  },
+  "git.run": async (p) => {
+    // git must run inside an approved folder, like every other fs-touching op.
+    // The args are the server's; the companion's destructive-op guard in
+    // gitops.js still refuses history-destroying forms on this machine.
+    await policy.ensurePath(p.cwd, "run git in");
+    return gitops.run(p);
   },
   // OAuth sign-in redirect for remote MCP servers (oauthops.js)
   "oauth.loopback": (p) => oauthops.loopback(p),

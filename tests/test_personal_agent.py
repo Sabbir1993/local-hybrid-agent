@@ -137,11 +137,13 @@ class WiringTests(unittest.TestCase):
 
     def test_run_route_needs_an_owned_agent_with_a_folder(self):
         # Setup guards moved to routes/agent/setup.py in the C1 setup extraction;
-        # loop-gate strings stay in run.py. Both files are checked.
+        # loop body moved to routes/agent/stream.py (2026-10-06). Both are checked.
         setup_src = Path("routes/agent/setup.py").read_text(encoding="utf-8")
         self.assertIn("personal_needs_folder", setup_src)
         self.assertIn("set_personal_scope(ctx.personal)", setup_src)
-        src = Path("routes/agent/run.py").read_text(encoding="utf-8")
+        src = "\n".join(p.read_text(encoding="utf-8")
+                        for p in (Path("routes/agent/run.py"),
+                                  Path("routes/agent/stream.py")))
         self.assertIn("not in hidden_tools", src)
         self.assertIn("(cfg.get(\"ask_first\", True) or personal)", src)
         self.assertIn("'saveable': False if personal", src)
@@ -201,7 +203,9 @@ class LoopFixTests(unittest.TestCase):
         self.assertIn("Do not retry 'spawn_agent'", out)
 
     def test_identical_lookups_are_not_rerun(self):
-        src = Path("routes/agent/run.py").read_text(encoding="utf-8")
+        src = "\n".join(p.read_text(encoding="utf-8")
+                        for p in (Path("routes/agent/run.py"),
+                                  Path("routes/agent/stream.py")))
         self.assertIn("seen_reads", src)
         self.assertIn("already ran and its result has not changed", src)
         self.assertIn("seen_reads.clear()", src)
@@ -226,7 +230,9 @@ class PythonWithApprovalTests(unittest.TestCase):
             self.assertIsNotNone(personal_write_violation(c), c)
 
     def test_run_python_always_asks_in_a_personal_run(self):
-        src = Path("routes/agent/run.py").read_text(encoding="utf-8")
+        src = "\n".join(p.read_text(encoding="utf-8")
+                        for p in (Path("routes/agent/run.py"),
+                                  Path("routes/agent/stream.py")))
         self.assertIn('name == "run_python" and (shell_cfg().get("ask_first", True) or personal)', src)
 
 
@@ -302,7 +308,9 @@ class PersonalPreviewTests(unittest.TestCase):
         self.assertEqual(ws_browse._personal_folder(None, mock.Mock(id=7)), (None, None))
 
     def test_card_and_file_share_the_renamed_path(self):
-        src = Path("routes/agent/run.py").read_text(encoding="utf-8")
+        src = "\n".join(p.read_text(encoding="utf-8")
+                        for p in (Path("routes/agent/run.py"),
+                                  Path("routes/agent/stream.py")))
         self.assertIn("unique_create_args(args or {})", src)
         self.assertIn("run_tool(name, args, unique_done=personal)", src)
         js = Path("static/js/preview.js").read_text(encoding="utf-8")

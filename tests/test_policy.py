@@ -179,14 +179,47 @@ class ParallelSpawnWiring(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.src = (Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py"
-                   ).read_text(encoding="utf-8")
+        # the fan-out loops moved verbatim to stream.py (2026-10-06); the guard
+        # is about the agent call path, so scan both modules
+        cls.src = "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in (Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py",
+                      Path(__file__).resolve().parents[1] / "routes" / "agent" / "stream.py"))
 
     def test_predicate_imported(self):
         self.assertIn("parallel_spawn_eligible,", self.src)
 
     def test_both_fan_out_loops_consult_it(self):
         self.assertEqual(self.src.count("parallel_spawn_eligible(name, bool(req.plan or plan_gate)"), 2)
+
+
+class ParallelReadWiring(unittest.TestCase):
+    """The parallel fast path widened (2026-10-06) from an all-spawn_agent
+    fan-out to also cover all-read steps. The set must be an allow-list so a
+    new write/code/permission tool can never slip into concurrent execution."""
+
+    @classmethod
+    def setUpClass(cls):
+        from routes.agent.constants import PARALLEL_READ_TOOLS
+        cls.safe = PARALLEL_READ_TOOLS
+
+    def test_read_tools_are_included(self):
+        for t in ("read_file", "grep", "list_files", "web_fetch", "search_memory"):
+            self.assertIn(t, self.safe, t)
+
+    def test_writers_and_code_are_excluded(self):
+        for t in ("write_file", "edit_file", "append_file", "revert",
+                  "run_python", "run_shell",
+                  "create_plan", "update_plan_item", "finish",
+                  "generate_image", "generate_video"):
+            self.assertNotIn(t, self.safe, t)
+
+    def test_routes_module_uses_the_allow_list(self):
+        src = "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in (Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py",
+                      Path(__file__).resolve().parents[1] / "routes" / "agent" / "stream.py"))
+        self.assertIn("all_reads = bool(parsed_actions) and all(a[0] in PARALLEL_READ_TOOLS", src)
 
 
 if __name__ == "__main__":

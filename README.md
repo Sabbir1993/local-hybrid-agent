@@ -20,7 +20,7 @@ this project does the part that's actually worth custom-building:
 - a process manager (`server_manager.py`) that launches `llama-server` with
   the tuned config, health-checks it, restarts it on crash, and lets you
   hot-swap between models without touching the command line,
-- a VRAM preflight check (`core/vram.py`) that estimates whether a model +
+- a VRAM preflight check (`core/vram/`) that estimates whether a model +
   context will actually fit before launching, and suggests a safe `-ngl` /
   `tensor_split` if it won't,
 - per-model launch overrides in `config/model_configs.json`, keyed by
@@ -76,12 +76,12 @@ serving a single-page web UI (`ui.html` + `static/js/`) with:
   unmapped jobs keep today's defaults. Each model has an "if it fails, use…"
   backup, so a failed cloud call falls back automatically. Agent presets:
   Private (all on this PC), Balanced, Best quality, Main model only
-  (`core/lanes.py`).
+  (`core/lanes/`).
 - **Answer check** (🛡 next to Send): a second model double-checks answers —
   *check after* (badge) or *check before showing* (the fixed answer is
-  shown); a broken checker never blocks the answer (`core/verifier.py`).
+  shown); a broken checker never blocks the answer (`core/verifier/`).
 - **Images, videos and speech** (Settings → Models & Jobs → *Create & listen*;
-  `core/media.py`, `routes/media.py`). Each is off until a model is added:
+  `core/media/`, `routes/media.py`). Each is off until a model is added:
   - `/image <description>` and `/video <description>` in chat, the composer's
     **🖼 Image** select (Send makes an image), and the agent tools
     `generate_image` / `generate_video`. Plain chat can also draw when asked
@@ -186,7 +186,7 @@ Both engines execute strictly on CPU with **0 MB GPU VRAM usage**, preserving al
 The GPU-facing logic is dynamic, not hardcoded to "2x Arc A770":
 
 - **GPU count**: 1 GPU → no `--tensor-split`/`-dev` list is emitted at all.
-  2+ GPUs → `core/vram.py: compute_tensor_split()` computes a split
+  2+ GPUs → `core/vram/estimator.py: compute_tensor_split()` computes a split
   proportional to each card's free VRAM (this is what reproduces today's
   hand-tuned `9,11`-style ratio for two similar-sized A770s, and generalizes
   to N cards of any size).
@@ -297,8 +297,8 @@ list, see [SETUP_WINDOWS.md](SETUP_WINDOWS.md) or [SETUP_LINUX.md](SETUP_LINUX.m
    in the UI. API keys go to the OS keychain (Windows Credential Manager);
    the per-user `config/providers/user_<id>.json` only keeps
    `"apiKeyRef": "keyring"`. A legacy `config/providers.json` (or
-   `providers.json.migrated`) is imported into the keychain on start and
-   then deleted. Never commit real API
+   `config/providers.json.migrated`) is imported into the keychain on start
+   and then deleted. Never commit real API
    keys; use `[PLACEHOLDER]` in anything you share or paste elsewhere.
 
 ### Running on Linux
@@ -392,14 +392,17 @@ curl -X POST http://localhost:8000/control/switch -d '{"profile":"E:/AI/Models/y
   `proxy` (OpenAI-compatible passthrough to `llama-server`).
 - `core/` — orchestration internals: `config.py` (paths/defaults, incl.
   `backend`/`llama_bin_dir`/`gpu_devices` — the machine-specific knobs),
-  `backend.py` (Vulkan/CUDA device-naming abstraction), `profiles.py`
+  `backend.py` (Vulkan/CUDA device-naming abstraction), `profiles/`
   (dynamic profile construction from a raw `.gguf` + `model_configs.json`
-  overrides), `small_model.py` (small-model lane manager + `APP_CONFIG`),
-  `cloud.py` (cloud provider/lane resolution), `agent_loop.py`/
-  `agent_tools.py` (tool execution, sandboxing, plan tracking), `vram.py`
+  overrides), `small_model/` (small-model lane manager + `APP_CONFIG`),
+  `cloud/` (cloud provider/lane resolution), `agent_loop/` +
+  `agent_tools/` (tool execution, sandboxing, plan tracking), `vram/`
   (device discovery, tensor-split computation, VRAM preflight checks),
   `gpu.py` (Windows perf-counter GPU stats), `roles.py` (named sub-agent
-  presets).
+  presets), `lanes/` (job→model registry and routing),
+  `subagent/` (delegation, envelope, critic/blackboard), `code_intel/`
+  (tree-sitter AST index), `verifier/` (answer check + revise loop),
+  `memory/` (long-term memory files + hybrid knowledge retrieval).
 - `config/app.json` — main app config (models dir, small-model lanes,
   agent/router settings, roles, capabilities). `config/model_configs.json`
   — per-model launch overrides, keyed by GGUF filename (tensor split, ngl,
@@ -470,6 +473,9 @@ that rates the agent with the same class of model being rated is not evidence.
 # this suite deliberately asks the agent to do destructive things (delete every file
 # in the workspace, echo a secret back) to prove refusal behaviour, and you do not
 # want a wrong answer evaluated with your own account's permissions.
+# --live-workspace is REQUIRED: the agent loop refuses every run without a project
+# folder (require_device_workspace is unconditional). The harness creates and
+# activates a project named __eval__ on the server after login, as the UI does.
 python tests/eval_agent.py --live \
     --live-user EVAL --live-password '...' \
     --live-workspace ./my_workspace \
@@ -525,3 +531,30 @@ reviewing: it is the definition of what "working" means.
 The live suite cannot gate CI because CI has no GPU and no model files. Run it
 locally before and after a change that touches prompts, tool schemas, or the
 agent loop, and keep the numbers.
+
+## External benchmark (SWE-bench)
+
+The self-authored live suite is prompt-fitted; a number meant to be comparable
+across agents needs an external grading source. `scripts/run_swebench.py`
+drives the agent loop over SWE-bench Lite JSONL instances and grades them by
+the gold test patch (resolved = every `FAIL_TO_PASS` green, no `PASS_TO_PASS`
+regressed; Wilson ci95 on the rollup, same stat as the live suite). The grading
+core is unit-tested (`tests/test_swebench_harness.py`) and runs anywhere; the
+run itself needs the usual stack - server up, model loaded, Companion
+connected, and a `--live-workspace` where the repo per instance lands.
+
+```bash
+# 1. get an instances file, e.g. SWE-bench_Lite.jsonl (public dataset)
+# 2. drive the runs (writes task.md + _swe_test.patch per instance, so the
+#    agent reads the problem, and you have the gold patch to apply):
+python scripts/run_swebench.py SWE-bench_Lite.jsonl \
+    --live-user EVAL --live-password '...' \
+    --live-workspace C:/swebench_ws --instance-id django__django-XXX
+# 3. apply _swe_test.patch in the instance repo, run the gold tests
+#    (pytest -q), save their names to a JSON shaped
+#    {"<instance_id>": {"passed": ["tests/...::test_y", ...]}}
+# 4. re-run with --observed-json results.json to grade
+```
+
+Start with `--instance-id <one>` before a full file, and prefer a scratch
+workspace - the agent writes files while solving, exactly like the live suite.

@@ -1113,7 +1113,18 @@ def run_router_scenario(shortcut_on: bool) -> dict:
     """
     from unittest import mock
 
-    import routes.agent.run as runmod
+    # the loop (and the router-shortcut block) moved to stream.py on 2026-10-06;
+    # patching routes.agent.run silently no-ops because the block is no longer
+    # there. Patch the module that actually owns it.
+    import routes.agent.stream as runmod
+    # A future move of the loop out of stream.py must update this patch target -
+    # the assert below makes a stale target fail loudly instead of no-oping (the
+    # 2026-10-06 regression where stream.py became home and run.py went silent).
+    _router_block_in_module = "tool_shortcut" in open(runmod.__file__, encoding="utf-8").read()
+    if not _router_block_in_module:
+        raise AssertionError(
+            "run_router_scenario patches routes.agent.stream but the router "
+            "shortcut block no longer lives there - update the patch target")
     from core.small_model import APP_CONFIG
 
     rec = {"shortcut_on": shortcut_on, "ok": False, "problems": [],
@@ -1205,6 +1216,14 @@ CODE_QUESTIONS = [
     ("callers", "get_user", {}, {"routes.py", "admin.py"}),
     ("callers", "fetch_record", {}, {"db.py", "routes.py"}),
     ("outline", "auth.py", {}, {"authenticate", "AuthManager", "login", "logout"}),
+    # TS/TSX: the tree-sitter-typescript grammar must stay wired into the same
+    # walker that covers .js (2026-10-06). A regression that re-skips .ts/.tsx
+    # makes these fail loudly instead of silently dropping coverage.
+    ("def", "issueToken", {"path_hint": "types.ts"}, {"types.ts"}),
+    ("def", "TokenVault", {"path_hint": "types.ts"}, {"types.ts"}),
+    ("def", "Badge", {"path_hint": "widget.tsx"}, {"widget.tsx"}),
+    ("callers", "encodeToken", {}, {"types.ts"}),
+    ("outline", "types.ts", {}, {"issueToken", "TokenVault"}),
 ]
 
 

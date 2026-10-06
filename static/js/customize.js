@@ -418,7 +418,7 @@
       else toast('Finish signing in in the browser window that just opened.');
       const t0 = Date.now();
       for (;;) {
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => { setTimeout(r, 2000); });
         const st = await api(`/mcp/servers/${encodeURIComponent(id)}/oauth/status?scope=${encodeURIComponent(scope)}`);
         if (st.state === 'done') break;
         if (st.state === 'error') throw new Error(st.error || 'sign-in failed');

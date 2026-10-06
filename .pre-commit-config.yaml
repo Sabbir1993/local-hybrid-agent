@@ -1,0 +1,21 @@
+repos:
+  # Lint gate, same rule set / version as CI (pyproject.toml + ci.yml).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.9
+    hooks:
+      - id: ruff
+        args: [core, routes, tests, server_manager.py, autotune.py]
+  # Auth invariant: every non-public route must resolve a principal. Runs the
+  # full route walk (~1.5s) so a new endpoint can never go public unnoticed.
+  - repo: local
+    hooks:
+      - id: auth-invariant
+        name: auth invariant (PUBLIC_HTTP/PUBLIC_WS)
+        entry: python -m unittest tests.test_auth_invariant
+        language: system
+        pass_filenames: false
+      - id: js-lint
+        name: eslint static/js (no-undef over source-derived globals)
+        entry: npm run lint -- --no-color
+        language: system
+        pass_filenames: false

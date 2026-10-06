@@ -12,7 +12,6 @@ from pydantic import BaseModel
 from core import git_tools
 from core import git_ai
 from core import mcp as mcp_core
-from core.agent_tools import WorkspaceAccessDenied
 from core.auth import Principal
 from core.deps import get_current_user, require_permission
 from core.registry import registry
@@ -20,14 +19,11 @@ from core.registry import registry
 router = APIRouter(prefix="/git", tags=["git"])
 
 
-def _git(fn, *args):
-    """git_tools raise WorkspaceAccessDenied (local git runs on the server while
-    project folders live on user machines, so the panel stays disabled until it
-    is companion-routed): surface the reason as a 400, not an unhandled 500."""
-    try:
-        return fn(*args)
-    except WorkspaceAccessDenied as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+async def _git(fn, *args):
+    """Await a companion-routed git_tools fn. Errors surface as the fn's
+    {"error": ...} dict (companion refused / unavailable / repo-not-found),
+    mapped to a 400 by the route just like every other panel."""
+    return await fn(*args)
 
 
 def _is_denied(result) -> bool:
@@ -36,7 +32,7 @@ def _is_denied(result) -> bool:
 
 @router.get("/status")
 async def status():
-    result = _git(git_tools.git_status)
+    result = await _git(git_tools.git_status)
     if _is_denied(result):
         return result
     if "error" in result:
@@ -46,7 +42,7 @@ async def status():
 
 @router.get("/branches")
 async def branches():
-    result = _git(git_tools.git_branches)
+    result = await _git(git_tools.git_branches)
     if _is_denied(result):
         return result
     if "error" in result:
@@ -56,7 +52,7 @@ async def branches():
 
 @router.get("/diff")
 async def diff(path: Optional[str] = None, staged: bool = False):
-    result = _git(git_tools.git_diff, path, staged)
+    result = await _git(git_tools.git_diff, path, staged)
     if _is_denied(result):
         return result
     if "error" in result:
@@ -70,7 +66,7 @@ class PathsReq(BaseModel):
 
 @router.post("/stage")
 async def stage(req: PathsReq):
-    result = _git(git_tools.git_stage, req.paths)
+    result = await _git(git_tools.git_stage, req.paths)
     if _is_denied(result):
         return result
     if "error" in result:
@@ -80,7 +76,7 @@ async def stage(req: PathsReq):
 
 @router.post("/unstage")
 async def unstage(req: PathsReq):
-    result = _git(git_tools.git_unstage, req.paths)
+    result = await _git(git_tools.git_unstage, req.paths)
     if _is_denied(result):
         return result
     if "error" in result:
@@ -94,7 +90,7 @@ class CommitReq(BaseModel):
 
 @router.post("/commit")
 async def commit(req: CommitReq):
-    result = _git(git_tools.git_commit, req.message)
+    result = await _git(git_tools.git_commit, req.message)
     if _is_denied(result):
         return result
     if "error" in result:
@@ -109,7 +105,7 @@ class PushReq(BaseModel):
 
 @router.post("/push")
 async def push(req: PushReq, user: Principal = Depends(require_permission("git.push"))):
-    result = _git(git_tools.git_push, req.remote, req.branch)
+    result = await _git(git_tools.git_push, req.remote, req.branch)
     if _is_denied(result):
         return result
     if "error" in result:
@@ -119,12 +115,12 @@ async def push(req: PushReq, user: Principal = Depends(require_permission("git.p
 
 @router.post("/suggest_commit_message")
 async def suggest_commit_message(user: Principal = Depends(get_current_user)):
-    staged = _git(git_tools.git_diff, None, True)
+    staged = await _git(git_tools.git_diff, None, True)
     if _is_denied(staged):
         return staged
     diff_text = staged.get("diff", "")
     if not diff_text.strip():
-        unstaged = _git(git_tools.git_diff, None, False)
+        unstaged = await _git(git_tools.git_diff, None, False)
         if _is_denied(unstaged):
             return unstaged
         if "error" in unstaged:
@@ -145,7 +141,7 @@ class SuggestPrReq(BaseModel):
 
 @router.post("/suggest_pr")
 async def suggest_pr(req: SuggestPrReq, user: Principal = Depends(get_current_user)):
-    result = _git(git_tools.git_diff_range, req.base)
+    result = await _git(git_tools.git_diff_range, req.base)
     if _is_denied(result):
         return result
     if "error" in result:
@@ -175,7 +171,7 @@ async def create_pr(req: PrReq, user: Principal = Depends(require_permission("gi
                      "and click Connect on the GitHub card first.",
         }, status_code=400)
 
-    remote_url = _git(git_tools.git_remote_url, "origin")
+    remote_url = await _git(git_tools.git_remote_url, "origin")
     if _is_denied(remote_url):
         return remote_url
     owner_repo = git_tools.parse_github_owner_repo(remote_url) if remote_url else None
@@ -185,7 +181,7 @@ async def create_pr(req: PrReq, user: Principal = Depends(require_permission("gi
 
     head = req.head
     if not head:
-        st = _git(git_tools.git_status)
+        st = await _git(git_tools.git_status)
         if _is_denied(st):
             return st
         if "error" in st:
@@ -203,3 +199,44 @@ async def create_pr(req: PrReq, user: Principal = Depends(require_permission("gi
     if isinstance(result, str) and result.startswith("error:"):
         return JSONResponse({"error": result}, status_code=502)
     return {"ok": True, "result": result}
+
+
+class RewindReq(BaseModel):
+    run_id: str
+    step: int = 0
+
+
+@router.post("/rewind")
+async def rewind(req: RewindReq, user: Principal = Depends(get_current_user)):
+    """Reset the workspace to a checkpoint this app recorded for (run_id, step)."""
+    from core.agent_loop.checkpoint import rewind as _rewind
+    from core import git_tools
+
+    async def _git(args):
+        return await git_tools._run(args, git_tools._cwd())
+
+    ref = await _rewind(req.run_id, req.step, user.id, _git)
+    if ref is None:
+        return JSONResponse({"error": "checkpoint not found or git unavailable"},
+                            status_code=404)
+    return {"ok": True, "rewound_to": ref}
+
+
+@router.get("/checkpoints")
+async def checkpoints(session_id: Optional[str] = None,
+                      user: Principal = Depends(get_current_user)):
+    """Checkpoints recorded for this session (Phase A2 rail)."""
+    from core.agent_loop.checkpoint import _checkpoint_db
+    conn = _checkpoint_db()
+    if session_id:
+        rows = conn.execute(
+            "SELECT run_id, step, ref, ts FROM checkpoints "
+            "WHERE user_id=? AND session_id=? ORDER BY ts DESC LIMIT 20",
+            (user.id, session_id)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT run_id, step, ref, ts FROM checkpoints "
+            "WHERE user_id=? ORDER BY ts DESC LIMIT 20",
+            (user.id,)).fetchall()
+    return {"checkpoints": [{"run_id": r["run_id"], "step": r["step"],
+                             "ref": r["ref"], "ts": r["ts"]} for r in rows]}

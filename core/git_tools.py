@@ -4,48 +4,61 @@ No destructive operations are exposed here (no reset --hard, no force-push, no b
 this is a review/commit/push surface for the UI, not a full git client.
 """
 
-import subprocess
 from pathlib import Path
 from typing import Optional
 
-from .agent_tools import WorkspaceAccessDenied, MAX_TOOL_OUTPUT
+from .agent_tools import MAX_TOOL_OUTPUT
+from .agent_tools import require_device_workspace
+from .request_context import get_current_user_id
+
+from . import companion_bridge
 
 GIT_TIMEOUT_S = 30
 
+# Server-side mirror of companion/gitops.js BLOCKED_ARG_RX: refuse destructive
+# git args before spending an RPC. The companion re-checks; this is fail-fast.
+_BLOCKED_ARGS = (
+    "--hard", "reset", "-f", "--force", "clean", "filter-branch", "--delete",
+)
+
 
 def _cwd() -> Path:
-    """Refuse: these helpers run `git` as a server-side subprocess, and project
-    folders live on users' machines. Running it here would operate on the
-    server's disk whenever the same path exists on the server, so the Git
-    panel stays disabled until it is routed through the companion app."""
-    raise WorkspaceAccessDenied(
-        "the Git panel is unavailable: git would run on the server, and project folders "
-        "live on your machine - use git on your machine (or ask the agent to run it) instead")
+    """The active project folder on the USER's machine (via require_device_workspace).
+
+    git never runs on the server: the server would operate on its own disk
+    whenever the path happened to exist there. The companion executes git on
+    the user's machine inside the approved workspace (companion/gitops.js) and
+    returns stdout/stderr over the bridge - the argument/ref policy below is
+    enforced before a single RPC is sent, and the companion re-checks it.
+    """
+    _uid, ws = require_device_workspace()
+    return ws
 
 
-def _run(args: list, cwd: Path) -> tuple[int, str, str]:
+async def _run(args: list, cwd: Path) -> tuple[int, str, str]:
+    """One git->companion RPC: returns (exit_code, stdout, stderr)."""
     try:
-        p = subprocess.run(
-            ["git"] + args, cwd=str(cwd), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=GIT_TIMEOUT_S,
-        )
-        return p.returncode, p.stdout, p.stderr
-    except FileNotFoundError:
-        return 127, "", "git executable not found on PATH"
-    except subprocess.TimeoutExpired:
-        return 124, "", f"git {' '.join(args)} timed out after {GIT_TIMEOUT_S}s"
+        bad = [a for a in (args or []) if a in _BLOCKED_ARGS]
+        if bad:
+            return 1, "", f"refused by server: destructive git arg {bad[0]}"
+        uid = get_current_user_id()
+        data = await companion_bridge.call(
+            uid, "git.run", {"args": list(args), "cwd": str(cwd)}, timeout=GIT_TIMEOUT_S)
+        return int(data.get("exit_code", 1)), str(data.get("stdout", "")), str(data.get("stderr", ""))
+    except Exception as e:
+        return 1, "", f"git unavailable: {type(e).__name__}: {e}"
 
 
-def _is_repo(cwd: Path) -> bool:
-    code, out, _ = _run(["rev-parse", "--is-inside-work-tree"], cwd)
+async def _is_repo(cwd: Path) -> bool:
+    code, out, _ = await _run(["rev-parse", "--is-inside-work-tree"], cwd)
     return code == 0 and out.strip() == "true"
 
 
-def git_status() -> dict:
+async def git_status() -> dict:
     cwd = _cwd()
-    if not _is_repo(cwd):
+    if not await _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
-    code, out, err = _run(["status", "--porcelain=v1", "-b"], cwd)
+    code, out, err = await _run(["status", "--porcelain=v1", "-b"], cwd)
     if code != 0:
         return {"error": err.strip() or "git status failed"}
     lines = out.splitlines()
@@ -61,11 +74,11 @@ def git_status() -> dict:
 
     # Parsing the porcelain header for the branch name breaks on "No commits yet on
     # <branch>" (fresh repo) and "HEAD (no branch)" (detached) - ask git directly instead.
-    _, branch_out, _ = _run(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+    _, branch_out, _ = await _run(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
     branch = branch_out.strip() or None
     detached = branch == "HEAD"
     if detached:
-        _, sha_out, _ = _run(["rev-parse", "--short", "HEAD"], cwd)
+        _, sha_out, _ = await _run(["rev-parse", "--short", "HEAD"], cwd)
         branch = f"detached@{sha_out.strip()}" if sha_out.strip() else "detached HEAD"
     for ln in lines:
         if len(ln) < 4:
@@ -75,16 +88,16 @@ def git_status() -> dict:
     return {"branch": branch, "detached": detached, "ahead": ahead, "behind": behind, "files": files}
 
 
-def git_diff(path: Optional[str] = None, staged: bool = False) -> dict:
+async def git_diff(path: Optional[str] = None, staged: bool = False) -> dict:
     cwd = _cwd()
-    if not _is_repo(cwd):
+    if not await _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     args = ["diff"]
     if staged:
         args.append("--cached")
     if path:
         args += ["--", path]
-    code, out, err = _run(args, cwd)
+    code, out, err = await _run(args, cwd)
     if code != 0:
         return {"error": err.strip() or "git diff failed"}
     if len(out) > MAX_TOOL_OUTPUT:
@@ -92,37 +105,37 @@ def git_diff(path: Optional[str] = None, staged: bool = False) -> dict:
     return {"diff": out}
 
 
-def git_stage(paths: list) -> dict:
+async def git_stage(paths: list) -> dict:
     cwd = _cwd()
-    if not _is_repo(cwd):
+    if not await _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     if not paths:
         return {"error": "no paths given"}
-    code, _, err = _run(["add", "--"] + list(paths), cwd)
+    code, _, err = await _run(["add", "--"] + list(paths), cwd)
     if code != 0:
         return {"error": err.strip() or "git add failed"}
     return {"ok": True}
 
 
-def git_unstage(paths: list) -> dict:
+async def git_unstage(paths: list) -> dict:
     cwd = _cwd()
-    if not _is_repo(cwd):
+    if not await _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     if not paths:
         return {"error": "no paths given"}
-    code, _, err = _run(["restore", "--staged", "--"] + list(paths), cwd)
+    code, _, err = await _run(["restore", "--staged", "--"] + list(paths), cwd)
     if code != 0:
         return {"error": err.strip() or "git restore --staged failed"}
     return {"ok": True}
 
 
-def git_commit(message: str) -> dict:
+async def git_commit(message: str) -> dict:
     cwd = _cwd()
-    if not _is_repo(cwd):
+    if not await _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     if not message or not message.strip():
         return {"error": "commit message is required"}
-    code, out, err = _run(["commit", "-m", message.strip()], cwd)
+    code, out, err = await _run(["commit", "-m", message.strip()], cwd)
     if code != 0:
         return {"error": (err or out).strip() or "git commit failed"}
     return {"ok": True, "output": out.strip()}
@@ -137,34 +150,34 @@ def _bad_ref(*names) -> Optional[str]:
     return None
 
 
-def git_push(remote: str = "origin", branch: Optional[str] = None) -> dict:
+async def git_push(remote: str = "origin", branch: Optional[str] = None) -> dict:
     if _bad_ref(remote, branch):
         return {"error": _bad_ref(remote, branch)}
     cwd = _cwd()
-    if not _is_repo(cwd):
+    if not await _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     args = ["push", remote]
     if branch:
         args.append(branch)
-    code, out, err = _run(args, cwd)
+    code, out, err = await _run(args, cwd)
     if code != 0:
         return {"error": (err or out).strip() or "git push failed"}
     return {"ok": True, "output": (out + err).strip()}
 
 
-def git_branches() -> dict:
+async def git_branches() -> dict:
     """Local branch names for the PR-base picker, with the repo's default branch
     (origin/HEAD, if known) flagged so the UI can preselect it."""
     cwd = _cwd()
-    if not _is_repo(cwd):
+    if not await _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
-    code, out, err = _run(["for-each-ref", "--format=%(refname:short)", "refs/heads/"], cwd)
+    code, out, err = await _run(["for-each-ref", "--format=%(refname:short)", "refs/heads/"], cwd)
     if code != 0:
         return {"error": err.strip() or "git for-each-ref failed"}
     branches = [b for b in out.splitlines() if b.strip()]
 
     default_branch = None
-    _, head_out, _ = _run(["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], cwd)
+    _, head_out, _ = await _run(["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], cwd)
     if head_out.strip():
         default_branch = head_out.strip().split("/", 1)[-1]
     if not default_branch:
@@ -175,17 +188,17 @@ def git_branches() -> dict:
     return {"branches": branches, "default": default_branch}
 
 
-def git_diff_range(base: str) -> dict:
+async def git_diff_range(base: str) -> dict:
     """Diff of everything the current branch has that `base` doesn't - i.e. what a PR
     against `base` would contain. Used to auto-generate a PR title/description."""
     cwd = _cwd()
-    if not _is_repo(cwd):
+    if not await _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
     if not base or not base.strip():
         return {"error": "base branch is required"}
     if _bad_ref(base):
         return {"error": _bad_ref(base)}
-    code, out, err = _run(["diff", f"{base}...HEAD"], cwd)
+    code, out, err = await _run(["diff", f"{base}...HEAD"], cwd)
     if code != 0:
         return {"error": err.strip() or f"git diff {base}...HEAD failed"}
     if len(out) > MAX_TOOL_OUTPUT:
@@ -193,13 +206,13 @@ def git_diff_range(base: str) -> dict:
     return {"diff": out}
 
 
-def git_remote_url(remote: str = "origin") -> Optional[str]:
+async def git_remote_url(remote: str = "origin") -> Optional[str]:
     if _bad_ref(remote):
         return None
     cwd = _cwd()
-    if not _is_repo(cwd):
+    if not await _is_repo(cwd):
         return None
-    code, out, _ = _run(["remote", "get-url", remote], cwd)
+    code, out, _ = await _run(["remote", "get-url", remote], cwd)
     return out.strip() if code == 0 else None
 
 

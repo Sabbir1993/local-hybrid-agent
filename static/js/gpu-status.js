@@ -270,13 +270,11 @@ function activeLaneCtxMax() {
     if (lane !== 'executor') {
       return (curStatus && curStatus.context && curStatus.context.n_ctx) ? curStatus.context.n_ctx : curCtxMax;
     }
-    const ec = (typeof APP_MODELS !== 'undefined' && APP_MODELS.executor) ? APP_MODELS.executor.ctx : 0;
-    if (ec > 0) return ec;
-    const cfg = (typeof APP_MODELS !== 'undefined') ? APP_MODELS : null;
-    if (cfg && cfg.executor) {
-      const m = Object.values(cfg.executor.models || {})[0];
-      if (m && m.ctx > 0) return m.ctx;
-    }
+    // The executor's ctx is not exposed to this window today; curCtxMax is the
+    // main model's profile ctx (config.js), which is the only honest ceiling we
+    // have. APP_MODELS was read here but nothing ever set it (lint caught it) -
+    // the read always fell through to the same fallback, so this is not a change
+    // in behaviour, just the removal of a dead reference.
   } catch (_) { /* fall through */ }
   return (curStatus && curStatus.context && curStatus.context.n_ctx) ? curStatus.context.n_ctx : curCtxMax;
 }

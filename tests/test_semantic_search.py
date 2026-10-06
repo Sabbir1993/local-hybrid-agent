@@ -16,6 +16,7 @@ from core.memory import (
     search_vec_sqlite,
 )
 from core.memory import store as store_mod
+from core.memory import search as search_mod
 
 
 class SemanticSearchTests(unittest.TestCase):
@@ -323,6 +324,43 @@ class ASTSQLiteCacheTests(unittest.TestCase):
         names = [s["name"] for s in data_after["symbols"]]
         self.assertIn("multiply", names,
                       "New symbol 'multiply' should appear after file edit invalidates SQLite cache")
+
+
+class ConfigDrivenVocabularyTests(unittest.TestCase):
+    """knowledge.synonyms / knowledge.company_keywords must reach the live
+    search and KB-router paths without a code change (2026-10-06)."""
+
+    def test_synonym_config_extends_defaults(self):
+        with mock.patch.dict("core.small_model.APP_CONFIG",
+                             {"knowledge": {"synonyms": {"doggo": ["puppy"]}}}):
+            m = search_mod.synonym_map()
+            self.assertIn("doggo", m)
+            self.assertIn("rollover", m)          # default cluster survives
+        # expand_query uses the configured cluster
+        with mock.patch.dict("core.small_model.APP_CONFIG",
+                             {"knowledge": {"synonyms": {"doggo": ["puppy"]}}}):
+            v = expand_query("i love my doggo", max_variants=1)
+            self.assertTrue(any("puppy" in x for x in v))
+
+    def test_synonym_config_without_knowledge_block_keeps_defaults(self):
+        with mock.patch.dict("core.small_model.APP_CONFIG", {}, clear=False):
+            m = search_mod.synonym_map()
+            self.assertIn("rollover", m)
+            self.assertGreater(len(m), 20)
+
+    def test_company_keywords_union_config(self):
+        from core.knowledge_router import active_company_keywords, is_company_or_kb_query
+        with mock.patch.dict("core.small_model.APP_CONFIG",
+                             {"knowledge": {"company_keywords": ["megalocorp"]}}):
+            kw = active_company_keywords()
+            self.assertIn("megalocorp", kw)       # deployment terms added
+            self.assertIn("employee", kw)         # generic defaults retained
+            self.assertTrue(is_company_or_kb_query("megalocorp policy", {1}))
+        # without config: defaults only
+        with mock.patch.dict("core.small_model.APP_CONFIG", {}, clear=False):
+            kw = active_company_keywords()
+            self.assertNotIn("megalocorp", kw)
+            self.assertIn("employee", kw)
 
 
 if __name__ == "__main__":

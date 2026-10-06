@@ -51,6 +51,20 @@ class EnvelopeStatusTests(unittest.TestCase):
         self.assertIs(verdict("spawn_agent", ok), True,
                       "body text must not decide the verdict; the status field does")
 
+    def test_quoted_envelope_in_body_does_not_flip_a_single_child(self):
+        # a successful child quoted another agent's envelope line in its
+        # findings. Only the FIRST line is the child's own envelope - the body
+        # may not vote. Regression for the scan-all-lines verdict window.
+        ok = ("[sub-agent · role=code-reviewer · 6 msgs · lane=executor · status=success]\n"
+              "The sibling [sub-agent · lane=main · status=step_exhausted] gave up, but the fix is here.")
+        self.assertIs(verdict("spawn_agent", ok), True,
+                      "a quoted envelope in the body must not flip a single child's verdict")
+
+    def test_quoted_envelope_in_body_for_reviewed_coder(self):
+        ok = ("[critic-actor · iterations=1/2 · verdict=APPROVED · status=success]\n"
+              "Reviewer hit [sub-agent · status=step_exhausted] earlier but recovered.")
+        self.assertIs(verdict("spawn_reviewed_coder", ok), True)
+
     def test_non_subagent_tools_are_left_to_the_caller(self):
         self.assertIsNone(verdict("read_file", "a = 1\n"))
         self.assertIsNone(verdict("spawn_agent", "error: unknown role 'x'. Available: a, b"))

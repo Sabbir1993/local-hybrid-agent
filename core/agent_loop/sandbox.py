@@ -86,8 +86,6 @@ def validate_and_finalize_response(last_query: str, content: str, reasoning: str
 
         return "Task completed. All requested operations have been processed in the workspace.", True, "fallback confirmation"
 
-    creation_keywords = ("make", "create", "generate", "write", "build", "code", "landing page", "script", "implement", "add", "setup")
-    query_wants_creation = any(w in last_query.lower() for w in creation_keywords)
     if is_passive_refusal(clean_content, last_query, actions_taken):
         return clean_content, False, PASSIVE_REFUSAL_NOTE
 

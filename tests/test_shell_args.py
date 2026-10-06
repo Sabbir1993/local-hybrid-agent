@@ -9,6 +9,8 @@ from core.agent_loop import validate_and_repair_tool_args
 from core.tool_args import SHELL_COMMAND_KEYS, shell_command
 
 RUN_PY = Path(__file__).resolve().parent.parent / "routes" / "agent" / "run.py"
+STREAM_PY = Path(__file__).resolve().parent.parent / "routes" / "agent" / "stream.py"
+RUN_SRC = "\n".join(p.read_text(encoding="utf-8") for p in (RUN_PY, STREAM_PY))
 
 
 class ShellCommandNames(unittest.TestCase):
@@ -70,7 +72,7 @@ class ToolAndGate(unittest.TestCase):
         self.assertIn('"command"', str(cm.exception))
 
     def test_the_permission_gate_reads_the_same_resolved_command(self):
-        src = RUN_PY.read_text(encoding="utf-8")
+        src = RUN_SRC
         # the gate used to run only when the literal text "command" appeared in the arguments,
         # so a call under another name skipped the approval prompt
         self.assertNotIn('"command" in str(args', src)

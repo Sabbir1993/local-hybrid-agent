@@ -22,12 +22,12 @@ omit = [
 ]
 
 [tool.coverage.report]
-# Measured 58% with branch coverage (2026-10-01, Windows, full unittest suite).
+# Measured 67% with branch coverage (2026-10-06, Windows, full unittest suite).
 # Branch arcs are the point: partial branches are the untested error paths, and this
 # codebase's risk lives in error paths, not happy paths. Floor sits below the measured
 # number for win/linux branch variance (os.name-gated code covers one platform at a time).
 # Ratchet: raise toward the measured number as coverage improves, never lower it.
-fail_under = 55
+fail_under = 65
 show_missing = false
 exclude_lines = [
     "pragma: no cover",

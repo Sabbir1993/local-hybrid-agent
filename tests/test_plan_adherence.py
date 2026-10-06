@@ -103,8 +103,10 @@ class DetailWiringTests(unittest.TestCase):
 
     def test_the_loop_still_composes_with_other_codes(self):
         # the summary must not shadow a degeneration signal: both belong in detail
-        src = (Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py").read_text(
-            encoding="utf-8")
+        src = "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in (Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py",
+                      Path(__file__).resolve().parents[1] / "routes" / "agent" / "stream.py"))
         self.assertIn("run_summary(", src, "run.py must record the plan summary")
         self.assertRegex(src, r"_outcome_detail or _plan_detail or loop_detail|\"\|\"\.join",
                          "codes must be composed, not overwritten")

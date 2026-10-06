@@ -118,8 +118,14 @@ def subagent_result_verdict(tool_name: str, result) -> Optional[bool]:
     # spawn_parallel_agents interleaves envelopes with body lines
     # ("[Sub-agent #2]: [sub-agent ...]" then the child's text), so every envelope
     # line is collected rather than only the leading ones.
+    # A single spawn_agent / spawn_reviewed_coder has exactly one envelope - the
+    # first line. Only that line may vote: a successful child whose BODY quotes a
+    # `[sub-agent ... status=...]` line (it saw another agent's header in
+    # its findings) must not flip the verdict to failure.
     statuses = set()
-    for line in result.splitlines():
+    lines = result.splitlines()
+    candidates = lines if tool_name == "spawn_parallel_agents" else lines[:1]
+    for line in candidates:
         if line.startswith(("[sub-agent", "[Sub-agent", "[critic-actor")):
             statuses.update(re.findall(r"status=([a-z_]+)", line))
     if not statuses or not statuses <= set(SUBAGENT_STATUSES):
@@ -346,6 +352,13 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
         # corrupting the posted= field of the NEXT subagent.
         _active_scope_writes.reset(token)
 
+    # R10: a child's file writes pollute the parent's diff/undo set (_ws_changes
+    # in core/agent_tools/workspace.py). Drop THIS child's own writes now that
+    # its run is over - a parallel sibling's files are not in `files_modified`
+    # here, so they survive untouched.
+    from .scope import drop_child_write_tracking
+    drop_child_write_tracking(files_modified)
+
 
     # the child's answer returns as a tool result, bypassing output_guard -- mask
     # card numbers here so they never reach the parent context in the clear
@@ -422,4 +435,3 @@ async def tool_spawn_parallel_agents(args: dict) -> str:
     if not agents or not isinstance(agents, list):
         return "error: 'agents' is required and must be a list of agent specifications"
     return await run_parallel_subagents(agents)
-

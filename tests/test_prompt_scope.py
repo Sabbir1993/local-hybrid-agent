@@ -175,7 +175,10 @@ class AgentPromptTests(unittest.TestCase):
         """The router may only short-cut plan tools, so it must only be
         shown those (not the full registry on every step)."""
         from routes.agent.constants import PLAN_MODE_TOOLS
-        src = Path("routes/agent/run.py").read_text(encoding="utf-8")
+        # the loop body moved to stream.py (2026-10-06); scan both modules
+        src = "\n".join(p.read_text(encoding="utf-8")
+                        for p in (Path("routes/agent/run.py"),
+                                  Path("routes/agent/stream.py")))
         i = src.index("r_tools = [t for t in all_tools()")
         self.assertIn("PLAN_MODE_TOOLS", src[i:i + 200])
         self.assertGreaterEqual(len(PLAN_MODE_TOOLS), 10)
@@ -183,7 +186,9 @@ class AgentPromptTests(unittest.TestCase):
     def test_agent_mcp_wiring(self):
         setup = Path("routes/agent/setup.py").read_text(encoding="utf-8")
         self.assertIn("ctx.mcp_servers = prompt_scope.mcp_mentions", setup)
-        run = Path("routes/agent/run.py").read_text(encoding="utf-8")
+        run = "\n".join(p.read_text(encoding="utf-8")
+                        for p in (Path("routes/agent/run.py"),
+                                  Path("routes/agent/stream.py")))
         self.assertIn("prompt_scope.hide_unmentioned_mcp", run)
 
 

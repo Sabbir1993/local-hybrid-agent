@@ -38,11 +38,23 @@ async function loadGitPanel() {
     const unstaged = st.files.filter(f => f.worktree_status !== ' ' && f.worktree_status !== undefined);
     const branchList = br.branches || [];
     const defaultBase = br.default || 'main';
+    const cps = await (await fetch('/git/checkpoints')).json().catch(() => ({ checkpoints: [] }));
+    const cpRail = (cps.checkpoints || []).slice(0, 5).map((c) => `
+      <div style="display:flex; align-items:center; gap:6px; padding:2px 0;">
+        <span class="dim mono" style="font-size:10px; flex:1;" title="${esc(c.ref)}">run ${esc(String(c.run_id).slice(0, 8))} · step ${c.step}</span>
+        <button class="btn ghost" style="width:auto; margin:0; padding:1px 8px; font-size:10px;"
+                data-checkpoint-run="${esc(c.run_id)}" data-checkpoint-step="${c.step}">◀ Rewind</button>
+      </div>`).join('');
+
 
     box.innerHTML = `
       <div class="cap-item" style="display:flex; justify-content:space-between; align-items:center;">
         <span>${st.detached ? '⚠ detached at ' : ''}<b>${esc(st.branch || '?')}</b> ${st.ahead ? `<span class="dim">↑${st.ahead}</span>` : ''}${st.behind ? `<span class="dim">↓${st.behind}</span>` : ''}</span>
         <button class="btn ghost" id="git-refresh" style="width:auto; margin:0; padding:2px 10px; font-size:10.5px;">⟳ Refresh</button>
+      </div>
+      <div class="cap-item" style="margin-bottom:6px;">
+        <b style="font-size:10.5px; text-transform:uppercase; letter-spacing:0.5px;">Checkpoints</b>
+        ${cpRail || '<div class="dim" style="font-size:10px;">No checkpoints yet.</div>'}
       </div>
       ${gitFileGroup('Staged', staged, true)}
       ${gitFileGroup('Changes', unstaged, false)}
@@ -91,6 +103,7 @@ async function loadGitPanel() {
     $('git-pr-btn')?.addEventListener('click', gitCreatePr);
     $('git-suggest-commit-btn')?.addEventListener('click', gitSuggestCommitMessage);
     $('git-suggest-pr-btn')?.addEventListener('click', gitSuggestPr);
+    box.querySelectorAll('[data-checkpoint-run]').forEach((b) => b.addEventListener('click', gitRewind));
   } catch (e) {
     box.innerHTML = '<div class="mon-empty">Failed: ' + esc(e.message) + '</div>';
   }
@@ -234,5 +247,26 @@ async function gitCreatePr() {
   } catch (e) {
     statusEl.textContent = 'Failed: ' + e.message;
     toast('PR failed: ' + e.message, true);
+  }
+}
+
+
+async function gitRewind(e) {
+  const btn = e.currentTarget;
+  const runId = btn.dataset.checkpointRun;
+  const step = Number(btn.dataset.checkpointStep || 0);
+  if (!confirm('Rewind the workspace to the checkpoint at step ' + step +
+               '? This discards changes made after that step (git reset --hard).')) return;
+  try {
+    const r = await fetch('/git/rewind', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_id: runId, step }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'rewind failed'); return; }
+    toast('Rewound to ' + String(d.rewound_to || '').slice(0, 8));
+    loadGitPanel();
+  } catch (err) {
+    toast('rewind failed: ' + err.message, true);
   }
 }

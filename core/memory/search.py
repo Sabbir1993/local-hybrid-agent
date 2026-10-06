@@ -11,11 +11,16 @@ from .indexing import _embed_texts
 # Query expansion: synonym-based multi-variant generation (no model call).
 # Lifts paraphrase recall from 20% -> 85%+ by generating lexically diverse
 # variants that cover synonymous vocabulary the original query may miss.
-# Kept intentionally lightweight (regex substituion + word mapping) so it
+# Kept intentionally lightweight (regex substitution + word mapping) so it
 # runs in < 1ms with zero I/O.
+#
+# The base map below is the shipped default. A deployment can add clusters via
+# config/app.json -> knowledge.synonyms (dict keyed by phrase, merged over the
+# defaults): a fresh install behaves identically, and growing the domain
+# vocabulary needs no code change.
 # ---------------------------------------------------------------------------
 
-_SYNONYM_MAP: dict = {
+_DEFAULT_SYNONYM_MAP: dict = {
     # leave / time-off cluster
     "rollover": ["carryover", "carry over", "accrue"],
     "roll over": ["carryover", "carry over", "accrue"],
@@ -49,6 +54,22 @@ _SYNONYM_MAP: dict = {
 }
 
 
+def synonym_map() -> dict:
+    """The active synonym clusters: config knowledge.synonyms merged over the
+    code defaults (config wins per key, unknown keys extend)."""
+    merged = dict(_DEFAULT_SYNONYM_MAP)
+    try:
+        from ..small_model import APP_CONFIG
+        extra = (APP_CONFIG.get("knowledge") or {}).get("synonyms")
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                if isinstance(v, (list, tuple)) and v:
+                    merged[str(k)] = [str(s) for s in v]
+    except Exception as e:
+        print(f"[memory] synonym config unreadable: {e}", file=sys.stderr)
+    return merged
+
+
 def expand_query(query: str, max_variants: int = 2) -> List[str]:
     """Return up to `max_variants` lexically diverse synonym variants of `query`.
 
@@ -66,7 +87,7 @@ def expand_query(query: str, max_variants: int = 2) -> List[str]:
     variants: List[str] = []
     q_lower = query.lower()
     # sort by length descending so multi-word phrases match before their components
-    for phrase, synonyms in sorted(_SYNONYM_MAP.items(), key=lambda kv: -len(kv[0])):
+    for phrase, synonyms in sorted(synonym_map().items(), key=lambda kv: -len(kv[0])):
         if phrase in q_lower and synonyms:
             for syn in synonyms[:1]:   # one substitute per phrase to avoid explosion
                 v = re.sub(re.escape(phrase), syn, q_lower, count=1)

@@ -412,9 +412,13 @@ class ApprovedFlag(unittest.TestCase):
 
 
 class RunWiring(unittest.TestCase):
-    """routes/agent/run.py is one big generator with no end-to-end harness: pin the wiring in source."""
+    """Pin the wiring in source. The loop body moved to routes/agent/stream.py
+    (2026-10-06, extracted verbatim from run.py's agent_run) so scan both: the
+    route module holds the dispatch, stream.py holds the loop."""
 
-    src = Path("routes/agent/run.py").read_text(encoding="utf-8")
+    src = "\n".join(p.read_text(encoding="utf-8")
+                    for p in (Path("routes/agent/run.py"),
+                              Path("routes/agent/stream.py")))
 
     def test_every_terminal_event_carries_a_state(self):
         import re

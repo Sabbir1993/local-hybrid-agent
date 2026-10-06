@@ -198,5 +198,42 @@ class ScopeTests(unittest.TestCase):
             setp.assert_not_called()
 
 
+class ChildWriteTrackingTests(unittest.TestCase):
+    """R10: a child's file writes must not pollute the parent's _ws_changes
+    (diff/undo set) after the child finishes."""
+
+    def test_child_writes_are_dropped_sibling_and_parent_survive(self):
+        import tempfile
+        import core.agent_tools as at
+        from core.subagent.scope import drop_child_write_tracking
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name).resolve()
+
+        def fake_ws():
+            return Path(tmp.name)
+
+        # seed _ws_changes: parent file + the two child files + one sibling file
+        with mock.patch.object(at, "active_workspace", fake_ws), \
+             mock.patch.object(at, "_ws_changes", {7: {
+                 str(root / "README.md"): {"before": None, "after": "written"},
+                 str(root / "core" / "app.py"): {"before": None, "after": "written"},
+                 str(root / "tests" / "test_app.py"): {"before": None, "after": "written"},
+                 str(root / "sibling.txt"): {"before": None, "after": "written"},
+             }}), \
+             mock.patch("core.request_context.get_current_user_id", return_value=7):
+            drop_child_write_tracking({"core/app.py", "tests/test_app.py"})
+            changes = dict(at._ws_changes[7])
+        tmp.cleanup()
+        self.assertEqual(set(changes.keys()), {str(root / "README.md"), str(root / "sibling.txt")})
+
+    def test_empty_child_set_touches_nothing(self):
+        from core import agent_tools
+        from core.subagent.scope import drop_child_write_tracking
+        with mock.patch("core.agent_tools._ws_changes", {7: {"a": 1}}), \
+             mock.patch("core.request_context.get_current_user_id", return_value=7):
+            drop_child_write_tracking(set())
+            self.assertEqual(agent_tools._ws_changes[7], {"a": 1})
+
+
 if __name__ == "__main__":
     unittest.main()

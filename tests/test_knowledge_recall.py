@@ -11,6 +11,7 @@ Run: python -m unittest tests.test_knowledge_recall -v
 import asyncio
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -21,6 +22,7 @@ from core import auth_db
 from core.memory import indexing as indexing_mod
 from core.memory import search as search_mod
 from core.memory import constants as mem_const
+from core.memory.indexing import MAX_FILE_BYTES
 
 
 def _long_doc(n_chunks: int) -> str:
@@ -330,6 +332,213 @@ class RerankTests(_TempDb):
         self.assertTrue(all({"title", "text", "score"} <= set(h) for h in hits))
         self.assertTrue(any("quasar" in h["text"].lower() for h in hits),
                         "rerank buried the only relevant chunk")
+
+
+class EmbedderCircuitTests(_TempDb):
+    """core/memory/indexing.py _embed_texts: the embedder-down circuit breaker,
+    batching and response validation. All paths must degrade to lexical-only
+    (return None) rather than raise, because the caller banks on None."""
+
+    def test_empty_input_returns_none(self):
+        import core.memory as memory_pkg
+        from core.memory import indexing as idx
+        from core.memory import store as store_mod
+        orig = idx._embedder_down_until
+        try:
+            idx._embedder_down_until = 0.0
+            self.assertIsNone(asyncio.run(idx._embed_texts([])))
+        finally:
+            idx._embedder_down_until = orig
+
+    def test_cooldown_window_returns_none_without_calling(self):
+        import asyncio
+        from core.memory import indexing as idx
+        idx._embedder_down_until = time.time() + 60
+        try:
+            self.assertIsNone(asyncio.run(idx._embed_texts(["x"])))
+        finally:
+            idx._embedder_down_until = 0.0
+
+    def test_unavailable_instance_sets_cooldown(self):
+        import asyncio
+        from core.memory import indexing as idx
+        from core import lanes
+        from core import small_model
+        idx._embedder_down_until = 0.0
+        inst = mock.Mock()
+        inst.available = False
+        with mock.patch.object(lanes, "targets", return_value=[mock.Mock(lane="embed")]), \
+             mock.patch.object(small_model.small_models, "instances",
+                               {"embed": inst}):
+            self.assertIsNone(asyncio.run(idx._embed_texts(["hello world"])))
+            self.assertGreater(idx._embedder_down_until, time.time())
+
+    def test_http_error_closes_circuit(self):
+        import asyncio
+        from core.memory import indexing as idx
+        from core import lanes
+        from core import small_model
+        idx._embedder_down_until = 0.0
+        inst = mock.Mock()
+        inst.available = True
+        inst.ensure_loaded = mock.AsyncMock()
+
+        async def boom(*a, **k):
+            raise RuntimeError("embedder down")
+        inst.client.post = boom
+        with mock.patch.object(lanes, "targets", return_value=[mock.Mock(lane="embed")]), \
+             mock.patch.object(small_model.small_models, "instances",
+                               {"embed": inst}):
+            self.assertIsNone(asyncio.run(idx._embed_texts(["a", "b", "c"])))
+            self.assertGreater(idx._embedder_down_until, time.time())
+
+    def test_short_response_is_rejected(self):
+        import asyncio
+        from core.memory import indexing as idx
+        from core import lanes
+        from core import small_model
+        idx._embedder_down_until = 0.0
+        inst = mock.Mock()
+        inst.available = True
+        inst.ensure_loaded = mock.AsyncMock()
+
+        async def short(*a, **k):
+            resp = mock.Mock()
+            resp.raise_for_status = mock.Mock()
+            resp.json.return_value = {"data": [{"embedding": [0.1]}]}   # 1 vec for 3 texts
+            return resp
+        inst.client.post = short
+        with mock.patch.object(lanes, "targets", return_value=[mock.Mock(lane="embed")]), \
+             mock.patch.object(small_model.small_models, "instances",
+                               {"embed": inst}):
+            self.assertIsNone(asyncio.run(idx._embed_texts(["a", "b", "c"])))
+
+    def test_valid_batch_returns_same_count(self):
+        import asyncio
+        from core.memory import indexing as idx
+        from core import lanes
+        from core import small_model
+        idx._embedder_down_until = 0.0
+        inst = mock.Mock()
+        inst.available = True
+        inst.ensure_loaded = mock.AsyncMock()
+
+        async def ok(*a, **k):
+            resp = mock.Mock()
+            resp.raise_for_status = mock.Mock()
+            n = len(k["json"]["input"])
+            resp.json.return_value = {"data": [{"embedding": [float(i)]} for i in range(n)]}
+            return resp
+        inst.client.post = ok
+        with mock.patch.object(lanes, "targets", return_value=[mock.Mock(lane="embed")]), \
+             mock.patch.object(small_model.small_models, "instances",
+                               {"embed": inst}):
+            out = asyncio.run(idx._embed_texts(["a"] * 5))
+            self.assertEqual(len(out), 5)
+
+
+class WorkspaceIndexTests(_TempDb):
+    """index_workspace: walk filters (size, suffix, skip dirs), stale deletion
+    and the embed->store path."""
+
+    def _mk_ws(self):
+        import core.memory as memory_pkg
+        import tempfile
+        ws = Path(tempfile.mkdtemp())
+        (ws / "keep.md").write_text("hello world " * 50, encoding="utf-8")
+        (ws / "image.png").write_text("not text", encoding="utf-8")         # not in TEXT_EXTS
+        (ws / "node_modules").mkdir()
+        (ws / "node_modules" / "x.js").write_text("skip me", encoding="utf-8")
+        big = ws / "big.txt"
+        big.write_text("x" * (MAX_FILE_BYTES + 1000), encoding="utf-8")
+        return ws, memory_pkg
+
+    def test_workspace_walk_filters_and_embeds(self):
+        import asyncio
+        from core.memory import indexing as idx
+        ws, memory_pkg = self._mk_ws()
+        sent = []
+
+        async def fake_embed(texts):
+            sent.extend(texts)
+            return [[float(i)] for i in range(len(texts))]
+        with mock.patch.object(memory_pkg, "_embed_texts", fake_embed), \
+             mock.patch.object(memory_pkg, "_store_vecs", lambda rows, vecs: None):
+            out = asyncio.run(idx.index_workspace(ws, force=True))
+        self.assertEqual(out["files"], 1)          # only keep.md passes the filters
+        self.assertGreater(out["chunks"], 0)
+        self.assertTrue(any("hello world" in s for s in sent))
+
+    def test_workspace_already_indexed_skips(self):
+        import asyncio
+        from core.memory import indexing as idx
+        ws, memory_pkg = self._mk_ws()
+        calls = {"n": 0}
+
+        async def fake_embed(texts):
+            calls["n"] += 1
+            return [[float(i)] for i in range(len(texts))]
+        # first pass stores real rows (no _store_vecs patch) so the second
+        # pass hits the _already_indexed mtime check
+        with mock.patch.object(memory_pkg, "_embed_texts", fake_embed):
+            asyncio.run(idx.index_workspace(ws, force=True))
+            n_after_first = calls["n"]
+        # no force: the same mtime rows are already indexed -> no new embed
+        with mock.patch.object(memory_pkg, "_embed_texts", fake_embed):
+            asyncio.run(idx.index_workspace(ws))
+        self.assertEqual(n_after_first, 1)
+        self.assertEqual(calls["n"], 1)
+
+    def test_missing_workspace_and_file_replaced_cleanly(self):
+        import asyncio
+        from core.memory import indexing as idx
+        self.assertEqual(asyncio.run(idx.index_workspace(None)), {"files": 0, "chunks": 0})
+        self.assertEqual(asyncio.run(idx.index_workspace(Path("/no/such/dir/qq"))),
+                         {"files": 0, "chunks": 0})
+
+
+class SessionIndexTests(_TempDb):
+    def test_sessions_skipped_when_db_unavailable(self):
+        import asyncio
+        from core.memory import indexing as idx
+        with mock.patch("core.db.db_session_docs", side_effect=RuntimeError("no db")):
+            self.assertEqual(asyncio.run(idx.index_sessions()), 0)
+
+    def test_sessions_embed_and_store(self):
+        import asyncio
+        import core.memory as memory_pkg
+        from core.memory import indexing as idx
+        docs = [("session/1", "hello session world " * 30, 1.0)]
+
+        async def fake_embed(texts):
+            return [[float(i)] for i in range(len(texts))]
+
+        with mock.patch("core.db.db_session_docs", return_value=docs), \
+             mock.patch.object(memory_pkg, "_embed_texts", fake_embed), \
+             mock.patch.object(memory_pkg, "_store_vecs", lambda rows, vecs: None):
+            n = asyncio.run(idx.index_sessions())
+        self.assertGreater(n, 0)
+
+class EnsureIndexedTests(_TempDb):
+    def test_ensure_runs_once_within_window(self):
+        import asyncio
+        from core.memory import indexing as idx
+        calls = {"n": 0}
+
+        async def fake_workspace(*a, **k):
+            calls["n"] += 1
+            return {"files": 0, "chunks": 0}
+
+        orig = idx._last_index
+        idx._last_index = 0.0
+        try:
+            with mock.patch.object(idx, "index_workspace", fake_workspace), \
+                 mock.patch.object(idx, "index_sessions", mock.AsyncMock(return_value=0)):
+                asyncio.run(idx.ensure_indexed(max_age_s=0))     # runs
+                asyncio.run(idx.ensure_indexed(max_age_s=3600))  # within 1h of _last_index: guarded
+        finally:
+            idx._last_index = orig
+        self.assertEqual(calls["n"], 1)     # the _last_index guard dedupes
 
 
 if __name__ == "__main__":

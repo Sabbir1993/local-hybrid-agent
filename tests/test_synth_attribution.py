@@ -21,6 +21,7 @@ from core import route_log
 from core.agent_loop.sandbox import PASSIVE_REFUSAL_NOTE
 
 RUN_PY = Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py"
+STREAM_PY = Path(__file__).resolve().parents[1] / "routes" / "agent" / "stream.py"
 
 
 class SynthDetailTests(unittest.TestCase):
@@ -66,7 +67,11 @@ class SynthDetailIsWiredTests(unittest.TestCase):
     """Both outcome paths must record the cause, and the store must keep it."""
 
     def setUp(self):
-        self.src = RUN_PY.read_text(encoding="utf-8")
+        # both outcome paths moved verbatim to stream.py (2026-10-06); the
+        # wiring guarantee is that the code exists in the agent call path,
+        # whether it lives in run.py or stream.py
+        self.src = "\n".join(p.read_text(encoding="utf-8")
+                             for p in (RUN_PY, STREAM_PY))
 
     def test_both_finalize_paths_record_the_cause(self):
         # two call sites (the import carries no parens): the plan-mode path and

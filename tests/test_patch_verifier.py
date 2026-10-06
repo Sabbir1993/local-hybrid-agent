@@ -200,8 +200,7 @@ class JSSyntaxTests(unittest.TestCase):
         self.assertIn("}", r.error)
 
     def test_validate_file_syntax_routes_js(self):
-        source = "const x = {"   # unclosed brace, count=6 > threshold=5
-        r = validate_file_syntax("app.js", source="{"*10)
+        r = validate_file_syntax("app.js", source="{"*10)   # 10 unclosed braces > threshold=5
         self.assertFalse(r.ok)
 
     def test_unsupported_ext_always_passes(self):
