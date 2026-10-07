@@ -30,6 +30,39 @@ class RoleAccessBody(BaseModel):
     roles: list[str]
 
 
+class CloudAccessBody(BaseModel):
+    allowed: bool
+
+
+class CategoryBody(BaseModel):
+    name: str
+    cloud_ok: bool = False
+
+
+class SourceCategoryBody(BaseModel):
+    category: Optional[str] = None
+
+
+class RuleBody(BaseModel):
+    name: str
+    kind: str = "keywords"
+    pattern: str
+
+
+class RuleEnabledBody(BaseModel):
+    enabled: bool
+
+
+class RuleTestBody(BaseModel):
+    text: str
+
+
+class WebPolicyBody(BaseModel):
+    gap_fill: Optional[bool] = None
+    full_cos: Optional[float] = None
+    budget: Optional[dict] = None
+
+
 class BulkDeleteBody(BaseModel):
     ids: list[int]
 

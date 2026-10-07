@@ -14,17 +14,49 @@ from . import auth_db
 
 # Data residency: organizational knowledge (HR, salary, internal policy) must
 # not be sent to cloud model providers. app.json "knowledge.cloud_policy":
-#   "local_only" (default) -- KB context/tool results only ever reach local models
+#   "local_only" (default) -- KB context/tool results only reach local models, except for sources
+#                             the admin marked "cloud models may read" (knowledge_sources.cloud_ok)
 #   "allow"                -- legacy behavior, KB may be sent to cloud lanes
 _kb_blocked: contextvars.ContextVar[bool] = contextvars.ContextVar("kb_blocked_for_cloud", default=False)
 
 KB_CLOUD_BLOCKED_MSG = ("error: the company knowledge base is only available to local models, and this "
-                        "request uses a cloud model. Switch to a local lane to query internal knowledge.")
+                        "request uses a cloud model. Switch to a local lane to query internal knowledge. (Public facts can be "
+                        "looked up with web search if the user has it on - say they come from the web, not company records.)")
 
 
 def kb_local_only() -> bool:
     from .small_model import APP_CONFIG
     return str((APP_CONFIG.get("knowledge") or {}).get("cloud_policy", "local_only")).lower() != "allow"
+
+
+def cloud_ok_ids(ids) -> set:
+    """Of these source ids, the ones an admin marked 'cloud models may read' (Knowledge panel).
+    Only meaningful while kb_local_only(); under cloud_policy 'allow' every source is fine."""
+    ids = set(ids or ())
+    return ids if not kb_local_only() else ids & auth_db.cloud_ok_source_ids()
+
+
+def hits_need_local(hits) -> bool:
+    """True when any retrieved chunk must stay on local models: its source isn't cleared for cloud, or
+    its text trips a sensitive-content rule (core/knowledge_rules.py)."""
+    if not hits or not kb_local_only():
+        return False
+    from . import knowledge_rules
+    ok = auth_db.cloud_ok_source_ids()
+    rules = knowledge_rules._rules()
+    return any(h.get("source_id") not in ok or knowledge_rules.sensitive_reason(h.get("text"), rules)
+               for h in hits)
+
+
+def cloud_safe_hits(hits) -> list:
+    """Drop chunks a cloud model must not see: source not cleared, or the text trips a sensitive rule."""
+    if not kb_local_only():
+        return list(hits or [])
+    from . import knowledge_rules
+    ok = auth_db.cloud_ok_source_ids()
+    rules = knowledge_rules._rules()
+    return [h for h in hits or [] if h.get("source_id") in ok
+            and not knowledge_rules.sensitive_reason(h.get("text"), rules)]
 
 
 def set_kb_cloud_blocked(any_cloud_lane: bool) -> bool:

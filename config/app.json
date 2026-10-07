@@ -163,7 +163,27 @@
     "max_tool_rounds": 12,
     "max_web_calls": 8,
     "deep_max_tool_rounds": 20,
-    "deep_max_web_calls": 12
+    "deep_max_web_calls": 12,
+    "web_budget": {
+      "full": {
+        "low": 0,
+        "medium": 0,
+        "high": 0,
+        "deep": 3
+      },
+      "partial": {
+        "low": 2,
+        "medium": 3,
+        "high": 6,
+        "deep": 12
+      },
+      "open": {
+        "low": 4,
+        "medium": 8,
+        "high": 12,
+        "deep": 20
+      }
+    }
   },
   "reasoning_effort": {
     "default": "low",
@@ -384,6 +404,8 @@
     "cloud_policy": "local_only",
     "min_cos": 0.45,
     "auto_inject_cos": 0.55,
+    "full_cos": 0.7,
+    "web_gap_fill": true,
     "company_keywords": [
       "ssl wireless",
       "sslwireless",

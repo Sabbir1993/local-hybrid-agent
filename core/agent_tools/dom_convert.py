@@ -1,6 +1,59 @@
 import re
 from .dom_theme import render_doc_page, render_slides_page
 
+_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+
+
+def normalize_tables(content: str) -> str:
+    """Models often write a table with blank lines between its rows (or no blank line before it), which no
+    Markdown parser treats as one table. Join the rows and make sure a table starts its own block."""
+    lines = content.splitlines()
+    out = []
+    in_fence = False
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence:                                        # code is left exactly as written
+            out.append(line)
+            continue
+        if not line.strip():
+            prev = next((l for l in reversed(out) if l.strip()), "")
+            nxt = next((l for l in lines[i + 1:] if l.strip()), "")
+            if _TABLE_ROW.match(prev) and _TABLE_ROW.match(nxt):
+                continue                                    # blank line inside a table
+        elif _TABLE_ROW.match(line) and out and out[-1].strip() and not _TABLE_ROW.match(out[-1]):
+            out.append("")                                  # a table cannot interrupt a paragraph
+        out.append(line)
+    return "\n".join(out)
+
+
+_DOC_CLASSES = (
+    (r"<h1>", '<h1 class="doc-h1">'), (r"<h2>", '<h2 class="doc-h2">'),
+    (r"<h[3-6]>", '<h3 class="doc-h3">'), (r"<p>", '<p class="doc-p">'),
+    (r"<ul>", '<ul class="doc-list">'), (r"<ol( start=\"\d+\")?>", r'<ol class="doc-ordered"\1>'),
+    (r"<hr ?/?>", '<hr class="doc-hr"/>'), (r"<blockquote>", '<blockquote class="doc-quote">'),
+    (r"<table>", '<table class="doc-table">'), (r"<pre><code", '<pre class="code-block"><code'),
+    (r"(?<!<pre>)<code>", '<code class="inline-code">'),
+    (r"<li>\[ \] ", "<li>"), (r"<li>\[[xX]\] ", "<li>✓ "),      # task boxes mean nothing in a document
+)
+
+
+def markdown_to_body_html(content: str):
+    """Document body HTML from Markdown (GitHub tables, nested lists, quotes, ...) with the doc theme's classes,
+    or None when markdown-it is not installed (the caller then uses the simple converter). Raw HTML in the
+    text is escaped, never passed through."""
+    try:
+        from markdown_it import MarkdownIt
+    except ImportError:
+        return None
+    md = MarkdownIt("commonmark", {"html": False, "breaks": True}).enable(["table", "strikethrough"])
+    html = md.render(normalize_tables(content))
+    for pat, rep in _DOC_CLASSES:
+        html = re.sub(pat, rep, html)
+    return html
+
 
 def _markdown_to_html_dom(content: str, title: str = "", is_slides: bool = False) -> str:
     def esc(s: str) -> str:
@@ -86,6 +139,9 @@ def _markdown_to_html_dom(content: str, title: str = "", is_slides: bool = False
         return render_slides_page(esc(clean_title), slides_html)
 
     # Standard Document mode
+    body_html = markdown_to_body_html(content.strip())
+    if body_html is not None:
+        return render_doc_page(esc(clean_title), [body_html])
     body_elements = []
     in_code_block = False
     code_lang = ""

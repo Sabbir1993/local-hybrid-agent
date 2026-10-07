@@ -1,0 +1,72 @@
+<!doctype html>
+<!-- Manual / browser check for the chat Markdown renderer with the REAL DOMPurify and the real stylesheet.
+     Open this file directly (file://) - no server needed. Shows PASS/FAIL lines and the rendered BRAC sample. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>markdown check</title>
+<link rel="stylesheet" href="../../static/css/style.css">
+<style>body{padding:16px;max-width:820px;margin:0 auto} #res div{font:12px monospace;padding:1px 0} .pass{color:#3a3} .fail{color:#d33;font-weight:700}</style>
+</head>
+<body>
+<h3>Markdown renderer check <span id="verdict"></span></h3>
+<div id="res"></div>
+<h4>Rendered sample (what a chat bubble looks like)</h4>
+<div class="msg assistant"><div class="bubble" id="sample"></div></div>
+<h4>Same sample while streaming (last block still growing)</h4>
+<div class="msg assistant"><div class="bubble" id="stream"></div></div>
+
+<script src="../../static/vendor/marked.umd.js"></script>
+<script src="../../static/vendor/purify.min.js"></script>
+<script>
+  // utils.js expects these from other scripts; the check does not need real highlighting
+  function hlLangFor() { return ''; }
+  function hlCode(c) { return c; }
+</script>
+<script src="../../static/js/utils.js"></script>
+<script src="../../static/js/markdown.js"></script>
+<script>
+const out = document.getElementById('res');
+let bad = 0;
+function ok(c, m) { if (!c) bad++; const d = document.createElement('div'); d.className = c ? 'pass' : 'fail'; d.textContent = (c ? 'PASS ' : 'FAIL ') + m; out.appendChild(d); }
+
+const BRAC = [
+  '**Business-Model and Strategic Contrast — Islami Bank Bangladesh PLC vs. BRAC Bank PLC (2025 Lens)**', '',
+  '> **Data caveat:** No 2025 annual-report data was retrievable in this session. Any figure is marked `[ESTIMATE - pre-2025, unverified]`. The contrast is architectural, but 2025 conditions changed *which model is advantaged*.', '',
+  '---', '', '## 1. The Core Contrast in One Sentence', '',
+  '**IBBL is a deposit-rich, faith-mandated, relationship bank**; BRAC Bank is a capital-efficient, tech-distributed, fee-heavy universal bank. They are *different engines*.', '',
+  '## 2. Revenue Model', '',
+  '| Dimension | IBBL | BRAC Bank |', '|---|---|---|',
+  '| Primary earnings engine | Net investment margin on Shariah-compliant financing (Murabaha, Bai-Muajjal, Ijara, Musharaka, Mudaraba) | Net interest margin plus a structurally high share of fee and commission income |',
+  '| Non-funded income | Moderate — trade-finance commissions, LC handling, remittance fees | High — trade services, cards, digital payments, agent-banking fees `[ESTIMATE ~20-25% of operating income]` |',
+  '| Shariah constraint | Cannot invest in interest-bearing conventional instruments | No such constraint |', '',
+  '1. First step', '2. Second step', '   - nested point', '   - another', '', '- [x] done', '- [ ] to do', '',
+].join('\n');
+
+const h = md(BRAC);
+ok(/<table>/.test(h) && h.includes('md-table-wrap'), 'table rendered inside a scroll wrapper');
+ok(h.includes('<blockquote>') && h.includes('<hr>') && h.includes('<em>which model is advantaged</em>') && h.includes('<h2>'), 'quote, rule, italic, headings');
+ok(h.includes('<ol>') && h.includes('<ul>') && h.includes('md-task'), 'ordered, nested and task lists');
+ok(!h.includes('|---|') && !h.includes('**'), 'no raw Markdown left in the sample');
+
+// real DOMPurify: hostile input must not create live elements or handlers
+const evil = md('| a |\n|---|\n| <img src=x onerror=window.__pwn=1> |\n\n<script>window.__pwn=1<\/script> <iframe src="https://evil.example"></iframe>\n\n[x](javascript:window.__pwn=1) ![p](javascript:window.__pwn=1) <b onclick="window.__pwn=1">b</b>\n\n[ok](https://example.com/?a=1" onmouseover="window.__pwn=1)');
+const probe = document.createElement('div'); probe.innerHTML = evil; document.body.appendChild(probe); probe.style.display = 'none';
+ok(!probe.querySelector('script, iframe, svg, img[onerror], [onclick], [onmouseover], a[href^="javascript"]'), 'no script / iframe / handler / javascript: link survives');
+ok(!window.__pwn, 'nothing executed');
+ok(![...probe.querySelectorAll('*')].some(el => [...el.attributes].some(a => /^on/i.test(a.name) || a.name === 'style')), 'no on* or style attributes anywhere');
+probe.remove();
+
+// DOMPurify keeps the sanitised structure but not our trusted chips being stripped (they are swapped in afterwards)
+const chips = md('- [DOWNLOAD: r.xlsx]\n- [1](https://news.example.com/x)\n- ![a](/agent/raw?path=a.png)');
+const c = document.createElement('div'); c.innerHTML = chips;
+ok(c.querySelector('[data-preview-path="r.xlsx"]') && c.querySelector('a.citation-pill[target="_blank"]') && c.querySelector('img.chat-inline-img'), 'download chip, citation pill and local image survive the sanitiser step');
+
+document.getElementById('sample').innerHTML = md(BRAC);
+const partial = BRAC.slice(0, BRAC.indexOf('| Non-funded') + 40);
+document.getElementById('stream').innerHTML = md(partial, { streaming: true });
+document.getElementById('verdict').textContent = bad ? '- ' + bad + ' FAILED' : '- all passed';
+document.getElementById('verdict').style.color = bad ? '#d33' : '#3a3';
+</script>
+</body>
+</html>

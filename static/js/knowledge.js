@@ -46,9 +46,12 @@ async function loadKnowledgePanel() {
   if (!box) return;
   box.innerHTML = '<div class="mon-empty">Loading…</div>';
   try {
-    const [sourcesRes, rolesRes] = await Promise.all([fetch('/knowledge'), fetch('/admin/role_names')]);
+    const [sourcesRes, rolesRes, polRes] = await Promise.all([fetch('/knowledge'), fetch('/admin/role_names'), fetch('/knowledge/policy')]);
     if (!sourcesRes.ok) { box.innerHTML = '<div class="mon-empty">You do not have access to the knowledge base.</div>'; return; }
-    const sources = (await sourcesRes.json()).sources || [];
+    const kbJson = await sourcesRes.json();
+    const sources = kbJson.sources || [];
+    _kbCloudPolicy = kbJson.cloud_policy || 'local_only';
+    _kbPolicy = polRes.ok ? await polRes.json() : { cloud_policy: _kbCloudPolicy, categories: [], rules: [] };
     _kbAllRoles = rolesRes.ok ? ((await rolesRes.json()).roles || []) : [];
     renderKnowledgePanel(box, sources);
   } catch (e) {
@@ -119,55 +122,153 @@ async function uploadFileChunked(file, title, onProgress) {
   return completeJson;
 }
 
+let _kbCloudPolicy = 'local_only';
+let _kbPolicy = { cloud_policy: 'local_only', categories: [], rules: [] };
+let _kbActiveTab = 'sources';
+
 function renderKnowledgePanel(box, sources) {
+  const categories = _kbPolicy.categories || [];
+  const catOptions = categories.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
+
   box.innerHTML = `
-    <div class="cap-item" style="margin-bottom:10px;">
-      <b>Add source</b>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
-        <select id="kb-add-kind" style="flex:0 0 160px;">
-          <option value="text">📝 Pasted text</option>
-          <option value="url">🔗 URL</option>
-          <option value="file">📄 File (PDF/DOCX/XLSX)</option>
-        </select>
-        <input type="text" id="kb-add-title" placeholder="Title" style="flex:1; min-width:140px;">
-      </div>
-      <div id="kb-add-body" style="margin-top:8px;"></div>
-      <div style="margin-top:8px;">
-        <label class="dim" style="font-size:11px; font-weight:600; display:block; margin-bottom:4px;">Roles allowed to query</label>
-        <div style="display:flex; gap:6px; align-items:flex-start;">
-          <div id="kb-add-roles" class="tagpicker" style="flex:1;"></div>
-          <button class="btn accent" id="kb-add-submit" style="width:auto; margin:0; padding:6px 14px; font-size:12px; height:34px;">+ Add</button>
-        </div>
-      </div>
-      <div id="kb-upload-progress" style="display:none; margin-top:8px; padding:8px 10px; background:var(--panel2); border-radius:6px; border:1px solid var(--border);">
-        <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:6px;">
-          <span id="kb-progress-status" style="font-weight:500; color:var(--text);">Uploading...</span>
-          <span id="kb-progress-pct" class="dim" style="font-family:monospace; font-size:11px;">0%</span>
-        </div>
-        <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
-          <div id="kb-progress-bar" style="width:0%; height:100%; background:var(--accent); transition:width 0.2s;"></div>
-        </div>
-      </div>
-      <div class="cfg-note" style="margin-top:6px;">Large files are uploaded in 5 MB chunks to safely bypass server size limits. Ingestion is not blocked.</div>
+    <div role="tablist" class="ru-tabs kb-tabs" style="display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:14px;">
+      <button type="button" role="tab" class="ru-tab kb-tab btn ghost on" data-tab="sources" style="width:auto; margin:0; padding:6px 16px; font-size:12px; border-radius:6px 6px 0 0; display:inline-flex; align-items:center; gap:6px;">
+        <span>📚 Sources</span>
+        <span class="cap-pill-badge" style="background:var(--panel2); border:1px solid var(--border);">${sources.length}</span>
+      </button>
+      <button type="button" role="tab" class="ru-tab kb-tab btn ghost" data-tab="add" style="width:auto; margin:0; padding:6px 16px; font-size:12px; border-radius:6px 6px 0 0;">
+        <span>➕ Add Source</span>
+      </button>
+      <button type="button" role="tab" class="ru-tab kb-tab btn ghost" data-tab="policy" style="width:auto; margin:0; padding:6px 16px; font-size:12px; border-radius:6px 6px 0 0;">
+        <span>☁️ Cloud Policy &amp; Rules</span>
+      </button>
     </div>
-    ${sources.length ? `
-    <div id="kb-toolbar" style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:14px; margin-bottom:8px; padding:8px 12px; background:var(--panel2); border:1px solid var(--border); border-radius:7px; flex-wrap:wrap;">
-      <div style="display:flex; align-items:center; gap:10px;">
-        <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; font-weight:600; color:var(--text); margin:0; user-select:none;">
-          <input type="checkbox" id="kb-select-all" style="cursor:pointer; accent-color:var(--accent); width:15px; height:15px; margin:0;">
-          <span>Select all</span>
-        </label>
-        <span id="kb-selected-count" class="dim" style="font-size:11px;">(0 of ${sources.length} selected)</span>
+
+    <!-- PANE 1: Sources -->
+    <div class="ru-pane kb-pane" data-pane="sources">
+      <div class="kb-filter-bar" style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+        <input type="text" id="kb-search-input" placeholder="🔍 Search sources by title..." style="flex:1; min-width:180px; height:34px; box-sizing:border-box; padding:0 12px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
+        <select id="kb-cat-filter" style="width:auto; height:34px; box-sizing:border-box; padding:0 10px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
+          <option value="">All Categories</option>
+          ${catOptions}
+        </select>
+        <select id="kb-kind-filter" style="width:auto; height:34px; box-sizing:border-box; padding:0 10px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
+          <option value="">All Types</option>
+          <option value="file">📄 File</option>
+          <option value="url">🔗 URL</option>
+          <option value="text">📝 Pasted Text</option>
+        </select>
       </div>
-      <div style="display:flex; align-items:center; gap:8px;">
-        <button type="button" class="btn red" id="kb-bulk-delete" disabled style="width:auto; margin:0; padding:5px 12px; font-size:11.5px; opacity:0.5; cursor:not-allowed; display:inline-flex; align-items:center; gap:5px;">
-          🗑️ Delete Selected
-        </button>
+
+      ${sources.length ? `
+      <div id="kb-toolbar" style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; padding:8px 12px; background:var(--panel2); border:1px solid var(--border); border-radius:7px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; font-weight:600; color:var(--text); margin:0; user-select:none;">
+            <input type="checkbox" id="kb-select-all" style="cursor:pointer; accent-color:var(--accent); width:15px; height:15px; margin:0;">
+            <span>Select all</span>
+          </label>
+          <span id="kb-selected-count" class="dim" style="font-size:11px;">(0 of ${sources.length} selected)</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button type="button" class="btn red" id="kb-bulk-delete" disabled style="width:auto; margin:0; padding:5px 12px; font-size:11.5px; opacity:0.5; cursor:not-allowed; display:inline-flex; align-items:center; gap:5px;">
+            🗑️ Delete Selected
+          </button>
+        </div>
+      </div>` : ''}
+
+      <div id="kb-list" style="display:flex; flex-direction:column; gap:8px;">
+        ${sources.map(s => sourceRow(s)).join('') || '<div class="dim" style="font-size:12px; padding:16px; text-align:center;">No knowledge sources yet. Click <b>➕ Add Source</b> to ingest documents.</div>'}
       </div>
-    </div>` : ''}
-    <div id="kb-list" style="display:flex; flex-direction:column; gap:4px;">
-      ${sources.map(s => sourceRow(s)).join('') || '<div class="dim" style="font-size:11px;">No knowledge sources yet.</div>'}
+    </div>
+
+    <!-- PANE 2: Add Source -->
+    <div class="ru-pane kb-pane" data-pane="add" style="display:none;">
+      <div class="cap-pane-card" style="margin-bottom:14px; padding:14px 18px; background:var(--panel2); border-radius:8px; border:1px solid var(--border);">
+        <div style="font-weight:600; font-size:14px; color:var(--text); margin-bottom:4px;">Add New Knowledge Source</div>
+        <div class="dim" style="font-size:11px; margin-bottom:14px;">Ingest PDF, Office docs, web pages, or pasted text into the company knowledge base.</div>
+        
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+          <select id="kb-add-kind" style="flex:0 0 170px; height:34px; box-sizing:border-box; padding:0 8px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
+            <option value="file">📄 Document File (PDF/DOCX/XLSX)</option>
+            <option value="url">🔗 Web URL</option>
+            <option value="text">📝 Pasted Text</option>
+          </select>
+          <input type="text" id="kb-add-title" placeholder="Source Title (e.g. Employee Handbook 2025)" style="flex:1; min-width:180px; height:34px; box-sizing:border-box; padding:0 10px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
+        </div>
+
+        <div id="kb-add-body" style="margin-bottom:14px;"></div>
+
+        <div style="margin-bottom:14px;">
+          <label class="dim" style="font-size:11px; font-weight:600; display:block; margin-bottom:4px;">Roles allowed to query</label>
+          <div style="display:flex; gap:6px; align-items:flex-start;">
+            <div id="kb-add-roles" class="tagpicker" style="flex:1;"></div>
+          </div>
+        </div>
+
+        <div id="kb-upload-progress" style="display:none; margin-bottom:12px; padding:10px 14px; background:var(--bg-input); border-radius:7px; border:1px solid var(--border);">
+          <div style="display:flex; justify-content:space-between; align-items:center; font-size:11.5px; margin-bottom:6px;">
+            <span id="kb-progress-status" style="font-weight:600; color:var(--text);">Uploading...</span>
+            <span id="kb-progress-pct" class="dim" style="font-family:monospace; font-size:11px;">0%</span>
+          </div>
+          <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
+            <div id="kb-progress-bar" style="width:0%; height:100%; background:var(--accent); transition:width 0.2s;"></div>
+          </div>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:8px;">
+          <button class="btn accent" id="kb-add-submit" style="width:auto; margin:0; padding:7px 20px; font-size:12.5px; font-weight:600; height:36px;">+ Ingest Source</button>
+          <span class="dim" style="font-size:10.5px;">Files uploaded in 5 MB chunks safely bypass server limits.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANE 3: Cloud Policy & Rules -->
+    <div class="ru-pane kb-pane" data-pane="policy" style="display:none;">
+      <div id="kb-policy"></div>
     </div>`;
+
+  renderKbPolicy($('kb-policy'), _kbPolicy, loadKnowledgePanel);
+
+  const _kbShowTab = (tab) => {
+    _kbActiveTab = tab;
+    box.querySelectorAll('.kb-tab').forEach(b => {
+      const on = b.dataset.tab === tab;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    box.querySelectorAll('.kb-pane').forEach(p => {
+      p.style.display = p.dataset.pane === tab ? '' : 'none';
+    });
+  };
+  box.querySelectorAll('.kb-tab').forEach(b => {
+    b.onclick = () => _kbShowTab(b.dataset.tab);
+  });
+  _kbShowTab(_kbActiveTab);
+
+  // Search & filter wiring
+  const searchInput = box.querySelector('#kb-search-input');
+  const catFilter = box.querySelector('#kb-cat-filter');
+  const kindFilter = box.querySelector('#kb-kind-filter');
+  const applyFilter = () => {
+    const q = (searchInput ? searchInput.value : '').toLowerCase().trim();
+    const cat = catFilter ? catFilter.value : '';
+    const kind = kindFilter ? kindFilter.value : '';
+
+    box.querySelectorAll('.kb-item').forEach(el => {
+      const title = (el.dataset.title || '').toLowerCase();
+      const itemCat = el.dataset.category || '';
+      const itemKind = el.dataset.kind || '';
+
+      const matchQ = !q || title.includes(q);
+      const matchCat = !cat || itemCat === cat;
+      const matchKind = !kind || itemKind === kind;
+
+      el.style.display = (matchQ && matchCat && matchKind) ? '' : 'none';
+    });
+  };
+  if (searchInput) searchInput.oninput = applyFilter;
+  if (catFilter) catFilter.onchange = applyFilter;
+  if (kindFilter) kindFilter.onchange = applyFilter;
 
   const kindSel = $('kb-add-kind');
   const bodyBox = $('kb-add-body');
@@ -354,6 +455,35 @@ function renderKnowledgePanel(box, sources) {
     };
   });
 
+  box.querySelectorAll('.kb-category').forEach(sel => {
+    sel.onchange = async () => {
+      try {
+        const cat = sel.value || null;
+        const c = (_kbPolicy.categories || []).find(x => x.name === cat);
+        if (c && c.cloud_ok && !confirm('"' + cat + '" is readable by cloud models. Filing this source under it sends its text (minus content held back by rules) to cloud providers. Continue?')) { loadKnowledgePanel(); return; }
+        await kbPolicyCall(`/knowledge/${sel.dataset.id}/category`, 'PUT', { category: cat });
+        toast(cat ? `Filed under ${cat}` : 'Category removed');
+        loadKnowledgePanel();
+      } catch (e) { toast('Update failed: ' + e.message, true); loadKnowledgePanel(); }
+    };
+  });
+
+  box.querySelectorAll('.kb-cloud-ok').forEach(cb => {
+    cb.onchange = async () => {
+      const want = cb.checked;
+      if (want && !confirm('Allow cloud model providers to read this source? Its text will be sent to them when a chat or agent run uses a cloud model.')) { cb.checked = false; return; }
+      try {
+        const r = await fetch(`/knowledge/${cb.dataset.id}/cloud`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ allowed: want }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ('HTTP ' + r.status));
+        toast(want ? 'Cloud models may now read this source' : 'This source is local-only again');
+      } catch (e) { cb.checked = !want; toast('Update failed: ' + e.message, true); }
+    };
+  });
+
   box.querySelectorAll('.kb-roles-picker').forEach(el => {
     let initial = [];
     try { initial = JSON.parse(el.dataset.roles || '[]'); } catch (e) {}
@@ -388,24 +518,39 @@ function renderKnowledgePanel(box, sources) {
 }
 
 function sourceRow(s) {
-  const statusColor = s.status === 'ready' ? 'var(--green)' : (s.status === 'error' ? 'var(--red)' : (s.status === 'processing' ? 'var(--accent)' : 'var(--dim)'));
-  return `<div class="cap-item kb-item" data-id="${s.id}">
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+  const isReady = s.status === 'ready';
+  const isErr = s.status === 'error';
+  const isProc = s.status === 'processing';
+  const statusCls = isReady ? 'ready' : (isErr ? 'err' : (isProc ? 'proc' : 'dim'));
+  const kindIco = s.kind === 'file' ? '📄' : (s.kind === 'url' ? '🔗' : '📝');
+
+  return `<div class="cap-item kb-item kb-source-card" data-id="${s.id}" data-title="${esc(s.title)}" data-category="${esc(s.category || '')}" data-kind="${esc(s.kind || '')}" style="padding:12px 14px; margin-bottom:8px; border-radius:8px; border:1px solid var(--border); background:var(--panel2); transition:box-shadow .15s ease;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
       <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-        <input type="checkbox" class="kb-row-select" data-id="${s.id}" aria-label="Select ${esc(s.title)}" style="cursor:pointer; accent-color:var(--accent); width:15px; height:15px; flex-shrink:0; margin:0;">
-        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><b>${esc(s.title)}</b> <span class="dim">(${esc(s.kind)})</span>
-          <span style="color:${statusColor};"> · ${esc(s.status)}</span></span>
+        <input type="checkbox" class="kb-row-select" data-id="${s.id}" aria-label="Select ${esc(s.title)}" style="cursor:pointer; accent-color:var(--accent); width:16px; height:16px; flex-shrink:0; margin:0;">
+        <span class="cap-tool-badge ${s.kind === 'file' ? 'write' : (s.kind === 'url' ? 'web' : 'skill')}" style="padding:2px 8px; font-size:11px; font-weight:600; display:inline-flex; align-items:center; gap:4px; border-radius:5px;">
+          <span>${kindIco}</span>
+          <span>${esc(s.kind)}</span>
+        </span>
+        <b style="font-size:13px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(s.title)}">${esc(s.title)}</b>
+        <span class="kb-status-pill ${statusCls}" style="font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px;">● ${esc(s.status)}</span>
       </div>
-      <div style="display:flex; gap:4px; flex-shrink:0;">
-        ${s.kind === 'file' ? `<a class="btn ghost" href="/knowledge/${s.id}/file" target="_blank" rel="noopener" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px; text-decoration:none;">👁 View</a>` : ''}
-        <button class="btn ghost kb-reindex" data-id="${s.id}" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;">⟳ Reindex</button>
-        <button class="btn ghost kb-delete" data-id="${s.id}" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px; color:var(--red);">Delete</button>
+      <div style="display:flex; gap:6px; flex-shrink:0;">
+        ${s.kind === 'file' ? `<a class="btn ghost" href="/knowledge/${s.id}/file" target="_blank" rel="noopener" style="width:auto; margin:0; padding:3px 10px; font-size:11px; text-decoration:none;">👁 View</a>` : ''}
+        <button class="btn ghost kb-reindex" data-id="${s.id}" style="width:auto; margin:0; padding:3px 10px; font-size:11px;">⟳ Reindex</button>
+        <button class="btn ghost kb-delete" data-id="${s.id}" style="width:auto; margin:0; padding:3px 10px; font-size:11px; color:var(--red);">🗑️ Delete</button>
       </div>
     </div>
-    ${s.error ? `<div class="dim" style="font-size:10px; color:var(--red); margin-top:3px;">${esc(s.error)}</div>` : ''}
-    <div style="display:flex; gap:6px; margin-top:5px; align-items:flex-start;">
-      <div class="kb-roles-picker tagpicker" data-id="${s.id}" data-roles="${esc(JSON.stringify(s.roles || []))}" style="flex:1;"></div>
-      <button class="btn ghost kb-roles-save" data-id="${s.id}" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;">Save</button>
+    ${s.error ? `<div class="chat-alert-box error" style="margin:6px 0; font-size:11px; padding:6px 10px;">⚠ ${esc(s.error)}</div>` : ''}
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding-top:8px; border-top:1px solid var(--border-subtle);">
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:nowrap;">
+        ${kbSourceCloudHtml(s, _kbPolicy.categories, _kbCloudPolicy)}
+      </div>
+      <div style="display:flex; gap:6px; align-items:center; margin-left:auto;">
+        <span class="dim" style="font-size:10.5px;">Role access:</span>
+        <div class="kb-roles-picker tagpicker" data-id="${s.id}" data-roles="${esc(JSON.stringify(s.roles || []))}"></div>
+        <button class="btn ghost kb-roles-save" data-id="${s.id}" style="width:auto; margin:0; padding:3px 10px; font-size:11px;">Save</button>
+      </div>
     </div>
   </div>`;
 }

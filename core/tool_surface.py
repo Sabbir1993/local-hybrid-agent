@@ -59,6 +59,8 @@ FAMILIES: dict = {
 
 DEFAULT_CFG = {"main_lane_on_demand": True}
 
+WEB_NAMES = ("web_search", "web_fetch", "web_search_images")
+
 
 def _cfg(cfg: Optional[dict]) -> dict:
     base = dict(DEFAULT_CFG)
@@ -110,9 +112,24 @@ def surface_query(msgs: Iterable[dict], recent_user_turns: int = 3) -> str:
         elif role == "assistant":
             for tc in m.get("tool_calls") or []:
                 n = (tc.get("function") or {}).get("name") or ""
-                if n and _family_of(n):
+                if n and (_family_of(n) or n in WEB_NAMES):
                     used.append(n)
     return "\n".join(parts + sorted(set(used)))
+
+
+def _web_wanted(query: str, cfg: dict) -> bool:
+    if not cfg.get("web_on_demand", False) or not cfg.get("main_lane_on_demand", True):
+        return True                                   # flag off: web is a core tool, as before
+    if cfg.get("web_extra"):
+        return True
+    q = str(query or "")
+    if re.search(r"https?://|\bweb_(?:search|fetch)", q):
+        return True
+    try:
+        from . import prompt_scope
+        return bool(prompt_scope.web_intent(q, [], []))
+    except Exception:
+        return False
 
 
 def needed_families(query: str, cfg: Optional[dict] = None) -> set:
@@ -141,11 +158,16 @@ def filter_tools(tools: Iterable[dict], query: str = "", cfg: Optional[dict] = N
     which this family filter knows nothing about.
     """
     wanted = needed_families(query, cfg)
+    web_ok = _web_wanted(query, _cfg(cfg))
     out = []
     for t in tools or []:
         name = _name(t)
         if not name or name.startswith("mcp__"):
             out.append(t)
+            continue
+        if name in WEB_NAMES:
+            if web_ok:
+                out.append(t)
             continue
         fam = _family_of(name)
         if fam is None or fam in wanted:
@@ -157,4 +179,7 @@ def hidden_families(query: str = "", cfg: Optional[dict] = None) -> list:
     """Families that were withheld - for the event: ctx payload and /control/status,
     so a missing tool is explainable instead of mysterious."""
     wanted = needed_families(query, cfg)
-    return sorted(f for f in FAMILIES if f not in wanted)
+    hidden = sorted(f for f in FAMILIES if f not in wanted)
+    if not _web_wanted(query, _cfg(cfg)):
+        hidden.append("web")
+    return hidden

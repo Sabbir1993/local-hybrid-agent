@@ -2,14 +2,16 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
-from .dom_convert import _markdown_to_html_dom
+from .dom_convert import _markdown_to_html_dom, normalize_tables
 
 _PDF_CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; "
             "script-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'")
-_DOCTYPE_RX = re.compile(r"^\s*<!doctype[^>]*>", re.IGNORECASE)
+_PDF_WAIT_S = 15          # how long to wait for the browser's PDF after it has exited
+_DOCTYPE_RX =re.compile(r"^\s*<!doctype[^>]*>", re.IGNORECASE)
 
 
 def _find_chromium_binary() -> Optional[str]:
@@ -64,7 +66,8 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
             "--disable-gpu",
             "--no-pdf-header-footer",
             f"--user-data-dir={profile_dir}",
-            "--blink-settings=scriptEnabled=false",
+            # no "--blink-settings=scriptEnabled=false": in current Edge/Chrome it makes --print-to-pdf hang without
+            # writing a file. Scripts are blocked anyway by the page's CSP (script-src 'none', _lock_down_html).
             "--host-resolver-rules=MAP * ~NOTFOUND",
             "--proxy-server=127.0.0.1:9",
             "--disable-extensions",
@@ -72,12 +75,29 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
             f"--print-to-pdf={abs_pdf}",
             tmp_html
         ]
+        try:
+            os.remove(abs_pdf)            # a leftover file must not be mistaken for this render
+        except OSError:
+            pass
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
         if res.returncode != 0:
             print(f"[_render_html_to_pdf] browser exited {res.returncode}: "
                   f"{(res.stderr or '').strip()[:300]}", file=sys.stderr)
             return False
-        return _pdf_looks_valid(Path(abs_pdf))
+        # Current Edge builds hand the print job to a detached child and exit at once, so the PDF shows up a
+        # moment AFTER this process returned. Wait for it, and for it to stop growing, instead of giving up
+        # (which silently fell back to the plain ReportLab writer: no tables, raw backticks).
+        deadline = time.monotonic() + _PDF_WAIT_S
+        last_size = -1
+        while True:
+            if _pdf_looks_valid(Path(abs_pdf)):
+                size = os.path.getsize(abs_pdf)
+                if size == last_size:
+                    return True
+                last_size = size
+            if time.monotonic() >= deadline:
+                return _pdf_looks_valid(Path(abs_pdf))
+            time.sleep(0.25)
     except Exception as e:
         print(f"[_render_html_to_pdf browser error: {e}]", file=sys.stderr)
         return False
@@ -96,6 +116,33 @@ def _pdf_looks_valid(p: Path) -> bool:
         return p.is_file() and p.stat().st_size > 0 and p.read_bytes()[:5] == b"%PDF-"
     except OSError:
         return False
+
+
+def _reportlab_table(rows: list, width_pts: float = 522):
+    """A Markdown table (list of '| a | b |' lines) as a ReportLab Table, for the no-browser fallback."""
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.platypus import Paragraph, Table, TableStyle
+    cells = [[c.strip() for c in r.strip().strip("|").split("|")] for r in rows]
+    header = len(cells) >= 2 and all(re.match(r"^:?-+:?$", c.replace(" ", "")) for c in cells[1])
+    if header:
+        del cells[1]
+    ncol = max(len(r) for r in cells)
+    base = getSampleStyleSheet()["Normal"]
+    body = ParagraphStyle("TblCell", parent=base, fontSize=8.5, leading=11)
+
+    def cell(text: str, bold: bool):
+        t = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+        return Paragraph(f"<b>{t}</b>" if bold else t, body)
+
+    data = [[cell(r[i] if i < len(r) else "", header and ri == 0) for i in range(ncol)] for ri, r in enumerate(cells)]
+    tbl = Table(data, colWidths=[width_pts / ncol] * ncol, repeatRows=1 if header else 0)
+    style = [("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")), ("VALIGN", (0, 0), (-1, -1), "TOP")]
+    if header:
+        style.append(("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")))
+    tbl.setStyle(TableStyle(style))
+    return tbl
 
 
 def _save_text_or_markdown_as_pdf(p: Path, content: str) -> bool:
@@ -148,12 +195,20 @@ def _save_text_or_markdown_as_pdf(p: Path, content: str) -> bool:
         code_style = ParagraphStyle('CustomCode', parent=styles['Code'], fontSize=9, leading=12, textColor=colors.HexColor("#0f172a"), backColor=colors.HexColor("#f1f5f9"), spaceAfter=6)
 
         story = []
-        lines = content.strip().splitlines()
+        lines = normalize_tables(content.strip()).splitlines()
         in_code_block = False
         code_buf = []
+        tbl_rows = []
 
         for line in lines:
             trimmed = line.strip()
+            if not in_code_block and trimmed.startswith("|") and trimmed.endswith("|"):
+                tbl_rows.append(trimmed)
+                continue
+            if tbl_rows:
+                story.append(_reportlab_table(tbl_rows))
+                story.append(Spacer(1, 6))
+                tbl_rows = []
             if trimmed.startswith("```"):
                 if in_code_block:
                     story.append(Paragraph("<br/>".join(code_buf), code_style))
@@ -197,6 +252,8 @@ def _save_text_or_markdown_as_pdf(p: Path, content: str) -> bool:
                 story.append(Paragraph(text, normal))
                 story.append(Spacer(1, 3))
 
+        if tbl_rows:
+            story.append(_reportlab_table(tbl_rows))
         if in_code_block and code_buf:
             story.append(Paragraph("<br/>".join(code_buf), code_style))
 

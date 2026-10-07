@@ -5,8 +5,33 @@ async function loadCapabilities() {
   try {
     const d = await (await fetch('/control/capabilities')).json();
     if (d.error) { box.innerHTML = '<div class="mon-empty">' + esc(d.error) + '</div>'; return; }
-    let h = `<div class="rep-bar" style="display:flex; align-items:center; justify-content:space-between;"><span><b>${d.total_tools}</b> tools registered</span></div>`;
-    // Web
+    let _capActiveTab = window._capTab || 'web';
+    const tabBtn = (id, label, enabled) => {
+      let badge = '';
+      if (enabled === true) badge = `<span class="cap-pill-badge on">ON</span>`;
+      else if (enabled === false) badge = `<span class="cap-pill-badge off">OFF</span>`;
+      return `<button type="button" role="tab" class="ru-tab cap-tab btn ghost" data-tab="${id}"
+        style="width:auto; margin:0; padding:6px 14px; font-size:12px; border-radius:6px 6px 0 0; display:inline-flex; align-items:center; gap:6px; white-space:nowrap;">
+        <span>${label}</span>${badge}
+      </button>`;
+    };
+
+    let h = `<div class="rep-bar" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;"><span><b>${d.total_tools}</b> tools registered</span></div>`;
+    
+    // Tab strip
+    h += `<div role="tablist" class="ru-tabs cap-tabs" style="display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:14px; overflow-x:auto; padding-bottom:1px;">
+      ${tabBtn('web', '🌐 Web', d.web.enabled)}
+      ${tabBtn('skills', '🎯 Skills', d.skills.enabled)}
+      ${tabBtn('mcp', '🔌 MCP Servers', d.mcp.enabled)}
+      ${tabBtn('plugins', '🧩 Plugins', d.plugins.enabled)}
+      ${tabBtn('shell', '⌨️ Shell', (d.shell || {}).enabled)}
+      ${tabBtn('task', '🤖 Agent Task', null)}
+      ${tabBtn('memory', '🧠 Memory', null)}
+      ${tabBtn('library', '📚 Library', null)}
+      ${tabBtn('router', '🧭 Router', null)}
+    </div>`;
+
+    // 1. Web Pane
     h += capSection('web', '🌐 Web Browsing', d.web.enabled,
       (d.web.tools || []).map(t => `
         <div class="cap-tool-entry">
@@ -15,7 +40,7 @@ async function loadCapabilities() {
         </div>`).join(''),
       'web_fetch pulls page text; web_search queries DuckDuckGo (keyless)');
 
-    // Skills
+    // 2. Skills Pane
     h += capSection('skills', '🎯 Skills', d.skills.enabled,
       (d.skills.items || []).map(s => `
         <div class="cap-tool-entry">
@@ -24,7 +49,7 @@ async function loadCapabilities() {
         </div>`).join('') || '<div class="cap-item dim" style="padding:4px 6px;">none in skills/ yet</div>',
       'Reusable instruction packs loaded from .agents/skills/*/SKILL.md');
 
-    // MCP
+    // 3. MCP Pane
     // global servers: admin-managed; personal ("just for me") servers: any user, for themselves
     const canManageMcp = !!(window.hasPerm && window.hasPerm('settings.orchestration.configure'));
     const canAddMcp = canManageMcp || !!(window.hasPerm && window.hasPerm('chat.use'));
@@ -60,7 +85,7 @@ async function loadCapabilities() {
       mcpInner + (canAddMcp ? mcpEditorHtml(canManageMcp) : ''),
       'External tool servers via Model Context Protocol (stdio / http)');
 
-    // Plugins
+    // 4. Plugins Pane
     const canManagePlugins = canManageMcp;
     h += capSection('plugins', '🧩 Plugins', d.plugins.enabled,
       ((d.plugins.items || []).map(p => pluginRowHtml(p, canManagePlugins)).join('')
@@ -68,7 +93,7 @@ async function loadCapabilities() {
         + (canManagePlugins ? pluginBrowserHtml() : ''),
       'Python modules loaded from plugins/*/plugin.py · catalog = reviewed bundles in plugin_catalog/');
 
-    // Shell
+    // 5. Shell Pane
     const sh = d.shell || {};
     const canConfigureGlobal = !!(window.hasPerm && window.hasPerm('settings.shell.configure'));
     const shellInner = `
@@ -105,54 +130,83 @@ async function loadCapabilities() {
     h += capSection('shell', '⌨️ Shell Execution', sh.enabled, shellInner,
       'run_shell tool — agent runs commands like "npx skills add …" in the workspace');
 
-    // Agent Task step cap (no on/off toggle - always bounded)
+    // 6. Agent Task & Limits Pane
     const ag = d.agent || {};
-    h += `<details class="cap-group fold" style="margin-top:10px;">
-      <summary class="cap-head">
-        <span class="cap-head-title" style="display:flex; align-items:center; gap:6px;">
-          <span class="cap-chevron">▶</span>
-          <span>🤖 Agent Task</span>
-        </span>
-      </summary>
-      <div class="cap-body">
-        <div style="display:flex; align-items:center; gap:6px;">
-          <span>Max steps per run</span>
-          <input type="number" id="agent-max-steps" min="${ag.min || 5}" max="${ag.max || 200}" value="${ag.max_steps || 200}"
-            ${canManageMcp ? '' : 'disabled'} style="width:64px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:2px 6px; font-size:11px;">
-          <span class="dim" style="font-size:9.5px;">${ag.min || 5}–${ag.max || 200}</span>
-        </div>
-        <div style="display:flex; align-items:center; gap:6px; margin-top:6px;">
-          <span>Wall-clock limit</span>
-          <input type="number" id="agent-run-timeout" min="0" max="1440" value="${Math.round((ag.run_timeout_s != null ? ag.run_timeout_s : 1800) / 60)}"
-            ${canManageMcp ? '' : 'disabled'} style="width:64px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:2px 6px; font-size:11px;">
-          <span class="dim" style="font-size:9.5px;">minutes (0 = off)</span>
-          ${canManageMcp ? '<button class="btn accent" id="agent-steps-save" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">Save</button>' : ''}
-        </div>
-        <div class="dim" style="font-size:9.5px; margin-top:4px;">At the cap a run pauses with a Continue button; runs repeating the same tool calls stop early. The wall-clock limit is what actually protects the GPU.</div>
-      </div>
-    </details>`;
-
-    // Output caps, file-tool limits, compaction threshold and memory switches (admin), and the user's own memory
     let limits = null;
     if (canManageMcp) {
       try { const lr = await fetch('/control/agent_limits'); if (lr.ok) limits = await lr.json(); } catch (e) {}
     }
-    if (limits) h += agentLimitsHtml(limits);
-    h += agentMemoryHtml();
+    const taskInner = `
+      <div class="cap-item" style="margin-bottom:10px;">
+        <b>Task Step Limits</b>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+          <span style="min-width:140px;">Max steps per run</span>
+          <input type="number" id="agent-max-steps" min="${ag.min || 5}" max="${ag.max || 200}" value="${ag.max_steps || 200}"
+            ${canManageMcp ? '' : 'disabled'} style="width:70px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:11px;">
+          <span class="dim" style="font-size:9.5px;">${ag.min || 5}–${ag.max || 200}</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+          <span style="min-width:140px;">Wall-clock limit</span>
+          <input type="number" id="agent-run-timeout" min="0" max="1440" value="${Math.round((ag.run_timeout_s != null ? ag.run_timeout_s : 1800) / 60)}"
+            ${canManageMcp ? '' : 'disabled'} style="width:70px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:11px;">
+          <span class="dim" style="font-size:9.5px;">minutes (0 = off)</span>
+          ${canManageMcp ? '<button class="btn accent" id="agent-steps-save" style="width:auto; margin:0 0 0 10px; padding:3px 12px; font-size:10.5px;">Save</button>' : ''}
+        </div>
+        <div class="dim" style="font-size:9.5px; margin-top:6px;">At the cap a run pauses with a Continue button; runs repeating the same tool calls stop early. The wall-clock limit is what actually protects the GPU.</div>
+      </div>
+      ${limits ? agentLimitsHtml(limits) : ''}`;
+    h += capSection('task', '🤖 Agent Task', true, taskInner, 'Execution step caps, timeouts, and resource guardrails', false);
 
-    // Agent Library (.agents/agents + .agents/commands), admin-managed allow/deny
+    // 7. Memory Pane
+    h += `<div class="ru-pane cap-pane" data-pane="memory" style="display:none;">
+      ${agentMemoryHtml()}
+    </div>`;
+
+    // 8. Agent Library Pane
     let lib = null;
     try { lib = await (await fetch('/control/agent_library')).json(); } catch (e) {}
     const canManageLib = !!(window.hasPerm && window.hasPerm('settings.agents.configure'));
-    if (lib && !lib.error) h += agentLibraryHtml(lib, canManageLib);
+    if (lib && !lib.error) {
+      h += agentLibraryHtml(lib, canManageLib);
+    } else {
+      h += `<div class="ru-pane cap-pane" data-pane="library" style="display:none;"><div class="dim" style="padding:10px;">Library not configured.</div></div>`;
+    }
 
-    // Router: usage stats + tuner suggestions (needs usage.report.view to see)
+    // 9. Router Pane
     let rt = null;
     try { const rr = await fetch('/control/router'); if (rr.ok) rt = await rr.json(); } catch (e) {}
     const canManageRouter = !!(window.hasPerm && window.hasPerm('settings.router.configure'));
-    if (rt) h += routerHtml(rt, canManageRouter);
+    if (rt) {
+      h += routerHtml(rt, canManageRouter);
+    } else {
+      h += `<div class="ru-pane cap-pane" data-pane="router" style="display:none;"><div class="dim" style="padding:10px;">Router stats not available.</div></div>`;
+    }
 
     box.innerHTML = h;
+
+    const _capShowTab = (tab) => {
+      window._capTab = tab;
+      box.querySelectorAll('.cap-tab').forEach(b => {
+        const on = b.dataset.tab === tab;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      box.querySelectorAll('.cap-pane').forEach(p => {
+        p.style.display = p.dataset.pane === tab ? '' : 'none';
+      });
+    };
+    box.querySelectorAll('.cap-tab').forEach(b => {
+      b.onclick = () => _capShowTab(b.dataset.tab);
+    });
+    _capShowTab(_capActiveTab);
+
+    if (limits) wireAgentLimits(box);
+    wireAgentMemory(box);
+    if (lib && !lib.error && canManageLib) wireAgentLibrary(box, lib);
+    if (rt && canManageRouter) wireRouter(box, rt);
+    if (canAddMcp) wireMcpEditor(box, canManageMcp);
+    if (canManagePlugins) wirePlugins(box);
+    scheduleMcpStatusPoll(d.mcp.servers || []);
     if (limits) wireAgentLimits(box);
     wireAgentMemory(box);
     if (lib && !lib.error && canManageLib) wireAgentLibrary(box, lib);
@@ -328,21 +382,24 @@ function agentLibraryHtml(lib, canEdit) {
       ${listEd('agents', 'allow')}${listEd('agents', 'deny')}${listEd('commands', 'allow')}${listEd('commands', 'deny')}
       <button class="btn accent" id="lib-save" style="width:auto; margin:6px 0 0; padding:4px 12px; font-size:10.5px;">💾 Save lists</button>
     </details>` : ''}`;
-  // own toggle class: the generic .cap-toggle handler posts to /control/capabilities
-  return `<details class="cap-group fold">
-    <summary class="cap-head">
-      <span class="cap-head-title" style="display:flex; align-items:center; gap:6px;">
-        <span class="cap-chevron">▶</span>
-        <span>📚 Agent Library</span>
-      </span>
+  return `<div class="ru-pane cap-pane" data-pane="library" style="display:none;">
+    <div class="cap-pane-card" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; padding:12px 16px; background:var(--panel2); border-radius:8px; border:1px solid var(--border); gap:12px;">
+      <div>
+        <div style="font-weight:600; font-size:14px; color:var(--text); display:flex; align-items:center; gap:8px;">
+          <span>📚 Agent Library</span>
+          ${lib.enabled ? '<span class="cap-pill-badge on">Active</span>' : '<span class="cap-pill-badge off">Disabled</span>'}
+        </div>
+        <div class="dim" style="font-size:11px; margin-top:3px;">Agent profiles from .agents/agents and prompt commands from .agents/commands · org-wide, admin-managed</div>
+      </div>
       <button class="cap-toggle-lib ${lib.enabled ? 'on' : ''}" ${canEdit ? '' : 'disabled'}
-        data-stop
+        data-stop style="width:auto; margin:0; padding:4px 14px; font-size:11px; font-weight:700;"
         title="${canEdit ? 'Enable/disable the Agent Library' : 'Admin-only setting'}">${lib.enabled ? 'ON' : 'OFF'}</button>
-    </summary>
-    <div class="cap-body" style="${lib.enabled ? '' : 'opacity:0.45;'}">${inner}
-      <div class="dim" style="font-size:9.5px; margin-top:4px;">Agent profiles from .agents/agents and prompt commands from .agents/commands · org-wide, admin-managed · every change is audited</div>
     </div>
-  </details>`;
+    <div class="cap-pane-body" style="${lib.enabled ? '' : 'opacity:0.6;'}">
+      ${inner}
+      <div class="dim" style="font-size:9.5px; margin-top:8px;">Every change is audited.</div>
+    </div>
+  </div>`;
 }
 
 async function saveAgentLibrary(body) {
@@ -449,15 +506,17 @@ function routerHtml(rt, canEdit) {
     </div>`;
   }).join('');
   const chk = (k, label, tip) => `<label style="margin-right:12px;" title="${esc(tip)}"><input type="checkbox" class="rt-flag" data-key="${k}" ${s[k] ? 'checked' : ''} ${dis}> ${label}</label>`;
-  return `<details class="cap-group fold">
-    <summary class="cap-head">
-      <span class="cap-head-title" style="display:flex; align-items:center; gap:6px;">
-        <span class="cap-chevron">▶</span>
-        <span>🧭 Router (usage-tuned)</span>
-      </span>
-      <span class="dim" style="font-size:10px;">${esc(rt.engine || '')} router ${rt.router_available ? 'ready' : 'unavailable'}</span>
-    </summary>
-    <div class="cap-body">
+  return `<div class="ru-pane cap-pane" data-pane="router" style="display:none;">
+    <div class="cap-pane-card" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; padding:12px 16px; background:var(--panel2); border-radius:8px; border:1px solid var(--border); gap:12px;">
+      <div>
+        <div style="font-weight:600; font-size:14px; color:var(--text); display:flex; align-items:center; gap:8px;">
+          <span>🧭 Router (usage-tuned)</span>
+          <span class="cap-pill-badge on">${esc(rt.engine || '')} router ${rt.router_available ? 'ready' : 'unavailable'}</span>
+        </div>
+        <div class="dim" style="font-size:11px; margin-top:3px;">Usage-based routing statistics and adaptive tuning</div>
+      </div>
+    </div>
+    <div class="cap-pane-body">
       <div class="cap-item"><b>Last 30 days by request type</b>
         ${rows ? `<table class="rt-table" style="width:100%; font-size:10.5px; border-collapse:collapse; margin-top:3px;">
           <tr class="dim"><th align="left">type</th><th align="left">runs</th><th align="left">avg steps</th>
@@ -514,7 +573,7 @@ function routerHtml(rt, canEdit) {
       </details>
       <div class="dim" style="font-size:9.5px; margin-top:4px;">Only request types, lanes and tool outcomes are recorded (no prompt text) and kept 90 days. Suggestions apply only when you approve them, or when automatic tuning is on (one change at a time, rolled back if runs get worse); every change is audited.</div>
     </div>
-  </details>`;
+  </div>`;
 }
 
 function wireRouter(box, rt) {
@@ -557,17 +616,22 @@ function wireRouter(box, rt) {
 }
 
 
-function capSection(id, title, enabled, innerHtml, note) {
-  return `<details class="cap-group fold">
-    <summary class="cap-head">
-      <span class="cap-head-title" style="display:flex; align-items:center; gap:6px;">
-        <span class="cap-chevron">▶</span>
-        <span>${title}</span>
-      </span>
-      <button class="cap-toggle ${enabled ? 'on' : ''}" data-section="${id}" title="Enable/disable this capability" data-stop>${enabled ? 'ON' : 'OFF'}</button>
-    </summary>
-    <div class="cap-body" style="${enabled ? '' : 'opacity:0.45;'}">${innerHtml || ''}${note ? `<div class="dim" style="font-size:9.5px; margin-top:4px;">${esc(note)}</div>` : ''}</div>
-  </details>`;
+function capSection(id, title, enabled, innerHtml, note, hasToggle = true) {
+  return `<div class="ru-pane cap-pane" data-pane="${id}" style="display:none;">
+    <div class="cap-pane-card" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; padding:12px 16px; background:var(--panel2); border-radius:8px; border:1px solid var(--border); gap:12px;">
+      <div>
+        <div style="font-weight:600; font-size:14px; color:var(--text); display:flex; align-items:center; gap:8px;">
+          <span>${title}</span>
+          ${hasToggle ? (enabled ? '<span class="cap-pill-badge on">Active</span>' : '<span class="cap-pill-badge off">Disabled</span>') : ''}
+        </div>
+        ${note ? `<div class="dim" style="font-size:11px; margin-top:3px;">${esc(note)}</div>` : ''}
+      </div>
+      ${hasToggle ? `<button class="cap-toggle ${enabled ? 'on' : ''}" data-section="${id}" title="Enable/disable this capability" data-stop style="width:auto; margin:0; padding:4px 14px; font-size:11px; font-weight:700;">${enabled ? 'ON' : 'OFF'}</button>` : ''}
+    </div>
+    <div class="cap-pane-body" style="${enabled ? '' : 'opacity:0.6;'}">
+      ${innerHtml || ''}
+    </div>
+  </div>`;
 }
 
 /* ---------------- MCP custom servers: add / edit / remove / paste JSON ---------------- */

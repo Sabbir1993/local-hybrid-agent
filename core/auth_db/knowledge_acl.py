@@ -37,6 +37,71 @@ def delete_knowledge_source(source_id: int) -> None:
     db().commit()
 
 
+def set_source_cloud_ok(source_id: int, ok: bool) -> None:
+    db().execute("UPDATE knowledge_sources SET cloud_ok = ?, updated_at = ? WHERE id = ?",
+                 (1 if ok else 0, time.time(), source_id))
+    db().commit()
+
+
+def cloud_ok_source_ids() -> set:
+    """Sources cloud models may read: the category's setting when the source has a (still existing)
+    category, otherwise the source's own switch."""
+    rows = db().execute(
+        "SELECT s.id FROM knowledge_sources s LEFT JOIN knowledge_categories c ON c.name = s.category "
+        "WHERE (c.name IS NOT NULL AND c.cloud_ok = 1) OR (c.name IS NULL AND s.cloud_ok = 1)").fetchall()
+    return {r["id"] for r in rows}
+
+
+def set_source_category(source_id: int, category: Optional[str]) -> None:
+    db().execute("UPDATE knowledge_sources SET category = ?, updated_at = ? WHERE id = ?",
+                 (category or None, time.time(), source_id))
+    db().commit()
+
+
+def list_knowledge_categories() -> list:
+    return [dict(r) for r in db().execute(
+        "SELECT c.name, c.cloud_ok, (SELECT COUNT(*) FROM knowledge_sources s WHERE s.category = c.name) AS sources "
+        "FROM knowledge_categories c ORDER BY c.created_at, c.name").fetchall()]
+
+
+def upsert_knowledge_category(name: str, cloud_ok: bool) -> None:
+    db().execute("INSERT INTO knowledge_categories (name, cloud_ok, created_at) VALUES (?, ?, ?) "
+                 "ON CONFLICT(name) DO UPDATE SET cloud_ok = excluded.cloud_ok",
+                 (name, 1 if cloud_ok else 0, time.time()))
+    db().commit()
+
+
+def delete_knowledge_category(name: str) -> None:
+    """Sources filed under it go back to uncategorised (their own cloud switch applies)."""
+    db().execute("UPDATE knowledge_sources SET category = NULL WHERE category = ?", (name,))
+    db().execute("DELETE FROM knowledge_categories WHERE name = ?", (name,))
+    db().commit()
+
+
+def list_knowledge_rules(enabled_only: bool = False) -> list:
+    q = "SELECT * FROM knowledge_rules" + (" WHERE enabled = 1" if enabled_only else "") + " ORDER BY id"
+    return [dict(r) for r in db().execute(q).fetchall()]
+
+
+def add_knowledge_rule(name: str, kind: str, pattern: str) -> int:
+    cur = db().execute("INSERT INTO knowledge_rules (name, kind, pattern, enabled, builtin, created_at) "
+                       "VALUES (?, ?, ?, 1, 0, ?)", (name, kind, pattern, time.time()))
+    db().commit()
+    return cur.lastrowid
+
+
+def set_knowledge_rule_enabled(rule_id: int, enabled: bool) -> bool:
+    cur = db().execute("UPDATE knowledge_rules SET enabled = ? WHERE id = ?", (1 if enabled else 0, rule_id))
+    db().commit()
+    return cur.rowcount > 0
+
+
+def delete_knowledge_rule(rule_id: int) -> bool:
+    cur = db().execute("DELETE FROM knowledge_rules WHERE id = ? AND builtin = 0", (rule_id,))
+    db().commit()
+    return cur.rowcount > 0
+
+
 def get_source_role_names(source_id: int) -> list:
     rows = db().execute(
         "SELECT r.name FROM knowledge_source_role_access ksra JOIN roles r ON r.id = ksra.role_id "

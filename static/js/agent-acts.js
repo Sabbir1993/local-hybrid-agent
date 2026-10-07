@@ -114,47 +114,65 @@ function formatToolArgs(name, args) {
 function quickArgPreview(name, args) {
   if (!args || typeof args !== 'object') return '';
   const p = args.path || args.file || args.filename;
-  if (p) return esc(p);
-  if (args.pattern) return `pattern: "${esc(args.pattern)}"`;
+  if (p) return p;
+  if (args.pattern) return `pattern: "${args.pattern}"`;
   if (args.code) {
     const clean = args.code.replace(/\s+/g, ' ').trim();
-    return `py: ${esc(clean.slice(0, 45))}${clean.length > 45 ? '…' : ''}`;
+    return `py: ${clean.slice(0, 45)}${clean.length > 45 ? '…' : ''}`;
   }
-  if (args.query) return `"${esc(args.query)}"`;
+  if (args.query) return `"${args.query}"`;
+  if (args.url) return args.url;
+  if (args.command || args.cmd) {
+    const c = (args.command || args.cmd).trim().split('\n')[0];
+    return c.length > 50 ? c.slice(0, 48) + '…' : c;
+  }
   const k = Object.keys(args);
-  if (k.length) return `${k[0]}: ${esc(String(args[k[0]]).slice(0, 40))}`;
+  if (k.length) {
+    const val = String(args[k[0]]);
+    return `${k[0]}: ${val.slice(0, 40)}${val.length > 40 ? '…' : ''}`;
+  }
   return '';
 }
 
 function toolMeta(name) {
   switch (name) {
-    case 'write_file': return { icon: '📄', label: 'write_file', verb: 'Saved', cls: 'write' };
-    case 'edit_file': return { icon: '✏️', label: 'edit_file', verb: 'Edited', cls: 'edit' };
-    case 'append_file': return { icon: '➕', label: 'append_file', verb: 'Appended to', cls: 'write' };
-    case 'insert_at_line': return { icon: '✏️', label: 'insert_at_line', verb: 'Inserted into', cls: 'edit' };
-    case 'read_file': return { icon: '📖', label: 'read_file', verb: 'Read', cls: 'read' };
-    case 'run_python': return { icon: '⚡', label: 'run_python', verb: 'Executed', cls: 'run' };
-    case 'list_files': return { icon: '📁', label: 'list_files', verb: 'Listed', cls: 'list' };
-    case 'grep': return { icon: '🔍', label: 'grep', verb: 'Searched', cls: 'grep' };
-    case 'revert': return { icon: '↩️', label: 'revert', verb: 'Reverted', cls: 'revert' };
-    case 'spawn_agent': return { icon: '🤖', label: 'spawn_agent', verb: 'Delegated', cls: 'subagent' };
-    case 'spawn_parallel_agents': return { icon: '👥', label: 'spawn_parallel_agents', verb: 'Delegated (Parallel)', cls: 'subagent' };
+    case 'search_knowledge_base': return { icon: '📚', label: 'Knowledge Base', verb: 'Searched knowledge base', running: 'Searching knowledge base', cls: 'kb' };
+    case 'web_search': return { icon: '🌐', label: 'Web Search', verb: 'Searched web', running: 'Searching web', cls: 'web' };
+    case 'web_fetch': return { icon: '🌐', label: 'Web Fetch', verb: 'Fetched webpage', running: 'Fetching webpage', cls: 'web' };
+    case 'search_memory': case 'memory_list': case 'memory_read': case 'memory_write':
+    case 'memory_append': case 'memory_delete': return { icon: '🧠', label: 'Memory', verb: 'Accessed memory', running: 'Accessing memory', cls: 'memory' };
+    case 'write_file': return { icon: '💾', label: 'write_file', verb: 'Created file', running: 'Creating file', cls: 'write' };
+    case 'edit_file': return { icon: '✏️', label: 'edit_file', verb: 'Edited file', running: 'Editing file', cls: 'edit' };
+    case 'append_file': return { icon: '➕', label: 'append_file', verb: 'Appended to file', running: 'Appending to file', cls: 'write' };
+    case 'insert_at_line': return { icon: '✏️', label: 'insert_at_line', verb: 'Inserted into file', running: 'Inserting into file', cls: 'edit' };
+    case 'read_file': return { icon: '📖', label: 'read_file', verb: 'Read file', running: 'Reading file', cls: 'read' };
+    case 'run_python': return { icon: '🐍', label: 'Python', verb: 'Ran Python script', running: 'Running Python script', cls: 'run' };
+    case 'run_command': case 'run_shell': return { icon: '💻', label: 'Terminal', verb: 'Ran command', running: 'Running command', cls: 'run' };
+    case 'list_files': return { icon: '📁', label: 'list_files', verb: 'Listed files', running: 'Listing files', cls: 'list' };
+    case 'grep': return { icon: '🔍', label: 'grep', verb: 'Searched files', running: 'Searching files', cls: 'grep' };
+    case 'revert': return { icon: '↩️', label: 'revert', verb: 'Reverted file', running: 'Reverting file', cls: 'revert' };
+    case 'create_plan': return { icon: '📋', label: 'Plan', verb: 'Created plan', running: 'Creating plan', cls: 'plan' };
+    case 'update_plan_item': return { icon: '✔️', label: 'Plan', verb: 'Updated plan', running: 'Updating plan', cls: 'plan' };
+    case 'get_plan': return { icon: '📋', label: 'Plan', verb: 'Retrieved plan', running: 'Retrieving plan', cls: 'plan' };
+    case 'spawn_agent': return { icon: '🤖', label: 'spawn_agent', verb: 'Delegated task', running: 'Delegating task', cls: 'subagent' };
+    case 'spawn_parallel_agents': return { icon: '👥', label: 'spawn_parallel_agents', verb: 'Delegated task (Parallel)', running: 'Delegating task (Parallel)', cls: 'subagent' };
     case 'generate_image': return { icon: '🎨', label: 'generate_image', verb: 'Made image', running: 'Making image', cls: 'media' };
     case 'generate_video': return { icon: '🎬', label: 'generate_video', verb: 'Made video', running: 'Making video', cls: 'media' };
-    case 'browser_navigate': return { icon: '🌐', label: name, verb: 'Opened', running: 'Opening', cls: 'default' };
+    case 'analyze_image': return { icon: '🖼️', label: 'analyze_image', verb: 'Analyzed image', running: 'Analyzing image', cls: 'media' };
+    case 'browser_navigate': return { icon: '🌐', label: name, verb: 'Opened', running: 'Opening', cls: 'web' };
     case 'browser_screenshot': case 'mobile_screenshot': return { icon: '📸', label: name, verb: 'Captured', running: 'Capturing', cls: 'default' };
-    case 'browser_console': return { icon: '🧾', label: name, verb: 'Checked console', cls: 'default' };
+    case 'browser_console': return { icon: '🧾', label: name, verb: 'Checked console', running: 'Checking console', cls: 'default' };
     default:
-      if (/^browser_/.test(name)) return { icon: '🌐', label: name, verb: name.slice(8).replace(/_/g, ' '), cls: 'default' };
+      if (/^browser_/.test(name)) return { icon: '🌐', label: name, verb: name.slice(8).replace(/_/g, ' '), cls: 'web' };
       if (/^mobile_/.test(name)) return { icon: '📱', label: name, verb: name.slice(7).replace(/_/g, ' '), cls: 'default' };
-      return { icon: '🛠️', label: name, verb: 'Done', cls: 'default' };
+      return { icon: '⚡', label: name, verb: name.replace(/_/g, ' '), cls: 'default' };
   }
 }
 
 function toggleAllCodex(btn) {
   const container = btn.closest('.agy-agent-container') || btn.closest('.agy-stream-timeline');
   if (!container) return;
-  const cards = container.querySelectorAll('.codex-action-card, .codex-thought-card');
+  const cards = container.querySelectorAll('.codex-action-card, .codex-thought-card, .codex-file-card, .codex-cmd-card');
   // the label follows what the cards actually are, so it stays right after a card is opened by hand
   const isExpanding = ![...cards].some(c => c.open);
   cards.forEach(c => { c.open = isExpanding; if (window._rememberCardOpen) window._rememberCardOpen(c, isExpanding); });
@@ -391,9 +409,11 @@ function renderThoughtCard(item, isRunning) {
   const title = isRunning ? `Thinking (${duration}s)...` : `Thought for ${duration}s`;
   return `<details class="codex-thought-card">
     <summary class="codex-thought-head">
-      <span class="codex-thought-icon">🧠</span>
+      <span class="agy-tool-badge memory"><span class="agy-badge-icon">🧠</span></span>
       <span class="codex-thought-title">${esc(title)}</span>
-      <span class="codex-chevron">▾</span>
+      <span class="agy-step-spacer"></span>
+      ${isRunning ? '<span class="agy-spinner" title="Thinking..."></span>' : '<span class="agy-status-chip done" title="Done"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg></span>'}
+      <svg class="agy-chevron" viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" fill-rule="evenodd" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>
     </summary>
     <div class="codex-thought-body">${esc(item.text).replace(/\n/g, '<br>')}</div>
   </details>`;
@@ -409,15 +429,21 @@ function renderCommandCard(t, isItemRunning) {
   }
   const shortCmd = fullCmd.split('\n')[0] || t.name;
   const preview = shortCmd.length > 60 ? shortCmd.slice(0, 58) + '…' : shortCmd;
-  const headTitle = isRunning ? `Running command (${esc(preview)})...` : `Ran command (${esc(preview)})`;
+  const verb = isRunning ? 'Running command' : 'Ran command';
+
+  const statusChip = isRunning
+    ? '<span class="agy-spinner" title="Executing command..."></span>'
+    : (t.ok
+      ? '<span class="agy-status-chip done" title="Success"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg></span>'
+      : '<span class="agy-status-chip err" title="Command failed"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM4.97 4.97a.75.75 0 0 1 1.06 0L8 6.94l1.97-1.97a.75.75 0 1 1 1.06 1.06L9.06 8l1.97 1.97a.75.75 0 1 1-1.06 1.06L8 9.06l-1.97 1.97a.75.75 0 0 1-1.06-1.06L6.94 8 4.97 6.03a.75.75 0 0 1 0-1.06Z"/></svg></span>');
 
   return `<details class="codex-cmd-card" open>
     <summary class="codex-cmd-head">
-      <span class="codex-cmd-icon">&gt;_</span>
-      <span class="codex-cmd-title">${headTitle}</span>
+      <span class="agy-tool-badge run"><span class="agy-badge-icon">&gt;_</span></span>
+      <span class="codex-cmd-title">${verb} <code class="agy-target-code">${esc(preview)}</code></span>
       <span class="agy-step-spacer"></span>
-      ${isRunning ? '<span class="agy-summary-pulse active" style="width:6px; height:6px;"></span>' : (t.ok ? '' : '<span style="color:var(--red); font-size:11px;">⚠</span>')}
-      <span class="codex-chevron">▾</span>
+      ${statusChip}
+      <svg class="agy-chevron" viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" fill-rule="evenodd" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>
     </summary>
     <div class="codex-cmd-body">
       <div class="codex-cmd-prompt"><span class="codex-prompt-sym">$</span> ${esc(fullCmd || shortCmd)}</div>
@@ -425,7 +451,7 @@ function renderCommandCard(t, isItemRunning) {
         <div class="codex-cmd-out-label">OUTPUT</div>
         <pre class="codex-cmd-terminal"><code>${esc(t.result != null ? String(t.result).trim() : '(no output)')}</code></pre>
       ` : `
-        <div class="codex-cmd-running"><span class="agy-summary-pulse active" style="width:6px; height:6px;"></span> Executing...</div>
+        <div class="codex-cmd-running"><span class="agy-spinner" style="width:12px; height:12px;"></span> Executing...</div>
       `}
     </div>
   </details>`;
@@ -439,6 +465,7 @@ function renderFileCard(t, isItemRunning) {
   const isEdit = t.name === 'edit_file' || t.name === 'insert_at_line' || t.name === 'append_file' || (diff && !diff.created);
   const verb = isRunning ? (isEdit ? 'Editing file' : 'Writing file') : (isEdit ? 'Edited file' : 'Created file');
   const icon = isEdit ? '✏️' : '💾';
+  const badgeCls = isEdit ? 'edit' : 'write';
 
   let diffPill = '';
   if (diff) {
@@ -448,22 +475,28 @@ function renderFileCard(t, isItemRunning) {
 
   const isPreviewable = p && /\.(html|htm|csv|xlsx|xls|pdf|md|py|js|ts|json|txt|svg|png|jpg|jpeg|webp|pptx)$/i.test(p);
   const previewBtn = diff
-    ? `<button type="button" class="btn ghost agy-open-btn" data-ws-open="${esc(p)}" title="Open in project panel">↗ Open</button>`
+    ? `<button type="button" class="btn ghost agy-open-btn agy-preview-pill" data-ws-open="${esc(p)}" title="Open in project panel">↗ Open</button>`
     : isPreviewable
-    ? `<button type="button" class="btn ghost codex-head-btn" data-preview-path="${esc(p)}" data-preview-title="${esc(filename)}" data-preview-source="ws" title="Preview file">👁️ Preview</button>`
+    ? `<button type="button" class="btn ghost codex-head-btn agy-preview-pill" data-preview-path="${esc(p)}" data-preview-title="${esc(filename)}" data-preview-source="ws" title="Preview file"><svg width="12" height="12" viewBox="0 0 16 16"><path fill="currentColor" d="M8 3c-4 0-7 5-7 5s3 5 7 5 7-5 7-5-3-5-7-5zm0 8.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7zm0-5.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg> Preview</button>`
     : '';
+
+  const statusChip = isRunning
+    ? '<span class="agy-spinner" title="Working..."></span>'
+    : (t.ok
+      ? '<span class="agy-status-chip done" title="Success"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 1.06 0l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg></span>'
+      : '<span class="agy-status-chip err" title="File operation failed"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM4.97 4.97a.75.75 0 0 1 1.06 0L8 6.94l1.97-1.97a.75.75 0 1 1 1.06 1.06L9.06 8l1.97 1.97a.75.75 0 1 1-1.06 1.06L8 9.06l-1.97 1.97a.75.75 0 0 1-1.06-1.06L6.94 8 4.97 6.03a.75.75 0 0 1 0-1.06Z"/></svg></span>');
 
   const openByDefault = !isRunning;
 
   return `<details class="codex-file-card"${openByDefault ? ' open' : ''}>
     <summary class="codex-file-head">
-      <span class="codex-file-icon">${icon}</span>
-      <span class="codex-file-title">${verb} <b>${esc(filename)}</b></span>
+      <span class="agy-tool-badge ${badgeCls}"><span class="agy-badge-icon">${icon}</span></span>
+      <span class="codex-file-title">${verb} <code class="agy-target-code">${esc(filename)}</code></span>
       ${diffPill}
       <span class="agy-step-spacer"></span>
-      ${isRunning ? '<span class="agy-summary-pulse active" style="width:6px; height:6px;"></span>' : (t.ok ? '' : '<span style="color:var(--red); font-size:11px;">⚠</span>')}
+      ${statusChip}
       ${previewBtn}
-      <span class="codex-chevron">▾</span>
+      <svg class="agy-chevron" viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" fill-rule="evenodd" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>
     </summary>
     <div class="codex-file-body">
       ${p ? `<div class="codex-file-subpath">.../${esc(p)}</div>` : ''}
@@ -480,7 +513,8 @@ function renderGenericToolCard(t, isItemRunning) {
   const meta = toolMeta(t.name);
   const isRunning = t.result === null;
   const p = t.args.path || t.args.file || t.args.filename || '';
-  const label = esc(p || quickArgPreview(t.name, t.args) || t.name);
+  const rawTarget = p || quickArgPreview(t.name, t.args);
+  const targetEsc = rawTarget ? esc(rawTarget) : '';
 
   let extra = '';
   if (t.name === 'read_file' && t.args.start_line != null && t.args.end_line != null) {
@@ -488,28 +522,34 @@ function renderGenericToolCard(t, isItemRunning) {
   } else if (t.name === 'grep' && t.result) {
     const matches = (t.result.match(/\n/g) || []).length + 1;
     extra = `<span class="agy-step-count">${matches} result${matches !== 1 ? 's' : ''}</span>`;
-  } else if (t.name === 'web_search' && t.result) {
-    const matches = (t.result.match(/https?:\/\//g) || []).length;
+  } else if ((t.name === 'web_search' || t.name === 'search_knowledge_base') && t.result) {
+    const matches = (t.result.match(/https?:\/\/|source|match|snippet/gi) || []).length;
     if (matches > 0) extra = `<span class="agy-step-count">${matches} sources</span>`;
   }
 
   const isPreviewable = p && /\.(html|htm|csv|xlsx|xls|pdf|md|py|js|ts|json|txt|svg|png|jpg|jpeg|webp|pptx)$/i.test(p);
   const previewBtn = isPreviewable
-    ? `<button type="button" class="btn ghost codex-head-btn" data-preview-path="${esc(p)}" data-preview-title="${esc(p)}" data-preview-source="ws" title="Preview file">👁️ Preview</button>`
+    ? `<button type="button" class="btn ghost codex-head-btn agy-preview-pill" data-preview-path="${esc(p)}" data-preview-title="${esc(p)}" data-preview-source="ws" title="Preview file"><svg width="12" height="12" viewBox="0 0 16 16"><path fill="currentColor" d="M8 3c-4 0-7 5-7 5s3 5 7 5 7-5 7-5-3-5-7-5zm0 8.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7zm0-5.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg> Preview</button>`
     : '';
   const isMedia = meta.cls === 'media';
-  const title = isMedia ? esc(String(t.args.prompt || '').slice(0, 90)) : label;
+  const displayTarget = isMedia ? esc(String(t.args.prompt || '').slice(0, 90)) : targetEsc;
   const verb = isRunning && meta.running ? meta.running : meta.verb;
+
+  const statusChip = isRunning
+    ? '<span class="agy-spinner" title="Executing..."></span>'
+    : (t.ok
+      ? '<span class="agy-status-chip done" title="Success"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 1.06 0l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg></span>'
+      : '<span class="agy-status-chip err" title="Tool error"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM4.97 4.97a.75.75 0 0 1 1.06 0L8 6.94l1.97-1.97a.75.75 0 1 1 1.06 1.06L9.06 8l1.97 1.97a.75.75 0 1 1-1.06 1.06L8 9.06l-1.97 1.97a.75.75 0 0 1-1.06-1.06L6.94 8 4.97 6.03a.75.75 0 0 1 0-1.06Z"/></svg></span>');
 
   return `<details class="codex-action-card">
     <summary class="codex-action-head">
-      <span class="codex-action-icon">${meta.icon}</span>
-      <span class="codex-action-title"><b>${verb}</b> ${title}</span>
+      <span class="agy-tool-badge ${meta.cls || 'default'}"><span class="agy-badge-icon">${meta.icon}</span></span>
+      <span class="codex-action-title"><b>${verb}</b>${displayTarget ? ` <code class="agy-target-code">${displayTarget}</code>` : ''}</span>
       ${extra}
       <span class="agy-step-spacer"></span>
-      ${isRunning ? '<span class="agy-summary-pulse active" style="width:6px; height:6px;"></span>' : (t.ok ? '' : '<span style="color:var(--red); font-size:11px;">⚠</span>')}
+      ${statusChip}
       ${previewBtn}
-      <span class="codex-chevron">▾</span>
+      <svg class="agy-chevron" viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" fill-rule="evenodd" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>
     </summary>
     <div class="codex-action-body">
       <div class="agy-detail-bar">
@@ -518,7 +558,7 @@ function renderGenericToolCard(t, isItemRunning) {
       </div>
       ${t.args && Object.keys(t.args).length > 0 ? `
         <div class="agy-args-row">
-          <button type="button" class="agy-expand-btn" data-click="toggle-tool-args">◂ Show arguments</button>
+          <button type="button" class="agy-expand-btn" data-click="toggle-tool-args">Show arguments</button>
           <span>(${Object.keys(t.args).length})</span>
         </div>
         <pre class="agy-detail-code agy-args-pre"><code>${esc(formatToolArgs(t.name, t.args))}</code></pre>` : ''}
@@ -594,7 +634,7 @@ function agentActsHtml(acts, live = true) {
   });
 
   if (!isAllDone) {
-    h += `<div class="agy-working-bar"><span class="agy-summary-pulse active" style="width:6px; height:6px;"></span> Working…</div>`;
+    h += `<div class="agy-working-bar"><span class="agy-spinner" style="width:12px; height:12px;"></span> Working…</div>`;
   }
 
   h += '</div></div>';

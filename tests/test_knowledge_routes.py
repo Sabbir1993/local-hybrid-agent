@@ -87,7 +87,7 @@ class CrudTests(_KbApp):
     def test_list_starts_empty(self):
         r = self.client.get("/knowledge")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json(), {"sources": []})
+        self.assertEqual(r.json()["sources"], [])
 
     def test_add_text_round_trip(self):
         r = self.client.post("/knowledge/text", json={"title": "t", "text": "hello"})

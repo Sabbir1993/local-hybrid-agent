@@ -569,7 +569,7 @@ function bubbleHtml(m, idx) {
   } else if (acHidden) {
     body = answerCheckGateHtml(m);
   } else if (hasText) {
-    body = md(m.content);
+    body = md(m.content, { streaming: generating && isLast });
   } else if (!generating && m.reasoning && m.reasoning.trim()) {
     // If generation completed and content was empty, render reasoning so user is never left with a blank message
     body = md(m.reasoning);
@@ -583,7 +583,7 @@ function bubbleHtml(m, idx) {
   
   // Render interactive grill-me / ask_question choice cards if options or question frontiers are present
   if (hasText && !generating && !acHidden) {
-    const qCards = renderInteractiveQuestions(m.content, idx);
+    const qCards = renderInteractiveQuestions(m.content, idx, !isLast);   // only the newest message can still be answered
     if (qCards) {
       body += qCards;
     }
@@ -626,6 +626,25 @@ window._grillCustom = window._grillCustom || {};
 // Track submitted question cards so previous rounds show submitted status and do not get re-submitted
 window._grillSubmitted = window._grillSubmitted || new Set();
 
+// All of the above is keyed by message position, so it must not outlive the chat it belongs to: after opening
+// another chat, "message 5" there would otherwise inherit the old chat's submitted flag and ticked options.
+function _grillSyncSession() {
+  const sid = (typeof curSession !== 'undefined' && curSession) ? String(curSession.id) : '';
+  if (window._grillSid === sid) return;
+  window._grillSid = sid;
+  window._grillMeta = {}; window._grillSelected = {}; window._grillCustom = {};
+  window._grillSubmitted = new Set();
+}
+
+// A question card can only be answered while its message is the newest one. Once anything follows it (your
+// answer, or a newer reply) it is history: answering it then would send a stale decision into the conversation.
+function _grillIsOpen(idx) {
+  return idx === messages.length - 1 && !window._grillSubmitted.has(idx);
+}
+
+// More choices than this is a document (checklist, report outline), not a decision
+const GRILL_MAX_OPTIONS = 12;
+
 function _grillSel(idx, qi) {
   window._grillSelected[idx] = window._grillSelected[idx] || {};
   window._grillSelected[idx][qi] = window._grillSelected[idx][qi] || new Set();
@@ -645,7 +664,7 @@ function _grillSyncDom(idx, qi) {
 }
 
 function toggleGrillOption(idx, qi, key) {
-  if (window._grillSubmitted.has(idx)) return;
+  if (!_grillIsOpen(idx)) return;
   const q = (window._grillMeta[idx] || [])[qi];
   if (!q) return;
   const sel = _grillSel(idx, qi);
@@ -715,7 +734,10 @@ document.addEventListener('input', (e) => {
 });
 
 function submitGrillAnswers(idx) {
-  if (window._grillSubmitted.has(idx)) return;
+  if (!_grillIsOpen(idx)) {
+    if (idx !== messages.length - 1) toast('That question is from earlier in the chat - type your answer in the message box', true);
+    return;
+  }
   const meta = window._grillMeta[idx] || [];
   const lines = [];
 
@@ -759,7 +781,8 @@ function submitGrillAnswers(idx) {
 const _GRILL_MULTI_RE = /\b(?:select|choose|pick|check|tick)\s+(?:all|any|one or more|multiple|several)\b|\ball that apply\b|\bmulti-?select\b|\bmultiple (?:choices|answers|options)\b/i;
 const _GRILL_OTHER_RE = /^(?:other|something else|none of (?:the )?above|custom(?: answer)?)\b/i;
 
-function renderInteractiveQuestions(rawText, idx) {
+function renderInteractiveQuestions(rawText, idx, closed) {
+  _grillSyncSession();
   // Check if text matches grill-me format or question frontiers
   // Look for ❓, Q1/Q2, Question 1, or ➡️ / recommended markers
   const hasTrigger = rawText.includes('❓') ||
@@ -824,6 +847,7 @@ function renderInteractiveQuestions(rawText, idx) {
       }
     }
 
+    if (options.length > GRILL_MAX_OPTIONS) continue;     // a long checklist / outline, not a decision
     if (options.length > 0 || recommendation) {
       const multi = sawCheckbox || _GRILL_MULTI_RE.test(block);
       parsedQuestions.push({ qId, qTitle, recommendation, options, multi });
@@ -833,12 +857,14 @@ function renderInteractiveQuestions(rawText, idx) {
   if (parsedQuestions.length === 0) return '';
 
   window._grillMeta[idx] = parsedQuestions;
-  const isSubmitted = window._grillSubmitted.has(idx);
+  const wasSubmitted = window._grillSubmitted.has(idx);
+  const isSubmitted = wasSubmitted || !!closed;        // closed = a later message exists: read-only history
   const customState = window._grillCustom[idx] || {};
   const tab = isSubmitted ? '-1' : '0';
   const disabledAttr = isSubmitted ? ' aria-disabled="true"' : '';
+  const subText = wasSubmitted ? 'Answers submitted' : (closed ? 'Earlier question (closed)' : 'Select an option or write your own');
   let html = `<div class="grill-interactive-box${isSubmitted ? ' submitted' : ''}" id="grill-card-${idx}" data-idx="${idx}">`;
-  html += `<div class="grill-box-header"><span>🎯 Decision Options</span><span class="grill-box-sub">${isSubmitted ? 'Answers submitted' : 'Select an option or write your own'}</span></div>`;
+  html += `<div class="grill-box-header"><span>🎯 Decision Options</span><span class="grill-box-sub">${subText}</span></div>`;
 
   parsedQuestions.forEach((q, qi) => {
     const sel = _grillSel(idx, qi);
@@ -872,7 +898,7 @@ function renderInteractiveQuestions(rawText, idx) {
   });
 
   html += `<div class="grill-footer">`;
-  html += `<button type="button" class="btn primary grill-submit-btn" ${isSubmitted ? 'disabled' : ''} data-click="submit-grill" data-arg="${idx}">${isSubmitted ? '✓ Answer Submitted' : '✓ Submit Decisions'}</button>`;
+  html += `<button type="button" class="btn primary grill-submit-btn" ${isSubmitted ? 'disabled' : ''} data-click="submit-grill" data-arg="${idx}">${wasSubmitted ? '✓ Answer Submitted' : (closed ? 'Closed' : '✓ Submit Decisions')}</button>`;
   html += `</div>`;
   html += `</div>`;
 

@@ -36,7 +36,7 @@ from core.monitor import (
     monitor_begin,
     monitor_end,
 )
-from core.knowledge_access import allowed_source_ids_for, kb_local_only, set_kb_cloud_blocked
+from core.knowledge_access import allowed_source_ids_for, cloud_ok_ids, hits_need_local, kb_local_only, set_kb_cloud_blocked
 from core.db import db_record_request
 from .. import common
 from core import reasoning
@@ -77,6 +77,11 @@ def _record_chat_usage(res_dict, sent_tokens, msgs, tools) -> None:
     u = (res_dict or {}).get("usage") or {}
     if u.get("prompt_tokens"):
         context_budget.record_usage("main", sent_tokens, u["prompt_tokens"], msgs, tools)
+
+
+WEB_AFTER_KB_BLOCK = (" The user has web search turned on, so you may search the public web for general or public "
+                      "information about the question. Say clearly that such facts come from the public web, "
+                      "not from company records, and never present web results as internal company data.")
 
 
 @router.post("/chat/run")
@@ -146,7 +151,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # reused below for the tool loop (same inputs, same answer).
     wants_file = wants_file_output(last_query) or file_followup == "edit"
     has_file = bool(file_followup or wants_file)
-    has_web = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs))
+    web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs))
+    has_web = False   # decided after the KB lookup (core/kb_coverage.py): the web fills what the KB cannot
 
     # Tools for Chat Mode: write_file always (core), the rest on intent.
     chat_tools = [CHAT_WRITE_FILE_SCHEMA]
@@ -156,12 +162,6 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
     if skb:
         chat_tools.append(skb)
-    if has_web:
-        register_web_tools()
-        for t_name in ("web_search", "web_fetch", "web_search_images"):
-            rt = registry.get(t_name)
-            if rt and rt.schema:
-                chat_tools.append(rt.schema)
     # images made on this PC (stable-diffusion.cpp): the model may draw when asked.
     # A cloud-first route isn't offered here (chat has no ask-first dialog for cost);
     # /image and agent mode handle those.
@@ -232,6 +232,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         sys_parts.append(mcp_prompt)
         sys_labels.append("mcp")
 
+    deep = bool(req.deep_mode)
+    # How much the model reasons: the composer's effort level, independent of
+    # Deep research; mapped per local/cloud target in common._llm_chat_stream_raw
+    effort = reasoning.resolve(req.reasoning_effort, deep)
+
     # Organizational knowledge base: permission-scoped routing & retrieval.
     # Injected only for company-directed queries or strongly matching chunks -
     # otherwise unrelated KB text gets mixed into general answers. The model
@@ -241,6 +246,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     kb_hits = []
     kb_prompt_block = ""
     kb_blocked_reason = ""
+    cov_hits = []
     from core.knowledge_router import kb_routing_query
     kb_query = kb_routing_query(msgs, last_query)
     if kb_ids and kb_query.strip() and not file_followup:
@@ -252,6 +258,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 top_cos = max(float(h.get("cos") or 0.0) for h in kb_hits)
                 if not (is_company_or_kb_query(kb_query, kb_ids) or top_cos >= auto_cos):
                     kb_hits, kb_prompt_block = [], ""
+            cov_hits = list(kb_hits)         # scores only feed the web decision below (also when withheld)
             if kb_hits:
                 kb_used = True
                 sys_parts.append(kb_prompt_block)
@@ -263,7 +270,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # to a cloud provider. A KB question from a cloud-bound user is answered by
     # the local model instead; if none can run, the KB context is withheld.
     if cloud_main and kb_local_only():
-        if kb_hits:
+        if kb_hits and hits_need_local(kb_hits):     # sources the admin cleared for cloud stay on the cloud lane
             target = state.profile_path or state.profile or common.initial_profile_path
             local_err = "" if target else "no local model profile is configured"
             try:
@@ -289,9 +296,34 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                  "local model is loaded, so internal company data is not available for "
                                  "this answer. Tell the user this instead of guessing.")
                 sys_labels.append("kb-note")
-        if cloud_main and skb in chat_tools:
+        if cloud_main and skb in chat_tools and not cloud_ok_ids(kb_ids):
             chat_tools.remove(skb)
     set_kb_cloud_blocked(cloud_main is not None)
+    # Web only for what the KB cannot answer (core/kb_coverage.py): full -> none, partial -> lean hint + small
+    # budget, none -> only on explicit web intent; the budget grows with reasoning effort / Deep mode.
+    from core import kb_coverage
+    web_budget_n = None
+    web_lean = False
+    if kb_coverage.gap_fill_enabled():
+        if use_web and not web_explicit:
+            cov = await kb_coverage.resolve(kb_query, cov_hits, blocked=bool(kb_blocked_reason))
+        else:
+            cov = "none"
+        plan = kb_coverage.decide_web(cov, kb_coverage.tier(effort, deep), bool(use_web), web_explicit)
+        has_web, web_lean, web_budget_n = plan["web"], plan["lean"], plan["budget"]
+        print(f"[chat] route kb={cov} web={'lean' if web_lean and has_web else ('full' if has_web else 'off')} "
+              f"budget={web_budget_n} tier={kb_coverage.tier(effort, deep)}", file=sys.stderr)
+    else:
+        has_web = web_explicit
+    if has_web:
+        register_web_tools()
+        for t_name in ("web_search", "web_fetch", "web_search_images"):
+            rt = registry.get(t_name)
+            if rt and rt.schema and (allowed_names is None or t_name in allowed_names):
+                chat_tools.append(rt.schema)
+        if kb_blocked_reason and not web_lean:
+            sys_parts.append(WEB_AFTER_KB_BLOCK.strip())
+            sys_labels.append("kb-web-note")
 
     # S1: the full manual only on file intent, else a lean pointer (S4).
     if has_file:
@@ -347,27 +379,36 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     # S1: the full web manual + schemas only on web intent; otherwise the
     # model answers from knowledge (old rule 5) and spends nothing on browsing.
-    if has_web:
+    if has_web and web_lean:
+        sys_parts.append(prompt_scope.WEB_LEAN.format(
+            kb=prompt_scope.WEB_LEAN_KB["blocked" if kb_blocked_reason else ("used" if kb_used else "none")],
+            n=web_budget_n))
+        sys_labels.append("web-lean")
+    elif has_web:
         sys_parts.append(prompt_scope.WEB_MANUAL)
         sys_labels.append("web-manual")
+        if kb_used:
+            sys_parts.append(prompt_scope.PROVENANCE)
+            sys_labels.append("sources")
 
     # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat"
     chat_cfg = APP_CONFIG.get("chat") or {}
-    deep = bool(req.deep_mode)
     max_turns = int(chat_cfg.get("deep_max_tool_rounds" if deep else "max_tool_rounds", 25 if deep else 15)) if chat_tools else 1
     max_web_calls = int(chat_cfg.get("deep_max_web_calls" if deep else "max_web_calls", 16 if deep else 8))
+    if web_budget_n is not None:                      # coverage-aware budget (scales with effort / Deep)
+        max_web_calls = web_budget_n
+        if has_web and chat_tools:
+            max_turns = kb_coverage.rounds_for(max_web_calls, max_turns)
     if deep:
         sys_parts.append(
             "DEEP RESEARCH MODE:\n"
             "1. First, briefly list the sub-questions you need answered to fully satisfy the request.\n"
-            f"2. Research each one with targeted web searches (use the current year; you have up to {max_web_calls} web calls).\n"
-            "3. Stop searching as soon as you have enough data, then write the complete deliverable in one go. "
+            + (f"2. Research each one with targeted web searches (use the current year; you have up to {max_web_calls} web calls).\n"
+               if has_web else
+               "2. Answer each one from the knowledge base and what you know (no web tools are offered for this question).\n")
+            + "3. Stop searching as soon as you have enough data, then write the complete deliverable in one go. "
             "Cite sources, and label any figure you could not verify as an estimate.")
         sys_labels.append("deep")
-    # How much the model reasons: the composer's effort level, independent of
-    # Deep research; mapped per local/cloud target in common._llm_chat_stream_raw
-    effort = reasoning.resolve(req.reasoning_effort, deep)
-
     combined_sys = "\n\n".join(sys_parts).strip()
     if combined_sys:
         has_sys = False
@@ -413,6 +454,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         t0 = time.time()
         turn_limit = max_turns       # grows by one if a continuation nudge needs it
         web_calls = 0
+        web_seen = set()
         research_nudged = False
         continued = False
         finish_reason = None
@@ -928,13 +970,19 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                        "Produce the final answer from the results you already have.")
                         elif t_name == "web_search":
                             q = args.get("query") or args.get("q") or ""
-                            res_str = await tool_web_search({"query": q})
+                            qk = kb_coverage.query_key(q)
+                            if qk and qk in web_seen:
+                                res_str = ("note: you already ran this search - use the earlier results or "
+                                           "search for something different.")
+                            else:
+                                web_seen.add(qk)
+                                res_str = kb_coverage.cap_web_result(await tool_web_search({"query": q}), web_calls)
                         elif t_name == "web_search_images":
                             q = args.get("query") or args.get("q") or ""
                             res_str = await tool_web_search_images({"query": q})
                         elif t_name == "web_fetch":
                             u = args.get("url") or ""
-                            res_str = await tool_web_fetch({"url": u})
+                            res_str = kb_coverage.cap_web_result(await tool_web_fetch({"url": u}), web_calls)
                         elif t_name in ("generate_image", "generate_video") and t_name not in chat_media_tools:
                             res_str = ("error: making images isn't available in chat right now - "
                                        "ask the user to use /image or agent mode")

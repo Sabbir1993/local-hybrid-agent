@@ -4,6 +4,71 @@ Entries are kept short on purpose: this is a local single-dev project and long
 per-commit prose rots faster than it helps. Versioning starts where the repo
 has a tag or release; until then, dates + headline changes.
 
+## 2026-10-08 — preview of server-generated PDFs / HTML / images from agent tool cards
+
+- A tool card's 👁 Preview says "workspace" (the user's device), but files the server generates (PDF, Office, images)
+  live in the server's common space. Text previews already fell back to the common space; the PDF, HTML and image
+  viewers did not, so a generated PDF showed "File Not Found On Disk" although it existed. They now try the
+  workspace once and fall back to `/agent/raw`, and the "New Tab" link follows the URL that worked.
+
+## 2026-10-08 — generated PDFs get real tables; no empty checkboxes
+
+- PDFs written from Markdown (`core/agent_tools/dom_convert.py`) used a line-by-line converter, so a table with
+  blank lines between its rows (how models often write them) came out as raw `| a | b |` text. Now `markdown-it-py`
+  (already installed and hash-locked; declared in requirements.txt) renders the document: GitHub tables incl.
+  alignment, nested lists, quotes, strikethrough; raw HTML in the text is escaped. A pre-pass joins table rows split
+  by blank lines (code fences untouched). The no-browser ReportLab fallback now draws real tables too.
+- Root cause of "PDFs still look plain": the headless-browser step never succeeded on current Edge, so every
+  PDF silently came from the ReportLab fallback (no theme, no tables, raw backticks). Edge exits at once and writes
+  the PDF ~1 s later (we checked too early), and `--blink-settings=scriptEnabled=false` makes `--print-to-pdf` hang
+  without writing anything. `_render_html_to_pdf` now waits for the file to appear and stop growing, and the flag is
+  gone (scripts stay blocked by the page's CSP `script-src 'none'`). Needs a server restart.
+- `- [ ]` / `- [x]` lines: the empty box is dropped in chat and PDFs (it meant nothing); a done item keeps a muted tick.
+
+## 2026-10-08 — question cards only answerable on the newest message
+
+- The "Decision Options" cards (static/js/chat.js) stayed clickable on old messages after a reload or when another
+  chat was opened: the "already answered" flag lived in memory, keyed by message position, and was shared across chats.
+  Now a card is live only while its message is the newest one; anything after it makes it read-only
+  ("Earlier question (closed)"), and the card state is reset when you switch chats.
+- A list with more than 12 choices (e.g. a 74-line checklist) is no longer turned into a decision form.
+
+## 2026-10-08 — chat renders full Markdown
+
+- Replies now render GitHub-style Markdown: tables (scrollable, aligned columns), `>` quotes, `---` rules, real
+  headings, nested/ordered/task lists, *italic*, ~~strike~~ and bare links. Before, only bold, inline code and
+  simple bullets worked and every newline became `<br>`.
+- Parser: `marked` 18.1.0 + sanitiser `DOMPurify` 3.4.16, vendored in `static/vendor/` with SRI hashes (same way as
+  mermaid / xlsx; both verified against their npm registry integrity hashes, licences alongside). Glue in
+  `static/js/markdown.js`: raw HTML from the model is shown as text, links / images / `[DOWNLOAD:]` / `[VIDEO:]` /
+  code blocks are built by our code and added after sanitising, finished blocks are cached while streaming and an
+  unfinished `**` / `` ` `` is closed for display only. If the libraries fail to load, the old renderer is used.
+- Checks: `tests/js/test_markdown.js` (node), `tests/js/markdown_browser_check.html` (real DOMPurify in a browser).
+
+## 2026-10-08 — web only for what the knowledge base cannot answer
+
+- Chat now looks at how well the knowledge base covers the question before offering the web
+  (`core/kb_coverage.py`): full -> no web tools (saves ~1.3k tokens/turn), partial -> a ~150-token "fill the
+  gap" hint and a small call budget, none -> web only when the question asks for it. The grey zone is settled by
+  one tiny call to the small local model (falls back to "partial"). Replaces the "force web when the KB is blocked" patch.
+- The web-call budget grows with reasoning effort and Deep mode (`chat.web_budget`: low/medium/high/deep x
+  full/partial/open; deep + nothing in the KB gets 20), the tool-round limit follows, repeated searches are
+  skipped and late results trimmed. Settings -> Knowledge Base -> "Web next to the knowledge base" edits it.
+- Agent mode: `tool_surface.web_on_demand` (off by default) offers the web tools only when needed and caps calls per run.
+
+## 2026-10-08 — knowledge base: what cloud models may read
+
+- The all-or-nothing "KB never goes to cloud" block is now per source and per chunk, still local-only by
+  default. Layer 1: admin-defined categories (Public / Internal / HR / ...) each marked "cloud may read",
+  every source filed under one (sources with no category keep their own switch). Layer 2: sensitive-content
+  rules (salary, IDs, bank accounts, phone/email, card numbers, credentials + admin keyword/regex rules)
+  hold individual chunks back at retrieval time, so edits apply at once with no reindex. Rules only restrict.
+- A question whose hits include any non-cleared source or held-back chunk is answered by the local model as
+  before; the search tool on a cloud lane returns only cleared, rule-clean chunks.
+- UI: Settings -> Knowledge Base ("What cloud models may read" card + per-source category picker);
+  `/knowledge/policy`, `/knowledge/categories`, `/knowledge/rules`, `/knowledge/{id}/category`.
+  Code: `core/knowledge_rules.py`, `core/knowledge_access.py`, `static/js/knowledge-policy.js`.
+
 ## 2026-10-08 — video attachments
 
 - Attaching a video samples frames (scene changes + an even grid, <= 16, <= 10 min) with ffmpeg on

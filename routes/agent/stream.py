@@ -262,6 +262,8 @@ async def run_agent_stream(req, user, ctx):
     msgs = ctx.msgs
     last_query = ctx.last_query
     surface_q = ctx.surface_q
+    surface_cfg = ctx.surface_cfg or APP_CONFIG.get("tool_surface")
+    web_cap = ctx.web_cap
     rpol = ctx.rpol
     q_category = ctx.q_category
     clf_profile = ctx.clf_profile
@@ -436,6 +438,7 @@ async def run_agent_stream(req, user, ctx):
         return StreamingResponse(direct_chat(), media_type="text/event-stream")
 
     async def event_stream():
+        web_used = 0                # web calls made this run, against web_cap
         actions_taken = []
         seen_reads: dict = {}       # (tool, args) -> times a read-only lookup was already run this request
         final_content = ""
@@ -725,14 +728,17 @@ async def run_agent_stream(req, user, ctx):
                               "memory_read", "memory_append", "memory_str_replace",
                               "create_plan", "update_plan_item", "get_plan", "finish") + EXECUTOR_TEST_TOOLS
                              or t.get("function", {}).get("name", "").startswith("mcp__")],
-                            surface_q, APP_CONFIG.get("tool_surface"))
+                            surface_q, surface_cfg)
                     else:
                         tools_for_lane = tool_surface.filter_tools(
-                            all_tools(), surface_q, APP_CONFIG.get("tool_surface"))
+                            all_tools(), surface_q, surface_cfg)
                 if custom_agent_tools:
                     tools_for_lane = [t for t in tools_for_lane if t.get("function", {}).get("name") in custom_agent_tools]
                 if hidden_tools:
                     tools_for_lane = [t for t in tools_for_lane if t.get("function", {}).get("name") not in hidden_tools]
+                if web_cap is not None and web_used >= web_cap:     # research budget spent: answer from what is in hand
+                    tools_for_lane = [t for t in tools_for_lane
+                                      if t.get("function", {}).get("name") not in ("web_search", "web_fetch", "web_search_images")]
                 # S1: MCP schemas only for mentioned/used servers (+ explicit
                 # custom-agent allowlist). A lane that needs a hidden family
                 # delegates via spawn_agent (full set), per the escape hatch.
@@ -748,7 +754,7 @@ async def run_agent_stream(req, user, ctx):
                 # a "missing" tool is explainable. A child spawned via spawn_agent still
                 # receives the full set (core/subagent.py), so the orchestrator can
                 # delegate browser / device / document work it cannot call itself.
-                hidden_fams = tool_surface.hidden_families(surface_q, APP_CONFIG.get("tool_surface"))
+                hidden_fams = tool_surface.hidden_families(surface_q, surface_cfg)
 
                 # A multi-step job starts with the todo list: until create_plan has run, only it and the
                 # read-only tools are offered (create_plan alone from the second try; it gives up after
@@ -995,7 +1001,7 @@ async def run_agent_stream(req, user, ctx):
                     esc_tools = ([t for t in all_tools()
                                   if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
                                  if req.plan else tool_surface.filter_tools(
-                                     all_tools(), surface_q, APP_CONFIG.get("tool_surface")))
+                                     all_tools(), surface_q, surface_cfg))
                     if custom_agent_tools:
                         esc_tools = [t for t in esc_tools if t.get("function", {}).get("name") in custom_agent_tools]
                     esc_tools = prompt_scope.hide_unmentioned_mcp(
@@ -1241,6 +1247,7 @@ async def run_agent_stream(req, user, ctx):
                     }
                     clean_tool_calls.append(clean_tc)
                     parsed_actions.append((name, tc_id, args))
+                web_used += sum(1 for _n, _i, _a in parsed_actions if _n in ("web_search", "web_fetch", "web_search_images"))
 
                 # semantic loop detection: identical tool+args attempted again
                 sigs = [(name, json.dumps(args, sort_keys=True, default=str))

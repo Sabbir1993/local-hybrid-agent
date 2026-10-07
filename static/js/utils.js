@@ -109,7 +109,85 @@ if (typeof MutationObserver !== 'undefined' && document.documentElement) {
   }).observe(document.documentElement, { childList: true, subtree: true });
 }
 
-function md(s) {
+// The previous regex renderer: used only when marked / DOMPurify did not load (static/js/markdown.js).
+function mdProseLegacy(text) {
+  // files shown as an inline image here: their download chips would repeat them
+  const shown = new Set();
+  String(text).replace(/!\[[^\]]*\]\((?:\/agent\/raw|\/raw)\?path=([^)&\s]+)[^)]*\)/g, (_, p) => {
+    try { shown.add(decodeURIComponent(p)); } catch (e) { shown.add(p); }
+    return _;
+  });
+  let t = esc(text);
+  t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+  t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  t = t.replace(/^#{1,3} (.*)$/gm, '<b>$1</b>');
+  t = t.replace(/^\s*[-*] (.*)$/gm, '• $1');
+
+  // Highlight internal directives (/commands, /skills) and file tags (@files)
+  t = t.replace(/(^|[\s\[({,;:"'])\/([a-zA-Z0-9_\-]+)(?=$|[\s\])}>.,;:!?])/g,
+    '$1<span class="token-hl token-cmd" title="Internal directive: /$2">/$2</span>');
+  t = t.replace(/(^|[\s\[({,;:"'])@([\w\-./\\]+\.[\w]+)(?=$|[\s\])}>.,;:!?])/g,
+    '$1<span class="token-hl token-tag" title="Target file: @$2">@$2</span>');
+
+  // `t` is already HTML-escaped here, so captured groups are safe inside a
+  // quoted attribute. Model text never goes into inline JS (onclick=...):
+  // the browser would decode &#39; back to ' and let it break out of the
+  // JS string. Clicks are handled by the delegated [data-preview-path]
+  // listener below instead.
+
+  // 1. Render markdown images: ![alt](url)
+  t = t.replace(/!\[([^\]]*)\]\(((?:https?:\/\/|\/agent\/raw|\/raw)[^)]+)\)/g, (match, alt, url) => {
+    if (!isLocalMediaUrl(url)) return externalImageButton(url, alt);
+    return `<span class="chat-inline-media"><img src="${url}" alt="${alt}" class="chat-inline-img" loading="lazy" title="Click to enlarge" /></span>`;
+  });
+
+  // 2. Render links, file download buttons & SEO favicon citation pills
+  t = t.replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/agent\/download|\/download)[^)]+)\)/g, (match, text, url) => {
+    if (url.startsWith('/agent/download') || url.startsWith('/download')) {
+      const m = url.match(/[?&]path=([^&]+)/);
+      let fpath = text;
+      if (m) { try { fpath = esc(decodeURIComponent(m[1])); } catch (e) { fpath = m[1]; } }
+      if (m && shown.has(_unesc(fpath))) return '';
+      return `<span style="display:inline-flex; align-items:center; gap:4px; margin:2px 0;">
+        <button type="button" class="file-action-badge primary" data-preview-path="${fpath}" data-preview-title="${text}" title="Preview ${text}">👁️ Preview ${text}</button>
+        <a href="${url}" class="file-action-badge" download title="Download ${text}">⬇</a>
+      </span>`;
+    }
+    const isNumericCitation = /^(\d+|\[\d+\]|ref\.?\s*\d+|\^?\d+\^?)$/i.test(text.trim());
+    const domain = extractDomain(url);
+    if (isNumericCitation && domain) {
+      const safeDomain = esc(domain);
+      const safeFavicon = esc(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`);
+      return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="citation-pill" title="${safeDomain} - Click to open source">`
+        + `<img src="${safeFavicon}" class="citation-favicon" alt="" loading="lazy" />`
+        + `<span class="citation-host">${safeDomain}</span>`
+        + `</a>`;
+    }
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+  });
+
+  // 3a. [VIDEO: generated/x.mp4] markers from /video and generate_video: inline player
+  t = t.replace(/\[VIDEO:\s*([^\]]+)\]/g, (_, fname) => {
+    const src = `/agent/raw?path=${encodeURIComponent(fname.trim())}`;
+    return `<span class="chat-inline-media"><video class="chat-inline-video" controls preload="metadata" src="${src}"></video></span>`;
+  });
+
+  // 3. Parse [DOWNLOAD: filename] markers emitted by the agent
+  t = t.replace(/\[DOWNLOAD:\s*([^\]]+)\]/g, (_, fname) => {
+    const cleanName = fname.trim();
+    if (shown.has(_unesc(cleanName))) return '';
+    const url = `/agent/download?path=${encodeURIComponent(cleanName)}`;
+    return `<span style="display:inline-flex; align-items:center; gap:4px; margin:2px 0;">
+      <button type="button" class="file-action-badge primary" data-preview-path="${cleanName}" data-preview-title="${cleanName}" title="Preview ${cleanName}">👁️ Preview ${cleanName}</button>
+      <a href="${url}" class="file-action-badge" download="${cleanName}" title="Download ${cleanName}">⬇ Download</a>
+    </span>`;
+  });
+  t = t.replace(/\n/g, '<br>');
+  return t;
+}
+
+// opts.streaming: the reply is still arriving (unfinished **bold** / `code` in the last paragraph are closed for display)
+function md(s, opts) {
   // split fences BEFORE escaping: hlCode() escapes internally
   const parts = String(s).split(/```/);
   let out = '';
@@ -135,79 +213,8 @@ function md(s) {
         out += codeBlockHtml(rawLang, code, lang ? hlCode(code, lang) : esc(code));
       }
     } else {
-      // files shown as an inline image here: their download chips would repeat them
-      const shown = new Set();
-      String(parts[i]).replace(/!\[[^\]]*\]\((?:\/agent\/raw|\/raw)\?path=([^)&\s]+)[^)]*\)/g, (_, p) => {
-        try { shown.add(decodeURIComponent(p)); } catch (e) { shown.add(p); }
-        return _;
-      });
-      let t = esc(parts[i]);
-      t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
-      t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      t = t.replace(/^#{1,3} (.*)$/gm, '<b>$1</b>');
-      t = t.replace(/^\s*[-*] (.*)$/gm, '• $1');
-
-      // Highlight internal directives (/commands, /skills) and file tags (@files)
-      t = t.replace(/(^|[\s\[({,;:"'])\/([a-zA-Z0-9_\-]+)(?=$|[\s\])}>.,;:!?])/g,
-        '$1<span class="token-hl token-cmd" title="Internal directive: /$2">/$2</span>');
-      t = t.replace(/(^|[\s\[({,;:"'])@([\w\-./\\]+\.[\w]+)(?=$|[\s\])}>.,;:!?])/g,
-        '$1<span class="token-hl token-tag" title="Target file: @$2">@$2</span>');
-
-      // `t` is already HTML-escaped here, so captured groups are safe inside a
-      // quoted attribute. Model text never goes into inline JS (onclick=...):
-      // the browser would decode &#39; back to ' and let it break out of the
-      // JS string. Clicks are handled by the delegated [data-preview-path]
-      // listener below instead.
-
-      // 1. Render markdown images: ![alt](url)
-      t = t.replace(/!\[([^\]]*)\]\(((?:https?:\/\/|\/agent\/raw|\/raw)[^)]+)\)/g, (match, alt, url) => {
-        if (!isLocalMediaUrl(url)) return externalImageButton(url, alt);
-        return `<span class="chat-inline-media"><img src="${url}" alt="${alt}" class="chat-inline-img" loading="lazy" title="Click to enlarge" /></span>`;
-      });
-
-      // 2. Render links, file download buttons & SEO favicon citation pills
-      t = t.replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/agent\/download|\/download)[^)]+)\)/g, (match, text, url) => {
-        if (url.startsWith('/agent/download') || url.startsWith('/download')) {
-          const m = url.match(/[?&]path=([^&]+)/);
-          let fpath = text;
-          if (m) { try { fpath = esc(decodeURIComponent(m[1])); } catch (e) { fpath = m[1]; } }
-          if (m && shown.has(_unesc(fpath))) return '';
-          return `<span style="display:inline-flex; align-items:center; gap:4px; margin:2px 0;">
-            <button type="button" class="file-action-badge primary" data-preview-path="${fpath}" data-preview-title="${text}" title="Preview ${text}">👁️ Preview ${text}</button>
-            <a href="${url}" class="file-action-badge" download title="Download ${text}">⬇</a>
-          </span>`;
-        }
-        const isNumericCitation = /^(\d+|\[\d+\]|ref\.?\s*\d+|\^?\d+\^?)$/i.test(text.trim());
-        const domain = extractDomain(url);
-        if (isNumericCitation && domain) {
-          const safeDomain = esc(domain);
-          const safeFavicon = esc(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`);
-          return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="citation-pill" title="${safeDomain} - Click to open source">`
-            + `<img src="${safeFavicon}" class="citation-favicon" alt="" loading="lazy" />`
-            + `<span class="citation-host">${safeDomain}</span>`
-            + `</a>`;
-        }
-        return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
-      });
-
-      // 3a. [VIDEO: generated/x.mp4] markers from /video and generate_video: inline player
-      t = t.replace(/\[VIDEO:\s*([^\]]+)\]/g, (_, fname) => {
-        const src = `/agent/raw?path=${encodeURIComponent(fname.trim())}`;
-        return `<span class="chat-inline-media"><video class="chat-inline-video" controls preload="metadata" src="${src}"></video></span>`;
-      });
-
-      // 3. Parse [DOWNLOAD: filename] markers emitted by the agent
-      t = t.replace(/\[DOWNLOAD:\s*([^\]]+)\]/g, (_, fname) => {
-        const cleanName = fname.trim();
-        if (shown.has(_unesc(cleanName))) return '';
-        const url = `/agent/download?path=${encodeURIComponent(cleanName)}`;
-        return `<span style="display:inline-flex; align-items:center; gap:4px; margin:2px 0;">
-          <button type="button" class="file-action-badge primary" data-preview-path="${cleanName}" data-preview-title="${cleanName}" title="Preview ${cleanName}">👁️ Preview ${cleanName}</button>
-          <a href="${url}" class="file-action-badge" download="${cleanName}" title="Download ${cleanName}">⬇ Download</a>
-        </span>`;
-      });
-      t = t.replace(/\n/g, '<br>');
-      out += t;
+      const html = (typeof mdRender === 'function') ? mdRender(parts[i], opts) : null;
+      out += html !== null && html !== undefined ? html : mdProseLegacy(parts[i]);
     }
   }
   return out;

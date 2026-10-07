@@ -19,6 +19,9 @@ def _source_public(row) -> dict:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "roles": auth_db.get_source_role_names(row["id"]),
+        "cloud_ok": bool(row["cloud_ok"]),
+        "category": row["category"],
+        "cloud_effective": row["id"] in auth_db.cloud_ok_source_ids(),
     }
 
 

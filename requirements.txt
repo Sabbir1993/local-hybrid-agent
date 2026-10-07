@@ -25,6 +25,7 @@ pdfminer.six>=20251107     # CMap pickle-loading fix (pulled in by pdfplumber)
 python-pptx>=1.0
 python-docx>=1.1
 reportlab>=4.0
+markdown-it-py>=3.0       # Markdown -> HTML for generated PDFs (tables, lists, quotes); pinned + hashed in requirements.lock
 # NOTE: pandas was removed here. It had zero imports across core/, routes/, tests/ and scripts/
 # - the only hit was a string inside a system prompt telling the MODEL it may `import pandas`.
 # It cost ~12 MB, a supply-chain entry, and a hash-locked install for nothing. If an agent tool

@@ -104,6 +104,22 @@ CREATE TABLE IF NOT EXISTS knowledge_sources (
     updated_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_categories (
+    name TEXT PRIMARY KEY,
+    cloud_ok INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    builtin INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS knowledge_source_role_access (
     source_id INTEGER NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
     role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
@@ -243,6 +259,20 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _seed_knowledge_classification(conn) -> None:
+    """Default categories and sensitive-content rules, only when the tables are empty so an admin's
+    edits (including deleting a default) are never undone."""
+    from .knowledge_defaults import DEFAULT_CATEGORIES, DEFAULT_RULES
+    now = time.time()
+    if not conn.execute("SELECT 1 FROM knowledge_categories LIMIT 1").fetchone():
+        conn.executemany("INSERT INTO knowledge_categories (name, cloud_ok, created_at) VALUES (?, ?, ?)",
+                         [(n, ok, now) for n, ok in DEFAULT_CATEGORIES])
+    if not conn.execute("SELECT 1 FROM knowledge_rules LIMIT 1").fetchone():
+        conn.executemany("INSERT INTO knowledge_rules (name, kind, pattern, enabled, builtin, created_at) "
+                         "VALUES (?, ?, ?, 1, 1, ?)", [(n, k, p, now) for n, k, p in DEFAULT_RULES])
+    conn.commit()
+
+
 def init_tables(conn) -> None:
     conn.executescript(SCHEMA_SCRIPT)
     conn.commit()
@@ -265,6 +295,14 @@ def init_tables(conn) -> None:
         conn.execute("ALTER TABLE user_custom_agents ADD COLUMN share_status TEXT DEFAULT ''")
         conn.execute("UPDATE user_custom_agents SET share_status = 'approved' WHERE is_public = 1 AND user_id IS NOT NULL")
         conn.commit()
+    if "cloud_ok" not in {r[1] for r in conn.execute("PRAGMA table_info(knowledge_sources)")}:
+        # admin decides per source whether cloud models may read it; existing sources stay local-only
+        conn.execute("ALTER TABLE knowledge_sources ADD COLUMN cloud_ok INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    if "category" not in {r[1] for r in conn.execute("PRAGMA table_info(knowledge_sources)")}:
+        conn.execute("ALTER TABLE knowledge_sources ADD COLUMN category TEXT")
+        conn.commit()
+    _seed_knowledge_classification(conn)
     _seed_defaults(conn)
     try:
         from .custom_agents_seed import _seed_starter_custom_agents

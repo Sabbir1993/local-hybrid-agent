@@ -89,6 +89,21 @@ WEB_MANUAL = (
     "unless the user wrote them."
 )
 
+# Lean web hint (~150 tokens instead of ~800): the knowledge base already covers (part of) the question, so
+# the web is only for what it does not contain. Format with the call budget.
+WEB_LEAN = (
+    "WEB (gap-filling): {kb} Use `web_search` only for the part that is missing - public or general facts - "
+    "at most {n} call(s), and stop as soon as you have enough. Tag claims [KB: title] or [Web: site]; never "
+    "present web results as company records, and never put company data in a search query.")
+WEB_LEAN_KB = {
+    "used": "The company knowledge base above covers the company-specific part of this question.",
+    "blocked": "The company knowledge base is withheld from this run, so internal facts are unavailable.",
+    "none": "The company knowledge base has nothing on this.",
+}
+# only when both the KB block and the full web manual are in the prompt
+PROVENANCE = ("SOURCES: tag claims [KB: title] when they come from the company knowledge base and [Web: site] "
+              "when they come from the web. Never present web results as company records.")
+
 
 def file_intent(query: str, file_followup=None, prior_files=None) -> bool:
     """True when the file manual + doc tools earn their tokens this turn."""

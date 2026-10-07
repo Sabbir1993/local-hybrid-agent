@@ -102,5 +102,44 @@ vm.runInContext(previewSrc, ctx);
   cards.forEach(c => assert.ok(c.includes('data-preview-source="ws"'),
     'a tool-card preview button must declare its source: ' + c));
 
+  // --- PDF / HTML / image previews: a server-generated file lives in the common space -------------
+  // (the reported bug: a PDF the server wrote showed "File Not Found On Disk" from an agent tool card,
+  // because the card said source:'ws' and the PDF viewer used that URL with no fallback)
+  const realFetch = ctx.fetch;
+  const serve = (okPrefix) => async (url) => {
+    fetched.push(url);
+    const ok = url.startsWith(okPrefix);
+    return { ok, status: ok ? 200 : 404, headers: { get: () => 'application/pdf' }, json: async () => ({ error: 'nope' }) };
+  };
+
+  ctx.fetch = serve('/agent/raw');                         // only the common space has the file
+  fetched = [];
+  await ctx.openFilePreview('Report-eacd3c32.pdf', 'Report.pdf', null, { source: 'ws' });
+  assert.ok(fetched[0].startsWith('/agent/ws/raw'), 'workspace is tried first: ' + fetched);
+  assert.ok(fetched[fetched.length - 1].startsWith('/agent/raw'), 'the PDF viewer ends up on the common space: ' + fetched);
+  assert.strictEqual(fetched.filter(u => u.startsWith('/agent/ws/raw')).length, 1, 'workspace is probed only once');
+  assert.ok(els['preview-raw-link'].href.startsWith('/agent/raw'), 'the "New Tab" link follows the working URL');
+
+  ctx.fetch = serve('/agent/ws/raw');                      // a real project PDF on the user\'s machine
+  fetched = [];
+  await ctx.openFilePreview('docs/spec.pdf', 'spec.pdf', null, { source: 'ws' });
+  assert.ok(fetched.every(u => u.startsWith('/agent/ws/raw')), 'a workspace PDF never touches the common space: ' + fetched);
+
+  ctx.fetch = serve('/agent/raw');                         // plain common-space preview: no probing at all
+  fetched = [];
+  await ctx.openFilePreview('Report-eacd3c32.pdf', 'Report.pdf');
+  assert.deepStrictEqual(fetched.map(u => u.split('?')[0]), ['/agent/raw'], 'one request, straight to the common space');
+
+  ctx.fetch = serve('/agent/raw');                         // images use the same fallback
+  fetched = [];
+  let imgUrl = null;
+  const realImg = ctx.renderImagePreview;
+  ctx.renderImagePreview = (u) => { imgUrl = u; };         // which URL the image viewer is given
+  await ctx.openFilePreview('chart-1a2b3c4d.png', 'chart.png', null, { source: 'ws' });
+  ctx.renderImagePreview = realImg;
+  assert.ok(fetched[0].startsWith('/agent/ws/raw'), 'image: workspace probed first: ' + fetched);
+  assert.ok(imgUrl && imgUrl.startsWith('/agent/raw?path='), 'image: the viewer is given the common-space URL after the miss: ' + imgUrl);
+  ctx.fetch = realFetch;
+
   console.log('preview routing ok (' + cards.length + ' tool-card buttons)');
 })().catch(e => { console.error(e); process.exit(1); });

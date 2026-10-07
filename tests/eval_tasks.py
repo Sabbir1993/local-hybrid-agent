@@ -79,6 +79,15 @@ TASKS = [
          prompt="What is the company's annual leave entitlement? Use the knowledge base.",
          expect_tools=["fetch_company_knowledge", "search_knowledge"]),
 
+    # KB-first / web-for-the-gap routing (core/kb_coverage.py): token burn, not just correctness
+    dict(name="routing_kb_answer_no_web", category="retrieval", soft=True,
+         prompt="What is the company's annual leave entitlement? Answer from the knowledge base only.",
+         forbid_tools=["web_search", "web_fetch"]),
+
+    dict(name="routing_general_question_no_tools", category="retrieval", soft=True,
+         prompt="In two sentences, explain what a hash map is.",
+         forbid_tools=["web_search", "web_fetch", "search_knowledge_base"]),
+
     dict(name="retrieval_memory_lookup", category="retrieval", soft=True,
          prompt="Search your memory for anything I told you about my preferences.",
          expect_tools=["search_memory"]),

@@ -35,7 +35,7 @@ from core.auth import Principal
 from core.audit import audit_log
 from core.db import db_get_plan_items, db_session_owner
 from core.grammar import envelope_examples
-from core.knowledge_access import allowed_source_ids_for, kb_local_only, set_kb_cloud_blocked
+from core.knowledge_access import allowed_source_ids_for, hits_need_local, kb_local_only, set_kb_cloud_blocked
 from core.plugins import plugins_prompt_fragment
 from core.project_context import load_project_instructions, prompt_block as project_prompt_block
 from core import reasoning as reasoning_mod
@@ -88,6 +88,8 @@ class RunContext:
     clf_profile: Optional[dict] = None
     kb_ids: set = field(default_factory=set)
     kb_blocked_reason: str = ""
+    surface_cfg: dict = field(default_factory=dict)   # tool_surface config + this run's web_extra
+    web_cap: Optional[int] = None                      # web calls allowed this run (None = no cap)
     sys_prompt: str = ""
     ws_path: str = ""
     use_executor: bool = False
@@ -425,6 +427,7 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     kb_hits = []
     ctx.kb_blocked_reason = ""
     kb_prompt = ""
+    cov_hits = []
     if ctx.kb_ids and _kb_query.strip():
         try:
             from core.knowledge_router import fetch_company_knowledge, kb_routing_query, is_company_or_kb_query
@@ -437,12 +440,13 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
                 _top_cos = max(float(h.get("cos") or 0.0) for h in kb_hits)
                 if not (is_company_or_kb_query(_kb_route_q, ctx.kb_ids) or _top_cos >= _auto_cos):
                     kb_hits, kb_prompt = [], ""
+            cov_hits = list(kb_hits)         # scores only feed the web decision (also when the text is withheld)
         except Exception as e:
             print(f"[agent] knowledge retrieval failed: {e}", file=sys.stderr)
     # Data residency (core/knowledge_access.py): internal knowledge never goes
     # to a cloud provider. A run whose question hits the KB is moved onto the
     # local lanes; if the local main model can't run, the KB context is withheld.
-    if kb_hits and (ctx.use_cloud_main or ctx.cloud_exec) and kb_local_only():
+    if kb_hits and (ctx.use_cloud_main or ctx.cloud_exec) and kb_local_only() and hits_need_local(kb_hits):
         target = state.profile_path or state.profile or common.initial_profile_path
         local_err = "" if target else "no local model profile is configured"
         try:
@@ -464,7 +468,9 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
                       detail={"reason": local_err or "local model not running"}, result="deny")
             ctx.sys_prompt += ("\n\nNOTE: The company knowledge base is restricted to local models and no "
                                "local model is loaded, so internal company data is not available for this "
-                               "answer. Tell the user this instead of guessing.")
+                               "answer. Tell the user this instead of guessing. If web search is available "
+                               "you may use it for general or public information, but say clearly it comes "
+                               "from the public web, not company records.")
             sys_labels.append("kb-note")
     if kb_hits:
         ctx.sys_prompt += "\n\n" + kb_prompt
@@ -543,6 +549,19 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             ctx.last_query = str(m.get("content", ""))
             break
     ctx.surface_q = tool_surface.surface_query(ctx.msgs) or ctx.last_query
+    # Web tools on demand (tool_surface.web_on_demand, off by default): offered when the request reads like a web
+    # request or the KB only partly covers it; capped per run, and the cap grows with reasoning effort.
+    ctx.surface_cfg = dict(APP_CONFIG.get("tool_surface") or {})
+    if ctx.surface_cfg.get("web_on_demand", False) and (APP_CONFIG.get("capabilities") or {}).get("web", False):
+        from core import kb_coverage
+        _explicit = prompt_scope.web_intent(ctx.surface_q, [], [])
+        _cov = (await kb_coverage.resolve(_kb_query, cov_hits, blocked=bool(ctx.kb_blocked_reason))
+                if (ctx.kb_ids and not _explicit) else "none")
+        _tier = kb_coverage.tier(ctx.effort, False)
+        ctx.surface_cfg["web_extra"] = _cov == "partial"
+        ctx.web_cap = kb_coverage.web_budget(_cov, _tier, _explicit)
+        print(f"[agent] route kb={_cov} web_extra={ctx.surface_cfg['web_extra']} cap={ctx.web_cap} tier={_tier}",
+              file=sys.stderr)
     # P0 ruler (S5): composition via labels; per-lane tool counts vary per step.
     prompt_scope.maybe_log("agent/setup", [("system", ctx.sys_prompt)], None,
                            extra=f"blocks={'+'.join(sys_labels)} msgs={len(ctx.msgs)}")

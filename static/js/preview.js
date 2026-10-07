@@ -107,6 +107,21 @@ async function openFilePreview(filePath, title = '', directContent = null, opts 
     return r;
   };
 
+  // PDF / HTML / image previews hand a URL to a viewer, so they need the URL that actually serves the file. A file
+  // the SERVER generated (PDF, Office, images) lives in the common space even when the card that opened the
+  // preview said "workspace": try the workspace endpoint, and fall back to common once if it has no such file.
+  const pickRawUrl = async () => {
+    if (!isWs) return rawUrl;
+    try {
+      const r = await fetch(rawUrl);
+      if (r.body && r.body.cancel) r.body.cancel();      // only the status matters here
+      if (r.ok) return rawUrl;
+    } catch (_) { /* fall through to common space */ }
+    const common = `/agent/raw?path=${enc}`;
+    if (rawBtn) rawBtn.href = common;
+    return common;
+  };
+
   // Choose icon based on filetype
   const iconMap = {
     html: '🌐', htm: '🌐', svg: '🖼️', mermaid: '📊', mmd: '📊',
@@ -122,7 +137,7 @@ async function openFilePreview(filePath, title = '', directContent = null, opts 
 
   try {
     if (ext === 'html' || ext === 'htm') {
-      renderHtmlPreview(rawUrl, directContent, contentEl, controlsEl);
+      renderHtmlPreview(directContent || !filePath ? rawUrl : await pickRawUrl(), directContent, contentEl, controlsEl);
     } else if (ext === 'mermaid' || ext === 'mmd') {
       let code = directContent;
       if (!code && filePath) {
@@ -146,7 +161,7 @@ async function openFilePreview(filePath, title = '', directContent = null, opts 
       }
       renderExcelPreview(buf, contentEl, controlsEl);
     } else if (ext === 'pdf') {
-      renderPdfPreview(rawUrl, contentEl, controlsEl);
+      renderPdfPreview(await pickRawUrl(), contentEl, controlsEl);
     } else if (ext === 'pptx') {
       const r = await fetch(`/agent/slides?path=${encodeURIComponent(filePath)}`);
       const data = await r.json().catch(() => ({}));
@@ -155,7 +170,7 @@ async function openFilePreview(filePath, title = '', directContent = null, opts 
     } else if (['ppt', 'doc', 'docx', 'xlsm', 'pptm', 'zip'].includes(ext)) {
       contentEl.innerHTML = `<div style="padding:40px 24px; text-align:center; color:var(--dim); font-size:12px;">No inline preview for .${esc(ext)} files. Use ⬇ Download to open it.</div>`;
     } else if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'ico'].includes(ext) || (filePath && filePath.startsWith('http') && !filePath.includes('.pdf') && !filePath.includes('.csv'))) {
-      renderImagePreview(filePath && filePath.startsWith('http') ? filePath : rawUrl, contentEl, controlsEl);
+      renderImagePreview(filePath && filePath.startsWith('http') ? filePath : await pickRawUrl(), contentEl, controlsEl);
     } else if (ext === 'md') {
       let text = directContent;
       if (!text && filePath) {

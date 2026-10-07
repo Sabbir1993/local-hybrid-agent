@@ -108,18 +108,26 @@ async def tool_search_knowledge_base(args: dict) -> str:
     query = args.get("query", "")
     if not query:
         raise ValueError("query required")
-    from ..knowledge_access import KB_CLOUD_BLOCKED_MSG, kb_cloud_blocked
-    if kb_cloud_blocked():
-        return KB_CLOUD_BLOCKED_MSG
+    from ..knowledge_access import KB_CLOUD_BLOCKED_MSG, kb_cloud_blocked, cloud_ok_ids
     uid = get_current_user_id()
     from ..auth import _to_principal
     from ..knowledge_access import allowed_source_ids_for
     user = _to_principal(uid) if uid is not None else None
     kb_ids = allowed_source_ids_for(user)
+    if kb_cloud_blocked():                 # a cloud model reads the result: only admin-approved sources
+        kb_ids = cloud_ok_ids(kb_ids)
+        if not kb_ids:
+            return KB_CLOUD_BLOCKED_MSG
     if not kb_ids:
         return "(no accessible company knowledge base sources for this user account)"
     from ..knowledge_router import fetch_company_knowledge
     hits, _ = await fetch_company_knowledge(query, allowed_source_ids=kb_ids, k=6)
+    if kb_cloud_blocked():                 # also drop chunks that trip a sensitive-content rule
+        from ..knowledge_access import cloud_safe_hits
+        held = len(hits)
+        hits = cloud_safe_hits(hits)
+        if held and not hits:
+            return KB_CLOUD_BLOCKED_MSG
     if not hits:
         return f"(no matching company knowledge base records found for '{query}')"
     lines = []

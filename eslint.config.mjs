@@ -103,6 +103,8 @@ export default defineConfig([
         // vendored libs (static/vendor/*.js) expose globals
         mermaid: "readonly",
         XLSX: "readonly",
+        marked: "readonly",
+        DOMPurify: "readonly",
         // shared app namespace: window.* exports, computed from source above
         ...appGlobals,
       },
