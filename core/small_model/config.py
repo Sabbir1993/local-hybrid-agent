@@ -114,6 +114,8 @@ def _load_app_config() -> dict:
             "allow_cloud_audio": False,
             "limits": {"image_per_day": 50, "video_per_day": 5},
             "max_audio_mb": 25,
+            "max_video_mb": 100,
+            "video_understanding": {"max_frames": 16, "max_minutes": 10},
         },
     }
     # Role definitions live in config/roles.json: they merge over the built-in defaults.

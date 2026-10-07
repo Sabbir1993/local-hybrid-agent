@@ -178,6 +178,97 @@ class RoutingTests(LaneTestBase):
         with self.assertRaises(ValueError):
             lanes.save_user_lane(1, "a1", {"fallback": "a1"})
 
+    def test_fallback_disabled_removes_the_chain(self):
+        key = self.add_cloud()
+        # first save: fallback to main (normal state)
+        lanes.save_user_lane(1, "fb-off", {"kind": "chat", "cloud": key, "fallback": "main"})
+        # then disable the flag: the registry must drop the fallback entirely
+        lanes.save_user_lane(1, "fb-off", {"fallback_enabled": False})
+        reg = lanes.registry(1)
+        self.assertIsNone(reg["fb-off"]["fallback"])
+        lanes.set_role_map(1, {"summarize": "fb-off"})
+        route = [t.lane for t in lanes.targets("summarize", 1)]
+        self.assertEqual(route, ["fb-off"])
+
+    def test_fallback_flag_defaults_to_main(self):
+        key = self.add_cloud()
+        lanes.save_user_lane(1, "fb-on", {"kind": "chat", "cloud": key, "fallback": "main"})
+        reg = lanes.registry(1)
+        self.assertEqual(reg["fb-on"]["fallback"], "main")
+
+    def test_fallback_off_plus_explicit_fallback_rejected(self):
+        key = self.add_cloud()
+        with self.assertRaises(ValueError):
+            lanes.save_user_lane(1, "fb-bad", {"kind": "chat", "cloud": key,
+                                               "fallback_enabled": False, "fallback": "main"})
+
+    def test_executor_lane_as_vision_serves_both_jobs(self):
+        """One vision-capable model on the executor lane may serve BOTH routine
+        tool calls and image reading from a single process: a vision lane
+        accepts chat jobs, and the loop keys on the lane name (2026-10-07)."""
+        self.sm_cfg["executor"] = {"model": "o.gguf", "mmproj": "mm.gguf",
+                                   "port": 8091, "kind": "vision"}
+        self.insts["executor"] = _Inst("executor", kind="vision")
+        self.insts.pop("vision", None)
+        reg = lanes.registry(1)
+        self.assertEqual(reg["executor"]["kind"], "vision")
+        # both jobs validate onto the executor lane
+        self.assertIsNone(lanes.validate_mapping("agent.tool_step", "executor", 1))
+        self.assertIsNone(lanes.validate_mapping("vision", "executor", 1))
+
+    def test_vision_auto_picks_who_can_see(self):
+        """Reading images is automatic: main if it can see (case 3), else a vision-capable
+        helper (case 1), else the dedicated image reader on its own port (case 2)."""
+        self.assertEqual(lanes.role_map(1)["vision"], "vision")           # case 2: nobody else sees
+        self.sm_cfg["executor"]["mmproj"] = "mm.gguf"                      # case 1: helper + mmproj
+        self.assertEqual(lanes.role_map(1)["vision"], "executor")
+        self.assertEqual(lanes.targets("vision", 1)[0].lane, "executor")
+        from core.state import state
+        state.profile = {"vision_capable": True}                           # case 3: main sees
+        self.assertEqual(lanes.role_map(1)["vision"], "main")
+        self.assertEqual([t.lane for t in lanes.targets("vision", 1)][:2], ["main", "executor"])
+        # an explicit pick still wins over the automatic one
+        lanes.set_role_map(1, {"vision": "vision"})
+        self.assertEqual(lanes.role_map(1)["vision"], "vision")
+
+    def test_text_main_is_not_a_vision_lane(self):
+        self.assertFalse(lanes.registry(1)["main"]["vision"])
+        self.assertIn("needs an image model", lanes.validate_mapping("vision", "main", 1))
+
+    def test_save_executor_with_vision_single_process(self):
+        with mock.patch.object(small_model.small_models, "reconfigure", lambda *a, **k: None),                 mock.patch("core.config.update_app_config", lambda fn: fn(small_model.APP_CONFIG)),                 mock.patch("core.profiles.in_helper_dir", lambda p: True),                 mock.patch("core.profiles.in_media_dir", lambda p, k: False),                 mock.patch("pathlib.Path.exists", lambda self: True):
+            lanes.save_local_lane("executor", {"model": "o.gguf", "mmproj": "mm.gguf", "vision": True})
+            self.assertEqual(self.sm_cfg["executor"]["kind"], "vision")
+            self.assertTrue(lanes.registry(1)["executor"]["vision"])
+            lanes.save_local_lane("executor", {"vision": False})
+            self.assertNotIn("kind", self.sm_cfg["executor"])
+            self.assertNotIn("mmproj", self.sm_cfg["executor"])
+            self.assertFalse(lanes.registry(1)["executor"]["vision"])
+
+    def test_cloud_vision_marker(self):
+        cloud.save_provider(1, "p", {"base_url": "https://api.example/v1", "api_key": "[PLACEHOLDER_KEY]",
+                                     "models": [{"id": "m", "ctx": 1000, "vision": True}, {"id": "t"}]})
+        self.assertTrue(cloud.get_cloud("p/m", 1).can_vision)
+        self.assertFalse(cloud.get_cloud("p/t", 1).can_vision)
+        # re-saving without the flag keeps ctx and marker; False clears it
+        cloud.save_provider(1, "p", {"models": [{"id": "m"}]})
+        self.assertTrue(cloud.get_cloud("p/m", 1).can_vision)
+        self.assertEqual(cloud.get_cloud("p/m", 1).ctx, 1000)
+        cloud.save_provider(1, "p", {"models": [{"id": "m", "vision": False}]})
+        self.assertFalse(cloud.get_cloud("p/m", 1).can_vision)
+        # a chat lane on a vision-marked model, or carrying its own marker, may read images
+        cloud.save_provider(1, "p", {"models": [{"id": "m", "vision": True}]})
+        lanes.save_user_lane(1, "seer", {"kind": "chat", "cloud": "p/m"})
+        self.assertTrue(lanes.registry(1)["seer"]["vision"])
+        self.assertIsNone(lanes.validate_mapping("vision", "seer", 1))
+        lanes.save_user_lane(1, "plain", {"kind": "chat", "cloud": "p/t"})
+        self.assertFalse(lanes.registry(1)["plain"]["vision"])
+        lanes.save_user_lane(1, "plain", {"vision": True})
+        self.assertTrue(lanes.registry(1)["plain"]["vision"])
+        # main bound to a vision-marked cloud model sees, so it becomes the automatic reader
+        cloud.write_user_section(1, "cloud", {"main": "p/m"})
+        self.assertEqual(lanes.role_map(1)["vision"], "main")
+
     def test_builtin_lane_cannot_be_deleted(self):
         with self.assertRaises(ValueError):
             lanes.delete_local_lane("executor")

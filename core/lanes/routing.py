@@ -1,12 +1,13 @@
 import sys
 from typing import Optional
 
-from .constants import JOBS, SHARED_MEDIA_JOBS, kind_ok
+from .constants import JOBS, SHARED_MEDIA_JOBS
 from .registry import (
     _load_rank,
     _shared_media_lanes,
     allow_cloud_audio,
     default_lane,
+    job_ok,
     registry,
     role_map,
     validate_mapping,
@@ -29,11 +30,18 @@ def targets(job: str, user_id: Optional[int] = None, force_local: bool = False) 
 
     chain, seen = [], set()
     lane = mapped
+    hard_stop = False   # a lane with fallback_enabled=False ends the route here
     while lane and lane not in seen and lane in reg:
         seen.add(lane)
         chain.append(lane)
+        if reg[lane].get("fallback_enabled", True) is False:
+            hard_stop = True
         lane = reg[lane].get("fallback")
-    for extra in (spec["default"], *_shared_media_lanes(job, reg), "main"):
+    # image reading: any lane that can see is a valid backup (main, then the helper), so a
+    # sleeping/failed reader falls back to a model that already has eyes
+    seers = tuple(n for n in ("main", "executor") if job == "vision" and reg.get(n, {}).get("vision"))
+    extras = () if hard_stop else (*seers, spec["default"], *_shared_media_lanes(job, reg), "main")
+    for extra in extras:
         if extra and extra not in seen and extra in reg:
             seen.add(extra)
             chain.append(extra)
@@ -42,7 +50,7 @@ def targets(job: str, user_id: Optional[int] = None, force_local: bool = False) 
     out = []
     for name in chain:
         d = reg[name]
-        if not kind_ok(spec["kind"], d["kind"]):
+        if not job_ok(spec["kind"], d):
             continue
         if d["cloud_key"] and not local_only and not no_cloud_audio:
             cm = cloud.cloud_lane(name, user_id)

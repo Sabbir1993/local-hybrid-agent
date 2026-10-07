@@ -265,7 +265,13 @@ function agentStoppedHtml(acts, canContinue) {
                        s.reason === 'interrupted' || s.reason === 'cancelled' || s.reason === 'failed' || s.reason === 'budget'))
     ? `<button type="button" class="btn accent agy-continue-btn" data-click="agent-continue">▶ Continue</button>`
     : '';
-  return `<div class="agy-stopped ${s.reason !== 'max_steps' ? 'loop' : ''}"><span>${esc(msg)}</span>${btn}</div>`;
+  const stepsInfo = s.steps ? `<span class="agy-stop-meta">${s.steps} step${s.steps !== 1 ? 's' : ''}</span>` : '';
+  const timeInfo = s.elapsed_s ? `<span class="agy-stop-meta">${Math.floor(s.elapsed_s / 60)}m ${s.elapsed_s % 60}s</span>` : '';
+  return `<div class="agy-stopped ${s.reason !== 'max_steps' ? 'loop' : ''}">
+    <span class="agy-stop-dot"></span>
+    <span class="agy-stop-text">${esc(msg)}</span>
+    ${stepsInfo}${timeInfo}${btn}
+  </div>`;
 }
 
 /* Resume a paused run. Sent as a real turn, but the message is explicit that it
@@ -510,11 +516,16 @@ function renderGenericToolCard(t, isItemRunning) {
         <span>${esc(t.name)} ${p ? '· ' + esc(p) : ''}</span>
         ${t.model ? `<span style="font-family:monospace; opacity:0.8; margin-left:8px;">${esc(t.model)}</span>` : ''}
       </div>
-      ${t.args && Object.keys(t.args).length > 0 ? `<pre class="agy-detail-code"><code>${esc(formatToolArgs(t.name, t.args))}</code></pre>` : ''}
+      ${t.args && Object.keys(t.args).length > 0 ? `
+        <div class="agy-args-row">
+          <button type="button" class="agy-expand-btn" data-click="toggle-tool-args">◂ Show arguments</button>
+          <span>(${Object.keys(t.args).length})</span>
+        </div>
+        <pre class="agy-detail-code agy-args-pre"><code>${esc(formatToolArgs(t.name, t.args))}</code></pre>` : ''}
       ${agentShotHtml(t.image)}
       ${t.result !== null ? `
         <div style="font-size:10px; font-weight:700; color:var(--dim); margin:6px 0 4px; text-transform:uppercase;">Result</div>
-        <pre class="agy-detail-code" style="color:${t.ok ? 'var(--dim)' : 'var(--red)'};"><code>${esc(t.result || '(empty)')}</code></pre>
+        <pre class="agy-detail-code agy-result-code" data-ok="${t.ok ? 'ok' : 'err'}"><code>${esc(t.result || '(empty)')}</code></pre>
       ` : ''}
     </div>
   </details>${isMedia && isRunning ? mediaProgressHtml(t.progress) : ''}`;
@@ -555,7 +566,7 @@ function agentActsHtml(acts, live = true) {
   const toolOps = stream.filter(s => s.type === 'tool');
   const isAllDone = toolOps.length === 0 || toolOps.every(t => t.result !== null);
 
-  let h = '<div class="agy-agent-container"><div class="agy-stream-timeline">';
+  let h = '<div class="agy-agent-container"><div class="agy-stream-timeline" data-acts-idx>';
 
   if (stream.length > 2) {
     h += `<div class="codex-timeline-toolbar">

@@ -29,6 +29,7 @@ class ProviderModel(BaseModel):
     id: str
     name: Optional[str] = None
     ctx: Optional[int] = None
+    vision: Optional[bool] = None      # marker: this model can read images
 
 
 class ProviderReq(BaseModel):

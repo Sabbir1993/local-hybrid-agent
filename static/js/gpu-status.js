@@ -138,9 +138,43 @@ async function pollGpu() {
           <div class="g-bot"><span>compute engine</span><span class="mono ${cp > 5 ? 'hot' : ''}">${cp}%</span></div>
         </div>`;
       }).join('') || '<div class="dim" style="font-size:12px">No discrete GPU data</div>';
+      _renderLaneVram();
     }
     return d;
   } catch (e) { /* manager restarting */ }
+}
+
+/* Per-lane estimated VRAM (weights + KV), grouped by GPU. Drawn under the GPU
+   bars so "what will fit alongside the loaded model" is visible at a glance. */
+async function _renderLaneVram() {
+  let data;
+  try {
+    const r = await fetch('/control/vram/lanes');
+    if (!r.ok) return;
+    data = await r.json();
+  } catch (_) { return; }
+  const box = $('gpu-lane-vram');
+  if (!box) return;
+  const lanes = (data.lanes || []).filter(l => !l.error);
+  if (!lanes.length) { box.style.display = 'none'; return; }
+  const byGpu = {};
+  lanes.forEach(l => {
+    (byGpu[l.gpu] = byGpu[l.gpu] || []).push(l);
+  });
+  box.style.display = 'block';
+  box.innerHTML = Object.keys(byGpu).sort().map(g => `
+    <div class="gpu-lane-group">
+      <div class="dim" style="font-size:10px; text-transform:uppercase; letter-spacing:0.6px; margin:6px 0 3px;">GPU ${g} — model lanes</div>
+      ${byGpu[g].map(l => `<div class="gpu-lane-row" title="${esc(l.model)}">
+        <span class="gpu-lane-name"><b>${esc(l.lane)}</b>${l.loaded ? ' <span class="dim">· loaded</span>' : ''}</span>
+        <span class="mono gpu-lane-gb">${l.total_gb.toFixed(1)} GB</span>
+        <div class="gpu-lane-stack">
+          <div class="gpu-lane-weights" style="flex:${Math.max(1, l.weights_gb)}"><span>w</span></div>
+          <div class="gpu-lane-kv" style="flex:${Math.max(1, l.kv_gb)}"><span>kv</span></div>
+        </div>
+      </div>`).join('')}
+    </div>`).join('');
+  box.style.display = '';  // keep layout natural
 }
 
 let curCtxMax = 32768;

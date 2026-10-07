@@ -8,6 +8,8 @@ class LaneReq(BaseModel):
     kind: Optional[str] = None             # chat | vision | embed
     label: Optional[str] = Field(default=None, max_length=40)
     fallback: Optional[str] = None
+    fallback_enabled: Optional[bool] = None   # False = never escalate to another model
+    vision: Optional[bool] = None             # can also read images (executor + mmproj / cloud marker)
     # local
     model: Optional[str] = None
     mmproj: Optional[str] = None

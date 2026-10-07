@@ -371,6 +371,76 @@ function mediaAttachAudio(f) {
 }
 window.mediaAttachAudio = mediaAttachAudio;
 
+/* attach a video: sampled frames are described one by one (and the audio transcribed) -> prompt text.
+ * The server (ffmpeg) does the sampling; with no ffmpeg the browser does it. */
+function mediaAttachVideo(f) {
+  const vr = (MEDIA.status && MEDIA.status.video_read) || {};
+  const capMb = vr.max_mb || 100;
+  if (f.size > capMb * 1024 * 1024) { toast(`"${f.name}" is too large (${capMb} MB max for videos).`, true); return; }
+  const att = { name: f.name || 'video', size: f.size, isImage: false, isVideo: true, uploading: true,
+                progress: 'getting pictures…' };
+  attachments.push(att);
+  refreshAttachUI();
+  // NOT "still in the attachments list": pressing Send empties that list while the prompt still waits
+  // for this promise. Only the user removing the card (att.cancelled) stops the work.
+  const alive = () => !att.cancelled;
+  const step = txt => { att.progress = txt; refreshAttachUI(); };
+  att.transcribePromise = (async () => {
+    try {
+      let r;
+      if (vr.ffmpeg) {
+        const fd = new FormData();
+        fd.append('file', f, f.name);
+        const res = await fetch('/media/video', { method: 'POST', body: fd });
+        r = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(r.error || ('HTTP ' + res.status));
+      } else {
+        r = await videoFramesInBrowser(f, { maxFrames: vr.max_frames || 16, maxMinutes: vr.max_minutes || 10 });
+        r.transcript = null;
+        if (mediaReady('transcribe')) {
+          try { r.transcript = (await mediaTranscribeBlob(f)) || null; }
+          catch (e) { r.transcript_note = e.message; }
+        }
+      }
+      att.thumb = r.frames[0] ? await videoPoster(r.frames[0]) : null;   // kept in the chat, shown again after a reload
+      const notes = [];
+      let failed = 0;
+      for (let i = 0; i < r.frames.length; i++) {
+        if (!alive()) return;
+        const fr = r.frames[i];
+        step(`reading picture ${i + 1}/${r.frames.length}…`);
+        let text;
+        try {
+          const vres = await fetch('/agent/vision', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_b64: fr.b64, mime: fr.mime,
+              question: `This is a frame at ${videoClock(fr.t)} of a video. Describe what is visible, including any readable text. Be concise.` }),
+          });
+          const vj = await vres.json().catch(() => ({}));
+          if (!vres.ok) throw new Error(vj.error || ('HTTP ' + vres.status));
+          text = (vj.description || '').trim() || '(nothing described)';
+        } catch (e) {
+          failed++;
+          text = `(could not read this picture: ${e.message})`;
+        }
+        notes.push({ t: fr.t, text });
+        // the first three pictures all failed: the image reader is down, stop instead of grinding on
+        if (failed >= 3 && failed === notes.length) throw new Error(notes[0].text.replace(/^\(could not read this picture: |\)$/g, ''));
+      }
+      att.content = videoPromptText(att.name, r.duration, notes, r.transcript, r.transcript_note);
+      toast(`🎬 ${att.name} read (${notes.length} pictures)`);
+    } catch (e) {
+      att.content = `(could not read the video ${att.name}: ${e.message})`;
+      toast(`Couldn’t read ${att.name}: ${e.message}`, true);
+    } finally {
+      att.uploading = false;
+      att.progress = '';
+      refreshAttachUI();
+    }
+  })();
+}
+window.mediaAttachVideo = mediaAttachVideo;
+
 
 /* ---------------- pictures to start from: change one / combine several ---------------- */
 /* Local only: the server sends them to the image model on this PC, never to the cloud. */

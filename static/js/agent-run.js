@@ -24,7 +24,8 @@ async function runAgentSSE(text) {
   }
   const input = $('input');
   const sentAttachments = attachments.slice();
-  const sentImages = sentAttachments.filter(a => a.isImage && a.dataUrl).map(a => a.dataUrl);
+  // a video shows its first frame as the preview (the video itself is never kept in the history)
+  const sentImages = sentAttachments.map(a => (a.isImage && a.dataUrl) || (a.isVideo && a.thumb) || null).filter(Boolean);
   const sentFiles = sentAttachments.map(a => a.name).join(', ');
   const nFiles = sentAttachments.filter(a => a.content != null).length;
   if (input) input.value = '';
@@ -66,6 +67,9 @@ async function runAgentSSE(text) {
   try {
     fullPrompt = await buildPromptText(text, sentAttachments, ctrl.signal);
     userMsg.content = fullPrompt;
+    // a video sent before its frames were ready gets its poster now
+    const late = sentAttachments.filter(a => a.isVideo && a.thumb && !sentImages.includes(a.thumb)).map(a => a.thumb);
+    if (late.length) { sentImages.push(...late); userMsg.images = sentImages; renderAll(); }
   } catch (err) {
     if (err.name === 'AbortError') {
       assistantMsg.content = '⏹️ Generation cancelled';

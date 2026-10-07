@@ -50,6 +50,7 @@ DEFAULT_RATE_PATHS = (
     "/chat/completions",
     "/completions",
     "/agent/vision",
+    "/media/video",
 )
 
 # Upload endpoints keep their real headroom; everything else falls back to the base limit.
@@ -60,6 +61,7 @@ DEFAULT_BODY_PATH_OVERRIDES = {
     "/agent/vision": 24 * 1024 * 1024,      # 15 MB base64 field, ~20 MB on the wire
     "/media/generate": 24 * 1024 * 1024,
     "/media/transcribe": 24 * 1024 * 1024,
+    "/media/video": 110 * 1024 * 1024,      # media.max_video_mb (100) + multipart overhead
     "/agent/preview-html": 4 * 1024 * 1024,
 }
 

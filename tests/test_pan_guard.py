@@ -31,6 +31,15 @@ class PanDetectTests(unittest.TestCase):
         self.assertFalse(pan.contains_pan("4444444444444444"))          # repeated digit
         self.assertFalse(pan.contains_pan("order 12345"))
 
+    def test_attachment_file_name_is_not_scanned(self):
+        name = "photo_6210835229476328575_y.jpg"      # Luhn-valid by chance
+        self.assertTrue(pan.contains_pan(name))
+        body = f"hi\n--- IMAGE: {name} ---\na plant\n--- END {name} ---"
+        self.assertFalse(pan.contains_pan(pan.blank_attachment_names(body)))
+        leak = f"--- FILE: a.txt ---\ncard {VISA_TEST}\n--- END a.txt ---"   # content still scanned
+        self.assertTrue(pan.contains_pan(pan.blank_attachment_names(leak)))
+        self.assertTrue(pan.contains_pan(pan.blank_attachment_names(f"pay {VISA_TEST}")))
+
     def test_mask_keeps_last_four(self):
         out, n = pan.mask_pans(f"a {VISA_TEST} b {MC_TEST}")
         self.assertEqual(n, 2)

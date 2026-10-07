@@ -24,6 +24,8 @@ def _apply_fallback(name: str, kind: str, cur: dict, fallback: Optional[str], re
     """Validate + set a lane's backup. Media lanes can only back up to the same kind."""
     reg = dict(reg)
     reg.setdefault(name, {"fallback": None, "kind": kind})
+    if cur.get("fallback_enabled", True) is False and fallback:
+        raise ValueError("fallback is off for this model; clear it or enable fallback first")
     err = _check_fallback(name, fallback, reg)
     if err:
         raise ValueError(err)
@@ -60,12 +62,20 @@ def save_user_lane(user_id: int, name: str, data: dict) -> dict:
     if not key or cloud.get_cloud(key, user_id) is None:
         raise ValueError("pick one of your cloud models (add a provider first if the list is empty)")
     cur["cloud"] = key
+    if "vision" in data:
+        # marker: this cloud model can read images, so it may serve "Reading images" too
+        if data["vision"]:
+            cur["vision"] = True
+        else:
+            cur.pop("vision", None)
     if data.get("label") is not None:
         cur["label"] = str(data["label"]).strip()[:40] or name
     cur.setdefault("label", name)
+    if "fallback_enabled" in data:
+        cur["fallback_enabled"] = bool(data["fallback_enabled"])
     if "fallback" in data:
         _apply_fallback(name, kind, cur, data.get("fallback") or None, reg)
-    if kind not in MEDIA_KINDS:
+    if kind not in MEDIA_KINDS and cur.get("fallback_enabled", True):
         cur.setdefault("fallback", "main")
     own[name] = cur
     cloud.write_user_section(user_id, "lanes", own)

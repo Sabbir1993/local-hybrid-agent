@@ -41,7 +41,7 @@ def check(texts: list, user, any_cloud_lane: bool) -> Optional[dict]:
         return None
     # Built-in PCI rule: runs even when the admin rule set is disabled.
     from .. import pan
-    if pan.enabled("pan_input") and any(pan.contains_pan(t) for t in texts):
+    if pan.enabled("pan_input") and any(pan.contains_pan(pan.blank_attachment_names(t)) for t in texts):
         return {"name": pan.RULE_NAME, "scope": "block_all",
                 "message": pan.BLOCK_MESSAGE, "_matched_pattern": "builtin:pan"}
     # Built-in credential floor. Same deal, and it exists because the shipped rule set had

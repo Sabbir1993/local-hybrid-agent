@@ -111,7 +111,13 @@ def save_provider(user_id: int, name: str, data: dict) -> dict:
             mid = str((m or {}).get("id") or "").strip()
             if not mid:
                 continue
-            mc = {"name": str(m.get("name") or mid).strip()}
+            old = ((entry.get("models") or {}).get(mid) or {})
+            mc = {**old, "name": str(m.get("name") or old.get("name") or mid).strip()}
+            if m.get("vision") is not None:
+                if m["vision"]:
+                    mc["vision"] = True
+                else:
+                    mc.pop("vision", None)
             try:
                 if m.get("ctx"):
                     mc["ctx"] = int(m["ctx"])

@@ -214,6 +214,33 @@ function renderLast() {
     // Agent step list + tool output blocks are re-created below; remember their scroll
     // so the fixed-height panels stay scrollable while the task streams
     const SCROLLERS = '.agy-steps-list, .agy-detail-code, .agy-diff';
+    // D5d render-diff: while an agent run is streaming, only the acts block
+    // changes (a new tool_call / tool_result arrives); the bubble's text,
+    // thinking card and plan panel stay identical. Swap just the
+    // .agy-agent-container node instead of re-rendering the whole bubble on
+    // every SSE chunk - that is what made tool output lag and reflow under load.
+    const existingActs = lastEl.querySelector('.agy-agent-container');
+    if (generating && existingActs && m.acts && m.acts.length) {
+      const actScroll = Array.from(existingActs.querySelectorAll(SCROLLERS)).map(el => ({
+        top: el.scrollTop,
+        atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 15,
+      }));
+      const actsTemp = document.createElement('div');
+      actsTemp.innerHTML = agentActsHtml(m.acts, true);
+      const newActs = actsTemp.firstElementChild;
+      if (newActs) {
+        if (m._cardOpen) {
+          _cardDetails(newActs).forEach((d, i) => { if (m._cardOpen[i] !== undefined) d.open = m._cardOpen[i]; });
+        }
+        newActs.querySelectorAll(SCROLLERS).forEach((el, i) => {
+          const p = actScroll[i];
+          const follow = el.classList.contains('agy-steps-list') && (!p || p.atBottom);
+          el.scrollTop = follow ? el.scrollHeight : (p ? p.top : 0);
+        });
+        lastEl.replaceChild(newActs, existingActs);
+      }
+      return;
+    }
     const prevScroll = Array.from(lastEl.querySelectorAll(SCROLLERS)).map(el => ({
       top: el.scrollTop,
       atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 15,
@@ -900,7 +927,8 @@ async function send(inputText) {
     }
   }
   const sentAttachments = attachments.slice();
-  const sentImages = sentAttachments.filter(a => a.isImage && a.dataUrl).map(a => a.dataUrl);
+  // a video shows its first frame as the preview (the video itself is never kept in the history)
+  const sentImages = sentAttachments.map(a => (a.isImage && a.dataUrl) || (a.isVideo && a.thumb) || null).filter(Boolean);
   const sentFiles = sentAttachments.map(a => a.name).join(', ');
   const nFiles = sentAttachments.filter(a => a.content != null).length;
   if (input) input.value = '';
@@ -933,6 +961,9 @@ async function send(inputText) {
   try {
     fullPrompt = await buildPromptText(text, sentAttachments, ctrl.signal);
     userMsg.content = fullPrompt;
+    // a video sent before its frames were ready gets its poster now
+    const late = sentAttachments.filter(a => a.isVideo && a.thumb && !sentImages.includes(a.thumb)).map(a => a.thumb);
+    if (late.length) { sentImages.push(...late); userMsg.images = sentImages; renderAll(); }
   } catch (err) {
     if (err.name === 'AbortError') {
       assistantMsg.content = '⏹️ Generation cancelled';

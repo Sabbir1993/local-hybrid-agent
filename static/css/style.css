@@ -1479,6 +1479,42 @@ header .icon-btn[data-tip]:focus-visible::after {
   font-family: inherit;
   font-size: 12.5px;
 }
+/* D5b: tool arguments collapse by default; the expand link reveals the JSON.
+   Mirrors OpenCode/Antigravity where a tool row shows its name + target and
+   the payload only on request. */
+.agy-args-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--dim);
+  padding: 2px 0;
+}
+.agy-args-row .agy-expand-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 10.5px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.agy-args-row .agy-expand-btn:hover { text-decoration: underline; }
+.agy-args-pre {
+  display: none;
+  margin: 4px 0 6px;
+  max-height: none;
+}
+.agy-args-pre.open { display: block; }
+.agy-result-code { max-height: 420px; overflow-y: auto; color: var(--dim); }
+.agy-result-code[data-ok="err"] { color: var(--red); }
+.gpu-lane-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 11px; }
+.gpu-lane-name { flex: 0 0 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gpu-lane-gb { flex: 0 0 44px; text-align: right; font-size: 10.5px; color: var(--dim); }
+.gpu-lane-stack { flex: 1; display: flex; height: 10px; border-radius: 5px; overflow: hidden;
+  border: 1px solid var(--border-subtle); background: var(--bg-input); }
+.gpu-lane-weights { background: var(--accent); opacity: .85; }
+.gpu-lane-kv { background: var(--accent); opacity: .4; }
+.gpu-lane-stack span { font-size: 8px; opacity: 0; }
 .agy-agent-drawer {
   background: var(--panel);
   border: 1px solid var(--border-subtle);
@@ -4447,6 +4483,11 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 }
 .agy-stopped.loop { border-color: rgba(248,81,73,.35); background: rgba(248,81,73,.07); }
 .agy-stopped .agy-continue-btn { width: auto; margin: 0 0 0 auto; padding: 4px 12px; font-size: 11.5px; flex: none; }
+.agy-stop-dot { width: 8px; height: 8px; border-radius: 50%; background: #d2a122; flex: none; }
+.agy-stopped.loop .agy-stop-dot { background: #f85149; }
+.agy-stop-meta { font-size: 10.5px; color: var(--dim); padding: 1px 7px; border: 1px solid var(--border-subtle);
+  border-radius: 999px; white-space: nowrap; }
+.agy-stop-text { flex: 1; }
 
 /* agent answer thumbs (router feedback) */
 .run-rate { display: inline-flex; gap: 2px; vertical-align: middle; }

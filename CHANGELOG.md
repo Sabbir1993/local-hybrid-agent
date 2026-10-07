@@ -4,6 +4,54 @@ Entries are kept short on purpose: this is a local single-dev project and long
 per-commit prose rots faster than it helps. Versioning starts where the repo
 has a tag or release; until then, dates + headline changes.
 
+## 2026-10-08 — video attachments
+
+- Attaching a video samples frames (scene changes + an even grid, <= 16, <= 10 min) with ffmpeg on
+  the server (`POST /media/video`, `core/media/video.py`), describes each with the Image reader
+  (`/agent/vision`) and transcribes the audio track; the result is prompt text with timestamps.
+  No ffmpeg: the browser samples frames instead (`static/js/video-frames.js`). Temp files are
+  deleted after each call; nothing is stored or logged. Limits: `media.max_video_mb`,
+  `media.video_understanding`.
+- Unsupported binaries (zip, exe...) now say so instead of "max size is 512 KB".
+- Fixed: `describe_image_bytes` raised UnboundLocalError (import order) after the vision token cap change;
+  image descriptions use `vision_max_tokens`.
+
+## 2026-10-08 — vision capability is a flag, "Reading images" is automatic
+
+- Lanes carry a `vision` capability: image-reader lanes, the executor with an mmproj, local main
+  started with an mmproj, and cloud models marked 👁 (per model in Cloud Models, or per cloud lane).
+- "Reading images" defaults to Automatic: main if it can see, else the helper, else the dedicated
+  Image reader (own model + port). The Image reader shows "Not needed" and never starts when another
+  model already reads images. An explicit pick in Models & Jobs still wins.
+- Editable from Settings: executor "can also read images" toggle (one model, one port), cloud
+  "can read images" marker, and an "Automatic" option on the Reading images job.
+
+## 2026-10-07 — executor serves vision from one port
+
+- `registry()` now lets a builtin lane's kind be overridden by config, so the
+  executor lane (`kind: "vision"` + `mmproj`) serves both routine tool calls
+  and image reading from a single llama-server process. Shared `role_map` maps
+  the vision job to the executor lane for all users. Repo config runs Ornith
+  1.5-9B (Q4 + its mmproj) as that lane; the separate Qwen-VL vision lane is
+  disabled. Switch back = clear executor kind + re-enable the vision lane.
+
+## 2026-10-07 — lane fallback switch, per-lane VRAM, OpenCode-style cards
+
+- Lanes: `fallback_enabled` (0/1, all lanes) — 0 means "no fallback"; a failing
+  lane ends the call with a clear error instead of silently escalating to main.
+  Exposed as a checkbox in Models & Jobs (local + cloud). A vision-kind lane
+  already serves chat jobs, so one vision-capable model (gguf + mmproj) can be
+  the helper AND vision from a single port; README documents the recipe.
+- `GET /control/vram/lanes`: per-lane estimated weights/KV/total via the same
+  plan_launch preflight (the numbers that decide fit). The Settings GPU panel
+  now draws a per-GPU lane stack (weights vs KV).
+- Agent streaming UI (OpenCode/Antigravity style): render-diff — a running
+  agent updates only the acts block per SSE chunk instead of re-rendering the
+  whole bubble. Tool arguments collapse by default with a click-to-expand
+  toggle; long results capped with a scroll; the stopped banner gets a status
+  dot + step/time chips; a tool call auto-collapses the still-open thinking
+  card. Card chrome classed, not inline-styled.
+
 ## 2026-10-07 — frontend D-phase status
 
 - D4 (checkpoint rail UI) shipped with Phase A2: the git panel lists checkpoints

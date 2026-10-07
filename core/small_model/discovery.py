@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,18 @@ def find_sd_server() -> Optional[Path]:
             if p.is_file():
                 return p
     return None
+
+
+def find_ffmpeg() -> Optional[Path]:
+    """ffmpeg(.exe) for reading video (frames + audio): runtime `ffmpeg_bin_dir`, else PATH."""
+    v = ACTIVE_RUNTIME.get("ffmpeg_bin_dir")
+    if v:
+        for n in ("ffmpeg.exe", "ffmpeg"):
+            p = Path(v) / n
+            if p.is_file():
+                return p
+    w = shutil.which("ffmpeg")
+    return Path(w) if w else None
 
 
 def find_whisper_server() -> Optional[Path]:

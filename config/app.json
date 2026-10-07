@@ -23,24 +23,27 @@
   },
   "small_models": {
     "executor": {
-      "model": "orchestrator/Spark-X2.5-4B-Q4_K_M.gguf",
+      "model": "orchestrator/Ornith-1.5-9B-Q4_K_M.gguf",
       "port": 8091,
       "gpu": 1,
-      "ctx": 65536,
+      "ctx": 32648,
       "np": 2,
       "kv_cache_type": "q8_0",
-      "label": "Fast helper",
-      "fallback": "main"
+      "label": "executor",
+      "fallback": "main",
+      "fallback_enabled": true,
+      "idle_unload_s": 0
     },
     "vision": {
       "model": "orchestrator/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
       "mmproj": "orchestrator/mmproj-model-f16.gguf",
       "port": 8092,
       "gpu": 1,
-      "ctx": 16384,
-      "np": 1,
+      "ctx": 8192,
       "label": "Image reader",
-      "fallback": "main"
+      "fallback": "main",
+      "idle_unload_s": 0,
+      "fallback_enabled": true
     },
     "embedder": {
       "model": "orchestrator/nomic-embed-text-v1.5-Q8_0.gguf",
@@ -179,7 +182,7 @@
     "idle_unload_s": 0,
     "executor_max_tokens": 4096,
     "main_max_tokens": 16000,
-    "vision_max_tokens": 1024,
+    "vision_max_tokens": 4096,
     "write_file_max_tokens": 4000,
     "chunk_target_tokens": 3000,
     "read_file_default_limit": 200,
@@ -460,7 +463,8 @@
     }
   },
   "role_map": {
-    "verify": "executor"
+    "verify": "executor",
+    "vision": "executor"
   },
   "media_dirs": {
     "voice_models": "E:\\AI\\Models\\orchestrator\\voice-models",
@@ -470,7 +474,8 @@
   "media": {
     "limits": {
       "image_per_day": 10
-    }
+    },
+    "allow_cloud_audio": false
   },
   "security": {
     "session_idle_enabled": true,

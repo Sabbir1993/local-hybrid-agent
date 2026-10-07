@@ -117,6 +117,8 @@ def _save_sdcpp_lane(name: str, kind: str, cur: dict, data: dict) -> dict:
     cur.update({"kind": kind, "engine": "sdcpp"})
     if data.get("label") is not None:
         cur["label"] = str(data["label"]).strip()[:40] or name
+    if "fallback_enabled" in data:
+        cur["fallback_enabled"] = bool(data["fallback_enabled"])
     if "fallback" in data:
         _apply_fallback(name, kind, cur, data.get("fallback") or None, registry())
 
@@ -144,8 +146,16 @@ def save_local_lane(name: str, data: dict) -> dict:
     kind = BUILTIN_KINDS.get(name) or str(data.get("kind") or cur.get("kind") or "chat")
     if kind not in _KIND_OK:
         raise ValueError("type must be chat, vision, embed, image_gen, video_gen or stt")
-    if not is_new and cur.get("kind") and cur.get("kind") != kind:
+    if not is_new and cur.get("kind") and cur.get("kind") != kind and name not in BUILTIN_KINDS:
         raise ValueError("a model's type can't be changed - add a new one instead")
+    # The helper can read images too: ONE model + mmproj on ONE port serves both jobs
+    # (the lane is registered as kind "vision", which still accepts chat jobs).
+    if name == "executor" and "vision" in data:
+        kind = "vision" if data["vision"] else "chat"
+        if kind == "chat":
+            cur.pop("mmproj", None)
+    elif name == "executor" and cur.get("kind") == "vision":
+        kind = "vision"
     if kind in ("image_gen", "video_gen"):
         if str(data.get("engine") or "sdcpp") != "sdcpp":
             raise ValueError("images and videos on this PC are made by stable-diffusion.cpp (engine sdcpp)")
@@ -213,6 +223,13 @@ def save_local_lane(name: str, data: dict) -> dict:
         cur["label"] = str(data["label"]).strip()[:40] or name
     if name not in BUILTIN_KINDS:
         cur["kind"] = kind
+    elif name == "executor":
+        if kind == "vision":
+            cur["kind"] = "vision"
+        else:
+            cur.pop("kind", None)
+    if "fallback_enabled" in data:
+        cur["fallback_enabled"] = bool(data["fallback_enabled"])
     if "fallback" in data:
         _apply_fallback(name, kind, cur, data.get("fallback") or None, registry())
 

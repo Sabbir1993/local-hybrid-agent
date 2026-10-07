@@ -1,5 +1,6 @@
 import asyncio
 import time
+from pathlib import Path
 from typing import Optional
 from fastapi import Depends
 from core.auth import Principal
@@ -16,6 +17,58 @@ from core.state import state
 from core import cloud
 
 from .base import router
+
+
+@router.get("/control/vram/lanes")
+async def vram_lanes(user: Principal = Depends(get_current_user)):
+    """Per-lane estimated VRAM (weights + KV + compute) and loaded state.
+    Uses the same plan_launch path as the launch preflight, so the numbers are
+    the ones that decide whether a model fits - not a separate calculator."""
+    from core.config import CONFIG_DEFAULTS
+    from core.small_model import small_models
+    from core.vram import preflight
+    lanes = []
+    for name, inst in sorted(small_models.instances.items()):
+        if not inst.model_path or not inst.model_path.exists():
+            continue
+        try:
+            profile = {"model_path": str(inst.model_path), "context_size": int(inst.ctx),
+                       "n_gpu_layers": 999, "gpu_devices": [int(inst.gpu)],
+                       "tensor_split": "1", "kv_cache_type": str(inst.kv_cache_type or "f16"),
+                       "flash_attn": "on", "ubatch_size": 512, "n_slots": max(1, getattr(inst, "n_slots", 1) or 1),
+                       "llama_bin_dir": CONFIG_DEFAULTS["llama_bin_dir"]}
+            mm = getattr(inst, "mmproj_path", None)
+            if mm and Path(str(mm)).exists():
+                profile["mmproj_path"] = str(mm)
+                profile["vision_capable"] = True
+            plan = preflight.plan_launch(profile)
+            est = plan.get("estimate") or {}
+            lanes.append({
+                "lane": name,
+                "model": inst.model_path.name,
+                "gpu": inst.gpu,
+                "kind": getattr(inst, "kind", "chat"),
+                "loaded": inst.is_up(),
+                "total_gb": round(float(est.get("total_gb", 0)), 2),
+                "weights_gb": round(float(est.get("weights_gb", 0)), 2),
+                "kv_gb": round(float(est.get("kv_gb", 0)), 2),
+                "compute_gb": round(float(est.get("compute_gb", 0)), 2),
+                "fits": plan.get("status") != "nofit",
+            })
+        except Exception as e:
+            lanes.append({"lane": name, "error": str(e)})
+    # per-GPU totals
+    by_gpu = {}
+    for ln in lanes:
+        g = str(ln.get("gpu"))
+        by_gpu[g] = by_gpu.get(g, 0.0) + float(ln.get("total_gb", 0))
+    return {"lanes": lanes, "per_gpu": {g: round(t, 2) for g, t in by_gpu.items()},
+            "gpu_devices": _runtime_gpus()}
+
+
+def _runtime_gpus() -> list:
+    from core.config import ACTIVE_RUNTIME
+    return ACTIVE_RUNTIME.get("gpu_devices") or []
 
 
 @router.get("/control/status")

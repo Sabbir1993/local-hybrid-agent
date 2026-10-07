@@ -58,6 +58,13 @@ document.addEventListener('click', (e) => {
 const CLICK_ACTIONS = {
   'agent-continue': () => agentContinue(),
   'toggle-all-codex': (el) => toggleAllCodex(el),
+  'toggle-tool-args': (el) => {
+    const pre = el.closest('.codex-action-body, .agy-detail-bar') ?
+      el.closest('.codex-action-body').querySelector('.agy-args-pre') : null;
+    if (!pre) return;
+    pre.classList.toggle('open');
+    el.textContent = pre.classList.contains('open') ? 'Hide arguments' : '◂ Show arguments';
+  },
   'remove-attachment': (el) => removeAttachment(parseInt(el.dataset.arg, 10)),
   'open-image': (el) => openImageModal(el.src, 'Image attachment'),
   'think-summary': (el, e) => onThinkSummaryClick(parseInt(el.dataset.arg, 10), e),

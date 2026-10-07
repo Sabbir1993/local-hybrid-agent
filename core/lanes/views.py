@@ -11,6 +11,8 @@ def _status_text(row: dict) -> dict:
         return {"level": "ok", "text": f"Cloud: {row.get('cloud_display') or row['cloud_key']}"}
     if not row.get("local"):
         return {"level": "warn", "text": "Cloud model not set or removed - using its backup model"}
+    if row.get("idle_note"):
+        return {"level": "idle", "text": row["idle_note"]}
     if row["name"] == "main":
         return ({"level": "ok", "text": "Running"} if row.get("loaded")
                 else {"level": "idle", "text": "Not loaded (start it from the top bar)"})
@@ -67,11 +69,13 @@ def _media_view() -> dict:
 
 def public_view(user_id: Optional[int] = None, is_admin: bool = False) -> dict:
     """Everything Settings -> Models needs, in plain language."""
+    from .. import cloud
     from ..small_model import APP_CONFIG, small_models
     reg = registry(user_id)
     status = small_models.status()
     sm = APP_CONFIG.get("small_models") or {}
     lanes = []
+    rmap = role_map(user_id)
     for name, d in reg.items():
         row = dict(d)
         if d["local"] and name != "main":
@@ -101,13 +105,20 @@ def public_view(user_id: Optional[int] = None, is_admin: bool = False) -> dict:
         if not d["local"]:
             from .. import cloud
             row["cloud_binding"] = (cloud.user_lanes(user_id).get(name) or {}).get("cloud")
+        if name == "vision" and rmap.get("vision") != "vision" and not (sm.get(name) or {}).get("model"):
+            # nobody needs a separate image reader: a model that can already see does the job
+            row["idle_note"] = f"Not needed - {(reg.get(rmap.get('vision')) or {}).get('label', 'another model')} reads images"
+            row["needed"] = False
         row["status"] = _status_text(row)
-        row["used_by"] = [j for j, ln in role_map(user_id).items() if ln == name]
+        row["used_by"] = [j for j, ln in rmap.items() if ln == name]
         lanes.append(row)
     return {
         "lanes": lanes,
         "jobs": [{"job": j, **{k: v for k, v in s.items()}} for j, s in JOBS.items()],
-        "role_map": role_map(user_id),
+        "role_map": rmap,
+        # jobs left on "Automatic" (the lane is picked from what can see) and the user's own picks
+        "auto_jobs": ["vision"],
+        "explicit_jobs": sorted((cloud.role_map(user_id) or {}).keys()),
         "defaults": {j: default_lane(j, user_id, reg) for j in JOBS},
         "can_edit_local": is_admin,
         "media": _media_view(),

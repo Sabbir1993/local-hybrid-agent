@@ -22,6 +22,9 @@ function refreshAttachUI() {
         let thumb;
         if (a.isImage && a.dataUrl) {
           thumb = `<img src="${a.dataUrl}" alt="${esc(a.name)}" class="chat-img-thumb" title="Click to enlarge">`;
+        } else if (a.isVideo) {
+          thumb = a.thumb ? `<img src="${a.thumb}" alt="${esc(a.name)}" class="chat-img-thumb" title="First frame of the video">`
+            : `<span style="font-size:20px; line-height:1;" title="Video">🎬</span>`;
         } else if (a.isAudio) {
           thumb = `<span style="font-size:20px; line-height:1;" title="${a.uploading ? 'Turning speech into text…' : 'Transcribed'}">${a.uploading ? '⏳' : '🎤'}</span>`;
         } else if (a.isDoc) {
@@ -31,7 +34,9 @@ function refreshAttachUI() {
         } else {
           thumb = `<span style="font-size:20px; line-height:1;">📝</span>`;
         }
-        const statusBadge = a.isAudio
+        const statusBadge = a.isVideo
+          ? (a.uploading ? `<span class="attach-doc-uploading">${esc(a.progress || 'reading…')}</span>` : `<span class="attach-doc-badge ok">frames</span>`)
+          : a.isAudio
           ? (a.uploading ? `<span class="attach-doc-uploading">transcribing…</span>` : `<span class="attach-doc-badge ok">transcript</span>`)
           : a.isDoc && a.uploading
           ? `<span class="attach-doc-uploading">uploading…</span>`
@@ -64,6 +69,7 @@ function refreshAttachUI() {
 function removeAttachment(idx) {
   if (idx >= 0 && idx < attachments.length) {
     const removed = attachments.splice(idx, 1)[0];
+    removed.cancelled = true;   // stops a video that is still being read
     refreshAttachUI();
     toast(`Removed ${removed.name || 'attachment'}`);
   }
@@ -100,8 +106,15 @@ const IMAGE_RE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
 const DOC_RE = /\.(xlsx?|pdf|pptx?|docx?|csv)$/i;
 
 const AUDIO_RE = /\.(mp3|m4a|wav|ogg|oga|opus|webm|flac|aac)$/i;
+const VIDEO_RE = /\.(mp4|m4v|mov|mkv|avi|mpe?g|wmv|flv|3gp|ogv)$/i;
+const BINARY_RE = /\.(zip|rar|7z|tar|gz|tgz|bz2|xz|exe|dll|msi|iso|bin|apk|dmg|jar|so|dylib|dat|db|sqlite)$/i;
 
 async function addAttachmentFile(f, namePrefix = 'screenshot') {
+  // video: sampled frames described one by one (media.js; needs an image reader, ffmpeg helps)
+  if (VIDEO_RE.test(f.name || '') || (f.type && f.type.startsWith('video/'))) {
+    if (typeof mediaAttachVideo === 'function') mediaAttachVideo(f);
+    return;
+  }
   // audio: attached as its transcript (media.js; needs a speech-to-text model)
   if (AUDIO_RE.test(f.name || '') || (f.type && f.type.startsWith('audio/'))) {
     if (typeof mediaAttachAudio === 'function') mediaAttachAudio(f);
@@ -152,8 +165,12 @@ async function addAttachmentFile(f, namePrefix = 'screenshot') {
     return;
   }
 
+  if (!isImage && BINARY_RE.test(f.name || '')) {
+    toast(`"${f.name || 'File'}" can’t be attached — this kind of file isn’t supported (images, audio, video, documents and text/code are).`, true);
+    return;
+  }
   // --- Images and text/code files: local FileReader ---
-  const maxBytes = isImage ? (15 * 1024 * 1024) : (512 * 1024);
+  const maxBytes = isImage ? (10 * 1024 * 1024) : (512 * 1024);
   if (f.size > maxBytes) {
     toast(`"${f.name || 'File'}" is ${fmtBytes(f.size)} — max size is ${fmtBytes(maxBytes)}`, true);
     return;
@@ -232,6 +249,7 @@ $('attach-info').style.cursor = 'pointer';
 $('attach-info').title = 'Click to clear attachments';
 $('attach-info').onclick = () => {
   if (attachments.length) {
+    attachments.forEach(a => { a.cancelled = true; });
     clearAttachments();
     toast('Attachments cleared');
   }

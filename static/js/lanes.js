@@ -142,7 +142,7 @@ function laneLabel(n) { const l = laneByName(n); return l ? l.label : n; }
 function whyNot(job, lane) {
   const s = jobSpec(job), l = laneByName(lane);
   if (!s || !l) return 'not available';
-  if (!(KIND_OK[s.kind] || [s.kind]).includes(l.kind)) return 'needs ' + KIND_NEED[s.kind];
+  if (!(KIND_OK[s.kind] || [s.kind]).includes(l.kind) && !(s.kind === 'vision' && l.vision)) return 'needs ' + KIND_NEED[s.kind];
   if (s.local_only && !l.local) return 'always runs on this PC';
   if (s.local_first && !l.local && !((LN.d.media || {}).allow_cloud_audio)) return 'stays on this PC unless an admin allows cloud speech';
   if (job === 'agent.reason' && l.local && l.name !== 'main' && !l.cloud_key) return 'needs the main model or a cloud model';
@@ -449,6 +449,7 @@ function advancedHtml() {
       <div class="ln-model-head">
         <span class="ln-model-name">${where(l) === 'cloud' ? '☁' : '🖥'} ${esc(l.label)}</span>
         <span class="ln-tag">${esc(KIND_TEXT[l.kind] || l.kind)}</span>
+        ${l.vision && l.kind !== 'vision' ? '<span class="ln-tag" title="Can also read pictures, so no separate image reader is needed">👁 Reads images</span>' : ''}
         <span class="ln-tag">${where(l) === 'cloud' ? 'Cloud' : 'This PC'}</span>
         ${l.owner === 'user' ? '<span class="ln-tag">Yours</span>' : ''}
         <code class="ln-id">${esc(l.name)}</code>
@@ -470,12 +471,15 @@ function advancedHtml() {
   const rows = (d.jobs || []).map(j => {
     // media jobs only list models of their own type (and can be off)
     const pool = (d.lanes || []).filter(l => !isMedia(j.kind) || l.kind === j.kind);
-    const opts = (d.defaults[j.job] ? '' : `<option value=""${m[j.job] ? '' : ' selected'}>Off — not set up</option>`)
+    const auto = (d.auto_jobs || []).includes(j.job);
+    const autoOn = auto && (Object.prototype.hasOwnProperty.call(LN.draft, j.job) ? LN.draft[j.job] === null : !(d.explicit_jobs || []).includes(j.job));
+    const opts = (auto ? `<option value=""${autoOn ? ' selected' : ''}>Automatic — main if it can see, else the helper, else the image reader (now: ${esc(laneLabel(d.role_map[j.job]))})</option>`
+        : d.defaults[j.job] ? '' : `<option value=""${m[j.job] ? '' : ' selected'}>Off — not set up</option>`)
       + pool.map(l => {
       const why = whyNot(j.job, l.name);
-      return `<option value="${esc(l.name)}"${m[j.job] === l.name ? ' selected' : ''}${why ? ' disabled' : ''}>${where(l) === 'cloud' ? '☁ ' : '🖥 '}${esc(l.label)}${why ? ' — ' + esc(why) : ''}</option>`;
+      return `<option value="${esc(l.name)}"${!autoOn && m[j.job] === l.name ? ' selected' : ''}${why ? ' disabled' : ''}>${where(l) === 'cloud' ? '☁ ' : '🖥 '}${esc(l.label)}${why ? ' — ' + esc(why) : ''}</option>`;
     }).join('');
-    const isDefault = (m[j.job] || null) === (d.defaults[j.job] || null);
+    const isDefault = auto ? autoOn : (m[j.job] || null) === (d.defaults[j.job] || null);
     return `<tr>
       <th scope="row"><span class="ln-job">${esc(j.label)}</span>
         <span class="ln-info" tabindex="0" role="img" aria-label="${esc(j.hint)}" title="${esc(j.hint)}">ⓘ</span>
@@ -657,7 +661,8 @@ async function openWizard(editName, presetKind) {
     WZ.data = {
       purpose: purposeOf(l.kind), backend: l.local ? 'local' : 'cloud', kind: l.kind, label: l.label, name: l.name,
       model: l.model, mmproj: l.mmproj, gpu: l.gpu, port: l.port, ctx: l.ctx, idle_unload_s: l.idle_unload_s,
-      cloud: l.cloud_binding || l.cloud_key, fallback: l.fallback || '', jobs: [],
+      cloud: l.cloud_binding || l.cloud_key, fallback: l.fallback || '',
+      fallback_enabled: l.fallback_enabled === false ? false : true, jobs: [], vision: !!l.vision,
       timeout_s: l.timeout_s,
       threads: l.threads, language: l.language,
     };
@@ -740,7 +745,7 @@ function wizardRender() {
     const kind = D.kind;
     const fake = { kind, local: D.backend !== 'cloud', cloud_key: D.backend === 'cloud' ? D.cloud : null, name: D.name };
     const jobs = (LN.d.jobs || []).filter(j => {
-      if (!(KIND_OK[j.kind] || []).includes(kind)) return false;
+      if (!(KIND_OK[j.kind] || []).includes(kind) && !(j.job === 'vision' && D.vision)) return false;
       if (j.local_only && !fake.local) return false;
       if (j.job === 'agent.reason' && fake.local) return false;
       if (j.local_first && !fake.local && !(LN.d.media || {}).allow_cloud_audio) return false;
@@ -756,7 +761,11 @@ function wizardRender() {
         <span><b>${esc(j.label)}</b><small class="dim">${esc(j.hint)}</small></span></label>`).join('') : '<div class="dim">No jobs need this kind of model right now.</div>'}
       </fieldset>
       <label class="ln-lbl" for="wz-fb">If it fails, use</label>
-      <select id="wz-fb" data-wz="fallback">${fbOpts}</select>`;
+      <div style="display:flex; align-items:center; gap:8px;">
+        <select id="wz-fb" data-wz="fallback"${D.fallback_enabled === false ? ' disabled' : ''}>${fbOpts}</select>
+        <label class="ln-check" style="margin:0;"><input type="checkbox" data-wz="fallback_enabled"${D.fallback_enabled === false ? ' checked' : ''}>
+          <span>No fallback — end the request if this model fails</span></label>
+      </div>`;
   }
   const err = D._err ? `<div class="ln-test bad" role="alert">✕ ${esc(D._err)}</div>` : '';
   const ok = D._ok ? `<div class="ln-test ok" role="status">✅ ${esc(D._ok)}${D._img ? `<img class="ln-test-img" src="${esc(D._img)}" alt="Image made by the test">` : ''}</div>` : '';
@@ -787,6 +796,7 @@ function fitText(sizeGb, gpu) {
 function wizardLocalHtml() {
   const D = WZ.data;
   const builtinKind = WZ.editing && laneByName(WZ.editing) && laneByName(WZ.editing).builtin;
+  const isExec = WZ.editing === 'executor';
   const kinds = [['chat', 'Text', 'Answers and tool calls'], ['vision', 'Image reader', 'Describes pictures (needs an mmproj file)'], ['embed', 'Search memory', 'Embeddings for memory search']];
   const models = helperFiles('models');
   const gpus = LN.d.gpus || [];
@@ -808,7 +818,10 @@ function wizardLocalHtml() {
     <label class="ln-lbl" for="wz-model">Model file</label>
     <select id="wz-model" data-wz="model"><option value="">Choose a .gguf file…</option>${modelOpts}</select>
     ${models.length ? '' : `<div class="dim ln-hint">No model files in <code>${esc(helperFolder())}</code> — put the .gguf there, then reopen this.</div>`}
-    ${D.kind === 'vision' ? `<label class="ln-lbl" for="wz-mmproj">Image projector (mmproj)</label>
+    ${isExec ? `<label class="ln-check" style="margin-top:10px;"><input type="checkbox" data-wz="vision"${D.vision ? ' checked' : ''}>
+      <span><b>This model can also read images</b> <small class="dim">One model file + its mmproj, loaded once on one port. It then does routine steps <i>and</i> reads pictures, so the separate Image reader is never started.
+      Leave it off to keep the helper text-only and give "Image reader" its own model and port instead.</small></span></label>` : ''}
+    ${(D.kind === 'vision' && !isExec) || (isExec && D.vision) ? `<label class="ln-lbl" for="wz-mmproj">Image projector (mmproj)</label>
       <select id="wz-mmproj" data-wz="mmproj"><option value="">${chosen && chosen.mmproj_path ? 'Use the one next to the model' : 'Choose…'}</option>
       ${helperFiles('mmproj').map(m => `<option value="${esc(m.path)}"${D.mmproj && m.path === String(D.mmproj).replace(/\\/g, '/') ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select>` : ''}
     <label class="ln-lbl" for="wz-gpu">GPU</label>
@@ -834,6 +847,7 @@ function wizardCloudHtml() {
       <p class="dim">Add a provider (its web address and API key) in <a href="#sec-cloud" data-wz="goto-cloud">Cloud Models</a>.
       The key is stored in Windows Credential Manager, never in a file. Then come back here.</p>`;
   }
+  const selCm = (LN.d.cloud_models || []).find(c => c.key === D.cloud) || {};
   return `<fieldset class="ln-fs"><legend>What kind of model?</legend><div class="ln-kinds">
       <label class="ln-radio"><input type="radio" name="wz-kind" value="chat" data-wz="kind"${D.kind !== 'vision' ? ' checked' : ''}${WZ.editing ? ' disabled' : ''}> <span><b>Text</b><small>Answers and tool calls</small></span></label>
       <label class="ln-radio"><input type="radio" name="wz-kind" value="vision" data-wz="kind"${D.kind === 'vision' ? ' checked' : ''}${WZ.editing ? ' disabled' : ''}> <span><b>Image reader</b><small>Can also read pictures</small></span></label>
@@ -841,6 +855,8 @@ function wizardCloudHtml() {
     <label class="ln-lbl" for="wz-cloud">Cloud model</label>
     <select id="wz-cloud" data-wz="cloud"><option value="">Choose…</option>
       ${cms.map(c => `<option value="${esc(c.key)}"${D.cloud === c.key ? ' selected' : ''}>${esc(c.display)} · ${esc(c.provider)}</option>`).join('')}</select>
+    ${D.kind !== 'vision' ? `<label class="ln-check" style="margin-top:8px;"><input type="checkbox" data-wz="vision"${D.vision || selCm.vision ? ' checked' : ''}${selCm.vision ? ' disabled' : ''}>
+      <span><b>This model can read images</b> <small class="dim">${selCm.vision ? 'Already marked as vision-capable in Cloud Models.' : 'Marks it so “Reading images” can use it directly.'}</small></span></label>` : ''}
     <div class="dim ln-hint">Card numbers are masked before anything is sent to it.</div>
     <label class="ln-lbl" for="wz-label">Name it</label>
     <input id="wz-label" data-wz="label" maxlength="40" value="${esc(D.label || '')}" placeholder="e.g. Cloud reviewer" autocomplete="off">`;
@@ -1006,7 +1022,13 @@ function wizardChange(e) {
     D.jobs = [...document.querySelectorAll('[data-wz="job"]:checked')].map(x => x.value);
     return;
   }
+  if (k === 'fallback_enabled') {
+    D.fallback_enabled = !t.checked;   // checked = "no fallback" -> flag off
+    wizardRender();                    // re-enables/disables the fallback select
+    return;
+  }
   if (k === 'kind') { D.kind = t.value; wizardRender(); return; }
+  if (k === 'vision') { D.vision = t.checked; wizardRender(); return; }
   if (k === 'clear_auth') { D.clear_auth = t.checked; return; }
   if (k === 'offload_to_cpu') { D.offload_to_cpu = t.checked; D.sd_preset = 'custom'; wizardRender(); return; }
   if (k === 'edit_refs') { D.edit_refs = t.checked; return; }
@@ -1068,8 +1090,9 @@ async function wizardClick(e) {
     D._busy = true; D._err = null; wizardRender();
     const media = isMedia(D.kind);
     const body = { name: D.name || slug(D.label), backend: D.backend === 'sdcpp' ? 'local' : D.backend, kind: D.kind,
-                   label: D.label || undefined, fallback: D.fallback || (media ? null : 'main') };
-    if (D.kind === 'vision' && !D.mmproj) {
+                   label: D.label || undefined, fallback: D.fallback || (media ? null : 'main'),
+                   fallback_enabled: D.fallback_enabled === false ? false : (media ? false : true) };
+    if ((D.kind === 'vision' || (D.vision && D.backend === 'local')) && !D.mmproj) {
       const m = helperFiles('models').find(x => D.model && x.path === String(D.model).replace(/\\/g, '/'));
       if (m && m.mmproj_path) D.mmproj = m.mmproj_path;
     }
@@ -1084,10 +1107,11 @@ async function wizardClick(e) {
     } else if (D.backend === 'local' && D.kind === 'stt') {
       Object.assign(body, { model: D.model, gpu: D.gpu, port: D.port || undefined, threads: D.threads || undefined,
                             language: D.language || 'auto', idle_unload_s: D.idle_unload_s ?? undefined });
-    } else if (D.backend === 'local') Object.assign(body, { model: D.model, mmproj: D.mmproj || undefined, gpu: D.gpu,
+    } else if (D.backend === 'local') Object.assign(body, { model: D.model, mmproj: D.mmproj || undefined,
+                                                    vision: WZ.editing === 'executor' ? !!D.vision : undefined, gpu: D.gpu,
                                                     port: D.port || undefined, ctx: D.ctx || undefined,
                                                     idle_unload_s: D.idle_unload_s ?? undefined });
-    else body.cloud = D.cloud;
+    else { body.cloud = D.cloud; if (D.kind === 'chat') body.vision = !!D.vision; }
     if (D.jobs.length) body.jobs = D.jobs;
     try {
       await lanesApi('/control/lanes', 'POST', body);
@@ -1139,11 +1163,15 @@ document.addEventListener('click', async (e) => {
     else if (k === 'add-media') await openWizard(null, b.dataset.kind);
     else if (k === 'test-full') await testLane(b.dataset.name, true);
     else if (k === 'del') deleteDialog(b.dataset.name);
-    else if (k === 'job-reset') { LN.draft[b.dataset.job] = LN.d.defaults[b.dataset.job]; lanesRender(); }
+    else if (k === 'job-reset') {
+      LN.draft[b.dataset.job] = (LN.d.auto_jobs || []).includes(b.dataset.job) ? null : LN.d.defaults[b.dataset.job];
+      lanesRender();
+    }
     else if (k === 'jobs-discard') { LN.draft = {}; lanesRender(); }
     else if (k === 'jobs-save') {
       const map = {};
-      Object.entries(LN.draft).forEach(([j, l]) => { map[j] = l === LN.d.defaults[j] ? null : l; });
+      // an automatic job keeps an explicit pick even when it equals today's automatic choice
+      Object.entries(LN.draft).forEach(([j, l]) => { map[j] = (l === LN.d.defaults[j] && !(LN.d.auto_jobs || []).includes(j)) ? null : l; });
       await saveJobs(map, LN.asDefault);
     }
   } catch (err) { toast(err.message, true); }
@@ -1160,7 +1188,9 @@ document.addEventListener('change', async (e) => {
     else if (k === 'verify-sel') await saveJobs({ verify: t.value === LN.d.defaults.verify ? null : t.value }, false);
     else if (k === 'job') {
       const v = t.value || null;
-      if (v === (LN.d.role_map[t.dataset.job] || null)) delete LN.draft[t.dataset.job];
+      const auto = (LN.d.auto_jobs || []).includes(t.dataset.job);
+      const cur = auto && !(LN.d.explicit_jobs || []).includes(t.dataset.job) ? null : (LN.d.role_map[t.dataset.job] || null);
+      if (v === cur) delete LN.draft[t.dataset.job];
       else LN.draft[t.dataset.job] = v;
       lanesRender();
       const again = document.getElementById('ln-job-' + t.dataset.job);

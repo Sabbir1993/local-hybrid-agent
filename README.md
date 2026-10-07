@@ -73,10 +73,27 @@ serving a single-page web UI (`ui.html` + `static/js/`) with:
   their own cloud ones. Every kind of work is a fixed *job* (thinking &
   planning, routine tool calls, summarizing, commit messages, sub-agents,
   checking answers, reading images, search memory…) that you map to a model;
-  unmapped jobs keep today's defaults. Each model has an "if it fails, use…"
+unmapped jobs keep today's defaults. Each model has an "if it fails, use…"
   backup, so a failed cloud call falls back automatically. Agent presets:
   Private (all on this PC), Balanced, Best quality, Main model only
   (`core/lanes/`).
+- **One model, many jobs (helper + vision on one port).** A vision-kind lane
+  may serve `chat` jobs too (`core/lanes/constants.py` `_KIND_OK`), and the
+  agent loop keys executor behaviour on the lane NAME — so a single
+  vision-capable model (`config/app.json → small_models.executor` with `mmproj`
+  and `kind: "vision"`) drives both routine tool calls and image reading from
+  one process, no duplicate load. The repo config already does this with
+  `Ornith-1.5-9B-Q4_K_M.gguf` + `mmproj-Ornith-1.5-9B-BF16.gguf`. The vision
+  JOB is mapped to the executor lane by the shared `role_map` (`"vision":
+  "executor"`) so fresh users get the same routing without per-user setup. To
+  switch to a separate vision model, set `executor.kind` back to absent/`chat`
+  and re-enable the `vision` lane with its own `mmproj` + a distinct port.
+  Alternatively, if the MAIN model has vision (`vision_capable: true` +
+  `mmproj`), image reading uses the main lane and the vision lane never starts.
+- **Disable a model's fallback.** A lane can be set to "no fallback": on
+  failure the request ends with a clear error instead of silently escalating to
+  the main model (core/lanes/registry.py `fallback_enabled`, a checkbox in
+  Models & Jobs). Cloud models can carry a vision marker the same way.
 - **Answer check** (🛡 next to Send): a second model double-checks answers —
   *check after* (badge) or *check before showing* (the fixed answer is
   shown); a broken checker never blocks the answer (`core/verifier/`).

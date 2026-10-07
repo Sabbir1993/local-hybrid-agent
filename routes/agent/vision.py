@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from fastapi import Depends
 from fastapi.responses import JSONResponse
+from core.agent_tools.limits import lane_output_cap
 from core.auth import Principal
 from core.deps import get_current_user, require_permission
 from core.db import db_record_request
@@ -26,7 +27,7 @@ async def agent_vision(req: VisionReq, user: Principal = Depends(get_current_use
                 {"type": "image_url", "image_url": {"url": f"data:{req.mime};base64,{req.image_b64}"}},
             ],
         }],
-        "max_tokens": 400,
+        "max_tokens": lane_output_cap("vision"),   # Settings -> vision_max_tokens (was a fixed 400)
         "temperature": 0.1,
     }
     body_bytes = json.dumps({"messages": [req.question]}).encode()
@@ -40,7 +41,10 @@ async def agent_vision(req: VisionReq, user: Principal = Depends(get_current_use
     vision_route = lanes.targets("vision", user.id)
     vision_explicit = "vision" in cloud.role_map(user.id)
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
-    main_vision = main_ready and bool((state.profile or {}).get("vision_capable")) and not vision_explicit
+    first = vision_route[0] if vision_route else None
+    picked_main = bool(first and first.lane == "main" and not first.is_cloud)   # explicit pick of main
+    main_vision = (main_ready and bool((state.profile or {}).get("vision_capable"))
+                   and (not vision_explicit or picked_main))
     if main_vision:
         model_name = Path((state.profile or {}).get("model_path", "")).name or "Main LLM (vision)"
         model_name = model_name.replace(".gguf", "")

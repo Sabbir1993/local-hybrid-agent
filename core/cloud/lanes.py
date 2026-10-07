@@ -129,7 +129,8 @@ def providers_public(user_id: Optional[int] = None) -> list:
             "has_key": bool(str(raw_key or "").strip()),
             "extra_headers": opts.get("extra_headers") or {},
             "models": [{"id": str(mid), "name": str((mcfg or {}).get("name") or mid),
-                        "ctx": (mcfg or {}).get("ctx")}
+                        "ctx": (mcfg or {}).get("ctx"),
+                        "vision": bool((mcfg or {}).get("vision"))}
                        for mid, mcfg in (models.items() if isinstance(models, dict) else [])],
         })
     return out

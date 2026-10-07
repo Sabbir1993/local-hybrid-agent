@@ -5,6 +5,7 @@ routes/media.py - images, videos and speech to text (core/media.py).
   POST   /media/generate          start an image or video job -> {job_id}
   GET    /media/jobs/{id}         SSE: queued -> progress -> done | error
   DELETE /media/jobs/{id}         cancel (stops waiting; the service may finish anyway)
+  POST   /media/video             multipart video -> {duration, frames[{t,b64,mime}], transcript}
   POST   /media/transcribe        multipart WAV -> {text, model, source, ms, audio_s, rtf}
   POST   /media/transcribe/warmup   pre-load the local STT server -> {model, already_loaded}
   POST   /media/transcribe_stream/start   {language?} -> {stream_id}
@@ -211,6 +212,25 @@ async def media_stream_finish(req: StreamIdReq, user: Principal = Depends(get_cu
 @router.post("/media/transcribe_stream/cancel")
 async def media_stream_cancel(req: StreamIdReq, user: Principal = Depends(get_current_user)):
     return await media.stream_cancel(user, req.stream_id)
+
+
+@router.post("/media/video")
+async def media_video(file: UploadFile = FastAPIFile(...), user: Principal = Depends(get_current_user)):
+    """Sample frames (and transcribe the audio) of an attached video. The client describes each
+    frame with /agent/vision. Frames and audio are processed in a temp folder and never stored."""
+    cap = media.video_limits()["max_mb"] * 1024 * 1024
+    data = await file.read(cap + 1)
+    if len(data) > cap:
+        return _err(f"That video is too large ({cap // (1024 * 1024)} MB max).", 413)
+    try:
+        res = await media.read_video(user, data)
+    except media.MediaError as e:
+        return _err(str(e), 409 if "isn't set up" in str(e) else 400)
+    # metadata only: never the pictures or the words
+    audit_log(user, action="media.video.read", resource="local",
+              detail={"bytes": len(data), "frames": len(res["frames"]), "seconds": res["duration"],
+                      "transcribed": bool(res["transcript"])}, result="allow")
+    return res
 
 
 @router.post("/media/transcribe")

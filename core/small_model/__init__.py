@@ -14,6 +14,7 @@ from .discovery import (
     sd_search_dirs,
     find_sd_server,
     find_whisper_server,
+    find_ffmpeg,
 )
 from .instance import SmallModelInstance
 from .specialized import (
@@ -56,6 +57,7 @@ __all__ = [
     "sd_search_dirs",
     "find_sd_server",
     "find_whisper_server",
+    "find_ffmpeg",
     "SmallModelInstance",
     "WhisperInstance",
     "SdCppInstance",

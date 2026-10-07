@@ -14,7 +14,8 @@ _LOCAL_PERM = "model.local.configure"
 
 def _view(user: Principal) -> dict:
     out = lanes.public_view(user.id, is_admin=user_has_permission(user, _LOCAL_PERM))
-    out["cloud_models"] = [{"key": cm.key, "display": cm.display, "provider": cm.provider_name}
+    out["cloud_models"] = [{"key": cm.key, "display": cm.display, "provider": cm.provider_name,
+                           "vision": cm.can_vision}
                            for cm in cloud.cloud_models(user.id)]
     out["gpus"] = list(ACTIVE_RUNTIME.get("gpu_devices") or [])
     out["suggested_port"] = lanes.suggest_port()

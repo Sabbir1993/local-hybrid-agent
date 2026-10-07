@@ -97,6 +97,11 @@ class CloudModel:
         return self.context_length
 
     @property
+    def can_vision(self) -> bool:
+        """The user marked this model as able to read images."""
+        return bool(self.model_cfg.get("vision"))
+
+    @property
     def display_name(self) -> str:
         return str(self.model_cfg.get("name") or self.model_id)
 
@@ -161,7 +166,7 @@ class CloudModel:
             "max_tokens": None,
             "system_prompt": True,
             "can_stream": True,
-            "can_vision": False,
+            "can_vision": self.can_vision,
         }
 
     def __repr__(self) -> str:

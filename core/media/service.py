@@ -53,6 +53,13 @@ def status(user_id: Optional[int]) -> dict:
         caps.update(refs=True, max_refs=refs[0].inst.edit_caps()["max_refs"])
     out["image"]["edit"] = caps
     out["max_audio_mb"] = int(media_cfg().get("max_audio_mb") or 25)
+    from .video import ffmpeg_ready, video_limits
+    # reading a video someone attaches (not making one): needs ffmpeg here + a model that can see
+    lim = video_limits()
+    seer = lanes.primary("vision", user_id)
+    out["video_read"] = {"ready": ffmpeg_ready() and seer is not None, "ffmpeg": ffmpeg_ready(),
+                         "max_mb": lim["max_mb"], "max_frames": lim["max_frames"],
+                         "max_minutes": lim["max_minutes"]}
     return out
 
 

@@ -76,6 +76,18 @@ def is_pan(candidate: str) -> bool:
     return _luhn_ok(digits)
 
 
+_ATTACH_NAME_RX = re.compile(
+    r"^(--- (?:FILE|IMAGE|END)(?::)? )[^\n]{1,200}?(\.[A-Za-z0-9]{1,8})( ---)$", re.M)
+
+
+def blank_attachment_names(text: str) -> str:
+    """Hide the file name in the '--- FILE: x.ext ---' markers the chat adds around attachments.
+    Phone/messenger names like photo_6210835229476328575_y.jpg carry long digit runs that pass the
+    Luhn check by chance (~1 in 10), which blocked harmless photos. The file's own content is
+    still scanned; only a name that ends in a short extension is skipped."""
+    return _ATTACH_NAME_RX.sub(r"\1[name]\2\3", text) if isinstance(text, str) and "--- " in text else text
+
+
 def contains_pan(text) -> bool:
     if not text:
         return False

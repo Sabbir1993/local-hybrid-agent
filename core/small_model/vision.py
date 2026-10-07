@@ -22,6 +22,7 @@ async def describe_image_bytes(data: bytes, question: str = "Describe this image
     mime = image_mime(data)
     if mime is None:
         return "error: not a PNG, JPEG, WEBP or GIF image"
+    from ..agent_tools.limits import lane_output_cap
     b64 = base64.b64encode(data).decode()
     payload = {
         "messages": [{
@@ -31,7 +32,7 @@ async def describe_image_bytes(data: bytes, question: str = "Describe this image
                 {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
             ],
         }],
-        "max_tokens": 400,
+        "max_tokens": lane_output_cap("vision"),   # Settings -> vision_max_tokens (was a fixed 400)
         "temperature": 0.1,
     }
     from .. import cloud, lanes

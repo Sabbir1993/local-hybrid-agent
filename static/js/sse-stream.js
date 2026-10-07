@@ -94,6 +94,10 @@ function sseToolCall(L, d) {
   if (!L.acts) L.acts = [];
   L.acts.push({ type: 'tool_call', ...d });
   L.statusText = (typeof formatToolStatus === 'function') ? formatToolStatus(d.name, d.args) : `Running ${d.name}...`;
+  // OpenCode/Antigravity behaviour: when the first tool call fires, a still-open
+  // thinking card auto-collapses so the action timeline takes the floor. The
+  // user can reopen it by hand; the toggle handler remembers the choice.
+  document.querySelectorAll('#chat-inner details.think[open]').forEach((t) => { t.open = false; });
   _sseHud({
     phase: ['write_file', 'edit_file', 'append_file', 'insert_at_line'].includes(d.name) ? 'writing' : 'running',
     name: d.name,

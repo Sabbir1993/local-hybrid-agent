@@ -47,7 +47,7 @@ function renderCloudCard(d) {
             ${p.has_key ? `<button class="btn ghost cloud-reveal" data-prov="${esc(p.provider)}" style="width:auto; margin:0; padding:1px 6px; font-size:10px;" title="Reveal API key">\uD83D\uDC41</button>` : ''}
           </div>
           <div style="display:flex; gap:5px; flex-wrap:wrap; margin-top:5px;">
-            ${(p.models || []).map(m => `<span class="badge-main" title="${esc(m.id)}${m.ctx ? ' · ' + m.ctx + ' ctx' : ''}">${esc(m.name)}<a href="#" class="cloud-test-model" data-prov="${esc(p.provider)}" data-mid="${esc(m.id)}" title="Test ${esc(m.id)}" style="margin-left:4px; text-decoration:none; opacity:0.7;">✓</a><a href="#" class="cloud-del-model" data-prov="${esc(p.provider)}" data-mid="${esc(m.id)}" title="Remove ${esc(m.id)}" style="margin-left:3px; text-decoration:none; opacity:0.7; color:var(--red);">✕</a></span>`).join('') || '<span class="dim" style="font-size:10px;">no models yet</span>'}
+            ${(p.models || []).map(m => `<span class="badge-main" title="${esc(m.id)}${m.ctx ? ' · ' + m.ctx + ' ctx' : ''}">${esc(m.name)}${m.vision ? ' <span title="Marked as able to read images">👁</span>' : ''}<a href="#" class="cloud-vis-model" data-prov="${esc(p.provider)}" data-mid="${esc(m.id)}" data-on="${m.vision ? 1 : 0}" title="${m.vision ? 'Unmark: this model can NOT read images' : 'Mark: this model can read images'}" style="margin-left:4px; text-decoration:none; opacity:${m.vision ? 1 : 0.4};">👁</a><a href="#" class="cloud-test-model" data-prov="${esc(p.provider)}" data-mid="${esc(m.id)}" title="Test ${esc(m.id)}" style="margin-left:4px; text-decoration:none; opacity:0.7;">✓</a><a href="#" class="cloud-del-model" data-prov="${esc(p.provider)}" data-mid="${esc(m.id)}" title="Remove ${esc(m.id)}" style="margin-left:3px; text-decoration:none; opacity:0.7; color:var(--red);">✕</a></span>`).join('') || '<span class="dim" style="font-size:10px;">no models yet</span>'}
           </div>
         </div>
       </div>`;
@@ -84,6 +84,8 @@ function renderCloudCard(d) {
         <input type="text" id="cf-mlabel" placeholder="union-alpha" style="width:100%;"></div>
       <div><label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Context (tokens)</label>
         <input type="number" id="cf-mctx" placeholder="262144" style="width:100%;"></div>
+      <label style="grid-column:span 2; display:flex; gap:6px; align-items:center; font-size:11px;">
+        <input type="checkbox" id="cf-mvision"> <span>👁 These model(s) can read images <span class="dim">— lets “Reading images” use them directly instead of starting a separate image reader</span></span></label>
       <div style="grid-column:span 2; font-size:10.5px; color:var(--dim); line-height:1.4;">
         Add more models to this same provider by separating ids (and labels) with commas,
         e.g. <code>stealth/union-alpha, stealth/vision</code> — existing models are kept, these are merged in.
@@ -119,6 +121,7 @@ function wireCloudCard() {
     g('#cf-mid').value = (pre && pre.models ? pre.models.map(x => x.id).join(', ') : '') || (m0 ? m0.id : '');
     g('#cf-mlabel').value = m0 ? m0.name : '';
     g('#cf-mctx').value = m0 && m0.ctx ? m0.ctx : 262144;   // 256K default for new models
+    g('#cf-mvision').checked = !!(m0 && m0.vision);
     g('#cf-npm').value = (pre && pre.npm) || '';
     // Reconstruct headers string from the saved provider info
     const savedProv = pre ? (cloudSnap.providers || []).find(x => x.provider === pre.provider) : null;
@@ -146,6 +149,9 @@ function wireCloudCard() {
       const m = { id, name: labelList[i] || id };
       const ctx = parseInt(g('#cf-mctx').value);
       if (ctx > 0 && i === 0) m.ctx = ctx;   // shared ctx for now
+      const was = (((cloudSnap.providers || []).find(x => x.provider === prov) || {}).models || []).find(x => x.id === id);
+      if (g('#cf-mvision').checked) m.vision = true;
+      else if (was && was.vision) m.vision = false;   // unticked: clear an existing marker
       return m;
     });
     // Parse extra headers: "Key=Value, Key2=Value2"
@@ -259,6 +265,25 @@ function wireCloudCard() {
       const mid = prov && (prov.models || [])[0] ? prov.models[0].id : null;
       if (!mid) { toast('Add a model to this provider first', true); return; }
       await runProbe(prov.provider, mid);
+    };
+  });
+
+  // Per-model 👁 links: mark / unmark "can read images" without touching anything else.
+  box.querySelectorAll('.cloud-vis-model').forEach(a => {
+    a.onclick = async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const on = a.dataset.on !== '1';
+      try {
+        const r = await fetch('/control/cloud/provider', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: a.dataset.prov, models: [{ id: a.dataset.mid, vision: on }] }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        toast(on ? a.dataset.mid + ' can now read images' : a.dataset.mid + ' is no longer marked as reading images');
+        await loadCloudCard();
+        if (typeof lanesLoad === 'function') lanesLoad();
+      } catch (err) { toast('Save failed: ' + err.message, true); }
     };
   });
 
