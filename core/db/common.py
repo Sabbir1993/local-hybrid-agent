@@ -24,7 +24,9 @@ def _init_projects_db() -> ThreadLocalDB:
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
         title TEXT NOT NULL,
-        created_at REAL NOT NULL
+        created_at REAL NOT NULL,
+        user_id INTEGER,
+        agent_id INTEGER
     );
     CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +84,30 @@ def _init_projects_db() -> ThreadLocalDB:
     session_cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)")]
     if "user_id" not in session_cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
+    if "agent_id" not in session_cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN agent_id INTEGER")
+    try:
+        conn.execute("""
+            UPDATE sessions SET agent_id = 1
+            WHERE agent_id IS NULL AND (
+                title LIKE '%System & Metric Report%'
+                OR title LIKE '%Email Analyzer%'
+                OR title LIKE '%Code QA & Test%'
+                OR title LIKE '%Architecture & System%'
+                OR title LIKE '%Security & Vulnerability%'
+                OR title LIKE '%Doc & Knowledge%'
+                OR title LIKE '📊%'
+                OR title LIKE '📧%'
+                OR title LIKE '🧪%'
+                OR title LIKE '🏗️%'
+                OR title LIKE '🛡️%'
+                OR title LIKE '📚%'
+                OR title LIKE '% Agent'
+                OR title LIKE '% Reporter'
+            )
+        """)
+    except Exception:
+        pass
 
     # migration: check if UNIQUE(name, user_id, device_id) is present.
     has_user_dev_unique = False

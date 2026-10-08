@@ -32,6 +32,7 @@
       renderPickerDropdown();
       renderSettingsAgentsGrid();
       restoreSavedAgent();
+      if (typeof loadSessions === 'function') loadSessions(false);
     } catch (e) {
       console.warn('[custom-agents] failed to load agents:', e);
     }
@@ -47,10 +48,18 @@
   }
 
   function getActiveCustomAgentId() {
+    if (activeCustomAgent && !isAgentOnCurrentDevice(activeCustomAgent)) {
+      clearActiveCustomAgent();
+      return null;
+    }
     return activeCustomAgent ? activeCustomAgent.id : null;
   }
 
   function getActiveCustomAgent() {
+    if (activeCustomAgent && !isAgentOnCurrentDevice(activeCustomAgent)) {
+      clearActiveCustomAgent();
+      return null;
+    }
     return activeCustomAgent;
   }
 
@@ -79,8 +88,38 @@
     };
   }
 
+  function isAgentOnCurrentDevice(agent) {
+    if (!agent) return true;
+    if (agent.scope === 'template') return false;
+    const myDevId = (typeof getClientDeviceId === 'function') ? getClientDeviceId() : '';
+    const myDevLabel = (typeof getDeviceDisplayLabel === 'function') ? getDeviceDisplayLabel() : '';
+    const myDevName = (typeof getClientDeviceName === 'function') ? getClientDeviceName() : '';
+
+    if (agent.device_id && myDevId) {
+      return String(agent.device_id).toLowerCase() === String(myDevId).toLowerCase();
+    }
+    if (agent.device_name && (myDevName || myDevLabel)) {
+      const aName = String(agent.device_name).trim().toLowerCase();
+      const devNameMatch = myDevName && aName === String(myDevName).trim().toLowerCase();
+      const devLabelMatch = myDevLabel && aName === String(myDevLabel).trim().toLowerCase();
+      return !!(devNameMatch || devLabelMatch);
+    }
+    if (agent.device_id || agent.device_name) {
+      return false;
+    }
+    return true;
+  }
+  window.isAgentOnCurrentDevice = isAgentOnCurrentDevice;
+
   function setActiveCustomAgent(agent, fromParentSync = false, noBind = false) {
+    if (agent && !isAgentOnCurrentDevice(agent)) {
+      clearActiveCustomAgent();
+      if (typeof toast === 'function') toast(`Bound to "${agent.device_name || 'another device'}". Fork it to use on this machine.`, true);
+      openForkModal(agent);
+      return;
+    }
     activeCustomAgent = agent || null;
+    window.activeCustomAgent = activeCustomAgent;
     activationSnapshot = activeCustomAgent ? { temp: _composerTemp(), effort: _composerEffort() } : null;
 
     // Settings runs in an iframe: tell the main window so its in-memory agent follows
@@ -100,6 +139,27 @@
     if (pill) pill.style.display = 'none';
     const btn = $('btn-agent-picker');
     if (btn) btn.style.display = 'none';
+
+    // Update Terminal CWD when custom agent changes
+    if (window.RightDock && typeof window.RightDock.setTerminalCwd === 'function') {
+      if (activeCustomAgent && activeCustomAgent.work_dir) {
+        window.RightDock.setTerminalCwd(activeCustomAgent.work_dir, `${activeCustomAgent.name} (${activeCustomAgent.work_dir})`);
+      } else if (activeCustomAgent) {
+        const fallbackCwd = window.curProject?.workspace_dir || '';
+        window.RightDock.setTerminalCwd(fallbackCwd, activeCustomAgent.name);
+      } else if (window.curProject && window.curProject.workspace_dir) {
+        window.RightDock.setTerminalCwd(window.curProject.workspace_dir, `${window.curProject.name} (${window.curProject.workspace_dir})`);
+      }
+    }
+
+    // Update Right Dock tab visibility (show code & terminal on custom agent)
+    if (window.RightDock && typeof window.RightDock.syncTabVisibility === 'function') {
+      const curMode = (typeof window.appMode !== 'undefined' ? window.appMode : 'chat');
+      window.RightDock.syncTabVisibility(curMode === 'agent' || curMode === 'code' || !!activeCustomAgent);
+    }
+    if (window.RightDock && typeof window.RightDock.updateTerminalStatus === 'function') {
+      window.RightDock.updateTerminalStatus();
+    }
 
     renderAgentChip();
     updateComposerPlaceholder();
@@ -122,13 +182,18 @@
     try { localStorage.setItem(SESSION_MAP_KEY, JSON.stringify(m)); } catch (_) {}
   }
 
-  function restoreForSession(sid) {
-    const aid = _sessionMap()[String(sid)];
+  function restoreForSession(sid, sessionObj = null) {
+    let aid = _sessionMap()[String(sid)];
+    if (aid == null && sessionObj && sessionObj.agent_id) {
+      aid = sessionObj.agent_id;
+    }
     const a = aid != null ? customAgentsList.find(x => String(x.id) === String(aid)) : null;
     if (a) {
+      bindSession(sid, a);
       if (!activeCustomAgent || activeCustomAgent.id !== a.id) setActiveCustomAgent(a, false, true);
     } else if (activeCustomAgent) {
       activeCustomAgent = null;          // not bound: plain session (keep the map as is)
+      window.activeCustomAgent = null;
       localStorage.removeItem('active_custom_agent_id');
       activationSnapshot = null;
       updateComposerPlaceholder();
@@ -144,20 +209,71 @@
     const savedId = localStorage.getItem('active_custom_agent_id');
     if (savedId) {
       const found = customAgentsList.find(a => String(a.id) === String(savedId) && a.scope === 'mine');
-      if (found) {
+      if (found && isAgentOnCurrentDevice(found)) {
         setActiveCustomAgent(found);
+      } else {
+        clearActiveCustomAgent();
       }
     }
   }
 
+  function selectCustomAgent(agent) {
+    if (!agent) return;
+    if (!isAgentOnCurrentDevice(agent)) {
+      clearActiveCustomAgent();
+      if (typeof toast === 'function') toast(`Bound to "${agent.device_name || 'another device'}". Fork it to configure your local workspace path.`, true);
+      openForkModal(agent);
+      return;
+    }
+    setActiveCustomAgent(agent, false, true);
+
+    if (window.RightDock && typeof window.RightDock.setTerminalCwd === 'function') {
+      if (agent.work_dir) {
+        window.RightDock.setTerminalCwd(agent.work_dir, `${agent.name} (${agent.work_dir})`);
+      }
+    }
+
+    // Check if curSession belongs to this agent
+    let curAgentId = null;
+    if (curSession) {
+      const map = _sessionMap();
+      curAgentId = curSession.agent_id != null ? String(curSession.agent_id) : (map[String(curSession.id)] ? String(map[String(curSession.id)]) : null);
+    }
+    // If no session or session doesn't belong to this agent: clear to empty chat box
+    if (!curSession || (curAgentId && curAgentId !== String(agent.id))) {
+      curSession = null;
+      messages = [];
+      try {
+        const sKey = typeof window.getActiveSessionKey === 'function' ? window.getActiveSessionKey() : 'active_agent_session_id';
+        localStorage.removeItem(sKey);
+      } catch (_) {}
+      if (typeof setGenUI === 'function') setGenUI(false);
+      if (typeof renderAll === 'function') renderAll();
+    }
+
+    if (typeof loadSessions === 'function') loadSessions(false);
+    if (typeof toast === 'function') {
+      toast(`Selected agent: ${agent.name} ${agent.icon || '🤖'}`);
+    }
+    const input = $('input');
+    if (input) input.focus();
+    renderSidebarAgentsList();
+  }
+
   async function startAgentChatSession(agent) {
+    if (agent && !isAgentOnCurrentDevice(agent)) {
+      if (typeof toast === 'function') toast(`Bound to "${agent.device_name || 'another device'}". Fork it to configure your local workspace path.`, true);
+      openForkModal(agent);
+      return;
+    }
     setActiveCustomAgent(agent, false, true);   // bound to the new session below
 
     const isCurRunning = curSession && window.bgJobs && window.bgJobs.has(String(curSession.id));
     curSession = null;
     messages = [];
     try {
-      localStorage.removeItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
+      const sKey = typeof window.getActiveSessionKey === 'function' ? window.getActiveSessionKey() : 'active_agent_session_id';
+      localStorage.removeItem(sKey);
     } catch (_) {}
 
     if (typeof setGenUI === 'function') setGenUI(false);
@@ -174,14 +290,15 @@
           'Content-Type': 'application/json',
           ...devHeaders,
         },
-        body: JSON.stringify({ title }),
+        body: JSON.stringify({ title, agent_id: agent.id }),
       });
       const data = await res.json();
       if (data && data.session) {
         curSession = data.session;
         bindSession(data.session.id, agent);
         try {
-          localStorage.setItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id', String(data.session.id));
+          const sKey = typeof window.getActiveSessionKey === 'function' ? window.getActiveSessionKey() : 'active_agent_session_id';
+          localStorage.setItem(sKey, String(data.session.id));
         } catch (_) {}
       }
     } catch (e) {
@@ -213,32 +330,66 @@
     const list = $('custom-agents-sidebar-list');
     if (!list) return;
 
-    if (!customAgentsList.some(a => a.scope === 'mine')) {
-      list.innerHTML = `<div class="dim" style="font-size:11px; padding:6px 4px; line-height:1.45;">No agents yet. Create one with ＋ New, or fork a starter from Customize → Agents.</div>`;
-      return;
+    const card = $('custom-agents-card');
+    const curMode = window.appMode || (localStorage.getItem('app_mode') || 'chat');
+    if (card) {
+      card.style.display = (curMode === 'agent') ? 'flex' : 'none';
     }
 
     const myAgents = customAgentsList.filter(a => a.scope === 'mine');
 
-    let html = '';
+    const btnHeadNew = $('btn-new-custom-agent');
+    if (btnHeadNew) {
+      btnHeadNew.onclick = (e) => {
+        e.stopPropagation();
+        openAgentBuilder(null);
+      };
+    }
 
-    if (myAgents.length) {
-      html += `<div style="font-size:8.5px; color:var(--dim); font-weight:700; letter-spacing:0.8px; text-transform:uppercase; padding:3px 4px 1px;">My Agents</div>`;
-      for (const a of myAgents) {
-        const isSel = activeCustomAgent && activeCustomAgent.id === a.id;
-        html += `
-          <div class="sidebar-agent-row ${isSel ? 'selected' : ''}" data-agent-id="${a.id}" title="${esc(a.name)}: ${esc(a.description)}">
-            <span class="sidebar-agent-icon">${esc(a.icon || '🤖')}</span>
-            <div class="sidebar-agent-info">
-              <div class="sidebar-agent-name">${esc(a.name)}</div>
-              <div class="sidebar-agent-desc">${esc(a.description || a.preferred_lane || '')}${shareChip(a)}</div>
+    if (!myAgents.length) {
+      list.innerHTML = `
+        <div class="sidebar-empty-card" style="display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:18px 12px; gap:8px; margin:4px; border-radius:10px; background:rgba(255,255,255,0.02); border:1px dashed var(--border);">
+          <div style="width:32px; height:32px; border-radius:8px; background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.22); display:flex; align-items:center; justify-content:center; color:var(--accent);">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          </div>
+          <div style="font-size:11.5px; font-weight:600; color:var(--text);">No Custom Agents</div>
+          <div style="font-size:10.5px; color:var(--dim); line-height:1.4; max-width:170px;">Click ＋ above to create one, or fork an agent from another device.</div>
+        </div>
+      `;
+      return;
+    }
+
+    let html = '';
+    const myDevLabel = (typeof getDeviceDisplayLabel === 'function') ? getDeviceDisplayLabel() : 'This Device';
+    for (const a of myAgents) {
+      const isCurDev = isAgentOnCurrentDevice(a);
+      const isSel = isCurDev && activeCustomAgent && activeCustomAgent.id === a.id;
+      const devLabel = a.device_name || (isCurDev ? myDevLabel : 'Other Device');
+      html += `
+        <div class="sidebar-agent-row ${isSel ? 'selected' : ''} ${!isCurDev ? 'other-device-barrier' : ''}" data-agent-id="${a.id}" title="${esc(a.name)}: ${esc(a.description)}${!isCurDev ? `\n(Bound to: ${devLabel}. Only Fork is available on this device)` : ''}">
+          <span class="sidebar-agent-icon">${esc(a.icon || '🤖')}</span>
+          <div class="sidebar-agent-info">
+            <div class="sidebar-agent-device-tag" style="font-size:9px; color:${isCurDev ? 'var(--accent, #38bdf8)' : 'var(--amber, #f59e0b)'}; font-weight:700; display:flex; align-items:center; gap:4px; margin-bottom:1px; line-height:1.2; flex-wrap:nowrap; min-width:0; overflow:hidden;">
+              <span style="flex-shrink:0;">${isCurDev ? '💻' : '🔒'}</span>
+              <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto;">${esc(devLabel)}</span>
+              ${!isCurDev ? '<span style="font-size:7.5px; background:rgba(245,158,11,0.18); color:var(--amber, #f59e0b); padding:1px 5px; border-radius:3px; margin-left:auto; text-transform:uppercase; font-weight:700; white-space:nowrap; flex-shrink:0; display:inline-block; line-height:1.2;">Fork only</span>' : ''}
             </div>
-            <div class="sidebar-agent-actions">
-              <button type="button" class="btn ghost btn-icon-xs edit-agent-btn" data-edit-id="${a.id}" title="Edit Agent">✏️</button>
+            <div class="sidebar-agent-name">${esc(a.name)}</div>
+            <div class="sidebar-agent-desc">
+              ${a.work_dir ? `<span class="ca-workdir-pill" title="Workspace: ${esc(a.work_dir)}">📁 ${esc(a.work_dir.split(/[/\\]/).pop() || a.work_dir)}</span> · ` : ''}
+              ${esc(a.description || a.preferred_lane || '')}${shareChip(a)}
             </div>
           </div>
-        `;
-      }
+          <div class="sidebar-agent-actions">
+            ${!isCurDev ? `
+              <button type="button" class="btn ghost fork-agent-btn" data-fork-id="${a.id}" title="Fork Agent to use on this device">🍴 Fork</button>
+            ` : `
+              <button type="button" class="btn ghost btn-icon-xs fork-agent-btn" data-fork-id="${a.id}" title="Fork Agent">🍴</button>
+              <button type="button" class="btn ghost btn-icon-xs edit-agent-btn" data-edit-id="${a.id}" title="Edit Agent">✏️</button>
+            `}
+          </div>
+        </div>
+      `;
     }
 
     list.innerHTML = html;
@@ -249,12 +400,18 @@
         const aid = row.getAttribute('data-agent-id');
         const agent = customAgentsList.find(a => String(a.id) === String(aid));
         if (agent) {
-          if (activeCustomAgent && String(activeCustomAgent.id) === String(aid)) {
-            clearActiveCustomAgent();
-            if (typeof toast === 'function') toast('Switched to General Chat');
+          if (!isAgentOnCurrentDevice(agent)) {
+            if (typeof toast === 'function') toast(`"${agent.name}" is bound to ${agent.device_name || 'another device'}. Only Fork is available on this device.`, true);
+            openForkModal(agent);
             return;
           }
-          startAgentChatSession(agent);
+          if (activeCustomAgent && String(activeCustomAgent.id) === String(aid)) {
+            clearActiveCustomAgent();
+            if (typeof toast === 'function') toast('Deselected agent');
+            if (typeof loadSessions === 'function') loadSessions(false);
+            return;
+          }
+          selectCustomAgent(agent);
         }
       };
     });
@@ -269,10 +426,11 @@
     });
 
     list.querySelectorAll('.fork-agent-btn').forEach(btn => {
-      btn.onclick = async (e) => {
+      btn.onclick = (e) => {
         e.stopPropagation();
         const id = btn.getAttribute('data-fork-id');
-        await forkCustomAgent(id);
+        const agent = customAgentsList.find(a => String(a.id) === String(id));
+        if (agent) openForkModal(agent);
       };
     });
   }
@@ -330,18 +488,22 @@
     const starterAgents = [];
 
     if (myAgents.length) {
+      const myDevLabel = (typeof getDeviceDisplayLabel === 'function') ? getDeviceDisplayLabel() : 'This Device';
       html += `<div class="agent-dropdown-section-label">My Custom Agents</div>`;
       for (const a of myAgents) {
         const isSel = activeCustomAgent && activeCustomAgent.id === a.id;
+        const isCurDev = isAgentOnCurrentDevice(a);
+        const devLabel = a.device_name || myDevLabel;
         html += `
           <div class="agent-picker-item ${isSel ? 'selected' : ''}" data-agent-id="${a.id}">
             <span class="agent-item-icon">${esc(a.icon || '🤖')}</span>
             <div class="agent-item-text">
-              <div class="agent-item-name">${esc(a.name)}</div>
+              <div class="agent-item-name">${!isCurDev ? '<span style="color:var(--amber, #f59e0b); font-size:10px; margin-right:3px;">🔒</span>' : ''}${esc(a.name)} <span style="font-size:9px; color:${isCurDev ? 'var(--accent, #38bdf8)' : 'var(--amber, #f59e0b)'}; font-weight:normal;">(${esc(devLabel)})</span></div>
               <div class="agent-item-desc">${esc(a.description)}</div>
             </div>
             <div class="agent-item-actions">
-              <button class="btn ghost btn-icon-xs edit-agent-btn" data-edit-id="${a.id}" title="Edit Agent">✏️</button>
+              ${isCurDev ? `<button class="btn ghost btn-icon-xs edit-agent-btn" data-edit-id="${a.id}" title="Edit Agent">✏️</button>` : ''}
+              <button class="btn ghost btn-icon-xs fork-agent-btn" data-fork-id="${a.id}" title="Fork for this device">🍴</button>
               ${isSel ? '<span class="agent-item-check">✓</span>' : ''}
             </div>
           </div>
@@ -390,7 +552,15 @@
           clearActiveCustomAgent();
         } else {
           const a = customAgentsList.find(x => String(x.id) === String(id));
-          if (a) setActiveCustomAgent(a);
+          if (a) {
+            if (!isAgentOnCurrentDevice(a)) {
+              closePickerDropdown();
+              if (typeof toast === 'function') toast(`Bound to "${a.device_name || 'another device'}". Fork it to configure your local workspace path.`, true);
+              openForkModal(a);
+              return;
+            }
+            setActiveCustomAgent(a);
+          }
         }
       };
     });
@@ -405,10 +575,11 @@
     });
 
     drop.querySelectorAll('.fork-agent-btn').forEach(btn => {
-      btn.onclick = async (e) => {
+      btn.onclick = (e) => {
         e.stopPropagation();
         closePickerDropdown();
-        await forkCustomAgent(btn.dataset.forkId);
+        const a = customAgentsList.find(x => String(x.id) === String(btn.dataset.forkId));
+        if (a) openForkModal(a);
       };
     });
   }
@@ -451,6 +622,15 @@
     if (!modal) return;
 
     $('ca-modal-title').textContent = agent ? `Edit Agent: ${agent.name}` : 'Create Custom Agent';
+    const myDevLabel = (typeof getDeviceDisplayLabel === 'function') ? getDeviceDisplayLabel() : 'This Device';
+    const devNameEl = $('ca-modal-device-name');
+    if (devNameEl) {
+      if (agent) {
+        devNameEl.textContent = `Bound Device: ${agent.device_name || myDevLabel}`;
+      } else {
+        devNameEl.textContent = `Binding to Device: ${myDevLabel}`;
+      }
+    }
     $('ca-name').value = agent ? agent.name : '';
     $('ca-slug').value = agent ? agent.slug : '';
     $('ca-icon').value = agent ? (agent.icon || '🤖') : '🤖';
@@ -584,6 +764,10 @@
     }
     const tempNum = parseFloat($('ca-temp').value);
 
+    const myDevId = (typeof getClientDeviceId === 'function') ? getClientDeviceId() : '';
+    const myDevName = (typeof getDeviceDisplayLabel === 'function') ? getDeviceDisplayLabel() : '';
+    const curAgent = editingAgentId ? customAgentsList.find(x => String(x.id) === String(editingAgentId)) : null;
+
     const payload = {
       name,
       slug: slug || undefined,
@@ -597,6 +781,8 @@
       temperature: Number.isFinite(tempNum) ? tempNum : 0.4,
       is_public: $('ca-public').checked,
       work_dir: $('ca-workdir').value.trim(),
+      device_id: (curAgent && curAgent.device_id) ? curAgent.device_id : myDevId,
+      device_name: (curAgent && curAgent.device_name) ? curAgent.device_name : myDevName,
     };
 
     try {
@@ -650,18 +836,92 @@
     }
   }
 
-  async function forkCustomAgent(agentId) {
+  let forkingAgent = null;
+
+  function openForkModal(agent) {
+    if (!agent) return;
+    forkingAgent = agent;
+    const modal = $('ca-fork-modal');
+    if (!modal) return;
+
+    const myDevLabel = (typeof getDeviceDisplayLabel === 'function') ? getDeviceDisplayLabel() : 'This Device';
+    const isCurDev = isAgentOnCurrentDevice(agent);
+
+    const titleEl = $('ca-fork-modal-title');
+    if (titleEl) titleEl.textContent = `Fork Agent: ${agent.name}`;
+
+    const targetDevEl = $('ca-fork-target-device');
+    if (targetDevEl) targetDevEl.textContent = `Target Device: ${myDevLabel}`;
+
+    const sourceText = $('ca-fork-source-text');
+    if (sourceText) sourceText.textContent = `${agent.icon || '🤖'} ${agent.name}`;
+
+    const sourceReason = $('ca-fork-source-reason');
+    if (sourceReason) {
+      if (!isCurDev) {
+        sourceReason.textContent = `🔒 Barrier Active: This agent is bound to "${agent.device_name || 'another device'}". To use it on this machine ("${myDevLabel}"), fork it and choose a local workspace directory below.`;
+      } else {
+        sourceReason.textContent = `Forking creates a distinct clone bound to this machine, allowing you to configure a different workspace directory or prompt.`;
+      }
+    }
+
+    const nameInput = $('ca-fork-name');
+    if (nameInput) nameInput.value = `${agent.name} (Fork)`;
+
+    const workdirInput = $('ca-fork-workdir');
+    if (workdirInput) workdirInput.value = '';
+
+    modal.style.display = 'flex';
+    window.focus();
+    setTimeout(() => {
+      if (workdirInput) workdirInput.focus();
+    }, 60);
+  }
+
+  function closeForkModal() {
+    const modal = $('ca-fork-modal');
+    if (modal) modal.style.display = 'none';
+    forkingAgent = null;
+  }
+
+  async function submitForkAgent() {
+    if (!forkingAgent) return;
+    const name = ($('ca-fork-name') ? $('ca-fork-name').value : '').trim() || `${forkingAgent.name} (Fork)`;
+    const workDir = ($('ca-fork-workdir') ? $('ca-fork-workdir').value : '').trim();
+    if (!workDir) {
+      if (typeof toast === 'function') toast('Please specify a workspace path on this device', true);
+      if ($('ca-fork-workdir')) $('ca-fork-workdir').focus();
+      return;
+    }
+    const myDevId = (typeof getClientDeviceId === 'function') ? getClientDeviceId() : '';
+    const myDevName = (typeof getDeviceDisplayLabel === 'function') ? getDeviceDisplayLabel() : '';
     try {
-      const forked = await api(`/custom-agents/${agentId}/fork`, {
+      const forked = await api(`/custom-agents/${forkingAgent.id}/fork`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(typeof getDeviceHeaders === 'function' ? getDeviceHeaders() : {})
+        },
+        body: JSON.stringify({
+          name,
+          work_dir: workDir,
+          device_id: myDevId,
+          device_name: myDevName,
+        })
       });
-      if (typeof toast === 'function') toast(`Forked as "${forked.name}"`);
+      closeForkModal();
+      if (typeof toast === 'function') toast(`Forked & bound to this device as "${forked.name}" ⚡`);
       await refreshAllCustomAgentViews();
-      setActiveCustomAgent(forked);
+      selectCustomAgent(forked);
     } catch (e) {
       if (typeof toast === 'function') toast(`Fork failed: ${e.message}`, true);
+    }
+  }
+
+  async function forkCustomAgent(agentId) {
+    const a = customAgentsList.find(x => String(x.id) === String(agentId));
+    if (a) {
+      openForkModal(a);
     }
   }
 
@@ -762,6 +1022,24 @@
     const modalClose = $('ca-modal-close');
     if (modalClose) modalClose.onclick = closeAgentBuilder;
 
+    const forkModalClose = $('ca-fork-modal-close');
+    if (forkModalClose) forkModalClose.onclick = closeForkModal;
+
+    const forkCancelBtn = $('ca-fork-cancel-btn');
+    if (forkCancelBtn) forkCancelBtn.onclick = closeForkModal;
+
+    const forkBrowseBtn = $('ca-fork-browse-btn');
+    if (forkBrowseBtn) {
+      forkBrowseBtn.onclick = async () => {
+        const cur = $('ca-fork-workdir') ? $('ca-fork-workdir').value : '';
+        const dir = await pickFolder(cur);
+        if (dir && $('ca-fork-workdir')) $('ca-fork-workdir').value = dir;
+      };
+    }
+
+    const forkSubmitBtn = $('ca-fork-submit-btn');
+    if (forkSubmitBtn) forkSubmitBtn.onclick = submitForkAgent;
+
     // Direct click-to-focus for all field containers
     document.querySelectorAll('.ca-field').forEach(field => {
       field.addEventListener('click', (e) => {
@@ -780,6 +1058,7 @@
       }
     });
 
+    renderSidebarAgentsList();
     loadCustomAgents();
     loadAvailableTools();
   }
@@ -892,19 +1171,26 @@
   window.customAgentRequestOverrides = requestOverrides;
   window.getActiveCustomAgent = getActiveCustomAgent;
   window.setActiveCustomAgent = setActiveCustomAgent;
+  window.selectCustomAgent = selectCustomAgent;
   window.clearActiveCustomAgent = clearActiveCustomAgent;
   window.startAgentChatSession = startAgentChatSession;
+  window.bindCustomAgentSession = bindSession;
   window.openAgentBuilder = openAgentBuilder;
+  window.openForkModal = openForkModal;
   window.loadCustomAgents = loadCustomAgents;
+  window.renderSidebarAgentsList = renderSidebarAgentsList;
   window.customAgentsList = () => customAgentsList;
   window.customAgents = {
     getActiveId: getActiveCustomAgentId,
     getActive: getActiveCustomAgent,
     setActive: setActiveCustomAgent,
+    select: selectCustomAgent,
     clear: clearActiveCustomAgent,
     startSession: startAgentChatSession,
+    bindSession,
     list: () => customAgentsList,
     openModal: openAgentBuilder,
+    openFork: openForkModal,
     reload: loadCustomAgents,
     restoreForSession,
   };

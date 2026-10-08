@@ -152,6 +152,16 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             raise SetupError({"error": "custom_agent_not_found",
                               "message": "The selected custom agent no longer exists or isn't shared with you."},
                              404)
+        agent_dev_id = ctx.custom_agent.get("device_id")
+        cur_dev_id = request.headers.get("X-Device-Id")
+        if agent_dev_id and cur_dev_id:
+            from core.request_context import normalize_device_id
+            if normalize_device_id(agent_dev_id) != normalize_device_id(cur_dev_id):
+                raise SetupError(
+                    {"error": "custom_agent_other_device",
+                     "message": f"This agent is bound to '{ctx.custom_agent.get('device_name') or 'another device'}'. Please fork it to use on this machine."},
+                    403
+                )
         if ctx.custom_agent.get("tool_allowlist"):
             # writing files is never withheld from an agent: a restricted set always keeps write_file / edit_file
             ctx.custom_agent_tools = set(ctx.custom_agent["tool_allowlist"]) | {"write_file", "edit_file", "append_file"}

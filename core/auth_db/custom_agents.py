@@ -49,39 +49,24 @@ def _custom_agent_row(r) -> dict:
 
 
 def db_list_custom_agents(user_id: Optional[int] = None, include_public: bool = True) -> list[dict]:
-    """List custom agents accessible to user: user's own agents + system templates / public agents."""
+    """List custom agents accessible to user: user's own agents + system templates / public agents.
+    Returns all user custom agents created across devices so other devices can see and fork them."""
     conn = db()
-    if user_id is not None:
-        if include_public:
-            rows = conn.execute(
-                """SELECT * FROM user_custom_agents
-                   WHERE user_id = ? OR user_id IS NULL OR is_public = 1
-                   ORDER BY (CASE WHEN user_id = ? THEN 0 WHEN user_id IS NULL THEN 1 ELSE 2 END), name COLLATE NOCASE""",
-                (user_id, user_id)
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM user_custom_agents WHERE user_id = ? ORDER BY name COLLATE NOCASE",
-                (user_id,)
-            ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM user_custom_agents WHERE user_id IS NULL OR is_public = 1 ORDER BY name COLLATE NOCASE"
-        ).fetchall()
+    rows = conn.execute(
+        """SELECT * FROM user_custom_agents
+           WHERE user_id IS NOT NULL OR is_public = 1 OR user_id IS NULL
+           ORDER BY (CASE WHEN user_id IS NOT NULL THEN 0 ELSE 1 END), name COLLATE NOCASE"""
+    ).fetchall()
     return [_custom_agent_row(r) for r in rows]
 
 
 def db_get_custom_agent(agent_id: int, user_id: Optional[int] = None) -> Optional[dict]:
-    """Get agent by id, checking access (owner, public, or system template)."""
+    """Get agent by id (accessible to read, inspect, and fork across devices)."""
     conn = db()
     row = conn.execute("SELECT * FROM user_custom_agents WHERE id = ?", (agent_id,)).fetchone()
     if not row:
         return None
-    agent = _custom_agent_row(row)
-    if user_id is not None:
-        if agent.get("user_id") not in (user_id, None) and not agent.get("is_public"):
-            return None
-    return agent
+    return _custom_agent_row(row)
 
 
 def db_get_custom_agent_by_slug(slug: str, user_id: Optional[int] = None) -> Optional[dict]:
@@ -136,6 +121,8 @@ def db_create_custom_agent(user_id: Optional[int], data: dict) -> dict:
     share_status = str(data.get("share_status") or "")
     is_public = 1 if share_status == "approved" else 0
     work_dir = clean_work_dir(data.get("work_dir"))
+    device_id = str(data.get("device_id") or "").strip()
+    device_name = str(data.get("device_name") or "").strip()
 
     base_slug = slug
     counter = 1
@@ -148,11 +135,11 @@ def db_create_custom_agent(user_id: Optional[int], data: dict) -> dict:
             """INSERT INTO user_custom_agents (
                 user_id, name, slug, description, icon, system_prompt, tool_allowlist,
                 input_template, preferred_lane, reasoning_effort, temperature, is_public, work_dir, share_status,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                device_id, device_name, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (user_id, name, slug, description, icon, system_prompt, tool_json,
              input_template, preferred_lane, reasoning_effort, temperature, is_public, work_dir, share_status,
-             now, now)
+             device_id, device_name, now, now)
         )
         new_id = cursor.lastrowid
     return db_get_custom_agent(new_id)
@@ -178,7 +165,7 @@ def db_update_custom_agent(agent_id: int, user_id: int, data: dict) -> Optional[
     fields = []
     args = []
 
-    for k in ("name", "description", "icon", "system_prompt", "input_template", "preferred_lane", "reasoning_effort"):
+    for k in ("name", "description", "icon", "system_prompt", "input_template", "preferred_lane", "reasoning_effort", "device_id", "device_name"):
         if k in data:
             fields.append(f"{k} = ?")
             args.append(str(data[k]).strip())
@@ -269,7 +256,7 @@ def db_delete_custom_agent(agent_id: int, user_id: int) -> bool:
 
 
 def db_fork_custom_agent(agent_id: int, user_id: int, new_name: Optional[str] = None,
-                         work_dir: str = "") -> Optional[dict]:
+                         work_dir: str = "", device_id: str = "", device_name: str = "") -> Optional[dict]:
     """Clone an existing agent / template into user's own collection."""
     source = db_get_custom_agent(agent_id, user_id)
     if not source:
@@ -295,5 +282,7 @@ def db_fork_custom_agent(agent_id: int, user_id: int, new_name: Optional[str] = 
         "reasoning_effort": source["reasoning_effort"],
         "temperature": source["temperature"],
         "work_dir": work_dir,          # never copied from the source: a path on someone else's machine
+        "device_id": device_id,
+        "device_name": device_name,
     }
     return db_create_custom_agent(user_id, data)

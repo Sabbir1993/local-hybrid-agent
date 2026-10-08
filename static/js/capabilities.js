@@ -108,6 +108,20 @@ async function loadCapabilities() {
         </label>
       </div>
       <div class="cap-item">
+        <label style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+          <div>
+            <b>Default Terminal Shell</b>
+            <div class="dim" style="font-size:11px;">Preferred shell for companion and console terminal</div>
+          </div>
+          <select id="setting-terminal-shell" style="background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:4px 8px; font-size:11.5px; outline:none; cursor:pointer;">
+            <option value="powershell">PowerShell (Default)</option>
+            <option value="cmd">Command Prompt (CMD)</option>
+            <option value="bash">Git Bash / WSL (Bash)</option>
+            <option value="pwsh">PowerShell Core (PWSH)</option>
+          </select>
+        </label>
+      </div>
+      <div class="cap-item">
         <b>Global allowed patterns</b> <span class="dim">(wildcards ok, <code>*</code> = allow all — admin-managed, applies to every user)</span>
         <div id="shell-pats" style="display:flex; flex-direction:column; gap:3px; margin-top:4px;">
           ${(sh.allow_patterns || []).map((p, i) => `
@@ -269,6 +283,16 @@ async function loadCapabilities() {
       } catch (e) { myPats.textContent = 'Could not load your allowed commands.'; }
     };
     loadMyPats();
+    const termShellEl = box.querySelector('#setting-terminal-shell');
+    if (termShellEl) {
+      termShellEl.value = localStorage.getItem('default_terminal_shell') || 'powershell';
+      termShellEl.onchange = () => {
+        localStorage.setItem('default_terminal_shell', termShellEl.value);
+        const termSelect = document.getElementById('term-shell-select');
+        if (termSelect) termSelect.value = termShellEl.value;
+        toast(`Default terminal shell: ${termShellEl.options[termShellEl.selectedIndex]?.text || termShellEl.value}`);
+      };
+    }
     const askEl = box.querySelector('#shell-ask');
     if (askEl) askEl.onchange = async () => {
       try {

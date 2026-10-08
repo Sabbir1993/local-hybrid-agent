@@ -160,7 +160,7 @@ function mdProseLegacy(text) {
       const safeDomain = esc(domain);
       const safeFavicon = esc(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`);
       return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="citation-pill" title="${safeDomain} - Click to open source">`
-        + `<img src="${safeFavicon}" class="citation-favicon" alt="" loading="lazy" />`
+        + `<img src="${safeFavicon}" class="citation-favicon" alt="" loading="lazy" onerror="this.style.display='none'" />`
         + `<span class="citation-host">${safeDomain}</span>`
         + `</a>`;
     }

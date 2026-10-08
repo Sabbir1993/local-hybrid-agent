@@ -13,6 +13,7 @@ from core.db import (
     db_list_sessions_page,
     db_load_messages,
     db_update_session_title,
+    db_update_session_agent_id,
 )
 from core.deps import get_current_user
 from .models import MessageReq, SessionReq
@@ -37,7 +38,7 @@ async def list_sessions(pid: int, limit: Optional[int] = None, before: Optional[
 @router.post("/control/projects/{pid}/sessions")
 async def create_session(pid: int, req: SessionReq, user: Principal = Depends(get_current_user)):
     try:
-        s = db_create_session(pid, req.title, owner_user_id=user.id)
+        s = db_create_session(pid, req.title, owner_user_id=user.id, agent_id=req.agent_id)
     except PermissionError:
         return JSONResponse({"error": "project not found"}, status_code=404)
     except Exception as e:
@@ -48,7 +49,10 @@ async def create_session(pid: int, req: SessionReq, user: Principal = Depends(ge
 @router.patch("/control/sessions/{sid}")
 async def update_session(sid: int, req: SessionReq, user: Principal = Depends(get_current_user)):
     try:
-        db_update_session_title(sid, req.title, owner_user_id=user.id)
+        if req.title is not None:
+            db_update_session_title(sid, req.title, owner_user_id=user.id)
+        if req.agent_id is not None:
+            db_update_session_agent_id(sid, req.agent_id, owner_user_id=user.id)
     except PermissionError:
         return JSONResponse({"error": "session not found"}, status_code=404)
     except Exception as e:

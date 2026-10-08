@@ -56,13 +56,14 @@ function defaultInputPlaceholder() {
 function refreshInputPlaceholder() {
   const input = $('input');
   if (!input) return;
+  const curMode = window.appMode || (typeof appMode !== 'undefined' ? appMode : 'chat');
   if (armedCmd) {
     const h = CMD_HINTS[armedCmd.name] || {};
     input.placeholder = h.ph || (armedCmd.desc ? `${armedCmd.desc} — Enter to run` : `Instructions for /${armedCmd.name} — Enter to run`);
-  } else if (window.customAgents && typeof window.customAgents.getActive === 'function' && window.customAgents.getActive()) {
+  } else if (curMode === 'agent' && window.customAgents && typeof window.customAgents.getActive === 'function' && window.customAgents.getActive()) {
     const a = window.customAgents.getActive();
     input.placeholder = `${a.icon || '🤖'} ${a.name}: ${a.description || 'Describe your task for this agent…'}`;
-  } else if (typeof window.getActiveCustomAgent === 'function' && window.getActiveCustomAgent()) {
+  } else if (curMode === 'agent' && typeof window.getActiveCustomAgent === 'function' && window.getActiveCustomAgent()) {
     const a = window.getActiveCustomAgent();
     input.placeholder = `${a.icon || '🤖'} ${a.name}: ${a.description || 'Describe your task for this agent…'}`;
   } else {
@@ -607,11 +608,12 @@ function dispatchPrompt(text) {
   if (agentMode || personalAgentRun()) runAgentSSE(text); else send(text);
 }
 
-/* Personal Agents live in the Chat sidebar and only make sense with a native companion connected:
-   hidden in Agent Task mode and in the plain web app. */
+/* Custom Agents card is ONLY shown in agent mode — never in chat or code mode. */
 function updatePersonalAgentsCard() {
   const card = $('custom-agents-card');
-  if (card) card.style.display = (companionConnected && !agentMode) ? 'flex' : 'none';
+  if (!card) return;
+  const curMode = window.appMode || (localStorage.getItem('app_mode') || 'chat');
+  card.style.display = (curMode === 'agent') ? 'flex' : 'none';
 }
 
 function updateAgentModeAvailability(connected, hostname) {
@@ -621,6 +623,11 @@ function updateAgentModeAvailability(connected, hostname) {
     (typeof window !== 'undefined' && window.electronAPI && window.electronAPI.isNativeApp) ||
     (typeof navigator !== 'undefined' && (navigator.userAgent.includes("A770NativeApp") || navigator.userAgent.includes("Electron")))
   );
+  document.documentElement.classList.toggle('is-native-app', isNative);
+  document.body?.classList.toggle('is-native-app', isNative);
+  const sw = $('app-mode-switch') || document.querySelector('.tri-mode-switch');
+  if (sw) sw.style.setProperty('display', isNative ? 'grid' : 'none', 'important');
+
   const btnAgent = $('mode-agent');
   const btnChat = $('mode-chat');
 
@@ -643,76 +650,162 @@ function updateAgentModeAvailability(connected, hostname) {
       btnAgent.disabled = true;
       btnAgent.classList.add('disabled');
       btnAgent.title = 'Agent Task mode is only enabled in the desktop native app. In web browser, only Chat is enabled.';
-      if (agentMode) {
-        setAppMode(false, false);
+      if (appMode !== 'chat') {
+        setAppMode('chat', false);
       }
     }
   }
 }
 
-function setAppMode(isAgent, isUserSwitch = false) {
+let appMode = (function() {
+  try {
+    const isNative = typeof isNativeAppClient === 'function' ? isNativeAppClient() : (
+      (typeof window !== 'undefined' && window.electronAPI && window.electronAPI.isNativeApp) ||
+      (typeof navigator !== 'undefined' && (navigator.userAgent.includes("A770NativeApp") || navigator.userAgent.includes("Electron")))
+    );
+    if (!isNative) return 'chat';
+    const s = localStorage.getItem('app_mode');
+    if (s === 'agent' || s === 'code') return s;
+    return 'chat';
+  } catch (_) { return 'chat'; }
+})();
+window.appMode = appMode;
+
+function setAppMode(mode, isUserSwitch = false) {
+  if (typeof mode === 'boolean') {
+    mode = mode ? 'code' : 'chat';
+  }
+  if (!mode || (mode !== 'chat' && mode !== 'agent' && mode !== 'code')) {
+    mode = 'chat';
+  }
+
   const isNative = typeof isNativeAppClient === 'function' ? isNativeAppClient() : (
     (typeof window !== 'undefined' && window.electronAPI && window.electronAPI.isNativeApp) ||
     (typeof navigator !== 'undefined' && (navigator.userAgent.includes("A770NativeApp") || navigator.userAgent.includes("Electron")))
   );
 
-  // In web browser, only chat is permitted
-  if (isAgent && !isNative) {
+  // In web browser without desktop native app, Agent and Code modes are disabled
+  if ((mode === 'agent' || mode === 'code') && !isNative) {
     if (isUserSwitch) {
-      toast('Agent Task mode is only enabled in the desktop native app. In web browser, only Chat is enabled.');
+      toast(`${mode === 'agent' ? 'Custom Agent' : 'Coding Agent'} mode requires the desktop Companion app.`);
     }
-    isAgent = false;
+    mode = 'chat';
   }
 
-  const prevMode = agentMode;
-  agentMode = !!isAgent;
-  try { localStorage.setItem('app_mode', agentMode ? 'agent' : 'chat'); } catch (e) {}
+  const prevMode = appMode;
+  appMode = mode;
+  window.appMode = appMode;
+  agentMode = (appMode === 'code');
+  window.agentMode = agentMode;
+  try { localStorage.setItem('app_mode', appMode); } catch (e) {}
+  document.body?.setAttribute('data-app-mode', appMode);
+  document.documentElement.setAttribute('data-app-mode', appMode);
 
   const btnChat = $('mode-chat');
   const btnAgent = $('mode-agent');
-  if (btnChat) btnChat.classList.toggle('active', !agentMode);
-  if (btnAgent) btnAgent.classList.toggle('active', agentMode);
+  const btnCode = $('mode-code');
+  if (btnChat) btnChat.classList.toggle('active', appMode === 'chat');
+  if (btnAgent) btnAgent.classList.toggle('active', appMode === 'agent');
+  if (btnCode) btnCode.classList.toggle('active', appMode === 'code');
+
   const banner = $('agent-banner');
   if (banner) banner.style.display = 'none';
+
+  // Section visibility:
+  // Chat: hide projects, hide custom agents
+  // Agent: show custom agents, hide projects
+  // Code: show projects, hide custom agents
   const projCard = $('projects-card');
-  if (projCard) projCard.style.display = agentMode ? 'block' : 'none';
-  updatePersonalAgentsCard();
-  // plan/build select + engine select only in agent mode
+  if (projCard) projCard.style.display = (appMode === 'code') ? 'flex' : 'none';
+  const caCard = $('custom-agents-card');
+  if (caCard) caCard.style.display = (appMode === 'agent') ? 'flex' : 'none';
+
+  // Session list title
+  const sTitle = $('session-title');
+  if (sTitle) {
+    if (appMode === 'chat') {
+      sTitle.textContent = 'Recent Chats';
+      sTitle.title = 'Generic chat sessions';
+    } else if (appMode === 'agent') {
+      sTitle.textContent = 'Agent Sessions';
+      sTitle.title = 'Custom agent conversation sessions';
+    } else {
+      sTitle.textContent = 'Project Tasks';
+      sTitle.title = 'Project-scoped task sessions';
+    }
+  }
+
+  // Plan/build select + engine select only in code mode
   const planSel = $('agent-plan-sel');
-  if (planSel) planSel.style.display = agentMode ? 'inline-block' : 'none';
+  if (planSel) planSel.style.display = (appMode === 'code') ? 'inline-block' : 'none';
   const eng = $('agent-engine');
-  if (eng) eng.style.display = agentMode ? 'inline-block' : 'none';
-  // cloud model picker: visible in agent mode when mode needs a cloud executor
+  if (eng) eng.style.display = (appMode === 'code') ? 'inline-block' : 'none';
+
+  // Cloud model picker: visible when mode needs a cloud executor
   if (typeof _updateCloudModelSelVisibility === 'function') _updateCloudModelSelVisibility();
+
+  // Mode permissions dropdown: hidden in chat mode, shown in agent & code modes
+  const modeWrap = $('claude-mode-wrap');
+  if (modeWrap) modeWrap.style.setProperty('display', (appMode === 'chat') ? 'none' : 'inline-flex', 'important');
+  const bypassItem = $('claude-mode-menu')?.querySelector('[data-mode-key="bypass"]');
+  if (bypassItem) bypassItem.style.display = (appMode === 'chat') ? 'none' : '';
+  if (window.RightDock && typeof window.RightDock.syncModeVisibility === 'function') {
+    window.RightDock.syncModeVisibility();
+  }
+
+  // Web search toggle: available in chat and agent modes, hidden in code mode
   const webToggle = $('btn-web-toggle');
-  if (webToggle) webToggle.style.display = agentMode ? 'none' : 'flex';
-  // effort chip: Deep research is chat-only, so its switch hides in agent mode
+  if (webToggle) webToggle.style.setProperty('display', (appMode === 'code') ? 'none' : 'inline-flex', 'important');
+  if (typeof updateWebToggleUI === 'function') updateWebToggleUI();
+
+  // Effort chip
   if (typeof updateEffortUI === 'function') updateEffortUI();
-  if (agentMode && window._setPlanMode) window._setPlanMode(planMode);   // refresh placeholder
-  // workspace side panel needs agent mode + an active project
+  if (agentMode && window._setPlanMode) window._setPlanMode(planMode);
+
+  // Workspace side panel needs agent mode + an active project
   if (!agentMode && wsPanelOpen) setWsPanel(false);
   updateWsRail();
   refreshProjectInitHint();
-  const sTitle = $('session-title');
-  if (sTitle) {
-    sTitle.textContent = agentMode ? 'Project Tasks' : 'Recent Chats';
-    sTitle.title = agentMode ? 'Project-scoped task sessions' : 'Generic chat sessions';
-  }
-  const sel = $('profile');
-  const mName = (sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'model';
   refreshInputPlaceholder();
-  if (agentMode) {
-    if (isUserSwitch) toast(curProject ? `Agent Task mode active (workspace: ${curProject.name || curProject})` : 'Agent Task mode active — please select a project');
-  } else {
-    if (isUserSwitch) toast('Chat mode active — direct conversation with LLM');
+
+  if (typeof syncHeaderTitleAndPill === 'function') syncHeaderTitleAndPill();
+  else if (window.syncHeaderTitleAndPill) window.syncHeaderTitleAndPill();
+
+  if (appMode === 'chat') {
+    if (typeof clearActiveCustomAgent === 'function') clearActiveCustomAgent();
+    else if (window.clearActiveCustomAgent) window.clearActiveCustomAgent();
+  } else if (appMode === 'agent') {
+    if (typeof window.renderSidebarAgentsList === 'function') window.renderSidebarAgentsList();
+    if (typeof window.loadCustomAgents === 'function') window.loadCustomAgents();
+  }
+
+  if (window.RightDock && typeof window.RightDock.syncTabVisibility === 'function') {
+    window.RightDock.syncTabVisibility(appMode === 'code' || appMode === 'agent');
+  }
+  if (window.RightDock && typeof window.RightDock.updateTerminalStatus === 'function') {
+    window.RightDock.updateTerminalStatus();
+  }
+
+  if (isUserSwitch) {
+    if (appMode === 'code') {
+      toast(curProject ? `Code mode (workspace: ${curProject.name || curProject})` : 'Code mode');
+    } else if (appMode === 'agent') {
+      toast(window.activeCustomAgent ? `Agent: ${window.activeCustomAgent.name}` : 'Agent mode');
+    } else {
+      toast('Chat mode');
+    }
   }
 
   // Switching between modes opens a new fresh chat window and loads relevant session list
-  if (isUserSwitch && prevMode !== agentMode) {
+  if (isUserSwitch && prevMode !== appMode) {
     curSession = null;
     messages = [];
+    if (window.RightDock && typeof window.RightDock.resetPlan === 'function') {
+      window.RightDock.resetPlan();
+    }
     try {
-      localStorage.removeItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
+      const oldKey = typeof window.getActiveSessionKey === 'function' ? window.getActiveSessionKey() : (prevMode === 'agent' ? 'active_agent_session_id' : (prevMode === 'code' ? 'active_code_session_id' : 'active_chat_session_id'));
+      localStorage.removeItem(oldKey);
     } catch (e) {}
     setGenUI(false);
     renderAll();
@@ -726,20 +819,19 @@ function setAppMode(isAgent, isUserSwitch = false) {
   } else if (isUserSwitch) {
     loadSessions(true);
   }
+  if (typeof window !== 'undefined' && window.SlotMachine) {
+    window.SlotMachine.syncFromState();
+  }
 }
 
 if ($('mode-chat')) {
-  $('mode-chat').onclick = () => setAppMode(false, true);
+  $('mode-chat').onclick = () => setAppMode('chat', true);
 }
 if ($('mode-agent')) {
-  $('mode-agent').onclick = () => {
-    const isNative = typeof isNativeAppClient === 'function' ? isNativeAppClient() : false;
-    if (!isNative) {
-      toast('Agent Task mode is only enabled in the desktop native app. In web browser, only Chat is enabled.');
-      return;
-    }
-    setAppMode(true, true);
-  };
+  $('mode-agent').onclick = () => setAppMode('agent', true);
+}
+if ($('mode-code')) {
+  $('mode-code').onclick = () => setAppMode('code', true);
 }
 
 // Initial availability update on load

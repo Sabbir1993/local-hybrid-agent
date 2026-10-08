@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from core.audit import audit_log
 from core.auth import Principal
@@ -37,9 +37,13 @@ async def list_custom_agents(user: Principal = Depends(get_current_user)):
 
 
 @router.post("")
-async def create_custom_agent(req: CustomAgentCreateReq, user: Principal = Depends(get_current_user)):
+async def create_custom_agent(req: CustomAgentCreateReq, request: Request, user: Principal = Depends(get_current_user)):
     """Create a new custom agent for the signed-in user."""
     data = req.model_dump()
+    if not data.get("device_id"):
+        data["device_id"] = request.headers.get("X-Device-Id", "")
+    if not data.get("device_name"):
+        data["device_name"] = request.headers.get("X-Device-Name", "")
     err = _check_slug(data.get("slug"), data.get("name"))
     if err:
         return err
@@ -208,10 +212,13 @@ async def delete_custom_agent(agent_id: int, user: Principal = Depends(get_curre
 
 
 @router.post("/{agent_id}/fork")
-async def fork_custom_agent(agent_id: int, req: ForkReq, user: Principal = Depends(get_current_user)):
+async def fork_custom_agent(agent_id: int, req: ForkReq, request: Request, user: Principal = Depends(get_current_user)):
     """Clone an agent or starter template into user's own custom agents."""
+    device_id = req.device_id or request.headers.get("X-Device-Id", "")
+    device_name = req.device_name or request.headers.get("X-Device-Name", "")
     try:
-        forked = db_fork_custom_agent(agent_id, user.id, req.name, req.work_dir or "")
+        forked = db_fork_custom_agent(agent_id, user.id, req.name, req.work_dir or "",
+                                     device_id=device_id, device_name=device_name)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     if not forked:

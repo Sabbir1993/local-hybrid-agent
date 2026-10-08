@@ -358,7 +358,7 @@ function updateContextChip() {
 
   const nCtx = (curStatus && curStatus.context && curStatus.context.n_ctx) ? curStatus.context.n_ctx : curCtxMax;
   const pct = Math.min(100, Number(((totalToks / Math.max(1, nCtx)) * 100).toFixed(1)));
-  const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
+  const fmtK = n => n >= 1000000 ? (n / 1000000).toFixed(1).replace('.0','') + 'M' : (n >= 1000 ? (n / 1000).toFixed(1).replace('.0','') + 'k' : n);
 
   cChip.innerHTML = `<svg class="ui-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04Z"/></svg> <span>${fmtK(totalToks)} / ${fmtK(nCtx)} (${pct}%)</span>`;
   cChip.title = `Session Tokens: ${totalToks.toLocaleString()} / ${nCtx.toLocaleString()} tokens used (${pct}%)`
@@ -370,4 +370,18 @@ function updateContextChip() {
   if (pct > CTX_CRIT_PCT) cChip.style.color = 'var(--red)';
   else if (pct > CTX_WARN_PCT) cChip.style.color = 'var(--amber)';
   else cChip.style.color = 'var(--dim)';
+
+  // Update Claude Bottom Context Pie Chart Ring & Tooltip (Image 4)
+  const ringFill = $('claude-ctx-fill');
+  const popupTitle = $('claude-ctx-popup-title');
+  if (ringFill) {
+    const strokeDash = 88;
+    const offset = Math.max(0, strokeDash - (pct / 100) * strokeDash);
+    ringFill.style.strokeDashoffset = offset;
+    const color = pct > CTX_CRIT_PCT ? 'var(--red, #ef4444)' : (pct > CTX_WARN_PCT ? 'var(--amber, #f59e0b)' : 'var(--blue, #38bdf8)');
+    ringFill.style.stroke = color;
+  }
+  if (popupTitle) {
+    popupTitle.textContent = `Context ${fmtK(totalToks)} / ${fmtK(nCtx)} (${Math.round(pct)}%)`;
+  }
 }

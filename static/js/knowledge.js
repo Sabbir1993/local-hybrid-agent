@@ -131,100 +131,110 @@ function renderKnowledgePanel(box, sources) {
   const catOptions = categories.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
 
   box.innerHTML = `
-    <div role="tablist" class="ru-tabs kb-tabs" style="display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:14px;">
-      <button type="button" role="tab" class="ru-tab kb-tab btn ghost on" data-tab="sources" style="width:auto; margin:0; padding:6px 16px; font-size:12px; border-radius:6px 6px 0 0; display:inline-flex; align-items:center; gap:6px;">
-        <span>📚 Sources</span>
-        <span class="cap-pill-badge" style="background:var(--panel2); border:1px solid var(--border);">${sources.length}</span>
-      </button>
-      <button type="button" role="tab" class="ru-tab kb-tab btn ghost" data-tab="add" style="width:auto; margin:0; padding:6px 16px; font-size:12px; border-radius:6px 6px 0 0;">
-        <span>➕ Add Source</span>
-      </button>
-      <button type="button" role="tab" class="ru-tab kb-tab btn ghost" data-tab="policy" style="width:auto; margin:0; padding:6px 16px; font-size:12px; border-radius:6px 6px 0 0;">
-        <span>☁️ Cloud Policy &amp; Rules</span>
-      </button>
-    </div>
-
-    <!-- PANE 1: Sources -->
-    <div class="ru-pane kb-pane" data-pane="sources">
-      <div class="kb-filter-bar" style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
-        <input type="text" id="kb-search-input" placeholder="🔍 Search sources by title..." style="flex:1; min-width:180px; height:34px; box-sizing:border-box; padding:0 12px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
-        <select id="kb-cat-filter" style="width:auto; height:34px; box-sizing:border-box; padding:0 10px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
-          <option value="">All Categories</option>
-          ${catOptions}
-        </select>
-        <select id="kb-kind-filter" style="width:auto; height:34px; box-sizing:border-box; padding:0 10px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
-          <option value="">All Types</option>
-          <option value="file">📄 File</option>
-          <option value="url">🔗 URL</option>
-          <option value="text">📝 Pasted Text</option>
-        </select>
+    <div class="kb-redesign-wrap">
+      <div class="kb-header-title-row">
+        <span style="font-size:16px;">📚</span>
+        <span>Knowledge Base</span>
+      </div>
+      <div class="kb-header-subtitle">
+        Organizational knowledge base: documents, pasted text &amp; URLs, tagged by role
       </div>
 
-      ${sources.length ? `
-      <div id="kb-toolbar" style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; padding:8px 12px; background:var(--panel2); border:1px solid var(--border); border-radius:7px; flex-wrap:wrap;">
-        <div style="display:flex; align-items:center; gap:10px;">
-          <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; font-weight:600; color:var(--text); margin:0; user-select:none;">
-            <input type="checkbox" id="kb-select-all" style="cursor:pointer; accent-color:var(--accent); width:15px; height:15px; margin:0;">
-            <span>Select all</span>
-          </label>
-          <span id="kb-selected-count" class="dim" style="font-size:11px;">(0 of ${sources.length} selected)</span>
-        </div>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <button type="button" class="btn red" id="kb-bulk-delete" disabled style="width:auto; margin:0; padding:5px 12px; font-size:11.5px; opacity:0.5; cursor:not-allowed; display:inline-flex; align-items:center; gap:5px;">
-            🗑️ Delete Selected
-          </button>
-        </div>
-      </div>` : ''}
-
-      <div id="kb-list" style="display:flex; flex-direction:column; gap:8px;">
-        ${sources.map(s => sourceRow(s)).join('') || '<div class="dim" style="font-size:12px; padding:16px; text-align:center;">No knowledge sources yet. Click <b>➕ Add Source</b> to ingest documents.</div>'}
+      <div role="tablist" class="kb-tabs-bar">
+        <button type="button" role="tab" class="kb-tab kb-tab-pill on" data-tab="sources">
+          <span>📚 Sources</span>
+          <span class="kb-tab-badge">${sources.length}</span>
+        </button>
+        <button type="button" role="tab" class="kb-tab kb-tab-pill" data-tab="add">
+          <span>➕ Add Source</span>
+        </button>
+        <button type="button" role="tab" class="kb-tab kb-tab-pill" data-tab="policy">
+          <span>☁️ Cloud Policy &amp; Rules</span>
+        </button>
       </div>
-    </div>
 
-    <!-- PANE 2: Add Source -->
-    <div class="ru-pane kb-pane" data-pane="add" style="display:none;">
-      <div class="cap-pane-card" style="margin-bottom:14px; padding:14px 18px; background:var(--panel2); border-radius:8px; border:1px solid var(--border);">
-        <div style="font-weight:600; font-size:14px; color:var(--text); margin-bottom:4px;">Add New Knowledge Source</div>
-        <div class="dim" style="font-size:11px; margin-bottom:14px;">Ingest PDF, Office docs, web pages, or pasted text into the company knowledge base.</div>
-        
-        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
-          <select id="kb-add-kind" style="flex:0 0 170px; height:34px; box-sizing:border-box; padding:0 8px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
-            <option value="file">📄 Document File (PDF/DOCX/XLSX)</option>
-            <option value="url">🔗 Web URL</option>
+      <!-- PANE 1: Sources -->
+      <div class="ru-pane kb-pane" data-pane="sources">
+        <div class="kb-filter-bar" style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+          <input type="text" id="kb-search-input" placeholder="🔍 Search sources by title..." style="flex:1; min-width:180px; height:34px; box-sizing:border-box; padding:0 12px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
+          <select id="kb-cat-filter" style="width:auto; height:34px; box-sizing:border-box; padding:0 10px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
+            <option value="">All Categories</option>
+            ${catOptions}
+          </select>
+          <select id="kb-kind-filter" style="width:auto; height:34px; box-sizing:border-box; padding:0 10px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
+            <option value="">All Types</option>
+            <option value="file">📄 File</option>
+            <option value="url">🔗 URL</option>
             <option value="text">📝 Pasted Text</option>
           </select>
-          <input type="text" id="kb-add-title" placeholder="Source Title (e.g. Employee Handbook 2025)" style="flex:1; min-width:180px; height:34px; box-sizing:border-box; padding:0 10px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
         </div>
 
-        <div id="kb-add-body" style="margin-bottom:14px;"></div>
-
-        <div style="margin-bottom:14px;">
-          <label class="dim" style="font-size:11px; font-weight:600; display:block; margin-bottom:4px;">Roles allowed to query</label>
-          <div style="display:flex; gap:6px; align-items:flex-start;">
-            <div id="kb-add-roles" class="tagpicker" style="flex:1;"></div>
+        ${sources.length ? `
+        <div id="kb-toolbar" style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; padding:8px 12px; background:var(--panel2); border:1px solid var(--border); border-radius:7px; flex-wrap:wrap;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; font-weight:600; color:var(--text); margin:0; user-select:none;">
+              <input type="checkbox" id="kb-select-all" style="cursor:pointer; accent-color:var(--accent); width:15px; height:15px; margin:0;">
+              <span>Select all</span>
+            </label>
+            <span id="kb-selected-count" class="dim" style="font-size:11px;">(0 of ${sources.length} selected)</span>
           </div>
-        </div>
-
-        <div id="kb-upload-progress" style="display:none; margin-bottom:12px; padding:10px 14px; background:var(--bg-input); border-radius:7px; border:1px solid var(--border);">
-          <div style="display:flex; justify-content:space-between; align-items:center; font-size:11.5px; margin-bottom:6px;">
-            <span id="kb-progress-status" style="font-weight:600; color:var(--text);">Uploading...</span>
-            <span id="kb-progress-pct" class="dim" style="font-family:monospace; font-size:11px;">0%</span>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button type="button" class="btn red" id="kb-bulk-delete" disabled style="width:auto; margin:0; padding:5px 12px; font-size:11.5px; opacity:0.5; cursor:not-allowed; display:inline-flex; align-items:center; gap:5px;">
+              🗑️ Delete Selected
+            </button>
           </div>
-          <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
-            <div id="kb-progress-bar" style="width:0%; height:100%; background:var(--accent); transition:width 0.2s;"></div>
-          </div>
-        </div>
+        </div>` : ''}
 
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:8px;">
-          <button class="btn accent" id="kb-add-submit" style="width:auto; margin:0; padding:7px 20px; font-size:12.5px; font-weight:600; height:36px;">+ Ingest Source</button>
-          <span class="dim" style="font-size:10.5px;">Files uploaded in 5 MB chunks safely bypass server limits.</span>
+        <div id="kb-list" style="display:flex; flex-direction:column; gap:8px;">
+          ${sources.map(s => sourceRow(s)).join('') || '<div class="dim" style="font-size:12px; padding:16px; text-align:center;">No knowledge sources yet. Click <b>➕ Add Source</b> to ingest documents.</div>'}
         </div>
       </div>
-    </div>
 
-    <!-- PANE 3: Cloud Policy & Rules -->
-    <div class="ru-pane kb-pane" data-pane="policy" style="display:none;">
-      <div id="kb-policy"></div>
+      <!-- PANE 2: Add Source (Image 3) -->
+      <div class="ru-pane kb-pane" data-pane="add" style="display:none;">
+        <div class="kb-add-card">
+          <div class="kb-card-title">Add New Knowledge Source</div>
+          <div class="kb-card-desc">Ingest PDF, Office docs, web pages, or pasted text into the company knowledge base.</div>
+          
+          <div class="kb-form-row">
+            <select id="kb-add-kind" class="kb-kind-select">
+              <option value="file">📄 Document File (PDF/DOCX/XLSX)</option>
+              <option value="url">🔗 Web URL</option>
+              <option value="text">📝 Pasted Text</option>
+            </select>
+            <input type="text" id="kb-add-title" class="kb-title-input" placeholder="Source Title (e.g. Employee Handbook 2025)">
+          </div>
+
+          <div id="kb-add-body" class="kb-body-area"></div>
+
+          <div class="kb-roles-section">
+            <div class="kb-roles-label">Roles allowed to query</div>
+            <div style="display:flex; gap:6px; align-items:flex-start;">
+              <div id="kb-add-roles" class="tagpicker" style="flex:1;"></div>
+            </div>
+          </div>
+
+          <div id="kb-upload-progress" style="display:none; margin-bottom:14px; padding:10px 14px; background:#0d0f12; border-radius:8px; border:1px solid rgba(255,255,255,0.1);">
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:11.5px; margin-bottom:6px;">
+              <span id="kb-progress-status" style="font-weight:600; color:#e5e7eb;">Uploading...</span>
+              <span id="kb-progress-pct" class="dim" style="font-family:monospace; font-size:11px;">0%</span>
+            </div>
+            <div style="width:100%; height:6px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden;">
+              <div id="kb-progress-bar" style="width:0%; height:100%; background:#38bdf8; transition:width 0.2s;"></div>
+            </div>
+          </div>
+
+          <div class="kb-footer-actions">
+            <button type="button" class="kb-btn-ingest" id="kb-add-submit">+ Ingest Source</button>
+            <span class="kb-chunk-hint">Files uploaded in 5 MB chunks safely bypass server limits.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE 3: Cloud Policy & Rules -->
+      <div class="ru-pane kb-pane" data-pane="policy" style="display:none;">
+        <div id="kb-policy"></div>
+      </div>
     </div>`;
 
   renderKbPolicy($('kb-policy'), _kbPolicy, loadKnowledgePanel);
@@ -278,7 +288,30 @@ function renderKnowledgePanel(box, sources) {
     } else if (kindSel.value === 'url') {
       bodyBox.innerHTML = '<input type="text" id="kb-add-url" placeholder="https://…" style="width:100%; box-sizing:border-box;">';
     } else {
-      bodyBox.innerHTML = '<input type="file" id="kb-add-file" accept=".pdf,.docx,.pptx,.xlsx,.xls,.csv" style="font-size:12px; padding:6px 0; color:var(--text);">';
+      bodyBox.innerHTML = `
+        <div class="kb-file-custom-row">
+          <button type="button" class="kb-file-btn" id="kb-file-trigger">Choose File</button>
+          <span class="kb-file-label" id="kb-file-name-label">No file chosen</span>
+          <input type="file" id="kb-add-file" accept=".pdf,.docx,.pptx,.xlsx,.xls,.csv" style="display:none;">
+        </div>
+      `;
+      const fileInput = $('kb-add-file');
+      const fileBtn = $('kb-file-trigger');
+      const fileLabel = $('kb-file-name-label');
+      if (fileBtn && fileInput) {
+        fileBtn.onclick = () => fileInput.click();
+      }
+      if (fileInput && fileLabel) {
+        fileInput.onchange = () => {
+          if (fileInput.files && fileInput.files.length > 0) {
+            fileLabel.textContent = fileInput.files[0].name;
+            fileLabel.style.color = '#e5e7eb';
+          } else {
+            fileLabel.textContent = 'No file chosen';
+            fileLabel.style.color = '#9ca3af';
+          }
+        };
+      }
     }
   };
   renderBody();

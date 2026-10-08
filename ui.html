@@ -4,74 +4,92 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Local Agent — Control Center</title>
-<script src="/static/js/theme-boot.js?v=1.0"></script>
-<link rel="stylesheet" href="/static/css/style.css?v=5.15">
+<script src="/static/js/theme-boot.js?v=1.1"></script>
+<link rel="stylesheet" href="/static/css/style.css?v=5.17">
 <link rel="stylesheet" href="/static/css/lanes.css?v=1.2">
 <link rel="stylesheet" href="/static/css/media.css?v=1.2">
 <link rel="stylesheet" href="/static/css/voice.css?v=1.1">
+<link rel="stylesheet" href="/static/css/claude-ui.css?v=1.2">
 <link rel="icon" href="/static/logo/logo.jpg">
 </head>
 <body>
 <div id="app">
-  <aside>
-    <div class="logo" title="Local Agent — Control Center">
-      <span class="logo-title">
-        <img class="logo-mark" src="/static/logo/logo.jpg" alt="Logo" width="20" height="20">
-        <span>LOCAL <span>AGENT</span></span>
-      </span>
-      <small id="logo-hw-tag">DUAL GPU · VULKAN</small>
+  <aside id="sidebar">
+    <div class="claude-sidebar-top-block">
+      <!-- Hidden compatibility button for shortcuts / scripts -->
+      <button id="btn-newchat" style="display:none;" aria-hidden="true"></button>
+
+      <!-- Mode Switch: Chat | Agent | Code (Native/Companion only) -->
+      <div id="app-mode-switch" class="mode-switch full tri-mode-switch" title="Switch Mode" style="display:none;">
+        <button id="mode-chat" class="mode-btn active" type="button" title="Chat (Direct LLM conversation)">
+          <svg class="ui-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>Chat</span>
+        </button>
+        <button id="mode-agent" class="mode-btn" type="button" title="Custom Agents (Persona & tools)">
+          <svg class="ui-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M12 8V4H8"/><path d="M2 14h2"/><path d="M20 14h2"/><circle cx="9" cy="13" r="1" fill="currentColor"/><circle cx="15" cy="13" r="1" fill="currentColor"/><path d="M9 17h6"/></svg>
+          <span>Agent</span>
+        </button>
+        <button id="mode-code" class="mode-btn" type="button" title="Coding Agent (Project workspace & tools)">
+          <svg class="ui-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          <span>Code</span>
+        </button>
+      </div>
     </div>
 
-    <div class="mode-switch full" title="Switch between direct LLM conversation and Autonomous Coding Agent">
-      <button id="mode-chat" class="mode-btn active" type="button" title="Direct, fast conversation with the loaded LLM">
-        <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        <span>Chat</span>
-      </button>
-      <button id="mode-agent" class="mode-btn" type="button" title="Autonomous coding agent that reads/writes files in the active project workspace">
-        <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M12 8V4H8"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
-        <span>Agent Task</span>
-      </button>
+    <!-- Custom Agents Section (Agent Mode) -->
+    <div id="custom-agents-card" class="sidebar-section" style="display:none;">
+      <div class="sidebar-section-head">
+        <span class="sidebar-section-title">My Agents</span>
+        <div style="display:flex; align-items:center; gap:2px;">
+          <button id="btn-new-custom-agent" class="claude-icon-tool" title="Create New Custom Agent (+)" aria-label="New Custom Agent">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="custom-agents-sidebar-list" class="claude-projects-scroll"></div>
     </div>
 
-    <button id="btn-newchat" class="btn blue newchat-btn" title="Start a fresh chat (Ctrl+K)">
-      <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-      <span>New Chat</span>
-      <kbd class="kbd-hint">Ctrl K</kbd>
-    </button>
-
-    <section id="custom-agents-card" class="card" style="padding:10px 8px; flex-shrink:0; display:none; flex-direction:column; max-height:220px;">
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding:0 4px;">
-        <span style="font-size:9.5px; color:var(--dim); letter-spacing:1.8px; font-weight:700; text-transform:uppercase;">Personal Agents</span>
-        <div style="display:flex; align-items:center; gap:4px;">
-          <button id="btn-new-custom-agent" class="btn ghost" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;" title="Create custom agent">＋ New</button>
+    <!-- Projects Section (Agent Task Mode) -->
+    <div id="projects-card" class="sidebar-section" style="display:none;">
+      <div class="sidebar-section-head">
+        <span class="sidebar-section-title">Projects</span>
+        <div style="display:flex; align-items:center; gap:2px;">
+          <button id="btn-newproject" class="claude-icon-tool" title="Create / Register New Project" aria-label="New Project">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
         </div>
       </div>
-      <div id="custom-agents-sidebar-list" style="overflow-y:auto; display:flex; flex-direction:column; gap:3px; max-height:175px; padding-right:2px;">
-      </div>
-    </section>
+      <div id="projects-list" class="claude-projects-scroll"></div>
+      <div id="device-bar" style="display:none;"><span id="device-label-text"></span></div>
+    </div>
 
-    <section id="projects-card" class="card" style="padding:10px 8px; display:none; max-height:280px; flex-direction:column;">
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding:0 4px;">
-        <span style="font-size:9.5px; color:var(--dim); letter-spacing:1.8px; font-weight:700; text-transform:uppercase;">Projects</span>
-        <div style="display:flex; align-items:center; gap:4px;">
-          <button id="btn-newproject" class="btn ghost" style="width:auto; margin:0; padding:2px 8px; font-size:10.5px;" title="Create project with optional custom local directory">＋ New</button>
+    <!-- Sessions Section (Chats or Project Tasks) -->
+    <div class="sidebar-section" style="flex:1; min-height:0; display:flex; flex-direction:column;">
+      <div class="sidebar-section-head">
+        <span class="sidebar-section-title" id="session-title">Recent Chats</span>
+        <div style="display:flex; align-items:center; gap:2px; margin-left:auto;">
+          <button class="claude-icon-tool" id="btn-new-session" title="New Session (+)" aria-label="New Session">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button class="claude-icon-tool" id="btn-sidebar-search" title="Search sessions (/)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          </button>
         </div>
       </div>
-      <div id="device-bar" style="display:flex; align-items:center; padding:2px 4px 6px; font-size:10px; color:var(--dim); border-bottom:1px solid var(--border); margin-bottom:4px;">
-        <span id="device-label-text" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; width:100%;" title="Current device">💻 This Device</span>
-      </div>
-      <div id="projects-list" style="overflow-y:auto; display:flex; flex-direction:column; gap:3px; max-height:190px; padding-right:2px;">
-      </div>
-    </section>
-
-    <section class="card" style="flex:1; display:flex; flex-direction:column; overflow:hidden; padding:10px 8px;">
-      <div style="display:flex; align-items:center; justify-content:space-between; padding:0 4px 6px; border-bottom:1px solid var(--border); margin-bottom:8px;">
-        <span id="session-title" style="font-size:9.5px; color:var(--dim); letter-spacing:1.8px; font-weight:700; text-transform:uppercase;" title="Chat sessions — persisted in projects.db">Recent Chats</span>
-      </div>
-      <div id="session-list" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; padding-right:2px;">
+      <div class="claude-sessions-scroll" id="session-list">
         <div class="dim" style="font-size:12px; padding:6px;">no chats yet</div>
       </div>
-    </section>
+    </div>
+
+    <!-- Claude User Profile Pill at Bottom with User Menu attached -->
+    <div class="claude-profile-pill user-menu" id="btn-claude-user-profile" title="Account &amp; Preferences" style="margin-top:auto; position:relative;">
+      <div class="claude-avatar" id="claude-avatar-badge">SH</div>
+      <div class="claude-profile-info">
+        <span class="claude-profile-name" id="claude-user-name">Sabbir Hossain</span>
+        <span class="claude-profile-sub" id="claude-user-org">SSLWIRELESS</span>
+      </div>
+      <span style="font-size:10px; color:var(--dim); margin-left:auto;">▾</span>
+    </div>
   </aside>
 
   <main>
@@ -80,19 +98,23 @@
         <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
       </button>
 
-      <div class="model-group" title="Currently available model. Local loading &amp; launch config live in Settings — this picks which cloud model answers you (or switches back to local)">
-        <select id="profile" title="Available models (cloud models are switchable here; local loading happens in Settings)" style="display:none;"></select>
-        <button type="button" id="model-picker-btn" class="model-picker-btn">
-          <span id="model-picker-icon" class="model-picker-icon">
-            <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="5" y="5" rx="2"/><path d="M9 2v3"/><path d="M15 2v3"/><path d="M9 19v3"/><path d="M15 19v3"/><path d="M2 9h3"/><path d="M2 15h3"/><path d="M19 9h3"/><path d="M19 15h3"/></svg>
-          </span>
+      <!-- Claude Session Breadcrumb & Project Pill (hidden from top nav) -->
+      <button class="claude-header-title-btn" id="claude-header-title-btn" title="Current Chat Session" style="display:none !important;" aria-hidden="true">
+        <span id="claude-header-title-text" style="display:none;">New Chat</span>
+        <span class="slot-caret" style="display:none;">▾</span>
+      </button>
+      <span class="claude-project-pill" id="claude-project-pill" style="display:none;"></span>
+
+      <!-- Hidden top model group & ctx (now shown in bottom composer bar) -->
+      <div class="model-group" style="display:none;" title="Model selection moved to bottom bar">
+        <select id="profile" title="Available models" style="display:none;"></select>
+        <button type="button" id="model-picker-btn" class="model-picker-btn" style="display:none;">
+          <span id="model-picker-icon" class="model-picker-icon"></span>
           <span id="model-picker-label" class="model-picker-label">No model</span>
           <span class="model-picker-caret">▾</span>
         </button>
-        <div id="model-picker-dropdown" class="model-picker-dropdown"></div>
       </div>
-      <span class="chip mono" id="chip-ctx" title="Current KV-cache context window consumption in tokens" style="cursor:help;">
-        <svg class="ui-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04Z"/></svg>
+      <span class="chip mono" id="chip-ctx" style="display:none;" title="Context window">
         <span>0 / 32k (0%)</span>
       </span>
       <span class="chip bg-chip" id="chip-bg-indicator" style="display:none;" title="Active background tasks">
@@ -100,15 +122,11 @@
       </span>
       <div class="spacer"></div>
 
-      <!-- Dev & System Tools Cluster -->
+      <!-- Dev & System Tools Cluster (Customize, Report, Audit, DB, Monitor) -->
       <div class="header-tool-cluster" id="header-dev-cluster">
         <button id="btn-customize" class="btn ghost icon-btn" title="Customize: browse and install skills, connectors and plugins">
           <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M17.5 14v7M14 17.5h7"/></svg>
           <span class="btn-label">Customize</span>
-        </button>
-        <button id="btn-monitor" class="btn ghost icon-btn" data-perm="monitor.view" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">
-          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-          <span class="btn-label">Monitor</span>
         </button>
         <button id="btn-report" class="btn ghost icon-btn" data-perm="usage.report.view" title="Token usage report: prompts vs completions, per-model and per-day totals">
           <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
@@ -122,17 +140,19 @@
           <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
           <span class="btn-label">Database</span>
         </button>
+        <button id="btn-monitor" class="btn ghost icon-btn" data-perm="monitor.view" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">
+          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          <span class="btn-label">Monitor</span>
+        </button>
       </div>
 
       <div class="header-divider"></div>
 
-      <!-- Action Tools Cluster -->
+      <!-- Action Tools Cluster: Toggle Right Dock Panel (Image 3 & Image 5) -->
       <div class="header-actions-cluster">
-        <div class="user-menu" style="position: relative; display: inline-flex;">
-          <button id="btn-user-menu" class="btn ghost icon-btn icon-only user-avatar-btn" title="Account, Settings &amp; Navigation" aria-label="Account">
-            <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-          </button>
-        </div>
+        <button id="btn-dock-toggle" class="btn ghost icon-btn icon-only" title="Toggle Right Panel (Ctrl+Shift+B)" aria-label="Toggle Right Panel">
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg>
+        </button>
       </div>
     </header>
 
@@ -155,114 +175,300 @@
     <footer>
       <div id="f-inner">
         <div id="live-state-hud" class="live-state-hud" style="display:none;"></div>
-        <div class="composer">
+
+        <!-- Claude Git Status Bar -->
+        <div class="claude-git-status-strip" id="claude-git-status-strip" style="display:none;">
+          <div class="claude-git-status-left">
+            <span class="claude-git-branch" id="claude-git-branch"></span>
+            <span class="claude-git-diffs" id="claude-git-diffs"></span>
+          </div>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <button class="claude-git-action-btn" id="claude-git-action-btn">Source Control</button>
+            <button class="claude-icon-tool" id="claude-git-dismiss-btn" title="Dismiss bar">✕</button>
+          </div>
+        </div>
+
+        <div class="claude-chat-composer composer" id="claude-chat-composer">
           <div id="attach-preview-bar" class="attach-preview-bar"></div>
           <div id="media-pics-bar" class="media-pics-bar" hidden></div>
           <div id="proj-init-bar" class="proj-init-bar" style="display:none;"></div>
           <div id="cmd-chip-bar" class="cmd-chip-bar" title="Armed command — press Enter to run, Backspace on an empty box (or ✕) to remove"></div>
-          <div style="position:relative;" class="composer-input-wrap">
+
+          <!-- Top Rounded Input Box (matching screenshot) -->
+          <div class="claude-input-pill-box" id="claude-input-pill-box">
             <div id="input-backdrop" class="input-backdrop" aria-hidden="true"></div>
-            <textarea id="input" placeholder="Message the model…" title="Type your prompt here. Press Enter to send, Shift+Enter for newline. @ = tag project files (agent mode). / = commands"></textarea>
+            <textarea id="input" placeholder="yes, add the personal data guard for web results" title="Type your prompt here. Press Enter to send, Shift+Enter for newline." rows="1"></textarea>
             <div id="cmd-menu" style="display:none;"></div>
+            <button type="button" class="claude-enter-btn" id="btn-input-enter" title="Send (Enter)">⏎</button>
           </div>
-          <div class="comp-actions">
-            <button id="btn-attach" class="comp-tool" title="Attach files — images, documents, code" aria-label="Attach files">
-              <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-            </button>
-            <input type="file" id="file-input" multiple accept=".txt,.md,.py,.js,.ts,.json,.c,.cpp,.h,.cs,.java,.rs,.go,.html,.css,.xml,.yml,.yaml,.toml,.ini,.cfg,.log,.csv,.sql,.sh,.ps1,.bat,.png,.jpg,.jpeg,.webp,.gif,.xlsx,.xls,.pdf,.pptx,.ppt,.docx,.doc,.mp3,.m4a,.wav,.ogg,.opus,.flac,.aac,.webm,.mp4,.m4v,.mov,.mkv,.avi,.mpg,.mpeg,.wmv,audio/*,video/*" style="display:none">
-            <button id="btn-web-toggle" class="comp-tool comp-web-btn active" type="button" title="Web Search: ON (click to disable)" aria-label="Toggle web search">
-              <span class="web-icon">
-                <svg class="ui-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
-              </span>
-              <span class="comp-tool-text">Web</span>
-            </button>
-            <div class="effort-wrap" id="effort-wrap" style="display:none;">
-              <button id="effort-btn" class="comp-tool effort-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Reasoning effort and deep research">
-                <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
-                <span class="comp-tool-text" id="effort-label">Low</span>
+
+          <!-- Bottom Toolbar Row (matching screenshot) -->
+          <div class="claude-input-bar-row">
+            <!-- Left: +   🎤   Auto ▾ -->
+            <div class="claude-bar-left">
+              <button id="btn-attach" class="claude-tool-icon-btn comp-tool" type="button" title="Attach files" aria-label="Attach files">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               </button>
-              <div class="effort-menu" id="effort-menu" role="menu">
-                <button type="button" class="effort-item" role="menuitemradio" data-level="none">None</button>
-                <button type="button" class="effort-item" role="menuitemradio" data-level="low">Low</button>
-                <button type="button" class="effort-item" role="menuitemradio" data-level="medium">Medium</button>
-                <button type="button" class="effort-item" role="menuitemradio" data-level="high">High</button>
-                <button type="button" class="effort-item" role="menuitemradio" data-level="extra">Extra</button>
-                <div class="effort-sep" id="effort-sep"></div>
-                <button type="button" class="effort-deep" id="effort-deep" role="menuitemcheckbox" aria-checked="false" title="Plans first, then researches with a larger tool and web-call budget (slower)">
-                  <span>Deep research</span><span class="effort-switch" aria-hidden="true"></span>
+              <input type="file" id="file-input" multiple accept=".txt,.md,.py,.js,.ts,.json,.c,.cpp,.h,.cs,.java,.rs,.go,.html,.css,.xml,.yml,.yaml,.toml,.ini,.cfg,.log,.csv,.sql,.sh,.ps1,.bat,.png,.jpg,.jpeg,.webp,.gif,.xlsx,.xls,.pdf,.pptx,.ppt,.docx,.doc,.mp3,.m4a,.wav,.ogg,.opus,.flac,.aac,.webm,.mp4,.m4v,.mov,.mkv,.avi,.mpg,.mpeg,.wmv,audio/*,video/*" style="display:none">
+
+              <!-- Split Mic Pill (Image 2) -->
+              <div class="claude-mic-split-wrap" id="claude-mic-split-wrap">
+                <div class="claude-mic-split-pill" id="claude-mic-split-pill">
+                  <button id="btn-mic" class="claude-mic-main-btn comp-tool comp-mic-btn" type="button" title="Dictate voice (Transcribe)" aria-label="Dictate" aria-pressed="false">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+                  </button>
+                  <div class="claude-mic-divider" aria-hidden="true"></div>
+                  <button id="btn-mic-menu-toggle" class="claude-mic-arrow-btn" type="button" title="Voice options" aria-haspopup="menu" aria-expanded="false" aria-label="Voice options">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
+                  </button>
+                </div>
+                <!-- Voice Dropdown Menu (Image 2) -->
+                <div class="claude-voice-menu" id="claude-voice-menu" role="menu" style="display:none;">
+                  <button type="button" class="claude-menu-item active" data-voice-mode="transcribe">
+                    <span class="claude-menu-check">✓</span>
+                    <span class="claude-menu-icon">🎤</span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Transcribe</div>
+                      <div class="claude-menu-desc">Dictate speech into prompt box</div>
+                    </div>
+                  </button>
+                  <button type="button" class="claude-menu-item" data-voice-mode="voice">
+                    <span class="claude-menu-check"></span>
+                    <span class="claude-menu-icon">🗣</span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Voice to voice</div>
+                      <div class="claude-menu-desc">Real-time two-way voice chat</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Mode Selector & Dropdown Menu (Image 1) -->
+              <div class="claude-mode-wrap" id="claude-mode-wrap">
+                <button id="btn-claude-mode" class="claude-tool-text-btn" type="button" title="Mode / Permissions" aria-haspopup="menu" aria-expanded="false">
+                  <span id="claude-mode-text">Auto</span>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
                 </button>
+                <div class="claude-mode-menu" id="claude-mode-menu" role="menu" style="display:none;">
+                  <div class="claude-menu-header">Mode</div>
+                  <button type="button" class="claude-menu-item active" data-mode-key="auto" data-hotkey="1">
+                    <span class="claude-menu-check">✓</span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Auto</div>
+                      <div class="claude-menu-desc">Claude handles permission decisions</div>
+                    </div>
+                    <kbd class="claude-kbd-shortcut">1</kbd>
+                  </button>
+                  <button type="button" class="claude-menu-item" data-mode-key="manual" data-hotkey="2">
+                    <span class="claude-menu-check"></span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Manual</div>
+                      <div class="claude-menu-desc">Always ask before making changes</div>
+                    </div>
+                    <kbd class="claude-kbd-shortcut">2</kbd>
+                  </button>
+                  <button type="button" class="claude-menu-item" data-mode-key="accept_edits" data-hotkey="3">
+                    <span class="claude-menu-check"></span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Accept edits</div>
+                      <div class="claude-menu-desc">Automatically accept all file edits</div>
+                    </div>
+                    <kbd class="claude-kbd-shortcut">3</kbd>
+                  </button>
+                  <button type="button" class="claude-menu-item" data-mode-key="plan" data-hotkey="4">
+                    <span class="claude-menu-check"></span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Plan</div>
+                      <div class="claude-menu-desc">Create a plan before making changes</div>
+                    </div>
+                    <kbd class="claude-kbd-shortcut">4</kbd>
+                  </button>
+                  <button type="button" class="claude-menu-item" data-mode-key="bypass" data-hotkey="5">
+                    <span class="claude-menu-check"></span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Bypass permissions</div>
+                      <div class="claude-menu-desc">Accepts all permissions</div>
+                    </div>
+                    <kbd class="claude-kbd-shortcut">5</kbd>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Web Search Toggle (icon only, beside mode dropdown) -->
+              <button id="btn-web-toggle" class="claude-tool-icon-btn comp-tool comp-web-btn active" type="button" title="Toggle web search" aria-label="Toggle web search">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+              </button>
+            </div>
+
+            <!-- Right: Model   Medium   ◌   [Send / Abort] -->
+            <div class="claude-bar-right">
+              <button id="btn-claude-model" class="claude-tool-text-btn" type="button" title="Choose Model">
+                <span id="claude-model-text">Select model</span>
+              </button>
+
+              <div class="effort-wrap" id="effort-wrap" style="display:inline-flex;">
+                <button id="effort-btn" class="claude-tool-text-btn effort-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Reasoning effort">
+                  <span id="effort-label">Medium</span>
+                </button>
+                <div class="effort-menu" id="effort-menu" role="menu">
+                  <button type="button" class="effort-item" role="menuitemradio" data-level="none">None</button>
+                  <button type="button" class="effort-item" role="menuitemradio" data-level="low">Low</button>
+                  <button type="button" class="effort-item active" role="menuitemradio" data-level="medium">Medium</button>
+                  <button type="button" class="effort-item" role="menuitemradio" data-level="high">High</button>
+                  <button type="button" class="effort-item" role="menuitemradio" data-level="extra">Extra</button>
+                  <div class="effort-sep" id="effort-sep"></div>
+                  <button type="button" class="effort-deep" id="effort-deep" role="menuitemcheckbox" aria-checked="false" title="Deep research">
+                    <span>Deep research</span><span class="effort-switch" aria-hidden="true"></span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Context Window Pie Chart (Image 4) -->
+              <div class="claude-ctx-wrap" id="claude-ctx-wrap">
+                <button id="btn-claude-ctx" class="claude-tool-icon-btn claude-ctx-btn" type="button" title="Context usage" aria-label="Context usage">
+                  <svg class="claude-ctx-svg" width="16" height="16" viewBox="0 0 36 36">
+                    <circle class="claude-ctx-bg" cx="18" cy="18" r="14" fill="none" stroke="currentColor" stroke-width="3" opacity="0.25"/>
+                    <circle class="claude-ctx-fill" id="claude-ctx-fill" cx="18" cy="18" r="14" fill="none" stroke="var(--blue, #38bdf8)" stroke-width="3" stroke-dasharray="88 88" stroke-dashoffset="88" transform="rotate(-90 18 18)" stroke-linecap="round"/>
+                  </svg>
+                </button>
+                <div class="claude-ctx-popup" id="claude-ctx-popup" role="tooltip" style="display:none;">
+                  <div class="claude-ctx-popup-title" id="claude-ctx-popup-title">Context 0 / 32k (0%)</div>
+                </div>
               </div>
             </div>
-            <select id="agent-plan-sel" style="display:none;" class="comp-select" title="Plan explores &amp; proposes changes; Build executes them">
-              <option value="build" selected>🔨 Build</option>
-              <option value="plan">📋 Plan</option>
+          </div>
+
+          <!-- Legacy & State Controls Tray (hidden, keeps all engine/web/voice code 100% working) -->
+          <div style="display:none;" id="legacy-comp-controls" aria-hidden="true">
+            <button id="btn-send" class="comp-btn comp-send-btn" type="button" title="Send prompt (Enter)" aria-label="Send prompt"></button>
+            <button id="btn-abort" class="comp-btn comp-abort-btn" type="button" title="Cancel generation" aria-label="Cancel"></button>
+            <select id="agent-plan-sel"><option value="build" selected>Build</option><option value="plan">Plan</option></select>
+            <button id="btn-git-icon" type="button"></button>
+            <select id="agent-engine">
+              <option value="all-local" selected>Private</option>
+              <option value="main-local-rest-cloud">Balanced</option>
+              <option value="main-cloud-rest-local">Cloud</option>
+              <option value="no-orchestration">Main</option>
             </select>
-            <span class="comp-hint" id="attach-info">Shift + ↵ for newline</span>
-            <button id="btn-git-icon" class="comp-tool" type="button" title="Source Control — the active project has a git repository" style="display:none;">
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0c-4.42 0-8 3.58-8 8a8.013 8.013 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path></svg>
-            </button>
-            <select id="agent-engine" style="display:none;" class="comp-select" title="Where the agent's models run - change the models in Settings → Models &amp; Jobs" aria-label="Where the agent's models run">
-              <option value="all-local" selected title="Everything runs on this PC. Nothing is sent to a cloud provider.">🔒 Private (all on this PC)</option>
-              <option value="main-local-rest-cloud" title="The main model runs on this PC; quick helper steps use a cloud model.">⚖ Balanced</option>
-              <option value="main-cloud-rest-local" title="Your cloud model does the thinking; quick helper steps stay on this PC.">✨ Best quality</option>
-              <option value="no-orchestration" title="Every step goes to your main model (on this PC or cloud, whichever is picked). No helper model.">🎯 Main model only</option>
-            </select>
-            <select id="cloud-model-sel" style="display:none;" class="comp-select" title="Cloud model for rest lanes (executor & vision)">
-              <option value="">☁ Pick cloud model…</option>
-            </select>
-            <select id="comp-mode" class="comp-select" hidden aria-label="What Send does">
-              <option value="chat" selected>💬 Chat</option>
-              <option value="image">🖼 Image</option>
-            </select>
-            <button id="btn-mic" class="comp-tool comp-mic-btn" type="button" hidden title="Dictate" aria-label="Dictate" aria-pressed="false">🎤</button>
-            <button id="btn-voice" class="comp-tool comp-voice-btn" type="button" hidden title="Talk with the agent by voice (hands-free)" aria-label="Talk with the agent by voice" aria-pressed="false">🗣</button>
-            <button id="btn-answer-check" class="comp-tool comp-ac-btn" type="button" title="Answer check: a second model double-checks each reply. Now: Off. Click to switch (Off → Check after → Check before showing)" aria-label="Answer check: off" aria-pressed="false">🛡</button>
-            <button id="btn-send" class="comp-btn comp-send-btn" title="Send prompt (Enter)" aria-label="Send prompt">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
-            </button>
-            <button id="btn-abort" class="comp-btn comp-abort-btn" style="display:none" title="Cancel active generation" aria-label="Cancel generation">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect width="14" height="14" x="5" y="5" rx="2"/></svg>
-            </button>
+            <select id="cloud-model-sel"><option value="">Pick cloud</option></select>
+            <select id="comp-mode"><option value="chat" selected>Chat</option><option value="image">Image</option></select>
+            <span id="attach-info"></span>
+            <div class="simplistic-slot-machine" id="simplistic-slot-machine">
+              <div class="slot-reel" id="slot-reel-mode">💬 Chat</div>
+              <div class="slot-reel" id="slot-reel-engine">🔒 Local</div>
+              <div class="slot-reel" id="slot-reel-model">Model</div>
+            </div>
+            <button id="btn-voice" type="button"></button>
+            <button id="btn-answer-check" type="button"></button>
           </div>
         </div>
       </div>
     </footer>
   </main>
+
+  <!-- Claude Docked Right Panel (Split View) -->
+  <div id="right-dock" class="right-dock dock-collapsed">
+    <div class="dock-grip" id="dock-grip" title="Drag to resize pane"></div>
+    <div class="dock-header">
+      <div class="dock-header-tools">
+        <button class="dock-tab-btn active" id="dock-btn-plan" title="Plan & Execution (12 steps)">📋 Plan</button>
+        <button class="dock-tab-btn" id="dock-btn-files" title="Code & Workspace Files (Ctrl+Shift+F)">&lt;/&gt; Code</button>
+        <button class="dock-tab-btn" id="dock-btn-preview" title="Web Preview (HTML / Artifacts)">🌐 Preview</button>
+        <button class="dock-tab-btn" id="dock-btn-terminal" title="Companion Shell Terminal">&gt;_ Terminal</button>
+      </div>
+      <div style="display:flex; align-items:center; gap:4px;">
+        <button class="dock-icon-btn" id="dock-btn-expand" title="Toggle expand width">⤢</button>
+        <button class="dock-icon-btn" id="dock-btn-close" title="Close panel">✕</button>
+      </div>
+    </div>
+
+    <!-- Dock Content Views -->
+    <div class="dock-view-body active" id="dock-view-plan">
+      <div style="padding:32px 16px; text-align:center; color:var(--dim); font-size:12.5px;">
+        <div style="font-size:24px; margin-bottom:8px;">📋</div>
+        <b>No active plan</b>
+        <p style="margin-top:6px; font-size:11.5px;">When the agent starts a multi-step task, the 12-step plan will be tracked live here.</p>
+      </div>
+    </div>
+
+    <!-- Code & Workspace Files View -->
+    <div class="dock-view-body" id="dock-view-files">
+      <div id="ws-panel" class="dock-ws-inner">
+        <div id="ws-tree-view">
+          <div id="ws-root-path" class="mono" title="Workspace root directory on disk">📁 (no project active)</div>
+          <div id="ws-changes" style="display:none;">
+            <div class="ws-changes-head" id="ws-changes-toggle" title="Files the agent created or modified this session">
+              <span class="caret">▶</span> Session Changes <span id="ws-changes-count" class="mono"></span>
+            </div>
+            <div id="ws-changes-list"></div>
+          </div>
+          <div id="ws-filter-bar">
+            <input type="text" id="ws-filter" placeholder="Filter files…" title="Filter tree by name">
+            <button class="btn ghost" id="ws-refresh" title="Refresh file tree" style="width:auto; margin:0; padding:3px 8px; font-size:11px;">⟳</button>
+          </div>
+          <div id="ws-tree"></div>
+        </div>
+        <div id="ws-file-view" style="display:none;">
+          <div id="ws-file-head">
+            <button class="btn ghost" id="ws-back" style="width:auto; margin:0; padding:3px 10px; font-size:11px;" title="Back to file tree">← Files</button>
+            <span id="ws-file-path" class="mono" title="Workspace-relative path"></span>
+            <span id="ws-file-badge" title="Session change status"></span>
+          </div>
+          <pre id="ws-file-code"></pre>
+        </div>
+      </div>
+      <span id="ws-title-name" style="display:none;">Workspace</span>
+      <button id="ws-close" style="display:none;"></button>
+    </div>
+
+    <!-- Web Preview View -->
+    <div class="dock-view-body" id="dock-view-preview">
+      <div style="padding:32px 16px; text-align:center; color:var(--dim); font-size:12.5px;">
+        <div style="font-size:24px; margin-bottom:8px;">🌐</div>
+        <b>Web Preview</b>
+        <p style="margin-top:6px; font-size:11.5px;">Open an HTML file or generate a web page to see live interactive preview here.</p>
+      </div>
+    </div>
+
+    <!-- Companion Shell Terminal View -->
+    <div class="dock-view-body" id="dock-view-terminal">
+      <div class="term-toolbar">
+        <div class="term-status-wrap">
+          <span class="term-indicator" id="term-status-dot"></span>
+          <span class="term-title" id="term-status-text">Companion Shell</span>
+          <span class="term-cwd" id="term-cwd-display" title="Active workspace directory">📁 (workspace)</span>
+        </div>
+        <div class="term-toolbar-actions">
+          <select id="term-shell-select" class="term-shell-select" title="Choose shell interpreter">
+            <option value="powershell" selected>PowerShell</option>
+            <option value="cmd">CMD</option>
+            <option value="bash">Bash</option>
+            <option value="pwsh">PWSH</option>
+          </select>
+          <button class="btn ghost ln-small" id="term-btn-clear" title="Clear console output" style="width:auto; margin:0; padding:3px 8px; font-size:11px;">Clear</button>
+        </div>
+      </div>
+      <div class="term-body" id="term-output">
+        <div class="term-welcome">
+          <div style="font-weight:600; color:var(--text); margin-bottom:4px;">Dual-Runtime Console Terminal</div>
+          <div class="dim">Run shell commands directly or inspect all shell commands executed by the agent via companion.</div>
+        </div>
+      </div>
+      <form class="term-input-bar" id="term-input-form">
+        <span class="term-prompt-char">$</span>
+        <input type="text" id="term-input" class="term-cmd-input" placeholder="Type command here (e.g. dir, git status, npm test)..." autocomplete="off" spellcheck="false">
+        <button type="submit" class="term-run-btn" id="term-btn-run">Run</button>
+      </form>
+    </div>
+
+    <div class="dock-view-body" id="dock-view-tasks" style="display:none;">
+      <!-- Background tasks alias -->
+    </div>
+  </div>
 </div>
 
 <div id="toast"></div>
-<div id="ws-rail" title="Project workspace files" style="display:none;">📂</div>
-<div id="ws-panel">
-  <div id="ws-grip" title="Drag to resize panel width"></div>
-  <div class="drawer-head">
-    <span title="Active project workspace directory">📁 <span id="ws-title-name">Workspace</span></span>
-    <div style="display:flex; gap:4px; align-items:center;">
-      <button class="btn ghost" id="ws-refresh" style="width:auto; margin:0; padding:3px 8px; font-size:11px;" title="Refresh file tree">⟳</button>
-      <button class="btn ghost" id="ws-close" style="width:auto; margin:0; padding:4px 10px;" title="Collapse panel">✕</button>
-    </div>
-  </div>
-  <div id="ws-tree-view">
-    <div id="ws-root-path" class="mono" title="Workspace root directory on disk"></div>
-    <div id="ws-changes" style="display:none;">
-      <div class="ws-changes-head" id="ws-changes-toggle" title="Files the agent created or modified this session">
-        <span class="caret">▶</span> Session Changes <span id="ws-changes-count" class="mono"></span>
-      </div>
-      <div id="ws-changes-list"></div>
-    </div>
-    <div id="ws-filter-bar">
-      <input type="text" id="ws-filter" placeholder="Filter files…" title="Filter tree by name">
-    </div>
-    <div id="ws-tree"></div>
-  </div>
-  <div id="ws-file-view" style="display:none;">
-    <div id="ws-file-head">
-      <button class="btn ghost" id="ws-back" style="width:auto; margin:0; padding:3px 10px; font-size:11px;" title="Back to file tree">← Tree</button>
-      <span id="ws-file-path" class="mono" title="Workspace-relative path"></span>
-      <span id="ws-file-badge" title="Session change status"></span>
-    </div>
-    <pre id="ws-file-code"></pre>
-  </div>
-</div>
+<div id="ws-rail" title="Project workspace files" style="display:none;"></div>
 <div id="monitor-drawer">
   <div class="drawer-head">
     <span>📡 Real-time Monitor</span>
@@ -741,6 +947,10 @@ Full instructions the agent reads via read_skill.</pre>
   <div class="ca-modal-box">
     <div class="ca-modal-head">
       <div class="ca-modal-title-wrap">
+        <div id="ca-modal-device-badge" class="ca-modal-device-badge">
+          <span>💻</span>
+          <span id="ca-modal-device-name">Bound Device: Windows PC-ABC12DEF3456</span>
+        </div>
         <span id="ca-modal-title">Create Custom Agent</span>
       </div>
       <button id="ca-modal-close" class="rep-close" title="Close (Esc)">✕</button>
@@ -844,6 +1054,49 @@ Full instructions the agent reads via read_skill.</pre>
   </div>
 </div>
 
+<!-- Fork Agent for Device Modal -->
+<div id="ca-fork-modal" class="ca-modal-overlay" style="display:none;">
+  <div class="ca-modal-box" style="max-width:520px;">
+    <div class="ca-modal-head">
+      <div class="ca-modal-title-wrap">
+        <div id="ca-fork-device-badge" class="ca-modal-device-badge">
+          <span>💻</span>
+          <span id="ca-fork-target-device">Target Device: Windows PC-ABC12DEF3456</span>
+        </div>
+        <span id="ca-fork-modal-title">Fork Agent for This Device</span>
+      </div>
+      <button id="ca-fork-modal-close" class="rep-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="ca-modal-body" style="padding:16px 20px;">
+      <div id="ca-fork-source-banner" style="background:var(--panel2, rgba(255,255,255,0.04)); border:1px solid var(--border-subtle, rgba(255,255,255,0.08)); border-radius:6px; padding:10px 12px; margin-bottom:14px; font-size:12px; line-height:1.5;">
+        <div id="ca-fork-source-text" style="color:var(--text); font-weight:600;">System &amp; Metric Reporter</div>
+        <div id="ca-fork-source-reason" style="color:var(--dim); font-size:11px; margin-top:2px;">This agent is bound to another device. Fork it to bind a copy to this machine with its own local workspace directory.</div>
+      </div>
+
+      <div class="ca-field" style="margin-bottom:12px;">
+        <label for="ca-fork-name" style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:5px;">Agent Name *</label>
+        <input type="text" id="ca-fork-name" placeholder="Agent Name" style="width:100%; box-sizing:border-box;">
+      </div>
+
+      <div class="ca-field" style="margin-bottom:8px;">
+        <label for="ca-fork-workdir" style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:5px;">Workspace Path on This Device *</label>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="ca-fork-workdir" placeholder="e.g. D:\Projects\MyWorkspace or C:\Users\..." style="flex:1; box-sizing:border-box;">
+          <button type="button" class="btn secondary" id="ca-fork-browse-btn" style="width:auto; padding:6px 12px; white-space:nowrap;">Browse…</button>
+        </div>
+        <div style="font-size:10.5px; color:var(--dim); margin-top:4px;">Select the directory where this agent will read, write, and execute tasks on this machine.</div>
+      </div>
+    </div>
+    <div class="ca-modal-foot" style="display:flex; justify-content:flex-end; gap:8px; padding:12px 20px; border-top:1px solid var(--border-subtle, rgba(255,255,255,0.08));">
+      <button type="button" class="btn ghost" id="ca-fork-cancel-btn">Cancel</button>
+      <button type="button" class="btn blue" id="ca-fork-submit-btn">Fork &amp; Bind to Device</button>
+    </div>
+  </div>
+</div>
+
+<!-- Global Model Picker Dropdown (Anchored to bottom bar) -->
+<div id="model-picker-dropdown" class="model-picker-dropdown"></div>
+
 <div id="settings-modal" hidden style="display:none;">
   <div id="settings-modal-box">
     <div id="settings-modal-head">
@@ -864,7 +1117,7 @@ Full instructions the agent reads via read_skill.</pre>
      mermaid@10.9.3, SheetJS 0.20.3 (0.18.5 has CVE-2023-30533 / CVE-2024-22363). -->
 <script src="/static/vendor/mermaid.min.js" integrity="sha384-R63zfMfSwJF4xCR11wXii+QUsbiBIdiDzDbtxia72oGWfkT7WHJfmD/I/eeHPJyT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="/static/vendor/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="/static/js/theme.js?v=2.8"></script>
+<script src="/static/js/theme.js?v=2.9"></script>
 <script src="/static/vendor/marked.umd.js" integrity="sha384-IvVdUXkhyoD0shbjhiiOnuiTbervTaB0VJcnEcg3shUAMVOOF6lKj4ozJrCwvz6s" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="/static/vendor/purify.min.js" integrity="sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="/static/js/utils.js?v=3.2"></script>
@@ -891,10 +1144,10 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/config.js?v=3.2"></script>
 <script src="/static/js/cloud.js?v=3.1"></script>
 <script src="/static/js/attachments.js?v=3.0"></script>
-<script src="/static/js/projects.js?v=4.7"></script>
+<script src="/static/js/projects.js?v=4.9"></script>
 <script src="/static/js/workspace.js?v=2.13"></script>
 <script src="/static/js/dnd.js?v=1.0"></script>
-<script src="/static/js/agent-cmd.js?v=4.1"></script>
+<script src="/static/js/agent-cmd.js?v=4.4"></script>
 <script src="/static/js/media.js?v=1.9"></script>
 <script src="/static/js/voice-core.js?v=1.1"></script>
 <script src="/static/js/voice.js?v=1.1"></script>
@@ -903,8 +1156,9 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/agent-run.js?v=3.19"></script>
 <script src="/static/js/compact.js?v=2.9"></script>
 <script src="/static/js/export.js?v=1.0"></script>
-<script src="/static/js/custom-agents.js?v=1.9"></script>
+<script src="/static/js/custom-agents.js?v=2.2"></script>
 <script src="/static/js/main.js?v=4.4"></script>
+<script src="/static/js/claude-dock.js?v=1.2"></script>
 
 </body>
 </html>

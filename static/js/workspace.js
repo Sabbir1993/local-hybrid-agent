@@ -75,7 +75,7 @@ function hasValidActiveProject() {
 async function wsLoadTree(dirPath, targetEl, indent) {
   try {
     if (!hasValidActiveProject()) {
-      targetEl.innerHTML = '<div class="ws-empty" style="padding:12px; text-align:center;">Please select a project to view workspace files.</div>';
+      targetEl.innerHTML = '<div class="ws-empty" style="padding:32px 16px; text-align:center; color:var(--dim); font-size:12.5px;"><div style="font-size:26px; margin-bottom:8px;">📁</div><b>No project active</b><p style="margin-top:6px; font-size:11.5px;">Select or create a project to explore workspace files, diffs, and code.</p></div>';
       return;
     }
     const hdrs = (typeof getDeviceHeaders === 'function') ? getDeviceHeaders() : {};
@@ -197,9 +197,13 @@ async function wsShowFile(path) {
     const d = await r.json().catch(() => ({ error: `server error ${r.status}` }));
     if (!r.ok || d.error) { toast('File view failed: ' + (d.error || r.status), true); return; }
     wsCurrentFile = { path, content: d.content || '' };
-    $('ws-tree-view').style.display = 'none';
+    if (window.RightDock && (!window.RightDock.isOpen || window.RightDock.activeTab !== 'files')) {
+      window.RightDock.open('files');
+    }
+    const tv = $('ws-tree-view');
+    if (tv) tv.style.display = 'none';
     const fv = $('ws-file-view');
-    fv.style.display = 'flex';
+    if (fv) fv.style.display = 'flex';
     $('ws-file-path').textContent = path;
     $('ws-file-path').title = path;
 
@@ -270,8 +274,10 @@ async function wsShowFile(path) {
 })();
 
 function wsShowTree() {
-  $('ws-file-view').style.display = 'none';
-  $('ws-tree-view').style.display = 'block';
+  const fv = $('ws-file-view');
+  if (fv) fv.style.display = 'none';
+  const tv = $('ws-tree-view');
+  if (tv) tv.style.display = 'flex';
 }
 
 function wsRefreshTree() {
@@ -281,21 +287,15 @@ function wsRefreshTree() {
   wsExpandedDirs.clear();
   wsLoadTree('', tree, false);
   // if a file is open, refresh its diff too
-  if ($('ws-file-view').style.display !== 'none') {
-    const p = $('ws-file-path').textContent;
+  if ($('ws-file-view') && $('ws-file-view').style.display !== 'none') {
+    const p = $('ws-file-path')?.textContent;
     if (p) wsShowFile(p);
   }
 }
 
 function updateWsRail() {
   const rail = $('ws-rail');
-  if (!rail) return;
-  // workspace panel only makes sense with a real, active user project workspace
-  const hasValidProject = hasValidActiveProject();
-  rail.style.display = (agentMode && hasValidProject && !wsPanelOpen) ? 'block' : 'none';
-  if ((!agentMode || !hasValidProject) && wsPanelOpen) {
-    setWsPanel(false);
-  }
+  if (rail) rail.style.display = 'none';
   if (typeof updateGitIconVisibility === 'function') updateGitIconVisibility();
 }
 
@@ -303,16 +303,14 @@ function setWsPanel(open) {
   const hasValidProject = hasValidActiveProject();
   if (open && (!agentMode || !hasValidProject)) {
     wsPanelOpen = false;
-    const panel = $('ws-panel');
-    if (panel) panel.classList.remove('open');
+    if (window.RightDock && window.RightDock.activeTab === 'files') window.RightDock.close();
     updateWsRail();
     return;
   }
   wsPanelOpen = open;
-  const panel = $('ws-panel');
-  if (panel) {
-    panel.style.right = '';
-    panel.classList.toggle('open', open);
+  if (window.RightDock) {
+    if (open) window.RightDock.open('files');
+    else if (window.RightDock.activeTab === 'files') window.RightDock.close();
   }
   updateWsRail();
   if (open) wsRefreshTree();

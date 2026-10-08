@@ -332,9 +332,8 @@ document.querySelectorAll('header .icon-btn').forEach(b => {
 
 /* boot */
 try {
-  const isNative = typeof isNativeAppClient === 'function' ? isNativeAppClient() : false;
-  const savedMode = localStorage.getItem('app_mode');
-  setAppMode(isNative && savedMode === 'agent', false);
+  const savedMode = localStorage.getItem('app_mode') || 'chat';
+  setAppMode(savedMode, false);
 } catch (_) {}
 loadProfiles();   // loadConfig() runs inside once the dropdown is ready
 loadProjects(true);

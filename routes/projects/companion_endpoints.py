@@ -1,6 +1,7 @@
 """Companion status, filesystem browse/mkdir, and device management endpoints."""
 
 import asyncio
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Request
@@ -12,7 +13,7 @@ from core.db import db_list_user_devices, db_rename_device
 from core.deps import get_current_user
 from core.request_context import normalize_device_id, set_current_device
 from .helpers import _ask_directory_native
-from .models import BrowseFolderReq, MkdirReq, RenameDeviceReq
+from .models import BrowseFolderReq, MkdirReq, RenameDeviceReq, ShellExecReq
 
 router = APIRouter()
 
@@ -104,3 +105,103 @@ async def rename_device(req: RenameDeviceReq,
 @router.get("/control/user/devices")
 async def list_user_devices(user: Principal = Depends(get_current_user)):
     return {"ok": True, "devices": db_list_user_devices(user.id)}
+
+
+@router.post("/control/companion/shell")
+async def companion_shell(req: ShellExecReq, user: Principal = Depends(get_current_user)):
+    cmd = (req.command or "").strip()
+    if not cmd:
+        return JSONResponse({"ok": False, "error": "Command cannot be empty"}, status_code=400)
+
+    target_cwd = (req.cwd or "").strip()
+    if not target_cwd:
+        try:
+            from core.agent_tools.workspace import active_workspace
+            target_cwd = str(active_workspace())
+        except Exception:
+            target_cwd = os.getcwd()
+
+    timeout_s = min(max(int(req.timeout or 60), 1), 300)
+
+    sh_type = (req.shell or "powershell").lower().strip()
+
+    # 1. Dispatch to paired companion if connected
+    if companion_bridge.is_connected(user.id):
+        try:
+            data = await companion_bridge.call(
+                user.id,
+                "shell.run",
+                {"command": cmd, "cwd": target_cwd, "timeout": timeout_s, "approved_in_app": True, "shell": sh_type},
+                timeout=timeout_s + 10,
+            )
+            return {
+                "ok": True,
+                "exit_code": data.get("exit_code", 0),
+                "stdout": data.get("stdout", ""),
+                "stderr": data.get("stderr", ""),
+                "cwd": target_cwd,
+                "shell": sh_type,
+                "source": "companion",
+            }
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"companion: {e}"}, status_code=502)
+
+    # 2. Local fallback if server/companion runs on localhost
+    try:
+        run_args = None
+        if os.name == "nt":
+            if sh_type == "cmd":
+                run_args = ["cmd.exe", "/c", cmd]
+            elif sh_type == "bash":
+                run_args = ["bash.exe", "-c", cmd]
+            elif sh_type == "pwsh":
+                run_args = ["pwsh.exe", "-NoProfile", "-Command", cmd]
+            else:  # default powershell
+                run_args = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd]
+        else:
+            if sh_type in ("bash", "sh"):
+                run_args = ["/bin/bash", "-c", cmd]
+            else:
+                run_args = ["/bin/sh", "-c", cmd]
+
+        safe_cwd = target_cwd if os.path.exists(target_cwd) else os.getcwd()
+        proc = await asyncio.create_subprocess_exec(
+            *run_args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=safe_cwd,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+            return {
+                "ok": True,
+                "exit_code": proc.returncode,
+                "stdout": stdout.decode("utf-8", errors="replace"),
+                "stderr": stderr.decode("utf-8", errors="replace"),
+                "cwd": safe_cwd,
+                "shell": sh_type,
+                "source": "local",
+            }
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return {"ok": False, "error": f"command timed out after {timeout_s}s", "exit_code": -1, "cwd": safe_cwd}
+    except FileNotFoundError:
+        return JSONResponse({
+            "ok": False,
+            "error": f"Shell interpreter '{sh_type}' was not found on your system (PATH). Try selecting PowerShell or CMD.",
+            "exit_code": 127,
+            "cwd": safe_cwd,
+            "shell": sh_type
+        }, status_code=200)
+    except Exception as e:
+        return JSONResponse({
+            "ok": False,
+            "error": f"Command execution failed: {e}",
+            "exit_code": 1,
+            "cwd": safe_cwd if 'safe_cwd' in locals() else target_cwd,
+            "shell": sh_type
+        }, status_code=200)
+

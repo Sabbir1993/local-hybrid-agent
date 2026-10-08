@@ -108,6 +108,12 @@ function sseToolCall(L, d) {
     L.reasoning = (L.reasoning ? L.reasoning + '\n\n' : '') + L.content.trim();
     L.content = '';
   }
+  if (d.name === 'run_shell' || d.name === 'shell' || d.name === 'bash' || d.name === 'exec') {
+    const cmd = (d.args && (d.args.command || d.args.cmd)) || '';
+    if (cmd && typeof window.logTerminal === 'function') {
+      window.logTerminal({ source: 'agent', cmd, status: 'running', id: d.id });
+    }
+  }
 }
 
 // tool_progress: a long tool (image/video generation) reports its step; kept on
@@ -125,6 +131,11 @@ function sseToolResult(L, d) {
   if (!L.acts) L.acts = [];
   L.acts.push({ type: 'tool_result', ...d });
   L.statusText = 'Crunching tool results...';
+  if (d.name === 'run_shell' || d.name === 'shell' || d.name === 'bash' || d.name === 'exec') {
+    if (typeof window.logTerminalResult === 'function') {
+      window.logTerminalResult({ id: d.id, ok: d.ok !== false, result: d.result });
+    }
+  }
   if (!['write_file', 'edit_file', 'append_file', 'insert_at_line'].includes(d.name)) return;
   const p = _ssePath(d);
   const filename = p ? p.split(/[\\/]/).pop() : 'file';

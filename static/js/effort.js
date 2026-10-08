@@ -3,7 +3,7 @@
    Deep research (chatDeepMode, theme.js) is chat-only and independent of the level. */
 const EFFORT_LEVELS = ['none', 'low', 'medium', 'high', 'extra'];
 const EFFORT_LABELS = { none: 'None', low: 'Low', medium: 'Medium', high: 'High', extra: 'Extra' };
-let chatEffort = 'low';
+let chatEffort = 'medium';
 try {
   const saved = localStorage.getItem('chat_effort');
   if (EFFORT_LEVELS.includes(saved)) chatEffort = saved;
@@ -27,8 +27,7 @@ function updateEffortUI() {
   const canReason = mode !== 'none';
   const deepShown = !agentMode;               // Deep research only applies to chat
   const deepOn = deepShown && !!chatDeepMode;
-  // nothing to choose: non-reasoning model in agent mode
-  wrap.style.display = (canReason || deepShown) ? 'inline-flex' : 'none';
+  wrap.style.display = 'inline-flex';
   document.querySelectorAll('#effort-menu .effort-item').forEach(it => {
     const on = it.dataset.level === chatEffort;
     it.style.display = canReason ? '' : 'none';
@@ -47,7 +46,7 @@ function updateEffortUI() {
   if (canReason) parts.push(EFFORT_LABELS[chatEffort]);
   if (deepOn) parts.push('Deep');
   const label = $('effort-label');
-  if (label) label.textContent = parts.join(' · ') || 'Standard';
+  if (label) label.textContent = parts.join(' · ') || EFFORT_LABELS[chatEffort] || 'Medium';
   const btn = $('effort-btn');
   if (btn) {
     btn.classList.toggle('deep', deepOn);

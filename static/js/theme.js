@@ -17,11 +17,20 @@ function isNativeAppClient() {
   );
 }
 window.isNativeAppClient = isNativeAppClient;
+try {
+  const isNat = isNativeAppClient();
+  document.documentElement.classList.toggle('is-native-app', isNat);
+  if (document.body) document.body.classList.toggle('is-native-app', isNat);
+  if (!isNat) {
+    localStorage.setItem('app_mode', 'chat');
+  }
+} catch (_) {}
 
 let agentMode = (function() {
   try {
     if (!isNativeAppClient()) return false;
-    return localStorage.getItem('app_mode') === 'agent';
+    const m = localStorage.getItem('app_mode');
+    return m === 'code' || m === 'agent';
   } catch (_) { return false; }
 })();
 let planMode = false;
@@ -108,6 +117,10 @@ function updateWebToggleUI() {
   const btn = $('btn-web-toggle');
   if (!btn) return;
   btn.classList.toggle('active', !!chatWebSearch);
+  const textEl = $('web-search-text');
+  if (textEl) {
+    textEl.textContent = chatWebSearch ? 'Web Search' : 'Web Search (Off)';
+  }
   btn.title = chatWebSearch
     ? 'Web Search is ON (model searches web & fetches URLs) — Click to turn OFF'
     : 'Web Search is OFF (offline local knowledge only) — Click to turn ON';
@@ -143,7 +156,6 @@ function applyTheme(t) {
 function setTheme(t) {
   localStorage.setItem(THEME_KEY, t);
   applyTheme(t);
-  toast(`🎨 Theme: ${THEME_NAMES[t] || t}`);
 }
 
 function cycleTheme() {

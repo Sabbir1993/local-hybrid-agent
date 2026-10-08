@@ -55,14 +55,19 @@ def db_list_sessions_page(pid: Optional[int], owner_user_id: int, limit: Optiona
     has_more = bool(limit) and len(rows) > int(limit)
     if has_more:
         rows = rows[:int(limit)]
-    return ([{"id": r["id"], "title": r["title"], "created_at": r["created_at"]} for r in rows], has_more)
+    return ([{
+        "id": r["id"],
+        "title": r["title"],
+        "created_at": r["created_at"],
+        "agent_id": r["agent_id"] if "agent_id" in r.keys() else None,
+    } for r in rows], has_more)
 
 
 def db_list_sessions(pid: Optional[int], owner_user_id: int) -> list:
     return db_list_sessions_page(pid, owner_user_id)[0]
 
 
-def db_create_session(pid: Optional[int], title: str = None, owner_user_id: int = None) -> dict:
+def db_create_session(pid: Optional[int], title: str = None, owner_user_id: int = None, agent_id: Optional[int] = None) -> dict:
     if owner_user_id is None:
         raise ValueError("owner_user_id required")
     now = time.time()
@@ -71,10 +76,10 @@ def db_create_session(pid: Optional[int], title: str = None, owner_user_id: int 
     if actual_pid is not None and db_project_owner(actual_pid) != owner_user_id:
         raise PermissionError("not your project")
     cur = _projects_db.execute(
-        "INSERT INTO sessions (project_id, title, created_at, user_id) VALUES (?, ?, ?, ?)",
-        (actual_pid, title, now, owner_user_id))
+        "INSERT INTO sessions (project_id, title, created_at, user_id, agent_id) VALUES (?, ?, ?, ?, ?)",
+        (actual_pid, title, now, owner_user_id, agent_id))
     _projects_db.commit()
-    return {"id": cur.lastrowid, "title": title, "created_at": now}
+    return {"id": cur.lastrowid, "title": title, "created_at": now, "agent_id": agent_id}
 
 
 def db_update_session_title(sid: int, title: str, owner_user_id: int) -> None:
@@ -82,6 +87,13 @@ def db_update_session_title(sid: int, title: str, owner_user_id: int) -> None:
         raise PermissionError("not your session")
     title = _at_rest((title or "New session").strip())[:80]
     _projects_db.execute("UPDATE sessions SET title = ? WHERE id = ?", (title, sid))
+    _projects_db.commit()
+
+
+def db_update_session_agent_id(sid: int, agent_id: Optional[int], owner_user_id: int) -> None:
+    if db_session_owner(sid) != owner_user_id:
+        raise PermissionError("not your session")
+    _projects_db.execute("UPDATE sessions SET agent_id = ? WHERE id = ?", (agent_id, sid))
     _projects_db.commit()
 
 

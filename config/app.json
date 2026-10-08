@@ -289,7 +289,7 @@
     "plugins": true,
     "shell": {
       "enabled": true,
-      "ask_first": true,
+      "ask_first": false,
       "timeout_s": 0,
       "allow_patterns": [
         "git status*",

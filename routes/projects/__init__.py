@@ -52,7 +52,7 @@ __all__ = [
     # helpers
     "_ask_directory_native",
     # companion/fs/device endpoints
-    "companion_status", "browse_folder", "fs_browse", "fs_mkdir", "rename_device", "list_user_devices",
+    "companion_status", "browse_folder", "fs_browse", "fs_mkdir", "rename_device", "list_user_devices", "companion_shell",
     # project endpoints
     "list_projects", "create_project", "update_project_workspace", "delete_project", "activate_project",
     # session endpoints

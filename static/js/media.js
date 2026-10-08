@@ -78,9 +78,10 @@ function _paintMic() {
   const b = $('btn-mic');
   if (!b) return;
   const st = MEDIA.status && MEDIA.status.transcribe;
-  b.hidden = !(st && st.ready);
+  b.hidden = false;
   const recording = !!MEDIA.rec;
   b.classList.toggle('recording', recording);
+  b.classList.toggle('active', recording);
   b.setAttribute('aria-pressed', recording ? 'true' : 'false');
   const label = recording ? 'Stop recording and keep the text'
     : `Dictate — click to record, click again to stop${st && st.ready ? ' · ' + _whereText(st) : ''}`;

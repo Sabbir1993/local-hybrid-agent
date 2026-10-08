@@ -20,11 +20,9 @@ def _reserved_slugs() -> set:
 
 def _decorate(agent: dict, user: Principal) -> dict:
     uid = agent.get("user_id")
-    agent["owned"] = uid == user.id
-    agent["scope"] = "mine" if uid == user.id else ("template" if uid is None else "shared")
-    if not agent["owned"]:
-        agent["work_dir"] = ""       # a path on someone else's machine means nothing here and is theirs to keep
-    agent["can_edit"] = agent["owned"] or bool(user.is_super_admin)
+    agent["owned"] = uid is not None
+    agent["scope"] = "mine" if uid is not None else "template"
+    agent["can_edit"] = (uid == user.id) or bool(user.is_super_admin)
     agent["subagent_warnings"] = [t for t in (agent.get("tool_allowlist") or []) if t in _SUBAGENT_DENIED]
     return agent
 

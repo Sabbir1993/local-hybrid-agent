@@ -19,6 +19,7 @@ class UpdateWorkspaceReq(BaseModel):
 
 class SessionReq(BaseModel):
     title: Optional[str] = None
+    agent_id: Optional[int] = None
 
 
 class BrowseFolderReq(BaseModel):
@@ -40,3 +41,12 @@ class RenameDeviceReq(BaseModel):
     new_name: str
     old_name: Optional[str] = None
     device_id: Optional[str] = None
+
+
+class ShellExecReq(BaseModel):
+    command: str
+    cwd: Optional[str] = None
+    timeout: Optional[int] = 60
+    shell: Optional[str] = "powershell"
+
+

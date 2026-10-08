@@ -137,7 +137,18 @@ async function openFilePreview(filePath, title = '', directContent = null, opts 
 
   try {
     if (ext === 'html' || ext === 'htm') {
-      renderHtmlPreview(directContent || !filePath ? rawUrl : await pickRawUrl(), directContent, contentEl, controlsEl);
+      const finalRawUrl = directContent || !filePath ? rawUrl : await pickRawUrl();
+      if (window.RightDock) {
+        let codeText = directContent;
+        if (!codeText && filePath) {
+          try { const cr = await fetchRaw(); codeText = await cr.text(); } catch (_) {}
+        }
+        window.RightDock.setWebPreview(title || fname, codeText, finalRawUrl, ext);
+        modal.hidden = true;
+        modal.style.display = 'none';
+        return;
+      }
+      renderHtmlPreview(finalRawUrl, directContent, contentEl, controlsEl);
     } else if (ext === 'mermaid' || ext === 'mmd') {
       let code = directContent;
       if (!code && filePath) {

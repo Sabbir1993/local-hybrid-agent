@@ -202,6 +202,9 @@ function planPanelHtml(acts) {
   if (!acts || !acts.length) return '';
   const plans = acts.filter(a => a.type === 'plan' && Array.isArray(a.items) && a.items.length);
   if (!plans.length) return '';
+  if (typeof window !== 'undefined' && window.RightDock) {
+    window.RightDock.updatePlanFromActs(acts);
+  }
   const items = plans[plans.length - 1].items;
   const done = items.filter(i => i.status === 'done').length;
   const failed = items.filter(i => i.status === 'failed').length;

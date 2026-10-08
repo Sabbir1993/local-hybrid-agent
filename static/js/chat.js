@@ -948,6 +948,18 @@ function setGenUI(on) {
   generating = on;
   $('btn-send').style.display = on ? 'none' : '';
   $('btn-abort').style.display = on ? '' : 'none';
+  const enterBtn = $('btn-input-enter');
+  if (enterBtn) {
+    if (on) {
+      enterBtn.innerHTML = '■';
+      enterBtn.title = 'Cancel generation';
+      enterBtn.classList.add('abort-state');
+    } else {
+      enterBtn.innerHTML = '⏎';
+      enterBtn.title = 'Send (Enter)';
+      enterBtn.classList.remove('abort-state');
+    }
+  }
   if (on) {
     const job = (curSession && window.bgJobs) ? window.bgJobs.get(String(curSession.id)) : null;
     startClaudeWorkingTicker(job ? job.t0 : performance.now());

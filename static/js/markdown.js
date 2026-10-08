@@ -110,7 +110,7 @@ function _mdConfigure() {
           const d = esc(domain);
           const fav = esc(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`);
           return _mdPut(`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" class="citation-pill" title="${d} - Click to open source">`
-            + `<img src="${fav}" class="citation-favicon" alt="" loading="lazy" /><span class="citation-host">${d}</span></a>`);
+            + `<img src="${fav}" class="citation-favicon" alt="" loading="lazy" onerror="this.style.display='none'" /><span class="citation-host">${d}</span></a>`);
         }
         const title = token.title ? ` title="${esc(token.title)}"` : '';
         return _mdPut(`<a href="${esc(href)}"${title} target="_blank" rel="noopener noreferrer">`) + inner + _mdPut('</a>');

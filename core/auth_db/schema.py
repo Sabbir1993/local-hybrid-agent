@@ -210,6 +210,8 @@ CREATE TABLE IF NOT EXISTS user_custom_agents (
     is_public INTEGER DEFAULT 0,
     work_dir TEXT DEFAULT '',
     share_status TEXT DEFAULT '',
+    device_id TEXT DEFAULT '',
+    device_name TEXT DEFAULT '',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -294,6 +296,13 @@ def init_tables(conn) -> None:
         # sharing now needs approval; agents that were already public keep their approved standing
         conn.execute("ALTER TABLE user_custom_agents ADD COLUMN share_status TEXT DEFAULT ''")
         conn.execute("UPDATE user_custom_agents SET share_status = 'approved' WHERE is_public = 1 AND user_id IS NOT NULL")
+        conn.commit()
+    _ca_cols = {r[1] for r in conn.execute("PRAGMA table_info(user_custom_agents)")}
+    if "device_id" not in _ca_cols:
+        conn.execute("ALTER TABLE user_custom_agents ADD COLUMN device_id TEXT DEFAULT ''")
+        conn.commit()
+    if "device_name" not in _ca_cols:
+        conn.execute("ALTER TABLE user_custom_agents ADD COLUMN device_name TEXT DEFAULT ''")
         conn.commit()
     if "cloud_ok" not in {r[1] for r in conn.execute("PRAGMA table_info(knowledge_sources)")}:
         # admin decides per source whether cloud models may read it; existing sources stay local-only

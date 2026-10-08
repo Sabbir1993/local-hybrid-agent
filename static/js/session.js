@@ -63,11 +63,11 @@
   }
 
   function buildUserMenu(user) {
-    const trigger = document.getElementById('btn-user-menu');
+    const trigger = document.getElementById('btn-claude-user-profile') || document.getElementById('btn-user-menu');
     if (!trigger) return;
 
     // Clean up any previously attached dropdown
-    const existing = trigger.parentElement ? trigger.parentElement.querySelector('.user-menu-dropdown') : null;
+    const existing = document.querySelector('.user-menu-dropdown');
     if (existing) existing.remove();
 
     const dd = document.createElement('div');
@@ -77,13 +77,19 @@
     const isSuper = !!user.is_super_admin;
     const canManageUsers = isSuper || (window.__perms && window.__perms.has('users.manage'));
 
-    dd.innerHTML = `
-      <div class="user-menu-email">
-        <div style="font-weight:600; font-size:13px; color:var(--text);">${esc(label)}</div>
-        ${isSuper ? '<span class="user-menu-badge">super admin</span>' : ''}
-        ${user.username && user.display_name && user.display_name !== user.username ? `<div class="dim" style="font-size:11px; margin-top:2px;">@${esc(user.username)}</div>` : ''}
-      </div>
+    // Populate bottom profile pill in sidebar
+    const whoName = document.getElementById('claude-user-name');
+    if (whoName) whoName.textContent = user.display_name || user.username || 'User';
+    const whoOrg = document.getElementById('claude-user-org');
+    if (whoOrg) whoOrg.textContent = isSuper ? 'SUPER ADMIN' : (user.organization || 'SSLWIRELESS');
+    const whoBadge = document.getElementById('claude-avatar-badge');
+    if (whoBadge) {
+      const n = (user.display_name || user.username || 'SH').trim();
+      const initials = n.split(/\s+/).map(w => w[0]).join('').substring(0, 2).toUpperCase();
+      whoBadge.textContent = initials || 'SH';
+    }
 
+    dd.innerHTML = `
       <button type="button" class="user-menu-item" data-action="theme" title="Quick cycle color theme">
         <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.563-2.512 5.563-5.563C22 6.5 17.5 2 12 2z"/></svg>
         <span>Theme</span>
@@ -137,9 +143,9 @@
       </button>
     `;
 
-    trigger.parentElement.style.position = 'relative';
-    trigger.parentElement.classList.add('user-menu');
-    trigger.parentElement.appendChild(dd);
+    trigger.style.position = 'relative';
+    trigger.classList.add('user-menu');
+    trigger.appendChild(dd);
 
     const pwdForm = dd.querySelector('.user-menu-pwd-form');
     const pwdMsg = dd.querySelector('.user-menu-msg');
@@ -338,7 +344,7 @@
     else if (idle >= idleMs - 60 * 1000) showIdleWarning();
   }
 
-  const earlyTrigger = document.getElementById('btn-user-menu');
+  const earlyTrigger = document.getElementById('btn-claude-user-profile') || document.getElementById('btn-user-menu');
   if (earlyTrigger) {
     earlyTrigger.onclick = (e) => {
       e.stopPropagation();

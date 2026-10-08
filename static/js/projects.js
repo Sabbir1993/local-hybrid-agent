@@ -14,6 +14,40 @@ try {
   });
 } catch (_) {}
 
+function syncHeaderTitleAndPill() {
+  const headerTitle = $('claude-header-title-text');
+  const projPill = $('claude-project-pill');
+  const repoGroup = $('claude-repo-group');
+  const repoName = $('sidebar-repo-name');
+
+  const isAgent = typeof agentMode !== 'undefined' && Boolean(agentMode);
+  if (headerTitle) {
+    if (curSession && curSession.title) {
+      headerTitle.textContent = curSession.title;
+    } else {
+      headerTitle.textContent = isAgent ? 'New Agent Task' : 'New Chat';
+    }
+  }
+
+  const hasProj = Boolean(curProject && curProject.name && curProject.name !== 'scratch' && curProject.name !== 'default');
+  if (isAgent && hasProj) {
+    if (projPill) {
+      projPill.textContent = curProject.name;
+      projPill.style.display = 'inline-flex';
+    }
+    if (repoGroup) repoGroup.style.display = 'flex';
+    if (repoName) repoName.textContent = curProject.name;
+  } else {
+    if (projPill) projPill.style.display = 'none';
+    if (repoGroup) repoGroup.style.display = 'none';
+  }
+
+  if (window.GitStrip && typeof window.GitStrip.refresh === 'function') {
+    window.GitStrip.refresh();
+  }
+}
+window.syncHeaderTitleAndPill = syncHeaderTitleAndPill;
+
 /* ---------------- client device helper ---------------- */
 function getClientDeviceId() {
   if (window.electronAPI && window.electronAPI.deviceId) {
@@ -84,6 +118,12 @@ function getDeviceHeaders() {
     'X-Device-Name': getClientDeviceName()
   };
 }
+
+window.getClientDeviceId = getClientDeviceId;
+window.getClientDeviceName = getClientDeviceName;
+window.getClientDeviceShortId = getClientDeviceShortId;
+window.getDeviceDisplayLabel = getDeviceDisplayLabel;
+window.getDeviceHeaders = getDeviceHeaders;
 
 /* Every same-origin API call carries this device's identity. The server keys
    the active project by (user, device); a request without it resolves as the
@@ -356,6 +396,7 @@ async function loadProjects(autoRestoreSessions = false) {
     }
 
     updateWsRail();
+    syncHeaderTitleAndPill();
     loadSessions(autoRestoreSessions);
   } catch (e) {}
 }
@@ -395,11 +436,21 @@ const SESS_PAGE = 15;
 const SESS_MAX = 100;
 const _sess = { items: [], hasMore: false, loading: false, key: '', obs: null };
 
-const SESS_ICON_CHAT = '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.75;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
-const SESS_ICON_AGENT = '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.75;"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>';
+const SESS_ICON_CHAT = '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.85;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+const SESS_ICON_AGENT = '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.85;"><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M12 8V4H8"/><path d="M2 14h2"/><path d="M20 14h2"/><circle cx="9" cy="13" r="1" fill="currentColor"/><circle cx="15" cy="13" r="1" fill="currentColor"/><path d="M9 17h6"/></svg>';
+const SESS_ICON_CODE = '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.85;"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
+
+function getActiveSessionKey() {
+  const m = window.appMode || (agentMode ? 'code' : 'chat');
+  if (m === 'agent') return 'active_agent_session_id';
+  if (m === 'code') return 'active_code_session_id';
+  return 'active_chat_session_id';
+}
+window.getActiveSessionKey = getActiveSessionKey;
 
 function sessionsUrl() {
-  return agentMode
+  const curAppMode = window.appMode || (agentMode ? 'code' : 'chat');
+  return (curAppMode === 'code')
     ? (curProject ? `/control/projects/${curProject.id}/sessions` : null)
     : `/control/projects/0/sessions`;
 }
@@ -408,7 +459,13 @@ function sessionRowEl(s) {
   const row = document.createElement('div');
   row.className = 'session-row' + (curSession && curSession.id === s.id ? ' cur' : '');
   row.setAttribute('data-sid', String(s.id));
-  const icon = agentMode ? SESS_ICON_AGENT : SESS_ICON_CHAT;
+  const curAppMode = window.appMode || (agentMode ? 'code' : 'chat');
+  let icon = SESS_ICON_CHAT;
+  if (curAppMode === 'agent') {
+    icon = SESS_ICON_AGENT;
+  } else if (curAppMode === 'code') {
+    icon = SESS_ICON_CODE;
+  }
   const isRunning = window.bgJobs && window.bgJobs.has(String(s.id));
   const bgBadge = isRunning ? '<span class="bg-session-indicator" title="Executing in background..."><span class="bg-pulse-dot"></span>⚡</span>' : '';
   row.innerHTML = `<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; align-items:center;" title="${esc(s.title)}">${icon}<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(s.title)}</span></span>` +
@@ -464,15 +521,108 @@ async function sessionsFetch(qs) {
   return r.json();
 }
 
+const STARTER_AGENT_SUBSTRINGS = [
+  'System & Metric Report',
+  'Email Analyzer',
+  'Code QA & Test',
+  'Architecture & System Design',
+  'Security & Vulnerability Audit',
+  'Doc & Knowledge Synth'
+];
+
+function isCustomAgentSession(s) {
+  if (!s) return false;
+  // 1. Explicit agent_id returned by backend
+  if (s.agent_id != null && s.agent_id !== 0 && s.agent_id !== '') return true;
+
+  // 2. Mapped in browser localStorage
+  let map = {};
+  try { map = JSON.parse(localStorage.getItem('custom_agent_sessions') || '{}') || {}; } catch (_) {}
+  if (map[String(s.id)]) return true;
+
+  const title = (s.title || '').trim();
+  if (!title) return false;
+
+  // 3. Known starter agent titles or partial matches
+  for (const starter of STARTER_AGENT_SUBSTRINGS) {
+    if (title.includes(starter)) {
+      try {
+        map[String(s.id)] = starter;
+        localStorage.setItem('custom_agent_sessions', JSON.stringify(map));
+      } catch (_) {}
+      return true;
+    }
+  }
+
+  // 4. Custom agents loaded in window (user custom agents & templates)
+  const agentList = (window.customAgents && typeof window.customAgents.list === 'function')
+    ? window.customAgents.list()
+    : (typeof window.customAgentsList === 'function' ? window.customAgentsList() : []);
+  if (Array.isArray(agentList) && agentList.length) {
+    for (const a of agentList) {
+      if (!a || !a.name) continue;
+      const aname = a.name.trim();
+      const aicon = (a.icon || '').trim();
+      if (title === aname || title.startsWith(aname) || (aicon && title.startsWith(aicon + ' ' + aname)) || title.includes(aname)) {
+        try {
+          map[String(s.id)] = a.id;
+          localStorage.setItem('custom_agent_sessions', JSON.stringify(map));
+        } catch (_) {}
+        return true;
+      }
+    }
+  }
+
+  // 5. Pattern heuristics: titles starting with emojis followed by agent keywords
+  if (/^[\p{Extended_Pictographic}\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]\s*(?:System|Metric|Email|Code|Test|Architecture|Security|Doc|Release|[A-Za-z0-9\s&]+(?:Agent|Reporter|Assistant|Automator|Designer|Auditor|Synthesizer))/u.test(title)) {
+    try {
+      map[String(s.id)] = 'agent';
+      localStorage.setItem('custom_agent_sessions', JSON.stringify(map));
+    } catch (_) {}
+    return true;
+  }
+
+  return false;
+}
+
+function filterSessionsByMode(sessions, curAppMode) {
+  if (!Array.isArray(sessions)) return [];
+  if (curAppMode === 'chat') {
+    return sessions.filter(s => !isCustomAgentSession(s));
+  } else if (curAppMode === 'agent') {
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem('custom_agent_sessions') || '{}') || {}; } catch (_) {}
+    const curAgent = (window.customAgents && typeof window.customAgents.getActive === 'function')
+      ? window.customAgents.getActive()
+      : window.activeCustomAgent;
+    if (curAgent) {
+      const targetId = String(curAgent.id);
+      const targetName = (curAgent.name || '').trim();
+      const targetIcon = (curAgent.icon || '').trim();
+      return sessions.filter(s => {
+        if (!isCustomAgentSession(s)) return false;
+        if (String(s.agent_id) === targetId || String(map[String(s.id)]) === targetId) return true;
+        const title = (s.title || '').trim();
+        if (targetName && (title.includes(targetName) || (targetIcon && title.startsWith(targetIcon + ' ' + targetName)))) return true;
+        return false;
+      });
+    }
+    return sessions.filter(s => isCustomAgentSession(s));
+  }
+  return sessions;
+}
+
 async function loadMoreSessions(silent = false) {
   const list = $('session-list');
   if (!list || _sess.loading || !_sess.hasMore || !_sess.items.length || !sessionsUrl()) return false;
   _sess.loading = true;
+  const curAppMode = window.appMode || (agentMode ? 'code' : 'chat');
   try {
     const last = _sess.items[_sess.items.length - 1];
     const d = await sessionsFetch(`limit=${SESS_PAGE}&before=${last.id}`);
     const known = new Set(_sess.items.map(x => x.id));
-    const fresh = (d.sessions || []).filter(x => !known.has(x.id));
+    let fresh = (d.sessions || []).filter(x => !known.has(x.id));
+    fresh = filterSessionsByMode(fresh, curAppMode);
     _sess.items.push(...fresh);
     _sess.hasMore = !!d.has_more && fresh.length > 0;
     if (!silent) {       // silent: the caller redraws the whole list itself (auto-restore search)
@@ -492,32 +642,78 @@ async function loadMoreSessions(silent = false) {
 async function loadSessions(autoRestore = false) {
   const list = $('session-list');
   const base = sessionsUrl();
+  const curAppMode = window.appMode || (agentMode ? 'code' : 'chat');
 
-  if (agentMode && !curProject) {
+  if (curAppMode === 'code' && !curProject) {
     _sess.items = []; _sess.hasMore = false; _sess.key = '';
     sessionsDisconnect();
-    list.innerHTML = '<div class="dim" style="font-size:11.5px; padding:8px 4px;">No project selected.<br>Pick or create a project above for agent tasks.</div>';
+    list.innerHTML = `
+      <div class="sidebar-empty-card" style="display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:30px 14px; gap:9px; margin:8px 4px; border-radius:12px; background:rgba(255,255,255,0.02); border:1px dashed var(--border);">
+        <div style="width:38px; height:38px; border-radius:10px; background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.22); display:flex; align-items:center; justify-content:center; color:var(--accent);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        </div>
+        <div style="font-size:12.5px; font-weight:600; color:var(--text); letter-spacing:-0.01em;">No Project Selected</div>
+        <div style="font-size:11px; color:var(--dim); line-height:1.45; max-width:180px;">Pick or register a project above for agent tasks.</div>
+      </div>`;
+    return;
+  }
+  const curAgent = (window.customAgents && typeof window.customAgents.getActive === 'function')
+    ? window.customAgents.getActive()
+    : window.activeCustomAgent;
+  if (curAppMode === 'agent' && !curAgent) {
+    _sess.items = []; _sess.hasMore = false; _sess.key = '';
+    sessionsDisconnect();
+    list.innerHTML = `
+      <div class="sidebar-empty-card" style="display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:32px 14px; gap:10px; margin:8px 4px; border-radius:12px; background:rgba(255,255,255,0.02); border:1px dashed var(--border);">
+        <div style="width:40px; height:40px; border-radius:10px; background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.22); display:flex; align-items:center; justify-content:center; color:var(--accent);">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M12 8V4H8"/><path d="M2 14h2"/><path d="M20 14h2"/><circle cx="9" cy="13" r="1" fill="currentColor"/><circle cx="15" cy="13" r="1" fill="currentColor"/><path d="M9 17h6"/></svg>
+        </div>
+        <div style="font-size:12.5px; font-weight:600; color:var(--text); letter-spacing:-0.01em;">No Agent Selected</div>
+        <div style="font-size:11px; color:var(--dim); line-height:1.45; max-width:180px;">Select an agent from My Agents above to view sessions or start chatting.</div>
+      </div>`;
     return;
   }
   try {
     if (_sess.key !== base) { _sess.items = []; _sess.hasMore = false; _sess.key = base; }   // another project / mode
     const limit = Math.min(SESS_MAX, Math.max(SESS_PAGE, _sess.items.length));
     const d = await sessionsFetch(`limit=${limit}`);
-    _sess.items = d.sessions || [];
+    let allSess = d.sessions || [];
+    allSess = filterSessionsByMode(allSess, curAppMode);
+    _sess.items = allSess;
     _sess.hasMore = !!d.has_more;
     if (!_sess.items.length) {
       sessionsDisconnect();
-      const emptyMsg = agentMode
-        ? 'No task sessions in this project.<br>Type a prompt to start an agent task.'
-        : 'No chats yet.<br>Type a message to start chatting.';
-      list.innerHTML = `<div class="dim" style="font-size:11.5px; padding:8px 4px;">${emptyMsg}</div>`;
+      let iconSvg = '';
+      let emptyTitle = '';
+      let emptySub = '';
+      if (curAppMode === 'code') {
+        iconSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
+        emptyTitle = 'No Task Sessions';
+        emptySub = 'Type a prompt to start an agent task in this project.';
+      } else if (curAppMode === 'agent') {
+        iconSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M12 8V4H8"/><path d="M2 14h2"/><path d="M20 14h2"/><circle cx="9" cy="13" r="1" fill="currentColor"/><circle cx="15" cy="13" r="1" fill="currentColor"/><path d="M9 17h6"/></svg>';
+        emptyTitle = 'No Agent Sessions';
+        emptySub = 'Click ＋ above or type below to start chatting with this agent.';
+      } else {
+        iconSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+        emptyTitle = 'No Recent Chats';
+        emptySub = 'Type a message below to start a new chat.';
+      }
+      list.innerHTML = `
+        <div class="sidebar-empty-card" style="display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:30px 14px; gap:9px; margin:8px 4px; border-radius:12px; background:rgba(255,255,255,0.02); border:1px dashed var(--border);">
+          <div style="width:38px; height:38px; border-radius:10px; background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.22); display:flex; align-items:center; justify-content:center; color:var(--accent);">
+            ${iconSvg}
+          </div>
+          <div style="font-size:12.5px; font-weight:600; color:var(--text); letter-spacing:-0.01em;">${emptyTitle}</div>
+          <div style="font-size:11px; color:var(--dim); line-height:1.45; max-width:180px;">${emptySub}</div>
+        </div>`;
       return;
     }
 
     // Auto-restore active session on initial load / refresh if saved: it may sit beyond the first page
     let target = null;
     if (autoRestore && !curSession) {
-      const savedSid = localStorage.getItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
+      const savedSid = localStorage.getItem(getActiveSessionKey()) || (agentMode ? localStorage.getItem('active_agent_session_id') : null);
       if (savedSid) {
         const find = () => _sess.items.find(x => String(x.id) === String(savedSid));
         target = find();
@@ -543,7 +739,7 @@ async function openSession(s) {
   try {
     if (curSession && String(curSession.id) === String(s.id)) return;
     if (window.customAgents && typeof window.customAgents.restoreForSession === 'function') {
-      window.customAgents.restoreForSession(s.id);
+      window.customAgents.restoreForSession(s.id, s);
     }
 
     // If target session is currently running in background, attach directly to live job state
@@ -552,7 +748,7 @@ async function openSession(s) {
       curSession = s;
       messages = job.messages;
       try {
-        localStorage.setItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id', String(s.id));
+        localStorage.setItem(getActiveSessionKey(), String(s.id));
       } catch (e) {}
       renderAll();
       setGenUI(true);
@@ -607,8 +803,24 @@ async function openSession(s) {
       };
     });
     curSession = s;
+    syncHeaderTitleAndPill();
+    // Restore or reset live plan in dock
+    let foundPlan = false;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const acts = messages[i].acts;
+      if (Array.isArray(acts) && acts.some(a => a.type === 'plan')) {
+        if (window.RightDock && typeof window.RightDock.updatePlanFromActs === 'function') {
+          window.RightDock.updatePlanFromActs(acts);
+          foundPlan = true;
+        }
+        break;
+      }
+    }
+    if (!foundPlan && window.RightDock && typeof window.RightDock.resetPlan === 'function') {
+      window.RightDock.resetPlan();
+    }
     try {
-      localStorage.setItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id', String(s.id));
+      localStorage.setItem(getActiveSessionKey(), String(s.id));
     } catch (e) {}
     setGenUI(false);
     renderAll();
@@ -682,7 +894,7 @@ async function deleteSession(sid) {
     curSession = null;
     messages = [];
     try {
-      localStorage.removeItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
+      localStorage.removeItem(getActiveSessionKey());
     } catch (e) {}
     renderAll();
   }
@@ -729,6 +941,11 @@ function ensureSession(promptText) {
     toast('Please select a project first', true);
     return Promise.resolve(null);
   }
+  const curAppMode = window.appMode || (agentMode ? 'code' : 'chat');
+  const curAgent = (window.customAgents && typeof window.customAgents.getActive === 'function')
+    ? window.customAgents.getActive()
+    : window.activeCustomAgent;
+  const agentId = (curAppMode === 'agent' && curAgent) ? curAgent.id : null;
   const pid = (agentMode && curProject) ? curProject.id : 0;
   return fetch(`/control/projects/${pid}/sessions`, {
     method: 'POST',
@@ -736,14 +953,22 @@ function ensureSession(promptText) {
       'Content-Type': 'application/json',
       ...getDeviceHeaders(),
     },
-    body: JSON.stringify({ title: desiredTitle }),
+    body: JSON.stringify({ title: desiredTitle, agent_id: agentId }),
   })
     .then(r => r.json())
     .then(j => {
       curSession = j.session;
       if (curSession) {
+        if (agentId) curSession.agent_id = agentId;
+        if (agentId && curAgent) {
+          if (typeof window.bindCustomAgentSession === 'function') {
+            window.bindCustomAgentSession(curSession.id, curAgent);
+          } else if (window.customAgents && typeof window.customAgents.bindSession === 'function') {
+            window.customAgents.bindSession(curSession.id, curAgent);
+          }
+        }
         try {
-          localStorage.setItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id', String(curSession.id));
+          localStorage.setItem(getActiveSessionKey(), String(curSession.id));
         } catch (e) {}
       }
       loadSessions();
@@ -754,13 +979,21 @@ function ensureSession(promptText) {
 
 $('btn-newchat').onclick = () => {
   const isCurRunning = curSession && window.bgJobs && window.bgJobs.has(String(curSession.id));
+  const curAppMode = window.appMode || (agentMode ? 'code' : 'chat');
   curSession = null;
+  syncHeaderTitleAndPill();
+  if (window.RightDock && typeof window.RightDock.resetPlan === 'function') {
+    window.RightDock.resetPlan();
+  }
   messages = [];
   try {
-    localStorage.removeItem(agentMode ? 'active_agent_session_id' : 'active_chat_session_id');
+    localStorage.removeItem(getActiveSessionKey());
   } catch (e) {}
-  if (typeof clearActiveCustomAgent === 'function') clearActiveCustomAgent();
-  else if (window.customAgents && typeof window.customAgents.clear === 'function') window.customAgents.clear();
+
+  if (curAppMode === 'chat') {
+    if (typeof clearActiveCustomAgent === 'function') clearActiveCustomAgent();
+    else if (window.customAgents && typeof window.customAgents.clear === 'function') window.customAgents.clear();
+  }
   setGenUI(false);
   renderAll();
   loadSessions(false);
@@ -773,13 +1006,19 @@ $('btn-newchat').onclick = () => {
   if (isCurRunning) {
     toast('Previous task is continuing in background ⚡');
   } else {
-    toast(agentMode ? 'New agent task started' : 'New chat started');
+    toast(curAppMode === 'code' ? 'New agent task started' : (curAppMode === 'agent' ? (window.activeCustomAgent ? `Ready for ${window.activeCustomAgent.name}` : 'New agent session') : 'New chat started'));
   }
 };
 
 const btnNewSession = $('btn-newsession');
 if (btnNewSession) {
   btnNewSession.onclick = () => $('btn-newchat').click();
+}
+const btnRecentAdd = $('btn-new-session');
+if (btnRecentAdd) {
+  btnRecentAdd.onclick = () => {
+    $('btn-newchat').click();
+  };
 }
 
 // Global shortcut Ctrl+K / Cmd+K to start a fresh chat / agent task
@@ -1119,15 +1358,27 @@ async function activateProject(pid) {
     } catch (_) {}
     curSession = null;
     messages = [];
+    if (window.RightDock && typeof window.RightDock.resetPlan === 'function') {
+      window.RightDock.resetPlan();
+    }
     renderAll();
     await loadProjects();
     if (curProject) {
       const ws = curProject.workspace_dir || `E:\\AI\\workspace\\${curProject.name}`;
+      if (window.RightDock && typeof window.RightDock.setTerminalCwd === 'function') {
+        window.RightDock.setTerminalCwd(ws, `${curProject.name} (${ws})`);
+      }
       toast(`Active project: ${curProject.name} (${ws})`);
     } else {
+      if (window.RightDock && typeof window.RightDock.setTerminalCwd === 'function') {
+        window.RightDock.setTerminalCwd('', '(no project)');
+      }
       toast('No active project');
     }
     updateWsRail();
+    if (window.RightDock && typeof window.RightDock.updateTerminalStatus === 'function') {
+      window.RightDock.updateTerminalStatus();
+    }
     if (window.refreshProjectInitHint) window.refreshProjectInitHint();   // AGENTS.md loaded / offer /init
     if (wsPanelOpen) wsRefreshTree();   // tree now shows the new project's files
   } catch (e) { toast('Activate failed', true); }

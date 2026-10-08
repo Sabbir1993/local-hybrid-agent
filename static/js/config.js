@@ -167,7 +167,6 @@ $('profile').onchange = e => {
     if (eng && (eng.value === 'all-local' || eng.value === 'main-local-rest-cloud')) {
       eng.value = 'main-cloud-rest-local';
       try { localStorage.setItem('agent_engine', eng.value); } catch (err) {}
-      toast('\u2601 Cloud main model — agent set to "Best quality" (cloud main, local helpers)');
     }
     // Cloud models cost nothing to "load" (no VRAM involved) - bind the main
     // lane immediately instead of making the user press the Load button too.
@@ -235,6 +234,11 @@ function _createPickerItem(o, sel, dd) {
       sel._user = true;
       sel.dispatchEvent(new Event('change'));
     }
+    const claudeTxt = $('claude-model-text');
+    if (claudeTxt) {
+      claudeTxt.textContent = _mpShorten(raw, 26);
+      claudeTxt.title = raw + (o.dataset.provider ? ` (${o.dataset.provider})` : '');
+    }
     dd.classList.remove('open');
   };
   return item;
@@ -242,9 +246,8 @@ function _createPickerItem(o, sel, dd) {
 
 function renderModelPicker() {
   const sel = $('profile');
-  const btn = $('model-picker-btn');
   const dd = $('model-picker-dropdown');
-  if (!sel || !btn || !dd) return;
+  if (!sel || !dd) return;
 
   initModelPickerToggle();
 
@@ -256,6 +259,14 @@ function renderModelPicker() {
   const opts = [...sel.options].filter(o => o.value !== '');
   const localOpts = opts.filter(o => o.dataset.kind !== 'cloud');
   const cloudOpts = opts.filter(o => o.dataset.kind === 'cloud');
+
+  // Empty state fallback
+  if (localOpts.length === 0 && cloudOpts.length === 0) {
+    const emptyMsg = document.createElement('div');
+    emptyMsg.style.cssText = 'padding: 14px; font-size: 12px; color: var(--dim); text-align: center;';
+    emptyMsg.textContent = 'No models available';
+    dd.appendChild(emptyMsg);
+  }
 
   // 1. LOCAL SECTION
   if (localOpts.length > 0) {
@@ -311,6 +322,11 @@ function renderModelPicker() {
       label.textContent = _mpShorten(raw, 26);
       label.title = raw + (cur.dataset.provider ? ` (${cur.dataset.provider})` : '');
     }
+    const claudeTxt = $('claude-model-text');
+    if (claudeTxt) {
+      claudeTxt.textContent = _mpShorten(raw, 26);
+      claudeTxt.title = raw + (cur.dataset.provider ? ` (${cur.dataset.provider})` : '');
+    }
 
     const capsEl = $('model-picker-caps');
     if (capsEl) {
@@ -332,6 +348,11 @@ function renderModelPicker() {
       label.textContent = 'Select a model…';
       label.title = '';
     }
+    const claudeTxt = $('claude-model-text');
+    if (claudeTxt) {
+      claudeTxt.textContent = 'Select model';
+      claudeTxt.title = 'Select a model';
+    }
     const capsEl = $('model-picker-caps');
     if (capsEl) capsEl.innerHTML = '';
   }
@@ -340,27 +361,42 @@ function renderModelPicker() {
 function initModelPickerToggle() {
   const btn = document.getElementById('model-picker-btn');
   const dd = document.getElementById('model-picker-dropdown');
-  if (!btn || !dd) return;
-  if (btn._pickerBound) return;
-  btn._pickerBound = true;
+  if (!dd) return;
+  if (dd._pickerBound) return;
+  dd._pickerBound = true;
 
   const position = () => {
-    const r = btn.getBoundingClientRect();
-    dd.style.top = (r.bottom + 6) + 'px';
-    const targetW = Math.max(360, Math.min(r.width, 540));
+    const claudeBtn = document.getElementById('btn-claude-model');
+    const isClaude = claudeBtn && claudeBtn.offsetParent !== null;
+    const anchorBtn = isClaude ? claudeBtn : (btn && btn.offsetParent !== null ? btn : null);
+    if (!anchorBtn) return;
+    const r = anchorBtn.getBoundingClientRect();
+    const targetW = Math.max(340, Math.min(380, window.innerWidth - 32));
     dd.style.width = targetW + 'px';
-    const left = Math.min(r.left, window.innerWidth - targetW - 16);
-    dd.style.left = Math.max(8, left) + 'px';
+    if (isClaude) {
+      dd.style.top = 'auto';
+      dd.style.bottom = (window.innerHeight - r.top + 8) + 'px';
+      let left = r.right - targetW;
+      if (left < 16) left = 16;
+      if (left + targetW > window.innerWidth - 16) left = window.innerWidth - targetW - 16;
+      dd.style.left = left + 'px';
+    } else {
+      dd.style.bottom = 'auto';
+      dd.style.top = (r.bottom + 6) + 'px';
+      const left = Math.min(r.left, window.innerWidth - targetW - 16);
+      dd.style.left = Math.max(8, left) + 'px';
+    }
   };
 
-  btn.addEventListener('click', (e) => {
+  btn?.addEventListener('click', (e) => {
     e.stopPropagation();
     if (dd.classList.contains('open')) { dd.classList.remove('open'); return; }
     position();
     dd.classList.add('open');
   });
   document.addEventListener('click', (e) => {
-    if (dd.classList.contains('open') && !dd.contains(e.target) && e.target !== btn) {
+    const claudeBtn = document.getElementById('btn-claude-model');
+    if (dd.classList.contains('open') && !dd.contains(e.target) && e.target !== btn && (!claudeBtn || !claudeBtn.contains(e.target))) {
       dd.classList.remove('open');
     }
   });

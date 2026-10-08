@@ -63,15 +63,38 @@ function portOpen(port) {
   });
 }
 
+function resolveShell(sh) {
+  if (process.platform === "win32") {
+    const s = String(sh || "").toLowerCase().trim();
+    if (s === "cmd") return "cmd.exe";
+    if (s === "pwsh") return "pwsh.exe";
+    if (s === "bash") return "bash.exe";
+    if (s === "powershell" || !s) return "powershell.exe";
+    return s;
+  }
+  if (sh) {
+    const s = String(sh).toLowerCase().trim();
+    if (s === "bash") return "/bin/bash";
+    if (s === "sh") return "/bin/sh";
+    return s;
+  }
+  return undefined;
+}
+
 // Start a long-running command (a dev server) detached from this call and report once it is
 // listening (`wait_for_port`) or after `wait` seconds. The process keeps running afterwards; the
 // caller stops it with the returned pid (Windows: taskkill /PID <pid> /T /F).
-function runBackground({ command, cwd, wait_for_port, wait }) {
+function runBackground({ command, cwd, wait_for_port, wait, shell }) {
   return new Promise((resolve) => {
     let out = "";
+    const resolvedShell = resolveShell(shell);
     const child = spawn(command, {
-      cwd: cwd || undefined, shell: true, detached: true, windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"], env: buildChildEnv(process.env, activeEnvPolicy()),
+      cwd: cwd || undefined,
+      shell: resolvedShell || true,
+      detached: true,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: buildChildEnv(process.env, activeEnvPolicy()),
     });
     const grab = (d) => { out = (out + d).slice(-4000); };
     child.stdout.on("data", grab);
@@ -100,8 +123,9 @@ function runBackground({ command, cwd, wait_for_port, wait }) {
   });
 }
 
-function run({ command, cwd, timeout, background, wait_for_port, wait }) {
-  if (background) return runBackground({ command, cwd, wait_for_port, wait });
+function run({ command, cwd, timeout, background, wait_for_port, wait, shell }) {
+  if (background) return runBackground({ command, cwd, wait_for_port, wait, shell });
+  const resolvedShell = resolveShell(shell);
   return new Promise((resolve) => {
     const child = exec(
       command,
@@ -110,6 +134,7 @@ function run({ command, cwd, timeout, background, wait_for_port, wait }) {
         timeout: timeout ? timeout * 1000 : undefined,
         maxBuffer: 1024 * 1024 * 20,
         env: buildChildEnv(process.env, activeEnvPolicy()),
+        shell: resolvedShell,
       },
       (error, stdout, stderr) => {
         resolve({
@@ -122,4 +147,4 @@ function run({ command, cwd, timeout, background, wait_for_port, wait }) {
   });
 }
 
-module.exports = { run, buildChildEnv };
+module.exports = { run, buildChildEnv, resolveShell };
