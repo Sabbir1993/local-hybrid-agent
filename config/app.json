@@ -297,7 +297,9 @@
         "git log*",
         "dir *",
         "type *",
-        "grep *"
+        "grep *",
+        "powershell -NoProfile *",
+        "wmic *"
       ]
     },
     "mcp_user_allowed_packages": [

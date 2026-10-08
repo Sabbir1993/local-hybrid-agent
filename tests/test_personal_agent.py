@@ -46,7 +46,7 @@ class ShellRuleTests(unittest.TestCase):
     def test_anything_that_writes_or_starts_a_program_is_refused(self):
         for c in ("echo hi > out.txt", "dir | tee out.txt", "del x.txt", "rm -rf build", "move a b",
                   "copy a b", "mkdir x", "npm install", "pip install x",
-                  "git commit -m x", "git checkout main", "powershell -c gci", "cmd /c dir", "curl http://x",
+                  "git commit -m x", "git checkout main", "cmd /c dir", "curl http://x",
                   "reg add HKCU\\x", "Set-Content a.txt hi", "sed -i s/a/b/ f"):
             self.assertIsNotNone(personal_write_violation(c), c)
 
@@ -63,6 +63,37 @@ class ShellRuleTests(unittest.TestCase):
             self.assertIsNone(personal_write_violation(c), c)
         for c in ("format c:", "Copy-Item a b", "Remove-Item x", "Start-Process calc", "start calc"):
             self.assertIsNotNone(personal_write_violation(c), c)
+
+    def test_powershell_wrapper_is_read_only(self):
+        for c in ('powershell -NoProfile -Command "Get-Process | Sort-Object CPU -Descending | Format-Table"',
+                  'pwsh -c "Get-Service | Where-Object Status -eq Running"',
+                  "powershell -NoProfile -NonInteractive -Command Get-CimInstance Win32_OperatingSystem",
+                  "powershell -c gci", 'powershell -c "Get-Process 2>&1"',
+                  'powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk -Filter \\"DeviceID=\'C:\'\\" | '
+                  'Select-Object DeviceID, @{n=\'SizeGB\';e={[math]::Round($_.Size/1GB,2)}} | Format-List"'):
+            self.assertIsNone(personal_write_violation(c), c)
+        for c in ('powershell -c "[System.Environment]::OSVersion | Format-List"',
+                  'powershell -c "[System.Runtime.InteropServices.RuntimeInformation]::OSDescription"'):
+            self.assertIsNone(personal_write_violation(c), c)
+        for c in ('powershell -c "[Environment]::Exit(1)"', 'powershell -c "[System.Runtime.InteropServicesOperatingSystemInfoClass]::GetHostOS()"'):
+            self.assertIsNotNone(personal_write_violation(c), c)
+        for c in ('powershell -c "Set-Content a b"', "powershell -EncodedCommand AAAA", "powershell -File x.ps1",
+                  'powershell -c "Get-Process > x.txt"', "powershell -c \"[IO.File]::Delete('x')\"",
+                  'powershell -c "gci | % { ri $_ }"', 'powershell -c "Get-Process | Out-File p.txt"',
+                  'powershell -c "Get-Process; Remove-Item x"', 'powershell -c "Get-X" & del y',
+                  'powershell -c "Get-Process | ForEach-Object { $_.Kill() }"', 'powershell -c "Format-Volume -DriveLetter D"',
+                  'powershell -c "Invoke-Expression x"', 'powershell -c "powershell -c x"',
+                  "powershell -ExecutionPolicy Bypass -Command Get-Process", "powershell", "powershell -NoProfile"):
+            self.assertIsNotNone(personal_write_violation(c), c)
+
+    def test_saved_powershell_pattern_preapproves_only_read_only_powershell(self):
+        from core.shell_tools import personal_command_allowed as ok
+        pats = ["powershell -NoProfile *", "git status"]
+        self.assertTrue(ok('powershell -NoProfile -Command "Get-Process | Select-Object -First 3"', pats))
+        self.assertFalse(ok('powershell -NoProfile -Command "Set-Content a b"', pats))      # fails the read-only check
+        self.assertFalse(ok('powershell -Command "Get-Process"', pats))                     # pattern does not match
+        self.assertFalse(ok("git status", pats))                                            # not PowerShell: still asks
+        self.assertFalse(ok('powershell -NoProfile -Command "Get-Process"', ["*"]))         # "*" never counts here
 
     def test_discarding_output_is_fine_and_the_refusal_names_the_match(self):
         self.assertIsNone(personal_write_violation("tasklist 2>nul"))
@@ -226,7 +257,7 @@ class PythonWithApprovalTests(unittest.TestCase):
             self.assertIsNone(personal_write_violation(c), c)
 
     def test_shells_and_installers_are_still_refused(self):
-        for c in ("powershell -c gci", "cmd /c dir", "pip install x", "npm i", "python -c \"print(1)\" > out.txt"):
+        for c in ("powershell -c Remove-Item x", "cmd /c dir", "pip install x", "npm i", "python -c \"print(1)\" > out.txt"):
             self.assertIsNotNone(personal_write_violation(c), c)
 
     def test_run_python_always_asks_in_a_personal_run(self):

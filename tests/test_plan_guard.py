@@ -35,6 +35,38 @@ class NeedsPlan(unittest.TestCase):
     def test_bad_setting_falls_back_to_auto(self):
         self.assertEqual(pg.plan_mode_setting({"plan_required": "sometimes"}), "auto")
 
+    def test_personal_agent_has_a_higher_bar(self):
+        two_verbs = "fix the login bug and add a note"
+        self.assertTrue(pg.needs_plan("action", two_verbs, {}))
+        self.assertFalse(pg.needs_plan("action", two_verbs, {}, personal=True))
+        self.assertTrue(pg.needs_plan("action", "create a script, test it and run it", {}, personal=True))
+        self.assertFalse(pg.needs_plan("other", "x " * 150, {}, personal=True))
+        self.assertTrue(pg.needs_plan("other", "x " * 250, {}, personal=True))
+        self.assertTrue(pg.needs_plan("creation", "make me a report", {}, personal=True))
+        self.assertFalse(pg.needs_plan("creation", "make me a report", {"plan_required": "off"}, personal=True))
+
+
+class AutoPlan(unittest.TestCase):
+    def test_parse_steps(self):
+        from core.agent_loop import auto_plan as ap
+        self.assertEqual(ap.parse_steps('{"steps": ["a", "b", "c"]}'), ["a", "b", "c"])
+        self.assertEqual(ap.parse_steps('<think>x</think>```json\n{"steps": [{"text": "a"}, "b"]}\n```'), ["a", "b"])
+        self.assertEqual(ap.parse_steps("no json"), [])
+        self.assertEqual(ap.parse_steps('{"steps": ["only one"]}'), [])
+        self.assertEqual(ap.parse_steps('{"steps": "nope"}'), [])
+
+    def test_steps_are_capped(self):
+        import json
+        from core.agent_loop import auto_plan as ap
+        self.assertEqual(len(ap.parse_steps(json.dumps({"steps": [f"s{i}" for i in range(20)]}))), ap.MAX_STEPS)
+
+    def test_gate_drafts_a_plan_after_two_refusals_and_defers_softly(self):
+        src = Path("routes/agent/stream.py").read_text(encoding="utf-8")
+        self.assertIn("auto_plan.draft_steps(", src)
+        self.assertIn("plan_required_steps >= 2", src)
+        self.assertIn("deferred: '{name}' was not run", src)
+        self.assertNotIn("error: make the plan first", src)
+
 
 class Focus(unittest.TestCase):
     def test_current_item(self):

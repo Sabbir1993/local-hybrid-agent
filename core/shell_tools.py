@@ -132,22 +132,102 @@ _HARMLESS_REDIRECT_RE = re.compile(r"\d?>>?\s*(?:nul|\$null|/dev/null)(?![\w.])|
 _WMIC_WHERE_RE =re.compile(r"^\s*wmic\b.*?\bwhere\b(.*?)\bget\b", re.I)
 
 
-def personal_write_violation(cmd: str) -> Optional[str]:
-    """Why a Personal Agent may not run `cmd`, or None. Read-only inspection is what remains."""
-    cmd = cmd or ""
+# PowerShell as a read-only inspection tool: `powershell -NoProfile -Command "Get-Process | Sort-Object CPU"`.
+# The wrapper is allowed only when everything after it passes a default-deny check: every Verb-Noun cmdlet must
+# have a read-only verb, and the routes to writing without a cmdlet (.NET statics, methods, aliases, scripts,
+# call operators, encoded commands) are refused. The exact command is still shown on the approval card.
+_PS_WRAPPER_RE = re.compile(r"^\s*(?:&\s*)?(?:powershell|pwsh)(?:\.exe)?(?=\s|$)(.*)$", re.I | re.S)
+_PS_SAFE_FLAGS = frozenset({"noprofile", "nop", "noninteractive", "noni", "nologo", "nol"})
+_PS_READ_VERBS = frozenset({"get", "select", "where", "sort", "measure", "group", "format", "foreach", "compare",
+                            "test", "resolve", "split", "join", "convertto", "convertfrom"})
+_PS_READ_CMDLETS = frozenset({"out-string", "out-host", "write-output", "write-host"})
+_PS_CMDLET_RE = re.compile(r"(?<![\w$.-])([A-Za-z]+)-([A-Za-z]\w*)")
+_PS_RISKY_RE = re.compile(
+    r"::|`|&|\$\(|[\\/]\.\.[\\/]"
+    r"|\.(?:delete|kill|start|write\w*|create\w*|move\w*|copy\w*|remove\w*|set\w*|invoke\w*|save|dispose|close)\s*\("
+    r"|(?:^|[\s|;({])\.\s+\S"                                         # dot-sourcing
+    r"|\.(?:ps1|bat|cmd|exe|vbs|js|msi|dll)(?![\w])"                  # running a script / program
+    r"|(?:^|[\s|;({])(?:ri|rni|sc|ac|si|ni|cpi|mi|del|erase|rd|rm|mv|cp|kill|spps|sasv|spsv|clc|iex|icm|iwr|irm|"
+    r"saps|sal|sv|rmdir|move|copy|ren|md|mkdir)(?![\w-])"             # write aliases
+    r"|format-volume", re.I)
+
+
+# pure-computation .NET statics ([math]::Round, [datetime]::Now): no file, process or network access
+_PS_SAFE_STATIC_RE = re.compile(
+    r"\[(?:math|datetime|timespan|string|int|long|double|decimal)\]::\w+"
+    # read-only host facts: OS, machine, CPU count, uptime (not Environment.Exit / SetEnvironmentVariable)
+    r"|\[(?:system\.)?environment\]::(?:osversion|machinename|username|is64bitoperatingsystem|is64bitprocess"
+    r"|processorcount|tickcount64?|version|newline|systemdirectory)\b"
+    r"|\[(?:system\.)?runtime\.interopservices\.runtimeinformation\]::(?:osdescription|osarchitecture"
+    r"|processarchitecture|frameworkdescription)\b", re.I)
+
+
+def _write_refusal(found: str) -> str:
+    return (f"a Personal Agent cannot run this command: `{found}` is not allowed (it may not redirect output, "
+            "change files, install software or start a shell; any > or >> counts as a redirect, so filter "
+            "the output instead of comparing with >). PowerShell is allowed for read-only inspection only: "
+            "powershell -NoProfile -Command \"Get-... | Select-... | Format-...\". To save results use "
+            "write_file (it saves into your work folder); to change a file use edit_file. "
+            "Do not retry this command or run the same thing through run_python.")
+
+
+def _plain_violation(cmd: str) -> Optional[str]:
     m = _WMIC_WHERE_RE.match(cmd)
     if m:
         cmd = cmd[:m.start(1)] + " " + cmd[m.end(1):]
     cmd = _HARMLESS_REDIRECT_RE.sub(" ", cmd)
     hit = _PERSONAL_WRITE_RE.search(cmd)
+    return _write_refusal(hit.group(0).strip()) if hit else None
+
+
+def _powershell_violation(rest: str) -> Optional[str]:
+    """`rest` is everything after the powershell/pwsh word."""
+    body = rest
+    while True:
+        m = re.match(r"\s*-(\w+)\s*", body)
+        if not m:
+            break
+        flag = m.group(1).lower()
+        if flag in _PS_SAFE_FLAGS:
+            body = body[m.end():]
+            continue
+        if flag in ("command", "c"):
+            body = body[m.end():]
+            break
+        return _write_refusal(f"powershell -{m.group(1)}")
+    body = body.strip()
+    if not body:
+        return _write_refusal("powershell without a -Command")
+    body = _HARMLESS_REDIRECT_RE.sub(" ", body)
+    hit = _PS_RISKY_RE.search(_PS_SAFE_STATIC_RE.sub(" ", body))
     if hit:
-        found = hit.group(0).strip()
-        return (f"a Personal Agent cannot run this command: `{found}` is not allowed (it may not redirect output, "
-                "change files, install software or start a shell; any > or >> counts as a redirect, so filter "
-                "the output instead of comparing with >). To save results use "
-                "write_file (it saves into your work folder); to change a file use edit_file. "
-                "Do not retry this command or run the same thing through run_python.")
-    return None
+        return _write_refusal(hit.group(0).strip())
+    for verb, noun in _PS_CMDLET_RE.findall(body):
+        name = f"{verb}-{noun}".lower()
+        if verb.lower() not in _PS_READ_VERBS and name not in _PS_READ_CMDLETS:
+            return _write_refusal(f"{verb}-{noun}")
+    # quotes off so a program name right behind one ("powershell ...", 'cmd /c') still starts a word
+    return _plain_violation(body.replace('"', " ").replace("'", " "))
+
+
+def personal_command_allowed(cmd: str, patterns: list) -> bool:
+    """A Personal Agent asks for every command, except read-only PowerShell the user saved an allow pattern for
+    (e.g. `powershell -NoProfile *`). Only patterns that start with powershell/pwsh count, and the command must
+    pass the read-only check; that check, not is_compound, is what makes the pipes and `;` in it safe."""
+    c = (cmd or "").strip().lower()
+    if not _PS_WRAPPER_RE.match(c) or personal_write_violation(cmd):
+        return False
+    pats = [str(p).strip().lower() for p in patterns or []]
+    return any(fnmatch.fnmatch(c, p) for p in pats if p.startswith(("powershell", "pwsh")))
+
+
+def personal_write_violation(cmd: str) -> Optional[str]:
+    """Why a Personal Agent may not run `cmd`, or None. Read-only inspection is what remains."""
+    cmd = cmd or ""
+    ps = _PS_WRAPPER_RE.match(cmd)
+    if ps:
+        return _powershell_violation(ps.group(1))
+    return _plain_violation(cmd)
 
 
 def _sanity(cmd: str) -> Optional[str]:

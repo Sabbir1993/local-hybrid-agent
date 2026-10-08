@@ -20,8 +20,10 @@ def plan_mode_setting(cfg: dict) -> str:
     return v if v in ("auto", "always", "off") else "auto"
 
 
-def needs_plan(category: str, query: str, agent_cfg: dict = None) -> bool:
-    """Should this request start with a todo list? auto: creation requests, several action verbs, or a long request."""
+def needs_plan(category: str, query: str, agent_cfg: dict = None, personal: bool = False) -> bool:
+    """Should this request start with a todo list? auto: creation requests, several action verbs, or a long request.
+    A Personal Agent (small model, read-only inspection and reports) needs a higher bar: three verbs or a request
+    twice as long, so "check my disk and tell me what is big" is not turned into a planning exercise."""
     mode = plan_mode_setting(agent_cfg)
     if mode == "off" or category == "greeting":
         return False
@@ -30,9 +32,10 @@ def needs_plan(category: str, query: str, agent_cfg: dict = None) -> bool:
     q = (query or "").strip()
     if category == "creation":
         return True
-    if category == "question" and len(q) < LONG_REQUEST_CHARS:
+    long_chars = LONG_REQUEST_CHARS * (2 if personal else 1)
+    if category == "question" and len(q) < long_chars:
         return False
-    return len(q) >= LONG_REQUEST_CHARS or len({m.lower() for m in _ACTION_RX.findall(q)}) >= 2
+    return len(q) >= long_chars or len({m.lower() for m in _ACTION_RX.findall(q)}) >= (3 if personal else 2)
 
 
 def open_items(items: list) -> list:

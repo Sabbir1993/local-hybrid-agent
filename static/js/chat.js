@@ -74,7 +74,8 @@ function renderAll() {
 }
 
 function onThinkSummaryClick(idx, ev) {
-  const details = ev.currentTarget.closest('details');
+  const target = ev ? (ev.target || ev.currentTarget) : null;
+  const details = target ? target.closest('details') : document.querySelector(`details[data-think-idx="${idx}"]`);
   if (details && messages[idx]) {
     messages[idx]._thinkOpen = !details.open;
   }
@@ -91,21 +92,50 @@ window.onToggleThink = onToggleThink;
 // Tool / step cards are <details> rebuilt on every streaming render, which closed a card the moment the user
 // opened it. A click on a card head is remembered on the message (by card position) and re-applied in renderLast.
 function _cardDetails(bubble) {
+  if (!bubble) return [];
   return Array.from(bubble.querySelectorAll('details')).filter(d => !d.classList.contains('think'));
 }
+function _syncCardStatesFromDom(container, m) {
+  if (!container || !m) return;
+  m._cardOpen = m._cardOpen || {};
+  const cards = _cardDetails(container);
+  cards.forEach((d, idx) => {
+    const key = d.dataset.cardId;
+    if (key) m._cardOpen[key] = d.open;
+    m._cardOpen[idx] = d.open;
+  });
+}
 function _rememberCardOpen(details, isOpen) {
+  if (!details) return;
   const bubble = details.closest('#chat-inner > *');
   if (!bubble) return;
   const m = messages[Array.prototype.indexOf.call(bubble.parentElement.children, bubble)];
-  const i = _cardDetails(bubble).indexOf(details);
-  if (!m || i < 0) return;
-  (m._cardOpen = m._cardOpen || {})[i] = isOpen;
+  if (!m) return;
+  m._cardOpen = m._cardOpen || {};
+  const cardId = details.dataset.cardId;
+  if (cardId) {
+    m._cardOpen[cardId] = isOpen;
+  }
+  const cards = _cardDetails(bubble);
+  const idx = cards.indexOf(details);
+  if (idx >= 0) {
+    m._cardOpen[idx] = isOpen;
+  }
 }
 window._rememberCardOpen = _rememberCardOpen;
+
+document.addEventListener('toggle', e => {
+  const d = e.target;
+  if (d && d.tagName === 'DETAILS' && !d.classList.contains('think')) {
+    _rememberCardOpen(d, d.open);
+  }
+}, true);
+
 document.addEventListener('click', e => {
+  if (e.target && e.target.closest && e.target.closest('button, a, input')) return;
   const sum = e.target.closest && e.target.closest('#chat-inner details > summary');
   const d = sum && sum.parentElement;
-  if (d && !d.classList.contains('think')) _rememberCardOpen(d, !d.open);   // capture phase: before the toggle
+  if (d && !d.classList.contains('think')) _rememberCardOpen(d, !d.open);
 }, true);
 
 // While a mouse button is held inside the chat (dragging a scrollbar, selecting
@@ -118,7 +148,7 @@ function _releaseChatPointer() {
   _chatPointerHeld = false;
   if (_renderLastPending) {
     _renderLastPending = false;
-    renderLast();
+    setTimeout(renderLast, 30);
   }
 }
 document.addEventListener('pointerdown', e => {
@@ -221,16 +251,21 @@ function renderLast() {
     // every SSE chunk - that is what made tool output lag and reflow under load.
     const existingActs = lastEl.querySelector('.agy-agent-container');
     if (generating && existingActs && m.acts && m.acts.length) {
+      _syncCardStatesFromDom(existingActs, m);
       const actScroll = Array.from(existingActs.querySelectorAll(SCROLLERS)).map(el => ({
         top: el.scrollTop,
         atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 15,
       }));
       const actsTemp = document.createElement('div');
-      actsTemp.innerHTML = agentActsHtml(m.acts, true);
+      actsTemp.innerHTML = agentActsHtml(m.acts, true, m);
       const newActs = actsTemp.firstElementChild;
       if (newActs) {
         if (m._cardOpen) {
-          _cardDetails(newActs).forEach((d, i) => { if (m._cardOpen[i] !== undefined) d.open = m._cardOpen[i]; });
+          _cardDetails(newActs).forEach((d, i) => {
+            const key = d.dataset.cardId;
+            if (key && m._cardOpen[key] !== undefined) d.open = m._cardOpen[key];
+            else if (m._cardOpen[i] !== undefined) d.open = m._cardOpen[i];
+          });
         }
         newActs.querySelectorAll(SCROLLERS).forEach((el, i) => {
           const p = actScroll[i];
@@ -253,7 +288,11 @@ function renderLast() {
       inner.replaceChild(newEl, lastEl);
       // tool cards the user opened / closed by hand keep that choice across streaming re-renders
       if (m._cardOpen) {
-        _cardDetails(newEl).forEach((d, i) => { if (m._cardOpen[i] !== undefined) d.open = m._cardOpen[i]; });
+        _cardDetails(newEl).forEach((d, i) => {
+          const key = d.dataset.cardId;
+          if (key && m._cardOpen[key] !== undefined) d.open = m._cardOpen[key];
+          else if (m._cardOpen[i] !== undefined) d.open = m._cardOpen[i];
+        });
       }
       newEl.querySelectorAll(SCROLLERS).forEach((el, i) => {
         const p = prevScroll[i];
@@ -521,7 +560,7 @@ function bubbleHtml(m, idx) {
 
   // Render collapsible Antigravity agent action items & tool calls (if present in message)
   if (m.acts && m.acts.length) {
-    inner += agentActsHtml(m.acts, generating && idx === messages.length - 1);
+    inner += agentActsHtml(m.acts, generating && idx === messages.length - 1, m);
   }
 
   const isLast = idx === messages.length - 1;

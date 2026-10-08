@@ -181,7 +181,7 @@ function toggleAllCodex(btn) {
 const toggleAllSteps = toggleAllCodex;
 
 function copyCodexCode(btn) {
-  const container = btn.closest('.codex-action-body') || btn.closest('.codex-thought-card') || btn.parentElement;
+  const container = btn.closest('.codex-action-body') || btn.closest('.codex-cmd-body') || btn.closest('.codex-thought-card') || btn.parentElement;
   if (!container) return;
   let target = btn.parentElement ? btn.parentElement.nextElementSibling : null;
   if (!target || target.tagName !== 'PRE') {
@@ -404,10 +404,19 @@ function buildChronologicalStream(acts) {
   return stream;
 }
 
-function renderThoughtCard(item, isRunning) {
+function getCardKey(item, idx) {
+  if (item.type === 'thought') {
+    return 'thought-' + (item.step != null ? item.step : idx);
+  }
+  return item.id ? ('tool-' + item.id) : ('tool-' + (item.name || 'act') + '-' + idx);
+}
+
+function renderThoughtCard(item, isRunning, isOpen = false, cardKey = '', idx = 0) {
   const duration = item.duration_s ? Math.max(1, Math.round(item.duration_s)) : 2;
   const title = isRunning ? `Thinking (${duration}s)...` : `Thought for ${duration}s`;
-  return `<details class="codex-thought-card">
+  const openAttr = isOpen ? ' open' : '';
+  const keyAttr = cardKey ? ` data-card-id="${esc(cardKey)}" data-card-idx="${idx}"` : '';
+  return `<details class="codex-thought-card"${openAttr}${keyAttr}>
     <summary class="codex-thought-head">
       <span class="agy-tool-badge memory"><span class="agy-badge-icon">🧠</span></span>
       <span class="codex-thought-title">${esc(title)}</span>
@@ -419,37 +428,64 @@ function renderThoughtCard(item, isRunning) {
   </details>`;
 }
 
-function renderCommandCard(t, isItemRunning) {
+function renderCommandCard(t, isItemRunning, isOpen = true, cardKey = '', idx = 0) {
   const isRunning = t.result === null;
+  const isPython = t.name === 'run_python';
   let fullCmd = '';
-  if (t.name === 'run_python') {
+  if (isPython) {
     fullCmd = (t.args.code || t.args.command || (t.args.file ? `python ${t.args.file}` : '')).trim();
   } else {
     fullCmd = (t.args.command || t.args.cmd || t.args.code || '').trim();
   }
-  const shortCmd = fullCmd.split('\n')[0] || t.name;
+  const lines = fullCmd ? fullCmd.split('\n') : [];
+  const shortCmd = lines[0] || t.name;
   const preview = shortCmd.length > 60 ? shortCmd.slice(0, 58) + '…' : shortCmd;
-  const verb = isRunning ? 'Running command' : 'Ran command';
+  const verb = isRunning
+    ? (isPython ? 'Running Python' : 'Running command')
+    : (isPython ? 'Ran Python' : 'Ran command');
+  const badgeIcon = isPython ? '🐍' : '&gt;_';
+  const badgeCls = isPython ? 'run' : 'run';
 
   const statusChip = isRunning
-    ? '<span class="agy-spinner" title="Executing command..."></span>'
+    ? '<span class="agy-spinner" title="Executing..."></span>'
     : (t.ok
-      ? '<span class="agy-status-chip done" title="Success"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg></span>'
-      : '<span class="agy-status-chip err" title="Command failed"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM4.97 4.97a.75.75 0 0 1 1.06 0L8 6.94l1.97-1.97a.75.75 0 1 1 1.06 1.06L9.06 8l1.97 1.97a.75.75 0 1 1-1.06 1.06L8 9.06l-1.97 1.97a.75.75 0 0 1-1.06-1.06L6.94 8 4.97 6.03a.75.75 0 0 1 0-1.06Z"/></svg></span>');
+      ? '<span class="agy-status-chip done" title="Success"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 1.06 0l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg></span>'
+      : '<span class="agy-status-chip err" title="Execution failed"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM4.97 4.97a.75.75 0 0 1 1.06 0L8 6.94l1.97-1.97a.75.75 0 1 1 1.06 1.06L9.06 8l1.97 1.97a.75.75 0 1 1-1.06 1.06L8 9.06l-1.97 1.97a.75.75 0 0 1-1.06-1.06L6.94 8 4.97 6.03a.75.75 0 0 1 0-1.06Z"/></svg></span>');
 
-  return `<details class="codex-cmd-card" open>
+  const openAttr = (isOpen !== false) ? ' open' : '';
+  const keyAttr = cardKey ? ` data-card-id="${esc(cardKey)}" data-card-idx="${idx}"` : '';
+  const lineCountBadge = (isPython && lines.length > 1) ? `<span class="agy-step-lines">${lines.length} lines</span>` : '';
+
+  let bodyContent = '';
+  if (isPython) {
+    bodyContent = `
+      <div class="codex-cmd-out-label" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>PYTHON SCRIPT</span>
+        <button type="button" class="btn ghost codex-head-btn" data-click="copy-codex-code" style="font-size:10px; padding:2px 8px;">Copy</button>
+      </div>
+      <pre class="agy-detail-code codex-code-block" style="margin:0 0 6px; max-height:280px; overflow-y:auto; border-radius:0;"><code>${(typeof hlCode === 'function') ? hlCode(fullCmd, 'python') : esc(fullCmd)}</code></pre>
+    `;
+  } else {
+    bodyContent = `<div class="codex-cmd-prompt"><span class="codex-prompt-sym">$</span> ${esc(fullCmd || shortCmd)}</div>`;
+  }
+
+  return `<details class="codex-cmd-card"${openAttr}${keyAttr}>
     <summary class="codex-cmd-head">
-      <span class="agy-tool-badge run"><span class="agy-badge-icon">&gt;_</span></span>
+      <span class="agy-tool-badge ${badgeCls}"><span class="agy-badge-icon">${badgeIcon}</span></span>
       <span class="codex-cmd-title">${verb} <code class="agy-target-code">${esc(preview)}</code></span>
+      ${lineCountBadge}
       <span class="agy-step-spacer"></span>
       ${statusChip}
       <svg class="agy-chevron" viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" fill-rule="evenodd" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>
     </summary>
     <div class="codex-cmd-body">
-      <div class="codex-cmd-prompt"><span class="codex-prompt-sym">$</span> ${esc(fullCmd || shortCmd)}</div>
+      ${bodyContent}
       ${!isRunning ? `
-        <div class="codex-cmd-out-label">OUTPUT</div>
-        <pre class="codex-cmd-terminal"><code>${esc(t.result != null ? String(t.result).trim() : '(no output)')}</code></pre>
+        <div class="codex-cmd-out-label" style="display:flex; justify-content:space-between; align-items:center;">
+          <span>OUTPUT</span>
+          ${t.result ? '<button type="button" class="btn ghost codex-head-btn" data-click="copy-codex-code" style="font-size:10px; padding:2px 8px;">Copy</button>' : ''}
+        </div>
+        <pre class="codex-cmd-terminal codex-result-block"${!t.ok ? ' style="color:var(--red);"' : ''}><code>${esc(t.result != null ? String(t.result).trim() : '(no output)')}</code></pre>
       ` : `
         <div class="codex-cmd-running"><span class="agy-spinner" style="width:12px; height:12px;"></span> Executing...</div>
       `}
@@ -457,7 +493,7 @@ function renderCommandCard(t, isItemRunning) {
   </details>`;
 }
 
-function renderFileCard(t, isItemRunning) {
+function renderFileCard(t, isItemRunning, isOpen = null, cardKey = '', idx = 0) {
   const p = t.args.path || t.args.file || t.args.filename || '';
   const filename = p ? p.split(/[\\/]/).pop() : 'file';
   const diff = (t.diff && ['write_file', 'edit_file', 'append_file', 'insert_at_line'].includes(t.name)) ? t.diff : null;
@@ -487,8 +523,9 @@ function renderFileCard(t, isItemRunning) {
       : '<span class="agy-status-chip err" title="File operation failed"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM4.97 4.97a.75.75 0 0 1 1.06 0L8 6.94l1.97-1.97a.75.75 0 1 1 1.06 1.06L9.06 8l1.97 1.97a.75.75 0 1 1-1.06 1.06L8 9.06l-1.97 1.97a.75.75 0 0 1-1.06-1.06L6.94 8 4.97 6.03a.75.75 0 0 1 0-1.06Z"/></svg></span>');
 
   const openByDefault = !isRunning;
-
-  return `<details class="codex-file-card"${openByDefault ? ' open' : ''}>
+  const openAttr = (isOpen !== null ? isOpen : openByDefault) ? ' open' : '';
+  const keyAttr = cardKey ? ` data-card-id="${esc(cardKey)}" data-card-idx="${idx}"` : '';
+  return `<details class="codex-file-card"${openAttr}${keyAttr}>
     <summary class="codex-file-head">
       <span class="agy-tool-badge ${badgeCls}"><span class="agy-badge-icon">${icon}</span></span>
       <span class="codex-file-title">${verb} <code class="agy-target-code">${esc(filename)}</code></span>
@@ -509,7 +546,7 @@ function renderFileCard(t, isItemRunning) {
   </details>`;
 }
 
-function renderGenericToolCard(t, isItemRunning) {
+function renderGenericToolCard(t, isItemRunning, isOpen = false, cardKey = '', idx = 0) {
   const meta = toolMeta(t.name);
   const isRunning = t.result === null;
   const p = t.args.path || t.args.file || t.args.filename || '';
@@ -541,7 +578,9 @@ function renderGenericToolCard(t, isItemRunning) {
       ? '<span class="agy-status-chip done" title="Success"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 1.06 0l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg></span>'
       : '<span class="agy-status-chip err" title="Tool error"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM4.97 4.97a.75.75 0 0 1 1.06 0L8 6.94l1.97-1.97a.75.75 0 1 1 1.06 1.06L9.06 8l1.97 1.97a.75.75 0 1 1-1.06 1.06L8 9.06l-1.97 1.97a.75.75 0 0 1-1.06-1.06L6.94 8 4.97 6.03a.75.75 0 0 1 0-1.06Z"/></svg></span>');
 
-  return `<details class="codex-action-card">
+  const openAttr = isOpen ? ' open' : '';
+  const keyAttr = cardKey ? ` data-card-id="${esc(cardKey)}" data-card-idx="${idx}"` : '';
+  return `<details class="codex-action-card"${openAttr}${keyAttr}>
     <summary class="codex-action-head">
       <span class="agy-tool-badge ${meta.cls || 'default'}"><span class="agy-badge-icon">${meta.icon}</span></span>
       <span class="codex-action-title"><b>${verb}</b>${displayTarget ? ` <code class="agy-target-code">${displayTarget}</code>` : ''}</span>
@@ -593,7 +632,7 @@ function mediaProgressHtml(pr) {
 
 // live: this message is the run still streaming. Anything else (a finished or reloaded message) cannot have a tool
 // still executing, so a call with no result is shown as interrupted instead of "Executing..." forever.
-function agentActsHtml(acts, live = true) {
+function agentActsHtml(acts, live = true, msg = null) {
   if (!acts || !acts.length) return '';
   const stream = buildChronologicalStream(acts);
   if (!stream.length) return '';
@@ -615,20 +654,29 @@ function agentActsHtml(acts, live = true) {
     </div>`;
   }
 
+  const cardOpenMap = (msg && msg._cardOpen) ? msg._cardOpen : null;
+
   stream.forEach((item, idx) => {
     const isLast = idx === stream.length - 1;
     const isItemRunning = !isAllDone && isLast;
+    const cardKey = getCardKey(item, idx);
+    let cardOpen = null;
+    if (cardOpenMap) {
+      if (cardOpenMap[cardKey] !== undefined) cardOpen = cardOpenMap[cardKey];
+      else if (cardOpenMap[idx] !== undefined) cardOpen = cardOpenMap[idx];
+    }
+
     if (item.type === 'thought') {
-      h += renderThoughtCard(item, isItemRunning);
+      h += renderThoughtCard(item, isItemRunning, cardOpen !== null ? cardOpen : false, cardKey, idx);
     } else if (item.type === 'tool') {
       const isCmd = ['run_python', 'run_command', 'shell', 'exec', 'terminal'].includes(item.name);
       const isFile = ['edit_file', 'write_file', 'append_file', 'insert_at_line'].includes(item.name);
       if (isCmd) {
-        h += renderCommandCard(item, isItemRunning);
+        h += renderCommandCard(item, isItemRunning, cardOpen !== null ? cardOpen : true, cardKey, idx);
       } else if (isFile) {
-        h += renderFileCard(item, isItemRunning);
+        h += renderFileCard(item, isItemRunning, cardOpen, cardKey, idx);
       } else {
-        h += renderGenericToolCard(item, isItemRunning);
+        h += renderGenericToolCard(item, isItemRunning, cardOpen !== null ? cardOpen : false, cardKey, idx);
       }
     }
   });

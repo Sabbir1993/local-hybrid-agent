@@ -72,6 +72,7 @@ const CLICK_ACTIONS = {
   'new-project': () => document.getElementById('btn-newproject').click(),
   'hud-close': () => setLiveHud(null),
   'code-copy': (el) => copyCodeBlock(el),
+  'copy-codex-code': (el) => (typeof copyCodexCode === 'function' ? copyCodexCode(el) : null),
   'code-preview': (el) => previewCodeBlock(el),
   'mermaid-fullscreen': (el) => openFilePreview('diagram.mermaid', 'Mermaid Diagram',
     el.closest('.mermaid-box').querySelector('.mermaid-code-raw').textContent),

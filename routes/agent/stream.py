@@ -62,7 +62,7 @@ from core.request_context import set_device_approved
 from core.agent_loop.narration import _is_narration
 from core.agent_loop.executor_view import build_executor_view
 from core.agent_loop.finish import apply_finish, without_finish
-from core.agent_loop import plan_guard, script_nudge
+from core.agent_loop import plan_guard, script_nudge, auto_plan
 from core.agent_loop import loop_guard as _lg
 from core.tool_args import shell_command
 from core.agent_loop.tool_output import cap_tool_result, cap_from_config
@@ -467,8 +467,10 @@ async def run_agent_stream(req, user, ctx):
         # plan discipline (core/agent_loop/plan_guard.py): plan first on any multi-step job, then one
         # step at a time; finishing is blocked while steps are open
         _agent_cfg = APP_CONFIG.get("agent") or {}
-        plan_required = bool(req.session_id and not req.plan
-                             and plan_guard.needs_plan(q_category, last_query, _agent_cfg)
+        # a custom agent whose tool list leaves out the plan tools can neither write nor tick a plan: no gate for it
+        _plan_tools_ok = not custom_agent_tools or {"create_plan", "update_plan_item"} <= set(custom_agent_tools)
+        plan_required = bool(req.session_id and not req.plan and _plan_tools_ok
+                             and plan_guard.needs_plan(q_category, last_query, _agent_cfg, personal=personal)
                              and not plan_guard.open_items(db_get_plan_items(req.session_id)))
         plan_required_steps = 0     # steps spent asking for the plan (gives up after 2, never stalls)
         py_calls = 0                        # run_python scripts so far (each one needs the user's approval)
@@ -761,6 +763,28 @@ async def run_agent_stream(req, user, ctx):
                 # 3 tries so a model that cannot plan never stalls the run).
                 plan_gate = bool(plan_required and plan_required_steps < 3
                                  and not plan_guard.open_items(db_get_plan_items(req.session_id)))
+                if plan_gate and plan_required_steps >= 2:
+                    # two refusals and the model still will not plan: draft the steps for it (one short local
+                    # JSON-only call) and store them like a create_plan call, instead of a third refusal
+                    # and a run with no plan at all
+                    _steps = await auto_plan.draft_steps(last_query, user.id)
+                    if _steps:
+                        _pid, _pargs = f"auto_plan_{step}", {"items": _steps}
+                        yield sse("tool_call", {'id': _pid, 'name': "create_plan", 'args': _pargs})
+                        try:
+                            from core.agent_tools.plans import tool_create_plan
+                            _pres = tool_create_plan(_pargs)
+                            _pok = True
+                        except Exception as _pe:
+                            _pres, _pok = f"error: could not store the drafted plan ({_pe})", False
+                        yield _tool_result({'id': _pid, 'name': "create_plan", 'ok': _pok, 'result': _pres})
+                        if _pok:
+                            actions_taken.append({"name": "create_plan", "args": _pargs, "ok": True, "result": _pres})
+                            msgs.append({"role": "user", "content": (
+                                "[plan drafted for you] " + _pres + "\nWork on step #1 now; mark each step done "
+                                "with update_plan_item before starting the next.")})
+                            yield sse("plan", {'items': db_get_plan_items(req.session_id)})
+                            plan_gate = False
                 if plan_gate:
                     plan_required_steps += 1
                     tools_for_lane = [t for t in tools_for_lane if t.get("function", {}).get("name")
@@ -1355,7 +1379,8 @@ async def run_agent_stream(req, user, ctx):
                         continue
 
                     if plan_gate and name not in PLAN_MODE_TOOLS:
-                        result = "error: make the plan first - call create_plan with the steps, then do them one at a time."
+                        result = (f"deferred: '{name}' was not run. Call create_plan now with 3-12 short steps as your "
+                                  "only action, then do the steps one at a time.")
                         yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
                         actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
@@ -1466,9 +1491,14 @@ async def run_agent_stream(req, user, ctx):
                         # plus this user's own additional allows (independent of project)
                         user_pats = [] if personal else [str(p).strip().lower() for p in auth_db.get_user_allow_patterns(user.id)]
                         pats.extend(user_pats)
+                        _ps_saved = False
                         if personal:
-                            pats = []     # a Personal Agent asks for every command, whatever was saved elsewhere
-                        if (cfg.get("ask_first", True) or personal) and not command_allowed(cmd, pats):
+                            # a Personal Agent asks for every command, whatever was saved elsewhere - except
+                            # read-only PowerShell the admin allow-listed (core.shell_tools.personal_command_allowed)
+                            from core.shell_tools import personal_command_allowed
+                            _ps_saved = personal_command_allowed(cmd, cfg.get("allow_patterns") or [])
+                            pats = []
+                        if (cfg.get("ask_first", True) or personal) and not _ps_saved and not command_allowed(cmd, pats):
                             import uuid as _uuid
                             preq_id = _uuid.uuid4().hex[:12]
                             ev = asyncio.Event()
