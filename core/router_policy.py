@@ -96,10 +96,17 @@ def _has_any(text: str, words) -> bool:
     return any(str(w).lower() in t for w in (words or []) if str(w))
 
 
+_GREETING_RX = re.compile(r"^(hi|hello|hey|good (morning|afternoon|evening))( there)?"
+                          r"( how are you( doing)?( today)?| how's it going| how is it going)?$")
+
+
 def is_greeting(query: str, cfg: dict = None) -> bool:
     cfg = cfg or rcfg()
-    q = (query or "").strip().lower()
-    return q in {str(g).lower() for g in cfg["greetings"]} or (len(q) <= 3 and not q.startswith("/"))
+    raw = (query or "").strip().lower()
+    # speech-to-text adds punctuation ("Hello." / "Hi, how are you?"): compare the words, not the marks
+    q = re.sub(r"\s+", " ", re.sub(r"[.,!?;:]+", " ", raw)).strip() if not raw.startswith("/") else raw
+    return (q in {str(g).lower() for g in cfg["greetings"]} or raw in {str(g).lower() for g in cfg["greetings"]}
+            or bool(_GREETING_RX.match(q)) or (len(q) <= 3 and not q.startswith("/")))
 
 
 CONTINUATION_PHRASES = (

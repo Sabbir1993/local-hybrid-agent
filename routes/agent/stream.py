@@ -62,6 +62,7 @@ from core.request_context import set_device_approved
 from core.agent_loop.narration import _is_narration
 from core.agent_loop.executor_view import build_executor_view
 from core.agent_loop.finish import apply_finish, without_finish
+from core import voice_policy
 from core.agent_loop import plan_guard, script_nudge, auto_plan
 from core.agent_loop import loop_guard as _lg
 from core.tool_args import shell_command
@@ -423,7 +424,7 @@ async def run_agent_stream(req, user, ctx):
                 _drain = DrainResult()
                 async for chunk in drain_llm_stream(
                         direct_stream, user,
-                        StreamSpec(step=1, model_display=model_info["display"],
+                        StreamSpec(sentence_release=voice_policy.sentence_release(req), step=1, model_display=model_info["display"],
                                    audit_label="agent/direct", collect=[],
                                    forward_preparing=False,
                                    fallback_payload=_local_model_info('main' if (use_cloud_main or main_ready) else 'executor')),
@@ -907,7 +908,7 @@ async def run_agent_stream(req, user, ctx):
                     _drain = DrainResult()
                     async for chunk in drain_llm_stream(
                             lane_stream, user,
-                            StreamSpec(step=step + 1, model_display=model_info["display"],
+                            StreamSpec(sentence_release=voice_policy.sentence_release(req), step=step + 1, model_display=model_info["display"],
                                        audit_label=f"agent/{lane_name}", collect=streamed_content,
                                        fallback_payload=_local_model_info(lane_name)),
                             model_info, getattr(active_client, "is_cloud", False), _drain):
@@ -1061,7 +1062,7 @@ async def run_agent_stream(req, user, ctx):
                         _drain = DrainResult()
                         async for chunk in drain_llm_stream(
                                 esc_stream, user,
-                                StreamSpec(step=step + 1, model_display=model_info["display"],
+                                StreamSpec(sentence_release=voice_policy.sentence_release(req), step=step + 1, model_display=model_info["display"],
                                            audit_label="agent/main-escalated",
                                            collect=streamed_content,
                                            adopt_fallback_model=False,

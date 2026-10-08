@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/static/css/style.css?v=5.15">
 <link rel="stylesheet" href="/static/css/lanes.css?v=1.2">
 <link rel="stylesheet" href="/static/css/media.css?v=1.2">
+<link rel="stylesheet" href="/static/css/voice.css?v=1.1">
 <link rel="icon" href="/static/logo/logo.jpg">
 </head>
 <body>
@@ -214,6 +215,7 @@
               <option value="image">🖼 Image</option>
             </select>
             <button id="btn-mic" class="comp-tool comp-mic-btn" type="button" hidden title="Dictate" aria-label="Dictate" aria-pressed="false">🎤</button>
+            <button id="btn-voice" class="comp-tool comp-voice-btn" type="button" hidden title="Talk with the agent by voice (hands-free)" aria-label="Talk with the agent by voice" aria-pressed="false">🗣</button>
             <button id="btn-answer-check" class="comp-tool comp-ac-btn" type="button" title="Answer check: a second model double-checks each reply. Now: Off. Click to switch (Off → Check after → Check before showing)" aria-label="Answer check: off" aria-pressed="false">🛡</button>
             <button id="btn-send" class="comp-btn comp-send-btn" title="Send prompt (Enter)" aria-label="Send prompt">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
@@ -894,6 +896,8 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/dnd.js?v=1.0"></script>
 <script src="/static/js/agent-cmd.js?v=4.1"></script>
 <script src="/static/js/media.js?v=1.9"></script>
+<script src="/static/js/voice-core.js?v=1.1"></script>
+<script src="/static/js/voice.js?v=1.1"></script>
 <script src="/static/js/agent-acts.js?v=3.6"></script>
 <script src="/static/js/history-clip.js?v=1.0"></script>
 <script src="/static/js/agent-run.js?v=3.19"></script>

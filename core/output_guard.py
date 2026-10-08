@@ -23,6 +23,7 @@ DEFAULT_REPLACEMENT = "█████"
 _MAX_HOLD = 400          # never hold back more than this many chars
 _MAX_PENDING = 50_000    # safety valve for pathologically long pending matches
 _TRAILING_NUM_RX = re.compile(r"[\d -]{1,40}$")
+_SENTENCE_END_RX = re.compile(r"[.!?।॥][\"')\]]*\s|\n")      # . ! ? or the Bengali danda, then a space; or a line end
 
 
 def guard_cfg() -> dict:
@@ -122,7 +123,10 @@ class OutputRedactor:
     redacted in full before any of its characters are ever sent to the client.
     When no rules are active, feed() is a zero-overhead pass-through."""
 
-    def __init__(self, user, any_cloud_lane: bool):
+    def __init__(self, user, any_cloud_lane: bool, sentence_release: bool = False):
+        # sentence_release (spoken answers, core/voice_policy.py): a finished sentence is let through at once
+        # instead of waiting for the rolling holdback, so speech can start with the first sentence
+        self.sentence_release = bool(sentence_release)
         self.rules = _active_rules(user, any_cloud_lane)
         admin = [r for r in self.rules if not r.get("builtin")]
         self.pan = any(r.get("builtin") == "pan" for r in self.rules)
@@ -165,11 +169,9 @@ class OutputRedactor:
             m = _TRAILING_NUM_RX.search(self.buf)
             hold = max(hold, len(m.group(0)) if m else 0)
         limit = len(self.buf) - hold
-        if limit <= 0:
-            return 0
         if limit > _MAX_PENDING:      # safety valve: never buffer unbounded
             return len(self.buf) - self.hold
-        cut = limit
+        cut = max(limit, 0)
         for rule in self.rules:
             for rx, _ in rule["patterns"]:
                 for m in rx.finditer(self.buf):
@@ -178,6 +180,21 @@ class OutputRedactor:
                         # so nothing from its start on may be emitted yet
                         cut = min(cut, m.start())
                         break     # finditer is ordered; later matches start later
+        if self.sentence_release:
+            cut = max(cut, self._sentence_cut())
+        return cut
+
+    def _sentence_cut(self) -> int:
+        """End of the last finished sentence in buf, pulled back to the start of any match that straddles it."""
+        ends = [m.end() for m in _SENTENCE_END_RX.finditer(self.buf)]
+        if not ends:
+            return 0
+        cut = ends[-1]
+        for rule in self.rules:
+            for rx, _ in rule["patterns"]:
+                for m in rx.finditer(self.buf):
+                    if m.start() < cut < m.end():
+                        cut = m.start()
         return cut
 
     def _drain(self) -> str:

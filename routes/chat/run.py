@@ -87,7 +87,9 @@ WEB_AFTER_KB_BLOCK = (" The user has web search turned on, so you may search the
 @router.post("/chat/run")
 async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_user)):
     from core.agent_tools import set_current_user
+    from core import voice_policy
     set_current_user(user.id)
+    voice_policy.apply(req)     # a spoken turn: no hidden reasoning, short answer, no answer-check rewrite
     cloud_main = cloud.cloud_lane("main", user.id)
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
     if not main_ready and not cloud_main:
@@ -151,7 +153,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # reused below for the tool loop (same inputs, same answer).
     wants_file = wants_file_output(last_query) or file_followup == "edit"
     has_file = bool(file_followup or wants_file)
-    web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs))
+    web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
+                                                            explicit_only=voice_policy.web_explicit_only(req)))
     has_web = False   # decided after the KB lookup (core/kb_coverage.py): the web fills what the KB cannot
 
     # Tools for Chat Mode: write_file always (core), the rest on intent.
@@ -231,6 +234,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if mcp_prompt:
         sys_parts.append(mcp_prompt)
         sys_labels.append("mcp")
+    if req.voice:
+        from core.voice_prompt import VOICE_RULES
+        sys_parts.append(VOICE_RULES)
+        sys_labels.append("voice")
 
     deep = bool(req.deep_mode)
     # How much the model reasons: the composer's effort level, independent of
@@ -249,7 +256,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     cov_hits = []
     from core.knowledge_router import kb_routing_query
     kb_query = kb_routing_query(msgs, last_query)
-    if kb_ids and kb_query.strip() and not file_followup:
+    skip_kb = False
+    if kb_ids and kb_query.strip() and voice_policy.kb_company_only(req):
+        from core.knowledge_router import is_company_or_kb_query as _is_company
+        skip_kb = not _is_company(kb_query, kb_ids)       # small talk: no embedding lookup before the first word
+    if kb_ids and kb_query.strip() and not file_followup and not skip_kb:
         try:
             from core.knowledge_router import fetch_company_knowledge, is_company_or_kb_query
             kb_hits, kb_prompt_block = await fetch_company_knowledge(kb_query, kb_ids, k=6)
@@ -305,7 +316,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     web_budget_n = None
     web_lean = False
     if kb_coverage.gap_fill_enabled():
-        if use_web and not web_explicit:
+        if use_web and not web_explicit and not voice_policy.active(req):
             cov = await kb_coverage.resolve(kb_query, cov_hits, blocked=bool(kb_blocked_reason))
         else:
             cov = "none"
@@ -472,7 +483,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         # --- Output sanitizer: redact model deltas before they reach the
         # client (cloud_only rules only fire while the lane is cloud; the
         # fallback event recreates the redactor for the local lane).
-        redactor = output_guard.OutputRedactor(user, model_source == "cloud")
+        redactor = output_guard.OutputRedactor(user, model_source == "cloud",
+                                               sentence_release=voice_policy.sentence_release(req))
         guard_event_sent = False
 
         def _guard_notice():
@@ -587,7 +599,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         if _tail:
                             streamed_content.append(_tail)
                             yield f"event: delta\ndata: {json.dumps({'text': _tail})}\n\n"
-                        redactor = output_guard.OutputRedactor(user, False)
+                        redactor = output_guard.OutputRedactor(user, False,
+                                                               sentence_release=voice_policy.sentence_release(req))
                         continue
                     if ev == "thought_delta":
                         yield f"event: thought_delta\ndata: {json.dumps({'delta': val})}\n\n"

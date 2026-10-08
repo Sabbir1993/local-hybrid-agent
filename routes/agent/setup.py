@@ -119,6 +119,10 @@ class RunContext:
         return (await context_budget.probe_window("main", getattr(state, "client", None))) or win
 
 
+class _SkipKb(Exception):
+    """Internal: this spoken turn needs no knowledge-base lookup."""
+
+
 async def setup_run(req, request: Request, user: Principal) -> RunContext:
     ctx = RunContext(req=req, user=user)
     # Standard web browsers are restricted to Chat mode only; Agent Task requires the native app
@@ -137,6 +141,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             raise SetupError({"error": "session not found"}, 404)
     from core.agent_tools import set_current_user
     set_current_user(user.id)
+    from core import voice_policy
+    voice_policy.apply(req, cap_tokens=False)    # spoken turn: no hidden reasoning, no answer-check rewrite (a tool call may need long arguments, so no token cap)
     ctx.effort = reasoning_mod.resolve(req.reasoning_effort)
 
     if req.custom_agent_id:
@@ -371,6 +377,10 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             "found or made and where the file is - the user reads your answer, not the tool output.\n"
             "--- END PERSONAL AGENT RULES ---\n")
         sys_labels.append("personal")
+    if req.voice:
+        from core.voice_prompt import VOICE_RULES
+        ctx.sys_prompt += VOICE_RULES
+        sys_labels.append("voice")
     # S1: MCP prompt only for mentioned servers (schemas gated per step in run).
     ctx.mcp_servers = set()
     if APP_CONFIG.get("capabilities", {}).get("mcp", False):
@@ -435,6 +445,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
         try:
             from core.knowledge_router import fetch_company_knowledge, kb_routing_query, is_company_or_kb_query
             _kb_route_q = kb_routing_query(ctx.msgs, _kb_query)
+            if voice_policy.kb_company_only(req) and not is_company_or_kb_query(_kb_route_q, ctx.kb_ids):
+                raise _SkipKb()      # small talk by voice: no embedding lookup before the first word
             kb_hits, kb_prompt = await fetch_company_knowledge(_kb_route_q, ctx.kb_ids, k=6)
             if kb_hits:
                 # same gate as chat: a task like "test this app in my browser" must not pull in (or
@@ -444,6 +456,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
                 if not (is_company_or_kb_query(_kb_route_q, ctx.kb_ids) or _top_cos >= _auto_cos):
                     kb_hits, kb_prompt = [], ""
             cov_hits = list(kb_hits)         # scores only feed the web decision (also when the text is withheld)
+        except _SkipKb:
+            pass
         except Exception as e:
             print(f"[agent] knowledge retrieval failed: {e}", file=sys.stderr)
     # Data residency (core/knowledge_access.py): internal knowledge never goes
@@ -557,9 +571,9 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     ctx.surface_cfg = dict(APP_CONFIG.get("tool_surface") or {})
     if ctx.surface_cfg.get("web_on_demand", False) and (APP_CONFIG.get("capabilities") or {}).get("web", False):
         from core import kb_coverage
-        _explicit = prompt_scope.web_intent(ctx.surface_q, [], [])
+        _explicit = prompt_scope.web_intent(ctx.surface_q, [], [], explicit_only=voice_policy.web_explicit_only(req))
         _cov = (await kb_coverage.resolve(_kb_query, cov_hits, blocked=bool(ctx.kb_blocked_reason))
-                if (ctx.kb_ids and not _explicit) else "none")
+                if (ctx.kb_ids and not _explicit and not voice_policy.active(req)) else "none")
         _tier = kb_coverage.tier(ctx.effort, False)
         ctx.surface_cfg["web_extra"] = _cov == "partial"
         ctx.web_cap = kb_coverage.web_budget(_cov, _tier, _explicit)

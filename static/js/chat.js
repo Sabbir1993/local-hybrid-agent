@@ -1099,6 +1099,7 @@ async function send(inputText) {
         top_k: samplingCfg.topk,
         ...samplingExtraBody(samplingCfg),
         custom_agent_id: (window.customAgents && typeof window.customAgents.getActiveId === 'function') ? window.customAgents.getActiveId() : undefined,
+        voice: (window.voiceMode && window.voiceMode.active) || undefined,   // spoken conversation: short plain answers
       }),
       signal: jobCtrl.signal,
     });

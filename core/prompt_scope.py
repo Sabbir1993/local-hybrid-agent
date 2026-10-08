@@ -143,18 +143,22 @@ def _prior_tool_use(prior_msgs):
     return web, mcps
 
 
-def web_intent(query: str, url_matches=None, prior_msgs=None) -> bool:
+def web_intent(query: str, url_matches=None, prior_msgs=None, explicit_only: bool = False) -> bool:
     """True when the web manual + web tools earn their tokens this turn.
 
     Deliberately lean: general questions are answered from knowledge (the old
     rule 5). A miss only costs browsing, never correctness of the answer;
     the user can still force it with the web_search request flag + a URL or
-    recency wording.
+    recency wording. explicit_only (voice): only a URL or an explicit search verb counts.
     """
     if url_matches:
         return True
     q = query or ""
-    if _WEB_VERB_RE.search(q) or _WEB_RECENCY_RE.search(q):
+    if _WEB_VERB_RE.search(q):
+        return True
+    if explicit_only:        # spoken turn: "today" / "current" in small talk must not start a web search
+        return False
+    if _WEB_RECENCY_RE.search(q):
         return True
     web, _ = _prior_tool_use(prior_msgs)
     return web

@@ -12,6 +12,9 @@ routes/media.py - images, videos and speech to text (core/media.py).
   POST   /media/transcribe_stream/chunk   multipart WAV + stream_id + seq -> {seq, text, interim}
   POST   /media/transcribe_stream/finish  {stream_id} -> {text, chunks, ms, audio_s, rtf}
   POST   /media/transcribe_stream/cancel  {stream_id} -> {ok}
+  GET    /media/tts/status        local text-to-speech: installed? which voices are ready?
+  POST   /media/tts/warmup        ?voice=en|bn  pre-load a voice -> {voice, ms, already_loaded}
+  POST   /media/speak             {text, voice?, speed?} -> audio/wav (spoken on this PC's CPU, card numbers masked)
 
 A cloud video can cost money, so the first request for one answers 409
 {needs_confirm} and the client asks the user before sending confirm_cost.
@@ -21,14 +24,16 @@ to the image model on this PC; they are checked and re-encoded first
 (core/media_images.py) and never stored or logged.
 """
 
+import asyncio
 import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File as FastAPIFile, Form, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from core import lanes, media, media_images
+from core.media import tts as media_tts
 from core.audit import audit_log
 from core.auth import Principal, user_has_permission
 from core.deps import get_current_user
@@ -231,6 +236,46 @@ async def media_video(file: UploadFile = FastAPIFile(...), user: Principal = Dep
               detail={"bytes": len(data), "frames": len(res["frames"]), "seconds": res["duration"],
                       "transcribed": bool(res["transcript"])}, result="allow")
     return res
+
+
+class SpeakReq(BaseModel):
+    text: str = Field(min_length=1, max_length=media_tts.MAX_TEXT_CHARS * 2)
+    voice: Optional[str] = Field(default=None, pattern="^(en|bn)$")
+    speed: Optional[float] = Field(default=None, ge=0.5, le=2.0)
+
+
+@router.get("/media/tts/status")
+async def media_tts_status(user: Principal = Depends(get_current_user)):
+    from core import voice_policy
+    return {**media_tts.status(), "voice": voice_policy.public()}
+
+
+@router.post("/media/tts/warmup")
+async def media_tts_warmup(voice: str = "en", user: Principal = Depends(get_current_user)):
+    if voice not in ("en", "bn"):
+        return _err("voice must be en or bn.", 400)
+    try:
+        return await asyncio.to_thread(media_tts.warmup, voice)
+    except media.MediaError as e:
+        return _err(str(e), 409)
+
+
+@router.post("/media/speak")
+async def media_speak(req: SpeakReq, user: Principal = Depends(get_current_user)):
+    """Text -> one WAV, spoken locally on the CPU. The text is cleaned and card numbers are masked inside
+    core.media.tts, never in the client. Nothing here goes to a cloud service."""
+    try:
+        wav, meta = await asyncio.to_thread(media_tts.synthesize_wav, req.text, req.voice, req.speed)
+    except media.MediaError as e:
+        return _err(str(e), 409)
+    except Exception as e:           # a broken model file must not look like a server crash
+        return _err(f"Speech failed: {type(e).__name__}", 500)
+    # metadata only: never the words or the audio
+    audit_log(user, action="media.speak", resource="local",
+              detail={"chars": meta["chars"], "ms": meta["ms"], "audio_s": meta["audio_s"], "voice": meta["voice"]},
+              result="allow")
+    return Response(content=wav, media_type="audio/wav",
+                    headers={"X-Voice": meta["voice"], "X-TTS-Ms": str(meta["ms"]), "Cache-Control": "no-store"})
 
 
 @router.post("/media/transcribe")

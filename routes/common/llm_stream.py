@@ -209,6 +209,10 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
         # helper lanes (executor, vision): reuse the KV cache for the stable prompt prefix
         # (system prompt + tools) between steps - the request is otherwise reprocessed each step
         payload["cache_prompt"] = True
+        # Only an explicit "none" reaches a helper lane: the executor otherwise thinks on the template default with
+        # no budget (a spoken turn cannot wait for that). Other levels stay main-lane-only, as before.
+        if effort == "none":
+            payload.update(reasoning.local_fields("none"))
     if max_tokens is not None and int(max_tokens) > 0:
         payload["max_tokens"] = int(max_tokens)
     else:

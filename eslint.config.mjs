@@ -64,6 +64,7 @@ export default defineConfig([
         Blob: "readonly",
         FileReader: "readonly",
         AudioContext: "readonly",
+        AudioWorkletNode: "readonly",
         FormData: "readonly",
         URL: "readonly",
         URLSearchParams: "readonly",
@@ -128,6 +129,13 @@ export default defineConfig([
       "no-unreachable-loop": "error",
       "no-unused-private-class-members": "error",
       "valid-typeof": "error",
+    },
+  },
+  {
+    // the AudioWorklet script runs in its own scope on the audio thread, with these globals and no window
+    files: ["static/js/voice-worklet.js"],
+    languageOptions: {
+      globals: { AudioWorkletProcessor: "readonly", registerProcessor: "readonly", sampleRate: "readonly" },
     },
   },
 ]);

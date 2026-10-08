@@ -499,7 +499,35 @@
     "limits": {
       "image_per_day": 10
     },
-    "allow_cloud_audio": false
+    "allow_cloud_audio": false,
+    "tts": {
+      "enabled": true,
+      "speed": 1.0,
+      "threads": 6,
+      "voices": {
+        "en": {
+          "type": "vits",
+          "dir": "vits-piper-en_US-lessac-medium",
+          "speaker": 0
+        },
+        "bn": {
+          "type": "vits",
+          "dir": "vits-coqui-bn-custom_female",
+          "speaker": 0
+        }
+      }
+    }
+  },
+  "voice": {
+    "enabled": true,
+    "effort": "none",
+    "max_tokens": 300,
+    "web": "explicit",
+    "kb": "company",
+    "answer_check": "off",
+    "guard_release": "sentence",
+    "end_silence_ms": 500,
+    "filler": true
   },
   "security": {
     "session_idle_enabled": true,

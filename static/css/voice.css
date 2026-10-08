@@ -1,0 +1,39 @@
+/* ---------- voice conversation (static/js/voice.js) ---------- */
+
+/* 🗣 button next to 🎤 */
+.comp-voice-btn { min-width: 30px; font-size: 13px; }
+.comp-voice-btn[hidden] { display: none !important; }
+.comp-voice-btn.recording { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent);
+                            background: color-mix(in srgb, var(--green) 14%, transparent); }
+.comp-voice-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* top centre, under the header: never over the message box */
+#voice-panel { position: fixed; left: 50%; top: 68px; transform: translateX(-50%); z-index: 60;
+               display: flex; align-items: center; gap: 14px; min-width: 300px; max-width: min(92vw, 460px);
+               padding: 12px 16px; border-radius: 16px; border: 1px solid var(--border);
+               background: var(--panel); color: var(--text); box-shadow: 0 8px 28px rgba(0, 0, 0, .35); }
+#voice-panel .voice-orb { width: 38px; height: 38px; flex: none; border-radius: 50%; background: var(--text-muted);
+                          transition: background .2s, box-shadow .2s; }
+#voice-panel[data-state="listening"] .voice-orb { background: var(--accent); box-shadow: 0 0 0 6px var(--accent-bg); }
+#voice-panel[data-state="hearing"] .voice-orb { background: var(--green); box-shadow: 0 0 0 8px color-mix(in srgb, var(--green) 25%, transparent);
+                                                animation: voice-pulse 0.9s ease-in-out infinite; }
+#voice-panel[data-state="thinking"] .voice-orb { background: var(--amber); animation: voice-pulse 1.4s ease-in-out infinite; }
+#voice-panel[data-state="speaking"] .voice-orb { background: var(--accent); animation: voice-pulse 0.6s ease-in-out infinite; }
+#voice-panel .voice-body { flex: 1; min-width: 0; }
+#voice-panel .voice-label { font-size: 13px; font-weight: 600; }
+#voice-panel .voice-meter { height: 4px; margin: 6px 0 4px; border-radius: 2px; background: var(--panel2); overflow: hidden; }
+#voice-panel #voice-level { height: 100%; width: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left;
+                            transition: transform .06s linear; }
+#voice-panel .voice-hint { font-size: 11px; color: var(--text-muted); }
+#voice-panel .voice-end { flex: none; border: 1px solid var(--border); background: var(--panel2); color: var(--text);
+                          border-radius: 999px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; }
+#voice-panel .voice-end:hover { border-color: var(--red); color: var(--red); }
+#voice-panel .voice-end:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@keyframes voice-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+@media (prefers-reduced-motion: reduce) { #voice-panel .voice-orb { animation: none !important; } }
+
+#voice-panel .voice-heard { font-size: 12.5px; margin: 2px 0 4px; min-height: 1.2em; color: var(--text); overflow-wrap: anywhere; }
+#voice-panel .voice-row { display: flex; align-items: center; gap: 6px; margin: 2px 0 4px; }
+#voice-panel .voice-lang { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+                           font-size: 11.5px; padding: 1px 4px; }

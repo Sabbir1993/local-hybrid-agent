@@ -30,6 +30,7 @@ class AgentRequest(SamplerFields):
     presence_penalty: Optional[float] = None
     top_k: Optional[int] = None
     system_prompt: Optional[str] = None
+    voice: bool = False   # spoken conversation: answer in short plain sentences (core/voice_prompt.py)
     verify: Optional[Literal["off", "badge", "gate"]] = None   # answer check (shield toggle)
 
 

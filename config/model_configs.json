@@ -52,7 +52,7 @@
     "kv_unified": false,
     "kv_unified_per_slot": 0,
     "cache_reuse": 256,
-    "cache_ram": 0,
+    "cache_ram": 1024,
     "use_mmap": true
   },
   "kwaipilot_kat-coder-v2.5-dev-q4_k_s.gguf": {

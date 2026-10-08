@@ -42,6 +42,11 @@ tree-sitter-python>=0.25
 tree-sitter-javascript>=0.25
 tree-sitter-typescript>=0.23
 
+# --- Voice conversation: local text-to-speech on the CPU (core/media/tts.py; Apache-2.0, ONNX, no network) ---
+# Needs voice models in media_dirs.voice_models/tts/ (vits-piper-en_US-lessac-medium for English, vits-coqui-bn-custom_female
+# for Bangla; sherpa-onnx "tts-models" release). Without the package or a model, spoken replies report what is missing.
+sherpa-onnx>=1.12
+
 # --- CPU tool routers (core/small_model.py; engine chosen in config/app.json "router.engine") ---
 # both installed from PyPI (Apache-2.0); laya by Convai Innovations, cactus-needle lists no author - review before upgrading
 cactus-needle>=2.0

@@ -158,6 +158,7 @@ async function runAgentSSE(text) {
           verify: typeof answerCheckBegin === 'function' ? answerCheckBegin(job.assistantMsg) : undefined,
           custom_agent_id: typeof getActiveCustomAgentId === 'function' ? getActiveCustomAgentId() : undefined,
           personal: !agentMode || undefined,   // Personal Agent run from Chat: server confines writes to the common folder
+          voice: (window.voiceMode && window.voiceMode.active) || undefined,   // spoken conversation: short plain answers
         }),
         signal: jobCtrl.signal,
       });
@@ -246,7 +247,10 @@ async function runAgentSSE(text) {
             window.setLiveHud({ phase: 'running', text: 'Verifying tool changes...' });
           }
         }
-        else if (ev === 'permission_request') showPermModal(d.req_id, d.cmd, d.kind, d.saveable);
+        else if (ev === 'permission_request') {
+          showPermModal(d.req_id, d.cmd, d.kind, d.saveable);
+          if (window.voiceMode && window.voiceMode.onPermission) window.voiceMode.onPermission(d);   // spoken heads-up, never answered by voice
+        }
         else if (ev === 'delta') {
           closeThought(L);
           if (L._resetPrev != null) {
