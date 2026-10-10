@@ -153,6 +153,8 @@ def describe(rule: str, tool: str, count: int) -> str:
         return f"the last {count} tool calls all failed"
     if rule == "cycle":
         return f"the run kept going back and forth between the same calls (starting with `{tool}`), {count} times over"
+    if rule == "no_action":
+        return f"the last {count} steps were only planning and looking things up, with nothing written or run"
     return "the run stopped making progress"
 
 

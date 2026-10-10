@@ -7,6 +7,7 @@ from typing import Optional
 from core import reasoning
 from core.agent_loop import safe_parse_and_repair_args
 from core.limits import cloud_gate
+from core.llm_messages import normalize_system_messages
 from core.request_context import get_current_user_id
 from core.small_model import APP_CONFIG
 from core.state import state
@@ -176,6 +177,7 @@ def _tool_choice_key(client_or_state) -> str:
 
 
 async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None, tool_choice: Optional[str] = None):
+    msgs = normalize_system_messages(msgs)   # a system message mid-conversation 500s on Qwen/Llama templates (also the retry paths below)
     payload = {
         "messages": msgs,
         "temperature": temperature,

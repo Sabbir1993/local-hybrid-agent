@@ -33,7 +33,7 @@ class Nudge(unittest.TestCase):
 
 class Wiring(unittest.TestCase):
     def test_executor_has_grep(self):
-        self.assertIn('"list_files", "grep", "run_python"', RUN)
+        self.assertIn('"list_files", "project_overview", "grep", "run_python"', RUN)
 
     def test_run_python_description_forbids_file_inspection(self):
         from core.agent_tools import schemas

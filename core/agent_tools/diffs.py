@@ -15,13 +15,20 @@ def _pkg():
     return sys.modules.get("core.agent_tools")
 
 
-MAX_TRACKED_FILES = 50      # per user: each entry holds a whole before/after text, so a long session must not keep them all
+MAX_TRACKED_FILES = 1000    # per user: a real project is hundreds of files; memory is bounded by MAX_TRACKED_BYTES below
+MAX_TRACKED_BYTES = 64 * 1024 * 1024   # before + after text of all tracked files; the oldest go first past this
 
 
 def _trim_changes(changes: dict) -> None:
-    """Drop the oldest tracked files beyond MAX_TRACKED_FILES (their 'revert' baseline goes with them)."""
-    while len(changes) > MAX_TRACKED_FILES:
-        changes.pop(next(iter(changes)))
+    """Drop the oldest tracked files beyond MAX_TRACKED_FILES or MAX_TRACKED_BYTES (their 'revert' baseline goes with
+    them). The count alone (it was 50) cut the Session changes list of any real project; the byte budget is what
+    actually bounds memory, since each entry holds a whole before/after text."""
+    def size(rec):
+        return sum(len(v) for v in (rec.get("before"), rec.get("after")) if isinstance(v, str))
+    total = sum(size(r) for r in changes.values())
+    while changes and (len(changes) > MAX_TRACKED_FILES or total > MAX_TRACKED_BYTES) and len(changes) > 1:
+        oldest = next(iter(changes))
+        total -= size(changes.pop(oldest))
 
 
 def _snapshot_change(p: Path) -> None:

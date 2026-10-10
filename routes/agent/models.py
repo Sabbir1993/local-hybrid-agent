@@ -32,6 +32,9 @@ class AgentRequest(SamplerFields):
     system_prompt: Optional[str] = None
     voice: bool = False   # spoken conversation: answer in short plain sentences (core/voice_prompt.py)
     verify: Optional[Literal["off", "badge", "gate"]] = None   # answer check (shield toggle)
+    # composer Mode dropdown, enforced per request (never a global setting): plan = read-only, manual = ask before
+    # every edit/command, accept_edits = edits run unasked, bypass = no permission cards for this user
+    permission_mode: Optional[Literal["auto", "manual", "accept_edits", "plan", "bypass"]] = None
 
 
 class PermissionAnswerReq(BaseModel):

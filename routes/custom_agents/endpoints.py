@@ -109,6 +109,7 @@ async def available_tools(user: Principal = Depends(get_current_user)):
         "memory_delete": {"label": "Memory: Delete File", "cat": "Memory", "desc": "Delete a memory file when the user asks."},
         "edit_file": {"label": "Edit File", "cat": "Files & Code", "desc": "Apply targeted line or string replacements."},
         "list_files": {"label": "List Files", "cat": "Files & Code", "desc": "Glob and list files in workspace."},
+        "project_overview": {"label": "Project Overview", "cat": "Files & Code", "desc": "Layout, languages and manifests of the project in one call."},
         "grep": {"label": "Grep Search", "cat": "Files & Code", "desc": "Fast regex search across workspace files."},
         "run_python": {"label": "Run Python", "cat": "Files & Code", "desc": "Execute Python scripts inside the workspace sandbox."},
         "run_shell": {"label": "Run Shell / Terminal", "cat": "Files & Code", "desc": "Execute terminal commands (gated by permission)."},

@@ -132,14 +132,6 @@ function renderKnowledgePanel(box, sources) {
 
   box.innerHTML = `
     <div class="kb-redesign-wrap">
-      <div class="kb-header-title-row">
-        <span style="font-size:16px;">📚</span>
-        <span>Knowledge Base</span>
-      </div>
-      <div class="kb-header-subtitle">
-        Organizational knowledge base: documents, pasted text &amp; URLs, tagged by role
-      </div>
-
       <div role="tablist" class="kb-tabs-bar">
         <button type="button" role="tab" class="kb-tab kb-tab-pill on" data-tab="sources">
           <span>📚 Sources</span>
@@ -155,13 +147,13 @@ function renderKnowledgePanel(box, sources) {
 
       <!-- PANE 1: Sources -->
       <div class="ru-pane kb-pane" data-pane="sources">
-        <div class="kb-filter-bar" style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
-          <input type="text" id="kb-search-input" placeholder="🔍 Search sources by title..." style="flex:1; min-width:180px; height:34px; box-sizing:border-box; padding:0 12px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
-          <select id="kb-cat-filter" style="width:auto; height:34px; box-sizing:border-box; padding:0 10px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
+        <div class="kb-filter-bar">
+          <input type="text" id="kb-search-input" placeholder="🔍 Search sources by title...">
+          <select id="kb-cat-filter">
             <option value="">All Categories</option>
             ${catOptions}
           </select>
-          <select id="kb-kind-filter" style="width:auto; height:34px; box-sizing:border-box; padding:0 10px; font-size:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:7px; color:var(--text);">
+          <select id="kb-kind-filter">
             <option value="">All Types</option>
             <option value="file">📄 File</option>
             <option value="url">🔗 URL</option>
@@ -170,23 +162,23 @@ function renderKnowledgePanel(box, sources) {
         </div>
 
         ${sources.length ? `
-        <div id="kb-toolbar" style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; padding:8px 12px; background:var(--panel2); border:1px solid var(--border); border-radius:7px; flex-wrap:wrap;">
-          <div style="display:flex; align-items:center; gap:10px;">
-            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; font-weight:600; color:var(--text); margin:0; user-select:none;">
-              <input type="checkbox" id="kb-select-all" style="cursor:pointer; accent-color:var(--accent); width:15px; height:15px; margin:0;">
+        <div id="kb-toolbar" class="kb-toolbar">
+          <div class="kb-toolbar-left">
+            <label class="kb-select-all">
+              <input type="checkbox" id="kb-select-all">
               <span>Select all</span>
             </label>
             <span id="kb-selected-count" class="dim" style="font-size:11px;">(0 of ${sources.length} selected)</span>
           </div>
-          <div style="display:flex; align-items:center; gap:8px;">
+          <div class="kb-toolbar-right">
             <button type="button" class="btn red" id="kb-bulk-delete" disabled style="width:auto; margin:0; padding:5px 12px; font-size:11.5px; opacity:0.5; cursor:not-allowed; display:inline-flex; align-items:center; gap:5px;">
               🗑️ Delete Selected
             </button>
           </div>
         </div>` : ''}
 
-        <div id="kb-list" style="display:flex; flex-direction:column; gap:8px;">
-          ${sources.map(s => sourceRow(s)).join('') || '<div class="dim" style="font-size:12px; padding:16px; text-align:center;">No knowledge sources yet. Click <b>➕ Add Source</b> to ingest documents.</div>'}
+        <div id="kb-list" class="kb-list">
+          ${sources.map(s => sourceRow(s)).join('') || '<div class="kb-empty">No knowledge sources yet. Click <b>➕ Add Source</b> to ingest documents.</div>'}
         </div>
       </div>
 
@@ -557,32 +549,29 @@ function sourceRow(s) {
   const statusCls = isReady ? 'ready' : (isErr ? 'err' : (isProc ? 'proc' : 'dim'));
   const kindIco = s.kind === 'file' ? '📄' : (s.kind === 'url' ? '🔗' : '📝');
 
-  return `<div class="cap-item kb-item kb-source-card" data-id="${s.id}" data-title="${esc(s.title)}" data-category="${esc(s.category || '')}" data-kind="${esc(s.kind || '')}" style="padding:12px 14px; margin-bottom:8px; border-radius:8px; border:1px solid var(--border); background:var(--panel2); transition:box-shadow .15s ease;">
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
-      <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-        <input type="checkbox" class="kb-row-select" data-id="${s.id}" aria-label="Select ${esc(s.title)}" style="cursor:pointer; accent-color:var(--accent); width:16px; height:16px; flex-shrink:0; margin:0;">
-        <span class="cap-tool-badge ${s.kind === 'file' ? 'write' : (s.kind === 'url' ? 'web' : 'skill')}" style="padding:2px 8px; font-size:11px; font-weight:600; display:inline-flex; align-items:center; gap:4px; border-radius:5px;">
-          <span>${kindIco}</span>
-          <span>${esc(s.kind)}</span>
-        </span>
-        <b style="font-size:13px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(s.title)}">${esc(s.title)}</b>
-        <span class="kb-status-pill ${statusCls}" style="font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px;">● ${esc(s.status)}</span>
+  return `<div class="kb-item kb-source-card" data-id="${s.id}" data-title="${esc(s.title)}" data-category="${esc(s.category || '')}" data-kind="${esc(s.kind || '')}">
+    <div class="kb-item-head">
+      <div class="kb-item-title">
+        <input type="checkbox" class="kb-row-select" data-id="${s.id}" aria-label="Select ${esc(s.title)}">
+        <span class="kb-kind">${kindIco} ${esc(s.kind)}</span>
+        <b title="${esc(s.title)}">${esc(s.title)}</b>
+        <span class="kb-status-pill ${statusCls}">● ${esc(s.status)}</span>
       </div>
-      <div style="display:flex; gap:6px; flex-shrink:0;">
-        ${s.kind === 'file' ? `<a class="btn ghost" href="/knowledge/${s.id}/file" target="_blank" rel="noopener" style="width:auto; margin:0; padding:3px 10px; font-size:11px; text-decoration:none;">👁 View</a>` : ''}
-        <button class="btn ghost kb-reindex" data-id="${s.id}" style="width:auto; margin:0; padding:3px 10px; font-size:11px;">⟳ Reindex</button>
-        <button class="btn ghost kb-delete" data-id="${s.id}" style="width:auto; margin:0; padding:3px 10px; font-size:11px; color:var(--red);">🗑️ Delete</button>
+      <div class="kb-item-actions">
+        ${s.kind === 'file' ? `<a class="btn ghost" href="/knowledge/${s.id}/file" target="_blank" rel="noopener">👁 View</a>` : ''}
+        <button class="btn ghost kb-reindex" data-id="${s.id}">⟳ Reindex</button>
+        <button class="btn ghost kb-delete" data-id="${s.id}">🗑️ Delete</button>
       </div>
     </div>
-    ${s.error ? `<div class="chat-alert-box error" style="margin:6px 0; font-size:11px; padding:6px 10px;">⚠ ${esc(s.error)}</div>` : ''}
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding-top:8px; border-top:1px solid var(--border-subtle);">
-      <div style="display:flex; align-items:center; gap:8px; flex-wrap:nowrap;">
+    ${s.error ? `<div class="chat-alert-box error" style="margin:8px 0 0; font-size:11px; padding:6px 10px;">⚠ ${esc(s.error)}</div>` : ''}
+    <div class="kb-item-foot">
+      <div class="kb-item-foot-left">
         ${kbSourceCloudHtml(s, _kbPolicy.categories, _kbCloudPolicy)}
       </div>
-      <div style="display:flex; gap:6px; align-items:center; margin-left:auto;">
+      <div class="kb-item-foot-right">
         <span class="dim" style="font-size:10.5px;">Role access:</span>
         <div class="kb-roles-picker tagpicker" data-id="${s.id}" data-roles="${esc(JSON.stringify(s.roles || []))}"></div>
-        <button class="btn ghost kb-roles-save" data-id="${s.id}" style="width:auto; margin:0; padding:3px 10px; font-size:11px;">Save</button>
+        <button class="btn ghost kb-roles-save" data-id="${s.id}">Save</button>
       </div>
     </div>
   </div>`;

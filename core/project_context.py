@@ -32,7 +32,7 @@ _SECRET_RXS = [
 INIT_PROMPT = """Initialize this project for future agent sessions: create (or improve) an AGENTS.md file at the workspace root.
 
 Steps:
-1. Explore with list_files / read_file / grep: manifests (package.json, pyproject.toml, requirements*.txt, Cargo.toml, go.mod, composer.json, pom.xml, etc.), README, CI config (.github/workflows, .gitlab-ci.yml), test setup, and any existing AGENTS.md, CLAUDE.md, .cursorrules, .cursor/rules or .github/copilot-instructions.md.
+1. Explore FAST. Your first action is ONE project_overview call (layout, languages, entry points, README and manifest heads). Then read what is still missing (CI config such as .github/workflows or .gitlab-ci.yml, test setup, entry points, any existing AGENTS.md, CLAUDE.md, .cursorrules, .cursor/rules or .github/copilot-instructions.md) with several read_file / grep calls TOGETHER in a single step, never one per step. Read at most about 10 files and never read the same file or range twice: note what you learn as you go. If project_overview shows a large project (about 150+ source files, or three or more separate code areas), do not read it all yourself: call spawn_parallel_agents with one read-only sub-agent per area (for example backend, frontend, config and tests), each asked to return a short summary of its area (purpose, entry points, commands, conventions), then build AGENTS.md from those summaries.
 2. Write AGENTS.md with these sections, only what you actually found:
    - Overview: what the project is, main language/framework (2-4 lines).
    - Commands: install, build, run/dev, lint, test, and how to run a single test.

@@ -56,7 +56,7 @@ def require_device_workspace() -> tuple[int, Path]:
         cb = getattr(_pkg(), "companion_bridge", companion_bridge)
         if not cb.is_available(uid):
             raise WorkspaceAccessDenied(
-                "the A770 Companion app is not connected - open it on your machine and try again")
+                "the SSL Local Agent app is not connected - open it on your machine and try again")
         return uid, Path(own)
     proj = _active_project.get(_user_device_key(uid, did))
     if not proj:
@@ -72,11 +72,11 @@ def require_device_workspace() -> tuple[int, Path]:
     cb = getattr(_pkg(), "companion_bridge", companion_bridge)
     if not cb.is_available(uid):
         raise WorkspaceAccessDenied(
-            "the A770 Companion app is not connected - open it on your machine and try again")
+            "the SSL Local Agent app is not connected - open it on your machine and try again")
     comp_dev = (cb.connection_info(uid) or {}).get("device_id")
     if comp_dev and comp_dev != did:
         raise WorkspaceAccessDenied(
-            "the connected A770 Companion is on a different machine than this project")
+            "the connected SSL Local Agent is on a different machine than this project")
     return uid, Path(row["workspace_dir"])
 
 

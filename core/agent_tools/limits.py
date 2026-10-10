@@ -9,8 +9,8 @@ from ..small_model import APP_CONFIG
 AGENT_LIMITS = {
     "write_file_max_tokens": (4000, 500, 16000),
     "chunk_target_tokens": (3000, 500, 8000),
-    "read_file_default_limit": (200, 20, 2000),
-    "read_file_max_chars": (20000, 2000, 100000),
+    "read_file_default_limit": (500, 20, 2000),
+    "read_file_max_chars": (40000, 2000, 100000),
     "verify_max_retries": (3, 1, 10),
     "executor_max_tokens": (4096, 512, 16000),
     "main_max_tokens": (16000, 1024, 65536),

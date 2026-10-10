@@ -17,6 +17,20 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "project_overview",
+            "description": "Get the shape of the project in ONE call: top-level areas with file counts, languages, likely entry points, and the first lines of the README and manifests (package.json, pyproject.toml, ...). Call this FIRST when asked to analyze, explore, understand or document a project, instead of many list_files/read_file steps.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "optional sub-folder to summarize instead of the workspace root"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_file",
             "description": "Read a slice of a text file. Returns numbered lines (the numbers are not part of the file), the total line count and, when more remains, the offset to continue from. Read only the part you need.",
             "parameters": {

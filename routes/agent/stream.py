@@ -110,6 +110,10 @@ from core.monitor import (
 )
 from .. import common
 from core import reasoning as reasoning_mod
+from core.agent_loop.read_ledger import ReadLedger
+from core.agent_loop import budget as budget_mod
+from core.agent_loop import action_guard as action_guard_mod
+EXPLORE_TOOLS = ("read_file", "grep", "list_files", "project_overview")
 from ..common import _llm_chat_stream
 from ..common.sampling_extra import sampler_extra
 from core.verifier import sse_events as answer_check_events
@@ -249,6 +253,10 @@ async def run_agent_stream(req, user, ctx):
     custom_agent = ctx.custom_agent
     custom_agent_tools = ctx.custom_agent_tools
     personal = ctx.personal
+    # Mode dropdown (per request, this user only): bypass never asks, manual asks before every edit and command
+    pmode = req.permission_mode or "auto"
+    bypass = pmode == "bypass"
+    ask_edits = pmode == "manual"
     hidden_tools = ctx.hidden_tools
     ex_inst = ctx.ex_inst
     mode = ctx.mode
@@ -441,6 +449,10 @@ async def run_agent_stream(req, user, ctx):
     async def event_stream():
         web_used = 0                # web calls made this run, against web_cap
         actions_taken = []
+        action_guard = action_guard_mod.ActionGuard()   # planning/research with no action (core/agent_loop/action_guard.py)
+        plan_presented_told = False  # plan mode: told the model to present the saved plan as text
+        read_ban_until = -1         # steps below this number may not call read_file (it was re-reading in a loop)
+        read_ledger = ReadLedger()  # file chunks already read this run (core/agent_loop/read_ledger.py)
         seen_reads: dict = {}       # (tool, args) -> times a read-only lookup was already run this request
         final_content = ""
         final_reasoning = ""
@@ -459,8 +471,11 @@ async def run_agent_stream(req, user, ctx):
         passivity_nudges = 0
         # main reasons and writes the plan first, then the executor carries it out
         # (router.plan_first_categories; ends once a plan exists or after plan_first_max_steps)
+        # /init and "analyze this project": reading and reporting, so no forced plan and no "stop reading" nudge
+        _analysis_run = plan_guard.is_analysis_request(last_query)
         plan_first_on = bool(
             router_policy.plan_first_reason(q_category, rpol) and req.session_id and not req.plan
+            and not _analysis_run
             and use_executor and (use_cloud_main or main_ready) and ca_lane != "executor"
             and force_main_until < 0 and not db_get_plan_items(req.session_id))
         plan_first_max = int(rpol.get("plan_first_max_steps") or 0)
@@ -503,11 +518,26 @@ async def run_agent_stream(req, user, ctx):
         # The git calls are async and routed through the companion like every
         # other git op; the checkpoint table persists across restarts.
         _checkpoint_ref = None
+        if bypass:
+            audit_log(user, action="agent.permission_bypass", resource="agent.run", result="allow",
+                      detail={"session_id": req.session_id, "personal": bool(personal)})
         try:
             run_token_budget = max(0, int((APP_CONFIG.get("agent") or {}).get("run_token_budget", 0) or 0))
         except (TypeError, ValueError):
             run_token_budget = 0
         budget_squeeze = False
+        run_budget = budget_mod.RunBudget(run_token_budget)   # counts NEW tokens (core/agent_loop/budget.py)
+        budget_stage_sent = budget_mod.STAGE_OK
+        _last_lane = None
+        _step_rewrote = False       # the start of the conversation changed this step (cleared / compacted): cold cache
+
+        def _count_budget(ptoks, ctoks, acct, lane, client):
+            nonlocal _last_lane
+            cloud = bool(getattr(client, "is_cloud", False))
+            added = run_budget.add(ptoks, ctoks, cached_tokens=(acct.pcached if cloud else 0),
+                                   prefix_rewritten=(_step_rewrote or lane != _last_lane or lane == "executor"))
+            _last_lane = lane
+            return added
 
         def _tool_result(payload):
             pending_tool.pop(payload.get("id"), None)
@@ -546,20 +576,23 @@ async def run_agent_stream(req, user, ctx):
                           f"after {step} steps", file=sys.stderr)
                     stop_reason = "timeout"
                     break
-                if run_token_budget and run_prompt_tokens >= run_token_budget:
-                    print(f"[agent] run {run_id[:8]} used its {run_token_budget} token budget after {step} steps", file=sys.stderr)
-                    stop_reason = "budget"
-                    break
-                if run_token_budget and not budget_squeeze and run_prompt_tokens >= int(run_token_budget * 0.7):
-                    budget_squeeze = True
-                    msgs.append({"role": "user", "content": (
-                        "[budget] This run has used most of its token budget. Stop exploring: finish what is left in as "
-                        "few steps as possible and give the final answer.")})
+                if run_budget.enabled:
+                    if run_budget.exhausted():
+                        print(f"[agent] run {run_id[:8]} used its {run_token_budget} token budget after {step} steps", file=sys.stderr)
+                        stop_reason = "budget"
+                        break
+                    run_budget.note_step()          # a step past the limit is a grace step (finish the item in progress)
+                    _stage = run_budget.stage()
+                    if _stage > budget_stage_sent:
+                        budget_stage_sent = _stage
+                        budget_squeeze = budget_squeeze or _stage >= budget_mod.STAGE_SQUEEZE
+                        msgs.append({"role": "user", "content": budget_mod.MESSAGES[_stage]})
                 steps_run = step + 1
                 yield f"event: step\ndata: {json.dumps({'step': step + 1, 'total': steps})}\n\n"
                 tool_calls = None
                 content = ""
                 step_reasoning = ""
+                _step_rewrote = False
 
                 executor_stuck = repeat_streak >= rpol["repeat_streak_limit"]
                 # Escalation is per-step, never permanent. `lane_name` is recomputed
@@ -727,7 +760,7 @@ async def run_agent_stream(req, user, ctx):
                         tools_for_lane = tool_surface.filter_tools(
                             [t for t in all_tools()
                              if t.get("function", {}).get("name") in
-                             ("write_file", "append_file", "read_file", "read_file_chunk", "edit_file", "list_files", "grep", "run_python", "run_shell", "read_skill", "list_skills",
+                             ("write_file", "append_file", "read_file", "read_file_chunk", "edit_file", "list_files", "project_overview", "grep", "run_python", "run_shell", "read_skill", "list_skills",
                               "memory_read", "memory_append", "memory_str_replace",
                               "create_plan", "update_plan_item", "get_plan", "finish") + EXECUTOR_TEST_TOOLS
                              or t.get("function", {}).get("name", "").startswith("mcp__")],
@@ -825,6 +858,7 @@ async def run_agent_stream(req, user, ctx):
                     await _keep_working_memory(_sum_out)
                     sent_tokens = context_budget.prompt_tokens_for(lane_name, step_msgs, tools_for_lane)
                     if sent_tokens < pre_tokens:
+                        _step_rewrote = True
                         yield (f"event: ctx\ndata: "
                                + json.dumps({'lane': lane_name, 'before_tokens': pre_tokens,
                                              'after_tokens': sent_tokens, 'hidden': hidden_fams}) + "\n\n")
@@ -838,6 +872,7 @@ async def run_agent_stream(req, user, ctx):
                     # first layer: old tool results become one-line placeholders (core/agent_loop/clearing.py)
                     _freed = clear_old_results(msgs, pre_tokens, squeeze=budget_squeeze)
                     if _freed:
+                        _step_rewrote = True
                         try:
                             route_log.event(run_id, step, q_category, lane_name, "clear", outcome=f"cleared:{_freed}")
                         except Exception:
@@ -848,12 +883,14 @@ async def run_agent_stream(req, user, ctx):
                                              'hidden': hidden_fams}) + "\n\n")
                     sent_tokens = pre_tokens
                     if pre_tokens > budget:
+                        _step_rewrote = True
                         _sum_out = []
                         msgs[:] = compact_messages(msgs, budget, tools=tools_for_lane,
                                                    summary_fn=_task_summary(list(msgs)), summary_out=_sum_out)
                         await _keep_working_memory(_sum_out)
                         sent_tokens = context_budget.prompt_tokens_for(lane_name, msgs, tools_for_lane)
                         if sent_tokens < pre_tokens:
+                            _step_rewrote = True
                             yield (f"event: ctx\ndata: "
                                    + json.dumps({'lane': lane_name, 'before_tokens': pre_tokens,
                                                  'after_tokens': sent_tokens, 'hidden': hidden_fams}) + "\n\n")
@@ -863,12 +900,30 @@ async def run_agent_stream(req, user, ctx):
                 # the run by describing the step. It replaces the executor grammar for this
                 # step (required mode builds its own); servers that reject the field are
                 # remembered and skipped (routes/common/llm_stream.py).
+                # Plan mode: once the plan is recorded the job is to present it as text. Offering the tools again just
+                # lets a small model call create_plan over and over (nothing else is allowed in plan mode).
+                if req.plan and any(a.get("name") == "create_plan" and (a.get("ok") or "already exists" in str(a.get("result")))
+                                    for a in actions_taken):
+                    tools_for_lane = []
+                    step_grammar = None          # no tool-call grammar when no tool may be called
+                    if not plan_presented_told:
+                        plan_presented_told = True
+                        msgs.append({"role": "user", "content": (
+                            "[plan recorded] The plan is saved and shown to the user. Do not call any tool. Now write the "
+                            "plan as a clear numbered list: the files to create or change (exact paths), what changes in "
+                            "each, and the order. End with one line: 'Switch to Build mode to start building.' Then stop.")})
+                _act_forced = False
+                if action_guard.banned(step):
+                    _acting = [t for t in tools_for_lane
+                               if t.get("function", {}).get("name") not in action_guard_mod.PASSIVE_TOOLS]
+                    if _acting:
+                        tools_for_lane, _act_forced = _acting, True     # only tools that act are offered
                 step_tool_choice = ("required" if tools_for_lane and not req.plan and not actions_taken
                                     and router_policy.force_tool_call(q_category, step, narration_nudges, last_query, rpol)
                                     else None)
                 # A multi-step job starts with the todo list: until create_plan has run, only it and the
                 # read-only tools are offered; from the second try on, create_plan alone is required.
-                if plan_gate and tools_for_lane:
+                if (plan_gate or _act_forced) and tools_for_lane:
                     step_tool_choice = "required"
                     step_grammar = None
                     tools_for_lane = without_finish(tools_for_lane)
@@ -890,6 +945,8 @@ async def run_agent_stream(req, user, ctx):
                     # thinking counts against that cap: a small executor gets a short thinking budget however high the
                     # user set the effort for the main model (agent.executor_max_effort, default "low")
                     step_effort = (reasoning_mod.cap(effort, executor_effort_ceiling()) if lane_name == "executor" else effort)
+                    if _analysis_run and effort and effort not in ("none", "low"):
+                        step_effort = reasoning_mod.cap(effort, "low")      # reading files does not need long thinking
                     if getattr(active_client, "is_cloud", False):
                         fb_client = await _local_fallback(lane_name)
                         lane_stream = common._llm_chat_stream_with_fallback(
@@ -927,7 +984,7 @@ async def run_agent_stream(req, user, ctx):
                         sent_tokens=sent_tokens, is_orchestrator=is_orch,
                         run_id=run_id)
                     ptoks, ctoks, dt = acct.ptoks, acct.ctoks, acct.dt
-                run_prompt_tokens += int(ptoks or 0)
+                run_prompt_tokens += _count_budget(ptoks, ctoks, acct, lane_name, active_client)
                 yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks, 'run_prompt_tokens': run_prompt_tokens, 'run_token_budget': run_token_budget})}\n\n"
 
                 content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
@@ -1041,6 +1098,7 @@ async def run_agent_stream(req, user, ctx):
                     budget = context_budget.budget_for("main", esc_ctx, cloud=bool(cloud_main))
                     pre_tokens = context_budget.prompt_tokens_for("main", msgs, esc_tools)
                     if pre_tokens > budget:
+                        _step_rewrote = True
                         msgs[:] = compact_messages(msgs, budget, tools=esc_tools)
                     # estimate of what the escalated call actually sends (anchored below)
                     sent_tokens = context_budget.prompt_tokens_for("main", msgs, esc_tools)
@@ -1082,7 +1140,7 @@ async def run_agent_stream(req, user, ctx):
                             sent_tokens=sent_tokens, is_orchestrator=False,
                             run_id=run_id)
                         ptoks, ctoks = acct.ptoks, acct.ctoks
-                    run_prompt_tokens += int(ptoks or 0)
+                    run_prompt_tokens += _count_budget(ptoks, ctoks, acct, "main", main_client)
                     yield f"event: usage\ndata: {json.dumps({'prompt_tokens': ptoks, 'completion_tokens': ctoks, 'run_prompt_tokens': run_prompt_tokens, 'run_token_budget': run_token_budget})}\n\n"
                     content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                     step_reasoning = res_dict.get("reasoning", "") if res_dict else ""
@@ -1414,7 +1472,7 @@ async def run_agent_stream(req, user, ctx):
                     # always needs a one-time approval here (no allow pattern can cover code).
                     # This card is the single approval: the companion then runs it without a
                     # second local dialog (it gets approved_in_app, see companion/policy.js).
-                    if name == "run_python" and (shell_cfg().get("ask_first", True) or personal) and "run_python" not in run_allow:
+                    if name == "run_python" and not bypass and (pmode == "manual" or shell_cfg().get("ask_first", True) or personal) and "run_python" not in run_allow:
                         import uuid as _uuid
                         code = str((args or {}).get("code") or "")
                         shown = "run_python:\n" + (code if len(code) <= 4000 else code[:4000] + "\n… (truncated)")
@@ -1447,7 +1505,7 @@ async def run_agent_stream(req, user, ctx):
                     if name in ("generate_image", "generate_video"):
                         from core.media_tools import first_is_cloud
                         _is_cloud, _prov = first_is_cloud(name)
-                        if _is_cloud:
+                        if _is_cloud and not bypass:
                             import uuid as _uuid
                             what = "an image" if name == "generate_image" else "a video"
                             shown = (f"Make {what} with {_prov} (cloud - may cost money):\n"
@@ -1499,7 +1557,7 @@ async def run_agent_stream(req, user, ctx):
                             from core.shell_tools import personal_command_allowed
                             _ps_saved = personal_command_allowed(cmd, cfg.get("allow_patterns") or [])
                             pats = []
-                        if (cfg.get("ask_first", True) or personal) and not _ps_saved and not command_allowed(cmd, pats):
+                        if not bypass and (pmode == "manual" or cfg.get("ask_first", True) or personal) and not _ps_saved and not command_allowed(cmd, pats):
                             import uuid as _uuid
                             preq_id = _uuid.uuid4().hex[:12]
                             ev = asyncio.Event()
@@ -1527,7 +1585,7 @@ async def run_agent_stream(req, user, ctx):
                     _dev_ok = False
                     if _dev:
                         _dev_ok = True
-                        if _dev["key"] not in run_allow:
+                        if _dev["key"] not in run_allow and not bypass:
                             import uuid as _uuid
                             preq_id = _uuid.uuid4().hex[:12]
                             ev = asyncio.Event()
@@ -1551,8 +1609,50 @@ async def run_agent_stream(req, user, ctx):
                             if _decision == "project":      # "For this run" button
                                 run_allow.add(_dev["key"])
 
+                    # Manual mode: every file edit is asked in the same card ("For this run" allows the rest of the run)
+                    if ask_edits and name in FILE_WRITE_TOOLS and "edit" not in run_allow:
+                        import uuid as _uuid
+                        _epath = str((args or {}).get("path") or (args or {}).get("file") or "file")
+                        _body = str((args or {}).get("content") or (args or {}).get("new_string") or (args or {}).get("text") or "")
+                        shown = f"{name}: {_epath}\n" + (_body if len(_body) <= 1500 else _body[:1500] + "\n… (truncated)")
+                        preq_id = _uuid.uuid4().hex[:12]
+                        ev = asyncio.Event()
+                        _perm_pending[preq_id] = {"cmd": shown, "event": ev, "result": None,
+                                                  "user_id": user.id, "kind": "edit"}
+                        yield sse("permission_request", {'req_id': preq_id, 'cmd': shown, 'kind': 'edit', 'saveable': False})
+                        allowed, pnote, _decision = False, "", ""
+                        async for _k, _v in _permission_stream(preq_id, ev):
+                            if _k == 'ping':
+                                yield _v
+                            else:
+                                allowed, pnote, _decision = _v
+                        if not allowed:
+                            result = (f"error: the user declined this edit of {_epath}" + (f" ({pnote})" if pnote else "") + _NO_WORKAROUND)
+                            yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                            actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                            msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                            continue
+                        if _decision == "project":      # "For this run" button
+                            run_allow.add("edit")
+
                     dup_key = (name, json.dumps(args, sort_keys=True, default=str)) if name in ("grep", "list_files") else None
-                    if dup_key and seen_reads.get(dup_key, 0) >= 1:
+                    _read_plan = read_ledger.plan(args, msgs) if name == "read_file" else None
+                    _read_note = (_read_plan or {}).get("note")
+                    _read_prefix = ""
+                    if name == "read_file" and step < read_ban_until:
+                        _read_note = ("error: read_file is paused for a few steps because you kept re-reading the same lines. "
+                                      "Use what you already have: edit_file / write_file, run a command, or give your answer.")
+                    elif _read_plan and _read_plan.get("args") and tc_id not in parallel_results:
+                        args = _read_plan["args"]               # only the lines it does not have yet
+                        _read_prefix = _read_plan["prefix"] + "\n"
+                        if _read_plan.get("escalate"):
+                            read_ban_until = step + 4           # re-sent once with an order to act; then no reads for 3 steps
+                    if run_budget.enabled and run_budget.stage() >= budget_mod.STAGE_FINISH and name in EXPLORE_TOOLS:
+                        _read_note = ("error: the token budget is nearly gone, so no more exploring. Use what you already have: "
+                                      "edit_file / write_file, run a command, or give your answer with the exact next step.")
+                    if _read_note:
+                        result = _read_note
+                    elif dup_key and seen_reads.get(dup_key, 0) >= 1:
                         # the folder has not changed since the last identical lookup: say so instead of rerunning it
                         seen_reads[dup_key] += 1
                         result = (f"note: {name} with these exact arguments already ran and its result has not changed. "
@@ -1595,10 +1695,15 @@ async def run_agent_stream(req, user, ctx):
                                 set_device_approved(False)
                                 mark_approved("")             # the tool ran in a copy of this context: clear our copy too
                                 mark_code_approved("")
+                        if name == "read_file":
+                            read_ledger.record(args, tc_id, result)
+                            if _read_prefix and isinstance(result, str) and not result.startswith("error:"):
+                                result = _read_prefix + result
                         if dup_key:
                             seen_reads[dup_key] = 1
                         elif name in FILE_WRITE_TOOLS or name in ("run_shell", "run_python", "revert"):
                             seen_reads.clear()      # the folder may have changed: lookups are worth repeating
+                            read_ledger.clear()
                     try:
                         await fire_hook("after_tool", name, args, result)
                     except Exception as _he:          # a hook error must never swallow the tool's result
@@ -1661,9 +1766,29 @@ async def run_agent_stream(req, user, ctx):
 
                 # Anti-thrash stagnation watchdog: detect loops of read-only exploration
                 _step_acts = actions_taken[n_actions_before:]
-                if _step_acts and all(a.get("name") in ("read_file", "read_file_chunk", "grep", "list_files", "search_memory", "get_plan") for a in _step_acts):
+                # planning / lookups with nothing written or run (only while there is something to build)
+                if (not _analysis_run and not req.plan and req.session_id
+                        and plan_guard.open_items(db_get_plan_items(req.session_id))):
+                    _ag = action_guard.record_step([a.get("name") for a in _step_acts], step)
+                    if _ag == "nudge":
+                        _cur = plan_guard.current_item(db_get_plan_items(req.session_id))
+                        msgs.append({"role": "user", "content": action_guard_mod.nudge_message(
+                            action_guard.streak, (_cur or {}).get("text", ""))})
+                        yield sse("lane_warning", {"reason": "no_progress", "retrying": True,
+                                                   "message": "Planning and research without acting: told the model to act now."})
+                    elif _ag == "ban":
+                        force_main_until = max(force_main_until, step + 1 + action_guard_mod.BAN_STEPS)
+                        force_main_why = "no_action"
+                        msgs.append({"role": "user", "content": action_guard_mod.ban_message()})
+                    elif _ag == "stop":
+                        print(f"[agent] run {run_id[:8]} planned/researched for {action_guard.streak} steps without acting - stopping",
+                              file=sys.stderr)
+                        stop_reason = "no_progress"
+                        loop_detail = f"{action_guard_mod.RULE}:steps:{action_guard.streak}"
+                        break
+                if _step_acts and all(a.get("name") in ("read_file", "read_file_chunk", "grep", "list_files", "project_overview", "search_memory", "get_plan") for a in _step_acts):
                     consecutive_inspect_steps += 1
-                    if consecutive_inspect_steps >= 3:
+                    if consecutive_inspect_steps >= 3 and not _analysis_run:
                         msgs.append({
                             "role": "user",
                             "content": (
@@ -1709,7 +1834,9 @@ async def run_agent_stream(req, user, ctx):
                     wrap_msgs = list(msgs) + [{"role": "user", "content": (
                         "[stopped] The run was stopped before you finished. Do not call any tools. "
                         "Using the tool results above, answer my original request now: report what you "
-                        "found and did, what is still unfinished, and the concrete result.")}]
+                        "found and did, what is still unfinished, and the concrete result."
+                        + (" End with a line starting 'Next step:' that names the exact files and the first thing to do, so a "
+                           "new run can continue without re-reading anything." if stop_reason == "budget" else ""))}]
                     async for ev, val in _llm_chat_stream(main_client, wrap_msgs, None, req.temperature,
                                                           req.max_tokens, effort=effort):
                         if ev == "content_delta":

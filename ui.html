@@ -103,7 +103,7 @@
         <span id="claude-header-title-text" style="display:none;">New Chat</span>
         <span class="slot-caret" style="display:none;">▾</span>
       </button>
-      <span class="claude-project-pill" id="claude-project-pill" style="display:none;"></span>
+      <span class="claude-project-pill" id="claude-project-pill" style="display:none !important;" aria-hidden="true"></span>
 
       <!-- Hidden top model group & ctx (now shown in bottom composer bar) -->
       <div class="model-group" style="display:none;" title="Model selection moved to bottom bar">
@@ -255,7 +255,7 @@
                     <span class="claude-menu-check">✓</span>
                     <div class="claude-menu-text">
                       <div class="claude-menu-title">Auto</div>
-                      <div class="claude-menu-desc">Claude handles permission decisions</div>
+                      <div class="claude-menu-desc">Agent handles permission decisions</div>
                     </div>
                     <kbd class="claude-kbd-shortcut">1</kbd>
                   </button>
@@ -445,19 +445,16 @@
             <option value="bash">Bash</option>
             <option value="pwsh">PWSH</option>
           </select>
-          <button class="btn ghost ln-small" id="term-btn-clear" title="Clear console output" style="width:auto; margin:0; padding:3px 8px; font-size:11px;">Clear</button>
+          <button class="btn ghost ln-small" id="term-btn-clear" title="Clear console (Ctrl+L)" style="width:auto; margin:0; padding:3px 8px; font-size:11px;">Clear</button>
         </div>
       </div>
-      <div class="term-body" id="term-output">
-        <div class="term-welcome">
-          <div style="font-weight:600; color:var(--text); margin-bottom:4px;">Dual-Runtime Console Terminal</div>
-          <div class="dim">Run shell commands directly or inspect all shell commands executed by the agent via companion.</div>
-        </div>
+      <div class="term-body" id="term-output" tabindex="-1">
+        <div class="term-welcome"><b>Console</b> · runs on your device through the companion. Commands the agent runs show here too.<br>↑ ↓ history · Ctrl+L clear · Ctrl+C stop waiting · <b>clear</b> / <b>cls</b> also clear</div>
       </div>
       <form class="term-input-bar" id="term-input-form">
-        <span class="term-prompt-char">$</span>
-        <input type="text" id="term-input" class="term-cmd-input" placeholder="Type command here (e.g. dir, git status, npm test)..." autocomplete="off" spellcheck="false">
-        <button type="submit" class="term-run-btn" id="term-btn-run">Run</button>
+        <span class="term-prompt-char" id="term-prompt">$</span>
+        <input type="text" id="term-input" class="term-cmd-input" placeholder="" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Terminal command">
+        <button type="submit" class="term-run-btn" id="term-btn-run" tabindex="-1">Run</button>
       </form>
     </div>
 
@@ -521,7 +518,7 @@
           </button>
         </div>
         <small style="color:var(--dim); font-size:10px; line-height:1.4; display:block; margin-top:6px;">
-          Required. Agent tools (read, write, edit, shell, python) run only inside this folder on your machine, through the Companion app — never on the server.
+          Required. Agent tools (read, write, edit, shell, python) run only inside this folder on your machine, through the SSL Local Agent app — never on the server.
         </small>
       </div>
       <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">

@@ -2,6 +2,7 @@
 function toolIcon(name) {
   switch (name) {
     case 'list_files': return '📁';
+    case 'project_overview': return '🗺️';
     case 'read_file': return '📄';
     case 'grep': return '🔍';
     case 'write_file': return '💾';
@@ -149,6 +150,7 @@ function toolMeta(name) {
     case 'run_python': return { icon: '🐍', label: 'Python', verb: 'Ran Python script', running: 'Running Python script', cls: 'run' };
     case 'run_command': case 'run_shell': return { icon: '💻', label: 'Terminal', verb: 'Ran command', running: 'Running command', cls: 'run' };
     case 'list_files': return { icon: '📁', label: 'list_files', verb: 'Listed files', running: 'Listing files', cls: 'list' };
+    case 'project_overview': return { icon: '🗺️', label: 'project_overview', verb: 'Surveyed project', running: 'Surveying project', cls: 'list' };
     case 'grep': return { icon: '🔍', label: 'grep', verb: 'Searched files', running: 'Searching files', cls: 'grep' };
     case 'revert': return { icon: '↩️', label: 'revert', verb: 'Reverted file', running: 'Reverting file', cls: 'revert' };
     case 'create_plan': return { icon: '📋', label: 'Plan', verb: 'Created plan', running: 'Creating plan', cls: 'plan' };
@@ -226,7 +228,19 @@ function planPanelHtml(acts) {
 
 /* Unified diff for an Agent Task write (Claude Code / Codex style): old/new
    line numbers, green additions, red removals, dim context. */
+// highlighting every diff line is the expensive part of a render, and a diff never changes once recorded
+const _diffHtmlCache = new WeakMap();
 function agentDiffHtml(diff, path) {
+  if (diff && typeof diff === 'object') {
+    const hit = _diffHtmlCache.get(diff);
+    if (hit) return hit;
+    const html = _agentDiffHtmlBuild(diff, path);
+    _diffHtmlCache.set(diff, html);
+    return html;
+  }
+  return _agentDiffHtmlBuild(diff, path);
+}
+function _agentDiffHtmlBuild(diff, path) {
   const lang = (typeof hlLangFor === 'function') ? hlLangFor(path || '') : '';
   const hl = s => (lang && typeof hlCode === 'function') ? hlCode(s, lang) : esc(s);
   let oldNo = 0, newNo = 0;
@@ -525,9 +539,28 @@ function renderFileCard(t, isItemRunning, isOpen = null, cardKey = '', idx = 0) 
       ? '<span class="agy-status-chip done" title="Success"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 1.06 0l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg></span>'
       : '<span class="agy-status-chip err" title="File operation failed"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM4.97 4.97a.75.75 0 0 1 1.06 0L8 6.94l1.97-1.97a.75.75 0 1 1 1.06 1.06L9.06 8l1.97 1.97a.75.75 0 1 1-1.06 1.06L8 9.06l-1.97 1.97a.75.75 0 0 1-1.06-1.06L6.94 8 4.97 6.03a.75.75 0 0 1 0-1.06Z"/></svg></span>');
 
-  const openByDefault = !isRunning;
-  const openAttr = (isOpen !== null ? isOpen : openByDefault) ? ' open' : '';
+  const openByDefault = false;   // file cards start collapsed (the +N pill and name are enough); a click is remembered
+  const open = (isOpen !== null ? isOpen : openByDefault);
+  const openAttr = open ? ' open' : '';
   const keyAttr = cardKey ? ` data-card-id="${esc(cardKey)}" data-card-idx="${idx}"` : '';
+  // the body (a highlighted diff, often hundreds of lines) is built only when the card is open; a collapsed card
+  // gets an empty placeholder that fills on first open (chat.js 'toggle'). Every streamed event re-renders all cards,
+  // so building every file's diff each time is what made long file-writing runs crawl.
+  const bodyInner = () => `
+      ${p ? `<div class="codex-file-subpath">.../${esc(p)}</div>` : ''}
+      ${diff ? agentDiffHtml(diff, p) : (t.name === 'write_file' && typeof t.args.content === 'string' ? `<pre class="agy-detail-code"><code>${esc(t.args.content)}</code></pre>` : '')}
+      ${t.result !== null && !(diff && t.ok) ? `
+        <div style="font-size:10px; font-weight:700; color:var(--dim); margin:6px 0 4px; text-transform:uppercase;">Result</div>
+        <pre class="agy-detail-code" style="color:${t.ok ? 'var(--dim)' : 'var(--red)'};"><code>${esc(t.result || '(empty)')}</code></pre>
+      ` : ''}
+    `;
+  let bodyHtml = '';
+  let lazyAttr = '';
+  if (open || !cardKey) bodyHtml = bodyInner();
+  else {
+    (window._lazyCardBodies = window._lazyCardBodies || new Map()).set(cardKey, bodyInner);
+    lazyAttr = ' data-lazy="1"';
+  }
   return `<details class="codex-file-card"${openAttr}${keyAttr}>
     <summary class="codex-file-head">
       <span class="agy-tool-badge ${badgeCls}"><span class="agy-badge-icon">${icon}</span></span>
@@ -538,14 +571,7 @@ function renderFileCard(t, isItemRunning, isOpen = null, cardKey = '', idx = 0) 
       ${previewBtn}
       <svg class="agy-chevron" viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" fill-rule="evenodd" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>
     </summary>
-    <div class="codex-file-body">
-      ${p ? `<div class="codex-file-subpath">.../${esc(p)}</div>` : ''}
-      ${diff ? agentDiffHtml(diff, p) : (t.name === 'write_file' && typeof t.args.content === 'string' ? `<pre class="agy-detail-code"><code>${esc(t.args.content)}</code></pre>` : '')}
-      ${t.result !== null && !(diff && t.ok) ? `
-        <div style="font-size:10px; font-weight:700; color:var(--dim); margin:6px 0 4px; text-transform:uppercase;">Result</div>
-        <pre class="agy-detail-code" style="color:${t.ok ? 'var(--dim)' : 'var(--red)'};"><code>${esc(t.result || '(empty)')}</code></pre>
-      ` : ''}
-    </div>
+    <div class="codex-file-body"${lazyAttr}>${bodyHtml}</div>
   </details>`;
 }
 

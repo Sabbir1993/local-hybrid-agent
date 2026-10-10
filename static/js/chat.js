@@ -7,6 +7,12 @@ function initChatScrollTracking() {
 
   chat.addEventListener('scroll', () => {
     const dist = chat.scrollHeight - chat.scrollTop - chat.clientHeight;
+    // a prompt-dot jump is in flight: the first scroll events are still within 40px of the bottom, which used to
+    // read as "back at the bottom" and let the next streamed chunk pull the view back down
+    if (window._chatJumpHold) {
+      if (dist > 80) window._chatJumpHold = false;
+      return;
+    }
     if (dist < 40) {
       chatUserScrolledUp = false;
       updateScrollBottomBtn(false);
@@ -73,6 +79,14 @@ function renderAll() {
   }
 }
 
+document.addEventListener('toggle', e => {
+  const d = e.target;
+  if (!d || !d.classList || !d.classList.contains('compact-sum')) return;
+  const root = d.closest('[data-mi]');
+  const m = root && messages[Number(root.dataset.mi)];
+  if (m) m._compactOpen = d.open;
+}, true);
+
 function onThinkSummaryClick(idx, ev) {
   const target = ev ? (ev.target || ev.currentTarget) : null;
   const details = target ? target.closest('details') : document.querySelector(`details[data-think-idx="${idx}"]`);
@@ -124,8 +138,46 @@ function _rememberCardOpen(details, isOpen) {
 }
 window._rememberCardOpen = _rememberCardOpen;
 
+// "Show arguments" inside a tool card is a class on a <pre>, so a streaming re-render (which rebuilds the cards)
+// closed it again. Remember it on the message next to the card state and put it back after every render.
+function _argsKey(pre) {
+  const card = pre.closest('details');
+  if (!card) return '';
+  return card.dataset.cardId || ('idx:' + card.dataset.cardIdx);
+}
+function _rememberArgsOpen(pre, isOpen) {
+  const bubble = pre.closest('#chat-inner > *');
+  if (!bubble) return;
+  const m = messages[Array.prototype.indexOf.call(bubble.parentElement.children, bubble)];
+  const key = _argsKey(pre);
+  if (!m || !key) return;
+  m._argsOpen = m._argsOpen || {};
+  m._argsOpen[key] = isOpen;
+}
+function _applyArgsOpen(container, m) {
+  if (!container || !m || !m._argsOpen) return;
+  container.querySelectorAll('.agy-args-pre').forEach(pre => {
+    const key = _argsKey(pre);
+    if (!key || !m._argsOpen[key]) return;
+    pre.classList.add('open');
+    const btn = pre.parentElement && pre.parentElement.querySelector('.agy-expand-btn');
+    if (btn) btn.textContent = 'Hide arguments';
+  });
+}
+window._rememberArgsOpen = _rememberArgsOpen;
+
+// a collapsed file card is rendered without its diff (agent-acts.js); build it when the card is first opened
+function _fillLazyCard(d) {
+  const body = d.querySelector(':scope > .codex-file-body[data-lazy]');
+  if (!body) return;
+  const fn = window._lazyCardBodies && window._lazyCardBodies.get(d.dataset.cardId);
+  if (typeof fn === 'function') body.innerHTML = fn();
+  body.removeAttribute('data-lazy');
+}
+
 document.addEventListener('toggle', e => {
   const d = e.target;
+  if (d && d.tagName === 'DETAILS' && d.open && d.classList.contains('codex-file-card')) _fillLazyCard(d);
   if (d && d.tagName === 'DETAILS' && !d.classList.contains('think')) {
     _rememberCardOpen(d, d.open);
   }
@@ -272,6 +324,7 @@ function renderLast() {
           const follow = el.classList.contains('agy-steps-list') && (!p || p.atBottom);
           el.scrollTop = follow ? el.scrollHeight : (p ? p.top : 0);
         });
+        _applyArgsOpen(newActs, m);
         lastEl.replaceChild(newActs, existingActs);
       }
       return;
@@ -294,6 +347,7 @@ function renderLast() {
           else if (m._cardOpen[i] !== undefined) d.open = m._cardOpen[i];
         });
       }
+      _applyArgsOpen(newEl, m);
       newEl.querySelectorAll(SCROLLERS).forEach((el, i) => {
         const p = prevScroll[i];
         const follow = el.classList.contains('agy-steps-list') && generating && (!p || p.atBottom);
@@ -319,7 +373,7 @@ function renderLast() {
   }
 
   // Only auto-scroll the main chat container if user has NOT scrolled up and was at the bottom
-  if (chat && !chatUserScrolledUp && chatWasAtBottom) {
+  if (chat && !chatUserScrolledUp && chatWasAtBottom && !window._chatJumpHold) {
     chat.scrollTop = chat.scrollHeight;
     updateScrollBottomBtn(false);
   } else if (generating && chatUserScrolledUp) {
@@ -495,7 +549,13 @@ function onClaudeWorkingTick() {
   }
 }
 
+// every bubble carries its messages index, so the prompt dots find their target without relying on child order
 function bubbleHtml(m, idx) {
+  const html = _bubbleHtml(m, idx);
+  return typeof html === 'string' ? html.replace(/^(\s*<div)/, `$1 data-mi="${idx}"`) : html;
+}
+
+function _bubbleHtml(m, idx) {
   if (m.role === 'user') {
     const imgs = (m.images || []).map(u =>
       `<img src="${esc(u)}" class="chat-img-thumb" alt="Attachment" title="Click to enlarge" data-click="open-image" style="max-width:240px; max-height:180px; border-radius:8px; display:block; margin:6px 0; border:1px solid rgba(255,255,255,0.15); box-shadow:0 2px 8px rgba(0,0,0,0.3); cursor:zoom-in;">`).join('');
@@ -533,23 +593,15 @@ function bubbleHtml(m, idx) {
     const pct = (typeof m.reductionPct === 'number' && m.reductionPct > 0)
       ? m.reductionPct
       : ((bTok > 0 && aTok > 0 && bTok > aTok) ? Math.round((1 - aTok / bTok) * 100) : 0);
-    const wasTok = bTok ? ` · was ${bTok >= 1000 ? (bTok / 1000).toFixed(1) + 'k' : bTok} tok` : '';
-    const nowTok = aTok ? ` → now ${aTok >= 1000 ? (aTok / 1000).toFixed(1) + 'k' : aTok} tok` : '';
     const keptInfo = m.compactKept ? ` (${m.compactKept} recent preserved)` : '';
-    const pctBadge = pct > 0
-      ? `<span style="background:rgba(34,197,94,0.15); color:#4ade80; border:1px solid rgba(34,197,94,0.35); border-radius:999px; padding:1px 8px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:3px;">-${pct}% reduction</span>`
-      : '';
-    return `<div class="msg bot"><div class="bubble" style="border:1px dashed rgba(99,102,241,0.45); background:rgba(99,102,241,0.04); padding:12px 14px;">`
-      + `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:6px; flex-wrap:wrap; gap:6px;">`
-      + `  <div style="font-size:12px; font-weight:700; color:var(--accent, #6366f1); display:flex; align-items:center; gap:8px;">`
-      + `    <span>🧹 Compacted Context Summary</span>`
-      + `    ${pctBadge}`
-      + `  </div>`
-      + `  <div class="mono dim" style="font-size:10.5px;">${wasTok}${nowTok}${keptInfo}</div>`
-      + `</div>`
-      + `${md((m.content || '').replace(/^\[COMPACTED CONTEXT SUMMARY\]\n?/, ''))}`
-      + `<div class="dim" style="font-size:10.5px; margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.08);">Earlier messages are still saved above — only replies from here on use this summary as context.</div>`
-      + `</div></div>`;
+    const stats = (pct > 0 ? `-${pct}%` : '') + (bTok && aTok ? ` · ${bTok >= 1000 ? (bTok / 1000).toFixed(1) + 'k' : bTok} → ${aTok >= 1000 ? (aTok / 1000).toFixed(1) + 'k' : aTok} tokens` : '');
+    // one quiet line; the summary text is one click away
+    return `<div class="msg bot"><details class="compact-sum"${m._compactOpen ? ' open' : ''}>`
+      + `<summary><span class="cs-line"></span><span class="cs-label">Context compacted${stats ? ' · ' + esc(stats) : ''}${keptInfo ? esc(keptInfo) : ''}</span>`
+      + `<span class="cs-view">View summary</span><span class="cs-line"></span></summary>`
+      + `<div class="cs-body">${md((m.content || '').replace(/^\[COMPACTED CONTEXT SUMMARY\]\n?/, ''))}`
+      + `<div class="dim cs-note">Earlier messages are still saved above. Only replies from here on use this summary as context.</div></div>`
+      + `</details></div>`;
   }
   let inner = '';
   

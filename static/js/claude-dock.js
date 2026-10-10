@@ -160,8 +160,8 @@
       if (tab === 'preview' && this.previewView) this.previewView.classList.add('active');
       if (tab === 'terminal' && this.terminalView) {
         this.terminalView.classList.add('active');
-        this.updateTerminalStatus();
-        $('term-input')?.focus();
+        const inp = $('term-input');
+        if (inp) { inp.placeholder = ''; inp.focus(); }
       }
     },
 
@@ -190,37 +190,128 @@
     },
 
     // ---------------- CONSOLE TERMINAL CONTROLLER ----------------
+    // Not a PTY: every command is one request to /control/companion/shell (companion `shell.run`, a fresh
+    // process each time). The prompt, history, cwd tracking (`cd`), colours and Ctrl+C below are the client side.
+    termHistory: [],
+    termHistIdx: -1,
+    termDraft: '',
+
     initTerminal() {
       const clearBtn = $('term-btn-clear');
       const form = $('term-input-form');
       const input = $('term-input');
       const shellSel = $('term-shell-select');
+      const body = $('term-output');
 
-      // Initialize shell selection
+      try { this.termHistory = JSON.parse(localStorage.getItem('term_history') || '[]').slice(-200); } catch (_) { this.termHistory = []; }
+
       if (shellSel) {
-        const savedShell = localStorage.getItem('default_terminal_shell') || 'powershell';
-        shellSel.value = savedShell;
+        shellSel.value = localStorage.getItem('default_terminal_shell') || 'powershell';
         shellSel.addEventListener('change', () => {
           localStorage.setItem('default_terminal_shell', shellSel.value);
-          const selLabel = shellSel.options[shellSel.selectedIndex]?.text || shellSel.value;
-          toast(`Terminal shell: ${selLabel}`);
+          this.updatePrompt();
+          input?.focus();
         });
       }
 
-      clearBtn?.addEventListener('click', () => {
-        const out = $('term-output');
-        if (out) out.innerHTML = '';
+      clearBtn?.addEventListener('click', () => { this.clearTerminal(); input?.focus(); });
+
+      // a real terminal takes focus wherever you click, unless you are selecting text
+      body?.addEventListener('mouseup', () => {
+        if (!String(window.getSelection() || '')) input?.focus();
       });
 
       form?.addEventListener('submit', async (e) => {
         e.preventDefault();
+        if (this._termRunning) return;
         const cmd = (input?.value || '').trim();
         if (!cmd) return;
         input.value = '';
+        this.termHistory.push(cmd);
+        if (this.termHistory.length > 200) this.termHistory.shift();
+        try { localStorage.setItem('term_history', JSON.stringify(this.termHistory)); } catch (_) {}
+        this.termHistIdx = -1;
+        if (/^(clear|cls)$/i.test(cmd)) { this.clearTerminal(); return; }
         await this.runTerminalCommand(cmd);
       });
 
+      input?.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          if (!this.termHistory.length) return;
+          e.preventDefault();
+          if (this.termHistIdx === -1) { this.termDraft = input.value; this.termHistIdx = this.termHistory.length; }
+          this.termHistIdx += e.key === 'ArrowUp' ? -1 : 1;
+          if (this.termHistIdx < 0) this.termHistIdx = 0;
+          if (this.termHistIdx >= this.termHistory.length) { this.termHistIdx = -1; input.value = this.termDraft; }
+          else input.value = this.termHistory[this.termHistIdx];
+          requestAnimationFrame(() => input.setSelectionRange(input.value.length, input.value.length));
+        } else if (e.ctrlKey && e.key.toLowerCase() === 'l') {
+          e.preventDefault();
+          this.clearTerminal();
+        } else if (e.ctrlKey && e.key.toLowerCase() === 'c' && !String(window.getSelection() || '')) {
+          e.preventDefault();
+          if (this._termRunning && this._termCtl) this._termCtl.abort();
+          else if (input.value) { this.logTerminal({ cmd: input.value + '^C', source: 'user', stdout: '' }); input.value = ''; }
+        }
+      });
+
       this.updateTerminalStatus();
+      // the project / agent is often not loaded yet on refresh, and can change later: follow it
+      setInterval(() => {
+        const t = this.getValidTerminalTarget();
+        const key = (t.valid ? t.dir : '') + '|' + t.valid;
+        if (key !== this._termTargetKey) { this._termTargetKey = key; this.updateTerminalStatus(); }
+      }, 1000);
+    },
+
+    clearTerminal() {
+      const out = $('term-output');
+      if (out) out.innerHTML = '';
+    },
+
+    // "PS E:\proj>" for PowerShell, "E:\proj>" for cmd, "~/proj $" for bash
+    promptText() {
+      const shell = $('term-shell-select')?.value || localStorage.getItem('default_terminal_shell') || 'powershell';
+      let dir = this.currentCwd || '';
+      if (dir.length > 38) dir = '…' + dir.slice(-37);
+      if (shell === 'bash') return `${dir} $`;
+      if (shell === 'cmd') return `${dir}>`;
+      return `PS ${dir}>`;
+    },
+
+    updatePrompt() {
+      const el = $('term-prompt');
+      if (el) { el.textContent = this.promptText(); el.title = this.currentCwd || ''; }
+    },
+
+    // SGR colours -> spans. Text is HTML-escaped first, so output can never inject markup.
+    ansiToHtml(text) {
+      const COLORS = { 30: '#6b7280', 31: '#f87171', 32: '#4ade80', 33: '#fbbf24', 34: '#60a5fa', 35: '#c084fc', 36: '#22d3ee', 37: '#e5e7eb',
+                       90: '#9ca3af', 91: '#fca5a5', 92: '#86efac', 93: '#fde047', 94: '#93c5fd', 95: '#d8b4fe', 96: '#67e8f9', 97: '#ffffff' };
+      let t = String(text == null ? '' : text).replace(/\r\n/g, '\n');
+      t = t.split('\n').map(l => (l.includes('\r') ? l.split('\r').filter(Boolean).pop() || '' : l)).join('\n');   // progress bars: keep the last redraw
+      t = esc(t).replace(/\x1b\[[0-9;?]*[A-HJKSTfhlsu]/g, '');
+      let open = false, out = '', last = 0, fg = '', bold = false;
+      const re = /\x1b\[([0-9;]*)m/g;
+      let m;
+      const flush = () => { if (open) { out += '</span>'; open = false; } };
+      while ((m = re.exec(t))) {
+        out += t.slice(last, m.index);
+        last = re.lastIndex;
+        flush();
+        (m[1] === '' ? ['0'] : m[1].split(';')).forEach(c => {
+          const n = parseInt(c, 10);
+          if (n === 0) { fg = ''; bold = false; }
+          else if (n === 1) bold = true;
+          else if (n === 22) bold = false;
+          else if (n === 39) fg = '';
+          else if (COLORS[n]) fg = COLORS[n];
+        });
+        if (fg || bold) { out += `<span${fg ? ` style="color:${fg}"` : ''}${bold ? ' class="term-ansi-bold"' : ''}>`; open = true; }
+      }
+      out += t.slice(last);
+      flush();
+      return out.replace(/\x1b/g, '');
     },
 
     getValidTerminalTarget() {
@@ -277,11 +368,12 @@
       const cwdEl = $('term-cwd-display');
 
       if (!target.valid) {
+        // stay typeable: Enter explains what is missing instead of the field being locked
         if (input) {
-          input.disabled = true;
+          input.disabled = false;
           input.placeholder = target.reason;
         }
-        if (runBtn) runBtn.disabled = true;
+        if (runBtn) runBtn.disabled = false;
         if (cwdEl) {
           cwdEl.textContent = '🔒 (No workspace selected)';
           cwdEl.title = target.reason;
@@ -293,10 +385,12 @@
       // Valid workspace selected!
       if (input) {
         input.disabled = false;
-        input.placeholder = `Type command in ${target.name}...`;
+        input.placeholder = this._termRunning ? 'running… Ctrl+C to stop waiting' : '';
       }
       if (runBtn) runBtn.disabled = false;
-      this.currentCwd = target.dir;
+      // `cd` moves the prompt; only a different project / agent folder resets it
+      if (this._cwdFor !== target.dir) { this._cwdFor = target.dir; this.currentCwd = target.dir; }
+      this.updatePrompt();
       if (cwdEl) {
         cwdEl.textContent = `📁 ${target.dir}`;
         cwdEl.title = `${target.name}: ${target.dir}`;
@@ -328,35 +422,26 @@
       entry.className = 'term-entry';
       if (data.id) entry.dataset.id = data.id;
 
-      const sourceTag = data.source === 'agent'
-        ? '<span style="color:var(--accent); font-size:10px; margin-right:4px;">[AGENT]</span>'
-        : data.source === 'companion'
-        ? '<span style="color:var(--blue); font-size:10px; margin-right:4px;">[COMPANION]</span>'
-        : data.source === 'system'
-        ? '<span style="color:var(--dim); font-size:10px; margin-right:4px;">[SYSTEM]</span>'
-        : '';
+      const isAgent = data.source === 'agent';
+      const srcTag = isAgent ? '<span class="term-src">[agent]</span>'
+        : data.source === 'companion' ? '<span class="term-src">[companion]</span>'
+        : data.source === 'system' ? '<span class="term-src">[system]</span>' : '';
+      const prompt = isAgent ? '⚙' : this.promptText();
 
       let html = `
         <div class="term-cmd-line">
-          <span class="term-prompt-tag">$</span>
-          ${sourceTag}
-          <span class="term-cmd-text">${esc(data.cmd || '')}</span>
+          <span class="term-prompt-tag${isAgent ? ' agent' : ''}">${esc(prompt)}</span>
+          <span class="term-cmd-text">${srcTag}${esc(data.cmd || '')}</span>
           <span class="term-meta">${timeStr}</span>
         </div>`;
 
       if (data.status === 'running') {
-        html += `<div class="term-stdout dim" id="term-run-${data.id || 'curr'}">⏳ Running command...</div>`;
+        html += `<div class="term-stdout term-run-indicator" id="term-run-${data.id || 'curr'}">running</div>`;
       } else {
-        if (data.stdout) {
-          html += `<div class="term-stdout">${esc(data.stdout)}</div>`;
-        }
-        if (data.stderr) {
-          html += `<div class="term-stderr">${esc(data.stderr)}</div>`;
-        }
-        if (typeof data.exit_code === 'number') {
-          const code = data.exit_code;
-          const codeClass = code === 0 ? 'term-exit-0' : 'term-exit-err';
-          html += `<div class="term-exit-badge ${codeClass}">exit ${code}</div>`;
+        if (data.stdout) html += `<div class="term-stdout">${this.ansiToHtml(data.stdout)}</div>`;
+        if (data.stderr) html += `<div class="term-stderr">${this.ansiToHtml(data.stderr)}</div>`;
+        if (typeof data.exit_code === 'number' && data.exit_code !== 0) {
+          html += `<div class="term-exit-badge term-exit-err">exit ${data.exit_code}</div>`;
         }
       }
 
@@ -365,15 +450,37 @@
       out.scrollTop = out.scrollHeight;
     },
 
+    // append stdout / stderr / exit code to a finished entry
+    _termFinish(entry, stdout, stderr, code) {
+      entry.querySelector('.term-run-indicator')?.remove();
+      if (stdout) {
+        const o = document.createElement('div');
+        o.className = 'term-stdout';
+        o.innerHTML = this.ansiToHtml(stdout);
+        entry.appendChild(o);
+      }
+      if (stderr) {
+        const e = document.createElement('div');
+        e.className = 'term-stderr';
+        e.innerHTML = this.ansiToHtml(stderr);
+        entry.appendChild(e);
+      }
+      if (code !== 0) {
+        const badge = document.createElement('div');
+        badge.className = 'term-exit-badge term-exit-err';
+        badge.textContent = `exit ${code}`;
+        entry.appendChild(badge);
+      }
+      const out = $('term-output');
+      if (out) out.scrollTop = out.scrollHeight;
+    },
+
     logTerminalResult(data) {
       const out = $('term-output');
       if (!out) return;
 
-      let el = data.id ? out.querySelector(`[data-id="${data.id}"]`) : null;
+      const el = data.id ? out.querySelector(`[data-id="${data.id}"]`) : null;
       if (el) {
-        const runInd = el.querySelector(`#term-run-${data.id}`);
-        if (runInd) runInd.remove();
-
         const raw = String(data.result || '');
         let stdout = raw, stderr = '', exitCode = data.ok ? 0 : 1;
 
@@ -389,24 +496,7 @@
         }
         const m = raw.match(/exit code (-?\d+)/);
         if (m) exitCode = parseInt(m[1], 10);
-
-        if (stdout) {
-          const o = document.createElement('div');
-          o.className = 'term-stdout';
-          o.textContent = stdout;
-          el.appendChild(o);
-        }
-        if (stderr) {
-          const e = document.createElement('div');
-          e.className = 'term-stderr';
-          e.textContent = stderr;
-          el.appendChild(e);
-        }
-        const badge = document.createElement('div');
-        badge.className = `term-exit-badge ${exitCode === 0 ? 'term-exit-0' : 'term-exit-err'}`;
-        badge.textContent = `exit ${exitCode}`;
-        el.appendChild(badge);
-        out.scrollTop = out.scrollHeight;
+        this._termFinish(el, stdout, stderr, exitCode);
       } else {
         this.logTerminal({
           cmd: 'shell.run result',
@@ -420,21 +510,18 @@
     async runTerminalCommand(cmd) {
       const target = this.getValidTerminalTarget();
       if (!target.valid) {
-        if (typeof toast === 'function') toast(target.reason, true);
-        this.logTerminal({
-          cmd,
-          source: 'system',
-          stderr: target.reason,
-          exit_code: 1
-        });
+        this.logTerminal({ cmd, source: 'system', stderr: target.reason, exit_code: 1 });
         return;
       }
 
-      const btn = $('term-btn-run');
-      if (btn) btn.disabled = true;
+      this._termRunning = true;
+      this._termCtl = new AbortController();
+      const input = $('term-input');
+      if (input) input.placeholder = 'running… Ctrl+C to stop waiting';
 
       const runId = 'term_' + Math.random().toString(36).substring(2, 9);
       this.logTerminal({ cmd, source: 'user', status: 'running', id: runId });
+      const entry = () => $('term-output')?.querySelector(`[data-id="${runId}"]`);
 
       try {
         const cwd = this.currentCwd || target.dir;
@@ -444,6 +531,7 @@
           try { Object.assign(headers, getDeviceHeaders()); } catch (_) {}
         }
 
+        // a fresh process per command: `cd` is run together with a print of the new folder so the prompt can follow it
         let sendCmd = cmd;
         const cdMatch = cmd.trim().match(/^cd(?:\s+(.*))?$/i);
         if (cdMatch) {
@@ -453,7 +541,6 @@
           } else if (shell === 'bash') {
             sendCmd = rawTarget ? `cd ${rawTarget} && pwd` : `cd ~ && pwd`;
           } else {
-            // powershell / pwsh
             sendCmd = rawTarget ? `cd ${rawTarget}; (Get-Location).Path` : `cd ~; (Get-Location).Path`;
           }
         }
@@ -461,60 +548,41 @@
         const r = await fetch('/control/companion/shell', {
           method: 'POST',
           headers,
-          body: JSON.stringify({ command: sendCmd, cwd, shell })
+          body: JSON.stringify({ command: sendCmd, cwd, shell }),
+          signal: this._termCtl.signal,
         });
         const d = await r.json().catch(() => ({ ok: false, error: 'Non-JSON server response' }));
 
-        const out = $('term-output');
-        const entry = out?.querySelector(`[data-id="${runId}"]`);
-        if (entry) {
-          const pending = entry.querySelector(`#term-run-${runId}`);
-          if (pending) pending.remove();
-
-          if (d.stdout) {
-            const o = document.createElement('div');
-            o.className = 'term-stdout';
-            o.textContent = d.stdout;
-            entry.appendChild(o);
-          }
-          if (d.stderr || d.error || d.detail || !r.ok) {
-            const e = document.createElement('div');
-            e.className = 'term-stderr';
-            e.textContent = d.stderr || d.error || d.detail || `HTTP Error ${r.status}`;
-            entry.appendChild(e);
-          }
+        const el = entry();
+        if (el) {
           const code = typeof d.exit_code === 'number' ? d.exit_code : ((d.ok && r.ok) ? 0 : 1);
-          if (cdMatch && code === 0 && d.stdout) {
-            const lines = d.stdout.trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+          let stdout = d.stdout || '';
+          if (cdMatch && code === 0 && stdout) {
+            // the folder line is the prompt's new cwd, not output to show
+            const lines = stdout.trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
             const newPath = lines[lines.length - 1];
             if (newPath) {
               this.currentCwd = newPath;
-              const cwdEl = $('term-cwd-display');
-              if (cwdEl) {
-                cwdEl.textContent = `📁 ${newPath}`;
-                cwdEl.title = newPath;
-              }
+              this.updatePrompt();
+              stdout = '';
             }
           }
-          const badge = document.createElement('div');
-          badge.className = `term-exit-badge ${code === 0 ? 'term-exit-0' : 'term-exit-err'}`;
-          badge.textContent = `exit ${code}`;
-          entry.appendChild(badge);
-          if (out) out.scrollTop = out.scrollHeight;
+          const err = d.stderr || d.error || d.detail || (!r.ok ? `HTTP Error ${r.status}` : '');
+          this._termFinish(el, stdout, typeof err === 'string' ? err : JSON.stringify(err), code);
         }
       } catch (err) {
-        const out = $('term-output');
-        const entry = out?.querySelector(`[data-id="${runId}"]`);
-        if (entry) {
-          const pending = entry.querySelector(`#term-run-${runId}`);
-          if (pending) pending.remove();
-          const e = document.createElement('div');
-          e.className = 'term-stderr';
-          e.textContent = 'Execution failed: ' + err.message;
-          entry.appendChild(e);
+        const el = entry();
+        if (el) {
+          if (err && err.name === 'AbortError') {
+            this._termFinish(el, '', '^C — stopped waiting. The command may still finish on the device (60s limit).', 130);
+          } else {
+            this._termFinish(el, '', 'Execution failed: ' + err.message, 1);
+          }
         }
       } finally {
-        if (btn) btn.disabled = false;
+        this._termRunning = false;
+        this._termCtl = null;
+        this.updateTerminalStatus();
         $('term-input')?.focus();
       }
     },
@@ -952,9 +1020,18 @@
       const modeMenu = $('claude-mode-menu');
       if (!modeBtn || !modeMenu) return;
 
-      this.activeModeKey = localStorage.getItem('claude_selected_mode') || 'auto';
-      this.updateModeUI(this.activeModeKey);
+      const restore = () => {
+        let k = 'auto';
+        try { k = localStorage.getItem(this.modeStoreKey()) || 'auto'; } catch (_) {}
+        this.activeModeKey = k;
+        this.updateModeUI(k);
+        // restoring Plan must also turn the real plan switch on (and anything else turns it off)
+        this._syncing = true;
+        try { if (window._setPlanMode) window._setPlanMode(k === 'plan'); } finally { this._syncing = false; }
+      };
+      restore();
       this.syncModeVisibility();
+      if (window.__sessionReady) window.__sessionReady.then(restore);   // the user id is known only after sign-in check
 
       modeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1008,39 +1085,57 @@
       });
     },
 
-    setMode(key) {
-      this.activeModeKey = key || 'auto';
-      try { localStorage.setItem('claude_selected_mode', this.activeModeKey); } catch (_) {}
-      this.updateModeUI(this.activeModeKey);
+    // the choice is remembered per signed-in user, so Bypass for one person never carries over to another
+    modeStoreKey() {
+      const u = window.__user;
+      return 'claude_selected_mode' + (u && u.id != null ? ':' + u.id : '');
+    },
 
-      if (key === 'plan') {
-        const planSel = $('agent-plan-sel');
-        if (planSel) planSel.value = 'plan';
-        if (typeof setAppMode === 'function') setAppMode(true, true);
-        toast('Mode: Plan — Planning multi-step tasks before execution');
-      } else if (key === 'manual') {
-        try {
-          fetch('/control/shell_settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ask_first: true })
-          });
-        } catch (_) {}
-        toast('Mode: Manual — Permission will be requested for all changes');
-      } else if (key === 'accept_edits') {
-        toast('Mode: Accept edits — Automatically accepting file edits');
-      } else if (key === 'bypass') {
-        try {
-          fetch('/control/shell_settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ask_first: false })
-          });
-        } catch (_) {}
-        toast('Mode: Bypass permissions — All actions accepted');
-      } else {
-        toast('Mode: Auto — Smart permission decisions active');
-      }
+    setMode(key) {
+      const keys = ['auto', 'manual', 'accept_edits', 'plan', 'bypass'];
+      this.activeModeKey = keys.includes(key) ? key : 'auto';
+      try { localStorage.setItem(this.modeStoreKey(), this.activeModeKey); } catch (_) {}
+      this.updateModeUI(this.activeModeKey);
+      // Plan is the same read-only run as the /plan switch; every other mode turns it off
+      this._syncing = true;
+      try { if (window._setPlanMode) window._setPlanMode(this.activeModeKey === 'plan'); } finally { this._syncing = false; }
+    },
+
+    // /plan and /build from the composer. /build leaves Plan for Auto, any other mode is kept.
+    applySlashMode(name) {
+      if (name === 'plan') this.setMode('plan');
+      else this.setMode(this.activeModeKey === 'plan' ? 'auto' : this.activeModeKey);
+    },
+
+    // called when plan mode is switched from outside the dropdown (hidden select, restore on load)
+    syncFromPlan(on) {
+      if (this._syncing) return;
+      if (on && this.activeModeKey !== 'plan') { this.activeModeKey = 'plan'; this.updateModeUI('plan'); }
+      else if (!on && this.activeModeKey === 'plan') { this.activeModeKey = 'auto'; this.updateModeUI('auto'); }
+      try { localStorage.setItem(this.modeStoreKey(), this.activeModeKey); } catch (_) {}
+    },
+
+    // end of a Plan-mode run: approve it (leave Plan for Auto or Accept edits) or keep planning
+    showPlanApproval() {
+      const host = $('chat-inner');
+      if (!host || host.querySelector('.plan-approval')) return;
+      const card = document.createElement('div');
+      card.className = 'plan-approval';
+      card.style.cssText = 'margin:12px 0;padding:12px 14px;border:1px solid var(--border,#444);border-radius:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center';
+      card.innerHTML = '<b style="flex:1 1 100%">Plan ready. Switch to Build mode and start?</b>'
+        + '<button class="btn" data-m="auto">Build it (Auto)</button>'
+        + '<button class="btn" data-m="accept_edits">Build it (Accept edits)</button>'
+        + '<button class="btn" data-m="keep">Keep planning</button>';
+      card.addEventListener('click', (e) => {
+        const m = e.target && e.target.dataset && e.target.dataset.m;
+        if (!m) return;
+        card.remove();
+        if (m === 'keep') return;
+        this.setMode(m);
+        if (typeof dispatchPrompt === 'function') dispatchPrompt('Proceed with the plan.');
+      });
+      host.appendChild(card);
+      card.scrollIntoView({ block: 'nearest' });
     },
 
     updateModeUI(key) {

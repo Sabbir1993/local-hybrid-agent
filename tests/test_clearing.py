@@ -43,7 +43,8 @@ class Clearing(unittest.TestCase):
         self.assertTrue(all(t["content"].startswith(C.CLEARED_PREFIX) for t in tools[:6]))
         self.assertTrue(all(t["content"].startswith("R") for t in tools[6:]))        # the newest 4 untouched
         self.assertIn("read_file(f0.js)", tools[0]["content"])                        # says what it was
-        self.assertLess(len(tools[0]["content"]), 200)
+        self.assertLess(len(tools[0]["content"]), 1100)                               # placeholder + a short digest
+        self.assertIn("re-read only the exact", tools[0]["content"])
 
     def test_tool_call_records_and_pairing_survive(self):
         msgs = run(8)
@@ -113,7 +114,8 @@ class RunWiring(unittest.TestCase):
     # regression that removes the wiring from either file still fails
     src = "\n".join(p.read_text(encoding="utf-8")
                     for p in (Path("routes/agent/run.py"),
-                              Path("routes/agent/stream.py")))
+                              Path("routes/agent/stream.py"),
+                              Path("core/agent_loop/budget.py")))
 
     def test_budget_and_clearing_are_wired(self):
         for needle in ("clear_old_results(msgs, pre_tokens, squeeze=budget_squeeze)", 'stop_reason = "budget"',

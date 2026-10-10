@@ -131,7 +131,7 @@ const THEME_KEY = 'a770_theme';
 const THEMES = ['slate', 'claude', 'tokyonight', 'oled', 'nord', 'classic', 'ssl', 'ssl-light', 'light'];
 const THEME_NAMES = {
   slate: 'Slate & Indigo',
-  claude: 'Claude Warm',
+  claude: 'Agent Warm',
   tokyonight: 'Tokyo Night',
   oled: 'OLED Black',
   nord: 'Nord Arctic',

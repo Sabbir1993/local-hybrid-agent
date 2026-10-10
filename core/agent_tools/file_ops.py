@@ -66,9 +66,11 @@ def _lines(text: str) -> int:
     return text.count("\n") + (0 if not text or text.endswith("\n") else 1)
 
 
-def _too_big(content: str, tool: str) -> Optional[str]:
+def _too_big(content: str, tool: str, args: Optional[dict] = None) -> Optional[str]:
     cap = agent_limit("write_file_max_tokens")
-    n = est_tokens(content)
+    # `_oversize_tokens`: the stream was cut once the call passed the cap (routes/common/sse_stream.py), so
+    # `content` is empty and the size is the amount generated before the cut
+    n = int((args or {}).get("_oversize_tokens") or 0) or est_tokens(content)
     if n > cap:
         return (f"error: this {tool} content is about {n} tokens; one call may carry at most {cap}. "
                 "Write a short skeleton first (imports, class/function signatures, TODO markers) with "
@@ -126,7 +128,8 @@ async def tool_read_file(args: dict) -> str:
         offset = 1
     view = edit_engine.numbered(text, offset, limit, agent_limit("read_file_max_chars"))
     if view["first"] is None:
-        return f"error: offset {offset} is past the end - {path_arg} has {view['total']} lines."
+        return (f"note: offset {offset} is past the end - {path_arg} has only {view['total']} lines, so there is nothing more "
+                f"to read. Use what you already read (lines 1-{view['total']} are all of it).")
     foot = f"[{path_arg}: lines {view['first']}-{view['last']} of {view['total']}"
     if view["next_offset"]:
         foot += f"; {view['total'] - view['last']} more - call read_file with offset={view['next_offset']}, or grep for a name"
@@ -173,6 +176,8 @@ async def tool_write_file(args: dict) -> str:
             path_arg = "main.py"
     if not path_arg:
         raise ValueError("path required")
+    if args.get("_oversize_tokens"):
+        return _too_big("", "write_file", args)
     uid, p = _resolve(path_arg)
     content = args.get("content", "")
     if len(content) > MAX_EDIT_BYTES:
@@ -210,6 +215,8 @@ async def tool_write_file(args: dict) -> str:
 
 async def tool_append_file(args: dict) -> str:
     path_arg = _path_arg(args)
+    if args.get("_oversize_tokens"):
+        return _too_big("", "append_file", args)
     uid, p = _resolve(path_arg)
     content = args.get("content", args.get("text", ""))
     if not isinstance(content, str) or not content:

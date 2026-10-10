@@ -137,7 +137,7 @@
     ],
     "repeat_streak_limit": 5,
     "start_on_main_categories": [],
-    "auto_apply": false,
+    "auto_apply": true,
     "plan_first_categories": [
       "creation"
     ],
@@ -196,8 +196,8 @@
   },
   "agent": {
     "exec_timeout_s": 0,
-    "max_steps": 100,
-    "run_timeout_s": 2700,
+    "max_steps": 150,
+    "run_timeout_s": 21600,
     "run_token_budget": 2500000,
     "idle_unload_s": 0,
     "executor_max_tokens": 4096,
@@ -205,10 +205,10 @@
     "vision_max_tokens": 4096,
     "write_file_max_tokens": 4000,
     "chunk_target_tokens": 3000,
-    "read_file_default_limit": 200,
-    "read_file_max_chars": 20000,
+    "read_file_default_limit": 500,
+    "read_file_max_chars": 40000,
     "verify_max_retries": 5,
-    "plan_max_items": 20,
+    "plan_max_items": 30,
     "plan_item_max_chars": 300,
     "plan_item_max_steps": 50,
     "python_prompt_nudge": 4,
@@ -225,8 +225,8 @@
   "context": {
     "compaction_threshold": 0.7,
     "cloud_budget_tokens": 60000,
-    "clear_trigger_tokens": 30000,
-    "clear_keep_results": 4,
+    "clear_trigger_tokens": 50000,
+    "clear_keep_results": 10,
     "clear_at_least_tokens": 8000,
     "aging": {
       "keep_recent_results": 3

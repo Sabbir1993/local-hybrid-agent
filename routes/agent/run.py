@@ -242,6 +242,8 @@ def _tool_failure_code(name: str, result) -> str | None:
 
 @router.post("/agent/run")
 async def agent_run(req: AgentRequest, request: Request, user: Principal = Depends(get_current_user)):
+    if req.permission_mode == "plan":
+        req.plan = True      # the Plan mode of the dropdown is the same read-only run as the /plan switch
     try:
         ctx = await setup_run(req, request, user)
     except SetupError as e:

@@ -12,6 +12,7 @@ from .file_ops import (
     tool_write_file,
 )
 from .memory_tools import MEMORY_IMPLS, MEMORY_SCHEMAS
+from .overview import tool_project_overview
 from .plans import tool_create_plan, tool_get_plan, tool_update_plan_item
 from .schemas import AGENT_CORE_TOOLS, AGENT_TOOLS, CHAT_WRITE_FILE_SCHEMA
 from .search_tools import (
@@ -22,6 +23,7 @@ from .search_tools import (
 
 TOOL_IMPLS = {
     "list_files": tool_list_files,
+    "project_overview": tool_project_overview,
     "read_file": tool_read_file,
     "grep": tool_grep,
     "write_file": tool_write_file,

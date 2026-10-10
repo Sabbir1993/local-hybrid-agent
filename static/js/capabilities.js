@@ -19,7 +19,7 @@ async function loadCapabilities() {
     let h = `<div class="rep-bar" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;"><span><b>${d.total_tools}</b> tools registered</span></div>`;
     
     // Tab strip
-    h += `<div role="tablist" class="ru-tabs cap-tabs" style="display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:14px; overflow-x:auto; padding-bottom:1px;">
+    h += `<div role="tablist" class="ru-tabs cap-tabs" style="display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:14px; flex-wrap:wrap; padding-bottom:1px;">
       ${tabBtn('web', '🌐 Web', d.web.enabled)}
       ${tabBtn('skills', '🎯 Skills', d.skills.enabled)}
       ${tabBtn('mcp', '🔌 MCP Servers', d.mcp.enabled)}
@@ -164,9 +164,15 @@ async function loadCapabilities() {
           <input type="number" id="agent-run-timeout" min="0" max="1440" value="${Math.round((ag.run_timeout_s != null ? ag.run_timeout_s : 1800) / 60)}"
             ${canManageMcp ? '' : 'disabled'} style="width:70px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:11px;">
           <span class="dim" style="font-size:9.5px;">minutes (0 = off)</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+          <span style="min-width:140px;">Token budget per run</span>
+          <input type="number" id="agent-run-budget" min="0" max="50" step="0.5" value="${((ag.run_token_budget != null ? ag.run_token_budget : 2500000) / 1000000).toFixed(1).replace(/\.0$/, '')}"
+            ${canManageMcp ? '' : 'disabled'} style="width:70px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:11px;">
+          <span class="dim" style="font-size:9.5px;">million new tokens (0 = off)</span>
           ${canManageMcp ? '<button class="btn accent" id="agent-steps-save" style="width:auto; margin:0 0 0 10px; padding:3px 12px; font-size:10.5px;">Save</button>' : ''}
         </div>
-        <div class="dim" style="font-size:9.5px; margin-top:6px;">At the cap a run pauses with a Continue button; runs repeating the same tool calls stop early. The wall-clock limit is what actually protects the GPU.</div>
+        <div class="dim" style="font-size:9.5px; margin-top:6px;">The token budget counts only NEW tokens each step (the resent history is cached), warns the model at 50 / 70 / 90%, and lets it finish the item it is on before stopping with a Continue button. Runs repeating the same tool calls stop early. The wall-clock limit is what actually protects the GPU.</div>
       </div>
       ${limits ? agentLimitsHtml(limits) : ''}`;
     h += capSection('task', '🤖 Agent Task', true, taskInner, 'Execution step caps, timeouts, and resource guardrails', false);
@@ -253,13 +259,15 @@ async function loadCapabilities() {
           body: JSON.stringify({
             max_steps: parseInt(box.querySelector('#agent-max-steps').value, 10) || 200,
             run_timeout_s: (parseInt(box.querySelector('#agent-run-timeout').value, 10) || 0) * 60,
+            run_token_budget: Math.round((parseFloat(box.querySelector('#agent-run-budget').value) || 0) * 1000000),
           }),
         });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || j.detail || r.status);
         box.querySelector('#agent-max-steps').value = j.max_steps;
         box.querySelector('#agent-run-timeout').value = Math.round((j.run_timeout_s || 0) / 60);
-        toast(`Agent limits set: ${j.max_steps} steps, ${Math.round((j.run_timeout_s || 0) / 60)} min ✓`);
+        box.querySelector('#agent-run-budget').value = ((j.run_token_budget || 0) / 1000000).toFixed(1).replace(/[.]0$/, '');
+        toast(`Agent limits set: ${j.max_steps} steps, ${Math.round((j.run_timeout_s || 0) / 60)} min, ${((j.run_token_budget || 0) / 1000000).toFixed(1)}M tokens ✓`);
       } catch (e) { toast('Save failed: ' + e.message, true); }
     };
 
@@ -290,7 +298,6 @@ async function loadCapabilities() {
         localStorage.setItem('default_terminal_shell', termShellEl.value);
         const termSelect = document.getElementById('term-shell-select');
         if (termSelect) termSelect.value = termShellEl.value;
-        toast(`Default terminal shell: ${termShellEl.options[termShellEl.selectedIndex]?.text || termShellEl.value}`);
       };
     }
     const askEl = box.querySelector('#shell-ask');

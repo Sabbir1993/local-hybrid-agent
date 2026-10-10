@@ -304,6 +304,9 @@ async function loadProjects(autoRestoreSessions = false) {
         localStorage.setItem('active_project_id', String(curProject.id));
         localStorage.setItem('active_project_name', curProject.name);
       } catch (_) {}
+      // the server keeps the active project in memory (lost on a restart); the page shows the one it restored
+      // from this browser, so tell the server whenever the two differ
+      if (!d.active_project || d.active_project.id !== curProject.id) await ensureProjectActive();
     }
 
     if (list) {
@@ -787,6 +790,8 @@ async function openSession(s) {
         tps: meta.tps,
         ntok: tok,
         promptTokens: meta.promptTokens || undefined,
+        usageCompletion: meta.usageCompletion || undefined,
+        usageActs: meta.usageActs != null ? meta.usageActs : undefined,
         secs: meta.secs,
         compact: meta.compact || undefined,
         compactBefore: meta.before_tokens,
@@ -1338,6 +1343,19 @@ $('btn-dir-picker-mkdir').onclick = async () => {
     toast('Create folder error: ' + e.message, true);
   }
 };
+
+/* Make the server's active project (per user + device) the one this page shows. Idempotent and cheap. */
+async function ensureProjectActive() {
+  if (!curProject || !curProject.id) return false;
+  try {
+    const r = await fetch(`/control/projects/${curProject.id}/activate`, {
+      method: 'POST',
+      headers: { ...getDeviceHeaders() },
+    });
+    return r.ok;
+  } catch (_) { return false; }
+}
+window.ensureProjectActive = ensureProjectActive;
 
 async function activateProject(pid) {
   try {

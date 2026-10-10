@@ -61,6 +61,12 @@ def tool_create_plan(args: dict) -> str:
     from ..agent_loop import plan_guard
     sid = get_plan_context()
     existing = db_get_plan_items(sid)
+    if plan_guard.open_items(existing) and [i["text"] for i in existing] == texts:
+        # the same plan again resets it and gives the model nothing new, so a weak model can re-plan forever
+        cur = plan_guard.current_item(existing)
+        raise ValueError("this exact plan already exists - do not call create_plan again. Start doing step #"
+                         + str(cur["ord"] if cur else 1) + " now with a real action (write_file, edit_file, run_shell), "
+                         "not more research. In Plan mode (read-only) there is nothing to act with: write the plan out as text and stop.")
     if (plan_guard.open_items(existing) and any(i["status"] in ("done", "failed") for i in existing)
             and not args.get("replace")):
         raise ValueError("a plan is already in progress and some steps are finished. Do not recreate it: continue "

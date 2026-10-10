@@ -176,7 +176,7 @@ class WiringTests(unittest.TestCase):
                         for p in (Path("routes/agent/run.py"),
                                   Path("routes/agent/stream.py")))
         self.assertIn("not in hidden_tools", src)
-        self.assertIn("(cfg.get(\"ask_first\", True) or personal)", src)
+        self.assertIn("(pmode == \"manual\" or cfg.get(\"ask_first\", True) or personal)", src)
         self.assertIn("'saveable': False if personal", src)
 
     def test_client_sends_the_flag_only_from_chat(self):
@@ -264,7 +264,7 @@ class PythonWithApprovalTests(unittest.TestCase):
         src = "\n".join(p.read_text(encoding="utf-8")
                         for p in (Path("routes/agent/run.py"),
                                   Path("routes/agent/stream.py")))
-        self.assertIn('name == "run_python" and (shell_cfg().get("ask_first", True) or personal)', src)
+        self.assertIn('name == "run_python" and not bypass and (pmode == "manual" or shell_cfg().get("ask_first", True) or personal)', src)
 
 
 class UniqueFileNameTests(unittest.TestCase):

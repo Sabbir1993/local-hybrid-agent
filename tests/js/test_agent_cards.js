@@ -50,7 +50,9 @@ const fileActs = [
     diff: { added: 1, removed: 0, hunks: [{ t: '+', s: 'x = 1' }], truncated: false } },
 ];
 const fileHtml = ctx.agentActsHtml(JSON.parse(JSON.stringify(fileActs)), false);
-assert.ok(/agy-diff-line/.test(fileHtml), 'diff renders with agy-diff-line classes');
+assert.ok(!/agy-diff-line/.test(fileHtml) && /data-lazy="1"/.test(fileHtml), 'a collapsed file card builds no diff until opened');
+const openHtml = ctx.agentActsHtml(JSON.parse(JSON.stringify(fileActs)), false, { _cardOpen: { 'tool-f': true } });
+assert.ok(/agy-diff-line/.test(openHtml), 'diff renders with agy-diff-line classes once the card is open');
 assert.ok(/codex-diff-pill add/.test(fileHtml), 'diff pill shows +N');
 
 console.log('agent cards tests: OK');

@@ -226,7 +226,13 @@ async function wsShowFile(path) {
         return `<span class="${marker[l.t] || 'wsdiff-ctx'}">${sign}${hlCode(l.s, lang)}</span>`;
       }).join('');
     } else {
-      pre.innerHTML = hlCode(d.content || '(empty file)', lang);
+      const text = d.content || '';
+      const n = text ? text.replace(/\n$/, '').split('\n').length : 0;
+      let nums = '';
+      for (let i = 1; i <= n; i++) nums += i + '\n';
+      // line numbers: a sticky gutter in front of the code (user-select:none, skipped by the drag-line count below)
+      pre.innerHTML = (n ? `<span class="ws-gutter" aria-hidden="true">${nums.slice(0, -1)}</span>` : '')
+        + hlCode(text || '(empty file)', lang);
     }
     pre.scrollLeft = 0; pre.scrollTop = 0;
   } catch (e) {
@@ -259,6 +265,8 @@ async function wsShowFile(path) {
     const lineOf = (node, offset) => {
       const r = document.createRange();
       r.selectNodeContents(pre);
+      const g = pre.querySelector('.ws-gutter');
+      if (g) r.setStartAfter(g);
       r.setEnd(node, offset);
       return (r.toString().match(/\n/g) || []).length + 1;
     };
@@ -339,6 +347,7 @@ function showPermModal(reqId, cmd, kind, saveable) {
     browser_eval: ['🌐 Run JavaScript in the agent’s browser ', 'The agent wants to run this script in its test browser:'],
     browser_open: ['🌐 Open a website ', 'The agent wants to open this site in its test browser:'],
     device: ['📱 Device action ', 'The agent wants to do this on a phone / emulator:'],
+    edit: ['✏️ Edit a file ', 'The agent wants to change this file:'],
   };
   const pb = $('perm-project');
   if (DEVICE_KINDS[kind]) {
@@ -540,11 +549,13 @@ if ($('perm-close-x')) $('perm-close-x').onclick = () => answerPermission('deny'
     planMode = planSel.value === 'plan';
     try { localStorage.setItem('agent_plan', planMode ? 'plan' : 'build'); } catch (e) {}
     apply();
+    if (window.ClaudeChatBar) window.ClaudeChatBar.syncFromPlan(planMode);
   };
   apply(true);
   window._setPlanMode = (on) => {
     planMode = on;
     try { localStorage.setItem('agent_plan', on ? 'plan' : 'build'); } catch (e) {}
     apply(true);
+    if (window.ClaudeChatBar) window.ClaudeChatBar.syncFromPlan(on);
   };
 })();

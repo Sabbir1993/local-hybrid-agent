@@ -7,6 +7,8 @@ from core.config import CONFIG_FILE, write_app_config
 from core.deps import require_permission
 from core.small_model import APP_CONFIG
 from ..models import (
+    AGENT_BUDGET_MAX,
+    AGENT_BUDGET_MIN,
     AGENT_STEPS_MAX,
     AGENT_STEPS_MIN,
     AGENT_TIMEOUT_MAX_S,
@@ -62,8 +64,8 @@ async def agent_settings(req: AgentSettingsReq,
     The step cap alone is not a safety mechanism - it kills slow but legitimate
     work while doing nothing to stop a thrashing model. run_timeout_s is the
     bound that actually protects the GPU. 0 disables it."""
-    if req.max_steps is None and req.run_timeout_s is None:
-        return JSONResponse({"error": "max_steps or run_timeout_s required"}, status_code=400)
+    if req.max_steps is None and req.run_timeout_s is None and req.run_token_budget is None:
+        return JSONResponse({"error": "max_steps, run_timeout_s or run_token_budget required"}, status_code=400)
     try:
         cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except Exception as e:
@@ -71,23 +73,28 @@ async def agent_settings(req: AgentSettingsReq,
     agent_cfg = cfg.setdefault("agent", {})
     old_steps = agent_cfg.get("max_steps")
     old_timeout = agent_cfg.get("run_timeout_s")
+    old_budget = agent_cfg.get("run_token_budget")
     if req.max_steps is not None:
         agent_cfg["max_steps"] = max(AGENT_STEPS_MIN, min(AGENT_STEPS_MAX, int(req.max_steps)))
     if req.run_timeout_s is not None:
         agent_cfg["run_timeout_s"] = max(AGENT_TIMEOUT_MIN_S,
                                           min(AGENT_TIMEOUT_MAX_S, int(req.run_timeout_s)))
+    if req.run_token_budget is not None:
+        agent_cfg["run_token_budget"] = max(AGENT_BUDGET_MIN, min(AGENT_BUDGET_MAX, int(req.run_token_budget)))
     try:
         write_app_config(cfg, CONFIG_FILE)
     except Exception as e:
         return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
     APP_CONFIG.setdefault("agent", {}).update(
-        {k: v for k, v in agent_cfg.items() if k in ("max_steps", "run_timeout_s")})
+        {k: v for k, v in agent_cfg.items() if k in ("max_steps", "run_timeout_s", "run_token_budget")})
     audit_log(user, action="agent.settings", resource="agent.limits",
               permission_key="settings.orchestration.configure",
               detail={"max_steps": [old_steps, agent_cfg.get("max_steps")],
-                      "run_timeout_s": [old_timeout, agent_cfg.get("run_timeout_s")]})
+                      "run_timeout_s": [old_timeout, agent_cfg.get("run_timeout_s")],
+                      "run_token_budget": [old_budget, agent_cfg.get("run_token_budget")]})
     return {"ok": True, "max_steps": agent_cfg.get("max_steps"),
-            "run_timeout_s": agent_cfg.get("run_timeout_s")}
+            "run_timeout_s": agent_cfg.get("run_timeout_s"),
+            "run_token_budget": agent_cfg.get("run_token_budget")}
 
 
 def _limits_view() -> dict:

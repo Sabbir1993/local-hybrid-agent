@@ -115,7 +115,7 @@ async function ensurePath(target, action) {
     buttons: ["Deny", "Allow this folder"],
     defaultId: 0,
     cancelId: 0,
-    title: "A770 Companion — file access request",
+    title: "SSL Local Agent — file access request",
     message: `The server wants to ${action}:\n${path.resolve(target)}`,
     detail: `Allow the AI agent to access files in this folder?\n\n${dir}\n\n` +
       "Only allow folders you intend to use as a workspace.",
@@ -218,7 +218,7 @@ async function confirmShell(command, cwd, display, approvedInApp) {
     buttons,
     defaultId: 0,
     cancelId: 0,
-    title: "A770 Companion — run command?",
+    title: "SSL Local Agent — run command?",
     message: display ? "The AI agent wants to run this code on your computer:"
                      : "The AI agent wants to run this command on your computer:",
     detail: `${shown}\n\nin: ${cwd}` +
@@ -249,7 +249,7 @@ async function confirmOrigin(origin, approvedInApp) {
     buttons: ["Deny", "Allow this site"],
     defaultId: 0,
     cancelId: 0,
-    title: "A770 Companion — open a website?",
+    title: "SSL Local Agent — open a website?",
     message: "The AI agent wants to open this site in its test browser:",
     detail: `${origin}\n\nThe agent's browser is a fresh profile (none of your logins or cookies), ` +
       "but anything the page shows is sent to the AI. Allow only sites you are testing.",
@@ -268,7 +268,7 @@ async function confirmAction(title, message, detail, trustKey, approvedInApp) {
     buttons: ["Deny", "Allow"],
     defaultId: 0,
     cancelId: 0,
-    title: `A770 Companion — ${title}`,
+    title: `SSL Local Agent — ${title}`,
     message,
     detail: detail.length > MAX_SHOWN_CODE ? detail.slice(0, MAX_SHOWN_CODE) + "\n…" : detail,
     checkboxLabel: trustKey ? "Don't ask again for this until the companion restarts" : undefined,

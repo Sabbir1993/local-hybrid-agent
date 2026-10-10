@@ -74,6 +74,19 @@ class TrackedFiles(unittest.TestCase):
         self.assertNotIn("f0", changes)
         self.assertIn(f"f{diffs.MAX_TRACKED_FILES + 4}", changes)
 
+    def test_a_real_project_is_not_cut_at_50_files(self):
+        changes = {f"f{i}": {"before": "x", "after": "y"} for i in range(200)}
+        diffs._trim_changes(changes)
+        self.assertEqual(len(changes), 200)
+
+    def test_memory_is_bounded_by_bytes_oldest_first(self):
+        big = "z" * (diffs.MAX_TRACKED_BYTES // 3)
+        changes = {f"f{i}": {"before": big, "after": None} for i in range(5)}
+        diffs._trim_changes(changes)
+        self.assertLessEqual(len(changes), 3)
+        self.assertIn("f4", changes)
+        self.assertNotIn("f0", changes)
+
 
 class MemoryReport(unittest.TestCase):
     def test_reports_this_process_with_numbers(self):

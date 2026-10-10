@@ -103,6 +103,7 @@ async def capabilities_status(user: Principal = Depends(get_current_user)):
             "min": AGENT_STEPS_MIN, "max": AGENT_STEPS_MAX,
             "run_timeout_s": APP_CONFIG.get("agent", {}).get("run_timeout_s", 1800),
             "timeout_min": 0, "timeout_max": 1440,
+            "run_token_budget": APP_CONFIG.get("agent", {}).get("run_token_budget", 2500000),
         },
         "total_tools": len(registry.schemas()),
     }

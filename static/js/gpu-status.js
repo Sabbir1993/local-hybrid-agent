@@ -336,7 +336,24 @@ function updateContextChip() {
   for (let i = ctxMsgs.length - 1; i >= minIdx; i--) {
     if (ctxMsgs[i].role === 'assistant' && ctxMsgs[i].promptTokens > 0) { anchor = i; break; }
   }
-  if (anchor >= 0) {
+  const am = anchor >= 0 ? ctxMsgs[anchor] : null;
+  // an agent message saved before usageActs existed: its promptTokens came from the run's last step, so every act it
+  // holds was already in that prompt (counting the full tool output again is how a reload showed 150k for a 27k prompt)
+  const legacyAgent = am && am.usageActs === undefined && Array.isArray(am.acts) && am.acts.length > 0 && am.promptTokens > 0;
+  if (am && (am.usageActs !== undefined || legacyAgent) && Array.isArray(am.acts)) {
+    // live agent run: the server's figure for the latest step + that step's reply, then only the tool
+    // results / calls that arrived since (the whole run is one message, so adding all of its acts double counts)
+    let extra = 0;
+    for (const a of am.acts.slice(am.usageActs !== undefined ? am.usageActs : am.acts.length)) extra += actTokens(a);
+    promptToks = am.promptTokens + extra;
+    compToks = am.usageCompletion || (legacyAgent ? Math.round(((am.content || '').length + (am.reasoning || '').length) / 3.5) : 0);
+    totalToks = promptToks + compToks;
+    for (const m of ctxMsgs.slice(anchor + 1)) {
+      const tok = messageTokens(m);
+      if (m.role === 'assistant') compToks += tok; else promptToks += tok;
+      totalToks += tok;
+    }
+  } else if (anchor >= 0) {
     promptToks = ctxMsgs[anchor].promptTokens;
     compToks = messageTokens(ctxMsgs[anchor]);
     totalToks = promptToks + compToks;
@@ -383,5 +400,7 @@ function updateContextChip() {
   }
   if (popupTitle) {
     popupTitle.textContent = `Context ${fmtK(totalToks)} / ${fmtK(nCtx)} (${Math.round(pct)}%)`;
+    const rb = window._runBudget;
+    if (rb && rb.limit > 0) popupTitle.textContent += ` · Run budget ${Math.min(100, Math.round((rb.used / rb.limit) * 100))}%`;
   }
 }

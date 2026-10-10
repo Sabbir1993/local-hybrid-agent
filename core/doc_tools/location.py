@@ -70,7 +70,7 @@ async def _locate(name: str) -> tuple[_Loc, bytes]:
         pass
     except RuntimeError as e:
         if "unknown op" in str(e):
-            raise DocOpError("the A770 Companion app on your machine is too old for document edits - "
+            raise DocOpError("the SSL Local Agent app on your machine is too old for document edits - "
                              "update it and try again")
         raise DocOpError(f"could not read the file on your device: {e}")
     # 2. the user's own common space (chat files, uploaded attachments)

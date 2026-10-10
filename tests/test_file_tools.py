@@ -464,6 +464,8 @@ class ToolTests(Base):
     def test_read_pagination_footer(self):
         self.fc.files[full("r.txt")] = "".join(f"l{i}\n" for i in range(1, 451))
         out = self.call("read_file", path="r.txt")
+        self.assertIn("lines 1-450 of 450", out)    # the default slice is 500 lines
+        out = self.call("read_file", path="r.txt", limit=200)
         self.assertIn("lines 1-200 of 450", out)
         self.assertIn("offset=201", out)
         out = self.call("read_file", path="r.txt", offset=401)

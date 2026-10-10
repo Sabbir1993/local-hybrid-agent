@@ -101,7 +101,7 @@ def stop_note(reason: str, ctx: StopContext) -> str:
     notes = {
         StopReason.MAX_STEPS.value: f"max steps reached ({ctx.steps})",
         StopReason.TIMEOUT.value: f"wall-clock limit reached ({ctx.run_limit_s}s)",
-        StopReason.BUDGET.value: f"token budget reached ({ctx.run_token_budget:,} prompt tokens)",
+        StopReason.BUDGET.value: f"token budget reached ({ctx.run_token_budget:,} new tokens)",
         StopReason.LOOP.value: "stopped: repeating the same tool calls",
         StopReason.LOOP_NEAR_REPEAT.value: f"stopped: `{ctx.loop_detail}` called repeatedly without progress",
         StopReason.NO_PROGRESS.value: "stopped: no progress - " + describe_stop(ctx.loop_detail),
@@ -114,7 +114,7 @@ def stop_headline(reason: str, ctx: StopContext) -> str:
     headlines = {
         StopReason.MAX_STEPS.value: f"Reached the step limit ({ctx.steps} steps)",
         StopReason.TIMEOUT.value: f"Ran for {ctx.elapsed_s // 60} min (wall-clock limit)",
-        StopReason.BUDGET.value: f"Used the run's token budget ({ctx.run_prompt_tokens:,} prompt tokens)",
+        StopReason.BUDGET.value: f"Used the run's token budget ({ctx.run_prompt_tokens:,} new tokens)",
         StopReason.LOOP.value: "Kept repeating the same tool calls",
         StopReason.LOOP_NEAR_REPEAT.value: f"Called `{ctx.loop_detail}` repeatedly without making progress",
         StopReason.NO_PROGRESS.value: "Stopped making progress: " + describe_stop(ctx.loop_detail),

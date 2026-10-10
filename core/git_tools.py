@@ -88,17 +88,22 @@ async def git_status() -> dict:
     return {"branch": branch, "detached": detached, "ahead": ahead, "behind": behind, "files": files}
 
 
-async def git_diff(path: Optional[str] = None, staged: bool = False) -> dict:
+async def git_diff(path: Optional[str] = None, staged: bool = False, untracked: bool = False) -> dict:
     cwd = _cwd()
     if not await _is_repo(cwd):
         return {"error": f"'{cwd}' is not a git repository"}
-    args = ["diff"]
-    if staged:
-        args.append("--cached")
-    if path:
-        args += ["--", path]
+    if untracked and path:
+        # a new file is not in the index, so a plain diff is empty: compare it against nothing instead
+        args = ["diff", "--no-index", "--", "/dev/null", path]
+    else:
+        args = ["diff"]
+        if staged:
+            args.append("--cached")
+        if path:
+            args += ["--", path]
     code, out, err = await _run(args, cwd)
-    if code != 0:
+    # --no-index exits 1 when the files differ, which is the normal case for a new file
+    if code != 0 and not (untracked and code == 1 and out):
         return {"error": err.strip() or "git diff failed"}
     if len(out) > MAX_TOOL_OUTPUT:
         out = out[:MAX_TOOL_OUTPUT] + f"\n... (truncated, {len(out)} chars total)"

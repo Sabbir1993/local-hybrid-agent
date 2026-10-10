@@ -31,11 +31,13 @@ class ShellSettingsReq(BaseModel):
 AGENT_STEPS_MIN, AGENT_STEPS_MAX = 5, 200
 # 0 = no wall-clock ceiling; 24h is the practical upper bound
 AGENT_TIMEOUT_MIN_S, AGENT_TIMEOUT_MAX_S = 0, 86400
+AGENT_BUDGET_MIN, AGENT_BUDGET_MAX = 0, 50_000_000
 
 
 class AgentSettingsReq(BaseModel):
     max_steps: Optional[int] = None
     run_timeout_s: Optional[int] = None
+    run_token_budget: Optional[int] = None    # new tokens one run may use (0 = off)
 
 
 class AgentLimitsReq(BaseModel):

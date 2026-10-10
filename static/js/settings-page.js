@@ -217,7 +217,7 @@ async function loadDevicesPanel() {
         <span style="margin-left:auto;">${x.revoked_at ? 'revoked' : ''}</span>
         ${x.revoked_at ? '' : `<button class="btn ghost dev-revoke" data-id="${esc(x.id)}" style="width:auto; margin:0; padding:2px 10px; font-size:11px; color:var(--red);">Revoke</button>`}
       </div>`).join('');
-    box.innerHTML = rows || '<div class="dim" style="font-size:12px;">No paired devices yet. Sign in inside the A770 Companion app and it pairs itself.</div>';
+    box.innerHTML = rows || '<div class="dim" style="font-size:12px;">No paired devices yet. Sign in inside the SSL Local Agent app and it pairs itself.</div>';
     box.querySelectorAll('.dev-revoke').forEach(btn => {
       btn.addEventListener('click', async () => {
         if (!confirm('Revoke this device? Its companion disconnects and must be signed in again.')) return;

@@ -453,7 +453,7 @@ def _live_preflight_companion(base: str, client, username: str) -> None:
         return
     info = r.json() or {}
     if not info.get("connected"):
-        _abort("live eval: the A770 Companion app is not connected for user "
+        _abort("live eval: the SSL Local Agent app is not connected for user "
                f"'{username}'.\n"
                "  File tools run on the user's machine through the Companion, so the "
                "agent loop refuses runs (or fails every file tool) without it.\n"

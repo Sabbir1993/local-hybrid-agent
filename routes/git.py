@@ -51,8 +51,8 @@ async def branches():
 
 
 @router.get("/diff")
-async def diff(path: Optional[str] = None, staged: bool = False):
-    result = await _git(git_tools.git_diff, path, staged)
+async def diff(path: Optional[str] = None, staged: bool = False, untracked: bool = False):
+    result = await _git(git_tools.git_diff, path, staged, untracked)
     if _is_denied(result):
         return result
     if "error" in result:

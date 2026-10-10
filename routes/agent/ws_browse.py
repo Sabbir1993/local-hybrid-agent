@@ -100,7 +100,7 @@ async def agent_ws_tree(path: str = "", user: Principal = Depends(get_current_us
     try:
         nodes = await _ws_tree_scan(path)
     except (ConnectionError, TimeoutError, RuntimeError) as e:
-        return JSONResponse({"error": f"Companion app: {e}"}, status_code=502)
+        return JSONResponse({"error": f"SSL Local Agent: {e}"}, status_code=502)
     return {"root": ws.name, "project": curr_proj, "nodes": nodes, "changes": changes}
 
 
@@ -124,7 +124,7 @@ async def agent_ws_file(path: str, user: Principal = Depends(get_current_user), 
     try:
         data = await companion_bridge.call(uid, "fs.read", {"path": str(p)})
     except (ConnectionError, TimeoutError, RuntimeError) as e:
-        return JSONResponse({"error": f"Companion app: {e}"}, status_code=502)
+        return JSONResponse({"error": f"SSL Local Agent: {e}"}, status_code=502)
     content = data.get("content")
     if content is None:
         return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
@@ -218,7 +218,7 @@ async def agent_ws_raw(path: str, user: Principal = Depends(get_current_user), a
             if len(body) > _WS_RAW_MAX:
                 body = body[:_WS_RAW_MAX]
     except (ConnectionError, TimeoutError, RuntimeError) as e:
-        return JSONResponse({"error": f"Companion app: {e}"}, status_code=502)
+        return JSONResponse({"error": f"SSL Local Agent: {e}"}, status_code=502)
     except ValueError as e:
         return JSONResponse({"error": f"could not decode {path}: {e}"}, status_code=422)
 

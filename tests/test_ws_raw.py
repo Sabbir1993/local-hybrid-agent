@@ -140,7 +140,7 @@ class WsRawTests(unittest.TestCase):
             raise ConnectionError("companion not running")
         r = self._get("src/shop.js", call=boom)
         self.assertEqual(r.status_code, 502)
-        self.assertIn("Companion app", self._body(r))
+        self.assertIn("SSL Local Agent", self._body(r))
 
     def test_oversize_file_is_truncated(self):
         self.files[str(WS / "big.txt")] = b"a" * (agent_routes._WS_RAW_MAX + 5000)

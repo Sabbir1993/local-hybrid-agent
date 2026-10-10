@@ -64,6 +64,7 @@ const CLICK_ACTIONS = {
     if (!pre) return;
     pre.classList.toggle('open');
     el.textContent = pre.classList.contains('open') ? 'Hide arguments' : '◂ Show arguments';
+    if (window._rememberArgsOpen) window._rememberArgsOpen(pre, pre.classList.contains('open'));
   },
   'remove-attachment': (el) => removeAttachment(parseInt(el.dataset.arg, 10)),
   'open-image': (el) => openImageModal(el.src, 'Image attachment'),
@@ -479,6 +480,21 @@ function setLiveHud(state) {
     actionsHtml = `<div class="hud-actions"><button class="hud-close-btn" title="Dismiss" data-click="hud-close">✕</button></div>`;
   }
 
+  // the same phase streams many updates (tool_preparing fires per chunk): change the text in place so the
+  // spinner does not restart and the bar does not flicker
+  const hudKey = state.phase + '|' + ((state.actions && state.actions.length) || 0);
+  const hudText = hud.querySelector('.hud-text');
+  if (hud.dataset.hudKey === hudKey && hudText && !(state.actions && state.actions.length)) {
+    const t = state.text || '';
+    if (hudText.textContent !== t) hudText.textContent = t;
+    let sub = hud.querySelector('.hud-subtext');
+    if (state.subtext) {
+      if (!sub) { sub = document.createElement('span'); sub.className = 'hud-subtext'; hudText.after(sub); }
+      if (sub.textContent !== state.subtext) sub.textContent = state.subtext;
+    } else if (sub) sub.remove();
+    return;
+  }
+  hud.dataset.hudKey = hudKey;
   hud.innerHTML = `<div class="hud-left">`
     + iconHtml
     + `<span class="hud-text">${esc(state.text || '')}</span>`

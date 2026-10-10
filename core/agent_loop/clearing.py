@@ -21,6 +21,8 @@ from typing import Optional
 from .compaction import _call_index, _call_label
 
 CLEARED_PREFIX = "[cleared to save context"
+READ_DIGEST_CHARS = 700            # ...and never more than this many characters of them
+READ_DIGEST_LINES = 15             # lines of a cleared file read that stay as a digest
 MIN_CLEAR_CHARS = 600              # a result this small is not worth a placeholder
 # never cleared: what the model must keep seeing, or that is already tiny
 EXEMPT_TOOLS = frozenset({"read_skill", "create_plan", "update_plan_item", "get_plan", "finish"})
@@ -43,8 +45,8 @@ def settings(squeeze: bool = False) -> dict:
             return max(lo, int(c.get(key, default)))
         except (TypeError, ValueError):
             return default
-    trig = num("clear_trigger_tokens", 30000, 0)
-    keep = num("clear_keep_results", 4, 1)
+    trig = num("clear_trigger_tokens", 50000, 0)
+    keep = num("clear_keep_results", 10, 1)
     least = num("clear_at_least_tokens", 8000, 0)
     if squeeze:
         trig, keep, least = max(1, trig // 3), max(1, keep // 2), max(1, least // 2)
@@ -82,6 +84,14 @@ def clear_old_results(msgs: list, prompt_tokens: int, squeeze: bool = False) -> 
         body = str(m.get("content") or "")
         call = calls.get(m.get("tool_call_id"))
         label = _call_label(*call) if call else "tool result"
+        if call and call[0] == "read_file":
+            # a bare "call it again" made the model read the same file over and over: keep what it saw
+            # (the top of the file) so it can tell whether it really needs the rest
+            head = "\n".join(body.splitlines()[:READ_DIGEST_LINES])[:READ_DIGEST_CHARS]
+            msgs[i] = {**m, "content": f"{CLEARED_PREFIX}: {label}, about {len(body) // 4} tokens omitted. "
+                                       "You already read this: rely on what you noted, and re-read only the exact "
+                                       "lines you still need (offset/limit). Top of it:\n" + head + "\n...]"}
+            continue
         msgs[i] = {**m, "content": f"{CLEARED_PREFIX}: {label}, about {len(body) // 4} tokens omitted. "
                                    "Call the tool again if you need it.]"}
     return freed_chars // 4

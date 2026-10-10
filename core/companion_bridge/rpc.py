@@ -51,7 +51,7 @@ async def _call_once(user_id: int, op: str, params: dict, timeout: float) -> dic
     ws = await _wait_connected(user_id, CONNECT_WAIT_S)
     if ws is None:
         raise ConnectionError("companion connection was interrupted and did not come back - "
-                              "check the A770 Companion app on your machine, then retry the same call")
+                              "check the SSL Local Agent app on your machine, then retry the same call")
 
     req_id = uuid.uuid4().hex[:16]
     fut: asyncio.Future = asyncio.get_event_loop().create_future()

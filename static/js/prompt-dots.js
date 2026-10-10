@@ -52,7 +52,7 @@
 
   function target(idx) {
     const inner = document.getElementById('chat-inner');
-    return inner && inner.children[idx];
+    return inner && (inner.querySelector(`:scope > [data-mi="${idx}"]`) || inner.children[idx]);
   }
 
   function setActive(n) {
@@ -91,7 +91,12 @@
     if (!el) return;
     // the view is now where the user put it: a streaming answer must not pull it back down
     if (typeof chatUserScrolledUp !== 'undefined') chatUserScrolledUp = true;
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    window._chatJumpHold = true;          // chat.js: no auto-follow while the smooth scroll is under way
+    clearTimeout(window._chatJumpHoldTimer);
+    window._chatJumpHoldTimer = setTimeout(() => { window._chatJumpHold = false; }, 1500);
+    // measured from the live layout; a scrollIntoView that races a re-render or a layout shift can end up nowhere
+    const top = chat.scrollTop + el.getBoundingClientRect().top - chat.getBoundingClientRect().top - 8;
+    chat.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
     const n = dots.findIndex(d => d.el === b);
     if (n >= 0) setActive(n);
   });

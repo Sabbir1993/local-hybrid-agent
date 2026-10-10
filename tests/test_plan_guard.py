@@ -169,6 +169,14 @@ class PlanTools(unittest.TestCase):
         plans.tool_create_plan({"items": ["x", "y"], "replace": True})
         self.assertEqual(len(self.rows), 2)
 
+    def test_the_same_plan_again_is_refused_so_the_model_must_act(self):
+        plans.tool_create_plan({"items": ["init project", "write config"]})
+        with self.assertRaises(ValueError) as cm:
+            plans.tool_create_plan({"items": ["init project", "write config"]})
+        self.assertIn("already exists", str(cm.exception))
+        self.assertIn("step #1", str(cm.exception))
+        self.assertEqual(self.status(), ["in_progress", "pending"])
+
     def test_a_finished_plan_can_be_replaced(self):
         plans.tool_create_plan({"items": ["a"]})
         plans.tool_update_plan_item({"item": 1, "status": "done"})

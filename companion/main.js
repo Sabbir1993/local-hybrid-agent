@@ -67,7 +67,7 @@ let parkedToken = null;   // token we stopped reconnecting with (4401 / 4409) un
 function setTrayStatus(text, connectedNow) {
   connected = connectedNow;
   if (!tray) return;
-  tray.setToolTip(`A770 Companion — ${text}`);
+  tray.setToolTip(`SSL Local Agent — ${text}`);
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: connectedNow ? "🟢 Connected" : "🔴 Not connected", enabled: false },
@@ -83,7 +83,7 @@ function setTrayStatus(text, connectedNow) {
         label: "Forget always-allowed commands",
         click: () => {
           policy.forgetAlwaysAllowed();
-          dialog.showMessageBox({ type: "info", title: "A770 Companion",
+          dialog.showMessageBox({ type: "info", title: "SSL Local Agent",
             message: "The agent will ask again before running any command." });
         },
       },
@@ -766,7 +766,7 @@ function setupApplicationMenu() {
 app.whenReady().then(() => {
   setupApplicationMenu();
   if (!SERVER_URL) {
-    dialog.showErrorBox("A770 Companion — not configured",
+    dialog.showErrorBox("SSL Local Agent — not configured",
       `${SERVER_URL_ERROR}.
 
 Set A770_SERVER_URL=https://your-server in a .env file next to the app.`);

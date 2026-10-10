@@ -17,6 +17,8 @@ function compactMapMessages(rawMsgs) {
       tps: meta.tps,
       ntok: tok,
       promptTokens: meta.promptTokens || undefined,
+      usageCompletion: meta.usageCompletion || undefined,
+      usageActs: meta.usageActs != null ? meta.usageActs : undefined,
       secs: meta.secs,
       compact: meta.compact || undefined,
       compactBefore: meta.before_tokens,
@@ -103,9 +105,10 @@ async function autoCompactIfNeeded(hist) {
   // Estimate from the real message list, not the lossy {role, content} projection
   // the caller used to hand us - that dropped tool traffic entirely.
   const ctxMsgs = (typeof buildContextMessages === 'function') ? buildContextMessages() : messages;
-  const est = (typeof estimateSessionTokens === 'function')
-    ? estimateSessionTokens(ctxMsgs).total
-    : (hist || []).reduce((a, m) => a + Math.round((m.content || '').length / 3.5) + 12, 0);
+  // A new run starts from each earlier message's TEXT only (agent-run.js sends {role, content}); the tool calls and
+  // results of earlier runs are not resent. Counting their acts made a freshly compacted chat look full again
+  // (a kept agent message can hold hundreds of thousands of tokens of tool output) and compacted it a second time.
+  const est = ctxMsgs.reduce((a, m) => a + Math.round((m.content || '').length / 3.5) + 12, 0);
 
   if (est < limit * (pct / 100)) return true;
   try {

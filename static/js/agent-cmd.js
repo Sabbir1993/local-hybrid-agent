@@ -168,6 +168,12 @@ function renderInputHighlights() {
 }
 window.renderInputHighlights = renderInputHighlights;
 
+/* /plan and /build drive the Mode dropdown (which in turn drives plan mode): /build leaves Plan for Auto. */
+function slashMode(name) {
+  if (window.ClaudeChatBar) window.ClaudeChatBar.applySlashMode(name);
+  else if (window._setPlanMode) window._setPlanMode(name === 'plan');
+}
+
 /* Run an armed command, with whatever is typed in the composer as its argument. */
 function runArmedCmd(cmd, text) {
   if (!cmd) return;
@@ -179,7 +185,7 @@ function runArmedCmd(cmd, text) {
   }
   if (cmd.name === 'plan') {
     disarmCmd();
-    if (window._setPlanMode) window._setPlanMode(true);
+    slashMode('plan');
     if (arg) {
       dispatchPrompt(arg);
     }
@@ -187,7 +193,7 @@ function runArmedCmd(cmd, text) {
   }
   if (cmd.name === 'build') {
     disarmCmd();
-    if (window._setPlanMode) window._setPlanMode(false);
+    slashMode('build');
     if (arg) {
       dispatchPrompt(arg);
     }
@@ -280,7 +286,9 @@ async function refreshProjectInitHint() {
   if (!d) { bar.style.display = 'none'; return; }
   const dismissKey = `init_hint_dismissed_${pid}`;
   if (d.exists) {
-    bar.innerHTML = `<span class="proj-init-ok" title="Injected into every agent task for this project">📘 ${esc(d.filename)} loaded</span>`;
+    // the file is still injected into every agent task; there is nothing to show about it
+    bar.style.display = 'none'; bar.innerHTML = '';
+    return;
   } else {
     let dismissed = false;
     try { dismissed = localStorage.getItem(dismissKey) === '1'; } catch (e) {}
@@ -374,7 +382,7 @@ async function cmdMenuOpen(kind, query) {
                      desc: typeof f.size === 'number' ? `${(f.size / 1024).toFixed(1)} KB` : '', value: f.path }));
     } catch (e) { cmdMenuClose(); return; }
   } else if (kind === 'slash') {
-    // /plan and /build are agent-mode only; /compact works in both (agent mode
+    // /plan and /build are offered in agent and code mode; /compact works in both (agent mode
     // requires an active project — enforced by doCompact and the backend).
     const all = agentMode ? [
       { icon: '📋', name: 'plan', desc: 'switch to Plan mode (read-only, propose)', category: 'mode' },
@@ -387,6 +395,8 @@ async function cmdMenuOpen(kind, query) {
       ..._mediaSlashItems(),
       { icon: '🧑‍🤝‍🧑', name: 'multiagent', desc: 'delegate multiple roles (planner/coder/reviewer) in one prompt', category: 'utility', template: true },
     ] : [
+      { icon: '📋', name: 'plan', desc: 'switch to Plan mode (read-only, propose)', category: 'mode' },
+      { icon: '🔨', name: 'build', desc: 'switch out of Plan mode (Auto if you were planning)', category: 'mode' },
       { icon: '🎯', name: 'goal', desc: 'autonomous goal execution — drive to completion', category: 'utility' },
       { icon: '🧹', name: 'compact', desc: 'compress conversation history', category: 'utility' },
       ..._mediaSlashItems(),
@@ -480,15 +490,13 @@ function cmdMenuPick(i) {
       return;
     }
     if (it.name === 'plan' || it.name === 'build') {
-      const isPlan = it.name === 'plan';
-      if (window._setPlanMode) window._setPlanMode(isPlan);
+      slashMode(it.name);
       // Remove the slash token typed so far without inserting /plan or /build into the input
       input.value = before + after.replace(/^\s?/, '');
       input.focus();
       const pos = before.length;
       input.setSelectionRange(pos, pos);
       renderInputHighlights();
-      toast(isPlan ? '📋 Switched to Plan mode' : '🔨 Switched to Build mode');
       return;
     }
 
@@ -687,7 +695,7 @@ function setAppMode(mode, isUserSwitch = false) {
   // In web browser without desktop native app, Agent and Code modes are disabled
   if ((mode === 'agent' || mode === 'code') && !isNative) {
     if (isUserSwitch) {
-      toast(`${mode === 'agent' ? 'Custom Agent' : 'Coding Agent'} mode requires the desktop Companion app.`);
+      toast(`${mode === 'agent' ? 'Custom Agent' : 'Coding Agent'} mode requires the SSL Local Agent desktop app.`);
     }
     mode = 'chat';
   }

@@ -20,6 +20,19 @@ def plan_mode_setting(cfg: dict) -> str:
     return v if v in ("auto", "always", "off") else "auto"
 
 
+# /init and "analyze / explore / summarize this project" are read-then-report jobs: a forced todo list only adds
+# create_plan / update_plan_item steps (each one a full model round trip) to something that has no steps to track.
+INIT_PROMPT_PREFIX = "Initialize this project for future agent sessions"
+_ANALYSIS_RX = re.compile(
+    r"^\s*(please\s+)?(analy[sz]e|explore|summari[sz]e|review|understand|scan|explain|walk me through|give me an overview of)\b"
+    r".{0,80}\b(project|codebase|code base|repo|repository|app|application|source)\b", re.I)
+
+
+def is_analysis_request(query: str) -> bool:
+    q = (query or "").strip()
+    return q.startswith(INIT_PROMPT_PREFIX) or bool(_ANALYSIS_RX.match(q))
+
+
 def needs_plan(category: str, query: str, agent_cfg: dict = None, personal: bool = False) -> bool:
     """Should this request start with a todo list? auto: creation requests, several action verbs, or a long request.
     A Personal Agent (small model, read-only inspection and reports) needs a higher bar: three verbs or a request
@@ -29,6 +42,8 @@ def needs_plan(category: str, query: str, agent_cfg: dict = None, personal: bool
         return False
     if mode == "always":
         return True
+    if is_analysis_request(query):
+        return False
     q = (query or "").strip()
     if category == "creation":
         return True

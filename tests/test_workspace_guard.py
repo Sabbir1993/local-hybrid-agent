@@ -85,7 +85,7 @@ class GuardTests(unittest.TestCase):
     def test_companion_offline_refused(self):
         self.activate("ui-inspector")
         self.connected.clear()
-        with self.assertRaisesRegex(WorkspaceAccessDenied, "Companion"):
+        with self.assertRaisesRegex(WorkspaceAccessDenied, "SSL Local Agent"):
             require_device_workspace()
 
     def test_other_users_project_name_not_resolved(self):

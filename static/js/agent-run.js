@@ -7,6 +7,9 @@ async function runAgentSSE(text) {
     else toast('Please select a project first', true);
     return;
   }
+  // the page can show a project the server forgot (server restart, another tab): re-select it before the run
+  if (agentMode && typeof ensureProjectActive === 'function') await ensureProjectActive();
+  window._runBudget = null;   // a new run starts a fresh budget
   if (!mainLaneReady()) {
     const sel = $('profile');
     if (!sel || !sel.value) {
@@ -141,7 +144,8 @@ async function runAgentSSE(text) {
         body: JSON.stringify({
           messages: hist,
           mode: engineMode,
-          plan: agentMode ? planMode : false,
+          plan: (agentMode ? planMode : false) || (window.ClaudeChatBar && window.ClaudeChatBar.activeModeKey === 'plan'),
+          permission_mode: window.ClaudeChatBar ? window.ClaudeChatBar.activeModeKey : undefined,   // enforced per request by the server
           session_id: sessionId || null,
           temperature: window.customAgentRequestOverrides ? window.customAgentRequestOverrides().temperature : getSamplingConfig().temp,
           max_tokens: (() => { const mt = getSamplingConfig().maxtok; return (isNaN(mt) || mt <= 0) ? -1 : mt; })(),
@@ -296,6 +300,9 @@ async function runAgentSSE(text) {
           const planAct = { type: 'plan', items: d.items || [] };
           const pi = L.acts.findIndex(a => a.type === 'plan');
           if (pi >= 0) L.acts[pi] = planAct; else L.acts.push(planAct);
+          // the streaming render only swaps the tool-card list, so the Plan tab never saw this: push it there now
+          if (window.RightDock && typeof window.RightDock.renderPlanView === 'function' && planAct.items.length
+              && curSession && String(curSession.id) === String(sessionId)) window.RightDock.renderPlanView(planAct.items);
         }
         else if (ev === 'kb_blocked') sseKbBlocked(L, d);
         else if (ev === 'lane_warning') sseLaneWarning(L, d);
@@ -306,13 +313,24 @@ async function runAgentSSE(text) {
         }
         else if (ev === 'usage') {
           // per-step prompt size; the last step's is the run's real context use
-          if (d.prompt_tokens) L.promptTokens = d.prompt_tokens;
+          if (d.run_token_budget) window._runBudget = { used: d.run_prompt_tokens || 0, limit: d.run_token_budget };
+          if (d.prompt_tokens) {
+            L.promptTokens = d.prompt_tokens;
+            // what the model was sent, plus its reply, is exact up to here; only tool results after this point are estimated
+            L.usageCompletion = d.completion_tokens || 0;
+            L.usageActs = (L.acts || []).length;
+          }
+          if (curSession && String(curSession.id) === String(sessionId) && typeof updateContextChip === 'function') updateContextChip();
         }
         else if (ev === 'done') {
           closeThought(L);
           // how the run ended: completed | stopped | failed | cancelled (older servers send none: a reason means stopped)
           L.runState = d.state || (d.reason ? 'stopped' : 'completed');
           if (typeof answerCheckEnd === 'function') answerCheckEnd(L);
+          if ((L.runState === 'completed' || (L.acts || []).some(a => a.type === 'plan')) && L.runState !== 'failed'
+              && window.ClaudeChatBar && window.ClaudeChatBar.activeModeKey === 'plan') {
+            setTimeout(() => window.ClaudeChatBar.showPlanApproval(), 0);   // approve the plan to leave Plan mode
+          }
           // run ended early (step cap or loop stop): keep why, so the bubble can offer Continue
           if (d.reason) {
             if (!L.acts) L.acts = [];
@@ -324,7 +342,9 @@ async function runAgentSSE(text) {
         }
         else if (ev === 'error') throw new Error(d.error);
 
-        if (curSession && String(curSession.id) === String(sessionId)) {
+        // tool_preparing (one per streamed chunk of a file's content) only moves the status bar; re-rendering every
+        // card for it is what froze the page while a file was being written
+        if (ev !== 'tool_preparing' && curSession && String(curSession.id) === String(sessionId)) {
           scheduleRenderLast();
         }
       });
@@ -408,6 +428,7 @@ function finishAgentMessage(sessionId, L, t0) {
   persistMsgForSession(sessionId, 'assistant', L.content || (cut ? '(run interrupted)' : ''), {
     tps: L.tps, ntok, secs: dt,
     promptTokens: L.promptTokens || undefined,
+    usageCompletion: L.usageCompletion || undefined, usageActs: L.usageActs != null ? L.usageActs : undefined,   // so a reload anchors on the real prompt size, not the full tool output
     reasoning: L.reasoning || undefined,
     // screenshots stay in this browser tab: never written to the server's session history
     acts: (L.acts || []).map(a => (a && a.image) ? { ...a, image: undefined } : a),

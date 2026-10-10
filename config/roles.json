@@ -4,6 +4,7 @@
     "max_steps": 6,
     "tools": [
       "list_files",
+      "project_overview",
       "read_file",
       "grep",
       "search_memory",
@@ -23,6 +24,7 @@
       "read_file",
       "edit_file",
       "list_files",
+      "project_overview",
       "grep",
       "run_python"
     ],
@@ -33,6 +35,7 @@
     "max_steps": 6,
     "tools": [
       "list_files",
+      "project_overview",
       "read_file",
       "grep",
       "list_diff"
@@ -43,6 +46,7 @@
     "max_steps": 8,
     "tools": [
       "list_files",
+      "project_overview",
       "read_file",
       "grep",
       "list_diff",
@@ -55,6 +59,7 @@
     "max_steps": 8,
     "tools": [
       "list_files",
+      "project_overview",
       "read_file",
       "grep",
       "list_diff",
@@ -67,6 +72,7 @@
     "max_steps": 6,
     "tools": [
       "list_files",
+      "project_overview",
       "read_file",
       "grep",
       "list_diff",

@@ -193,7 +193,7 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     if not companion_bridge.is_connected(user.id):
         raise SetupError(
             {"error": "agent_requires_companion",
-             "message": "Agent Task mode requires the A770 Companion app. Install and open it, then try again."},
+             "message": "Agent Task mode requires the SSL Local Agent app. Install and open it, then try again."},
             403,
         )
     # Agent tools only ever touch the user's own machine: resolve this device's

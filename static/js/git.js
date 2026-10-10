@@ -1,5 +1,4 @@
 /* ---------------- Source Control panel ---------------- */
-let _gitDiffTarget = null; // {path, staged}
 
 async function updateGitIconVisibility() {
   const btn = $('btn-git-icon');
@@ -58,13 +57,6 @@ async function loadGitPanel() {
       </div>
       ${gitFileGroup('Staged', staged, true)}
       ${gitFileGroup('Changes', unstaged, false)}
-      <div id="git-diff-view" style="display:none; margin-top:6px;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <span class="mono" id="git-diff-path" style="font-size:10.5px;"></span>
-          <button class="btn ghost" id="git-diff-close" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">✕</button>
-        </div>
-        <pre id="git-diff-pre" style="max-height:220px; overflow:auto; font-size:10.5px; background:var(--bg-input); border:1px solid var(--border); border-radius:6px; padding:8px; margin-top:4px;"></pre>
-      </div>
       <div class="cap-item" style="margin-top:8px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <span class="dim" style="font-size:10.5px;">Commit message</span>
@@ -97,7 +89,6 @@ async function loadGitPanel() {
 
     wireGitFileClicks(box);
     $('git-refresh')?.addEventListener('click', loadGitPanel);
-    $('git-diff-close')?.addEventListener('click', () => { $('git-diff-view').style.display = 'none'; _gitDiffTarget = null; });
     $('git-commit-btn')?.addEventListener('click', gitCommit);
     $('git-push-btn')?.addEventListener('click', gitPush);
     $('git-pr-btn')?.addEventListener('click', gitCreatePr);
@@ -111,30 +102,47 @@ async function loadGitPanel() {
 
 function gitFileGroup(label, files, staged) {
   if (!files.length) return '';
-  return `<div class="cap-item">
-    <b style="font-size:10.5px; text-transform:uppercase; letter-spacing:0.5px;">${esc(label)} (${files.length})</b>
+  return `<div class="cap-item git-group" data-staged="${staged}">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <b style="font-size:10.5px; text-transform:uppercase; letter-spacing:0.5px;">${esc(label)} (${files.length})</b>
+      <button class="btn ghost git-expand-all" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">Expand all</button>
+    </div>
     <div style="display:flex; flex-direction:column; gap:2px; margin-top:3px;">
-      ${files.map(f => `
-        <div class="git-file-row" data-path="${esc(f.path)}" data-staged="${staged}" style="display:flex; align-items:center; gap:6px; font-size:11px;">
-          <button class="btn ghost git-toggle" style="width:auto; margin:0; padding:1px 6px; font-size:10px;" title="${staged ? 'Unstage' : 'Stage'}">${staged ? '−' : '+'}</button>
-          <span class="mono git-file-link" style="cursor:pointer; flex:1; word-break:break-all;" title="View diff">${esc(f.path)}</span>
-        </div>`).join('')}
+      ${files.map(f => {
+        const untracked = f.index_status === '?' || f.worktree_status === '?';
+        const code = untracked ? 'U' : (staged ? f.index_status : f.worktree_status);
+        return `
+        <div class="git-file" data-path="${esc(f.path)}" data-staged="${staged}" data-untracked="${untracked}">
+          <div class="git-file-row" style="display:flex; align-items:center; gap:6px; font-size:11px;">
+            <button class="btn ghost git-toggle" style="width:auto; margin:0; padding:1px 6px; font-size:10px;" title="${staged ? 'Unstage' : 'Stage'}">${staged ? '−' : '+'}</button>
+            <span class="mono git-file-link" style="cursor:pointer; flex:1; word-break:break-all;" title="Show changes"><span class="git-chev dim">▸</span> ${esc(f.path)}</span>
+            <span class="mono git-counts dim" style="font-size:10px;"></span>
+            <span class="mono dim" style="font-size:10px;" title="${untracked ? 'New file (not tracked yet)' : 'Status'}">${esc(code)}</span>
+          </div>
+          <pre class="git-inline-diff" style="display:none; max-height:260px; overflow:auto; font-size:10.5px; line-height:1.45; background:var(--bg-input); border:1px solid var(--border); border-radius:6px; padding:6px 8px; margin:3px 0 4px; white-space:pre;"></pre>
+        </div>`;
+      }).join('')}
     </div>
   </div>`;
 }
 
 function wireGitFileClicks(box) {
-  box.querySelectorAll('.git-file-link').forEach(el => {
-    el.onclick = () => {
-      const row = el.closest('.git-file-row');
-      showGitDiff(row.dataset.path, row.dataset.staged === 'true');
+  box.querySelectorAll('.git-file').forEach(file => {
+    file.querySelector('.git-file-link').onclick = () => toggleGitDiff(file);
+  });
+  box.querySelectorAll('.git-expand-all').forEach(btn => {
+    btn.onclick = () => {
+      const group = btn.closest('.git-group');
+      const open = btn.textContent === 'Expand all';
+      group.querySelectorAll('.git-file').forEach(file => toggleGitDiff(file, open));
+      btn.textContent = open ? 'Collapse all' : 'Expand all';
     };
   });
   box.querySelectorAll('.git-toggle').forEach(btn => {
     btn.onclick = async () => {
-      const row = btn.closest('.git-file-row');
-      const staged = row.dataset.staged === 'true';
-      const path = row.dataset.path;
+      const file = btn.closest('.git-file');
+      const staged = file.dataset.staged === 'true';
+      const path = file.dataset.path;
       try {
         const r = await fetch(`/git/${staged ? 'unstage' : 'stage'}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -145,21 +153,46 @@ function wireGitFileClicks(box) {
       } catch (e) { toast('Failed: ' + e.message, true); }
     };
   });
+  // a few changed files: show their lines right away, no click needed
+  box.querySelectorAll('.git-group').forEach(group => {
+    const files = group.querySelectorAll('.git-file');
+    if (files.length <= 4) files.forEach(file => toggleGitDiff(file, true));
+  });
 }
 
-async function showGitDiff(path, staged) {
-  _gitDiffTarget = { path, staged };
-  const view = $('git-diff-view'), pre = $('git-diff-pre'), pathEl = $('git-diff-path');
-  view.style.display = 'block';
-  pathEl.textContent = path;
+// inline, per file: works for staged, unstaged and new (untracked) files alike
+async function toggleGitDiff(file, forceOpen) {
+  const pre = file.querySelector('.git-inline-diff');
+  const chev = file.querySelector('.git-chev');
+  const open = forceOpen === undefined ? pre.style.display === 'none' : forceOpen;
+  pre.style.display = open ? 'block' : 'none';
+  if (chev) chev.textContent = open ? '▾' : '▸';
+  if (!open || file.dataset.loaded) return;
+  file.dataset.loaded = '1';
   pre.textContent = 'Loading…';
   try {
-    const d = await (await fetch(`/git/diff?path=${encodeURIComponent(path)}&staged=${staged}`)).json();
+    const q = `path=${encodeURIComponent(file.dataset.path)}&staged=${file.dataset.staged}&untracked=${file.dataset.untracked}`;
+    const d = await (await fetch(`/git/diff?${q}`)).json();
     if (d.error) throw new Error(d.error);
-    pre.textContent = d.diff || '(no diff)';
+    renderGitDiff(pre, d.diff || '', file.querySelector('.git-counts'));
   } catch (e) {
+    file.dataset.loaded = '';
     pre.textContent = 'Failed: ' + e.message;
   }
+}
+
+function renderGitDiff(pre, text, countsEl) {
+  if (!text.trim()) { pre.textContent = '(no changes)'; return; }
+  let add = 0, del = 0;
+  pre.innerHTML = text.split('\n').map(line => {
+    let color = '';
+    if (line.startsWith('+') && !line.startsWith('+++')) { add++; color = '#4ade80'; }
+    else if (line.startsWith('-') && !line.startsWith('---')) { del++; color = '#f87171'; }
+    else if (line.startsWith('@@')) color = '#60a5fa';
+    else if (/^(diff |index |--- |\+\+\+ |new file|deleted file)/.test(line)) color = 'var(--dim)';
+    return color ? `<span style="color:${color}">${esc(line)}</span>` : esc(line);
+  }).join('\n');
+  if (countsEl) countsEl.innerHTML = `<span style="color:#4ade80">+${add}</span> <span style="color:#f87171">−${del}</span>`;
 }
 
 async function gitCommit() {

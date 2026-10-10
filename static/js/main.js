@@ -65,12 +65,13 @@ function submitPrompt() {
   // /plan and /build typed directly — Plan/Build mode switches (agent mode)
   if (/^\/(plan|build)(\s|$)/i.test(text)) {
     if (agentMode && (!curProject || !curProject.id)) { flashProjectsCard(); return; }
-    if (window._setPlanMode) window._setPlanMode(/^\/plan/i.test(text));
+    if (window.ClaudeChatBar) window.ClaudeChatBar.applySlashMode(/^\/plan/i.test(text) ? 'plan' : 'build');
+    else if (window._setPlanMode) window._setPlanMode(/^\/plan/i.test(text));
     const rest = text.replace(/^\/(plan|build)\s*/i, '').trim();
+    if (rest) { dispatchPrompt(rest); return; }   // the command is a switch, not part of the prompt
     if (!rest) {
       if (input) input.value = '';
       if (window.renderInputHighlights) window.renderInputHighlights();
-      toast(/^\/plan/i.test(text) ? '📋 Plan mode — explore & propose changes' : '🔨 Build mode — execute changes');
       return;
     }
   }

@@ -62,7 +62,7 @@ def _run_timeout_s() -> int:
 
 # Tools allowed in plan mode: read/explore only — nothing that mutates disk.
 # create_plan/get_plan ARE allowed: the deliverable of plan mode is the tracked plan itself.
-PLAN_MODE_TOOLS = {"list_files", "read_file", "grep", "search_memory", "list_skills", "read_skill",
+PLAN_MODE_TOOLS = {"list_files", "project_overview", "read_file", "grep", "search_memory", "list_skills", "read_skill",
                    "analyze_image", "web_fetch", "web_search", "create_plan", "get_plan",
                    # looking at the running app / device changes nothing in the project
                    "browser_navigate", "browser_snapshot", "browser_console",
@@ -86,7 +86,7 @@ EXECUTOR_TEST_TOOLS = ("browser_navigate", "browser_snapshot", "browser_click", 
 # finish (terminal), spawn_agent (handled by its own fan-out below), media
 # generation (GPU/expensive), browser/mobile (stateful sessions, self-ordered).
 PARALLEL_READ_TOOLS = frozenset({
-    "read_file", "read_file_chunk", "grep", "list_files", "list_diff",
+    "read_file", "read_file_chunk", "grep", "list_files", "project_overview", "list_diff",
     "get_plan", "search_memory", "search_knowledge_base",
     "memory_read", "list_skills", "read_skill",
     "web_search", "web_fetch", "analyze_image", "doc_inspect",
@@ -101,7 +101,7 @@ changes anything. Your job is to investigate, then produce an implementation pla
 1. Explore the workspace with read-only tools (list_files, read_file, grep, web_*) as needed.
 2. Then call create_plan ONCE with your final ordered steps (the items array) so the plan is tracked and displayed to the user.
 3. Then output the same plan as a clear numbered list: files to create/modify (exact paths), the change in each, and the execution order.
-4. End with: 'Say "proceed" (or switch off Plan mode) to execute this plan.'
+4. Stop after the plan. The user approves it with a button, so do not ask them to type anything.
 Never attempt file modifications in plan mode; mutating tools are unavailable."""
 
 
