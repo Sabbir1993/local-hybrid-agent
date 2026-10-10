@@ -3,7 +3,7 @@
 // still owns all allow/deny policy and only sends a command here once it has
 // already decided to run it.
 
-const { exec, spawn } = require("child_process");
+const { spawn } = require("child_process");
 const net = require("net");
 
 const MAX_OUTPUT_CHARS = 20000;
@@ -123,28 +123,60 @@ function runBackground({ command, cwd, wait_for_port, wait, shell }) {
   });
 }
 
+// Kill a command and everything it started. exec's own timeout only terminates the shell: on Windows a
+// `python slow.py` or `npm test` it launched keeps running (and keeps the output pipes open, so the call
+// would not even return). taskkill /T walks the tree; elsewhere the command was started as a process-group
+// leader, so the whole group gets the signal.
+function killTree(child) {
+  if (!child || !child.pid) return;
+  try {
+    if (process.platform === "win32") {
+      spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" }).on("error", () => {});
+    } else {
+      try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+    }
+  } catch {}
+}
+
 function run({ command, cwd, timeout, background, wait_for_port, wait, shell }) {
   if (background) return runBackground({ command, cwd, wait_for_port, wait, shell });
   const resolvedShell = resolveShell(shell);
   return new Promise((resolve) => {
-    const child = exec(
-      command,
-      {
-        cwd: cwd || undefined,
-        timeout: timeout ? timeout * 1000 : undefined,
-        maxBuffer: 1024 * 1024 * 20,
-        env: buildChildEnv(process.env, activeEnvPolicy()),
-        shell: resolvedShell,
-      },
-      (error, stdout, stderr) => {
-        resolve({
-          exit_code: error ? (typeof error.code === "number" ? error.code : 1) : 0,
-          stdout: (stdout || "").slice(-MAX_OUTPUT_CHARS),
-          stderr: (stderr || "").slice(-4000) + (error && error.killed ? "\n(killed: timeout)" : ""),
-        });
-      }
-    );
+    // Rolling tails, not an unbounded buffer: a command that prints without end costs a fixed amount of memory
+    // and the model still gets the part that matters (the end).
+    let out = "";
+    let err = "";
+    let timedOut = false;
+    let settled = false;
+    const child = spawn(command, {
+      cwd: cwd || undefined,
+      shell: resolvedShell || true,
+      detached: process.platform !== "win32",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: buildChildEnv(process.env, activeEnvPolicy()),
+    });
+    const finish = (code, extraErr) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        exit_code: timedOut ? 124 : (typeof code === "number" ? code : 1),
+        stdout: out.slice(-MAX_OUTPUT_CHARS),
+        stderr: (err.slice(-4000)) + (timedOut ? "\n(killed: timeout)" : "") + (extraErr || ""),
+      });
+    };
+    child.stdout.on("data", (d) => { out = (out + d).slice(-MAX_OUTPUT_CHARS * 2); });
+    child.stderr.on("data", (d) => { err = (err + d).slice(-8000); });
+    child.on("error", (e) => finish(1, "\n" + e.message));
+    child.on("close", (code) => finish(code));
+    const timer = timeout ? setTimeout(() => {
+      timedOut = true;
+      killTree(child);
+      // the tree is gone, but a grandchild that escaped the group could hold the pipes open: do not wait for it
+      setTimeout(() => finish(null), 2000);
+    }, timeout * 1000) : null;
   });
 }
 
-module.exports = { run, buildChildEnv, resolveShell };
+module.exports = { run, buildChildEnv, resolveShell, killTree };

@@ -458,7 +458,16 @@ def _live_preflight_companion(base: str, client, username: str) -> None:
                "  File tools run on the user's machine through the Companion, so the "
                "agent loop refuses runs (or fails every file tool) without it.\n"
                "  Open the Companion app, pair/approve this user, then re-run.")
-    print(f"  companion: connected ({info.get('device_name') or 'device'})")
+    # Projects and the active-project key are per device. Without X-Device-Id every request
+    # resolves to the "default" device, which never matches the companion's real device_id,
+    # so require_device_workspace rejects the run as "a different machine".
+    dev_id = info.get("device_id") or ""
+    host = info.get("hostname") or ""
+    if dev_id:
+        client.headers["X-Device-Id"] = dev_id
+    if host:
+        client.headers["X-Device-Name"] = host
+    print(f"  companion: connected ({host or 'device'}, device_id={dev_id or 'unknown'})")
 
 
 def _totp_code(cmd: str) -> str:

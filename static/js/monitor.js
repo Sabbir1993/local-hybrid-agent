@@ -53,7 +53,48 @@ function renderMonitorRecent(list) {
   }).join('');
 }
 
+/* Agent runs held by the server (running, or finished and not yet saved by a browser): Stop / Open. */
+let monRunsKey = '';
+function renderMonitorRuns(runs) {
+  const key = runs.map(r => `${r.id}:${r.state}:${r.frames}`).join('|');
+  if (key === monRunsKey) return;
+  monRunsKey = key;
+  const el = $('mon-runs-list');
+  if (!el) return;
+  if (!runs.length) { el.innerHTML = '<div class="mon-empty">No agent runs</div>'; return; }
+  el.innerHTML = runs.map(r => {
+    const secs = Math.max(0, Math.round(((r.finished_at || Date.now() / 1000) - r.started)));
+    const label = r.running ? 'running' : esc(r.state || 'done');
+    return `<div class="mon-recent">
+      <div class="mon-recent-left"><span class="ep">session ${esc(String(r.session_id ?? '?'))}</span>
+        <span class="mon-model-tag">${label}</span></div>
+      <span class="num">${secs}s
+        ${r.running ? `<button class="btn ghost" data-run-stop="${esc(r.id)}" style="width:auto;margin:0 0 0 6px;padding:2px 8px;">Stop</button>` : ''}
+        <button class="btn ghost" data-run-open="${esc(String(r.session_id ?? ''))}" style="width:auto;margin:0 0 0 4px;padding:2px 8px;">Open</button>
+      </span></div>`;
+  }).join('');
+}
+
+async function pollRuns() {
+  try {
+    const r = await fetch('/agent/runs', { headers: { ...getDeviceHeaders() }, background: true });
+    if (r.ok) renderMonitorRuns((await r.json()).runs || []);
+  } catch (e) { /* server restarting */ }
+}
+
+document.addEventListener('click', (ev) => {
+  const stop = ev.target.closest && ev.target.closest('[data-run-stop]');
+  if (stop) {
+    cancelServerRun(stop.getAttribute('data-run-stop'));
+    setTimeout(pollRuns, 600);
+    return;
+  }
+  const open = ev.target.closest && ev.target.closest('[data-run-open]');
+  if (open && open.getAttribute('data-run-open')) openSessionById(open.getAttribute('data-run-open'));
+});
+
 async function pollMonitor() {
+  pollRuns();
   try {
     const d = await (await fetch('/control/monitor', { background: true })).json();
     // active generations

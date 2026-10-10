@@ -113,5 +113,12 @@ async def tool_project_overview(args: dict) -> str:
     for rel, text in zip(picks, heads):
         if text:
             lines.append(f"\n--- {rel} (first {HEAD_LINES} lines) ---\n{_head(text)}")
+    try:
+        from .code_intel_tools import repo_map
+        code_map = await repo_map(sub)
+    except Exception:           # the map is a bonus: tree-sitter missing or the device too old must not break the overview
+        code_map = ""
+    if code_map:
+        lines.append("\n" + code_map)
     lines.append("\nNext: read the entry points and the few files that matter with parallel read_file calls in ONE step.")
     return "\n".join(lines)

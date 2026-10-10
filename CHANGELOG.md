@@ -210,8 +210,9 @@ has a tag or release; until then, dates + headline changes.
   `core/memory/indexing.py` coverage 16% -> 86%.
 - Deferred: container sandbox. The spawn seam is
   `companion/shellops.js` (Electron, runs on the user's machine); no server-side
-  sandbox can work there (TIER1_SANDBOX_SPIKE). Needs Docker + companion
-  rebuild to implement and verify.
+  sandbox can work there (TIER1_SANDBOX_SPIKE). Docker is not used by this
+  project (policy: no Docker); containment is process-tree kill plus, later,
+  native Windows Job Objects in the companion.
 
 ## 2026-10-06 — eval hygiene + CI green
 

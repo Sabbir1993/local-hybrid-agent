@@ -60,20 +60,72 @@ def _clip(text: str) -> str:
     return text[:MAX_CHARS] + f"\n... (truncated, {len(text)} chars total — keep AGENTS.md short)"
 
 
-async def load_project_instructions() -> Optional[tuple[str, str]]:
-    """(filename, sanitized text) for the active project, or None."""
-    from .agent_tools import read_raw
-    for name in INSTRUCTION_FILES:
+RULE_DIRS = (".agents/rules", ".cursor/rules")
+RULE_SUFFIXES = (".md", ".mdc")
+MAX_RULE_FILES = 12
+MAX_RULES_CHARS = 6000
+_FRONTMATTER_RX = re.compile(r"\A---\s*\n.*?\n---\s*\n", re.S)
+
+
+def _rule_text(raw: str) -> str:
+    return _FRONTMATTER_RX.sub("", raw.strip(), count=1).strip()       # Cursor .mdc files start with YAML metadata
+
+
+async def load_rule_files() -> list:
+    """[(path, sanitized text)] for the project's rule files (.agents/rules/*.md, .cursor/rules/*.md[c]), read on
+    the user's machine. Small, many, topic-focused files next to AGENTS.md; at most MAX_RULE_FILES, MAX_RULES_CHARS in total."""
+    import sys
+    from .agent_tools import active_workspace, read_raw, _remote_uid
+    cb = getattr(sys.modules.get("core.agent_tools"), "companion_bridge", None)
+    if cb is None:
+        return []
+    try:
+        root, uid = str(active_workspace()), _remote_uid()
+    except Exception:
+        return []
+    found: list = []
+    for d in RULE_DIRS:
+        for suffix in RULE_SUFFIXES:
+            try:
+                data = await cb.call(uid, "fs.list", {"root": root, "pattern": f"{d}/*{suffix}"})
+            except Exception:
+                continue
+            found.extend(f.replace("\\", "/") for f in (data.get("files") or []) if isinstance(f, str))
+    out, used = [], 0
+    for path in sorted(set(found))[:MAX_RULE_FILES]:
         try:
-            raw = await read_raw(name)
+            raw = await read_raw(path)
         except Exception:
             continue
-        if not raw:
+        text = _rule_text(raw or "")
+        if not text:
             continue
-        text = raw.strip()
-        if text:
-            return name, _clip(sanitize(text))
-    return None
+        text = sanitize(text)[:max(0, MAX_RULES_CHARS - used)]
+        if not text:
+            break
+        used += len(text)
+        out.append((path, text))
+    return out
+
+
+async def load_project_instructions() -> Optional[tuple[str, str]]:
+    """(filename, sanitized text) for the active project, or None. AGENTS.md (or CLAUDE.md) first, then the rule
+    files from the rules folders, each under its own heading."""
+    from .agent_tools import read_raw
+    name, text = None, ""
+    for candidate in INSTRUCTION_FILES:
+        try:
+            raw = await read_raw(candidate)
+        except Exception:
+            continue
+        if raw and raw.strip():
+            name, text = candidate, _clip(sanitize(raw.strip()))
+            break
+    rules = await load_rule_files()
+    if rules:
+        text += "".join(f"\n\n### Rule: {path}\n{body}" for path, body in rules)
+        name = name or "the project rules folder"
+    return (name, text.strip()) if name else None
 
 
 def prompt_block(pi: Optional[tuple[str, str]]) -> str:

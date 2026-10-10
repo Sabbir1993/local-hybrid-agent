@@ -71,12 +71,19 @@ _RISKY_ARG_RE = re.compile(
     r"|\.\.[\\/]|[\\/]\.\.(?:$|\s)")   # parent-directory traversal
 
 
+SHELL_INTERPRETERS = frozenset({"powershell", "pwsh", "cmd", "bash", "sh", "wsl", "wmic"})
+
+
 def command_allowed(cmd: str, patterns: list) -> bool:
     """True when `cmd` is auto-approved by one of the allow patterns."""
     c = (cmd or "").strip().lower()
     pats = [str(p).strip().lower() for p in patterns or [] if str(p).strip()]
     if "*" in pats:
         return True             # user explicitly allowed everything
+    # A pattern for a shell that runs an arbitrary command string ("powershell -NoProfile *") would approve ANY
+    # code. It never counts here; a Personal Agent matches it through personal_command_allowed, which checks
+    # that the command is read-only first.
+    pats = [p for p in pats if p.split(None, 1)[0] not in SHELL_INTERPRETERS]
     if not c or is_compound(c):
         return False
     first, _, rest = c.partition(" ")
@@ -94,6 +101,10 @@ def mark_approved(cmd: str) -> None:
 
 
 _approved_code: contextvars.ContextVar = contextvars.ContextVar("python_approved_code", default=None)
+
+# Execution timeout (seconds) for ONE call, set only by trusted server code (run_tests: test suites outlast the
+# default). A contextvar, not a tool argument, so the model cannot raise the admin-configured limit itself.
+_exec_timeout: contextvars.ContextVar = contextvars.ContextVar("shell_exec_timeout", default=None)
 
 
 def mark_code_approved(code: str) -> None:
@@ -288,6 +299,7 @@ async def tool_run_shell(args: dict) -> str:
     # 0 = "default", not "forever": the server stops waiting after this, so the
     # companion must kill the process then too instead of leaving it running
     timeout = int(raw_t) if raw_t and int(raw_t) > 0 else DEFAULT_EXEC_TIMEOUT_S
+    timeout = _exec_timeout.get() or timeout
     bg = _background_args(args)
     from .agent_tools import require_device_workspace
     # Agent shell commands run ONLY on the user's machine via the companion.
@@ -381,3 +393,6 @@ def register_shell_tools() -> None:
                            "required": ["command"]},
         }},
         source="shell", meta={"label": "Shell execution"}, replace=True)
+    from .agent_tools.test_runner import RUN_TESTS_SCHEMA, tool_run_tests
+    registry.register("run_tests", tool_run_tests, RUN_TESTS_SCHEMA, source="shell",
+                      meta={"label": "Run tests"}, replace=True)

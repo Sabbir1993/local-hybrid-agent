@@ -70,3 +70,6 @@ companion/.env
 *.db-shm
 *.db-journal
 *.bak
+
+# SWE-bench runner output (scripts/run_swebench.py)
+bench_results/

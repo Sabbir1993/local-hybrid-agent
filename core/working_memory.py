@@ -66,6 +66,12 @@ def build_summary(msgs: list, plan_items: Optional[list] = None, previous: str =
                     failures.append((path, f"{name} {path}: {_clip(res, 140)}"))
             elif name == "read_file" and path and path not in reads:
                 reads.append(path)
+            elif name == "run_tests":
+                first = (res.splitlines()[0] if res else "")
+                cmds.append((_clip("run_tests " + str(args.get("path") or ""), 70), _clip(first.split("->", 1)[-1].strip(), 60)))
+                failures = [f for f in failures if f[0] != "tests"]       # the latest run supersedes an earlier one
+                if _is_error(res) or "FAILED" in first or "cannot run" in first:
+                    failures.append(("tests", f"run_tests: {_clip(res, 120)}"))
             elif name in ("run_shell", "run_python"):
                 cmd = str(args.get("command") or args.get("code") or "")
                 cmds.append((_clip(cmd, 70), _clip(res.splitlines()[0] if res else "", 60)))

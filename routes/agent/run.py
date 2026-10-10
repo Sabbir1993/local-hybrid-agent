@@ -40,6 +40,7 @@ from core.sse import sse
 from core.agent_tools.limits import agent_limit, effective_max_tokens, executor_effort_ceiling
 from core.agent_tools.memory_tools import MEMORY_TOOL_NAMES
 from core import agent_memory, working_memory
+from . import run_manager
 from core.agent_tools import (
     FILE_WRITE_TOOLS,
     active_workspace,
@@ -252,4 +253,15 @@ async def agent_run(req: AgentRequest, request: Request, user: Principal = Depen
     # SSE events) lives in routes/agent/stream.py as run_agent_stream() - extracted
     # verbatim from this function on 2026-10-06 so the 1,500-line body stops
     # strangling the route module and can be covered independently.
-    return await run_agent_stream(req, user, ctx)
+    resp = await run_agent_stream(req, user, ctx)
+    # The loop is an async generator of SSE frames. Run it as a detached server-side task and answer with a
+    # subscriber of its output, so a closed tab or a dropped connection no longer kills the run.
+    if not run_manager.enabled() or not isinstance(resp, StreamingResponse):
+        return resp
+    try:
+        handle = run_manager.start(user.id, req.session_id, resp.body_iterator, req.client_run_id)
+    except run_manager.TooManyRuns as e:
+        await resp.body_iterator.aclose()          # never started: nothing was run
+        return JSONResponse({"error": "too_many_runs", "message": str(e)}, status_code=429)
+    return StreamingResponse(run_manager.subscribe(handle), media_type="text/event-stream",
+                             headers={"X-Run-Id": handle.id, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

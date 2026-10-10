@@ -43,6 +43,24 @@ def subagent_call_verdict(name: str, names_ok) -> Optional[str]:
     return None
 
 
+async def subagent_policy_refusal(name: str, args) -> Optional[str]:
+    """Administrator rules and pre_tool hooks apply to sub-agents exactly as to the main agent, so delegating
+    cannot get around them. A rule that asks is a refusal here: a sub-agent has no approval card to raise."""
+    from .. import hooks, permission_rules
+    from ..small_model import APP_CONFIG
+    verdict = permission_rules.evaluate(name, args, (APP_CONFIG.get("permissions") or {}).get("rules"))
+    if verdict:
+        if verdict["action"] == "deny":
+            return permission_rules.refusal_text(verdict)
+        return (f"error: policy rule '{verdict['id']}' needs the user's approval for '{name}', and a sub-agent cannot "
+                "ask. Report back to the parent agent that this step needs the user's approval.")
+    if hooks.matching("pre_tool", name):
+        why = await hooks.run_pre(name, args)
+        if why:
+            return f"error: {why}"
+    return None
+
+
 # The child's outcome, machine-readable in the header the parent already sees.
 # The parent's tool verdict is `ok = not result.startswith("error:")`
 # (routes/agent/run.py), and this header means a result NEVER starts with
@@ -320,6 +338,8 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                     except Exception:
                         a = {}
                     refused = subagent_call_verdict(name, names_ok)
+                    if refused is None:
+                        refused = await subagent_policy_refusal(name, a)
                     if refused is not None:
                         result = refused
                     elif name in ("write_file", "edit_file", "append_file"):

@@ -3,6 +3,7 @@ function toolIcon(name) {
   switch (name) {
     case 'list_files': return '📁';
     case 'project_overview': return '🗺️';
+    case 'find_symbol': case 'find_references': case 'file_outline': return '🧭';
     case 'read_file': return '📄';
     case 'grep': return '🔍';
     case 'write_file': return '💾';
@@ -151,6 +152,13 @@ function toolMeta(name) {
     case 'run_command': case 'run_shell': return { icon: '💻', label: 'Terminal', verb: 'Ran command', running: 'Running command', cls: 'run' };
     case 'list_files': return { icon: '📁', label: 'list_files', verb: 'Listed files', running: 'Listing files', cls: 'list' };
     case 'project_overview': return { icon: '🗺️', label: 'project_overview', verb: 'Surveyed project', running: 'Surveying project', cls: 'list' };
+    case 'git_inspect': return { icon: '🌿', label: 'git', verb: 'Inspected git', running: 'Inspecting git', cls: 'list' };
+    case 'git_commit': return { icon: '🌿', label: 'git commit', verb: 'Committed', running: 'Committing', cls: 'run' };
+    case 'git_branch': return { icon: '🌿', label: 'git branch', verb: 'Changed branch', running: 'Changing branch', cls: 'run' };
+    case 'run_tests': return { icon: '🧪', label: 'Tests', verb: 'Ran tests', running: 'Running tests', cls: 'run' };
+    case 'find_symbol': return { icon: '🧭', label: 'find_symbol', verb: 'Found definition', running: 'Finding definition', cls: 'grep' };
+    case 'find_references': return { icon: '🧭', label: 'find_references', verb: 'Found call sites', running: 'Finding call sites', cls: 'grep' };
+    case 'file_outline': return { icon: '🧭', label: 'file_outline', verb: 'Outlined file', running: 'Outlining file', cls: 'list' };
     case 'grep': return { icon: '🔍', label: 'grep', verb: 'Searched files', running: 'Searching files', cls: 'grep' };
     case 'revert': return { icon: '↩️', label: 'revert', verb: 'Reverted file', running: 'Reverting file', cls: 'revert' };
     case 'create_plan': return { icon: '📋', label: 'Plan', verb: 'Created plan', running: 'Creating plan', cls: 'plan' };

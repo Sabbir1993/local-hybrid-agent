@@ -38,7 +38,7 @@ NEAR_REPEAT_WINDOW = 30
 
 # Tools that are driven step by step with different arguments each time (a shell session, a
 # browser or device test) get the whole window before the backstop applies.
-NEAR_REPEAT_ITERATIVE_PREFIXES = ("run_shell", "browser_", "mobile_")
+NEAR_REPEAT_ITERATIVE_PREFIXES = ("run_shell", "run_tests", "browser_", "mobile_")
 NEAR_REPEAT_ITERATIVE_LIMIT = 30
 
 
@@ -62,7 +62,7 @@ def _run_timeout_s() -> int:
 
 # Tools allowed in plan mode: read/explore only — nothing that mutates disk.
 # create_plan/get_plan ARE allowed: the deliverable of plan mode is the tracked plan itself.
-PLAN_MODE_TOOLS = {"list_files", "project_overview", "read_file", "grep", "search_memory", "list_skills", "read_skill",
+PLAN_MODE_TOOLS = {"list_files", "project_overview", "read_file", "grep", "find_symbol", "find_references", "file_outline", "git_inspect", "search_memory", "list_skills", "read_skill",
                    "analyze_image", "web_fetch", "web_search", "create_plan", "get_plan",
                    # looking at the running app / device changes nothing in the project
                    "browser_navigate", "browser_snapshot", "browser_console",
@@ -87,6 +87,7 @@ EXECUTOR_TEST_TOOLS = ("browser_navigate", "browser_snapshot", "browser_click", 
 # generation (GPU/expensive), browser/mobile (stateful sessions, self-ordered).
 PARALLEL_READ_TOOLS = frozenset({
     "read_file", "read_file_chunk", "grep", "list_files", "project_overview", "list_diff",
+    "find_symbol", "find_references", "file_outline", "git_inspect",
     "get_plan", "search_memory", "search_knowledge_base",
     "memory_read", "list_skills", "read_skill",
     "web_search", "web_fetch", "analyze_image", "doc_inspect",

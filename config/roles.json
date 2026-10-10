@@ -5,6 +5,9 @@
     "tools": [
       "list_files",
       "project_overview",
+      "find_symbol",
+      "find_references",
+      "file_outline",
       "read_file",
       "grep",
       "search_memory",
@@ -25,6 +28,9 @@
       "edit_file",
       "list_files",
       "project_overview",
+      "find_symbol",
+      "find_references",
+      "file_outline",
       "grep",
       "run_python"
     ],
@@ -36,6 +42,9 @@
     "tools": [
       "list_files",
       "project_overview",
+      "find_symbol",
+      "find_references",
+      "file_outline",
       "read_file",
       "grep",
       "list_diff"
@@ -47,6 +56,9 @@
     "tools": [
       "list_files",
       "project_overview",
+      "find_symbol",
+      "find_references",
+      "file_outline",
       "read_file",
       "grep",
       "list_diff",
@@ -60,6 +72,9 @@
     "tools": [
       "list_files",
       "project_overview",
+      "find_symbol",
+      "find_references",
+      "file_outline",
       "read_file",
       "grep",
       "list_diff",
@@ -73,6 +88,9 @@
     "tools": [
       "list_files",
       "project_overview",
+      "find_symbol",
+      "find_references",
+      "file_outline",
       "read_file",
       "grep",
       "list_diff",

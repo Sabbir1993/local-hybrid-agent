@@ -32,18 +32,53 @@ async def _check(uid: int, p: Path, rel: str, text: str) -> tuple[str, str]:
     return status, detail
 
 
+MAX_LINT_SHOWN = 5
+
+
+def _diagnostics_on() -> bool:
+    from ..small_model import APP_CONFIG
+    return bool((APP_CONFIG.get("agent") or {}).get("diagnostics", True))
+
+
+async def _lint(uid: int, p: Path, rel: str) -> str:
+    """Lint findings for a file the agent just changed, as one short line; "" when clean, unavailable or off.
+
+    High-signal rules only (undefined names, invalid comparisons, parse errors - see companion/fsops.js
+    diagnose), and advisory: they never count as a failed verify and never trigger the auto-restore, because
+    a half-finished refactor legitimately has an undefined name for a step.
+    """
+    if not _diagnostics_on():
+        return ""
+    try:
+        from .workspace import active_workspace
+        data = await _cb().call(uid, "fs.diagnose", {"path": str(p), "root": str(active_workspace())}, timeout=25)
+    except Exception:
+        return ""                         # an older companion has no fs.diagnose: no lint, no error
+    issues = data.get("issues") or []
+    if not data.get("checked") or not issues:
+        return ""
+    total = int(data.get("total") or len(issues))
+    shown = "; ".join(f"L{i.get('line')} {i.get('code')} {' '.join(str(i.get('message') or '').split())[:100]}".rstrip()
+                      for i in issues[:MAX_LINT_SHOWN])
+    more = f"; +{total - MAX_LINT_SHOWN} more" if total > MAX_LINT_SHOWN else ""
+    return (f"\nlint ({data.get('tool') or 'lint'}): {total} problem{'s' if total != 1 else ''} in {rel} - {shown}{more}. "
+            "Fix these before you finish; they are likely real bugs.")
+
+
 async def verify_after(uid: int, p: Path, rel: str, text: str, before: Optional[str],
                        can_autorevert: bool) -> str:
     status, detail = await _check(uid, p, rel, text)
+    # lint only complete-file edits: a skeleton or appended chunk is unfinished by design
+    lint = await _lint(uid, p, rel) if can_autorevert and status in ("ok", "skip") else ""
     if status == "skip":
-        return ""
+        return lint
     st = file_state.verify_state(str(p))
     if st["good"] is None and before:
         if verify_text(rel, before)[0] == "ok":
             st["good"] = before           # the file passed before this change: a restore point
     if status == "ok":
         st["fails"], st["good"] = 0, text
-        return f"\nverify: OK ({detail})"
+        return f"\nverify: OK ({detail})" + lint
 
     st["fails"] += 1
     limit = agent_limit("verify_max_retries")

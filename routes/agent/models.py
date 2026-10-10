@@ -35,6 +35,8 @@ class AgentRequest(SamplerFields):
     # composer Mode dropdown, enforced per request (never a global setting): plan = read-only, manual = ask before
     # every edit/command, accept_edits = edits run unasked, bypass = no permission cards for this user
     permission_mode: Optional[Literal["auto", "manual", "accept_edits", "plan", "bypass"]] = None
+    # chosen by the client so Stop can address the run even before the first byte of the response arrives
+    client_run_id: Optional[str] = Field(None, max_length=64)
 
 
 class PermissionAnswerReq(BaseModel):

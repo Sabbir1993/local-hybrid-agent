@@ -799,12 +799,17 @@
             <div style="color:var(--dim); font-size:12px;">Checking tasks...</div>
           </div>
           <div style="display:flex; gap:8px;">
-            <button class="btn ghost ln-small" onclick="loadMonitor(); $('monitor-drawer').classList.add('open');">📡 Full Monitor</button>
-            <button class="btn ghost ln-small" onclick="setReportModal(true);">📊 Token Report</button>
+            <button class="btn ghost ln-small" id="btn-tasks-monitor">📡 Full Monitor</button>
+            <button class="btn ghost ln-small" id="btn-tasks-report">📊 Token Report</button>
           </div>
         </div>`;
 
       $('btn-tasks-refresh')?.addEventListener('click', () => this.refreshTasks());
+      // the monitor drawer and usage report are opened by their toolbar buttons (monitor.js, usage-report.js)
+      $('btn-tasks-monitor')?.addEventListener('click', () => {
+        if (!$('monitor-drawer')?.classList.contains('open')) $('btn-monitor')?.click();
+      });
+      $('btn-tasks-report')?.addEventListener('click', () => $('btn-report')?.click());
 
       try {
         const r = await fetch('/control/status');

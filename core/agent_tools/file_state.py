@@ -42,6 +42,11 @@ def was_read(path: str) -> bool:
     return path in _read_sets.get(_scope(), {})
 
 
+def failing_files() -> list:
+    """Files written this session whose last syntax check failed (the plan's 'done' gate asks)."""
+    return sorted(p for p, st in _verify.get(_scope(), {}).items() if st.get("fails", 0) > 0)
+
+
 # ---- undo ----
 def _bytes(stack_map) -> int:
     return sum(len(c or "") for st in stack_map.values() for c in st)

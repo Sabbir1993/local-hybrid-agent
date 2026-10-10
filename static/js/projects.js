@@ -831,6 +831,7 @@ async function openSession(s) {
     renderAll();
     loadSessions();
     if (typeof updateBgIndicators === 'function') updateBgIndicators();
+    if (typeof reattachDetachedRuns === 'function') reattachDetachedRuns(s);      // a run that kept going while the page was closed
   } catch (e) { toast('Failed to load session', true); }
 }
 

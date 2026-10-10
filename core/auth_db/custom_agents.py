@@ -49,24 +49,42 @@ def _custom_agent_row(r) -> dict:
 
 
 def db_list_custom_agents(user_id: Optional[int] = None, include_public: bool = True) -> list[dict]:
-    """List custom agents accessible to user: user's own agents + system templates / public agents.
-    Returns all user custom agents created across devices so other devices can see and fork them."""
+    """List custom agents accessible to user: user's own agents (from every device they use,
+    each row carries its device_id/device_name) + system templates / public agents.
+    Never another user's private agent: its prompt and work_dir are theirs."""
     conn = db()
-    rows = conn.execute(
-        """SELECT * FROM user_custom_agents
-           WHERE user_id IS NOT NULL OR is_public = 1 OR user_id IS NULL
-           ORDER BY (CASE WHEN user_id IS NOT NULL THEN 0 ELSE 1 END), name COLLATE NOCASE"""
-    ).fetchall()
+    if user_id is not None:
+        if include_public:
+            rows = conn.execute(
+                """SELECT * FROM user_custom_agents
+                   WHERE user_id = ? OR user_id IS NULL OR is_public = 1
+                   ORDER BY (CASE WHEN user_id = ? THEN 0 WHEN user_id IS NULL THEN 1 ELSE 2 END), name COLLATE NOCASE""",
+                (user_id, user_id)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM user_custom_agents WHERE user_id = ? ORDER BY name COLLATE NOCASE",
+                (user_id,)
+            ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM user_custom_agents WHERE user_id IS NULL OR is_public = 1 ORDER BY name COLLATE NOCASE"
+        ).fetchall()
     return [_custom_agent_row(r) for r in rows]
 
 
 def db_get_custom_agent(agent_id: int, user_id: Optional[int] = None) -> Optional[dict]:
-    """Get agent by id (accessible to read, inspect, and fork across devices)."""
+    """Get agent by id, checking access (owner, public, or system template).
+    user_id=None skips the check: internal callers only (post-create re-read)."""
     conn = db()
     row = conn.execute("SELECT * FROM user_custom_agents WHERE id = ?", (agent_id,)).fetchone()
     if not row:
         return None
-    return _custom_agent_row(row)
+    agent = _custom_agent_row(row)
+    if user_id is not None:
+        if agent.get("user_id") not in (user_id, None) and not agent.get("is_public"):
+            return None
+    return agent
 
 
 def db_get_custom_agent_by_slug(slug: str, user_id: Optional[int] = None) -> Optional[dict]:

@@ -115,7 +115,10 @@ class RunToolTests(unittest.TestCase):
         self.assertTrue(personal_scope())
 
     def test_code_execution_and_sub_agents_are_refused(self):
-        self.assertEqual(PERSONAL_BLOCKED_TOOLS, {"spawn_agent", "spawn_parallel_agents"})
+        # run_tests executes the project's code and git_commit/git_branch change the repository: a Personal Agent
+        # never does either
+        self.assertEqual(PERSONAL_BLOCKED_TOOLS,
+                         {"spawn_agent", "spawn_parallel_agents", "run_tests", "git_commit", "git_branch"})
         for name in sorted(PERSONAL_BLOCKED_TOOLS):
             out = run(execution.run_tool(name, {"code": "print(1)"}))
             self.assertTrue(out.startswith("error:"), name)

@@ -91,6 +91,8 @@ def _pattern_error(pattern: str, rec: dict) -> Optional[str]:
         return "run_python code can only be allowed once"
     if rec.get("kind") == "media":
         return "a cloud image/video can only be allowed once"
+    if rec.get("kind") == "rule":
+        return "an administrator policy approval can only be given once or for this run"
     pat = pattern.strip().lower()
     cmd = str(rec.get("cmd") or "").strip().lower()
     first = cmd.split()[0] if cmd.split() else ""

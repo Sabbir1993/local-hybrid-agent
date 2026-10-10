@@ -11,7 +11,7 @@ the passive tools are withheld for BAN_STEPS steps so the model has to act; at S
 
 PASSIVE_TOOLS = frozenset({
     "create_plan", "get_plan", "web_fetch", "web_search", "read_file", "read_file_chunk", "grep", "list_files",
-    "project_overview", "search_memory", "search_knowledge_base", "list_skills", "read_skill", "analyze_image",
+    "project_overview", "find_symbol", "find_references", "file_outline", "git_inspect", "search_memory", "search_knowledge_base", "list_skills", "read_skill", "analyze_image",
     "doc_inspect",
 })
 NUDGE_AT, BAN_AT, STOP_AT = 3, 5, 8

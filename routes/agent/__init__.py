@@ -52,6 +52,7 @@ from .permissions import (
 from .run import (
     agent_run,
 )
+from . import run_endpoints  # noqa: F401  (registers the /agent/run/{id}/... routes)
 from .meta_endpoints import (
     agent_project_instructions,
     agent_feedback,

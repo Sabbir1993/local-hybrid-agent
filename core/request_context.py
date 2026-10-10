@@ -114,7 +114,7 @@ def tool_allowed(name: str) -> bool:
 _personal_scope: contextvars.ContextVar[bool] = contextvars.ContextVar("personal_scope", default=False)
 _personal_workspace: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("personal_workspace", default=None)
 
-PERSONAL_BLOCKED_TOOLS = frozenset({"spawn_agent", "spawn_parallel_agents"})
+PERSONAL_BLOCKED_TOOLS = frozenset({"spawn_agent", "spawn_parallel_agents", "run_tests", "git_commit", "git_branch"})
 
 
 def set_personal_scope(on: bool) -> contextvars.Token:

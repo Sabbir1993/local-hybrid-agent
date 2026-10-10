@@ -18,6 +18,9 @@ from core import project_context, agent_tools, companion_bridge
 
 async def _device_call(uid, op, params, timeout=None):
     """The user's machine, backed by a temp folder: fs.read returns the file's text or None."""
+    if op == "fs.list":
+        root = Path(params["root"])
+        return {"files": sorted(str(f.relative_to(root)).replace("\\", "/") for f in root.glob(params["pattern"]))}
     p = Path(params["path"])
     return {"content": p.read_text(encoding="utf-8") if p.is_file() else None}
 
@@ -62,6 +65,42 @@ class LoaderTests(unittest.TestCase):
 
     def test_empty_file_ignored(self):
         (self.ws / "AGENTS.md").write_text("   \n", encoding="utf-8")
+        self.assertIsNone(self.load())
+
+    def rule(self, folder, name, text):
+        d = self.ws / folder
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(text, encoding="utf-8")
+
+    def test_rule_files_follow_agents_md_each_under_its_own_heading(self):
+        (self.ws / "AGENTS.md").write_text("Run: pytest", encoding="utf-8")
+        self.rule(".agents/rules", "style.md", "Use type hints.")
+        self.rule(".agents/rules", "api.md", "Never break the public API.")
+        name, text = self.load()
+        self.assertEqual(name, "AGENTS.md")
+        self.assertLess(text.index("pytest"), text.index("### Rule: .agents/rules/api.md"))
+        self.assertIn("### Rule: .agents/rules/style.md", text)
+        self.assertIn("Never break the public API.", text)
+
+    def test_rules_alone_are_enough_and_cursor_rule_files_are_read_without_their_metadata(self):
+        self.rule(".cursor/rules", "ts.mdc", "---\ndescription: ts\nglobs: **/*.ts\n---\nPrefer const.")
+        name, text = self.load()
+        self.assertEqual(name, "the project rules folder")
+        self.assertIn("Prefer const.", text)
+        self.assertNotIn("globs", text)
+
+    def test_rule_files_are_masked_like_agents_md_and_bounded(self):
+        self.rule(".agents/rules", "a.md", "api_key = sk_live_abcdefghijklmnop1234")
+        for i in range(30):
+            self.rule(".agents/rules", f"big{i:02d}.md", "y" * 3000)
+        _, text = self.load()
+        self.assertNotIn("abcdefghijklmnop1234", text)
+        self.assertLessEqual(text.count("### Rule:"), project_context.MAX_RULE_FILES)
+        self.assertLess(len(text), project_context.MAX_CHARS + project_context.MAX_RULES_CHARS + 1500)
+
+    def test_other_folders_and_file_types_are_ignored(self):
+        self.rule("docs", "notes.md", "not a rule")
+        self.rule(".agents/rules", "x.txt", "not a rule either")
         self.assertIsNone(self.load())
 
     def test_truncates_large_file(self):

@@ -58,7 +58,15 @@ from core import router_policy, route_log
 from core.plugins import plugins_prompt_fragment, fire_hook
 from core.shell_tools import command_allowed, mark_approved, mark_code_approved, shell_cfg
 from core import device_approval
-from core.request_context import set_device_approved
+from core.request_context import get_current_device_id, set_device_approved
+from core.agent_loop import tool_audit as _tool_audit
+from core.agent_tools.test_runner import command_for as _tests_command_for
+from core.agent_tools import file_state as _file_state
+from core import injection_guard as _inj
+from core import permission_rules as _rules
+from core import hooks as _hooks
+from core.pan import mask_pans as _mask_pans
+from core.agent_tools.git_agent_tools import GIT_GATED_TOOLS, command_for as _git_command_for
 from core.agent_loop.narration import _is_narration
 from core.agent_loop.executor_view import build_executor_view
 from core.agent_loop.finish import apply_finish, without_finish
@@ -113,7 +121,8 @@ from core import reasoning as reasoning_mod
 from core.agent_loop.read_ledger import ReadLedger
 from core.agent_loop import budget as budget_mod
 from core.agent_loop import action_guard as action_guard_mod
-EXPLORE_TOOLS = ("read_file", "grep", "list_files", "project_overview")
+EXPLORE_TOOLS = ("read_file", "grep", "list_files", "project_overview", "find_symbol", "find_references", "file_outline",
+                 "git_inspect")
 from ..common import _llm_chat_stream
 from ..common.sampling_extra import sampler_extra
 from core.verifier import sse_events as answer_check_events
@@ -449,6 +458,8 @@ async def run_agent_stream(req, user, ctx):
     async def event_stream():
         web_used = 0                # web calls made this run, against web_cap
         actions_taken = []
+        plan_warned = set()         # plan steps already warned once about missing evidence (plan_guard)
+        tainted = False             # this run has read third-party content (core/injection_guard.py)
         action_guard = action_guard_mod.ActionGuard()   # planning/research with no action (core/agent_loop/action_guard.py)
         plan_presented_told = False  # plan mode: told the model to present the saved plan as text
         read_ban_until = -1         # steps below this number may not call read_file (it was re-reading in a loop)
@@ -509,6 +520,18 @@ async def run_agent_stream(req, user, ctx):
         # tool calls announced to the client but not yet answered: closed explicitly if the run dies mid-tool
         pending_tool: dict = {}
         run_allow: set = set()      # device/browser approvals the user gave "for this run"
+
+        def _rule_verdict(_name, _args):
+            """Admin allow/ask/deny rule (config permissions.rules) that decides this call, or None."""
+            _rl = (APP_CONFIG.get("permissions") or {}).get("rules")
+            if not _rl:
+                return None
+            _cmd = shell_command(_args) if _name == "run_shell" else None
+            return _rules.evaluate(_name, _args, _rl, command=_cmd)
+
+        def _rule_verdict_or_hook(_name, _args):
+            """Anything that must go through the sequential gauntlet instead of the parallel fast path."""
+            return _rule_verdict(_name, _args) or (_hooks.matching("pre_tool", _name) and {"action": "hook"}) or None
         # prompt tokens this run has sent so far: agent.run_token_budget ends a run that keeps re-sending a big
         # history (at 70% it clears old results harder and asks the model to wrap up; at 100% it stops with a summary)
         run_prompt_tokens = 0
@@ -762,7 +785,9 @@ async def run_agent_stream(req, user, ctx):
                              if t.get("function", {}).get("name") in
                              ("write_file", "append_file", "read_file", "read_file_chunk", "edit_file", "list_files", "project_overview", "grep", "run_python", "run_shell", "read_skill", "list_skills",
                               "memory_read", "memory_append", "memory_str_replace",
-                              "create_plan", "update_plan_item", "get_plan", "finish") + EXECUTOR_TEST_TOOLS
+                              "create_plan", "update_plan_item", "get_plan", "finish",
+                              "find_symbol", "find_references", "file_outline", "run_tests",
+                              "git_inspect", "git_commit", "git_branch") + EXECUTOR_TEST_TOOLS
                              or t.get("function", {}).get("name", "").startswith("mcp__")],
                             surface_q, surface_cfg)
                     else:
@@ -1388,14 +1413,17 @@ async def run_agent_stream(req, user, ctx):
                     # concurrently. Calls the plan gates would stop are not
                     # pre-emitted: the sequential loop below emits their card
                     # together with the plan-mode error.
+                    # a call an admin rule denies or asks about goes through the sequential gauntlet too
                     for name, tc_id, args in parsed_actions:
                         pending_tool[tc_id] = name
-                        if parallel_spawn_eligible(name, bool(req.plan or plan_gate), PLAN_MODE_TOOLS):
+                        if (parallel_spawn_eligible(name, bool(req.plan or plan_gate), PLAN_MODE_TOOLS)
+                                and _rule_verdict_or_hook(name, args) is None):
                             yield sse("tool_call", {'id': tc_id, 'name': name, 'args': args})
                     valid_coros = []
                     valid_ids = []
                     for name, tc_id, args in parsed_actions:
-                        if not parallel_spawn_eligible(name, bool(req.plan or plan_gate), PLAN_MODE_TOOLS):
+                        if (not parallel_spawn_eligible(name, bool(req.plan or plan_gate), PLAN_MODE_TOOLS)
+                                or _rule_verdict_or_hook(name, args) is not None):
                             # plan mode / plan-first would stop this call in the
                             # sequential gauntlet below: leave it out of the fast
                             # path so it lands there and is reported, not run
@@ -1449,7 +1477,8 @@ async def run_agent_stream(req, user, ctx):
                         try:
                             _no = int((args or {}).get("item", 0))
                             _pi = db_get_plan_items(req.session_id)
-                            _rec_err = plan_guard.check_execution_receipt(_pi, _no, actions_taken)
+                            _rec_err = (plan_guard.check_execution_receipt(_pi, _no, actions_taken, plan_warned)
+                                        or plan_guard.check_files_before_done(_no, _file_state.failing_files(), plan_warned))
                             if _rec_err:
                                 result = f"error: {_rec_err}"
                                 yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
@@ -1467,6 +1496,57 @@ async def run_agent_stream(req, user, ctx):
                         actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                         msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                         continue
+
+                    # administrator rules (config permissions.rules): a deny holds in every mode, bypass included;
+                    # an ask is an approval card that bypass mode skips
+                    _rv = _rule_verdict(name, args)
+                    if _rv and _rv["action"] == "deny":
+                        result = _rules.refusal_text(_rv)
+                        audit_log(user, action="agent.rule.deny", resource=name, result="deny",
+                                  detail={"rule": _rv["id"], "run_id": run_id,
+                                          "args": _tool_audit.summarize_args(args)})
+                        yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                        actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                        msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                        continue
+                    if _rv and _rv["action"] == "ask" and not bypass and f"rule:{_rv['id']}" not in run_allow:
+                        import uuid as _uuid
+                        _rwhat = (_rv["reason"] + "\n" if _rv["reason"] else "") + f"{name}\n" + _mask_pans(
+                            json.dumps(_tool_audit.summarize_args(args), ensure_ascii=False, default=str))[0][:600]
+                        preq_id = _uuid.uuid4().hex[:12]
+                        ev = asyncio.Event()
+                        _perm_pending[preq_id] = {"cmd": _rwhat, "event": ev, "result": None,
+                                                  "user_id": user.id, "kind": "rule"}
+                        yield sse("permission_request", {'req_id': preq_id, 'cmd': _rwhat, 'kind': 'rule', 'saveable': False})
+                        allowed, pnote, _decision = False, "", ""
+                        async for _k, _v in _permission_stream(preq_id, ev):
+                            if _k == 'ping':
+                                yield _v
+                            else:
+                                allowed, pnote, _decision = _v
+                        audit_log(user, action="agent.rule.ask", resource=name, result="allow" if allowed else "deny",
+                                  detail={"rule": _rv["id"], "run_id": run_id})
+                        if not allowed:
+                            result = (f"error: the user declined '{name}' (policy rule {_rv['id']})"
+                                      + (f" ({pnote})" if pnote else "") + _NO_WORKAROUND)
+                            yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                            actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                            msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                            continue
+                        if _decision == "project":      # "For this run" button
+                            run_allow.add(f"rule:{_rv['id']}")
+
+                    # admin pre_tool hooks (config hooks.rules): a failing hook blocks the call, in every mode
+                    if not personal and _hooks.matching("pre_tool", name):
+                        _hook_block = await _hooks.run_pre(name, args)
+                        if _hook_block:
+                            result = f"error: {_hook_block}. Do not work around it; tell the user what was blocked."
+                            audit_log(user, action="agent.hook.block", resource=name, result="deny",
+                                      detail={"run_id": run_id, "reason": _hook_block[:200]})
+                            yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                            actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                            msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                            continue
 
                     # run_python is arbitrary code on the user's machine: with ask_first on it
                     # always needs a one-time approval here (no allow pattern can cover code).
@@ -1527,10 +1607,48 @@ async def run_agent_stream(req, user, ctx):
                                 msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                                 continue
 
+                    # connector tools that change something: asked about when the run has read third-party
+                    # content (a page or ticket may have talked the model into it), or always, per admin policy
+                    if name.startswith("mcp__") and not bypass:
+                        _rt = registry.get(name)
+                        _ro = (_rt.meta or {}).get("read_only") if _rt else None
+                        if (_inj.mcp_call_needs_approval(_ro, tainted, APP_CONFIG)
+                                or (pmode == "manual" and _ro is not True)):
+                            import uuid as _uuid
+                            _what = name[len("mcp__"):].replace("__", " / ", 1)
+                            _argtxt = _mask_pans(json.dumps(args or {}, ensure_ascii=False, default=str))[0][:800]
+                            shown = f"{_what}\n{_argtxt}"
+                            preq_id = _uuid.uuid4().hex[:12]
+                            ev = asyncio.Event()
+                            _perm_pending[preq_id] = {"cmd": shown, "event": ev, "result": None,
+                                                      "user_id": user.id, "kind": "mcp"}
+                            yield sse("permission_request", {'req_id': preq_id, 'cmd': shown, 'kind': 'mcp',
+                                                             'tainted': tainted, 'saveable': False})
+                            allowed, pnote, _decision = False, "", ""
+                            async for _k, _v in _permission_stream(preq_id, ev):
+                                if _k == 'ping':
+                                    yield _v
+                                else:
+                                    allowed, pnote, _decision = _v
+                            if not allowed:
+                                result = (f"error: the user declined {_what}" + (f" ({pnote})" if pnote else "")
+                                          + _NO_WORKAROUND)
+                                yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                                actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                                msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                                continue
+
                     # shell commands: ask permission here (not inside the tool)
                     # so the SSE stream can emit the modal event while we wait
-                    if name == "run_shell" and shell_command(args):
-                        cmd = shell_command(args)
+                    # run_tests runs a detected test command through run_shell's own gate, so the loop asks about
+                    # exactly that command line (the tool recomputes the same line and the gate matches it)
+                    _gate_cmd = shell_command(args) if name == "run_shell" else None
+                    if name == "run_tests" and not personal:
+                        _gate_cmd = await _tests_command_for(args)
+                    elif name in GIT_GATED_TOOLS and not personal:
+                        _gate_cmd = _git_command_for(name, args)     # the card shows exactly what will be committed
+                    if _gate_cmd:
+                        cmd = _gate_cmd
                         cfg = shell_cfg()
                         if personal:
                             from core.shell_tools import personal_write_violation
@@ -1557,13 +1675,17 @@ async def run_agent_stream(req, user, ctx):
                             from core.shell_tools import personal_command_allowed
                             _ps_saved = personal_command_allowed(cmd, cfg.get("allow_patterns") or [])
                             pats = []
-                        if not bypass and (pmode == "manual" or cfg.get("ask_first", True) or personal) and not _ps_saved and not command_allowed(cmd, pats):
+                        _taint_force = _inj.shell_needs_approval_when_tainted(cmd, tainted)
+                        if not bypass and not _ps_saved and (
+                                ((pmode == "manual" or cfg.get("ask_first", True) or personal) and not command_allowed(cmd, pats))
+                                or _taint_force):
                             import uuid as _uuid
                             preq_id = _uuid.uuid4().hex[:12]
                             ev = asyncio.Event()
                             _perm_pending[preq_id] = {"cmd": cmd, "event": ev, "result": None,
                                                       "user_id": user.id}
-                            yield sse("permission_request", {'req_id': preq_id, 'cmd': cmd, 'saveable': False if personal else can_save_pattern(cmd)})
+                            yield sse("permission_request", {'req_id': preq_id, 'cmd': cmd, 'tainted': _taint_force,
+                                                             'saveable': False if personal else can_save_pattern(cmd)})
                             async for _k, _v in _permission_stream(preq_id, ev):
                                 if _k == 'ping':
                                     yield _v
@@ -1709,6 +1831,13 @@ async def run_agent_stream(req, user, ctx):
                     except Exception as _he:          # a hook error must never swallow the tool's result
                         print(f"[agent] after_tool hook failed: {_he}", file=sys.stderr)
                     ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
+                    if ok and not personal and isinstance(result, str) and _hooks.matching("post_tool", name):
+                        try:
+                            _hook_note = await _hooks.run_post(name, args)
+                        except Exception:
+                            _hook_note = ""
+                        if _hook_note:
+                            result = f"{result}\n[{_hook_note}]"
                     # A sub-agent's result is prefixed with its envelope, so it never starts
                     # with "error:" and a child that ran out of steps counted as a SUCCESS here.
                     # The envelope states its own structural outcome; believe that instead.
@@ -1720,6 +1849,13 @@ async def run_agent_stream(req, user, ctx):
                                         tool_err=None if ok else _tool_failure_code(name, result))
                     except Exception:
                         pass
+                    _tool_audit.audit_tool_call(
+                        user, run_id, name, args, ok,
+                        err_code=None if ok else _tool_failure_code(name, result),
+                        step=step, device_id=get_current_device_id(), session_id=req.session_id,
+                        tainted=tainted)
+                    if ok and _inj.is_external_content_tool(name):
+                        tainted = True          # from the next call on, side effects need the user's card
                     try:
                         _payload = _with_diff({'id': tc_id, 'name': name, 'ok': ok, 'result': result}, args)
                     except Exception as _de:
@@ -1786,7 +1922,8 @@ async def run_agent_stream(req, user, ctx):
                         stop_reason = "no_progress"
                         loop_detail = f"{action_guard_mod.RULE}:steps:{action_guard.streak}"
                         break
-                if _step_acts and all(a.get("name") in ("read_file", "read_file_chunk", "grep", "list_files", "project_overview", "search_memory", "get_plan") for a in _step_acts):
+                if _step_acts and all(a.get("name") in ("read_file", "read_file_chunk", "grep", "list_files", "project_overview", "search_memory", "get_plan",
+                                                  "find_symbol", "find_references", "file_outline", "git_inspect") for a in _step_acts):
                     consecutive_inspect_steps += 1
                     if consecutive_inspect_steps >= 3 and not _analysis_run:
                         msgs.append({
@@ -1797,7 +1934,7 @@ async def run_agent_stream(req, user, ctx):
                             )
                         })
                         consecutive_inspect_steps = 0
-                elif any(a.get("ok") and (a.get("name") in FILE_WRITE_TOOLS or a.get("name") in ("run_python", "run_shell", "update_plan_item")) for a in _step_acts):
+                elif any(a.get("ok") and (a.get("name") in FILE_WRITE_TOOLS or a.get("name") in ("run_python", "run_shell", "run_tests", "git_commit", "update_plan_item")) for a in _step_acts):
                     consecutive_inspect_steps = 0
 
                 # re-assert the plan-tracking reminder every step (not just once at

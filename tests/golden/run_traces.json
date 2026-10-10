@@ -1,0 +1,1102 @@
+{
+ "append_build": [
+  [
+   "run",
+   {}
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "items"
+    ],
+    "name": "create_plan"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "create_plan",
+    "ok": true
+   }
+  ],
+  [
+   "plan",
+   {}
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "content",
+     "path"
+    ],
+    "name": "write_file"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "write_file",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "content",
+     "path"
+    ],
+    "name": "append_file"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "append_file",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "content",
+     "path"
+    ],
+    "name": "append_file"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "append_file",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "Log has the header and both entries."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "\n\n"
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "Done."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "\n\n"
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "Done."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "\n\n"
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "Done."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "\n\n"
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "Done."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "validated",
+   {}
+  ],
+  [
+   "done",
+   {
+    "reason": null,
+    "state": "completed"
+   }
+  ]
+ ],
+ "compute_only": [
+  [
+   "run",
+   {}
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "code"
+    ],
+    "name": "run_python"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "run_python",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "3973"
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "validated",
+   {}
+  ],
+  [
+   "done",
+   {
+    "reason": null,
+    "state": "completed"
+   }
+  ]
+ ],
+ "edit_flow": [
+  [
+   "run",
+   {}
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "path"
+    ],
+    "name": "read_file"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "read_file",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "new_string",
+     "old_string",
+     "path"
+    ],
+    "name": "edit_file"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "edit_file",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "Done - greeting is now hello."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "validated",
+   {}
+  ],
+  [
+   "done",
+   {
+    "reason": null,
+    "state": "completed"
+   }
+  ]
+ ],
+ "grep_search": [
+  [
+   "run",
+   {}
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "path",
+     "pattern"
+    ],
+    "name": "grep"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "grep",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "The retry helper is defined in net.py."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "validated",
+   {}
+  ],
+  [
+   "done",
+   {
+    "reason": null,
+    "state": "completed"
+   }
+  ]
+ ],
+ "json_repair_truncated": [
+  [
+   "run",
+   {}
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "__invalid_json__",
+     "path"
+    ],
+    "name": "write_file"
+   }
+  ],
+  [
+   "tool_result",
+   {
+    "name": "write_file",
+    "ok": false
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "content",
+     "path"
+    ],
+    "name": "write_file"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "write_file",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "Saved r.py after resending the call in full."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "validated",
+   {}
+  ],
+  [
+   "done",
+   {
+    "reason": null,
+    "state": "completed"
+   }
+  ]
+ ],
+ "missing_arg_recovery": [
+  [
+   "run",
+   {}
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "path"
+    ],
+    "name": "read_file"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "read_file",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "m.txt says: done."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "validated",
+   {}
+  ],
+  [
+   "done",
+   {
+    "reason": null,
+    "state": "completed"
+   }
+  ]
+ ],
+ "read_after_write": [
+  [
+   "run",
+   {}
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "content",
+     "path"
+    ],
+    "name": "write_file"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "write_file",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "path"
+    ],
+    "name": "read_file"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "read_file",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "Confirmed - clinic.txt says intake hours are Mon-Fri 9-5."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "validated",
+   {}
+  ],
+  [
+   "done",
+   {
+    "reason": null,
+    "state": "completed"
+   }
+  ]
+ ],
+ "symbol_navigation": [
+  [
+   "run",
+   {}
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "symbol"
+    ],
+    "name": "find_symbol"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "find_symbol",
+    "ok": false
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "symbol"
+    ],
+    "name": "find_references"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "find_references",
+    "ok": false
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "check is defined in auth.py and called from login.py."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "validated",
+   {}
+  ],
+  [
+   "done",
+   {
+    "reason": null,
+    "state": "completed"
+   }
+  ]
+ ],
+ "unknown_tool_graceful": [
+  [
+   "run",
+   {}
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "path"
+    ],
+    "name": "frobnicate"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "frobnicate",
+    "ok": false
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_preparing",
+   {}
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "tool_call",
+   {
+    "args": [
+     "path"
+    ],
+    "name": "list_files"
+   }
+  ],
+  [
+   "verify",
+   {}
+  ],
+  [
+   "tool_result",
+   {
+    "name": "list_files",
+    "ok": true
+   }
+  ],
+  [
+   "step",
+   {}
+  ],
+  [
+   "lane",
+   {}
+  ],
+  [
+   "delta",
+   {
+    "text": "Listed via list_files after the bad call was refused."
+   }
+  ],
+  [
+   "usage",
+   {}
+  ],
+  [
+   "validated",
+   {}
+  ],
+  [
+   "done",
+   {
+    "reason": null,
+    "state": "completed"
+   }
+  ]
+ ]
+}

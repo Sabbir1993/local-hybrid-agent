@@ -3,6 +3,7 @@ import json
 import sys
 from typing import Optional
 
+from ..injection_guard import mcp_tool_is_read_only
 from ..registry import registry
 from .constants import configured_servers, server_key
 from .server import McpServer
@@ -153,7 +154,7 @@ async def connect_one(name: str, cfg: dict, owner: Optional[int] = None) -> dict
             _tool_bridge(srv, tname),
             _bridge_schema(name, t),
             source=f"mcp:{key}",
-            meta={"label": f"{name}/{tname}"}, replace=True, owner=owner)
+            meta={"label": f"{name}/{tname}", "read_only": mcp_tool_is_read_only(t)}, replace=True, owner=owner)
     return srv.status_info()
 
 

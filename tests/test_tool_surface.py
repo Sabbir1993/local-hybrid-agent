@@ -135,7 +135,7 @@ class TestFilter(unittest.TestCase):
         q = "open the website and take a screenshot"
         self.assertEqual(set(ts.hidden_families(q)),
                          set(ts.FAMILIES) - set(ts.needed_families(q)))
-        self.assertEqual(ts.hidden_families(q), ["docs", "image_gen", "mobile"])
+        self.assertEqual(ts.hidden_families(q), ["docs", "git", "image_gen", "mobile"])
 
 
 def _register_everything():
@@ -174,15 +174,20 @@ class TestRealRegistrySaving(unittest.TestCase):
         core_only = ts.filter_tools(self.tools, "fix the failing test in core/db.py")
         full = len(self.tools)
         self.assertGreater(full, 20, "registry should hold the whole tool set")
-        self.assertLess(len(core_only), full * 0.6,
-                        "a coding run must not carry the situational families")
+        # the count ratio drifted whenever a core tool was added; what matters is that no situational
+        # family rides along (the token ratio below is the actual budget)
+        carried = [t["function"]["name"] for t in core_only if ts._family_of(t["function"]["name"])]
+        self.assertEqual(carried, [], "a coding run must not carry the situational families")
+        self.assertLess(len(core_only), full * 0.7)
         self.assertLess(self._schema_tokens(core_only), self._schema_tokens(self.tools) * 0.6)
 
     def test_named_families_come_back(self):
         for query, tool in (("use the browser to click through the page", "browser_click"),
                             ("edit this excel spreadsheet", "doc_inspect"),
                             ("make me a picture of a cat", "generate_image"),
-                            ("run it on my android emulator", "mobile_tap")):
+                            ("run it on my android emulator", "mobile_tap"),
+                            ("commit the fix on a new branch", "git_commit"),
+                            ("what changed since the last commit? use git", "git_inspect")):
             with self.subTest(query=query):
                 kept = {t["function"]["name"] for t in ts.filter_tools(self.tools, query)}
                 self.assertIn(tool, kept)

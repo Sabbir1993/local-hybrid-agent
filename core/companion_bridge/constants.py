@@ -19,7 +19,7 @@ DEFAULT_TIMEOUT_S = 60
 RECONNECT_GRACE_S = 10    # a companion that dropped this recently is expected back
 CONNECT_WAIT_S = 5        # how long call() waits for a (re)connection before failing
 # ops that are safe to repeat after a dropped connection; writes and shell are not
-READ_ONLY_OPS = {"fs.read", "fs.read_b64", "fs.list", "fs.grep", "fs.tree", "fs.browse"}
+READ_ONLY_OPS = {"fs.read", "fs.read_b64", "fs.list", "fs.grep", "fs.tree", "fs.browse", "fs.read_many", "fs.diagnose"}
 # ops the companion would otherwise confirm in a native dialog of its own (companion/policy.js)
 CONFIRM_OPS = {"browser.navigate", "browser.eval", "android.boot_avd", "android.pair", "android.connect",
                "android.install", "ios.boot", "ios.install"}

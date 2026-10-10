@@ -28,6 +28,22 @@ class AllowListTests(unittest.TestCase):
                     "git status ^& calc"):
             self.assertFalse(st.command_allowed(cmd, self.PATS), cmd)
 
+    def test_shell_interpreter_patterns_never_auto_approve_for_the_general_agent(self):
+        # "powershell -NoProfile *" would approve any code at all; it only counts on a Personal Agent's
+        # read-only-checked path (personal_command_allowed)
+        for pat, cmd in (("powershell -NoProfile *", "powershell -NoProfile -Command Remove-Item -Recurse x"),
+                         ("pwsh *", "pwsh -c whoami"), ("cmd *", "cmd /c calc"), ("bash *", "bash -c id"),
+                         ("wmic *", "wmic process call create calc"), ("wsl *", "wsl rm -rf x")):
+            with self.subTest(pattern=pat):
+                self.assertFalse(st.command_allowed(cmd, [pat]))
+        # the same patterns do not disable the rest of the list
+        self.assertTrue(st.command_allowed("git status", ["powershell -NoProfile *", "git *"]))
+        # a Personal Agent still gets its read-only PowerShell
+        self.assertTrue(st.personal_command_allowed('powershell -NoProfile -Command "Get-Process"',
+                                                    ["powershell -NoProfile *"]))
+        # an explicit "*" is still the admin's blanket choice
+        self.assertTrue(st.command_allowed("powershell -c x", ["*"]))
+
     def test_star_pattern_allows_everything(self):
         self.assertTrue(st.command_allowed("git status & dir", ["*"]))
 

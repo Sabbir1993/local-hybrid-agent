@@ -32,6 +32,18 @@ class NeedsPlan(unittest.TestCase):
         self.assertTrue(pg.needs_plan("action", "fix the login bug and add a test for it", {}))
         self.assertTrue(pg.needs_plan("other", "x " * 150, {}))
 
+    def test_single_file_creation_skips_the_forced_plan(self):
+        self.assertFalse(pg.needs_plan(
+            "creation", "Write clinic.txt with the intake hours, then read it back and confirm.", {}))
+        self.assertFalse(pg.needs_plan("creation", "create notes.md with three bullet points", {}))
+        # forced planning stays on when the request is bigger than one file
+        self.assertTrue(pg.needs_plan("creation", "create a.py and b.py", {}))
+        self.assertTrue(pg.needs_plan("creation", "build a todo app in app.py", {}))
+        self.assertTrue(pg.needs_plan("creation", "create main.py, test it, run it and deploy it", {}))
+        self.assertTrue(pg.needs_plan("creation", "write notes.txt " + "with detail " * 12, {}))
+        # an explicit "always" still wins
+        self.assertTrue(pg.needs_plan("creation", "write notes.txt", {"plan_required": "always"}))
+
     def test_bad_setting_falls_back_to_auto(self):
         self.assertEqual(pg.plan_mode_setting({"plan_required": "sometimes"}), "auto")
 
@@ -99,13 +111,78 @@ class Order(unittest.TestCase):
         self.assertEqual([pg.stuck_action(n, 8) for n in (0, 7, 8, 40)], ["ok", "ok", "warn", "warn"])
         self.assertEqual(pg.stuck_action(99, 0), "ok")
 
-    def test_execution_receipt_required(self):
-        plan_items = items("in_progress", "pending")
-        plan_items[0]["text"] = "Implement and test auth endpoint"
-        # Zero actions performed -> receipt missing
-        self.assertIn("receipt missing", pg.check_update(plan_items, 1, "done", actions=[]))
-        # With successful write action -> receipt accepted
-        self.assertIsNone(pg.check_update(plan_items, 1, "done", actions=[{"name": "write_file", "ok": True}]))
+
+def act(name, ok=True):
+    return {"name": name, "ok": ok}
+
+
+def step(text):
+    return [{"ord": 1, "text": text, "status": "in_progress", "note": None}]
+
+
+class ExecutionReceipt(unittest.TestCase):
+    """A step may only be closed with evidence of work done since the previous step closed."""
+
+    def test_create_plan_alone_is_not_evidence(self):
+        # it is itself a tool call, which is why the old "any action at all" check could never fire
+        err = pg.check_execution_receipt(step("Write the auth module"), 1, [act("create_plan")])
+        self.assertIn("no evidence of work", err)
+        self.assertIn("a file change or a command", err)
+
+    def test_work_steps_need_a_change_or_command(self):
+        items = step("Implement and test auth endpoint")
+        self.assertIsNone(pg.check_execution_receipt(items, 1, [act("create_plan"), act("write_file")]))
+        self.assertIsNone(pg.check_execution_receipt(items, 1, [act("run_shell")]))
+        self.assertIn("no evidence", pg.check_execution_receipt(items, 1, [act("create_plan"), act("read_file")]))
+
+    def test_test_steps_need_a_run_not_a_write(self):
+        items = step("Run the tests")
+        self.assertIsNone(pg.check_execution_receipt(items, 1, [act("run_tests")]))
+        self.assertIsNone(pg.check_execution_receipt(items, 1, [act("browser_navigate")]))
+        err = pg.check_execution_receipt(items, 1, [act("write_file")])
+        self.assertIn("a command or test run", err)
+
+    def test_other_steps_need_any_successful_call(self):
+        items = step("Review the config layout")
+        self.assertIsNone(pg.check_execution_receipt(items, 1, [act("read_file")]))
+        self.assertIn("at least one tool call", pg.check_execution_receipt(items, 1, []))
+
+    def test_failed_calls_and_plan_tools_do_not_count(self):
+        items = step("Fix the parser")
+        acts = [act("write_file", ok=False), act("get_plan"), act("finish")]
+        self.assertIn("no evidence", pg.check_execution_receipt(items, 1, acts))
+
+    def test_evidence_window_starts_after_the_previous_step_closed(self):
+        items = [{"ord": 1, "text": "Write a.py", "status": "done", "note": None},
+                 {"ord": 2, "text": "Write b.py", "status": "in_progress", "note": None}]
+        acts = [act("create_plan"), act("write_file"), act("update_plan_item")]
+        self.assertIn("no evidence", pg.check_execution_receipt(items, 2, acts),
+                      "step 1's write is not step 2's evidence")
+        self.assertIsNone(pg.check_execution_receipt(items, 2, acts + [act("write_file")]))
+
+    def test_first_refusal_is_advisory_so_batched_work_is_not_trapped(self):
+        items = step("Write b.py")
+        warned = set()
+        acts = [act("create_plan")]
+        self.assertIn("no evidence", pg.check_execution_receipt(items, 1, acts, warned))
+        self.assertIsNone(pg.check_execution_receipt(items, 1, acts, warned), "confirmed on the second attempt")
+
+    def test_a_resumed_run_with_no_plan_call_uses_the_whole_window(self):
+        self.assertIsNone(pg.check_execution_receipt(step("Fix it"), 1, [act("edit_file")]))
+
+    def test_check_update_still_enforces_order_only(self):
+        self.assertIsNone(pg.check_update(step("Write a.py"), 1, "done"))
+
+
+class FilesBeforeDone(unittest.TestCase):
+    def test_a_file_that_still_fails_blocks_done_once(self):
+        warned = set()
+        err = pg.check_files_before_done(2, ["app.py"], warned)
+        self.assertIn("app.py still fails its syntax check", err)
+        self.assertIsNone(pg.check_files_before_done(2, ["app.py"], warned), "advisory: stale state cannot trap a step")
+
+    def test_clean_session_passes(self):
+        self.assertIsNone(pg.check_files_before_done(1, []))
 
 
 class PlanTools(unittest.TestCase):

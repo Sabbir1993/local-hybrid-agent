@@ -775,6 +775,20 @@ class LiveProjectBootstrap(unittest.TestCase):
         # the message goes to stdout; SystemExit carries the code
         self.assertEqual(e.exception.code, 2)
 
+    def test_preflight_pins_requests_to_the_companion_device(self):
+        # Without X-Device-Id the server resolves the "default" device, which never
+        # matches the companion's real device_id -> "different machine" 403.
+        import eval_agent
+        from unittest import mock
+        client = mock.Mock()
+        client.headers = {}
+        client.get.return_value = mock.Mock(
+            status_code=200,
+            json=lambda: {"connected": True, "device_id": "dev-abc", "hostname": "WS-1"})
+        eval_agent._live_preflight_companion("http://x", client, "eval")
+        self.assertEqual(client.headers.get("X-Device-Id"), "dev-abc")
+        self.assertEqual(client.headers.get("X-Device-Name"), "WS-1")
+
 
 class LiveBaselineCompare(unittest.TestCase):
     def test_compare_summary_shapes_records_for_compare_baseline(self):

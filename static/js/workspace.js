@@ -336,11 +336,27 @@ updateWsRail();
 document.addEventListener('DOMContentLoaded', updateWsRail);
 
 /* ---------------- shell permission modal ---------------- */
-function showPermModal(reqId, cmd, kind, saveable) {
+// the run has read content from outside this machine (web page, browser, connector): say so on the card, because
+// the action being asked about may be what that content talked the model into
+function setPermTaint(m, on) {
+  let w = $('perm-taint');
+  if (!w) {
+    w = document.createElement('div');
+    w.id = 'perm-taint';
+    w.style.cssText = 'margin:0 0 8px; padding:6px 8px; border-radius:6px; font-size:11px; background:rgba(234,179,8,.15); border:1px solid rgba(234,179,8,.5);';
+    w.textContent = '⚠️ This run has read content from outside your machine (a web page, the agent’s browser or a connector). Approve only if this action is what YOU asked for.';
+    const anchor = $('perm-cmd');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(w, anchor);
+  }
+  w.hidden = !on;
+}
+
+function showPermModal(reqId, cmd, kind, saveable, tainted) {
   const m = $('perm-modal');
   if (!m) return;
   m.dataset.reqId = reqId;
   $('perm-cmd').textContent = cmd;
+  setPermTaint(m, !!tainted);
   // page JavaScript / a new website / a device action: asked here instead of in a native companion dialog.
   // Allow once, or for the rest of this run (the "project" button, relabelled), or deny.
   const DEVICE_KINDS = {
@@ -348,6 +364,7 @@ function showPermModal(reqId, cmd, kind, saveable) {
     browser_open: ['🌐 Open a website ', 'The agent wants to open this site in its test browser:'],
     device: ['📱 Device action ', 'The agent wants to do this on a phone / emulator:'],
     edit: ['✏️ Edit a file ', 'The agent wants to change this file:'],
+    rule: ['🛡 Policy check ', 'A rule set by your administrator needs your approval for this action:'],
   };
   const pb = $('perm-project');
   if (DEVICE_KINDS[kind]) {
@@ -365,21 +382,23 @@ function showPermModal(reqId, cmd, kind, saveable) {
   if (pb) pb.textContent = '📁 For this project';
   // code and paid cloud media can only ever be allowed once: no saved patterns
   // a command with & | > ; or special options is asked about every time, so it cannot be remembered either
-  const chained = kind !== 'python' && kind !== 'media' && saveable === false;
-  const onceOnly = kind === 'python' || kind === 'media' || chained;
+  const chained = kind !== 'python' && kind !== 'media' && kind !== 'mcp' && saveable === false;
+  const onceOnly = kind === 'python' || kind === 'media' || kind === 'mcp' || chained;
   ['perm-project', 'perm-user', 'perm-always'].forEach(id => { const b = $(id); if (b) b.hidden = onceOnly; });
   // code cannot be remembered, but the user may allow scripts for the rest of THIS run (nothing is saved)
   if (kind === 'python' && pb) { pb.hidden = false; pb.textContent = '⏱ For this run'; }
   const h = m.querySelector('h2');
   if (h && h.firstChild && h.firstChild.nodeType === 3) {
     h.firstChild.textContent = kind === 'media' ? '💳 Cloud media — may cost money ' :
+      kind === 'mcp' ? '🔌 Connector action ' :
       kind === 'python' ? '🔑 Run Python code ' : '🔑 Shell Execution Permission ';
   }
   const lead = m.querySelector('#perm-box > p.dim');
   if (lead) lead.textContent = kind === 'media' ? 'The agent wants to make this with a paid cloud service:' :
+    kind === 'mcp' ? 'The agent wants a connected service to do this:' :
     kind === 'python' ? 'The agent wants to run this code:' : 'The agent wants to run a shell command:';
   if (onceOnly) {
-    $('perm-note').textContent = kind === 'media'
+    $('perm-note').textContent = (kind === 'media' || kind === 'mcp')
       ? 'Allow it just this once, or deny. The agent asks again next time.'
       : chained ? 'This command chains steps or uses special options (& | > ;), so it can only be allowed once. Run each step as its own command to be able to remember it.'
       : 'Code is never remembered. Allow it once, or allow Python scripts for the rest of this run (nothing is saved after the run ends).';

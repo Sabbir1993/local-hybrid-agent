@@ -1,0 +1,42 @@
+{
+  "name": "a770-agent",
+  "displayName": "A770 Agent",
+  "description": "Ask the A770 agent about your selection or give it a task; approvals are answered in VS Code.",
+  "version": "0.1.0",
+  "publisher": "sslwireless",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "a770.runTask", "title": "A770: Run a task" },
+      { "command": "a770.askAboutSelection", "title": "A770: Ask about the selection" },
+      { "command": "a770.setToken", "title": "A770: Set API token" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "a770.askAboutSelection", "when": "editorHasSelection", "group": "navigation" }
+      ]
+    },
+    "configuration": {
+      "title": "A770 Agent",
+      "properties": {
+        "a770.baseUrl": {
+          "type": "string", "default": "http://127.0.0.1:8000",
+          "markdownDescription": "Address of the A770 server. Use https for anything but this machine."
+        },
+        "a770.deviceId": {
+          "type": "string", "default": "",
+          "markdownDescription": "Companion device id. Leave empty to use the Companion connected for your account."
+        },
+        "a770.permissionMode": {
+          "type": "string", "default": "auto", "enum": ["auto", "manual", "accept_edits", "plan"],
+          "markdownDescription": "How much the agent asks before acting. `plan` is read-only. Bypass is not offered here."
+        }
+      }
+    }
+  }
+}

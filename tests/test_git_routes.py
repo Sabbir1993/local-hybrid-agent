@@ -129,7 +129,7 @@ class CompanionRoutedGitTests(_GitApp):
         self.addCleanup(_cleanup)
 
         async def git(args):
-            return 0, "cafe1234\n", ""
+            return (0, "cafe1234\n", "") if args == ["stash", "create"] else (0, "", "")
         # record a checkpoint for user 7
         asyncio.run(checkpoint.create_checkpoint("run-aa", 7, "sess-1", 0, git))
 
@@ -138,14 +138,20 @@ class CompanionRoutedGitTests(_GitApp):
         self.assertEqual(r.json()["checkpoints"][0]["run_id"], "run-aa")
 
         # rewind drives git through git_tools (companion-routed); mock _run.
+        git_calls = []
+
         def fake_run(args, cwd):
-            self.assertIn("--hard", args)
+            git_calls.append(list(args))
             return 0, "", ""
         with mock.patch("core.git_tools._run", side_effect=fake_run), \
+             mock.patch("core.audit.auth_db.insert_audit") as audit, \
              mock.patch("core.git_tools.require_device_workspace", return_value=(7, Path("C:/ws"))):
             r = self.client.post("/git/rewind", json={"run_id": "run-aa", "step": 0})
         self.assertEqual(r.status_code, 200, r.text[:200])
         self.assertEqual(r.json()["rewound_to"], "cafe1234")
+        self.assertIn(["restore", "--source=cafe1234", "--staged", "--worktree", "--", "."], git_calls)
+        self.assertFalse(any("--hard" in c or "reset" in c for c in git_calls), "the guards forbid reset --hard")
+        self.assertEqual(audit.call_args.kwargs["action"], "git.rewind", "a rewind is audited")
 
     def test_commit_success(self):
         self._bridge({

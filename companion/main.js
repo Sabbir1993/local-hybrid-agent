@@ -504,8 +504,10 @@ const OPS = {
   "fs.edit": async (p) => { await policy.ensurePath(p.path, "edit"); return fsops.edit(p); },
   "fs.remove": async (p) => { await policy.ensurePath(p.path, "delete"); return fsops.remove(p); },
   "fs.verify": async (p) => { await policy.ensurePath(p.path, "read"); return fsops.verify(p); },
+  "fs.diagnose": async (p) => { await policy.ensurePath(p.path, "read"); return fsops.diagnose(p); },
   "fs.list": async (p) => { await policy.ensurePath(p.root, "list files in"); return fsops.list(p); },
   "fs.grep": async (p) => { await policy.ensurePath(p.root, "search files in"); return fsops.grep(p); },
+  "fs.read_many": async (p) => { await policy.ensurePath(p.root, "read source files in"); return fsops.readMany(p); },
   "fs.tree": async (p) => { await policy.ensurePath(p.root, "browse"); return fsops.tree(p); },
   "shell.run": async (p) => {
     await policy.confirmShell(p.command, p.cwd, p.display, p.approved_in_app === true);

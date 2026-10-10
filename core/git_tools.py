@@ -4,6 +4,7 @@ No destructive operations are exposed here (no reset --hard, no force-push, no b
 this is a review/commit/push surface for the UI, not a full git client.
 """
 
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -245,3 +246,63 @@ def parse_github_owner_repo(remote_url: str) -> Optional[tuple]:
     if len(parts) < 2:
         return None
     return parts[-2], parts[-1]
+
+
+# ---- helpers for the agent's git tools (core/agent_tools/git_agent_tools.py) ----
+
+_REF_RX = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._/-]{0,99}$")
+
+
+def valid_branch_name(name: str) -> bool:
+    """A branch name safe to pass as an argument: no option-like start, no '..', no trailing '/' or '.lock'."""
+    n = str(name or "")
+    return bool(_REF_RX.match(n)) and ".." not in n and not n.endswith(("/", ".lock", ".")) and "//" not in n
+
+
+async def git_log(count: int = 10, path: Optional[str] = None) -> dict:
+    cwd = _cwd()
+    if not await _is_repo(cwd):
+        return {"error": f"'{cwd}' is not a git repository"}
+    n = max(1, min(int(count or 10), 50))
+    args = ["log", f"-n{n}", "--date=short", "--pretty=format:%h %ad %an: %s"]
+    if path:
+        args += ["--", path]
+    code, out, err = await _run(args, cwd)
+    if code != 0:
+        return {"error": err.strip() or "git log failed"}
+    return {"log": out.strip()}
+
+
+async def git_switch(name: str, create: bool = False, start: Optional[str] = None) -> dict:
+    """Create (and switch to) or switch to a branch. Never forces: a dirty tree that conflicts refuses."""
+    if not valid_branch_name(name) or (start and not valid_branch_name(start)):
+        return {"error": f"invalid branch name: {name!r}"}
+    cwd = _cwd()
+    if not await _is_repo(cwd):
+        return {"error": f"'{cwd}' is not a git repository"}
+    args = ["switch"] + (["-c", name] + ([start] if start else []) if create else [name])
+    code, out, err = await _run(args, cwd)
+    if code != 0:
+        return {"error": (err or out).strip() or "git switch failed"}
+    return {"ok": True, "output": (out + err).strip()}
+
+
+async def git_staged_names(paths: Optional[list] = None) -> list:
+    """Paths currently staged (optionally limited to `paths`)."""
+    cwd = _cwd()
+    args = ["diff", "--cached", "--name-only"] + (["--"] + list(paths) if paths else [])
+    code, out, _ = await _run(args, cwd)
+    return [ln.strip() for ln in out.splitlines() if ln.strip()] if code == 0 else []
+
+
+async def git_commit_paths(message: str, paths: list) -> dict:
+    """Commit only `paths` (git's --only semantics): changes a user staged elsewhere are not swept in."""
+    cwd = _cwd()
+    if not await _is_repo(cwd):
+        return {"error": f"'{cwd}' is not a git repository"}
+    if not message or not message.strip():
+        return {"error": "commit message is required"}
+    code, out, err = await _run(["commit", "-m", message.strip(), "--"] + list(paths), cwd)
+    if code != 0:
+        return {"error": (err or out).strip() or "git commit failed"}
+    return {"ok": True, "output": out.strip()}

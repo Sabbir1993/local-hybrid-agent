@@ -1,5 +1,9 @@
 ﻿# Engineering Improvement Plan (single roadmap for this repo)
 
+> **Docker note:** the Docker/container sandbox items below are NOT planned. This project does not use Docker
+> (see the no-Docker policy). The active roadmap is the competitive plan (Phases 0-6); containment is done in
+> the companion with process-tree kill and native Job Objects.
+
 > **Status note (2026-10-06): the self-assigned scores below predate the eval
 > hygiene fixes and were never measured against a real model.** Read them as a
 > ranking of where work was needed, not as measured facts. The live eval

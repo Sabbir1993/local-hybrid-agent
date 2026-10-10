@@ -1,5 +1,33 @@
 /* ---------------- agent SSE runner ---------------- */
-async function runAgentSSE(text) {
+/* A run lives on the server and outlives this page: reattaching replays it from the start into a fresh message. */
+function newRunId() {
+  return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+const RUN_SAVED_KEY = 'a770_saved_runs';
+function runWasSaved(id) {
+  try { return (JSON.parse(localStorage.getItem(RUN_SAVED_KEY) || '[]')).includes(id); } catch (e) { return false; }
+}
+// remembered so a lost acknowledgement can never make a reload show the same result twice
+function markRunSaved(id) {
+  try {
+    const l = JSON.parse(localStorage.getItem(RUN_SAVED_KEY) || '[]').filter(x => x !== id);
+    l.push(id);
+    localStorage.setItem(RUN_SAVED_KEY, JSON.stringify(l.slice(-50)));
+  } catch (e) {}
+}
+function ackServerRun(id) {
+  if (!id) return;
+  markRunSaved(id);
+  fetch('/agent/run/' + encodeURIComponent(id) + '/ack', { method: 'POST', headers: { ...getDeviceHeaders() } }).catch(() => {});
+}
+function cancelServerRun(id) {
+  if (!id) return;
+  fetch('/agent/run/' + encodeURIComponent(id) + '/cancel', { method: 'POST', headers: { ...getDeviceHeaders() }, keepalive: true }).catch(() => {});
+}
+
+async function runAgentSSE(text, opts = {}) {
+  const reattachId = opts.reattachRunId || null;      // replay a run that kept going on the server
+  const runHandleId = reattachId || newRunId();
   let ctxToastShown = false;   // the context-trim toast shows once per run
   // Agent tasks are project-scoped (like Claude Code): no project -> refuse.
   if (agentMode && (!curProject || !curProject.id)) {
@@ -10,7 +38,7 @@ async function runAgentSSE(text) {
   // the page can show a project the server forgot (server restart, another tab): re-select it before the run
   if (agentMode && typeof ensureProjectActive === 'function') await ensureProjectActive();
   window._runBudget = null;   // a new run starts a fresh budget
-  if (!mainLaneReady()) {
+  if (!reattachId && !mainLaneReady()) {
     const sel = $('profile');
     if (!sel || !sel.value) {
       toast('Please select a model from the top dropdown first', true);
@@ -26,19 +54,21 @@ async function runAgentSSE(text) {
     }
   }
   const input = $('input');
-  const sentAttachments = attachments.slice();
+  const sentAttachments = reattachId ? [] : attachments.slice();
   // a video shows its first frame as the preview (the video itself is never kept in the history)
   const sentImages = sentAttachments.map(a => (a.isImage && a.dataUrl) || (a.isVideo && a.thumb) || null).filter(Boolean);
   const sentFiles = sentAttachments.map(a => a.name).join(', ');
   const nFiles = sentAttachments.filter(a => a.content != null).length;
-  if (input) input.value = '';
-  if (window.renderInputHighlights) window.renderInputHighlights();
-  clearAttachments();
+  if (!reattachId) {      // a reattach must not eat what the user is typing now
+    if (input) input.value = '';
+    if (window.renderInputHighlights) window.renderInputHighlights();
+    clearAttachments();
+  }
 
   // Auto-compact when the context window is nearly full — agent mode with an
   // active project only (see autoCompactIfNeeded). Runs before the new turn so
   // the streaming placeholder below is preserved. Never blocks the run.
-  if (typeof autoCompactIfNeeded === 'function') {
+  if (!reattachId && typeof autoCompactIfNeeded === 'function') {
     // Pass the real message objects. This used to map to {role, content}, which
     // dropped acts/ntok/images and under-counted an agent turn several-fold.
     await autoCompactIfNeeded(buildContextMessages());
@@ -51,15 +81,16 @@ async function runAgentSSE(text) {
     images: sentImages.length ? sentImages : undefined,
     files: sentFiles || undefined
   };
-  messages.push(userMsg);
+  if (!reattachId) messages.push(userMsg);      // on a reattach the question is already in the session
 
   const assistantMsg = {
     role: 'assistant',
     content: '',
     reasoning: '',
     acts: [],
-    statusText: sentImages.length ? '🔍 Analyzing image...' : (nFiles ? '📄 Loading attached files...' : '')
+    statusText: reattachId ? 'Reconnecting to the run...' : (sentImages.length ? '🔍 Analyzing image...' : (nFiles ? '📄 Loading attached files...' : ''))
   };
+  assistantMsg.handleId = runHandleId;       // the server-side run to acknowledge once the result is saved
   messages.push(assistantMsg);
 
   renderAll();
@@ -68,8 +99,8 @@ async function runAgentSSE(text) {
 
   let fullPrompt = text;
   try {
-    fullPrompt = await buildPromptText(text, sentAttachments, ctrl.signal);
-    userMsg.content = fullPrompt;
+    if (!reattachId) fullPrompt = await buildPromptText(text, sentAttachments, ctrl.signal);
+    if (!reattachId) userMsg.content = fullPrompt;
     // a video sent before its frames were ready gets its poster now
     const late = sentAttachments.filter(a => a.isVideo && a.thumb && !sentImages.includes(a.thumb)).map(a => a.thumb);
     if (late.length) { sentImages.push(...late); userMsg.images = sentImages; renderAll(); }
@@ -92,13 +123,17 @@ async function runAgentSSE(text) {
     displayContent: text || undefined
   };
   // await session creation so the structured-plan tools receive a real session_id
-  const session = await ensureSession((text || (sentFiles ? `📎 ${sentFiles}` : 'Agent task')).slice(0, 60));
+  const session = reattachId ? curSession : await ensureSession((text || (sentFiles ? `📎 ${sentFiles}` : 'Agent task')).slice(0, 60));
   const sessionId = session ? session.id : (curSession ? curSession.id : 0);
   const sessionTitle = session ? session.title : (curSession ? curSession.title : (text || 'Agent task').slice(0, 40));
-  persistMsgForSession(sessionId, 'user', fullPrompt, userMeta);
+  if (!reattachId) persistMsgForSession(sessionId, 'user', fullPrompt, userMeta);
 
   // Register into background jobs
   const jobCtrl = ctrl;
+  // Every Stop path in the UI calls ctrl.abort(). A closed connection no longer cancels a run, so aborting also
+  // tells the server to stop it (the id is ours, so this works even before the first byte arrives).
+  const _abort = jobCtrl.abort.bind(jobCtrl);
+  jobCtrl.abort = (...a) => { cancelServerRun(runHandleId); return _abort(...a); };
   const job = {
     id: sessionId,
     title: sessionTitle,
@@ -137,11 +172,14 @@ async function runAgentSSE(text) {
       const docAttachments = sentAttachments
         .filter(a => a.isDoc && a.serverPath)
         .map(a => ({ name: a.name, path: a.serverPath, preview: a.preview || '', truncated: a.truncated || false }));
-      const res = await fetch('/agent/run', {
+      const res = reattachId
+        ? await fetch('/agent/run/' + encodeURIComponent(reattachId) + '/events?after=-1', { headers: { ...getDeviceHeaders() }, signal: jobCtrl.signal })
+        : await fetch('/agent/run', {
         method: 'POST',
         // device identity selects this machine's project; without it the server refuses the run
         headers: { 'Content-Type': 'application/json', ...getDeviceHeaders() },
         body: JSON.stringify({
+          client_run_id: runHandleId,
           messages: hist,
           mode: engineMode,
           plan: (agentMode ? planMode : false) || (window.ClaudeChatBar && window.ClaudeChatBar.activeModeKey === 'plan'),
@@ -252,7 +290,7 @@ async function runAgentSSE(text) {
           }
         }
         else if (ev === 'permission_request') {
-          showPermModal(d.req_id, d.cmd, d.kind, d.saveable);
+          showPermModal(d.req_id, d.cmd, d.kind, d.saveable, d.tainted);
           if (window.voiceMode && window.voiceMode.onPermission) window.voiceMode.onPermission(d);   // spoken heads-up, never answered by voice
         }
         else if (ev === 'delta') {
@@ -414,6 +452,22 @@ async function runAgentSSE(text) {
   })();
 }
 
+/* On opening a session: a run that kept going while this page was closed (or reloaded) is reattached, so its
+   result shows up instead of being lost. Runs this browser already saved are skipped. */
+async function reattachDetachedRuns(session) {
+  if (!session || (window.bgJobs && window.bgJobs.has(String(session.id)))) return;
+  let rows = [];
+  try {
+    const r = await fetch('/agent/runs?session_id=' + encodeURIComponent(session.id), { headers: { ...getDeviceHeaders() } });
+    if (!r.ok) return;
+    rows = (await r.json()).runs || [];
+  } catch (e) { return; }
+  const row = rows.find(x => !runWasSaved(x.id));
+  if (!row || !curSession || String(curSession.id) !== String(session.id)) return;
+  toast(row.running ? 'Reconnecting to a run that kept going...' : 'Showing a run that finished while you were away');
+  runAgentSSE('', { reattachRunId: row.id });
+}
+
 /* The tail of an agent run: timing, the t/s chip, and saving the message with the state the run ended in. */
 function finishAgentMessage(sessionId, L, t0) {
   const dt = Math.max(0.001, (performance.now() - t0) / 1000);
@@ -439,4 +493,7 @@ function finishAgentMessage(sessionId, L, t0) {
     runState: L.runState || undefined,
     check: typeof _checkMeta === 'function' ? _checkMeta(L) : undefined,
   });
+  // the server may forget the run now. A connection that merely dropped is not an end: that run is still going
+  // and its full result can still be reattached
+  if (L.handleId && L.runState !== 'interrupted') ackServerRun(L.handleId);
 }

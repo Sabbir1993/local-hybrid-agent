@@ -289,7 +289,7 @@ async function gitRewind(e) {
   const runId = btn.dataset.checkpointRun;
   const step = Number(btn.dataset.checkpointStep || 0);
   if (!confirm('Rewind the workspace to the checkpoint at step ' + step +
-               '? This discards changes made after that step (git reset --hard).')) return;
+               '? Tracked files go back to how they were then. Your current state is saved first (the toast shows how to get it back), and new untracked files are left alone.')) return;
   try {
     const r = await fetch('/git/rewind', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -297,7 +297,10 @@ async function gitRewind(e) {
     });
     const d = await r.json();
     if (!r.ok) { toast(d.error || 'rewind failed'); return; }
-    toast('Rewound to ' + String(d.rewound_to || '').slice(0, 8));
+    const left = (d.left_untracked || []).length;
+    toast('Rewound to ' + String(d.rewound_to || '').slice(0, 8)
+      + (d.backup ? ' - previous state saved; to undo: git restore --source=' + String(d.backup).slice(0, 12) + ' --staged --worktree -- .' : '')
+      + (left ? ' - ' + left + ' new file(s) kept' : ''));
     loadGitPanel();
   } catch (err) {
     toast('rewind failed: ' + err.message, true);

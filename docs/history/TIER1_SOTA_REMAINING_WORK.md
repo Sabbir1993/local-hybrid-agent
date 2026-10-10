@@ -1,5 +1,7 @@
 # Path to Tier-1 SOTA (95+ / S-Tier): Architectural Specification & Implementation Guide
 
+> **Historical, not active.** The Docker backend described here will not be built (project policy: no Docker).
+
 > **Current Milestone:** 85.9 / 100 (Solid A Grade)  
 > **Target Milestone:** 96.5 / 100 (S-Tier / Direct Commercial Competitor to Claude Code & Devin)  
 > **Target Scope:** Closing the three remaining gaps between this dual-runtime local workstation and commercial frontier systems.

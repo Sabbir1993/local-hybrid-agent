@@ -202,6 +202,22 @@ class FakeCompanion:
                     if len(hits) >= 50:
                         break
             return {"hits": hits}
+        if op == "fs.read_many":
+            # same contract as companion/fsops.js readMany: stamps, `known` skipping, `all`
+            root = self._resolve(params.get("root") or ".")
+            exts = tuple(str(e).lower() for e in params.get("exts") or [])
+            known = params.get("known") or {}
+            out, every = [], []
+            for f in sorted(root.rglob("*")) if root.is_dir() else []:
+                if not f.is_file() or f.suffix.lower() not in exts:
+                    continue
+                rel = str(f.relative_to(root)).replace("\\", "/")
+                st = f.stat()
+                stamp = [st.st_mtime_ns // 1_000_000, st.st_size]
+                every.append(rel)
+                if known.get(rel) != stamp:
+                    out.append({"rel": rel, "stamp": stamp, "text": f.read_text(encoding="utf-8", errors="replace")})
+            return {"files": out, "all": every, "more": False, "truncated": False, "skipped_large": 0}
         if op == "fs.verify":
             p = self._resolve(params["path"])
             if p.suffix.lower() in (".js", ".mjs", ".cjs"):
@@ -756,6 +772,20 @@ MOCK_TASKS = [
      "grade": {"tools_in_order": ["write_file", "read_file"],
                "final_contains": ["Mon-Fri 9-5"]},
      "max_steps": 8,
+     "soft": False},
+    {"name": "symbol_navigation",
+     "prompt": "Where is the function check defined, and which file calls it?",
+     "script": [
+         T(tool_calls=[TC("find_symbol", symbol="check")]),
+         T(tool_calls=[TC("find_references", symbol="check")]),
+         T(content="check is defined in auth.py and called from login.py."),
+     ],
+     "grade": {"tools_in_order": ["find_symbol", "find_references"],
+               "forbid_tools": ["write_file", "edit_file"],
+               "final_contains": ["auth.py", "login.py"]},
+     "max_steps": 8,
+     "seed_files": {"auth.py": "def check(token):\n    return bool(token)\n",
+                    "login.py": "from auth import check\n\n\ndef login(user):\n    return check(user)\n"},
      "soft": False},
     {"name": "edit_flow",
      "prompt": "In app.py change the greeting from hi to hello.",

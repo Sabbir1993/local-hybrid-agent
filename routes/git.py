@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from core import git_tools
 from core import git_ai
 from core import mcp as mcp_core
+from core.audit import audit_log
 from core.auth import Principal
 from core.deps import get_current_user, require_permission
 from core.registry import registry
@@ -215,11 +216,17 @@ async def rewind(req: RewindReq, user: Principal = Depends(get_current_user)):
     async def _git(args):
         return await git_tools._run(args, git_tools._cwd())
 
-    ref = await _rewind(req.run_id, req.step, user.id, _git)
-    if ref is None:
+    res = await _rewind(req.run_id, req.step, user.id, _git)
+    if res is None:
         return JSONResponse({"error": "checkpoint not found or git unavailable"},
                             status_code=404)
-    return {"ok": True, "rewound_to": ref}
+    if res.get("error"):
+        return JSONResponse({"error": res["error"], "backup": res.get("backup")}, status_code=409)
+    audit_log(user, action="git.rewind", resource=req.run_id,
+              detail={"step": req.step, "commit": res["commit"], "backup": res.get("backup"),
+                      "left_untracked": len(res.get("left_untracked") or [])})
+    return {"ok": True, "rewound_to": res["commit"], "backup": res.get("backup"),
+            "left_untracked": res.get("left_untracked") or []}
 
 
 @router.get("/checkpoints")

@@ -91,6 +91,7 @@ document.addEventListener('error', (e) => {
     const card = img.closest('.media-card');
     if (card) card.style.display = 'none';
   }
+  if (img && img.dataset && img.dataset.hideOnError !== undefined) img.style.display = 'none';
 }, true);
 
 // data-stop: clicks inside must not reach ancestor handlers (e.g. buttons inside a
@@ -161,7 +162,7 @@ function mdProseLegacy(text) {
       const safeDomain = esc(domain);
       const safeFavicon = esc(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`);
       return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="citation-pill" title="${safeDomain} - Click to open source">`
-        + `<img src="${safeFavicon}" class="citation-favicon" alt="" loading="lazy" onerror="this.style.display='none'" />`
+        + `<img src="${safeFavicon}" class="citation-favicon" alt="" loading="lazy" data-hide-on-error />`
         + `<span class="citation-host">${safeDomain}</span>`
         + `</a>`;
     }

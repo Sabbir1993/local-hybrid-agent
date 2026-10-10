@@ -203,6 +203,85 @@ def _walk_js(root, src: bytes, rel: str, syms: list, calls: list) -> None:
     visit(root)
 
 
+SUPPORTED_SUFFIXES = frozenset(_LANGS)
+
+
+def parse_source(rel: str, src: bytes) -> tuple:
+    """Parse one file's bytes. Returns (status, symbols, calls); status is "ok", "unsupported" or
+    "parse_error". Pure: no disk, so the same code serves a local root and sources fetched from a device."""
+    lang = _LANGS.get(os.path.splitext(rel)[1].lower())
+    if lang is None:
+        return "unsupported", [], []
+    tree = _parser(lang).parse(src)
+    if tree.root_node.has_error:
+        return "parse_error", [], []
+    syms, calls = [], []
+    if lang is _PY:
+        _walk_py(tree.root_node, src, rel, syms, calls)
+    else:
+        _walk_js(tree.root_node, src, rel, syms, calls)
+    return "ok", syms, calls
+
+
+class SourceIndex:
+    """Incremental in-memory index over sources that arrive as text (fetched from the user's device).
+
+    Per-file results are kept with the stamp they were parsed at, so a refresh re-parses only files whose
+    stamp changed. Nothing touches disk: the server never holds the user's workspace.
+    """
+
+    def __init__(self):
+        self._files: dict = {}          # rel -> {"stamp": tuple, "status": str, "symbols": [], "calls": []}
+        self._data = None
+
+    def stamps(self) -> dict:
+        return {rel: f["stamp"] for rel, f in self._files.items()}
+
+    def update(self, rel: str, stamp, src: bytes) -> None:
+        status, syms, calls = parse_source(rel, src)
+        self._files[rel] = {"stamp": tuple(stamp), "status": status, "symbols": syms, "calls": calls}
+        self._data = None
+
+    def remove(self, rel: str) -> None:
+        if self._files.pop(rel, None) is not None:
+            self._data = None
+
+    def retain(self, keep) -> None:
+        """Drop every file not in `keep` (deleted on the device)."""
+        keep = set(keep)
+        for rel in [r for r in self._files if r not in keep]:
+            self.remove(rel)
+
+    def data(self) -> dict:
+        if self._data is None:
+            syms, calls, skipped, files = [], [], [], 0
+            for rel in sorted(self._files):
+                f = self._files[rel]
+                if f["status"] == "ok":
+                    files += 1
+                    syms += f["symbols"]
+                    calls += f["calls"]
+                elif f["status"] == "parse_error":
+                    skipped.append(rel + " (parse error)")
+            syms.sort(key=lambda s: (s["file"], s["line"]))
+            calls.sort(key=lambda c: (c["file"], c["line"]))
+            self._data = {"symbols": syms, "calls": calls, "files": files, "skipped": skipped}
+        return self._data
+
+    def outline(self, rel: str) -> Optional[list]:
+        """Skeleton of one indexed file, or None when it is not indexed (unknown or unparseable)."""
+        f = self._files.get(rel)
+        if f is None or f["status"] != "ok":
+            return None
+        return [{"kind": s["kind"], "name": s["name"], "class": s["class"], "line": s["line"],
+                 "end_line": s["end_line"], "signature": s["signature"], "docstring": s["docstring"]}
+                for s in f["symbols"]]
+
+    def status(self, rel: str) -> Optional[str]:
+        f = self._files.get(rel)
+        return f["status"] if f else None
+
+
 def _repo_stamp(root) -> dict:
     """{rel_posix: (mtime_ns, size)} for every parseable or skipped-suffix file.
 
@@ -433,31 +512,44 @@ def index_repo(root) -> dict:
     return data
 
 
-def find_symbol_definition(name: str, root, path_hint: str = None) -> list:
-    """All definitions of `name`; path_hint narrows to matching paths.
+def definitions_in(data: dict, name: str, path_hint: str = None) -> list:
+    """All definitions of `name` in an index `data` dict; path_hint narrows to matching paths.
 
     The hint matches a full relative path or a path SUFFIX ("pkg/auth.py"),
     never a substring: hint "auth.py" must not match "legacy_auth.py".
     """
-    syms = index_repo(root)["symbols"]
-    hits = [s for s in syms if s["name"] == name]
+    hits = [s for s in data["symbols"] if s["name"] == name]
     if path_hint:
         hits = [h for h in hits
                 if h["file"] == path_hint or h["file"].endswith("/" + path_hint)]
     return hits
 
 
-def find_symbol_callers(name: str, root) -> list:
+def callers_in(data: dict, name: str) -> list:
     """Every syntactic call site of `name`, with file, line, and caller function."""
-    return [c for c in index_repo(root)["calls"] if c["name"] == name]
+    return [c for c in data["calls"] if c["name"] == name]
+
+
+def find_symbol_definition(name: str, root, path_hint: str = None) -> list:
+    """All definitions of `name` under a local root (see definitions_in)."""
+    return definitions_in(index_repo(root), name, path_hint)
+
+
+def find_symbol_callers(name: str, root) -> list:
+    """Every syntactic call site of `name` under a local root."""
+    return callers_in(index_repo(root), name)
 
 
 def find_symbol_callees(name: str, root, path_hint: str = None) -> list:
     """Every symbol called inside the body of `name`.
     Cross-references targets with their definitions across the workspace.
     """
-    data = index_repo(root)
-    defs = find_symbol_definition(name, root, path_hint=path_hint)
+    return callees_in(index_repo(root), name, path_hint)
+
+
+def callees_in(data: dict, name: str, path_hint: str = None) -> list:
+    """find_symbol_callees over an index `data` dict."""
+    defs = definitions_in(data, name, path_hint=path_hint)
     if not defs:
         return []
     callees = []

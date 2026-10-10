@@ -46,6 +46,18 @@ TOOL_IMPLS = {
 TOOL_IMPLS.update(MEMORY_IMPLS)
 AGENT_TOOLS.extend(MEMORY_SCHEMAS)
 
+from .git_agent_tools import GIT_IMPLS, GIT_SCHEMAS
+TOOL_IMPLS.update(GIT_IMPLS)
+AGENT_TOOLS.extend(GIT_SCHEMAS)
+
+try:        # tree-sitter is a native wheel: without it the agent keeps grep/read_file instead of failing to start
+    from .code_intel_tools import CODE_INTEL_IMPLS, CODE_INTEL_SCHEMAS
+    TOOL_IMPLS.update(CODE_INTEL_IMPLS)
+    AGENT_TOOLS.extend(CODE_INTEL_SCHEMAS)
+except ImportError as _e:       # pragma: no cover
+    import sys as _sys
+    print(f"[agent] code navigation tools unavailable: {_e}", file=_sys.stderr)
+
 __all__ = [
     "AGENT_TOOLS",
     "AGENT_CORE_TOOLS",

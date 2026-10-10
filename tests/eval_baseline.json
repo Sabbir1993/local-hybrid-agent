@@ -141,6 +141,10 @@
       "n": 3,
       "pass_rate": 1.0
     },
+    "symbol_navigation": {
+      "n": 3,
+      "pass_rate": 1.0
+    },
     "traversal_blocked": {
       "n": 3,
       "pass_rate": 1.0

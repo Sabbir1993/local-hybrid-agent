@@ -76,7 +76,11 @@ class ToolAndGate(unittest.TestCase):
         # the gate used to run only when the literal text "command" appeared in the arguments,
         # so a call under another name skipped the approval prompt
         self.assertNotIn('"command" in str(args', src)
-        self.assertRegex(src, r'if name == "run_shell" and shell_command\(args\):\s+cmd = shell_command\(args\)')
+        # one resolved command feeds the gate for run_shell AND run_tests (which runs a detected command through
+        # run_shell's own check): the gate and the tool must read the same line
+        self.assertRegex(src, r'_gate_cmd = shell_command\(args\) if name == "run_shell" else None')
+        self.assertRegex(src, r'name == "run_tests" and not personal:\s+_gate_cmd = await _tests_command_for\(args\)')
+        self.assertRegex(src, r'if _gate_cmd:\s+cmd = _gate_cmd')
 
 
 if __name__ == "__main__":

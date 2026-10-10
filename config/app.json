@@ -208,6 +208,10 @@
     "read_file_default_limit": 500,
     "read_file_max_chars": 40000,
     "verify_max_retries": 5,
+    "diagnostics": true,
+    "detached_runs": true,
+    "max_active_runs_per_user": 3,
+    "run_retention_s": 21600,
     "plan_max_items": 30,
     "plan_item_max_chars": 300,
     "plan_item_max_steps": 50,
@@ -252,6 +256,7 @@
     "screenshot_cloud_vision": false,
     "skills": true,
     "mcp": true,
+    "mcp_write_approval": "tainted",
     "mcp_servers": {
       "echo": {
         "transport": "stdio",
@@ -289,8 +294,8 @@
     "plugins": true,
     "shell": {
       "enabled": true,
-      "ask_first": false,
-      "timeout_s": 0,
+      "ask_first": true,
+      "timeout_s": 120,
       "allow_patterns": [
         "git status*",
         "git diff*",
@@ -298,8 +303,7 @@
         "dir *",
         "type *",
         "grep *",
-        "powershell -NoProfile *",
-        "wmic *"
+        "powershell -NoProfile *"
       ]
     },
     "mcp_user_allowed_packages": [
@@ -533,5 +537,36 @@
     "session_idle_enabled": true,
     "session_idle_minutes": 1440,
     "mfa_required": false
+  },
+  "hooks": {
+    "enabled": false,
+    "timeout_s": 15,
+    "rules": []
+  },
+  "permissions": {
+    "rules": [
+      {
+        "id": "private-keys",
+        "tool": "read_file|write_file|edit_file|insert_at_line|append_file|grep|run_shell|git_commit",
+        "path": "**/{*.pem,id_rsa*,id_ed25519*,*.key,*.p12,*.pfx}",
+        "action": "deny",
+        "reason": "private keys and certificates are never read or changed by the agent"
+      },
+      {
+        "id": "ssh-folder",
+        "tool": "read_file|write_file|edit_file|grep|run_shell",
+        "path": "**/.ssh/**",
+        "action": "deny",
+        "reason": "SSH credentials are never read or changed by the agent"
+      },
+      {
+        "id": "env-files",
+        "tool": "read_file|write_file|edit_file|append_file",
+        "path": ".env*",
+        "unless": ".env.example",
+        "action": "ask",
+        "reason": "environment files usually hold secrets"
+      }
+    ]
   }
 }

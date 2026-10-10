@@ -49,6 +49,11 @@ FAMILIES: dict = {
         "keywords": ["docx", "word document", "word file", "excel", "xlsx", "spreadsheet",
                      "powerpoint", "pptx", "pdf", "office document", "workbook", "slide deck"],
     },
+    "git": {
+        "names": ("git_inspect", "git_commit", "git_branch"),
+        "keywords": ["git", "commit", "branch", "merge", "rebase", "pull request", "version control",
+                     "repo history", "repository history", "changelog"],
+    },
     "image_gen": {
         "names": ("generate_image",),
         "keywords": ["generate image", "generate a picture", "create an image", "draw",
