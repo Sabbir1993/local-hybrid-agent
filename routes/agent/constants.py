@@ -88,7 +88,7 @@ EXECUTOR_TEST_TOOLS = ("browser_navigate", "browser_snapshot", "browser_click", 
 PARALLEL_READ_TOOLS = frozenset({
     "read_file", "read_file_chunk", "grep", "list_files", "project_overview", "list_diff",
     "find_symbol", "find_references", "file_outline", "git_inspect",
-    "get_plan", "search_memory", "search_knowledge_base", "kb_find_mentions",
+    "get_plan", "search_memory", "search_knowledge_base", "kb_find_mentions", "kb_query",
     "memory_read", "list_skills", "read_skill",
     "web_search", "web_fetch", "analyze_image", "doc_inspect",
 })

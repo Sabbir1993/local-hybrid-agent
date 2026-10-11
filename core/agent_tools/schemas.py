@@ -269,6 +269,34 @@ AGENT_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "kb_query",
+            "description": "Exact counts, lists and group-bys over the Excel/CSV files in the company knowledge base (staff lists, rosters, "
+                           "registers). Use it for 'how many X', 'list all Y where ...', 'count by department'. Call it first with "
+                           "describe=true to see the available tables and their columns. Answers come from the real rows, not from guessing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "describe": {"type": "boolean", "description": "List the tables and their column names instead of querying"},
+                    "source": {"type": "string", "description": "Only tables whose document title or sheet name contains this text"},
+                    "filters": {
+                        "type": "array",
+                        "description": "All must match. Each: {column, op, value}. op is one of =, !=, contains, starts_with, >, >=, <, <=, in (value is a list), is_empty, not_empty",
+                        "items": {"type": "object", "properties": {
+                            "column": {"type": "string"}, "op": {"type": "string"},
+                            "value": {"description": "text, number or list (for in)"}},
+                            "required": ["column"]},
+                    },
+                    "select": {"type": "array", "items": {"type": "string"}, "description": "Columns to show (default: all)"},
+                    "group_by": {"type": "string", "description": "Count rows per distinct value of this column"},
+                    "count": {"type": "boolean", "description": "Only return how many rows match"},
+                    "limit": {"type": "integer", "description": "Max rows to list (default 50, max 200)"},
+                },
+            },
+        },
+    },
 ]
 
 from .finish import FINISH_SCHEMA

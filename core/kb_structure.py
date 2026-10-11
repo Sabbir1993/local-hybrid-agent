@@ -27,7 +27,7 @@ ROW_RX = re.compile(r"^R(\d+): ", re.MULTILINE)
 def _cell(c) -> str:
     if c is None:
         return ""
-    s = " ".join(str(c).split())
+    s = " ".join(str(c).split()).replace(" | ", " / ")      # " | " is the cell separator
     return s[:MAX_CELL_CHARS]
 
 

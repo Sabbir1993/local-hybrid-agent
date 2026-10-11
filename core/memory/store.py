@@ -153,6 +153,11 @@ def _delete_stale(source: str, seen: set) -> None:
 def delete_knowledge_chunks(source_id: int) -> None:
     _db().execute("DELETE FROM chunks WHERE source='knowledge' AND path=?", (f"kb:{source_id}",))
     _db().commit()
+    try:
+        from .. import kb_tables              # the spreadsheet rows of this source go with it
+        kb_tables.delete_source(source_id)
+    except Exception as e:
+        print(f"[memory] could not remove table rows of source {source_id}: {e}", file=sys.stderr)
 
 
 def delete_session_chunks(session_ids) -> None:

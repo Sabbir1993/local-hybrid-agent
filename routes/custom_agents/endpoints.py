@@ -128,6 +128,7 @@ async def available_tools(user: Principal = Depends(get_current_user)):
         "web_search": {"label": "Web Search", "cat": "Web & Research", "desc": "Query search engines for fresh internet data."},
         "web_fetch": {"label": "Web Fetch", "cat": "Web & Research", "desc": "Download and extract content from public web URLs."},
         "search_knowledge_base": {"label": "Knowledge Base", "cat": "Web & Research", "desc": "Search internal company organizational documents."},
+        "kb_query": {"label": "KB: spreadsheet query", "cat": "Web & Research", "desc": "Exact counts, lists and group-bys over Excel/CSV files in the company knowledge base."},
         "kb_find_mentions": {"label": "KB: find a name", "cat": "Web & Research", "desc": "List every line across all company documents that mentions a person or term."},
         "analyze_image": {"label": "Analyze Image", "cat": "Vision & Media", "desc": "Inspect workspace pictures using local vision model."},
         "spawn_agent": {"label": "Spawn Sub-Agent", "cat": "Multi-Agent", "desc": "Delegate sub-tasks to focused helper agents."},

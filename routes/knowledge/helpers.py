@@ -1,4 +1,5 @@
 import shutil
+import sys
 import time
 from core import auth_db, pan
 from core.audit import audit_log
@@ -40,6 +41,11 @@ async def _finish_ingest(source_id: int, text: str, user: Principal) -> dict:
     # one cannot. Uses core/pan.py, the same detector as chat input, model output and cloud
     # egress -- the count is audited so the uploading admin can see that redaction happened.
     text, n_pans = pan.mask_pans(text)
+    try:                                    # Excel/CSV rows are also kept as real rows for exact queries (kb_query)
+        from core import kb_tables
+        kb_tables.replace_source(source_id, text)
+    except Exception as e:
+        print(f"[knowledge] could not store table rows for source {source_id}: {e}", file=sys.stderr)
     report = kb_chunk_report(text)
     n_chunks = await index_knowledge_source(source_id, text)
     auth_db.update_knowledge_source_status(source_id, "ready")

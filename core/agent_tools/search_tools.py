@@ -179,3 +179,48 @@ async def tool_kb_find_mentions(args: dict) -> str:
     from ..knowledge_access import partial_notice
     note = partial_notice(set(titles))
     return kb_mentions.render(name, result) + (f"\n\n{note}" if note else "")
+
+
+async def tool_kb_query(args: dict) -> str:
+    """Exact counts, lists and group-bys over the Excel/CSV sources the user may read."""
+    import json as _json
+    from ..knowledge_access import KB_CLOUD_BLOCKED_MSG, kb_cloud_blocked, cloud_ok_ids, allowed_source_ids_for
+    from ..auth import _to_principal
+    uid = get_current_user_id()
+    user = _to_principal(uid) if uid is not None else None
+    kb_ids = allowed_source_ids_for(user)
+    cloud = kb_cloud_blocked()
+    if cloud:
+        kb_ids = cloud_ok_ids(kb_ids)
+        if not kb_ids:
+            return KB_CLOUD_BLOCKED_MSG
+    if not kb_ids:
+        return "(no accessible company knowledge base sources for this user account)"
+    from .. import kb_tables
+    from ..auth_db import list_knowledge_sources
+    titles = {ks["id"]: ks["title"] for ks in list_knowledge_sources()
+              if ks["id"] in kb_ids and ks["status"] == "ready"}
+    spec = {k: args.get(k) for k in ("source", "sheet", "filters", "select", "group_by", "count", "limit")}
+    if args.get("describe") or not any(spec.get(k) for k in ("filters", "select", "group_by", "count")):
+        return kb_tables.describe(set(titles), titles, str(spec.get("source") or ""))
+    try:
+        res = kb_tables.run_query(spec, set(titles), titles)
+    except ValueError as e:
+        return f"error: {e}"
+    if cloud:                              # drop rows a sensitive-content rule holds back, as the search tool does
+        from ..knowledge_access import cloud_safe_hits
+        for t in res["tables"]:
+            kept = cloud_safe_hits([{"source_id": 0, "text": " | ".join(map(str, v))} for _, v in t["rows"]])
+            keep = {h["text"] for h in kept}
+            t["rows"] = [(n, v) for n, v in t["rows"] if " | ".join(map(str, v)) in keep]
+    try:                                   # filter values can be names: audit that a query ran, store only a hash
+        import hashlib
+        from ..audit import audit_log
+        digest = hashlib.sha256(_json.dumps(spec, sort_keys=True, default=str).encode()).hexdigest()[:16]
+        audit_log(user, "kb.query", resource="knowledge",
+                  detail={"spec_sha256": digest, "tables": len(res["tables"]), "rows": res["total"]})
+    except Exception:
+        pass
+    from ..knowledge_access import partial_notice
+    note = partial_notice(set(titles))
+    return kb_tables.render(spec, res) + (f"\n\n{note}" if note else "")
