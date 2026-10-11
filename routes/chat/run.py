@@ -165,6 +165,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
     if skb:
         chat_tools.append(skb)
+        chat_tools.extend(t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "kb_find_mentions")
     # images made on this PC (stable-diffusion.cpp): the model may draw when asked.
     # A cloud-first route isn't offered here (chat has no ask-first dialog for cost);
     # /image and agent mode handle those.
@@ -319,6 +320,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 sys_labels.append("kb-note")
         if cloud_main and skb in chat_tools and not cloud_ok_ids(kb_ids):
             chat_tools.remove(skb)
+            chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") != "kb_find_mentions"]
     set_kb_cloud_blocked(cloud_main is not None)
     # Web only for what the KB cannot answer (core/kb_coverage.py): full -> none, partial -> lean hint + small
     # budget, none -> only on explicit web intent; the budget grows with reasoning effort / Deep mode.

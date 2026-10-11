@@ -252,6 +252,23 @@ AGENT_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "kb_find_mentions",
+            "description": "List EVERY line in the company knowledge base that mentions a person or exact term, across all documents "
+                           "(search_knowledge_base returns only the 6 best matches). Use it for 'everything about <employee>', 'where does "
+                           "<name> appear', 'employee details of <name>'. Returns quoted lines grouped by document with table column "
+                           "headers; build the table from those lines only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The person's name or exact term, e.g. 'Rahim Uddin' (case-insensitive, whole words)"}
+                },
+                "required": ["name"],
+            },
+        },
+    },
 ]
 
 from .finish import FINISH_SCHEMA

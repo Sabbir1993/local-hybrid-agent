@@ -423,6 +423,8 @@ function formatToolStatus(name, args) {
       return 'Searching past memory...';
     case 'search_knowledge_base':
       return 'Searching knowledge base...';
+    case 'kb_find_mentions':
+      return 'Scanning all documents for the name...';
     case 'analyze_image':
       return 'Analyzing image with vision model...';
     case 'create_plan':

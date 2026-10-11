@@ -135,3 +135,43 @@ async def tool_search_knowledge_base(args: dict) -> str:
         title = h.get("title") or f"Source #{h.get('source_id')}"
         lines.append(f"[{title}] (score: {h['score']:.2f})\n{h['text']}")
     return "\n\n---\n\n".join(lines)
+
+
+async def tool_kb_find_mentions(args: dict) -> str:
+    """Every document line that mentions a person or term, not just the 6 best semantic chunks."""
+    name = " ".join(str(args.get("name") or "").split())
+    if not name:
+        raise ValueError("name required")
+    from ..knowledge_access import KB_CLOUD_BLOCKED_MSG, kb_cloud_blocked, cloud_ok_ids, allowed_source_ids_for
+    from ..auth import _to_principal
+    uid = get_current_user_id()
+    user = _to_principal(uid) if uid is not None else None
+    kb_ids = allowed_source_ids_for(user)
+    if kb_cloud_blocked():
+        kb_ids = cloud_ok_ids(kb_ids)
+        if not kb_ids:
+            return KB_CLOUD_BLOCKED_MSG
+    if not kb_ids:
+        return "(no accessible company knowledge base sources for this user account)"
+    from .. import kb_mentions
+    from ..auth_db import list_knowledge_sources
+    from ..memory import _cached_entries, _knowledge_id_from_path
+    titles = {ks["id"]: ks["title"] for ks in list_knowledge_sources()
+              if ks["id"] in kb_ids and ks["status"] == "ready"}
+    result = kb_mentions.find_mentions(name, _cached_entries()["entries"], titles,
+                                       _knowledge_id_from_path, set(titles))
+    if kb_cloud_blocked():                 # a cloud model reads the result: drop sensitive lines like the search tool does
+        from ..knowledge_access import cloud_safe_hits
+        for d in result["docs"]:
+            kept = cloud_safe_hits([{"source_id": d["source_id"], "text": ln} for ln in d["lines"]])
+            d["lines"] = [h["text"] for h in kept]
+        result["docs"] = [d for d in result["docs"] if d["lines"]]
+    try:                                   # who looked up whom is personal-data access: audit it, store only a hash
+        import hashlib
+        from ..audit import audit_log
+        audit_log(user, "kb.find_mentions", resource="knowledge",
+                  detail={"query_sha256": hashlib.sha256(name.lower().encode()).hexdigest()[:16],
+                          "documents": len(result["docs"])})
+    except Exception:
+        pass
+    return kb_mentions.render(name, result)

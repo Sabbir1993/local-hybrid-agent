@@ -17,6 +17,7 @@ from .plans import tool_create_plan, tool_get_plan, tool_update_plan_item
 from .schemas import AGENT_CORE_TOOLS, AGENT_TOOLS, CHAT_WRITE_FILE_SCHEMA
 from .search_tools import (
     tool_analyze_image,
+    tool_kb_find_mentions,
     tool_search_knowledge_base,
     tool_search_memory,
 )
@@ -37,6 +38,7 @@ TOOL_IMPLS = {
     "analyze_image": tool_analyze_image,
     "search_memory": tool_search_memory,
     "search_knowledge_base": tool_search_knowledge_base,
+    "kb_find_mentions": tool_kb_find_mentions,
     "create_plan": tool_create_plan,
     "update_plan_item": tool_update_plan_item,
     "get_plan": tool_get_plan,

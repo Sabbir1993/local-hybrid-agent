@@ -811,7 +811,7 @@ async def run_agent_stream(req, user, ctx):
                         getattr(ctx, "mcp_servers", None), custom_agent_tools))
                 if not kb_ids:      # nothing to search: do not offer the tool (it only invites a pointless first call)
                     tools_for_lane = [t for t in tools_for_lane
-                                      if t.get("function", {}).get("name") != "search_knowledge_base"]
+                                      if t.get("function", {}).get("name") not in ("search_knowledge_base", "kb_find_mentions")]
                 if not rpol.get("finish_tool", True):
                     tools_for_lane = without_finish(tools_for_lane)
                 # Situational families withheld from this step, surfaced on event: ctx so
