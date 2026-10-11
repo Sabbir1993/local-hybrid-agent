@@ -357,6 +357,12 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
 
     ctx.ws_path = str(active_workspace())
     ctx.sys_prompt = AGENT_SYSTEM_PROMPT.format(workspace=ctx.ws_path)
+    if req.permission_mode == "bypass":
+        # the prompt says every run_python call needs approval; in bypass that is false and a small
+        # model then avoids running anything (it burned a whole SWE-bench run reasoning around it)
+        ctx.sys_prompt = ctx.sys_prompt.replace(
+            "every run_python call needs the user's approval.",
+            "calls run without asking the user, so run your tests and checks freely.")
     sys_labels = ["system"]   # parallel to ctx.sys_prompt blocks: P0 ruler (S5)
     if req.system_prompt and req.system_prompt.strip():
         ctx.sys_prompt = f"{req.system_prompt.strip()}\n\n{ctx.sys_prompt}"
