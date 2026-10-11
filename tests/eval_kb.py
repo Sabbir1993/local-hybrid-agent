@@ -116,7 +116,9 @@ def build_corpus(root: Path, seed: int = 7) -> dict:
 @contextmanager
 def kb_environment(root: Path):
     """Temporary memory/auth databases, no embedder, audit and access control stubbed."""
-    import core.memory as memory_pkg
+    import core.memory  # noqa: F401
+    memory_pkg = sys.modules["core.memory"]      # not `import core.memory as x`: another test may have re-imported the package
+    from core.memory import indexing as indexing_mod
     from core import auth_db
     from core.memory import cache as cache_mod
     from core.memory import store as store_mod
@@ -136,7 +138,8 @@ def kb_environment(root: Path):
     async def no_embed(texts):
         return None
     try:
-        with mock.patch.object(memory_pkg, "_embed_texts", no_embed), \
+        # both bindings: a real embedder here would start a llama-server on the GPU and take minutes
+        with mock.patch.object(memory_pkg, "_embed_texts", no_embed), mock.patch.object(indexing_mod, "_embed_texts", no_embed), \
                 mock.patch("routes.knowledge.helpers.audit_log"), mock.patch("core.audit.audit_log"):
             yield
     finally:

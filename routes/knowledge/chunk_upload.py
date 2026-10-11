@@ -8,7 +8,7 @@ from core import auth_db, knowledge_ingest
 from core.auth import Principal
 from core.config import KNOWLEDGE_UPLOADS_DIR
 from core.deps import require_permission
-from .helpers import _cleanup_old_chunks, _finish_ingest, _source_public
+from .helpers import _cleanup_old_chunks, _finish_ingest, _queue_file, _source_public
 from .models import (
     CHUNKS_TEMP_DIR,
     MAX_KB_CHUNK_BYTES,
@@ -101,6 +101,10 @@ async def complete_chunked_upload(
         title=body.title or fname, kind="file", origin=fname, stored_path=str(dest),
         content_hash=content_hash, status="processing", created_by=user.id,
     )
+    from core import kb_queue
+    if total >= kb_queue.background_min_bytes():          # big file: index in the background, answer now
+        await _queue_file(source_id, dest, user)
+        return {"ok": True, "queued": True, "source": _source_public(auth_db.get_knowledge_source(source_id))}
     try:
         text = knowledge_ingest.extract_file(dest)
     except Exception as e:

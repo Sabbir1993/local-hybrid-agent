@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, File as FastAPIFile, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
-from core import auth_db, knowledge_ingest, knowledge_rules
+from core import auth_db, kb_queue, knowledge_ingest, knowledge_rules
 from core.audit import audit_log
 from core.auth import Principal
 from core.config import KNOWLEDGE_UPLOADS_DIR
@@ -14,6 +14,7 @@ from core.memory import delete_knowledge_chunks
 from .chunk_upload import router as chunk_router
 from .helpers import (
     _finish_ingest,
+    _queue_file,
     _source_public,
 )
 from .models import (
@@ -38,8 +39,49 @@ router.include_router(chunk_router)
 @router.get("")
 async def list_sources(user: Principal = Depends(require_permission("knowledge.manage"))):
     from core.knowledge_access import kb_local_only
+    kb_queue.sweep_orphans()
     return {"sources": [_source_public(r) for r in auth_db.list_knowledge_sources()],
             "cloud_policy": "local_only" if kb_local_only() else "allow"}
+
+
+@router.get("/stats")
+async def kb_stats(user: Principal = Depends(require_permission("knowledge.manage"))):
+    """Index size and queue state, so an admin can see how close a large knowledge base is to the memory limit."""
+    from core.memory import kb_chunk_count, kb_total_chunk_limit
+    from core.memory.store import _db
+    chunks = kb_chunk_count()
+    size = _db().execute("SELECT COALESCE(SUM(length(text) + COALESCE(length(vec), 0)), 0) FROM chunks "
+                         "WHERE source='knowledge'").fetchone()[0]
+    rows = auth_db.list_knowledge_sources()
+    return {"sources": len(rows), "chunks": chunks, "chunk_limit": kb_total_chunk_limit(),
+            "index_mb": round(size / 1e6, 1), "est_cache_mb": round(size * 2.2 / 1e6, 1),
+            "partial_sources": sum(1 for r in rows if r["chunks_total"] and r["chunks_indexed"] is not None
+                                   and r["chunks_indexed"] < r["chunks_total"]),
+            "needs_reindex": sum(1 for r in rows if r["status"] == "ready" and r["chunks_total"] is None
+                                 and r["kind"] in ("file", "url")),
+            "queue": kb_queue.snapshot()}
+
+
+@router.post("/reindex-outdated")
+async def reindex_outdated(user: Principal = Depends(require_permission("knowledge.manage"))):
+    """Queue every file/URL source that was indexed before structure markers and the higher chunk cap existed
+    (no chunk counts recorded) or that was cut at the cap. Runs in the background, one at a time."""
+    queued = 0
+    for row in auth_db.list_knowledge_sources():
+        stale = row["chunks_total"] is None or (row["chunks_indexed"] is not None and row["chunks_indexed"] < row["chunks_total"])
+        if row["status"] != "ready" or not stale or kb_queue.progress(row["id"]):
+            continue
+        if row["kind"] == "file" and row["stored_path"] and Path(row["stored_path"]).exists():
+            await _queue_file(row["id"], Path(row["stored_path"]), user)
+            queued += 1
+        elif row["kind"] == "url" and row["origin"]:
+            async def load(url=row["origin"]):
+                return await knowledge_ingest.extract_url(url)
+            auth_db.update_knowledge_source_status(row["id"], "processing")
+            await kb_queue.enqueue(row["id"], load, user)
+            queued += 1
+    audit_log(user, action="knowledge.reindex_outdated", resource="knowledge", detail={"queued": queued}, result="allow")
+    return {"ok": True, "queued": queued}
 
 
 @router.post("/text")
@@ -80,6 +122,9 @@ async def upload_source(file: UploadFile = FastAPIFile(...), title: Optional[str
         title=title or fname, kind="file", origin=fname, stored_path=str(dest),
         content_hash=content_hash, created_by=user.id,
     )
+    if len(data) >= kb_queue.background_min_bytes():     # big file: index in the background, answer now
+        await _queue_file(source_id, dest, user)
+        return {"ok": True, "queued": True, "source": _source_public(auth_db.get_knowledge_source(source_id))}
     try:
         text = knowledge_ingest.extract_file(dest)
     except Exception as e:
@@ -266,6 +311,9 @@ async def reindex_source(source_id: int, user: Principal = Depends(require_permi
     if not row:
         return JSONResponse({"error": "source not found"}, status_code=404)
     if row["kind"] == "file" and row["stored_path"] and Path(row["stored_path"]).exists():
+        if Path(row["stored_path"]).stat().st_size >= kb_queue.background_min_bytes():
+            await _queue_file(source_id, Path(row["stored_path"]), user)
+            return {"ok": True, "queued": True, "source": _source_public(auth_db.get_knowledge_source(source_id))}
         try:
             text = knowledge_ingest.extract_file(Path(row["stored_path"]))
         except Exception as e:

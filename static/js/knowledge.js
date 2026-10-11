@@ -41,19 +41,53 @@ function initTagPicker(container, allRoles, initialSelected) {
 
 let _kbAllRoles = [];
 
-async function loadKnowledgePanel() {
+let _kbPollTimer = null;
+let _kbLastSig = '';
+
+function renderKbStats(box, st) {
+  const wrap = box.querySelector('.kb-redesign-wrap');
+  if (!wrap || !st) return;
+  const full = st.chunk_limit ? Math.round(100 * st.chunks / st.chunk_limit) : 0;
+  const bits = [`${st.chunks.toLocaleString()} sections (${full}% of the ${st.chunk_limit.toLocaleString()} limit)`, `~${st.est_cache_mb} MB in memory`];
+  if (st.partial_sources) bits.push(`${st.partial_sources} partly indexed`);
+  const outdated = st.needs_reindex + st.partial_sources;
+  const bar = document.createElement('div');
+  bar.className = 'dim';
+  bar.style.cssText = 'font-size:11px; margin:6px 0 8px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;';
+  bar.innerHTML = `<span>${esc(bits.join(' · '))}</span>` +
+    (outdated ? `<button class="btn ghost" id="kb-reindex-outdated" style="font-size:11px;">⟳ Reindex ${outdated} outdated source(s)</button>` : '');
+  wrap.insertBefore(bar, wrap.firstChild);
+  const btn = bar.querySelector('#kb-reindex-outdated');
+  if (btn) btn.onclick = async () => {
+    btn.disabled = true;
+    const r = await fetch('/knowledge/reindex-outdated', { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    toast(r.ok ? `Queued ${j.queued || 0} source(s) for background reindexing` : (j.error || 'Could not queue'), !r.ok);
+    loadKnowledgePanel(true);
+  };
+}
+
+async function loadKnowledgePanel(quiet) {
   const box = $('knowledge-content');
   if (!box) return;
-  box.innerHTML = '<div class="mon-empty">Loading…</div>';
+  clearTimeout(_kbPollTimer);
+  if (!quiet) box.innerHTML = '<div class="mon-empty">Loading…</div>';
   try {
-    const [sourcesRes, rolesRes, polRes] = await Promise.all([fetch('/knowledge'), fetch('/admin/role_names'), fetch('/knowledge/policy')]);
+    const [sourcesRes, rolesRes, polRes, statsRes] = await Promise.all([fetch('/knowledge'), fetch('/admin/role_names'), fetch('/knowledge/policy'), fetch('/knowledge/stats')]);
     if (!sourcesRes.ok) { box.innerHTML = '<div class="mon-empty">You do not have access to the knowledge base.</div>'; return; }
     const kbJson = await sourcesRes.json();
     const sources = kbJson.sources || [];
     _kbCloudPolicy = kbJson.cloud_policy || 'local_only';
     _kbPolicy = polRes.ok ? await polRes.json() : { cloud_policy: _kbCloudPolicy, categories: [], rules: [] };
     _kbAllRoles = rolesRes.ok ? ((await rolesRes.json()).roles || []) : [];
-    renderKnowledgePanel(box, sources);
+    const stats = statsRes.ok ? await statsRes.json() : null;
+    // a quiet refresh keeps the tab and form the admin is working in; only redraw when something changed
+    const sig = JSON.stringify(sources.map(s => [s.id, s.status, s.progress && s.progress.done, s.chunks_indexed]));
+    if (!quiet || sig !== _kbLastSig) { renderKnowledgePanel(box, sources); renderKbStats(box, stats); }
+    _kbLastSig = sig;
+    if (sources.some(s => s.status === 'processing')) {      // big files index in the background: follow them
+      _kbPollTimer = setTimeout(() => loadKnowledgePanel(true), 4000);
+    }
   } catch (e) {
     box.innerHTML = '<div class="mon-empty">Failed to load: ' + esc(e.message) + '</div>';
   }
@@ -373,7 +407,7 @@ function renderKnowledgePanel(box, sources) {
           body: JSON.stringify({ roles }),
         });
       }
-      toast(`'${title}' indexed ✓ (${j.chunks || 0} chunks${panNote(j)})`);
+      toast(j.queued ? `'${title}' uploaded - indexing in the background` : `'${title}' indexed ✓ (${j.chunks || 0} chunks${panNote(j)})`);
       loadKnowledgePanel();
     } catch (e) {
       toast('Add failed: ' + e.message, true);
@@ -474,7 +508,7 @@ function renderKnowledgePanel(box, sources) {
         const r = await fetch(`/knowledge/${btn.dataset.id}/reindex`, { method: 'POST' });
         const j = await r.json().catch(() => ({}));
         if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
-        toast(`Reindexed ✓ (${j.chunks || 0} chunks${panNote(j)})`);
+        toast(j.queued ? 'Reindexing in the background' : `Reindexed ✓ (${j.chunks || 0} chunks${panNote(j)})`);
         loadKnowledgePanel();
       } catch (e) { toast('Reindex failed: ' + e.message, true); }
     };
@@ -555,7 +589,7 @@ function sourceRow(s) {
         <input type="checkbox" class="kb-row-select" data-id="${s.id}" aria-label="Select ${esc(s.title)}">
         <span class="kb-kind">${kindIco} ${esc(s.kind)}</span>
         <b title="${esc(s.title)}">${esc(s.title)}</b>
-        <span class="kb-status-pill ${statusCls}">● ${esc(s.status)}</span>
+        <span class="kb-status-pill ${statusCls}">● ${esc(s.status)}${s.progress && s.progress.total ? ` ${Number(s.progress.done).toLocaleString()}/${Number(s.progress.total).toLocaleString()}` : (s.progress ? ` (${esc(s.progress.state)})` : '')}</span>
       </div>
       <div class="kb-item-actions">
         ${s.kind === 'file' ? `<a class="btn ghost" href="/knowledge/${s.id}/file" target="_blank" rel="noopener">👁 View</a>` : ''}

@@ -1,5 +1,6 @@
 import sys
 import threading
+import time
 
 from .constants import _decode_vec
 from .store import _db
@@ -18,10 +19,25 @@ def _chunks_gen():
     return row[0] if row else None
 
 
+STALE_WHILE_INGESTING_S = 60.0       # during a bulk ingest, rebuild the whole search cache at most this often
+
+
+def _ingest_active() -> bool:
+    try:
+        from .. import kb_queue
+        return kb_queue.active()
+    except Exception:
+        return False
+
+
 def _cached_entries() -> dict:
     gen = _chunks_gen()
     cache = _cache
     if gen is not None and cache.get("gen") == gen:
+        return cache
+    # Every finished document bumps the generation; reloading hundreds of thousands of chunks after each one
+    # would make searches during a bulk upload wait many seconds. Serve the previous cache for a short while.
+    if cache.get("entries") and _ingest_active() and time.time() - cache.get("built_at", 0) < STALE_WHILE_INGESTING_S:
         return cache
     with _cache_lock:
         gen = _chunks_gen()
@@ -35,7 +51,7 @@ def _cached_entries() -> dict:
 
 def _build_cache(entries: list, gen=None) -> dict:
     """entries: [(source, path, text, vec_or_None)] -> the search cache."""
-    built = {"gen": gen, "entries": entries, "lower": [e[2].lower() for e in entries],
+    built = {"gen": gen, "built_at": time.time(), "entries": entries, "lower": [e[2].lower() for e in entries],
              "dim": None, "mat": None, "pos": None}
     if _np is not None:
         dims = [len(e[3]) for e in entries if e[3] is not None]

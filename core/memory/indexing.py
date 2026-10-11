@@ -143,6 +143,14 @@ async def index_sessions(force: bool = False) -> int:
     return len(rows)
 
 
+def kb_chunk_count(exclude_source: Optional[int] = None) -> int:
+    """Knowledge chunks currently stored (optionally leaving out one source, e.g. the one being reindexed)."""
+    if exclude_source is None:
+        return _db().execute("SELECT COUNT(*) FROM chunks WHERE source='knowledge'").fetchone()[0]
+    return _db().execute("SELECT COUNT(*) FROM chunks WHERE source='knowledge' AND path <> ?",
+                         (f"kb:{exclude_source}",)).fetchone()[0]
+
+
 def kb_chunk_report(text: str) -> dict:
     """How much of a document the index holds: {"indexed", "total"}; indexed < total means it was cut at the cap."""
     cap = kb_chunk_cap()
@@ -150,18 +158,40 @@ def kb_chunk_report(text: str) -> dict:
     return {"indexed": min(total, cap), "total": total}
 
 
-async def index_knowledge_source(source_id: int, text: str, version: Optional[float] = None) -> int:
+KB_EMBED_GROUP = 256        # chunks embedded per progress step
+
+
+def _kb_rows(path: str, text: str, version: float) -> list:
+    return [("knowledge", path, idx, part, version)
+            for idx, part in enumerate(add_context(_chunk_text(text, kb_chunk_cap())))]
+
+
+async def index_knowledge_source(source_id: int, text: str, version: Optional[float] = None, progress=None) -> int:
+    """Chunk, embed and store one source. `progress(done, total)` is called after each group of chunks is embedded."""
     path = f"kb:{source_id}"
     version = version if version is not None else time.time()
     _db().execute("DELETE FROM chunks WHERE source='knowledge' AND path=?", (path,))
     _db().commit()
-    rows = [("knowledge", path, idx, part, version)
-            for idx, part in enumerate(add_context(_chunk_text(text, kb_chunk_cap())))]
+    rows = await asyncio.to_thread(_kb_rows, path, text, version) if progress else _kb_rows(path, text, version)
     if rows:
         embed_fn = getattr(sys.modules.get("core.memory"), "_embed_texts", _embed_texts)
-        vecs = await embed_fn([r[3] for r in rows])
+        if progress:
+            vecs, down = [], False
+            for i in range(0, len(rows), KB_EMBED_GROUP):
+                got = None if down else await embed_fn([r[3] for r in rows[i:i + KB_EMBED_GROUP]])
+                if got is None:
+                    down = True                  # embedder unavailable: lexical-only, same as the unprogressed path
+                else:
+                    vecs.extend(got)
+                progress(min(i + KB_EMBED_GROUP, len(rows)), len(rows))
+            vecs = None if down else vecs
+        else:
+            vecs = await embed_fn([r[3] for r in rows])
         store_fn = getattr(sys.modules.get("core.memory"), "_store_vecs", _store_vecs)
-        store_fn(rows, vecs)
+        if progress:
+            await asyncio.to_thread(store_fn, rows, vecs)       # thousands of inserts must not stall the event loop
+        else:
+            store_fn(rows, vecs)
     return len(rows)
 
 

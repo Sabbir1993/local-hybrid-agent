@@ -27,6 +27,15 @@ MAX_CHUNKS_PER_DOC = 40
 MAX_KB_CHUNKS_PER_DOC = 20000
 
 
+def kb_total_chunk_limit() -> int:
+    """Upper bound on knowledge chunks held at once: the search cache keeps every chunk's text and vector in RAM."""
+    try:
+        from ..small_model import APP_CONFIG
+        return max(1000, int((APP_CONFIG.get("knowledge") or {}).get("max_total_chunks") or 600000))
+    except Exception:
+        return 600000
+
+
 def kb_chunk_cap() -> int:
     try:
         from ..small_model import APP_CONFIG

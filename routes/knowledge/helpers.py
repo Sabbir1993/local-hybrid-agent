@@ -1,15 +1,18 @@
+import asyncio
 import shutil
 import sys
 import time
 from core import auth_db, pan
 from core.audit import audit_log
 from core.auth import Principal
-from core.memory import index_knowledge_source, kb_chunk_report
+from core.memory import index_knowledge_source, kb_chunk_count, kb_chunk_report, kb_total_chunk_limit
 from .models import CHUNKS_TEMP_DIR
 
 
 def _source_public(row) -> dict:
+    from core import kb_queue
     return {
+        "progress": kb_queue.progress(row["id"]),
         "id": row["id"],
         "title": row["title"],
         "kind": row["kind"],
@@ -30,7 +33,12 @@ def _source_public(row) -> dict:
     }
 
 
-async def _finish_ingest(source_id: int, text: str, user: Principal) -> dict:
+async def _finish_ingest(source_id: int, text: str, user: Principal, progress=None) -> dict:
+    """Mask, store table rows, chunk and embed one source. With `progress` (the background queue) the CPU-heavy
+    steps run in a thread so a large file does not stall the server."""
+    async def _run(fn, *a):
+        return await asyncio.to_thread(fn, *a) if progress else fn(*a)
+
     if not text.strip():
         auth_db.update_knowledge_source_status(source_id, "error", "no extractable text")
         return {"ok": False, "error": "no extractable text found"}
@@ -40,20 +48,38 @@ async def _finish_ingest(source_id: int, text: str, user: Principal) -> dict:
     # in the vector store can be retrieved into a prompt and sent to a cloud lane, a masked
     # one cannot. Uses core/pan.py, the same detector as chat input, model output and cloud
     # egress -- the count is audited so the uploading admin can see that redaction happened.
-    text, n_pans = pan.mask_pans(text)
+    text, n_pans = await _run(pan.mask_pans, text)
+    report = await _run(kb_chunk_report, text)
+    limit, others = kb_total_chunk_limit(), kb_chunk_count(exclude_source=source_id)
+    if others + report["indexed"] > limit:          # refuse before the in-memory search index outgrows the server
+        msg = (f"knowledge index is full: {others:,} chunks stored + {report['indexed']:,} for this source exceeds "
+               f"knowledge.max_total_chunks ({limit:,})")
+        auth_db.update_knowledge_source_status(source_id, "error", msg)
+        audit_log(user, action="knowledge.ingest", resource=str(source_id), result="deny", detail={"reason": "index_full"})
+        return {"ok": False, "error": msg}
     try:                                    # Excel/CSV rows are also kept as real rows for exact queries (kb_query)
         from core import kb_tables
-        kb_tables.replace_source(source_id, text)
+        await _run(kb_tables.replace_source, source_id, text)
     except Exception as e:
         print(f"[knowledge] could not store table rows for source {source_id}: {e}", file=sys.stderr)
-    report = kb_chunk_report(text)
-    n_chunks = await index_knowledge_source(source_id, text)
+    n_chunks = (await index_knowledge_source(source_id, text, progress=progress) if progress
+                else await index_knowledge_source(source_id, text))
     auth_db.update_knowledge_source_status(source_id, "ready")
     auth_db.update_knowledge_source_index(source_id, report["indexed"], report["total"])
     partial = report["indexed"] < report["total"]
     audit_log(user, action="knowledge.ingest", resource=str(source_id), result="allow",
               detail={"chunks": n_chunks, "pans_masked": n_pans, "partial": partial})
     return {"ok": True, "chunks": n_chunks, "pans_masked": n_pans, "chunks_total": report["total"], "partial": partial}
+
+
+async def _queue_file(source_id: int, path, user: Principal) -> None:
+    """Hand a stored file to the background queue (extraction happens on the worker, in a thread)."""
+    from core import kb_queue, knowledge_ingest
+
+    async def load():
+        return await asyncio.to_thread(knowledge_ingest.extract_file, path)
+    auth_db.update_knowledge_source_status(source_id, "processing")
+    await kb_queue.enqueue(source_id, load, user)
 
 
 def _cleanup_old_chunks(max_age_s: float = 86400.0) -> None:
