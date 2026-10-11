@@ -83,5 +83,22 @@ class ExecutorViewTests(unittest.TestCase):
         self.assertEqual(msgs, snapshot)
 
 
+    def test_every_loop_injected_notice_keeps_the_real_task_in_view(self):
+        """Regression: a '[stagnation guard]' turn was taken for the user's request and the task vanished."""
+        from core.agent_loop import action_guard, budget, loop_guard, truncation
+        notices = [
+            "[stagnation guard] You have inspected files across multiple consecutive steps.",
+            "[directive action required] Do not ask the user for file paths.",
+            "[plan recorded] The plan is saved.",
+            action_guard.nudge_message(4, "step"), action_guard.ban_message(),
+            truncation.CUT_CALL_NOTICE, truncation.CUT_TEXT_NOTICE,
+            *budget.MESSAGES.values(),
+        ]
+        for note in notices:
+            msgs = [SYS, u("Fix the bug in config.py"), call(), tool("ok"), u(note)]
+            view = ev.build_executor_view(msgs)
+            self.assertTrue(any(m.get("content") == "Fix the bug in config.py" for m in view), note[:40])
+
+
 if __name__ == "__main__":
     unittest.main()

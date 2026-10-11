@@ -340,6 +340,8 @@ def consume_sse(lines) -> dict:
             rec["tools"].append(data.get("name"))
         elif event == "delta":
             rec["final_text"] += data.get("text") or ""
+        elif event == "delta_reset":
+            rec["final_text"] = ""
         elif event == "guard":
             rec["guard_hits"].append(data.get("rule") or data.get("message"))
         elif event == "done":
@@ -405,7 +407,9 @@ def run_instance(inst: dict, args, ctx: dict) -> dict:
         run = run_agent(args.base, ctx["client"], build_prompt(inst), args.mode, args.max_steps,
                         args.run_timeout)
         rec.update(run_id=run["run_id"], tools=run["tools"], done_state=run["done_state"],
-                   done_reason=run["done_reason"], agent_error=run["error"])
+                   done_reason=run["done_reason"], agent_error=run["error"],
+                   # why a run with no patch stopped: the agent's last words, and the order it used its tools
+                   final_text=(run.get("final_text") or "")[-1500:], tool_sequence=list(run["tools"]))
         rec["patch"] = extract_patch(workdir)
         graded = grade_patch(inst, workdir, args.test_cmd, args.test_timeout) if rec["patch"] else \
             {"resolved": False, "error": "agent produced no patch", "passed": 0}

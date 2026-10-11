@@ -261,7 +261,7 @@ class GitFlowTests(unittest.TestCase):
             seen["prompt"] = prompt
             (seen["wd"] / "calc.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
             return {"run_id": "r1", "tools": ["edit_file"], "done_state": "completed", "done_reason": None,
-                    "error": None}
+                    "error": None, "final_text": "x" * 3000 + "FIXED"}
 
         args = argparse.Namespace(base="http://x", test_cmd=self.cmd, test_timeout=60, mode="auto",
                                   max_steps=5, run_timeout=5, keep=False)
@@ -269,6 +269,8 @@ class GitFlowTests(unittest.TestCase):
         with mock.patch.object(sw, "point_project_at", fake_point), mock.patch.object(sw, "run_agent", fake_agent):
             rec = sw.run_instance(self.inst, args, ctx)
         self.assertEqual((rec["status"], rec["resolved"], rec["done_state"]), ("graded", True, "completed"))
+        self.assertTrue(rec["final_text"].endswith("FIXED") and len(rec["final_text"]) == 1500)   # the last words are kept
+        self.assertEqual(rec["tool_sequence"], ["edit_file"])
         self.assertIn("add() subtracts", seen["prompt"])
         self.assertNotIn("test_fix", seen["prompt"])            # the agent never sees the grading tests
         self.assertFalse(seen["wd"].exists())                   # checkout removed unless --keep
