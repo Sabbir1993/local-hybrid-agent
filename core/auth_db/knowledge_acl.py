@@ -24,6 +24,12 @@ def update_knowledge_source_status(source_id: int, status: str, error: Optional[
     db().commit()
 
 
+def update_knowledge_source_index(source_id: int, indexed: int, total: int) -> None:
+    db().execute("UPDATE knowledge_sources SET chunks_indexed = ?, chunks_total = ? WHERE id = ?",
+                 (int(indexed), int(total), source_id))
+    db().commit()
+
+
 def list_knowledge_sources() -> list:
     return db().execute("SELECT * FROM knowledge_sources ORDER BY created_at DESC").fetchall()
 

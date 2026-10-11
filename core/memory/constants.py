@@ -20,10 +20,20 @@ CHUNK_SNAP_LOOKBACK = 200
 MAX_FILE_BYTES = 512 * 1024
 MAX_FILES = 400
 MAX_CHUNKS_PER_DOC = 40
-# Company knowledge arrives as long PDFs: cap the KB path an order of magnitude
-# higher (~300KB). Workspace/session callers keep the default, which bounds
-# index size and agent context -- F decides those separately.
-MAX_KB_CHUNKS_PER_DOC = 400
+# Company knowledge arrives as long PDFs and spreadsheets. A low cap silently left most of a big
+# document unsearchable (400 chunks = ~300KB), so the default is high and configurable
+# (app.json knowledge.max_chunks_per_doc); a document that still hits it is reported as partial.
+# Workspace/session callers keep MAX_CHUNKS_PER_DOC, which bounds index size and agent context.
+MAX_KB_CHUNKS_PER_DOC = 20000
+
+
+def kb_chunk_cap() -> int:
+    try:
+        from ..small_model import APP_CONFIG
+        v = int((APP_CONFIG.get("knowledge") or {}).get("max_chunks_per_doc") or MAX_KB_CHUNKS_PER_DOC)
+        return max(1, min(v, 200000))
+    except Exception:
+        return MAX_KB_CHUNKS_PER_DOC
 MAX_SESSIONS = 60
 EMBED_BATCH = 16
 EMBEDDER_RETRY_S = 600  # retry the embedder 10 min after a failure

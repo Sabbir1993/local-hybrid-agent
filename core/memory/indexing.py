@@ -11,7 +11,7 @@ from .constants import (
     EMBEDDER_RETRY_S,
     MAX_FILE_BYTES,
     MAX_FILES,
-    MAX_KB_CHUNKS_PER_DOC,
+    kb_chunk_cap,
     MAX_SESSIONS,
     SKIP_DIRS,
     TEXT_EXTS,
@@ -142,13 +142,20 @@ async def index_sessions(force: bool = False) -> int:
     return len(rows)
 
 
+def kb_chunk_report(text: str) -> dict:
+    """How much of a document the index holds: {"indexed", "total"}; indexed < total means it was cut at the cap."""
+    cap = kb_chunk_cap()
+    total = len(_chunk_text(text, 10 ** 9))
+    return {"indexed": min(total, cap), "total": total}
+
+
 async def index_knowledge_source(source_id: int, text: str, version: Optional[float] = None) -> int:
     path = f"kb:{source_id}"
     version = version if version is not None else time.time()
     _db().execute("DELETE FROM chunks WHERE source='knowledge' AND path=?", (path,))
     _db().commit()
     rows = [("knowledge", path, idx, part, version)
-            for idx, part in enumerate(_chunk_text(text, MAX_KB_CHUNKS_PER_DOC))]
+            for idx, part in enumerate(_chunk_text(text, kb_chunk_cap()))]
     if rows:
         embed_fn = getattr(sys.modules.get("core.memory"), "_embed_texts", _embed_texts)
         vecs = await embed_fn([r[3] for r in rows])

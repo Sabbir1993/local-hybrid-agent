@@ -311,6 +311,10 @@ def init_tables(conn) -> None:
     if "category" not in {r[1] for r in conn.execute("PRAGMA table_info(knowledge_sources)")}:
         conn.execute("ALTER TABLE knowledge_sources ADD COLUMN category TEXT")
         conn.commit()
+    for _col in ("chunks_indexed", "chunks_total"):      # how much of a source the index holds (partial = cut at the cap)
+        if _col not in {r[1] for r in conn.execute("PRAGMA table_info(knowledge_sources)")}:
+            conn.execute(f"ALTER TABLE knowledge_sources ADD COLUMN {_col} INTEGER")
+            conn.commit()
     _seed_knowledge_classification(conn)
     _seed_defaults(conn)
     try:

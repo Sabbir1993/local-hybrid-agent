@@ -3,7 +3,7 @@ import time
 from core import auth_db, pan
 from core.audit import audit_log
 from core.auth import Principal
-from core.memory import index_knowledge_source
+from core.memory import index_knowledge_source, kb_chunk_report
 from .models import CHUNKS_TEMP_DIR
 
 
@@ -18,6 +18,10 @@ def _source_public(row) -> dict:
         "created_by": row["created_by"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "chunks_indexed": row["chunks_indexed"] if "chunks_indexed" in row.keys() else None,
+        "chunks_total": row["chunks_total"] if "chunks_total" in row.keys() else None,
+        "partial": bool(row["chunks_total"] and row["chunks_indexed"] is not None
+                        and row["chunks_indexed"] < row["chunks_total"]) if "chunks_total" in row.keys() else False,
         "roles": auth_db.get_source_role_names(row["id"]),
         "cloud_ok": bool(row["cloud_ok"]),
         "category": row["category"],
@@ -36,11 +40,14 @@ async def _finish_ingest(source_id: int, text: str, user: Principal) -> dict:
     # one cannot. Uses core/pan.py, the same detector as chat input, model output and cloud
     # egress -- the count is audited so the uploading admin can see that redaction happened.
     text, n_pans = pan.mask_pans(text)
+    report = kb_chunk_report(text)
     n_chunks = await index_knowledge_source(source_id, text)
     auth_db.update_knowledge_source_status(source_id, "ready")
+    auth_db.update_knowledge_source_index(source_id, report["indexed"], report["total"])
+    partial = report["indexed"] < report["total"]
     audit_log(user, action="knowledge.ingest", resource=str(source_id), result="allow",
-              detail={"chunks": n_chunks, "pans_masked": n_pans})
-    return {"ok": True, "chunks": n_chunks, "pans_masked": n_pans}
+              detail={"chunks": n_chunks, "pans_masked": n_pans, "partial": partial})
+    return {"ok": True, "chunks": n_chunks, "pans_masked": n_pans, "chunks_total": report["total"], "partial": partial}
 
 
 def _cleanup_old_chunks(max_age_s: float = 86400.0) -> None:

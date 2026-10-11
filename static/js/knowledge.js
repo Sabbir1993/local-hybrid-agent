@@ -564,6 +564,7 @@ function sourceRow(s) {
       </div>
     </div>
     ${s.error ? `<div class="chat-alert-box error" style="margin:8px 0 0; font-size:11px; padding:6px 10px;">⚠ ${esc(s.error)}</div>` : ''}
+    ${s.partial ? `<div class="chat-alert-box error" style="margin:8px 0 0; font-size:11px; padding:6px 10px;">⚠ Partly indexed: ${Number(s.chunks_indexed).toLocaleString()} of ${Number(s.chunks_total).toLocaleString()} sections. Searches cannot see the rest. Raise knowledge.max_chunks_per_doc and reindex.</div>` : (s.chunks_total ? `<div class="dim" style="margin:6px 0 0; font-size:10.5px;">Indexed ${Number(s.chunks_indexed).toLocaleString()} sections (complete)</div>` : '')}
     <div class="kb-item-foot">
       <div class="kb-item-foot-left">
         ${kbSourceCloudHtml(s, _kbPolicy.categories, _kbCloudPolicy)}

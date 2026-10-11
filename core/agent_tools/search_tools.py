@@ -128,13 +128,15 @@ async def tool_search_knowledge_base(args: dict) -> str:
         hits = cloud_safe_hits(hits)
         if held and not hits:
             return KB_CLOUD_BLOCKED_MSG
+    from ..knowledge_access import partial_notice
+    note = partial_notice(kb_ids)
     if not hits:
-        return f"(no matching company knowledge base records found for '{query}')"
+        return f"(no matching company knowledge base records found for '{query}')" + (f"\n{note}" if note else "")
     lines = []
     for h in hits:
         title = h.get("title") or f"Source #{h.get('source_id')}"
         lines.append(f"[{title}] (score: {h['score']:.2f})\n{h['text']}")
-    return "\n\n---\n\n".join(lines)
+    return "\n\n---\n\n".join(lines) + (f"\n\n{note}" if note else "")
 
 
 async def tool_kb_find_mentions(args: dict) -> str:
@@ -174,4 +176,6 @@ async def tool_kb_find_mentions(args: dict) -> str:
                           "documents": len(result["docs"])})
     except Exception:
         pass
-    return kb_mentions.render(name, result)
+    from ..knowledge_access import partial_notice
+    note = partial_notice(set(titles))
+    return kb_mentions.render(name, result) + (f"\n\n{note}" if note else "")

@@ -48,6 +48,23 @@ def hits_need_local(hits) -> bool:
                for h in hits)
 
 
+def partial_notice(ids) -> str:
+    """One line naming sources the index holds only in part, or "". A search result over such a source is
+    incomplete, and the model must say so instead of answering 'not found'."""
+    try:
+        ids = set(ids or ())
+        partial = [r["title"] for r in auth_db.list_knowledge_sources()
+                   if r["id"] in ids and r["chunks_total"] and r["chunks_indexed"] is not None
+                   and r["chunks_indexed"] < r["chunks_total"]]
+    except Exception:
+        return ""
+    if not partial:
+        return ""
+    shown = ", ".join(partial[:5]) + (f" and {len(partial) - 5} more" if len(partial) > 5 else "")
+    return (f"NOTE: {len(partial)} source(s) are only partly indexed ({shown}); a missing result does not prove "
+            "the information is absent. Tell the user this when the answer is 'not found'.")
+
+
 def cloud_safe_hits(hits) -> list:
     """Drop chunks a cloud model must not see: source not cleared, or the text trips a sensitive rule."""
     if not kb_local_only():
