@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from ..kb_structure import add_context
 from .constants import (
     CHUNK_CHARS,
     CHUNK_OVERLAP,
@@ -155,7 +156,7 @@ async def index_knowledge_source(source_id: int, text: str, version: Optional[fl
     _db().execute("DELETE FROM chunks WHERE source='knowledge' AND path=?", (path,))
     _db().commit()
     rows = [("knowledge", path, idx, part, version)
-            for idx, part in enumerate(_chunk_text(text, kb_chunk_cap()))]
+            for idx, part in enumerate(add_context(_chunk_text(text, kb_chunk_cap())))]
     if rows:
         embed_fn = getattr(sys.modules.get("core.memory"), "_embed_texts", _embed_texts)
         vecs = await embed_fn([r[3] for r in rows])

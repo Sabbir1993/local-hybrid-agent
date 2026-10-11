@@ -17,6 +17,8 @@ prompt or sent to a cloud lane.
 import re
 from pathlib import Path
 
+from . import kb_structure
+
 MAX_URL_BYTES = 2 * 1024 * 1024
 URL_TIMEOUT_S = 15.0
 
@@ -26,16 +28,24 @@ def extract_pdf(path: Path) -> str:
     parts = []
     n_pages = 0
     image_only_pages = 0
+    has_text = False
     with pdfplumber.open(str(path)) as pdf:
         for page in pdf.pages:
             n_pages += 1
             t = page.extract_text() or ""
             if t.strip():
-                parts.append(t)
+                has_text = True
+                parts.append(f"{kb_structure.page_marker(n_pages)}\n{t}")     # page numbers make answers citable
             elif page.images:
                 image_only_pages += 1
+                # visible in the index: a name missing from this page is not proof of absence
+                parts.append(f"{kb_structure.page_marker(n_pages)}\n(image-only page: no text could be extracted)")
+            try:
+                page.flush_cache()                  # a 50 MB PDF must not keep every parsed page in memory
+            except Exception:
+                pass
     text = "\n\n".join(parts)
-    if not text.strip() and n_pages:
+    if not has_text and n_pages:
         # Not silent: an image-only scan re-uploaded unchanged extracts
         # nothing again, and the admin has to know WHY (OCR is not available
         # in this pipeline) rather than retrying the same file. Partial
@@ -103,12 +113,13 @@ def extract_xlsx(path: Path) -> str:
     import openpyxl
     wb = openpyxl.load_workbook(str(path), data_only=True, read_only=True)
     parts = []
-    for ws in wb.worksheets:
-        for row in ws.iter_rows(values_only=True):
-            cells = [str(c) for c in row if c is not None]
-            if cells:
-                parts.append(" | ".join(cells))
-    return "\n".join(parts)
+    try:
+        for ws in wb.worksheets:
+            # empty cells stay in place so every value sits under its column header
+            parts.append(kb_structure.rows_to_text(ws.iter_rows(values_only=True), ws.title))
+    finally:
+        wb.close()                  # read-only mode keeps the file open; Windows then cannot delete the upload
+    return "\n".join(p for p in parts if p)
 
 
 def extract_xls(path: Path) -> str:
@@ -116,11 +127,8 @@ def extract_xls(path: Path) -> str:
     wb = xlrd.open_workbook(str(path))
     parts = []
     for sheet in wb.sheets():
-        for r in range(sheet.nrows):
-            cells = [str(c) for c in sheet.row_values(r) if c not in (None, "")]
-            if cells:
-                parts.append(" | ".join(cells))
-    return "\n".join(parts)
+        parts.append(kb_structure.rows_to_text((sheet.row_values(r) for r in range(sheet.nrows)), sheet.name))
+    return "\n".join(p for p in parts if p)
 
 
 def extract_csv(path: Path) -> str:
@@ -136,13 +144,7 @@ def extract_csv(path: Path) -> str:
     if content is None:
         content = path.read_text(encoding="utf-8", errors="replace")
 
-    reader = csv.reader(io.StringIO(content))
-    parts = []
-    for row in reader:
-        cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
-        if cells:
-            parts.append(" | ".join(cells))
-    return "\n".join(parts)
+    return kb_structure.rows_to_text(csv.reader(io.StringIO(content)))
 
 
 def extract_pasted_text(text: str) -> str:

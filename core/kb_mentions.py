@@ -9,6 +9,8 @@ Access control (source ids, cloud policy) is decided by the caller; this module 
 import re
 from typing import Optional
 
+from . import kb_structure
+
 MAX_QUERY_CHARS = 120
 MAX_DOCS = 50
 MAX_LINES_PER_DOC = 12
@@ -41,12 +43,27 @@ def _first_table_line(texts: list) -> Optional[str]:
     return None
 
 
+def _label(loc: dict, line: str) -> str:
+    """Where a line came from: sheet / page, and the spreadsheet row when the line carries one."""
+    bits = []
+    if loc.get("sheet"):
+        bits.append(f"Sheet {loc['sheet']}")
+    if loc.get("page"):
+        bits.append(f"p.{loc['page']}")
+    m = re.match(r"R(\d+): ", line)
+    if m:
+        bits.append(f"row {m.group(1)}")
+    return ", ".join(bits)
+
+
 def find_mentions(name: str, entries: list, titles: dict, kid_of, allowed_ids: set,
                   max_docs: int = MAX_DOCS, max_lines: int = MAX_LINES_PER_DOC) -> dict:
     """entries: [(source, path, text, vec)] in chunk order. Returns {"docs": [...], "more_docs": int}.
 
-    Each doc: {"source_id", "title", "header", "lines": [str], "total": int}. `header` is the document's
-    first table line when matched lines are table rows with the same column count.
+    Each doc: {"source_id", "title", "groups": [{"header", "lines"}], "lines": [str], "header", "total"}.
+    Lines carry their sheet / page / row. A group's `header` is the column header in force where the lines sit
+    (read from the Columns: markers the ingestion writes), or, for older indexes, the document's first table
+    line when every matched row has the same column count.
     """
     match = name_matcher(name)
     if match is None:
@@ -63,23 +80,35 @@ def find_mentions(name: str, entries: list, titles: dict, kid_of, allowed_ids: s
         by_doc.setdefault(kid, []).append(str(text or ""))
     docs = []
     for kid, texts in by_doc.items():
-        seen, hits = set(), []
+        seen, hits, loc = set(), [], {}
         for t in texts:
-            if not quick.search(t):
-                continue
-            for ln in t.splitlines():
-                s = ln.strip()
-                if s and s not in seen and match(s):     # chunk overlap repeats lines
-                    seen.add(s)
-                    hits.append(s)
+            if quick.search(t):
+                for ln in t.splitlines():
+                    s = ln.strip()
+                    if s and s not in seen and match(s) and not s.startswith("Columns:"):   # chunk overlap repeats lines
+                        seen.add(s)
+                        # location in force at the line: markers earlier in this chunk, else carried from before
+                        here = kb_structure.location_after(t[:t.find(ln)], dict(loc)) if ln in t else dict(loc)
+                        hits.append((s, here.get("cols"), _label(here, s)))
+            kb_structure.location_after(t, loc)
         if not hits:
             continue
-        header = _first_table_line(texts)
-        rows = [h for h in hits if " | " in h]
-        if not (header and rows and all(_cols(h) == _cols(header) for h in rows)):
-            header = None
-        docs.append({"source_id": kid, "title": titles.get(kid) or f"Source #{kid}", "header": header,
-                     "lines": [h[:MAX_LINE_CHARS] for h in hits[:max_lines]], "total": len(hits)})
+        legacy = _first_table_line(texts)
+        groups: dict = {}
+        for s, cols, label in hits:
+            h = cols
+            if h is None and legacy and " | " in s and _cols(s) == _cols(legacy):
+                h = legacy
+            body = re.sub(r"^R\d+: ", "", s)
+            groups.setdefault(h, []).append((f"[{label}] " if label else "") + body[:MAX_LINE_CHARS])
+        flat, shown = [], []
+        for h, lines in groups.items():
+            take = lines[:max(0, max_lines - len(flat))]
+            if take:
+                shown.append({"header": h, "lines": take})
+                flat.extend(take)
+        docs.append({"source_id": kid, "title": titles.get(kid) or f"Source #{kid}", "groups": shown,
+                     "header": shown[0]["header"] if shown else None, "lines": flat, "total": len(hits)})
     docs.sort(key=lambda d: (-d["total"], d["title"].lower()))
     return {"docs": docs[:max_docs], "more_docs": max(0, len(docs) - max_docs)}
 
@@ -92,9 +121,10 @@ def render(name: str, result: dict) -> str:
            "company records; build the table from these lines only and leave a cell empty rather than guess."]
     for d in docs:
         out.append(f"\n## {d['title']} ({d['total']} matching line(s))")
-        if d["header"]:
-            out.append(f"Columns: {d['header']}")
-        out.extend(f"- {ln}" for ln in d["lines"])
+        for g in d["groups"]:
+            if g["header"]:
+                out.append(f"Columns: {g['header']}")
+            out.extend(f"- {ln}" for ln in g["lines"])
         if d["total"] > len(d["lines"]):
             out.append(f"- ... {d['total'] - len(d['lines'])} more line(s) in this document")
     if result["more_docs"]:
