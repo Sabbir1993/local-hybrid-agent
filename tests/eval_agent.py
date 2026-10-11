@@ -340,6 +340,7 @@ LIVE_TASKS = [
 # cannot be checked from here and the omission is reported per task rather than counted
 # as a pass.
 LIVE_WORKSPACE = None
+LIVE_ALLOW_PYTHON = False
 
 
 def _abort(msg: str) -> None:
@@ -590,7 +591,7 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, clie
     rec = {"name": task["name"], "tools": [], "lanes": [], "escalated": False,
            "final_len": 0, "final_text": "", "ok": False, "soft": task.get("soft", False),
            "error": None, "duration_s": None, "events_seen": [], "done_state": None,
-           "guard_hits": [], "kb_blocked": None}
+           "guard_hits": [], "kb_blocked": None, "approvals_denied": []}
     payload = {"messages": [{"role": "user", "content": task["prompt"]}],
                "mode": mode, "max_steps": 12, "temperature": 0.3}
     t0 = time.time()
@@ -642,6 +643,21 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, clie
                         rec["tools"].append(data.get("name"))
                     elif event == "tool_result":
                         pass    # counted via tool_call; kept here so it is not "unknown"
+                    elif event == "permission_request":
+                        # Nobody is at the keyboard. Unanswered, the agent waits 180s for each card and then
+                        # denies it anyway (a 4-minute task that fails for a reason nobody can see). Deny at once,
+                        # never allow: an eval must not run a shell command or script on the machine unattended
+                        # (the guard tasks even ask it to delete files), and the denial is recorded below.
+                        # The one exception, opt-in on the command line AND on the task: a run_python card for a task
+                        # whose whole point is to run a short script (allow_python), never a shell command.
+                        allow = bool(LIVE_ALLOW_PYTHON and task.get("allow_python") and data.get("kind") == "python")
+                        if not allow:
+                            rec["approvals_denied"].append(str(data.get("cmd") or "")[:100])
+                        try:
+                            client.post(f"{base}/agent/permission",
+                                        json={"req_id": data.get("req_id"), "decision": "allow" if allow else "deny"})
+                        except Exception:
+                            pass
                     elif event == "delta":
                         rec["final_len"] += len(data.get("text") or "")
                         rec["final_text"] += data.get("text") or ""
@@ -685,6 +701,30 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, clie
     return rec
 
 
+def reset_eval_tmp(workspace) -> bool:
+    """Delete <workspace>/eval_tmp so every run starts from the same empty state. True when something was removed.
+
+    The tasks create files under eval_tmp, and write_file refuses to overwrite: a run that finds the previous run's
+    files behaves differently (explores, edits, gives up), so results would depend on what ran before. Only that one
+    folder, by exact name directly under the workspace, is ever touched; the rest of the project is never deleted.
+    """
+    import os
+    import shutil
+    import stat
+    if not workspace:
+        return False
+    root = os.path.realpath(str(workspace))
+    target = os.path.join(root, "eval_tmp")
+    if os.path.islink(target) or not os.path.isdir(target) or os.path.realpath(target) != target:
+        return False                      # absent, or a link that could lead somewhere else: leave it alone
+
+    def _writable(func, path, _exc):      # read-only files (Windows) would otherwise stop the delete
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    shutil.rmtree(target, onerror=_writable)
+    return True
+
+
 def run_live_suite(base: str, tasks, mode: str, repeats: int, session=None,
                    timeout_s: float = 600) -> dict:
     """Run every task `repeats` times and summarize with Wilson intervals.
@@ -699,6 +739,7 @@ def run_live_suite(base: str, tasks, mode: str, repeats: int, session=None,
     for task in tasks:
         runs = []
         for i in range(max(1, repeats)):
+            reset_eval_tmp(LIVE_WORKSPACE)          # no run inherits the files of an earlier one
             for s in task.get("setup", []) or []:
                 bare = {"name": task["name"] + "#setup", "prompt": s, "soft": True}
                 run_live_task(base, bare, mode, timeout_s=timeout_s, client=session)
@@ -774,6 +815,10 @@ def main() -> int:
                     help="comma-separated live task names (default: all of eval_tasks.TASKS)")
     ap.add_argument("--live-categories", default=None,
                     help="comma-separated categories to run, e.g. files,compute,docs,guard")
+    ap.add_argument("--live-allow-python", action="store_true",
+                    help="approve run_python cards, for the few tasks marked allow_python only (the compute tasks "
+                         "and multi_step_then_verify). That runs model-written code on THIS machine, unattended, so "
+                         "use it only with a disposable --live-workspace. Every other card is still denied.")
     ap.add_argument("--live-workspace", default=None,
                     help="local workspace root, enabling expect_files checks. Omit when the "
                          "server is remote; file checks are then reported as skipped")
@@ -827,8 +872,9 @@ def main() -> int:
                 results["offline"].append({"name": name, "status": "FAIL", "note": f"{type(e).__name__}: {e}"})
 
     if args.live:
-        global LIVE_WORKSPACE
+        global LIVE_WORKSPACE, LIVE_ALLOW_PYTHON
         LIVE_WORKSPACE = args.live_workspace
+        LIVE_ALLOW_PYTHON = bool(args.live_allow_python)
         tasks = LIVE_TASKS if args.legacy_tasks else eval_tasks.select(
             (args.live_tasks.split(",") if args.live_tasks else None),
             (args.live_categories.split(",") if args.live_categories else None),

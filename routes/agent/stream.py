@@ -65,6 +65,7 @@ from core.agent_tools import file_state as _file_state
 from core import injection_guard as _inj
 from core import permission_rules as _rules
 from core import hooks as _hooks
+from core.agent_loop import doc_redirect as _doc_redirect
 from core.pan import mask_pans as _mask_pans
 from core.agent_tools.git_agent_tools import GIT_GATED_TOOLS, command_for as _git_command_for
 from core.agent_loop.narration import _is_narration
@@ -787,7 +788,9 @@ async def run_agent_stream(req, user, ctx):
                               "memory_read", "memory_append", "memory_str_replace",
                               "create_plan", "update_plan_item", "get_plan", "finish",
                               "find_symbol", "find_references", "file_outline", "run_tests",
-                              "git_inspect", "git_commit", "git_branch") + EXECUTOR_TEST_TOOLS
+                              "git_inspect", "git_commit", "git_branch",
+                              # shown only when the request names an Office file (tool_surface 'docs' family)
+                              "doc_create", "doc_inspect", "doc_edit") + EXECUTOR_TEST_TOOLS
                              or t.get("function", {}).get("name", "").startswith("mcp__")],
                             surface_q, surface_cfg)
                     else:
@@ -1547,6 +1550,19 @@ async def run_agent_stream(req, user, ctx):
                             actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                             msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                             continue
+
+                    # an Office file is one doc_create call, not a script (told once per run, before any approval card)
+                    # (judged on what this run may use at all: a step's own list can be narrowed by plan mode)
+                    _doc_avail = {t.get("function", {}).get("name") for t in all_tools()} - set(hidden_tools or ())
+                    if custom_agent_tools:
+                        _doc_avail &= set(custom_agent_tools)
+                    _doc_note = _doc_redirect.note(name, args, _doc_avail, run_allow)
+                    if _doc_note:
+                        result = _doc_note
+                        yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
+                        actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
+                        msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+                        continue
 
                     # run_python is arbitrary code on the user's machine: with ask_first on it
                     # always needs a one-time approval here (no allow pattern can cover code).
