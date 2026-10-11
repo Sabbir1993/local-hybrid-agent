@@ -1,3 +1,5 @@
+import re
+
 from .degeneration import sanitize_user_facing_content
 
 # outcome code for a run where the model was asked to build something and replied by asking
@@ -74,6 +76,9 @@ def validate_and_finalize_response(last_query: str, content: str, reasoning: str
             return f"🔍 **Information gathered from web search:**\n\n{summary}", True, "synthesized web search results"
 
         if python_runs:
+            if _run_failed(python_runs[-1]):
+                return (f"⚠️ **The last script failed.**\n\n```\n{python_runs[-1].strip()}\n```", True,
+                        "synthesized execution output (failed run)")
             return f"✅ **Script executed successfully.**\n\n```\n{python_runs[-1].strip()}\n```", True, "synthesized execution output"
 
         if reasoning and len(reasoning.strip()) > 15:
@@ -90,6 +95,15 @@ def validate_and_finalize_response(last_query: str, content: str, reasoning: str
         return clean_content, False, PASSIVE_REFUSAL_NOTE
 
     return clean_content, False, "validated"
+
+
+def _run_failed(output: str) -> bool:
+    """A run_python result with a non-zero exit or a traceback must not be announced as a success."""
+    t = str(output or "")
+    m = re.search(r"exit code\s+(-?\d+)", t)
+    if m and m.group(1) != "0":
+        return True
+    return "Traceback (most recent call last)" in t or "SyntaxError" in t
 
 
 def is_passive_refusal(content: str, last_query: str, actions_taken: list) -> bool:
