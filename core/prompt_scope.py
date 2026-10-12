@@ -139,7 +139,7 @@ _STYLE_ADVICE_RE = re.compile(
     r"|improve|boost|raise|reduce|lose|gain|plan|tips?|ideas?|better)\b", re.IGNORECASE)
 _STYLE_SKIP_RE = re.compile(
     r"```|\b(python|javascript|typescript|java|c\+\+|sql|bash|regex|function|class|traceback|stack\s*trace|compile\w*"
-    r"|exception|git|commit|docker|api|endpoint|json|html|css|file|folder|pptx|docx|xlsx|slides?)\b", re.IGNORECASE)
+    r"|exception|git|commit|docker|api|endpoint|json|html|css|file|folder|pptx|docx|xlsx|pdf|slides?)\b", re.IGNORECASE)
 
 
 def style_wanted(query: str, prior_msgs=None, voice: bool = False, enabled: bool = True) -> bool:
@@ -150,7 +150,8 @@ def style_wanted(query: str, prior_msgs=None, voice: bool = False, enabled: bool
         return False
     for m in prior_msgs or []:
         if m.get("role") == "assistant" and "```questionnaire" in str(m.get("content") or ""):
-            return True
+            # our deck / PDF cards have their own briefs (DECK_BRIEF / PDF_BRIEF): not a second, advice-style one
+            return not re.search(r"your (?:deck|pdf)", str(m.get("content") or ""), re.IGNORECASE)
     q = (query or "").strip()
     if len(q) < 25 or _STYLE_SKIP_RE.search(q):
         return False
@@ -367,3 +368,43 @@ def deck_brief_wanted(query: str, prior_msgs=None) -> bool:
     if not q or not _DECK_ASK_RE.search(q) or not _DECK_VERB_RE.search(q):
         return False
     return not re.search(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain)\b", q, re.IGNORECASE)
+
+
+# PDF documents (guide / report / handbook): same ask-first, build-in-pieces flow as the deck brief. The PDF is
+# printed once at the end; until then the right-hand pane shows a live HTML draft of the sections written so far.
+PDF_BRIEF = (
+    "PDF DOCUMENT REQUEST:\n"
+    "- Unless the user already gave the length AND audience (or has just answered your questions), do NOT write the file "
+    "yet. Reply with one short line and ONE fenced block, nothing after it:\n"
+    "```questionnaire\n"
+    '{"title":"A few quick choices for your PDF","questions":['
+    '{"id":"sections","type":"radio","q":"How long should the PDF be?","options":["Short (4-5 sections)","Standard (6-8 sections)","Detailed (9-12 sections)"]},'
+    '{"id":"audience","type":"radio","q":"Who is it for?","options":["Executives","Customers","Technical team","General / non-technical"]},'
+    '{"id":"tone","type":"radio","q":"Style?","options":["Formal report","Friendly guide","Step-by-step handbook"]},'
+    '{"id":"extra","type":"text","q":"Anything it must include? (optional)"}],"submit_label":"Build my PDF"}\n'
+    "```\n"
+    "- After the answers (or when the user already specified them), BUILD THE PDF IN PIECES so the user watches it grow:\n"
+    "  1. First work out the section plan in your head: exactly N sections (the number their length choice implies), one "
+    "heading + one-line purpose each; the last section is a short summary / next steps.\n"
+    "  2. Call doc_create(file='<topic>.pdf', total=N, content=...) with ONLY the title (`# Title`), a one-line intro, and sections "
+    "1-2 (each `## Heading` + short paragraphs or bullets).\n"
+    "  3. Then call doc_append(file=<the exact name doc_create returned>, content=<next 1-2 sections>) again and again, following "
+    "your plan, until N sections exist; put done=true on the last call (that prints the PDF). Plain markdown only: headings, "
+    "paragraphs, bullets, simple tables. No emoji and no ASCII-art diagrams. Never write the whole PDF in one call.")
+
+_PDF_ASK_RE = re.compile(r"\b(pdf|report|guide|handbook|whitepaper|white paper|manual|ebook|e-book)\b", re.IGNORECASE)
+
+
+def pdf_brief_wanted(query: str, prior_msgs=None) -> bool:
+    """True for a request to produce a PDF document (or the user's answers to our PDF questionnaire). Decks go to the
+    deck brief, edits of an existing file to doc_inspect/doc_edit, and a plain question about PDFs is not a request."""
+    for m in reversed(prior_msgs or []):
+        if m.get("role") == "assistant":
+            c = str(m.get("content") or "")
+            return "```questionnaire" in c and "your pdf" in c.lower() and "sections" in c.lower()
+    q = (query or "").strip()
+    if not q or not re.search(r"\bpdf\b", q, re.IGNORECASE) or deck_brief_wanted(q, []):
+        return False
+    if not _DECK_VERB_RE.search(q):
+        return False
+    return not re.search(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain|read|open|convert)\b", q, re.IGNORECASE)

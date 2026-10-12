@@ -74,5 +74,23 @@ class BuildInPiecesTests(unittest.TestCase):
         self.assertNotEqual(path.read_bytes(), before)                                   # printed on done
 
 
+class BriefIntentTests(unittest.TestCase):
+    def test_pdf_brief_intent(self):
+        from core import prompt_scope as ps
+        for q in ("make a PDF guide about cyber security", "generate a pdf report on sales"):
+            self.assertTrue(ps.pdf_brief_wanted(q, []), q)
+        for q in ("what is a pdf", "summarize this pdf", "make a PPT about cats", "create a pdf presentation on x", "hi"):
+            self.assertFalse(ps.pdf_brief_wanted(q, []), q)
+        card = {"role": "assistant", "content": '```questionnaire\n{"title":"A few quick choices for your PDF",'
+                                                '"questions":[{"q":"How many sections?"}]}\n```'}
+        self.assertTrue(ps.pdf_brief_wanted("Short, executives", [card]))
+        self.assertFalse(ps.style_wanted("Short, executives, friendly tone please", [card]),
+                         "our card has its own brief, not the advice-style one")
+
+    def test_deck_follow_up_is_recognised(self):
+        from core import prompt_scope as ps
+        self.assertIsNotNone(ps._PPTX_RE.search("your deck"))      # was a pattern with backspace characters, never matched
+
+
 if __name__ == "__main__":
     unittest.main()

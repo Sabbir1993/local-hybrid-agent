@@ -156,7 +156,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     prev_assistant = next((str(m.get("content") or "") for m in reversed(msgs[:-1]) if m.get("role") == "assistant"), "")[-500:]
     deck_answer = (len(last_query) < 240 and "?" in prev_assistant and "[DOWNLOAD" not in prev_assistant
                    and bool(prompt_scope._PPTX_RE.search(prev_assistant)))
-    wants_file = wants_file_output(last_query) or file_followup == "edit" or deck_answer
+    pdf_build = prompt_scope.pdf_brief_wanted(last_query, msgs[:-1])      # a PDF request, or the answers to our PDF card
+    wants_file = wants_file_output(last_query) or file_followup == "edit" or deck_answer or pdf_build
     has_file = bool(file_followup or wants_file)
     web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
                                                             explicit_only=voice_policy.web_explicit_only(req),
@@ -167,7 +168,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     chat_tools = [CHAT_WRITE_FILE_SCHEMA]
     if has_file:
         chat_tools += [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
-        if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
+        if pdf_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
             chat_tools += [DOC_CREATE_SCHEMA, DOC_APPEND_SCHEMA]       # decks / PDFs are built in pieces
     from core.agent_tools import AGENT_TOOLS
     skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
@@ -435,6 +436,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
         sys_parts.append(prompt_scope.DECK_BRIEF)
         sys_labels.append("deck-brief")
+    elif pdf_build:
+        sys_parts.append(prompt_scope.PDF_BRIEF)
+        sys_labels.append("pdf-brief")
 
     # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat"
     chat_cfg = APP_CONFIG.get("chat") or {}
