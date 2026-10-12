@@ -34,6 +34,18 @@ async def tool_browser_navigate(args: dict) -> str:
     return _page_text(d)
 
 
+async def tool_open_in_my_browser(args: dict) -> str:
+    from ..device_approval import open_url_ok
+    url = open_url_ok(str(args.get("url") or ""))
+    if not url:
+        return "error: give a plain http(s) URL without a username or password"
+    try:
+        await call_companion("system.open_url", {"url": url}, timeout=60)
+    except Exception as e:
+        return _err(e)
+    return f"opened {url} in the user's default browser (you cannot see that page; ask the user if you need something from it)"
+
+
 async def tool_browser_snapshot(args: dict) -> str:
     try:
         return _page_text(await call_companion("browser.snapshot", _base(args)))

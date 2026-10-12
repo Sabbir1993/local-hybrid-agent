@@ -12,6 +12,7 @@ from .tools import (
     tool_browser_snapshot,
     tool_browser_type,
     tool_browser_wait,
+    tool_open_in_my_browser,
 )
 
 
@@ -37,6 +38,11 @@ BROWSER_TOOLS = [
          "device": {"type": "string", "enum": DEVICES, "description": "viewport preset (default desktop)"},
          "show": {"type": "boolean", "description": "default: a visible window opens on the user's screen so they can watch; pass false to run headless"}},
         ["url"])),
+    ("open_in_my_browser", tool_open_in_my_browser, _fn(
+        "open_in_my_browser",
+        "Open a link in the USER'S OWN default browser (e.g. 'open YouTube'). The user confirms. Fire-and-forget: "
+        "you get no page content back. To test or read a page yourself use browser_navigate instead.",
+        {"url": {"type": "string", "description": "https://www.youtube.com"}}, ["url"])),
     ("browser_snapshot", tool_browser_snapshot, _fn(
         "browser_snapshot", "Re-read the current page's accessibility snapshot (after it changed on its own).", {})),
     ("browser_click", tool_browser_click, _fn(

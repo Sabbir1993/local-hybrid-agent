@@ -22,7 +22,8 @@ CONNECT_WAIT_S = 5        # how long call() waits for a (re)connection before fa
 READ_ONLY_OPS = {"fs.read", "fs.read_b64", "fs.list", "fs.grep", "fs.tree", "fs.browse", "fs.read_many", "fs.diagnose"}
 # ops the companion would otherwise confirm in a native dialog of its own (companion/policy.js)
 CONFIRM_OPS = {"browser.navigate", "browser.eval", "android.boot_avd", "android.pair", "android.connect",
-               "android.install", "ios.boot", "ios.install"}
+               "android.install", "ios.boot", "ios.install",
+               "system.open_url"}
 
 
 def is_connected(user_id: Optional[int]) -> bool:

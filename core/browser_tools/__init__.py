@@ -34,6 +34,7 @@ from .tools import (
     tool_browser_snapshot,
     tool_browser_type,
     tool_browser_wait,
+    tool_open_in_my_browser,
 )
 from .registry_ops import (
     BROWSER_TOOLS,
@@ -74,6 +75,7 @@ __all__ = [
     "tool_browser_console",
     "tool_browser_eval",
     "tool_browser_close",
+    "tool_open_in_my_browser",
     "_fn",
     "_TARGET_PROPS",
     "BROWSER_TOOLS",

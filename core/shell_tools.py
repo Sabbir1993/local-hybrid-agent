@@ -178,7 +178,8 @@ def _write_refusal(found: str) -> str:
             "change files, install software or start a shell; any > or >> counts as a redirect, so filter "
             "the output instead of comparing with >). PowerShell is allowed for read-only inspection only: "
             "powershell -NoProfile -Command \"Get-... | Select-... | Format-...\". To save results use "
-            "write_file (it saves into your work folder); to change a file use edit_file. "
+            "write_file (it saves into your work folder); to change a file use edit_file; to open a link in the "
+            "user's own browser use open_in_my_browser. "
             "Do not retry this command or run the same thing through run_python.")
 
 

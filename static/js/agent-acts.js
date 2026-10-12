@@ -173,6 +173,7 @@ function toolMeta(name) {
     case 'generate_image': return { icon: '🎨', label: 'generate_image', verb: 'Made image', running: 'Making image', cls: 'media' };
     case 'generate_video': return { icon: '🎬', label: 'generate_video', verb: 'Made video', running: 'Making video', cls: 'media' };
     case 'analyze_image': return { icon: '🖼️', label: 'analyze_image', verb: 'Analyzed image', running: 'Analyzing image', cls: 'media' };
+    case 'open_in_my_browser': return { icon: '🌐', label: name, verb: 'Opened in your browser', running: 'Opening in your browser', cls: 'web' };
     case 'browser_navigate': return { icon: '🌐', label: name, verb: 'Opened', running: 'Opening', cls: 'web' };
     case 'browser_screenshot': case 'mobile_screenshot': return { icon: '📸', label: name, verb: 'Captured', running: 'Capturing', cls: 'default' };
     case 'browser_console': return { icon: '🧾', label: name, verb: 'Checked console', running: 'Checking console', cls: 'default' };

@@ -31,6 +31,20 @@ def origin_of(url: str) -> str:
     return f"{u.scheme}://{u.netloc}" if u.scheme in ("http", "https") and u.hostname else ""
 
 
+def open_url_ok(url: str) -> str:
+    """The URL when it is a plain http(s) link safe to hand to the user's browser, else "". No credentials in
+    it, no control characters, bounded length. Same rule as companion/main.js openUserBrowser."""
+    url = (url or "").strip()
+    if not url or len(url) > 2000 or any(ord(c) < 32 or c.isspace() for c in url):
+        return ""
+    try:
+        u = urlparse(url)
+        ok = u.scheme in ("http", "https") and bool(u.hostname) and not u.username and not u.password
+    except ValueError:
+        return ""
+    return url if ok else ""
+
+
 def request_for(name: str, args: Optional[dict]) -> Optional[dict]:
     """{kind, text, key} describing what the user is asked to allow, or None when this call needs no question.
     `key` identifies "the same thing" for the allow-for-this-run memory (an origin, a device action kind)."""
@@ -49,6 +63,12 @@ def request_for(name: str, args: Optional[dict]) -> Optional[dict]:
         return {"kind": KIND_OPEN, "key": origin,
                 "text": f"{origin}\n\nThe agent's browser is a fresh profile (none of your logins or cookies), but anything "
                         "the page shows is sent to the AI. Allow only sites you are testing."}
+    if name == "open_in_my_browser":
+        url = open_url_ok(str(args.get("url") or ""))
+        if not url:
+            return None         # the tool itself refuses it
+        return {"kind": KIND_DEVICE, "key": f"open:{origin_of(url)}",
+                "text": f"Open this link in your own browser (your default browser, with your logins):\n{url}"}
     if name == "mobile_boot":
         what = args.get("avd") or args.get("udid") or args.get("device") or "the default device"
         return {"kind": KIND_DEVICE, "key": KIND_DEVICE, "text": f"Start the emulator / simulator: {what}"}

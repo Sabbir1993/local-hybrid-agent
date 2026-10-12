@@ -372,6 +372,16 @@ class DeviceApproval(unittest.TestCase):
         self.assertEqual(r["key"], "https://example.com")
         self.assertIn("https://example.com", r["text"])
 
+    def test_open_in_my_browser_asks_for_every_http_link_and_refuses_the_rest(self):
+        r = device_approval.request_for("open_in_my_browser", {"url": "https://www.youtube.com"})
+        self.assertEqual(r["kind"], device_approval.KIND_DEVICE)
+        self.assertEqual(r["key"], "open:https://www.youtube.com")
+        self.assertIn("https://www.youtube.com", r["text"])
+        for bad in ("", "file:///C:/x.exe", "javascript:alert(1)", "https://u:p@example.com", "https://a.com/x y",
+                    "chrome.exe --flag"):
+            self.assertIsNone(device_approval.request_for("open_in_my_browser", {"url": bad}), bad)
+            self.assertEqual(device_approval.open_url_ok(bad), "", bad)
+
     def test_page_script_shows_the_script(self):
         r = device_approval.request_for("browser_eval", {"expression": "document.title"})
         self.assertEqual(r["kind"], device_approval.KIND_EVAL)

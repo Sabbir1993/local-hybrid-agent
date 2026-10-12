@@ -518,8 +518,13 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
         test_hint = ("\nVERIFY WHAT YOU BUILD: after creating or changing something a browser or phone renders, "
                      "run it and look at it before finishing - browser_navigate/browser_console/browser_screenshot "
                      "for web apps, mobile_* tools for Android/iOS apps (skills: webapp-testing, mobile-testing).")
+    open_hint = ""
+    if not req.plan and registry.get("open_in_my_browser"):
+        open_hint = ("\nOPENING A SITE FOR THE USER ('open youtube', 'open X in chrome'): call open_in_my_browser with the "
+                     "https URL. web_fetch only downloads text for you - it opens nothing, so never say you opened a "
+                     "site unless open_in_my_browser succeeded.")
     for frag in (skills_prompt_fragment(), agent_library_prompt_fragment(), custom_agents_prompt_fragment(),
-                 plugins_prompt_fragment(), test_hint):
+                 plugins_prompt_fragment(), test_hint, open_hint):
         if frag:
             ctx.sys_prompt += "\n" + frag
             sys_labels.append("fragments")
