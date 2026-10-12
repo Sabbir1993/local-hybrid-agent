@@ -161,6 +161,8 @@
     "fallback_local": true
   },
   "chat": {
+    "style": true,
+    "research_web": false,
     "max_tool_rounds": 12,
     "max_web_calls": 8,
     "deep_max_tool_rounds": 20,

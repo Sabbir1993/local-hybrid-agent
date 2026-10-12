@@ -159,7 +159,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     wants_file = wants_file_output(last_query) or file_followup == "edit" or deck_answer
     has_file = bool(file_followup or wants_file)
     web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
-                                                            explicit_only=voice_policy.web_explicit_only(req)))
+                                                            explicit_only=voice_policy.web_explicit_only(req),
+                                                            research=bool((APP_CONFIG.get("chat") or {}).get("research_web", False))))
     has_web = False   # decided after the KB lookup (core/kb_coverage.py): the web fills what the KB cannot
 
     # Tools for Chat Mode: write_file always (core), the rest on intent.
@@ -421,6 +422,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if kb_used:
             sys_parts.append(prompt_scope.PROVENANCE)
             sys_labels.append("sources")
+
+    # advice-style answers: sections, thumbnails, a questionnaire card (chat.style, off unless enabled)
+    if prompt_scope.style_wanted(last_query, msgs[:-1], voice=bool(req.voice),
+                                 enabled=bool((APP_CONFIG.get("chat") or {}).get("style", False))):
+        sys_parts.append(prompt_scope.CHAT_STYLE)
+        sys_labels.append("style")
 
     # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat"
     chat_cfg = APP_CONFIG.get("chat") or {}

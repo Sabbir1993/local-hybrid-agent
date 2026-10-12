@@ -21,6 +21,8 @@ from . import web_search as ws
 from . import prompt_fence
 from .agent_tools import MAX_TOOL_OUTPUT
 from .net_guard import BlockedURLError
+from . import image_proxy
+from .request_context import get_current_user_id
 from .registry import registry
 
 UA = ws.UA
@@ -177,6 +179,7 @@ async def tool_web_search(args) -> str:
         try:
             img_results = await asyncio.to_thread(_bing_images_search_sync, query, 3)
             if img_results:
+                _remember_images(img_results)
                 out.append("\nImage Results:")
                 for img in img_results:
                     out.append(f"- ![{img['title']}]({img['image_url']}) (Source: {img['source_url']})")
@@ -187,6 +190,14 @@ async def tool_web_search(args) -> str:
     if len(text) > MAX_RESULTS_CHARS:
         text = text[:MAX_RESULTS_CHARS] + "\n... (truncated)"
     return text
+
+
+def _remember_images(results) -> None:
+    """Let /media/proxy serve exactly the pictures this search returned (core/image_proxy.py)."""
+    urls = []
+    for r in results or []:
+        urls += [r.get("thumbnail_url"), r.get("image_url")]
+    image_proxy.remember(get_current_user_id(), urls)
 
 
 async def tool_web_search_images(args) -> str:
@@ -204,9 +215,11 @@ async def tool_web_search_images(args) -> str:
     if not results:
         return f"(no images found for: {query})"
 
+    _remember_images(results)
     out = [f"Found {len(results)} image(s) for: {query}\n"]
     for i, r in enumerate(results, 1):
-        out.append(f"{i}. **{r['title']}**\n   - Image URL: {r['image_url']}\n   - Thumbnail: {r['thumbnail_url']}\n   - Source: {r['source_url']}\n   - Markdown: ![{r['title']}]({r['image_url']})")
+        pic = r['thumbnail_url'] or r['image_url']        # list-item pictures: the small thumbnail
+        out.append(f"{i}. **{r['title']}**\n   - Image URL: {r['image_url']}\n   - Thumbnail: {r['thumbnail_url']}\n   - Source: {r['source_url']}\n   - Markdown: ![{r['title']}]({pic})")
     return "\n".join(out)
 
 

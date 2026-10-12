@@ -661,6 +661,8 @@ function _bubbleHtml(m, idx) {
   }
 
   let body = '';
+  // a ```questionnaire block is shown as a card, not as text
+  const qz = (hasText && typeof parseQuestionnaire === 'function') ? parseQuestionnaire(m.content) : null;
   const acHidden = typeof answerCheckHides === 'function' && answerCheckHides(m);
   const mediaLive = typeof mediaBusy === 'function' && mediaBusy(m);
   if (mediaLive) {
@@ -668,7 +670,7 @@ function _bubbleHtml(m, idx) {
   } else if (acHidden) {
     body = answerCheckGateHtml(m, idx);
   } else if (hasText) {
-    body = md(m.content, { streaming: generating && isLast });
+    body = md(qz ? qz.prose : m.content, { streaming: generating && isLast });
   } else if (!generating && m.reasoning && m.reasoning.trim()) {
     // If generation completed and content was empty, render reasoning so user is never left with a blank message
     body = md(m.reasoning);
@@ -682,7 +684,9 @@ function _bubbleHtml(m, idx) {
   
   // Render interactive grill-me / ask_question choice cards if options or question frontiers are present
   if (hasText && !generating && !acHidden) {
-    const qCards = renderInteractiveQuestions(m.content, idx, !isLast);   // only the newest message can still be answered
+    // only the newest message can still be answered; a typed questionnaire replaces the prose heuristic
+    const qCards = qz ? (qz.quiz ? renderQuestionnaireCard(qz.quiz, idx, !isLast) : '')
+                      : renderInteractiveQuestions(m.content, idx, !isLast);
     if (qCards) {
       body += qCards;
     }
@@ -953,6 +957,16 @@ function renderInteractiveQuestions(rawText, idx, closed) {
     }
   }
 
+  return _grillCardHtml(parsedQuestions, idx, closed, {});
+}
+
+// Typed ```questionnaire card (see parseQuestionnaire in markdown.js): same card, same state and submit path.
+function renderQuestionnaireCard(quiz, idx, closed) {
+  _grillSyncSession();
+  return _grillCardHtml(quiz.questions, idx, closed, { title: quiz.title, submit: quiz.submit });
+}
+
+function _grillCardHtml(parsedQuestions, idx, closed, opt) {
   if (parsedQuestions.length === 0) return '';
 
   window._grillMeta[idx] = parsedQuestions;
@@ -963,16 +977,17 @@ function renderInteractiveQuestions(rawText, idx, closed) {
   const disabledAttr = isSubmitted ? ' aria-disabled="true"' : '';
   const subText = wasSubmitted ? 'Answers submitted' : (closed ? 'Earlier question (closed)' : 'Select an option or write your own');
   let html = `<div class="grill-interactive-box${isSubmitted ? ' submitted' : ''}" id="grill-card-${idx}" data-idx="${idx}">`;
-  html += `<div class="grill-box-header"><span>🎯 Decision Options</span><span class="grill-box-sub">${subText}</span></div>`;
+  html += `<div class="grill-box-header"><span>${esc(opt.title || '🎯 Decision Options')}</span><span class="grill-box-sub">${subText}</span></div>`;
 
   parsedQuestions.forEach((q, qi) => {
     const sel = _grillSel(idx, qi);
     const role = q.multi ? 'checkbox' : 'radio';
     const kind = q.multi ? 'multi' : 'single';
     html += `<div class="grill-q-block" id="grill-q-${idx}-${qi}" data-qi="${qi}">`;
-    html += `<div class="grill-q-label"><strong>${esc(q.qId)}</strong> ${esc(q.qTitle)}`;
-    html += `<span class="grill-q-mode">${q.multi ? 'Select all that apply' : 'Select one'}</span></div>`;
+    html += `<div class="grill-q-label">${q.hideId ? '' : `<strong>${esc(q.qId)}</strong> `}${esc(q.qTitle)}`;
+    html += `<span class="grill-q-mode">${q.kind === 'text' ? 'Type your answer' : (q.multi ? 'Select all that apply' : 'Select one')}</span></div>`;
     html += `<div class="grill-options-list" role="${q.multi ? 'group' : 'radiogroup'}">`;
+    const textOnly = q.kind === 'text';
 
     q.options.forEach((opt, oi) => {
       const isRec = q.recommendation && (opt === q.recommendation || opt.includes(q.recommendation) || q.recommendation.includes(opt));
@@ -989,15 +1004,15 @@ function renderInteractiveQuestions(rawText, idx, closed) {
     const otherOn = sel.has('other');
     html += `<div class="grill-opt other ${kind}${otherOn ? ' active' : ''}" role="${role}" tabindex="${tab}" aria-checked="${otherOn}"${disabledAttr} data-opt="other">`;
     html += `<span class="grill-opt-mark" aria-hidden="true"></span>`;
-    html += `<span class="grill-opt-num">${q.options.length + 1}.</span>`;
-    html += `<input type="text" id="grill-custom-${idx}-${qi}" class="grill-custom-input" value="${esc(customState[qi] || '')}" placeholder="Other — type your own answer…" ${isSubmitted ? 'disabled' : ''}>`;
+    if (!textOnly) html += `<span class="grill-opt-num">${q.options.length + 1}.</span>`;
+    html += `<input type="text" id="grill-custom-${idx}-${qi}" class="grill-custom-input" value="${esc(customState[qi] || '')}" placeholder="${textOnly ? 'Type your answer…' : 'Other — type your own answer…'}" ${isSubmitted ? 'disabled' : ''}>`;
     html += `</div>`;
 
     html += `</div></div>`;
   });
 
   html += `<div class="grill-footer">`;
-  html += `<button type="button" class="btn primary grill-submit-btn" ${isSubmitted ? 'disabled' : ''} data-click="submit-grill" data-arg="${idx}">${wasSubmitted ? '✓ Answer Submitted' : (closed ? 'Closed' : '✓ Submit Decisions')}</button>`;
+  html += `<button type="button" class="btn primary grill-submit-btn" ${isSubmitted ? 'disabled' : ''} data-click="submit-grill" data-arg="${idx}">${wasSubmitted ? '✓ Answer Submitted' : (closed ? 'Closed' : (opt.submit || '✓ Submit Decisions'))}</button>`;
   html += `</div>`;
   html += `</div>`;
 

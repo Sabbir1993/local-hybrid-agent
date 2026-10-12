@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, File as FastAPIFile, Form, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from core import lanes, media, media_images
+from core import image_proxy, lanes, media, media_images
 from core.media import tts as media_tts
 from core.audit import audit_log
 from core.auth import Principal, user_has_permission
@@ -294,3 +294,16 @@ async def media_transcribe(file: UploadFile = FastAPIFile(...), language: Option
               detail={"bytes": len(data), "chars": len(res["text"]), "ms": res["ms"],
                       "audio_s": res.get("audio_s"), "rtf": res.get("rtf")}, result="allow")
     return res
+
+
+@router.get("/media/proxy")
+async def media_proxy(u: str = "", user: Principal = Depends(get_current_user)):
+    """A picture from a web search result, served from this origin (core/image_proxy.py): the browser never contacts
+    the third-party host, and only URLs a search tool gave this user are served."""
+    try:
+        ctype, data = await asyncio.to_thread(image_proxy.fetch, user.id, u)
+    except image_proxy.ProxyRefused as e:
+        return _err(str(e), 404)
+    return Response(content=data, media_type=ctype, headers={
+        "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox"})

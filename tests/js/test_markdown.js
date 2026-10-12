@@ -132,3 +132,17 @@ const css = fs.readFileSync(__dirname + '/../../static/css/style.css', 'utf8');
 const taskRule = (css.match(/\.md-task \{[^}]*\}/) || [''])[0];
 ok(/user-select:\s*none/.test(taskRule) && /pointer-events:\s*none/.test(taskRule), 'task box is not selectable or clickable');
 ok(/li:has\(> \.md-task\)[^{]*\{[^}]*list-style:\s*none/.test(css), 'a task item has no bullet next to its box');
+
+// list item with a picture: thumbnail beside the text, loaded from our own proxy (never the third-party host)
+h = md('- ![Omega-3](https://tse1.mm.bing.net/th?id=x&w=1) **Omega-3 oil** - supports coat.\n- plain item');
+ok(h.includes('class="rich-item"') && h.includes('class="rich-thumb"') && h.includes('class="rich-body"'), 'picture list item becomes a rich item');
+ok(h.includes('src="/media/proxy?u=https%3A%2F%2Ftse1.mm.bing.net%2Fth%3Fid%3Dx%26w%3D1"'), 'its picture loads from /media/proxy');
+ok(!/src="https:\/\/tse1/.test(h), 'the third-party host is never an <img src>');
+ok(h.includes('<strong>Omega-3 oil</strong>') && h.includes('supports coat.'), 'title and text sit in the body');
+ok((h.match(/<li>/g) || []).length === 1 && h.includes('plain item'), 'a plain item in the same list is untouched');
+h = md('- ![x](http://insecure.example/a.png) text');
+ok(!h.includes('rich-item') && !h.includes('/media/proxy'), 'http images are not proxied');
+h = md('![alone](https://example.com/a.png)');
+ok(h.includes('data-load-src') || h.includes('chat-ext-img') || !h.includes('/media/proxy'), 'a standalone external image keeps the click-to-load rule');
+const richCss = (css.match(/\.rich-item \{[^}]*\}/) || [''])[0];
+ok(/display:\s*flex/.test(richCss) && /list-style:\s*none/.test(richCss), 'rich item is a flex row without a bullet');

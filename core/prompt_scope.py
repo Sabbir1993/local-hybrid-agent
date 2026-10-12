@@ -102,7 +102,7 @@ WEB_MANUAL = (
     "1. YOU HAVE ACTIVE REAL-TIME INTERNET ACCESS. NEVER say 'I cannot browse the live internet' or 'I don't have internet access'.\n"
     "2. When the user provides a URL or asks to inspect, read, browse, or summarize a website (e.g. 'summarise https://...'), call `web_fetch(url=...)` immediately.\n"
     "3. When the user asks about recent events, real-time facts, current versions, weather, or anything outside your certain knowledge, call `web_search(query=...)` immediately.\n"
-    "4. When the user asks for a photo, picture, image, or portrait (e.g. 'Can you give his photo?', 'show a picture of...'), call `web_search_images(query=...)` immediately, and in your final answer include the image links using markdown image syntax `![Description](URL)`.\n"
+    "4. When the user asks for a photo, picture, image, or portrait (e.g. 'Can you give his photo?', 'show a picture of...'), call `web_search_images(query=...)` immediately, and in your final answer include the image links using markdown image syntax `![Description](URL)` (use the Thumbnail URL for list-item pictures).\n"
     "5. If you are confident in your knowledge (e.g. general explanations, basic math, creative writing, common programming concepts), answer directly without calling tools.\n"
     "6. When answering based on web search or fetch results, synthesize a clear, helpful response and cite each fact inline with the source number and link from the results, e.g. [1](URL), or `![Title](URL)` for images. Prefer the page excerpts (lines starting with '>') over snippets, and say so when the sources disagree or don't answer the question.\n"
     "7. Never put personal data (names of customers, emails, phone or account numbers) into search queries.\n"
@@ -113,6 +113,49 @@ WEB_MANUAL = (
     "third-party facts. Never add product, server or tool names from this system prompt to a search query "
     "unless the user wrote them."
 )
+
+# Advice-style answers (chat.style): recommendation first, sections, thumbnails, a typed questionnaire card when
+# key facts are missing. ~250 tokens; added only when style_wanted() says the question is advice/research-like.
+CHAT_STYLE = (
+    "ANSWER STYLE (advice / how-to / recommendation questions):\n"
+    "- Lead with a 1-2 sentence direct answer or recommendation, then 2-4 numbered sections with `##` headings. "
+    "Be concise: at most 4 items per section, 1-2 sentences each.\n"
+    "- List items that name a product, food, place or thing: `- ![name](THUMBNAIL_URL) **Title** - one or two sentences`, "
+    "using the Thumbnail URL from web_search_images when you called it; no image if you have none (never invent URLs).\n"
+    "- Medical, legal or safety topics: say what to check with a professional (e.g. a vet) and when it is urgent.\n"
+    "- If key facts are missing (age, weight, budget, symptoms...), end with ONE fenced block and nothing after it:\n"
+    "```questionnaire\n"
+    '{"title":"Tell me a little about ...","questions":[{"id":"age","type":"radio","q":"How old is it?",'
+    '"options":["Under 1 year","1-7 years","Over 7 years"]},{"id":"signs","type":"checkbox","q":"Any of these?",'
+    '"options":["Vomiting","Poor coat"]},{"id":"weight","type":"text","q":"Current weight, if known"}],'
+    '"submit_label":"Get my plan"}\n'
+    "```\n"
+    "  (valid JSON, 2-5 questions, types radio | checkbox | text). When the user replies with answers, use them to "
+    "personalise the plan and do not ask the same questions again.")
+
+_STYLE_ADVICE_RE = re.compile(
+    r"\b(recommend\w*|suggest\w*|advice|advise|should\s+i|can\s+i|how\s+(can|do|to|should)|best|which|compare"
+    r"|versus|vs\.?|safe|healthy|health|diet|supplements?|vitamins?|medicine|treatment|remed\w+"
+    r"|improve|boost|raise|reduce|lose|gain|plan|tips?|ideas?|better)\b", re.IGNORECASE)
+_STYLE_SKIP_RE = re.compile(
+    r"```|\b(python|javascript|typescript|java|c\+\+|sql|bash|regex|function|class|traceback|stack\s*trace|compile\w*"
+    r"|exception|git|commit|docker|api|endpoint|json|html|css|file|folder|pptx|docx|xlsx|slides?)\b", re.IGNORECASE)
+
+
+def style_wanted(query: str, prior_msgs=None, voice: bool = False, enabled: bool = True) -> bool:
+    """True when the advice-style block earns its tokens: a real advice/how-to/recommendation question (not code,
+    files, small talk or voice), or a conversation already in that style (an earlier questionnaire) so the style
+    stays stable across the follow-ups and the user's answers get personalised."""
+    if not enabled or voice:
+        return False
+    for m in prior_msgs or []:
+        if m.get("role") == "assistant" and "```questionnaire" in str(m.get("content") or ""):
+            return True
+    q = (query or "").strip()
+    if len(q) < 25 or _STYLE_SKIP_RE.search(q):
+        return False
+    return bool(_STYLE_ADVICE_RE.search(q))
+
 
 # Lean web hint (~150 tokens instead of ~800): the knowledge base already covers (part of) the question, so
 # the web is only for what it does not contain. Format with the call budget.
@@ -168,7 +211,13 @@ def _prior_tool_use(prior_msgs):
     return web, mcps
 
 
-def web_intent(query: str, url_matches=None, prior_msgs=None, explicit_only: bool = False) -> bool:
+_WEB_RESEARCH_RE = re.compile(
+    r"\b(recommend\w*|suggest\w*|best|which|compare|versus|vs\.?|safe|supplements?|vitamins?|medicine|treatment"
+    r"|remed\w+|reviews?|alternatives?|ideas?|tips?|how\s+(can|do|to|should)|should\s+i)\b", re.IGNORECASE)
+
+
+def web_intent(query: str, url_matches=None, prior_msgs=None, explicit_only: bool = False,
+               research: bool = False) -> bool:
     """True when the web manual + web tools earn their tokens this turn.
 
     Deliberately lean: general questions are answered from knowledge (the old
@@ -185,6 +234,8 @@ def web_intent(query: str, url_matches=None, prior_msgs=None, explicit_only: boo
         return False
     if _WEB_RECENCY_RE.search(q):
         return True
+    if research and len(q) >= 25 and _WEB_RESEARCH_RE.search(q) and not _STYLE_SKIP_RE.search(q):
+        return True      # chat.research_web: advice-style questions look things up without the word "search"
     web, _ = _prior_tool_use(prior_msgs)
     return web
 

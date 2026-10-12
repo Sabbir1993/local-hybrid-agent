@@ -86,6 +86,20 @@ function _mdConfigure() {
         const hl = hlLangFor(lang);
         return _mdPut(codeBlockHtml(lang, token.text, hl ? hlCode(token.text, hl) : esc(token.text)));
       },
+      // "- ![name](https://...) **Title** text": a picture beside the item. The browser loads it from /media/proxy
+      // (never from the third-party host); the server only serves URLs a search tool returned (core/image_proxy.py),
+      // so a model-invented URL just shows no picture. Any other list item keeps the default rendering.
+      listitem(item) {
+        const first = item.tokens && item.tokens[0];
+        const img = first && first.type === 'text' && first.tokens && first.tokens[0] && first.tokens[0].type === 'image'
+          ? first.tokens[0] : null;
+        if (!img || !/^https:\/\//i.test(String(img.href || ''))) return false;
+        const src = esc('/media/proxy?u=' + encodeURIComponent(img.href));
+        const thumb = _mdPut(`<span class="rich-thumb"><img src="${src}" alt="${esc(img.text || '')}" loading="lazy" referrerpolicy="no-referrer" data-hide-on-error /></span>`);
+        const rest = this.parser.parseInline(first.tokens.slice(1)).replace(/^\s+/, '')
+          + (item.tokens.length > 1 ? this.parser.parse(item.tokens.slice(1), !!item.loose) : '');
+        return `<li class="rich-item">${thumb}<div class="rich-body">${rest}</div></li>\n`;
+      },
       image(token) {
         const href = String(token.href || ''), alt = token.text || '';
         if (!/^(?:https?:\/\/|\/agent\/raw|\/raw)/.test(href)) return esc(alt);
@@ -183,4 +197,37 @@ function mdRender(prose, opts) {
   return out;
 }
 
-if (typeof module !== 'undefined') module.exports = { mdRender, mdHeal, mdAvailable };
+/* Questionnaire card: the model ends an advice answer with a fenced block
+ *   ```questionnaire {"title":..,"questions":[{"id","type":"radio|checkbox|text","q","options":[..]}],"submit_label":..}```
+ * parseQuestionnaire() splits it off the text. Returns null when there is no such fence, else
+ *   {prose, quiz, partial}: prose = the text to render as markdown, quiz = the validated card (or null),
+ *   partial = the fence is still streaming (hidden until it closes, so raw JSON never flashes).
+ * An invalid block is left in the prose (shown as a code block), so nothing the model writes is lost. */
+const QZ_MAX_Q = 6, QZ_MAX_OPT = 8;
+
+function parseQuestionnaire(text) {
+  const src = String(text ?? '');
+  const m = /```questionnaire[ \t]*\r?\n([\s\S]*?)(```|$)/.exec(src);
+  if (!m) return null;
+  const closed = m[2] === '```';
+  const prose = (src.slice(0, m.index) + (closed ? src.slice(m.index + m[0].length) : '')).replace(/\s+$/, '');
+  if (!closed) return { prose, quiz: null, partial: true };
+  let data;
+  try { data = JSON.parse(m[1]); } catch (_) { return { prose: src, quiz: null, partial: false }; }
+  const str = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
+  const qs = Array.isArray(data && data.questions) ? data.questions.slice(0, QZ_MAX_Q) : [];
+  const questions = [];
+  for (const q of qs) {
+    const title = str(q && q.q, 200);
+    if (!title) continue;
+    const opts = Array.isArray(q.options) ? q.options.map(o => str(o, 120)).filter(Boolean).slice(0, QZ_MAX_OPT) : [];
+    let type = ['radio', 'checkbox', 'text'].includes(q.type) ? q.type : (opts.length ? 'radio' : 'text');
+    if (type !== 'text' && !opts.length) type = 'text';
+    questions.push({ qId: title, qTitle: title, hideId: true, recommendation: '', options: type === 'text' ? [] : opts,
+      multi: type === 'checkbox', kind: type });
+  }
+  if (!questions.length) return { prose: src, quiz: null, partial: false };
+  return { prose, partial: false, quiz: { title: str(data.title, 120), submit: str(data.submit_label, 40), questions } };
+}
+
+if (typeof module !== 'undefined') module.exports = { mdRender, mdHeal, mdAvailable, parseQuestionnaire };
