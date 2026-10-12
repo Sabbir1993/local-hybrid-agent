@@ -747,13 +747,32 @@
         </div>
 
         <div class="preview-iframe-wrapper ${this.isMobileView ? 'mobile-frame' : ''}" id="prev-frame-wrap" style="display:${this.previewMode === 'preview' ? 'flex' : 'none'};">
-          <iframe id="prev-dock-iframe" class="preview-live-iframe" sandbox="allow-scripts allow-forms allow-same-origin allow-modals" src="${rawUrl || 'about:blank'}"></iframe>
+          <iframe id="prev-dock-iframe" class="preview-live-iframe" sandbox="allow-scripts allow-forms allow-popups allow-modals" src="${rawUrl || 'about:blank'}"></iframe>
         </div>
 
         <pre class="preview-code-view" id="prev-code-wrap" style="display:${this.previewMode === 'code' ? 'block' : 'none'};">${esc(content || '')}</pre>
       `;
 
       this.previewView.innerHTML = html;
+
+      // A chat snippet has no file on disk (no rawUrl): serve its HTML from the server's sandboxed
+      // preview endpoint, same as the modal viewer. Without this the frame stays on about:blank.
+      const loadSnippet = async () => {
+        const frame = $('prev-dock-iframe');
+        if (!frame || rawUrl || !content || !isHtml) return;
+        try {
+          const r = await fetch('/agent/preview-html', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ html: String(content) }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.url) throw new Error(d.error || d.detail || ('HTTP ' + r.status));
+          frame.src = d.url;
+        } catch (e) {
+          frame.srcdoc = '<p style="font:13px sans-serif;padding:16px">Preview failed: ' + esc(e.message) + '</p>';
+        }
+      };
+      loadSnippet();
 
       // Wire controls
       $('btn-prev-tab-view')?.addEventListener('click', () => {
@@ -781,7 +800,7 @@
         const frame = $('prev-dock-iframe');
         if (frame) {
           if (rawUrl) frame.src = rawUrl;
-          else frame.contentWindow?.location.reload();
+          else loadSnippet();
         }
       });
     },

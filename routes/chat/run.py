@@ -429,6 +429,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         sys_parts.append(prompt_scope.CHAT_STYLE)
         sys_labels.append("style")
 
+    # PowerPoint requests: ask slide count / audience / palette first, then build a real .pptx
+    if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
+        sys_parts.append(prompt_scope.DECK_BRIEF)
+        sys_labels.append("deck-brief")
+
     # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat"
     chat_cfg = APP_CONFIG.get("chat") or {}
     max_turns = int(chat_cfg.get("deep_max_tool_rounds" if deep else "max_tool_rounds", 25 if deep else 15)) if chat_tools else 1

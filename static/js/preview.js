@@ -137,7 +137,7 @@ async function openFilePreview(filePath, title = '', directContent = null, opts 
 
   try {
     if (ext === 'html' || ext === 'htm') {
-      const finalRawUrl = directContent || !filePath ? rawUrl : await pickRawUrl();
+      const finalRawUrl = !filePath ? '' : (directContent ? rawUrl : await pickRawUrl());   // a chat snippet has no file: no URL, the dock serves its HTML itself
       if (window.RightDock) {
         let codeText = directContent;
         if (!codeText && filePath) {

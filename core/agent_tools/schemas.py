@@ -312,7 +312,7 @@ CHAT_WRITE_FILE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "write_file",
-        "description": "Create or write a file in the shared common space and share a downloadable link with the user. Use this whenever the user asks to generate, create, fill, or save data to an Excel (.xlsx), CSV, code, or document file.",
+        "description": "Create or write a file in the shared common space and share a downloadable link with the user. Use this whenever the user asks to generate, create, fill, or save data to an Excel (.xlsx), PowerPoint (.pptx), Word (.docx), CSV, code, or document file. A PowerPoint/PPT/slides request MUST use a .pptx filename (never .md): it is built into a real slide deck.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -322,7 +322,7 @@ CHAT_WRITE_FILE_SCHEMA = {
                 },
                 "content": {
                     "type": "string",
-                    "description": "The complete file content to write. For spreadsheets (.xlsx, .csv), provide formatted CSV rows or markdown table rows."
+                    "description": "The complete file content to write. For spreadsheets (.xlsx, .csv), provide formatted CSV rows or markdown table rows. For a .pptx deck, write markdown: a '# Title' line per slide, bullet lines under it, and slides separated by a line containing only '---'. For .docx, plain markdown."
                 }
             },
             "required": ["path", "content"]

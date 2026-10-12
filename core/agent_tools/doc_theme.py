@@ -111,9 +111,15 @@ DOC_CSS = """
     color: #f8fafc;
     padding: 14px;
     border-radius: 6px;
-    font-size: 12px;
+    font-size: 11px;
+    line-height: 1.25;
+    white-space: pre;
     overflow-x: auto;
     margin: 14px 0;
+  }
+  .code-block code {
+    background: none;
+    padding: 0;
   }
   code {
     font-family: "Cascadia Code", Consolas, Monaco, monospace;

@@ -35,7 +35,7 @@ _DOC_CLASSES = (
     (r"<ul>", '<ul class="doc-list">'), (r"<ol( start=\"\d+\")?>", r'<ol class="doc-ordered"\1>'),
     (r"<hr ?/?>", '<hr class="doc-hr"/>'), (r"<blockquote>", '<blockquote class="doc-quote">'),
     (r"<table>", '<table class="doc-table">'), (r"<pre><code", '<pre class="code-block"><code'),
-    (r"(?<!<pre>)<code>", '<code class="inline-code">'),
+    (r'(?<!<pre>)(?<!<pre class="code-block">)<code>', '<code class="inline-code">'),   # not the <code> inside a fence
     (r"<li>\[ \] ", "<li>"), (r"<li>\[[xX]\] ", "<li>✓ "),      # task boxes mean nothing in a document
 )
 

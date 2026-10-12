@@ -7,7 +7,7 @@ dropped and a layout inferred per slide, so the renderer never sees raw markdown
 import re
 from . import theme as _theme
 
-MAX_DECK_SLIDES = 14
+MAX_DECK_SLIDES = 30
 MAX_BULLETS = 12
 MAX_CARDS = 6
 MAX_TABLE_ROWS = 9
@@ -22,6 +22,13 @@ _LAYOUT_ALIAS = {"columns": "two-column", "two-columns": "two-column", "twocolum
 _META = re.compile(
     r"^(markdown source|source for conversion|here(?:'s| is| are)\b|below is|sure[,!. ]|certainly|of course|"
     r"presentation (?:outline|content|structure)|\d+\s*slides?\b.*(?:structure|outline|total|\+|:)\s*$)", re.I)
+_FOOTER_META = re.compile(
+    r"^(end of (?:the )?(?:presentation|deck|slides?)|total slides?.*|estimated (?:presentation )?time.*|"
+    r"format\s*:.*(?:markdown|pptx|powerpoint|convert).*|\(?end\)?)$", re.I)
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍⃣]")
+_ARROW_ONLY = re.compile(r"^[\s↓↑→←⇒⇓⬇▼▲|│┃:·.\-–—]+$")
+_CHECKBOX = re.compile(r"^\[[ xX✓✔]?\]\s*")
+_SLIDE_PREFIX = re.compile(r"^(?:slide|section|part)\s*\d+\s*[:.\-–—)]*\s*", re.I)
 _GLOBAL_THEME = re.compile(r"^(?:global\s+(?:theme|style|design)|style|design|palette|colou?r palette|colou?rs?)\s*:\s*(.*)$", re.I)
 _FIELD = re.compile(r"^(subtitle|tagline|theme|accent|layout|notes?|speaker notes?|title)\s*:\s*(.*)$", re.I)
 _SLIDE_MARK = re.compile(r"^\**\s*slide\s+(\d+)\s*(?:\(([^)]*)\))?\s*[:.\-–—]*\**\s*(.*)$", re.I)
@@ -40,6 +47,8 @@ def clean(s: str) -> str:
     s = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"\1", s)
     s = re.sub(r"(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])", r"\1", s)
     s = s.replace("`", "").replace("**", "").replace("__", "")
+    s = _EMOJI.sub("", s)
+    s = re.sub(r"^\*+(?=\S)|(?<=\S)\*+$", "", s.strip())      # emphasis opened on one line and closed on the next
     return re.sub(r"\s+", " ", s).strip()
 
 
@@ -76,6 +85,32 @@ def _slide_title_from_marker(cat: str, rest: str) -> str:
     return _unquote(rest) or clean(cat) or ""
 
 
+_COVER_TITLE = re.compile(r"^(?:title(?:\s+(?:page|slide))?|cover(?:\s+(?:page|slide))?)$", re.I)
+
+
+def _slide_heading_level(lines: list) -> int:
+    """Which '#' depth starts a new slide. 'SLIDE n' headings decide it; else the shallowest depth (or the next one
+    when a single top heading is just the deck title). Deeper headings are labelled groups inside a slide."""
+    heads, marked, fence = [], [], False
+    for ln in lines:
+        st = ln.strip()
+        if st.startswith("```"):
+            fence = not fence
+        m = None if fence else re.match(r"^(#{1,6})\s+(.+)$", st)
+        if m:
+            heads.append(len(m.group(1)))
+            if _SLIDE_PREFIX.match(clean(m.group(2))):
+                marked.append(len(m.group(1)))
+    if marked:
+        return min(marked)
+    if not heads:
+        return 1
+    top = min(heads)
+    if heads.count(top) == 1 and heads.count(top + 1) >= 2:
+        return top + 1
+    return top
+
+
 def parse_outline(md: str, deck_title: str = "") -> dict:
     deck = {"title": "", "subtitle": "", "theme": "", "accent": "", "hint": "", "slides": []}
     slides: list[dict] = []
@@ -88,15 +123,22 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
             slides.append(cur)
         cur, group_open = _new(), False
 
-    for raw in (md or "").replace("\t", "    ").splitlines():
+    lines = (md or "").replace("\t", "    ").splitlines()
+    slide_level = _slide_heading_level(lines)
+
+    for raw in lines:
         st = raw.strip()
         if not st or st.startswith("```"):
             continue
         if re.match(r"^([-*_])\1{2,}$", st) or re.match(r"^-{3,}\s*$", st):
             flush()
             continue
+        st = re.sub(r"^(?:>\s*)+", "", st)                  # blockquote markers are not slide text
+        st = _CHECKBOX.sub("", st)
+        if not st or _ARROW_ONLY.match(st):                  # "↓" connectors of ASCII flow diagrams
+            continue
         plain = clean(st)
-        if _empty(cur) and _META.match(plain):
+        if not plain or _FOOTER_META.match(plain) or (_empty(cur) and _META.match(plain)):
             continue
         g = _GLOBAL_THEME.match(plain)
         if g and not st.startswith(("-", "#")):
@@ -108,11 +150,30 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
                 if len(cur["table"]) < MAX_TABLE_ROWS:
                     cur["table"].append(cells[:MAX_TABLE_COLS])
             continue
-        m = re.match(r"^(#{1,3})\s+(.+)$", st)
+        m = re.match(r"^(#{1,6})\s+(.+)$", st)
         if m:
+            text = clean(m.group(2)).strip("# ")
+            if len(m.group(1)) > slide_level:               # a sub-heading inside a slide: a labelled group
+                label = _SLIDE_PREFIX.sub("", text).rstrip(":").strip()
+                if label and not _FOOTER_META.match(label):
+                    if cur["title"] or cur["bullets"] or cur["table"]:
+                        cur["bullets"].append(label + ("" if label[-1] in "!?." else ":"))
+                        group_open = True
+                    else:
+                        cur["title"] = label
+                continue
+            title = _SLIDE_PREFIX.sub("", text).strip() or text
+            if _FOOTER_META.match(title):
+                continue
+            if _COVER_TITLE.match(title):                    # "SLIDE 1: TITLE PAGE" is the cover marker, not a title
+                continue
+            if slides == [] and cur["title"] and not cur["bullets"] and not cur["subtitle"] and not _SLIDE_PREFIX.match(text) \
+                    and len(m.group(1)) == slide_level:       # "# Deck" then "## Tagline": the tagline is the cover subtitle
+                cur["subtitle"] = title
+                continue
             if cur["title"] or cur["bullets"] or cur["table"]:
                 flush()
-            cur["title"] = clean(m.group(2)).strip("# ")
+            cur["title"] = title
             continue
         m = _SLIDE_MARK.match(st)
         if m and (m.group(2) is not None or st.rstrip("*").rstrip().endswith(":") or m.group(3)):
@@ -141,8 +202,8 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
         bm = _BULLET.match(st)
         if bm:
             indent = (len(raw) - len(raw.lstrip(" "))) // 2
-            txt = clean(bm.group(2))
-            if not txt:
+            txt = _CHECKBOX.sub("", clean(bm.group(2)))
+            if not txt or _FOOTER_META.match(txt):
                 continue
             if group_open:
                 indent = max(indent, 1)
@@ -185,7 +246,7 @@ def _finish(deck: dict, slides: list, deck_title: str) -> dict:
             if s["title"] == s["subtitle"]:
                 s["subtitle"] = ""
     # keep slides that have a title but are exact title-only duplicates out of the way
-    if slides and (len([b for b in slides[0]["bullets"] if not b.startswith("\t")]) > 2 or slides[0]["table"]) and title:
+    if slides and (len([b for b in slides[0]["bullets"] if not b.startswith("\t")]) > 3 or slides[0]["table"]) and title:
         slides.insert(0, {**_new(), "title": title, "layout": "cover"})
     if not slides:
         slides = [{**_new(), "title": title or "Presentation", "layout": "cover"}]
@@ -195,7 +256,7 @@ def _finish(deck: dict, slides: list, deck_title: str) -> dict:
     while len(slides) > MAX_DECK_SLIDES:
         victim = min(range(1, len(slides) - 1), key=lambda i: _weight(slides[i]))
         v, prev = slides.pop(victim), slides[victim - 1]
-        line = v["title"] + (": " + v["bullets"][0].strip() if v["bullets"] else "")
+        line = v["title"].rstrip(":") + (": " + v["bullets"][0].strip().rstrip(":") if v["bullets"] else "")
         prev["bullets"].append(line)
         prev["notes"] = (prev["notes"] + " " + v["notes"]).strip()
         prev["layout"] = prev["layout"] if prev["layout"] in ("", "bullets") else ""
@@ -241,7 +302,7 @@ def _classify(s: dict, idx: int, n: int) -> None:
     lay = s["layout"]
     top = groups(s["bullets"])
     flat = [h for h, c in top if h and not c]
-    if idx == 0 and lay in ("", "cover", "bullets") and not s["table"] and len(top) <= 2:
+    if idx == 0 and lay in ("", "cover", "bullets") and not s["table"] and len(top) <= 3 and (s["subtitle"] or len(top) <= 2):
         s["kind"] = "cover"
         if not s["subtitle"]:
             s["subtitle"] = " · ".join(h for h, _ in top)

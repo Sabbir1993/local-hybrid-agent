@@ -324,3 +324,42 @@ def maybe_log(tag: str, sections, tools=None, extra: str = "") -> None:
               + (f" {extra}" if extra else ""), file=sys.stderr)
     except Exception:
         pass
+
+
+# PowerPoint requests: a deck built from a one-line ask is generic and the wrong length, so the model asks first
+# (typed questionnaire card, rendered by markdown.js), then builds it with write_file as a .pptx.
+DECK_BRIEF = (
+    "POWERPOINT REQUEST:\n"
+    "- Unless the user already gave the slide count AND the colour palette (or has just answered your questions), do NOT "
+    "write the file yet. Reply with one short line and ONE fenced block, nothing after it:\n"
+    "```questionnaire\n"
+    '{"title":"A few quick choices for your deck","questions":['
+    '{"id":"slides","type":"radio","q":"How many slides?","options":["5-7 (short)","8-12 (standard)","13-20 (detailed)"]},'
+    '{"id":"audience","type":"radio","q":"Who is it for?","options":["Executives","Customers","Technical team","General / non-technical"]},'
+    '{"id":"palette","type":"radio","q":"Colour palette?","options":["Midnight (navy + cyan, dark)","Corporate (white + blue)",'
+    '"Forest (green + amber)","Sunset (charcoal + coral)","Minimal (white, black, red)","Royal (indigo + gold)"]},'
+    '{"id":"extra","type":"text","q":"Anything it must include? (optional)"}],"submit_label":"Build my deck"}\n'
+    "```\n"
+    "- After the answers (or when the user already specified them): call write_file ONCE with a .pptx filename and markdown "
+    "content: first line `Theme: <midnight|corporate|forest|sunset|minimal|royal>`, then `# Deck title` and a subtitle line; "
+    "then exactly the requested number of slides, each `## Slide title` + 3-5 bullets of at most 12 words, slides separated by "
+    "a line containing only `---`, last slide a closing/thank-you slide. Plain text only: no emoji, no `>` quotes, no tables, "
+    "no ASCII diagrams. Never write a .md file for a PowerPoint request.")
+
+_DECK_ASK_RE = re.compile(
+    r"\b(ppt|pptx|power\s*point|presentation|slide\s*deck|slides?|deck)\b", re.IGNORECASE)
+_DECK_VERB_RE = re.compile(
+    r"\b(make|create|generate|build|prepare|design|draft|write|produce|need|want|give|convert)\b", re.IGNORECASE)
+
+
+def deck_brief_wanted(query: str, prior_msgs=None) -> bool:
+    """True for a request to make a PowerPoint (or the user's answers to our deck questionnaire), so the model asks
+    for slide count / audience / palette before building. Edits of an existing deck are left to doc_inspect/doc_edit."""
+    for m in reversed(prior_msgs or []):
+        if m.get("role") == "assistant":
+            c = str(m.get("content") or "")
+            return "```questionnaire" in c and "deck" in c.lower() and "slides" in c.lower()
+    q = (query or "").strip()
+    if not q or not _DECK_ASK_RE.search(q) or not _DECK_VERB_RE.search(q):
+        return False
+    return not re.search(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain)\b", q, re.IGNORECASE)

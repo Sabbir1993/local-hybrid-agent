@@ -160,7 +160,7 @@ class PptxDesignTests(unittest.TestCase):
         md = "# Big Deck\nsubtitle: lots\n" + body + "---\n## Thank you\n- a@b.c\n"
         data = pptx_ops.create(md)
         titles = [e["text"] for e in pptx_ops.inspect(data)["elements"] if e["kind"] == "title"]
-        self.assertEqual(len(titles), 14)
+        self.assertEqual(len(titles), pptx_ops.outline.MAX_DECK_SLIDES)
         self.assertEqual((titles[0], titles[-1]), ("Big Deck", "Thank you"))
 
     def test_layouts_render_and_decoration_is_not_inspected(self):
