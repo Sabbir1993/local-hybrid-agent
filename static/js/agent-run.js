@@ -311,6 +311,12 @@ async function runAgentSSE(text, opts = {}) {
           L.content = (d.text || '');
           L.statusText = '';
         }
+        else if (ev === 'delta_reset' && d && d.purge) {
+          // a policy withheld the answer: neither it nor the thinking that quoted it stays on screen
+          L.content = '';
+          L.reasoning = '';
+          L._resetPrev = null;
+        }
         else if (ev === 'delta_reset') {
           // Replacing content with a synthesized final answer: decide on the next
           // delta whether the prior streamed text is worth keeping as reasoning

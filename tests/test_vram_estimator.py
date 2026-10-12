@@ -118,18 +118,17 @@ class MoeOffloadIsAdvisoryNotSubtracted(unittest.TestCase):
                                  n_cpu_moe=500, n_expert_used=128)
         self.assertGreater(off["weights_b"], 0, "a clamped fraction must not empty the weights")
 
-    def test_n_cpu_moe_is_resolved_only_for_an_moe_profile(self):
-        """core/process.py only emits -ncmoe when model_type == 'moe'; the estimator has to
-        agree or it would model a flag that is not on the command line."""
-        dense = effective_params({"model_type": "dense", "tuned": {"n_cpu_moe": 8}})
-        moe = effective_params({"model_type": "moe", "tuned": {"n_cpu_moe": 8}})
-        self.assertEqual(dense["n_cpu_moe"], 0)
-        self.assertEqual(moe["n_cpu_moe"], 8)
+    def test_the_explicit_n_cpu_moe_is_reported_and_applied_by_the_model_not_the_label(self):
+        """Whether -ncmoe reaches the command line is decided from the GGUF (core/vram/moe.py),
+        so a profile that is not labelled 'moe' still gets its tuned value."""
+        eff = effective_params({"model_type": "dense", "tuned": {"n_cpu_moe": 8}})
+        self.assertEqual((eff["n_cpu_moe"], eff["n_cpu_moe_set"]), (8, True))
+        self.assertFalse(effective_params({})["n_cpu_moe_set"])
 
     def test_a_nonsense_n_cpu_moe_does_not_raise(self):
         for bad in ("eight", None, -3, []):
             eff = effective_params({"model_type": "moe", "tuned": {"n_cpu_moe": bad}})
-            self.assertEqual(eff["n_cpu_moe"], 0 if bad != -3 else 0)
+            self.assertEqual(eff["n_cpu_moe"], 0)
 
 
 class UnreadableModelFailsClosed(unittest.TestCase):

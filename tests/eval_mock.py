@@ -1404,6 +1404,23 @@ RETRIEVAL_QUESTIONS = [
 
 async def run_retrieval_slice(k: int = 6, embedder: str = "fake",
                             scoring: "dict | None" = None) -> dict:
+    """Runs the retrieval slice and removes the knowledge sources it registered.
+
+    The slice registers its documents through the real auth DB (the temp DBs of the scenario harness are not
+    active here), so each run used to leave nine "ready" test sources behind in the live Knowledge panel."""
+    created: list = []
+    try:
+        return await _run_retrieval_slice(k, embedder, scoring, created)
+    finally:
+        try:
+            from core import auth_db as _auth
+            for sid in created:
+                _auth.delete_knowledge_source(sid)
+        except Exception as e:
+            print(f"[eval] could not remove the retrieval slice's test sources: {e}")
+
+
+async def _run_retrieval_slice(k: int, embedder: str, scoring: "dict | None", created: list) -> dict:
     """Recall@k over the real chunk -> embed -> hybrid-search path, in two modes.
 
     Hybrid mode uses a deterministic bag-of-words stand-in embedder: it measures
@@ -1535,6 +1552,7 @@ async def run_retrieval_slice(k: int = 6, embedder: str = "fake",
         id_by_title = {}
         for title, body in RETRIEVAL_DOCS:
             sid = knowledge_acl.create_knowledge_source(title, "text", "eval")
+            created.append(sid)
             knowledge_acl.update_knowledge_source_status(sid, "ready")
             id_by_title[title] = sid
         allowed = set(id_by_title.values())

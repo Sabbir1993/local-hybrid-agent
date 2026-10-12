@@ -55,9 +55,9 @@
       });
 
       // Wire sidebar shortcuts
+      // the search icon opens the session filter (projects.js) rather than typing "/" into the composer
       $('btn-sidebar-search')?.addEventListener('click', () => {
-        const inp = $('input');
-        if (inp) { inp.focus(); inp.value = '/'; }
+        if (typeof window.toggleSessionFilter === 'function') window.toggleSessionFilter();
       });
 
       // Keep Computer Awake toggle
@@ -1167,6 +1167,11 @@
     },
 
     initVoiceControls() {
+      if (!window.VOICE_ICON_DICTATE) {
+        // set once; the same two strings are used by updateVoiceUI below
+        window.VOICE_ICON_DICTATE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>';
+        window.VOICE_ICON_CHAT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="10" x2="4" y2="14"/><line x1="8" y1="6" x2="8" y2="18"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="16" y1="7" x2="16" y2="17"/><line x1="20" y1="10" x2="20" y2="14"/></svg>';
+      }
       const micPill = $('claude-mic-split-pill');
       const micBtn = $('btn-mic');
       const arrowBtn = $('btn-mic-menu-toggle');
@@ -1190,8 +1195,42 @@
         arrowBtn.setAttribute('aria-expanded', !isOpen ? 'true' : 'false');
       });
 
+      // Language: Auto -> English -> Bangla; read by dictation and voice chat (stt_lang)
+      const langBtn = $('btn-voice-lang');
+      const LANGS = [['auto', 'Auto'], ['en', 'English'], ['bn', '\u09ac\u09be\u0982\u09b2\u09be']];
+      const curLang = () => { let v = 'auto'; try { v = localStorage.getItem('stt_lang') || 'auto'; } catch (_) {} return LANGS.some(l => l[0] === v) ? v : 'auto'; };
+      const paintLang = () => { const v = $('voice-lang-value'); if (v) v.textContent = LANGS.find(l => l[0] === curLang())[1]; };
+      paintLang();
+      langBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const next = LANGS[(LANGS.findIndex(l => l[0] === curLang()) + 1) % LANGS.length][0];
+        try { localStorage.setItem('stt_lang', next); } catch (_) {}
+        paintLang();
+      });
+
+      // Noise reduction: each click steps Off -> Standard -> Crowd; the menu stays open
+      const noiseBtn = $('btn-voice-noise');
+      const paintNoise = () => {
+        const lv = typeof voiceNoiseLevel === 'function' ? voiceNoiseLevel() : 'standard';
+        const v = $('voice-noise-value');
+        if (v) {
+          v.textContent = VOICE_NOISE_LEVELS[lv].label;
+          v.classList.toggle('on', lv === 'crowd');
+        }
+        if (noiseBtn) noiseBtn.title = 'Noise reduction: ' + VOICE_NOISE_LEVELS[lv].hint + ' (click to change)';
+      };
+      paintNoise();
+      noiseBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const order = Object.keys(VOICE_NOISE_LEVELS);
+        const next = order[(order.indexOf(voiceNoiseLevel()) + 1) % order.length];
+        voiceSetNoiseLevel(next);
+        paintNoise();
+        toast('Noise reduction: ' + VOICE_NOISE_LEVELS[next].label + ' — ' + VOICE_NOISE_LEVELS[next].hint);
+      });
+
       // Menu items selection
-      voiceMenu.querySelectorAll('.claude-menu-item').forEach(it => {
+      voiceMenu.querySelectorAll('.claude-menu-item[data-voice-mode]').forEach(it => {
         it.addEventListener('click', (e) => {
           e.stopPropagation();
           const mode = it.dataset.voiceMode;
@@ -1199,9 +1238,7 @@
           voiceMenu.style.display = 'none';
           micPill?.classList.remove('open');
           arrowBtn?.setAttribute('aria-expanded', 'false');
-
-          // Trigger the chosen voice feature
-          this.triggerVoiceAction(mode);
+          // picking a mode only switches the button (its icon changes); the click starts it
         });
       });
 
@@ -1235,13 +1272,12 @@
       const voiceMenu = $('claude-voice-menu');
 
       if (micBtn) {
-        if (mode === 'voice') {
-          micBtn.title = 'Real-time Voice to Voice Chat';
-          micBtn.setAttribute('aria-label', 'Real-time Voice to Voice Chat');
-        } else {
-          micBtn.title = 'Dictate voice (Transcribe into prompt)';
-          micBtn.setAttribute('aria-label', 'Dictate voice (Transcribe)');
-        }
+        const voice = mode === 'voice';
+        // the main button shows what a click will do: a mic to dictate, sound bars for voice chat
+        micBtn.innerHTML = voice ? window.VOICE_ICON_CHAT : window.VOICE_ICON_DICTATE;
+        micBtn.dataset.mode = voice ? 'voice' : 'transcribe';
+        micBtn.title = voice ? 'Voice chat' : 'Dictate (speech into the prompt)';
+        micBtn.setAttribute('aria-label', voice ? 'Voice chat' : 'Dictate');
       }
 
       if (voiceMenu) {
@@ -1256,11 +1292,9 @@
 
     triggerVoiceAction(mode) {
       if (mode === 'voice') {
+        // starts or ends voice chat; the mic pill itself shows the state (voice.js)
         const vBtn = $('btn-voice');
-        if (vBtn) {
-          vBtn.click();
-          toast('Started Voice to Voice mode');
-        }
+        if (vBtn) vBtn.click();
       } else {
         // Transcribe mode
         if (typeof micStart === 'function' && typeof MEDIA !== 'undefined') {

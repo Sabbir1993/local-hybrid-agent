@@ -25,20 +25,9 @@ const browserops = () => (_browserops = _browserops || require("./browserops"));
 const androidops = require("./androidops");
 const iosops = require("./iosops");
 
-// Relative icon resolution — portable across clones on any machine
-const STATIC_LOGO_PATH = path.join(__dirname, "..", "static", "logo", "logo.jpg");
-const BUILD_ICON_PNG = path.join(__dirname, "build", "icon.png");
-const BUILD_ICON_ICO = path.join(__dirname, "build", "icon.ico");
-
-let APP_ICON_PATH = BUILD_ICON_PNG;
-if (process.platform === "win32" && fs.existsSync(BUILD_ICON_ICO)) {
-  APP_ICON_PATH = BUILD_ICON_ICO;
-} else if (fs.existsSync(BUILD_ICON_PNG)) {
-  APP_ICON_PATH = BUILD_ICON_PNG;
-} else if (fs.existsSync(STATIC_LOGO_PATH)) {
-  APP_ICON_PATH = STATIC_LOGO_PATH;
-}
-const appIcon = nativeImage.createFromPath(APP_ICON_PATH);
+// Icon: shipped as extraResources when installed, from build/ when run from source (see appicon.js)
+const { loadAppIcon } = require("./appicon");
+const appIcon = loadAppIcon({ nativeImage, fs }).image;
 const trayIconImage = appIcon.resize({ width: 32, height: 32 });
 
 const SESSION_COOKIE_NAME = "a770_session";
@@ -532,6 +521,18 @@ const OPS = {
   },
   // OAuth sign-in redirect for remote MCP servers (oauthops.js)
   "oauth.loopback": (p) => oauthops.loopback(p),
+  // open a link in the user's own default browser (not the agent's test browser)
+  "system.open_url": async (p) => {
+    let u;
+    try { u = new URL(String(p.url || "")); } catch (_) { throw new Error("invalid URL"); }
+    if ((u.protocol !== "https:" && u.protocol !== "http:") || u.username || u.password) {
+      throw new Error("only plain http(s) links can be opened");
+    }
+    await policy.confirmAction("open link?", "The AI agent wants to open this link in your browser:", u.href,
+      `open\n${u.origin}`, p.approved_in_app === true);
+    await shell.openExternal(u.href);
+    return { opened: u.href };
+  },
   // agent test browser (browserops.js)
   "browser.navigate": (p) => browserops().navigate(p),
   "browser.snapshot": (p) => browserops().snapshot(p),

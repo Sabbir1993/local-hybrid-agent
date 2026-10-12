@@ -176,3 +176,68 @@ class TestAgentRunRegression(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class ClassifierDisablesThinking(unittest.TestCase):
+    """A reasoning model used up the 4-token budget on its think block, answered nothing, and the
+    empty answer was read as NO - so a policy such as "never share phone numbers" never fired."""
+
+    def test_the_request_switches_thinking_off_and_reads_yes(self):
+        import asyncio
+        from unittest import mock
+        from core.input_guard import semantic
+
+        seen = {}
+
+        class _Resp:
+            def raise_for_status(self): pass
+            def json(self): return {"choices": [{"message": {"content": "YES"}}]}
+
+        class _Client:
+            async def post(self, url, json=None):
+                seen.update(json)
+                return _Resp()
+
+        class _Target:
+            def available(self): return True
+            async def client(self): return _Client()
+
+        with mock.patch("core.lanes.targets", return_value=[_Target()]):
+            self.assertTrue(asyncio.run(semantic._classify("no phone numbers", "call 01712345678")))
+        self.assertEqual(seen["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertGreaterEqual(seen["max_tokens"], 8)
+
+
+class HelperModelCallsAreAccounted(unittest.TestCase):
+    """The executor's checks used to be invisible: nothing showed in the Monitor or the Report."""
+
+    def test_post_chat_leaves_a_monitor_row_and_a_usage_row(self):
+        import asyncio
+        from unittest import mock
+        from core import monitor
+        from core.lanes import routing
+
+        class _Resp:
+            def raise_for_status(self): pass
+            def json(self): return {"choices": [{"message": {"content": "{}"}}],
+                                    "usage": {"prompt_tokens": 120, "completion_tokens": 7}}
+
+        class _Client:
+            async def post(self, url, json=None, timeout=None): return _Resp()
+
+        class _T:
+            lane, source, cm = "executor", "local", None
+            def available(self): return True
+            def is_up(self): return True
+            def model_name(self): return "Ornith-9B"
+            def describe(self): return "executor"
+            async def client(self): return _Client()
+
+        rows = []
+        with mock.patch.object(routing, "targets", return_value=[_T()]), \
+             mock.patch("core.db.usage.db_record_request", side_effect=lambda *a, **k: rows.append((a, k))):
+            asyncio.run(routing.post_chat("verify", {"messages": []}))
+        last = monitor._monitor_state["recent"][-1]
+        self.assertEqual((last["endpoint"], last["model"], last["completion_tokens"]), ("lane/verify", "Ornith-9B", 7))
+        self.assertEqual(rows[0][0][0], "lane/verify")
+        self.assertTrue(rows[0][1]["is_orchestrator"])

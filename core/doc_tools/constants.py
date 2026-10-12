@@ -40,8 +40,11 @@ DOC_EDIT_SCHEMA = {"type": "function", "function": {
 
 DOC_CREATE_SCHEMA = {"type": "function", "function": {
     "name": "doc_create",
-    "description": "Create a new .pptx/.docx/.xlsx/.csv/.pdf from markdown (slides split by '---' or '# '; "
-                   "tables as markdown tables or CSV). Built so later doc_edit calls can change parts of it.",
+    "description": "Create a new .pptx/.docx/.xlsx/.csv/.pdf from markdown. For .pptx use an outline: '# Deck title', "
+                   "'subtitle:', 'theme: midnight|corporate|forest|sunset|minimal|royal', then slides separated by '---', "
+                   "each '## Title' + 2-5 short bullets (8-12 slides, max 14; optional 'layout: cards|stats|timeline|"
+                   "two-column|quote|section', 'notes:'). Tables as markdown tables or CSV. Built so later doc_edit calls "
+                   "can change parts of it.",
     "parameters": {"type": "object", "properties": {
         "file": {"type": "string", "description": "file name with extension"},
         "content": {"type": "string", "description": "markdown / table text"},

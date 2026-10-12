@@ -197,6 +197,15 @@ def parse_gguf_info(model_path) -> "dict | None":
         if sliding_window is not None and sliding_window <= 0:
             sliding_window = None  # 0/-1 mean "no window", i.e. full attention
     n_expert_used = scalar(f"{arch}.expert_used_count")
+    # Hybrid attention/linear models (Qwen3-Next family) keep a KV cache only in every Nth
+    # layer; the rest hold a small fixed recurrent state. The key sits after the early exit
+    # above, so it is read separately. Failing to read it is the safe direction: every layer
+    # is then charged KV, which can only over-estimate.
+    n_kv_layers = int(n_layer)
+    interval = read_gguf_scalars(first, [f"{arch}.full_attention_interval"]).get(
+        f"{arch}.full_attention_interval") if parse_err is None else None
+    if isinstance(interval, int) and interval > 1:
+        n_kv_layers = max(1, int(n_layer) // interval)
 
     info = {"arch": arch,
             "n_layer": int(n_layer), "n_head": int(n_head) if n_head else None,
@@ -205,6 +214,7 @@ def parse_gguf_info(model_path) -> "dict | None":
             "sliding_window": sliding_window,
             "n_expert": int(scalar(f"{arch}.expert_count", default=0) or 0),
             "n_expert_used": int(n_expert_used or 0),
+            "n_kv_layers": n_kv_layers,
             "n_vocab": raw.get("n_vocab"), "file_bytes": total_b,
             "complete": complete, "model_path": str(p), "error": parse_err}
     with _gguf_lock:
@@ -258,4 +268,96 @@ def read_gguf_scalars(model_path, keys) -> dict:
                     break
     except Exception:
         pass
+    return out
+
+
+_EXPERT_NAME = re.compile(r"^blk\.(\d+)\..*_exps\.")
+_expert_cache: dict = {}        # path -> ((mtime_ns, size), {layer: bytes})
+
+
+def _skip_kv_value(cur, vtype: int) -> None:
+    if vtype == 8:
+        cur.skip(struct.unpack("<Q", cur.read(8))[0])
+    elif vtype == 9:
+        et = struct.unpack("<I", cur.read(4))[0]
+        cnt = struct.unpack("<Q", cur.read(8))[0]
+        if et == 8:
+            for _ in range(cnt):
+                cur.skip(struct.unpack("<Q", cur.read(8))[0])
+        elif et in _GGUF_FMT:
+            cur.skip(_GGUF_FMT[et][1] * cnt)
+        else:
+            raise ValueError(f"bad array elem type {et}")
+    elif vtype in _GGUF_FMT:
+        cur.skip(_GGUF_FMT[vtype][1])
+    else:
+        raise ValueError(f"unknown GGUF kv type {vtype}")
+
+
+def expert_layer_bytes(model_path) -> "dict[int, int]":
+    """Bytes of the routed-expert tensors (*_exps) of each transformer block, {} if unreadable.
+
+    A mixture-of-experts file is ~90% expert weights, and `--n-cpu-moe N` moves exactly those
+    for the first N blocks into RAM, so the VRAM estimate needs the real figure. Tensor sizes
+    come from the offset gaps in the tensor table, so no quantisation block table is needed.
+    Only the first shard is read; a split model returns {} and the caller falls back to a
+    proportional estimate.
+    """
+    p = Path(model_path)
+    try:
+        st = p.stat()
+    except OSError:
+        return {}
+    key = str(p)
+    with _gguf_lock:
+        hit = _expert_cache.get(key)
+        if hit and hit[0] == (st.st_mtime_ns, st.st_size):
+            return hit[1]
+    out: dict = {}
+    try:
+        if _SHARD_RE.search(p.name):
+            raise ValueError("split model")
+        with open(p, "rb") as fh:
+            cur = _Cursor(fh, chunk=1 * MIB)
+            if cur.read(4) != b"GGUF":
+                raise ValueError("not a GGUF file")
+            if struct.unpack("<I", cur.read(4))[0] < 2:
+                raise ValueError("unsupported GGUF version")
+            n_tensors = struct.unpack("<Q", cur.read(8))[0]
+            kv_count = struct.unpack("<Q", cur.read(8))[0]
+            if kv_count > 100_000 or n_tensors > 1_000_000:
+                raise ValueError("implausible GGUF counts")
+            alignment = 32
+            for _ in range(kv_count):
+                klen = struct.unpack("<Q", cur.read(8))[0]
+                name = cur.read(klen).decode("utf-8", "replace")
+                vtype = struct.unpack("<I", cur.read(4))[0]
+                if name == "general.alignment" and vtype in (4, 5):
+                    alignment = max(1, struct.unpack(_GGUF_FMT[vtype][0], cur.read(4))[0])
+                else:
+                    _skip_kv_value(cur, vtype)
+            tensors = []
+            for _ in range(n_tensors):
+                ln = struct.unpack("<Q", cur.read(8))[0]
+                name = cur.read(ln).decode("utf-8", "replace")
+                nd = struct.unpack("<I", cur.read(4))[0]
+                cur.skip(8 * nd)
+                cur.read(4)  # ggml type
+                tensors.append((struct.unpack("<Q", cur.read(8))[0], name))
+            # position of the end of the tensor table within the file
+            table_end = cur.fh.tell() - (len(cur.buf) - cur.pos)
+            data_start = -(-table_end // alignment) * alignment
+        tensors.sort()
+        for i, (off, name) in enumerate(tensors):
+            m = _EXPERT_NAME.match(name)
+            if not m:
+                continue
+            end = tensors[i + 1][0] if i + 1 < len(tensors) else st.st_size - data_start
+            if end > off:
+                layer = int(m.group(1))
+                out[layer] = out.get(layer, 0) + (end - off)
+    except Exception:
+        out = {}
+    with _gguf_lock:
+        _expert_cache[key] = ((st.st_mtime_ns, st.st_size), out)
     return out

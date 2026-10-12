@@ -106,10 +106,13 @@ class WhisperInstance(SmallModelInstance):
         await self.ensure_loaded()
         self.last_used = time.time()
         lang = (language or self.language or "auto").strip().lower()
+        form = {"response_format": "json", "language": lang, "temperature": "0"}
+        hint = str(self.cfg.get(f"prompt_{lang}") or "").strip()   # e.g. "prompt_bn": opt-in, test with scripts/eval_stt.py
+        if hint:
+            form["prompt"] = hint[:200]
         r = await self.client.post("/v1/audio/transcriptions",
                                    files={"file": ("audio.wav", wav, "audio/wav")},
-                                   data={"response_format": "json", "language": lang, "temperature": "0"},
-                                   timeout=600)
+                                   data=form, timeout=600)
         r.raise_for_status()
         self.last_used = time.time()
         try:

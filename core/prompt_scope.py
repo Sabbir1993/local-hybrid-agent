@@ -59,6 +59,31 @@ FILE_MANUAL = (
     "_proper), never write helper/generator scripts (.py) to build a document, and link only that one file."
 )
 
+# Deck format + style questions: appended to FILE_MANUAL only when the request is about slides.
+PPTX_MANUAL = (
+    "PRESENTATIONS (.pptx): `content` must be ONLY a slide outline in this exact format, nothing before or after it:\n"
+    "   # Deck title\n   subtitle: one line\n   theme: midnight|corporate|forest|sunset|minimal|royal\n   ---\n"
+    "   ## Slide title\n   - short bullet (max 14 words, 2-5 bullets)\n   notes: optional speaker notes\n   ---\n   (next slide...)\n"
+    "   Optional line under a slide title: `layout: cards|stats|timeline|two-column|quote|section`. Cards = 3-4 bullets written "
+    "`Label: text`; stats = bullets that start with a number (`99.9% uptime`); a markdown table becomes a table slide. "
+    "Use 8-12 slides, NEVER more than 14; the first slide is the title, the last is `## Thank you` or another closing slide. "
+    "One idea per slide. Never write `Slide N:` labels, headers like 'Markdown source', bold markup or any text outside the outline.\n"
+    "   Before writing a deck, if the user gave neither a slide count nor a style, ask ONE short question in plain sentences "
+    "(no table, no code block) offering these looks: midnight (navy + cyan), corporate (white + blue), forest (green + amber), "
+    "sunset (charcoal + coral), minimal (white + red accent), royal (indigo + gold), and a slide count (default 10). "
+    "Skip the question when they already answered, said 'you choose' / 'just make it', or sent a detailed brief: then pick the "
+    "theme that fits the topic. To change only the look of an existing deck, call write_file again with the same slides and a new `theme:` line.\n"
+)
+
+_PPTX_RE = re.compile(r"(pptx?|power ?point|slides?|slide deck|deck|presentation)", re.I)
+
+
+def pptx_intent(query: str, prior_files=None, msgs=None) -> bool:
+    """Deck request now, or earlier in this chat (the user may just be answering the style question)."""
+    recent = [str(m.get("content") or "")[-600:] for m in (msgs or [])[-4:] if isinstance(m, dict)]
+    return any(_PPTX_RE.search(t) for t in [query or "", *recent]) or any(str(f).lower().endswith((".pptx", ".ppt")) for f in (prior_files or []))
+
+
 # Lean pointer shipped on every turn so the model still knows files exist.
 FILE_MANUAL_LEAN = (
     "FILES (only when asked): you can create and share files with the "

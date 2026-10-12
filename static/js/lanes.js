@@ -303,6 +303,7 @@ function simpleHtml() {
       <section class="ln-card" aria-labelledby="ln-ver-t">
         <div class="ln-card-t" id="ln-ver-t">🛡 Answer check</div>
         <div class="ln-hint dim">A second model double-checks answers. You can also switch it per message with 🛡 next to Send.</div>
+        ${verifyOverrideNote(vmode)}
         <div role="radiogroup" aria-labelledby="ln-ver-t" class="ln-radios">
           ${radio('off', 'Off', 'Answers are shown as they are.')}
           ${radio('badge', 'Check after', 'The answer appears right away; a ✅ or ⚠ badge follows.')}
@@ -319,6 +320,16 @@ function simpleHtml() {
 }
 
 /* ---------- create & listen: images, videos, speech ---------- */
+/* this browser's 🛡 override, when it differs from the saved setting (it wins, so say so) */
+function verifyOverrideNote(saved) {
+  let o = null;
+  try { o = localStorage.getItem('answer_check'); } catch (_) {}
+  if (!o || o === saved) return '';
+  const names = { off: 'Off', badge: 'Check after', gate: 'Check before showing' };
+  return `<div class="ln-hint" role="status" style="color:var(--amber)">This browser is set to “${esc(names[o] || o)}” with the 🛡 button, which wins over this setting.
+    <button type="button" class="btn ghost" data-ln="ver-use-setting" style="width:auto;margin:0 0 0 6px;padding:2px 10px;font-size:11.5px;">Use this setting</button></div>`;
+}
+
 function mediaSimpleHtml() {
   const d = LN.d, m = effMap();
   const cards = MEDIA_JOBS.map(mj => {
@@ -535,9 +546,19 @@ async function setHelper(val) {
   undoToast('Helper model changed', () => lanesApi('/control/cloud/lanes', 'POST', prev).then(lanesLoad));
 }
 
+// The shield button next to Send is a per-browser override that wins over this setting, so a
+// browser that once clicked it kept showing the gate after the setting was turned Off.
+function clearVerifyOverride() {
+  try { localStorage.removeItem('answer_check'); } catch (_) {}
+  if (LN.d && LN.d.verification) window._answerCheckDefault = LN.d.verification.mode || 'off';
+  const b = document.getElementById('btn-answer-check');
+  if (b && typeof _paintShield === 'function') _paintShield();
+}
+
 async function saveVerify(upd) {
   const prev = Object.assign({}, LN.d.verification);
   await lanesApi('/control/verification', 'POST', upd);
+  if (upd.mode) { LN.d.verification = Object.assign({}, LN.d.verification, upd); clearVerifyOverride(); }
   lanesRender();
   undoToast('Answer check updated', () => lanesApi('/control/verification', 'POST', { mode: prev.mode }));
 }
@@ -1168,6 +1189,7 @@ document.addEventListener('click', async (e) => {
       lanesRender();
     }
     else if (k === 'jobs-discard') { LN.draft = {}; lanesRender(); }
+    else if (k === 'ver-use-setting') { clearVerifyOverride(); lanesRender(); toast('Answer check now follows the setting'); }
     else if (k === 'jobs-save') {
       const map = {};
       // an automatic job keeps an explicit pick even when it equals today's automatic choice

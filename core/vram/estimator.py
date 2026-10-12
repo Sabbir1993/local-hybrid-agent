@@ -35,7 +35,7 @@ def estimate_footprint(info: dict, ctx: int, kv_type: str = "f16",
         headroom_gb = cfg["headroom_gb"]
     weights_b = int(info["file_bytes"] * 1.01)
     kv_pe = _KV_BYTES_PER_ELEM.get(kv_type, 2.0)
-    kv_per_token_b = info["n_layer"] * info["n_head_kv"] * info["head_dim"] * 2 * kv_pe
+    kv_per_token_b = (info.get("n_kv_layers") or info["n_layer"]) * info["n_head_kv"] * info["head_dim"] * 2 * kv_pe
 
     # Effective per-layer cache length. min(ctx, window) for a windowed model, ctx otherwise.
     # Normalised here as well as in the parser: 0 and -1 both mean "no window" in GGUF, and a
@@ -132,20 +132,22 @@ def effective_params(profile: dict, overrides: dict | None = None) -> dict:
                 except OSError:
                     pass
 
-    # mirrors core/process.py: -ncmoe is only emitted for a model typed as MoE
-    n_cpu_moe = 0
-    if profile.get("model_type") == "moe" and tuned.get("n_cpu_moe") is not None:
+    # the explicit value only (0 and n_cpu_moe_set False when absent); plan_launch resolves it
+    # against the model (core/vram/moe.py), exactly as core/process.py does for the command
+    n_cpu_moe, n_cpu_moe_set = 0, False
+    if tuned.get("n_cpu_moe") is not None:
         try:
-            n_cpu_moe = max(0, int(tuned["n_cpu_moe"]))
+            n_cpu_moe, n_cpu_moe_set = max(0, int(tuned["n_cpu_moe"])), True
         except (TypeError, ValueError):
-            n_cpu_moe = 0
+            pass
 
     return {"n_gpu_layers": n_gpu_layers, "tensor_split": tensor_split,
             "context_size": context_size, "kv_cache_type": kv_cache_type,
             "flash_attn": flash_attn, "ubatch_size": ubatch,
             "gpu_devices": gpu_devices, "split_mode": split_mode,
             "model_path": model_path, "llama_bin_dir": llama_bin_dir,
-            "draft_b": draft_b, "n_cpu_moe": n_cpu_moe}
+            "draft_b": draft_b, "n_cpu_moe": n_cpu_moe,
+            "n_cpu_moe_set": n_cpu_moe_set}
 
 
 def _shares_for(target_devs: list, tensor_split: str) -> list:

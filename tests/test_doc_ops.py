@@ -129,6 +129,66 @@ class PptxTests(unittest.TestCase):
         self.assertEqual(titles, ["Acme Corp", "Strategic Priorities", "Platform Metrics"])
 
 
+class PptxDesignTests(unittest.TestCase):
+    """The generator must turn any outline into a short, clean, themed deck."""
+
+    @staticmethod
+    def texts(data: bytes) -> list[str]:
+        return [e["text"] for e in pptx_ops.inspect(data)["elements"]]
+
+    def test_messy_outline_is_cleaned(self):
+        md = ('MARKDOWN SOURCE FOR CONVERSION:\nSlide 1: Title - "Project Local Agent"\n'
+              "Subtitle: Bringing Intelligent Assistance to Your Team\n"
+              "Slide 2: Executive Summary\n**What We're Building:**\nA local assistant\nRuns on your hardware\n"
+              "**Why It Matters:**\nCloud AI is costly\nPrivacy concerns\nGLOBAL THEME: deep navy, gold\n")
+        data = pptx_ops.create(md)
+        out = " ".join(self.texts(data))
+        for junk in ("MARKDOWN SOURCE", "Slide 1", "Slide 2", "**", "GLOBAL THEME", "Subtitle:"):
+            self.assertNotIn(junk, out)
+        titles = [e["text"] for e in pptx_ops.inspect(data)["elements"] if e["kind"] == "title"]
+        self.assertEqual(titles, ["Project Local Agent", "Executive Summary"])
+        self.assertIn("Bringing Intelligent Assistance to Your Team", out)
+
+    def test_one_line_per_slide_dump_collapses(self):
+        md = "\n---\n".join(f"line number {i}" for i in range(217))
+        data = pptx_ops.create(md, title="Local_Agent_Project_Presentation-29c2084f.pptx")
+        from pptx import Presentation
+        self.assertLessEqual(len(Presentation(io.BytesIO(data)).slides), 14)
+
+    def test_hard_cap_keeps_cover_and_closing(self):
+        body = "".join(f"---\n## Topic {i}\n- point a\n- point b\n" for i in range(30))
+        md = "# Big Deck\nsubtitle: lots\n" + body + "---\n## Thank you\n- a@b.c\n"
+        data = pptx_ops.create(md)
+        titles = [e["text"] for e in pptx_ops.inspect(data)["elements"] if e["kind"] == "title"]
+        self.assertEqual(len(titles), 14)
+        self.assertEqual((titles[0], titles[-1]), ("Big Deck", "Thank you"))
+
+    def test_layouts_render_and_decoration_is_not_inspected(self):
+        md = ("# Deck\nsubtitle: s\ntheme: royal\n---\n## Cards\n- Alpha: first thing\n- Beta: second thing\n- Gamma: third thing\n"
+              "---\n## Numbers\n- 99.9% uptime\n- 5 users\n---\n## Plan\nlayout: timeline\n- Q1: one\n- Q2: two\n- Q3: three\n"
+              "---\n## Table\n| a | b |\n|---|---|\n| 1 | 2 |\n---\n## Words\nlayout: quote\n- Stay local.\n- The CISO\n"
+              "---\n## Thank you\n- x@y.z\n")
+        data = pptx_ops.create(md)
+        els = pptx_ops.inspect(data)["elements"]
+        kinds = [e["text"].split(": ")[1] for e in els if e["kind"] == "slide"]
+        self.assertEqual(len(kinds), 7)
+        self.assertFalse([e for e in els if "deco" in e["text"].lower()])
+        self.assertIn("99.9%", " ".join(self.texts(data)))
+        self.assertTrue(any(e["kind"] == "cell" and e["text"] == "2" for e in els))
+
+    def test_theme_and_accent_apply(self):
+        from pptx import Presentation
+        data = pptx_ops.create("# T\ntheme: forest\naccent: #FF0000\n---\n## A\n- one\n- two\n")
+        prs = Presentation(io.BytesIO(data))
+        self.assertEqual(str(prs.slides[0].background.fill.fore_color.rgb), "0F3D2E")
+        self.assertIn("FF0000", zipfile.ZipFile(io.BytesIO(data)).read("ppt/slides/slide2.xml").decode())
+
+    def test_edit_still_works_on_designed_deck(self):
+        data = pptx_ops.create("# T\n---\n## Revenue\n- Up 12%\n- Down 3%\n")
+        r = pptx_ops.apply(data, [{"op": "replace_text", "find": "12%", "replace": "15%"}])
+        self.assertEqual(changed_parts(data, r.data), ["ppt/slides/slide2.xml"])
+
+
 class XlsxTests(unittest.TestCase):
     def setUp(self):
         import openpyxl

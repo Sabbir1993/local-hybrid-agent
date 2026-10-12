@@ -149,6 +149,18 @@ body.sidebar-collapsed aside {
   background: var(--panel2);
 }
 
+/* Sessions filter (sidebar search icon) */
+.session-filter-bar { align-items: center; gap: 6px; margin: 2px 0 6px; }
+.session-filter-bar:not([hidden]) { display: flex; }
+.session-filter-bar input {
+  flex: 1; min-width: 0; font-size: 12px; padding: 5px 8px;
+  background: var(--panel2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; outline: none;
+}
+.session-filter-bar input:focus { border-color: var(--accent); }
+.session-filter-bar #session-filter-count { font-size: 10.5px; white-space: nowrap; }
+.session-filter-empty { font-size: 11.5px; padding: 10px 6px; text-align: center; }
+
 /* Sessions History List */
 .claude-sessions-scroll {
   flex: 1;
@@ -1536,6 +1548,33 @@ html[data-app-mode="chat"] #claude-mode-wrap {
 .claude-menu-text {
   flex: 1;
   min-width: 0;
+}
+
+/* the voice menu is a two-line picker: icon, label, tick */
+.claude-voice-menu {
+  min-width: 260px;
+}
+
+.claude-voice-menu .claude-menu-title {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.claude-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-subtle, rgba(255, 255, 255, 0.1));
+}
+
+.claude-menu-value {
+  font-size: 11px;
+  color: var(--dim, #9ca3af);
+  padding-left: 14px;
+}
+
+.claude-menu-value.on {
+  color: var(--accent, #d97706);
+  font-weight: 600;
 }
 
 .claude-menu-title {

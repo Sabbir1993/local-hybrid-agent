@@ -538,6 +538,10 @@ function onClaudeWorkingTick() {
     thinkSummary.innerHTML = `<span class="codex-thought-icon">🧠</span> <span class="codex-thought-title">Thinking (${elapsedSec}s)...</span><span class="codex-chevron">▾</span>`;
   }
 
+  // the answer-check gate (answer written but held back): keep its elapsed time / word count live
+  const gateMeta = lastEl.querySelector('.ac-gate-meta');
+  if (gateMeta && typeof window.answerCheckGateMeta === 'function') gateMeta.textContent = window.answerCheckGateMeta(m);
+
   // 2. If content text hasn't streamed in yet, update or create the working pill
   if (!hasText) {
     const workingBox = lastEl.querySelector('.claude-working-box');
@@ -662,7 +666,7 @@ function _bubbleHtml(m, idx) {
   if (mediaLive) {
     body = mediaCardHtml(m, idx);          // /image or /video still running / asking / failed
   } else if (acHidden) {
-    body = answerCheckGateHtml(m);
+    body = answerCheckGateHtml(m, idx);
   } else if (hasText) {
     body = md(m.content, { streaming: generating && isLast });
   } else if (!generating && m.reasoning && m.reasoning.trim()) {
@@ -1206,6 +1210,10 @@ async function send(inputText) {
       } else if (ev === 'delta_replace') {
         L.content = (d.text || '');
         L.statusText = '';
+      } else if (ev === 'delta_reset' && d && d.purge) {
+        // a policy withheld the answer: neither it nor the thinking that quoted it stays on screen
+        L.content = '';
+        L.reasoning = '';
       } else if (ev === 'delta_reset') {
         // a checked-and-fixed answer replaces the draft (kept in check.original)
         if (L.content && L.content.trim() && !(L.check && L.check.state === 'checking')) {

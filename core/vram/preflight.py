@@ -12,6 +12,16 @@ from .estimator import (
     estimate_footprint,
 )
 from .gguf_parser import parse_gguf_info
+from .moe import expert_bytes_offloaded, is_moe, resolve_offload, smallest_fitting
+
+
+def _moe_note(plan: dict) -> str:
+    moe = plan.get("moe") or {}
+    if not moe.get("n_cpu_moe"):
+        return ""
+    how = "chosen to fit" if moe.get("auto") else "set"
+    return (f" --n-cpu-moe {moe['n_cpu_moe']} ({how}: ~{moe['experts_in_ram_gb']} GB of experts "
+            "kept in RAM)")
 
 
 def _human_msg(plan: dict) -> str:
@@ -23,7 +33,8 @@ def _human_msg(plan: dict) -> str:
     eff = plan.get("effective") or {}
     lines = [f"[vram] {name}: {est.get('total_gb', '?')} GB needed "
              f"(weights {est.get('weights_gb')} + KV@ctx {est.get('kv_gb')} + "
-             f"compute {est.get('compute_gb')}) with -ngl {eff.get('n_gpu_layers')}, "
+             f"compute {est.get('compute_gb')}) with -ngl {eff.get('n_gpu_layers')}"
+             f"{_moe_note(plan)}, "
              f"split \"{eff.get('tensor_split')}\", headroom {est.get('headroom_gb')} GB"]
     for d in plan.get("devices", []):
         if d.get("target"):
@@ -101,11 +112,21 @@ def plan_launch(profile: dict, overrides: dict | None = None,
         plan["message"] = (f"could not read model file: {mp} ({info.get('error') or 'unknown error'}) - "
                            "not launching, because an unreadable model cannot be sized.")
         return plan
+    # MoE: split by experts, not by layer (core/vram/moe.py). The same resolution runs in
+    # core/process.py, so the config that is checked is the config that is launched.
+    moe = is_moe(profile, info)
+    explicit = eff["n_cpu_moe"] if eff.get("n_cpu_moe_set") else None
+    eff["n_gpu_layers"], eff["n_cpu_moe"] = resolve_offload(
+        profile, info, eff["n_gpu_layers"], explicit, None)
     fp = estimate_footprint(info, eff["context_size"], eff["kv_cache_type"],
                             eff["ubatch_size"], eff["flash_attn"],
-                            n_cpu_moe=eff.get("n_cpu_moe", 0),
+                            n_cpu_moe=eff["n_cpu_moe"],
                             n_expert_used=info.get("n_expert") or 0)
     weights_b = fp["weights_b"] + eff["draft_b"]
+    moe_ram_b = 0
+    if moe and eff["n_cpu_moe"] > 0:
+        moe_ram_b = expert_bytes_offloaded(mp, info, fp["weights_b"], eff["n_cpu_moe"])
+        weights_b -= moe_ram_b
     fp["total_b"] = weights_b + fp["kv_total_b"] + fp["compute_b"]
     plan["estimate"] = {"weights_gb": round(weights_b / GB, 2),
                         "kv_gb": round(fp["kv_total_b"] / GB, 2),
@@ -138,6 +159,29 @@ def plan_launch(profile: dict, overrides: dict | None = None,
     needs, margins = _eval_fit(targets, s_norm, weights_b, units,
                                eff["n_gpu_layers"], fp["kv_total_b"],
                                fp["compute_b"], fp["headroom_b"])
+    if moe and explicit is None and eff["n_gpu_layers"] >= units and any(m < 0 for m in margins):
+        # no explicit setting: use the least RAM offload that fits the free VRAM
+        def _fits_with(n):
+            w = fp["weights_b"] + eff["draft_b"] - expert_bytes_offloaded(mp, info, fp["weights_b"], n)
+            _, mg = _eval_fit(targets, s_norm, w, units, units, fp["kv_total_b"],
+                              fp["compute_b"], fp["headroom_b"])
+            return all(m >= 0 for m in mg)
+        auto = smallest_fitting(info["n_layer"], _fits_with)
+        if auto is not None:
+            eff["n_gpu_layers"], eff["n_cpu_moe"] = resolve_offload(profile, info, units, None, auto)
+            moe_ram_b = expert_bytes_offloaded(mp, info, fp["weights_b"], auto)
+            weights_b = fp["weights_b"] + eff["draft_b"] - moe_ram_b
+            plan["auto_n_cpu_moe"] = auto
+            needs, margins = _eval_fit(targets, s_norm, weights_b, units, units,
+                                       fp["kv_total_b"], fp["compute_b"], fp["headroom_b"])
+    if moe:
+        plan["effective"].update(n_gpu_layers=eff["n_gpu_layers"], n_cpu_moe=eff["n_cpu_moe"])
+        if "auto_n_cpu_moe" in plan:
+            fp["total_b"] = weights_b + fp["kv_total_b"] + fp["compute_b"]
+            plan["estimate"].update(weights_gb=round(weights_b / GB, 2),
+                                    total_gb=round(fp["total_b"] / GB, 2))
+        plan["moe"] = {"n_cpu_moe": eff["n_cpu_moe"], "experts_in_ram_gb": round(moe_ram_b / GB, 2),
+                       "auto": "auto_n_cpu_moe" in plan}
     for t, need, margin in zip(targets, needs, margins):
         for pd in plan["devices"]:
             if pd["index"] == t["index"]:
@@ -177,7 +221,13 @@ def enforce(plan: dict) -> dict:
 
 def check_or_raise(profile: dict) -> dict:
     """Preflight for the main llama-server launch."""
-    return enforce(plan_launch(profile))
+    plan = enforce(plan_launch(profile))
+    # the launch command is built after this gate and must use the value that was checked
+    if plan.get("auto_n_cpu_moe") is not None:
+        profile["_auto_n_cpu_moe"] = plan["auto_n_cpu_moe"]
+    else:
+        profile.pop("_auto_n_cpu_moe", None)
+    return plan
 
 
 def _main_model_suggestion(plan: dict, target_idx: int) -> dict | None:

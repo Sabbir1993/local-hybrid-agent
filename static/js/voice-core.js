@@ -86,11 +86,61 @@ function voiceTakeSpeakable(text, spoken, opts) {
   return { pieces, ends, spoken: pos };
 }
 
+/* Noise reduction. "standard" is what the browser does by itself. "crowd" is for a room full of other
+ * voices: automatic gain control is OFF (it lifts the background babble in every pause), the speech
+ * detector needs a much louder, steadier voice than the room (so the person at the mic wins), and the
+ * audio is band-limited to the speech range before it is analysed or recorded. */
+const VOICE_NOISE_LEVELS = {
+  off: { label: 'Off', hint: 'Raw microphone',
+    constraints: { echoCancellation: true, noiseSuppression: false, autoGainControl: false },
+    vad: {}, startMs: 128, filter: null },
+  standard: { label: 'Standard', hint: 'Browser noise suppression',
+    constraints: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    vad: {}, startMs: 128, filter: null },
+  crowd: { label: 'Crowd', hint: 'Noisy room: only a close, clear voice counts',
+    constraints: { echoCancellation: true, noiseSuppression: true, autoGainControl: false, voiceIsolation: true },
+    vad: { minThreshold: 0.02, ratio: 4, floorMax: 0.03, minStats: true }, startMs: 192, filter: { hp: 120, lp: 3800 } },
+};
+
+function voiceNoiseLevel() {
+  let v = 'standard';
+  try { v = localStorage.getItem('voice_noise') || 'standard'; } catch (_) {}
+  return VOICE_NOISE_LEVELS[v] ? v : 'standard';
+}
+
+function voiceSetNoiseLevel(v) {
+  if (!VOICE_NOISE_LEVELS[v]) v = 'standard';
+  try { localStorage.setItem('voice_noise', v); } catch (_) {}
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('voice-noise-change', { detail: v }));
+  }
+  return v;
+}
+
+function voiceNoiseSettings(level) {
+  return VOICE_NOISE_LEVELS[level] || VOICE_NOISE_LEVELS[voiceNoiseLevel()];
+}
+
+// speech-band filter between `src` and whatever consumes it; returns { out, set(level) } so it can change live
+function voiceFilterChain(ctx, src, level) {
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass';
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
+  src.connect(hp); hp.connect(lp);
+  const set = (lv) => {
+    const f = voiceNoiseSettings(lv).filter;
+    hp.frequency.value = f ? f.hp : 10;           // 10 Hz / 20 kHz: effectively transparent
+    lp.frequency.value = f ? f.lp : 20000;
+  };
+  set(level);
+  return { out: lp, set };
+}
+
 class VoiceEnergyVad {
   constructor(o) {
-    this.o = Object.assign({ minThreshold: 0.012, ratio: 3.5, floorMax: 0.05 }, o || {});
+    this.o = Object.assign({ minThreshold: 0.012, ratio: 3.5, floorMax: 0.05, minStats: false, histFrames: 160 }, o || {});
     this.floor = 0.003;
     this.level = 0;
+    this.hist = [];
   }
   // frame: Float32Array; gate multiplies the threshold (higher while the agent is talking);
   // adapt: true only when nobody is speaking, so the floor tracks the room, not the voice
@@ -99,9 +149,20 @@ class VoiceEnergyVad {
     for (let i = 0; i < frame.length; i++) s += frame[i] * frame[i];
     const rms = Math.sqrt(s / (frame.length || 1));
     this.level = rms;
+    if (this.o.minStats) {
+      // Steady babble is "voiced" all the time, so the floor below would never learn it. Instead the
+      // floor is the quiet end (10th percentile) of the last ~5 s: babble keeps it up, while a
+      // person talking close to the microphone is still well above it.
+      this.hist.push(rms);
+      if (this.hist.length > this.o.histFrames) this.hist.shift();
+      if (this.hist.length >= 30) {
+        const sorted = this.hist.slice().sort((a, b) => a - b);
+        this.floor = Math.min(this.o.floorMax, sorted[Math.floor(sorted.length * 0.1)]);
+      }
+    }
     const thr = Math.max(this.o.minThreshold, this.floor * this.o.ratio) * (gate || 1);
     const voiced = rms > thr;
-    if (adapt && !voiced) this.floor = Math.min(this.o.floorMax, this.floor * 0.95 + rms * 0.05);
+    if (!this.o.minStats && adapt && !voiced) this.floor = Math.min(this.o.floorMax, this.floor * 0.95 + rms * 0.05);
     return voiced;
   }
 }
@@ -195,9 +256,14 @@ if (typeof window !== 'undefined') {
   window.VoiceEnergyVad = VoiceEnergyVad;
   window.VoiceEndpointer = VoiceEndpointer;
   window.VoiceBargeDetector = VoiceBargeDetector;
+  window.VOICE_NOISE_LEVELS = VOICE_NOISE_LEVELS;
+  window.voiceNoiseLevel = voiceNoiseLevel;
+  window.voiceSetNoiseLevel = voiceSetNoiseLevel;
+  window.voiceNoiseSettings = voiceNoiseSettings;
+  window.voiceFilterChain = voiceFilterChain;
 }
 
 if (typeof module !== 'undefined') {
   module.exports = { voiceStripThink, voiceTakeSpeakable, VoiceEnergyVad, VoiceEndpointer, VoiceBargeDetector, voiceIsHallucination,
-    voiceLooksUnfinished, voiceFillerLang, voiceHeardText, VOICE_FILLERS };
+    voiceLooksUnfinished, voiceFillerLang, voiceHeardText, VOICE_FILLERS, VOICE_NOISE_LEVELS, voiceNoiseSettings, voiceFilterChain };
 }

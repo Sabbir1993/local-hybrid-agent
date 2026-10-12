@@ -282,5 +282,5 @@ MODEL_CONFIG_KEYS = (
     "flash_attn", "kv_cache_type", "mtp_enabled", "mtp_draft_n_max",
     "keepalive_interval_s", "gpu_devices", "vision_capable",
     "kv_unified", "kv_unified_per_slot", "cache_reuse", "cache_ram",
-    "use_mmap",
+    "use_mmap", "op_offload",
 )

@@ -3,7 +3,7 @@ const assert = require('assert');
 const path = require('path');
 const core = require(path.join(__dirname, '..', '..', 'static', 'js', 'voice-core.js'));
 const { voiceStripThink, voiceTakeSpeakable, VoiceEnergyVad, VoiceEndpointer, VoiceBargeDetector, voiceIsHallucination,
-  voiceLooksUnfinished, voiceFillerLang, voiceHeardText, VOICE_FILLERS } = core;
+  voiceLooksUnfinished, voiceFillerLang, voiceHeardText, VOICE_FILLERS, VOICE_NOISE_LEVELS, voiceNoiseSettings, voiceFilterChain } = core;
 
 // think blocks: closed ones removed, an open one hides the rest
 assert.strictEqual(voiceStripThink('<think>plan</think>Hello.'), 'Hello.');
@@ -135,3 +135,30 @@ assert.strictEqual(voiceFillerLang('What is my balance'), 'en');
 assert.ok(VOICE_FILLERS.en.length >= 2 && VOICE_FILLERS.bn.length >= 2);
 
 console.log('OK test_voice_core');
+
+// noise reduction: "crowd" ignores babble that "standard" would take for speech, and never boosts it with AGC
+{
+  const frame = (amp) => Float32Array.from({ length: 512 }, (_, i) => amp * Math.sin(i / 3));
+  const babble = frame(0.06);                       // rms ~0.042: other people talking nearby
+  const nearVoice = frame(0.5);                     // rms ~0.35: the person at the microphone
+  const std = new VoiceEnergyVad(VOICE_NOISE_LEVELS.standard.vad);
+  const crowd = new VoiceEnergyVad(VOICE_NOISE_LEVELS.crowd.vad);
+  for (let i = 0; i < 40; i++) { std.isVoiced(babble, 1, true); crowd.isVoiced(babble, 1, true); }
+  assert.strictEqual(std.isVoiced(frame(0.1), 1, false), true, 'standard counts a modest voice');
+  assert.strictEqual(crowd.isVoiced(frame(0.1), 1, false), false, 'crowd ignores it');
+  assert.strictEqual(crowd.isVoiced(nearVoice, 1, false), true, 'crowd still hears the close voice');
+  assert.strictEqual(VOICE_NOISE_LEVELS.crowd.constraints.autoGainControl, false);
+  assert.strictEqual(VOICE_NOISE_LEVELS.standard.constraints.autoGainControl, true);
+  assert.strictEqual(VOICE_NOISE_LEVELS.off.constraints.noiseSuppression, false);
+  assert.ok(VOICE_NOISE_LEVELS.crowd.startMs > VOICE_NOISE_LEVELS.standard.startMs, 'crowd needs a longer, steadier start');
+  assert.strictEqual(voiceNoiseSettings('nonsense'), voiceNoiseSettings('standard'), 'an unknown level falls back to standard');
+
+  // the filter is a speech band only in crowd mode and transparent otherwise, and can be switched live
+  const node = () => ({ frequency: { value: 0 }, connect() {}, type: '' });
+  const made = [];
+  const ctx = { createBiquadFilter() { const n = node(); made.push(n); return n; } };
+  const chain = voiceFilterChain(ctx, { connect() {} }, 'crowd');
+  assert.deepStrictEqual([made[0].frequency.value, made[1].frequency.value], [120, 3800]);
+  chain.set('standard');
+  assert.deepStrictEqual([made[0].frequency.value, made[1].frequency.value], [10, 20000]);
+}

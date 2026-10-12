@@ -35,6 +35,20 @@ class JoinTests(unittest.TestCase):
         self.assertEqual(media.join_interims(["see you Hello", "hello again"]),
                          "see you Hello again")
 
+    def test_punctuation_differences_at_the_cut_do_not_repeat_words(self):
+        # the model heard the re-sent tail with different punctuation: the words used to come out twice
+        self.assertEqual(
+            media.join_interims(["I have to be there and walk the place.", "walk the place, and then we go home."]),
+            "I have to be there and walk the place. and then we go home.")
+
+    def test_the_repeat_may_stop_a_word_short_of_the_end(self):
+        self.assertEqual(media.join_interims(["one two three four five", "three four six seven"]),
+                         "one two three four five six seven")
+
+    def test_bengali_words_keep_their_vowel_signs_when_compared(self):
+        a, b = "আমি ভালো আছি।", "ভালো আছি, আপনি"
+        self.assertEqual(media.join_interims([a, b]), a + " আপনি")
+
     def test_no_overlap_just_joins(self):
         self.assertEqual(media.join_interims(["one", "two three"]), "one two three")
 

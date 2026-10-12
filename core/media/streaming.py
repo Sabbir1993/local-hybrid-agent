@@ -19,6 +19,7 @@ import asyncio
 import re
 import secrets
 import time
+import unicodedata
 from typing import Optional
 
 from .constants import MediaError, media_cfg
@@ -41,17 +42,31 @@ def _purge() -> None:
         _STREAMS.pop(sid, None)
 
 
+def _norm(word: str) -> str:
+    """A word for comparing across windows: case and punctuation do not count. Only punctuation and
+    symbols are dropped (not combining marks), so Bengali words keep their vowel signs."""
+    return "".join(c for c in word.lower() if unicodedata.category(c)[0] not in "PS")
+
+
 def _overlap_tail(prev_words: list, new_words: list, max_k: int = 12) -> list:
-    """new_words minus a leading run that repeats prev_words' tail."""
+    """new_words minus a leading run that repeats words already in prev_words' tail.
+
+    The client re-sends ~0.75 s of the previous window so a cut never eats a word, and the model
+    hears that second differently: "story." then "story", a trailing word added or dropped at the
+    cut. Comparing exact words missed those, so the last few words came out twice, over and over.
+    Punctuation and case are ignored, and the repeat may end up to 3 words before the very end of
+    the previous text."""
     if not prev_words or not new_words:
         return new_words
-    n = min(max_k, len(prev_words), len(new_words))
-    for k in range(n, 0, -1):
-        if prev_words[-k:] == new_words[:k]:
-            return new_words[k:]
-        # same words, different case ("Hello" vs "hello" at a cut)
-        if [w.lower() for w in prev_words[-k:]] == [w.lower() for w in new_words[:k]]:
-            return new_words[k:]
+    prev = [_norm(w) for w in prev_words[-(max_k + 3):]]
+    new = [_norm(w) for w in new_words[:max_k]]
+    for k in range(min(max_k, len(prev), len(new)), 0, -1):
+        for skip in range(0, 4):                     # the repeat may stop `skip` words short of the end
+            end = len(prev) - skip
+            if end - k < 0:
+                break
+            if prev[end - k:end] == new[:k] and any(new[:k]):
+                return new_words[k:]
     return new_words
 
 

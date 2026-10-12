@@ -91,6 +91,13 @@ def build_launch_command(profile: dict) -> list[str]:
 
     tensor_split = tuned.get("tensor_split") or profile.get("tensor_split", CONFIG_DEFAULTS["tensor_split"])
     n_gpu_layers = tuned.get("n_gpu_layers") if tuned.get("n_gpu_layers") is not None else profile.get("n_gpu_layers", CONFIG_DEFAULTS["n_gpu_layers"])
+    # MoE models are split by experts, not by layer (see core/vram/moe.py)
+    from .vram.gguf_parser import parse_gguf_info
+    from .vram.moe import is_moe, resolve_offload
+    gguf = parse_gguf_info(profile["model_path"])
+    n_gpu_layers, n_cpu_moe = resolve_offload(
+        profile, gguf, int(n_gpu_layers),
+        tuned.get("n_cpu_moe"), profile.get("_auto_n_cpu_moe"))
     split_mode = profile.get("split_mode", CONFIG_DEFAULTS["split_mode"])
     gpu_devices = profile.get("gpu_devices", CONFIG_DEFAULTS["gpu_devices"])
     backend = profile.get("backend", CONFIG_DEFAULTS["backend"])
@@ -139,8 +146,17 @@ def build_launch_command(profile: dict) -> list[str]:
         cmd += ["--cache-reuse", str(profile["cache_reuse"])]
     # an unset/0 profile value used to mean llama's own 8192 MiB host-RAM prompt cache: bound it (-1 = no limit)
     cmd += ["-cram", str(profile.get("cache_ram") or MAIN_CACHE_RAM_MB)]
-    if profile.get("model_type") == "moe" and tuned.get("n_cpu_moe") is not None:
-        cmd += ["-ncmoe", str(tuned["n_cpu_moe"])]
+    if n_cpu_moe > 0:
+        cmd += ["-ncmoe", str(n_cpu_moe)]
+    # Expert weights left in RAM (a partial -ngl or -ncmoe): llama.cpp normally copies them to the
+    # GPU for long prompts (op offload) and the Vulkan build aborts there with
+    # GGML_ASSERT(id >= 0 && id < n_expert) - short warm-up prompts pass, the first real one
+    # kills the server. Keeping those ops on the CPU is slower for prompt processing but stable.
+    op_offload = profile.get("op_offload")
+    experts_in_ram = is_moe(profile, gguf) and (n_cpu_moe > 0 or (
+        gguf and 0 < n_gpu_layers < int(gguf.get("n_layer") or 0) + 1))
+    if op_offload is False or (op_offload is None and experts_in_ram):
+        cmd += ["--no-op-offload"]
     if profile.get("use_mmap") is False:
         cmd += ["--load-mode", "none"]
     cmd += ["--jinja"]

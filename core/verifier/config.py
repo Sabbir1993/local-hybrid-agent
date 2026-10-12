@@ -1,5 +1,6 @@
 import json
 import re
+import unicodedata
 from typing import Optional
 from .constants import APPLY_TO, DEFAULTS, MAX_EVIDENCE_CHARS, MODES
 
@@ -18,6 +19,21 @@ def settings(user_id: Optional[int] = None) -> dict:
     out["max_rounds"] = max(0, min(3, int(out.get("max_rounds") or 0)))
     out["min_length"] = max(0, int(out.get("min_length") or 0))
     return out
+
+
+_SMALLTALK = re.compile(
+    r"^(?:hi+|hello+|hey+|yo|hola|thanks?|thank you|thx|ok(?:ay)?|good (?:morning|afternoon|evening|night)|"
+    r"how are you|assalamu? ?alaikum|assalamualaikum|salam|সালাম|আসসালামু আলাইকুম|হ্যালো|হাই|ধন্যবাদ|কেমন আছো|কেমন আছেন)$",
+    re.IGNORECASE)
+
+
+def is_smalltalk(question: str) -> bool:
+    """A greeting or thanks: there is nothing in the reply to fact-check, and a check (plus a possible rewrite) costs
+    as much as the reply itself on a local model."""
+    # drop punctuation and symbols/emoji only: Bengali vowel signs are combining marks and must stay in the word
+    t = "".join(" " if unicodedata.category(c)[0] in "PS" else c for c in str(question or ""))
+    t = " ".join(t.split())
+    return bool(t) and len(t) <= 30 and bool(_SMALLTALK.match(t))
 
 
 def effective_mode(surface: str, answer: str, user_id: Optional[int] = None,

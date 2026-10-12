@@ -159,59 +159,56 @@
     speaking: 'Speaking… talk over me to interrupt',
   };
 
+  // No floating panel: voice chat is a state of the mic button. Its colour says what is happening
+  // (listening / hearing you / thinking / speaking), its ring follows the microphone level, and the
+  // tooltip carries the words that were heard. Clicking the button or pressing Esc ends it.
+  const stateTargets = () => [$id('claude-mic-split-pill'), $id('btn-voice')].filter(Boolean);
+
   function setState(st) {
     V.state = st;
-    const el = $id('voice-panel');
-    if (el) { el.dataset.state = st; const l = $id('voice-label'); if (l) l.textContent = LABELS[st] || ''; }
+    const mic = $id('btn-mic');
+    stateTargets().forEach((el) => { el.dataset.voiceState = st; });
+    if (mic && V.active) {
+      const L = sttLang();
+      const lang = L === 'bn' ? 'Bangla' : L === 'en' ? 'English' : 'Auto language (pin one in the menu for better accuracy)';
+      const t = (LABELS[st] || '') + ' [' + lang + '] - click to end';
+      mic.title = t; mic.setAttribute('aria-label', t);
+    }
   }
 
   function paintLevel(level) {
-    const el = $id('voice-level');
-    if (el) el.style.transform = 'scaleX(' + Math.min(1, level * 12).toFixed(2) + ')';
+    const pill = $id('claude-mic-split-pill');
+    if (pill) pill.style.setProperty('--voice-level', Math.min(1, level * 12).toFixed(2));
   }
 
   // language the person speaks: "auto" lets whisper guess per clip, which is unreliable on short sentences
+  // (chosen in the mic menu)
   function sttLang() {
-    const sel = $id('voice-lang');
-    const v = (sel && sel.value) || localStorage.getItem('stt_lang') || 'auto';
-    return v === 'auto' ? 'auto' : v;
+    let v = 'auto';
+    try { v = localStorage.getItem('stt_lang') || 'auto'; } catch (_) {}
+    return ['en', 'bn'].includes(v) ? v : 'auto';
   }
 
   function paintHeard(text) {
-    const el = $id('voice-heard');
-    if (el) el.textContent = text ? '“' + text + '”' : '';
+    const mic = $id('btn-mic');
+    if (mic && V.active && text) mic.title = 'Heard: \u201c' + text + '\u201d - click to end';
   }
 
-  function paintLatency(t) {
-    const el = $id('voice-lat');
-    if (!el || !t) return;
-    const s = (ms) => (ms == null ? '–' : (ms / 1000).toFixed(1) + 's');
-    el.textContent = 'last turn: heard ' + s(t.transcribeMs) + ' · first sentence ' + s(t.firstSentenceMs) + ' · first sound ' + s(t.firstAudioMs);
-  }
+  function paintLatency() {}
 
   function showPanel(on) {
-    let el = $id('voice-panel');
-    if (!on) { if (el) el.remove(); return; }
-    if (el) return;
-    el = document.createElement('div');
-    el.id = 'voice-panel';
-    el.setAttribute('role', 'status');
-    el.innerHTML = '<div class="voice-orb" aria-hidden="true"></div>'
-      + '<div class="voice-body"><div id="voice-label" class="voice-label"></div>'
-      + '<div class="voice-meter" aria-hidden="true"><div id="voice-level"></div></div>'
-      + '<div id="voice-heard" class="voice-heard"></div>'
-      + '<div class="voice-row"><label class="voice-hint" for="voice-lang">I speak</label>'
-      + '<select id="voice-lang" class="voice-lang" title="Pick your language for better recognition (Auto guesses for each sentence)">'
-      + '<option value="auto">Auto</option><option value="en">English</option><option value="bn">বাংলা</option></select></div>'
-      + '<div class="voice-hint">Headphones work best. Approvals stay on screen.</div>'
-      + '<div id="voice-lat" class="voice-hint"></div></div>'
-      + '<button id="voice-end" type="button" class="voice-end" title="End voice conversation (Esc)">End</button>';
-    document.body.appendChild(el);
-    $id('voice-end').onclick = () => V.stop();
-    const sel = $id('voice-lang');
-    const saved = localStorage.getItem('stt_lang') || 'auto';
-    sel.value = ['auto', 'en', 'bn'].includes(saved) ? saved : 'auto';
-    sel.onchange = () => { try { localStorage.setItem('stt_lang', sel.value); } catch (_) {} };
+    const pill = $id('claude-mic-split-pill');
+    if (pill) pill.classList.toggle('voice-live', !!on);
+    if (!on) {
+      stateTargets().forEach((el) => { delete el.dataset.voiceState; });
+      if (pill) pill.style.removeProperty('--voice-level');
+      const mic = $id('btn-mic');
+      if (mic) {                                    // back to the menu's own wording
+        const voice = mic.dataset.mode === 'voice';
+        mic.title = voice ? 'Voice chat' : 'Dictate (speech into the prompt)';
+        mic.setAttribute('aria-label', voice ? 'Voice chat' : 'Dictate');
+      }
+    }
   }
 
   function paintButton() {
@@ -457,7 +454,7 @@
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+        audio: Object.assign({ channelCount: 1 }, voiceNoiseSettings().constraints) });
     } catch (e) {
       note('Microphone is not available: ' + (e.message || e), true);
       return;
@@ -477,7 +474,8 @@
     const node = new AudioWorkletNode(ctx, 'voice-frames');
     const mute = ctx.createGain();
     mute.gain.value = 0;
-    src.connect(node); node.connect(mute); mute.connect(ctx.destination);   // connected, so the browser keeps pulling frames
+    const chain = voiceFilterChain(ctx, src, voiceNoiseLevel());
+    chain.out.connect(node); node.connect(mute); mute.connect(ctx.destination);   // connected, so the browser keeps pulling frames
 
     const pol = st.voice || {};
     const endMs = parseInt(localStorage.getItem('voice_end_silence_ms') || '', 10) || pol.end_silence_ms || DEFAULT_END_MS;
@@ -485,8 +483,9 @@
     S.ctx = ctx; S.stream = stream; S.node = node; S.src = src;
     S.player = new VoicePlayer(ctx);
     S.queue = new SpeakQueue(S.transport, S.player, (e) => note('Speech failed: ' + (e.message || e), true));
-    S.vad = new VoiceEnergyVad();
-    S.ep = new VoiceEndpointer({ endSilenceMs: endMs });
+    S.chain = chain;
+    S.vad = new VoiceEnergyVad(voiceNoiseSettings().vad);
+    S.ep = new VoiceEndpointer({ endSilenceMs: endMs, startMs: voiceNoiseSettings().startMs });
     S.barge = new VoiceBargeDetector();
     S.ring = []; S.utter = []; S.reply = null; S.turn = null; S.carry = ''; S.lastActivity = performance.now();
     S.pendingSend = null; S.pendingTrim = null; S.sentText = ''; S.ducked = false; S.quietFrames = 0;
@@ -503,6 +502,17 @@
     fetch('/media/tts/warmup?voice=en', { method: 'POST' }).catch(() => {});
     if (S.fillersOn) loadFillers();
   };
+
+  // the noise setting can be changed while talking: detector, filter and microphone follow it
+  window.addEventListener('voice-noise-change', () => {
+    if (!V.active || !S.vad) return;
+    const lv = voiceNoiseLevel();
+    const ns = voiceNoiseSettings(lv);
+    S.vad = new VoiceEnergyVad(ns.vad);
+    S.ep.o.startMs = ns.startMs;
+    try { S.chain.set(lv); } catch (_) {}
+    try { S.stream.getAudioTracks().forEach((t) => t.applyConstraints(ns.constraints)); } catch (_) {}
+  });
 
   V.stop = function () {
     if (!V.active) return;

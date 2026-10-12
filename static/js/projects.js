@@ -439,6 +439,86 @@ const SESS_PAGE = 15;
 const SESS_MAX = 100;
 const _sess = { items: [], hasMore: false, loading: false, key: '', obs: null };
 
+/* Session filter: the sidebar search icon opens a box that narrows the list to titles containing the text.
+   The list only ever holds the current mode's sessions (chats, agent sessions or code sessions), so that is what
+   gets filtered. While a filter is set the remaining pages are loaded too, so an older session is still found. */
+const _sessFilter = { text: '', mode: '', run: 0 };
+
+function sessionMatchesFilter(s) { return !_sessFilter.text || String(s.title || '').toLowerCase().includes(_sessFilter.text); }
+function sessionFilterNoun() {
+  const m = window.appMode || (agentMode ? 'code' : 'chat');
+  return m === 'agent' ? 'agent sessions' : (m === 'code' ? 'code sessions' : 'chats');
+}
+
+function renderSessionRows(list) {
+  list.innerHTML = '';
+  const shown = _sess.items.filter(sessionMatchesFilter);
+  shown.forEach(s => list.appendChild(sessionRowEl(s)));
+  if (_sessFilter.text && !shown.length) {
+    const note = document.createElement('div');
+    note.className = 'dim session-filter-empty';
+    note.textContent = `No ${sessionFilterNoun()} match "${_sessFilter.text}"`;     // textContent: the query is user input
+    list.appendChild(note);
+  }
+  const count = $('session-filter-count');
+  if (count) count.textContent = _sessFilter.text ? `${shown.length}/${_sess.items.length}` : '';
+  const inp = $('session-filter-input');
+  if (inp) inp.placeholder = `Filter ${sessionFilterNoun()}…`;
+}
+
+async function applySessionFilter() {
+  const list = $('session-list');
+  if (!list) return;
+  const run = ++_sessFilter.run;
+  renderSessionRows(list);
+  sessionsWatchBottom(list);
+  // a filter must see older sessions too: pull the remaining pages (bounded by SESS_MAX), then redraw
+  for (let i = 0; _sessFilter.text && _sess.hasMore && _sess.items.length < SESS_MAX && i < 10; i++) {
+    if (!(await loadMoreSessions(true)) || run !== _sessFilter.run) break;
+  }
+  if (run === _sessFilter.run) { renderSessionRows(list); sessionsWatchBottom(list); }
+}
+
+function closeSessionFilter(redraw = true) {
+  const bar = $('session-filter-bar');
+  const had = !!_sessFilter.text;
+  _sessFilter.text = '';
+  _sessFilter.run++;
+  const inp = $('session-filter-input');
+  if (inp) inp.value = '';
+  if (bar) bar.hidden = true;
+  $('btn-sidebar-search')?.setAttribute('aria-expanded', 'false');
+  if (redraw && had) applySessionFilter();
+}
+
+function toggleSessionFilter() {
+  const bar = $('session-filter-bar');
+  const inp = $('session-filter-input');
+  if (!bar || !inp) return;
+  if (!bar.hidden) { closeSessionFilter(); return; }
+  bar.hidden = false;
+  $('btn-sidebar-search')?.setAttribute('aria-expanded', 'true');
+  inp.placeholder = `Filter ${sessionFilterNoun()}…`;
+  inp.focus();
+}
+window.toggleSessionFilter = toggleSessionFilter;
+
+(function bindSessionFilter() {
+  let timer = null;
+  const wire = () => {
+    const inp = $('session-filter-input');
+    if (!inp || inp.dataset.bound) return;
+    inp.dataset.bound = '1';
+    inp.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { _sessFilter.text = inp.value.trim().toLowerCase(); applySessionFilter(); }, 120);
+    });
+    inp.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); closeSessionFilter(); } });
+    $('session-filter-clear')?.addEventListener('click', () => closeSessionFilter());
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire); else wire();
+})();
+
 const SESS_ICON_CHAT = '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.85;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
 const SESS_ICON_AGENT = '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.85;"><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M12 8V4H8"/><path d="M2 14h2"/><path d="M20 14h2"/><circle cx="9" cy="13" r="1" fill="currentColor"/><circle cx="15" cy="13" r="1" fill="currentColor"/><path d="M9 17h6"/></svg>';
 const SESS_ICON_CODE = '<svg class="session-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; vertical-align:-2px; margin-right:6px; opacity:0.85;"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
@@ -630,7 +710,7 @@ async function loadMoreSessions(silent = false) {
     _sess.hasMore = !!d.has_more && fresh.length > 0;
     if (!silent) {       // silent: the caller redraws the whole list itself (auto-restore search)
       const more = $('session-more');
-      fresh.forEach(s => list.insertBefore(sessionRowEl(s), more));
+      fresh.filter(sessionMatchesFilter).forEach(s => list.insertBefore(sessionRowEl(s), more));
       if (typeof updateBgIndicators === 'function') updateBgIndicators();
       sessionsWatchBottom(list);
     }
@@ -646,6 +726,8 @@ async function loadSessions(autoRestore = false) {
   const list = $('session-list');
   const base = sessionsUrl();
   const curAppMode = window.appMode || (agentMode ? 'code' : 'chat');
+  if (_sessFilter.mode && _sessFilter.mode !== curAppMode) closeSessionFilter(false);     // a filter belongs to one list
+  _sessFilter.mode = curAppMode;
 
   if (curAppMode === 'code' && !curProject) {
     _sess.items = []; _sess.hasMore = false; _sess.key = '';
@@ -729,8 +811,7 @@ async function loadSessions(autoRestore = false) {
 
     sessionsBindScroll();
     const top = list.scrollTop;
-    list.innerHTML = '';
-    _sess.items.forEach(s => list.appendChild(sessionRowEl(s)));
+    renderSessionRows(list);
     sessionsWatchBottom(list);
     list.scrollTop = top;
     if (typeof updateBgIndicators === 'function') updateBgIndicators();

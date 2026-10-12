@@ -67,7 +67,7 @@ function _paintShield() {
 /* Called when a request starts: gate mode hides the answer until it's checked. */
 function answerCheckBegin(L) {
   const mode = getAnswerCheckMode();
-  L.check = mode === 'gate' ? { state: 'pending', mode } : undefined;
+  L.check = mode === 'gate' ? { state: 'pending', mode, t0: Date.now() } : undefined;
   return mode;
 }
 window.answerCheckBegin = answerCheckBegin;
@@ -75,7 +75,8 @@ window.answerCheckBegin = answerCheckBegin;
 /* SSE hook. Returns true when the event was an answer-check event. */
 function sseAnswerCheck(L, ev, d) {
   if (ev === 'verify_start') {
-    L.check = { state: 'checking', mode: d.mode, checker: d.checker, source: d.source };
+    // keep what the gate already knows (start time, "Show now" clicked) while the check runs
+    L.check = Object.assign({}, L.check, { state: 'checking', mode: d.mode, checker: d.checker, source: d.source, t1: Date.now() });
     L.statusText = 'Double-checking with ' + (d.checker || 'the checker') + '…';
     if (typeof window.setLiveHud === 'function') {
       window.setLiveHud({ phase: 'running', text: L.statusText });
@@ -103,18 +104,50 @@ window.answerCheckEnd = answerCheckEnd;
 
 /* True while the answer must stay hidden (gate mode, not checked yet). */
 function answerCheckHides(m) {
-  return !!(m && m.check && m.check.mode === 'gate' && m.check.state !== 'done');
+  return !!(m && m.check && m.check.mode === 'gate' && m.check.state !== 'done' && !m.check.skipped);
 }
 window.answerCheckHides = answerCheckHides;
 
-function answerCheckGateHtml(m) {
-  const who = (m.check && m.check.checker) ? esc(m.check.checker) : 'the checker';
-  const txt = m.check && m.check.state === 'checking'
-    ? `Double-checking with <b>${who}</b>…`
-    : 'Writing the answer — it will be checked before it is shown…';
-  return `<div class="ac-gate" role="status" aria-live="polite"><span class="ac-shimmer"></span><span>🛡 ${txt}</span></div>`;
+/* What the gate shows right now: the stage, and how long it has been going / how much is written.
+   Stage 1 writing (the answer is being generated and is held back), stage 2 checking (a second model reads it). */
+function answerCheckGateMeta(m) {
+  const c = (m && m.check) || {};
+  const now = Date.now();
+  if (c.state === 'checking') return `${Math.max(0, Math.round((now - (c.t1 || now)) / 1000))}s`;
+  const secs = Math.max(0, Math.round((now - (c.t0 || now)) / 1000));
+  const text = String((m && m.content) || '').trim();
+  const words = text ? text.split(/\s+/).length : 0;
+  return (words ? `${words} words · ` : '') + `${secs}s`;
+}
+window.answerCheckGateMeta = answerCheckGateMeta;
+
+function answerCheckGateHtml(m, idx) {
+  const c = (m && m.check) || {};
+  const checking = c.state === 'checking';
+  const who = c.checker ? esc(c.checker) : 'the checker';
+  const step = checking ? '2/2' : '1/2';
+  const label = checking ? `Double-checking with <b>${who}</b>…` : 'Writing the answer…';
+  const hint = checking ? 'It appears as soon as the check is done.' : 'It is held back until it has been checked.';
+  const skip = (idx !== undefined && idx !== null)
+    ? `<button type="button" class="ac-skip" data-click="ac-skip" data-arg="${idx}" title="Show the answer without waiting for the check; the result is added when it finishes">Show now</button>`
+    : '';
+  return `<div class="ac-gate"><span class="ac-shimmer"></span>`
+    + `<span class="ac-gate-main" role="status" aria-live="polite"><span>🛡 <span class="ac-step">${step}</span> ${label}</span>`
+    + `<span class="ac-gate-hint">${hint}</span></span>`
+    + `<span class="ac-gate-meta" aria-hidden="true">${answerCheckGateMeta(m)}</span>${skip}</div>`;
 }
 window.answerCheckGateHtml = answerCheckGateHtml;
+
+/* "Show now": reveal the answer written so far without waiting; the check keeps running and its badge is added after. */
+function answerCheckSkip(idx) {
+  const list = (typeof messages !== 'undefined') ? messages : null;
+  const m = list && list[idx];
+  if (!m || !m.check) return;
+  m.check = Object.assign({}, m.check, { skipped: true });
+  if (typeof scheduleRenderLast === 'function' && idx === list.length - 1) scheduleRenderLast();
+  else if (typeof renderAll === 'function') renderAll();
+}
+window.answerCheckSkip = answerCheckSkip;
 
 /* Verdict badge under a finished answer. */
 function answerCheckBadgeHtml(m, idx) {

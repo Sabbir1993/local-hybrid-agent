@@ -102,7 +102,7 @@ class ProxyState:
         self.lock = asyncio.Lock()
         self.watchdog_task: Optional[asyncio.Task] = None
         self.keepalive_task: Optional[asyncio.Task] = None
-        self.keepalive_enabled = False
+        self.keepalive_enabled = _keepalive_default()
         self.keepalive_interval_s = KEEPALIVE_INTERVAL_S
         self.last_activity = time.time()
         self._log_tasks: set = set()
@@ -172,11 +172,12 @@ class ProxyState:
         else:
             raise ValueError("Invalid profile target")
 
-        cmd = build_launch_command(self.profile)
         # Preflight: refuse to spawn llama-server if the VRAM math says it
-        # won't fit (a WDDM OOM spill hangs the whole desktop on Arc).
+        # won't fit (a WDDM OOM spill hangs the whole desktop on Arc). It runs first
+        # because a MoE model's expert offload is chosen from the free VRAM it measures.
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, vram.check_or_raise, self.profile)
+        cmd = build_launch_command(self.profile)
         print(f"[server_manager] launching: {' '.join(cmd)}")
         self.process = subprocess.Popen(
             cmd,
@@ -436,6 +437,42 @@ class ProxyState:
         self.process = None
 
 
+def _keepalive_default() -> bool:
+    """On unless config runtime.keepalive is false: Windows demotes idle GPU allocations to
+    system memory, and a model that has sat idle comes back slow."""
+    try:
+        from .small_model import APP_CONFIG
+        return bool((APP_CONFIG.get("runtime") or {}).get("keepalive", True))
+    except Exception:
+        return True
+
+
+# A one-token "ping" only touches what that token needs. A mixture-of-experts model routes each
+# token to 8 of its 256 experts per layer, so a short ping leaves most expert weights untouched
+# and they are the ones the OS pages out. This text is ~120 tokens of mixed prose, code, numbers
+# and names so that the prefill routes through most experts; it is only used for MoE models.
+_MOE_WARM_TEXT = (
+    "Warm-up text, not a question. The quarterly report lists revenue, headcount and churn for "
+    "Dhaka, Chattogram and Sylhet; def merge(a, b): return {**a, **b}; SELECT id, name FROM "
+    "users WHERE active = 1; 3.14159 x 2718 = 8539; আমি বাংলায় কথা বলি; 日本語の文章です; "
+    "Ceci est une phrase en français; the quick brown fox jumps over the lazy dog; "
+    "import numpy as np; for i in range(10): print(i ** 2); JSON {\"k\": [1, 2, 3]}; "
+    "photosynthesis, mitochondria, inflation, jurisprudence, thermodynamics, Shakespeare."
+)
+
+
+def keepalive_prompt(profile: Optional[dict]) -> str:
+    try:
+        from .vram.gguf_parser import parse_gguf_info
+        from .vram.moe import is_moe
+        path = (profile or {}).get("model_path")
+        if path and is_moe(profile or {}, parse_gguf_info(path)):
+            return _MOE_WARM_TEXT
+    except Exception:
+        pass
+    return "ping"
+
+
 state = ProxyState()
 
 
@@ -454,7 +491,7 @@ async def keepalive_loop():
             # conversation prefix. With -np 1 there is no spare slot to use.
             n_slots = int((state.profile or {}).get("n_slots") or 1)
             await state.client.post("/completion", json={
-                "prompt": "ping",
+                "prompt": keepalive_prompt(state.profile),
                 "n_predict": 1,
                 "cache_prompt": False,
                 "id_slot": max(0, n_slots - 1),

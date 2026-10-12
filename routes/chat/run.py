@@ -9,6 +9,7 @@ from core.auth import Principal
 from core.deps import get_current_user
 from core.audit import audit_log
 from core import input_guard
+from core.chat_errors import friendly_chat_error
 from core import mcp as mcp_core
 from core import output_guard
 from core import verifier
@@ -151,7 +152,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     # Prompt scope S1: intent first, manuals only on intent. wants_file is
     # reused below for the tool loop (same inputs, same answer).
-    wants_file = wants_file_output(last_query) or file_followup == "edit"
+    # a short reply to the assistant's own "which style / how many slides?" question continues the deck request
+    prev_assistant = next((str(m.get("content") or "") for m in reversed(msgs[:-1]) if m.get("role") == "assistant"), "")[-500:]
+    deck_answer = (len(last_query) < 240 and "?" in prev_assistant and "[DOWNLOAD" not in prev_assistant
+                   and bool(prompt_scope._PPTX_RE.search(prev_assistant)))
+    wants_file = wants_file_output(last_query) or file_followup == "edit" or deck_answer
     has_file = bool(file_followup or wants_file)
     web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
                                                             explicit_only=voice_policy.web_explicit_only(req)))
@@ -352,6 +357,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if has_file:
         sys_parts.append(prompt_scope.FILE_MANUAL)
         sys_labels.append("file-manual")
+        if prompt_scope.pptx_intent(last_query, prior_files, msgs):
+            sys_parts.append(prompt_scope.PPTX_MANUAL)
+            sys_labels.append("pptx-manual")
     else:
         sys_parts.append(prompt_scope.FILE_MANUAL_LEAN)
         sys_labels.append("file-lean")
@@ -497,6 +505,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         # fallback event recreates the redactor for the local lane).
         redactor = output_guard.OutputRedactor(user, model_source == "cloud",
                                                sentence_release=voice_policy.sentence_release(req))
+        think_redactor = output_guard.OutputRedactor(user, model_source == "cloud")
         guard_event_sent = False
 
         def _guard_notice():
@@ -613,9 +622,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             yield f"event: delta\ndata: {json.dumps({'text': _tail})}\n\n"
                         redactor = output_guard.OutputRedactor(user, False,
                                                                sentence_release=voice_policy.sentence_release(req))
+                        think_redactor = output_guard.OutputRedactor(user, False)
                         continue
                     if ev == "thought_delta":
-                        yield f"event: thought_delta\ndata: {json.dumps({'delta': val})}\n\n"
+                        _t = think_redactor.feed(val)
+                        if _t:
+                            yield f"event: thought_delta\ndata: {json.dumps({'delta': _t})}\n\n"
                     elif ev == "content_to_thought":
                         # forced-open <think>: the text streamed as the answer was reasoning
                         redactor.reset()
@@ -634,6 +646,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     elif ev == "result":
                         res_dict = val
 
+                _tt = think_redactor.flush()
+                if _tt:
+                    yield f"event: thought_delta\ndata: {json.dumps({'delta': _tt})}\n\n"
                 # end of this turn's stream: release the redactor holdback so
                 # the final chars of the answer are shown too
                 _tail = redactor.flush()
@@ -652,9 +667,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     res_dict.get("content", "") if res_dict else "".join(streamed_content),
                     user, model_source == "cloud")
                 if _sem:
-                    if streamed_content:
-                        redactor.reset()
-                        yield "event: delta_reset\ndata: {}\n\n"
+                    redactor.reset()
+                    # purge: the withheld answer must not be moved into the "thinking" block, and the
+                    # thinking itself (which quoted the data) is dropped with it
+                    yield "event: delta_reset\ndata: {\"purge\": true}\n\n"
                     _msg = _sem.get("message") or "Response filtered by policy."
                     yield f"event: delta\ndata: {json.dumps({'text': _msg})}\n\n"
                     yield f"event: guard\ndata: {json.dumps({'rule': _sem.get('name'), 'message': _msg})}\n\n"
@@ -1113,7 +1129,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         yield f"event: queued\ndata: {json.dumps(val)}\n\n"
                         continue
                     if ev == "thought_delta":
-                        yield f"event: thought_delta\ndata: {json.dumps({'delta': val})}\n\n"
+                        _t = think_redactor.feed(val)
+                        if _t:
+                            yield f"event: thought_delta\ndata: {json.dumps({'delta': _t})}\n\n"
                     elif ev == "content_to_thought":
                         # forced-open <think>: the text streamed as the answer was reasoning
                         redactor.reset()
@@ -1130,6 +1148,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     elif ev == "result":
                         res_dict = val
 
+                _tt = think_redactor.flush()
+                if _tt:
+                    yield f"event: thought_delta\ndata: {json.dumps({'delta': _tt})}\n\n"
                 _tail = redactor.flush()
                 if _tail:
                     streamed_content.append(_tail)
@@ -1187,7 +1208,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            yield f"event: delta\ndata: {json.dumps({'text': f'⚠️ Chat error: {e}'})}\n\n"
+            print(f"[chat] request failed: {type(e).__name__}: {e}", file=sys.stderr)
+            yield f"event: delta\ndata: {json.dumps({'text': friendly_chat_error(e)})}\n\n"
             yield f"event: done\ndata: {{}}\n\n"
         finally:
             if redactor.matched:

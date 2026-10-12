@@ -1281,8 +1281,7 @@ async def run_agent_stream(req, user, ctx):
                     if _sem:
                         _msg = _sem.get("message") or "Response filtered by policy."
                         _red.reset()
-                        if final_content.strip():
-                            yield "event: delta_reset\ndata: {}\n\n"
+                        yield "event: delta_reset\ndata: {\"purge\": true}\n\n"
                         yield f"event: delta\ndata: {json.dumps({'text': _msg})}\n\n"
                         yield f"event: guard\ndata: {json.dumps({'rule': _sem.get('name'), 'message': _msg})}\n\n"
                         audit_log(user, action="output_guard.redact", resource=_sem.get("name"),
@@ -2009,7 +2008,7 @@ async def run_agent_stream(req, user, ctx):
             _sem = await output_guard.semantic_check(final_content, user, _cloud_out)
             if _sem:
                 _msg = _sem.get("message") or "Response filtered by policy."
-                yield "event: delta_reset\ndata: {}\n\n"
+                yield "event: delta_reset\ndata: {\"purge\": true}\n\n"
                 yield f"event: delta\ndata: {json.dumps({'text': _msg})}\n\n"
                 yield f"event: guard\ndata: {json.dumps({'rule': _sem.get('name'), 'message': _msg})}\n\n"
                 audit_log(user, action="output_guard.redact", resource=_sem.get("name"),

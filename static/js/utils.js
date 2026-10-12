@@ -68,6 +68,7 @@ const CLICK_ACTIONS = {
   },
   'remove-attachment': (el) => removeAttachment(parseInt(el.dataset.arg, 10)),
   'open-image': (el) => openImageModal(el.src, 'Image attachment'),
+  'ac-skip': (el) => (typeof answerCheckSkip === 'function' ? answerCheckSkip(parseInt(el.dataset.arg, 10)) : null),
   'think-summary': (el, e) => onThinkSummaryClick(parseInt(el.dataset.arg, 10), e),
   'submit-grill': (el) => submitGrillAnswers(parseInt(el.dataset.arg, 10)),
   'new-project': () => document.getElementById('btn-newproject').click(),

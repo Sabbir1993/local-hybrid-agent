@@ -71,10 +71,17 @@
           <button class="claude-icon-tool" id="btn-new-session" title="New Session (+)" aria-label="New Session">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
           </button>
-          <button class="claude-icon-tool" id="btn-sidebar-search" title="Search sessions (/)">
+          <button class="claude-icon-tool" id="btn-sidebar-search" title="Filter sessions" aria-label="Filter sessions" aria-expanded="false" aria-controls="session-filter-bar">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
           </button>
         </div>
+      </div>
+      <div class="session-filter-bar" id="session-filter-bar" hidden>
+        <input type="search" id="session-filter-input" placeholder="Filter chats…" autocomplete="off" maxlength="100" aria-label="Filter sessions by title">
+        <span class="dim" id="session-filter-count" aria-live="polite"></span>
+        <button class="claude-icon-tool" id="session-filter-clear" title="Clear filter (Esc)" aria-label="Clear filter">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
       </div>
       <div class="claude-sessions-scroll" id="session-list">
         <div class="dim" style="font-size:12px; padding:6px;">no chats yet</div>
@@ -224,21 +231,26 @@
                 </div>
                 <!-- Voice Dropdown Menu (Image 2) -->
                 <div class="claude-voice-menu" id="claude-voice-menu" role="menu" style="display:none;">
-                  <button type="button" class="claude-menu-item active" data-voice-mode="transcribe">
-                    <span class="claude-menu-check">✓</span>
+                  <button type="button" class="claude-menu-item active" data-voice-mode="transcribe" title="Dictate speech into the prompt box">
                     <span class="claude-menu-icon">🎤</span>
-                    <div class="claude-menu-text">
-                      <div class="claude-menu-title">Transcribe</div>
-                      <div class="claude-menu-desc">Dictate speech into prompt box</div>
-                    </div>
+                    <span class="claude-menu-title">Dictate</span>
+                    <span class="claude-menu-check">✓</span>
                   </button>
-                  <button type="button" class="claude-menu-item" data-voice-mode="voice">
-                    <span class="claude-menu-check"></span>
+                  <button type="button" class="claude-menu-item" data-voice-mode="voice" title="Talk with the assistant, hands-free">
                     <span class="claude-menu-icon">🗣</span>
-                    <div class="claude-menu-text">
-                      <div class="claude-menu-title">Voice to voice</div>
-                      <div class="claude-menu-desc">Real-time two-way voice chat</div>
-                    </div>
+                    <span class="claude-menu-title">Voice chat</span>
+                    <span class="claude-menu-check"></span>
+                  </button>
+                  <div class="claude-menu-sep" aria-hidden="true"></div>
+                  <button type="button" class="claude-menu-item" id="btn-voice-lang" title="The language you speak. Auto guesses for every sentence, which is less reliable on short ones">
+                    <span class="claude-menu-icon">🌐</span>
+                    <span class="claude-menu-title">I speak</span>
+                    <span class="claude-menu-value" id="voice-lang-value">Auto</span>
+                  </button>
+                  <button type="button" class="claude-menu-item" id="btn-voice-noise" title="Noise reduction. Crowd: for a noisy room, only a close, clear voice counts">
+                    <span class="claude-menu-icon">🎧</span>
+                    <span class="claude-menu-title">Noise reduction</span>
+                    <span class="claude-menu-value" id="voice-noise-value">Standard</span>
                   </button>
                 </div>
               </div>

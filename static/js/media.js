@@ -211,8 +211,11 @@ async function micStart() {
   }
   let stream;
   try {
+    // noise setting from the mic menu (voice-core.js); "standard" keeps the previous behaviour except
+    // that automatic gain stays on, as it is in voice chat
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      audio: Object.assign({ channelCount: 1 }, typeof voiceNoiseSettings === 'function'
+        ? voiceNoiseSettings().constraints : { echoCancellation: true, noiseSuppression: true }) });
   } catch (e) {
     const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
     toast(denied ? 'The microphone is blocked. Allow it from the 🔒 icon in the address bar, then try again.'
@@ -220,9 +223,20 @@ async function micStart() {
     return;
   }
   const chunks = [];
-  const rec = new MediaRecorder(stream);
   const Ctx = window.AudioContext || window.webkitAudioContext;
   const actx = Ctx ? new Ctx() : null;
+  // crowd mode: record and stream the speech band only (what the recorder hears is what gets transcribed)
+  let recStream = stream;
+  if (actx && typeof voiceNoiseSettings === 'function' && voiceNoiseSettings().filter && actx.createMediaStreamDestination) {
+    try {
+      await actx.resume();
+      const chain = voiceFilterChain(actx, actx.createMediaStreamSource(stream), voiceNoiseLevel());
+      const dest = actx.createMediaStreamDestination();
+      chain.out.connect(dest);
+      recStream = dest.stream;
+    } catch (_) { recStream = stream; }
+  }
+  const rec = new MediaRecorder(recStream);
   const state = { rec, stream, actx, chunks, t0: Date.now(), raf: 0 };
   MEDIA.rec = state;
   // insert position: where the caret was before the mic button took focus
@@ -242,7 +256,7 @@ async function micStart() {
   // live path: parallel PCM tap + a server session; any failure keeps streamDead
   // and stopping falls back to the full MediaRecorder audio exactly as before
   Object.assign(state, { seq: 0, chain: Promise.resolve(), streamDead: true, streamId: null,
-                         cap: _streamCaptureStart(stream, actx), lastWin: Date.now() });
+                         cap: _streamCaptureStart(recStream, actx), lastWin: Date.now() });
   if (state.cap) {
     try {
       const sr = await fetch('/media/transcribe_stream/start', { method: 'POST',
@@ -291,12 +305,28 @@ async function _recFinished(s) {
       const fin = await s.chain.then(() => mediaStreamFinish(s.streamId));
       if (!fin.text) { toast('No speech was heard. Try again a little closer to the microphone.'); return; }
       _streamRenderInput(s, fin.text, true);
+      _recRefine(s);
     } catch (e) {
       await _recTranscribeBlob(s);   // live path broke mid-flight: use the full recording
     }
     return;
   }
   await _recTranscribeBlob(s);
+}
+
+/* The live text is stitched from 4 s windows that can start or end mid-word, so it is the least accurate
+ * transcript there is. Once recording stops, the whole recording is transcribed in one go (the model
+ * sees full sentences) and replaces the live text, unless the person already edited it. */
+async function _recRefine(s) {
+  if (!s.chunks.length) return;
+  const input = $('input');
+  const shown = input ? input.value : null;
+  try {
+    const blob = new Blob(s.chunks, { type: s.rec.mimeType || 'audio/webm' });
+    const text = await mediaTranscribeBlob(blob);
+    if (!text || !input || input.value !== shown || input.value !== s.lastRendered) return;   // edited meanwhile: keep theirs
+    _streamRenderInput(s, text, true);
+  } catch (_) { /* the live text stays */ }
 }
 
 /* the full-recording path: also the fallback when live streaming fails */
@@ -1060,7 +1090,8 @@ document.addEventListener('click', async e => {
 /* ---------------- init ---------------- */
 (function initMedia() {
   const b = $('btn-mic');
-  if (b) b.addEventListener('click', () => { if (MEDIA.rec) micStop(); else micStart(); });
+  // in voice-chat mode the same button starts the conversation instead (claude-dock.js)
+  if (b) b.addEventListener('click', () => { if (b.dataset.mode === 'voice') return; if (MEDIA.rec) micStop(); else micStart(); });
   const input = $('input');
   if (input) input.addEventListener('blur', () => { MEDIA.sel = [input.selectionStart, input.selectionEnd, input.value]; });
   document.addEventListener('keydown', e => {

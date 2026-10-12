@@ -21,6 +21,23 @@ class Target:
     def source(self) -> str:
         return "cloud" if self.cm else "local"
 
+    def model_name(self) -> str:
+        """The model that serves this step (cloud display name, or the local model's file name)."""
+        try:
+            if self.cm:
+                return str(self.cm.display)
+            if self.lane == "main":
+                from ..state import state
+                prof = state.profile or {}
+                if prof.get("name"):
+                    return str(prof["name"])
+                mp = prof.get("model_path")
+                return mp.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0] if mp else "main"
+            inst = _inst(self.lane)
+            return inst.model_path.stem if inst is not None and inst.model_path else self.lane
+        except Exception:
+            return self.lane
+
     def describe(self) -> str:
         if self.cm:
             return f"cloud-{self.lane}:{self.cm.display}"

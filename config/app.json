@@ -69,14 +69,15 @@
       "default_size": "medium"
     },
     "whisper-large-v3": {
-      "model": "orchestrator/voice-models/ggml-large-v3-turbo-q5_0.bin",
+      "model": "orchestrator/voice-models/ggml-large-v3.bin",
       "port": 8096,
       "gpu": 1,
       "threads": 8,
       "engine": "whisper",
       "language": "auto",
       "label": "Whisper large-v3",
-      "kind": "stt"
+      "kind": "stt",
+      "fallback_enabled": false
     }
   },
   "router": {
@@ -312,7 +313,7 @@
     ]
   },
   "input_guard": {
-    "enabled": true,
+    "enabled": false,
     "rules": [
       {
         "id": "input_guard-2-secret-egress",
@@ -347,7 +348,7 @@
     ]
   },
   "output_guard": {
-    "enabled": true,
+    "enabled": false,
     "rules": [
       {
         "id": "output_guard-2-kb-leak",
@@ -362,14 +363,14 @@
         "roles": [],
         "users": [],
         "message": "That content came from the organizational knowledge base and is restricted to the roles cleared for it. Answer the question without reproducing it.",
-        "replacement": "",
+        "replacement": "\u2588\u2588\u2588\u2588\u2588",
         "enabled": true
       },
       {
         "id": "output_guard-1-1790054059571",
         "name": "Never share personal info from the knowledge base",
         "type": "semantic",
-        "description": "Never share personal information from organizational knowledge base if user asks.",
+        "description": "Never share mobile number information from organizational knowledge base if user asks.",
         "scope": "block_all",
         "roles": [],
         "users": [],

@@ -8,7 +8,8 @@ async def _classify(policy: str, text: str) -> bool:
     """Ask a LOCAL model (never cloud) whether `text` violates the natural-language
     policy -- the "Policy checks" job (core/lanes.py; the executor by default).
     Module-level so tests can monkeypatch it."""
-    from .. import lanes
+    from .. import lanes, reasoning
+    from ..lanes import routing
     route = lanes.targets("input_guard")      # local_only job: no cloud targets
     t = route[0] if route else None
     if t is None or not t.available():
@@ -25,9 +26,14 @@ async def _classify(policy: str, text: str) -> bool:
                           "Answer YES or NO only.")},
         ],
         "temperature": 0.0,
-        "max_tokens": 4,
+        # A reasoning model spends a 4-token budget on its think block and returns an empty
+        # answer, which read as "NO" and let every answer through. Thinking is switched off for
+        # this call (the classifier is local only, so these llama-server fields are always valid).
+        "max_tokens": 8,
         "stream": False,
+        **reasoning.local_fields("none"),
     }
+    rid, t0 = routing._account_begin("input_guard", t)
     try:
         client = await t.client()
         r = await asyncio.wait_for(
@@ -35,9 +41,15 @@ async def _classify(policy: str, text: str) -> bool:
             timeout=SEMANTIC_TIMEOUT_S)
         r.raise_for_status()
         data = r.json()
-        ans = str(data["choices"][0]["message"]["content"] or "").strip().upper()
+        routing._account_end("input_guard", t, rid, t0, 200, data)
+        msg = data["choices"][0]["message"]
+        ans = str(msg.get("content") or "").strip().upper()
+        if not ans:
+            # nothing usable came back: say so, because "no answer" is not "no violation"
+            print("[input_guard] semantic classifier returned an empty answer (fail-open)", file=sys.stderr)
         return ans.startswith("YES")
     except Exception as e:
+        routing._account_end("input_guard", t, rid, t0, 500, None)
         print(f"[input_guard] semantic classifier unavailable (fail-open): {e}",
               file=sys.stderr)
         return False

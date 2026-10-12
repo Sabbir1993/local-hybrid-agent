@@ -7,33 +7,19 @@
                             background: color-mix(in srgb, var(--green) 14%, transparent); }
 .comp-voice-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* top centre, under the header: never over the message box */
-#voice-panel { position: fixed; left: 50%; top: 68px; transform: translateX(-50%); z-index: 60;
-               display: flex; align-items: center; gap: 14px; min-width: 300px; max-width: min(92vw, 460px);
-               padding: 12px 16px; border-radius: 16px; border: 1px solid var(--border);
-               background: var(--panel); color: var(--text); box-shadow: 0 8px 28px rgba(0, 0, 0, .35); }
-#voice-panel .voice-orb { width: 38px; height: 38px; flex: none; border-radius: 50%; background: var(--text-muted);
-                          transition: background .2s, box-shadow .2s; }
-#voice-panel[data-state="listening"] .voice-orb { background: var(--accent); box-shadow: 0 0 0 6px var(--accent-bg); }
-#voice-panel[data-state="hearing"] .voice-orb { background: var(--green); box-shadow: 0 0 0 8px color-mix(in srgb, var(--green) 25%, transparent);
-                                                animation: voice-pulse 0.9s ease-in-out infinite; }
-#voice-panel[data-state="thinking"] .voice-orb { background: var(--amber); animation: voice-pulse 1.4s ease-in-out infinite; }
-#voice-panel[data-state="speaking"] .voice-orb { background: var(--accent); animation: voice-pulse 0.6s ease-in-out infinite; }
-#voice-panel .voice-body { flex: 1; min-width: 0; }
-#voice-panel .voice-label { font-size: 13px; font-weight: 600; }
-#voice-panel .voice-meter { height: 4px; margin: 6px 0 4px; border-radius: 2px; background: var(--panel2); overflow: hidden; }
-#voice-panel #voice-level { height: 100%; width: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left;
-                            transition: transform .06s linear; }
-#voice-panel .voice-hint { font-size: 11px; color: var(--text-muted); }
-#voice-panel .voice-end { flex: none; border: 1px solid var(--border); background: var(--panel2); color: var(--text);
-                          border-radius: 999px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; }
-#voice-panel .voice-end:hover { border-color: var(--red); color: var(--red); }
-#voice-panel .voice-end:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* voice chat is shown on the mic pill itself (no floating panel): colour = state, ring = mic level */
+.claude-mic-split-pill.voice-live { background: color-mix(in srgb, var(--voice-c, var(--accent)) 14%, transparent);
+  border-color: color-mix(in srgb, var(--voice-c, var(--accent)) 45%, transparent);
+  box-shadow: 0 0 0 calc(var(--voice-level, 0) * 5px) color-mix(in srgb, var(--voice-c, var(--accent)) 30%, transparent);
+  transition: box-shadow .06s linear, background .2s, border-color .2s; }
+.claude-mic-split-pill.voice-live .claude-mic-main-btn { color: var(--voice-c, var(--accent)); }
+.claude-mic-split-pill[data-voice-state="listening"] { --voice-c: var(--accent); }
+.claude-mic-split-pill[data-voice-state="hearing"]   { --voice-c: var(--green); }
+.claude-mic-split-pill[data-voice-state="thinking"]  { --voice-c: var(--amber); }
+.claude-mic-split-pill[data-voice-state="speaking"]  { --voice-c: var(--blue, #60a5fa); }
+.claude-mic-split-pill[data-voice-state="thinking"] .claude-mic-main-btn,
+.claude-mic-split-pill[data-voice-state="speaking"] .claude-mic-main-btn { animation: voice-pulse 1.2s ease-in-out infinite; }
+.claude-mic-split-pill[data-voice-state="speaking"] .claude-mic-main-btn { animation-duration: .7s; }
 
-@keyframes voice-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
-@media (prefers-reduced-motion: reduce) { #voice-panel .voice-orb { animation: none !important; } }
-
-#voice-panel .voice-heard { font-size: 12.5px; margin: 2px 0 4px; min-height: 1.2em; color: var(--text); overflow-wrap: anywhere; }
-#voice-panel .voice-row { display: flex; align-items: center; gap: 6px; margin: 2px 0 4px; }
-#voice-panel .voice-lang { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
-                           font-size: 11.5px; padding: 1px 4px; }
+@keyframes voice-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.14); } }
+@media (prefers-reduced-motion: reduce) { .claude-mic-split-pill .claude-mic-main-btn { animation: none !important; } }

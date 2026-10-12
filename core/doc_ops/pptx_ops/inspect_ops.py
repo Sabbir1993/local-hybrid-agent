@@ -17,6 +17,8 @@ def inspect(data: bytes) -> dict:
     for i, slide in enumerate(prs.slides, 1):
         els.append({"addr": f"s{i}", "kind": "slide", "text": f"layout: {slide.slide_layout.name}"})
         for sh in _iter_shapes(slide.shapes):
+            if sh.name.startswith("deco"):      # decoration drawn by design.py (footer, accents, badges)
+                continue
             base = f"s{i}/sh{sh.shape_id}"
             kind = _shape_kind(sh)
             if kind == "table":

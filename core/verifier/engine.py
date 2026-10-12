@@ -2,7 +2,7 @@ import asyncio
 import re
 import sys
 from typing import Optional
-from .config import _parse, effective_mode, evidence_from, settings
+from .config import _parse, effective_mode, evidence_from, is_smalltalk, settings
 from .constants import MAX_DRAFT_CHARS, REVISE_TIMEOUT_S, VERIFY_TIMEOUT_S, _REVISE, _SYSTEM
 
 
@@ -12,7 +12,10 @@ def _checker_label(t) -> str:
         d = registry().get(t.lane) or {}
         if t.cm is not None:
             return t.cm.display
-        return str(d.get("label") or t.lane)
+        label = str(d.get("label") or t.lane)
+        model = t.model_name()
+        # which model actually checked, so a slow or wrong check can be traced to it
+        return f"{label} · {model[:34]}" if model else label
     except Exception:
         return t.lane
 
@@ -120,7 +123,7 @@ async def sse_events(user, surface: str, question: str, answer: str, msgs: list,
     from .. import lanes, output_guard
     from ..sse import sse
     mode = effective_mode(surface, answer, user.id, override)
-    if mode == "off":
+    if mode == "off" or is_smalltalk(question):
         return
     t = lanes.primary("verify", user.id)
     if t is None:
