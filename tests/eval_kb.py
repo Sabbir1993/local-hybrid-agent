@@ -139,7 +139,9 @@ def kb_environment(root: Path):
         return None
     try:
         # both bindings: a real embedder here would start a llama-server on the GPU and take minutes
+        import core.knowledge_router as knowledge_router    # binds _embed_texts at import and backfills vectors on search
         with mock.patch.object(memory_pkg, "_embed_texts", no_embed), mock.patch.object(indexing_mod, "_embed_texts", no_embed), \
+                mock.patch.object(knowledge_router, "_embed_texts", no_embed), \
                 mock.patch("routes.knowledge.helpers.audit_log"), mock.patch("core.audit.audit_log"):
             yield
     finally:

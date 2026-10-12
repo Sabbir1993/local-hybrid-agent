@@ -149,7 +149,7 @@ VISIBLE_DEVICES_ENV = {"vulkan": "GGML_VK_VISIBLE_DEVICES", "cuda": "CUDA_VISIBL
                        "metal": "GGML_METAL_NOOP"}  # Metal has no visible-devices variable
 ```
 
-`devices.py` builds its regex from `DEVICE_PREFIX`, so it picks `MTL` up
+`core/vram/devices.py` builds its regex from `DEVICE_PREFIX`, so it picks `MTL` up
 automatically. Then verify the parse against your real output:
 
 ```bash
