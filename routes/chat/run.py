@@ -263,6 +263,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # How much the model reasons: the composer's effort level, independent of
     # Deep research; mapped per local/cloud target in common._llm_chat_stream_raw
     effort = reasoning.resolve(req.reasoning_effort, deep)
+    # Building or editing an Office file / PDF is writing, not puzzle solving: unrestricted ("Extra") thinking only burns
+    # minutes before the first slide. The ceiling is app.json reasoning_effort.doc_build_ceiling (default "medium").
+    doc_build = (pdf_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]) or file_followup == "edit"
+                 or bool(_re.search(r"\.(?:pptx|docx|pdf)\b", prev_assistant, _re.IGNORECASE)))
+    if doc_build:
+        effort = reasoning.cap(effort, str((APP_CONFIG.get("reasoning_effort") or {}).get("doc_build_ceiling", "medium")))
 
     # Organizational knowledge base: permission-scoped routing & retrieval.
     # Injected only for company-directed queries or strongly matching chunks -
@@ -1093,6 +1099,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         res_str = f"error: {e}"
                         ok = False
 
+                    if not ok and t_name in chat_media_tools and "isn't loaded" in str(res_str):
+                        # the image/video model is not running: stop offering the tool, or the model retries it every round
+                        chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") != t_name]
                     if t_name in WEB_TOOL_NAMES:
                         web_calls += 1
                     yield sse("tool_result", {'id': tc_id, 'name': t_name, 'ok': ok, 'result': res_str})
