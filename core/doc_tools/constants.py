@@ -40,15 +40,32 @@ DOC_EDIT_SCHEMA = {"type": "function", "function": {
 
 DOC_CREATE_SCHEMA = {"type": "function", "function": {
     "name": "doc_create",
-    "description": "Create a new .pptx/.docx/.xlsx/.csv/.pdf from markdown. For .pptx use an outline: '# Deck title', "
-                   "'subtitle:', 'theme: midnight|corporate|forest|sunset|minimal|royal', then slides separated by '---', "
-                   "each '## Title' + 2-5 short bullets (8-12 slides, max 14; optional 'layout: cards|stats|timeline|"
-                   "two-column|quote|section', 'notes:'). Tables as markdown tables or CSV. Built so later doc_edit calls "
-                   "can change parts of it.",
+    "description": "Create a new .pptx/.docx/.xlsx/.csv/.pdf from markdown. For .pptx use an outline: 'theme: "
+                   "midnight|corporate|forest|sunset|minimal|royal', '# Deck title', 'subtitle:', then slides separated "
+                   "by '---', each '## Title' + 3-5 short bullets (optional 'layout: cards|stats|timeline|two-column|"
+                   "quote|section', 'notes:'). Tables as markdown tables or CSV. A deck or PDF of more than ~6 "
+                   "slides/sections is built in pieces: send ONLY the cover and the first 2 slides (or the first "
+                   "sections) here with total=<how many the user wants>, then add the rest with doc_append. Built so "
+                   "later doc_edit calls can change parts of it.",
     "parameters": {"type": "object", "properties": {
         "file": {"type": "string", "description": "file name with extension"},
         "content": {"type": "string", "description": "markdown / table text"},
+        "total": {"type": "integer", "description": "how many slides (pptx) or sections (pdf/docx) the finished "
+                                                    "document will have; set it when building in pieces"},
         "template": {"type": "string", "description": "optional .pptx whose theme and layouts to use"},
     }, "required": ["file", "content"]}}}
 
-DOC_SCHEMAS = [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA, DOC_CREATE_SCHEMA]
+DOC_APPEND_SCHEMA = {"type": "function", "function": {
+    "name": "doc_append",
+    "description": "Add the NEXT 2-3 slides (.pptx) or sections (.pdf/.docx) to a document you are building in pieces "
+                   "and rebuild it in place; the user watches it grow in the preview pane. Use the exact file name "
+                   "doc_create returned. Same markdown format as doc_create (slides separated by '---', each "
+                   "'## Title' + 3-5 short bullets, plain text only). The last slide is the closing slide. Set "
+                   "done=true with the final call, never earlier.",
+    "parameters": {"type": "object", "properties": {
+        "file": {"type": "string", "description": "the file name returned by doc_create"},
+        "content": {"type": "string", "description": "markdown for the next 2-3 slides / sections only"},
+        "done": {"type": "boolean", "description": "true on the last call: finishes the document"},
+    }, "required": ["file", "content"]}}}
+
+DOC_SCHEMAS = [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA, DOC_CREATE_SCHEMA, DOC_APPEND_SCHEMA]

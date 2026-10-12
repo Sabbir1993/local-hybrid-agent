@@ -75,7 +75,7 @@ PPTX_MANUAL = (
     "theme that fits the topic. To change only the look of an existing deck, call write_file again with the same slides and a new `theme:` line.\n"
 )
 
-_PPTX_RE = re.compile(r"(pptx?|power ?point|slides?|slide deck|deck|presentation)", re.I)
+_PPTX_RE = re.compile(r"\b(pptx?|power ?point|slides?|slide deck|deck|presentation)\b", re.I)
 
 
 def pptx_intent(query: str, prior_files=None, msgs=None) -> bool:
@@ -340,11 +340,15 @@ DECK_BRIEF = (
     '"Forest (green + amber)","Sunset (charcoal + coral)","Minimal (white, black, red)","Royal (indigo + gold)"]},'
     '{"id":"extra","type":"text","q":"Anything it must include? (optional)"}],"submit_label":"Build my deck"}\n'
     "```\n"
-    "- After the answers (or when the user already specified them): call write_file ONCE with a .pptx filename and markdown "
-    "content: first line `Theme: <midnight|corporate|forest|sunset|minimal|royal>`, then `# Deck title` and a subtitle line; "
-    "then exactly the requested number of slides, each `## Slide title` + 3-5 bullets of at most 12 words, slides separated by "
-    "a line containing only `---`, last slide a closing/thank-you slide. Plain text only: no emoji, no `>` quotes, no tables, "
-    "no ASCII diagrams. Never write a .md file for a PowerPoint request.")
+    "- After the answers (or when the user already specified them), BUILD THE DECK IN PIECES so the user watches it grow:\n"
+    "  1. First work out the slide plan in your head: exactly N slides (the number they chose, mid-range if a range), one "
+    "title + one-line purpose each, last slide a closing/thank-you slide.\n"
+    "  2. Call doc_create(file='<topic>.pptx', total=N, content=...) with ONLY: first line `Theme: <midnight|corporate|forest|"
+    "sunset|minimal|royal>` (the palette they chose), `# Deck title`, a subtitle line, then slides 1-2 (each `## Slide title` + "
+    "3-5 bullets of at most 12 words, slides separated by a line containing only `---`).\n"
+    "  3. Then call doc_append(file=<the exact name doc_create returned>, content=<next 2-3 slides>) again and again, following "
+    "your plan, until N slides exist; put done=true on the last call. Plain text only: no emoji, no `>` quotes, no tables, "
+    "no ASCII diagrams. Never write a .md file for a PowerPoint request and never send the whole deck in one call.")
 
 _DECK_ASK_RE = re.compile(
     r"\b(ppt|pptx|power\s*point|presentation|slide\s*deck|slides?|deck)\b", re.IGNORECASE)

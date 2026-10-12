@@ -23,8 +23,8 @@ from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch, 
 from core import web_search as web_search_mod
 from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA, _common_resolve
 from core.request_context import run_in_executor_ctx, set_tool_allowlist, tool_allowed
-from core.doc_tools import (DOC_EDIT_SCHEMA, DOC_INSPECT_SCHEMA, tool_doc_edit_common,
-                            tool_doc_inspect_common)
+from core.doc_tools import (CHAT_IMPLS as _DOC_CHAT_IMPLS, DOC_APPEND_SCHEMA, DOC_CREATE_SCHEMA, DOC_EDIT_SCHEMA,
+                            DOC_INSPECT_SCHEMA, tool_doc_inspect_common)
 from core.agent_loop import (
     run_tool,
     safe_parse_and_repair_args,
@@ -167,6 +167,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     chat_tools = [CHAT_WRITE_FILE_SCHEMA]
     if has_file:
         chat_tools += [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
+        if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
+            chat_tools += [DOC_CREATE_SCHEMA, DOC_APPEND_SCHEMA]       # decks / PDFs are built in pieces
     from core.agent_tools import AGENT_TOOLS
     skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
     if skb:
@@ -1051,13 +1053,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                     res_str, done = rest
                                     if done and done.get("markdown"):
                                         made_media.append(done["markdown"])
-                        elif t_name in ("doc_inspect", "doc_edit"):
-                            impl = tool_doc_inspect_common if t_name == "doc_inspect" else tool_doc_edit_common
+                        elif t_name in ("doc_inspect", "doc_edit", "doc_create", "doc_append"):
+                            impl = _DOC_CHAT_IMPLS[t_name]
                             res_str = await run_in_executor_ctx(impl, args)
                             if res_str.startswith("doc error"):
                                 res_str = "error: " + res_str
                             else:
-                                written_files.extend(_DL_TAG_RE.findall(res_str))
+                                written_files.extend(f for f in _DL_TAG_RE.findall(res_str) if f not in written_files)   # one deck, many doc_append steps
                         elif t_name == "write_file" and _wraps_media(
                                 made_media, args.get("path") or args.get("file") or args.get("filename"), last_query):
                             res_str = _WRAP_REFUSAL

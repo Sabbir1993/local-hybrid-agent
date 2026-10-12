@@ -81,3 +81,19 @@ async def agent_slides(path: str, space: Optional[str] = None):
     except Exception as e:
         return JSONResponse({"error": f"could not read presentation: {type(e).__name__}"}, status_code=422)
     return JSONResponse(model, headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/agent/doc-draft")
+async def doc_draft(path: str, user: Principal = Depends(get_current_user)):
+    """HTML draft of a PDF that is still being built in pieces (doc_create + doc_append). The real PDF is printed once, at
+    the end; until then the right-hand pane shows this page, rendered from the stored markdown with the PDF's own styles."""
+    from fastapi.responses import HTMLResponse
+    from core import doc_store
+    from core.agent_tools.dom_convert import _markdown_to_html_dom
+    p = _resolve_requested_file(path, "common")
+    row = doc_store.find(user.id, p.name, "common") if p is not None and p.is_file() else None
+    if not row or not row.get("source_spec"):
+        return JSONResponse({"error": "no draft for this file"}, status_code=404)
+    title = p.stem.replace("_", " ").replace("-", " ").title()
+    return HTMLResponse(_markdown_to_html_dom(row["source_spec"], title), headers={
+        "Content-Security-Policy": "sandbox", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})

@@ -47,7 +47,7 @@ FAMILIES: dict = {
     "docs": {
         "prefix": "doc_",
         "keywords": ["docx", "word document", "word file", "excel", "xlsx", "spreadsheet",
-                     "powerpoint", "pptx", "pdf", "office document", "workbook", "slide deck"],
+                     "powerpoint", "pptx", "ppt", "presentation", "slides", "pdf", "office document", "workbook", "slide deck"],
     },
     "git": {
         "names": ("git_inspect", "git_commit", "git_branch"),

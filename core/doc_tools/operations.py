@@ -81,4 +81,90 @@ async def _create(args: dict, location: str) -> str:
     doc_store.register(uid, key, target.suffix.lower().lstrip("."), location=location, source_spec=spec,
                        sha256=sha256(data))
     msg = f"Created {target.name}. Later changes can be made with doc_edit without regenerating it."
+    if args.get("total") and target.suffix.lower() in _APPENDABLE:
+        try:
+            _BUILD_TOTAL[(uid if location == "common" else dev_uid, key)] = max(1, min(int(args["total"]), 30))
+            msg += (f" It has {_unit_count(target.suffix.lower(), spec)} of {int(args['total'])}: add the rest in small "
+                    f"steps with doc_append(file='{target.name}', content=<next 2-3 slides/sections>), then done=true.")
+        except (TypeError, ValueError):
+            pass
     return msg + (f" [DOWNLOAD: {target.name}]" if location == "common" else f" (saved on your device: {target})")
+
+
+# Build-in-pieces bookkeeping: (uid, file key) -> slide/section count the user asked for. In memory on purpose:
+# after a restart the count check is simply off, the document itself is unaffected.
+_BUILD_TOTAL: dict = {}
+_APPENDABLE = (".pptx", ".docx", ".pdf")
+
+
+def _unit_count(ext: str, spec: str) -> int:
+    """Slides in a deck, or top-level sections in a document, in the source markdown."""
+    if ext == ".pptx":
+        from ..doc_ops.pptx_ops import outline
+        return len(outline.parse_outline(spec)["slides"])
+    import re
+    return len(re.findall(r"(?m)^#{1,2}\s+\S", spec))
+
+
+def _leftover_markup(ext: str, spec: str) -> list:
+    """Raw markdown that would show up as text in the finished file (checked on the final pass)."""
+    import re
+    if ext != ".pptx":
+        return []
+    from ..doc_ops.pptx_ops import outline
+    bad = []
+    for sl in outline.parse_outline(spec)["slides"]:
+        for t in [sl["title"], sl.get("subtitle", "")] + [b.strip() for b in sl["bullets"]]:
+            if re.search(r"\*\*|__|^#{1,6}\s|^>\s|^\[[ xX]\]", t or ""):
+                bad.append(f"slide '{sl['title'][:40]}': {t[:50]}")
+    return bad
+
+
+async def _append(args: dict, location: str) -> str:
+    """Add the next slides / sections to a document that is being built in pieces and rebuild it IN PLACE, so every
+    step leaves a real, valid file (the right-hand preview refreshes from it). The markdown source is the truth:
+    the final file is exactly what one write of the whole markdown would give."""
+    name = _file_arg(args)
+    content = str(args.get("content") or "").strip()
+    done = bool(args.get("done"))
+    if not content and not done:
+        raise ValueError("content required (the next slides / sections as markdown)")
+    loc, data = (await _locate(name)) if location == "device" else _locate_common(name)
+    ext = loc.path.suffix.lower()
+    if ext not in _APPENDABLE:
+        raise ValueError(f"doc_append works on .pptx / .docx / .pdf, not {ext or 'this file'}")
+    row, spec = _spec_for(loc)
+    if not spec:
+        raise ValueError("this file was not built here, so there is no source to extend - use doc_edit")
+    key = (loc.uid, loc.key)
+    if args.get("total"):
+        try:
+            _BUILD_TOTAL[key] = max(1, min(int(args["total"]), 30))
+        except (TypeError, ValueError):
+            pass
+    new_spec = spec.rstrip()
+    if content:
+        new_spec += ("\n\n---\n\n" if ext == ".pptx" else "\n\n") + content
+    have, total = _unit_count(ext, new_spec), _BUILD_TOTAL.get(key)
+    if done and total and have < total:
+        raise ValueError(f"not finished: {have} of {total} {'slides' if ext == '.pptx' else 'sections'} so far - "
+                         "keep adding with doc_append (done=true only after the last one)")
+    if ext == ".pdf" and not done:
+        out = data              # the PDF is printed once at the end; the preview shows a live HTML draft of the spec
+    else:
+        out, _ = doc_ops.create(loc.path.name, new_spec)
+    if out is not data:
+        await _write(loc, loc.path, out)
+    doc_store.register(loc.uid, loc.key, ext.lstrip("."), location=loc.location,
+                       parent_id=row["id"] if row else None, source_spec=new_spec, sha256=sha256(out))
+    unit = "slides" if ext == ".pptx" else "sections"
+    msg = f"Added to {loc.path.name}: now {have} {unit}" + (f" of {total}." if total else ".")
+    if done:
+        _BUILD_TOTAL.pop(key, None)
+        bad = _leftover_markup(ext, new_spec)
+        msg += " Finished" + (" - fix these with doc_edit set_text: " + "; ".join(bad[:5]) if bad else ".")
+    elif total and have < total:
+        msg += f" Continue with the next {min(3, total - have)} {unit} (doc_append), the last one is the closing."
+    if loc.location == "common":
+        msg += f" [DOWNLOAD: {loc.path.name}]"
+    return msg

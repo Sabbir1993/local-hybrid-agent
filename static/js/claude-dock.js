@@ -805,6 +805,83 @@
       });
     },
 
+    // ---------------- LIVE DOCUMENT PREVIEW (deck / PDF built in pieces) ----------------
+    // Called after every doc_create / doc_append / doc_edit / write_file result. The first call opens the Preview tab;
+    // later calls only re-render the body (throttled, never re-opening the tab), so the user can keep reading.
+    liveDoc: { name: '', ext: '', done: false, timer: 0, last: 0, busy: false, again: false },
+
+    showLiveDoc(name, ext, opts = {}) {
+      if (!this.previewView || !name || !['pptx', 'pdf'].includes(ext)) return;
+      const L = this.liveDoc;
+      const fresh = L.name !== name || !$('live-doc-body');
+      L.done = !!opts.done;
+      if (fresh) {
+        L.name = name;
+        L.ext = ext;
+        L.last = 0;
+        this.open('preview');
+        const url = `/agent/download?path=${encodeURIComponent(name)}`;
+        this.previewView.innerHTML = `
+          <div class="preview-tab-controls">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <b>${esc(name)}</b>
+              <span class="chip mono" style="font-size:10px; padding:1px 6px;">.${esc(ext)}</span>
+              <span class="dim" id="live-doc-status" style="font-size:11px;"></span>
+            </div>
+            <a href="${url}" class="dock-icon-btn" title="Download" style="text-decoration:none;">⬇</a>
+          </div>
+          <div id="live-doc-body" style="flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column;"></div>`;
+      }
+      this._queueLiveDoc(fresh ? 0 : 500);
+    },
+
+    _queueLiveDoc(minGap) {
+      const L = this.liveDoc;
+      if (L.busy) { L.again = true; return; }
+      if (L.timer) return;
+      const wait = Math.max(0, L.last + minGap - Date.now());
+      L.timer = setTimeout(() => { L.timer = 0; this._renderLiveDoc(); }, wait);
+    },
+
+    async _renderLiveDoc() {
+      const L = this.liveDoc, body = $('live-doc-body'), status = $('live-doc-status');
+      if (!body || !L.name) return;
+      L.busy = true;
+      const enc = encodeURIComponent(L.name);
+      try {
+        if (L.ext === 'pptx') {
+          const r = await fetch(`/agent/slides?path=${enc}&space=common`);
+          const deck = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(deck.error || ('HTTP ' + r.status));
+          const scroller = body.querySelector('.pptx-deck');
+          const nearEnd = !scroller || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+          const keep = scroller ? scroller.scrollTop : 0;
+          const n = (deck.slides || []).length;
+          // renderSlidesPreview writes its slide count into the controls element: give it a throwaway one
+          renderSlidesPreview(deck, body, document.createElement('div'));
+          const sc = body.querySelector('.pptx-deck');
+          if (sc) sc.scrollTop = nearEnd ? sc.scrollHeight : keep;       // follow the newest slide unless the user scrolled up
+          if (status) status.textContent = L.done ? `${n} slides` : `building… ${n} slides`;
+        } else if (L.done) {
+          body.innerHTML = `<iframe class="preview-live-iframe" style="flex:1; border:none; background:#525659;" ` +
+            `src="/agent/raw?path=${enc}#toolbar=1"></iframe>`;
+          if (status) status.textContent = '';
+        } else {
+          const frame = body.querySelector('iframe');
+          const src = `/agent/doc-draft?path=${enc}&t=${Date.now()}`;
+          if (frame) frame.src = src;
+          else body.innerHTML = `<iframe class="preview-live-iframe" sandbox="allow-scripts" style="flex:1; border:none; background:#fff;" src="${src}"></iframe>`;
+          if (status) status.textContent = 'building… draft';
+        }
+      } catch (e) {
+        if (status) status.textContent = 'preview unavailable: ' + (e.message || e);
+      } finally {
+        L.busy = false;
+        L.last = Date.now();
+        if (L.again) { L.again = false; this._queueLiveDoc(500); }
+      }
+    },
+
     // Background Tasks view
     async refreshTasks() {
       if (!this.tasksView) return;

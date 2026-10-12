@@ -126,6 +126,21 @@ function sseToolProgress(L, d) {
   _sseHud({ phase: 'running', name: d.name, text: d.text || 'Working…' });
 }
 
+// A deck / PDF built in pieces (doc_create, then doc_append...): after each step the right-hand pane shows the file as it is
+// now. Only files in the common space carry a [DOWNLOAD: name] tag, so device-side agent files are left to the Preview pill.
+function _sseLiveDoc(d) {
+  if (!['doc_create', 'doc_append', 'doc_edit', 'write_file'].includes(d.name) || d.ok === false) return;
+  if (!window.RightDock || typeof window.RightDock.showLiveDoc !== 'function') return;
+  const res = String(d.result || '');
+  const tag = /\[DOWNLOAD:\s*([^\]]+)\]/.exec(res);
+  if (!tag) return;
+  const name = tag[1].trim().split(/[\\/]/).pop();
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (ext !== 'pptx' && ext !== 'pdf') return;
+  const building = d.name === 'doc_append' ? !/\bFinished\b/.test(res) : /doc_append\(/.test(res);
+  window.RightDock.showLiveDoc(name, ext, { done: !building });
+}
+
 // tool_result: record it; a file write/edit also gets a toast + HUD with Preview/Reveal
 function sseToolResult(L, d) {
   if (!L.acts) L.acts = [];
@@ -136,6 +151,7 @@ function sseToolResult(L, d) {
       window.logTerminalResult({ id: d.id, ok: d.ok !== false, result: d.result });
     }
   }
+  _sseLiveDoc(d);
   if (!['write_file', 'edit_file', 'append_file', 'insert_at_line'].includes(d.name)) return;
   const p = _ssePath(d);
   const filename = p ? p.split(/[\\/]/).pop() : 'file';

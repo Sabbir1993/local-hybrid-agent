@@ -1,6 +1,6 @@
 import asyncio
 from .location import _err, _file_arg, _locate, _locate_common
-from .operations import _create, _edit, _inspect
+from .operations import _append, _create, _edit, _inspect
 
 
 async def tool_doc_inspect(args: dict) -> str:
@@ -22,6 +22,13 @@ async def tool_doc_edit(args: dict) -> str:
 async def tool_doc_create(args: dict) -> str:
     try:
         return await _create(args, "device")
+    except Exception as e:
+        return _err(e)
+
+
+async def tool_doc_append(args: dict) -> str:
+    try:
+        return await _append(args, "device")
     except Exception as e:
         return _err(e)
 
@@ -63,13 +70,22 @@ def tool_doc_create_common(args: dict) -> str:
         return _err(e)
 
 
+def tool_doc_append_common(args: dict) -> str:
+    try:
+        return _run(_append(args, "common"))
+    except Exception as e:
+        return _err(e)
+
+
 AGENT_IMPLS = {
     "doc_inspect": tool_doc_inspect,
     "doc_edit": tool_doc_edit,
     "doc_create": tool_doc_create,
+    "doc_append": tool_doc_append,
 }
 CHAT_IMPLS = {
     "doc_inspect": tool_doc_inspect_common,
     "doc_edit": tool_doc_edit_common,
     "doc_create": tool_doc_create_common,
+    "doc_append": tool_doc_append_common,
 }
