@@ -143,6 +143,23 @@ def full_text(data: bytes, name: str, source_spec: Optional[str] = None) -> str:
 # Editing
 # ------------------------------------------------------------------
 
+def _infer_op(o: dict) -> dict:
+    """Small models often drop the 'op' field and send only {addr, text, ...}. When the rest of the object says
+    unambiguously what is meant, fill it in instead of failing the whole edit."""
+    if o.get("op"):
+        return o
+    for alias in ("type", "action", "operation", "command"):
+        if isinstance(o.get(alias), str) and o[alias]:
+            return {**o, "op": o[alias]}
+    if "find" in o and "replace" in o:
+        return {**o, "op": "replace_text"}
+    if "addr" in o and "text" in o:
+        return {**o, "op": "set_text"}
+    if "after" in o and ("title" in o or "bullets" in o):
+        return {**o, "op": "add_slide"}
+    return o
+
+
 def normalize_ops(ops) -> list[dict]:
     if isinstance(ops, str):
         try:
@@ -151,8 +168,11 @@ def normalize_ops(ops) -> list[dict]:
             raise DocOpError("ops must be a JSON list of {op, addr, ...} objects")
     if isinstance(ops, dict):
         ops = [ops]
+    if isinstance(ops, list):
+        ops = [_infer_op(o) if isinstance(o, dict) else o for o in ops]
     if not isinstance(ops, list) or not ops or not all(isinstance(o, dict) and o.get("op") for o in ops):
-        raise DocOpError("ops must be a non-empty list of objects, each with an 'op' field")
+        raise DocOpError("ops must be a non-empty list of objects, each with an 'op' field "
+                         "(e.g. {\"op\":\"set_text\",\"addr\":\"s2/sh3/p1\",\"text\":\"...\"})")
     if len(ops) > 200:
         raise DocOpError("too many ops in one edit (max 200)")
     return ops

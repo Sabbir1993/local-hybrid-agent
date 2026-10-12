@@ -74,6 +74,25 @@ class BuildInPiecesTests(unittest.TestCase):
         self.assertNotEqual(path.read_bytes(), before)                                   # printed on done
 
 
+class OpInferenceTests(unittest.TestCase):
+    def test_ops_without_op_field_are_inferred(self):
+        from core import doc_ops
+        got = doc_ops.normalize_ops([
+            {"addr": "s2/sh3/p1", "text": "x"}, {"find": "a", "replace": "b"},
+            {"after": 1, "title": "T", "bullets": ["a"]}, {"type": "delete_slide", "addr": "s4"}])
+        self.assertEqual([o["op"] for o in got], ["set_text", "replace_text", "add_slide", "delete_slide"])
+        with self.assertRaises(doc_ops.DocOpError):
+            doc_ops.normalize_ops([{"addr": "s2"}])               # nothing says what to do: still refused
+
+    def test_edit_with_inferred_ops_saves_a_new_version(self):
+        from core.doc_ops import pptx_ops
+        from core import doc_ops
+        data = pptx_ops.create("# Deck\nsub\n---\n## Why\n- one\n- two\n")
+        out = doc_ops.edit(data, "d.pptx", [{"addr": "s2/title", "text": "Why it matters"}])
+        self.assertEqual(out.changes, ["s2/title: text set"])
+        self.assertIn("Why it matters", doc_ops.inspect(out.data, "d.pptx"))
+
+
 class BriefIntentTests(unittest.TestCase):
     def test_pdf_brief_intent(self):
         from core import prompt_scope as ps
