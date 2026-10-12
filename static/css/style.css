@@ -5589,6 +5589,18 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 #rep-content .rep-reset { margin-left: auto; }
 #rep-content .rep-reset[hidden] { display: none; }
 
+/* report tabs: one per section */
+#rep-content .rep-tabs { display: flex; gap: 2px; margin: 0 0 14px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+#rep-content .rep-tab { width: auto; margin: 0 0 -1px; padding: 8px 14px; background: transparent; color: var(--dim); font: inherit; font-size: 12.5px;
+  border: none; border-bottom: 2px solid transparent; border-radius: 0; cursor: pointer; white-space: nowrap; }
+#rep-content .rep-tab:hover { color: var(--text); }
+#rep-content .rep-tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+#rep-content .rep-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#rep-content [data-panel][hidden] { display: none; }
+#rep-content .rep-note { font-size: 11px; color: var(--dim); margin: 0 0 10px; }
+#rep-content .rep-share { display: inline-block; vertical-align: middle; width: 54px; height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; }
+#rep-content .rep-share i { display: block; height: 100%; background: var(--accent); }
+
 
 /* Work folder field: Browse button sits level with the input and reads as a button */
 .ca-browse {

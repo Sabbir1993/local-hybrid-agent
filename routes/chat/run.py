@@ -1245,6 +1245,6 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         source=model_source, provider=model_provider)
             db_record_request("chat/run", clean_model_name, ptoks, toks, tps, dt, None, True, 200,
                               prompt_cached_tokens=pcached, completion_cached_tokens=0, is_orchestrator=False,
-                              source=model_source, provider=model_provider)
+                              source=model_source, provider=model_provider, user_id=user.id)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

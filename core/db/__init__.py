@@ -12,6 +12,7 @@ from .usage import (
     db_record_request,
     db_report,
     db_report_runs,
+    db_report_users,
 )
 from .projects import (
     _proj_row,
@@ -60,6 +61,7 @@ __all__ = [
     "db_record_request",
     "db_report",
     "db_report_runs",
+    "db_report_users",
     "_proj_row",
     "_client_workspace_path",
     "db_list_projects",

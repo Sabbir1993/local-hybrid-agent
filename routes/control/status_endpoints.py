@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import Depends
 from core.auth import Principal
 from core.deps import get_current_user, require_permission
-from core.db import db_report, db_report_runs
+from core.db import db_report, db_report_runs, db_report_users
 from core.gpu import get_gpu_stats, get_hardware_engine_summary, refresh_hw_async
 from core.monitor import (
     _monitor_state,
@@ -239,6 +239,26 @@ async def report_runs(days: int = 7, limit: int = 10,
                       user: Principal = Depends(require_permission("usage.report.view"))):
     """Heaviest agent runs (prompt tokens, peak step, steps, how each ended)."""
     return {"days": max(1, min(365, days)), "runs": db_report_runs(days, limit)}
+
+
+@router.get("/control/report/users")
+async def report_users(days: int = 365, start: Optional[str] = None, end: Optional[str] = None,
+                       user: Principal = Depends(require_permission("usage.report.view"))):
+    """Token consumption per user (counts only), for the report's "By user" tab."""
+    from core.auth_db.common import db as auth_db
+    try:
+        days = max(1, min(365, int(days)))
+    except ValueError:
+        days = 365
+    rows = db_report_users(days, start, end)
+    names = {r["id"]: r for r in auth_db().execute(
+        "SELECT id, username, display_name, email FROM users").fetchall()}
+    for r in rows:
+        u = names.get(r["user_id"])
+        r["username"] = (u["username"] if u else None)
+        r["name"] = ((u["display_name"] or u["username"]) if u else ("Unattributed" if r["user_id"] is None else f"user {r['user_id']} (removed)"))
+        r["email"] = (u["email"] if u else None)
+    return {"users": rows}
 
 
 @router.get("/control/report")

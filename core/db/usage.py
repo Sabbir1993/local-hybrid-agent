@@ -26,7 +26,8 @@ def _init_usage_db() -> ThreadLocalDB:
         is_orchestrator INTEGER DEFAULT 0,
         source TEXT,
         provider TEXT,
-        run_id TEXT
+        run_id TEXT,
+        user_id INTEGER
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts)")
     # Schema migration for existing DB
@@ -44,6 +45,15 @@ def _init_usage_db() -> ThreadLocalDB:
     if "run_id" not in cols:                 # which agent run a request belongs to (per-run cost in the report)
         conn.execute("ALTER TABLE requests ADD COLUMN run_id TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_run ON requests(run_id)")
+    if "user_id" not in cols:                # who the request was made for (per-user consumption in the report)
+        conn.execute("ALTER TABLE requests ADD COLUMN user_id INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_user ON requests(user_id)")
+    # older rows: an agent run knows its user (route_runs lives in this DB; absent on a brand-new file, so guarded)
+    try:
+        conn.execute("UPDATE requests SET user_id = (SELECT r.user_id FROM route_runs r WHERE r.run_id = requests.run_id) "
+                     "WHERE user_id IS NULL AND run_id IS NOT NULL")
+    except Exception:
+        pass
     # Backfill source for older records logged before cloud lanes existed
     conn.execute("UPDATE requests SET source = 'cloud' WHERE source IS NULL AND model LIKE 'cloud:%'")
     conn.execute("UPDATE requests SET source = 'local' WHERE source IS NULL")
@@ -65,9 +75,14 @@ def db_record_request(endpoint: str, model: Optional[str], prompt_tokens: Option
                       is_orchestrator: bool = False,
                       source: Optional[str] = None,
                       provider: Optional[str] = None,
-                      run_id: Optional[str] = None) -> None:
-    """Persist one completed request with input/output cache and orchestrator attribution."""
+                      run_id: Optional[str] = None,
+                      user_id: Optional[int] = None) -> None:
+    """Persist one completed request with input/output cache and orchestrator attribution. The user is the one
+    whose request is being served (request context) unless given; background work has none."""
     try:
+        if user_id is None:
+            from ..request_context import get_current_user_id
+            user_id = get_current_user_id()
         m_lower = (model or "").lower()
         ep_lower = (endpoint or "").lower()
         if not is_orchestrator:
@@ -75,13 +90,13 @@ def db_record_request(endpoint: str, model: Optional[str], prompt_tokens: Option
                 is_orchestrator = True
 
         _usage_db.execute(
-            "INSERT INTO requests (ts, endpoint, model, prompt_tokens, completion_tokens, total_tokens, tps, duration_s, prompt_tps, stream, status, prompt_cached_tokens, completion_cached_tokens, is_orchestrator, source, provider, run_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO requests (ts, endpoint, model, prompt_tokens, completion_tokens, total_tokens, tps, duration_s, prompt_tps, stream, status, prompt_cached_tokens, completion_cached_tokens, is_orchestrator, source, provider, run_id, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (time.time(), endpoint, model, prompt_tokens or 0, completion_tokens or 0,
              (prompt_tokens or 0) + (completion_tokens or 0), tps, duration_s,
              prompt_tps, 1 if stream else 0, status,
              prompt_cached_tokens or 0, completion_cached_tokens or 0, 1 if is_orchestrator else 0,
-             source or "local", provider, run_id),
+             source or "local", provider, run_id, user_id),
         )
         _usage_db.commit()
     except Exception as e:
@@ -260,3 +275,35 @@ def db_report_runs(days: int = 7, limit: int = 10) -> list:
     return [{"run_id": r[0], "started": r[1], "requests": r[2], "prompt_tokens": r[3] or 0,
              "completion_tokens": r[4] or 0, "cached_tokens": r[5] or 0, "peak_prompt_tokens": r[6] or 0,
              "cloud_prompt_tokens": r[7] or 0, "steps": r[8], "outcome": r[9], "mode": r[10]} for r in rows]
+
+
+def db_report_users(days: int = 30, start: Optional[str] = None, end: Optional[str] = None) -> list:
+    """Token consumption per user for the window: requests, prompt / generated / cached / total tokens, the share that ran
+    on a cloud provider, agent runs, last activity and the model that used the most tokens. Counts only (no text).
+    user_id None = work with no user (background jobs, requests logged before users were recorded)."""
+    since = time.time() - max(1, int(days)) * 86400
+    a, until = _day_bounds(start, end)
+    if a is not None:
+        since = a
+    until = until if until is not None else time.time() + 86400 * 366
+    try:
+        rows = _usage_db.execute(
+            "SELECT COALESCE(q.user_id, r.user_id) AS uid, COUNT(*), COALESCE(SUM(q.prompt_tokens),0), "
+            "COALESCE(SUM(q.prompt_cached_tokens),0), COALESCE(SUM(q.completion_tokens),0), COALESCE(SUM(q.total_tokens),0), "
+            "COALESCE(SUM(CASE WHEN q.source = 'cloud' THEN q.total_tokens ELSE 0 END),0), "
+            "COUNT(DISTINCT q.run_id), MAX(q.ts), COALESCE(AVG(q.tps),0) "
+            "FROM requests q LEFT JOIN route_runs r ON r.run_id = q.run_id "
+            "WHERE q.ts >= ? AND q.ts < ? GROUP BY uid ORDER BY SUM(q.total_tokens) DESC",
+            (since, until)).fetchall()
+        top: dict = {}
+        for uid, model, tok in _usage_db.execute(
+                "SELECT COALESCE(q.user_id, r.user_id) AS uid, q.model, SUM(q.total_tokens) FROM requests q "
+                "LEFT JOIN route_runs r ON r.run_id = q.run_id WHERE q.ts >= ? AND q.ts < ? GROUP BY uid, q.model", (since, until)).fetchall():
+            if uid not in top or (tok or 0) > top[uid][1]:
+                top[uid] = (model or "unknown", tok or 0)
+    except Exception as e:
+        print(f"[usage] user report failed: {e}", file=sys.stderr)
+        return []
+    return [{"user_id": r[0], "requests": r[1], "prompt_tokens": r[2], "prompt_cached_tokens": r[3],
+             "completion_tokens": r[4], "total_tokens": r[5], "cloud_tokens": r[6], "runs": r[7],
+             "last_active": r[8], "avg_tps": round(r[9], 2), "top_model": top.get(r[0], ("", 0))[0]} for r in rows]

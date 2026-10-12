@@ -1,6 +1,26 @@
 /* ---------------- usage report ---------------- */
-/* The period buttons at the top (Today / 7d / 30d / All) drive the summary cards only. The two tables
-   below have their own date range, filters and pager, and load their rows separately. */
+/* One tab per section: Summary, Heaviest runs, By model, By day, By user. The period buttons (Today / 7d / 30d / All)
+   belong to the Summary tab and drive its cards only; the other tabs have their own date range, filters and pager,
+   and load their rows separately. */
+const REP_TABS = [['summary', 'Summary'], ['runs', 'Heaviest runs'], ['model', 'By model'], ['day', 'By day'], ['user', 'By user']];
+let REP_TAB = 'summary';
+
+function repTabsHtml() {
+  return `<div class="rep-tabs" role="tablist">${REP_TABS.map(([id, l]) =>
+    `<button type="button" class="rep-tab${REP_TAB === id ? ' on' : ''}" role="tab" data-tab="${id}" aria-selected="${REP_TAB === id}">${l}</button>`).join('')}</div>`;
+}
+
+/* show the active panel, mark its tab, and show the period buttons only on Summary */
+function repApplyTab() {
+  document.querySelectorAll('#rep-content [data-panel]').forEach(p => { p.hidden = p.dataset.panel !== REP_TAB; });
+  document.querySelectorAll('#rep-content .rep-tab').forEach(b => {
+    const on = b.dataset.tab === REP_TAB;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', String(on));
+  });
+  const days = $('rep-days');
+  if (days) days.style.display = REP_TAB === 'summary' ? 'flex' : 'none';   // inline display:flex would beat [hidden]
+}
 function repSummaryHtml(d) {
   // big totals read 26.7M; the exact figure stays in the tooltip
   const fmt = n => n == null ? '0' : repTok(n);
@@ -63,7 +83,8 @@ async function repLoadRuns() {
 async function loadReport(days) {
   const box = $('rep-content');
   if (!$('rep-summary')) {
-    box.innerHTML = '<div id="rep-summary"><div class="mon-empty">Loading…</div></div><div id="rep-tables"></div>';
+    box.innerHTML = repTabsHtml() + '<section data-panel="summary"><div id="rep-summary"><div class="mon-empty">Loading…</div></div></section>' +
+      '<div id="rep-tables"></div>';
     box.oninput = box.onchange = repOnFilter;
     box.onclick = repOnClick;
   }
@@ -79,10 +100,12 @@ async function loadReport(days) {
       _repData = wide;
       _repModels = wide.by_model || [];
       $('rep-tables').innerHTML = repCardsHtml(wide);
+      repApplyTab();
       repLoadRuns();
       if (REP.model.from || REP.model.to) await repFetchModels();
       repRenderModels();
       repRenderDays();
+      repLoadUsers();
     }
   } catch (e) {
     box.innerHTML = '<div class="mon-empty">Report failed: ' + esc(e.message) + '</div>';
@@ -127,8 +150,9 @@ const REP_DEFAULT_PRESET = '7d';
 const REP_DEFAULTS = {          // getters: the date range is relative to today, so it is computed when used
   get model() { return { q: '', role: 'all', source: 'all', sort: 'total', ...repPresetRange(REP_DEFAULT_PRESET), page: 0, size: 10 }; },
   get day() { return { ...repPresetRange(REP_DEFAULT_PRESET), minReq: 0, orch: false, sort: 'newest', page: 0, size: 10 }; },
+  get user() { return { q: '', sort: 'total', ...repPresetRange(REP_DEFAULT_PRESET), page: 0, size: 10 }; },
 };
-const REP = { model: Object.assign({}, REP_DEFAULTS.model), day: Object.assign({}, REP_DEFAULTS.day) };
+const REP = { model: Object.assign({}, REP_DEFAULTS.model), day: Object.assign({}, REP_DEFAULTS.day), user: Object.assign({}, REP_DEFAULTS.user) };
 let _repData = null;
 const repFmt = n => n == null ? '0' : Number(n).toLocaleString();
 const repPct = (a, b) => b > 0 ? Math.round((a / b) * 100) + '%' : '-';
@@ -137,6 +161,8 @@ const REP_MODEL_SORTS = [['total', 'Most tokens'], ['req', 'Most requests'], ['p
   ['gen', 'Most generated'], ['cache', 'Most cache read'], ['hit', 'Best cache hit rate'], ['name', 'Name A-Z']];
 const REP_DAY_SORTS = [['newest', 'Newest first'], ['oldest', 'Oldest first'], ['total', 'Most tokens'],
   ['req', 'Most requests'], ['hit', 'Best cache hit rate']];
+const REP_USER_SORTS = [['total', 'Most tokens'], ['req', 'Most requests'], ['runs', 'Most agent runs'], ['cloud', 'Most cloud tokens'],
+  ['recent', 'Most recently active'], ['name', 'Name A-Z']];
 const REP_SIZES = [10, 25, 50, 100];
 
 function repOpts(list, cur) {
@@ -169,6 +195,7 @@ function repRangeChanged(s) {
 function repActiveCount(card) {
   const s = REP[card];
   if (card === 'model') return (s.q.trim() ? 1 : 0) + (s.role !== 'all' ? 1 : 0) + (s.source !== 'all' ? 1 : 0) + (repRangeChanged(s) ? 1 : 0);
+  if (card === 'user') return (s.q.trim() ? 1 : 0) + (repRangeChanged(s) ? 1 : 0);
   return (repRangeChanged(s) ? 1 : 0) + (s.minReq > 0 ? 1 : 0) + (s.orch ? 1 : 0);
 }
 
@@ -210,6 +237,16 @@ function repBarHtml(card) {
       ${repResetBtn('model')}
     </div>`;
   }
+  if (card === 'user') {
+    return `<div class="rep-bar" id="rep-bar-user">
+      <label class="rep-search${s.q ? ' active' : ''}">${REP_ICON_SEARCH}
+        <input type="search" data-card="user" data-f="q" placeholder="Search name, username or email" value="${esc(s.q)}" aria-label="Search users"></label>
+      <div class="rep-group"><span class="rep-glabel">Sort</span>
+        <select data-card="user" data-f="sort" aria-label="Sort by">${repOpts(REP_USER_SORTS, s.sort)}</select></div>
+      ${repDateGroup('user', s)}
+      ${repResetBtn('user')}
+    </div>`;
+  }
   return `<div class="rep-bar" id="rep-bar-day">
     ${repDateGroup('day', s)}
     <div class="rep-group"><span class="rep-glabel">Min requests</span>
@@ -244,31 +281,14 @@ function repRedrawBar(card) {
 }
 
 function repCardsHtml(d) {
-  let h = `
-      <div class="rep-sub">
-        <span>Heaviest runs</span>
-        <span style="font-size:9.5px; font-weight:normal; text-transform:none; color:var(--dim);">Agent tasks that used the most prompt tokens (last 7 days)</span>
-      </div>
-      <div id="rep-runs"><div class="mon-empty">Loading…</div></div>`;
-  if (d.by_model && d.by_model.length) {
-    h += `
-      <div class="rep-sub">
-        <span>By Model</span>
-        <span style="font-size:9.5px; font-weight:normal; text-transform:none; color:var(--dim);">Includes main &amp; orchestrator lanes</span>
-      </div>
-      ${repBarHtml('model')}
-      <div id="rep-model-out"></div>`;
-  }
-  if (d.by_day && d.by_day.length) {
-    h += `
-      <div class="rep-sub">
-        <span>By Day</span>
-        <span style="font-size:9.5px; font-weight:normal; text-transform:none; color:var(--dim);">Daily usage &amp; cache hits</span>
-      </div>
-      ${repBarHtml('day')}
-      <div id="rep-day-out"></div>`;
-  }
-  return h;
+  const note = t => `<div class="rep-note">${t}</div>`;
+  const panel = (id, inner) => `<section data-panel="${id}"${REP_TAB === id ? '' : ' hidden'}>${inner}</section>`;
+  return panel('runs', note('Agent tasks that used the most prompt tokens (last 7 days)') +
+      '<div id="rep-runs"><div class="mon-empty">Loading…</div></div>') +
+    panel('model', note('Includes main &amp; orchestrator lanes') + repBarHtml('model') + '<div id="rep-model-out"></div>') +
+    panel('day', note('Daily usage &amp; cache hits') + repBarHtml('day') + '<div id="rep-day-out"></div>') +
+    panel('user', note('Who used the tokens: requests, agent runs, cache, cloud share. Counts only, never message text.') +
+      repBarHtml('user') + '<div id="rep-user-out"><div class="mon-empty">Loading…</div></div>');
 }
 
 function repPager(card, total, s) {
@@ -389,6 +409,75 @@ function repRenderDays() {
     : '<div class="mon-empty">No days match these filters. <button type="button" class="rep-reset" data-reset="day">Reset filters</button></div>';
 }
 
+/* ---- By user: consumption per account for its own date range (the server groups for exactly those days) ---- */
+let _repUsers = null;                 // null until the first load
+let _repUserTimer = null;
+const repWhen = t => {
+  if (!t) return '-';
+  const d = new Date(t * 1000);
+  return `${repIso(d).slice(5)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+async function repFetchUsers() {
+  const s = REP.user;
+  const qs = new URLSearchParams({ days: '365' });
+  if (s.from) qs.set('start', s.from);
+  if (s.to) qs.set('end', s.to);
+  try {
+    const r = await fetch('/control/report/users?' + qs);
+    if (!r.ok) throw new Error(r.status === 403 ? 'not allowed' : 'HTTP ' + r.status);
+    _repUsers = (await r.json()).users || [];
+  } catch (e) { _repUsers = { error: e.message }; }
+}
+function repLoadUsers() { return repFetchUsers().then(repRenderUsers); }
+
+function repRenderUsers() {
+  const out = $('rep-user-out');
+  if (!out) return;
+  if (_repUsers && _repUsers.error) { out.innerHTML = `<div class="mon-empty">Could not load users: ${esc(_repUsers.error)}</div>`; return; }
+  if (!_repUsers) return;
+  const s = REP.user, q = s.q.trim().toLowerCase();
+  const nm = u => String(u.name || '');
+  let rows = _repUsers.filter(u => !q || (nm(u) + ' ' + (u.username || '') + ' ' + (u.email || '')).toLowerCase().includes(q));
+  const key = { total: u => u.total_tokens, req: u => u.requests, runs: u => u.runs, cloud: u => u.cloud_tokens, recent: u => u.last_active }[s.sort];
+  rows = rows.slice().sort(key ? (a, b) => (key(b) || 0) - (key(a) || 0) : (a, b) => nm(a).localeCompare(nm(b)));
+  const all = _repUsers.reduce((t, u) => t + (u.total_tokens || 0), 0);
+  const sum = rows.reduce((t, u) => t + (u.total_tokens || 0), 0);
+  const page = rows.slice(s.page * s.size, (s.page + 1) * s.size);
+  const body = page.map(u => {
+    const share = all > 0 ? Math.round((u.total_tokens / all) * 100) : 0;
+    const who = u.user_id == null
+      ? '<span title="Background jobs and requests logged before per-user tracking began">Unattributed</span>'
+      : `<b>${esc(nm(u))}</b>${u.email ? `<div class="dim" style="font-size:10.5px;">${esc(u.email)}</div>` : ''}`;
+    return `<tr>
+      <td>${who}</td>
+      <td>${repFmt(u.requests)}</td>
+      <td>${u.user_id == null ? '-' : repFmt(u.runs)}</td>
+      ${repTokCell(u.prompt_tokens)}
+      ${repTokCell(u.completion_tokens)}
+      <td class="dim">${repPct(u.prompt_cached_tokens, u.prompt_tokens)}</td>
+      <td class="dim" title="${repFmt(u.cloud_tokens)} tokens ran on a cloud provider">${repPct(u.cloud_tokens, u.total_tokens)}</td>
+      <td title="${repFmt(u.total_tokens)}"><b>${repTok(u.total_tokens)}</b></td>
+      <td title="${share}% of all tokens in this range"><span class="rep-share"><i style="width:${share}%"></i></span> <span class="dim">${share}%</span></td>
+      <td class="dim">${esc(repWhen(u.last_active))}</td>
+      <td class="dim" title="${esc(u.top_model || '')}">${esc((u.top_model || '-').split('\\').pop().split('/').pop())}</td>
+    </tr>`;
+  }).join('');
+  out.innerHTML = rows.length ? `
+    <table class="rep-table">
+      <tr><th>User</th><th>Req</th><th title="Agent runs">Runs</th><th>Prompt</th><th>Gen</th>
+        <th title="Share of prompt tokens served from cache">Hit</th><th title="Share of tokens that ran on a cloud provider">Cloud</th>
+        <th>Total</th><th title="Share of all tokens in this date range">Share</th><th>Last active</th><th>Top model</th></tr>${body}
+    </table>
+    <div class="rep-sum">${repFmt(rows.length)} user${rows.length === 1 ? '' : 's'} · ${repTok(sum)} tokens in this selection</div>
+    ${repPager('user', rows.length, s)}`
+    : '<div class="mon-empty">No users match these filters. <button type="button" class="rep-reset" data-reset="user">Reset filters</button></div>';
+}
+
+/* redraw the table a card owns */
+function repRerender(card) {
+  if (card === 'model') repRenderModels(); else if (card === 'user') repRenderUsers(); else repRenderDays();
+}
+
 function repOnFilter(e) {
   const t = e.target, card = t.dataset && t.dataset.card, f = t.dataset && t.dataset.f;
   if (!card || !f || !REP[card]) return;
@@ -408,17 +497,29 @@ function repOnFilter(e) {
     _repModelTimer = setTimeout(async () => { await repFetchModels(); repRenderModels(); }, 250);
     return;
   }
-  if (card === 'model') repRenderModels(); else repRenderDays();
+  if (card === 'user' && (f === 'from' || f === 'to')) {
+    clearTimeout(_repUserTimer);
+    _repUserTimer = setTimeout(repLoadUsers, 250);
+    return;
+  }
+  repRerender(card);
 }
 
 function repOnClick(e) {
+  const tab = e.target.closest('[data-tab]');
+  if (tab) {
+    REP_TAB = tab.dataset.tab;
+    repApplyTab();
+    if (REP_TAB === 'user' && _repUsers === null) repLoadUsers();
+    return;
+  }
   const seg = e.target.closest('[data-seg]');
   if (seg) {
     const card = seg.dataset.card;
     REP[card][seg.dataset.f] = seg.dataset.v;
     REP[card].page = 0;
     repRedrawBar(card);
-    if (card === 'model') repRenderModels(); else repRenderDays();
+    repRerender(card);
     return;
   }
   const pre = e.target.closest('[data-preset]');
@@ -426,7 +527,9 @@ function repOnClick(e) {
     const card = pre.dataset.card;
     Object.assign(REP[card], repPresetRange(pre.dataset.preset), { page: 0 });
     repRedrawBar(card);
-    if (card === 'model') repFetchModels().then(repRenderModels); else repRenderDays();
+    if (card === 'model') repFetchModels().then(repRenderModels);
+    else if (card === 'user') repLoadUsers();
+    else repRenderDays();
     return;
   }
   const tog = e.target.closest('[data-toggle]');
@@ -444,12 +547,14 @@ function repOnClick(e) {
     Object.assign(REP[card], REP_DEFAULTS[card]);
     if (_repData) {
       // the default date range (last 7 days) is a range: By Model asks the server for exactly those days
-      (card === 'model' ? repFetchModels() : Promise.resolve()).then(() => {
+      (card === 'model' ? repFetchModels() : card === 'user' ? repFetchUsers() : Promise.resolve()).then(() => {
         // redraw the filter bars with their default values; the summary cards stay
         $('rep-tables').innerHTML = repCardsHtml(_repData);
+        repApplyTab();
         repLoadRuns();
         repRenderModels();
         repRenderDays();
+        repRenderUsers();
       });
     }
     return;
@@ -458,7 +563,7 @@ function repOnClick(e) {
   if (pg && !pg.disabled) {
     const card = pg.dataset.card;
     REP[card].page = Math.max(0, parseInt(pg.dataset.page, 10) || 0);
-    if (card === 'model') repRenderModels(); else repRenderDays();
+    repRerender(card);
   }
 }
 
@@ -469,6 +574,9 @@ $('btn-report').onclick = () => {
   // all three sections start on the last 7 days, whatever was picked last time
   Object.assign(REP.model, REP_DEFAULTS.model);
   Object.assign(REP.day, REP_DEFAULTS.day);
+  Object.assign(REP.user, REP_DEFAULTS.user);
+  _repUsers = null;
+  REP_TAB = 'summary';
   document.querySelectorAll('.rep-day').forEach(x => { x.className = (x.dataset.days === '7' ? 'btn blue' : 'btn ghost') + ' rep-day'; });
   loadReport(7);
 };
