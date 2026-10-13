@@ -20,6 +20,8 @@
       '.pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:26px;height:26px;margin:0;padding:0;display:inline-flex;' +
       'align-items:center;justify-content:center;background:transparent;border:none;border-radius:6px;color:var(--dim,#8b949e);cursor:pointer;' +
       'box-shadow:none;line-height:1}' +
+      '.pw-ic{display:inline-flex;pointer-events:none}.pw-ic-hide,.pw-eye[aria-pressed="true"] .pw-ic-show{display:none}' +
+      '.pw-eye[aria-pressed="true"] .pw-ic-hide{display:inline-flex}' +
       '.pw-eye:hover{color:var(--text,#e6edf3);background:rgba(128,128,128,.16)}' +
       '.pw-eye:focus-visible{outline:2px solid var(--accent,#58a6ff);outline-offset:1px}' +
       '.pw-wrap>input{padding-right:36px!important}';
@@ -50,7 +52,9 @@
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'pw-eye';
-    btn.innerHTML = EYE;
+    // both icons stay in the DOM and CSS picks one: swapping the button's children on click detached the clicked <svg>, and
+    // a menu's own "click outside closes me" handler then saw a target it no longer contained (the account menu shut)
+    btn.innerHTML = '<span class="pw-ic pw-ic-show">' + EYE + '</span><span class="pw-ic pw-ic-hide">' + EYE_OFF + '</span>';
     btn.setAttribute('aria-label', 'Show password');
     btn.setAttribute('aria-pressed', 'false');
     btn.title = 'Show password';
@@ -59,7 +63,6 @@
 
     const set = show => {
       input.type = show ? 'text' : 'password';
-      btn.innerHTML = show ? EYE_OFF : EYE;
       btn.setAttribute('aria-pressed', String(show));
       btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
       btn.title = show ? 'Hide password' : 'Show password';
