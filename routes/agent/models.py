@@ -20,6 +20,7 @@ class AgentRequest(SamplerFields):
     plan: bool = False
     session_id: Optional[int] = None
     attachments: list[AttachedFile] = []
+    kb: Literal["auto", "on", "off"] = "auto"   # company knowledge base: auto = intent policy, on = always, off = never
     cloud_model_override: Optional[str] = None   # key of cloud model for executor/vision lanes
     reasoning_effort: Optional[Literal["none", "low", "medium", "high", "extra"]] = None
     custom_agent_id: Optional[int] = None

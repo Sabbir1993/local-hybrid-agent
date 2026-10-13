@@ -180,6 +180,7 @@ async function runAgentSSE(text, opts = {}) {
         headers: { 'Content-Type': 'application/json', ...getDeviceHeaders() },
         body: JSON.stringify({
           client_run_id: runHandleId,
+          kb: typeof window.chatKbMode === 'function' ? window.chatKbMode() : 'auto',
           messages: hist,
           mode: engineMode,
           plan: (agentMode ? planMode : false) || (window.ClaudeChatBar && window.ClaudeChatBar.activeModeKey === 'plan'),

@@ -241,6 +241,13 @@ async def report_runs(days: int = 7, limit: int = 10,
     return {"days": max(1, min(365, days)), "runs": db_report_runs(days, limit)}
 
 
+@router.get("/control/report/kb")
+async def report_kb(days: int = 30, user: Principal = Depends(require_permission("usage.report.view"))):
+    """Company-KB retrieval decisions per reason code (counts only): is the gate too strict or too loose?"""
+    from core import kb_log
+    return kb_log.stats(max(1, min(365, days)))
+
+
 @router.get("/control/report/users")
 async def report_users(days: int = 365, start: Optional[str] = None, end: Optional[str] = None,
                        user: Principal = Depends(require_permission("usage.report.view"))):

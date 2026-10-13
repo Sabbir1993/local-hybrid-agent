@@ -315,6 +315,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 sys_labels.append("kb")
         except Exception as e:
             print(f"[chat] knowledge retrieval failed: {e}", file=sys.stderr)
+    if kb_ids:
+        from core import kb_log
+        kb_log.record(user.id, "chat", consult_kb and not file_followup, kb_reason, len(cov_hits),
+                      max((float(h.get("cos") or 0.0) for h in cov_hits), default=None), kb_used)
 
     # Data residency (core/knowledge_access.py): internal knowledge never goes
     # to a cloud provider. A KB question from a cloud-bound user is answered by

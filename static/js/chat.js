@@ -1173,6 +1173,7 @@ async function send(inputText) {
       body: JSON.stringify({
         messages: msgs,
         web_search: !!chatWebSearch,
+        kb: typeof window.chatKbMode === 'function' ? window.chatKbMode() : 'auto',
         deep_mode: !!chatDeepMode,
         reasoning_effort: window.customAgentRequestOverrides ? window.customAgentRequestOverrides().reasoning_effort : (typeof getReasoningEffort === 'function' ? getReasoningEffort() : undefined),
         verify: typeof answerCheckBegin === 'function' ? answerCheckBegin(job.assistantMsg) : undefined,
