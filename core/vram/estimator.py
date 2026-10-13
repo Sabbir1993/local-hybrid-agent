@@ -180,7 +180,11 @@ def _fits(target_devs, s_norm, weights_b, units, ngl, kv_total_b,
     return all(m >= 0 for m in margins)
 
 
-def _shares_str(s_norm: list, scale: int = 20) -> str:
+def _shares_str(s_norm: list, scale: "int | None" = None) -> str:
+    # 20 keeps the familiar "9,11" for up to 4 GPUs; beyond that a sum of 20 leaves too few
+    # steps per GPU (14 cards would all collapse to 1-2), so scale with the GPU count.
+    if scale is None:
+        scale = 20 if len(s_norm) <= 4 else 10 * len(s_norm)
     ints = [max(1, int(round(s * scale))) for s in s_norm]
     idx = ints.index(max(ints))
     ints[idx] = max(1, ints[idx] + (scale - sum(ints)))

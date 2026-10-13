@@ -621,7 +621,13 @@
           <div class="cfg-item cfg-full" title="GPU shares. 9,11 = both GPUs (~45%/55% split) · 0,1 = GPU 2 only · 1,0 = GPU 1 only">
             <label for="cfg-ts">Tensor split <span class="info" title="Comma-separated shares per GPU. 0,1 = only GPU 2 works · 1,0 = only GPU 1 works · 9,11 = balanced dual-GPU split">ⓘ</span></label>
             <input type="text" id="cfg-ts" value="9,11" title="GPU share: 0,1 = GPU 2 only · 1,0 = GPU 1 only · 9,11 = both GPUs">
-            <small style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;">0,1 → GPU 2 only · 1,0 → GPU 1 only · 9,11 → dual</small>
+            <small style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;">One share per GPU, in order · 0 skips that GPU · e.g. 9,11 → dual</small>
+            <div id="cfg-ts-tools" style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">
+              <button type="button" class="btn" id="ts-auto" title="Shares proportional to each GPU's VRAM">Auto by VRAM</button>
+              <button type="button" class="btn" id="ts-equal" title="Same share on every GPU">Equal</button>
+            </div>
+            <div id="cfg-ts-rows" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:6px; margin-top:6px;"></div>
+            <small id="cfg-ts-warn" style="color:var(--warn, #d9a441); font-size:9.5px; margin-top:3px; display:none;"></small>
           </div>
           <div class="cfg-item" title="GPU split strategy: 'layer' splits transformer layers; 'row' splits tensor matrices">
             <label for="cfg-sm">Split mode <span class="info" title="'layer' (pipeline split) is recommended for Arc GPUs">ⓘ</span></label>

@@ -499,6 +499,8 @@ function fillConfigForm(c) {
     $('cfg-np').value = c.n_slots ?? CFG_DEFAULTS.np;
     $('cfg-kai').value = c.keepalive_interval_s ?? CFG_DEFAULTS.kai;
     $('cfg-ts').value = c.tensor_split ?? CFG_DEFAULTS.ts;
+    cfgGpuIdx = Array.isArray(c.gpu_devices) ? c.gpu_devices.slice() : [];
+    tsRowsFromText();
     updateGpuDependentFields();
     $('cfg-sm').value = c.split_mode || CFG_DEFAULTS.sm;
     $('cfg-fa').value = c.flash_attn || CFG_DEFAULTS.fa;
@@ -556,7 +558,72 @@ function updateGpuDependentFields() {
   if (sm) { sm.disabled = !multi; sm.style.opacity = multi ? '' : '0.45'; }
 }
 
-if ($('cfg-ts')) $('cfg-ts').addEventListener('input', updateGpuDependentFields);
+/* One share input per GPU the runtime uses (up to 14); #cfg-ts stays the stored value. */
+let cfgGpuIdx = [];   // Vulkan/CUDA indices from the active runtime, in -dev order
+
+function tsGpuInfo(idx) {
+  const info = (curStatus && curStatus.gpu_devices_info) || [];
+  return info.find(d => d.index === idx) || null;
+}
+
+function tsRowsFromText() {
+  const box = $('cfg-ts-rows');
+  if (!box) return;
+  if (cfgGpuIdx.length < 2) { box.innerHTML = ''; tsCheck(); return; }
+  const shares = parseTensorSplit($('cfg-ts').value);
+  box.innerHTML = cfgGpuIdx.map((gi, i) => {
+    const d = tsGpuInfo(gi);
+    const label = d ? `GPU ${gi} · ${d.total_gb} GB` : `GPU ${gi}`;
+    const v = shares[i] !== undefined ? shares[i] : '';
+    return `<label style="display:flex; align-items:center; gap:6px; font-size:11px;" title="${d ? d.name : ''}">
+      <span style="flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${label}</span>
+      <input type="number" min="0" max="999" class="ts-share" data-i="${i}" value="${v}" style="width:64px;">
+    </label>`;
+  }).join('');
+  box.querySelectorAll('.ts-share').forEach(el => el.addEventListener('input', tsTextFromRows));
+  tsCheck();
+}
+
+function tsTextFromRows() {
+  const vals = [...document.querySelectorAll('#cfg-ts-rows .ts-share')].map(el => el.value.trim() || '0');
+  $('cfg-ts').value = vals.join(',');
+  updateGpuDependentFields();
+  tsCheck();
+}
+
+function tsSetShares(shares) {
+  $('cfg-ts').value = shares.join(',');
+  tsRowsFromText();
+  updateGpuDependentFields();
+}
+
+function tsAutoShares() {
+  const caps = cfgGpuIdx.map(gi => { const d = tsGpuInfo(gi); return d ? d.total_gb : 0; });
+  if (!caps.every(c => c > 0)) return null;   // sizes unknown: let the caller fall back to equal
+  const n = caps.length, scale = n <= 4 ? 20 : 10 * n, tot = caps.reduce((a, b) => a + b, 0);
+  const out = caps.map(c => Math.max(1, Math.round(c / tot * scale)));
+  const big = out.indexOf(Math.max(...out));
+  out[big] = Math.max(1, out[big] + (scale - out.reduce((a, b) => a + b, 0)));
+  return out;
+}
+
+function tsCheck() {
+  const w = $('cfg-ts-warn');
+  if (!w) return;
+  const shares = parseTensorSplit($('cfg-ts').value);
+  let msg = '';
+  if (cfgGpuIdx.length > 1 && shares.length !== cfgGpuIdx.length) {
+    msg = `⚠ ${shares.length} share(s) for ${cfgGpuIdx.length} GPUs — an equal split will be used.`;
+  } else if (shares.length && !shares.some(s => parseInt(s) > 0)) {
+    msg = '⚠ At least one GPU needs a share above 0.';
+  }
+  w.textContent = msg;
+  w.style.display = msg ? 'block' : 'none';
+}
+
+if ($('cfg-ts')) $('cfg-ts').addEventListener('input', () => { updateGpuDependentFields(); tsRowsFromText(); });
+if ($('ts-equal')) $('ts-equal').onclick = () => tsSetShares(cfgGpuIdx.map(() => 1));
+if ($('ts-auto')) $('ts-auto').onclick = () => tsSetShares(tsAutoShares() || cfgGpuIdx.map(() => 1));
 
 if ($('btn-apply')) $('btn-apply').onclick = async () => {
   // restore defaults for any field the user cleared

@@ -7,6 +7,7 @@ from core.config import (
     CONFIG_INT_FIELDS,
     CONFIG_CHOICE_FIELDS,
     CONFIG_TARGETS,
+    MAX_GPUS,
     MODEL_CONFIG_KEYS,
 )
 from core import supervision
@@ -79,8 +80,9 @@ def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
     if key == "tensor_split":
         value = str(value).strip()
         segs = [s.strip() for s in value.split(",")]
-        if not (1 <= len(segs) <= 4) or not all(s.isdigit() and int(s) >= 0 for s in segs):
-            return "tensor_split must be comma-separated non-negative integers, e.g. 9,11 (0,1 = GPU 2 only, 1,0 = GPU 1 only)"
+        if not (1 <= len(segs) <= MAX_GPUS) or not all(s.isdigit() and int(s) >= 0 for s in segs):
+            return (f"tensor_split must be 1-{MAX_GPUS} comma-separated non-negative integers, one per GPU, "
+                    "e.g. 9,11 (a 0 skips that GPU)")
         if not any(int(s) > 0 for s in segs):
             return "tensor_split: at least one GPU share must be > 0 (e.g. 0,1 or 1,0)"
         profile.setdefault("tuned", {})["tensor_split"] = ",".join(segs)

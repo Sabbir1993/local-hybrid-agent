@@ -83,6 +83,10 @@ TOOL_CANCEL_GRACE_S = 5
 
 IGNORED_IGPU_LUIDS = {"0x000165f7", "0x0001665a"}
 
+# Most GPUs one llama-server can be split across (llama.cpp has no hard limit; this bounds the
+# tensor_split the config API will accept).
+MAX_GPUS = 14
+
 # Defaults used when a profile/config field is empty or deleted by the user
 CONFIG_DEFAULTS = {
     "context_size": 32768,
@@ -128,12 +132,20 @@ def normalize_tensor_split(tensor_split, gpu_devices) -> tuple:
 
     Rule: the segment count is compared against the device count BEFORE any filtering, because
     filtering first is the bug. A count mismatch means the split and the device list genuinely
-    disagree ("9,,11" on two GPUs is ambiguous - dropping either GPU is a guess), so both are
-    passed through untouched for llama.cpp to reject loudly. A zero or non-numeric segment in
-    an otherwise-aligned split disables that GPU, which is the documented "0,1" behaviour.
+    disagree ("9,,11" on two GPUs is ambiguous - dropping either GPU is a guess), the split is
+    replaced by an equal split over every device (with a warning), so launch and preflight still
+    agree: a saved "10,10" on a 3-GPU runtime used to be handed to llama.cpp as-is, which
+    silently leaves the third GPU idle. A zero or non-numeric segment in an otherwise-aligned
+    split disables that GPU, which is the documented "0,1" behaviour.
     """
     devs = list(gpu_devices or [])
     parts = [s.strip() for s in str(tensor_split or "").split(",")]
+    if len(devs) > 1 and len(parts) != len(devs):
+        equal = ",".join("1" for _ in devs)
+        print(f"[server_manager] tensor_split '{tensor_split}' has {len(parts)} entries but "
+              f"{len(devs)} GPUs are in use; using an equal split ({equal}). Set one share "
+              f"per GPU in Model Config.", file=sys.stderr)
+        return devs, equal
     if len(devs) > 1 and len(parts) == len(devs):
         # No "if kept" guard: an all-zero split ("0,0") filters every device and takes the
         # single-device path, which is the behaviour core/process.py always had and which

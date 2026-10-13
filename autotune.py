@@ -52,6 +52,10 @@ def default_tensor_split_candidates(profile) -> list[str]:
         target_devs = [{"free_b": 1} for _ in gpu_devices]
     seed = vram.compute_tensor_split(target_devs)
     seed_vals = [int(v) for v in seed.split(",")]
+    if len(seed_vals) > 4:
+        # +/-1 steps are noise on a 10*N scale and 2N+1 bench runs gets slow: just compare the
+        # VRAM-proportional split against an equal one.
+        return sorted({seed, ",".join("1" for _ in seed_vals)})
     candidates = {seed}
     for i in range(len(seed_vals)):
         for delta in (-1, 1):

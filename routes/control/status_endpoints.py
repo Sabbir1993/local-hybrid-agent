@@ -107,6 +107,7 @@ async def status(user: Principal = Depends(get_current_user)):
     return {
         "hardware_tag": hw_info.get("hardware_tag"),
         "discrete_gpus": hw_info.get("discrete_gpus"),
+        "gpu_devices_info": hw_info.get("devices", []),
         "engine": hw_info.get("engine"),
         "profile": state.profile.get("name") if state.profile else None,
         "model": state.profile.get("model_path") if state.profile else None,

@@ -133,15 +133,26 @@ def _discrete_vram_totals_gb() -> list:
     return list(_hw_cache["totals"])
 
 
+_IGPU_NAME_KW = ("uhd", "hd graphics", "iris", "integrated", "radeon(tm) graphics",
+                 "arc(tm) graphics", "xe graphics", "vega", "llvmpipe", "software")
+_MIN_DISCRETE_B = 2 * vram.GB   # an iGPU/software device reports little or no dedicated memory
+
+
+def _discrete_devices(devs: list) -> list:
+    """The discrete GPUs in a `llama-bench --list-devices` list. One rule for the count, the
+    VRAM totals and the per-GPU rows, so they cannot disagree about what counts as a GPU."""
+    return [d for d in devs
+            if d.get("total_b", 0) >= _MIN_DISCRETE_B
+            and not any(k in d.get("name", "").lower() for k in _IGPU_NAME_KW)]
+
+
 def _compute_hardware_engine_summary() -> dict:
     """Calculate discrete GPU count and runtime engine (e.g. DUAL GPU · VULKAN)."""
     try:
-        devs = vram.query_devices()
-        igpu_kw = ("uhd", "hd graphics", "iris", "integrated", "radeon(tm) graphics")
-        discrete = [d for d in devs if not any(k in d.get("name", "").lower() for k in igpu_kw)]
+        discrete = _discrete_devices(vram.query_devices())
         count = len(discrete)
     except Exception:
-        count = 0
+        discrete, count = [], 0
 
     app_cfg = {}
     if CONFIG_FILE.exists():
@@ -166,6 +177,9 @@ def _compute_hardware_engine_summary() -> dict:
     tag = f"{gpu_label} · {backend}"
     return {
         "discrete_gpus": count,
+        # index = the id used in gpu_devices / -dev; lets the UI label one tensor-split row per GPU
+        "devices": [{"index": d["index"], "name": d.get("name", ""),
+                     "total_gb": round(d["total_b"] / vram.GB, 1)} for d in discrete],
         "engine": backend,
         "hardware_tag": tag,
     }
@@ -176,12 +190,7 @@ def _compute_discrete_vram_totals_gb() -> list:
     `llama-bench --list-devices`. Filters out iGPUs.
     """
     try:
-        devs = vram.query_devices()
-        igpu_kw = ("uhd", "hd graphics", "iris", "integrated", "radeon(tm) graphics")
-        totals = [
-            d["total_b"] / vram.GB for d in devs
-            if not any(k in d.get("name", "").lower() for k in igpu_kw)
-        ]
+        totals = [d["total_b"] / vram.GB for d in _discrete_devices(vram.query_devices())]
         return sorted(totals, reverse=True)
     except Exception:
         return []
