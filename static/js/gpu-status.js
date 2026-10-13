@@ -44,28 +44,30 @@ async function pollStatus() {
     const sel = $('profile');
     const selName = (sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'Model';
     const m = s.model ? s.model.split('\\').pop().split('/').pop() : selName;
-    if (!$('empty-model')) return;
-
-    if (cloudMain) {
-      $('empty-model').textContent =
-        `${cloudMain.display}  ·  via ${cloudMain.provider}  ·  cloud (no VRAM)`;
-      const ec = document.querySelector('.empty-card');
-      if (ec) {
-        ec.innerHTML = `<p><b>${esc(cloudMain.display)} is ready!</b></p><p class="dim" style="margin-top:6px;">Main lane is served by <b>${esc(cloudMain.provider)}</b> in the cloud — your local GPU(s) stay free. Type your message below and press Enter.</p>`;
-      }
-    } else if (s.model && s.pid) {
-      const visionTag = s.vision_capable ? '  ·  👁 vision' : '';
-      $('empty-model').textContent =
-        `${m}${visionTag}  ·  split ${s.tensor_split || 'auto'}  ·  bench ${Number(s.measured_tg_tokens_per_sec || 0).toFixed(1)} t/s`;
-      const ec = document.querySelector('.empty-card');
-      if (ec) {
-        ec.innerHTML = `<p><b>${m} is ready!</b></p><p class="dim" style="margin-top:6px;">GPU(s) loaded${s.vision_capable ? ' with <b>vision support</b> (mmproj)' : ''}. Type your message below and press Enter to chat.</p>`;
-      }
-    } else {
-      $('empty-model').textContent = 'Model unloaded';
-      const ec = document.querySelector('.empty-card');
-      if (ec) {
-        ec.innerHTML = `<p><b>${m} is currently unloaded.</b></p><p class="dim" style="margin-top:6px;">Click <b>▶ Load</b> in the top bar, or simply type your message below to auto-load.</p>`;
+    // The welcome card only exists on an empty chat. Its absence must not stop the rest of this refresh: with a
+    // conversation open, returning here left the model picker, the profile and the context ring stale until a reload.
+    if ($('empty-model')) {
+      if (cloudMain) {
+        $('empty-model').textContent =
+          `${cloudMain.display}  ·  via ${cloudMain.provider}  ·  cloud (no VRAM)`;
+        const ec = document.querySelector('.empty-card');
+        if (ec) {
+          ec.innerHTML = `<p><b>${esc(cloudMain.display)} is ready!</b></p><p class="dim" style="margin-top:6px;">Main lane is served by <b>${esc(cloudMain.provider)}</b> in the cloud — your local GPU(s) stay free. Type your message below and press Enter.</p>`;
+        }
+      } else if (s.model && s.pid) {
+        const visionTag = s.vision_capable ? '  ·  👁 vision' : '';
+        $('empty-model').textContent =
+          `${m}${visionTag}  ·  split ${s.tensor_split || 'auto'}  ·  bench ${Number(s.measured_tg_tokens_per_sec || 0).toFixed(1)} t/s`;
+        const ec = document.querySelector('.empty-card');
+        if (ec) {
+          ec.innerHTML = `<p><b>${m} is ready!</b></p><p class="dim" style="margin-top:6px;">GPU(s) loaded${s.vision_capable ? ' with <b>vision support</b> (mmproj)' : ''}. Type your message below and press Enter to chat.</p>`;
+        }
+      } else {
+        $('empty-model').textContent = 'Model unloaded';
+        const ec = document.querySelector('.empty-card');
+        if (ec) {
+          ec.innerHTML = `<p><b>${m} is currently unloaded.</b></p><p class="dim" style="margin-top:6px;">Click <b>▶ Load</b> in the top bar, or simply type your message below to auto-load.</p>`;
+        }
       }
     }
 
