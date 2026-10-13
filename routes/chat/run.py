@@ -460,6 +460,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         sys_parts.append(prompt_scope.CHAT_STYLE)
         sys_labels.append("style")
 
+    # "how does X work" answers may carry one drawn flow/cards block (chat.visuals, on unless set false)
+    if prompt_scope.visual_wanted(last_query, voice=bool(req.voice),
+                                  enabled=bool((APP_CONFIG.get("chat") or {}).get("visuals", True))):
+        sys_parts.append(prompt_scope.VISUAL_STYLE)
+        sys_labels.append("visual")
+
     # PowerPoint requests: ask slide count / audience / palette first, then build a real .pptx
     if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
         sys_parts.append(prompt_scope.DECK_BRIEF)

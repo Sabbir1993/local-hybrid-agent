@@ -3998,6 +3998,39 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
   background: rgba(255, 255, 255, 0.035);
 }
 
+/* Visual blocks in chat (```visual JSON: flow / cards), drawn by markdown.js renderVisualHtml.
+   Tints are translucent so they read on both the dark and light themes. */
+.vis-box { margin: 10px 0; padding: 12px; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; }
+.vis-title { font-size: 12px; font-weight: 700; margin: 0 0 10px; text-align: center; }
+.vis-flow { display: flex; flex-direction: column; align-items: stretch; max-width: 560px; margin: 0 auto; }
+.vis-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.vis-card { --vt: 96, 165, 250; padding: 10px 14px; border-radius: 8px; text-align: center;
+  background: rgba(var(--vt), 0.14); border: 1px solid rgba(var(--vt), 0.35); }
+.vis-icon { display: block; margin: 0 auto 4px; width: 22px; height: 22px; color: rgb(var(--vt)); }
+.vis-icon svg { width: 22px; height: 22px; display: block; }
+.vis-ct { font-size: 13px; font-weight: 700; }
+.vis-tx { font-size: 11.5px; margin-top: 3px; opacity: 0.8; }
+.vis-tx code, .vis-ct code, .vis-note code { font-size: 0.95em; }
+.vis-arrow { display: flex; flex-direction: column; align-items: center; padding: 3px 0; color: var(--dim); }
+.vis-arrow-ic { width: 16px; height: 16px; }
+.vis-note { font-size: 10.5px; margin-top: 1px; text-align: center; }
+.vis-tone-blue   { --vt: 96, 165, 250; }
+.vis-tone-purple { --vt: 167, 139, 250; }
+.vis-tone-green  { --vt: 74, 222, 128; }
+.vis-tone-amber  { --vt: 251, 191, 36; }
+.vis-tone-red    { --vt: 248, 113, 113; }
+.vis-tone-gray   { --vt: 148, 163, 184; }
+.vis-pending { margin: 8px 0; font-size: 11px; }
+.vis-chart { display: block; width: 100%; max-width: 640px; margin: 0 auto; height: auto; overflow: visible; }
+.vis-chart .vis-ax { fill: var(--dim); font-size: 10.5px; }
+.vis-chart .vis-val { fill: currentColor; font-size: 10.5px; font-weight: 600; }
+.vis-chart .vis-grid-l { stroke: var(--border-subtle, rgba(128, 128, 128, 0.25)); stroke-width: 1; }
+.vis-chart .vis-bar { fill: rgba(var(--vt), 0.85); }
+.vis-chart .vis-line { fill: none; stroke: rgb(var(--vt)); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.vis-chart .vis-dot { fill: rgb(var(--vt)); }
+.vis-legend { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; font-size: 11px; margin-bottom: 6px; }
+.vis-legend .vis-sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; background: rgb(var(--vt)); }
+
 /* Inline Mermaid Render Box in Chat */
 .mermaid-box {
   margin: 10px 0; background: var(--panel2); border: 1px solid var(--border);

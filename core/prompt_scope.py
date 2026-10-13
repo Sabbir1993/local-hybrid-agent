@@ -133,6 +133,48 @@ CHAT_STYLE = (
     "  (valid JSON, 2-5 questions, types radio | checkbox | text). When the user replies with answers, use them to "
     "personalise the plan and do not ask the same questions again.")
 
+# Visual explainers (chat.visuals): a "how does X work / architecture / flow" answer may carry one drawn block. The
+# client renders the JSON itself (static/js/markdown.js parseVisual), so the model never writes HTML or styles.
+VISUAL_STYLE = (
+    "VISUAL BLOCKS: when explaining how something works (a flow, pipeline, architecture or sequence of 3-6 stages), "
+    "put ONE fenced `visual` block right after your short intro, then continue in normal markdown. Format (valid "
+    "JSON only):\n"
+    "```visual\n"
+    '{"type":"flow","title":"How it works","steps":[{"title":"Public internet","text":"User visits `https://app.example.com`",'
+    '"icon":"globe","tone":"blue","note":"DNS resolves the domain to your public IP"},{"title":"Reverse proxy",'
+    '"text":"Terminates TLS on port 443","icon":"shield","tone":"purple","note":"Forwards to a local port"},'
+    '{"title":"Local app","text":"`127.0.0.1:3000`","icon":"server","tone":"green"}]}\n'
+    "```\n"
+    "Rules: at most 6 steps; `note` is the short caption on the arrow AFTER that step; `text` under 12 words. "
+    "icon is one of globe, shield, server, database, lock, user, cloud, cpu, file, key, gear, check, alert, code, "
+    'network, mobile, mail, money (or omit); tone is one of blue, purple, green, amber, red, gray (or omit). For '
+    'a set of parallel items use {"type":"cards","items":[{"title","text","icon","tone"}]}.\n'
+    "For numbers (trends, shares, comparisons) NEVER draw ASCII or text-block charts; use a chart block instead:\n"
+    "```visual\n"
+    '{"type":"chart","kind":"line","title":"Attacks per year","unit":"%","labels":["2024","2025","2026"],'
+    '"series":[{"name":"AI-enabled","values":[40,60,89]}]}\n'
+    "```\n"
+    'kind is bar, line or hbar; up to 4 series; hbar also accepts {"items":[{"label":"Zero-day","value":42}]}. '
+    "Chart only numbers you actually know (never invent data) and name the source in the text. Do not put card "
+    "numbers, secrets or personal data in a block. Use a block only when it helps; skip it for simple answers.")
+
+_VISUAL_RE = re.compile(
+    r"\b(diagram|flow\s*chart|flowchart|architecture|work\s*flow|workflow|pipeline|life\s*cycle|lifecycle|sequence"
+    r"|visuali[sz]\w*|step[- ]by[- ]step|overview|request\s+flow|charts?|graphs?|plot|trends?|statistics|stats)\b"
+    r"|\bhow\b.{0,60}\b(works?|flows?|happens?|communicates?|connects?)\b",
+    re.IGNORECASE)
+_VISUAL_SKIP_RE = re.compile(r"```|\bmermaid\b|\b(pptx|docx|xlsx|pdf|slides?|deck)\b", re.IGNORECASE)
+
+
+def visual_wanted(query: str, voice: bool = False, enabled: bool = True) -> bool:
+    """True when the visual-block instructions earn their ~300 tokens: an explain-how-it-works / diagram question
+    (not voice, not code or document building, not an explicit mermaid request)."""
+    if not enabled or voice:
+        return False
+    q = str(query or "")
+    return bool(_VISUAL_RE.search(q)) and not _VISUAL_SKIP_RE.search(q)
+
+
 _STYLE_ADVICE_RE = re.compile(
     r"\b(recommend\w*|suggest\w*|advice|advise|should\s+i|can\s+i|how\s+(can|do|to|should)|best|which|compare"
     r"|versus|vs\.?|safe|healthy|health|diet|supplements?|vitamins?|medicine|treatment|remed\w+"

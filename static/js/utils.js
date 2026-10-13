@@ -212,6 +212,13 @@ function md(s, opts) {
           <div class="mermaid-viewport"><div class="dim" style="font-size:11px;">Rendering diagram…</div></div>
           <pre class="mermaid-code-raw" style="display:none;">${esc(code)}</pre>
         </div>`;
+      } else if (rawLang === 'visual' && typeof parseVisual === 'function') {
+        // cards / flow drawn by our own code from validated JSON; anything invalid stays a plain code block
+        const spec = parseVisual(code);
+        const unclosed = i === parts.length - 1;   // the closing fence has not arrived (yet)
+        if (spec) out += renderVisualHtml(spec);
+        else if (unclosed && opts && opts.streaming) out += '<div class="vis-pending dim">Drawing diagram…</div>';
+        else out += codeBlockHtml(rawLang, code, esc(code));
       } else {
         const lang = hlLangFor(rawLang);
         out += codeBlockHtml(rawLang, code, lang ? hlCode(code, lang) : esc(code));
