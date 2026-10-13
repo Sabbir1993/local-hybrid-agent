@@ -20,6 +20,7 @@ class ChatRunRequest(SamplerFields):
     presence_penalty: Optional[float] = None
     top_k: Optional[int] = None
     custom_agent_id: Optional[int] = None
+    kb: Literal["auto", "on", "off"] = "auto"    # company knowledge base: auto = intent policy, on = always, off = never
     voice: bool = False       # spoken conversation: answer in short plain sentences (core/voice_prompt.py)
 
 

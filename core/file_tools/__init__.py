@@ -15,6 +15,7 @@ from .extractors import (
     _extract_pdf,
     _extract_pptx,
     _extract_text,
+    extract_attachment_preview,
     extract_file_content,
 )
 from .chunking import (
@@ -39,6 +40,7 @@ __all__ = [
     "_extract_docx",
     "_extract_text",
     "extract_file_content",
+    "extract_attachment_preview",
     "_read_project_text",
     "tool_read_file_chunk",
     "register_file_tools",

@@ -46,7 +46,8 @@ FAMILIES: dict = {
     },
     "docs": {
         "prefix": "doc_",
-        "keywords": ["docx", "word document", "word file", "excel", "xlsx", "spreadsheet",
+        "names": ("data_query",),
+        "keywords": ["docx", "word document", "word file", "excel", "xlsx", "spreadsheet", "csv", "data set", "dataset",
                      "powerpoint", "pptx", "ppt", "presentation", "slides", "pdf", "office document", "workbook", "slide deck"],
     },
     "git": {

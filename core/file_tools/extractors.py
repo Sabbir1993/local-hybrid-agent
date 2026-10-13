@@ -147,3 +147,21 @@ def extract_file_content(path, max_chars: int = DEFAULT_MAX_CHARS):
     if len(text) > max_chars:
         return text[:max_chars], True
     return text, False
+
+
+def extract_attachment_preview(path, max_chars: int = DEFAULT_MAX_CHARS):
+    """What an attached file contributes to the conversation (chat message / agent prompt).
+
+    A spreadsheet becomes a compact PROFILE (sheets, rows x columns, column types and ranges, common values, sample
+    rows) instead of its first 12,000 characters of raw rows, so the model knows what the whole data set is and can
+    compute the rest (data_query / read_file_chunk). Everything else is extracted as before.
+    Returns (text, truncated): truncated is True when parts of the file are not in the text."""
+    p = Path(path)
+    if p.suffix.lower() in (".xlsx", ".xls", ".csv") and p.is_file():
+        try:
+            from .profile import profile_file
+            text, complete = profile_file(p)
+            return text, not complete
+        except Exception:
+            pass                       # an odd workbook: fall back to the raw extraction below
+    return extract_file_content(p, max_chars)

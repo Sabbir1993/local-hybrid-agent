@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import UploadFile, File as FastAPIFile
 from fastapi.responses import JSONResponse
-from core.file_tools import extract_file_content
+from core.file_tools import extract_attachment_preview
 from core.agent_tools import common_workspace
 
 from .base import router
@@ -49,7 +49,7 @@ async def agent_upload(files: list[UploadFile] = FastAPIFile(...), space: Option
         # Extract text content for context injection
         try:
             preview, truncated = await asyncio.get_event_loop().run_in_executor(
-                None, extract_file_content, dest)
+                None, extract_attachment_preview, dest)
         except Exception as e:
             preview = f"(extraction error: {e})"
             truncated = False

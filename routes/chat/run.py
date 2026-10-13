@@ -133,7 +133,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     url_matches = _re.findall(r'https?://[^\s<>")\]]+', last_query)
 
     prior_files = session_files(msgs)
-    file_followup = file_followup_intent(last_query, bool(prior_files))
+    # what the user typed, without the attachment text the client pastes into the same message: every intent
+    # check below must read this, or a word inside a sheet ("add", "ssl", "policy") decides what the turn is
+    from core.knowledge_router import has_attachment_text, own_words, should_consult_kb
+    own_q = own_words(last_query, 2000)
+    has_attachments = has_attachment_text(last_query)
+    file_followup = file_followup_intent(own_q, bool(prior_files))
     if file_followup == "where":
         # "where is the file?" - answer with the existing link instead of
         # asking a slow local model to regenerate (and usually invent) it.
@@ -157,7 +162,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     deck_answer = (len(last_query) < 240 and "?" in prev_assistant and "[DOWNLOAD" not in prev_assistant
                    and bool(prompt_scope._PPTX_RE.search(prev_assistant)))
     pdf_build = prompt_scope.pdf_brief_wanted(last_query, msgs[:-1])      # a PDF request, or the answers to our PDF card
-    wants_file = wants_file_output(last_query) or file_followup == "edit" or deck_answer or pdf_build
+    wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or pdf_build
     has_file = bool(file_followup or wants_file)
     web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
                                                             explicit_only=voice_policy.web_explicit_only(req),
@@ -166,6 +171,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     # Tools for Chat Mode: write_file always (core), the rest on intent.
     chat_tools = [CHAT_WRITE_FILE_SCHEMA]
+    # a spreadsheet attached to this conversation: the model gets its profile in the message and data_query for exact figures
+    has_data_attachment = any(m.get("role") == "user" and prompt_scope.DATA_ATTACHMENT_RX.search(str(m.get("content") or ""))
+                              for m in msgs)
+    if has_data_attachment:
+        from core.agent_tools import AGENT_TOOLS as _ALL_TOOLS
+        chat_tools += [t for t in _ALL_TOOLS if t.get("function", {}).get("name") == "data_query"]
     if has_file:
         chat_tools += [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
         if pdf_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
@@ -275,6 +286,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # otherwise unrelated KB text gets mixed into general answers. The model
     # can still call search_knowledge_base explicitly.
     kb_ids = allowed_source_ids_for(user)
+    if not kb_ids:                       # nothing to search: do not offer the tools (the agent route already does this)
+        chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") not in ("search_knowledge_base", "kb_find_mentions", "kb_query")]
     kb_used = False
     kb_hits = []
     kb_prompt_block = ""
@@ -282,10 +295,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     cov_hits = []
     from core.knowledge_router import kb_routing_query
     kb_query = kb_routing_query(msgs, last_query)
-    skip_kb = False
-    if kb_ids and kb_query.strip() and voice_policy.kb_company_only(req):
-        from core.knowledge_router import is_company_or_kb_query as _is_company
-        skip_kb = not _is_company(kb_query, kb_ids)       # small talk: no embedding lookup before the first word
+    # one policy for "should the company KB be searched for this turn" (core/knowledge_router.should_consult_kb): the
+    # user's own words decide, attached data comes first, small talk never retrieves; /kb on|off overrides it.
+    consult_kb, kb_reason = should_consult_kb(kb_query, has_attachments, voice_policy.kb_company_only(req), req.kb)
+    skip_kb = not consult_kb
     if kb_ids and kb_query.strip() and not file_followup and not skip_kb:
         try:
             from core.knowledge_router import fetch_company_knowledge, is_company_or_kb_query
@@ -374,10 +387,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         sys_parts.append(prompt_scope.FILE_MANUAL_LEAN)
         sys_labels.append("file-lean")
 
+    if has_data_attachment:
+        sys_parts.append(prompt_scope.ATTACHED_DATA)
+        sys_labels.append("attached-data")
+
     if prior_files:
         latest = prior_files[-1]
         prior_block = (
-            "FILES ALREADY CREATED IN THIS CONVERSATION (oldest first): " + ", ".join(prior_files[-5:]) + "\n"
+            "FILES IN THIS CONVERSATION (attached by the user or created here, oldest first): " + ", ".join(prior_files[-5:]) + "\n"
             f"The most recent file is `{latest}`. If the user asks where a file is, give its "
             f"[DOWNLOAD: filename] link - do not regenerate it.")
         if file_followup == "edit" and Path(latest).suffix.lower() in _DOC_EDIT_EXTS:
@@ -572,8 +589,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 if turn == 0 and kb_used and kb_hits:
                     tc_id = "kb_fetch_0"
                     source_names = ", ".join(sorted(set(h.get("title", "") for h in kb_hits)))
-                    yield sse("tool_call", {'id': tc_id, 'name': 'search_knowledge_base', 'args': {'query': last_query}})
-                    yield sse("tool_result", {'id': tc_id, 'name': 'search_knowledge_base', 'ok': True, 'result': f'Retrieved {len(kb_hits)} records from company knowledge base ({source_names})'})
+                    yield sse("tool_call", {'id': tc_id, 'name': 'search_knowledge_base', 'args': {'query': kb_query, 'auto': True}})   # the short routed question, not the whole message
+                    yield sse("tool_result", {'id': tc_id, 'name': 'search_knowledge_base', 'ok': True, 'result': f'Retrieved {len(kb_hits)} records from company knowledge base ({source_names}) - automatic lookup from your question'})
 
                 res_dict = None
                 streamed_content = []

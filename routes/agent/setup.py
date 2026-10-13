@@ -459,10 +459,15 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     cov_hits = []
     if ctx.kb_ids and _kb_query.strip():
         try:
-            from core.knowledge_router import fetch_company_knowledge, kb_routing_query, is_company_or_kb_query
+            from core.knowledge_router import (fetch_company_knowledge, has_attachment_text, is_company_or_kb_query,
+                                               kb_routing_query, should_consult_kb)
+            # the user's own words, never the attached file text pasted into the same message
             _kb_route_q = kb_routing_query(ctx.msgs, _kb_query)
-            if voice_policy.kb_company_only(req) and not is_company_or_kb_query(_kb_route_q, ctx.kb_ids):
-                raise _SkipKb()      # small talk by voice: no embedding lookup before the first word
+            _consult, _kb_reason = should_consult_kb(
+                _kb_route_q, has_attachment_text(_kb_query) or bool(getattr(req, "attachments", None)),
+                voice_policy.kb_company_only(req), getattr(req, "kb", "auto"))
+            if not _consult:
+                raise _SkipKb()      # small talk / attachment analysis / user blocked: no embedding lookup
             kb_hits, kb_prompt = await fetch_company_knowledge(_kb_route_q, ctx.kb_ids, k=6)
             if kb_hits:
                 # same gate as chat: a task like "test this app in my browser" must not pull in (or
@@ -593,7 +598,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     if ctx.surface_cfg.get("web_on_demand", False) and (APP_CONFIG.get("capabilities") or {}).get("web", False):
         from core import kb_coverage
         _explicit = prompt_scope.web_intent(ctx.surface_q, [], [], explicit_only=voice_policy.web_explicit_only(req))
-        _cov = (await kb_coverage.resolve(_kb_query, cov_hits, blocked=bool(ctx.kb_blocked_reason))
+        from core.knowledge_router import own_words as _own_words
+        _cov = (await kb_coverage.resolve(_own_words(_kb_query), cov_hits, blocked=bool(ctx.kb_blocked_reason))
                 if (ctx.kb_ids and not _explicit and not voice_policy.active(req)) else "none")
         _tier = kb_coverage.tier(ctx.effort, False)
         ctx.surface_cfg["web_extra"] = _cov == "partial"

@@ -239,13 +239,16 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_knowledge_base",
-            "description": "Search the organizational company knowledge base (internal company documents, employee records, policies, services, guidelines). Returns authentic company records.",
+            "description": "Search the organizational company knowledge base (internal company documents, employee records, policies, services, guidelines). Returns authentic company records. "
+                           "Use it ONLY when the answer needs company knowledge that is not already in this conversation. Do NOT use it to "
+                           "summarise or analyse a file or data the user attached or pasted (that data is already in the message), for general "
+                           "knowledge, or for small talk. If a knowledge-base block is already in your instructions, answer from it instead of searching again.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The search term or question to search the company knowledge base for (e.g. 'engineering managers', 'leave policy', 'MIOT benefits', 'company overview')"
+                        "description": "A SHORT question or a few key terms, at most ~15 words (e.g. 'engineering managers', 'leave policy', 'MIOT benefits', 'company overview'). Never paste file text or the whole user message."
                     }
                 },
                 "required": ["query"],

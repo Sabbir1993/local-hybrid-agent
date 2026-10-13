@@ -408,3 +408,17 @@ def pdf_brief_wanted(query: str, prior_msgs=None) -> bool:
     if not _DECK_VERB_RE.search(q):
         return False
     return not re.search(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain|read|open|convert)\b", q, re.IGNORECASE)
+
+
+# A spreadsheet (xlsx / xls / csv) attached to the conversation: the message carries its PROFILE, data_query gives exact figures.
+DATA_ATTACHMENT_RX = re.compile(r"--- FILE:[^\n]*?\.(?:xlsx?|csv)\s*---", re.IGNORECASE)
+ATTACHED_DATA = (
+    "ATTACHED DATA SET:\n"
+    "- The user attached a spreadsheet. Their message contains its PROFILE (sheets, columns, types, ranges, common values, sample "
+    "rows), not every row. Work from that first and say what the data is.\n"
+    "- For any count, total, average, ranking, comparison or filter, call `data_query` on the attached file (use the file name from "
+    "the attachment note): it answers exactly over ALL rows. Never estimate figures from the sample rows.\n"
+    "- Do NOT search the company knowledge base or the web for a question about the attached data. Use them only if the user asks "
+    "for company information or outside facts.\n"
+    "- Answer with a short summary of the key findings and figures (a small table when it helps); mention anything you could not "
+    "verify.")

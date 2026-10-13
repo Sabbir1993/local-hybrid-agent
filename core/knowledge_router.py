@@ -67,15 +67,96 @@ def _get_active_source_titles(allowed_source_ids: Optional[Set[int]] = None) -> 
     return out
 
 
+# What the user typed vs what the client pasted into the same message. The client puts every attachment in the message as
+#   --- FILE: name ---\n<content>\n--- END name ---        (images: --- IMAGE: name --- ... --- END name ---)
+# and agent mode appends  [Attached Files] --- ATTACHED FILE: ... . None of that is the user's question, so it must never
+# reach retrieval, keyword gates or a search query (a file called "...SSL.xlsx" once turned a data-set summary into a KB search).
+_FILE_BLOCK_RX = re.compile(r"---\s*(?:FILE|IMAGE):[^\n]*?---.*?(?:---\s*END[^\n]*?---|\Z)", re.S)
+_AGENT_BLOCK_RX = re.compile(r"\[Attached Files\].*\Z", re.S)
+KB_QUERY_MAX_CHARS = 300
+
+
+def has_attachment_text(text: str) -> bool:
+    """True when the message carries pasted attachment blocks."""
+    t = str(text or "")
+    return bool(_FILE_BLOCK_RX.search(t) or _AGENT_BLOCK_RX.search(t))
+
+
+def own_words(text: str, max_chars: int = KB_QUERY_MAX_CHARS) -> str:
+    """The user's own words: attachment blocks removed, whitespace collapsed, capped (the start is kept)."""
+    t = _AGENT_BLOCK_RX.sub("", _FILE_BLOCK_RX.sub(" ", str(text or "")))
+    t = re.sub(r"\s+", " ", t).strip()
+    return t if len(t) <= max_chars else t[:max_chars].rsplit(" ", 1)[0]
+
+
 def kb_routing_query(msgs: list, last_query: str) -> str:
-    """Query used for KB routing. A short follow-up ("yes", "go ahead") carries
-    no intent of its own, so it is routed together with the previous user turn."""
-    if len(last_query.split()) > 3:
-        return last_query
-    users = [str(m.get("content", "")) for m in msgs if m.get("role") == "user"]
+    """Query used for KB routing: the user's OWN words (attachments stripped, capped). A short follow-up
+    ("yes", "go ahead") carries no intent of its own, so it is routed together with the previous user turn."""
+    own = own_words(last_query)
+    if len(own.split()) > 3:
+        return own
+    users = [own_words(str(m.get("content", ""))) for m in msgs if m.get("role") == "user"]
     if len(users) >= 2 and users[-2].strip():
-        return f"{users[-2].strip()} {last_query}".strip()
-    return last_query
+        return f"{users[-2].strip()} {own}".strip()
+    return own
+
+
+# Reason codes of a retrieval decision (counted in the route log, never any text)
+KB_COMPANY_INTENT = "company_intent"
+KB_ATTACHMENT_ANALYSIS = "attachment_analysis"
+KB_SMALL_TALK = "small_talk"
+KB_NO_SOURCES = "no_sources"
+KB_USER_FORCED = "user_forced"
+KB_USER_BLOCKED = "user_blocked"
+KB_VOICE = "voice_skip"
+
+_SMALL_TALK_RX = re.compile(
+    r"^\W*(hi|hello|hey|thanks?|thank you|ok(ay)?|cool|great|good (morning|evening|night)|bye|yes|no|sure)\W*$", re.I)
+# An attachment turn consults the KB only on an explicit company / knowledge-base cue in the user's own words
+_ATTACHMENT_KB_CUE_RX = re.compile(
+    r"\b(knowledge ?base|kb|company|internal|polic(?:y|ies)|handbook|hr|employees?|staff|sop|guidelines?|"
+    r"our (?:team|process|rules?|standard|customers?|clients?))\b", re.I)
+
+
+def should_consult_kb(own_text: str, has_attachments: bool = False, voice_company_only: bool = False,
+                      mode: str = "auto") -> tuple:
+    """Whether to look in the company KB before answering, and why -> (bool, reason code).
+
+    The single policy shared by the chat and agent routes: the KB is for company knowledge the user's own words ask
+    for. In-context data (an attached sheet) comes first, and small talk never retrieves. `mode` is the user's
+    /kb override: "on" always, "off" never, "auto" this policy. The model can still call the KB tools on demand."""
+    if mode == "off":
+        return False, KB_USER_BLOCKED
+    if mode == "on":
+        return True, KB_USER_FORCED
+    text = (own_text or "").strip()
+    if not text:
+        return False, KB_SMALL_TALK
+    if _SMALL_TALK_RX.match(text):
+        return False, KB_SMALL_TALK
+    if has_attachments:
+        try:
+            from .small_model import APP_CONFIG
+            skip = bool((APP_CONFIG.get("knowledge") or {}).get("attachment_skip_kb", True))
+        except Exception:
+            skip = True
+        if skip:
+            extra = active_company_keywords() - COMPANY_KEYWORDS      # the deployment's own names (config)
+            q = text.lower()
+            own_term = any(re.search(r"(?<!\w)" + re.escape(k) + r"(?!\w)", q) for k in extra)
+            if _ATTACHMENT_KB_CUE_RX.search(text) or own_term:
+                return True, KB_COMPANY_INTENT
+            return False, KB_ATTACHMENT_ANALYSIS
+    if voice_company_only and not is_company_or_kb_query(text):
+        return False, KB_VOICE
+    return True, KB_COMPANY_INTENT
+
+
+# Words that appear in many document titles AND in ordinary requests ("summarise this document", "test data"): matching
+# them says nothing about company knowledge.
+_TITLE_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "document", "documents", "test", "tests", "automated", "data", "file", "files", "report",
+    "reports", "list", "sheet", "sheets", "summary", "table", "template", "sample", "draft", "final", "copy", "version"})
 
 
 def is_company_or_kb_query(query: str, allowed_source_ids: Optional[Set[int]] = None) -> bool:
@@ -103,7 +184,7 @@ def is_company_or_kb_query(query: str, allowed_source_ids: Optional[Set[int]] = 
         if t_lower in q_lower:
             return True
         # Check individual substantive words in title (e.g. "Platinum", "Club", "Facility")
-        t_words = [w for w in re.findall(r"\w{3,}", t_lower) if w not in {"the", "and", "for", "with"}]
+        t_words = [w for w in re.findall(r"\w{4,}", t_lower) if w not in _TITLE_STOPWORDS]
         if t_words and any(tw in q_words for tw in t_words):
             return True
 
@@ -171,7 +252,9 @@ async def fetch_company_knowledge(query: str, allowed_source_ids: Set[int], k: i
         "1. When the user's question concerns the company or its internal data, answer strictly and accurately using the authentic internal knowledge base data above. "
         "If the question is about an unrelated topic (general knowledge, public market research, coding, etc.), IGNORE this knowledge base block entirely and do not mix it into the answer. "
         "A document about one organisation (one bank's report, one product) describes only that organisation: never narrow a general "
-        "or public question (nearest branch or booth, market comparison, any provider) to the single organisation the documents happen to cover.\n"
+        "or public question (nearest branch or booth, market comparison, any provider) to the single organisation the documents happen to cover. "
+        "Data the user attached or pasted in this conversation takes priority over this block. This block is already your knowledge-base "
+        "search result: do not call search_knowledge_base again for the same question.\n"
         "2. NEVER hallucinate, invent, fabricate, or generate dummy employee names, fake records, or placeholder datasets.\n"
         "3. NEVER call `write_file` to create sample or dummy CSV/Excel spreadsheets with fictional data when asked for company data. "
         "Provide the real data directly in your text answer.\n"

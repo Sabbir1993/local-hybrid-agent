@@ -105,9 +105,10 @@ async def tool_search_memory(args: dict) -> str:
 
 
 async def tool_search_knowledge_base(args: dict) -> str:
-    query = args.get("query", "")
+    from ..knowledge_router import KB_QUERY_MAX_CHARS, own_words
+    query = own_words(str(args.get("query", "")), KB_QUERY_MAX_CHARS)      # never a pasted attachment / whole message
     if not query:
-        raise ValueError("query required")
+        raise ValueError("query required: a short question or a few key terms (not file text)")
     from ..knowledge_access import KB_CLOUD_BLOCKED_MSG, kb_cloud_blocked, cloud_ok_ids
     uid = get_current_user_id()
     from ..auth import _to_principal
