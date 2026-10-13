@@ -1,5 +1,7 @@
 import asyncio
-from fastapi import Depends
+from urllib.parse import urlsplit
+
+from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from core.small_model import APP_CONFIG
 from core import mcp_oauth
@@ -15,6 +17,23 @@ from .store import _bg_tasks, _can_manage_global, _connect_in_background, _owner
 def _redirect_base() -> str:
     """Public https URL of this app, if the admin set one: enables the server-side callback."""
     return str(APP_CONFIG.get("capabilities", {}).get("mcp_oauth_redirect_base") or "").rstrip("/")
+
+
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _same_machine_base(request: Request) -> str:
+    """http://127.0.0.1:<port> when the person is using this app ON the machine that runs it (the TCP peer is loopback AND
+    the page was opened through a loopback host name): the provider can redirect straight back to this server, so no
+    companion app and no public https address are needed. Empty for any remote browser, so a remote user still gets the
+    clear 'open the companion' message."""
+    peer = request.client.host if request.client else ""
+    host = request.headers.get("host", "")
+    try:
+        name = urlsplit("//" + host).hostname or ""
+    except ValueError:
+        return ""
+    return f"http://{host}" if peer in _LOOPBACK and name in _LOOPBACK else ""
 
 
 async def _loopback_flow(user_id: int, name: str, owner, scfg: dict) -> None:
@@ -42,7 +61,7 @@ async def _loopback_flow(user_id: int, name: str, owner, scfg: dict) -> None:
 
 
 @router.post("/servers/{name}/oauth/start")
-async def oauth_start(name: str, req: OAuthStartReq, user: Principal = Depends(_use)):
+async def oauth_start(name: str, req: OAuthStartReq, request: Request, user: Principal = Depends(_use)):
     owner, resp = _owner_for(req.scope, user)
     if resp:
         return resp
@@ -61,7 +80,7 @@ async def oauth_start(name: str, req: OAuthStartReq, user: Principal = Depends(_
         task.add_done_callback(_bg_tasks.discard)
         return {"mode": "companion", "status": "pending",
                 "message": "Finish signing in in the browser window the companion opened."}
-    base = _redirect_base()
+    base = _redirect_base() or _same_machine_base(request)
     if not base:
         return JSONResponse({"error": "Open the companion app on this device to sign in "
                                       "(it receives the sign-in redirect on 127.0.0.1)."}, status_code=409)

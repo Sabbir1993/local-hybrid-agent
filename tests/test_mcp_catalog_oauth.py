@@ -111,6 +111,32 @@ class OAuthTests(_McpApp):
             r = self.client.post("/mcp/servers/s/oauth/start", json={"scope": "user"})
         self.assertEqual(r.status_code, 409)
 
+    def test_same_machine_base_only_for_a_loopback_peer_on_a_loopback_host(self):
+        from types import SimpleNamespace
+        fake = lambda peer, host: SimpleNamespace(client=SimpleNamespace(host=peer), headers={"host": host})  # noqa: E731
+        f = oauth_endpoints._same_machine_base
+        self.assertEqual(f(fake("127.0.0.1", "127.0.0.1:8000")), "http://127.0.0.1:8000")
+        self.assertEqual(f(fake("::1", "localhost:8000")), "http://localhost:8000")
+        self.assertEqual(f(fake("192.168.1.9", "127.0.0.1:8000")), "", "a remote peer is never trusted")
+        self.assertEqual(f(fake("127.0.0.1", "evil.example.com")), "", "a loopback peer behind some other host name")
+        self.assertEqual(f(fake("127.0.0.1", "")), "")
+        self.assertEqual(f(SimpleNamespace(client=None, headers={"host": "127.0.0.1:8000"})), "")
+
+    def test_start_on_the_same_machine_uses_the_server_callback_without_a_companion(self):
+        from core import companion_bridge
+        scfg = {"transport": "http", "url": "http://x"}
+        seen = {}
+
+        async def fake_begin(name, owner, cfg, redirect_uri=None):
+            seen["redirect"] = redirect_uri
+            return {"auth_url": "https://auth.example/authorize?x=1", "state": "s"}
+
+        with mock.patch.object(oauth_endpoints, "_servers_for", lambda owner: {"s": scfg}),              mock.patch.object(companion_bridge, "is_connected", lambda uid: False),              mock.patch.object(oauth_endpoints, "_redirect_base", lambda: ""),              mock.patch.object(oauth_endpoints, "_same_machine_base", lambda request: "http://127.0.0.1:8000"),              mock.patch.object(oauth_endpoints.mcp_oauth, "begin", fake_begin):
+            r = self.client.post("/mcp/servers/s/oauth/start", json={"scope": "user"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["mode"], "redirect")
+        self.assertEqual(seen["redirect"], "http://127.0.0.1:8000/mcp/oauth/callback")
+
     def test_disconnect_round_trip(self):
         with mock.patch.object(oauth_endpoints, "_servers_for", lambda owner: {}):
             pass
