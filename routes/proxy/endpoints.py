@@ -25,7 +25,7 @@ from core.monitor import (
 from routes.common.llm_stream import admission
 from core.state import state
 from .cloud_proxy import _proxy_cloud
-from .constants import _ALLOWED_PATHS, _CHAT_PATHS, _upstream_headers
+from .constants import _ALLOWED_PATHS, _CHAT_PATHS, _upstream_headers, short_models_listing
 from .guard import _SSERedactor, _audit_redaction, _guarded_json_response, _prompt_texts
 
 router = APIRouter(tags=["proxy"])
@@ -203,4 +203,9 @@ async def proxy(path: str, request: Request, user: Principal = Depends(require_p
     db_record_request(path, clean_model_name, ptoks, ctoks, tps, dt, prompt_tps, False, r.status_code,
                       prompt_cached_tokens=pcached, completion_cached_tokens=ccached, is_orchestrator=is_orch,
                       source="local")
+    if request.method == "GET" and path.lower().strip("/") in ("v1/models", "models") and r.status_code == 200:
+        try:
+            return JSONResponse(short_models_listing(r.json()))     # plain model names, no server file paths
+        except Exception:
+            pass
     return _guarded_json_response(r, user, False, path)
