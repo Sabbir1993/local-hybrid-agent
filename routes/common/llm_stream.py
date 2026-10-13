@@ -200,7 +200,8 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
             payload.update(extra)
         # reasoning effort (level already resolved by the route); its template
         # kwargs are merged so they don't clobber other chat_template_kwargs
-        for k, v in reasoning.local_fields(effort).items():
+        _mp = (state.profile or {}).get("model_path") if state.profile else None
+        for k, v in reasoning.local_fields(effort, reasoning.local_efforts(_mp)).items():
             if k == "chat_template_kwargs":
                 payload[k] = {**(payload.get(k) or {}), **v}
             else:
@@ -243,6 +244,21 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
                 async for item in _recover_context(client_or_state, payload, msgs, tools, rid, err_text):
                     yield item
                 return
+            if (response.status_code == 500 and "Unexpected reasoning effort" in err_msg and "reasoning_effort" in payload
+                    and client_or_state is state.client):
+                # this model's chat template accepts only some effort words (e.g. low / medium / xhigh): learn them from its own
+                # error and send the nearest one - once; if it still fails the error surfaces as before
+                _mp = (state.profile or {}).get("model_path") if state.profile else None
+                learned = reasoning.learn_efforts(_mp, err_text.decode("utf-8", "replace"))
+                if learned and payload["reasoning_effort"] not in learned:
+                    print(f"[common] reasoning effort '{payload['reasoning_effort']}' not accepted by this template "
+                          f"({', '.join(learned)}) - retrying with the nearest", file=sys.stderr)
+                    async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
+                                                           repeat_penalty, rid, grammar, extra=extra, effort=effort,
+                                                           top_p=top_p, min_p=min_p, presence_penalty=presence_penalty,
+                                                           top_k=top_k, tool_choice=tool_choice):
+                        yield item
+                    return
             if "tool_choice" in payload and (response.status_code in (400, 422)
                                              or (response.status_code == 500 and "tool_choice" in err_msg.lower())):
                 # this server/provider does not accept tool_choice: remember it and

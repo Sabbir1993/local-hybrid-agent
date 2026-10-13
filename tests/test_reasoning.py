@@ -94,6 +94,33 @@ class FieldsTests(unittest.TestCase):
         self.assertEqual(extra["reasoning_effort"], "high")  # templates know high, not extra
         self.assertNotIn("thinking_budget_tokens", extra)  # -1 = unrestricted, key omitted
 
+    def test_efforts_the_template_does_not_know_are_mapped_to_the_nearest(self):
+        err = "Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low."
+        sup = reasoning.parse_efforts(err)
+        self.assertEqual(sup, ("low", "medium", "xhigh"))
+        got = {lv: reasoning.local_fields(lv, sup)["reasoning_effort"] for lv in ("low", "medium", "high", "extra")}
+        self.assertEqual(got, {"low": "low", "medium": "medium", "high": "xhigh", "extra": "xhigh"})
+        plain = reasoning.local_fields("high")
+        self.assertEqual(plain["reasoning_effort"], "high", "no list known: unchanged")
+        self.assertEqual(reasoning.parse_efforts("{% if reasoning_effort not in ['low','medium','high'] %}"), ("low", "medium", "high"))
+        self.assertIsNone(reasoning.parse_efforts("no effort words here"))
+        self.assertIsNone(reasoning.parse_efforts("Supported types are low."), "one word is not a list")
+
+    def test_nearest_effort_prefers_the_higher_on_a_tie(self):
+        self.assertEqual(reasoning.pick_effort("medium", ("low", "high")), "high")
+        self.assertEqual(reasoning.pick_effort("low", ("medium", "high")), "medium")
+        self.assertEqual(reasoning.pick_effort("extra", ("low", "medium", "high")), "high")
+
+    def test_learning_from_a_template_error_is_remembered_per_model(self):
+        err = "Error: Jinja Exception: Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low."
+        try:
+            self.assertIsNone(reasoning.local_efforts("/models/saluki-not-learned-yet.gguf"))
+            reasoning.learn_efforts("/models/saluki.gguf", err)
+            self.assertEqual(reasoning.local_efforts("/models/saluki.gguf"), ("low", "medium", "xhigh"))
+            self.assertIsNone(reasoning.local_efforts("/models/other.gguf"))
+        finally:
+            reasoning._learned_efforts.clear()
+
     def test_cloud_fields(self):
         cm = SimpleNamespace(model_cfg={}, base_url="https://openrouter.ai/api/v1")
         self.assertEqual(reasoning.cloud_fields("high", cm), {"reasoning": {"effort": "high"}})

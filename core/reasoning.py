@@ -13,6 +13,7 @@ template, overridable with `reasoning` in config/model_configs.json (local) or
 in the model entry of config/providers/user_<id>.json (cloud).
 """
 
+import re
 import threading
 from pathlib import Path
 from typing import Optional
@@ -106,8 +107,83 @@ def _template_effort(level: str) -> str:
     return "high" if level == "extra" else level
 
 
-def local_fields(level: Optional[str]) -> dict:
-    """llama-server request fields for an effective level ({} = template default)."""
+# ---- which effort words a model's own chat template accepts -------------------------------------------------------
+# Our five levels are not what every template knows: a gpt-oss style template accepts only low / medium / xhigh and
+# raises "Unexpected reasoning effort high" (HTTP 500) for anything else. The accepted words are read from the template
+# (or learned from that very error) and our level is mapped to the nearest one.
+_EFFORT_WORDS = ("minimal", "low", "medium", "high", "xhigh", "max")
+_WORD_RX = re.compile(r"\b(" + "|".join(_EFFORT_WORDS) + r")\b", re.I)
+_efforts_cache: dict = {}      # model path -> ((mtime_ns, size), efforts or None)
+_learned_efforts: dict = {}    # model path -> efforts parsed from a template error
+
+
+def parse_efforts(text: str) -> Optional[tuple]:
+    """The accepted effort words named in a chat template or in its error message, lowest first; None if unclear."""
+    t = str(text or "")
+    seg = ""
+    m = re.search(r"Supported (?:types|values|levels|efforts)[^.]*", t, re.I)
+    if m:
+        seg = m.group(0)
+    else:
+        m = re.search(r"reasoning_effort\s+(?:not\s+in|in)\s*[\[(]([^\])]*)[\])]", t)
+        if m:
+            seg = m.group(1)
+    found = {w.lower() for w in _WORD_RX.findall(seg)}
+    if len(found) < 2:
+        return None
+    return tuple(w for w in _EFFORT_WORDS if w in found)
+
+
+def pick_effort(level: str, supported: Optional[tuple]) -> str:
+    """The template word for our level: unchanged when no list is known or it is accepted, else the nearest accepted
+    one (ties go to the higher effort; "extra" means the highest the model offers)."""
+    want = _template_effort(level)
+    if not supported or want in supported:
+        return want
+    if level == "extra":
+        return supported[-1]
+    rank = {w: i for i, w in enumerate(_EFFORT_WORDS)}
+    return min(supported, key=lambda w: (abs(rank[w] - rank[want]), -rank[w]))
+
+
+def local_efforts(model_path) -> Optional[tuple]:
+    """Accepted effort words of a local GGUF's chat template (learned from an error first), or None."""
+    if not model_path:
+        return None
+    key = str(model_path)
+    if key in _learned_efforts:
+        return _learned_efforts[key]
+    try:
+        st = Path(model_path).stat()
+    except OSError:
+        return None
+    sig = (st.st_mtime_ns, st.st_size)
+    with _mode_lock:
+        hit = _efforts_cache.get(key)
+    if hit and hit[0] == sig:
+        return hit[1]
+    try:
+        from .vram import read_gguf_scalars
+        tpl = read_gguf_scalars(Path(model_path), ["tokenizer.chat_template"]).get("tokenizer.chat_template", "")
+        efforts = parse_efforts(tpl if isinstance(tpl, str) else "")
+    except Exception:
+        efforts = None
+    with _mode_lock:
+        _efforts_cache[key] = (sig, efforts)
+    return efforts
+
+
+def learn_efforts(model_path, error_text: str) -> Optional[tuple]:
+    """Remember the accepted words from a template's own error ("... Supported types are xhigh (default), medium, and low.")."""
+    efforts = parse_efforts(error_text)
+    if efforts and model_path:
+        _learned_efforts[str(model_path)] = efforts
+    return efforts
+
+
+def local_fields(level: Optional[str], supported: Optional[tuple] = None) -> dict:
+    """llama-server request fields for an effective level ({} = template default). `supported` = the effort words the
+    loaded model's template accepts (local_efforts), so a level it does not know is sent as the nearest one it does."""
     if level not in LEVELS:
         return {}
     if level == "none":
@@ -115,7 +191,7 @@ def local_fields(level: Optional[str]) -> dict:
         return {"chat_template_kwargs": {"enable_thinking": False},
                 "thinking_budget_tokens": 0}
     fields = {"chat_template_kwargs": {"enable_thinking": True},
-              "reasoning_effort": _template_effort(level)}
+              "reasoning_effort": pick_effort(level, supported)}
     b = budget(level)
     if b >= 0:
         fields["thinking_budget_tokens"] = b
