@@ -137,7 +137,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # check below must read this, or a word inside a sheet ("add", "ssl", "policy") decides what the turn is
     from core.knowledge_router import has_attachment_text, own_words, should_consult_kb
     own_q = own_words(last_query, 2000)
-    has_attachments = has_attachment_text(last_query)
+    # attached data anywhere in the conversation (a follow-up like 'which status has the most rows' has none in its own message)
+    has_attachments = any(m.get('role') == 'user' and has_attachment_text(str(m.get('content') or '')) for m in msgs)
     file_followup = file_followup_intent(own_q, bool(prior_files))
     if file_followup == "where":
         # "where is the file?" - answer with the existing link instead of

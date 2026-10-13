@@ -473,7 +473,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             # the user's own words, never the attached file text pasted into the same message
             _kb_route_q = kb_routing_query(ctx.msgs, _kb_query)
             _consult, _kb_reason = should_consult_kb(
-                _kb_route_q, has_attachment_text(_kb_query) or bool(getattr(req, "attachments", None)),
+                _kb_route_q, bool(getattr(req, "attachments", None)) or any(
+                    m.get("role") == "user" and has_attachment_text(str(m.get("content") or "")) for m in ctx.msgs),
                 voice_policy.kb_company_only(req), getattr(req, "kb", "auto"))
             if not _consult:
                 raise _SkipKb()      # small talk / attachment analysis / user blocked: no embedding lookup
