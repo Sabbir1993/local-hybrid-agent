@@ -119,8 +119,10 @@
       return;
     }
     const typeLabel = db.is_system ? 'System Database' : 'Workspace Database';
-    badge.innerHTML = `<span class="db-chip ${db.is_system ? 'sys' : 'ws'}">${typeLabel}</span> ` +
-      `<span class="dim" style="font-size:11px;">${escapeHtml(db.description || '')} · <b>${formatBytes(db.size_bytes)}</b></span>`;
+    // line 1: the kind of database and its size; line 2: where it is / what it holds (long paths wrap, never push the picker)
+    badge.innerHTML = `<div class="db-badge-line"><span class="db-chip ${db.is_system ? 'sys' : 'ws'}">${typeLabel}</span>` +
+      `<span class="dim"><b>${formatBytes(db.size_bytes)}</b></span></div>` +
+      (db.description ? `<div class="db-badge-desc dim" title="${escapeHtml(db.description)}">${escapeHtml(db.description)}</div>` : '');
   }
 
   async function loadSchema(dbId) {

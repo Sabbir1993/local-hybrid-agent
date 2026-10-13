@@ -4247,17 +4247,17 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
   padding-bottom: 12px; border-bottom: 1px solid var(--border);
 }
 .db-top-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap;
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border-subtle);
 }
 .db-select-el {
   background: var(--panel2); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 5px 10px; font-size: 12px; font-weight: 600;
-  outline: none; max-width: 440px; flex: 1;
+  outline: none; flex: 1; min-width: 0; width: 100%;
 }
-.db-info-badge {
-  display: flex; align-items: center; gap: 8px; font-size: 11px;
-}
+.db-info-badge { display: flex; flex-direction: column; gap: 3px; font-size: 11px; min-width: 0; }
+.db-badge-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.db-badge-desc { font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; word-break: break-word; }
 .db-chip {
   display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 9.5px;
   font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
