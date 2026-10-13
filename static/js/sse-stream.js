@@ -171,12 +171,9 @@ function sseToolResult(L, d) {
       }
     });
   }
-  if (typeof toast === 'function') {
-    toast(isSuccess ? `💾 ${verb} ${filename}` : `⚠️ Failed to write ${filename}`, {
-      isErr: !isSuccess,
-      duration: 5000,
-      actions: actions
-    });
+  // a successful save already shows in the tool card ("Created file … Preview"), so no toast; only a failure needs one
+  if (!isSuccess && typeof toast === 'function') {
+    toast(`⚠️ Failed to write ${filename}`, { isErr: true, duration: 5000, actions: actions });
   }
   _sseHud({
     phase: isSuccess ? 'done' : 'error',
