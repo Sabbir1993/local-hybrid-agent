@@ -361,7 +361,7 @@ function _visChartSvg(spec) {
   const n = labels.length, every = Math.ceil(n / 8);
   const slot = (R - L) / n;
   const xBar = (i) => L + slot * i + slot / 2;
-  const xLine = (i) => (n === 1 ? (L + R) / 2 : L + (R - L) * i / (n - 1));
+  const xLine = (i) => (n === 1 ? (L + R) / 2 : L + 22 + (R - L - 44) * i / (n - 1));   // 22 px in: the first point's label stays off the axis text
   const xAt = kind === 'bar' ? xBar : xLine;
   labels.forEach((l, i) => {
     if (i % every === 0) svg += `<text class="vis-ax" x="${r1(xAt(i))}" y="${B + 16}" text-anchor="middle">${esc(l.length > 14 ? l.slice(0, 13) + '…' : l)}</text>`;
