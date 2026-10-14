@@ -81,9 +81,20 @@ def pretty_title(name: str) -> str:
     return re.sub(r"[_\-]+", " ", n).strip()
 
 
+# `[Wikipedia](https://...)` pasted into a bullet: models copy their research citations into the slide text. The link is
+# dropped from the text and its NAME becomes the slide's `source:` line (when it has none); bare URLs are dropped too.
+_CITE = re.compile(r"\s*\[([^\]\n]{2,60})\]\((?:[^)\s]*?(?:https?:|www\.|\.[a-z]{2,}/)[^)]*)\)", re.I)
+_BARE_URL = re.compile(r"\s*\bhttps?://\S+", re.I)
+
+
+def _strip_citations(text: str, found: list) -> str:
+    found.extend(m.strip() for m in _CITE.findall(text))
+    return re.sub(r"[\s/;,|]+$", "", _BARE_URL.sub("", _CITE.sub("", text)))
+
+
 def _new() -> dict:
     return {"title": "", "subtitle": "", "bullets": [], "notes": "", "layout": "", "table": [], "image": None,
-            "image_extra": [], "chart": None, "eyebrow": "", "source": "", "art": ""}
+            "image_extra": [], "chart": None, "eyebrow": "", "source": "", "art": "", "_cite": []}
 
 
 CHART_KINDS = ("bar", "hbar", "line", "pie", "share")
@@ -236,6 +247,10 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
 
     def flush():
         nonlocal cur, group_open
+        if cur["_cite"] and not cur["source"]:
+            names = list(dict.fromkeys(cur["_cite"]))
+            cur["source"] = "; ".join(names)[:170]
+        cur.pop("_cite", None)
         if not _empty(cur):
             slides.append(cur)
         cur, group_open = _new(), False
@@ -249,6 +264,10 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
             continue
         if _ASCII_ART.search(st) or _XML_LINE.match(st):
             continue
+        if not _FIELD.match(clean(st)) or _BULLET.match(st):          # field lines (image: https://...) keep their text
+            st = _strip_citations(st, cur["_cite"]).strip()
+            if not st:
+                continue
         if re.match(r"^([-*_])\1{2,}$", st) or re.match(r"^-{3,}\s*$", st):
             flush()
             continue

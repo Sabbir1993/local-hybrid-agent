@@ -265,7 +265,7 @@ built in pieces with a live preview). What the builders do beyond writing text:
   `timeline` and `cards` accept `- 36.6M | what it measures` bullets; `layout: textside` puts a table or chart beside the text;
   `chart: stacked` draws one bar split into shares. The deck prompt asks for figures, dates and names from research and a
   source on every content slide.
-- **Research before slides:** after the questionnaire the build gets its own budget (`chat.deck_research_calls`, default 14
+- **Research before slides:** after the questionnaire the build gets its own budget (`chat.deck_research_calls`, default 10
   searches / page reads, `0` = off) and a thinking floor (`chat.deck_effort`, default `medium`), independent of the chat tier
   (which allows only 4 web calls at low effort). It needs the user's web switch on and is skipped when the Knowledge Base
   already covers the topic; the web tools are removed after the first `doc_create`.

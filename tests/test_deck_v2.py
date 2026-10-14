@@ -177,11 +177,57 @@ class Rendering(unittest.TestCase):
         self.assertEqual([f["message"] for f in lint.lint_deck(data)], [])
 
 
+class Citations(unittest.TestCase):
+    MD = ("# D\nsubtitle: s\n---\n## At a Glance\n"
+          "- 25.4 million people in the metro area [Wikipedia](https://en.wikipedia.org/wiki/Dhaka) / "
+          "[InsideBangladesh](httpshttps://insinside-bangladesh.com/dd/d/dhaka-city)\n"
+          "- Contributes 36% of GDP https://example.org/x\n")
+
+    def test_links_leave_the_text_and_become_the_source(self):
+        s = O.parse_outline(self.MD)["slides"][1]
+        self.assertEqual(s["bullets"], ["25.4 million people in the metro area", "Contributes 36% of GDP"])
+        self.assertEqual(s["source"], "Wikipedia; InsideBangladesh")
+
+    def test_an_explicit_source_line_wins(self):
+        md = self.MD + "source: UN WUP 2024\n"
+        self.assertEqual(O.parse_outline(md)["slides"][1]["source"], "UN WUP 2024")
+
+    def test_image_urls_in_field_lines_are_kept(self):
+        md = "# D\nsubtitle: s\n---\n## A\nimage: https://example.org/pic.jpg\n- one\n- two\n"
+        self.assertEqual(O.parse_outline(md)["slides"][1]["image"]["url"], "https://example.org/pic.jpg")
+
+    def test_plain_bracket_text_is_untouched(self):
+        md = "# D\nsubtitle: s\n---\n## A\n- Use [brackets] and (parentheses) freely\n- Another line here\n"
+        self.assertIn("[brackets]", " ".join(O.parse_outline(md)["slides"][1]["bullets"]))
+
+
+class TypeSize(unittest.TestCase):
+    def test_a_few_short_lines_can_be_big_and_dense_text_is_smaller(self):
+        from core.doc_ops.pptx_ops import design as D
+        short = ["Fast", "Cheap", "Safe"]
+        dense = ["25.4 million people live in the metro area and it ranks among the fastest growing megacities in the world"] * 3
+        very = dense * 2
+        self.assertEqual(D.bullet_base(short), 26)
+        self.assertLessEqual(D.bullet_base(dense), 22)
+        self.assertEqual(D.bullet_base(very), 19)
+        self.assertEqual(D.bullet_base(dense, True), D.bullet_base(dense) - 2)
+
+    def test_body_text_on_a_dense_slide_stays_readable_not_poster_sized(self):
+        md = ("# D\nsubtitle: s\n---\n## At a Glance\n"
+              "- 25.4 million people live in the metro area, one of the world's fastest-growing megacities today\n"
+              "- Contributes over 36% of Bangladesh's GDP, making it the nation's economic engine for decades\n"
+              "- Founded as a Mughal capital in 1610 and renamed Jahangirnagar after the Emperor Jahangir\n")
+        prs = Presentation(io.BytesIO(pptx_ops.create(md)))
+        sizes = {r.font.size.pt for sh in prs.slides[1].placeholders if sh.placeholder_format.idx == 1
+                 for p in sh.text_frame.paragraphs for r in p.runs}
+        self.assertTrue(sizes and max(sizes) <= 22, sizes)
+
+
 class ResearchBudget(unittest.TestCase):
     def test_defaults(self):
-        self.assertEqual(deck_research.calls({}), 14)
+        self.assertEqual(deck_research.calls({}), 10)
         self.assertEqual(deck_research.calls({"chat": {"deck_research_calls": 6}}), 6)
-        self.assertEqual(deck_research.calls({"chat": {"deck_research_calls": "x"}}), 14)
+        self.assertEqual(deck_research.calls({"chat": {"deck_research_calls": "x"}}), 10)
         self.assertEqual(deck_research.calls({"chat": {"deck_research_calls": 999}}), 40)
 
     def test_effort_is_raised_to_the_floor_never_lowered(self):
@@ -192,7 +238,7 @@ class ResearchBudget(unittest.TestCase):
 
     def test_build_phase_gets_the_bigger_budget(self):
         p = deck_research.web_plan({}, "build", True, "none", False, True, 4)
-        self.assertEqual(p, {"has_web": True, "lean": False, "budget": 14})
+        self.assertEqual(p, {"has_web": True, "lean": False, "budget": 10})
 
     def test_a_bigger_existing_budget_is_kept(self):
         self.assertEqual(deck_research.web_plan({}, "build", True, "none", True, False, 20)["budget"], 20)
@@ -213,11 +259,34 @@ class ResearchBudget(unittest.TestCase):
 
     def test_tool_rounds_cover_research_and_build(self):
         self.assertEqual(deck_research.turns_for(14, 12), 26)
+        self.assertEqual(deck_research.turns_for(10, 12), 22)
         self.assertEqual(deck_research.turns_for(2, 30), 30)
+
+    def test_building_has_no_repeat_penalty_and_a_token_cap(self):
+        self.assertEqual(deck_research.build_limits({}, "build"), {"repeat_penalty": 1.0, "max_tokens": 8000})
+        self.assertEqual(deck_research.build_limits({}, "ask"), {"repeat_penalty": None, "max_tokens": None})
+        self.assertEqual(deck_research.build_limits({}, ""), {"repeat_penalty": None, "max_tokens": None})
+        cfg = {"chat": {"deck_repeat_penalty": 1.05, "deck_max_tokens": 4000}}
+        self.assertEqual(deck_research.build_limits(cfg, "build"), {"repeat_penalty": 1.05, "max_tokens": 4000})
+        off = {"chat": {"deck_repeat_penalty": 0, "deck_max_tokens": 0}}
+        self.assertEqual(deck_research.build_limits(off, "build"), {"repeat_penalty": None, "max_tokens": None})
+
+    def test_unlimited_requests_are_capped_and_small_ones_kept(self):
+        self.assertEqual(deck_research.clamp_tokens(-1, 8000), 8000)
+        self.assertEqual(deck_research.clamp_tokens(None, 8000), 8000)
+        self.assertEqual(deck_research.clamp_tokens(0, 8000), 8000)
+        self.assertEqual(deck_research.clamp_tokens(32000, 8000), 8000)
+        self.assertEqual(deck_research.clamp_tokens(2000, 8000), 2000)
+        self.assertEqual(deck_research.clamp_tokens(-1, None), -1)
+
+    def test_web_results_are_trimmed_harder_while_building(self):
+        self.assertEqual(deck_research.web_cap("build"), (1, 4500))
+        self.assertEqual(deck_research.web_cap(""), (6, 6000))
 
     def test_the_chat_route_uses_it(self):
         src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
-        for needle in ("deck_research.effort_for", "deck_research.web_plan", "deck_research.turns_for"):
+        for needle in ("deck_research.effort_for", "deck_research.web_plan", "deck_research.turns_for",
+                       "deck_research.build_limits", "deck_research.clamp_tokens", "deck_research.web_cap"):
             self.assertIn(needle, src)
 
 

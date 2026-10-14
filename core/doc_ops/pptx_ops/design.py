@@ -411,6 +411,14 @@ def _variant(t: dict, n: int) -> dict:
     return v
 
 
+def bullet_base(items: list, with_pic: bool = False) -> int:
+    """Largest body size for a bullets slide, by how much text it carries: a few short lines can be big, four fact-bearing
+    sentences at 30 pt look like a poster. _fill_bullets still shrinks further until the text fits."""
+    words = sum(len(str(i).split()) for i in items)
+    base = 26 if words <= 28 else (22 if words <= 55 else 19)
+    return base - 2 if with_pic else base
+
+
 def _heading_body(item):
     head, kids = item
     head = head.rstrip(":").strip()
@@ -519,11 +527,11 @@ def _bullets(slide, s, t):
     _deco(slide, MSO_SHAPE.RECTANGLE, MX, 1.95, 0.06, min(h - 0.2, 0.62 * max(len(items), 3)), t["accent"])
     if s.get("image_data"):                           # text on the left, picture on the right
         px, pw = 7.55, W - MX - 7.55
-        _fill_bullets(body, items, t, MX + 0.3, 1.9, px - MX - 0.7, h, base=26 if len(items) <= 4 else 22, floor=12)
+        _fill_bullets(body, items, t, MX + 0.3, 1.9, px - MX - 0.7, h, base=bullet_base(items, True), floor=12)
         _picture(slide, s, px, 1.95, pw, h - 0.35)
         _credit(slide, s, t, px, 1.95 + h - 0.3, pw)
         return
-    _fill_bullets(body, items, t, MX + 0.3, 1.9, W - 2 * MX - 0.3, h, base=30 if len(items) <= 4 else 26)
+    _fill_bullets(body, items, t, MX + 0.3, 1.9, W - 2 * MX - 0.3, h, base=bullet_base(items))
 
 
 def _columns(slide, s, t):
@@ -539,7 +547,7 @@ def _columns(slide, s, t):
             lines.append(head)
             lines += ["\t" + k for k in kids]
         x = MX + i * (cw + 0.6)
-        _fill_bullets(ph, lines, t, x, 1.95, cw, 4.75, base=21, floor=12)
+        _fill_bullets(ph, lines, t, x, 1.95, cw, 4.75, base=bullet_base(lines), floor=12)
     _deco(slide, MSO_SHAPE.RECTANGLE, W / 2 - 0.01, 2.0, 0.02, 4.4, t["line"])
 
 
@@ -575,7 +583,7 @@ def _cards(slide, s, t):
         _frame(tf, MSO_ANCHOR.TOP, (0.28, 1.0, 0.28, 0.2))
         inner_w, inner_h = cw - 0.56, ch - 1.2
         hs = _fit([head], inner_w, 0.9, 21, 14, gap_pt=0, font=t["head"], bold=True)
-        bs = _fit(kids, inner_w, max(inner_h - 0.8, 0.8), 18, 11, gap_pt=6, font=t["body"])
+        bs = _fit(kids, inner_w, max(inner_h - 0.8, 0.8), 16, 11, gap_pt=6, font=t["body"])
         tf.text = head
         tf.paragraphs[0].alignment = PP_ALIGN.LEFT
         tf.paragraphs[0].space_after = Pt(8)
@@ -617,7 +625,7 @@ def _stats(slide, s, t):
         p = tf.add_paragraph()
         p.text = cap
         p.alignment = PP_ALIGN.LEFT
-        _style_runs(p, t["body"], _fit([cap], cw - 0.75, 1.2, 18, 12, gap_pt=0, font=t["body"]), t["text"])
+        _style_runs(p, t["body"], _fit([cap], cw - 0.75, 1.2, 16, 12, gap_pt=0, font=t["body"]), t["text"])
 
 
 def _timeline(slide, s, t):
@@ -638,7 +646,7 @@ def _timeline(slide, s, t):
         _style_runs(dt.paragraphs[0], t["head"], 16, _on(t["accent"] if i % 2 == 0 else t["accent2"]), True)
         w = sw - 0.3
         paras = [(head, t["head"], _fit([head], w, 0.9, 22, 13, gap_pt=0, font=t["head"], bold=True), t["text"], True, False, 6)]
-        bs = _fit(kids, w, 2.6, 18, 11, gap_pt=6, font=t["body"])
+        bs = _fit(kids, w, 2.6, 16, 11, gap_pt=6, font=t["body"])
         paras += [(k, t["body"], bs, _ink(t["muted"], t["bg"], 4.5), False, False, 6) for k in kids]
         _textbox(slide, cx - w / 2, ly + 0.6, w, 3.2, paras, name=f"Step {i + 1}", align=PP_ALIGN.CENTER)
 
@@ -908,7 +916,7 @@ def _textside(slide, s, t):
     rx = MX + lw + gap
     rw = W - MX - rx
     if body is not None:
-        _fill_bullets(body, items, t, MX, 1.95, lw, 4.75, base=20, floor=12)
+        _fill_bullets(body, items, t, MX, 1.95, lw, 4.75, base=min(bullet_base(items), 20), floor=12)
     if s.get("chart_data"):
         _chart(slide, s, t, box=(rx, 1.95, rw, 4.6))
     else:

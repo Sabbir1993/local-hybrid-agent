@@ -188,9 +188,9 @@ def _kind_html(s: dict, ts: dict) -> str:
         items = s["bullets"]
         if s.get("image_data"):
             px = 7.55
-            return (_bullets_html(items, ts, MX + 0.3, 1.95, px - MX - 0.7, 4.7, 26 if len(items) <= 4 else 22, 12)
+            return (_bullets_html(items, ts, MX + 0.3, 1.95, px - MX - 0.7, 4.7, D.bullet_base(items, True), 12)
                     + _img(s["image_data"], px, 1.95, W - MX - px, 4.45) + _credit(s, px, 6.42, W - MX - px))
-        return _bullets_html(items, ts, MX + 0.3, 1.95, W - 2 * MX - 0.3, 4.7, 30 if len(items) <= 4 else 26, 13)
+        return _bullets_html(items, ts, MX + 0.3, 1.95, W - 2 * MX - 0.3, 4.7, D.bullet_base(items), 13)
     if kind == "columns":
         half = math.ceil(len(top) / 2)
         out = ""
@@ -200,7 +200,7 @@ def _kind_html(s: dict, ts: dict) -> str:
             for head, kids in part:
                 lines.append(head)
                 lines += ["\t" + k for k in kids]
-            out += _bullets_html(lines, ts, MX + i * (cw + 0.6), 1.95, cw, 4.7, 21, 12)
+            out += _bullets_html(lines, ts, MX + i * (cw + 0.6), 1.95, cw, 4.7, D.bullet_base(lines), 12)
         return out
     if kind in ("cards", "stats", "timeline"):
         if kind == "stats":
@@ -224,13 +224,13 @@ def _kind_html(s: dict, ts: dict) -> str:
                 num, cap = it
                 ns = common
                 col = D._ink(ts["accent2"], ts["text"] if hi else ts["surface"], 3.0)
-                cs = _pt([cap], ts["body"], cw - 0.6, ch - 1.9, 18, 12)
+                cs = _pt([cap], ts["body"], cw - 0.6, ch - 1.9, 16, 12)
                 cells.append(f'<div class="card{" hi" if hi else ""}" style="min-height:{min(ch, 2.4)}in"><div class="k head" style="font-size:{ns}pt;'
                              f'color:#{col}">{esc(num)}</div><div class="t" style="font-size:{cs}pt;margin-top:.14in">{esc(cap)}</div></div>')
             else:
                 head, kids = it
-                hs = _pt([head], ts["head"], cw - 0.56, 0.9, 24 if kind == "timeline" else 21, 14, 0, True)
-                bs = _pt(kids, ts["body"], cw - 0.56, ch - 1.35, 18, 11, 6)
+                hs = _pt([head], ts["head"], cw - 0.56, 0.9, 22 if kind == "timeline" else 20, 14, 0, True)
+                bs = _pt(kids, ts["body"], cw - 0.56, ch - 1.35, 16, 11, 6)
                 hc = D._ink(ts["accent2"], ts["surface"], 3.0)
                 body = "".join(f"<p style='margin-top:6pt'>{esc(k)}</p>" for k in kids)
                 cells.append(f'<div class="card" style="min-height:{min(ch, 1.6)}in"><div class="k head" style="font-size:{hs}pt;color:#{hc}">{esc(head)}</div>'
@@ -256,7 +256,7 @@ def _kind_html(s: dict, ts: dict) -> str:
         lw, gap = 5.8, 0.5
         rx = MX + lw + gap
         rw = W - MX - rx
-        left = _bullets_html(s["bullets"], ts, MX, 1.95, lw, 4.7, 21, 12)
+        left = _bullets_html(s["bullets"], ts, MX, 1.95, lw, 4.7, min(D.bullet_base(s["bullets"]), 20), 12)
         right = _chart_html(s, ts, rx, 1.95, rw, 4.6) if s.get("chart_data") else _table_html(s["table"], ts, rx, 2.1, rw, 4.4)
         return left + right
     if kind == "comparison":

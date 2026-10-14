@@ -514,6 +514,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             + "3. Stop searching as soon as you have enough data, then write the complete deliverable in one go. "
             "Cite sources, and label any figure you could not verify as an estimate.")
         sys_labels.append("deep")
+    deck_lim = deck_research.build_limits(APP_CONFIG, brief_phase)     # no repeat penalty, capped turn length while building
+    turn_max_tokens = deck_research.clamp_tokens(req.max_tokens, deck_lim["max_tokens"])
     combined_sys = "\n\n".join(sys_parts).strip()
     if combined_sys:
         has_sys = False
@@ -669,15 +671,15 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             fb_local = state.client
                         except Exception as e:
                             print(f"[chat] local fallback unavailable: {e}", file=sys.stderr)
-                    chat_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
+                    chat_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
                     chat_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, current_tools, req.temperature,
-                        req.max_tokens, repeat_penalty=chat_rep, rid=chat_rid, lane="main", effort=effort,
+                        turn_max_tokens, repeat_penalty=chat_rep, rid=chat_rid, lane="main", effort=effort,
                         top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
                 else:
-                    chat_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
+                    chat_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
                     chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature,
-                                                   max_tokens=req.max_tokens, repeat_penalty=chat_rep, rid=chat_rid, effort=effort,
+                                                   max_tokens=turn_max_tokens, repeat_penalty=chat_rep, rid=chat_rid, effort=effort,
                                                    top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
                 # Estimate of what this turn actually sends, for anchoring below. Must be
                 # taken post-shrink with the exact tools of this turn - an estimate from
@@ -1099,13 +1101,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                            "search for something different.")
                             else:
                                 web_seen.add(qk)
-                                res_str = kb_coverage.cap_web_result(await tool_web_search({"query": q}), web_calls)
+                                res_str = kb_coverage.cap_web_result(await tool_web_search({"query": q}), web_calls, *deck_research.web_cap(brief_phase))
                         elif t_name == "web_search_images":
                             q = args.get("query") or args.get("q") or ""
                             res_str = await tool_web_search_images({"query": q})
                         elif t_name == "web_fetch":
                             u = args.get("url") or ""
-                            res_str = kb_coverage.cap_web_result(await tool_web_fetch({"url": u}), web_calls)
+                            res_str = kb_coverage.cap_web_result(await tool_web_fetch({"url": u}), web_calls, *deck_research.web_cap(brief_phase))
                         elif t_name in ("generate_image", "generate_video") and t_name not in chat_media_tools:
                             res_str = ("error: making images isn't available in chat right now - "
                                        "ask the user to use /image or agent mode")
@@ -1199,15 +1201,15 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             fb_local = state.client
                         except Exception:
                             pass
-                    final_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
+                    final_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
                     final_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, None, req.temperature,
-                        req.max_tokens, repeat_penalty=final_rep, rid=chat_rid, lane="main", effort=effort,
+                        turn_max_tokens, repeat_penalty=final_rep, rid=chat_rid, lane="main", effort=effort,
                         top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
                 else:
-                    final_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
+                    final_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
                     final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature,
-                                                    max_tokens=req.max_tokens, repeat_penalty=final_rep, rid=chat_rid, effort=effort,
+                                                    max_tokens=turn_max_tokens, repeat_penalty=final_rep, rid=chat_rid, effort=effort,
                                                     top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
 
                 async for ev, val in final_stream:

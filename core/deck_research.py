@@ -6,7 +6,9 @@ budget (searches and full-page reads) and a thinking budget, independent of the 
 effort the chat allows 4 web calls and ~1k thinking tokens, which is a quick answer, not a deck.
 
 All knobs live under `chat` in config/app.json:
-  deck_research_calls   web calls for a deck / PDF build (default 14; 0 turns the extra budget off)
+  deck_research_calls   web calls for a deck / PDF build (default 10; 0 turns the extra budget off)
+  deck_repeat_penalty   repeat penalty while writing the deck (default 1.0; the chat's 1.15 garbles URLs and names)
+  deck_max_tokens       cap for ONE turn while building (default 8000; 0 = no cap)
   deck_effort           reasoning effort floor while building (default "medium"; the cap reasoning_effort.doc_build_ceiling
                         still applies afterwards)
 """
@@ -14,7 +16,7 @@ from typing import Optional
 
 from . import reasoning
 
-DEFAULT_CALLS = 14
+DEFAULT_CALLS = 10
 BUILD_TURNS = 12          # tool rounds kept for doc_create / doc_append after the research
 
 
@@ -48,6 +50,42 @@ def web_plan(app_cfg: Optional[dict], brief_phase: str, web_on: bool, coverage: 
     if brief_phase != "build" or not web_on or n <= 0 or coverage == "full":
         return keep
     return {"has_web": True, "lean": False, "budget": max(int(budget or 0), n)}
+
+
+def build_limits(app_cfg: Optional[dict], phase: str) -> dict:
+    """Sampling limits for the turns that WRITE the deck. -> {repeat_penalty, max_tokens} (None = leave as configured).
+
+    The chat default repeat penalty (1.15) punishes every repeated token, and a deck is full of repeats - URLs, source names,
+    JSON-like slide syntax. The model then spells words wrong ("Decemberber", "wikipedia.wikipedia.wikipedia") and can run
+    away into a loop, which on a local GPU is half an hour and 25k tokens for one doc_append. While building: penalty 1.0
+    and a hard cap on the tokens of one turn (a 3-slide doc_append is ~1.5k)."""
+    if phase != "build":
+        return {"repeat_penalty": None, "max_tokens": None}
+    chat = _cfg(app_cfg)
+    try:
+        rp = float(chat.get("deck_repeat_penalty", 1.0))
+    except (TypeError, ValueError):
+        rp = 1.0
+    try:
+        mt = int(chat.get("deck_max_tokens", 8000))
+    except (TypeError, ValueError):
+        mt = 8000
+    return {"repeat_penalty": rp if rp > 0 else None, "max_tokens": mt if mt > 0 else None}
+
+
+def clamp_tokens(requested, cap: Optional[int]):
+    """The request's max_tokens (-1 / None / 0 = unlimited), lowered to `cap` when there is one."""
+    if not cap:
+        return requested
+    if requested in (None, -1, 0) or int(requested) > cap:
+        return cap
+    return requested
+
+
+def web_cap(phase: str) -> tuple:
+    """(soft_after, soft_chars) for trimming web results: a deck's research keeps its context small, because every later
+    turn (and every slide written) is processed on top of it."""
+    return (1, 4500) if phase == "build" else (6, 6000)
 
 
 def turns_for(budget: int, configured: int) -> int:
