@@ -68,6 +68,14 @@ PPTX_MANUAL = (
     "`Label: text`; stats = bullets that start with a number (`99.9% uptime`); a markdown table becomes a table slide. "
     "Use 8-12 slides, NEVER more than 14; the first slide is the title, the last is `## Thank you` or another closing slide. "
     "One idea per slide. Never write `Slide N:` labels, headers like 'Markdown source', bold markup or any text outside the outline.\n"
+    "   PICTURES: a slide may carry one picture with a line `image: <3-6 search words> | source=search|generate` (source is "
+    "optional: by default the web is searched first, then the local image model if it is loaded). Put it under the slide "
+    "title on the cover and on plain bullet slides (2-4 bullets: text left, picture right); `layout: full` + `image:` makes "
+    "a full-screen picture slide with the title over it. Use pictures on about half the slides, max 8 per deck, for concrete "
+    "subjects (a place, a product, a scene) - never for charts, tables, logos or text. Name the SPECIFIC subject and the "
+    "place/topic of the deck, e.g. `image: Lalbagh Fort Dhaka Bangladesh` or `image: data center server racks`, never a generic "
+    "word like 'history' or 'culture' and never a sentence; a slide with no concrete subject gets no `image:` line. Web pictures "
+    "are matched to the topic and credited on the slide automatically; a slide without a good match stays text-only.\n"
     "   Before writing a deck, if the user gave neither a slide count nor a style, ask ONE short question in plain sentences "
     "(no table, no code block) offering these looks: midnight (navy + cyan), corporate (white + blue), forest (green + amber), "
     "sunset (charcoal + coral), minimal (white + red accent), royal (indigo + gold), and a slide count (default 10). "
@@ -389,7 +397,10 @@ DECK_BRIEF = (
     "  2. Call doc_create(file='<topic>.pptx', total=N, content=...) with ONLY: first line `Theme: <midnight|corporate|forest|"
     "sunset|minimal|royal>` (the palette they chose), `# Deck title`, a subtitle line, then slides 1-2 (each `## Slide title` + "
     "3-5 bullets of at most 12 words, slides separated by a line containing only `---`).\n"
-    "  3. Then call doc_append(file=<the exact name doc_create returned>, content=<next 2-3 slides>) again and again, following "
+    "  3. If the user wants pictures/visuals/images in the deck, add an `image: <3-6 search words>` line under the title of the "
+    "cover and of roughly every other content slide (see the picture rules in the presentation format); read the tool result "
+    "for slides that got no picture and do not retry them.\n"
+    "  4. Then call doc_append(file=<the exact name doc_create returned>, content=<next 2-3 slides>) again and again, following "
     "your plan, until N slides exist; put done=true on the last call. Plain text only: no emoji, no `>` quotes, no tables, "
     "no ASCII diagrams. Never write a .md file for a PowerPoint request and never send the whole deck in one call.")
 
@@ -405,7 +416,9 @@ def deck_brief_wanted(query: str, prior_msgs=None) -> bool:
     for m in reversed(prior_msgs or []):
         if m.get("role") == "assistant":
             c = str(m.get("content") or "")
-            return "```questionnaire" in c and "deck" in c.lower() and "slides" in c.lower()
+            if "```questionnaire" in c and "deck" in c.lower() and "slides" in c.lower():
+                return True
+            break                       # the last reply was something else: judge the new request on its own words
     q = (query or "").strip()
     if not q or not _DECK_ASK_RE.search(q) or not _DECK_VERB_RE.search(q):
         return False
@@ -443,13 +456,42 @@ def pdf_brief_wanted(query: str, prior_msgs=None) -> bool:
     for m in reversed(prior_msgs or []):
         if m.get("role") == "assistant":
             c = str(m.get("content") or "")
-            return "```questionnaire" in c and "your pdf" in c.lower() and "sections" in c.lower()
+            if "```questionnaire" in c and "your pdf" in c.lower() and "sections" in c.lower():
+                return True
+            break
     q = (query or "").strip()
     if not q or not re.search(r"\bpdf\b", q, re.IGNORECASE) or deck_brief_wanted(q, []):
         return False
     if not _DECK_VERB_RE.search(q):
         return False
     return not re.search(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain|read|open|convert)\b", q, re.IGNORECASE)
+
+
+def brief_phase(query: str, prior_msgs=None) -> str:
+    """For a deck / PDF request: "ask" (show the questionnaire card now) or "build" (the user just answered it), else "".
+    The two need opposite tool sets: asking needs no research (it was thrown away and burned the turn / web budget),
+    building must not ask again."""
+    if not (deck_brief_wanted(query, prior_msgs) or pdf_brief_wanted(query, prior_msgs)):
+        return ""
+    for m in reversed(prior_msgs or []):
+        if m.get("role") == "assistant":
+            return "build" if "```questionnaire" in str(m.get("content") or "") else "ask"
+    return "ask"
+
+
+# Appended after the deck / PDF brief once the user has answered the card: stops the model asking again (it did, after
+# a few slides, once research results had pushed the answers far up the conversation).
+BRIEF_BUILD_NOW = (
+    "THE USER HAS ALREADY ANSWERED YOUR QUESTIONNAIRE: slide/section count, audience, palette and extras are in their last "
+    "message. Do NOT ask any question and do NOT show the card again - not at the start, not after a few slides, not at the "
+    "end. Start building now (doc_create, then doc_append until the planned count exists, done=true on the last call). For "
+    "pictures write `image:` lines only: the system fetches them; never call web_search_images. Search the web only if a "
+    "fact is genuinely missing, and never after the first doc_create."
+)
+
+BRIEF_ASK_NOW = (
+    "Do not research or call any tool yet: reply with the one short line and the questionnaire card only."
+)
 
 
 # A spreadsheet (xlsx / xls / csv) attached to the conversation: the message carries its PROFILE, data_query gives exact figures.

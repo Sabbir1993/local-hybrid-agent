@@ -108,6 +108,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     web_cap_enabled = APP_CONFIG.get("capabilities", {}).get("web", False)
     use_web = req.web_search and web_cap_enabled
+    # deck pictures: the web is searched only when the user switched web search on for this chat
+    from core.doc_tools import slide_images
+    slide_images.allow_web.set(bool(use_web))
+    slide_images.main_loop.set(asyncio.get_running_loop())
 
     msgs = [dict(m) for m in req.messages]
     last_query = ""
@@ -163,6 +167,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     deck_answer = (len(last_query) < 240 and "?" in prev_assistant and "[DOWNLOAD" not in prev_assistant
                    and bool(prompt_scope._PPTX_RE.search(prev_assistant)))
     pdf_build = prompt_scope.pdf_brief_wanted(last_query, msgs[:-1])      # a PDF request, or the answers to our PDF card
+    brief_phase = prompt_scope.brief_phase(last_query, msgs[:-1])         # "ask" (card now) / "build" (answered) / ""
     wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or pdf_build
     has_file = bool(file_followup or wants_file)
     web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
@@ -371,9 +376,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
               f"budget={web_budget_n} tier={kb_coverage.tier(effort, deep)}", file=sys.stderr)
     else:
         has_web = web_explicit
+    if brief_phase == "ask":
+        has_web = False          # nothing researched before the card is kept (only the final text is), so don't search
     if has_web:
         register_web_tools()
         for t_name in ("web_search", "web_fetch", "web_search_images"):
+            if brief_phase == "build" and t_name == "web_search_images":
+                continue         # deck pictures come from `image:` lines (core/doc_tools/slide_images.py)
             rt = registry.get(t_name)
             if rt and rt.schema and (allowed_names is None or t_name in allowed_names):
                 chat_tools.append(rt.schema)
@@ -473,6 +482,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     elif pdf_build:
         sys_parts.append(prompt_scope.PDF_BRIEF)
         sys_labels.append("pdf-brief")
+    if brief_phase:
+        sys_parts.append(prompt_scope.BRIEF_BUILD_NOW if brief_phase == "build" else prompt_scope.BRIEF_ASK_NOW)
+        sys_labels.append("brief-" + brief_phase)
 
     # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat"
     chat_cfg = APP_CONFIG.get("chat") or {}
@@ -609,8 +621,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 # Research budget: once web calls are used up (or only the last two
                 # turns remain) drop the web tools but keep write_file, so the
                 # remaining turns go to producing the answer instead of more searches.
-                research_over = use_web and web_calls > 0 and (
-                    web_calls >= max_web_calls or turn >= turn_limit - 2)
+                research_over = bool(use_web and web_calls > 0 and (
+                    web_calls >= max_web_calls or turn >= turn_limit - 2))
+                if brief_phase == "build" and written_files:
+                    research_over = True        # the deck exists: from here on only doc_append, no more searching
                 if turn == turn_limit - 1 and msgs and msgs[-1].get("role") == "tool":
                     # final turn: must answer now; a requested file can still be written
                     current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and tool_allowed("write_file")) else None
@@ -619,7 +633,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                      if t.get("function", {}).get("name") not in WEB_TOOL_NAMES]
                 else:
                     current_tools = chat_tools
-                if research_over and not research_nudged:
+                if research_over and not research_nudged and brief_phase == "build":
+                    research_nudged = True
+                    msgs.append({"role": "user", "content": (
+                        "[system note] Do not search and do not ask the user anything: their answers are already in the "
+                        "conversation. Continue building the document: call doc_append with the next slides/sections of "
+                        "your plan (done=true on the last call).")})
+                elif research_over and not research_nudged:
                     research_nudged = True
                     msgs.append({"role": "user", "content": (
                         "[system note] The research phase is over - do not search any more. Using the "

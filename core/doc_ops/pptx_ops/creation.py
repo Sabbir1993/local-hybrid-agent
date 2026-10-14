@@ -53,9 +53,25 @@ def _create_from_template(deck: dict, template: bytes) -> bytes:
     return _save(prs)
 
 
-def create(md: str, template: Optional[bytes] = None, title: str = "") -> bytes:
+def attach_images(deck: dict, images: Optional[dict]) -> None:
+    """images: {slide index: {data, credit_host, credit_url}} (resolved by doc_tools/slide_images.py) -> onto the slides
+    that can show a picture. A web picture also gets its source page in the speaker notes."""
+    for idx, info in (images or {}).items():
+        if not isinstance(idx, int) or not 0 <= idx < len(deck["slides"]) or not info.get("data"):
+            continue
+        s = deck["slides"][idx]
+        if s.get("kind") not in outline.IMAGE_KINDS or not s.get("image"):
+            continue
+        s["image_data"] = info["data"]
+        s["image_credit"] = info.get("credit_host") or ""
+        if info.get("credit_url"):
+            s["notes"] = (s["notes"] + f" Image source: {info['credit_url']}").strip()
+
+
+def create(md: str, template: Optional[bytes] = None, title: str = "", images: Optional[dict] = None) -> bytes:
     """Markdown / loose outline -> .pptx. Max outline.MAX_DECK_SLIDES slides; designed theme unless a template is given."""
     deck = outline.parse_outline(md, title)
     if template:
         return _create_from_template(deck, template)
+    attach_images(deck, images)
     return _save(design.build(deck))

@@ -238,14 +238,16 @@ def render_pdf(md: str, title: str = "document") -> bytes:
             pass
 
 
-def create(name: str, content: str, template: Optional[bytes] = None) -> tuple[bytes, Optional[str]]:
-    """(file bytes, source_spec) for a new document built from markdown / table text."""
+def create(name: str, content: str, template: Optional[bytes] = None,
+           images: Optional[dict] = None) -> tuple[bytes, Optional[str]]:
+    """(file bytes, source_spec) for a new document built from markdown / table text.
+    images: {slide index: {data, credit_host, credit_url}} for a .pptx (pictures already fetched / generated)."""
     ext = _ext(name)
     _guard_ext(ext)
     _check_ops_for_pan([{"op": "create", "content": content}])
     title = Path(name).stem.replace("_", " ").replace("-", " ").title()
     if ext == ".pptx":
-        return pptx_ops.create(content, template=template, title=title), content
+        return pptx_ops.create(content, template=template, title=title, images=images), content
     if ext == ".docx":
         return docx_ops.create(content, title=title), content
     if ext == ".xlsx":

@@ -3,6 +3,7 @@
 Titles and bullet bodies stay real placeholders (so doc_inspect/doc_edit address them like any deck);
 everything decorative is a shape named "deco*" that inspection skips.
 """
+import io
 import math
 from lxml import etree
 from pptx import Presentation
@@ -161,6 +162,60 @@ def _chrome(slide, t, title, deck_title, num):
              name=DECO + "-number", anchor=MSO_ANCHOR.MIDDLE, align=PP_ALIGN.RIGHT)
 
 
+def _fit_image(data: bytes, w: float, h: float, fit: str = "cover"):
+    """(bytes, left, top, width, height) in inches: 'cover' crops the picture to the w x h box, 'contain' keeps it whole
+    and centres it. Re-encoded (JPEG for photos), so the deck stays small."""
+    from PIL import Image
+    im = Image.open(io.BytesIO(data))
+    im.load()
+    has_alpha = im.mode in ("RGBA", "LA", "PA") or (im.mode == "P" and "transparency" in im.info)
+    im = im.convert("RGBA" if has_alpha else "RGB")
+    iw, ih = im.size
+    box = w / h
+    if fit == "cover":
+        if iw / ih > box:
+            nw = int(ih * box)
+            im = im.crop(((iw - nw) // 2, 0, (iw - nw) // 2 + nw, ih))
+        else:
+            nh = int(iw / box)
+            im = im.crop((0, (ih - nh) // 2, iw, (ih - nh) // 2 + nh))
+        dx, dy, dw, dh = 0.0, 0.0, w, h
+    else:
+        scale = min(w / iw, h / ih)
+        dw, dh = iw * scale, ih * scale
+        dx, dy = (w - dw) / 2, (h - dh) / 2
+    out = io.BytesIO()
+    if has_alpha:
+        im.save(out, format="PNG")
+    else:
+        im.save(out, format="JPEG", quality=85, optimize=True)
+    return out.getvalue(), dx, dy, dw, dh
+
+
+def _picture(slide, s, x, y, w, h, name="Image"):
+    """Add the slide's resolved picture in the (x, y, w, h) box; returns the shape (None when there is no picture)."""
+    data = s.get("image_data")
+    if not data:
+        return None
+    spec = s.get("image") or {}
+    blob, dx, dy, dw, dh = _fit_image(data, w, h, spec.get("fit", "cover"))
+    pic = slide.shapes.add_picture(io.BytesIO(blob), Inches(x + dx), Inches(y + dy), Inches(dw), Inches(dh))
+    pic.name = name
+    alt = spec.get("caption") or spec.get("query") or ""
+    if alt:
+        pic._element.nvPicPr.cNvPr.set("descr", alt[:200])
+    return pic
+
+
+def _credit(slide, s, t, x, y, w, color=None, align=PP_ALIGN.RIGHT):
+    """Small source line under / over a picture: the caption, then 'Image: host' for web pictures."""
+    spec = s.get("image") or {}
+    bits = [b for b in (spec.get("caption"), s.get("image_credit")) if b]
+    if bits and s.get("image_data"):
+        _textbox(slide, x, y, w, 0.3, [("  ·  ".join(bits), t["body"], 9, color or t["muted"], False, True, 0)],
+                 name=DECO + "-credit", anchor=MSO_ANCHOR.MIDDLE, align=align)
+
+
 def _heading_body(item):
     head, kids = item
     head = head.rstrip(":").strip()
@@ -176,6 +231,9 @@ def _cover(slide, s, t, closing=False):
     _bg(slide, t["cover_bg"])
     motif = t["motif"]
     tw = 10.4 if motif == "rule" else 8.0
+    has_pic = bool(s.get("image_data")) and not closing
+    if has_pic:
+        tw = 6.6
     if motif == "circles":
         _deco(slide, MSO_SHAPE.OVAL, 8.9, -1.9, 7.2, 7.2, t["accent"], alpha=16)
         _deco(slide, MSO_SHAPE.OVAL, 10.6, 3.5, 5.2, 5.2, t["accent2"], alpha=28)
@@ -186,6 +244,10 @@ def _cover(slide, s, t, closing=False):
         _deco(slide, MSO_SHAPE.RECTANGLE, 1.1, 1.4, 0.9, 0.1, t["accent"])
         _deco(slide, MSO_SHAPE.RECTANGLE, 1.1, 6.6, 11.1, 0.02, t["muted"], alpha=40)
     _deco(slide, MSO_SHAPE.RECTANGLE, 0, 0, 0.28, H, t["accent"])
+    if has_pic:                                       # full-height picture panel on the right edge
+        _picture(slide, s, 8.0, 0, W - 8.0, H, name="Cover image")
+        _deco(slide, MSO_SHAPE.RECTANGLE, 7.9, 0, 0.1, H, t["accent"], back=False)
+        _credit(slide, s, t, 8.1, 7.1, W - 8.3, color="FFFFFF")
     _title(slide, s["title"], t, 1.1, 2.0, tw, 2.2, color=t["cover_text"], base=46,
            anchor=MSO_ANCHOR.BOTTOM)
     _deco(slide, MSO_SHAPE.RECTANGLE, 1.1, 4.42, 1.2, 0.07, t["accent"])
@@ -224,11 +286,39 @@ def _section(slide, s, t):
         body._element.getparent().remove(body._element)
 
 
+def _full(slide, s, t):
+    """Full-bleed picture with a dark scrim; the title (and subtitle) sit over it."""
+    _bg(slide, t["cover_bg"])
+    pic = _picture(slide, s, 0, 0, W, H, name="Background image")
+    scrim = _deco(slide, MSO_SHAPE.RECTANGLE, 0, 0, W, H, "000000", alpha=48, back=False)
+    for shp in (scrim, pic):                           # behind the placeholders, picture lowest
+        if shp is not None:
+            _back(shp)
+    _deco(slide, MSO_SHAPE.RECTANGLE, 1.1, 4.55, 1.2, 0.07, t["accent"], back=False)
+    _title(slide, s["title"], t, 1.1, 2.4, 10.5, 2.0, color="FFFFFF", base=44, anchor=MSO_ANCHOR.BOTTOM)
+    body = next((p for p in slide.placeholders if p.placeholder_format.idx == 1), None)
+    if body is not None and s["subtitle"]:
+        _place(body, 1.1, 4.8, 10.5, 1.2)
+        _frame(body.text_frame, MSO_ANCHOR.TOP)
+        body.text_frame.text = s["subtitle"]
+        for p in body.text_frame.paragraphs:
+            _style_runs(p, t["body"], 20, "E5E7EB")
+    elif body is not None:
+        body._element.getparent().remove(body._element)
+    _credit(slide, s, t, W - MX - 6, 7.05, 6, color="E5E7EB")
+
+
 def _bullets(slide, s, t):
     body = next((p for p in slide.placeholders if p.placeholder_format.idx == 1), None)
     items = s["bullets"]
     h = 4.85
     _deco(slide, MSO_SHAPE.RECTANGLE, MX, 1.95, 0.06, min(h - 0.2, 0.62 * max(len(items), 3)), t["accent"])
+    if s.get("image_data"):                           # text on the left, picture on the right
+        px, pw = 7.55, W - MX - 7.55
+        _fill_bullets(body, items, t, MX + 0.3, 1.9, px - MX - 0.7, h, base=26 if len(items) <= 4 else 22, floor=12)
+        _picture(slide, s, px, 1.95, pw, h - 0.35)
+        _credit(slide, s, t, px, 1.95 + h - 0.3, pw)
+        return
     _fill_bullets(body, items, t, MX + 0.3, 1.9, W - 2 * MX - 0.3, h, base=30 if len(items) <= 4 else 26)
 
 
@@ -385,7 +475,7 @@ def _table(slide, s, t):
             _style_runs(cell.text_frame.paragraphs[0], t["body"], size, _on(fill) if head else t["text"], head)
 
 
-_LAYOUT_FOR = {"cover": "Title Slide", "closing": "Title Slide", "section": "Section Header",
+_LAYOUT_FOR = {"cover": "Title Slide", "closing": "Title Slide", "section": "Section Header", "full": "Section Header",
                "bullets": "Title and Content", "columns": "Two Content"}
 
 
@@ -400,6 +490,8 @@ def build(deck: dict) -> Presentation:
         slide = prs.slides.add_slide(lays[_LAYOUT_FOR.get(kind, "Title Only")])
         if kind in ("cover", "closing"):
             _cover(slide, s, t, closing=kind == "closing")
+        elif kind == "full" or (kind == "section" and s.get("image_data")):
+            _full(slide, s, t)
         elif kind == "section":
             _section(slide, s, t)
         else:

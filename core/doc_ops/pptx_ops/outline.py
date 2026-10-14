@@ -13,11 +13,14 @@ MAX_CARDS = 6
 MAX_TABLE_ROWS = 9
 MAX_TABLE_COLS = 6
 
-LAYOUTS = {"bullets", "cards", "stats", "two-column", "timeline", "quote", "section", "table", "cover", "closing"}
+LAYOUTS = {"bullets", "cards", "stats", "two-column", "timeline", "quote", "section", "table", "cover", "closing", "full"}
+IMAGE_KINDS = ("cover", "bullets", "section", "full")   # slide kinds the renderer can put a picture on
+MAX_IMAGE_QUERY = 120
 _LAYOUT_ALIAS = {"columns": "two-column", "two-columns": "two-column", "twocolumn": "two-column", "2-column": "two-column",
                  "list": "bullets", "content": "bullets", "numbers": "stats", "metrics": "stats", "steps": "timeline",
                  "roadmap": "timeline", "grid": "cards", "title": "cover", "divider": "section", "thanks": "closing",
-                 "end": "closing"}
+                 "end": "closing", "split": "bullets", "image": "bullets", "picture": "bullets", "full-image": "full",
+                 "fullscreen": "full", "hero": "full"}
 
 _META = re.compile(
     r"^(markdown source|source for conversion|here(?:'s| is| are)\b|below is|sure[,!. ]|certainly|of course|"
@@ -30,7 +33,7 @@ _ARROW_ONLY = re.compile(r"^[\s↓↑→←⇒⇓⬇▼▲|│┃:·.\-–—]+$
 _CHECKBOX = re.compile(r"^\[[ xX✓✔]?\]\s*")
 _SLIDE_PREFIX = re.compile(r"^(?:slide|section|part)\s*\d+\s*[:.\-–—)]*\s*", re.I)
 _GLOBAL_THEME = re.compile(r"^(?:global\s+(?:theme|style|design)|style|design|palette|colou?r palette|colou?rs?)\s*:\s*(.*)$", re.I)
-_FIELD = re.compile(r"^(subtitle|tagline|theme|accent|layout|notes?|speaker notes?|title)\s*:\s*(.*)$", re.I)
+_FIELD = re.compile(r"^(subtitle|tagline|theme|accent|layout|notes?|speaker notes?|title|image|picture|photo)\s*:\s*(.*)$", re.I)
 _SLIDE_MARK = re.compile(r"^\**\s*slide\s+(\d+)\s*(?:\(([^)]*)\))?\s*[:.\-–—]*\**\s*(.*)$", re.I)
 _BULLET = re.compile(r"^([-*+•●▪◦]|\d+[.)])\s+(.*)$")
 _TABLE_SEP = re.compile(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$")
@@ -65,7 +68,30 @@ def pretty_title(name: str) -> str:
 
 
 def _new() -> dict:
-    return {"title": "", "subtitle": "", "bullets": [], "notes": "", "layout": "", "table": []}
+    return {"title": "", "subtitle": "", "bullets": [], "notes": "", "layout": "", "table": [], "image": None}
+
+
+def parse_image_spec(val: str):
+    """`image: search words | source=search|generate | fit=cover|contain | caption=...` -> a spec dict or None.
+    `source` defaults to auto (web first, then the local image model); a https URL in place of the words is kept
+    as `url` (it is only used if a search already returned it, see doc_tools/slide_images.py)."""
+    parts = [p.strip() for p in str(val or "").split("|")]
+    head = parts[0].strip("\"' ")
+    spec = {"query": "", "url": "", "source": "auto", "fit": "cover", "caption": ""}
+    if re.match(r"^https://\S+$", head):
+        spec["url"] = head
+    else:
+        spec["query"] = re.sub(r"\s+", " ", clean(head))[:MAX_IMAGE_QUERY]
+    for p in parts[1:]:
+        k, _, v = p.partition("=")
+        k, v = k.strip().lower(), v.strip().strip("\"'")
+        if k == "source" and v.lower() in ("auto", "search", "web", "generate", "ai"):
+            spec["source"] = {"web": "search", "ai": "generate"}.get(v.lower(), v.lower())
+        elif k == "fit" and v.lower() in ("cover", "contain"):
+            spec["fit"] = v.lower()
+        elif k == "caption":
+            spec["caption"] = clean(v)[:140]
+    return spec if (spec["query"] or spec["url"]) else None
 
 
 def _empty(sl: dict) -> bool:
@@ -196,6 +222,8 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
             elif key == "title":
                 if not cur["title"]:
                     cur["title"] = val
+            elif key in ("image", "picture", "photo"):
+                cur["image"] = parse_image_spec(val) or cur["image"]
             else:
                 cur["notes"] = (cur["notes"] + " " + val).strip()
             continue
@@ -236,6 +264,7 @@ def _finish(deck: dict, slides: list, deck_title: str) -> dict:
             prev = merged[-1]
             prev["bullets"] += ([s["subtitle"]] if s["subtitle"] else []) + s["bullets"]
             prev["table"] = prev["table"] or s["table"]
+            prev["image"] = prev["image"] or s["image"]
             prev["notes"] = (prev["notes"] + " " + s["notes"]).strip()
         else:
             merged.append(s)
@@ -302,6 +331,9 @@ def _classify(s: dict, idx: int, n: int) -> None:
     lay = s["layout"]
     top = groups(s["bullets"])
     flat = [h for h, c in top if h and not c]
+    if lay == "full" and s["image"] and idx > 0:        # full-bleed picture with the title over it
+        s["kind"] = "full"
+        return
     if idx == 0 and lay in ("", "cover", "bullets") and not s["table"] and len(top) <= 3 and (s["subtitle"] or len(top) <= 2):
         s["kind"] = "cover"
         if not s["subtitle"]:

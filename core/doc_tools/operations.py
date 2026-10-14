@@ -3,6 +3,7 @@ from pathlib import Path
 from .. import companion_bridge, doc_ops, doc_store
 from ..agent_tools import _common_resolve, _ws_resolve, require_device_workspace
 from ..doc_ops.base import sha256
+from . import slide_images
 from .location import (
     _Loc,
     _file_arg,
@@ -66,7 +67,11 @@ async def _create(args: dict, location: str) -> str:
     if args.get("template"):
         tloc, template = (await _locate(args["template"])) if location == "device" else _locate_common(args["template"])
     uid = _uid()
-    data, spec = doc_ops.create(name, content, template=template)
+    images, pic_note = {}, ""
+    if Path(name).suffix.lower() == ".pptx" and not template and slide_images.wants_images(content):
+        images, pic_notes, used_web = await slide_images.resolve(content, uid)
+        pic_note = slide_images.summary(images, pic_notes, used_web)
+    data, spec = doc_ops.create(name, content, template=template, images=images)
     if location == "device":
         dev_uid, _ws = require_device_workspace()
         target = _ws_resolve(name)
@@ -81,6 +86,8 @@ async def _create(args: dict, location: str) -> str:
     doc_store.register(uid, key, target.suffix.lower().lstrip("."), location=location, source_spec=spec,
                        sha256=sha256(data))
     msg = f"Created {target.name}. Later changes can be made with doc_edit without regenerating it."
+    if pic_note:
+        msg += " " + pic_note
     if args.get("total") and target.suffix.lower() in _APPENDABLE:
         try:
             _BUILD_TOTAL[(uid if location == "common" else dev_uid, key)] = max(1, min(int(args["total"]), 30))
@@ -149,10 +156,16 @@ async def _append(args: dict, location: str) -> str:
     if done and total and have < total:
         raise ValueError(f"not finished: {have} of {total} {'slides' if ext == '.pptx' else 'sections'} so far - "
                          "keep adding with doc_append (done=true only after the last one)")
+    images, pic_note = {}, ""
+    if ext == ".pptx" and slide_images.wants_images(new_spec):
+        # pictures already found for earlier slides come from the resolver's cache, so a rebuild costs nothing extra
+        images, pic_notes, used_web = await slide_images.resolve(new_spec, loc.uid)
+        if slide_images.wants_images(content) or done:
+            pic_note = slide_images.summary(images, pic_notes, used_web)
     if ext == ".pdf" and not done:
         out = data              # the PDF is printed once at the end; the preview shows a live HTML draft of the spec
     else:
-        out, _ = doc_ops.create(loc.path.name, new_spec)
+        out, _ = doc_ops.create(loc.path.name, new_spec, images=images)
     if out is not data:
         await _write(loc, loc.path, out)
     doc_store.register(loc.uid, loc.key, ext.lstrip("."), location=loc.location,
@@ -165,6 +178,8 @@ async def _append(args: dict, location: str) -> str:
         msg += " Finished" + (" - fix these with doc_edit set_text: " + "; ".join(bad[:5]) if bad else ".")
     elif total and have < total:
         msg += f" Continue with the next {min(3, total - have)} {unit} (doc_append), the last one is the closing."
+    if pic_note:
+        msg += " " + pic_note
     if loc.location == "common":
         msg += f" [DOWNLOAD: {loc.path.name}]"
     return msg
