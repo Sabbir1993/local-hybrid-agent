@@ -162,9 +162,10 @@ def user_has_permission(principal: Principal, key: str) -> bool:
     return key in principal.permission_keys
 
 
-# PCI DSS v4.0 8.3.6 asks for 12 (8 only where a system cannot support 12); 8 is a deliberate
-# owner decision for this deployment. Letters + digits are still required below.
-MIN_PASSWORD_LEN = 8
+# PCI DSS v4.0 8.3.6 asks for 12 characters (8 only where a system cannot support 12). Applies to new
+# users and password changes; existing passwords keep working until they are changed. Letters + digits
+# are still required below.
+MIN_PASSWORD_LEN = 12
 
 
 def password_policy_error(password: str, username: str = "") -> Optional[str]:

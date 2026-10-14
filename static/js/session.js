@@ -170,16 +170,15 @@
       resetPwdForm();
     };
 
+    // Only the profile pill (name / email row) opens and closes the menu. The menu is a child of the pill, so a click
+    // on one of its items or password fields bubbles up to the pill: that used to toggle it shut mid-edit, which made
+    // the password form unusable. Clicks inside the menu are ignored here, and there is no click-outside close.
     trigger.onclick = (e) => {
       e.stopPropagation();
+      if (dd.contains(e.target)) return;
+      if (user.must_change_password) { dd.classList.add('open'); return; }
       dd.classList.toggle('open');
     };
-
-    document.addEventListener('click', (e) => {
-      if (dd.classList.contains('open') && !dd.contains(e.target) && !trigger.contains(e.target)) {
-        closeMenu();
-      }
-    });
 
     dd.addEventListener('click', (e) => {
       const item = e.target.closest('[data-action]');
@@ -189,7 +188,6 @@
       if (action === 'theme') {
         if (typeof cycleTheme === 'function') cycleTheme();
       } else if (action === 'docs') {
-        closeMenu();
         if (typeof window.openDocsModal === 'function') {
           window.openDocsModal();
         } else {
@@ -197,16 +195,12 @@
           if (dm) { dm.hidden = false; dm.style.display = 'flex'; }
         }
       } else if (action === 'nav-settings') {
-        closeMenu();
         navigateSettings('sec-theme');
       } else if (action === 'nav-mfa') {
-        closeMenu();
         navigateSettings('sec-mfa');
       } else if (action === 'nav-users') {
-        closeMenu();
         navigateSettings('sec-users');
       } else if (action === 'nav-session') {
-        closeMenu();
         navigateSettings('sec-session');
       } else if (action === 'change-pwd') {
         pwdForm.style.display = pwdForm.style.display === 'none' ? 'flex' : 'none';
@@ -350,6 +344,7 @@
       e.stopPropagation();
       const dd = document.querySelector('.user-menu-dropdown');
       if (dd) {
+        if (dd.contains(e.target)) return;   // clicks inside the menu never toggle it
         dd.classList.toggle('open');
       } else {
         navigateSettings('sec-mfa');

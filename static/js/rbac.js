@@ -53,7 +53,7 @@ function renderUsersPanel(box, users) {
         <b>Create user</b>
         <div class="ru-create">
           <input type="text" id="ru-username" placeholder="username" autocomplete="off">
-          <input type="password" id="ru-password" placeholder="password (8+ characters, letters and digits)" autocomplete="new-password">
+          <input type="password" id="ru-password" placeholder="password (12+ characters, letters and digits)" autocomplete="new-password">
           <select id="ru-role" aria-label="Role for the new user">${roleOpts}</select>
           <button class="ru-btn primary" id="ru-create" type="button">+ Create</button>
         </div>

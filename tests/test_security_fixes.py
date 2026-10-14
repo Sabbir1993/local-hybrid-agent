@@ -347,6 +347,8 @@ class PanTests(unittest.TestCase):
         for bad in ("short1", "alllettersnodigits", "123456789012", "alice12345678"):
             self.assertIsNotNone(password_policy_error(bad, "alice12345678"), bad)
         self.assertIsNone(password_policy_error("correct horse 42", "alice"))
+        self.assertIsNotNone(password_policy_error("abcdefgh123", "alice"))   # 11 characters
+        self.assertIsNone(password_policy_error("abcdefgh1234", "alice"))     # 12 characters
 
 
 class SseHelperNotShadowedTests(unittest.TestCase):
