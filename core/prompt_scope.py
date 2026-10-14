@@ -510,6 +510,21 @@ def brief_phase(query: str, prior_msgs=None) -> str:
     return "ask"
 
 
+def brief_request(prior_msgs=None) -> str:
+    """The user's ORIGINAL deck / PDF request: the user message just before our questionnaire card. Once they have answered
+    the card, their latest message is only "How many slides?: 8-12 ... Colour palette?: Corporate ..." - routing the company
+    Knowledge Base by THAT text pulls in unrelated documents (it matched "Corporate" to annual reports)."""
+    msgs = list(prior_msgs or [])
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
+        if m.get("role") == "assistant" and "```questionnaire" in str(m.get("content") or ""):
+            for j in range(i - 1, -1, -1):
+                if msgs[j].get("role") == "user":
+                    return str(msgs[j].get("content") or "")
+            break
+    return ""
+
+
 # Appended after the deck / PDF brief once the user has answered the card: stops the model asking again (it did, after
 # a few slides, once research results had pushed the answers far up the conversation).
 BRIEF_BUILD_NOW = (

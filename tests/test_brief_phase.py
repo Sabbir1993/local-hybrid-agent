@@ -37,6 +37,26 @@ class BriefPhase(unittest.TestCase):
     def test_edits_of_an_existing_deck_are_not_a_brief(self):
         self.assertEqual(ps.brief_phase("change the theme of the ppt", []), "")
 
+    def test_the_original_request_is_the_message_before_the_card(self):
+        prior = [{"role": "user", "content": "Make a deck about the bank's 2025 results"},
+                 {"role": "assistant", "content": CARD}]
+        self.assertEqual(ps.brief_request(prior), "Make a deck about the bank's 2025 results")
+
+    def test_the_latest_card_is_the_one_used(self):
+        prior = [{"role": "user", "content": "first deck"}, {"role": "assistant", "content": CARD},
+                 {"role": "user", "content": ANSWERS}, {"role": "assistant", "content": "Done [DOWNLOAD: a.pptx]"},
+                 {"role": "user", "content": "now a PDF about onboarding"}, {"role": "assistant", "content": PDF_CARD}]
+        self.assertEqual(ps.brief_request(prior), "now a PDF about onboarding")
+
+    def test_no_card_no_request(self):
+        self.assertEqual(ps.brief_request([]), "")
+        self.assertEqual(ps.brief_request([{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]), "")
+
+    def test_the_chat_route_routes_the_kb_by_it(self):
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("prompt_scope.brief_request(msgs[:-1])", src)
+
     def test_build_note_forbids_asking_and_picture_searches(self):
         self.assertIn("Do NOT ask", ps.BRIEF_BUILD_NOW)
         self.assertIn("web_search_images", ps.BRIEF_BUILD_NOW)

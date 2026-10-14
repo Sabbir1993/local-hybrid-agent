@@ -304,6 +304,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     cov_hits = []
     from core.knowledge_router import kb_routing_query
     kb_query = kb_routing_query(msgs, last_query)
+    if brief_phase == "build":
+        # the latest message is only the card's answers: route the KB by the request the card belongs to
+        kb_query = own_words(prompt_scope.brief_request(msgs[:-1]) or last_query, 600)
     # one policy for "should the company KB be searched for this turn" (core/knowledge_router.should_consult_kb): the
     # user's own words decide, attached data comes first, small talk never retrieves; /kb on|off overrides it.
     consult_kb, kb_reason = should_consult_kb(kb_query, has_attachments, voice_policy.kb_company_only(req), req.kb)
