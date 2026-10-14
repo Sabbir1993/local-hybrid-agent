@@ -216,7 +216,7 @@ def _rows_from_text(content: str) -> list[list]:
     return _parse_tabular_text(content)
 
 
-def render_pdf(md: str, title: str = "document") -> bytes:
+def render_pdf(md: str, title: str = "document", images: Optional[dict] = None) -> bytes:
     """Markdown -> PDF bytes via the existing HTML/Chromium (ReportLab fallback) renderer.
     The renderer needs a file path; a temp file is used and removed immediately."""
     import os
@@ -226,7 +226,7 @@ def render_pdf(md: str, title: str = "document") -> bytes:
     d = tempfile.mkdtemp(prefix="docops_")
     p = Path(d) / f"{safe}.pdf"
     try:
-        if not _save_text_or_markdown_as_pdf(p, md) or not p.is_file():
+        if not _save_text_or_markdown_as_pdf(p, md, images=images) or not p.is_file():
             raise DocOpError("PDF rendering failed")
         return p.read_bytes()
     finally:
@@ -261,5 +261,5 @@ def create(name: str, content: str, template: Optional[bytes] = None,
                       "(a markdown table or delimited rows), not prose or code")
         return csv_ops.create(rows), None
     if ext == ".pdf":
-        return render_pdf(content, title), content
+        return render_pdf(content, title, images=images), content
     raise DocOpError(f"cannot create {ext} documents")

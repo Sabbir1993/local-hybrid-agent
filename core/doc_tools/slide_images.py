@@ -18,6 +18,7 @@ import asyncio
 import contextvars
 import io
 import re
+import time
 from collections import OrderedDict
 from typing import Optional
 from urllib.parse import urlparse
@@ -32,6 +33,10 @@ MIN_SIDE = 500                 # smaller web pictures look soft when stretched o
 MAX_CANDIDATES = 14           # search results looked at; only relevant ones are downloaded
 MAX_DOWNLOADS = 4              # downloads tried per slide, best match first
 _CACHE_MAX = 48
+_CACHE_BYTES = 40_000_000       # total picture bytes kept between builds
+RESOLVE_BUDGET_S = 100.0       # all pictures of one build together
+MIN_PICTURE_S = 5.0            # a picture that already started always gets at least this long
+WEB_SLOTS = 3                  # web searches / downloads running at once
 
 # the user's web switch for this chat run (set in routes/chat/run.py); decks only search the web when it is on
 allow_web: contextvars.ContextVar = contextvars.ContextVar("deck_web_images", default=False)
@@ -41,9 +46,10 @@ allow_web: contextvars.ContextVar = contextvars.ContextVar("deck_web_images", de
 main_loop: contextvars.ContextVar = contextvars.ContextVar("deck_main_loop", default=None)
 
 _cache: "OrderedDict[tuple, dict]" = OrderedDict()
+_sems: contextvars.ContextVar = contextvars.ContextVar("deck_image_slots", default=None)
 _IMAGE_LINE = re.compile(r"(?mi)^\s*(?:image|picture|photo)\s*:")
 
-_ASPECT = {"cover": "tall", "bullets": "square", "full": "wide", "section": "wide"}
+_ASPECT = {"cover": "tall", "bullets": "square", "full": "wide", "section": "wide", "gallery": "wide"}
 
 
 def wants_images(content: str) -> bool:
@@ -164,8 +170,13 @@ async def _from_web(uid: int, query: str, why: list, anchors: tuple = ()) -> Opt
     if not q:
         why.append("nothing left to search after removing personal data")
         return None
+    slot = (_sems.get() or {}).get("web")
     try:
-        results = await asyncio.to_thread(web_tools._bing_images_search_sync, q, MAX_CANDIDATES)
+        if slot is not None:
+            async with slot:
+                results = await asyncio.to_thread(web_tools._bing_images_search_sync, q, MAX_CANDIDATES)
+        else:
+            results = await asyncio.to_thread(web_tools._bing_images_search_sync, q, MAX_CANDIDATES)
     except Exception as e:
         why.append(f"image search failed ({type(e).__name__})")
         return None
@@ -204,8 +215,13 @@ async def _generate(uid: int, query: str, aspect: str, why: list, anchors: tuple
     if user is None:
         return None
     prompt = f"{search_query(query, list(anchors))}, clean professional presentation visual, high quality, no text, no watermark"
+    gen_slot = (_sems.get() or {}).get("gen")
     try:
-        res = await _on_main_loop(media.generate("image", user, prompt, {"aspect": aspect, "size": "medium"}))
+        if gen_slot is not None:
+            async with gen_slot:                     # the image model makes one picture at a time
+                res = await _on_main_loop(media.generate("image", user, prompt, {"aspect": aspect, "size": "medium"}))
+        else:
+            res = await _on_main_loop(media.generate("image", user, prompt, {"aspect": aspect, "size": "medium"}))
     except Exception as e:
         why.append(f"image generation failed ({type(e).__name__})")
         return None
@@ -244,20 +260,83 @@ async def _one(uid: int, spec: dict, kind: str, why: list, anchors: tuple = ()) 
         res = await _generate(uid, query, aspect, why, anchors)
     if res is not None:
         _cache[key] = res
-        while len(_cache) > _CACHE_MAX:
+        while len(_cache) > _CACHE_MAX or sum(len(v["data"]) for v in _cache.values()) > _CACHE_BYTES:
             _cache.popitem(last=False)
     return res
 
 
-async def resolve(content: str, uid: int) -> tuple:
-    """-> (images {slide index: {data, credit_host, credit_url, via}}, notes [str], used_web bool).
-    Never raises for a slide that cannot get a picture: it stays a text slide and a note says why."""
+async def _resolve_many(uid: int, items: list, anchors: tuple, noun: str) -> tuple:
+    """items: [(key, label, kind, spec | None, extras [spec])] -> (images {key: info}, notes, used_web).
+
+    Slides are resolved concurrently (web searches 3 at a time, the image model one at a time) inside an overall time
+    budget, so a deck with 8 pictures does not take 8 sequential searches. A picture that cannot be found, errors, or
+    runs out of time never fails the build: that slide stays text-only and a note says why. `extras` (gallery slides) are
+    resolved alongside the first picture and returned in info["extra"]."""
     images: dict = {}
     notes: list = []
+    sems = {"web": asyncio.Semaphore(WEB_SLOTS), "gen": asyncio.Semaphore(1)}
+    token = _sems.set(sems)
+    deadline = time.monotonic() + RESOLVE_BUDGET_S
+    todo = []
+    for n, (key, label, kind, spec, extras) in enumerate(items):
+        if spec is None:
+            notes.append(f"{label}: no description given")
+        elif n >= MAX_IMAGES:
+            notes.append(f"{label}: skipped, at most {MAX_IMAGES} pictures per {noun}")
+        else:
+            todo.append((key, label, kind, spec, extras))
+
+    async def one(spec, kind):
+        why: list = []
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None, "skipped, the picture time budget ran out"
+        try:
+            res = await asyncio.wait_for(_one(uid, spec, kind, why, anchors), timeout=max(MIN_PICTURE_S, remaining))
+        except asyncio.TimeoutError:
+            return None, "took too long"
+        except Exception as e:                      # one bad picture must not stop the build
+            return None, type(e).__name__
+        return res, (why[-1] if why else "unavailable")
+
+    async def run(key, label, kind, spec, extras):
+        got = await asyncio.gather(one(spec, kind), *[one(x, kind) for x in extras])
+        return key, label, got
+
+    try:
+        done = await asyncio.gather(*[run(*t) for t in todo])
+    finally:
+        _sems.reset(token)
     used_web = False
+    for key, label, got in done:
+        (first, why), rest = got[0], got[1:]
+        extra = [r for r, _w in rest]
+        if first is None:
+            first = next((r for r in extra if r), None)           # a gallery still shows what it found
+            extra = [r for r in extra if r and r is not first]
+        if first is None:
+            notes.append(f"{label}: no picture - {why}")
+            doc_store.audit(uid, "doc.image", label, {"via": "none", "reason": str(why)[:80]})
+            continue
+        first = dict(first)
+        if any(extra):
+            first["extra"] = [r for r in extra if r]
+        images[key] = first
+        for r in [first] + list(first.get("extra", [])):
+            used_web = used_web or r["via"] == "web"
+            doc_store.audit(uid, "doc.image", label, {"via": r["via"], "host": r.get("credit_host", "")})
+        for r, w in rest:
+            if r is None:
+                notes.append(f"{label}: one of its pictures was not found - {w}")
+    return images, notes, used_web
+
+
+async def resolve(content: str, uid: int) -> tuple:
+    """-> (images {slide index: {data, credit_host, credit_url, via[, extra]}}, notes [str], used_web bool).
+    Never raises for a slide that cannot get a picture: it stays a text slide and a note says why."""
     deck = outline.parse_outline(content or "")
     anchors = tuple(anchors_for(deck.get("title", "")))
-    n = 0
+    items, notes = [], []
     for i, s in enumerate(deck["slides"]):
         spec = s.get("image")
         if not spec:
@@ -266,23 +345,19 @@ async def resolve(content: str, uid: int) -> tuple:
         if s["kind"] not in outline.IMAGE_KINDS:
             notes.append(f"{label}: this kind of slide has no room for a picture (use a plain bullets slide)")
             continue
-        if n >= MAX_IMAGES:
-            notes.append(f"{label}: skipped, at most {MAX_IMAGES} pictures per deck")
-            continue
-        n += 1
-        why: list = []
-        try:
-            res = await _one(uid, spec, s["kind"], why, anchors)
-        except Exception as e:                      # one bad slide must not stop the deck
-            res, why = None, [f"{type(e).__name__}"]
-        if res is None:
-            notes.append(f"{label}: no picture - {why[-1] if why else 'unavailable'}")
-            doc_store.audit(uid, "doc.image", f"slide {i + 1}", {"via": "none", "reason": (why[-1] if why else "")[:80]})
-            continue
-        images[i] = res
-        used_web = used_web or res["via"] == "web"
-        doc_store.audit(uid, "doc.image", f"slide {i + 1}", {"via": res["via"], "host": res.get("credit_host", "")})
-    return images, notes, used_web
+        extras = list(s.get("image_extra") or []) if s["kind"] == "gallery" else []
+        items.append((i, label, s["kind"], spec, extras))
+    images, more, used_web = await _resolve_many(uid, items, anchors, "deck")
+    return images, notes + more, used_web
+
+
+async def resolve_pdf(content: str, uid: int) -> tuple:
+    """Same as resolve() for a PDF's markdown: its `image:` lines, in order (core/agent_tools/dom_convert.image_specs).
+    -> (images {line index: info}, notes, used_web). Pictures are wide figures between paragraphs."""
+    from ..agent_tools.dom_convert import image_specs
+    anchors = tuple(anchors_for(next((ln[2:].strip() for ln in (content or "").splitlines() if ln.startswith("# ")), "")))
+    items = [(i, f"picture {i + 1}", "full", spec, []) for i, spec in enumerate(image_specs(content or ""))]
+    return await _resolve_many(uid, items, anchors, "document")
 
 
 def summary(images: dict, notes: list, used_web: bool) -> str:

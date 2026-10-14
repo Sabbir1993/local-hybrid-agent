@@ -53,6 +53,9 @@ DOC_CREATE_SCHEMA = {"type": "function", "function": {
         "total": {"type": "integer", "description": "how many slides (pptx) or sections (pdf/docx) the finished "
                                                     "document will have; set it when building in pieces"},
         "template": {"type": "string", "description": "optional .pptx whose theme and layouts to use"},
+        "plan": {"type": "string", "description": "optional, when building in pieces: your plan, one line per slide / "
+                                                   "section, '1. Title - purpose'. It is returned to you after every "
+                                                   "doc_append so you stay on it"},
     }, "required": ["file", "content"]}}}
 
 DOC_APPEND_SCHEMA = {"type": "function", "function": {

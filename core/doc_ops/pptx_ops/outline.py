@@ -10,17 +10,20 @@ from . import theme as _theme
 MAX_DECK_SLIDES = 30
 MAX_BULLETS = 12
 MAX_CARDS = 6
-MAX_TABLE_ROWS = 9
+MAX_TABLE_ROWS = 24          # longer tables are split across slides by design._prepare
 MAX_TABLE_COLS = 6
 
-LAYOUTS = {"bullets", "cards", "stats", "two-column", "timeline", "quote", "section", "table", "cover", "closing", "full"}
-IMAGE_KINDS = ("cover", "bullets", "section", "full")   # slide kinds the renderer can put a picture on
+LAYOUTS = {"bullets", "cards", "stats", "two-column", "timeline", "quote", "section", "table", "cover", "closing", "full",
+           "chart", "comparison", "agenda", "gallery"}
+IMAGE_KINDS = ("cover", "bullets", "section", "full", "gallery")   # slide kinds the renderer can put a picture on
 MAX_IMAGE_QUERY = 120
 _LAYOUT_ALIAS = {"columns": "two-column", "two-columns": "two-column", "twocolumn": "two-column", "2-column": "two-column",
                  "list": "bullets", "content": "bullets", "numbers": "stats", "metrics": "stats", "steps": "timeline",
                  "roadmap": "timeline", "grid": "cards", "title": "cover", "divider": "section", "thanks": "closing",
                  "end": "closing", "split": "bullets", "image": "bullets", "picture": "bullets", "full-image": "full",
-                 "fullscreen": "full", "hero": "full"}
+                 "fullscreen": "full", "hero": "full", "versus": "comparison", "vs": "comparison",
+                 "contents": "agenda", "toc": "agenda", "graph": "chart", "photos": "gallery", "images": "gallery",
+                 "pictures": "gallery"}
 
 _META = re.compile(
     r"^(markdown source|source for conversion|here(?:'s| is| are)\b|below is|sure[,!. ]|certainly|of course|"
@@ -33,7 +36,7 @@ _ARROW_ONLY = re.compile(r"^[\s↓↑→←⇒⇓⬇▼▲|│┃:·.\-–—]+$
 _CHECKBOX = re.compile(r"^\[[ xX✓✔]?\]\s*")
 _SLIDE_PREFIX = re.compile(r"^(?:slide|section|part)\s*\d+\s*[:.\-–—)]*\s*", re.I)
 _GLOBAL_THEME = re.compile(r"^(?:global\s+(?:theme|style|design)|style|design|palette|colou?r palette|colou?rs?)\s*:\s*(.*)$", re.I)
-_FIELD = re.compile(r"^(subtitle|tagline|theme|accent|layout|notes?|speaker notes?|title|image|picture|photo)\s*:\s*(.*)$", re.I)
+_FIELD = re.compile(r"^(subtitle|tagline|theme|accent|layout|notes?|speaker notes?|title|image|picture|photo|chart|graph|font)\s*:\s*(.*)$", re.I)
 _SLIDE_MARK = re.compile(r"^\**\s*slide\s+(\d+)\s*(?:\(([^)]*)\))?\s*[:.\-–—]*\**\s*(.*)$", re.I)
 _BULLET = re.compile(r"^([-*+•●▪◦]|\d+[.)])\s+(.*)$")
 _TABLE_SEP = re.compile(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$")
@@ -68,7 +71,82 @@ def pretty_title(name: str) -> str:
 
 
 def _new() -> dict:
-    return {"title": "", "subtitle": "", "bullets": [], "notes": "", "layout": "", "table": [], "image": None}
+    return {"title": "", "subtitle": "", "bullets": [], "notes": "", "layout": "", "table": [], "image": None,
+            "image_extra": [], "chart": None}
+
+
+CHART_KINDS = ("bar", "hbar", "line", "pie")
+_NUM = re.compile(r"^[~<>≈≥≤]?\s*[$€£৳¥]?\s*(-?\d[\d,]*(?:\.\d+)?)\s*(%|thousand|million|billion|trillion|bn|mn|[KkMmBbTt](?![A-Za-z]))?\s*[A-Za-z%/]{0,6}$")
+_MULT = {"k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12, "bn": 1e9, "mn": 1e6, "thousand": 1e3, "million": 1e6,
+         "billion": 1e9, "trillion": 1e12}
+
+
+def parse_number(text: str):
+    """'40%' -> 40.0, '$10.8T' -> 1.08e13, '1,200' -> 1200.0, 'about 5' -> None."""
+    m = _NUM.match(str(text or "").strip())
+    if not m:
+        return None
+    try:
+        v = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    suffix = (m.group(2) or "").lower()
+    return v * _MULT.get(suffix, 1.0)
+
+
+def parse_chart_spec(val: str):
+    """`chart: bar | unit=% | title=...` -> {kind, unit, title}; the first word is the chart kind (default bar)."""
+    parts = [p.strip() for p in str(val or "").split("|")]
+    head = re.sub(r"[^a-z]", "", parts[0].lower())
+    kind = {"column": "bar", "columns": "bar", "bars": "bar", "horizontal": "hbar", "horizontalbar": "hbar",
+            "lines": "line", "trend": "line", "donut": "pie", "doughnut": "pie"}.get(head, head)
+    spec = {"kind": kind if kind in CHART_KINDS else "bar", "unit": "", "title": ""}
+    for p in parts[1:]:
+        k, _, v = p.partition("=")
+        k, v = k.strip().lower(), v.strip().strip("\"'")
+        if k == "unit":
+            spec["unit"] = v[:10]
+        elif k == "title":
+            spec["title"] = clean(v)[:80]
+    return spec
+
+
+_POINT = re.compile(r"^(.{1,60}?)\s*(?::|=|\s[-–—]\s)\s*(.+)$")
+
+
+def chart_data(s: dict):
+    """Labels + numeric series for a slide that asked for a chart: from its table (first column = labels, every fully
+    numeric other column = a series) or from `Label: number` bullets. None when there is not enough real data."""
+    spec = s.get("chart") or {}
+    rows = s.get("table") or []
+    labels, series = [], []
+    if len(rows) >= 3 and max(len(r) for r in rows) >= 2:
+        body = rows[1:]
+        for c in range(1, max(len(r) for r in rows)):
+            vals = [parse_number(r[c]) if c < len(r) else None for r in body]
+            if all(v is not None for v in vals):
+                series.append({"name": clean(rows[0][c]) if c < len(rows[0]) else f"Series {c}", "values": vals})
+        if series:
+            labels = [clean(r[0]) for r in body]
+    if not series:
+        pts = []
+        for b in s.get("bullets", []):
+            if b.startswith("\t"):
+                continue
+            m = _POINT.match(b.strip())
+            if m and parse_number(m.group(2)) is not None:
+                pts.append((m.group(1).strip(), parse_number(m.group(2)), m.group(2)))
+        if len(pts) >= 2:
+            labels = [p[0] for p in pts]
+            series = [{"name": spec.get("title") or "", "values": [p[1] for p in pts]}]
+            if not spec.get("unit") and all(str(p[2]).strip().endswith("%") for p in pts):
+                spec["unit"] = "%"
+    if len(labels) < 2 or not series:
+        return None
+    kind = spec.get("kind", "bar")
+    if kind == "pie" and (len(series) != 1 or len(labels) > 8 or any(v < 0 for v in series[0]["values"])):
+        kind = "bar"
+    return {"kind": kind, "unit": spec.get("unit", ""), "labels": labels[:24], "series": series[:4]}
 
 
 def parse_image_spec(val: str):
@@ -138,7 +216,7 @@ def _slide_heading_level(lines: list) -> int:
 
 
 def parse_outline(md: str, deck_title: str = "") -> dict:
-    deck = {"title": "", "subtitle": "", "theme": "", "accent": "", "hint": "", "slides": []}
+    deck = {"title": "", "subtitle": "", "theme": "", "accent": "", "hint": "", "font": "", "slides": []}
     slides: list[dict] = []
     cur = _new()
     group_open = False          # a "Label:" line is waiting for its sub-bullets
@@ -213,6 +291,9 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
                 cur["subtitle"] = val
             elif key == "theme":
                 deck["theme"] = val
+            elif key == "font":
+                if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 \-]{1,38}", val.strip()):
+                    deck["font"] = val.strip()
             elif key == "accent":
                 deck["accent"] = val
             elif key == "layout":
@@ -223,7 +304,13 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
                 if not cur["title"]:
                     cur["title"] = val
             elif key in ("image", "picture", "photo"):
-                cur["image"] = parse_image_spec(val) or cur["image"]
+                spec = parse_image_spec(val)
+                if spec and not cur["image"]:
+                    cur["image"] = spec
+                elif spec and len(cur["image_extra"]) < 2:      # a 2nd / 3rd `image:` line = more pictures (gallery)
+                    cur["image_extra"].append(spec)
+            elif key in ("chart", "graph"):
+                cur["chart"] = parse_chart_spec(val)
             else:
                 cur["notes"] = (cur["notes"] + " " + val).strip()
             continue
@@ -265,6 +352,7 @@ def _finish(deck: dict, slides: list, deck_title: str) -> dict:
             prev["bullets"] += ([s["subtitle"]] if s["subtitle"] else []) + s["bullets"]
             prev["table"] = prev["table"] or s["table"]
             prev["image"] = prev["image"] or s["image"]
+            prev["chart"] = prev["chart"] or s["chart"]
             prev["notes"] = (prev["notes"] + " " + s["notes"]).strip()
         else:
             merged.append(s)
@@ -291,10 +379,31 @@ def _finish(deck: dict, slides: list, deck_title: str) -> dict:
         prev["layout"] = prev["layout"] if prev["layout"] in ("", "bullets") else ""
     for i, s in enumerate(slides):
         _classify(s, i, len(slides))
+    _vary(slides)
     deck["slides"] = slides
     deck["title"] = slides[0]["title"]
     deck["subtitle"] = slides[0]["subtitle"]
     return deck
+
+
+def _vary(slides: list) -> None:
+    """Three plain bullet slides in a row read as a wall of text. The third one becomes cards (when its bullets are
+    `Label: text`) or two columns (4+ bullets), so the deck has rhythm even when the model wrote only bullets.
+    Slides with a picture, an explicit `layout:` or few bullets are left alone."""
+    run = 0
+    for s in slides:
+        if s.get("kind") != "bullets" or s.get("image") or s.get("layout"):
+            run = 0
+            continue
+        run += 1
+        if run < 3:
+            continue
+        top = groups(s["bullets"])
+        flat = [h for h, c in top if h and not c]
+        if 3 <= len(top) <= 4 and len(flat) == len(top) and all(label_split(h) for h in flat):
+            s["kind"], run = "cards", 0
+        elif len(top) >= 4:
+            s["kind"], run = "columns", 0
 
 
 def _weight(s: dict) -> int:
@@ -334,6 +443,16 @@ def _classify(s: dict, idx: int, n: int) -> None:
     if lay == "full" and s["image"] and idx > 0:        # full-bleed picture with the title over it
         s["kind"] = "full"
         return
+    if lay == "gallery" and s["image"] and s["image_extra"] and idx > 0:    # 2-3 pictures on one slide
+        s["kind"] = "gallery"
+        return
+    if idx > 0 and (s["chart"] or lay == "chart"):
+        s["chart"] = s["chart"] or {"kind": "bar", "unit": "", "title": ""}
+        data = chart_data(s)
+        if data:
+            s["chart_data"] = data
+            s["kind"] = "chart"
+            return
     if idx == 0 and lay in ("", "cover", "bullets") and not s["table"] and len(top) <= 3 and (s["subtitle"] or len(top) <= 2):
         s["kind"] = "cover"
         if not s["subtitle"]:
@@ -355,6 +474,12 @@ def _classify(s: dict, idx: int, n: int) -> None:
         return
     if lay == "timeline" and 2 <= len(top) <= 6:
         s["kind"] = "timeline"
+        return
+    if lay == "comparison" and len(top) == 2 and all(c for _, c in top) and all(h for h, _ in top):
+        s["kind"] = "comparison"
+        return
+    if lay == "agenda" and 2 <= len(top) <= 8:
+        s["kind"] = "agenda"
         return
     if lay in ("", "cards") and 2 <= len(top) <= MAX_CARDS and all(c for _, c in top) and all(h for h, _ in top):
         s["kind"] = "cards"
@@ -378,4 +503,7 @@ def parse_markdown_slides(md: str) -> list[dict]:
 
 
 def resolve_theme(deck: dict) -> dict:
-    return _theme.resolve(deck.get("theme", ""), deck.get("accent", ""), deck.get("hint", ""))
+    t = _theme.resolve(deck.get("theme", ""), deck.get("accent", ""), deck.get("hint", ""))
+    if deck.get("font"):                                    # `font: Arial` - one family for the whole deck
+        t["head"] = t["body"] = deck["font"]
+    return t

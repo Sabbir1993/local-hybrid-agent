@@ -5,6 +5,7 @@ everything decorative is a shape named "deco*" that inspection skips.
 """
 import io
 import math
+import sys
 from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
@@ -12,6 +13,8 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
+from . import measure as M
+from .lint import contrast as _contrast
 from . import outline as O
 from .text_ops import _set_frame_text
 
@@ -30,19 +33,30 @@ def _lum(h: str) -> float:
 
 
 def _on(h: str) -> str:
-    """Readable text colour on top of fill h."""
-    return "111111" if _lum(h) > 0.55 else "FFFFFF"
+    """Readable text colour on top of fill h: whichever of near-black / white has the higher WCAG contrast."""
+    return "111111" if _contrast("111111", h) >= _contrast("FFFFFF", h) else "FFFFFF"
 
 
-def _fit(texts: list, width: float, height: float, base: float, floor: float, gap_pt: float = 6.0) -> float:
-    size = base
-    while size > floor:
-        cpl = max(1, int(width * 72 / (size * 0.54)))
-        lines = sum(max(1, math.ceil(len(t) / cpl)) for t in texts)
-        if lines * size * 1.22 / 72 + len(texts) * gap_pt / 72 <= height:
-            break
-        size -= 1
-    return max(size, floor)
+def _ink(fg: str, bg: str, ratio: float = 4.5) -> str:
+    """fg nudged toward black (light background) or white (dark one) until it reads on bg at `ratio`:1, so an accent
+    colour used as TEXT stays on-brand without vanishing on a light card."""
+    if _contrast(fg, bg) >= ratio:
+        return fg
+    target = (0, 0, 0) if _contrast("000000", bg) >= _contrast("FFFFFF", bg) else (255, 255, 255)
+    r, g, b = (int(fg[i:i + 2], 16) for i in (0, 2, 4))
+    for step in range(1, 21):
+        k = step / 20
+        mixed = "%02X%02X%02X" % (round(r + (target[0] - r) * k), round(g + (target[1] - g) * k),
+                                  round(b + (target[2] - b) * k))
+        if _contrast(mixed, bg) >= ratio:
+            return mixed
+    return "%02X%02X%02X" % target
+
+
+def _fit(texts: list, width: float, height: float, base: float, floor: float, gap_pt: float = 6.0,
+         font: str = "Calibri", bold: bool = False) -> float:
+    """Largest font size (pt) in [floor, base] at which the texts fit width x height, measured on the real font."""
+    return M.fit_size([str(t) for t in texts], font, width, height, base, floor, gap_pt, bold)
 
 
 def _back(shape) -> None:
@@ -123,7 +137,7 @@ def _fill_bullets(shape, items: list, t: dict, x, y, w, h, base=22, floor=13):
     _place(shape, x, y, w, h)
     _frame(shape.text_frame, MSO_ANCHOR.TOP)
     _set_frame_text(shape.text_frame._txBody, "\n".join(items))
-    size = _fit([i.strip() for i in items], w - 0.4, h, base, floor, gap_pt=16)
+    size = _fit([i.strip() for i in items], w - 0.4, h, base, floor, gap_pt=16, font=t["body"])
     for p in shape.text_frame.paragraphs:
         level = p._p.pPr.get("lvl") if p._p.pPr is not None else None
         lvl = 1 if level and level != "0" else 0
@@ -139,7 +153,7 @@ def _title(slide, text, t, x=MX, y=0.5, w=W - 2 * MX, h=1.0, color=None, base=32
     sh.text_frame.text = text
     _place(sh, x, y, w, h)
     _frame(sh.text_frame, anchor)
-    size = _fit([text], w, h, base, 20, gap_pt=0)
+    size = _fit([text], w, h, base, 20, gap_pt=0, font=t["head"], bold=bold)
     for p in sh.text_frame.paragraphs:
         p.alignment = PP_ALIGN.LEFT
         _style_runs(p, t["head"], size, color or t["text"], bold)
@@ -156,10 +170,6 @@ def _chrome(slide, t, title, deck_title, num):
     _bg(slide, t["bg"])
     _title(slide, title, t)
     _deco(slide, MSO_SHAPE.RECTANGLE, MX, 1.55, 0.9, 0.07, t["accent"])
-    _textbox(slide, MX, 6.98, 8.5, 0.3, [(deck_title, t["body"], 10, t["muted"], False, False, 0)],
-             name=DECO + "-footer", anchor=MSO_ANCHOR.MIDDLE)
-    _textbox(slide, W - MX - 0.8, 6.98, 0.8, 0.3, [(str(num), t["body"], 10, t["muted"], True, False, 0)],
-             name=DECO + "-number", anchor=MSO_ANCHOR.MIDDLE, align=PP_ALIGN.RIGHT)
 
 
 def _fit_image(data: bytes, w: float, h: float, fit: str = "cover"):
@@ -216,6 +226,107 @@ def _credit(slide, s, t, x, y, w, color=None, align=PP_ALIGN.RIGHT):
                  name=DECO + "-credit", anchor=MSO_ANCHOR.MIDDLE, align=align)
 
 
+def _apply_theme_part(prs, t: dict) -> None:
+    """Write the deck's palette and fonts into the presentation's theme, so PowerPoint's colour / font pickers, Reset and
+    any shape the user adds later use the deck's design instead of the stock Office one."""
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    part = prs.slide_master.part.part_related_by(RT.THEME)
+    root = etree.fromstring(part.blob)
+    ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+    scheme = root.find(".//a:clrScheme", ns)
+    if scheme is None:
+        return
+    darker, lighter = sorted([t["bg"], t["text"]], key=_lum)
+    dk2, lt2 = sorted([t["cover_bg"], t["surface"]], key=_lum)
+    extra = ["F59E0B", "10B981", "EC4899", "8B5CF6"]
+    colors = {"dk1": darker, "lt1": lighter, "dk2": dk2, "lt2": lt2, "accent1": t["accent"], "accent2": t["accent2"],
+              "accent3": extra[0], "accent4": extra[1], "accent5": extra[2], "accent6": extra[3],
+              "hlink": t["accent"], "folHlink": t["muted"]}
+    scheme.set("name", t.get("label", "Deck")[:30])
+    for name, val in colors.items():
+        el = scheme.find(f"a:{name}", ns)
+        if el is None:
+            continue
+        for child in list(el):
+            el.remove(child)
+        etree.SubElement(el, qn("a:srgbClr")).set("val", val.upper())
+    for tag, face in (("majorFont", t["head"]), ("minorFont", t["body"])):
+        el = root.find(f".//a:fontScheme/a:{tag}/a:latin", ns)
+        if el is not None:
+            el.set("typeface", face)
+    fs = root.find(".//a:fontScheme", ns)
+    if fs is not None:
+        fs.set("name", f"{t['head']} / {t['body']}"[:40])
+    part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+def _widen_master(prs) -> None:
+    """The stock template is 4:3 (10 in wide); the deck is 16:9. Stretch the master's and layouts' placeholders to the
+    wide page, so PowerPoint's 'Reset' / 'Layout' put titles and footers where the design expects them."""
+    k = W / 10.0
+    for holder in [prs.slide_master, *prs.slide_layouts]:
+        for shp in holder.shapes:
+            try:
+                shp.left, shp.width = int(shp.left * k), int(shp.width * k)
+            except Exception:
+                continue
+
+
+def _footer_placeholders(slide, t: dict, deck_title: str, num: int) -> None:
+    """Footer text and slide number as REAL placeholders (named deco-*, so inspection skips them): the number is a live
+    field, so it stays right when a slide is inserted or moved in PowerPoint."""
+    spTree = slide.shapes._spTree
+    next_id = max([int(i) for i in spTree.xpath("//p:cNvPr/@id")] + [1]) + 1
+
+    def sp(kind: str, idx: int, name: str, x: float, y: float, w: float, h: float, algn: str, body: str, bold: bool):
+        return etree.fromstring(
+            f'<p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            f'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            f'<p:nvSpPr><p:cNvPr id="{next_id + idx}" name="{name}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+            f'<p:nvPr><p:ph type="{kind}" sz="quarter" idx="{idx}"/></p:nvPr></p:nvSpPr>'
+            f'<p:spPr><a:xfrm><a:off x="{int(Inches(x))}" y="{int(Inches(y))}"/><a:ext cx="{int(Inches(w))}" cy="{int(Inches(h))}"/></a:xfrm></p:spPr>'
+            f'<p:txBody><a:bodyPr lIns="0" tIns="0" rIns="0" bIns="0" anchor="ctr"/><a:lstStyle/>'
+            f'<a:p><a:pPr algn="{algn}"/>{body}</a:p></p:txBody></p:sp>')
+
+    def run_props(size=1000, b=False):
+        return (f'<a:rPr lang="en-US" sz="{size}" b="{1 if b else 0}"><a:solidFill><a:srgbClr val="{t["muted"]}"/></a:solidFill>'
+                f'<a:latin typeface="{t["body"]}"/></a:rPr>')
+    from xml.sax.saxutils import escape
+    footer = sp("ftr", 11, "deco-footer", MX, 6.98, 8.5, 0.3, "l",
+                f'<a:r>{run_props()}<a:t>{escape(deck_title)}</a:t></a:r>', False)
+    number = sp("sldNum", 12, "deco-number", W - MX - 0.8, 6.98, 0.8, 0.3, "r",
+                f'<a:fld id="{{B6F15528-21DE-4FAA-801E-634DDDAF4B2B}}" type="slidenum">{run_props(1000, True)}<a:t>{num}</a:t></a:fld>', True)
+    spTree.append(footer)
+    spTree.append(number)
+
+
+def _gallery(slide, s, t):
+    """2-3 pictures on one slide (`layout: gallery` with 2-3 `image:` lines): two side by side, or one large and two small."""
+    pics = [{"data": s["image_data"], "spec": s.get("image") or {}}] + list(s.get("image_extra_data") or [])
+    pics = [p for p in pics if p.get("data")][:3]
+    x0, y0, w, h, gap = MX, 1.95, W - 2 * MX, 4.45, 0.3
+    if len(pics) == 1:
+        boxes = [(x0, y0, w, h)]
+    elif len(pics) == 2:
+        bw = (w - gap) / 2
+        boxes = [(x0, y0, bw, h), (x0 + bw + gap, y0, bw, h)]
+    else:
+        lw = w * 0.58
+        rw, rh = w - lw - gap, (h - gap) / 2
+        boxes = [(x0, y0, lw, h), (x0 + lw + gap, y0, rw, rh), (x0 + lw + gap, y0 + rh + gap, rw, rh)]
+    for k, (p, (x, y, bw, bh)) in enumerate(zip(pics, boxes)):
+        _picture(slide, {"image_data": p["data"], "image": p.get("spec") or s.get("image") or {}}, x, y, bw, bh, name=f"Image {k + 1}")
+    hosts = []
+    for h_ in [s.get("image_credit", "")] + [p.get("credit_host", "") for p in s.get("image_extra_data") or []]:
+        if h_ and h_ not in hosts:
+            hosts.append(h_)
+    cap = (s.get("image") or {}).get("caption")
+    bits = ([cap] if cap else []) + (["Images: " + " · ".join(hosts)] if hosts else [])
+    if bits:
+        _textbox(slide, x0, y0 + h + 0.06, w, 0.3, [("  ·  ".join(bits), t["body"], 10, t["muted"], False, True, 0)],
+                 name=DECO + "-credit", anchor=MSO_ANCHOR.MIDDLE, align=PP_ALIGN.RIGHT)
+
+
 def _heading_body(item):
     head, kids = item
     head = head.rstrip(":").strip()
@@ -259,7 +370,7 @@ def _cover(slide, s, t, closing=False):
         _place(body, 1.1, 4.7, tw, 1.7)
         _frame(body.text_frame, MSO_ANCHOR.TOP)
         body.text_frame.text = sub
-        size = _fit(sub.split("\n"), tw, 1.7, 20, 13, gap_pt=4)
+        size = _fit(sub.split("\n"), tw, 1.7, 20, 13, gap_pt=4, font=t["body"])
         for p in body.text_frame.paragraphs:
             p.alignment = PP_ALIGN.LEFT
             p.space_after = Pt(4)
@@ -268,8 +379,11 @@ def _cover(slide, s, t, closing=False):
         body._element.getparent().remove(body._element)
 
 
-def _section(slide, s, t):
+def _section(slide, s, t, no: int = 0):
     _bg(slide, t["cover_bg"])
+    if no:                                              # "01", "02" ... above the section title
+        _textbox(slide, 1.1, 2.45, 3.0, 0.5, [(f"{no:02d}", t["head"], 24, _ink(t["accent"], t["cover_bg"], 3.0), True, False, 0)],
+                 name=DECO + "-section-number", anchor=MSO_ANCHOR.MIDDLE)
     _deco(slide, MSO_SHAPE.RECTANGLE, 0, 0, 0.28, H, t["accent"])
     if t["motif"] == "circles":
         _deco(slide, MSO_SHAPE.OVAL, 9.4, 1.2, 5.2, 5.2, t["accent2"], alpha=22)
@@ -370,8 +484,8 @@ def _cards(slide, s, t):
         tf = card.text_frame
         _frame(tf, MSO_ANCHOR.TOP, (0.28, 1.0, 0.28, 0.2))
         inner_w, inner_h = cw - 0.56, ch - 1.2
-        hs = _fit([head], inner_w, 0.9, 21, 14, gap_pt=0)
-        bs = _fit(kids, inner_w, max(inner_h - 0.8, 0.8), 18, 11, gap_pt=6)
+        hs = _fit([head], inner_w, 0.9, 21, 14, gap_pt=0, font=t["head"], bold=True)
+        bs = _fit(kids, inner_w, max(inner_h - 0.8, 0.8), 18, 11, gap_pt=6, font=t["body"])
         tf.text = head
         tf.paragraphs[0].alignment = PP_ALIGN.LEFT
         tf.paragraphs[0].space_after = Pt(8)
@@ -404,15 +518,15 @@ def _stats(slide, s, t):
         _deco(slide, MSO_SHAPE.RECTANGLE, x, y, 0.1, ch, accent, back=False)
         tf = tile.text_frame
         _frame(tf, MSO_ANCHOR.MIDDLE, (0.45, 0.2, 0.3, 0.2))
-        ns = _fit([num], cw - 0.75, 1.4, 60, 28, gap_pt=0)
+        ns = _fit([num], cw - 0.75, 1.4, 60, 28, gap_pt=0, font=t["head"], bold=True)
         tf.text = num
         tf.paragraphs[0].alignment = PP_ALIGN.LEFT
         tf.paragraphs[0].space_after = Pt(10)
-        _style_runs(tf.paragraphs[0], t["head"], ns, accent if _lum(accent) < 0.75 or _lum(t["surface"]) < 0.5 else t["text"], True)
+        _style_runs(tf.paragraphs[0], t["head"], ns, _ink(accent, t["surface"], 3.0), True)
         p = tf.add_paragraph()
         p.text = cap
         p.alignment = PP_ALIGN.LEFT
-        _style_runs(p, t["body"], _fit([cap], cw - 0.75, 1.2, 18, 12, gap_pt=0), t["text"])
+        _style_runs(p, t["body"], _fit([cap], cw - 0.75, 1.2, 18, 12, gap_pt=0, font=t["body"]), t["text"])
 
 
 def _timeline(slide, s, t):
@@ -432,8 +546,8 @@ def _timeline(slide, s, t):
         dt.paragraphs[0].alignment = PP_ALIGN.CENTER
         _style_runs(dt.paragraphs[0], t["head"], 16, _on(t["accent"] if i % 2 == 0 else t["accent2"]), True)
         w = sw - 0.3
-        paras = [(head, t["head"], _fit([head], w, 0.9, 22, 13, gap_pt=0), t["text"], True, False, 6)]
-        bs = _fit(kids, w, 2.6, 18, 11, gap_pt=6)
+        paras = [(head, t["head"], _fit([head], w, 0.9, 22, 13, gap_pt=0, font=t["head"], bold=True), t["text"], True, False, 6)]
+        bs = _fit(kids, w, 2.6, 18, 11, gap_pt=6, font=t["body"])
         paras += [(k, t["body"], bs, t["muted"], False, False, 6) for k in kids]
         _textbox(slide, cx - w / 2, ly + 0.6, w, 3.2, paras, name=f"Step {i + 1}", align=PP_ALIGN.CENTER)
 
@@ -444,24 +558,218 @@ def _quote(slide, s, t):
     by = " — ".join(items[1:])
     _deco(slide, MSO_SHAPE.RECTANGLE, MX + 0.2, 2.3, 0.08, 3.4, t["accent"])
     _textbox(slide, MX + 0.7, 2.2, W - 2 * MX - 1.2, 3.0,
-             [("“" + quote + "”", t["head"], _fit([quote], W - 2 * MX - 1.2, 3.0, 34, 18, gap_pt=0),
+             [("“" + quote + "”", t["head"], _fit([quote], W - 2 * MX - 1.2, 3.0, 34, 18, gap_pt=0, font=t["head"]),
                t["text"], False, True, 0)], name="Quote", anchor=MSO_ANCHOR.MIDDLE)
     if by:
         _textbox(slide, MX + 0.7, 5.4, W - 2 * MX - 1.2, 0.5,
-                 [(by, t["body"], 16, t["accent"], True, False, 0)], name="Attribution")
+                 [(by, t["body"], 16, _ink(t["accent"], t["bg"], 4.5), True, False, 0)], name="Attribution")
+
+
+def _series_colors(t: dict) -> list:
+    return [t["accent"], t["accent2"], "F59E0B", "10B981", "EC4899", "8B5CF6", "06B6D4", "84CC16"]
+
+
+def _chart(slide, s, t):
+    """A native, editable PowerPoint chart (bar / horizontal bar / line / pie) from the slide's numbers."""
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
+    d = s["chart_data"]
+    kinds = {"bar": XL_CHART_TYPE.COLUMN_CLUSTERED, "hbar": XL_CHART_TYPE.BAR_CLUSTERED,
+             "line": XL_CHART_TYPE.LINE_MARKERS, "pie": XL_CHART_TYPE.PIE}
+    cd = CategoryChartData()
+    cd.categories = d["labels"]
+    for i, ser in enumerate(d["series"]):
+        cd.add_series(ser["name"] or f"Series {i + 1}", ser["values"])
+    gf = slide.shapes.add_chart(kinds[d["kind"]], Inches(MX), Inches(1.95), Inches(W - 2 * MX), Inches(4.75), cd)
+    gf.name = "Chart"
+    ch = gf.chart
+    ch.has_title = False
+    ch.font.name = t["body"]
+    ch.font.size = Pt(14)
+    ch.font.color.rgb = _rgb(t["text"])
+    colors = _series_colors(t)
+    plot = ch.plots[0]
+    plot.has_data_labels = True
+    dl = plot.data_labels
+    dl.font.size = Pt(13)
+    dl.font.bold = True
+    dl.font.color.rgb = _rgb(t["text"])
+    dl.number_format = '#,##0.##' + (f'"{d["unit"]}"' if d["unit"] else "")
+    dl.number_format_is_linked = False
+    multi = len(d["series"]) > 1
+    if d["kind"] == "pie":
+        plot.vary_by_categories = True
+        for i, _ in enumerate(d["labels"]):
+            pt = plot.series[0].points[i]
+            pt.format.fill.solid()
+            pt.format.fill.fore_color.rgb = _rgb(colors[i % len(colors)])
+        dl.position = XL_LABEL_POSITION.OUTSIDE_END
+        ch.has_legend = True
+    else:
+        for i, ser in enumerate(plot.series):
+            col = _rgb(colors[i % len(colors)])
+            if d["kind"] == "line":
+                ser.format.line.color.rgb = col
+                ser.format.line.width = Pt(3)
+                ser.smooth = False
+                ser.marker.format.fill.solid()
+                ser.marker.format.fill.fore_color.rgb = col
+            else:
+                ser.format.fill.solid()
+                ser.format.fill.fore_color.rgb = col
+        dl.position = XL_LABEL_POSITION.ABOVE if d["kind"] == "line" else XL_LABEL_POSITION.OUTSIDE_END
+        if len(d["labels"]) > 8 or multi:
+            plot.has_data_labels = len(d["labels"]) <= 8
+        ch.has_legend = multi
+        for ax in (ch.category_axis, ch.value_axis):
+            ax.tick_labels.font.size = Pt(13)
+            ax.tick_labels.font.color.rgb = _rgb(t["muted"])
+            ax.format.line.color.rgb = _rgb(t["line"])
+        ch.value_axis.has_major_gridlines = True
+        ch.value_axis.major_gridlines.format.line.color.rgb = _rgb(t["line"])
+        ch.value_axis.format.line.fill.background()
+        ch.value_axis.tick_labels.number_format = '#,##0.##'
+        ch.value_axis.tick_labels.number_format_is_linked = False
+    if ch.has_legend:
+        ch.legend.position = XL_LEGEND_POSITION.BOTTOM
+        ch.legend.include_in_layout = False
+        ch.legend.font.size = Pt(13)
+        ch.legend.font.color.rgb = _rgb(t["text"])
+
+
+def _comparison(slide, s, t):
+    """Two options side by side (`layout: comparison`; two `Heading:` bullets, each with its own sub-bullets)."""
+    top = O.groups(s["bullets"])[:2]
+    gap = 0.9
+    cw = (W - 2 * MX - gap) / 2
+    y0, hh, ph = 1.95, 0.85, 4.75
+    for i, (head, kids) in enumerate(top):
+        x = MX + i * (cw + gap)
+        accent = t["accent"] if i == 0 else t["accent2"]
+        panel = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y0), Inches(cw), Inches(ph))
+        panel.name = f"Option {i + 1}"
+        panel.fill.solid()
+        panel.fill.fore_color.rgb = _rgb(t["surface"])
+        panel.line.color.rgb = _rgb(t["line"])
+        panel.line.width = Pt(1)
+        panel.shadow.inherit = False
+        band = _deco(slide, MSO_SHAPE.RECTANGLE, x, y0, cw, hh, accent, back=False, name=f"Option {i + 1} heading")
+        _frame(band.text_frame, MSO_ANCHOR.MIDDLE, (0.3, 0.05, 0.3, 0.05))
+        band.text_frame.text = head.rstrip(":").strip()
+        band.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT
+        _style_runs(band.text_frame.paragraphs[0], t["head"],
+                    _fit([head], cw - 0.6, hh - 0.1, 24, 14, gap_pt=0, font=t["head"], bold=True), _on(accent), True)
+        body_h = ph - hh - 0.5
+        size = _fit(kids, cw - 0.9, body_h, 22, 12, gap_pt=12, font=t["body"])
+        tb = slide.shapes.add_textbox(Inches(x + 0.3), Inches(y0 + hh + 0.3), Inches(cw - 0.6), Inches(body_h))
+        tb.name = f"Option {i + 1} points"
+        _frame(tb.text_frame, MSO_ANCHOR.TOP)
+        for j, k in enumerate(kids):
+            p = tb.text_frame.paragraphs[0] if j == 0 else tb.text_frame.add_paragraph()
+            p.text = k
+            p.space_after = Pt(12)
+            _style_runs(p, t["body"], size, t["text"])
+            _bullet(p, accent, 0)
+    vs = _deco(slide, MSO_SHAPE.OVAL, W / 2 - 0.42, y0 + hh / 2 - 0.42 + 0.0, 0.84, 0.84, t["bg"], back=False, name="deco-vs")
+    vs.line.color.rgb = _rgb(t["muted"])
+    vs.line.width = Pt(2)
+    _frame(vs.text_frame, MSO_ANCHOR.MIDDLE)
+    vs.text_frame.text = "VS"
+    vs.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+    _style_runs(vs.text_frame.paragraphs[0], t["head"], 16, t["text"], True)
+
+
+def _agenda(slide, s, t):
+    """Numbered contents list (`layout: agenda`): one column up to 4 items, two columns beyond."""
+    items = [h.rstrip(":").strip() for h, _ in O.groups(s["bullets"]) if h][:8]
+    n = len(items)
+    cols = 1 if n <= 4 else 2
+    rows = math.ceil(n / cols)
+    cw = (W - 2 * MX - (0.6 if cols == 2 else 0)) / cols
+    rh = min(1.0, 4.6 / rows)
+    for i, text in enumerate(items):
+        c, r = divmod(i, rows)
+        x, y = MX + c * (cw + 0.6), 2.0 + r * rh
+        accent = t["accent"] if i % 2 == 0 else t["accent2"]
+        dot = _deco(slide, MSO_SHAPE.OVAL, x, y + (rh - 0.62) / 2, 0.62, 0.62, accent, back=False, name=f"deco-num-{i + 1}")
+        _frame(dot.text_frame, MSO_ANCHOR.MIDDLE)
+        dot.text_frame.text = f"{i + 1}"
+        dot.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+        _style_runs(dot.text_frame.paragraphs[0], t["head"], 18, _on(accent), True)
+        _textbox(slide, x + 0.85, y, cw - 0.95, rh,
+                 [(text, t["body"], _fit([text], cw - 1.0, rh - 0.1, 26, 14, gap_pt=0, font=t["body"]), t["text"], False, False, 0)],
+                 name=f"Item {i + 1}", anchor=MSO_ANCHOR.MIDDLE)
+        if r < rows - 1:
+            _deco(slide, MSO_SHAPE.RECTANGLE, x + 0.85, y + rh - 0.01, cw - 0.95, 0.01, t["line"], back=False)
+
+
+TABLE_MAX_H = 4.7
+TABLE_SIZES = (20, 18, 16, 14, 13, 12, 11)
+
+
+def _table_widths(rows: list, total: float) -> list:
+    """Column widths in inches, proportional to the longest cell of each column (clamped), not all equal."""
+    cols = max(len(r) for r in rows)
+    weight = [max(6, min(42, max(len(r[c]) if c < len(r) else 0 for r in rows))) for c in range(cols)]
+    return [total * w / sum(weight) for w in weight]
+
+
+def _table_heights(rows: list, widths: list, size: float, font: str) -> list:
+    out = []
+    for ri, row in enumerate(rows):
+        lines = max(M.lines_for(cell, font, size, max(widths[c] - 0.34, 0.3), bold=(ri == 0)) for c, cell in enumerate(row))
+        out.append(lines * size * M.line_height(row) / 72 + 0.2)
+    return out
+
+
+def _plan_table(rows: list, font: str) -> list:
+    """[(rows, size, widths, heights)] : the whole table on one slide at the largest size that fits, else split after
+    the header repeats on every slide. Rows are padded to the same number of cells."""
+    cols = max(len(r) for r in rows)
+    rows = [r + [""] * (cols - len(r)) for r in rows]
+    widths = _table_widths(rows, W - 2 * MX)
+
+    def best(chunk):
+        for size in TABLE_SIZES:
+            hs = _table_heights(chunk, widths, size, font)
+            if sum(hs) <= TABLE_MAX_H:
+                return size, hs
+        return None
+
+    whole = best(rows)
+    if whole:
+        return [(rows, whole[0], widths, whole[1])]
+    header, body = rows[0], rows[1:]
+    chunks, cur = [], []
+    for r in body:
+        trial = [header] + cur + [r]
+        if cur and not best(trial):
+            chunks.append([header] + cur)
+            cur = [r]
+        else:
+            cur.append(r)
+    if cur:
+        chunks.append([header] + cur)
+    plan = []
+    for ch in chunks:
+        fit = best(ch)
+        size, hs = fit if fit else (TABLE_SIZES[-1], _table_heights(ch, widths, TABLE_SIZES[-1], font))
+        plan.append((ch, size, widths, hs))
+    return plan
 
 
 def _table(slide, s, t):
-    rows = s["table"]
-    cols = max(len(r) for r in rows)
-    rows = [r + [""] * (cols - len(r)) for r in rows]
-    h = min(0.72 * len(rows), 4.7)
-    gf = slide.shapes.add_table(len(rows), cols, Inches(MX), Inches(1.95), Inches(W - 2 * MX), Inches(h))
+    rows, size, widths, heights = _plan_table(s["table"], t["body"])[0]
+    cols = len(widths)
+    gf = slide.shapes.add_table(len(rows), cols, Inches(MX), Inches(1.95), Inches(W - 2 * MX), Inches(sum(heights)))
     gf.name = "Table"
     tbl = gf.table
     tbl.first_row = True
     tbl.horz_banding = False
-    size = 20 if cols <= 3 and len(rows) <= 5 else (16 if len(rows) <= 7 else 13)
+    for c, w in enumerate(widths):
+        tbl.columns[c].width = Inches(w)
+    for r, h in enumerate(heights):
+        tbl.rows[r].height = Inches(h)
     for r, row in enumerate(rows):
         for c, val in enumerate(row):
             cell = tbl.cell(r, c)
@@ -475,30 +783,126 @@ def _table(slide, s, t):
             _style_runs(cell.text_frame.paragraphs[0], t["body"], size, _on(fill) if head else t["text"], head)
 
 
+def _bullet_box(s: dict) -> tuple:
+    """(width, height, floor) of the bullet text area, as _bullets lays it out."""
+    if s.get("image_data"):
+        return 7.55 - MX - 0.7, 4.85, 12
+    return W - 2 * MX - 0.3, 4.85, 13
+
+
+def _split_bullets(s: dict, t: dict) -> list:
+    """A bullets slide whose text cannot fit even at the smallest size becomes two slides ('(cont.)') instead of
+    running off the box. Each half is checked again, so a very long list ends up as three or four slides."""
+    w, h, floor = _bullet_box(s)
+    items = [b.strip() for b in s["bullets"]]
+    if M.fits(items, t["body"], floor, w - 0.4, h, gap_pt=16):
+        return [s]
+    top = O.groups(s["bullets"])
+    if len(top) < 2:
+        return [s]
+    half = (len(top) + 1) // 2
+
+    def lines(part):
+        out = []
+        for head, kids in part:
+            if head:
+                out.append(head)
+            out += ["\t" + k for k in kids]
+        return out
+    first = {**s, "bullets": lines(top[:half])}
+    rest_title = s["title"] if s["title"].endswith("(cont.)") else s["title"] + " (cont.)"
+    second = {**s, "bullets": lines(top[half:]), "title": rest_title, "notes": "", "subtitle": "",
+              "image": None, "image_data": None, "image_credit": ""}
+    return _split_bullets(first, t) + _split_bullets(second, t)
+
+
+def _prepare(slides: list, t: dict) -> list:
+    """Slides after fitting: long bullet lists and long tables are split across slides."""
+    out = []
+    for s in slides:
+        if s["kind"] == "bullets" and s["bullets"]:
+            out += _split_bullets(s, t)
+        elif s["kind"] == "table" and s["table"]:
+            plan = _plan_table(s["table"], t["body"])
+            for i, (rows, _size, _w, _h) in enumerate(plan):
+                if i == 0:
+                    out.append({**s, "table": rows})
+                else:
+                    title = s["title"] if s["title"].endswith("(cont.)") else s["title"] + " (cont.)"
+                    out.append({**s, "table": rows, "title": title, "notes": "", "subtitle": ""})
+        else:
+            out.append(s)
+    return out
+
+
 _LAYOUT_FOR = {"cover": "Title Slide", "closing": "Title Slide", "section": "Section Header", "full": "Section Header",
                "bullets": "Title and Content", "columns": "Two Content"}
+
+
+def _plain_slide(prs, lays, s: dict, t: dict) -> None:
+    """Last-resort slide for content whose designed layout failed: title + text, no decoration, so nothing is lost."""
+    slide = prs.slides.add_slide(lays["Title and Content"])
+    if slide.shapes.title is not None:
+        slide.shapes.title.text_frame.text = s.get("title", "")
+    body = next((p for p in slide.placeholders if p.placeholder_format.idx == 1), None)
+    lines = [b.strip() for b in s.get("bullets", [])] + [" | ".join(r) for r in s.get("table", [])]
+    if body is not None:
+        body.text_frame.text = "\n".join(lines or [s.get("subtitle", "")])
+    if s.get("notes"):
+        slide.notes_slide.notes_text_frame.text = s["notes"]
+
+
+def _drop_last_slide(prs) -> None:
+    lst = prs.slides._sldIdLst
+    last = lst[-1]
+    prs.part.drop_rel(last.rId)
+    lst.remove(last)
 
 
 def build(deck: dict) -> Presentation:
     t = O.resolve_theme(deck)
     prs = Presentation()
     prs.slide_width, prs.slide_height = Inches(W), Inches(H)
+    for step in (_widen_master, lambda p: _apply_theme_part(p, t)):         # polish only: never fatal
+        try:
+            step(prs)
+        except Exception as e:
+            print(f"[deck] theme/master step skipped ({type(e).__name__}: {e})", file=sys.stderr)
     lays = {l.name: l for l in prs.slide_layouts}
     deck_title = deck["title"]
-    for i, s in enumerate(deck["slides"]):
-        kind = s["kind"]
-        slide = prs.slides.add_slide(lays[_LAYOUT_FOR.get(kind, "Title Only")])
-        if kind in ("cover", "closing"):
-            _cover(slide, s, t, closing=kind == "closing")
-        elif kind == "full" or (kind == "section" and s.get("image_data")):
-            _full(slide, s, t)
-        elif kind == "section":
-            _section(slide, s, t)
-        else:
-            _chrome(slide, t, s["title"], deck_title, i + 1)
-            {"bullets": _bullets, "columns": _columns, "cards": _cards, "stats": _stats,
-             "timeline": _timeline, "quote": _quote, "table": _table}[kind](slide, s, t)
-        _drop_empty_placeholders(slide)
-        if s["notes"]:
-            slide.notes_slide.notes_text_frame.text = s["notes"]
+    sec_no = 0
+    for i, s in enumerate(_prepare(deck["slides"], t)):
+        n_before = len(prs.slides)
+        try:
+            sec_no = _render_slide(prs, lays, s, t, deck_title, i, sec_no)
+        except Exception as e:                                            # one bad slide must not lose the deck
+            print(f"[deck] slide {i + 1} ({s.get('kind')}) failed to render: {type(e).__name__}: {e}; "
+                  "used a plain slide", file=sys.stderr)
+            while len(prs.slides) > n_before:
+                _drop_last_slide(prs)
+            _plain_slide(prs, lays, s, t)
     return prs
+
+
+def _render_slide(prs, lays, s: dict, t: dict, deck_title: str, i: int, sec_no: int) -> int:
+    """Draw one slide; returns the running section number."""
+    kind = s["kind"]
+    slide = prs.slides.add_slide(lays[_LAYOUT_FOR.get(kind, "Title Only")])
+    if kind in ("cover", "closing"):
+        _cover(slide, s, t, closing=kind == "closing")
+    elif kind == "full" or (kind == "section" and s.get("image_data")):
+        _full(slide, s, t)
+    elif kind == "section":
+        sec_no += 1
+        _section(slide, s, t, sec_no)
+    else:
+        _chrome(slide, t, s["title"], deck_title, i + 1)
+        {"bullets": _bullets, "columns": _columns, "cards": _cards, "stats": _stats,
+         "timeline": _timeline, "quote": _quote, "table": _table, "chart": _chart,
+         "comparison": _comparison, "agenda": _agenda, "gallery": _gallery}[kind](slide, s, t)
+    _drop_empty_placeholders(slide)
+    if kind not in ("cover", "closing", "section", "full"):
+        _footer_placeholders(slide, t, deck_title, i + 1)
+    if s["notes"]:
+        slide.notes_slide.notes_text_frame.text = s["notes"]
+    return sec_no

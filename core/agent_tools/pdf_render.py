@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .dom_convert import _markdown_to_html_dom, normalize_tables
+from .dom_convert import _markdown_to_html_dom, extract_charts, normalize_tables, prepare_images
 
 _PDF_CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; "
             "script-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'")
@@ -145,7 +145,32 @@ def _reportlab_table(rows: list, width_pts: float = 522):
     return tbl
 
 
-def _save_text_or_markdown_as_pdf(p: Path, content: str) -> bool:
+_BN = re.compile("[\u0980-\u09FF]")
+
+
+def _reportlab_font(text: str):
+    """(regular, bold) font names for the ReportLab fallback: Bengali needs a font that has the glyphs, Helvetica draws
+    empty boxes. Registers Nirmala / Noto Sans Bengali once when the text has Bengali and the font file exists."""
+    if not _BN.search(text or ""):
+        return "Helvetica", "Helvetica-Bold"
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from ..doc_ops.pptx_ops import measure
+        for family, files in (("BnSans", ("Nirmala.ttc", "NirmalaUI.ttf", "NotoSansBengali-Regular.ttf", "Shonar.ttf")),):
+            for f in files:
+                path = measure._find(f)
+                if path:
+                    if family not in pdfmetrics.getRegisteredFontNames():
+                        pdfmetrics.registerFont(TTFont(family, path, subfontIndex=0) if path.lower().endswith(".ttc")
+                                                else TTFont(family, path))
+                    return family, family
+    except Exception as e:
+        print(f"[_reportlab_font] {e}", file=sys.stderr)
+    return "Helvetica", "Helvetica-Bold"
+
+
+def _save_text_or_markdown_as_pdf(p: Path, content: str, images: Optional[dict] = None) -> bool:
     try:
         # Content already is PDF bytes (str form, latin1-encoded by the caller)
         if isinstance(content, str) and content.startswith("%PDF-"):
@@ -169,7 +194,7 @@ def _save_text_or_markdown_as_pdf(p: Path, content: str) -> bool:
         doc_title = p.stem.replace("_", " ").replace("-", " ").title()
 
         # Step 1: Generate modern, beautiful HTML DOM
-        html_dom = _markdown_to_html_dom(content, title=doc_title, is_slides=is_slides)
+        html_dom = _markdown_to_html_dom(content, title=doc_title, is_slides=is_slides, images=images)
 
         # Step 2: Render HTML DOM to PDF via Headless Chromium/Edge
         if _render_html_to_pdf(html_dom, p):
@@ -188,14 +213,17 @@ def _save_text_or_markdown_as_pdf(p: Path, content: str) -> bool:
             topMargin=45, bottomMargin=45
         )
         styles = getSampleStyleSheet()
-        normal = ParagraphStyle('CustomNormal', parent=styles['Normal'], fontSize=10, leading=14, textColor=colors.HexColor("#1e293b"))
-        title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=18, leading=22, textColor=colors.HexColor("#0f172a"), spaceAfter=8)
-        h2_style = ParagraphStyle('CustomH2', parent=styles['Heading2'], fontSize=13, leading=17, textColor=colors.HexColor("#1e40af"), spaceBefore=10, spaceAfter=6)
-        h3_style = ParagraphStyle('CustomH3', parent=styles['Heading3'], fontSize=11, leading=15, textColor=colors.HexColor("#334155"), spaceBefore=6, spaceAfter=4)
+        reg, bold = _reportlab_font(content)
+        normal = ParagraphStyle('CustomNormal', parent=styles['Normal'], fontName=reg, fontSize=10, leading=14, textColor=colors.HexColor("#1e293b"))
+        title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontName=bold, fontSize=18, leading=22, textColor=colors.HexColor("#0f172a"), spaceAfter=8)
+        h2_style = ParagraphStyle('CustomH2', parent=styles['Heading2'], fontName=bold, fontSize=13, leading=17, textColor=colors.HexColor("#1e40af"), spaceBefore=10, spaceAfter=6)
+        h3_style = ParagraphStyle('CustomH3', parent=styles['Heading3'], fontName=bold, fontSize=11, leading=15, textColor=colors.HexColor("#334155"), spaceBefore=6, spaceAfter=4)
         code_style = ParagraphStyle('CustomCode', parent=styles['Code'], fontSize=9, leading=12, textColor=colors.HexColor("#0f172a"), backColor=colors.HexColor("#f1f5f9"), spaceAfter=6)
 
         story = []
-        lines = normalize_tables(content.strip()).splitlines()
+        fallback_md, _ = prepare_images(content, None)          # no figures here: drop the `image:` lines instead of printing them
+        fallback_md, _ = extract_charts(fallback_md)            # and keep a chart's numbers as a plain list
+        lines = normalize_tables(fallback_md.replace("PDFCHARTTOKEN", "").strip()).splitlines()
         in_code_block = False
         code_buf = []
         tbl_rows = []

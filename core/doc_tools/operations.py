@@ -1,4 +1,5 @@
 import base64
+import re
 from pathlib import Path
 from .. import companion_bridge, doc_ops, doc_store
 from ..agent_tools import _common_resolve, _ws_resolve, require_device_workspace
@@ -67,9 +68,16 @@ async def _create(args: dict, location: str) -> str:
     if args.get("template"):
         tloc, template = (await _locate(args["template"])) if location == "device" else _locate_common(args["template"])
     uid = _uid()
+    if args.get("plan"):
+        doc_ops._check_ops_for_pan([{"op": "create", "content": str(args["plan"])}])      # the plan is echoed back to the model
     images, pic_note = {}, ""
-    if Path(name).suffix.lower() == ".pptx" and not template and slide_images.wants_images(content):
+    ext_ = Path(name).suffix.lower()
+    pictures_on = _flag("deck_images")
+    if pictures_on and ext_ == ".pptx" and not template and slide_images.wants_images(content):
         images, pic_notes, used_web = await slide_images.resolve(content, uid)
+        pic_note = slide_images.summary(images, pic_notes, used_web)
+    elif pictures_on and ext_ == ".pdf" and not args.get("total") and slide_images.wants_images(content):
+        images, pic_notes, used_web = await slide_images.resolve_pdf(content, uid)       # a PDF built in pieces is printed on done
         pic_note = slide_images.summary(images, pic_notes, used_web)
     data, spec = doc_ops.create(name, content, template=template, images=images)
     if location == "device":
@@ -88,9 +96,16 @@ async def _create(args: dict, location: str) -> str:
     msg = f"Created {target.name}. Later changes can be made with doc_edit without regenerating it."
     if pic_note:
         msg += " " + pic_note
+    if not args.get("total"):                      # a deck built in pieces is checked once, on its last doc_append
+        note = _layout_note(target.suffix.lower(), data, content)
+        if note:
+            msg += " " + note
     if args.get("total") and target.suffix.lower() in _APPENDABLE:
         try:
             _BUILD_TOTAL[(uid if location == "common" else dev_uid, key)] = max(1, min(int(args["total"]), 30))
+            plan = _parse_plan(args.get("plan"))
+            if plan:
+                _BUILD_PLAN[(uid if location == "common" else dev_uid, key)] = plan
             msg += (f" It has {_unit_count(target.suffix.lower(), spec)} of {int(args['total'])}: add the rest in small "
                     f"steps with doc_append(file='{target.name}', content=<next 2-3 slides/sections>), then done=true.")
         except (TypeError, ValueError):
@@ -98,10 +113,73 @@ async def _create(args: dict, location: str) -> str:
     return msg + (f" [DOWNLOAD: {target.name}]" if location == "common" else f" (saved on your device: {target})")
 
 
+# Build plan: (uid, file key) -> [(title, purpose)], the model's own slide / section plan (doc_create plan=...). It is
+# played back after every doc_append so a small model stays on it instead of drifting or repeating itself.
+_BUILD_PLAN: dict = {}
+_PLAN_LINE = re.compile(r"^\s*(?:\d+[.)]|[-*])\s*(.+?)\s*(?:(?:\s[-–—]\s+|:\s+)(.*))?$")
+
+
+def _parse_plan(text: str) -> list:
+    out = []
+    for line in str(text or "").splitlines():
+        m = _PLAN_LINE.match(line)
+        if m and m.group(1).strip():
+            out.append((re.sub(r"[*_`#]", "", m.group(1)).strip()[:80], (m.group(2) or "").strip()[:120]))
+    return out[:30]
+
+
+def _plan_note(key: tuple, have: int, built_titles: list, done: bool) -> str:
+    plan = _BUILD_PLAN.get(key)
+    if not plan:
+        return ""
+    if done:
+        have_l = " | ".join(t.lower() for t in built_titles)
+        missing = [t for t, _ in plan if t.lower() not in have_l]
+        _BUILD_PLAN.pop(key, None)
+        return (f"Planned but not found in the deck: {', '.join(missing[:6])}." if missing else "")
+    nxt = plan[have:have + 3]
+    if not nxt:
+        return ""
+    return "Next in your plan: " + "; ".join(f"{have + i + 1}. {t}" + (f" - {p}" if p else "") for i, (t, p) in enumerate(nxt)) + "."
+
+
 # Build-in-pieces bookkeeping: (uid, file key) -> slide/section count the user asked for. In memory on purpose:
 # after a restart the count check is simply off, the document itself is unaffected.
 _BUILD_TOTAL: dict = {}
 _APPENDABLE = (".pptx", ".docx", ".pdf")
+
+
+def _flag(name: str, default: bool = True) -> bool:
+    """chat.<name> in config/app.json: kill switches for the optional build steps (deck_images, deck_checks)."""
+    try:
+        from ..small_model import APP_CONFIG
+        return bool((APP_CONFIG.get("chat") or {}).get(name, default))
+    except Exception:
+        return default
+
+
+def _layout_note(ext: str, data: bytes, markdown: str = "") -> str:
+    """Layout check of a finished .pptx (text that overflows, low contrast, shapes off the slide...) as one sentence
+    for the tool result; '' when clean, not a deck, or the check itself failed (it must never block a build)."""
+    if not _flag("deck_checks"):
+        return ""
+    try:
+        if ext == ".pptx":
+            from ..doc_ops.pptx_ops import lint
+            return lint.summary(lint.lint_deck(data))
+        if ext == ".pdf":
+            from ..agent_tools import pdf_check
+            return pdf_check.render_note(data, markdown)
+    except Exception:
+        return ""
+    return ""
+
+
+def _built_titles(ext: str, spec: str) -> list:
+    if ext == ".pptx":
+        from ..doc_ops.pptx_ops import outline
+        return [s["title"] for s in outline.parse_outline(spec)["slides"]]
+    return re.findall(r"(?m)^#{1,3}\s+(.+?)\s*$", spec)
 
 
 def _unit_count(ext: str, spec: str) -> int:
@@ -157,11 +235,15 @@ async def _append(args: dict, location: str) -> str:
         raise ValueError(f"not finished: {have} of {total} {'slides' if ext == '.pptx' else 'sections'} so far - "
                          "keep adding with doc_append (done=true only after the last one)")
     images, pic_note = {}, ""
-    if ext == ".pptx" and slide_images.wants_images(new_spec):
+    pictures_on = _flag("deck_images")
+    if pictures_on and ext == ".pptx" and slide_images.wants_images(new_spec):
         # pictures already found for earlier slides come from the resolver's cache, so a rebuild costs nothing extra
         images, pic_notes, used_web = await slide_images.resolve(new_spec, loc.uid)
         if slide_images.wants_images(content) or done:
             pic_note = slide_images.summary(images, pic_notes, used_web)
+    elif pictures_on and ext == ".pdf" and done and slide_images.wants_images(new_spec):
+        images, pic_notes, used_web = await slide_images.resolve_pdf(new_spec, loc.uid)
+        pic_note = slide_images.summary(images, pic_notes, used_web)
     if ext == ".pdf" and not done:
         out = data              # the PDF is printed once at the end; the preview shows a live HTML draft of the spec
     else:
@@ -172,6 +254,9 @@ async def _append(args: dict, location: str) -> str:
                        parent_id=row["id"] if row else None, source_spec=new_spec, sha256=sha256(out))
     unit = "slides" if ext == ".pptx" else "sections"
     msg = f"Added to {loc.path.name}: now {have} {unit}" + (f" of {total}." if total else ".")
+    plan_note = _plan_note(key, have, _built_titles(ext, new_spec), done)
+    if plan_note:
+        msg += " " + plan_note
     if done:
         _BUILD_TOTAL.pop(key, None)
         bad = _leftover_markup(ext, new_spec)
@@ -180,6 +265,10 @@ async def _append(args: dict, location: str) -> str:
         msg += f" Continue with the next {min(3, total - have)} {unit} (doc_append), the last one is the closing."
     if pic_note:
         msg += " " + pic_note
+    if done:
+        note = _layout_note(ext, out, new_spec)
+        if note:
+            msg += " " + note
     if loc.location == "common":
         msg += f" [DOWNLOAD: {loc.path.name}]"
     return msg

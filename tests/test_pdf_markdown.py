@@ -161,11 +161,15 @@ class BrowserRenderTests(unittest.TestCase):
             self.assertTrue(pdf_render._save_text_or_markdown_as_pdf(out, md))
             with pdfplumber.open(out) as pdf:
                 text = "\n".join(pg.extract_text() or "" for pg in pdf.pages)
-                tables = [t for pg in pdf.pages for t in pg.extract_tables()]
         self.assertNotIn("cid:", text)                # not the ReportLab fallback's bullets
         self.assertNotIn("`", text)                   # inline code rendered, not shown raw
         self.assertNotIn("| Dimension", text)
-        self.assertTrue(tables and tables[0][0][:3] == ["Dimension", "IBBL", "BRAC Bank"], tables)
+        # The page is full width now, so pdfplumber's line-based table finder folds the heading rules into the table
+        # grid and mis-splits cells. Check what a reader sees instead: each table row is one line, in column order.
+        lines = text.splitlines()
+        self.assertTrue(any("Dimension" in ln and "IBBL" in ln and "BRAC Bank" in ln for ln in lines), lines)
+        self.assertTrue(any("Primary engine" in ln and "Corporate" in ln and "SME" in ln for ln in lines), lines)
+        self.assertTrue(any("Moat" in ln and "Shariah" in ln and "Agents" in ln for ln in lines), lines)
 
 
 if __name__ == "__main__":

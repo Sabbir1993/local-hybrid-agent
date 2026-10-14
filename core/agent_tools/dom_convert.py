@@ -55,7 +55,116 @@ def markdown_to_body_html(content: str):
     return html
 
 
-def _markdown_to_html_dom(content: str, title: str = "", is_slides: bool = False) -> str:
+_IMAGE_LINE = re.compile(r"^\s*(?:image|picture|photo)\s*:\s*(.+?)\s*$", re.I)
+_CHART_LINE = re.compile(r"^\s*(?:chart|graph)\s*:\s*(.*?)\s*$", re.I)
+_FIGURE = re.compile(r'<p class="doc-p"><img src="(data:image/[a-z]+;base64,[A-Za-z0-9+/=]+)" alt="([^"]*)"\s*/?></p>')
+
+
+def image_specs(content: str) -> list:
+    """The `image: search words | ...` lines of a PDF markdown, in order, as parsed specs (None for an empty one).
+    Code fences are skipped. The same order is used by prepare_images / the resolver."""
+    from ..doc_ops.pptx_ops import outline as O
+    out, fence = [], False
+    for line in content.splitlines():
+        if line.lstrip().startswith("```"):
+            fence = not fence
+            continue
+        m = None if fence else _IMAGE_LINE.match(line)
+        if m:
+            out.append(O.parse_image_spec(m.group(1)))
+    return out
+
+
+def prepare_images(content: str, images: dict | None):
+    """Replace each `image:` line with a figure token (or drop it when no picture was found), in order.
+    -> (markdown, {token index: image info})"""
+    from ..doc_ops.pptx_ops import outline as O
+    images = images or {}
+    out, fence, n, used = [], False, -1, {}
+    for line in content.splitlines():
+        if line.lstrip().startswith("```"):
+            fence = not fence
+            out.append(line)
+            continue
+        m = None if fence else _IMAGE_LINE.match(line)
+        if not m:
+            out.append(line)
+            continue
+        n += 1
+        info = images.get(n)
+        spec = O.parse_image_spec(m.group(1)) or {}
+        if info and info.get("data"):
+            alt = " - ".join(b for b in (spec.get("caption"), info.get("credit_host")) if b) or spec.get("query", "")
+            alt = re.sub(r"[\[\]()\"<>]", "", alt)[:200]
+            out += ["", f"![{alt}](pdfimg:{n})", ""]
+            used[n] = info
+    return "\n".join(out), used
+
+
+def embed_images(html_text: str, used: dict) -> str:
+    """pdfimg:N -> a data: URI (the print page's CSP allows only data: images), each in a captioned <figure>."""
+    import base64
+    for n, info in used.items():
+        data = info["data"]
+        mime = "image/jpeg" if data[:3] == b"\xff\xd8\xff" else "image/png"
+        uri = f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
+        html_text = html_text.replace(f"pdfimg:{n}", uri)
+    def fig(m):
+        alt = m.group(2)
+        cap = f"<figcaption>{alt}</figcaption>" if alt else ""
+        return f'<figure class="doc-fig"><img src="{m.group(1)}" alt="{alt}"/>{cap}</figure>'
+    return _FIGURE.sub(fig, html_text)
+
+
+def extract_charts(content: str):
+    """`chart: bar | unit=%` followed by `- Label: number` bullets or a markdown table -> a token paragraph (or, when the
+    numbers do not make a chart, just the plain list). -> (markdown, [svg strings])"""
+    from ..doc_ops.pptx_ops import outline as O
+    from .pdf_charts import chart_svg
+    lines = content.splitlines()
+    out, charts, i, fence = [], [], 0, False
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith("```"):
+            fence = not fence
+            out.append(line)
+            i += 1
+            continue
+        m = None if fence else _CHART_LINE.match(line)
+        if not m:
+            out.append(line)
+            i += 1
+            continue
+        spec = O.parse_chart_spec(m.group(1))
+        i += 1
+        bullets, rows = [], []
+        while i < len(lines) and lines[i].strip():
+            t = lines[i].strip()
+            if t.startswith("|"):
+                if not re.match(r"^\|?\s*:?-{2,}", t):
+                    rows.append([c.strip() for c in t.strip("|").split("|")])
+            elif re.match(r"^[-*+]\s+", t):
+                bullets.append(re.sub(r"^[-*+]\s+", "", t))
+            else:
+                break
+            i += 1
+        data = O.chart_data({"chart": spec, "bullets": bullets, "table": rows})
+        if data:
+            charts.append(chart_svg(data))
+            out += ["", f"PDFCHARTTOKEN{len(charts) - 1}", ""]
+        else:                                   # not real numbers: keep the content, drop the chart line
+            out += [("- " + b) for b in bullets] + ([("| " + " | ".join(r) + " |") for r in rows] if rows else [])
+    return "\n".join(out), charts
+
+
+def embed_charts(html_text: str, charts: list) -> str:
+    for n, svg in enumerate(charts):
+        html_text = html_text.replace(f'<p class="doc-p">PDFCHARTTOKEN{n}</p>', f'<figure class="doc-chart">{svg}</figure>')
+        html_text = html_text.replace(f"PDFCHARTTOKEN{n}", f'<figure class="doc-chart">{svg}</figure>')
+    return html_text
+
+
+def _markdown_to_html_dom(content: str, title: str = "", is_slides: bool = False, images: dict | None = None) -> str:
     def esc(s: str) -> str:
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -131,16 +240,18 @@ def _markdown_to_html_dom(content: str, title: str = "", is_slides: bool = False
               </div>
               <div class="slide-footer">
                 <span>{esc(clean_title)}</span>
-                <span>Generated by Autonomous Agent</span>
               </div>
             </section>
             """)
 
         return render_slides_page(esc(clean_title), slides_html)
 
-    # Standard Document mode
+    # Standard Document mode: `image:` lines and `chart:` blocks become figures (or vanish when there is no picture)
+    content, used_images = prepare_images(content, images)
+    content, charts = extract_charts(content)
     body_html = markdown_to_body_html(content.strip())
     if body_html is not None:
+        body_html = embed_charts(embed_images(body_html, used_images), charts)
         return render_doc_page(esc(clean_title), [body_html])
     body_elements = []
     in_code_block = False
@@ -279,4 +390,4 @@ def _markdown_to_html_dom(content: str, title: str = "", is_slides: bool = False
     if in_ol:
         body_elements.append("</ol>")
 
-    return render_doc_page(esc(clean_title), body_elements)
+    return render_doc_page(esc(clean_title), [embed_charts(embed_images(e, used_images), charts) for e in body_elements])
