@@ -14,7 +14,7 @@ MAX_TABLE_ROWS = 24          # longer tables are split across slides by design._
 MAX_TABLE_COLS = 6
 
 LAYOUTS = {"bullets", "cards", "stats", "two-column", "timeline", "quote", "section", "table", "cover", "closing", "full",
-           "chart", "comparison", "agenda", "gallery"}
+           "chart", "comparison", "agenda", "gallery", "textside"}
 IMAGE_KINDS = ("cover", "bullets", "section", "full", "gallery")   # slide kinds the renderer can put a picture on
 MAX_IMAGE_QUERY = 120
 _LAYOUT_ALIAS = {"columns": "two-column", "two-columns": "two-column", "twocolumn": "two-column", "2-column": "two-column",
@@ -23,7 +23,8 @@ _LAYOUT_ALIAS = {"columns": "two-column", "two-columns": "two-column", "twocolum
                  "end": "closing", "split": "bullets", "image": "bullets", "picture": "bullets", "full-image": "full",
                  "fullscreen": "full", "hero": "full", "versus": "comparison", "vs": "comparison",
                  "contents": "agenda", "toc": "agenda", "graph": "chart", "photos": "gallery", "images": "gallery",
-                 "pictures": "gallery"}
+                 "pictures": "gallery", "text-table": "textside", "split-table": "textside", "side-table": "textside",
+                 "text-chart": "textside", "text-side": "textside"}
 
 _META = re.compile(
     r"^(markdown source|source for conversion|here(?:'s| is| are)\b|below is|sure[,!. ]|certainly|of course|"
@@ -46,13 +47,13 @@ _ARROW_ONLY = re.compile(r"^[\s↓↑→←⇒⇓⬇▼▲|│┃:·.\-–—]+$
 _CHECKBOX = re.compile(r"^\[[ xX✓✔]?\]\s*")
 _SLIDE_PREFIX = re.compile(r"^(?:slide|section|part)\s*\d+\s*[:.\-–—)]*\s*", re.I)
 _GLOBAL_THEME = re.compile(r"^(?:global\s+(?:theme|style|design)|style|design|palette|colou?r palette|colou?rs?)\s*:\s*(.*)$", re.I)
-_FIELD = re.compile(r"^(subtitle|tagline|theme|accent|layout|notes?|speaker notes?|title|image|picture|photo|chart|graph|font)\s*:\s*(.*)$", re.I)
+_FIELD = re.compile(r"^(subtitle|tagline|theme|accent|layout|notes?|speaker notes?|title|image|picture|photo|chart|graph|font|eyebrow|kicker|source|sources|art|motif|mode)\s*:\s*(.*)$", re.I)
 _SLIDE_MARK = re.compile(r"^\**\s*slide\s+(\d+)\s*(?:\(([^)]*)\))?\s*[:.\-–—]*\**\s*(.*)$", re.I)
 _BULLET = re.compile(r"^([-*+•●▪◦]|\d+[.)])\s+(.*)$")
 _TABLE_SEP = re.compile(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$")
 _CLOSING = re.compile(r"\b(thank|thanks|questions?|q\s*&\s*a|contact|get in touch|let'?s talk|next steps?)\b", re.I)
-_STAT_HEAD = re.compile(r"^([~<>≈]?[$€£৳]?\s?\d[\d.,]*\s?(?:%|[KMBkmb]\+?|x|\+|ms|s|GB|TB|MB|k)?\+?)\s*(?:[-–—:]\s*|\s+)(.+)$")
-_LABEL = re.compile(r"^(.{2,48}?)\s*(?::|\s[-–—]\s)\s*(.+)$")
+_STAT_HEAD = re.compile(r"^([~<>≈]?[$€£৳]?\s?\d[\d.,]*\s?(?:%|km²|km2|sq\s?km|km|m²|m2|mi|hrs?|yrs?|years?|days?|min|[KMBTkmbt]\+?|x|\+|ms|s|GB|TB|MB)?\+?)\s*(?:\|\s*|[-–—:]\s*|\s+)(.+)$")
+_LABEL = re.compile(r"^(.{2,48}?)\s*(?::|\s[-–—]\s|\s\|\s)\s*(.+)$")
 
 
 def clean(s: str) -> str:
@@ -82,10 +83,11 @@ def pretty_title(name: str) -> str:
 
 def _new() -> dict:
     return {"title": "", "subtitle": "", "bullets": [], "notes": "", "layout": "", "table": [], "image": None,
-            "image_extra": [], "chart": None}
+            "image_extra": [], "chart": None, "eyebrow": "", "source": "", "art": ""}
 
 
-CHART_KINDS = ("bar", "hbar", "line", "pie")
+CHART_KINDS = ("bar", "hbar", "line", "pie", "share")
+ART_KINDS = ("arches", "waves", "skyline", "geometric", "network", "none")
 _NUM = re.compile(r"^[~<>≈≥≤]?\s*[$€£৳¥]?\s*(-?\d[\d,]*(?:\.\d+)?)\s*(%|thousand|million|billion|trillion|bn|mn|[KkMmBbTt](?![A-Za-z]))?\s*[A-Za-z%/]{0,6}$")
 _MULT = {"k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12, "bn": 1e9, "mn": 1e6, "thousand": 1e3, "million": 1e6,
          "billion": 1e9, "trillion": 1e12}
@@ -109,7 +111,8 @@ def parse_chart_spec(val: str):
     parts = [p.strip() for p in str(val or "").split("|")]
     head = re.sub(r"[^a-z]", "", parts[0].lower())
     kind = {"column": "bar", "columns": "bar", "bars": "bar", "horizontal": "hbar", "horizontalbar": "hbar",
-            "lines": "line", "trend": "line", "donut": "pie", "doughnut": "pie"}.get(head, head)
+            "lines": "line", "trend": "line", "donut": "pie", "doughnut": "pie", "stacked": "share",
+            "stackedbar": "share", "composition": "share"}.get(head, head)
     spec = {"kind": kind if kind in CHART_KINDS else "bar", "unit": "", "title": ""}
     for p in parts[1:]:
         k, _, v = p.partition("=")
@@ -154,7 +157,7 @@ def chart_data(s: dict):
     if len(labels) < 2 or not series:
         return None
     kind = spec.get("kind", "bar")
-    if kind == "pie" and (len(series) != 1 or len(labels) > 8 or any(v < 0 for v in series[0]["values"])):
+    if kind in ("pie", "share") and (len(series) != 1 or len(labels) > 8 or any(v < 0 for v in series[0]["values"])):
         kind = "bar"
     return {"kind": kind, "unit": spec.get("unit", ""), "labels": labels[:24], "series": series[:4]}
 
@@ -226,7 +229,7 @@ def _slide_heading_level(lines: list) -> int:
 
 
 def parse_outline(md: str, deck_title: str = "") -> dict:
-    deck = {"title": "", "subtitle": "", "theme": "", "accent": "", "hint": "", "font": "", "slides": []}
+    deck = {"title": "", "subtitle": "", "theme": "", "accent": "", "hint": "", "font": "", "mode": "", "slides": []}
     slides: list[dict] = []
     cur = _new()
     group_open = False          # a "Label:" line is waiting for its sub-bullets
@@ -323,6 +326,15 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
                     cur["image_extra"].append(spec)
             elif key in ("chart", "graph"):
                 cur["chart"] = parse_chart_spec(val)
+            elif key in ("eyebrow", "kicker"):
+                cur["eyebrow"] = clean(val).upper()[:44]
+            elif key in ("source", "sources"):
+                cur["source"] = clean(val)[:170]
+            elif key in ("art", "motif"):
+                a = re.sub(r"[^a-z]", "", val.lower())
+                cur["art"] = a if a in ART_KINDS else ""
+            elif key == "mode":
+                deck["mode"] = "designer" if re.sub(r"[^a-z]", "", val.lower()) in ("designer", "image", "images", "visual") else ""
             else:
                 cur["notes"] = (cur["notes"] + " " + val).strip()
             continue
@@ -366,6 +378,7 @@ def _finish(deck: dict, slides: list, deck_title: str) -> dict:
             prev["table"] = prev["table"] or s["table"]
             prev["image"] = prev["image"] or s["image"]
             prev["chart"] = prev["chart"] or s["chart"]
+            prev["source"] = prev["source"] or s["source"]
             prev["notes"] = (prev["notes"] + " " + s["notes"]).strip()
         else:
             merged.append(s)
@@ -459,6 +472,15 @@ def _classify(s: dict, idx: int, n: int) -> None:
     if lay == "gallery" and s["image"] and s["image_extra"] and idx > 0:    # 2-3 pictures on one slide
         s["kind"] = "gallery"
         return
+    if lay == "textside" and idx > 0 and s["bullets"] and (s["table"] or s["chart"]):
+        data = chart_data(s) if s["chart"] else None
+        if data:
+            s["chart_data"] = data
+            s["kind"] = "textside"
+            return
+        if s["table"] and not s["chart"]:
+            s["kind"] = "textside"
+            return
     if idx > 0 and (s["chart"] or lay == "chart"):
         s["chart"] = s["chart"] or {"kind": "bar", "unit": "", "title": ""}
         data = chart_data(s)
@@ -497,7 +519,7 @@ def _classify(s: dict, idx: int, n: int) -> None:
     if lay in ("", "cards") and 2 <= len(top) <= MAX_CARDS and all(c for _, c in top) and all(h for h, _ in top):
         s["kind"] = "cards"
         return
-    if lay in ("", "stats") and 2 <= len(top) <= 4 and flat and len(flat) == len(top) and all(stat_split(h) for h in flat):
+    if lay in ("", "stats") and 2 <= len(top) <= 5 and flat and len(flat) == len(top) and all(stat_split(h) for h in flat):
         s["kind"] = "stats"
         return
     label_cards = bool(flat) and len(flat) == len(top) and all(label_split(h) for h in flat)

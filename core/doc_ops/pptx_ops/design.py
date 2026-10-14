@@ -5,6 +5,7 @@ everything decorative is a shape named "deco*" that inspection skips.
 """
 import io
 import math
+import re
 import sys
 from lxml import etree
 from pptx import Presentation
@@ -143,7 +144,7 @@ def _fill_bullets(shape, items: list, t: dict, x, y, w, h, base=22, floor=13):
         lvl = 1 if level and level != "0" else 0
         p.space_after = Pt(16 if lvl == 0 else 6)
         p.alignment = PP_ALIGN.LEFT
-        _style_runs(p, t["body"], size if lvl == 0 else max(size - 3, floor), t["text"] if lvl == 0 else t["muted"])
+        _style_runs(p, t["body"], size if lvl == 0 else max(size - 3, floor), t["text"] if lvl == 0 else _ink(t["muted"], t["bg"], 4.5))
         _bullet(p, t["accent"], lvl)
 
 
@@ -166,9 +167,17 @@ def _drop_empty_placeholders(slide):
             ph._element.getparent().remove(ph._element)
 
 
-def _chrome(slide, t, title, deck_title, num):
+def _chrome(slide, t, title, deck_title, num, eyebrow=""):
     _bg(slide, t["bg"])
-    _title(slide, title, t)
+    if eyebrow:                                           # small spaced capitals above the title: "AT A GLANCE"
+        tb = _textbox(slide, MX, 0.3, 10.0, 0.3,
+                      [(eyebrow, t["body"], 11, _ink(t["accent"], t["bg"], 4.5), True, False, 0)],
+                      name=DECO + "-eyebrow", anchor=MSO_ANCHOR.MIDDLE)
+        for r in tb.text_frame.paragraphs[0].runs:
+            r._r.get_or_add_rPr().set("spc", "180")
+        _title(slide, title, t, y=0.6, h=0.9)
+    else:
+        _title(slide, title, t)
     _deco(slide, MSO_SHAPE.RECTANGLE, MX, 1.55, 0.9, 0.07, t["accent"])
 
 
@@ -292,7 +301,7 @@ def _footer_placeholders(slide, t: dict, deck_title: str, num: int) -> None:
         return (f'<a:rPr lang="en-US" sz="{size}" b="{1 if b else 0}"><a:solidFill><a:srgbClr val="{t["muted"]}"/></a:solidFill>'
                 f'<a:latin typeface="{t["body"]}"/></a:rPr>')
     from xml.sax.saxutils import escape
-    footer = sp("ftr", 11, "deco-footer", MX, 6.98, 8.5, 0.3, "l",
+    footer = sp("ftr", 11, "deco-footer", MX, 6.98, W - 2 * MX - 1.0, 0.3, "l",
                 f'<a:r>{run_props()}<a:t>{escape(deck_title)}</a:t></a:r>', False)
     number = sp("sldNum", 12, "deco-number", W - MX - 0.8, 6.98, 0.8, 0.3, "r",
                 f'<a:fld id="{{B6F15528-21DE-4FAA-801E-634DDDAF4B2B}}" type="slidenum">{run_props(1000, True)}<a:t>{num}</a:t></a:fld>', True)
@@ -327,6 +336,81 @@ def _gallery(slide, s, t):
                  name=DECO + "-credit", anchor=MSO_ANCHOR.MIDDLE, align=PP_ALIGN.RIGHT)
 
 
+def _stroke(slide, kind, x, y, w, h, color, width=1.6, adj=None, name=DECO + "-art"):
+    """An outline-only shape (no fill) pushed behind the text."""
+    sh = slide.shapes.add_shape(kind, Inches(x), Inches(y), Inches(w), Inches(h))
+    sh.name = name
+    sh.fill.background()
+    sh.line.color.rgb = _rgb(color)
+    sh.line.width = Pt(width)
+    sh.shadow.inherit = False
+    if adj is not None:
+        sh.adjustments[0] = adj
+    _back(sh)
+    return sh
+
+
+def _art(slide, kind: str, x: float, y: float, w: float, h: float, t: dict) -> None:
+    """Drawn motif for a cover (native shapes, named deco-*, so they are skipped by inspection and the layout check):
+    arches / waves / skyline / geometric / network."""
+    from pptx.enum.shapes import MSO_CONNECTOR
+    line, line2 = t["accent"], t["accent2"] if _contrast(t["accent2"], t["cover_bg"]) >= 2.2 else t["cover_muted"]
+    base = y + h * 0.66
+    if kind == "arches":
+        for fx, fw, fh in ((0.02, 0.28, 0.36), (0.31, 0.40, 0.56), (0.73, 0.25, 0.36)):
+            ax, aw, ah = x + w * fx, w * fw, h * fh
+            _stroke(slide, MSO_SHAPE.ROUND_2_SAME_RECTANGLE, ax, base - ah, aw, ah, line, 1.8, adj=0.5)
+            inset = min(aw * 0.2, 0.42)
+            _stroke(slide, MSO_SHAPE.ROUND_2_SAME_RECTANGLE, ax + inset, base - ah + inset * 1.4, aw - 2 * inset,
+                    ah - inset * 1.4, line, 1.1, adj=0.5)
+        for i in range(4):
+            _stroke(slide, MSO_SHAPE.WAVE, x, base + 0.38 + i * 0.38, w, 0.3, line2, 1.3)
+    elif kind == "waves":
+        for i in range(7):
+            _stroke(slide, MSO_SHAPE.WAVE, x, y + h * 0.18 + i * (h * 0.11), w, 0.34, line if i % 2 == 0 else line2, 1.4)
+    elif kind == "skyline":
+        heights = (0.34, 0.58, 0.44, 0.78, 0.5, 0.64, 0.38)
+        bw = w / (len(heights) + 0.5)
+        for i, fh in enumerate(heights):
+            hh = h * 0.7 * fh
+            _stroke(slide, MSO_SHAPE.RECTANGLE, x + i * bw * 1.07, base - hh, bw * 0.86, hh, line, 1.5)
+            for r in range(int(hh // 0.5)):
+                _deco(slide, MSO_SHAPE.RECTANGLE, x + i * bw * 1.07 + bw * 0.22, base - hh + 0.2 + r * 0.5, bw * 0.4, 0.07, line2)
+        _deco(slide, MSO_SHAPE.RECTANGLE, x, base, w, 0.03, line)
+        for i in range(3):
+            _stroke(slide, MSO_SHAPE.WAVE, x, base + 0.3 + i * 0.36, w, 0.3, line2, 1.3)
+    elif kind == "geometric":
+        _deco(slide, MSO_SHAPE.RECTANGLE, x, base - h * 0.42, w, h * 0.42, t["cover_muted"], alpha=22)
+        _deco(slide, MSO_SHAPE.OVAL, x + w * 0.08, base - h * 0.36, w * 0.28, w * 0.28, line)
+        _deco(slide, MSO_SHAPE.ISOSCELES_TRIANGLE, x + w * 0.4, base - h * 0.38, w * 0.26, h * 0.3, line2)
+        _deco(slide, MSO_SHAPE.RECTANGLE, x + w * 0.74, base - h * 0.3, w * 0.16, w * 0.16, line)
+        for i in range(3):
+            _stroke(slide, MSO_SHAPE.WAVE, x, base + 0.3 + i * 0.36, w, 0.3, line2, 1.3)
+    elif kind == "network":
+        pts = [(0.15, 0.2), (0.5, 0.1), (0.85, 0.25), (0.3, 0.5), (0.7, 0.55), (0.12, 0.8), (0.55, 0.85), (0.9, 0.82)]
+        edges = [(0, 1), (1, 2), (0, 3), (1, 3), (1, 4), (2, 4), (3, 4), (3, 5), (4, 6), (4, 7), (5, 6), (6, 7)]
+        for a, b in edges:
+            c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x + w * pts[a][0]), Inches(y + h * pts[a][1]),
+                                           Inches(x + w * pts[b][0]), Inches(y + h * pts[b][1]))
+            c.name = DECO + "-art"
+            c.line.color.rgb = _rgb(line2)
+            c.line.width = Pt(1.2)
+            _back(c)
+        for i, (fx, fy) in enumerate(pts):
+            d = 0.22 if i % 3 else 0.36
+            _deco(slide, MSO_SHAPE.OVAL, x + w * fx - d / 2, y + h * fy - d / 2, d, d, line if i % 2 == 0 else line2)
+
+
+def _variant(t: dict, n: int) -> dict:
+    """Theme with its alternate palette on every second content slide (editorial / ember: cream, deep, cream, deep ...)."""
+    alt = t.get("alt")
+    if not alt or n % 2 == 0:
+        return t
+    v = dict(t)
+    v.update(alt)
+    return v
+
+
 def _heading_body(item):
     head, kids = item
     head = head.rstrip(":").strip()
@@ -343,8 +427,12 @@ def _cover(slide, s, t, closing=False):
     motif = t["motif"]
     tw = 10.4 if motif == "rule" else 8.0
     has_pic = bool(s.get("image_data")) and not closing
+    art = "" if closing or has_pic else (s.get("art") or t.get("art") or "")
+    art = "" if art == "none" else art
     if has_pic:
         tw = 6.6
+    elif art:
+        tw = 6.8
     if motif == "circles":
         _deco(slide, MSO_SHAPE.OVAL, 8.9, -1.9, 7.2, 7.2, t["accent"], alpha=16)
         _deco(slide, MSO_SHAPE.OVAL, 10.6, 3.5, 5.2, 5.2, t["accent2"], alpha=28)
@@ -355,6 +443,8 @@ def _cover(slide, s, t, closing=False):
         _deco(slide, MSO_SHAPE.RECTANGLE, 1.1, 1.4, 0.9, 0.1, t["accent"])
         _deco(slide, MSO_SHAPE.RECTANGLE, 1.1, 6.6, 11.1, 0.02, t["muted"], alpha=40)
     _deco(slide, MSO_SHAPE.RECTANGLE, 0, 0, 0.28, H, t["accent"])
+    if art:
+        _art(slide, art, 7.9, 0.9, 4.9, 5.4, t)
     if has_pic:                                       # full-height picture panel on the right edge
         _picture(slide, s, 8.0, 0, W - 8.0, H, name="Cover image")
         _deco(slide, MSO_SHAPE.RECTANGLE, 7.9, 0, 0.1, H, t["accent"], back=False)
@@ -495,7 +585,7 @@ def _cards(slide, s, t):
             p.text = k
             p.alignment = PP_ALIGN.LEFT
             p.space_after = Pt(6)
-            _style_runs(p, t["body"], bs, t["muted"])
+            _style_runs(p, t["body"], bs, _ink(t["muted"], t["surface"], 4.5))
 
 
 def _stats(slide, s, t):
@@ -504,6 +594,7 @@ def _stats(slide, s, t):
     gap = 0.35
     area_w = W - 2 * MX
     cw = (area_w - gap * (n - 1)) / n
+    common_ns = min([M.fit_one_line(x[0], t["head"], cw - 0.75, 60, 24, True) for x in items], default=40)
     y, ch = 2.2, 3.7
     for i, (num, cap) in enumerate(items):
         x = MX + i * (cw + gap)
@@ -518,7 +609,7 @@ def _stats(slide, s, t):
         _deco(slide, MSO_SHAPE.RECTANGLE, x, y, 0.1, ch, accent, back=False)
         tf = tile.text_frame
         _frame(tf, MSO_ANCHOR.MIDDLE, (0.45, 0.2, 0.3, 0.2))
-        ns = _fit([num], cw - 0.75, 1.4, 60, 28, gap_pt=0, font=t["head"], bold=True)
+        ns = common_ns
         tf.text = num
         tf.paragraphs[0].alignment = PP_ALIGN.LEFT
         tf.paragraphs[0].space_after = Pt(10)
@@ -548,7 +639,7 @@ def _timeline(slide, s, t):
         w = sw - 0.3
         paras = [(head, t["head"], _fit([head], w, 0.9, 22, 13, gap_pt=0, font=t["head"], bold=True), t["text"], True, False, 6)]
         bs = _fit(kids, w, 2.6, 18, 11, gap_pt=6, font=t["body"])
-        paras += [(k, t["body"], bs, t["muted"], False, False, 6) for k in kids]
+        paras += [(k, t["body"], bs, _ink(t["muted"], t["bg"], 4.5), False, False, 6) for k in kids]
         _textbox(slide, cx - w / 2, ly + 0.6, w, 3.2, paras, name=f"Step {i + 1}", align=PP_ALIGN.CENTER)
 
 
@@ -569,18 +660,24 @@ def _series_colors(t: dict) -> list:
     return [t["accent"], t["accent2"], "F59E0B", "10B981", "EC4899", "8B5CF6", "06B6D4", "84CC16"]
 
 
-def _chart(slide, s, t):
-    """A native, editable PowerPoint chart (bar / horizontal bar / line / pie) from the slide's numbers."""
+def _chart(slide, s, t, box=None):
+    """A native, editable PowerPoint chart (bar / horizontal bar / line / pie / 100% stacked share) from the slide's numbers."""
     from pptx.chart.data import CategoryChartData
     from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
     d = s["chart_data"]
     kinds = {"bar": XL_CHART_TYPE.COLUMN_CLUSTERED, "hbar": XL_CHART_TYPE.BAR_CLUSTERED,
-             "line": XL_CHART_TYPE.LINE_MARKERS, "pie": XL_CHART_TYPE.PIE}
+             "line": XL_CHART_TYPE.LINE_MARKERS, "pie": XL_CHART_TYPE.PIE, "share": XL_CHART_TYPE.BAR_STACKED_100}
     cd = CategoryChartData()
-    cd.categories = d["labels"]
-    for i, ser in enumerate(d["series"]):
-        cd.add_series(ser["name"] or f"Series {i + 1}", ser["values"])
-    gf = slide.shapes.add_chart(kinds[d["kind"]], Inches(MX), Inches(1.95), Inches(W - 2 * MX), Inches(4.75), cd)
+    if d["kind"] == "share":                              # one stacked bar: a series per share
+        cd.categories = [d.get("unit") or "Share"]
+        for lab, v in zip(d["labels"], d["series"][0]["values"]):
+            cd.add_series(lab, [v])
+    else:
+        cd.categories = d["labels"]
+        for i, ser in enumerate(d["series"]):
+            cd.add_series(ser["name"] or f"Series {i + 1}", ser["values"])
+    bx, by, bw, bh = box or ((MX, 2.2, W - 2 * MX, 3.4) if d["kind"] == "share" else (MX, 1.95, W - 2 * MX, 4.75))
+    gf = slide.shapes.add_chart(kinds[d["kind"]], Inches(bx), Inches(by), Inches(bw), Inches(bh), cd)
     gf.name = "Chart"
     ch = gf.chart
     ch.has_title = False
@@ -597,7 +694,25 @@ def _chart(slide, s, t):
     dl.number_format = '#,##0.##' + (f'"{d["unit"]}"' if d["unit"] else "")
     dl.number_format_is_linked = False
     multi = len(d["series"]) > 1
-    if d["kind"] == "pie":
+    if d["kind"] == "share":
+        plot.gap_width = 12
+        plot.overlap = 100
+        for i, ser in enumerate(plot.series):
+            col = colors[i % len(colors)]
+            ser.format.fill.solid()
+            ser.format.fill.fore_color.rgb = _rgb(col)
+            ser.format.line.color.rgb = _rgb(t["bg"])
+            ser.data_labels.show_value = True
+            ser.data_labels.font.size = Pt(14)
+            ser.data_labels.font.bold = True
+            ser.data_labels.font.color.rgb = _rgb(_on(col))
+            ser.data_labels.number_format = '#,##0.##' + (f'"{d["unit"]}"' if d["unit"] else "")
+            ser.data_labels.number_format_is_linked = False
+        ch.value_axis.visible = False
+        ch.category_axis.visible = False
+        ch.value_axis.has_major_gridlines = False
+        ch.has_legend = True
+    elif d["kind"] == "pie":
         plot.vary_by_categories = True
         for i, _ in enumerate(d["labels"]):
             pt = plot.series[0].points[i]
@@ -722,17 +837,18 @@ def _table_heights(rows: list, widths: list, size: float, font: str) -> list:
     return out
 
 
-def _plan_table(rows: list, font: str) -> list:
+def _plan_table(rows: list, font: str, total_w: float = 0.0, max_h: float = 0.0) -> list:
     """[(rows, size, widths, heights)] : the whole table on one slide at the largest size that fits, else split after
     the header repeats on every slide. Rows are padded to the same number of cells."""
     cols = max(len(r) for r in rows)
     rows = [r + [""] * (cols - len(r)) for r in rows]
-    widths = _table_widths(rows, W - 2 * MX)
+    widths = _table_widths(rows, total_w or (W - 2 * MX))
+    limit = max_h or TABLE_MAX_H
 
     def best(chunk):
         for size in TABLE_SIZES:
             hs = _table_heights(chunk, widths, size, font)
-            if sum(hs) <= TABLE_MAX_H:
+            if sum(hs) <= limit:
                 return size, hs
         return None
 
@@ -758,10 +874,11 @@ def _plan_table(rows: list, font: str) -> list:
     return plan
 
 
-def _table(slide, s, t):
-    rows, size, widths, heights = _plan_table(s["table"], t["body"])[0]
+def _table(slide, s, t, box=None):
+    bx, by, bw, bh = box or (MX, 1.95, W - 2 * MX, TABLE_MAX_H)
+    rows, size, widths, heights = _plan_table(s["table"], t["body"], total_w=bw, max_h=bh)[0]
     cols = len(widths)
-    gf = slide.shapes.add_table(len(rows), cols, Inches(MX), Inches(1.95), Inches(W - 2 * MX), Inches(sum(heights)))
+    gf = slide.shapes.add_table(len(rows), cols, Inches(bx), Inches(by), Inches(bw), Inches(sum(heights)))
     gf.name = "Table"
     tbl = gf.table
     tbl.first_row = True
@@ -781,6 +898,21 @@ def _table(slide, s, t):
             cell.vertical_anchor = MSO_ANCHOR.MIDDLE
             cell.text_frame.text = val
             _style_runs(cell.text_frame.paragraphs[0], t["body"], size, _on(fill) if head else t["text"], head)
+
+
+def _textside(slide, s, t):
+    """Text on the left, a table or a chart on the right (`layout: textside`): the climate-table-beside-the-story slide."""
+    items = [b.strip() for b in s["bullets"]]
+    body = next((p for p in slide.placeholders if p.placeholder_format.idx == 1), None)
+    lw, gap = 5.8, 0.5
+    rx = MX + lw + gap
+    rw = W - MX - rx
+    if body is not None:
+        _fill_bullets(body, items, t, MX, 1.95, lw, 4.75, base=20, floor=12)
+    if s.get("chart_data"):
+        _chart(slide, s, t, box=(rx, 1.95, rw, 4.6))
+    else:
+        _table(slide, s, t, box=(rx, 2.1, rw, 4.4))
 
 
 def _bullet_box(s: dict) -> tuple:
@@ -835,7 +967,7 @@ def _prepare(slides: list, t: dict) -> list:
     return out
 
 
-_LAYOUT_FOR = {"cover": "Title Slide", "closing": "Title Slide", "section": "Section Header", "full": "Section Header",
+_LAYOUT_FOR = {"textside": "Title and Content", "cover": "Title Slide", "closing": "Title Slide", "section": "Section Header", "full": "Section Header",
                "bullets": "Title and Content", "columns": "Two Content"}
 
 
@@ -870,11 +1002,11 @@ def build(deck: dict) -> Presentation:
             print(f"[deck] theme/master step skipped ({type(e).__name__}: {e})", file=sys.stderr)
     lays = {l.name: l for l in prs.slide_layouts}
     deck_title = deck["title"]
-    sec_no = 0
+    sec_no = cn = 0
     for i, s in enumerate(_prepare(deck["slides"], t)):
         n_before = len(prs.slides)
         try:
-            sec_no = _render_slide(prs, lays, s, t, deck_title, i, sec_no)
+            sec_no, cn = _render_slide(prs, lays, s, t, deck_title, i, sec_no, cn)
         except Exception as e:                                            # one bad slide must not lose the deck
             print(f"[deck] slide {i + 1} ({s.get('kind')}) failed to render: {type(e).__name__}: {e}; "
                   "used a plain slide", file=sys.stderr)
@@ -884,8 +1016,8 @@ def build(deck: dict) -> Presentation:
     return prs
 
 
-def _render_slide(prs, lays, s: dict, t: dict, deck_title: str, i: int, sec_no: int) -> int:
-    """Draw one slide; returns the running section number."""
+def _render_slide(prs, lays, s: dict, t: dict, deck_title: str, i: int, sec_no: int, cn: int = 0) -> tuple:
+    """Draw one slide; returns the running (section number, content-slide number)."""
     kind = s["kind"]
     slide = prs.slides.add_slide(lays[_LAYOUT_FOR.get(kind, "Title Only")])
     if kind in ("cover", "closing"):
@@ -896,13 +1028,17 @@ def _render_slide(prs, lays, s: dict, t: dict, deck_title: str, i: int, sec_no: 
         sec_no += 1
         _section(slide, s, t, sec_no)
     else:
-        _chrome(slide, t, s["title"], deck_title, i + 1)
+        ts = _variant(t, cn)                                   # alternate palette on every second content slide
+        cn += 1
+        _chrome(slide, ts, s["title"], deck_title, i + 1, s.get("eyebrow", ""))
         {"bullets": _bullets, "columns": _columns, "cards": _cards, "stats": _stats,
          "timeline": _timeline, "quote": _quote, "table": _table, "chart": _chart,
-         "comparison": _comparison, "agenda": _agenda, "gallery": _gallery}[kind](slide, s, t)
+         "comparison": _comparison, "agenda": _agenda, "gallery": _gallery, "textside": _textside}[kind](slide, s, ts)
     _drop_empty_placeholders(slide)
     if kind not in ("cover", "closing", "section", "full"):
-        _footer_placeholders(slide, t, deck_title, i + 1)
+        src = s.get("source") or ""
+        foot = (src if re.match(r"(?i)sources?\b", src) else f"Source: {src}") if src else deck_title
+        _footer_placeholders(slide, ts, foot, i + 1)
     if s["notes"]:
         slide.notes_slide.notes_text_frame.text = s["notes"]
-    return sec_no
+    return sec_no, cn

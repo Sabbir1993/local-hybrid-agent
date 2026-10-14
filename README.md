@@ -259,6 +259,21 @@ built in pieces with a live preview). What the builders do beyond writing text:
 - **Checks, returned in the tool result:** a layout check of every finished deck (text overflow, shapes off the slide,
   overlaps, text under 11 pt, low contrast) and a PDF check (blank / almost-empty pages, stranded headings).
   `tests/test_deck_benchmark.py` builds nine varied decks in all six themes and requires them to be lint-clean.
+- **Rich decks (Claude-style):** the `editorial` (cream + deep teal) and `ember` (cream + maroon) themes alternate a light and a
+  deep palette slide by slide, use serif titles and draw a motif on the cover (`art: arches|waves|skyline|geometric|network`).
+  Slides take an `eyebrow:` label above the title and a `source:` line shown in the footer; `stats` (3-5 big numbers),
+  `timeline` and `cards` accept `- 36.6M | what it measures` bullets; `layout: textside` puts a table or chart beside the text;
+  `chart: stacked` draws one bar split into shares. The deck prompt asks for figures, dates and names from research and a
+  source on every content slide.
+- **Research before slides:** after the questionnaire the build gets its own budget (`chat.deck_research_calls`, default 14
+  searches / page reads, `0` = off) and a thinking floor (`chat.deck_effort`, default `medium`), independent of the chat tier
+  (which allows only 4 web calls at low effort). It needs the user's web switch on and is skipped when the Knowledge Base
+  already covers the topic; the web tools are removed after the first `doc_create`.
+- **Designer style (`mode: designer`, chosen in the questionnaire):** the slides are drawn as HTML/CSS (real typography, SVG art,
+  charts), printed by Edge/Chrome and rasterised (`core/doc_ops/pptx_ops/designer.py`), then placed in the .pptx as full-slide pictures with
+  the text in the speaker notes and alt text. It looks like a hand-designed page but the slides cannot be edited in place;
+  `doc_edit` says so and the deck is rebuilt instead. Without a browser it silently builds the editable deck. `chat.deck_designer:
+  false` switches it off.
 - **Several decks in one chat:** a new deck without a `theme:` line inherits the look (theme, accent, font) of the user's
   last deck for 8 hours (`"deck_keep_style": false` turns it off); an explicit `theme:` wins. To change an EARLIER deck,
   name it ("edit Dhaka_Deep_Dive…pptx", "the Dhaka deck", "the previous presentation", "the pdf"): the chat picks that

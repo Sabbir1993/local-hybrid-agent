@@ -26,6 +26,18 @@ THEMES: dict[str, dict] = {
                     cover_bg="FFFFFF", cover_text="111111", cover_muted="6B7280",
                     bg="FFFFFF", surface="F5F5F5", line="E5E5E5", text="111111", muted="6B7280",
                     accent="E11D48", accent2="111111", head="Calibri", body="Calibri"),
+    # Editorial: cream pages alternating with deep-teal ones, serif titles, a drawn arch motif on the cover. `alt` is the
+    # palette every second content slide uses (design._variant), `art` the cover's default drawing.
+    "editorial": dict(label="Editorial (cream + deep teal, gold)", motif="rule", art="arches",
+                      cover_bg="10302D", cover_text="F4EFE4", cover_muted="A9BDB6",
+                      bg="F4EFE4", surface="FBF8F1", line="E2D9C6", text="10302D", muted="5C6B64",
+                      accent="C9962B", accent2="B5412F", head="Georgia", body="Segoe UI",
+                      alt=dict(bg="10302D", surface="17433E", line="245A53", text="F4EFE4", muted="A9BDB6")),
+    "ember": dict(label="Ember (cream + maroon, gold)", motif="rule", art="waves",
+                  cover_bg="3A1814", cover_text="F6EBDD", cover_muted="D2B8A8",
+                  bg="F6EFE7", surface="FFFFFF", line="EADBCB", text="3A1A16", muted="7A5B52",
+                  accent="D4A24C", accent2="B03A2E", head="Georgia", body="Segoe UI",
+                  alt=dict(bg="4A1F1A", surface="5C2B25", line="7A3E36", text="F6EBDD", muted="D2B8A8")),
     "royal": dict(label="Royal (indigo + gold)", motif="circles",
                   cover_bg="1E1B4B", cover_text="FFFFFF", cover_muted="C7C5EE",
                   bg="FAFAF7", surface="FFFFFF", line="E4E2F0", text="1E1B4B", muted="6B7280",
@@ -40,6 +52,8 @@ _HINTS = [
     (("minimal", "monochrome", "black and white", "clean white"), "minimal"),
     (("corporate", "white", "light", "blue"), "corporate"),
     (("navy", "dark", "midnight", "cyan", "tech"), "midnight"),
+    (("cream", "teal", "editorial", "magazine", "serif"), "editorial"),
+    (("maroon", "burgundy", "wine", "ember", "crimson"), "ember"),
 ]
 _HEX = re.compile(r"^#?([0-9A-Fa-f]{6})$")
 

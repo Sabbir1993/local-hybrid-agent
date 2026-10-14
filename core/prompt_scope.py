@@ -61,41 +61,45 @@ FILE_MANUAL = (
 
 # Deck format + style questions: appended to FILE_MANUAL only when the request is about slides.
 PPTX_MANUAL = (
-    "PRESENTATIONS (.pptx): `content` must be ONLY a slide outline in this exact format, nothing before or after it:\n"
-    "   # Deck title\n   subtitle: one line\n   theme: midnight|corporate|forest|sunset|minimal|royal\n   ---\n"
-    "   ## Slide title\n   - short bullet (max 14 words, 2-5 bullets)\n   notes: optional speaker notes\n   ---\n   (next slide...)\n"
-    "   Optional line under a slide title: `layout: cards|stats|timeline|two-column|quote|section|table|full|chart|comparison|agenda`. Cards = 3-4 bullets written "
-    "`Label: text`; stats = bullets that start with a number (`99.9% uptime`); a markdown table (max 5 columns, short cells) becomes "
-    "a table slide - use one for any comparison. "
-    "Use 8-12 slides, NEVER more than 14; the first slide is the title, the last is `## Thank you` or another closing slide. "
-    "One idea per slide. CONTENT RULES: every content slide states a concrete fact, number, name or example (never filler like "
-    "'important', 'many', 'various'); vary the layouts (not three bullet slides in a row: use cards, stats, a table or a timeline "
-    "where the content fits); give each content slide a `notes:` line of 2-3 sentences a presenter could say; the second-to-last "
-    "slide is 'Key takeaways' (or 'Sources' when facts came from the web, naming them). Never write `Slide N:` labels, headers like 'Markdown source', bold markup or any text outside the outline.\n"
-    "   CHARTS: for numbers (trends, shares, comparisons) write `chart: bar|hbar|line|pie | unit=%` under the slide title, then "
-    "bullets `Label: number` (or a markdown table: first column = labels, other columns = numbers; several number columns make "
-    "several series). Use only numbers you actually know and name their source in `notes:`; never invent data. Other layouts: "
-    "`layout: comparison` (exactly two `Heading:` bullets, each with 2-4 sub-bullets), `layout: agenda` (3-6 short bullets), "
-    "`layout: gallery` (2-3 `image:` lines, no bullets).\n"
+    "PRESENTATIONS (.pptx): `content` is ONLY a slide outline in this format, nothing before or after it:\n"
+    "   # Deck title\n   subtitle: one line\n   theme: editorial|ember|midnight|corporate|forest|sunset|minimal|royal\n"
+    "   art: arches|waves|skyline|geometric|network   (optional drawing on the cover: pick the one that fits the topic)\n"
+    "   ---\n   ## Slide title\n   eyebrow: SHORT LABEL ABOVE THE TITLE   (1-3 words: AT A GLANCE, HISTORY, ECONOMY)\n"
+    "   - a line that carries a fact (up to 22 words; 3-5 lines)\n   source: where the facts on this slide come from\n"
+    "   notes: 2-3 sentences the presenter would say\n   ---\n   (next slide...)\n"
+    "   SLIDE TYPES - pick the one that fits the content and vary them (never three of the same kind in a row):\n"
+    "   `layout: stats` + bullets `- 36.6M | what it measures` (3-5 big numbers);  `layout: timeline` + `- 21 Feb 1952 | what "
+    "happened` (3-5 dated steps);  `layout: cards` + `- Heading | one or two sentences` (3-6 cards);  `layout: textside` = 2-4 "
+    "text bullets plus a markdown table (or `chart:` lines) shown beside them;  `layout: comparison` = exactly two `Heading:` "
+    "bullets, each with 2-4 sub-bullets;  `layout: agenda` (3-6 short bullets), `section`, `quote`, `two-column`, `table` (a "
+    "markdown table, max 5 columns), `full` (+ `image:`), `gallery` (2-3 `image:` lines). Plain bullets only when nothing else "
+    "fits.\n"
+    "   CHARTS: for trends, shares and comparisons write `chart: bar|hbar|line|pie|stacked | unit=%` under the title, then bullets "
+    "`Label: number` (or a markdown table: first column = labels, other columns = numbers = several series). `stacked` is one "
+    "bar split into shares.\n"
+    "   CONTENT RULES: use 8-14 slides; the first is the title, the second-to-last 'Key takeaways' (or 'Sources'), the last "
+    "`## Thank you` or another closing. Every content slide states concrete facts - figures, dates, names, examples - taken "
+    "from your research, never filler like 'important', 'many', 'various', and has a `source:` line naming where they come "
+    "from (say 'estimate' for a figure you could not verify). Never invent numbers or data. Never write `Slide N:` labels, "
+    "headers like 'Markdown source', bold markup, or any text outside the outline.\n"
     "   PICTURES: a slide may carry one picture with a line `image: <3-6 search words> | source=search|generate` (source is "
-    "optional: by default the web is searched first, then the local image model if it is loaded). Put it under the slide "
-    "title on the cover and on plain bullet slides (2-4 bullets: text left, picture right); `layout: full` + `image:` makes "
-    "a full-screen picture slide with the title over it. Use pictures on about half the slides, max 8 per deck, for concrete "
-    "subjects (a place, a product, a scene) - never for charts, tables, logos or text. Name the SPECIFIC subject and the "
-    "place/topic of the deck, e.g. `image: Lalbagh Fort Dhaka Bangladesh` or `image: data center server racks`, never a generic "
-    "word like 'history' or 'culture' and never a sentence; a slide with no concrete subject gets no `image:` line. Web pictures "
-    "are matched to the topic and credited on the slide automatically; a slide without a good match stays text-only. When the "
-    "user asks for images / pictures / visuals (\"with relevant images from the web\") put `image:` lines on the slides - the "
-    "system searches and inserts them. NEVER list image URLs in the deck, never add an 'Image sources' / 'Design notes' / "
-    "'Instructions' slide (every slide is content for the audience), never draw ASCII boxes or diagrams, and do not call "
-    "web_search_images for a deck.\n"
-    "   SAME LOOK AS BEFORE: when this chat already has a deck, reuse its `theme:` (and `accent:` / `font:`) line unless the "
-    "user asks for a different look, so the decks of one session match.\n"
-    "   Before writing a deck, if the user gave neither a slide count nor a style, ask ONE short question in plain sentences "
-    "(no table, no code block) offering these looks: midnight (navy + cyan), corporate (white + blue), forest (green + amber), "
-    "sunset (charcoal + coral), minimal (white + red accent), royal (indigo + gold), and a slide count (default 10). "
-    "Skip the question when they already answered, said 'you choose' / 'just make it', or sent a detailed brief: then pick the "
-    "theme that fits the topic. To change only the look of an existing deck, call write_file again with the same slides and a new `theme:` line.\n"
+    "optional: by default the web is searched first, then the local image model if it is loaded). Put it under the slide title "
+    "on the cover and on plain bullet slides (text left, picture right); `layout: full` + `image:` makes a full-screen picture "
+    "slide. Use pictures on about half the slides, max 8 per deck, for concrete subjects (a place, a product, a scene) - never "
+    "for charts, tables, logos or text. Name the SPECIFIC subject and the place/topic of the deck, e.g. `image: Lalbagh Fort "
+    "Dhaka Bangladesh`, never a generic word like 'history' and never a sentence. Web pictures are matched to the topic and "
+    "credited on the slide automatically; a slide without a good match stays text-only. When the user asks for images / pictures "
+    "/ visuals put `image:` lines on the slides - the system searches and inserts them. NEVER list image URLs in the deck, never "
+    "add an 'Image sources' / 'Design notes' / 'Instructions' slide (every slide is content for the audience), never draw ASCII "
+    "boxes or diagrams, and do not call web_search_images for a deck.\n"
+    "   SAME LOOK AS BEFORE: when this chat already has a deck, reuse its `theme:` (and `accent:` / `font:`) line unless the user "
+    "asks for a different look, so the decks of one session match.\n"
+    "   Before writing a deck, if the user gave neither a slide count nor a style, ask ONE short question in plain sentences (no "
+    "table, no code block) offering these looks: editorial (cream + deep teal, gold), ember (cream + maroon, gold), midnight (navy "
+    "+ cyan), corporate (white + blue), forest (green + amber), sunset (charcoal + coral), minimal (white + red accent), royal "
+    "(indigo + gold), and a slide count (default 10). Skip the question when they already answered, said 'you choose' / 'just make "
+    "it', or sent a detailed brief: then pick the theme that fits the topic. To change only the look of an existing deck, call "
+    "write_file again with the same slides and a new `theme:` line.\n"
 )
 
 _PPTX_RE = re.compile(r"\b(pptx?|power ?point|slides?|slide deck|deck|presentation)\b", re.I)
@@ -402,20 +406,25 @@ DECK_BRIEF = (
     '{"title":"A few quick choices for your deck","questions":['
     '{"id":"slides","type":"radio","q":"How many slides?","options":["5-7 (short)","8-12 (standard)","13-20 (detailed)"]},'
     '{"id":"audience","type":"radio","q":"Who is it for?","options":["Executives","Customers","Technical team","General / non-technical"]},'
-    '{"id":"palette","type":"radio","q":"Colour palette?","options":["Midnight (navy + cyan, dark)","Corporate (white + blue)",'
-    '"Forest (green + amber)","Sunset (charcoal + coral)","Minimal (white, black, red)","Royal (indigo + gold)"]},'
+    '{"id":"palette","type":"radio","q":"Colour palette?","options":["Editorial (cream + deep teal, gold)","Ember (cream + maroon, gold)",'
+    '"Midnight (navy + cyan, dark)","Corporate (white + blue)","Forest (green + amber)","Sunset (charcoal + coral)",'
+    '"Minimal (white, black, red)","Royal (indigo + gold)"]},'
+    '{"id":"style","type":"radio","q":"Slide style?","options":["Editable (real PowerPoint shapes you can change)",'
+    '"Designer (image slides, richest look, not editable)"]},'
     '{"id":"extra","type":"text","q":"Anything it must include? (optional)"}],"submit_label":"Build my deck"}\n'
     "```\n"
     "- After the answers (or when the user already specified them), BUILD THE DECK IN PIECES so the user watches it grow:\n"
     "  1. First work out the slide plan: exactly N slides (the number they chose, mid-range if a range), one "
     "title + one-line purpose each, last slide a closing/thank-you slide. Pass it as the `plan` argument of doc_create, one "
     "line per slide ('1. Title - purpose'); the tool plays it back after every doc_append.\n"
-    "  2. Call doc_create(file='<topic>.pptx', total=N, content=...) with ONLY: first line `Theme: <midnight|corporate|forest|"
-    "sunset|minimal|royal>` (the palette they chose), `# Deck title`, a subtitle line, then slides 1-2 (each `## Slide title` + "
-    "3-5 bullets of at most 14 words, slides separated by a line containing only `---`). Each bullet carries a concrete fact, "
-    "number or name; add a `notes:` line (2-3 sentences) to content slides; use a table, cards or stats where the content "
-    "fits instead of repeating bullet slides. Write for the audience they chose: executives = outcomes, numbers, decisions; "
-    "customers = benefits in plain words; technical team = specifics and trade-offs; general = no jargon.\n"
+    "  2. Call doc_create(file='<topic>.pptx', total=N, content=...) with ONLY: first line `theme: <editorial|ember|midnight|"
+    "corporate|forest|sunset|minimal|royal>` (the palette they chose), `mode: designer` right after it when they chose the "
+    "Designer style, `# Deck title`, a subtitle line, an `art:` line for the cover, then slides 1-2 (each `## Slide title` + an "
+    "`eyebrow:` label + 3-5 lines of up to 22 words + a `source:` line + a `notes:` line, slides separated by a line "
+    "containing only `---`). Each line carries a concrete fact, number or name from your research; use stats, timeline, cards, "
+    "a table beside text or a chart where the content fits instead of repeating bullet slides. Write for the audience they "
+    "chose: executives = outcomes, numbers, decisions; customers = benefits in plain words; technical team = specifics and "
+    "trade-offs; general = no jargon.\n"
     "  3. If the user wants pictures/visuals/images in the deck, add an `image: <3-6 search words>` line under the title of the "
     "cover and of roughly every other content slide (see the picture rules in the presentation format); read the tool result "
     "for slides that got no picture and do not retry them.\n"
@@ -423,7 +432,6 @@ DECK_BRIEF = (
     "your plan, until N slides exist; put done=true on the last call. Plain text only: no emoji, no `>` quotes, "
     "no ASCII diagrams (a markdown table is fine for a comparison). The second-to-last slide is 'Key takeaways' (or 'Sources' "
     "naming where facts came from), the last is the closing. Never write a .md file for a PowerPoint request and never send the whole deck in one call.")
-
 _DECK_ASK_RE = re.compile(
     r"\b(ppt|pptx|power\s*point|presentation|slide\s*deck|slides?|deck)\b", re.IGNORECASE)
 _DECK_VERB_RE = re.compile(
@@ -507,9 +515,17 @@ def brief_phase(query: str, prior_msgs=None) -> str:
 BRIEF_BUILD_NOW = (
     "THE USER HAS ALREADY ANSWERED YOUR QUESTIONNAIRE: slide/section count, audience, palette and extras are in their last "
     "message. Do NOT ask any question and do NOT show the card again - not at the start, not after a few slides, not at the "
-    "end. Start building now (doc_create, then doc_append until the planned count exists, done=true on the last call). For "
-    "pictures write `image:` lines only: the system fetches them; never call web_search_images. Search the web only if a "
-    "fact is genuinely missing, and never after the first doc_create."
+    "end. Work in this order:\n"
+    "1. RESEARCH (when web tools are offered): before writing any slide run 6-12 web_search / web_fetch calls for concrete "
+    "material on the topic - figures, dates, names, definitions, recent updates - and READ at least three pages in full with "
+    "web_fetch, not just the snippets. Keep track of where each fact came from.\n"
+    "2. PLAN: the slide plan goes in the `plan` argument of doc_create.\n"
+    "3. BUILD: doc_create, then doc_append until the planned count exists, done=true on the last call. Every content slide "
+    "carries figures, dates and names from your research, a `source:` line, and the slide type that fits it (stats for numbers, "
+    "timeline for dates, cards for a list of things, textside for a table beside text, chart for trends or shares). A figure you "
+    "could not verify is labelled an estimate in its source line; never invent numbers.\n"
+    "4. After the first doc_create do not search again. For pictures write `image:` lines only: the system fetches them; never "
+    "call web_search_images."
 )
 
 BRIEF_ASK_NOW = (

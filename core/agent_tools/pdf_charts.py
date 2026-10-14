@@ -3,6 +3,7 @@
 Same chart kinds and the same look as the chat `visual` blocks (static/js/markdown.js): bar, hbar, line, pie. Every label
 is escaped and every coordinate is computed here, so model text can only ever appear as plain text inside the drawing.
 """
+import contextvars
 import html
 import math
 
@@ -10,6 +11,26 @@ PALETTE = ["#2563EB", "#7C3AED", "#F59E0B", "#10B981", "#EC4899", "#06B6D4", "#8
 _AX = "#64748B"
 _GRID = "#E2E8F0"
 _INK = "#0F172A"
+_BG = "#FFFFFF"
+_style: contextvars.ContextVar = contextvars.ContextVar("chart_style", default=None)
+
+
+def _c(name: str) -> str:
+    """Colour from the style of the chart being drawn (ink / ax / grid / bg), else the light-page default."""
+    st = _style.get() or {}
+    return st.get(name) or {"ink": _INK, "ax": _AX, "grid": _GRID, "bg": _BG}[name]
+
+
+def _pal() -> list:
+    return (_style.get() or {}).get("palette") or PALETTE
+
+
+def _label_on(fill: str) -> str:
+    """Near-black or white text, whichever reads better on this segment colour (white on amber was unreadable)."""
+    h = fill.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    return "#111111" if lum > 0.5 else "#FFFFFF"
 
 
 def _fmt(n: float) -> str:
@@ -36,13 +57,24 @@ def _t(text: str, n: int) -> str:
     return html.escape(text if len(text) <= n else text[:n - 1] + "…")
 
 
-def _text(x, y, s, anchor="middle", size=10.5, fill=_AX, weight="400"):
+def _text(x, y, s, anchor="middle", size=10.5, fill=None, weight="400"):
+    fill = fill or _c("ax")
     return (f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="{anchor}" font-size="{size}" fill="{fill}" '
             f'font-weight="{weight}" font-family="Segoe UI, Arial, sans-serif">{s}</text>')
 
 
-def chart_svg(data: dict) -> str:
-    """data = {kind: bar|hbar|line|pie, unit, labels, series:[{name, values}]} -> an <svg> string."""
+def chart_svg(data: dict, style: dict | None = None) -> str:
+    """data = {kind: bar|hbar|line|pie|share, unit, labels, series:[{name, values}]} -> an <svg> string.
+    style (optional): {ink, ax, grid, bg, palette} so a chart can sit on a dark slide."""
+    token = _style.set(style)
+    try:
+        return _chart_svg(data)
+    finally:
+        _style.reset(token)
+
+
+def _chart_svg(data: dict) -> str:
+    """The drawing itself (see chart_svg)."""
     kind, labels, series, unit = data["kind"], data["labels"], data["series"], data.get("unit", "")
     u = (" " + html.escape(unit)) if unit else ""
     legend = ""
@@ -52,8 +84,8 @@ def chart_svg(data: dict) -> str:
         x = 40
         parts = []
         for i, n in enumerate(names[:8]):
-            parts.append(f'<rect x="{x}" y="4" width="10" height="10" rx="2" fill="{PALETTE[i % len(PALETTE)]}"/>'
-                         + _text(x + 15, 13, _t(n, 18), "start", 10.5, _INK))
+            parts.append(f'<rect x="{x}" y="4" width="10" height="10" rx="2" fill="{_pal()[i % len(_pal())]}"/>'
+                         + _text(x + 15, 13, _t(n, 18), "start", 10.5, _c("ink")))
             x += 28 + 6.2 * min(len(str(n)), 18)
         legend = "".join(parts)
         ly = 30
@@ -70,21 +102,41 @@ def chart_svg(data: dict) -> str:
             x0, y0 = cx + r * math.cos(a0), cy + r * math.sin(a0)
             x1, y1 = cx + r * math.cos(a1), cy + r * math.sin(a1)
             if len(vs) == 1:
-                body += f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{PALETTE[0]}"/>'
+                body += f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{_pal()[0]}"/>'
             else:
                 body += (f'<path d="M{cx},{cy} L{x0:.1f},{y0:.1f} A{r},{r} 0 {large} 1 {x1:.1f},{y1:.1f} Z" '
-                         f'fill="{PALETTE[i % len(PALETTE)]}" stroke="#fff" stroke-width="2"/>')
+                         f'fill="{_pal()[i % len(_pal())]}" stroke="{_c("bg")}" stroke-width="2"/>')
             am = (a0 + a1) / 2
             if v / total >= 0.05:
                 body += _text(cx + (r * 0.62) * math.cos(am), cy + (r * 0.62) * math.sin(am) + 4,
-                              f"{v / total * 100:.0f}%", "middle", 11, "#fff", "700")
+                              f"{v / total * 100:.0f}%", "middle", 11, _label_on(_pal()[i % len(_pal())]), "700")
             a0 = a1
         for i, (lab, v) in enumerate(zip(labels, vs)):
             y = ly + 30 + i * 22
-            body += (f'<rect x="290" y="{y - 10}" width="11" height="11" rx="2" fill="{PALETTE[i % len(PALETTE)]}"/>'
-                     + _text(308, y, f"{_t(lab, 26)} — {_fmt(v)}{u}", "start", 11.5, _INK))
+            body += (f'<rect x="290" y="{y - 10}" width="11" height="11" rx="2" fill="{_pal()[i % len(_pal())]}"/>'
+                     + _text(308, y, f"{_t(lab, 26)} — {_fmt(v)}{u}", "start", 11.5, _c("ink")))
         h = max(cy + r + 14, ly + 30 + len(vs) * 22 + 10)
         return _wrap(legend + body, 600, h)
+    if kind == "share":                                         # one 100% stacked bar with its legend underneath
+        vs = series[0]["values"]
+        total = sum(vs) or 1.0
+        x, bar_y, bar_h, bw = 40.0, ly + 14, 54, 520.0
+        body = ""
+        for i, v in enumerate(vs):
+            w = bw * v / total
+            col = _pal()[i % len(_pal())]
+            body += f'<rect x="{x:.1f}" y="{bar_y}" width="{max(w, 1):.1f}" height="{bar_h}" fill="{col}" stroke="{_c("bg")}" stroke-width="2"/>'
+            if w >= 34:
+                body += _text(x + w / 2, bar_y + bar_h / 2 + 4, f"{_fmt(v)}{u}", "middle", 11.5, _label_on(col), "700")
+            x += w
+        lx, ly2 = 40.0, bar_y + bar_h + 26
+        for i, lab in enumerate(labels):
+            if lx > 480:
+                lx, ly2 = 40.0, ly2 + 20
+            body += (f'<rect x="{lx:.1f}" y="{ly2 - 9}" width="10" height="10" rx="2" fill="{_pal()[i % len(_pal())]}"/>'
+                     + _text(lx + 15, ly2, _t(lab, 22), "start", 11, _c("ink")))
+            lx += 30 + 6.4 * min(len(str(lab)), 22)
+        return _wrap(legend + body, 600, ly2 + 14)
     lo, hi = min(0.0, min(vals)), _nice_max(max(0.0, max(vals)))
     span = (hi - lo) or 1.0
     if kind == "hbar":
@@ -97,9 +149,9 @@ def chart_svg(data: dict) -> str:
             y = ly + 4 + i * row
             w = abs(v) / span * max_w
             x = zero if v >= 0 else zero - w
-            body += _text(lab_w, y + 16, _t(lab, 24), "end", 11, _AX)
-            body += f'<rect x="{x:.1f}" y="{y + 3}" width="{max(w, 1):.1f}" height="{row - 10}" rx="3" fill="{PALETTE[0]}"/>'
-            body += _text((x + w + 6) if v >= 0 else (x - 6), y + 16, f"{_fmt(v)}{u}", "start" if v >= 0 else "end", 11, _INK, "600")
+            body += _text(lab_w, y + 16, _t(lab, 24), "end", 11, _c("ax"))
+            body += f'<rect x="{x:.1f}" y="{y + 3}" width="{max(w, 1):.1f}" height="{row - 10}" rx="3" fill="{_pal()[0]}"/>'
+            body += _text((x + w + 6) if v >= 0 else (x - 6), y + 16, f"{_fmt(v)}{u}", "start" if v >= 0 else "end", 11, _c("ink"), "600")
         return _wrap(legend + body, 600, h)
     left, right, top, bottom = 46, 590, ly + 6, ly + 180
     h = bottom + 28
@@ -107,7 +159,7 @@ def chart_svg(data: dict) -> str:
     for k in range(5):
         v = lo + span * k / 4
         yy = y_of(v)
-        body += f'<line x1="{left}" y1="{yy:.1f}" x2="{right}" y2="{yy:.1f}" stroke="{_GRID}" stroke-width="1"/>'
+        body += f'<line x1="{left}" y1="{yy:.1f}" x2="{right}" y2="{yy:.1f}" stroke="{_c("grid")}" stroke-width="1"/>'
         body += _text(left - 6, yy + 3.5, _fmt(v), "end")
     n = len(labels)
     slot = (right - left) / n
@@ -129,18 +181,18 @@ def chart_svg(data: dict) -> str:
                 x = x_bar(i) - bw * k / 2 + bw * si
                 y = y_of(v)
                 body += (f'<rect x="{x:.1f}" y="{min(y, y0):.1f}" width="{bw - 2:.1f}" height="{max(abs(y0 - y), 1):.1f}" '
-                         f'rx="2" fill="{PALETTE[si % len(PALETTE)]}"/>')
+                         f'rx="2" fill="{_pal()[si % len(_pal())]}"/>')
                 if show:
-                    body += _text(x + (bw - 2) / 2, (y - 4) if v >= 0 else (y + 12), _fmt(v), "middle", 10.5, _INK, "600")
+                    body += _text(x + (bw - 2) / 2, (y - 4) if v >= 0 else (y + 12), _fmt(v), "middle", 10.5, _c("ink"), "600")
     else:
         for si, s in enumerate(series):
-            col = PALETTE[si % len(PALETTE)]
+            col = _pal()[si % len(_pal())]
             pts = " ".join(f"{x_line(i):.1f},{y_of(v):.1f}" for i, v in enumerate(s["values"]))
             body += f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="2.5" stroke-linejoin="round"/>'
             for i, v in enumerate(s["values"]):
                 body += f'<circle cx="{x_line(i):.1f}" cy="{y_of(v):.1f}" r="3.5" fill="{col}"/>'
                 if show:
-                    body += _text(x_line(i), y_of(v) - 8, _fmt(v), "middle", 10.5, _INK, "600")
+                    body += _text(x_line(i), y_of(v) - 8, _fmt(v), "middle", 10.5, _c("ink"), "600")
     if unit:
         body += _text(left, top - 4, html.escape(unit), "start", 10.5)
     return _wrap(legend + body, 600, h)

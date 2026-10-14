@@ -38,6 +38,10 @@ async def _load_images(loc: _Loc, ops: list) -> None:
 
 
 async def _edit(loc: _Loc, data: bytes, args: dict) -> str:
+    if loc.path.suffix.lower() == ".pptx" and is_designer_deck(data):
+        raise ValueError("this deck is in Designer style: its slides are pictures, so single texts cannot be edited. "
+                         "Rebuild it with doc_create using the changed outline (same theme and `mode: designer`), or build "
+                         "it in the Editable style.")
     ops = doc_ops.normalize_ops(args.get("ops"))
     await _load_images(loc, ops)
     row, spec = _spec_for(loc)
@@ -75,7 +79,8 @@ async def _create(args: dict, location: str) -> str:
     # a PDF built in pieces is printed on its last doc_append, so its pictures are looked up then
     content, images, pic_note = await prepare_build(ext_, content, uid, template=bool(template),
                                                     partial=bool(args.get("total")))
-    data, spec = doc_ops.create(name, content, template=template, images=images)
+    data, spec = doc_ops.create(name, _interim(content, not args.get("total")), template=template, images=images)
+    spec = content
     if location == "device":
         dev_uid, _ws = require_device_workspace()
         target = _ws_resolve(name)
@@ -160,7 +165,8 @@ def _inherit_style(uid, ext: str, content: str) -> str:
     now = time.time()
     if deck.get("theme") or deck.get("hint"):
         t = outline.resolve_theme(deck)
-        _LAST_STYLE[uid] = {"theme": t["name"], "accent": deck.get("accent", ""), "font": deck.get("font", ""), "ts": now}
+        _LAST_STYLE[uid] = {"theme": t["name"], "accent": deck.get("accent", ""), "font": deck.get("font", ""),
+                            "mode": deck.get("mode", ""), "ts": now}
         return content
     last = _LAST_STYLE.get(uid)
     if not last or now - last["ts"] > _STYLE_TTL_S:
@@ -170,6 +176,8 @@ def _inherit_style(uid, ext: str, content: str) -> str:
         lines.append(f"accent: {last['accent']}")
     if last["font"] and not deck.get("font"):
         lines.append(f"font: {last['font']}")
+    if last.get("mode") and not deck.get("mode"):
+        lines.append(f"mode: {last['mode']}")
     return "\n".join(lines) + "\n" + content
 
 
@@ -177,6 +185,8 @@ async def prepare_build(ext: str, content: str, uid, *, template: bool = False, 
     """What every route that writes a deck / PDF does first: keep the session's look, then look up the pictures its
     `image:` lines ask for. -> (content, images, note). Shared by doc_create and write_file, so a deck gets the same
     pictures, style and checks whichever tool the model happened to use."""
+    if ext == ".pptx" and not _flag("deck_designer"):
+        content = re.sub(r"(?mi)^[ \t]*mode[ \t]*:[ \t]*designer[ \t]*\r?\n?", "", content)
     content = _inherit_style(uid, ext, content)
     images, note = {}, ""
     if uid is not None and _flag("deck_images") and slide_images.wants_images(content):
@@ -198,9 +208,38 @@ def _flag(name: str, default: bool = True) -> bool:
         return default
 
 
+_MODE_LINE = re.compile(r"(?mi)^[ \t]*mode[ \t]*:[ \t]*designer[ \t]*\r?\n?")
+
+
+def _interim(markdown: str, final: bool) -> str:
+    """Designer pictures take seconds per rebuild, and doc_append rebuilds the whole deck every step. While a deck is still
+    being built in pieces the file is drawn in the editable style (instant, and the live preview follows it); only the
+    last step draws the Designer pictures. The stored source keeps its `mode:` line either way."""
+    return markdown if final else _MODE_LINE.sub("", markdown)
+
+
+def is_designer_deck(data: bytes) -> bool:
+    """True for a deck built in Designer style: every slide is one full-slide picture (see pptx_ops/designer.py)."""
+    try:
+        import io
+        from pptx import Presentation
+        prs = Presentation(io.BytesIO(data))
+        slides = list(prs.slides)
+        return bool(slides) and all(len(s.shapes) == 1 and s.shapes[0].shape_type == 13 for s in slides)
+    except Exception:
+        return False
+
+
+DESIGNER_NOTE = ("Designer style: the slides are pictures, so their text cannot be edited in place (it is in the speaker "
+                 "notes and the alt text). To change something, rebuild the deck with doc_create and the changed outline, "
+                 "or ask for the Editable style.")
+
+
 def _layout_note(ext: str, data: bytes, markdown: str = "") -> str:
     """Layout check of a finished .pptx (text that overflows, low contrast, shapes off the slide...) as one sentence
     for the tool result; '' when clean, not a deck, or the check itself failed (it must never block a build)."""
+    if ext == ".pptx" and is_designer_deck(data):
+        return DESIGNER_NOTE                       # nothing to measure: the slides are pictures
     if not _flag("deck_checks"):
         return ""
     try:
@@ -287,7 +326,7 @@ async def _append(args: dict, location: str) -> str:
     if ext == ".pdf" and not done:
         out = data              # the PDF is printed once at the end; the preview shows a live HTML draft of the spec
     else:
-        out, _ = doc_ops.create(loc.path.name, new_spec, images=images)
+        out, _ = doc_ops.create(loc.path.name, _interim(new_spec, done), images=images)
     if out is not data:
         await _write(loc, loc.path, out)
     doc_store.register(loc.uid, loc.key, ext.lstrip("."), location=loc.location,

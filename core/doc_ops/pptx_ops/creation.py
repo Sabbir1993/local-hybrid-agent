@@ -168,4 +168,10 @@ def create(md: str, template: Optional[bytes] = None, title: str = "", images: O
     attach_images(deck, images)
     if template:
         return _create_from_template(deck, template)
+    if deck.get("mode") == "designer":                     # picture slides drawn as HTML; None -> fall back to editable
+        from . import designer
+        data = designer.build(deck)
+        if data:
+            return data
+        print("[deck] Designer style is not available here; built the editable deck instead", file=sys.stderr)
     return _save(design.build(deck))

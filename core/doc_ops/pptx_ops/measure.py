@@ -120,6 +120,17 @@ def fits(texts, family: str, size: float, width_in: float, height: float, gap_pt
     return height_in(texts, family, size, width_in, gap_pt, bold) <= height
 
 
+def fit_one_line(text: str, family: str, width_in: float, base: float, floor: float, bold: bool = False) -> float:
+    """Largest size in [floor, base] at which `text` stays on ONE line `width_in` wide. For big numbers and labels that must
+    not wrap: fit_size() lets a single long word break across lines and calls that a fit."""
+    size = base
+    while size > floor:
+        if _width_in(str(text), family, size, bold) <= width_in:
+            return size
+        size -= 1
+    return floor
+
+
 def fit_size(texts, family: str, width_in: float, height: float, base: float, floor: float,
              gap_pt: float = 0.0, bold: bool = False) -> float:
     """Largest size in [floor, base] (1 pt steps) at which the texts fit; `floor` when none does."""

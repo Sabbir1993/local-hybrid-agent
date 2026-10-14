@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.doc_ops import pptx_ops
 from core.doc_ops.pptx_ops import lint
 
-THEMES = ("midnight", "corporate", "forest", "sunset", "minimal", "royal")
+THEMES = ("midnight", "corporate", "forest", "sunset", "minimal", "royal", "editorial", "ember")
 LONG = "Founded in the seventeenth century by Mughal governors and expanded under later rulers of the region"
 BN = "ঢাকা বাংলাদেশের রাজধানী এবং বৃহত্তম শহর, যেখানে এক কোটিরও বেশি মানুষ বাস করে"
 
@@ -51,6 +51,35 @@ DECKS = {
                           "- Security: every request is verified and logged\n- Speed: pages open in under a second\n"
                           "- Cost: pay only for what you use each month\n---\n## Results\n- $10.8T global impact\n- 29 minutes average breach time\n"
                           "- 12,000 attempts blocked\n---\n## Thank you\n"),
+    "rich editorial": (
+        "# Dhaka: The Deep Dive\nsubtitle: A deep dive into the world's second-largest city\nart: arches\n---\n"
+        "## Dhaka in five numbers\neyebrow: At a glance\nlayout: stats\nsource: UN World Urbanization Prospects; 2022 census; DCCI 2025\n"
+        "- 36.6M | Metro population in the UN-based estimate, 2nd largest worldwide\n- 1610 | Year Dhaka became the Mughal capital of Bengal\n"
+        "- 306 km2 | Area of the capital proper\n- 33,600 | People per km2 in the city proper\n- 46% | Share of national GDP produced by Dhaka district\n"
+        "notes: Be clear about definitions when quoting population.\n---\n"
+        "## A city built on rivers\neyebrow: Setting\nlayout: textside\nsource: Bangladesh Meteorological Department\n"
+        "- Dhaka sits on the lower Ganges Delta, about 32 m above sea level.\n- Six linked river systems surround it.\n"
+        "- The climate is tropical savanna: about 87% of the rain falls between May and October.\n"
+        "| Month | Mean C | Rain mm |\n|---|---|---|\n| January | 18.4 | 7 |\n| April | 28.6 | 128 |\n| July | 28.9 | 391 |\n| October | 27.5 | 174 |\n---\n"
+        "## Language movement to liberation\neyebrow: 1952 to 1971\nlayout: timeline\nsource: Banglapedia\n"
+        "- 21 Feb 1952 | Students and citizens demonstrate for Bengali as a state language\n"
+        "- 7 Mar 1971 | Sheikh Mujib addresses a mass rally at the Ramna Race Course\n"
+        "- 25 Mar 1971 | Operation Searchlight begins and Dhaka bears the brunt\n"
+        "- 16 Dec 1971 | Pakistan's Eastern Command surrenders and Dhaka becomes the capital\n---\n"
+        "## Six places that tell Dhaka's story\neyebrow: Landmarks\nlayout: cards\nsource: Dhaka Tribune; Wikipedia\n"
+        "- Ahsan Manzil | The Pink Palace on the Buriganga, former residence of the Nawabs\n"
+        "- Lalbagh Fort | Unfinished 17th-century Mughal complex begun in 1678\n"
+        "- Binat Bibi Mosque | Built in 1454, the oldest surviving brick structure in the city\n"
+        "- Armenian Church | A reminder of the Armenian merchants who traded in Dhaka\n"
+        "- Curzon Hall | Colonial hall that blends imperial scale with Mughal motifs\n"
+        "- Sadarghat | The river terminal moving goods and passengers to the rest of the country\n---\n"
+        "## The engine of Bangladesh\neyebrow: Economy\nsource: DCCI Economic Position Index, 2025\nchart: stacked | unit=%\n"
+        "- Garments: 58.6\n- Food products: 13.4\n- Textiles: 9.3\n- Rubber and plastics: 7.7\n- Other: 11\n---\n"
+        "## Rickshaws, buses and a new metro\neyebrow: Getting around\nlayout: stats\nsource: DMTCL via Daily Ittefaq; World Bank\n"
+        "- 410K | Average daily riders on Metro Line 6 in mid-2026\n- 1M+ | Rickshaws, a commonly cited daily count\n- 3.2M | Working hours lost every day to traffic\n---\n"
+        "## Old vs new\neyebrow: Contrast\nlayout: comparison\n- Old Dhaka:\n  - Narrow lanes and river trade\n  - Mughal and colonial buildings\n"
+        "- New Dhaka:\n  - Glass towers and the metro\n  - Planned neighbourhoods like Gulshan\n---\n"
+        "## Thank you\n"),
     "everything dense": f"# Dense\nsubtitle: s\n---\n## One\n{bullets(5)}\n---\n## Two\n{bullets(6)}\n---\n## Three\n{bullets(7)}\n---\n## Thank you\n",
 }
 

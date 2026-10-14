@@ -40,7 +40,7 @@ from core.monitor import (
 from core.knowledge_access import allowed_source_ids_for, cloud_ok_ids, hits_need_local, kb_local_only, set_kb_cloud_blocked
 from core.db import db_record_request
 from .. import common
-from core import reasoning
+from core import deck_research, reasoning
 from ..common import _llm_chat_stream
 from ..common.sampling_extra import sampler_extra
 
@@ -285,6 +285,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # minutes before the first slide. The ceiling is app.json reasoning_effort.doc_build_ceiling (default "medium").
     doc_build = (pdf_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]) or file_followup == "edit"
                  or bool(_re.search(r"\.(?:pptx|docx|pdf)\b", prev_assistant, _re.IGNORECASE)))
+    if brief_phase == "build":
+        effort = deck_research.effort_for(effort, APP_CONFIG)       # a deck is not a quick answer: at least medium thinking
     if doc_build:
         effort = reasoning.cap(effort, str((APP_CONFIG.get("reasoning_effort") or {}).get("doc_build_ceiling", "medium")))
 
@@ -366,6 +368,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     from core import kb_coverage
     web_budget_n = None
     web_lean = False
+    cov = "none"
     if kb_coverage.gap_fill_enabled():
         if use_web and not web_explicit and not voice_policy.active(req):
             cov = await kb_coverage.resolve(kb_query, cov_hits, blocked=bool(kb_blocked_reason))
@@ -377,6 +380,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
               f"budget={web_budget_n} tier={kb_coverage.tier(effort, deep)}", file=sys.stderr)
     else:
         has_web = web_explicit
+    # building a deck / PDF: its own, larger research budget (searches + full-page reads) before the first slide
+    plan_w = deck_research.web_plan(APP_CONFIG, brief_phase, bool(use_web), cov, has_web, web_lean, web_budget_n)
+    has_web, web_lean, web_budget_n = plan_w["has_web"], plan_w["lean"], plan_w["budget"]
     if brief_phase == "ask":
         has_web = False          # nothing researched before the card is kept (only the final text is), so don't search
     if has_web:
@@ -496,6 +502,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         max_web_calls = web_budget_n
         if has_web and chat_tools:
             max_turns = kb_coverage.rounds_for(max_web_calls, max_turns)
+            if brief_phase == "build":
+                max_turns = deck_research.turns_for(max_web_calls, max_turns)      # research rounds + the build rounds
     if deep:
         sys_parts.append(
             "DEEP RESEARCH MODE:\n"
