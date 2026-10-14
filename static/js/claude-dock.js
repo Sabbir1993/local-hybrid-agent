@@ -19,6 +19,7 @@
       this.planView = $('dock-view-plan');
       this.filesView = $('dock-view-files');
       this.previewView = $('dock-view-preview');
+      this._previewDefault = this.previewView ? this.previewView.innerHTML : '';   // the empty state, restored by resetPreview()
       this.terminalView = $('dock-view-terminal');
       this.tasksView = $('dock-view-tasks');
       this.keepAwakeToggle = $('toggle-keep-awake');
@@ -721,6 +722,15 @@
           <b>No active plan</b>
           <p style="margin-top:6px; font-size:11.5px;">When the agent starts a multi-step task, the 12-step plan will be tracked live here.</p>
         </div>`;
+    },
+
+    // Back to the empty Preview tab: another chat was opened, so the deck / page of the previous one must not stay.
+    resetPreview() {
+      if (!this.previewView) return;
+      const L = this.liveDoc;
+      if (L.timer) clearTimeout(L.timer);
+      Object.assign(L, { name: '', ext: '', done: false, timer: 0, last: 0, busy: false, again: false });
+      this.previewView.innerHTML = this._previewDefault || '';
     },
 
     // ---------------- CLAUDE-STYLE WEB PREVIEW (🌐) ----------------

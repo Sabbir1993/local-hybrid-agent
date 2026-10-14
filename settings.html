@@ -620,13 +620,13 @@
           </div>
           <div class="cfg-item cfg-full" title="GPU shares. 9,11 = both GPUs (~45%/55% split) · 0,1 = GPU 2 only · 1,0 = GPU 1 only">
             <label for="cfg-ts">Tensor split <span class="info" title="Comma-separated shares per GPU. 0,1 = only GPU 2 works · 1,0 = only GPU 1 works · 9,11 = balanced dual-GPU split">ⓘ</span></label>
-            <input type="text" id="cfg-ts" value="9,11" title="GPU share: 0,1 = GPU 2 only · 1,0 = GPU 1 only · 9,11 = both GPUs">
-            <small style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;">One share per GPU, in order · 0 skips that GPU · e.g. 9,11 → dual</small>
-            <div id="cfg-ts-tools" style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">
-              <button type="button" class="btn" id="ts-auto" title="Shares proportional to each GPU's VRAM">Auto by VRAM</button>
-              <button type="button" class="btn" id="ts-equal" title="Same share on every GPU">Equal</button>
+            <div id="cfg-ts-tools" style="display:flex; gap:6px; align-items:center;">
+              <input type="text" id="cfg-ts" value="9,11" style="flex:1 1 auto; width:auto; min-width:0;" title="GPU share: 0,1 = GPU 2 only · 1,0 = GPU 1 only · 9,11 = both GPUs">
+              <button type="button" class="btn" id="ts-auto" style="flex:0 0 auto; width:auto; white-space:nowrap;" title="Shares proportional to each GPU's VRAM">Auto by VRAM</button>
+              <button type="button" class="btn" id="ts-equal" style="flex:0 0 auto; width:auto; white-space:nowrap;" title="Same share on every GPU">Equal</button>
             </div>
-            <div id="cfg-ts-rows" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:6px; margin-top:6px;"></div>
+            <small style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;">One share per GPU, in order · 0 skips that GPU · e.g. 9,11 → dual</small>
+            <div id="cfg-ts-rows" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:4px 12px; margin-top:6px;"></div>
             <small id="cfg-ts-warn" style="color:var(--warn, #d9a441); font-size:9.5px; margin-top:3px; display:none;"></small>
           </div>
           <div class="cfg-item" title="GPU split strategy: 'layer' splits transformer layers; 'row' splits tensor matrices">
@@ -923,7 +923,7 @@
 <div id="toast"></div>
 
 <script src="/static/js/session.js?v=1.4"></script>
-<script src="/static/js/theme.js?v=2.7"></script>
+<script src="/static/js/theme.js?v=2.8"></script>
 <script src="/static/vendor/marked.umd.js" integrity="sha384-IvVdUXkhyoD0shbjhiiOnuiTbervTaB0VJcnEcg3shUAMVOOF6lKj4ozJrCwvz6s" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="/static/vendor/purify.min.js" integrity="sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="/static/js/utils.js?v=3.2"></script>

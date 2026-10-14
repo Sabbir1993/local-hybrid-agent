@@ -559,6 +559,8 @@ function updateGpuDependentFields() {
 }
 
 /* One share input per GPU the runtime uses (up to 14); #cfg-ts stays the stored value. */
+const tsEsc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+const CFG_MAX_GPUS = 14;   // keep in step with MAX_GPUS in core/config.py
 let cfgGpuIdx = [];   // Vulkan/CUDA indices from the active runtime, in -dev order
 
 function tsGpuInfo(idx) {
@@ -569,16 +571,18 @@ function tsGpuInfo(idx) {
 function tsRowsFromText() {
   const box = $('cfg-ts-rows');
   if (!box) return;
-  if (cfgGpuIdx.length < 2) { box.innerHTML = ''; tsCheck(); return; }
+  if (!cfgGpuIdx.length) { box.innerHTML = ''; tsCheck(); return; }
   const shares = parseTensorSplit($('cfg-ts').value);
-  box.innerHTML = cfgGpuIdx.map((gi, i) => {
-    const d = tsGpuInfo(gi);
-    const label = d ? `GPU ${gi} · ${d.total_gb} GB` : `GPU ${gi}`;
+  // 14 fixed slots: one per GPU the runtime uses is editable, the rest are greyed out at 0 and never saved
+  box.innerHTML = Array.from({ length: CFG_MAX_GPUS }, (_, i) => {
+    if (i >= cfgGpuIdx.length) {
+      return `<label class="ts-slot off" title="No GPU in this slot"><span>Slot ${i + 1}</span>`
+        + `<input type="number" value="0" disabled></label>`;
+    }
+    const gi = cfgGpuIdx[i], d = tsGpuInfo(gi);
     const v = shares[i] !== undefined ? shares[i] : '';
-    return `<label style="display:flex; align-items:center; gap:6px; font-size:11px;" title="${d ? d.name : ''}">
-      <span style="flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${label}</span>
-      <input type="number" min="0" max="999" class="ts-share" data-i="${i}" value="${v}" style="width:64px;">
-    </label>`;
+    return `<label class="ts-slot" title="${d ? tsEsc(d.name) : ''}"><span>GPU ${gi}${d ? ' · ' + d.total_gb + ' GB' : ''}</span>`
+      + `<input type="number" min="0" max="999" class="ts-share" data-i="${i}" value="${tsEsc(v)}"></label>`;
   }).join('');
   box.querySelectorAll('.ts-share').forEach(el => el.addEventListener('input', tsTextFromRows));
   tsCheck();

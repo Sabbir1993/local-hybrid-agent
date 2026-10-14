@@ -831,6 +831,7 @@ async function openSession(s) {
       const job = window.bgJobs.get(String(s.id));
       curSession = s;
       messages = job.messages;
+      if (window.RightDock && typeof window.RightDock.resetPreview === 'function') window.RightDock.resetPreview();
       try {
         localStorage.setItem(getActiveSessionKey(), String(s.id));
       } catch (e) {}
@@ -905,6 +906,7 @@ async function openSession(s) {
     if (!foundPlan && window.RightDock && typeof window.RightDock.resetPlan === 'function') {
       window.RightDock.resetPlan();
     }
+    if (window.RightDock && typeof window.RightDock.resetPreview === 'function') window.RightDock.resetPreview();
     try {
       localStorage.setItem(getActiveSessionKey(), String(s.id));
     } catch (e) {}
@@ -1072,6 +1074,7 @@ $('btn-newchat').onclick = () => {
   if (window.RightDock && typeof window.RightDock.resetPlan === 'function') {
     window.RightDock.resetPlan();
   }
+  if (window.RightDock && typeof window.RightDock.resetPreview === 'function') window.RightDock.resetPreview();
   messages = [];
   try {
     localStorage.removeItem(getActiveSessionKey());

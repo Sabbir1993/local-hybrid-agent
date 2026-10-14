@@ -156,7 +156,16 @@ function applyTheme(t) {
 function setTheme(t) {
   localStorage.setItem(THEME_KEY, t);
   applyTheme(t);
+  // Settings opens as an iframe inside the app: restyle the app behind it right away, not on the next reload
+  try {
+    if (window.parent && window.parent !== window && typeof window.parent.applyTheme === 'function') window.parent.applyTheme(t);
+  } catch (_) { /* cross-origin parent: nothing to update */ }
 }
+
+// another tab or frame changed the theme
+window.addEventListener('storage', (e) => {
+  if (e.key === THEME_KEY && e.newValue) applyTheme(e.newValue);
+});
 
 function cycleTheme() {
   const cur = getSavedTheme();
