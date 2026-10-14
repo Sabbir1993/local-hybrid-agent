@@ -203,10 +203,14 @@ Both engines execute strictly on CPU with **0 MB GPU VRAM usage**, preserving al
 The GPU-facing logic is dynamic, not hardcoded to "2x Arc A770":
 
 - **GPU count**: 1 GPU → no `--tensor-split`/`-dev` list is emitted at all.
-  2+ GPUs → `core/vram/estimator.py: compute_tensor_split()` computes a split
-  proportional to each card's free VRAM (this is what reproduces today's
-  hand-tuned `9,11`-style ratio for two similar-sized A770s, and generalizes
-  to N cards of any size).
+  2 to 14 GPUs (`MAX_GPUS` in `core/config.py`) → one share per GPU in the
+  saved `tensor_split`. Model Config shows 14 slots: the GPUs of the active
+  runtime are editable (index + VRAM shown), the rest stay greyed at 0 and are
+  never saved; **Auto by VRAM** / **Equal** fill the shares for you, and
+  `compute_tensor_split()` (autotune's seed) scales its shares with the GPU
+  count. A saved split whose entry count differs from the GPU count is not
+  passed to llama.cpp as-is (that silently left GPUs idle): both the launcher
+  and the VRAM preflight use an equal split and log a warning.
 - **Backend (vendor)**: `core/backend.py` maps a single `"backend"` setting
   (`"vulkan"` or `"cuda"`) to the right `-dev` prefix (`Vulkan0,Vulkan1...`
   vs `CUDA0,CUDA1...`) and the right visible-devices env var
@@ -232,6 +236,33 @@ for these yet — they live in source/config, not a settings panel):
 
 None of these require a code change — they're all values in `core/config.py`
 or `config/*.json` — but they are hand-edited, not auto-detected, today.
+
+## Documents: decks and PDFs
+
+Chat builds `.pptx` and `.pdf` files with `doc_create` / `doc_append` (a short ask-first questionnaire, then the file is
+built in pieces with a live preview). What the builders do beyond writing text:
+
+- **Layout is measured, not guessed.** Text is measured on the real fonts (`core/doc_ops/pptx_ops/measure.py`, Bengali
+  included); a bullet list that cannot fit is split into "(cont.)" slides, tables get proportional columns / measured
+  row heights and split with the header repeated, and a third plain bullet slide in a row changes shape.
+- **Slide kinds:** cover, section (numbered), bullets (+ picture), cards, stats, timeline, quote, table, two-column,
+  agenda, comparison, full-bleed picture, gallery (2-3 pictures) and **native, editable charts** (`chart: bar|hbar|line|pie`
+  + `Label: number` bullets or a table). Palette and fonts are written into the PowerPoint theme; footer and slide number
+  are real placeholders; `font: Arial` switches the whole deck's font.
+- **Pictures:** an `image: <subject> | source=search|generate` line asks for one. Web first (the user's web switch must be
+  on; the subject is matched to the deck title, thumbnail / stock / shop sites are skipped, results must mention the topic),
+  then the local image model **only if it is already loaded** (never auto-loaded, never cloud). Web pictures carry a credit
+  line on the slide and the source URL in the speaker notes. Lookups run concurrently inside a time budget; a picture that
+  cannot be found leaves a text slide and a note, never a failed build.
+- **PDFs:** cover page and contents (long documents), "Page N of M" footer, headings kept with their text, table headers
+  repeated on every page, inline-SVG charts, embedded pictures, Bengali fonts (also in the no-browser fallback).
+- **Checks, returned in the tool result:** a layout check of every finished deck (text overflow, shapes off the slide,
+  overlaps, text under 11 pt, low contrast) and a PDF check (blank / almost-empty pages, stranded headings).
+  `tests/test_deck_benchmark.py` builds nine varied decks in all six themes and requires them to be lint-clean.
+- **Kill switches** (`config/app.json` → `chat`): `"deck_images": false` turns picture lookup off (the `image:` lines are
+  then ignored), `"deck_checks": false` turns the layout / PDF checks off. Both default to on.
+- **Not verifiable here:** how PowerPoint itself draws a deck (no renderer on the build machine; the check is a
+  measurement proxy), and the factual accuracy of what the model writes.
 
 ## Setup on a new machine
 

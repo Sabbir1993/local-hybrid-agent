@@ -4,6 +4,19 @@ Entries are kept short on purpose: this is a local single-dev project and long
 per-commit prose rots faster than it helps. Versioning starts where the repo
 has a tag or release; until then, dates + headline changes.
 
+## 2026-10-14 — decks and PDFs: charts, pictures, measured layout, checks
+
+- Slides: native charts, comparison / agenda / gallery / numbered-section layouts, pictures (web first, a loaded local
+  image model second, topic-matched, credited), text measured on real fonts with splitting instead of overflow, tables that
+  fit, palette and fonts in the PowerPoint theme, real footer / slide-number placeholders, template mode with tables and
+  pictures. PDFs: cover, contents, page numbers, repeating table headers, charts, pictures, Bengali.
+- Checks: deck layout lint and PDF check are appended to the tool result; a fixed benchmark keeps all themes lint-clean.
+- Robustness: a slide that fails to render becomes a plain slide, theme polish and checks are never fatal, picture lookups
+  are concurrent with a time budget and a 40 MB cache cap, the build plan is PAN-checked, and
+  `chat.deck_images` / `chat.deck_checks` switch the optional steps off.
+- Also: up to 14 GPUs with per-GPU tensor-split slots, 12-character minimum passwords, account menu fix, Settings theme
+  applies instantly, ask-the-questionnaire-once for deck / PDF requests. Needs a server restart.
+
 ## 2026-10-08 — preview of server-generated PDFs / HTML / images from agent tool cards
 
 - A tool card's 👁 Preview says "workspace" (the user's device), but files the server generates (PDF, Office, images)
