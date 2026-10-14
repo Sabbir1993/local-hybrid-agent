@@ -259,6 +259,14 @@ built in pieces with a live preview). What the builders do beyond writing text:
 - **Checks, returned in the tool result:** a layout check of every finished deck (text overflow, shapes off the slide,
   overlaps, text under 11 pt, low contrast) and a PDF check (blank / almost-empty pages, stranded headings).
   `tests/test_deck_benchmark.py` builds nine varied decks in all six themes and requires them to be lint-clean.
+- **Several decks in one chat:** a new deck without a `theme:` line inherits the look (theme, accent, font) of the user's
+  last deck for 8 hours (`"deck_keep_style": false` turns it off); an explicit `theme:` wins. To change an EARLIER deck,
+  name it ("edit Dhaka_Deep_Dive…pptx", "the Dhaka deck", "the previous presentation", "the pdf"): the chat picks that
+  file's newest version instead of always the newest file (`routes/chat/file_intent.py: pick_target`). A deck the user
+  attaches can be edited the same way.
+- **`write_file` and `doc_create` are the same pipeline:** a deck or PDF the model writes with `write_file` also gets the
+  session style, pictures from `image:` lines and the layout / PDF check. Model clutter is never a slide: ASCII-art
+  boxes, pasted XML and slides about the deck itself ("Design notes", "Image sources") are dropped by the outline parser.
 - **Kill switches** (`config/app.json` → `chat`): `"deck_images": false` turns picture lookup off (the `image:` lines are
   then ignored), `"deck_checks": false` turns the layout / PDF checks off. Both default to on.
 - **Not verifiable here:** how PowerPoint itself draws a deck (no renderer on the build machine; the check is a

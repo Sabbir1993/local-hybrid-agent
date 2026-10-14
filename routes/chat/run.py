@@ -61,6 +61,7 @@ from .file_intent import (
     file_followup_intent,
     load_prior_file,
     looks_undelivered,
+    pick_target,
     session_files,
     shrink_old_tool_results,
     wants_file_output,
@@ -147,9 +148,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if file_followup == "where":
         # "where is the file?" - answer with the existing link instead of
         # asking a slow local model to regenerate (and usually invent) it.
-        latest = prior_files[-1]
-        others = prior_files[:-1][-3:]
-        reply = f"Here is the latest file created in this chat:\n\n[DOWNLOAD: {latest}]"
+        latest = pick_target(own_q, prior_files)
+        others = [f for f in prior_files if f != latest][-3:]
+        reply = f"Here is the file you asked about:\n\n[DOWNLOAD: {latest}]"
         if others:
             reply += "\n\nEarlier files from this chat:\n\n" + "\n".join(f"[DOWNLOAD: {f}]" for f in reversed(others))
         reply += ("\n\nIf you asked for changes after this file and they aren't in it, tell me what to "
@@ -406,10 +407,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         sys_labels.append("attached-data")
 
     if prior_files:
-        latest = prior_files[-1]
+        latest = pick_target(own_q, prior_files)           # the file the user means: named, or the newest
         prior_block = (
             "FILES IN THIS CONVERSATION (attached by the user or created here, oldest first): " + ", ".join(prior_files[-5:]) + "\n"
-            f"The most recent file is `{latest}`. If the user asks where a file is, give its "
+            f"{'The most recent file is' if latest == prior_files[-1] else 'The file the user means is'} `{latest}`. "
+            f"If the user asks where a file is, give its "
             f"[DOWNLOAD: filename] link - do not regenerate it.")
         if file_followup == "edit" and Path(latest).suffix.lower() in _DOC_EDIT_EXTS:
             outline = await run_in_executor_ctx(tool_doc_inspect_common, {"file": latest})
@@ -1122,7 +1124,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                 made_media, args.get("path") or args.get("file") or args.get("filename"), last_query):
                             res_str = _WRAP_REFUSAL
                         elif t_name == "write_file":
-                            res_str = tool_write_file_common(args)
+                            # off the event loop: a deck / PDF written here may look up pictures (web, image model)
+                            res_str = await run_in_executor_ctx(tool_write_file_common, args)
                             p_name = args.get("path") or args.get("file") or args.get("filename")
                             # a failed write must not contribute a download link: every
                             # written_files entry later becomes a [DOWNLOAD:] marker, which

@@ -7,6 +7,44 @@ from .pdf_render import _save_text_or_markdown_as_pdf
 from .workspace import MAX_EDIT_BYTES, _common_resolve
 
 
+def _run_blocking(factory):
+    """Run an async step from this sync tool. Called from a worker thread (the chat route does that) it just runs; called
+    from inside a running event loop it runs on a helper thread with the same context, so the caller waits but nothing
+    deadlocks on the loop it is standing on."""
+    import asyncio
+    import contextvars
+    from concurrent.futures import ThreadPoolExecutor
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(factory())
+    ctx = contextvars.copy_context()
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(ctx.run, asyncio.run, factory()).result()
+
+
+def _prepare(ext: str, content: str) -> tuple:
+    """(content, images, note) for a deck / PDF: the session's style and the pictures its `image:` lines ask for. Never
+    raises: on any failure the document is written as it was."""
+    try:
+        from ..doc_tools import operations as ops
+        return _run_blocking(lambda: ops.prepare_build(ext, content, get_current_user_id()))
+    except Exception as e:
+        import sys
+        print(f"[write_file] picture / style step skipped ({type(e).__name__}: {e})", file=sys.stderr)
+        return content, {}, ""
+
+
+def _after_build(ext: str, data: bytes, content: str, extra: str) -> str:
+    """Picture notes and the layout / PDF check, as one extra sentence for the tool result."""
+    try:
+        from ..doc_tools import operations as ops
+        note = ops._layout_note(ext, data, content)
+    except Exception:
+        note = ""
+    return (" " + extra if extra else "") + (" " + note if note else "")
+
+
 def tool_write_file_common(args: dict) -> str:
     path_arg = args.get("path") or args.get("file") or args.get("filename")
     if not path_arg and args.get("content"):
@@ -69,20 +107,26 @@ def tool_write_file_common(args: dict) -> str:
         if sfx in (".ppt", ".doc"):
             p = p.with_suffix(sfx + "x")
             unique_path_arg = p.name
+        extra = ""
+        images: dict = {}
         try:
-            data, spec = doc_ops.create(p.name, content)
+            if p.suffix == ".pptx":
+                content, images, extra = _prepare(".pptx", content)
+            data, spec = doc_ops.create(p.name, content, images=images or None)
         except DocOpError as e:
             return f"error: {e}"
         p.write_bytes(data)
         kind = "PowerPoint presentation" if p.suffix == ".pptx" else "Word document"
         msg = f"Wrote {kind} to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+        msg += _after_build(p.suffix, data, content, extra)
 
     # Handle .pdf conversion if writing to a PDF file (via HTML DOM first)
     elif sfx == ".pdf":
         if not content.strip():
             return ("error: refusing to create an empty PDF - provide the document content "
                     "(markdown or an HTML document).")
-        if not _save_text_or_markdown_as_pdf(p, content):
+        content, images, extra = _prepare(".pdf", content)
+        if not _save_text_or_markdown_as_pdf(p, content, images=images or None):
             if p.is_file():
                 p.unlink()
             return ("error: the PDF could not be compiled (Chrome/Edge missing or the render "
@@ -90,6 +134,7 @@ def tool_write_file_common(args: dict) -> str:
                     "HTML, or try again.")
         spec = content
         msg = f"Wrote compiled PDF document to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+        msg += _after_build(".pdf", p.read_bytes(), content, extra)
 
     else:
         p.write_text(content, encoding="utf-8")

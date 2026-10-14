@@ -76,6 +76,53 @@ def session_files(msgs: list) -> list:
     return seen
 
 
+def _norm_name(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[-_.]+", " ", str(text or "").lower())).strip()
+
+
+_TYPE_WORDS = (
+    (r"pdf", (".pdf",)),
+    (r"sheet|spreadsheet|excel|xlsx|csv", (".xlsx", ".csv")),
+    (r"word|docx|document", (".docx",)),
+    (r"deck|ppt|pptx|powerpoint|presentation|slides?", (".pptx",)),
+)
+
+
+def pick_target(query: str, files: list) -> str:
+    """Which of this chat's files an edit / "where is it" request is about. The old rule was always the newest one, so a
+    user with three decks in a chat could not change the first. Order of evidence:
+    1. the message names a file (its name, or its name without the version / id suffix) -> that file's newest version;
+    2. a word that only ONE deck's name contains ("the Dhaka deck") -> that deck's newest version;
+    3. a type word ("the pdf", "the presentation"), with "previous / earlier / other" picking the one before the newest;
+    4. otherwise the newest file."""
+    if not files:
+        return ""
+    from core import doc_store
+    q = _norm_name(query)
+    bases: dict = {}
+    for f in files:                                           # oldest first -> the last entry per base is its newest
+        bases.setdefault(doc_store.base_stem(f), []).append(f)
+    for f in reversed(files):
+        for cand in (f, Path(f).stem, doc_store.base_stem(f)):
+            c = _norm_name(cand)
+            if len(c) >= 4 and c in q:
+                return bases[doc_store.base_stem(f)][-1]
+    words = {b: {w for w in _norm_name(b).split() if len(w) >= 4} for b in bases}
+    qwords = set(q.split())
+    for b, ws in words.items():
+        others = set().union(*[v for k, v in words.items() if k != b]) if len(words) > 1 else set()
+        if (ws - others) & qwords:
+            return bases[b][-1]
+    for rx, exts in _TYPE_WORDS:
+        if re.search(r"\b(?:" + rx + r")\b", q):
+            same = [f for f in files if Path(f).suffix.lower() in exts]
+            if same:
+                if len(same) > 1 and re.search(r"\b(previous|earlier|older|before|other|first)\b", q):
+                    return same[-2] if "first" not in q else same[0]
+                return same[-1]
+    return files[-1]
+
+
 def file_followup_intent(query: str, has_prior: bool) -> Optional[str]:
     """'where' = user can't find / wants the existing file again;
     'edit' = user wants the existing file changed. None otherwise."""

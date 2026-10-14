@@ -31,6 +31,16 @@ _META = re.compile(
 _FOOTER_META = re.compile(
     r"^(end of (?:the )?(?:presentation|deck|slides?)|total slides?.*|estimated (?:presentation )?time.*|"
     r"format\s*:.*(?:markdown|pptx|powerpoint|convert).*|\(?end\)?)$", re.I)
+# What models paste into a deck that is not deck content: ASCII-art boxes (draw as garbage in a text box) and raw XML
+# (they sometimes dump the package parts they just inspected). Those lines are dropped before anything is parsed.
+_ASCII_ART = re.compile("[\u2500-\u259F]")
+_XML_LINE = re.compile(r"^\s*<(\?xml|/?[A-Za-z][\w.-]*:[\w.-]+|presentation\b|sldLayout\b|sldMaster\b)")
+# Slides ABOUT the deck rather than FOR the audience ("Design Notes for This Deck", "Image Sources Used")
+_META_SLIDE = re.compile(
+    r"^(?:design|layout|visual|production|speaker|build|style|image|photo|picture)s?\s+"
+    r"(?:notes?|sources?|credits?|urls?|references?|guide|instructions?|used|applied)\b"
+    r"|^(?:notes?|instructions?)\s+(?:for|on|about)\s+(?:this|the)\s+(?:deck|presentation|slides?)\b"
+    r"|^about\s+this\s+(?:deck|presentation)\b", re.I)
 _EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍⃣]")
 _ARROW_ONLY = re.compile(r"^[\s↓↑→←⇒⇓⬇▼▲|│┃:·.\-–—]+$")
 _CHECKBOX = re.compile(r"^\[[ xX✓✔]?\]\s*")
@@ -234,6 +244,8 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
         st = raw.strip()
         if not st or st.startswith("```"):
             continue
+        if _ASCII_ART.search(st) or _XML_LINE.match(st):
+            continue
         if re.match(r"^([-*_])\1{2,}$", st) or re.match(r"^-{3,}\s*$", st):
             flush()
             continue
@@ -344,6 +356,7 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
 def _finish(deck: dict, slides: list, deck_title: str) -> dict:
     title = pretty_title(deck_title)
     slides = [s for s in slides if not _empty(s)]
+    slides = [s for i, s in enumerate(slides) if i == 0 or not _META_SLIDE.match((s["title"] or "").strip())]
     # slides without a title belong to the previous one (a 1-line-per-slide dump collapses here)
     merged: list[dict] = []
     for s in slides:

@@ -14,6 +14,9 @@ has a tag or release; until then, dates + headline changes.
 - Robustness: a slide that fails to render becomes a plain slide, theme polish and checks are never fatal, picture lookups
   are concurrent with a time budget and a 40 MB cache cap, the build plan is PAN-checked, and
   `chat.deck_images` / `chat.deck_checks` switch the optional steps off.
+- Several decks per chat: a new deck keeps the last deck's look (`chat.deck_keep_style`), an edit can name a specific deck
+  (`pick_target`), `write_file` decks get the same pictures / style / checks as `doc_create` (it runs off the event loop),
+  and pasted XML, ASCII-art boxes and "Design notes" / "Image sources" slides are dropped by the outline parser.
 - Also: up to 14 GPUs with per-GPU tensor-split slots, 12-character minimum passwords, account menu fix, Settings theme
   applies instantly, ask-the-questionnaire-once for deck / PDF requests. Needs a server restart.
 

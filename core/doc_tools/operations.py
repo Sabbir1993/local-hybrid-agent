@@ -1,5 +1,6 @@
 import base64
 import re
+import time
 from pathlib import Path
 from .. import companion_bridge, doc_ops, doc_store
 from ..agent_tools import _common_resolve, _ws_resolve, require_device_workspace
@@ -70,15 +71,10 @@ async def _create(args: dict, location: str) -> str:
     uid = _uid()
     if args.get("plan"):
         doc_ops._check_ops_for_pan([{"op": "create", "content": str(args["plan"])}])      # the plan is echoed back to the model
-    images, pic_note = {}, ""
     ext_ = Path(name).suffix.lower()
-    pictures_on = _flag("deck_images")
-    if pictures_on and ext_ == ".pptx" and not template and slide_images.wants_images(content):
-        images, pic_notes, used_web = await slide_images.resolve(content, uid)
-        pic_note = slide_images.summary(images, pic_notes, used_web)
-    elif pictures_on and ext_ == ".pdf" and not args.get("total") and slide_images.wants_images(content):
-        images, pic_notes, used_web = await slide_images.resolve_pdf(content, uid)       # a PDF built in pieces is printed on done
-        pic_note = slide_images.summary(images, pic_notes, used_web)
+    # a PDF built in pieces is printed on its last doc_append, so its pictures are looked up then
+    content, images, pic_note = await prepare_build(ext_, content, uid, template=bool(template),
+                                                    partial=bool(args.get("total")))
     data, spec = doc_ops.create(name, content, template=template, images=images)
     if location == "device":
         dev_uid, _ws = require_device_workspace()
@@ -147,6 +143,50 @@ def _plan_note(key: tuple, have: int, built_titles: list, done: bool) -> str:
 # after a restart the count check is simply off, the document itself is unaffected.
 _BUILD_TOTAL: dict = {}
 _APPENDABLE = (".pptx", ".docx", ".pdf")
+
+
+# Style memory: the theme / accent / font of the last deck a user built, so the NEXT deck in the same working session looks
+# like the last one instead of falling back to the default palette whenever the model leaves the `theme:` line out. An
+# explicit `theme:` in a new deck always wins (and becomes the new memory). Forgotten after a few hours.
+_LAST_STYLE: dict = {}
+_STYLE_TTL_S = 8 * 3600
+
+
+def _inherit_style(uid, ext: str, content: str) -> str:
+    if ext != ".pptx" or uid is None or not _flag("deck_keep_style"):
+        return content
+    from ..doc_ops.pptx_ops import outline
+    deck = outline.parse_outline(content)
+    now = time.time()
+    if deck.get("theme") or deck.get("hint"):
+        t = outline.resolve_theme(deck)
+        _LAST_STYLE[uid] = {"theme": t["name"], "accent": deck.get("accent", ""), "font": deck.get("font", ""), "ts": now}
+        return content
+    last = _LAST_STYLE.get(uid)
+    if not last or now - last["ts"] > _STYLE_TTL_S:
+        return content
+    lines = [f"theme: {last['theme']}"]
+    if last["accent"] and not deck.get("accent"):
+        lines.append(f"accent: {last['accent']}")
+    if last["font"] and not deck.get("font"):
+        lines.append(f"font: {last['font']}")
+    return "\n".join(lines) + "\n" + content
+
+
+async def prepare_build(ext: str, content: str, uid, *, template: bool = False, partial: bool = False) -> tuple:
+    """What every route that writes a deck / PDF does first: keep the session's look, then look up the pictures its
+    `image:` lines ask for. -> (content, images, note). Shared by doc_create and write_file, so a deck gets the same
+    pictures, style and checks whichever tool the model happened to use."""
+    content = _inherit_style(uid, ext, content)
+    images, note = {}, ""
+    if uid is not None and _flag("deck_images") and slide_images.wants_images(content):
+        if ext == ".pptx" and not template:
+            images, notes, used_web = await slide_images.resolve(content, uid)
+            note = slide_images.summary(images, notes, used_web)
+        elif ext == ".pdf" and not partial:
+            images, notes, used_web = await slide_images.resolve_pdf(content, uid)
+            note = slide_images.summary(images, notes, used_web)
+    return content, images, note
 
 
 def _flag(name: str, default: bool = True) -> bool:
