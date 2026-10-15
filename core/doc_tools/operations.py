@@ -5,7 +5,7 @@ from pathlib import Path
 from .. import companion_bridge, doc_ops, doc_store
 from ..agent_tools import _common_resolve, _ws_resolve, require_device_workspace
 from ..doc_ops.base import sha256
-from . import slide_images
+from . import builds, slide_images
 from .location import (
     _Loc,
     _file_arg,
@@ -103,10 +103,12 @@ async def _create(args: dict, location: str) -> str:
             msg += " " + note
     if args.get("total") and target.suffix.lower() in _APPENDABLE:
         try:
-            _BUILD_TOTAL[(uid if location == "common" else dev_uid, key)] = max(1, min(int(args["total"]), 30))
+            bkey = (uid if location == "common" else dev_uid, key)
+            _BUILD_TOTAL[bkey] = max(1, min(int(args["total"]), 30))
             plan = _parse_plan(args.get("plan"))
             if plan:
-                _BUILD_PLAN[(uid if location == "common" else dev_uid, key)] = plan
+                _BUILD_PLAN[bkey] = plan
+            builds.save(bkey[0], key, total=_BUILD_TOTAL[bkey], plan=plan or None, have=_unit_count(target.suffix.lower(), spec))
             msg += (f" It has {_unit_count(target.suffix.lower(), spec)} of {int(args['total'])}: add the rest in small "
                     f"steps with doc_append(file='{target.name}', content=<next 2-3 slides/sections>), then done=true.")
         except (TypeError, ValueError):
@@ -129,14 +131,31 @@ def _parse_plan(text: str) -> list:
     return out[:30]
 
 
+def _plan_for(key: tuple) -> list:
+    if key not in _BUILD_PLAN:
+        b = builds.load(key[0], str(key[1]))
+        if b and b["plan"]:
+            _BUILD_PLAN[key] = b["plan"]
+    return _BUILD_PLAN.get(key) or []
+
+
+def _total_for(key: tuple):
+    if key not in _BUILD_TOTAL:
+        b = builds.load(key[0], str(key[1]))
+        if b and b["total"]:
+            _BUILD_TOTAL[key] = b["total"]
+    return _BUILD_TOTAL.get(key)
+
+
 def _plan_note(key: tuple, have: int, built_titles: list, done: bool) -> str:
-    plan = _BUILD_PLAN.get(key)
+    plan = _plan_for(key)
     if not plan:
         return ""
     if done:
         have_l = " | ".join(t.lower() for t in built_titles)
         missing = [t for t, _ in plan if t.lower() not in have_l]
         _BUILD_PLAN.pop(key, None)
+        builds.close(key[0], str(key[1]))
         return (f"Planned but not found in the deck: {', '.join(missing[:6])}." if missing else "")
     nxt = plan[have:have + 3]
     if not nxt:
@@ -144,8 +163,8 @@ def _plan_note(key: tuple, have: int, built_titles: list, done: bool) -> str:
     return "Next in your plan: " + "; ".join(f"{have + i + 1}. {t}" + (f" - {p}" if p else "") for i, (t, p) in enumerate(nxt)) + "."
 
 
-# Build-in-pieces bookkeeping: (uid, file key) -> slide/section count the user asked for. In memory on purpose:
-# after a restart the count check is simply off, the document itself is unaffected.
+# Build-in-pieces bookkeeping: (uid, file key) -> slide/section count the user asked for. The dicts are a cache over
+# builds.py (projects.db), so a restart no longer loses the count or the plan.
 _BUILD_TOTAL: dict = {}
 _APPENDABLE = (".pptx", ".docx", ".pdf")
 
@@ -309,7 +328,7 @@ async def _append(args: dict, location: str) -> str:
     new_spec = spec.rstrip()
     if content:
         new_spec += ("\n\n---\n\n" if ext == ".pptx" else "\n\n") + content
-    have, total = _unit_count(ext, new_spec), _BUILD_TOTAL.get(key)
+    have, total = _unit_count(ext, new_spec), _total_for(key)
     if done and total and have < total:
         raise ValueError(f"not finished: {have} of {total} {'slides' if ext == '.pptx' else 'sections'} so far - "
                          "keep adding with doc_append (done=true only after the last one)")
@@ -331,6 +350,8 @@ async def _append(args: dict, location: str) -> str:
         await _write(loc, loc.path, out)
     doc_store.register(loc.uid, loc.key, ext.lstrip("."), location=loc.location,
                        parent_id=row["id"] if row else None, source_spec=new_spec, sha256=sha256(out))
+    if total and not done:
+        builds.save(key[0], str(key[1]), total=total, have=have)
     unit = "slides" if ext == ".pptx" else "sections"
     msg = f"Added to {loc.path.name}: now {have} {unit}" + (f" of {total}." if total else ".")
     plan_note = _plan_note(key, have, _built_titles(ext, new_spec), done)
@@ -338,6 +359,7 @@ async def _append(args: dict, location: str) -> str:
         msg += " " + plan_note
     if done:
         _BUILD_TOTAL.pop(key, None)
+        builds.close(key[0], str(key[1]))
         bad = _leftover_markup(ext, new_spec)
         msg += " Finished" + (" - fix these with doc_edit set_text: " + "; ".join(bad[:5]) if bad else ".")
     elif total and have < total:

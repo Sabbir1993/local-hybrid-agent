@@ -34,6 +34,7 @@ from core.agent_loop import (
 )
 from core.agent_loop.degeneration import RUNAWAY_MSG
 from core import prompt_scope
+from core.doc_tools import builds
 from core.monitor import (
     _monitor_state,
     monitor_begin,
@@ -171,7 +172,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                    and bool(prompt_scope._PPTX_RE.search(prev_assistant)))
     pdf_build = prompt_scope.pdf_brief_wanted(last_query, msgs[:-1])      # a PDF request, or the answers to our PDF card
     brief_phase = prompt_scope.brief_phase(last_query, msgs[:-1])         # "ask" (card now) / "build" (answered) / ""
-    wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or pdf_build
+    resume_note = builds.resume_note(user.id, last_query)                 # "continue" after a stop / restart mid-deck
+    wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or pdf_build or bool(resume_note)
     has_file = bool(file_followup or wants_file)
     web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
                                                             explicit_only=voice_policy.web_explicit_only(req),
@@ -498,6 +500,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if brief_phase:
         sys_parts.append(prompt_scope.BRIEF_BUILD_NOW if brief_phase == "build" else prompt_scope.BRIEF_ASK_NOW)
         sys_labels.append("brief-" + brief_phase)
+    if resume_note:
+        sys_parts.append(resume_note)
+        sys_labels.append("build-resume")
 
     # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat"
     chat_cfg = APP_CONFIG.get("chat") or {}
