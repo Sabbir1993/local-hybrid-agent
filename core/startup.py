@@ -168,6 +168,13 @@ async def lifespan(app: FastAPI):
     # build the routing classifier off the request path so its first use is not a cold load
     import threading
     threading.Thread(target=routing_classifier.warm, name="laya-warm", daemon=True).start()
+    try:
+        from core import kb_queue
+        resumed = await kb_queue.resume_interrupted()      # large KB files that were mid-ingest when the server stopped
+        if resumed:
+            print(f"[server_manager] re-queued {resumed} interrupted knowledge ingest(s)")
+    except Exception as e:
+        print(f"[server_manager] could not resume knowledge ingests: {e}", file=sys.stderr)
     memory_task = asyncio.create_task(memory_background_task())
     tuner_task = asyncio.create_task(tuner_background_task())
     yield

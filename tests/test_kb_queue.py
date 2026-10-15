@@ -90,6 +90,36 @@ class OrphanTests(unittest.TestCase):
         self.assertEqual(status.call_args[0][:2], (1, "error"))
 
 
+class ResumeTests(unittest.TestCase):
+    def test_interrupted_sources_are_queued_again_or_marked_failed(self):
+        import tempfile
+        from pathlib import Path
+        reset_queue()
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "big.pdf"
+            f.write_bytes(b"x")
+            rows = [{"id": 11, "status": "processing", "kind": "file", "stored_path": str(f), "origin": "big.pdf"},
+                    {"id": 12, "status": "processing", "kind": "url", "stored_path": None, "origin": "http://example.test/a"},
+                    {"id": 13, "status": "processing", "kind": "file", "stored_path": str(Path(d) / "gone.pdf"), "origin": "x"},
+                    {"id": 14, "status": "ready", "kind": "file", "stored_path": str(f), "origin": "y"}]
+            queued = []
+
+            async def fake_queue_file(sid, path, user):
+                queued.append(("file", sid))
+
+            async def fake_enqueue(sid, load, user):
+                queued.append(("url", sid))
+
+            async def go():
+                with mock.patch("core.auth_db.list_knowledge_sources", return_value=rows),                         mock.patch("routes.knowledge.helpers._queue_file", fake_queue_file),                         mock.patch.object(kb_queue, "enqueue", fake_enqueue),                         mock.patch("core.auth_db.update_knowledge_source_status") as status:
+                    return await kb_queue.resume_interrupted(), status
+            n, status = asyncio.run(go())
+        self.assertEqual(n, 2)
+        self.assertEqual(queued, [("file", 11), ("url", 12)])
+        status.assert_called_once()
+        self.assertEqual(status.call_args[0][:2], (13, "error"))
+
+
 class CacheThrottleTests(unittest.TestCase):
     def _db(self):
         fake_db = mock.Mock()
