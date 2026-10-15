@@ -19,6 +19,7 @@ AGENT_LIMITS = {
     "plan_item_max_chars": (300, 60, 1000),
     "plan_item_max_steps": (25, 5, 100),
     "python_prompt_nudge": (4, 3, 20),
+    "gen_timeout_s": (900, 60, 7200),     # one model generation (any flow); the run budgets only count between steps
 }
 CONTEXT_LIMITS = {
     "compaction_threshold": (0.70, 0.3, 0.95),

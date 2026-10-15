@@ -6,6 +6,7 @@ from pathlib import PurePosixPath
 from ..agent_tools import TOOL_IMPLS
 from ..registry import registry
 from ..request_context import PERSONAL_BLOCKED_TOOLS, personal_scope, run_in_executor_ctx, tool_allowed
+from .degeneration import RUNAWAY_MSG
 from .repair import validate_and_repair_tool_args
 from . import schema_check
 from .sandbox import fast_sandbox_check
@@ -16,6 +17,8 @@ async def run_tool(name: str, args: dict, unique_done: bool = False) -> str:
     # sandbox and the custom agent's tool allowlist are enforced here too
     if not tool_allowed(name):
         return f"error: tool '{name}' is not enabled for the active custom agent"
+    if isinstance(args, dict) and args.get("_runaway"):
+        return RUNAWAY_MSG        # the stream guard cut this call while it was looping: never run it
     if personal_scope():
         refusal = _personal_refusal(name, args or {})
         if refusal:

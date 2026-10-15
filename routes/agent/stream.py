@@ -68,6 +68,7 @@ from core import hooks as _hooks
 from core.agent_loop import doc_redirect as _doc_redirect
 from core.pan import mask_pans as _mask_pans
 from core.agent_tools.git_agent_tools import GIT_GATED_TOOLS, command_for as _git_command_for
+from core.agent_loop.degeneration import RUNAWAY_MSG
 from core.agent_loop.narration import _is_narration
 from core.agent_loop.executor_view import build_executor_view
 from core.agent_loop.finish import apply_finish, without_finish
@@ -1330,6 +1331,8 @@ async def run_agent_stream(req, user, ctx):
                         # off mid-JSON). Keep the reason: nothing runs, and the model is told why
                         # instead of being asked to approve a call that was never valid.
                         arg_errors[tc_id] = val_err
+                    if isinstance(args, dict) and args.get("_runaway"):
+                        arg_errors[tc_id] = RUNAWAY_MSG       # cut by the stream guard while looping: nothing runs
 
                     # For history retention in msgs, prune large payloads to lightweight stubs
                     # so future turns do not re-ingest tens of thousands of raw code characters

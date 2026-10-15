@@ -32,6 +32,7 @@ from core.agent_loop import (
     _extract_text_tool_calls,
     estimate_prompt_tokens,
 )
+from core.agent_loop.degeneration import RUNAWAY_MSG
 from core import prompt_scope
 from core.monitor import (
     _monitor_state,
@@ -564,6 +565,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                  model=clean_model_name, source=model_source, provider=model_provider)
         run_id = uuid.uuid4().hex
         run_end_state, run_end_reason, turn = "completed", None, -1
+        runaway_hits = 0
         runs.begin(run_id, "chat", user.id, stage="stream")
         t0 = time.time()
         turn_limit = max_turns       # grows by one if a continuation nudge needs it
@@ -605,6 +607,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             while True:
                 turn += 1
                 if turn >= turn_limit:
+                    break
+                run_cap = float(chat_cfg.get("run_timeout_s", 1800) or 0)
+                if run_cap and turn and time.time() - t0 > run_cap:
+                    run_end_reason = "timeout"      # chat had no wall-clock stop: the tool-free wrap-up below answers
                     break
                 # Turn 0 proactive URL fetch: if user specifically asks to summarize or inspect a URL
                 if turn == 0 and use_web and chat_tools and url_matches and tool_allowed("web_fetch"):
@@ -1093,7 +1099,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     yield sse("tool_call", {'id': tc_id, 'name': t_name, 'args': args})
 
                     try:
-                        if not tool_allowed(t_name):
+                        if args.get("_runaway"):
+                            # the stream guard cut this call while it was looping: never run it, ask once more, then stop
+                            runaway_hits += 1
+                            res_str = RUNAWAY_MSG
+                            if runaway_hits > int(chat_cfg.get("runaway_retries", 2)):
+                                turn_limit = turn + 1
+                                res_str += ". Stop retrying: summarise what is done so far in plain text"
+                        elif not tool_allowed(t_name):
                             # text-parsed calls can name any tool; the schema filter isn't enough
                             res_str = f"error: tool '{t_name}' is not enabled for the active custom agent"
                         elif t_name in WEB_TOOL_NAMES and web_calls >= max_web_calls:

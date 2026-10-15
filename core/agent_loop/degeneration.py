@@ -55,3 +55,45 @@ def sanitize_user_facing_content(text: str) -> str:
     text = text.replace("<![CDATA[", "").replace("]]>", "")
     text = re.sub(r"```(?:json)?\s*\{\s*\"name\"\s*:\s*\"(?:write_file|edit_file|read_file|list_files|run_python)\"[\s\S]*?\}\s*```", "", text)
     return text.strip()
+
+
+_SEP_LINE = re.compile(r"^[\s\-=_*#|:+.~`>]*$")
+RUNAWAY_MSG = ("error: your output started repeating itself and was cut off. Write it again shorter, "
+               "without repeating phrases, lines or URLs")
+
+
+def find_runaway(text: str, window: int = 6000) -> int:
+    """Index to cut `text` at when its tail has clearly started to loop, else -1.
+
+    Stricter than is_degeneration_or_loop (which also fires on a phrase seen three times) so that real
+    outlines, tables and slide lists never trip it: a 40+ character phrase with real words that occurs six
+    times inside the last `window` characters, or six identical consecutive non-separator lines. The cut
+    keeps one copy of the repeated text."""
+    if not text or len(text) < 400:
+        return -1
+    base = max(0, len(text) - window)
+    tail = text[base:]
+    lines = tail.split("\n")
+    run, pos = 1, 0
+    starts = []
+    for ln in lines:
+        starts.append(pos)
+        pos += len(ln) + 1
+    for i in range(1, len(lines)):
+        cur = lines[i].strip()
+        if cur and len(cur) >= 8 and cur == lines[i - 1].strip() and not _SEP_LINE.match(cur):
+            run += 1
+            if run >= 6:
+                return base + starts[i - run + 2]       # keep the first copy
+        else:
+            run = 1
+    for plen in (40, 70, 120, 200):
+        if len(tail) < plen * 6:
+            continue
+        phrase = tail[-plen:]
+        if len(re.findall(r"[A-Za-zঀ-৿0-9]{2,}", phrase)) < 5:
+            continue
+        if tail.count(phrase) >= 6:
+            first = tail.find(phrase)
+            return base + first + plen                   # keep the first copy
+    return -1

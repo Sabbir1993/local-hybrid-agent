@@ -3,6 +3,7 @@ import re
 import time
 from typing import Optional
 from core.monitor import monitor_token
+from core.small_model import APP_CONFIG
 
 from .think_splitter import ThinkSplitter, _emit_split
 
@@ -30,7 +31,25 @@ def _oversize_write(name: str, path: str, args_str: str) -> bool:
     return len(args_str) > agent_limit("write_file_max_tokens") * CHARS_PER_TOKEN * 1.3
 
 
+RUNAWAY_STEP = 2000     # re-check an accumulator each time it has grown by this many characters
+
+
+def _runaway_on() -> bool:
+    return (APP_CONFIG.get("agent") or {}).get("runaway_guard", True) is not False
+
+
+def _gen_timeout() -> float:
+    from core.agent_tools.limits import agent_limit
+    return float(agent_limit("gen_timeout_s"))
+
+
 async def _process_sse_stream(response, rid: Optional[int] = None):
+    from core.agent_loop.degeneration import find_runaway
+    guard_on = _runaway_on()
+    gen_limit = _gen_timeout()
+    started = time.time()
+    checked = {"content": 0, "reasoning": 0}
+    runaway = None          # "content" | "reasoning" | ("tool", idx) | "timeout"
     content_acc = []
     reasoning_acc = []
     accumulated_tcs = {}
@@ -63,6 +82,9 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
         if choices[0].get("finish_reason"):
             finish_reason = choices[0]["finish_reason"]
         delta = choices[0].get("delta") or {}
+        if gen_limit and time.time() - started > gen_limit:
+            runaway = "timeout"
+            break
 
         r_chunk = delta.get("reasoning_content")
         if r_chunk:
@@ -119,8 +141,28 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
             if _oversize_write(cur_fn_name, tc_meta["path"], cur_args_str):
                 oversize_idx = idx
                 break
+            if guard_on and len(cur_args_str) - tc_meta.get("checked", 0) >= RUNAWAY_STEP:
+                tc_meta["checked"] = len(cur_args_str)
+                if find_runaway(cur_args_str.replace("\\n", "\n")) >= 0:
+                    runaway = ("tool", idx)
+                    break
         if oversize_idx is not None:
             break   # closing the stream stops the model generating text the write tool would only reject
+        if runaway is not None:
+            break
+        if guard_on:
+            for kind, acc in (("content", content_acc), ("reasoning", reasoning_acc)):
+                n = sum(len(x) for x in acc)
+                if n - checked[kind] >= RUNAWAY_STEP:
+                    checked[kind] = n
+                    text = "".join(acc)
+                    cut = find_runaway(text)
+                    if cut >= 0:
+                        acc[:] = [text[:cut]]
+                        runaway = kind
+                        break
+            if runaway is not None:
+                break
 
     for item in _emit_split(think, think.flush(), content_acc, reasoning_acc, rid):
         yield item
@@ -132,6 +174,10 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
         tc["function"]["arguments"] = json.dumps({"path": _arg_path(tc["function"]["arguments"]),
                                                   "content": "", "_oversize_tokens": _est_args_tokens(
                                                       tc["function"]["arguments"])})
+    if isinstance(runaway, tuple):
+        # a looping tool call must not run: valid JSON the dispatchers turn into RUNAWAY_MSG
+        tc = accumulated_tcs[runaway[1]]
+        tc["function"]["arguments"] = json.dumps({"_runaway": True})
     tool_calls = [accumulated_tcs[k] for k in sorted(accumulated_tcs.keys())]
     full_content = "".join(content_acc)
     full_reasoning = "".join(reasoning_acc)
@@ -141,5 +187,7 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
         "tool_calls": tool_calls,
         "usage": last_usage,
         "timings": last_timings,
-        "finish_reason": finish_reason,
+        "finish_reason": "runaway" if runaway is not None and runaway != "timeout" else (
+            "timeout" if runaway == "timeout" else finish_reason),
+        "aborted": ("tool" if isinstance(runaway, tuple) else runaway),
     })
