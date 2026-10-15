@@ -78,3 +78,27 @@ class Resume(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ForcedMode(unittest.TestCase):
+    def run_prepare(self, mode, content):
+        import asyncio
+        tok = operations.forced_mode.set(mode)
+        try:
+            return asyncio.run(operations.prepare_build(".pptx", content, None))[0]
+        finally:
+            operations.forced_mode.reset(tok)
+
+    def test_the_answer_adds_designer_when_the_model_forgot(self):
+        out = self.run_prepare("designer", "theme: sunset\n# Dhaka\n---\n## A\n- b\n")
+        self.assertIn("mode: designer", out)
+
+    def test_an_existing_mode_line_is_not_doubled(self):
+        out = self.run_prepare("designer", "theme: sunset\nmode: designer\n# Dhaka\n")
+        self.assertEqual(out.lower().count("mode: designer"), 1)
+
+    def test_editable_answer_removes_it(self):
+        self.assertNotIn("mode: designer", self.run_prepare("editable", "theme: sunset\nmode: designer\n# Dhaka\n"))
+
+    def test_no_answer_changes_nothing(self):
+        self.assertNotIn("mode: designer", self.run_prepare("", "theme: sunset\n# Dhaka\n"))

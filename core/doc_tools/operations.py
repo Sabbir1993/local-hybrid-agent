@@ -1,4 +1,5 @@
 import base64
+import contextvars
 import re
 import time
 from pathlib import Path
@@ -206,6 +207,13 @@ async def prepare_build(ext: str, content: str, uid, *, template: bool = False, 
     pictures, style and checks whichever tool the model happened to use."""
     if ext == ".pptx" and not _flag("deck_designer"):
         content = re.sub(r"(?mi)^[ \t]*mode[ \t]*:[ \t]*designer[ \t]*\r?\n?", "", content)
+    if ext == ".pptx" and not template and _flag("deck_designer"):
+        # the user's own answer to the questionnaire decides, not whether the model remembered the `mode:` line
+        want = forced_mode.get()
+        if want == "designer" and not _MODE_LINE.search(content):
+            content = "mode: designer\n" + content
+        elif want == "editable":
+            content = _MODE_LINE.sub("", content)
     content = _inherit_style(uid, ext, content)
     images, note = {}, ""
     if uid is not None and _flag("deck_images") and slide_images.wants_images(content):
@@ -227,6 +235,7 @@ def _flag(name: str, default: bool = True) -> bool:
         return default
 
 
+forced_mode: contextvars.ContextVar = contextvars.ContextVar("deck_forced_mode", default="")   # "designer" | "editable" | ""
 _MODE_LINE = re.compile(r"(?mi)^[ \t]*mode[ \t]*:[ \t]*designer[ \t]*\r?\n?")
 
 

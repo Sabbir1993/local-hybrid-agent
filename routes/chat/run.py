@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import sys
 import time
 import uuid
@@ -123,6 +124,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if m.get("role") == "user":
             last_query = str(m.get("content", ""))
             break
+    from core.doc_tools import operations as deck_operations
+    _style = re.search(r"slide style\??\s*:\s*(designer|editable)", last_query or "", re.I)
+    deck_operations.forced_mode.set(_style.group(1).lower() if _style else "")      # the questionnaire's answer wins
 
     # --- Input sanitizer (core/input_guard.py) -----------------------------
     # cloud_only rules only fire when the main lane is a cloud model; local
