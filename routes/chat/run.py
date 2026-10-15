@@ -645,6 +645,29 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     yield sse("tool_call", {'id': tc_id, 'name': 'search_knowledge_base', 'args': {'query': kb_query, 'auto': True}})   # the short routed question, not the whole message
                     yield sse("tool_result", {'id': tc_id, 'name': 'search_knowledge_base', 'ok': True, 'result': f'Retrieved {len(kb_hits)} records from company knowledge base ({source_names}) - automatic lookup from your question'})
 
+                # Deck / PDF research: the broad searches run side by side (web I/O overlaps), the model then only follows up
+                if (turn == 0 and brief_phase == "build" and has_web and use_web and not written_files and tool_allowed("web_search")
+                        and not url_matches):
+                    pre_q = deck_research.parallel_queries(prompt_scope.brief_request(msgs[:-1]) or last_query, max_web_calls, APP_CONFIG)
+                    if pre_q:
+                        cap = deck_research.web_cap(brief_phase)
+                        ids = [f"prefetch_{i}" for i in range(len(pre_q))]
+                        for tid, q in zip(ids, pre_q):
+                            yield sse("tool_call", {'id': tid, 'name': 'web_search', 'args': {'query': q}})
+                        outs = await asyncio.gather(*[tool_web_search({"query": q}) for q in pre_q], return_exceptions=True)
+                        calls_msg, tool_msgs = [], []
+                        for tid, q, out in zip(ids, pre_q, outs):
+                            out = f"error: search failed ({type(out).__name__})" if isinstance(out, BaseException) else out
+                            web_calls += 1
+                            web_seen.add(kb_coverage.query_key(q))
+                            out = kb_coverage.cap_web_result(out, web_calls, *cap)
+                            ok = not (isinstance(out, str) and out.startswith("error:"))
+                            yield sse("tool_result", {'id': tid, 'name': 'web_search', 'ok': ok, 'result': out})
+                            calls_msg.append({"id": tid, "type": "function", "function": {"name": "web_search", "arguments": json.dumps({"query": q})}})
+                            tool_msgs.append({"role": "tool", "tool_call_id": tid, "content": out})
+                        msgs.append({"role": "assistant", "content": "I will research the topic from several angles at once.", "tool_calls": calls_msg})
+                        msgs.extend(tool_msgs)
+
                 res_dict = None
                 streamed_content = []
 

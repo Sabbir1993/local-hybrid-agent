@@ -12,6 +12,7 @@ All knobs live under `chat` in config/app.json:
   deck_effort           reasoning effort floor while building (default "medium"; the cap reasoning_effort.doc_build_ceiling
                         still applies afterwards)
 """
+import re
 from typing import Optional
 
 from . import reasoning
@@ -91,3 +92,37 @@ def web_cap(phase: str) -> tuple:
 def turns_for(budget: int, configured: int) -> int:
     """Tool rounds for research plus the build itself (the loop stops two rounds before its limit)."""
     return max(int(configured), int(budget) + BUILD_TURNS)
+
+
+PARALLEL_FACETS = ("overview key facts", "statistics and figures", "history and timeline",
+                   "latest developments", "examples and notable cases")
+
+
+def parallel_on(app_cfg: Optional[dict]) -> bool:
+    return _cfg(app_cfg).get("deck_parallel_research", True) is not False
+
+
+def parallel_queries(topic: str, budget: int, app_cfg: Optional[dict] = None) -> list:
+    """Searches the server runs AT THE SAME TIME before the model starts writing a deck (tool-side parallelism: web
+    I/O overlaps, no extra LLM load). The model chose one search at a time, line by line; this front-loads the breadth
+    and leaves the rest of the budget for the model's own follow-ups. Up to 4, never more than half the budget."""
+    topic = topic_of(topic)
+    n = min(len(PARALLEL_FACETS), 4, int(budget or 0) // 2)
+    if not topic or n < 2 or not parallel_on(app_cfg):
+        return []
+    return [f"{topic} {f}" for f in PARALLEL_FACETS[:n]]
+
+
+_ASK_HEAD = re.compile(r"^.*?(?:\b(?:ppt|pptx|presentation|deck|slides?|pdf|report|guide|document)s?\b\s*)+(?:(?:about|of|on|for|regarding|covering)\s+)?",
+                       re.I)
+_ASK_TAIL = re.compile(r"\s+(?:with|using|including|and add|and include|that has|which has|having|in (?:\d+|a few) )\b.*$", re.I)
+
+
+def topic_of(request: str) -> str:
+    """'Make a deep informative PPT of Dhaka with images from web' -> 'Dhaka' (a search needs the subject, not the order)."""
+    t = " ".join(str(request or "").split())
+    m = _ASK_HEAD.match(t)
+    if m and m.end() < len(t):
+        t = t[m.end():]
+    t = _ASK_TAIL.sub("", t).strip(" .?!,")
+    return t[:90]

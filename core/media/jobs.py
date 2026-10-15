@@ -3,6 +3,7 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from .. import runs
 from .constants import KINDS, MediaError, NotLoadedError, media_cfg, plain_error
 
 
@@ -84,6 +85,8 @@ async def _run(job: Job) -> None:
     mod = sys.modules.get("core.media")
     gen_fn = getattr(mod, "generate", generate) if mod else generate
     t0 = time.time()
+    state, reason = "completed", None
+    runs.begin(f"media-{job.id}", "media", job.user_id, ref=job.kind)
 
     async def _progress(text: str, pct: Optional[int]) -> None:
         job.push("progress", {"text": text, "pct": pct, "elapsed": int(time.time() - t0)})
@@ -98,14 +101,18 @@ async def _run(job: Job) -> None:
                   result="allow")
         job.push("done", res)
     except asyncio.CancelledError:
+        state = "cancelled"
         job.push("error", {"message": "Cancelled.", "cancelled": True})
     except NotLoadedError as e:
+        state, reason = "failed", "not_loaded"
         job.push("error", {"message": str(e), "not_loaded": {"lane": e.lane, "label": e.label}})
     except Exception as e:
+        state, reason = "failed", type(e).__name__
         audit_log(job.user, action=f"media.{job.kind}", resource="failed",
                   detail={"prompt_chars": len(job.prompt)}, result="error")
         job.push("error", {"message": plain_error(e)})
     finally:
+        runs.end(f"media-{job.id}", state, reason)
         job.opts.pop("inputs", None)
         job.done = True
         job.changed.set()

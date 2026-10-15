@@ -4,6 +4,20 @@ Entries are kept short on purpose: this is a local single-dev project and long
 per-commit prose rots faster than it helps. Versioning starts where the repo
 has a tag or release; until then, dates + headline changes.
 
+## 2026-10-15 — one run layer: journal, runaway guard, resume
+
+- Run journal (`core/runs.py`, usage.db `runs`): chat, agent, KB ingest and media jobs each get a run id, a state and a
+  short reason code (never prompts, answers or frames; card numbers are masked). Runs left "running" by a restart are marked
+  `interrupted` at startup and listed by `GET /agent/runs` (`interrupted`); Continue re-seeds from the plan as before.
+- Runaway guard in the shared stream parser: looping answers, reasoning or tool arguments are cut while they stream, a
+  looping tool call never runs (the model is told to write it shorter, twice, then chat stops retrying), one generation is
+  capped (`agent.gen_timeout_s`, default 900), and chat has a wall-clock stop (`chat.run_timeout_s`, default 1800).
+  `agent.runaway_guard: false` switches the loop check off.
+- Restart-safe work: interrupted KB ingests are re-queued at startup; deck/PDF builds keep their slide count and plan in
+  projects.db (`deck_builds`), and a bare "continue" resumes an open build without asking or searching again.
+- Decks: the broad research searches now run side by side before the model writes (`chat.deck_parallel_research`).
+- Not done yet: typed stage machines and LLM sub-agents in chat; media jobs are journaled, not re-run.
+
 ## 2026-10-14 — decks and PDFs: charts, pictures, measured layout, checks
 
 - Slides: native charts, comparison / agenda / gallery / numbered-section layouts, pictures (web first, a loaded local
