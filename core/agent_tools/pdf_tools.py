@@ -199,6 +199,73 @@ def _protect(args: dict) -> str:
     return f"{msg} Saved as {new}. [DOWNLOAD: {new}]"
 
 
-PDF_IMPLS = {"pdf_read": _wrap(_read), "pdf_tables": _wrap(_tables), "pdf_pages": _wrap(_pages), "pdf_form": _wrap(_form),
+PDF_SEE_SCHEMA = {"type": "function", "function": {
+    "name": "pdf_see",
+    "description": "Look at PDF pages with the vision model (charts, layout, stamps, scanned pages, anything the text does not "
+                   "show). Pages are drawn locally and only a local vision model is used. At most 4 pages per call. Give a question "
+                   "for what you want to know.",
+    "parameters": {"type": "object", "properties": {
+        "file": _FILE, "pages": _PAGES, "question": {"type": "string"}, "password": _PASSWORD}, "required": ["file"]}}}
+
+PDF_OCR_SCHEMA = {"type": "function", "function": {
+    "name": "pdf_ocr",
+    "description": "Recognise the text of scanned PDF pages. With Tesseract installed it saves a searchable copy of the PDF (the "
+                   "scanned pages get a hidden text layer) and returns the text; without it the vision model transcribes the pages "
+                   "(text only). Default pages: the ones pdf_read says have no text layer. lang like 'eng' or 'eng+ben'.",
+    "parameters": {"type": "object", "properties": {
+        "file": _FILE, "pages": _PAGES, "lang": {"type": "string"}, "password": _PASSWORD}, "required": ["file"]}}}
+
+
+def _wrap_async(fn):
+    from ..pdf_tools.common import PdfError
+
+    async def run(args: dict) -> str:
+        try:
+            return await fn(args or {})
+        except PdfError as e:
+            return f"error: {e}"
+        except Exception as e:
+            return f"error: could not process the PDF ({type(e).__name__})"
+    return run
+
+
+async def _see(args: dict) -> str:
+    from ..pdf_tools import see
+    from ..pdf_tools.common import PdfError, resolve
+    name = _file(args)
+    if not name:
+        raise PdfError("file required (the PDF's name)")
+    p = resolve(name)
+    return await see.see(p.read_bytes(), args.get("pages"), str(args.get("question") or ""), args.get("password"))
+
+
+async def _ocr(args: dict) -> str:
+    import asyncio
+    from ..pdf_tools import ocr
+    from ..pdf_tools.common import PdfError, resolve, save_new
+    name = _file(args)
+    if not name:
+        raise PdfError("file required (the PDF's name)")
+    if not ocr.enabled():
+        raise PdfError("OCR is switched off (chat.pdf_ocr)")
+    p = resolve(name)
+    data = p.read_bytes()
+    pages = ocr.selected_pages(data, args.get("pages"), args.get("password"))
+    exe = ocr.find_tesseract()
+    if exe:
+        lang = ocr.check_lang(args.get("lang"), ocr.languages(exe))
+        out, texts = await asyncio.to_thread(ocr.ocr_with_tesseract, exe, data, pages, lang, args.get("password"))
+        new = save_new(out, p.name, "searchable")
+        return (f"Recognised {len(texts)} page(s) with Tesseract ({lang}). Saved a searchable copy as {new}. [DOWNLOAD: {new}]\n\n"
+                + ocr.render_text(texts))
+    try:
+        texts = await ocr.ocr_with_vision(data, pages, args.get("password"))
+    except PdfError:
+        raise PdfError(ocr.how_to_enable())
+    return ("Tesseract is not installed, so the vision model transcribed the pages (text only, no searchable copy; check numbers "
+            "and names against the original).\n\n" + ocr.render_text(texts))
+
+
+PDF_IMPLS = {"pdf_see": _wrap_async(_see), "pdf_ocr": _wrap_async(_ocr), "pdf_read": _wrap(_read), "pdf_tables": _wrap(_tables), "pdf_pages": _wrap(_pages), "pdf_form": _wrap(_form),
              "pdf_redact": _wrap(_redact), "pdf_protect": _wrap(_protect)}
-PDF_SCHEMAS = [PDF_READ_SCHEMA, PDF_TABLES_SCHEMA, PDF_PAGES_SCHEMA, PDF_FORM_SCHEMA, PDF_REDACT_SCHEMA, PDF_PROTECT_SCHEMA]
+PDF_SCHEMAS = [PDF_SEE_SCHEMA, PDF_OCR_SCHEMA, PDF_READ_SCHEMA, PDF_TABLES_SCHEMA, PDF_PAGES_SCHEMA, PDF_FORM_SCHEMA, PDF_REDACT_SCHEMA, PDF_PROTECT_SCHEMA]
