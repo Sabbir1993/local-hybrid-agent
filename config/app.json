@@ -200,8 +200,8 @@
   "agent": {
     "exec_timeout_s": 0,
     "max_steps": 150,
-    "run_timeout_s": 21600,
-    "run_token_budget": 2500000,
+    "run_timeout_s": 25200,
+    "run_token_budget": 1000000,
     "idle_unload_s": 0,
     "executor_max_tokens": 4096,
     "main_max_tokens": 16000,
@@ -312,7 +312,8 @@
     "mcp_user_allowed_packages": [
       "mcp-atlassian",
       "mcp-remote"
-    ]
+    ],
+    "mcp_catalog_overrides": {}
   },
   "input_guard": {
     "enabled": false,
