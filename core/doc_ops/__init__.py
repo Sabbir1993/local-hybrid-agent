@@ -273,9 +273,18 @@ def create(name: str, content: str, template: Optional[bytes] = None,
         as_outline = pseudo.to_outline(content)           # "Sheet2,Cost Analysis" sections in one csv -> real sheets
         if as_outline:
             content = as_outline
+        if not sheet_build.is_outline(content):
+            from ..sheet_engine import tabular
+            as_tables = tabular.to_outline(content)        # pipe / csv / tab tables, several of them, notes around them
+            if as_tables:
+                content, formulas_ok = as_tables, False
+            else:
+                formulas_ok = True
+        else:
+            formulas_ok = True
         if sheet_build.is_outline(content):
             try:
-                data = sheet_build.build(content, title=title)
+                data = sheet_build.build(content, title=title, formulas=formulas_ok)
             except sheet_build.BuildError as e:
                 raise DocOpError(str(e))
             try:        # store the results next to the formulas so previews and readers that do not recalculate show numbers

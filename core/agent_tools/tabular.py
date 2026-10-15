@@ -89,8 +89,14 @@ def _modal_column_rows(rows: list, min_cols: int = 2) -> list:
 def _sniff_delimited(lines: list) -> list:
     """Best rows over comma / tab / semicolon / pipe, or [] when no delimiter
     turns at least two lines into a consistent multi-column table."""
+    # pipes and tabs are rare in prose, so a run of lines that split the same way on one of them IS a table; commas
+    # (every sentence has one, and "4,800,000" is one number) are only the last resort
+    for delim in ("|", "\t"):
+        rows = _modal_column_rows(_split_delimited("\n".join(lines), delim))
+        if len(rows) >= 2:
+            return rows
     best: list = []
-    for delim in (",", "\t", ";", "|"):
+    for delim in (";", ","):
         rows = _modal_column_rows(_split_delimited("\n".join(lines), delim))
         if len(rows) >= 2 and len(rows) > len(best):
             best = rows

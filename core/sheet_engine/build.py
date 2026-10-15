@@ -177,11 +177,14 @@ def _to_number(s: str):
     return None
 
 
-def _cell_value(raw, fmt: Optional[str], sheets: list, where: str):
-    """(value, is_formula). Raises BuildError for a refused formula."""
+def _cell_value(raw, fmt: Optional[str], sheets: list, where: str, formulas: bool = True):
+    """(value, is_formula). Raises BuildError for a refused formula. With formulas=False (a plain table the author did not
+    mark up) a cell that starts with = stays text, as it always has."""
     s = "" if raw is None else str(raw).strip()
     if s == "":
         return None, False
+    if s.startswith("=") and not formulas:
+        return s, False
     if s.startswith("="):
         try:
             return check_formula(s, sheets=sheets), True
@@ -225,7 +228,7 @@ def _kv_pairs(text: str) -> dict:
 
 
 # ---- building --------------------------------------------------------------------------------------------------------
-def build(text: str, title: str = "") -> bytes:
+def build(text: str, title: str = "", formulas: bool = True) -> bytes:
     import openpyxl
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     spec = parse(text)
@@ -281,7 +284,7 @@ def build(text: str, title: str = "") -> bytes:
             for ci, raw in enumerate(row, 1):
                 kind, nf = col_fmt[ci - 1]
                 where = f"sheet '{s['name']}' cell {col_letter(ci)}{ri}"
-                val, is_formula = _cell_value(raw, kind, names, where)
+                val, is_formula = _cell_value(raw, kind, names, where, formulas)
                 c = ws.cell(row=ri, column=ci)
                 if is_formula:
                     c.value = val
@@ -293,7 +296,11 @@ def build(text: str, title: str = "") -> bytes:
                     c.number_format = nf
                 c.border = Border(bottom=thin)
                 if isinstance(val, (int, float)) or is_formula:
-                    c.alignment = Alignment(horizontal="right")
+                    c.alignment = Alignment(horizontal="right", vertical="top")
+                elif isinstance(val, str) and len(val) > 45:
+                    c.alignment = Alignment(wrap_text=True, vertical="top")      # long text wraps instead of running off the sheet
+                else:
+                    c.alignment = Alignment(vertical="top")
         last = len(rows) + 1
 
         # totals
