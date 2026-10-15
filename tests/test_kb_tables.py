@@ -121,3 +121,47 @@ class QueryTests(TableTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KbSqlTests(TableTestBase):
+    """kb_sql: totals, joins and medians over the same rows kb_query sees, with the same access and cloud rules."""
+
+    def run_sql(self, args, scope=None):
+        import asyncio
+        from core.agent_tools import search_tools
+        scope = scope or (True, object(), False, TITLES)
+        with mock.patch.object(search_tools, "_kb_scope", return_value=scope), \
+                mock.patch("core.audit.audit_log"):
+            return asyncio.run(search_tools.tool_kb_sql(args))
+
+    def test_describe_lists_the_sheets(self):
+        out = self.run_sql({"describe": True})
+        self.assertIn("Staff_list_Staff", out)
+        self.assertIn('"Salary"', out)
+
+    def test_sum_avg_median_group_by(self):
+        out = self.run_sql({"sql": 'SELECT Dept, COUNT(*) n, SUM(Salary) total, MEDIAN(Salary) med FROM Staff_list_Staff GROUP BY Dept ORDER BY Dept'})
+        self.assertIn("| Dhaka | 2 | 150,000 | 75,000 |", out)         # "90,000" and 60000 are both numbers
+        self.assertIn("| Khulna | 2 | 125,000 | 62,500 |", out)
+
+    def test_join_between_two_documents(self):
+        out = self.run_sql({"sql": 'SELECT s.Name, v.Vendor FROM Staff_list_Staff s JOIN Vendors_V v ON v.Role = s.Role'})
+        self.assertIn("0 row", out)
+
+    def test_only_select_and_no_internal_tables(self):
+        self.assertTrue(self.run_sql({"sql": "DELETE FROM Staff_list_Staff"}).startswith("error:"))
+        self.assertTrue(self.run_sql({"sql": "SELECT * FROM sqlite_master"}).startswith("error:"))
+
+    def test_a_cloud_answer_cannot_use_it(self):
+        out = self.run_sql({"sql": "SELECT 1"}, scope=(True, object(), True, TITLES))
+        self.assertTrue(out.startswith("error:"))
+        self.assertIn("cloud", out)
+
+    def test_nothing_readable_returns_the_message(self):
+        self.assertEqual(self.run_sql({"sql": "SELECT 1"}, scope=(False, None, None, "(no accessible company knowledge base sources)")),
+                         "(no accessible company knowledge base sources)")
+
+    def test_registered_with_the_other_kb_tools(self):
+        from core.agent_tools import AGENT_TOOLS, TOOL_IMPLS
+        self.assertIn("kb_sql", TOOL_IMPLS)
+        self.assertTrue(any(t["function"]["name"] == "kb_sql" for t in AGENT_TOOLS))

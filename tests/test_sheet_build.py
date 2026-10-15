@@ -1,6 +1,7 @@
 """Workbook outline -> real formatted workbook; formula allow-list; built-in calculator and cached values."""
 import io
 import unittest
+from unittest import mock
 
 import core.agent_tools  # noqa: F401
 import openpyxl
@@ -239,3 +240,37 @@ class Intent(unittest.TestCase):
         self.assertIn("sheet_build = prompt_scope.sheet_build_wanted(", src)
         self.assertIn("prompt_scope.XLSX_MANUAL", src)
         self.assertIn("or sheet_build or prompt_scope.deck_brief_wanted", src)
+
+
+class LibreOffice(unittest.TestCase):
+    """The optional LibreOffice path: used when installed, never trusted blindly, never fatal."""
+
+    def test_not_installed_means_the_builtin_calculator(self):
+        from core.sheet_engine import office
+        with mock.patch.object(office, "find_soffice", return_value=None):
+            res = calc.calculate(make(OUTLINE))
+        self.assertEqual(res["engine"], "built-in calculator")
+        self.assertIn("built-in calculator", calc.check_report(res))
+
+    def test_its_values_replace_ours_and_errors_are_reported(self):
+        from core.sheet_engine import office
+        data = make("## Sheet: A\n| x | y |\n|---|---|\n| 4 | =A2*2 |\n| 5 | =A3/0 |\n")
+        fake = {("A", "B2"): 8.0, ("A", "B3"): "#DIV/0!"}
+        with mock.patch.object(office, "recalculate", return_value=fake):
+            res = calc.calculate(data)
+        self.assertEqual(res["engine"], "LibreOffice")
+        self.assertEqual(res["values"][("A", "B2")], 8.0)
+        self.assertTrue(any("#DIV/0!" in e for e in res["errors"]))
+        self.assertIn("LibreOffice", calc.check_report(res))
+
+    def test_a_failing_conversion_falls_back(self):
+        from core.sheet_engine import office
+        with mock.patch.object(office, "find_soffice", return_value="soffice"), \
+                mock.patch("subprocess.run", side_effect=OSError("boom")):
+            self.assertIsNone(office.recalculate(make(OUTLINE)))
+            self.assertEqual(calc.calculate(make(OUTLINE))["engine"], "built-in calculator")
+
+    def test_the_kill_switch(self):
+        from core.sheet_engine import office
+        with mock.patch.object(office, "enabled", return_value=False), mock.patch.object(office, "find_soffice", return_value="x"):
+            self.assertIsNone(office.recalculate(b"x"))

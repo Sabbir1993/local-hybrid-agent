@@ -178,6 +178,10 @@ def normalize_ops(ops) -> list[dict]:
     return ops
 
 
+_SHEET_OUTLINE_OPS = ("add_chart", "set_format", "add_highlight", "add_scale", "add_databar", "add_validation", "set_total",
+                      "set_theme", "set_freeze", "set_table", "set_filter", "add_note", "add_column")
+
+
 def edit(data: bytes, name: str, ops, source_spec: Optional[str] = None) -> EditOutcome:
     ext = _ext(name)
     _guard_ext(ext)
@@ -192,6 +196,19 @@ def edit(data: bytes, name: str, ops, source_spec: Optional[str] = None) -> Edit
         if _pan_count(new_md) > _pan_count(source_spec):
             raise DocOpError("the edited document would contain a new payment card number (PCI DSS)")
         return EditOutcome(render_pdf(new_md, Path(name).stem), changes, ["PDF re-rendered from its source"], new_md)
+    if ext == ".xlsx" and any(str(o.get("op")).lower() in _SHEET_OUTLINE_OPS for o in ops):
+        from ..sheet_engine import edit as sheet_edit
+        from ..sheet_engine.build import BuildError
+        if not all(sheet_edit.is_outline_op(o) for o in ops):
+            raise DocOpError("restyling ops (" + ", ".join(sheet_edit.OUTLINE_OPS[:4]) + ", ...) cannot be mixed with cell ops "
+                             "(set_cell, set_formula, ...) in one call - make two calls")
+        try:
+            new_data, new_outline, changes = sheet_edit.edit(source_spec, ops)
+        except (sheet_edit.EditError, BuildError) as e:
+            raise DocOpError(str(e))
+        if _pan_count(full_text(new_data, name)) > _pan_count(full_text(data, name)):
+            raise DocOpError("the edited document would contain a new payment card number (PCI DSS)")
+        return EditOutcome(new_data, changes, ["workbook rebuilt from its outline (formats, charts and rules included)"], new_outline)
     mod = EDITABLE.get(ext)
     if mod is None:
         raise DocOpError(f"{ext} files cannot be edited (have: {', '.join(sorted(DOC_EXTS))})")

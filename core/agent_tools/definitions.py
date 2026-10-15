@@ -19,6 +19,7 @@ from .search_tools import (
     tool_analyze_image,
     tool_kb_find_mentions,
     tool_kb_query,
+    tool_kb_sql,
     tool_search_knowledge_base,
     tool_search_memory,
 )
@@ -41,6 +42,7 @@ TOOL_IMPLS = {
     "search_knowledge_base": tool_search_knowledge_base,
     "kb_find_mentions": tool_kb_find_mentions,
     "kb_query": tool_kb_query,
+    "kb_sql": tool_kb_sql,
     "create_plan": tool_create_plan,
     "update_plan_item": tool_update_plan_item,
     "get_plan": tool_get_plan,

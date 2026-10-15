@@ -307,8 +307,17 @@ built in pieces with a live preview). What the builders do beyond writing text:
   cell. A function it cannot evaluate is reported, never guessed. It is not Excel: LibreOffice is not installed here.
 - **Cleaning** (`data_clean`): trim, dedupe, fix types, fill, split, rename, replace, drop columns over one sheet, saved as
   a NEW workbook with a Changes sheet (the original is never touched).
-- **Not done yet:** `doc_edit` ops to restyle or add charts to a finished workbook (rebuild from the outline instead),
-  a LibreOffice recalculation path, and `kb_query` on the same engine.
+- **Restyling a built workbook** (`doc_edit`): `add_chart`, `set_format`, `add_highlight`, `add_scale`, `add_databar`,
+  `add_validation`, `set_total`, `set_theme`, `set_freeze`, `set_table`, `add_note`, `add_column` (a formula per row with
+  `{r}`) change the workbook's outline and rebuild it, so formats, charts and rules survive. A cell-level edit
+  (`set_cell` ...) keeps the file byte-for-byte but detaches it from its outline; after that, restyling is refused until it is
+  rebuilt with `doc_create`. The two kinds of op cannot be mixed in one call.
+- **Knowledge-base spreadsheets** (`kb_sql`): the same read-only SQL over the Excel / CSV files in the company knowledge base
+  (sums, medians, joins between documents), with the same per-user access rules as `kb_query`. Not offered while a cloud model
+  answers (rows cannot be screened one by one in SQL); `kb_query` stays for that case.
+- **LibreOffice** is optional: if `soffice` is installed (or found at its usual Windows path) it recalculates every formula
+  and its values replace the built-in calculator's (the report says which engine was used). It only computes values; your file
+  is never replaced by its re-saved copy. Switch off with `"sheet_libreoffice": false` under `chat`.
 
 ## Setup on a new machine
 

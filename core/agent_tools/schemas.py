@@ -275,6 +275,26 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "kb_sql",
+            "description": "Read-only SQL (SQLite) over the Excel/CSV files in the company knowledge base: joins between sheets, "
+                           "pivots with SUM(CASE WHEN ...), sums / averages / medians / percentiles, several group-bys, month "
+                           "buckets with strftime, top-N. Call with describe=true first to see the table and column names. "
+                           "Use kb_query for a simple count or list; use this for anything that needs totals, ratios or joins. "
+                           "Not available while a cloud model answers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "describe": {"type": "boolean", "description": "List the tables and columns instead of running a query"},
+                    "source": {"type": "string", "description": "Only tables whose document title or sheet name contains this text"},
+                    "sql": {"type": "string", "description": "one SELECT (or WITH ... SELECT) statement"},
+                    "limit": {"type": "integer", "description": "max rows returned (default 50, max 200)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "kb_query",
             "description": "Exact counts, lists and group-bys over the Excel/CSV files in the company knowledge base (staff lists, rosters, "
                            "registers). Use it for 'how many X', 'list all Y where ...', 'count by department'. Call it first with "

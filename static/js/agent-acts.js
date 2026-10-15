@@ -20,6 +20,9 @@ function toolIcon(name) {
     case 'search_knowledge_base': return '🏢';
     case 'kb_find_mentions': return '🏢';
     case 'kb_query': return '🏢';
+    case 'kb_sql': return '🏢';
+    case 'data_sql': return '📊';
+    case 'data_clean': return '🧹';
     case 'create_plan': return '📋';
     case 'update_plan_item': return '✔️';
     case 'get_plan': return '🗒️';
@@ -142,6 +145,7 @@ function toolMeta(name) {
   switch (name) {
     case 'search_knowledge_base': return { icon: '📚', label: 'Knowledge Base', verb: 'Searched knowledge base', running: 'Searching knowledge base', cls: 'kb' };
     case 'kb_query': return { icon: '📊', label: 'Knowledge Base', verb: 'Queried spreadsheet', running: 'Querying spreadsheet', cls: 'kb' };
+    case 'kb_sql': return { icon: '📊', label: 'Knowledge Base', verb: 'Ran spreadsheet SQL', running: 'Running spreadsheet SQL', cls: 'kb' };
     case 'kb_find_mentions': return { icon: '📚', label: 'Knowledge Base', verb: 'Found every mention', running: 'Scanning all documents', cls: 'kb' };
     case 'web_search': return { icon: '🌐', label: 'Web Search', verb: 'Searched web', running: 'Searching web', cls: 'web' };
     case 'web_fetch': return { icon: '🌐', label: 'Web Fetch', verb: 'Fetched webpage', running: 'Fetching webpage', cls: 'web' };

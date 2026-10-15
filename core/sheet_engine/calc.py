@@ -777,8 +777,29 @@ def calculate(data: bytes) -> dict:
         if nums:
             magic.append(f"{sh}!{ref} has the number {nums[0]} typed into the formula - put it in an assumptions cell")
     unsupported = [f"{k[0]}!{openpyxl.utils.get_column_letter(k[2])}{k[1]}: {why}" for k, why in model.unsupported.items()]
-    return {"values": values, "errors": errors, "unsupported": unsupported, "formulas": len(model.formulas),
-            "sheets": len(model.sheets), "magic": magic, "circular": len(model.circular)}
+    result = {"values": values, "errors": errors, "unsupported": unsupported, "formulas": len(model.formulas),
+              "sheets": len(model.sheets), "magic": magic, "circular": len(model.circular), "engine": "built-in calculator"}
+    if model.formulas:
+        _prefer_libreoffice(data, result, model)
+    return result
+
+
+def _prefer_libreoffice(data: bytes, result: dict, model) -> None:
+    """When LibreOffice is installed it is the reference: its values replace ours and it covers every function."""
+    from . import office
+    lo = office.recalculate(data)
+    if lo is None:
+        return
+    import openpyxl
+    values, errors = {}, []
+    for (sh, r, c), f in model.formulas.items():
+        ref = f"{openpyxl.utils.get_column_letter(c)}{r}"
+        v = lo.get((sh, ref))
+        if office.is_error(v):
+            errors.append(f"{sh}!{ref} {v}  ({f[:60]})")
+        elif v is not None:
+            values[(sh, ref)] = v
+    result.update(values=values, errors=errors, unsupported=[], engine="LibreOffice")
 
 
 def write_cached(data: bytes, values: dict) -> bytes:
@@ -835,7 +856,7 @@ def check_report(result: dict) -> str:
     """One short paragraph for the tool result: what was checked and what to fix."""
     if not result["formulas"]:
         return ""
-    bits = [f"Checked (built-in calculator): {result['sheets']} sheet(s), {result['formulas']} formula(s), "
+    bits = [f"Checked ({result.get('engine', 'built-in calculator')}): {result['sheets']} sheet(s), {result['formulas']} formula(s), "
             f"{len(result['errors'])} error(s)."]
     if result["errors"]:
         bits.append("Errors: " + "; ".join(result["errors"][:6]) + (" ..." if len(result["errors"]) > 6 else ""))

@@ -205,7 +205,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
     if skb:
         chat_tools.append(skb)
-        chat_tools.extend(t for t in AGENT_TOOLS if t.get("function", {}).get("name") in ("kb_find_mentions", "kb_query"))
+        chat_tools.extend(t for t in AGENT_TOOLS if t.get("function", {}).get("name") in ("kb_find_mentions", "kb_query", "kb_sql"))
     # images made on this PC (stable-diffusion.cpp): the model may draw when asked.
     # A cloud-first route isn't offered here (chat has no ask-first dialog for cost);
     # /image and agent mode handle those.

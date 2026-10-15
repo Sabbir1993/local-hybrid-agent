@@ -427,6 +427,11 @@ function formatToolStatus(name, args) {
       return 'Scanning all documents for the name...';
     case 'kb_query':
       return 'Querying the spreadsheet data...';
+    case 'kb_sql':
+    case 'data_sql':
+      return 'Running SQL over the spreadsheet data...';
+    case 'data_clean':
+      return 'Cleaning the data...';
     case 'analyze_image':
       return 'Analyzing image with vision model...';
     case 'create_plan':

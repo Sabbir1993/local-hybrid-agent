@@ -12,6 +12,8 @@ has a tag or release; until then, dates + headline changes.
   formats, tables, charts, conditional formatting, validation, named ranges). A built-in calculator stores results next to the
   formulas and appends a check report (errors, circular references, typed-in constants). The preview shows formatted values
   and formulas on hover, first 500 rows.
+- Restyle a built workbook with `doc_edit` (charts, formats, rules, theme, a formula column); `kb_sql` brings the same SQL to
+  knowledge-base spreadsheets (local answers only); optional LibreOffice recalculation when installed; `data_clean`.
 - Chat: a deck request saving the same document again in one reply is stopped; the image tool is offered only when a picture
   is asked for; Chat saves no scripts or programs (`.sh .py .bat .exe ...`).
 

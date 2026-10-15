@@ -182,9 +182,10 @@ async def tool_kb_find_mentions(args: dict) -> str:
     return kb_mentions.render(name, result) + (f"\n\n{note}" if note else "")
 
 
-async def tool_kb_query(args: dict) -> str:
-    """Exact counts, lists and group-bys over the Excel/CSV sources the user may read."""
-    import json as _json
+def _kb_scope():
+    """(ok, user, cloud?, {source id: title} | message) for the knowledge-base sources this user may read; ok is False when
+    there is nothing to read and the last item is the message to return. Shared by kb_query and kb_sql so both apply the
+    same access and cloud rules."""
     from ..knowledge_access import KB_CLOUD_BLOCKED_MSG, kb_cloud_blocked, cloud_ok_ids, allowed_source_ids_for
     from ..auth import _to_principal
     uid = get_current_user_id()
@@ -194,13 +195,61 @@ async def tool_kb_query(args: dict) -> str:
     if cloud:
         kb_ids = cloud_ok_ids(kb_ids)
         if not kb_ids:
-            return KB_CLOUD_BLOCKED_MSG
+            return False, None, None, KB_CLOUD_BLOCKED_MSG
     if not kb_ids:
-        return "(no accessible company knowledge base sources for this user account)"
-    from .. import kb_tables
+        return False, None, None, "(no accessible company knowledge base sources for this user account)"
     from ..auth_db import list_knowledge_sources
     titles = {ks["id"]: ks["title"] for ks in list_knowledge_sources()
               if ks["id"] in kb_ids and ks["status"] == "ready"}
+    return True, user, cloud, titles
+
+
+async def tool_kb_sql(args: dict) -> str:
+    """Read-only SQL (joins, pivots, medians, month buckets) over the Excel/CSV sources the user may read."""
+    import hashlib
+    import json as _json
+    ok, user, cloud, titles = _kb_scope()
+    if not ok:
+        return titles                                      # the message: nothing readable
+    if cloud:
+        return ("error: kb_sql is not available while the answer is produced by a cloud model (rows cannot be screened one by "
+                "one in SQL); use kb_query, or switch to a local model")
+    from .. import kb_tables
+    from ..sheet_engine import sql as sheet_sql
+    tables = kb_tables.list_tables(set(titles), titles, str(args.get("source") or ""))
+    if not tables:
+        return "(no spreadsheet tables in the knowledge base sources you can read)"
+    db = kb_tables._db()
+    items = []
+    for t in tables[:60]:
+        rows = [json_row for (json_row,) in db.execute("SELECT cells FROM kb_rows WHERE table_id = ? ORDER BY rownum LIMIT 200000", (t["id"],))]
+        cols = t["columns"] or [f"col{i + 1}" for i in range(max((len(_json.loads(r)) for r in rows[:50]), default=1))]
+        items.append((f"{t['title']}_{t['sheet']}" if t["sheet"] else t["title"], t["title"], list(cols), [_json.loads(r) for r in rows]))
+    try:
+        wb = sheet_sql.from_tables(items)
+        if args.get("describe") or not args.get("sql"):
+            return sheet_sql.describe(wb)
+        out = sheet_sql.query(wb, args["sql"], args.get("limit") or sheet_sql.DEFAULT_ROWS)
+    except sheet_sql.SqlError as e:
+        return f"error: {e}"
+    try:                                                   # queries can contain names: audit that one ran, store only a hash
+        from ..audit import audit_log
+        audit_log(user, "kb.query", resource="knowledge",
+                  detail={"sql_sha256": hashlib.sha256(str(args.get("sql")).encode()).hexdigest()[:16], "tables": len(tables)})
+    except Exception:
+        pass
+    from ..knowledge_access import partial_notice
+    note = partial_notice(set(titles))
+    return out + (f"\n\n{note}" if note else "")
+
+
+async def tool_kb_query(args: dict) -> str:
+    """Exact counts, lists and group-bys over the Excel/CSV sources the user may read."""
+    import json as _json
+    ok, user, cloud, titles = _kb_scope()
+    if not ok:
+        return titles
+    from .. import kb_tables
     spec = {k: args.get(k) for k in ("source", "sheet", "filters", "select", "group_by", "count", "limit")}
     if args.get("describe") or not any(spec.get(k) for k in ("filters", "select", "group_by", "count")):
         return kb_tables.describe(set(titles), titles, str(spec.get("source") or ""))

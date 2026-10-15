@@ -147,38 +147,68 @@ class Workbook:
         self.lock = threading.Lock()
 
 
-def _build(paths: list) -> Workbook:
+def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.create_aggregate("MEDIAN", 1, _Median)
     conn.create_aggregate("STDEV", 1, _Stdev)
     conn.create_aggregate("PERCENTILE", 2, _Percentile)
     conn.create_aggregate("MODE", 1, _Mode)
+    return conn
+
+
+def _add_table(conn, tname: str, headers: list, rows: list) -> list:
+    """Create `tname` and fill it; each column becomes REAL when it is mostly numbers, else TEXT (dates as ISO text).
+    -> [(column, type)]"""
+    cols, kinds, seen = [], [], set()
+    data = list(zip(*[(r + [None] * len(headers))[: len(headers)] for r in rows])) if rows else [[] for _ in headers]
+    for h, values in zip(headers, data):
+        kind = column_stats(list(values), h)["kind"]
+        kinds.append(kind)
+        cname = h if h.lower() not in seen else f"{h}_{len(seen)}"
+        seen.add(cname.lower())
+        cols.append((cname, "REAL" if kind == "number" else "TEXT"))
+    conn.execute(f'CREATE TABLE "{tname}" (' + ", ".join(f'"{c}" {ty}' for c, ty in cols) + ")")
+    width = len(kinds)
+    conn.executemany(f'INSERT INTO "{tname}" VALUES (' + ",".join("?" * width) + ")",
+                     (tuple(_convert(k, v) for k, v in zip(kinds, (r + [None] * width)[:width])) for r in rows))
+    return cols
+
+
+def _lock(conn) -> None:
+    conn.commit()
+    conn.execute("PRAGMA query_only = ON")
+    conn.set_authorizer(_authorizer)
+
+
+def _build(paths: list) -> Workbook:
+    conn = _connect()
     used, tables, notes = set(), [], []
     multi = len(paths) > 1
     for path in paths:
         stem = _ident(Path(path).stem, set())
         for t in read_tables(path):
             tname = _ident(f"{stem}_{t.name}" if multi else t.name, used)
-            cols, kinds, seen = [], [], set()
-            data = list(zip(*[(r + [None] * len(t.headers))[: len(t.headers)] for r in t.rows])) if t.rows else [[] for _ in t.headers]
-            for h, values in zip(t.headers, data):
-                kind = column_stats(list(values), h)["kind"]
-                kinds.append(kind)
-                cname = h if h.lower() not in seen else f"{h}_{len(seen)}"
-                seen.add(cname.lower())
-                cols.append((cname, "REAL" if kind == "number" else "TEXT"))
-            conn.execute(f'CREATE TABLE "{tname}" (' + ", ".join(f'"{c}" {ty}' for c, ty in cols) + ")")
-            width = len(kinds)
-            conn.executemany(f'INSERT INTO "{tname}" VALUES (' + ",".join("?" * width) + ")",
-                             (tuple(_convert(k, v) for k, v in zip(kinds, (r + [None] * width)[:width])) for r in t.rows))
+            cols = _add_table(conn, tname, t.headers, t.rows)
             tables.append({"name": tname, "sheet": t.name, "file": Path(path).name, "cols": cols, "rows": t.total_rows,
                            "truncated": t.truncated, "formulas": dict(t.formulas), "preamble": list(t.preamble)})
             if t.truncated:
                 notes.append(f"{tname}: only the first {len(t.rows):,} of {t.total_rows:,} rows are loaded")
-    conn.commit()
-    conn.execute("PRAGMA query_only = ON")
-    conn.set_authorizer(_authorizer)
+    _lock(conn)
     return Workbook(conn, tables, notes)
+
+
+def from_tables(items: list) -> Workbook:
+    """A Workbook from in-memory tables: [(name, source label, headers, rows)] (the knowledge base's sheets). Not cached:
+    the rows behind it can change and are access-controlled by the caller."""
+    conn = _connect()
+    used, tables = set(), []
+    for name, label, headers, rows in items:
+        tname = _ident(name, used)
+        cols = _add_table(conn, tname, headers, rows)
+        tables.append({"name": tname, "sheet": name, "file": label, "cols": cols, "rows": len(rows), "truncated": False,
+                       "formulas": {}, "preamble": []})
+    _lock(conn)
+    return Workbook(conn, tables, [])
 
 
 def _authorizer(action, arg1, arg2, db, source):
