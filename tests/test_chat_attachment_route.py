@@ -58,6 +58,7 @@ class ChatAttachmentRouteTests(unittest.TestCase):
                   mock.patch.object(chat_route.run, "audit_log"),
                   mock.patch.object(chat_route.run, "monitor_begin", return_value=1),
                   mock.patch.object(chat_route.run, "monitor_end", create=True),
+                  mock.patch.object(chat_route.run, "db_record_request"),     # never write test traffic into the real usage.db
                   mock.patch.object(chat_route.run, "_llm_chat_stream", fake_stream)):
                 resp = await chat_route.chat_run(req, user)
                 events = []
