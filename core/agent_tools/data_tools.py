@@ -1,5 +1,7 @@
 """data_query: read-only structured queries over a spreadsheet the user attached (core/file_tools/data_query.py)."""
 
+import re  # noqa: E402
+
 DATA_QUERY_SCHEMA = {
     "type": "function",
     "function": {
@@ -114,5 +116,64 @@ def tool_data_sql(args: dict) -> str:
         return f"error: could not read the data file ({type(e).__name__})"
 
 
-DATA_IMPLS = {"data_query": tool_data_query, "data_sql": tool_data_sql}
-DATA_SCHEMAS = [DATA_QUERY_SCHEMA, DATA_SQL_SCHEMA]
+DATA_CLEAN_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "data_clean",
+        "description": "Clean an attached Excel / CSV sheet and save the result as a NEW workbook (the original is never changed; a "
+                       "'Changes' sheet lists what each step did). ops is a list of steps: {op:'trim'}, {op:'dedupe', columns?:[..]}, "
+                       "{op:'drop_empty_rows'}, {op:'drop_empty_columns'}, {op:'fix_types', columns?}, {op:'rename', from, to}, "
+                       "{op:'fill', column, value | method:'down'}, {op:'case', column, to:'upper|lower|title'}, "
+                       "{op:'replace', column, find, with}, {op:'drop_columns', columns:[..]}, "
+                       "{op:'split', column, delimiter, into:['First','Last']}. Look at the data with data_sql / the profile first.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file": {"type": "string", "description": "the attached file's name, exactly as shown in the attachment note"},
+                "sheet": {"type": "string", "description": "sheet name (default: the first sheet)"},
+                "ops": {"type": "array", "items": {"type": "object"}, "description": "the cleaning steps, in order"},
+            },
+            "required": ["file", "ops"],
+        },
+    },
+}
+
+
+def tool_data_clean(args: dict) -> str:
+    import uuid
+    from pathlib import Path
+    from ..doc_tools.location import _file_arg, resolve_common
+    from ..sheet_engine import clean
+    from .workspace import _common_resolve
+    try:
+        name = _file_arg(args)
+    except ValueError:
+        return "error: file required (the attached file's name)"
+    p = resolve_common(name)
+    if p is None or not p.is_file():
+        return f"error: no attached data file named '{name}' - use the name from the attachment note"
+    if p.suffix.lower() not in (".xlsx", ".xls", ".csv"):
+        return f"error: data_clean reads .xlsx / .xls / .csv files, not {p.suffix or 'this file'}"
+    try:
+        data, report = clean.run(p, args.get("ops"), args.get("sheet"))
+    except clean.CleanError as e:
+        return f"error: {e}"
+    except Exception as e:
+        return f"error: could not clean the data file ({type(e).__name__})"
+    stem = re.sub(r"([-_][0-9a-fA-F]{8})+$", "", Path(name).stem)
+    out_name = f"{stem}-cleaned-{uuid.uuid4().hex[:8]}.xlsx"
+    out = _common_resolve(out_name)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(data)
+    try:
+        from .. import doc_store
+        from ..doc_ops.base import sha256
+        from ..request_context import get_current_user_id
+        doc_store.register(get_current_user_id(), out.name, "xlsx", sha256=sha256(data))
+    except Exception:
+        pass
+    return f"Saved the cleaned data as {out.name}. {report}. [DOWNLOAD: {out.name}]"
+
+
+DATA_IMPLS = {"data_query": tool_data_query, "data_sql": tool_data_sql, "data_clean": tool_data_clean}
+DATA_SCHEMAS = [DATA_QUERY_SCHEMA, DATA_SQL_SCHEMA, DATA_CLEAN_SCHEMA]

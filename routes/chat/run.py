@@ -196,7 +196,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                               for m in msgs)
     if has_data_attachment:
         from core.agent_tools import AGENT_TOOLS as _ALL_TOOLS
-        chat_tools += [t for t in _ALL_TOOLS if t.get("function", {}).get("name") in ("data_query", "data_sql")]
+        chat_tools += [t for t in _ALL_TOOLS if t.get("function", {}).get("name") in ("data_query", "data_sql", "data_clean")]
     if has_file:
         chat_tools += [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
         if pdf_build or resume_note or brief_phase or sheet_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
