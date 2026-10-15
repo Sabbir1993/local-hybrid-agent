@@ -780,26 +780,29 @@ def calculate(data: bytes) -> dict:
     result = {"values": values, "errors": errors, "unsupported": unsupported, "formulas": len(model.formulas),
               "sheets": len(model.sheets), "magic": magic, "circular": len(model.circular), "engine": "built-in calculator"}
     if model.formulas:
-        _prefer_libreoffice(data, result, model)
+        _prefer_external(data, result, model)
     return result
 
 
-def _prefer_libreoffice(data: bytes, result: dict, model) -> None:
-    """When LibreOffice is installed it is the reference: its values replace ours and it covers every function."""
-    from . import office
-    lo = office.recalculate(data)
-    if lo is None:
-        return
+def _prefer_external(data: bytes, result: dict, model) -> None:
+    """The best engine available replaces ours, in this order: real Excel on the user's PC (through the companion), LibreOffice,
+    then the built-in calculator (already in `result`). An engine that is absent, slow or fails is skipped silently."""
+    from . import excel, office
     import openpyxl
-    values, errors = {}, []
-    for (sh, r, c), f in model.formulas.items():
-        ref = f"{openpyxl.utils.get_column_letter(c)}{r}"
-        v = lo.get((sh, ref))
-        if office.is_error(v):
-            errors.append(f"{sh}!{ref} {v}  ({f[:60]})")
-        elif v is not None:
-            values[(sh, ref)] = v
-    result.update(values=values, errors=errors, unsupported=[], engine="LibreOffice")
+    for engine, fn in (("Excel", excel.recalculate), ("LibreOffice", office.recalculate)):
+        ext = fn(data)
+        if ext is None:
+            continue
+        values, errors = {}, []
+        for (sh, r, c), f in model.formulas.items():
+            ref = f"{openpyxl.utils.get_column_letter(c)}{r}"
+            v = ext.get((sh, ref))
+            if office.is_error(v):
+                errors.append(f"{sh}!{ref} {v}  ({f[:60]})")
+            elif v is not None:
+                values[(sh, ref)] = v
+        result.update(values=values, errors=errors, unsupported=[], engine=engine)
+        return
 
 
 def write_cached(data: bytes, values: dict) -> bytes:

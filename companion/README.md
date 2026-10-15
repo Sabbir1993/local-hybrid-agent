@@ -20,6 +20,16 @@ Once logged in it connects a WebSocket back to the server using your session
 cookie and sits in the system tray; closing the window hides it to the tray
 instead of quitting (use the tray menu's "Quit" to actually exit).
 
+## Excel recalculation (`excel.recalc`, Windows, optional)
+
+If Microsoft Excel is installed on the PC, the server can ask the companion to calculate a workbook it just built, so the formula
+check uses real Excel (every function, Excel's own error cells). `excelops.js` runs the shipped `excel_recalc.ps1` (nothing comes
+from the server) on a **temporary copy**: hidden, macros force-disabled, links never updated, read-only, never saved, hard 45 s
+timeout that also ends that Excel process. `.xlsm` / `.xlsb` / `.xls` and any file with a VBA project are refused. The first
+workbook asks "calculate a workbook in Excel?" in a native dialog (tick "don't ask again" to keep it quiet until the companion
+restarts). Without Excel, or on an older companion, the server falls back to LibreOffice, then its built-in calculator.
+Needs companion 0.2.106+ (`asarUnpack` ships the script outside `app.asar`, where PowerShell can read it).
+
 ## Package a Windows installer
 
 ```

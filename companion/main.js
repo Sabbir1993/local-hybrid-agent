@@ -22,6 +22,8 @@ const oauthops = require("./oauthops");
 // loaded on first use: playwright-core is only needed once the agent opens a browser
 let _browserops = null;
 const browserops = () => (_browserops = _browserops || require("./browserops"));
+let _excelops = null;
+const excelops = () => (_excelops = _excelops || require("./excelops"));
 const androidops = require("./androidops");
 const iosops = require("./iosops");
 
@@ -518,6 +520,18 @@ const OPS = {
     // gitops.js still refuses history-destroying forms on this machine.
     await policy.ensurePath(p.cwd, "run git in");
     return gitops.run(p);
+  },
+  // calculate a workbook with the Excel installed on this PC (excelops.js): macros off, temp copy, hard timeout
+  "excel.recalc": async (p) => {
+    let data_b64 = p.data_b64;
+    if (!data_b64 && p.path) {                  // a workbook in an approved project folder
+      await policy.ensurePath(p.path, "read");
+      data_b64 = (await fsops.readB64({ path: p.path })).data;
+    }
+    await policy.confirmAction("calculate a workbook in Excel?",
+      "The AI assistant wants to open a workbook in Excel on this PC to calculate its formulas. Excel runs hidden on a temporary copy with macros " +
+      "and link updates disabled, and only the calculated numbers are sent back.", String(p.name || "workbook.xlsx"), "excel.recalc", false);
+    return excelops().recalc({ data_b64, name: p.name });
   },
   // OAuth sign-in redirect for remote MCP servers (oauthops.js)
   "oauth.loopback": (p) => oauthops.loopback(p),

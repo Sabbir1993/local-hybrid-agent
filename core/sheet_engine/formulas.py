@@ -90,3 +90,18 @@ def hardcoded_numbers(formula: str) -> list:
         if not small_int and val not in (100, 109, 101, 102, 103, 104, 105, 60, 365, 52) and tok not in out:
             out.append(tok)
     return out
+
+
+# Functions Excel added after 2007 are stored in the file as `_xlfn.NAME(`; written bare, Excel shows #NAME? until the cell is
+# edited (found by calculating a built workbook in real Excel: =XLOOKUP(...) came back #NAME?).
+NEEDS_XLFN = frozenset("IFS SWITCH CONCAT TEXTJOIN MAXIFS MINIFS XLOOKUP XMATCH IFNA DAYS XOR "
+                       "STDEV.S STDEV.P VAR.S VAR.P RANK.EQ".split())
+
+
+def to_file_form(formula: str) -> str:
+    """The formula with the `_xlfn.` prefix on newer functions (string literals untouched)."""
+    parts = re.split(r'("(?:[^"]|"")*")', str(formula))
+    for i in range(0, len(parts), 2):
+        parts[i] = re.sub(r"(?<![\w.])([A-Za-z][A-Za-z0-9.]*)\(",
+                          lambda m: f"_xlfn.{m.group(1).upper()}(" if m.group(1).upper() in NEEDS_XLFN else m.group(0), parts[i])
+    return "".join(parts)

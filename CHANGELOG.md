@@ -4,6 +4,14 @@ Entries are kept short on purpose: this is a local single-dev project and long
 per-commit prose rots faster than it helps. Versioning starts where the repo
 has a tag or release; until then, dates + headline changes.
 
+## 2026-10-15 — Excel as the formula engine
+
+- New companion op `excel.recalc` (companion 0.2.106, Windows): real Excel on the user's PC calculates a built workbook (hidden,
+  macros off, temp copy, asks once, hard timeout). Engine order Excel, LibreOffice, built-in; silent fallback; `GET /control/sheet_engines`.
+- Bug found by it: functions newer than Excel 2007 (XLOOKUP, IFS, TEXTJOIN, MAXIFS ...) were written without `_xlfn.` and showed
+  #NAME? in Excel. Fixed in the outline builder and in `doc_edit` formula writes.
+- Needs a companion update on the PC and a server restart. Opt-in live test: `A770_LIVE_EXCEL=1 python -m unittest tests.test_sheet_excel_live`.
+
 ## 2026-10-15 — PDF toolbox
 
 - New tools `pdf_read`, `pdf_tables`, `pdf_pages`, `pdf_form`, `pdf_redact`, `pdf_protect`, `pdf_see`, `pdf_ocr` (read, tables to Excel, page

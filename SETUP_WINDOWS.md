@@ -15,6 +15,9 @@ Linux: see [SETUP_LINUX.md](SETUP_LINUX.md). Background and config reference:
   "Add python.exe to PATH" ticked during install
 - Git for Windows
 - Up-to-date GPU driver (Intel Arc Control, or NVIDIA driver + CUDA toolkit)
+- Optional, for exact spreadsheet formula checking: LibreOffice (free; the app finds `soffice.exe` under `C:\Program Files\LibreOffice`
+  by itself). With Microsoft Excel on a PC that runs the companion app, Excel is used first. Settings shows which engine is active
+  (`GET /control/sheet_engines`).
 
 ---
 

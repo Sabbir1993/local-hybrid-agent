@@ -128,6 +128,13 @@ def _limits_view() -> dict:
     }
 
 
+@router.get("/control/sheet_engines")
+async def sheet_engines(user: Principal = Depends(require_permission("settings.orchestration.configure"))):
+    """Which engine checks workbook formulas for this user: Excel on their PC (companion), LibreOffice, or the built-in one."""
+    from core.sheet_engine import excel
+    return excel.status(user.id)
+
+
 @router.get("/control/agent_limits")
 async def agent_limits_get(user: Principal = Depends(require_permission("settings.orchestration.configure"))):
     """Output caps per lane, file-tool limits, compaction threshold and memory limits."""

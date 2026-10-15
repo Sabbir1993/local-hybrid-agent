@@ -46,12 +46,12 @@ def _coerce(value, allow_formula: bool):
         if not allow_formula:
             raise DocOpError(f"value '{s[:40]}' looks like a formula - use set_formula "
                              "(or formulas: true in set_range) to write formulas")
-        from ...sheet_engine.formulas import FormulaError, check_formula
+        from ...sheet_engine.formulas import FormulaError, check_formula, to_file_form
         try:
             check_formula(s)
         except FormulaError as e:
             raise DocOpError(f"formula '{s[:40]}' is not allowed: {e}")
-        return "formula", s[1:]
+        return "formula", to_file_form(s)[1:]
     t = s.strip()
     if len(t) > 1 and t[0] in "€£¥$":
         t = t[1:].strip()

@@ -1,6 +1,6 @@
 {
   "name": "local-agent",
-  "version": "0.2.105",
+  "version": "0.2.106",
   "description": "Local companion for Local Agent — runs file/shell operations on your own machine on the server's behalf.",
   "main": "main.js",
   "scripts": {
@@ -12,6 +12,7 @@
   "license": "MIT",
   "build": {
     "appId": "com.local-agent.companion",
+    "asarUnpack": ["excel_recalc.ps1"],
     "extraResources": [
       { "from": "build/icon.png", "to": "icon.png" },
       { "from": "build/icon.ico", "to": "icon.ico" }

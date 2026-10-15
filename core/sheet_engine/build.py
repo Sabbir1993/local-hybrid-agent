@@ -27,7 +27,7 @@ import io
 import re
 from typing import Optional
 
-from .formulas import FormulaError, check_formula
+from .formulas import FormulaError, check_formula, to_file_form
 
 MAX_SHEETS = 20
 MAX_COLS = 100
@@ -187,7 +187,7 @@ def _cell_value(raw, fmt: Optional[str], sheets: list, where: str, formulas: boo
         return s, False
     if s.startswith("="):
         try:
-            return check_formula(s, sheets=sheets), True
+            return to_file_form(check_formula(s, sheets=sheets)), True
         except FormulaError as e:
             raise BuildError(f"{where}: {e}")
     if fmt == "date" and _ISO_DATE.match(s):

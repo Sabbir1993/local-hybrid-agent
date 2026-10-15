@@ -335,6 +335,11 @@ exist; every change saves a NEW file and keeps the original.
 - **Knowledge-base spreadsheets** (`kb_sql`): the same read-only SQL over the Excel / CSV files in the company knowledge base
   (sums, medians, joins between documents), with the same per-user access rules as `kb_query`. Not offered while a cloud model
   answers (rows cannot be screened one by one in SQL); `kb_query` stays for that case.
+- **Formula engines, in order:** Excel on the user's own PC (through the companion app, `excel.recalc`, v0.2.106+: hidden, macros
+  disabled, temporary copy, asks once on that PC), then LibreOffice, then the built-in calculator. The tool result says which one
+  checked ("Checked (Excel): ..."); an engine that is missing, slow or denied is skipped silently. `GET /control/sheet_engines`
+  shows what is active. Switch Excel off with `"sheet_excel": false` under `chat`. Found by checking built workbooks in real Excel:
+  newer functions (XLOOKUP, IFS, TEXTJOIN ...) are now written with the `_xlfn.` prefix Excel needs, otherwise Excel showed #NAME?.
 - **LibreOffice** is optional: if `soffice` is installed (or found at its usual Windows path) it recalculates every formula
   and its values replace the built-in calculator's (the report says which engine was used). It only computes values; your file
   is never replaced by its re-saved copy. Switch off with `"sheet_libreoffice": false` under `chat`.
