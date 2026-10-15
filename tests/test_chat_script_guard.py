@@ -170,3 +170,21 @@ class ExplicitFormat(unittest.TestCase):
     def test_where_is_it_understands_the_typo(self):
         from routes.chat import file_intent as fi
         self.assertEqual(fi.missing_type("where is the spradesheet", ["a.md"]), "spreadsheet")
+
+
+class Typos(unittest.TestCase):
+    def test_misspelled_file_types_are_still_understood(self):
+        from core import prompt_scope as ps
+        for q, ext in (("share me the final spradesheet", ".xlsx"), ("give me a spreedsheet", ".xlsx"), ("need an excell file", ".xlsx"),
+                       ("make a powerpiont", ".pptx"), ("create a presentaion", ".pptx"), ("a pdf of it", ".pdf")):
+            self.assertEqual(ps.explicit_format(q), ext, q)
+
+    def test_look_alike_words_do_not_trigger(self):
+        from core import prompt_scope as ps
+        for q in ("I can present it to the board", "too much excess data", "dock the ship", "an expression of interest", "a better workout plan"):
+            self.assertEqual(ps.explicit_format(q), "", q)
+
+    def test_the_manual_says_how_to_choose_when_no_format_is_named(self):
+        from core import prompt_scope as ps
+        self.assertIn("CHOOSING THE FORMAT", ps.FILE_MANUAL)
+        self.assertIn("does not mean slides", ps.FILE_MANUAL)

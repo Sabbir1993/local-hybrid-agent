@@ -41,6 +41,10 @@ FILE_MANUAL = (
     "   - If not calling `write_file`, you MUST provide the complete, rich, runnable code inside a markdown code block (e.g. ```html ... ```). NEVER output `[DOWNLOAD: filename]` alone without either calling `write_file` or outputting the complete code block.\n"
     "2. For Excel spreadsheets (.xlsx) or CSV files, provide the tabular data rows in `content` with a descriptive filename. It will automatically be created as a real, valid spreadsheet workbook. The FIRST row is always a header of short column names (never a data record); several sheets are written as `## Sheet: Name` blocks, each with its own table, never as section titles inside one table.\n"
     "3. For PDF files (.pdf) and presentations (.pptx), provide clean, well-structured document or presentation content using `write_file(path='filename.pdf', content=...)`. It will automatically be compiled into a publication-ready PDF or presentation. CRITICAL: NEVER mention, display, or acknowledge to the user that any intermediate HTML generation or conversion is happening under the hood. Present it strictly as direct PDF or presentation creation.\n"
+    "3b. CHOOSING THE FORMAT when the user did not name one: content that is mostly tables, figures, trackers, plans with many "
+    "attributes per item, budgets, KPIs, comparisons or calculations -> .xlsx (a multi-sheet workbook); narrative reports, "
+    "policies, proposals -> .docx or .pdf; slides ONLY when they say slides / deck / presentation (\"present it to the board\" "
+    "does not mean slides). When unsure between two, make the one that matches the CONTENT and say which you chose in one line.\n"
     "4. All files generated in common storage automatically append a unique revision ID to ensure media and documents are never duplicated or overwritten.\n"
     "5. When you generate or write a file, you MUST include a download link in your final response using this exact syntax:\n"
     "   [DOWNLOAD: filename]\n"
@@ -585,7 +589,31 @@ def image_intent(query: str, prior_msgs=None) -> bool:
 
 
 # Spreadsheet / workbook BUILD requests: the model writes a workbook outline (core/sheet_engine/build.py) instead of a flat table.
-_SHEET_RE = re.compile(r"\b(xlsx|excel|spreadsheets?|sp[a-z]{2,8}\s?sheets?|workbooks?|worksheets?|budget sheet|tracker)\b", re.I)
+class _Family:
+    """A kind of file named in a message: the regex for the plain words, plus typo tolerance. "spradesheet", "spreedsheet",
+    "excell", "powerpiont" and "presentaion" all still name the thing; ordinary words next to them ("present", "excess",
+    "dock") do not (a word must be a close spelling of one of the names, not just similar to a prefix)."""
+
+    def __init__(self, rx, names, short=()):
+        self.rx, self.names, self.short = rx, tuple(names), frozenset(short)
+
+    def search(self, text):
+        t = str(text or "")
+        m = self.rx.search(t)
+        if m:
+            return m
+        import difflib
+        for w in re.findall(r"[a-z]{4,20}", t.lower()):
+            if w in self.short:
+                return True
+            if len(w) >= 5 and difflib.get_close_matches(w, self.names, n=1, cutoff=0.84):
+                return True
+        return None
+
+
+_SHEET_RE = _Family(
+    re.compile(r"\b(xlsx|excel|spreadsheets?|sp[a-z]{2,8}\s?sheets?|workbooks?|worksheets?|budget sheet|tracker)\b", re.I),
+    ("spreadsheet", "spreadsheets", "workbook", "worksheet", "worksheets"), short=("exel", "excell", "xcel", "exsel"))
 _SHEET_VERB_RE = re.compile(r"\b(creat\w*|mak(?:e|ing)|build\w*|generat\w*|prepar\w*|draft\w*|design\w*|set ?up|produce|give me|need|want|write|share|send|provide|export|deliver|get me|final)\b", re.I)
 _SHEET_EDIT_RE = re.compile(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain|analy[sz]e|analysis|attached|uploaded)\b", re.I)
 
@@ -640,7 +668,8 @@ XLSX_MANUAL = (
 _FORMAT_FAMILIES = (
     (".xlsx", _SHEET_RE),
     (".pdf", re.compile(r"\bpdf\b", re.I)),
-    (".pptx", _PPTX_RE),
+    (".pptx", _Family(_PPTX_RE, ("presentation", "presentations", "powerpoint", "slideshow"),
+                      short=("powerpiont", "powerpont", "slidedeck"))),
     (".docx", re.compile(r"\b(docx|word (?:document|file)|ms word)\b", re.I)),
 )
 _DOC_EXTS = (".xlsx", ".xls", ".csv", ".pdf", ".pptx", ".ppt", ".docx", ".doc")
