@@ -116,5 +116,89 @@ def _pages(args: dict) -> str:
     return f"{'; '.join(changes)}. Saved as {', '.join(names)}. {links}"
 
 
-PDF_IMPLS = {"pdf_read": _wrap(_read), "pdf_tables": _wrap(_tables), "pdf_pages": _wrap(_pages)}
-PDF_SCHEMAS = [PDF_READ_SCHEMA, PDF_TABLES_SCHEMA, PDF_PAGES_SCHEMA]
+PDF_FORM_SCHEMA = {"type": "function", "function": {
+    "name": "pdf_form",
+    "description": "Fill in a PDF form. Call with describe=true first to list the fields (names, types, options). Then pass "
+                   "values={field name: value} to fill them (saved as a NEW file; flatten=true makes the answers permanent). "
+                   "Only fill what the user gave you: never invent values.",
+    "parameters": {"type": "object", "properties": {
+        "file": _FILE, "describe": {"type": "boolean", "description": "list the form fields instead of filling"},
+        "values": {"type": "object", "description": "field name -> value"}, "flatten": {"type": "boolean"}, "password": _PASSWORD},
+        "required": ["file"]}}}
+
+PDF_REDACT_SCHEMA = {"type": "function", "function": {
+    "name": "pdf_redact",
+    "description": "Permanently remove text from a PDF (true redaction, verified: the text can no longer be extracted). Give terms "
+                   "(exact words, any case), patterns (regular expressions) and/or pan=true for payment card numbers. Pages with a "
+                   "match become pictures. Saved as a NEW file. If nothing matches, nothing is saved.",
+    "parameters": {"type": "object", "properties": {
+        "file": _FILE, "terms": {"type": "array", "items": {"type": "string"}}, "patterns": {"type": "array", "items": {"type": "string"}},
+        "pan": {"type": "boolean", "description": "also redact payment card numbers (Luhn-valid 13-19 digits)"},
+        "pages": _PAGES, "password": _PASSWORD}, "required": ["file"]}}}
+
+PDF_PROTECT_SCHEMA = {"type": "function", "function": {
+    "name": "pdf_protect",
+    "description": "Password-protect a PDF (AES-256) or remove the password. action='protect' needs user_password (6+ characters); "
+                   "allow_print / allow_copy / allow_modify set what a reader may do. action='unprotect' needs the current password. "
+                   "Saved as a NEW file. The passwords are never stored.",
+    "parameters": {"type": "object", "properties": {
+        "file": _FILE, "action": {"type": "string", "enum": ["protect", "unprotect"]},
+        "user_password": {"type": "string"}, "owner_password": {"type": "string"},
+        "allow_print": {"type": "boolean"}, "allow_copy": {"type": "boolean"}, "allow_modify": {"type": "boolean"},
+        "password": {"type": "string", "description": "the current password (to open an already protected file / for unprotect)"}},
+        "required": ["file", "action"]}}}
+
+
+def _form(args: dict) -> str:
+    from ..pdf_tools import forms
+    from ..pdf_tools.common import PdfError, resolve, save_new
+    name = _file(args)
+    if not name:
+        raise PdfError("file required (the PDF's name)")
+    p = resolve(name)
+    data = p.read_bytes()
+    if args.get("describe") or not args.get("values"):
+        return forms.describe(data, args.get("password"))
+    out, filled = forms.fill(data, args["values"], bool(args.get("flatten")), args.get("password"))
+    new = save_new(out, p.name, "filled")
+    return f"Filled {len(filled)} field(s): {'; '.join(filled)}. Saved as {new}. [DOWNLOAD: {new}]"
+
+
+def _redact(args: dict) -> str:
+    from ..pdf_tools import redact
+    from ..pdf_tools.common import PdfError, resolve, save_new
+    name = _file(args)
+    if not name:
+        raise PdfError("file required (the PDF's name)")
+    p = resolve(name)
+    out, report = redact.redact(p.read_bytes(), args.get("terms"), args.get("patterns"), bool(args.get("pan")),
+                                args.get("pages"), args.get("password"))
+    new = save_new(out, p.name, "redacted")
+    return f"{report} Saved as {new}. [DOWNLOAD: {new}]"
+
+
+def _protect(args: dict) -> str:
+    from ..pdf_tools import protect
+    from ..pdf_tools.common import PdfError, resolve, save_new
+    name = _file(args)
+    if not name:
+        raise PdfError("file required (the PDF's name)")
+    p = resolve(name)
+    action = str(args.get("action") or "protect").lower()
+    if action == "unprotect":
+        out = protect.unprotect(p.read_bytes(), str(args.get("password") or args.get("user_password") or ""))
+        tag, msg = "unlocked", "Password removed."
+    elif action == "protect":
+        out = protect.protect(p.read_bytes(), args.get("user_password"), args.get("owner_password"),
+                              args.get("allow_print", True) is not False, bool(args.get("allow_copy")),
+                              bool(args.get("allow_modify")), args.get("password"))
+        tag, msg = "protected", "Protected with AES-256."
+    else:
+        raise PdfError("action must be protect or unprotect")
+    new = save_new(out, p.name, tag)
+    return f"{msg} Saved as {new}. [DOWNLOAD: {new}]"
+
+
+PDF_IMPLS = {"pdf_read": _wrap(_read), "pdf_tables": _wrap(_tables), "pdf_pages": _wrap(_pages), "pdf_form": _wrap(_form),
+             "pdf_redact": _wrap(_redact), "pdf_protect": _wrap(_protect)}
+PDF_SCHEMAS = [PDF_READ_SCHEMA, PDF_TABLES_SCHEMA, PDF_PAGES_SCHEMA, PDF_FORM_SCHEMA, PDF_REDACT_SCHEMA, PDF_PROTECT_SCHEMA]
