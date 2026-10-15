@@ -46,7 +46,8 @@ allow_web: contextvars.ContextVar = contextvars.ContextVar("deck_web_images", de
 main_loop: contextvars.ContextVar = contextvars.ContextVar("deck_main_loop", default=None)
 
 _cache: "OrderedDict[tuple, dict]" = OrderedDict()
-_sems: contextvars.ContextVar = contextvars.ContextVar("deck_image_slots", default=None)
+_taken: contextvars.ContextVar = contextvars.ContextVar("deck_taken_pictures", default=None)
+_sems: contextvars.ContextVar =contextvars.ContextVar("deck_image_slots", default=None)
 _IMAGE_LINE = re.compile(r"(?mi)^\s*(?:image|picture|photo)\s*:")
 
 _ASPECT = {"cover": "tall", "bullets": "square", "full": "wide", "section": "wide", "gallery": "wide"}
@@ -185,16 +186,23 @@ async def _from_web(uid: int, query: str, why: list, anchors: tuple = ()) -> Opt
         why.append("no search result clearly matched the topic")
         return None
     image_proxy.remember(uid, [r.get("image_url") for r in good])
-    for r in good[:MAX_DOWNLOADS]:
+    taken = _taken.get()
+    for r in good[:MAX_DOWNLOADS + (len(taken) if taken else 0)]:
         url = str(r.get("image_url") or "")
+        if taken is not None and url in taken:
+            continue                                  # another slide of this deck already uses this picture
+        if taken is not None:
+            taken.add(url)                            # reserved now: slides resolve concurrently, so claim before downloading
         try:
             _ctype, raw = await asyncio.to_thread(image_proxy.fetch, uid, url)
+            data = await asyncio.to_thread(prepare, raw)
         except Exception:
-            continue
-        data = await asyncio.to_thread(prepare, raw)
+            data = None
         if data:
             src = str(r.get("source_url") or url)
-            return {"data": data, "credit_host": _host(src) or _host(url), "credit_url": src, "via": "web"}
+            return {"url": url, "data": data, "credit_host": _host(src) or _host(url), "credit_url": src, "via": "web"}
+        if taken is not None:
+            taken.discard(url)                        # unusable: free it for another slide
     why.append("no usable picture came back from the search")
     return None
 
@@ -252,7 +260,14 @@ async def _one(uid: int, spec: dict, kind: str, why: list, anchors: tuple = ()) 
     hit = _cache.get(key)
     if hit:
         _cache.move_to_end(key)
-        return hit
+        taken = _taken.get()
+        if taken is None or not hit.get("url") or hit["url"] not in taken:
+            if taken is not None and hit.get("url"):
+                taken.add(hit["url"])
+            return hit
+        # same words as an earlier slide: look for a different picture, leave the cache entry alone
+        res = await _from_web(uid, query, why, anchors) if source in ("auto", "search") else None
+        return res or hit
     res = None
     if source in ("auto", "search"):
         res = await _from_web(uid, query, why, anchors)
@@ -276,6 +291,7 @@ async def _resolve_many(uid: int, items: list, anchors: tuple, noun: str) -> tup
     notes: list = []
     sems = {"web": asyncio.Semaphore(WEB_SLOTS), "gen": asyncio.Semaphore(1)}
     token = _sems.set(sems)
+    taken_token = _taken.set(set())                    # picture URLs already used by this deck: no slide repeats another's
     deadline = time.monotonic() + RESOLVE_BUDGET_S
     todo = []
     for n, (key, label, kind, spec, extras) in enumerate(items):
@@ -307,6 +323,7 @@ async def _resolve_many(uid: int, items: list, anchors: tuple, noun: str) -> tup
         done = await asyncio.gather(*[run(*t) for t in todo])
     finally:
         _sems.reset(token)
+        _taken.reset(taken_token)
     used_web = False
     for key, label, got in done:
         (first, why), rest = got[0], got[1:]

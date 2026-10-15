@@ -352,3 +352,22 @@ class ToolFlow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoRepeats(unittest.TestCase):
+    """Two slides whose words rank the same search result first must not both show it."""
+
+    def test_a_picture_already_used_by_another_slide_is_skipped(self):
+        si.allow_web.set(True)
+        si._cache.clear()
+        results = [{"image_url": "https://img.example.org/fort.jpg", "source_url": "https://e.org/fort", "title": "Dhaka history fort"},
+                   {"image_url": "https://img.example.org/river.jpg", "source_url": "https://e.org/river", "title": "Dhaka history river"}]
+        deck = ("# Dhaka\n---\n## Mughal era\nimage: Dhaka history | source=search\n- a\n---\n"
+                "## Colonial rule\nimage: Dhaka history | source=search\n- b\n")
+        with mock.patch("core.web_tools._bing_images_search_sync", return_value=results), \
+                mock.patch("core.image_proxy.fetch", return_value=("image/png", png(1200, 800))), \
+                mock.patch("core.image_proxy.remember"):
+            images, _notes, _web = run(si.resolve(deck, 7))
+        urls = [v["url"] for v in images.values()]
+        self.assertEqual(len(urls), 2)
+        self.assertEqual(len(set(urls)), 2)
