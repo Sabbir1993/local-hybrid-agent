@@ -104,3 +104,19 @@ def _wraps_media(made: list[str], fname: str, query: str) -> bool:
 
 _WRAP_REFUSAL = ("error: the picture is already saved and shown to the user - don't put it in an HTML page "
                  "or any other file. Reply with the markdown generate_image returned and one short sentence.")
+
+
+_SCRIPT_SUFFIXES = (".sh", ".bash", ".bat", ".cmd", ".ps1", ".py")
+_SCRIPT_REFUSAL = ("error: chat cannot run scripts, so a script file builds nothing. Build the deck / PDF with doc_create "
+                   "(first slides + total + plan), then doc_append, as the instructions say. Do not write helper scripts.")
+_NO_TOOL_ANSWER = ("I could not finish that in this chat turn. Please say \"continue\" and I will carry on from where it stopped "
+                   "(Agent mode can run scripts if you need that).")
+
+
+def _script_for_deck(args: dict, brief_phase: str, pdf_build: bool, last_query: str) -> bool:
+    """True when a deck / PDF request tries to 'build' by saving a script (chat has no shell to run it)."""
+    path = str((args or {}).get("path") or (args or {}).get("file") or (args or {}).get("filename") or "").lower()
+    if not path.endswith(_SCRIPT_SUFFIXES):
+        return False
+    from core import prompt_scope
+    return bool(brief_phase or pdf_build or prompt_scope._PPTX_RE.search(str(last_query or "")))

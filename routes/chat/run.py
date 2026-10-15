@@ -33,7 +33,7 @@ from core.agent_loop import (
     _extract_text_tool_calls,
     estimate_prompt_tokens,
 )
-from core.agent_loop.degeneration import RUNAWAY_MSG
+from core.agent_loop.degeneration import RUNAWAY_MSG, sanitize_user_facing_content
 from core import prompt_scope
 from core.doc_tools import builds
 from core.monitor import (
@@ -50,7 +50,10 @@ from ..common.sampling_extra import sampler_extra
 
 from .base import router
 from .delivery import (
+    _NO_TOOL_ANSWER,
+    _SCRIPT_REFUSAL,
     _WRAP_REFUSAL,
+    _script_for_deck,
     _finalize_download_tags,
     _finalize_media,
     _prompt_tokens_of,
@@ -1184,6 +1187,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif t_name == "write_file" and _wraps_media(
                                 made_media, args.get("path") or args.get("file") or args.get("filename"), last_query):
                             res_str = _WRAP_REFUSAL
+                        elif t_name == "write_file" and _script_for_deck(args, brief_phase, pdf_build, last_query):
+                            res_str = _SCRIPT_REFUSAL
                         elif t_name == "write_file":
                             # off the event loop: a deck / PDF written here may look up pictures (web, image model)
                             res_str = await run_in_executor_ctx(tool_write_file_common, args)
@@ -1316,6 +1321,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     else:
                         content = "I have processed your request."
                         yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+
+            if "<tool_call>" in content or "<function=" in content or "<function " in content:
+                # the tool-free wrap-up turn tried to call a tool as text: never show that markup as the answer
+                content = sanitize_user_facing_content(re.sub(r"<function[=\s][\s\S]*?</function>", "", content)) or _NO_TOOL_ANSWER
+                yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
             if written_files:
                 content, _chg = _finalize_download_tags(content, written_files, last_query)
