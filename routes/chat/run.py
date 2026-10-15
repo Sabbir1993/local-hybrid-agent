@@ -2,13 +2,14 @@ import asyncio
 import json
 import sys
 import time
+import uuid
 from pathlib import Path
 from fastapi import Depends, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from core.auth import Principal
 from core.deps import get_current_user
 from core.audit import audit_log
-from core import input_guard
+from core import input_guard, runs
 from core.chat_errors import friendly_chat_error
 from core import mcp as mcp_core
 from core import output_guard
@@ -561,6 +562,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             yield f"event: kb_blocked\ndata: {json.dumps({'message': kb_blocked_reason})}\n\n"
         chat_rid = monitor_begin("chat/run", True, n_msgs=len(msgs),
                                  model=clean_model_name, source=model_source, provider=model_provider)
+        run_id = uuid.uuid4().hex
+        run_end_state, run_end_reason, turn = "completed", None, -1
+        runs.begin(run_id, "chat", user.id, stage="stream")
         t0 = time.time()
         turn_limit = max_turns       # grows by one if a continuation nudge needs it
         web_calls = 0
@@ -1297,12 +1301,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 yield _vc
             yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
         except asyncio.CancelledError:
-            pass
+            run_end_state = "cancelled"
         except Exception as e:
+            run_end_state, run_end_reason = "failed", type(e).__name__
             print(f"[chat] request failed: {type(e).__name__}: {e}", file=sys.stderr)
             yield f"event: delta\ndata: {json.dumps({'text': friendly_chat_error(e)})}\n\n"
             yield f"event: done\ndata: {{}}\n\n"
         finally:
+            runs.end(run_id, run_end_state, run_end_reason, step=turn)
             if redactor.matched:
                 audit_log(user, action="output_guard.redact", resource=redactor.matched.get("name"),
                           detail={"endpoint": "chat/run", "scope": redactor.matched.get("scope"),
@@ -1318,6 +1324,6 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         source=model_source, provider=model_provider)
             db_record_request("chat/run", clean_model_name, ptoks, toks, tps, dt, None, True, 200,
                               prompt_cached_tokens=pcached, completion_cached_tokens=0, is_orchestrator=False,
-                              source=model_source, provider=model_provider, user_id=user.id)
+                              source=model_source, provider=model_provider, user_id=user.id, run_id=run_id)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

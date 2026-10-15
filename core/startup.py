@@ -128,6 +128,11 @@ async def lifespan(app: FastAPI):
     # switch foreign keys on for the databases that check clean.
     from core.db_repair import enable_foreign_keys
     enable_foreign_keys()
+    from core import runs
+    stale = runs.reconcile_interrupted()  # nothing runs yet: leftover 'running' rows died with the old process
+    if stale:
+        print(f"[server_manager] {stale} run(s) were interrupted by the last shutdown")
+    runs.purge()
     _bootstrap_super_admin()
     _backfill_legacy_data_ownership()
     _backfill_legacy_cloud_providers()

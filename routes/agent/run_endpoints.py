@@ -28,7 +28,13 @@ def _not_found():
 
 @router.get("/agent/runs")
 async def agent_runs(session_id: Optional[int] = None, user: Principal = Depends(get_current_user)):
-    return {"runs": run_manager.list_for(user.id, session_id)}
+    from core import runs
+    lost = [{"id": r["run_id"], "session_id": r["session_id"], "reason": r["reason"], "stage": r["stage"],
+             "finished_at": r["updated_at"]}
+            for r in runs.interrupted(user.id, "agent")[:20]
+            if session_id is None or r["session_id"] == str(session_id)]
+    # runs the server lost in a restart: their frames are gone (memory only), Continue re-seeds from the plan
+    return {"runs": run_manager.list_for(user.id, session_id), "interrupted": lost}
 
 
 @router.get("/agent/run/{run_id}/events")

@@ -167,6 +167,14 @@ def _frame_text(frame) -> str:
     return frame.decode("utf-8", "replace") if isinstance(frame, (bytes, bytearray)) else str(frame)
 
 
+def _journal_end(handle: RunHandle) -> None:
+    """Record how the run ended in the run journal: state and a short reason code only, never frames."""
+    from core import runs
+    state = "cancelled" if handle.cancel_requested else handle.state
+    reason = handle.reason if isinstance(handle.reason, str) else None
+    runs.end(handle.id, state, reason, resumable=state in ("stopped", "cancelled", "interrupted", "failed"))
+
+
 async def _pump(handle: RunHandle, agen) -> None:
     try:
         async for raw in agen:
@@ -187,6 +195,7 @@ async def _pump(handle: RunHandle, agen) -> None:
                 {"state": "stopped", "reason": "cancelled", "note": "you stopped the run"}) + "\n\n")
         if handle.state == "running":
             handle.state = "completed" if not handle.cancel_requested else "stopped"
+        _journal_end(handle)
         try:
             await agen.aclose()
         except Exception:
@@ -203,6 +212,8 @@ def start(user_id: int, session_id: Optional[int], agen, run_id: Optional[str] =
     rid = run_id if valid_id(run_id) and run_id not in _RUNS else uuid.uuid4().hex
     handle = RunHandle(rid, user_id, session_id)
     _RUNS[rid] = handle
+    from core import runs
+    runs.begin(rid, "agent", user_id, session_id=session_id)
     # created here, inside the request, so the task inherits the request's context (user, device, plan session)
     handle.task = asyncio.get_running_loop().create_task(_pump(handle, agen))
     return handle
