@@ -658,14 +658,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         calls_msg, tool_msgs = [], []
                         for tid, q, out in zip(ids, pre_q, outs):
                             out = f"error: search failed ({type(out).__name__})" if isinstance(out, BaseException) else out
-                            web_calls += 1
-                            web_seen.add(kb_coverage.query_key(q))
-                            out = kb_coverage.cap_web_result(out, web_calls, *cap)
+                            web_seen.add(kb_coverage.query_key(q))      # not charged to the budget: it is for the model's follow-ups
+                            out = kb_coverage.cap_web_result(out, len(tool_msgs) + 1, *cap)
                             ok = not (isinstance(out, str) and out.startswith("error:"))
                             yield sse("tool_result", {'id': tid, 'name': 'web_search', 'ok': ok, 'result': out})
                             calls_msg.append({"id": tid, "type": "function", "function": {"name": "web_search", "arguments": json.dumps({"query": q})}})
                             tool_msgs.append({"role": "tool", "tool_call_id": tid, "content": out})
-                        msgs.append({"role": "assistant", "content": "I will research the topic from several angles at once.", "tool_calls": calls_msg})
+                        msgs.append({"role": "assistant", "content": f"I searched {len(pre_q)} angles at once; the web budget is untouched, so I can follow up on gaps.", "tool_calls": calls_msg})
                         msgs.extend(tool_msgs)
 
                 res_dict = None
