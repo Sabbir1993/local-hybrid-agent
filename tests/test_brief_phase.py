@@ -96,9 +96,12 @@ class ServerCard(unittest.TestCase):
         pdf, _ = self.card("pdf")
         self.assertEqual(ps.brief_phase("Short\nTechnical team\nFormal report", [{"role": "assistant", "content": pdf}]), "build")
 
-    def test_a_fresh_request_asks_and_the_route_answers_without_the_model(self):
+    def test_the_model_writes_the_card_the_server_copy_is_only_a_fallback(self):
         from pathlib import Path
         self.assertEqual(ps.brief_phase("Make a deep informative PPT of Dhaka with its visual image and graph", []), "ask")
         src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
-        self.assertIn('prompt_scope.brief_card("deck" if', src)
-        self.assertIn("brief_card_server", src)
+        self.assertIn('"brief_card_server", "fallback"', src)
+        self.assertIn('card_mode == "always"', src)                                 # the always-server mode is opt-in
+        self.assertEqual(src.count('"```questionnaire" not in content'), 2)        # fallback at both final-answer paths
+        self.assertIn("DECK_BRIEF", ps.DECK_BRIEF.replace("POWERPOINT REQUEST", "DECK_BRIEF"))
+        self.assertIn("```questionnaire", ps.DECK_BRIEF)                            # the model is still told to write the card

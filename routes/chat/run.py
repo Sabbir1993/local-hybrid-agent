@@ -189,9 +189,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                    and bool(prompt_scope._PPTX_RE.search(prev_assistant)))
     pdf_build = prompt_scope.pdf_brief_wanted(last_query, msgs[:-1])      # a PDF request, or the answers to our PDF card
     brief_phase = prompt_scope.brief_phase(last_query, msgs[:-1])         # "ask" (card now) / "build" (answered) / ""
-    if brief_phase == "ask" and (APP_CONFIG.get("chat") or {}).get("brief_card_server", True) is not False:
-        # the questionnaire card comes from the server, not from the model (a local model sometimes narrates its reasoning instead)
-        card = prompt_scope.brief_card("deck" if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]) else "pdf")
+    # The model writes the "few quick choices" card, as it always did. The server's copy of it (prompt_scope.brief_card) is used
+    # only when the model fails to produce one (a local model sometimes narrates its reasoning instead), or always when
+    # chat.brief_card_server is "always".
+    card_mode = (APP_CONFIG.get("chat") or {}).get("brief_card_server", "fallback")
+    card = prompt_scope.brief_card("deck" if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]) else "pdf") if brief_phase == "ask" else ""
+    if brief_phase == "ask" and card_mode == "always":
 
         async def _card_sse():
             yield f"event: delta\ndata: {json.dumps({'text': card})}\n\n"
@@ -1127,6 +1130,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                 content = "I have processed your request."
                                 yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
 
+                    if card and card_mode is not False and "```questionnaire" not in content:
+                        content = card                      # the model did not produce the card: send ours instead
+                        yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
                     _clean = scrub_server_paths(content)
                     if _clean != content:
                         content = _clean
@@ -1382,6 +1388,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 content = sanitize_user_facing_content(re.sub(r"<function[=\s][\s\S]*?</function>", "", content)) or _NO_TOOL_ANSWER
                 yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
+            if card and card_mode is not False and "```questionnaire" not in content:
+                content = card
+                yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
             _clean = scrub_server_paths(content)
             if _clean != content:
                 content = _clean
