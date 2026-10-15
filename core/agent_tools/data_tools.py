@@ -61,5 +61,58 @@ def tool_data_query(args: dict) -> str:
         return f"error: could not read the data file ({type(e).__name__})"
 
 
-DATA_IMPLS = {"data_query": tool_data_query}
-DATA_SCHEMAS = [DATA_QUERY_SCHEMA]
+DATA_SQL_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "data_sql",
+        "description": "Exact analysis over attached Excel / CSV data with read-only SQL (SQLite): joins across sheets or files, "
+                       "pivots with SUM(CASE WHEN ...), GROUP BY several columns, window functions, medians / percentiles "
+                       "(MEDIAN, PERCENTILE(col, 0.9), STDEV, MODE), month / quarter buckets with strftime, top-N, ratios. "
+                       "Call with describe=true first to see the table and column names. Each sheet is a table; dates are ISO text, "
+                       "numbers are REAL. SELECT only; never changes the file. Prefer this over data_query for anything beyond a "
+                       "single filter / one group-by.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "files": {"type": "array", "items": {"type": "string"},
+                          "description": "attached file name(s) exactly as shown in the attachment note; several files can be joined"},
+                "file": {"type": "string", "description": "one attached file (same as files with one item)"},
+                "describe": {"type": "boolean", "description": "list the tables and columns instead of running a query"},
+                "sql": {"type": "string", "description": "one SELECT (or WITH ... SELECT) statement"},
+                "limit": {"type": "integer", "description": "max rows returned (default 50, max 200)"},
+            },
+        },
+    },
+}
+
+
+def tool_data_sql(args: dict) -> str:
+    from ..doc_tools.location import resolve_common
+    from ..sheet_engine import sql as sheet_sql
+    names = list(args.get("files") or [])
+    if args.get("file"):
+        names.append(args["file"])
+    names = [str(n) for n in names if n]
+    if not names:
+        return "error: file required (the attached file's name)"
+    paths = []
+    for n in names[:6]:
+        p = resolve_common(n)
+        if p is None or not p.is_file():
+            return f"error: no attached data file named '{n}' - use the name from the attachment note"
+        if p.suffix.lower() not in (".xlsx", ".xls", ".csv"):
+            return f"error: data_sql reads .xlsx / .xls / .csv files, not {p.suffix or 'this file'}"
+        paths.append(p)
+    try:
+        wb = sheet_sql.load(paths)
+        if args.get("describe") or not args.get("sql"):
+            return sheet_sql.describe(wb)
+        return sheet_sql.query(wb, args["sql"], args.get("limit") or sheet_sql.DEFAULT_ROWS)
+    except sheet_sql.SqlError as e:
+        return f"error: {e}"
+    except Exception as e:
+        return f"error: could not read the data file ({type(e).__name__})"
+
+
+DATA_IMPLS = {"data_query": tool_data_query, "data_sql": tool_data_sql}
+DATA_SCHEMAS = [DATA_QUERY_SCHEMA, DATA_SQL_SCHEMA]

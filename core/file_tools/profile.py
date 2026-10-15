@@ -24,6 +24,8 @@ class Table:
 
     def __init__(self, name: str, headers: list, rows: list, total_rows: int):
         self.name, self.headers, self.rows, self.total_rows = name, headers, rows, total_rows
+        self.preamble: list = []       # title / note rows found above the header
+        self.formulas: dict = {}       # header -> an example formula, for columns that hold formulas (xlsx)
 
     @property
     def truncated(self) -> bool:
@@ -44,21 +46,57 @@ def _is_blank(row) -> bool:
     return all(c is None or (isinstance(c, str) and not c.strip()) for c in row)
 
 
+HEADER_SCAN = 30                 # non-blank rows looked at to find the header (titles / banners / notes sit above it)
+
+
+def _filled(row) -> list:
+    return [c for c in row if not (c is None or (isinstance(c, str) and not c.strip()))]
+
+
+def header_index(buf: list) -> int:
+    """Which of the first non-blank rows is the header. A sheet often opens with a title, a "prepared by" line or a merged
+    banner (one filled cell); the header is the first row that is about as wide as the widest row and is all text."""
+    widest = max((len(_filled(r)) for r in buf), default=0)
+    if widest < 2:
+        return 0
+    need = max(2, -(-widest * 6 // 10))
+    for i, r in enumerate(buf):
+        cells = _filled(r)
+        if len(cells) >= need and all(isinstance(c, str) for c in cells):
+            return i
+    return 0
+
+
 def _table_from_rows(name: str, rows_iter, max_rows: int) -> Optional[Table]:
-    headers, rows, total = None, [], 0
-    for row in rows_iter:
+    buf, stream = [], iter(rows_iter)
+    for row in stream:
         row = list(row)
         if _is_blank(row):
             continue
-        if headers is None:
-            headers = _clean_headers(row)
-            continue
+        buf.append(row)
+        if len(buf) >= HEADER_SCAN:
+            break
+    if not buf:
+        return None
+    hi = header_index(buf)
+    headers = _clean_headers(buf[hi])
+    preamble = [" ".join(str(c).strip() for c in _filled(r))[:120] for r in buf[:hi]]
+    rows, total = [], 0
+
+    def take(row):
+        nonlocal total
         total += 1
         if len(rows) < max_rows:
             rows.append(row)
-    if headers is None:
-        return None
-    return Table(name, headers, rows, total)
+    for row in buf[hi + 1:]:
+        take(row)
+    for row in stream:
+        row = list(row)
+        if not _is_blank(row):
+            take(row)
+    t = Table(name, headers, rows, total)
+    t.preamble = preamble
+    return t
 
 
 def read_tables(path, max_rows: int = MAX_LOAD_ROWS) -> list:
@@ -100,7 +138,39 @@ def read_tables(path, max_rows: int = MAX_LOAD_ROWS) -> list:
                 tables.append(t)
     finally:
         wb.close()
+    _note_formulas(p, tables)
     return tables
+
+
+FORMULA_SCAN_ROWS = 400
+
+
+def _note_formulas(path, tables: list) -> None:
+    """Which columns are formulas (first rows only): the data view shows cached values, and a workbook that was written by
+    a script and never opened in Excel has none, so those columns would look empty. Sets table.formulas {header: example}."""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(str(path), read_only=True, data_only=False)
+    except Exception:
+        return
+    try:
+        by_name = {t.name: t for t in tables}
+        for ws in wb.worksheets:
+            t = by_name.get(ws.title)
+            if t is None:
+                continue
+            found = {}
+            for n, row in enumerate(ws.iter_rows(values_only=True)):
+                if n >= FORMULA_SCAN_ROWS:
+                    break
+                for ci, v in enumerate(row):
+                    if isinstance(v, str) and v.startswith("=") and ci < len(t.headers) and t.headers[ci] not in found:
+                        found[t.headers[ci]] = v[:60]
+            t.formulas = found
+    except Exception:
+        pass
+    finally:
+        wb.close()
 
 
 # ---- column typing -------------------------------------------------------------------------------------------------
@@ -209,9 +279,16 @@ def profile_table(t: Table) -> str:
              + (f" (first {len(t.rows):,} rows profiled)" if t.truncated else "")]
     cols = list(zip(*[(r + [None] * len(t.headers))[: len(t.headers)] for r in t.rows])) if t.rows else [[] for _ in t.headers]
     for h, values in list(zip(t.headers, cols))[:MAX_COLS_SHOWN]:
-        lines.append(_column_line(h, column_stats(list(values), h)))
+        line = _column_line(h, column_stats(list(values), h))
+        if h in t.formulas:
+            line += f"; formula column, e.g. {t.formulas[h]}"
+            if line.startswith(f"- {_cell(h, 40)}: empty"):
+                line += " (no calculated values stored: open and save it in Excel, or recompute from the other columns)"
+        lines.append(line)
     if len(t.headers) > MAX_COLS_SHOWN:
         lines.append(f"- ... {len(t.headers) - MAX_COLS_SHOWN} more columns not shown")
+    if t.preamble:
+        lines.insert(1, "Title rows above the header (not data): " + " | ".join(t.preamble[:3]))
     if t.rows:
         lines.append(f"Sample rows (first {min(SAMPLE_ROWS, len(t.rows))}):")
         for i, r in enumerate(t.rows[:SAMPLE_ROWS], start=1):
