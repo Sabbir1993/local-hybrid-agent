@@ -136,7 +136,11 @@ def missing_type(query: str, files: list) -> str:
     return ""
 
 
-def file_followup_intent(query: str, has_prior: bool) -> Optional[str]:
+_SHEETISH_RE = re.compile(r"\b(sheets?|tabs?|columns?|rows?|cells?|headers?|formulas?|totals?|charts?|workbook|spreadsheet|excel|xlsx)\b", re.I)
+_NEW_FILE_RE = re.compile(r"\b(new|another|separate|second|different|fresh|brand new)\b.{0,25}\b(sheet|workbook|spreadsheet|excel|file|xlsx)\b", re.I)
+
+
+def file_followup_intent(query: str, has_prior: bool, prior_files=None, asked: bool = False) -> Optional[str]:
     """'where' = user can't find / wants the existing file again;
     'edit' = user wants the existing file changed. None otherwise."""
     q = (query or "").strip()
@@ -144,6 +148,12 @@ def file_followup_intent(query: str, has_prior: bool) -> Optional[str]:
         return None
     if _FILE_WHERE_RE.search(q) and not _FILE_EDIT_RE.search(q):
         return "where"
+    has_book = any(str(f).lower().endswith((".xlsx", ".xls")) for f in (prior_files or []))
+    if has_book and not _NEW_FILE_RE.search(q):
+        if _SHEETISH_RE.search(q):
+            return "edit"                  # "the cost sheet needs a Month column": the workbook already in this chat, not a new one
+        if asked and len(q) < 500:
+            return "edit"                  # the user is answering a question the assistant asked while working on it
     if _FILE_EDIT_RE.search(q) and re.search(
             r"\b" + _FILE_REF_RE + r"\b|\b(it|this|that|previous|last|same|ui|design|style|colou?rs?|layout"
             r"|section|chart|table|theme|font)\b|/frontend-design", q, re.IGNORECASE):

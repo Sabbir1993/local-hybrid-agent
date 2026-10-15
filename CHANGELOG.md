@@ -14,6 +14,7 @@ has a tag or release; until then, dates + headline changes.
   and formulas on hover, first 500 rows.
 - Restyle a built workbook with `doc_edit` (charts, formats, rules, theme, a formula column); `kb_sql` brings the same SQL to
   knowledge-base spreadsheets (local answers only); optional LibreOffice recalculation when installed; `data_clean`.
+- A workbook already in the chat is continued, not recreated: sheet / column / row talk or an answer to the assistant's question is an edit of that file, a second .xlsx is refused unless a new one is asked for, `set_column` changes one column of one sheet by its header, cell formulas written through `doc_edit` now obey the same function allow-list, and `sandbox:/mnt/data/...` links are scrubbed.
 - Excel from loosely written text: pipe-separated lines without outer pipes, several tables with headings, csv with 4,800,000 style numbers and notes between tables become one properly named sheet per table (prose goes to an Overview sheet, long text wraps); the old delimiter guess that split pipe tables on commas is fixed. A flat sheet whose first row is really a record gets generic column names (and the writer tells the model to add a header); Chat never shows server file paths (`/common_space/...` links become download tags); a csv with `Sheet2,Title` sections
   becomes a workbook with real sheets; workbooks grow sheet by sheet with `doc_edit` `add_outline_sheet`; the manual asks for
   4-6 sheets for business requests.

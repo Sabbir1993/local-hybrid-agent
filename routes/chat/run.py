@@ -54,6 +54,8 @@ from .delivery import (
     _WRAP_REFUSAL,
     chat_write_file,
     _ALREADY_SAVED,
+    _DUPLICATE_WORKBOOK,
+    _duplicate_workbook,
     _already_written,
     _finalize_download_tags,
     scrub_server_paths,
@@ -157,7 +159,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     own_q = own_words(last_query, 2000)
     # attached data anywhere in the conversation (a follow-up like 'which status has the most rows' has none in its own message)
     has_attachments = any(m.get('role') == 'user' and has_attachment_text(str(m.get('content') or '')) for m in msgs)
-    file_followup = file_followup_intent(own_q, bool(prior_files))
+    _prev_a = next((str(m.get("content") or "") for m in reversed(msgs[:-1]) if m.get("role") == "assistant"), "")
+    _asked = "```questionnaire" in _prev_a or _prev_a.rstrip()[-300:].rstrip("*_ ").endswith("?")
+    file_followup = file_followup_intent(own_q, bool(prior_files), prior_files, _asked)
     absent_type = missing_type(own_q, prior_files) if file_followup == "where" else ""
     if absent_type:
         file_followup = None            # "where is the spreadsheet?" when only a .md exists: build it, do not re-send the .md
@@ -1203,6 +1207,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                     res_str, done = rest
                                     if done and done.get("markdown"):
                                         made_media.append(done["markdown"])
+                        elif t_name in ("write_file", "doc_create") and _duplicate_workbook(
+                                prior_files + written_files, args, own_q):
+                            res_str = _DUPLICATE_WORKBOOK.format(name=[f for f in prior_files + written_files if f.lower().endswith((".xlsx", ".xls"))][-1])
                         elif t_name in ("write_file", "doc_create") and prompt_scope.format_mismatch(
                                 explicit_ext, args.get("path") or args.get("file") or args.get("filename")):
                             res_str = prompt_scope.format_mismatch(

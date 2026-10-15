@@ -212,6 +212,12 @@ def edit(data: bytes, name: str, ops, source_spec: Optional[str] = None) -> Edit
     mod = EDITABLE.get(ext)
     if mod is None:
         raise DocOpError(f"{ext} files cannot be edited (have: {', '.join(sorted(DOC_EXTS))})")
+    if ext == ".xlsx" and any(str(o.get("op")).lower() == "set_column" for o in ops):
+        from ..sheet_engine import edit as sheet_edit
+        try:
+            ops = sheet_edit.expand_column_ops(data, ops)        # one column of one sheet, nothing else touched
+        except sheet_edit.EditError as e:
+            raise DocOpError(str(e))
     before = full_text(data, name)
     res = mod.apply(data, ops)
     if _pan_count(full_text(res.data, name)) > _pan_count(before):

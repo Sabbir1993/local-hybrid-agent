@@ -149,8 +149,9 @@ def _already_written(written_files: list, args: dict) -> bool:
 # only through its [DOWNLOAD: name] tag, which the app turns into a preview / download button.
 _DOC_EXT = r"(?:xlsx|xls|csv|pptx|ppt|docx|doc|pdf|md|txt|html|json|png|jpg|jpeg|zip)"
 _SERVER_PATH = (
-    r"(?:file:///?)?(?:[A-Za-z]:[\\/]|/)?(?:[^\s()<>\]\[`\"']*[\\/])?(?:common_space|user_\d+|uploads|knowledge_uploads)[\\/]"
+    r"(?:sandbox:|file:///?)?(?:[A-Za-z]:[\\/]|/)?(?:[^\s()<>\]\[`\"']*[\\/])?(?:common_space|user_\d+|uploads|knowledge_uploads)[\\/]"
     r"[^\s()<>\]\[`\"']*")
+_SANDBOX_PATH = r"(?:sandbox:)?/mnt/(?:data|user-data|outputs)/[^\s()<>\]\[`\"']+"
 _ABS_PATH = r"(?:[A-Za-z]:[\\/]|/(?:tmp|home|var|srv|mnt|opt|etc|usr|root|Users|data)/)[^\s()<>\]\[`\"']+"
 
 
@@ -174,8 +175,8 @@ def scrub_server_paths(content: str) -> str:
             return f"[DOWNLOAD: {name}]"
         return label or name
 
-    link_rx = re.compile(r"!?\[([^\]]*)\]\(\s*((?:" + _SERVER_PATH + r"|" + _ABS_PATH + r"))\s*\)", re.I)
-    bare_rx = re.compile(r"`?(" + _SERVER_PATH + r")`?", re.I)
+    link_rx = re.compile(r"!?\[([^\]]*)\]\(\s*((?:" + _SERVER_PATH + r"|" + _SANDBOX_PATH + r"|" + _ABS_PATH + r"))\s*\)", re.I)
+    bare_rx = re.compile(r"`?(" + _SERVER_PATH + r"|" + _SANDBOX_PATH + r")`?", re.I)
     parts = re.split(r"(```[\s\S]*?```)", text)
     for i, part in enumerate(parts):
         if part.startswith("```"):
@@ -184,3 +185,18 @@ def scrub_server_paths(content: str) -> str:
         part = bare_rx.sub(lambda m: _base(m.group(1)), part)
         parts[i] = re.sub(r"(\[DOWNLOAD: [^\]]+\])(?:\s*\(\s*\1\s*\))+", r"\1", part)
     return "".join(parts)
+
+
+_DUPLICATE_WORKBOOK = ("error: this chat already has the workbook {name}. Change THAT file instead of creating another one: "
+                       "doc_edit(file='{name}', ops=[...]) with set_column (one column of one sheet), set_range / set_cell, "
+                       "add_outline_sheet (a new sheet), add_column, set_format, add_chart ... Only the parts the user asked for "
+                       "change. Create a new file only if the user asked for a separate workbook.")
+_SEPARATE_RE = re.compile(r"\b(new|another|separate|second|different|fresh|brand new)\b", re.I)
+
+
+def _duplicate_workbook(files: list, args: dict, query: str) -> bool:
+    """True when this call would create a second .xlsx although the chat already has one and the user did not ask for a new one."""
+    p = str((args or {}).get("path") or (args or {}).get("file") or (args or {}).get("filename") or "").lower()
+    if not p.endswith((".xlsx", ".xls")) or _SEPARATE_RE.search(query or ""):
+        return False
+    return any(str(f).lower().endswith((".xlsx", ".xls")) for f in files)

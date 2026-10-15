@@ -165,3 +165,60 @@ def edit(outline: Optional[str], ops: list) -> tuple:
         pass
     parse(new_outline)
     return data, new_outline, changes
+
+
+
+def expand_column_ops(data: bytes, ops: list) -> list:
+    """Turn {op:'set_column', sheet?, column:'Cost' | 'C', values:[..] | formula:'=B{r}*Rate', rows?} into set_range ops aimed at
+    exactly that column (found by its header text or its letter). Nothing else in the workbook is addressed."""
+    if not any(str(o.get("op")).lower() == "set_column" for o in ops):
+        return ops
+    import io
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True)
+    out = []
+    try:
+        for op in ops:
+            if str(op.get("op")).lower() != "set_column":
+                out.append(op)
+                continue
+            col = _need(op, "column")
+            want = str(op.get("sheet") or "").strip().lower()
+            ws = next((w for w in wb.worksheets if w.title.lower() == want), None) if want else wb.worksheets[0]
+            if ws is None:
+                raise EditError(f"set_column: sheet '{op.get('sheet')}' not found (sheets: {', '.join(w.title for w in wb.worksheets)})")
+            head_row, col_idx, headers = None, None, []
+            for r, row in enumerate(ws.iter_rows(min_row=1, max_row=25, values_only=True), start=1):
+                cells = [str(c).strip() if c is not None else "" for c in row]
+                if re.fullmatch(r"[A-Za-z]{1,3}", col) and not any(c.lower() == col.lower() for c in cells):
+                    from openpyxl.utils import column_index_from_string
+                    col_idx, head_row = column_index_from_string(col.upper()), 1
+                    break
+                hit = next((i for i, c in enumerate(cells, 1) if c and c.lower() == col.lower()), None) \
+                    or next((i for i, c in enumerate(cells, 1) if c and col.lower() in c.lower()), None)
+                if hit:
+                    col_idx, head_row = hit, r
+                    break
+                if sum(1 for c in cells if c) >= 2 and not headers:
+                    headers = [c for c in cells if c]
+            if col_idx is None:
+                raise EditError(f"set_column: no column '{col}' on sheet '{ws.title}'"
+                                + (f" (its columns: {', '.join(headers[:15])})" if headers else ""))
+            from openpyxl.utils import get_column_letter
+            letter = get_column_letter(col_idx)
+            q = f"'{ws.title}'" if re.search(r"[^A-Za-z0-9_]", ws.title) else ws.title
+            if isinstance(op.get("values"), list):
+                values = [[v] for v in op["values"]]
+            elif op.get("formula"):
+                formula = str(op["formula"])
+                if not formula.startswith("="):
+                    raise EditError("set_column: formula must start with = and may use {r} for the row number")
+                n = int(op.get("rows") or max(1, (ws.max_row or head_row + 1) - head_row))
+                values = [[formula.replace("{r}", str(head_row + 1 + i))] for i in range(n)]
+            else:
+                raise EditError("set_column: give values (a list, one per row) or a formula such as =B{r}*Rate")
+            out.append({"op": "set_range", "addr": f"{q}!{letter}{head_row + 1}", "values": values,
+                        "formulas": any(isinstance(v[0], str) and v[0].startswith("=") for v in values)})
+    finally:
+        wb.close()
+    return out
