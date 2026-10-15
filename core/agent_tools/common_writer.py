@@ -97,6 +97,7 @@ def tool_write_file_common(args: dict) -> str:
             return f"error: {e}"
         p.write_bytes(data)
         msg = f"Wrote Excel file to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+        msg += _sheet_note(data)
 
     # PowerPoint / Word: built on real layouts and styles so doc_edit can later
     # change one slide or paragraph without regenerating the rest
@@ -146,3 +147,13 @@ def tool_write_file_common(args: dict) -> str:
         doc_store.register(get_current_user_id(), p.name, p.suffix.lstrip(".").lower(),
                            source_spec=spec, sha256=sha256(p.read_bytes()))
     return msg
+
+
+def _sheet_note(data: bytes) -> str:
+    """What the built-in calculator found in a workbook with formulas ('' for a plain table or when the check fails)."""
+    try:
+        from ..sheet_engine import calc
+        note = calc.check_report(calc.calculate(data))
+        return (" " + note) if note else ""
+    except Exception:
+        return ""

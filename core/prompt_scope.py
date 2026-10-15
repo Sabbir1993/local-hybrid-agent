@@ -557,8 +557,10 @@ ATTACHED_DATA = (
     "ATTACHED DATA SET:\n"
     "- The user attached a spreadsheet. Their message contains its PROFILE (sheets, columns, types, ranges, common values, sample "
     "rows), not every row. Work from that first and say what the data is.\n"
-    "- For any count, total, average, ranking, comparison or filter, call `data_query` on the attached file (use the file name from "
-    "the attachment note): it answers exactly over ALL rows. Never estimate figures from the sample rows.\n"
+    "- For any count, total, average, ranking, comparison or filter, call `data_query` (one filter / one group-by) or `data_sql` "
+    "(joins across sheets, pivots, several group-bys, medians / percentiles, month or quarter buckets, window functions; call it "
+    "with describe=true first) on the attached file (use the file name from the attachment note): they answer exactly over ALL "
+    "rows. Never estimate figures from the sample rows. If the profile shows title rows or formula columns, say so.\n"
     "- Do NOT search the company knowledge base or the web for a question about the attached data. Use them only if the user asks "
     "for company information or outside facts.\n"
     "- Answer with a short summary of the key findings and figures (a small table when it helps); mention anything you could not "
@@ -580,3 +582,46 @@ def image_intent(query: str, prior_msgs=None) -> bool:
         if m.get("role") == "user":
             return bool(_IMAGE_RE.search(str(m.get("content") or "")[:400])) and len((query or "").strip()) < 80
     return False
+
+
+# Spreadsheet / workbook BUILD requests: the model writes a workbook outline (core/sheet_engine/build.py) instead of a flat table.
+_SHEET_RE = re.compile(r"\b(xlsx|excel|spreadsheets?|workbooks?|worksheets?|budget sheet|tracker)\b", re.I)
+_SHEET_VERB_RE = re.compile(r"\b(creat\w*|mak(?:e|ing)|build\w*|generat\w*|prepar\w*|draft\w*|design\w*|set ?up|produce|give me|need|want|write)\b", re.I)
+_SHEET_EDIT_RE = re.compile(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain|analy[sz]e|analysis|attached|uploaded)\b", re.I)
+
+
+def sheet_build_wanted(query: str, prior_msgs=None) -> bool:
+    """True for a request to make an Excel workbook / spreadsheet (not an edit of, or analysis of, an existing one)."""
+    q = (query or "").strip()
+    if not q or not _SHEET_RE.search(q) or not _SHEET_VERB_RE.search(q):
+        return False
+    return not _SHEET_EDIT_RE.search(q)
+
+
+XLSX_MANUAL = (
+    "EXCEL WORKBOOK REQUEST (build it with doc_create, file=<name>.xlsx):\n"
+    "Write a WORKBOOK OUTLINE, not a flat table:\n"
+    "```\n"
+    "# Workbook title\n"
+    "theme: corporate        (corporate|forest|sunset|minimal|royal|ember|editorial|ocean)\n"
+    "## Sheet: Assumptions\n"
+    "| Item | Value |\n|---|---|\n| Tax rate | 15% |\n"
+    "name: TaxRate = Assumptions!B2\n"
+    "## Sheet: Sales\n"
+    "| Date | Region | Revenue | Tax |\n|---|---|---|---|\n| 2026-07-05 | Dhaka | 1000 | =C2*TaxRate |\n"
+    "format: Revenue=currency:BDT, Tax=currency:BDT, Date=date\n"
+    "total: Revenue=sum, Tax=sum\n"
+    "highlight: Revenue<500 red\nscale: Revenue\nvalidate: Region in [Dhaka, Khulna]\ntable: SalesTbl\n"
+    "chart: bar | title=Revenue by region | x=Region | y=Revenue\n"
+    "```\n"
+    "RULES (professional spreadsheet practice):\n"
+    "- Calculations are FORMULAS (=SUM(C2:C9), =SUMIFS(...), =C2*TaxRate), never numbers you worked out yourself. Totals use "
+    "`total:`. The system checks and calculates every formula and reports errors: fix them with doc_edit.\n"
+    "- Inputs (rates, targets, thresholds) go on an Assumptions sheet and are referenced by cell or `name:`; do not type constants "
+    "like 1.15 inside formulas. Put units in headers (Revenue (BDT)). One row per record, no merged cells inside data.\n"
+    "- Allowed functions: SUM SUMIF(S) COUNTIF(S) AVERAGE(IF/IFS) MIN MAX MEDIAN IF IFS IFERROR ROUND INDEX MATCH VLOOKUP XLOOKUP "
+    "SUMPRODUCT TEXT DATE EOMONTH YEAR MONTH PMT FV PV NPV IRR and similar. No INDIRECT/OFFSET/HYPERLINK/external links.\n"
+    "- Summary / dashboard sheets are built from SUMIFS / COUNTIFS formulas over the data sheets (they stay live), with a chart.\n"
+    "- Dates as 2026-07-05, percentages as 15%, money as plain numbers with `format:`. Real data only: never invent rows; if the "
+    "user gave none, build the structure with the headers and a few clearly-labelled example rows.\n"
+    "- Reply with one short summary and the [DOWNLOAD: file] link. Do not describe the formulas at length.")

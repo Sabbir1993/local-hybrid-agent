@@ -266,6 +266,12 @@ DESIGNER_NOTE = ("Designer style: the slides are pictures, so their text cannot 
 def _layout_note(ext: str, data: bytes, markdown: str = "") -> str:
     """Layout check of a finished .pptx (text that overflows, low contrast, shapes off the slide...) as one sentence
     for the tool result; '' when clean, not a deck, or the check itself failed (it must never block a build)."""
+    if ext == ".xlsx":
+        try:
+            from ..sheet_engine import calc
+            return calc.check_report(calc.calculate(data))
+        except Exception:
+            return ""
     if ext == ".pptx" and is_designer_deck(data):
         return DESIGNER_NOTE                       # nothing to measure: the slides are pictures
     if not _flag("deck_checks"):

@@ -181,7 +181,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     pdf_build = prompt_scope.pdf_brief_wanted(last_query, msgs[:-1])      # a PDF request, or the answers to our PDF card
     brief_phase = prompt_scope.brief_phase(last_query, msgs[:-1])         # "ask" (card now) / "build" (answered) / ""
     resume_note = builds.resume_note(user.id, last_query)                 # "continue" after a stop / restart mid-deck
-    wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or pdf_build or bool(resume_note)
+    sheet_build = prompt_scope.sheet_build_wanted(last_query, msgs[:-1])        # "make me an Excel workbook ..."
+    wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or pdf_build or bool(resume_note) or sheet_build
     has_file = bool(file_followup or wants_file)
     web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
                                                             explicit_only=voice_policy.web_explicit_only(req),
@@ -198,7 +199,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         chat_tools += [t for t in _ALL_TOOLS if t.get("function", {}).get("name") in ("data_query", "data_sql")]
     if has_file:
         chat_tools += [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
-        if pdf_build or resume_note or brief_phase or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
+        if pdf_build or resume_note or brief_phase or sheet_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
             chat_tools += [DOC_CREATE_SCHEMA, DOC_APPEND_SCHEMA]       # decks / PDFs are built in pieces
     from core.agent_tools import AGENT_TOOLS
     skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
@@ -419,6 +420,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if prompt_scope.pptx_intent(last_query, prior_files, msgs):
             sys_parts.append(prompt_scope.PPTX_MANUAL)
             sys_labels.append("pptx-manual")
+        if sheet_build:
+            sys_parts.append(prompt_scope.XLSX_MANUAL)
+            sys_labels.append("xlsx-manual")
     else:
         sys_parts.append(prompt_scope.FILE_MANUAL_LEAN)
         sys_labels.append("file-lean")

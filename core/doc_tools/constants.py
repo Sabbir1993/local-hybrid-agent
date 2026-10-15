@@ -43,7 +43,11 @@ DOC_CREATE_SCHEMA = {"type": "function", "function": {
     "description": "Create a new .pptx/.docx/.xlsx/.csv/.pdf from markdown. For .pptx use an outline: 'theme: "
                    "midnight|corporate|forest|sunset|minimal|royal', '# Deck title', 'subtitle:', then slides separated "
                    "by '---', each '## Title' + 3-5 short bullets (optional 'layout: cards|stats|timeline|two-column|"
-                   "quote|section', 'notes:'). Tables as markdown tables or CSV. A deck or PDF of more than ~6 "
+                   "quote|section', 'notes:'). For .xlsx write a workbook outline: '# Title', 'theme:', then one '## Sheet: Name' + a "
+                   "markdown table per sheet; formulas are real when written as =SUM(B2:B9) in a cell (checked and calculated for "
+                   "you), and lines under a table set 'format: Col=currency:BDT|percent|date|int', 'total: Col=sum', "
+                   "'highlight: Col<0 red', 'scale: Col', 'validate: Col in [a, b]', 'table: Name', 'freeze: A2', 'name: Rate = "
+                   "Assumptions!B2', 'chart: bar|line|pie|column|scatter | title=.. | x=Col | y=Col[,Col]'. Tables as markdown tables or CSV. A deck or PDF of more than ~6 "
                    "slides/sections is built in pieces: send ONLY the cover and the first 2 slides (or the first "
                    "sections) here with total=<how many the user wants>, then add the rest with doc_append. Built so "
                    "later doc_edit calls can change parts of it.",

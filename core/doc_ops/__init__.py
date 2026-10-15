@@ -251,6 +251,19 @@ def create(name: str, content: str, template: Optional[bytes] = None,
     if ext == ".docx":
         return docx_ops.create(content, title=title), content
     if ext == ".xlsx":
+        from ..sheet_engine import build as sheet_build
+        if sheet_build.is_outline(content):
+            try:
+                data = sheet_build.build(content, title=title)
+            except sheet_build.BuildError as e:
+                raise DocOpError(str(e))
+            try:        # store the results next to the formulas so previews and readers that do not recalculate show numbers
+                from ..sheet_engine import calc as sheet_calc
+                data = sheet_calc.write_cached(data, sheet_calc.calculate(data)["values"])
+            except Exception as e:      # never fatal: the workbook is valid without cached values
+                import sys
+                print(f"[xlsx] could not store calculated values ({type(e).__name__}: {e})", file=sys.stderr)
+            return data, content
         rows = _rows_from_text(content)
         require(rows, "no tabular data found in the content - a spreadsheet needs rows "
                       "(a markdown table or delimited rows), not prose or code")
