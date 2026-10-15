@@ -208,7 +208,9 @@ def edit(data: bytes, name: str, ops, source_spec: Optional[str] = None) -> Edit
             raise DocOpError(str(e))
         if _pan_count(full_text(new_data, name)) > _pan_count(full_text(data, name)):
             raise DocOpError("the edited document would contain a new payment card number (PCI DSS)")
-        return EditOutcome(new_data, changes, ["workbook rebuilt from its outline (formats, charts and rules included)"], new_outline)
+        from ..sheet_engine import build as _sb
+        skipped = [f"skipped: {w}" for w in _sb.take_warnings()]
+        return EditOutcome(new_data, changes, ["workbook rebuilt from its outline (formats, charts and rules included)"] + skipped, new_outline)
     mod = EDITABLE.get(ext)
     if mod is None:
         raise DocOpError(f"{ext} files cannot be edited (have: {', '.join(sorted(DOC_EXTS))})")

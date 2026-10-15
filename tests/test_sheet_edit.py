@@ -80,11 +80,15 @@ class Outline(unittest.TestCase):
         for ops, needle in (([{"op": "add_chart", "sheet": "Nope", "chart": "bar"}], "not found"),
                             ([{"op": "set_format", "sheet": "Sales"}], "column required"),
                             ([{"op": "add_column", "sheet": "Sales", "name": "x", "formula": "B2"}], "must start with ="),
-                            ([{"op": "add_column", "sheet": "Sales", "name": "x", "formula": "=HYPERLINK(\"u\")"}], "not allowed"),
-                            ([{"op": "add_highlight", "sheet": "Sales", "rule": "garbage"}], "highlight")):
+                            ([{"op": "add_column", "sheet": "Sales", "name": "x", "formula": "=HYPERLINK(\"u\")"}], "not allowed")):
             with self.assertRaises(Exception) as cm:
                 self.edit(ops)
             self.assertIn(needle, str(cm.exception))
+
+    def test_a_rule_on_a_missing_column_is_skipped_with_a_note_not_an_error(self):
+        out = self.edit([{"op": "add_highlight", "sheet": "Sales", "rule": "Coverage<50 red"}])
+        self.assertTrue(any("column 'Coverage' not found" in n for n in out.notes))
+        self.assertEqual(wb_of(out.data).sheetnames, ["Assumptions", "Sales"])
 
     def test_a_workbook_not_built_from_an_outline_is_refused_with_advice(self):
         data, _ = D.create("t.xlsx", "| a | b |\n|---|---|\n| 1 | 2 |\n")

@@ -23,6 +23,7 @@ Outline (what the model writes):
 Everything after the first table of a sheet that looks like `key: value` is a directive (see DIRECTIVES). Formulas are checked by
 core.sheet_engine.formulas before they are written; anything refused raises BuildError with the cell and the reason.
 """
+import contextvars
 import io
 import re
 from typing import Optional
@@ -57,6 +58,34 @@ _FILLS = {"red": ("FFC7CE", "9C0006"), "green": ("C6EFCE", "006100"), "amber": (
 
 class BuildError(ValueError):
     pass
+
+
+# A decorative directive that cannot be applied (a highlight on a column that is not there, a chart with a wrong column name) must
+# not throw the whole workbook away: it is skipped and reported, the model fixes it with doc_edit. Structural problems and refused
+# formulas still stop the build.
+_warnings: contextvars.ContextVar = contextvars.ContextVar("sheet_build_warnings", default=None)
+
+
+def _warn(msg: str) -> None:
+    w = _warnings.get()
+    if w is not None and msg not in w:
+        w.append(msg)
+
+
+def take_warnings() -> list:
+    w = _warnings.get() or []
+    _warnings.set(None)
+    return list(w)
+
+
+def warnings_note() -> str:
+    """' Skipped: ...' for the tool result (and clears the list), '' when everything was applied."""
+    w = take_warnings()
+    return (" Skipped (not applied, fix with doc_edit): " + "; ".join(w[:6]) + (" ..." if len(w) > 6 else "") + ".") if w else ""
+
+
+def _cols_hint(header: list) -> str:
+    return f" (its columns: {', '.join(str(h) for h in header[:12])})"
 
 
 # ---- parsing ---------------------------------------------------------------------------------------------------------
@@ -233,6 +262,7 @@ def _kv_pairs(text: str) -> dict:
 def build(text: str, title: str = "", formulas: bool = True) -> bytes:
     import openpyxl
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    _warnings.set([])
     spec = parse(text)
     if not spec["sheets"]:
         raise BuildError("no sheet with a table found - write `## Sheet: Name` followed by a markdown table")
@@ -317,7 +347,8 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                 cname, fn = (x.strip() for x in part.split("=", 1))
                 idx = next((i for i, h in enumerate(header, 1) if h.lower() == cname.lower()), None)
                 if idx is None or fn.lower() not in codes:
-                    raise BuildError(f"sheet '{s['name']}': total: needs Column=sum|avg|min|max|count with a column that exists ({cname}={fn})")
+                    _warn(f"sheet '{s['name']}': total {cname}={fn}: needs Column=sum|avg|min|max|count with a column that exists" + _cols_hint(header))
+                    continue
                 cell = ws.cell(row=total_row, column=idx, value=f"=SUBTOTAL({codes[fn.lower()]},{col_letter(idx)}2:{col_letter(idx)}{last})")
                 cell.font = Font(bold=True)
                 if col_fmt[idx - 1][1]:
@@ -374,10 +405,12 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
         for v in dirs.get("highlight", []):
             m = re.match(r"^(?P<col>.+?)\s*(?P<op>>=|<=|!=|<>|=|>|<)\s*(?P<val>.+?)\s+(?P<color>red|green|amber|yellow|blue|grey|gray)$", v.strip(), re.I)
             if not m:
-                raise BuildError(f"sheet '{s['name']}': highlight: expects `Column<value red` (got '{v}')")
+                _warn(f"sheet '{s['name']}': highlight '{v}': expects `Column<value red`")
+                continue
             idx = next((i for i, h in enumerate(header, 1) if h.lower() == m.group("col").strip().lower()), None)
             if idx is None:
-                raise BuildError(f"sheet '{s['name']}': highlight: column '{m.group('col')}' not found")
+                _warn(f"sheet '{s['name']}': highlight: column '{m.group('col')}' not found" + _cols_hint(header))
+                continue
             op = {">": "greaterThan", "<": "lessThan", ">=": "greaterThanOrEqual", "<=": "lessThanOrEqual", "=": "equal",
                   "!=": "notEqual", "<>": "notEqual"}[m.group("op")]
             val = m.group("val").strip().strip("'\"")
@@ -391,7 +424,8 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                 cname = re.sub(r"\s+reverse$", "", v.strip(), flags=re.I)
                 idx = next((i for i, h in enumerate(header, 1) if h.lower() == cname.lower()), None)
                 if idx is None:
-                    raise BuildError(f"sheet '{s['name']}': {key}: column '{cname}' not found")
+                    _warn(f"sheet '{s['name']}': {key}: column '{cname}' not found" + _cols_hint(header))
+                    continue
                 if key == "scale":
                     lo, mid, hi = ("63BE7B", "FFEB84", "F8696B") if reverse else ("F8696B", "FFEB84", "63BE7B")
                     ws.conditional_formatting.add(rng(idx), ColorScaleRule(start_type="min", start_color=lo, mid_type="percentile",
@@ -405,11 +439,13 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
             m = re.match(r"^(?P<col>.+?)\s+in\s*\[(?P<items>.*)\]\s*$", v.strip(), re.I)
             m2 = re.match(r"^(?P<col>.+?)\s+between\s+(?P<a>-?[\d.]+)\s+and\s+(?P<b>-?[\d.]+)\s*$", v.strip(), re.I)
             if not (m or m2):
-                raise BuildError(f"sheet '{s['name']}': validate: expects `Column in [a, b]` or `Column between 0 and 100` (got '{v}')")
+                _warn(f"sheet '{s['name']}': validate '{v}': expects `Column in [a, b]` or `Column between 0 and 100`")
+                continue
             cname = (m or m2).group("col").strip()
             idx = next((i for i, h in enumerate(header, 1) if h.lower() == cname.lower()), None)
             if idx is None:
-                raise BuildError(f"sheet '{s['name']}': validate: column '{cname}' not found")
+                _warn(f"sheet '{s['name']}': validate: column '{cname}' not found" + _cols_hint(header))
+                continue
             if m:
                 items = [x.strip() for x in m.group("items").split(",") if x.strip()]
                 dv = DataValidation(type="list", formula1='"' + ",".join(items).replace('"', "") + '"', allow_blank=True)
@@ -436,11 +472,13 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
     for v in spec["names"]:
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(.+)$", v.strip())
         if not m:
-            raise BuildError(f"name: expects `Name = Sheet!B2` (got '{v}')")
+            _warn(f"name '{v}': expects `Name = Sheet!B2`")
+            continue
         ref = m.group(2).strip()
         sh = re.match(r"^'?(.+?)'?!", ref)
         if not sh or sh.group(1).lower() not in by_name:
-            raise BuildError(f"name: '{m.group(1)}' must point at a cell on an existing sheet (got '{ref}')")
+            _warn(f"name '{m.group(1)}': must point at a cell on a sheet of this workbook (got '{ref}')")
+            continue
         ref = ref.replace(sh.group(1), by_name[sh.group(1).lower()]["xname"], 1)
         if not ref.startswith("'") and re.search(r"[^A-Za-z0-9_.]", by_name[sh.group(1).lower()]["xname"]):
             ref = "'" + ref.replace("!", "'!", 1)
@@ -474,20 +512,26 @@ def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
                 flags.add(p.lower())
         src = by_name.get(opts.get("source", s["name"]).lower())
         if src is None:
-            raise BuildError(f"chart: source sheet '{opts.get('source')}' does not exist")
+            _warn(f"chart: source sheet '{opts.get('source')}' does not exist")
+            continue
         sws = wb[src["xname"]]
         header = [h or f"Column{i + 1}" for i, h in enumerate(src["header"][:MAX_COLS])]
         nlast = len(src["rows"]) + 1
         xcol = next((i for i, h in enumerate(header, 1) if h.lower() == opts.get("x", header[0]).lower()), None)
         if xcol is None:
-            raise BuildError(f"chart: x column '{opts.get('x')}' not found on sheet '{src['name']}'")
+            _warn(f"chart: x column '{opts.get('x')}' not found on sheet '{src['name']}'" + _cols_hint(header))
+            continue
         ys = [y.strip() for y in opts.get("y", "").split(",") if y.strip()] or [header[1] if len(header) > 1 else header[0]]
         ycols = []
         for y in ys:
             yi = next((i for i, h in enumerate(header, 1) if h.lower() == y.lower()), None)
             if yi is None:
-                raise BuildError(f"chart: y column '{y}' not found on sheet '{src['name']}'")
+                _warn(f"chart: y column '{y}' not found on sheet '{src['name']}'" + _cols_hint(header))
+                ycols = []
+                break
             ycols.append(yi)
+        if not ycols:
+            continue
         if kind in ("bar", "column", "col"):
             ch = BarChart()
             ch.type = "bar" if kind == "bar" and "horizontal" in flags else "col"
@@ -502,7 +546,8 @@ def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
         elif kind == "scatter":
             ch = ScatterChart()
         else:
-            raise BuildError(f"chart: type '{kind}' not supported (bar, column, line, area, pie, scatter)")
+            _warn(f"chart: type '{kind}' not supported (bar, column, line, area, pie, scatter)")
+            continue
         ch.title = opts.get("title") or None
         ch.width, ch.height = float(opts.get("w", 16)), float(opts.get("h", 8.5))
         cats = Reference(sws, min_col=xcol, min_row=2, max_row=nlast)

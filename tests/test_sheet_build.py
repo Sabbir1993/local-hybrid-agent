@@ -120,11 +120,34 @@ class Refusals(unittest.TestCase):
     def test_unknown_function(self):
         self.refused("## Sheet: A\n| a |\n|---|\n| =FROBNICATE(1) |\n", "not supported")
 
-    def test_bad_directives(self):
-        self.refused("## Sheet: A\n| a |\n|---|\n| 1 |\nhighlight: nope\n", "highlight")
-        self.refused("## Sheet: A\n| a |\n|---|\n| 1 |\ntotal: zzz=sum\n", "total")
-        self.refused("## Sheet: A\n| a |\n|---|\n| 1 |\nchart: bar | x=missing | y=a\n", "x column")
-        self.refused("## Sheet: A\n| a |\n|---|\n| 1 |\nname: Foo = Missing!A1\n", "existing sheet")
+    def test_a_directive_that_cannot_be_applied_is_skipped_and_reported_not_fatal(self):
+        from core.sheet_engine import build as sb
+        for directive, needle in (("highlight: nope", "highlight"), ("highlight: Coverage<50 red", "column 'Coverage' not found"),
+                                  ("total: zzz=sum", "total"), ("chart: bar | x=missing | y=a", "x column"),
+                                  ("chart: bar | x=a | y=nope", "y column"), ("chart: radar | x=a | y=a", "not supported"),
+                                  ("scale: Missing", "scale"), ("validate: Missing in [a, b]", "validate"),
+                                  ("name: Foo = Missing!A1", "sheet of this workbook")):
+            sb.take_warnings()
+            data = make("## Sheet: A\n| a |\n|---|\n| 1 |\n" + directive + "\n")          # the workbook is still built
+            self.assertEqual(openpyxl.load_workbook(io.BytesIO(data)).sheetnames, ["A"], directive)
+            note = sb.warnings_note()
+            self.assertIn("Skipped", note, directive)
+            self.assertIn(needle, note, directive)
+
+    def test_the_skipped_note_lists_the_real_columns(self):
+        from core.sheet_engine import build as sb
+        make("## Sheet: Now\n| Item | Score |\n|---|---|\n| a | 1 |\nhighlight: Coverage<50 red\n")
+        self.assertIn("its columns: Item, Score", sb.warnings_note())
+
+    def test_applied_directives_leave_no_note(self):
+        from core.sheet_engine import build as sb
+        make("## Sheet: A\n| a | b |\n|---|---|\n| 1 | 2 |\nhighlight: b<5 red\n")
+        self.assertEqual(sb.warnings_note(), "")
+
+    def test_the_write_result_carries_the_note(self):
+        from core.agent_tools.common_writer import _sheet_note
+        data = make("## Sheet: A\n| a |\n|---|\n| 1 |\nhighlight: Coverage<50 red\n")
+        self.assertIn("Skipped", _sheet_note(data))
 
     def test_text_that_looks_like_a_command_stays_text(self):
         data = make("## Sheet: A\n| a |\n|---|\n| +cmd|' /C calc'!A0 |\n| @SUM(1) |\n")

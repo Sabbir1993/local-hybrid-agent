@@ -156,7 +156,8 @@ def _sheet_note(data: bytes) -> str:
         import re
         import openpyxl
         from ..sheet_engine import calc
-        note = calc.check_report(calc.calculate(data))
+        from ..sheet_engine import build as sheet_build
+        note = calc.check_report(calc.calculate(data)) + sheet_build.warnings_note()
         ws = openpyxl.load_workbook(io.BytesIO(data), read_only=True).worksheets[0]
         first = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
         if first and all(re.fullmatch(r"Column\d+", str(c or "")) for c in first if c):

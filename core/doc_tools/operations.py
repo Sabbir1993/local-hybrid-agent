@@ -268,8 +268,8 @@ def _layout_note(ext: str, data: bytes, markdown: str = "") -> str:
     for the tool result; '' when clean, not a deck, or the check itself failed (it must never block a build)."""
     if ext == ".xlsx":
         try:
-            from ..sheet_engine import calc
-            return calc.check_report(calc.calculate(data))
+            from ..sheet_engine import build as sheet_build, calc
+            return (calc.check_report(calc.calculate(data)) + sheet_build.warnings_note()).strip()
         except Exception:
             return ""
     if ext == ".pptx" and is_designer_deck(data):
