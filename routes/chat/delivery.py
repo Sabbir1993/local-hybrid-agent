@@ -142,3 +142,45 @@ def _already_written(written_files: list, args: dict) -> bool:
         return False
     want = (base_stem(Path(p).name).lower(), Path(p).suffix.lower())
     return any((base_stem(Path(f).name).lower(), Path(f).suffix.lower()) == want for f in written_files)
+
+
+# The server's own file locations are never shown to a user: the model invents "(/common_space/report.xlsx)" links from the
+# phrase "common space" in a tool result, and a path like that tells the reader how the server is laid out. A file is shared
+# only through its [DOWNLOAD: name] tag, which the app turns into a preview / download button.
+_DOC_EXT = r"(?:xlsx|xls|csv|pptx|ppt|docx|doc|pdf|md|txt|html|json|png|jpg|jpeg|zip)"
+_SERVER_PATH = (
+    r"(?:file:///?)?(?:[A-Za-z]:[\\/]|/)?(?:[^\s()<>\]\[`\"']*[\\/])?(?:common_space|user_\d+|uploads|knowledge_uploads)[\\/]"
+    r"[^\s()<>\]\[`\"']*")
+_ABS_PATH = r"(?:[A-Za-z]:[\\/]|/(?:tmp|home|var|srv|mnt|opt|etc|usr|root|Users|data)/)[^\s()<>\]\[`\"']+"
+
+
+def _base(path: str) -> str:
+    return re.split(r"[\\/]", path.strip().rstrip("/\\"))[-1]
+
+
+def scrub_server_paths(content: str) -> str:
+    """Replace server file paths in a reply by the bare file name: a markdown link to a server path becomes a
+    [DOWNLOAD: name] tag (documents) or plain text, and a bare path into the server's file areas (common_space, user_<id>,
+    uploads) becomes the file name. Fenced code is left alone, and ordinary absolute paths a user may be asking about
+    (/etc/hosts, C:/Windows) are only touched when they are the target of a link to a document."""
+    text = content or ""
+    if not text:
+        return text
+
+    def link(m):
+        label, target = m.group(1), m.group(2)
+        name = _base(target)
+        if re.search(r"\." + _DOC_EXT + r"$", name, re.I):
+            return f"[DOWNLOAD: {name}]"
+        return label or name
+
+    link_rx = re.compile(r"!?\[([^\]]*)\]\(\s*((?:" + _SERVER_PATH + r"|" + _ABS_PATH + r"))\s*\)", re.I)
+    bare_rx = re.compile(r"`?(" + _SERVER_PATH + r")`?", re.I)
+    parts = re.split(r"(```[\s\S]*?```)", text)
+    for i, part in enumerate(parts):
+        if part.startswith("```"):
+            continue
+        part = link_rx.sub(link, part)
+        part = bare_rx.sub(lambda m: _base(m.group(1)), part)
+        parts[i] = re.sub(r"(\[DOWNLOAD: [^\]]+\])(?:\s*\(\s*\1\s*\))+", r"\1", part)
+    return "".join(parts)

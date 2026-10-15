@@ -14,6 +14,9 @@ has a tag or release; until then, dates + headline changes.
   and formulas on hover, first 500 rows.
 - Restyle a built workbook with `doc_edit` (charts, formats, rules, theme, a formula column); `kb_sql` brings the same SQL to
   knowledge-base spreadsheets (local answers only); optional LibreOffice recalculation when installed; `data_clean`.
+- A flat sheet whose first row is really a record gets generic column names (and the writer tells the model to add a header); Chat never shows server file paths (`/common_space/...` links become download tags); a csv with `Sheet2,Title` sections
+  becomes a workbook with real sheets; workbooks grow sheet by sheet with `doc_edit` `add_outline_sheet`; the manual asks for
+  4-6 sheets for business requests.
 - Chat: a deck request saving the same document again in one reply is stopped; the image tool is offered only when a picture
   is asked for; Chat saves no scripts or programs (`.sh .py .bat .exe ...`).
 

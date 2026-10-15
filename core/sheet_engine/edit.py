@@ -11,7 +11,7 @@ from typing import Optional
 
 from .build import BuildError, _SHEET_RX, _split_row, build, is_outline, parse
 
-OUTLINE_OPS = ("add_chart", "set_format", "add_highlight", "add_scale", "add_databar", "add_validation", "set_total",
+OUTLINE_OPS = ("add_outline_sheet", "add_chart", "set_format", "add_highlight", "add_scale", "add_databar", "add_validation", "set_total",
                "set_theme", "set_freeze", "set_table", "set_filter", "add_note", "add_column")
 
 
@@ -63,6 +63,18 @@ def apply_outline_ops(outline: str, ops: list) -> tuple:
     for op in ops:
         kind = str(op.get("op")).lower()
         sheet = op.get("sheet")
+        if kind == "add_outline_sheet":
+            name, body = _need(op, "name"), _need(op, "content")
+            if any(n.lower() == name.lower() for n, _a, _b in _sections(lines)):
+                raise EditError(f"add_outline_sheet: a sheet named '{name}' already exists")
+            body_lines = body.strip().splitlines()
+            if not any(ln.lstrip().startswith("|") for ln in body_lines):
+                raise EditError("add_outline_sheet: content must contain a markdown table (| Col | Col | then |---|---| and rows)")
+            while lines and not lines[-1].strip():
+                lines.pop()
+            lines += ["", f"## Sheet: {name}"] + body_lines
+            changes.append(f"sheet '{name}' added")
+            continue
         if kind == "set_theme":
             theme = _need(op, "theme").lower()
             idx = next((i for i, l in enumerate(lines) if re.match(r"^\s*theme\s*:", l, re.I)), None)

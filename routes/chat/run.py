@@ -56,6 +56,7 @@ from .delivery import (
     _ALREADY_SAVED,
     _already_written,
     _finalize_download_tags,
+    scrub_server_paths,
     _finalize_media,
     _prompt_tokens_of,
     _saved_filename,
@@ -1101,6 +1102,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                 content = "I have processed your request."
                                 yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
 
+                    _clean = scrub_server_paths(content)
+                    if _clean != content:
+                        content = _clean
+                        yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
                     if written_files:
                         content, _chg = _finalize_download_tags(content, written_files, last_query)
                         if _chg:
@@ -1345,6 +1350,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 content = sanitize_user_facing_content(re.sub(r"<function[=\s][\s\S]*?</function>", "", content)) or _NO_TOOL_ANSWER
                 yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
+            _clean = scrub_server_paths(content)
+            if _clean != content:
+                content = _clean
+                yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
             if written_files:
                 content, _chg = _finalize_download_tags(content, written_files, last_query)
                 if _chg:

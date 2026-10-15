@@ -90,3 +90,43 @@ class MissingType(unittest.TestCase):
         src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
         self.assertIn("absent_type = missing_type(own_q, prior_files)", src)
         self.assertIn('absent_type == "spreadsheet"', src)
+
+
+class ServerPaths(unittest.TestCase):
+    def s(self, text):
+        return d.scrub_server_paths(text)
+
+    def test_the_reported_case(self):
+        out = self.s("Here it is: [Hercules_TAP_Bangladesh_Market_Grep-a9978806.xlsx](/common_space/Hercules_TAP_Bangladesh_Market_Grep-a9978806.xlsx)")
+        self.assertEqual(out, "Here it is: [DOWNLOAD: Hercules_TAP_Bangladesh_Market_Grep-a9978806.xlsx]")
+        self.assertNotIn("common_space", out)
+
+    def test_other_shapes(self):
+        self.assertEqual(self.s("saved to (/common_space/user_5/a.pdf)"), "saved to (a.pdf)")
+        self.assertEqual(self.s("`/common_space/x.csv`"), "x.csv")
+        self.assertEqual(self.s(r"[file](C:\Users\sabbir\a.xlsx)"), "[DOWNLOAD: a.xlsx]")
+        self.assertEqual(self.s("[open](/home/app/uploads/report.docx)"), "[DOWNLOAD: report.docx]")
+        self.assertNotIn("/", self.s("see knowledge_uploads/abc/def.xlsx here").replace("see knowledge_uploads", ""))
+        self.assertEqual(self.s("[DOWNLOAD: a.xlsx] ([DOWNLOAD: a.xlsx])"), "[DOWNLOAD: a.xlsx]")
+
+    def test_ordinary_text_and_code_are_untouched(self):
+        for t in ("Edit /etc/hosts and restart", "the path C:/Windows/System32 is protected", "[docs](https://example.com/a.pdf)",
+                  "[DOWNLOAD: report-1234abcd.xlsx]", "```bash\ncat /common_space/notes.txt\n```", "[dl](/agent/download?path=a.xlsx)"):
+            self.assertEqual(self.s(t), t)
+
+    def test_the_route_scrubs_both_final_paths_and_the_tool_result_stops_saying_common_space(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        src = (root / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertEqual(src.count("scrub_server_paths(content)"), 2)
+        w = (root / "core" / "agent_tools" / "common_writer.py").read_text(encoding="utf-8")
+        self.assertNotIn("to common space", w)
+
+
+class ToolMessages(unittest.TestCase):
+    def test_a_write_result_carries_exactly_one_download_tag(self):
+        from pathlib import Path
+        w = (Path(__file__).resolve().parents[1] / "core" / "agent_tools" / "common_writer.py").read_text(encoding="utf-8")
+        for line in w.splitlines():
+            if 'msg = f"Wrote' in line:
+                self.assertEqual(line.count("[DOWNLOAD:"), 1, line)

@@ -96,7 +96,7 @@ def tool_write_file_common(args: dict) -> str:
         except DocOpError as e:
             return f"error: {e}"
         p.write_bytes(data)
-        msg = f"Wrote Excel file to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+        msg = f"Wrote Excel file as {unique_path_arg} (users get it only through the download link at the end of this message: never write a folder path or a file link yourself). [DOWNLOAD: {unique_path_arg}]"
         msg += _sheet_note(data)
 
     # PowerPoint / Word: built on real layouts and styles so doc_edit can later
@@ -118,7 +118,7 @@ def tool_write_file_common(args: dict) -> str:
             return f"error: {e}"
         p.write_bytes(data)
         kind = "PowerPoint presentation" if p.suffix == ".pptx" else "Word document"
-        msg = f"Wrote {kind} to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+        msg = f"Wrote {kind} as {unique_path_arg} (users get it only through the download link at the end of this message: never write a folder path or a file link yourself). [DOWNLOAD: {unique_path_arg}]"
         msg += _after_build(p.suffix, data, content, extra)
 
     # Handle .pdf conversion if writing to a PDF file (via HTML DOM first)
@@ -134,12 +134,12 @@ def tool_write_file_common(args: dict) -> str:
                     "failed), so nothing was saved. Send the document as markdown instead of "
                     "HTML, or try again.")
         spec = content
-        msg = f"Wrote compiled PDF document to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+        msg = f"Wrote compiled PDF document as {unique_path_arg} (users get it only through the download link at the end of this message: never write a folder path or a file link yourself). [DOWNLOAD: {unique_path_arg}]"
         msg += _after_build(".pdf", p.read_bytes(), content, extra)
 
     else:
         p.write_text(content, encoding="utf-8")
-        msg = f"Wrote {len(content)} chars to common space: {unique_path_arg}. [DOWNLOAD: {unique_path_arg}]"
+        msg = f"Wrote {len(content)} chars as {unique_path_arg} (users get it only through the download link at the end of this message: never write a folder path or a file link yourself). [DOWNLOAD: {unique_path_arg}]"
 
     if doc_ops.is_doc(p.name) and p.is_file():
         from .. import doc_store
@@ -152,8 +152,16 @@ def tool_write_file_common(args: dict) -> str:
 def _sheet_note(data: bytes) -> str:
     """What the built-in calculator found in a workbook with formulas ('' for a plain table or when the check fails)."""
     try:
+        import io
+        import re
+        import openpyxl
         from ..sheet_engine import calc
         note = calc.check_report(calc.calculate(data))
+        ws = openpyxl.load_workbook(io.BytesIO(data), read_only=True).worksheets[0]
+        first = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+        if first and all(re.fullmatch(r"Column\d+", str(c or "")) for c in first if c):
+            note += (" Note: the first row of your data looked like a record, not column names, so generic names (Column1...) were "
+                     "added. Write a header row first (Item, Priority, Owner, ...) next time.")
         return (" " + note) if note else ""
     except Exception:
         return ""

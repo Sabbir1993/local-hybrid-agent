@@ -178,7 +178,7 @@ def normalize_ops(ops) -> list[dict]:
     return ops
 
 
-_SHEET_OUTLINE_OPS = ("add_chart", "set_format", "add_highlight", "add_scale", "add_databar", "add_validation", "set_total",
+_SHEET_OUTLINE_OPS = ("add_outline_sheet", "add_chart", "set_format", "add_highlight", "add_scale", "add_databar", "add_validation", "set_total",
                       "set_theme", "set_freeze", "set_table", "set_filter", "add_note", "add_column")
 
 
@@ -269,6 +269,10 @@ def create(name: str, content: str, template: Optional[bytes] = None,
         return docx_ops.create(content, title=title), content
     if ext == ".xlsx":
         from ..sheet_engine import build as sheet_build
+        from ..sheet_engine import pseudo
+        as_outline = pseudo.to_outline(content)           # "Sheet2,Cost Analysis" sections in one csv -> real sheets
+        if as_outline:
+            content = as_outline
         if sheet_build.is_outline(content):
             try:
                 data = sheet_build.build(content, title=title)
@@ -284,7 +288,8 @@ def create(name: str, content: str, template: Optional[bytes] = None,
         rows = _rows_from_text(content)
         require(rows, "no tabular data found in the content - a spreadsheet needs rows "
                       "(a markdown table or delimited rows), not prose or code")
-        return xlsx_ops.create(rows), content
+        from ..sheet_engine.pseudo import with_header
+        return xlsx_ops.create(with_header(rows)), content
     if ext == ".csv":
         rows = _rows_from_text(content)
         require(rows, "no tabular data found in the content - a CSV needs rows "
