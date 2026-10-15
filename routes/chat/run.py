@@ -189,6 +189,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                    and bool(prompt_scope._PPTX_RE.search(prev_assistant)))
     pdf_build = prompt_scope.pdf_brief_wanted(last_query, msgs[:-1])      # a PDF request, or the answers to our PDF card
     brief_phase = prompt_scope.brief_phase(last_query, msgs[:-1])         # "ask" (card now) / "build" (answered) / ""
+    if brief_phase == "ask" and (APP_CONFIG.get("chat") or {}).get("brief_card_server", True) is not False:
+        # the questionnaire card comes from the server, not from the model (a local model sometimes narrates its reasoning instead)
+        card = prompt_scope.brief_card("deck" if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]) else "pdf")
+
+        async def _card_sse():
+            yield f"event: delta\ndata: {json.dumps({'text': card})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0})}\n\n"
+        return StreamingResponse(_card_sse(), media_type="text/event-stream")
     resume_note = builds.resume_note(user.id, last_query)                 # "continue" after a stop / restart mid-deck
     sheet_build = prompt_scope.sheet_build_wanted(last_query, msgs[:-1])        # "make me an Excel workbook ..."
     sheet_build = sheet_build or absent_type == "spreadsheet"

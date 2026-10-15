@@ -728,3 +728,29 @@ PDF_TOOLS_MANUAL = (
     "- Read before you act: for 'remove the signature page' find the page with pdf_read first. Do the whole request in as few "
     "calls as possible (several ops in one pdf_pages call). Give the user the [DOWNLOAD: file] link from the result and say what "
     "changed in one or two lines. Never write scripts; never put passwords or card numbers in your reply.")
+
+
+# The "few quick choices" card for a deck / PDF request is written by the SERVER, not by the model. A local model asked to reply
+# with exactly one line and one fenced block sometimes answers with its own reasoning instead ("Per the instructions, I should first
+# reply with ... But wait, let me just say whenever you're ready"), and the user gets no card. The wording and options are the
+# same as in DECK_BRIEF / PDF_BRIEF, so the answers come back in the shape brief_phase() already recognises.
+def brief_card(kind: str) -> str:
+    import json
+    radio = lambda i, q, opts: {"id": i, "type": "radio", "q": q, "options": opts}      # noqa: E731
+    audience = radio("audience", "Who is it for?", ["Executives", "Customers", "Technical team", "General / non-technical"])
+    extra = {"id": "extra", "type": "text", "q": "Anything it must include? (optional)"}
+    if kind == "pdf":
+        card = {"title": "A few quick choices for your PDF", "submit_label": "Build my PDF", "questions": [
+            radio("sections", "How long should the PDF be?", ["Short (4-5 sections)", "Standard (6-8 sections)", "Detailed (9-12 sections)"]),
+            audience, radio("tone", "Style?", ["Formal report", "Friendly guide", "Step-by-step handbook"]), extra]}
+        intro = "Before building your PDF, a few quick choices."
+    else:
+        card = {"title": "A few quick choices for your deck", "submit_label": "Build my deck", "questions": [
+            radio("slides", "How many slides?", ["5-7 (short)", "8-12 (standard)", "13-20 (detailed)"]), audience,
+            radio("palette", "Colour palette?", ["Editorial (cream + deep teal, gold)", "Ember (cream + maroon, gold)", "Midnight (navy + cyan, dark)",
+                                                  "Corporate (white + blue)", "Forest (green + amber)", "Sunset (charcoal + coral)",
+                                                  "Minimal (white, black, red)", "Royal (indigo + gold)"]),
+            radio("style", "Slide style?", ["Editable (real PowerPoint shapes you can change)", "Designer (image slides, richest look, not editable)"]),
+            extra]}
+        intro = "Before building your deck, a few quick choices."
+    return intro + "\n```questionnaire\n" + json.dumps(card, ensure_ascii=False) + "\n```"

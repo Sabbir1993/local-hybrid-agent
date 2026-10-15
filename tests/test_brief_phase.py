@@ -65,3 +65,40 @@ class BriefPhase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServerCard(unittest.TestCase):
+    """The deck / PDF questionnaire is written by the server: it must parse, and its answers must continue into the build phase."""
+
+    def card(self, kind):
+        import json
+        text = ps.brief_card(kind)
+        body = text.split("```questionnaire\n")[1].split("\n```")[0]
+        return text, json.loads(body)
+
+    def test_the_deck_card_has_the_questions_the_brief_expects(self):
+        text, card = self.card("deck")
+        self.assertEqual([q["id"] for q in card["questions"]], ["slides", "audience", "palette", "style", "extra"])
+        self.assertEqual(len(card["questions"][2]["options"]), 8)
+        self.assertEqual(card["submit_label"], "Build my deck")
+        self.assertTrue(text.startswith("Before building your deck"))
+
+    def test_the_pdf_card(self):
+        text, card = self.card("pdf")
+        self.assertEqual([q["id"] for q in card["questions"]], ["sections", "audience", "tone", "extra"])
+        self.assertEqual(card["submit_label"], "Build my PDF")
+
+    def test_the_answers_to_the_server_card_move_to_the_build_phase(self):
+        deck, _ = self.card("deck")
+        prior = [{"role": "user", "content": "make a ppt of Dhaka"}, {"role": "assistant", "content": deck}]
+        self.assertEqual(ps.brief_phase(ANSWERS, prior), "build")
+        self.assertEqual(ps.brief_request(prior), "make a ppt of Dhaka")
+        pdf, _ = self.card("pdf")
+        self.assertEqual(ps.brief_phase("Short\nTechnical team\nFormal report", [{"role": "assistant", "content": pdf}]), "build")
+
+    def test_a_fresh_request_asks_and_the_route_answers_without_the_model(self):
+        from pathlib import Path
+        self.assertEqual(ps.brief_phase("Make a deep informative PPT of Dhaka with its visual image and graph", []), "ask")
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn('prompt_scope.brief_card("deck" if', src)
+        self.assertIn("brief_card_server", src)
