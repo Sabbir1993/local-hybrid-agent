@@ -354,7 +354,7 @@ async def _append(args: dict, location: str) -> str:
     if ext == ".pdf" and not done:
         out = data              # the PDF is printed once at the end; the preview shows a live HTML draft of the spec
     else:
-        out, _ = doc_ops.create(loc.path.name, _interim(new_spec, done), images=images)
+        out, _ = doc_ops.create(loc.path.name, _interim(new_spec, done or bool(total and have >= total)), images=images)
     if out is not data:
         await _write(loc, loc.path, out)
     doc_store.register(loc.uid, loc.key, ext.lstrip("."), location=loc.location,

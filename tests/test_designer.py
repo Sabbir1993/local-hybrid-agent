@@ -234,7 +234,7 @@ class BuiltInPieces(unittest.TestCase):
     def test_designer_pictures_are_drawn_only_on_the_last_step(self):
         from core import doc_tools
         first = "mode: designer\n# Harbour\nsubtitle: s\n---\n## One\n- a\n- b\n"
-        out = doc_tools.tool_doc_create_common({"file": "p.pptx", "content": first, "total": 3})
+        out = doc_tools.tool_doc_create_common({"file": "p.pptx", "content": first, "total": 4})
         name = out.split("[DOWNLOAD: ")[1].split("]")[0]
         self.assertFalse(ops.is_designer_deck(self._file(name)))              # interim: editable and instant
         mid = doc_tools.tool_doc_append_common({"file": name, "content": "---\n## Two\n- c\n- d\n"})
