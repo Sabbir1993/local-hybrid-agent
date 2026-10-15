@@ -449,7 +449,7 @@ function renderExcelPreview(arrayBuffer, container, controls) {
   }
   try {
     const data = new Uint8Array(arrayBuffer);
-    const workbook = XLSX.read(data, { type: 'array' });
+    const workbook = XLSX.read(data, { type: 'array', cellFormula: true, cellDates: true });
     const sheetNames = workbook.SheetNames || [];
 
     if (!sheetNames.length) {
@@ -462,7 +462,7 @@ function renderExcelPreview(arrayBuffer, container, controls) {
     function showSheet(sheetName) {
       activeSheet = sheetName;
       const sheet = workbook.Sheets[sheetName];
-      const jsonRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      const jsonRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });   // raw:false = the cell's own number format (currency, %, dates)
 
       const tabsBar = container.querySelector('.sheet-tabs-bar');
       if (tabsBar) {
@@ -501,16 +501,24 @@ function renderExcelPreview(arrayBuffer, container, controls) {
       });
       html += `</tr></thead><tbody>`;
 
-      rows.forEach((r, idx) => {
+      const SHOW_ROWS = 500;     // a very large sheet would freeze the browser: show the first rows and say so
+      const range = sheet['!ref'] ? XLSX.utils.decode_range(sheet['!ref']) : { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } };
+      rows.slice(0, SHOW_ROWS).forEach((r, idx) => {
         let tableHtmlRow = `<tr><td style="color:var(--dim); text-align:center;">${idx + 1}</td>`;
         for (let i = 0; i < maxCols; i++) {
           const val = (r && r[i] !== undefined) ? r[i] : '';
-          tableHtmlRow += `<td>${esc(String(val))}</td>`;
+          const cell = sheet[XLSX.utils.encode_cell({ r: range.s.r + idx + 1, c: range.s.c + i })];
+          const isNum = cell && cell.t === 'n';
+          const tip = cell && cell.f ? ` title="=${esc(String(cell.f))}"` : '';
+          tableHtmlRow += `<td${tip} style="${isNum ? 'text-align:right;' : ''}${cell && cell.f ? 'color:var(--accent, #7aa2f7);' : ''}">${esc(String(val))}</td>`;
         }
         tableHtmlRow += `</tr>`;
         html += tableHtmlRow;
       });
       html += `</tbody></table>`;
+      if (rows.length > SHOW_ROWS) {
+        html += `<div style="padding:10px 14px; font-size:11px; color:var(--dim);">Showing the first ${SHOW_ROWS} of ${rows.length.toLocaleString()} rows. Download the file to see all of them.</div>`;
+      }
       tableBox.innerHTML = html;
     }
 

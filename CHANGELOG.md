@@ -4,6 +4,17 @@ Entries are kept short on purpose: this is a local single-dev project and long
 per-commit prose rots faster than it helps. Versioning starts where the repo
 has a tag or release; until then, dates + headline changes.
 
+## 2026-10-15 — spreadsheets: real analysis and real workbooks
+
+- Analysis: the profile finds the header below title rows and reports formula columns; new `data_sql` runs read-only SQL
+  (joins, pivots, medians, month buckets, window functions) over attached sheets in a locked in-memory SQLite.
+- Workbooks: `doc_create` / `write_file` take a workbook outline (multi-sheet, live formulas on an allow-list, number
+  formats, tables, charts, conditional formatting, validation, named ranges). A built-in calculator stores results next to the
+  formulas and appends a check report (errors, circular references, typed-in constants). The preview shows formatted values
+  and formulas on hover, first 500 rows.
+- Chat: a deck request saving the same document again in one reply is stopped; the image tool is offered only when a picture
+  is asked for; Chat saves no scripts or programs (`.sh .py .bat .exe ...`).
+
 ## 2026-10-15 — one run layer: journal, runaway guard, resume
 
 - Run journal (`core/runs.py`, usage.db `runs`): chat, agent, KB ingest and media jobs each get a run id, a state and a

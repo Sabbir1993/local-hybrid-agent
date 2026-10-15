@@ -287,6 +287,27 @@ built in pieces with a live preview). What the builders do beyond writing text:
 - **Not verifiable here:** how PowerPoint itself draws a deck (no renderer on the build machine; the check is a
   measurement proxy), and the factual accuracy of what the model writes.
 
+## Spreadsheets: analysis and workbooks
+
+- **Analysis** (`core/sheet_engine/sql.py`, tool `data_sql`): an attached xlsx / xls / csv is loaded (header row found below
+  title rows, formula columns reported) into a private in-memory SQLite and queried with read-only SQL: joins across sheets or
+  files, pivots (`SUM(CASE WHEN ...)`), several group-bys, window functions, `MEDIAN` / `PERCENTILE` / `STDEV` / `MODE`,
+  month and quarter buckets. Only `SELECT` runs (authorizer + `query_only` + an 8 s timeout); output is capped and card
+  numbers are masked. `data_query` stays for the simple one-filter questions.
+- **Workbooks** (`core/sheet_engine/build.py`): `doc_create` / `write_file` accept a workbook outline (`## Sheet: Name` + a
+  markdown table + directive lines such as `format:`, `total:`, `highlight:`, `scale:`, `validate:`, `table:`, `name:`,
+  `chart:`). Real numbers and dates, number formats, formulas, Excel tables, native charts, conditional formatting, data
+  validation, named ranges, frozen header and filters. A plain table with no outline directives is built as before.
+- **Formulas are an allow-list** (`core/sheet_engine/formulas.py`): arithmetic and ordinary calculation / lookup / text / date
+  functions; `HYPERLINK`, `WEBSERVICE`, `INDIRECT`, `OFFSET`, external links and DDE are refused with a reason. Text that
+  merely starts with `=`, `+`, `-` or `@` in a data cell stays text.
+- **Calculated and checked** (`core/sheet_engine/calc.py`): the built-in calculator stores each formula's result next to it
+  (so the in-app preview and `data_only` readers show numbers; Excel still recalculates on open) and appends a check report to
+  the tool result: `#DIV/0!` / `#REF!` / `#NAME?`, circular references, numbers typed into formulas instead of an assumptions
+  cell. A function it cannot evaluate is reported, never guessed. It is not Excel: LibreOffice is not installed here.
+- **Not done yet:** `doc_edit` ops to restyle or add charts to a finished workbook (rebuild from the outline instead),
+  `data_clean` write-back, and `kb_query` on the same engine.
+
 ## Setup on a new machine
 
 This is the actual "clone the repo and go" path. For a copy-paste command
