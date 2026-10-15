@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 from typing import Optional
@@ -79,6 +80,8 @@ def db_record_request(endpoint: str, model: Optional[str], prompt_tokens: Option
                       user_id: Optional[int] = None) -> None:
     """Persist one completed request with input/output cache and orchestrator attribution. The user is the one
     whose request is being served (request context) unless given; background work has none."""
+    if os.environ.get("A770_NO_USAGE_WRITES") == "1" and getattr(_usage_db, "path", "") == str(USAGE_DB_FILE):
+        return          # the test suite is running against the real file: its traffic must not show up in the usage dashboard
     try:
         if user_id is None:
             from ..request_context import get_current_user_id
