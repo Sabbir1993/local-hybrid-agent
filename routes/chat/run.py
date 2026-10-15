@@ -53,6 +53,8 @@ from .delivery import (
     _NO_TOOL_ANSWER,
     _WRAP_REFUSAL,
     chat_write_file,
+    _ALREADY_SAVED,
+    _already_written,
     _finalize_download_tags,
     _finalize_media,
     _prompt_tokens_of,
@@ -209,7 +211,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     chat_media_tools = set()
     try:
         from core import media_tools
-        img_schema = media_tools.chat_image_tool_schema()
+        img_schema = media_tools.chat_image_tool_schema() if prompt_scope.image_intent(last_query, msgs[:-1]) else None
         if img_schema:
             chat_tools.append(img_schema)
             chat_media_tools.add("generate_image")
@@ -1186,6 +1188,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif t_name == "write_file" and _wraps_media(
                                 made_media, args.get("path") or args.get("file") or args.get("filename"), last_query):
                             res_str = _WRAP_REFUSAL
+                        elif t_name == "write_file" and _already_written(written_files, args):
+                            # the model keeps re-saving the same document (each save gets a fresh unique name, so it never
+                            # sees "done"): say it is saved and end the research/write rounds
+                            res_str = _ALREADY_SAVED.format(name=written_files[-1])
+                            turn_limit = min(turn_limit, turn + 1)
                         elif t_name == "write_file":
                             # off the event loop: a deck / PDF written here may look up pictures (web, image model)
                             res_str = await run_in_executor_ctx(chat_write_file, args)

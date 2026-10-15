@@ -46,3 +46,26 @@ class Executables(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RepeatWrites(unittest.TestCase):
+    def test_same_document_again_is_detected_even_with_a_new_suffix(self):
+        saved = ["Hercules_TAP_Bangladesh_Market_Growth-897d8c24.md"]
+        self.assertTrue(d._already_written(saved, {"path": "Hercules_TAP_Bangladesh_Market_Growth.md"}))
+        self.assertTrue(d._already_written(saved, {"file": "hercules_tap_bangladesh_market_growth-4ab05d2f.md"}))
+
+    def test_other_documents_and_types_are_fine(self):
+        saved = ["Plan-897d8c24.md"]
+        self.assertFalse(d._already_written(saved, {"path": "Budget.md"}))
+        self.assertFalse(d._already_written(saved, {"path": "Plan.pdf"}))
+        self.assertFalse(d._already_written([], {"path": "Plan.md"}))
+        self.assertFalse(d._already_written(saved, {}))
+
+
+class ImageGate(unittest.TestCase):
+    def test_pictures_only_when_asked(self):
+        from core import prompt_scope as ps
+        self.assertTrue(ps.image_intent("draw a logo for my shop"))
+        self.assertTrue(ps.image_intent("make it darker", [{"role": "user", "content": "generate an image of a cat"}]))
+        self.assertFalse(ps.image_intent("write a TAP document for Hercules sales force automation", []))
+        self.assertFalse(ps.image_intent("summarise the market growth in Bangladesh"))

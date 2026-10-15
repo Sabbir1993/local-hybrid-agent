@@ -127,3 +127,18 @@ def chat_write_file(args: dict) -> str:
     if is_executable_path(a.get("path") or a.get("file") or a.get("filename")):
         return _SCRIPT_REFUSAL
     return tool_write_file_common(args)
+
+
+_ALREADY_SAVED = ("error: this document is already saved as {name} and the user can download it. Do NOT write it again: "
+                  "reply now with a short summary and the [DOWNLOAD: {name}] link.")
+
+
+def _already_written(written_files: list, args: dict) -> bool:
+    """True when this write_file would save the same document (same base name and type) again in one reply."""
+    from core.doc_store import base_stem
+    from pathlib import Path
+    p = str((args or {}).get("path") or (args or {}).get("file") or (args or {}).get("filename") or "")
+    if not p or not written_files:
+        return False
+    want = (base_stem(Path(p).name).lower(), Path(p).suffix.lower())
+    return any((base_stem(Path(f).name).lower(), Path(f).suffix.lower()) == want for f in written_files)

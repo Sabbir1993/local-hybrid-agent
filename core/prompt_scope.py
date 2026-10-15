@@ -563,3 +563,20 @@ ATTACHED_DATA = (
     "for company information or outside facts.\n"
     "- Answer with a short summary of the key findings and figures (a small table when it helps); mention anything you could not "
     "verify.")
+
+
+# Image tool gating: the chat offers generate_image only when the user is asking for a picture. Offered always, a
+# local model that has a tool it does not need tends to call it (a "serene mountain landscape" nobody asked for).
+_IMAGE_RE = re.compile(
+    r"\b(image|images|picture|pictures|photo|photos|illustration|illustrate|draw|drawing|paint|painting|sketch|logo|icon|"
+    r"poster|banner|wallpaper|thumbnail|avatar|portrait|artwork|render|generate an? (?:image|picture)|/image)\b|ছবি|চিত্র", re.I)
+
+
+def image_intent(query: str, prior_msgs=None) -> bool:
+    """True when this message (or the user message just before it, for "make it darker") asks for a picture."""
+    if _IMAGE_RE.search(query or ""):
+        return True
+    for m in reversed(prior_msgs or []):
+        if m.get("role") == "user":
+            return bool(_IMAGE_RE.search(str(m.get("content") or "")[:400])) and len((query or "").strip()) < 80
+    return False
