@@ -70,6 +70,21 @@ class Detector(unittest.TestCase):
         self.assertEqual(find_runaway(LOOP * 3), -1)
 
 
+class Tables(unittest.TestCase):
+    def test_table_rows_that_share_long_cells_are_not_a_loop(self):
+        rows = "".join(f"| Feature {i} | Core application development team assigned | High | 4 weeks |\n" for i in range(40))
+        self.assertEqual(find_runaway("| Name | Owner | Priority | Effort |\n|---|---|---|---|\n" + rows), -1)
+        csv_rows = "".join(f'"Feature {i}","Core application development team assigned","High","4 weeks"\n' for i in range(40))
+        self.assertEqual(find_runaway(csv_rows), -1)
+
+    def test_a_table_that_really_loops_is_still_cut(self):
+        line = "| Same row repeated again and again | High | 4 weeks |\n"
+        self.assertGreaterEqual(find_runaway("| a | b | c |\n|---|---|---|\n" + line * 12), 0)
+
+    def test_prose_loops_are_still_cut(self):
+        self.assertGreaterEqual(find_runaway("Intro paragraph about the topic. " * 3 + LOOP * 12), 0)
+
+
 class Stream(unittest.TestCase):
     def test_looping_content_stops_early(self):
         chunks = [content("Here is the answer. ")] + [content(LOOP) for _ in range(400)]

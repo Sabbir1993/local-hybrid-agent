@@ -111,7 +111,11 @@ class Refusals(unittest.TestCase):
 
     def test_external_references_and_unknown_sheets(self):
         self.refused("## Sheet: A\n| a |\n|---|\n| =[1]Sheet1!A1 |\n", "other workbooks")
-        self.refused("## Sheet: A\n| a |\n|---|\n| =Nope!A1 |\n", "does not exist")
+        # a sheet that does not exist yet is allowed (built step by step); the check report flags it as #REF!
+        data, _ = D.create("x.xlsx", "## Sheet: A\n| a |\n|---|\n| =Nope!A1 |\n")
+        res = calc.calculate(data)
+        self.assertTrue(any("#REF!" in e for e in res["errors"]))
+        self.assertIn("add_outline_sheet", calc.check_report(res))
 
     def test_unknown_function(self):
         self.refused("## Sheet: A\n| a |\n|---|\n| =FROBNICATE(1) |\n", "not supported")

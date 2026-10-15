@@ -105,6 +105,55 @@ class Outline(unittest.TestCase):
         self.assertIsNone(out.source_spec)            # the file no longer matches its outline
 
 
+class StepByStep(unittest.TestCase):
+    def test_a_summary_written_first_can_point_at_sheets_added_later(self):
+        from core.sheet_engine import calc
+        first = """# Plan
+## Sheet: Summary
+| Item | Total |
+|---|---|
+| Budget total | =Budget!B4 |
+| Headcount | =Resources!B2 |
+"""
+        data, spec = D.create("w.xlsx", first)                       # the model's first step: this used to be refused
+        with mock.patch("core.sheet_engine.excel.recalculate", return_value=None):
+            self.assertGreaterEqual(len(calc.calculate(data)["errors"]), 2)      # honest: #REF! until the sheets exist
+            r = D.edit(data, "w.xlsx", [{"op": "add_outline_sheet", "name": "Budget",
+                                         "content": "| Line | Cost |\n|---|---|\n| Dev | 100 |\n| Ops | 50 |\ntotal: Cost=sum"}], source_spec=spec)
+            r = D.edit(r.data, "w.xlsx", [{"op": "add_outline_sheet", "name": "Resources",
+                                           "content": "| Role | FTE |\n|---|---|\n| Dev | 8 |"}], source_spec=r.source_spec)
+            res = calc.calculate(r.data)
+        self.assertEqual(res["errors"], [])
+        vals = wb_of(r.data, True)["Summary"]
+        self.assertEqual([vals["B2"].value, vals["B3"].value], [150, 8])
+
+
+class AddSheets(unittest.TestCase):
+    def test_a_workbook_grows_sheet_by_sheet(self):
+        data, spec = D.create("w.xlsx", BASE)
+        r = D.edit(data, "w.xlsx", [{"op": "add_outline_sheet", "name": "Analysis",
+                                     "content": "| Region | Share |\n|---|---|\n| Dhaka | 67% |\n| Khulna | 33% |\nformat: Share=percent\nchart: pie | x=Region | y=Share"}],
+                   source_spec=spec)
+        wb = wb_of(r.data)
+        self.assertEqual(wb.sheetnames, ["Assumptions", "Sales", "Analysis"])
+        self.assertEqual(len(wb["Analysis"]._charts), 1)
+        self.assertEqual(wb["Analysis"]["B2"].value, 0.67)
+
+    def test_duplicates_and_empty_content_are_refused(self):
+        data, spec = D.create("w.xlsx", BASE)
+        for op, needle in (({"op": "add_outline_sheet", "name": "Sales", "content": "| a |\n|---|\n| 1 |"}, "already exists"),
+                           ({"op": "add_outline_sheet", "name": "X", "content": "no table here"}, "markdown table"),
+                           ({"op": "add_outline_sheet", "name": "X"}, "content required")):
+            with self.assertRaises(Exception) as cm:
+                D.edit(data, "w.xlsx", [op], source_spec=spec)
+            self.assertIn(needle, str(cm.exception))
+
+    def test_the_manual_asks_for_depth_and_teaches_the_op(self):
+        from core import prompt_scope as ps
+        self.assertIn("4-6 sheets", ps.XLSX_MANUAL)
+        self.assertIn("add_outline_sheet", ps.XLSX_MANUAL)
+
+
 class Tools(unittest.TestCase):
     """The same through doc_create / doc_edit (version chain, outline kept)."""
 

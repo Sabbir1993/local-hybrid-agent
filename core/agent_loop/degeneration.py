@@ -62,6 +62,15 @@ RUNAWAY_MSG = ("error: your output started repeating itself and was cut off. Wri
                "without repeating phrases, lines or URLs")
 
 
+def _table_like(lines: list) -> bool:
+    """Most non-empty lines are table rows (pipes, tabs) or csv rows: repeated cell values there are data, not a loop."""
+    body = [ln for ln in lines if ln.strip()]
+    if len(body) < 4:
+        return False
+    rows = sum(1 for ln in body if ln.count("|") >= 2 or ln.count("	") >= 2 or ln.count('","') >= 2 or ln.count(",") >= 4)
+    return rows >= 0.3 * len(body)
+
+
 def find_runaway(text: str, window: int = 6000) -> int:
     """Index to cut `text` at when its tail has clearly started to loop, else -1.
 
@@ -87,13 +96,15 @@ def find_runaway(text: str, window: int = 6000) -> int:
                 return base + starts[i - run + 2]       # keep the first copy
         else:
             run = 1
+    if _table_like(lines):
+        return -1       # rows of a table / csv legitimately share long cell values ("| Medium | Core App Dev | High |" x 12)
     for plen in (40, 70, 120, 200):
         if len(tail) < plen * 6:
             continue
         phrase = tail[-plen:]
         if len(re.findall(r"[A-Za-zঀ-৿0-9]{2,}", phrase)) < 5:
             continue
-        if tail.count(phrase) >= 6:
+        if tail.count(phrase) >= (8 if plen < 70 else 6):
             first = tail.find(phrase)
             return base + first + plen                   # keep the first copy
     return -1

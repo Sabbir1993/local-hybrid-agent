@@ -863,6 +863,9 @@ def check_report(result: dict) -> str:
             f"{len(result['errors'])} error(s)."]
     if result["errors"]:
         bits.append("Errors: " + "; ".join(result["errors"][:6]) + (" ..." if len(result["errors"]) > 6 else ""))
+    if any("#REF!" in e for e in result["errors"]):
+        bits.append("A #REF! here usually means the formula points at a sheet that is not in the workbook yet (add it with doc_edit "
+                    "add_outline_sheet) or at a wrong sheet name.")
     if result["circular"]:
         bits.append(f"{result['circular']} circular reference(s) - break the loop.")
     if result["unsupported"]:
