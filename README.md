@@ -305,8 +305,10 @@ built in pieces with a live preview). What the builders do beyond writing text:
   (so the in-app preview and `data_only` readers show numbers; Excel still recalculates on open) and appends a check report to
   the tool result: `#DIV/0!` / `#REF!` / `#NAME?`, circular references, numbers typed into formulas instead of an assumptions
   cell. A function it cannot evaluate is reported, never guessed. It is not Excel: LibreOffice is not installed here.
+- **Cleaning** (`data_clean`): trim, dedupe, fix types, fill, split, rename, replace, drop columns over one sheet, saved as
+  a NEW workbook with a Changes sheet (the original is never touched).
 - **Not done yet:** `doc_edit` ops to restyle or add charts to a finished workbook (rebuild from the outline instead),
-  `data_clean` write-back, and `kb_query` on the same engine.
+  a LibreOffice recalculation path, and `kb_query` on the same engine.
 
 ## Setup on a new machine
 
