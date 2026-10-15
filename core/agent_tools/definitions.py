@@ -56,6 +56,10 @@ from .data_tools import DATA_IMPLS, DATA_SCHEMAS
 TOOL_IMPLS.update(DATA_IMPLS)
 AGENT_TOOLS.extend(DATA_SCHEMAS)
 
+from .pdf_tools import PDF_IMPLS, PDF_SCHEMAS
+TOOL_IMPLS.update(PDF_IMPLS)
+AGENT_TOOLS.extend(PDF_SCHEMAS)
+
 from .git_agent_tools import GIT_IMPLS, GIT_SCHEMAS
 TOOL_IMPLS.update(GIT_IMPLS)
 AGENT_TOOLS.extend(GIT_SCHEMAS)
