@@ -69,3 +69,24 @@ class ImageGate(unittest.TestCase):
         self.assertTrue(ps.image_intent("make it darker", [{"role": "user", "content": "generate an image of a cat"}]))
         self.assertFalse(ps.image_intent("write a TAP document for Hercules sales force automation", []))
         self.assertFalse(ps.image_intent("summarise the market growth in Bangladesh"))
+
+
+class MissingType(unittest.TestCase):
+    def test_where_is_the_spreadsheet_when_only_a_md_exists(self):
+        from routes.chat import file_intent as fi
+        files = ["Hercules_TAP-3d384188.md"]
+        self.assertEqual(fi.missing_type("where is spread sheet ?", files), "spreadsheet")
+        self.assertEqual(fi.missing_type("where is the excel file", files), "spreadsheet")
+        self.assertEqual(fi.missing_type("send me the pdf", files), "pdf")
+
+    def test_when_one_exists_or_no_type_is_named_nothing_is_missing(self):
+        from routes.chat import file_intent as fi
+        self.assertEqual(fi.missing_type("where is the spreadsheet", ["a.md", "b-1234abcd.xlsx"]), "")
+        self.assertEqual(fi.missing_type("where is the file", ["a.md"]), "")
+        self.assertEqual(fi.missing_type("where is my csv", ["data.csv"]), "")
+
+    def test_the_route_builds_instead_of_resending(self):
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("absent_type = missing_type(own_q, prior_files)", src)
+        self.assertIn('absent_type == "spreadsheet"', src)

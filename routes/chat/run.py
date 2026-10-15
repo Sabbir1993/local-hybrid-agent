@@ -67,6 +67,7 @@ from .file_intent import (
     _DL_TAG_RE,
     _DOC_EDIT_EXTS,
     file_followup_intent,
+    missing_type,
     load_prior_file,
     looks_undelivered,
     pick_target,
@@ -156,6 +157,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # attached data anywhere in the conversation (a follow-up like 'which status has the most rows' has none in its own message)
     has_attachments = any(m.get('role') == 'user' and has_attachment_text(str(m.get('content') or '')) for m in msgs)
     file_followup = file_followup_intent(own_q, bool(prior_files))
+    absent_type = missing_type(own_q, prior_files) if file_followup == "where" else ""
+    if absent_type:
+        file_followup = None            # "where is the spreadsheet?" when only a .md exists: build it, do not re-send the .md
     if file_followup == "where":
         # "where is the file?" - answer with the existing link instead of
         # asking a slow local model to regenerate (and usually invent) it.
@@ -182,7 +186,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     brief_phase = prompt_scope.brief_phase(last_query, msgs[:-1])         # "ask" (card now) / "build" (answered) / ""
     resume_note = builds.resume_note(user.id, last_query)                 # "continue" after a stop / restart mid-deck
     sheet_build = prompt_scope.sheet_build_wanted(last_query, msgs[:-1])        # "make me an Excel workbook ..."
-    wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or pdf_build or bool(resume_note) or sheet_build
+    sheet_build = sheet_build or absent_type == "spreadsheet"
+    wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or pdf_build or bool(resume_note) or sheet_build or bool(absent_type)
     has_file = bool(file_followup or wants_file)
     web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
                                                             explicit_only=voice_policy.web_explicit_only(req),
@@ -512,6 +517,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if brief_phase:
         sys_parts.append(prompt_scope.BRIEF_BUILD_NOW if brief_phase == "build" else prompt_scope.BRIEF_ASK_NOW)
         sys_labels.append("brief-" + brief_phase)
+    if absent_type:
+        sys_parts.append(f"[system note] The user is asking for a {absent_type} that has NOT been made in this chat yet (only other "
+                         f"file types exist). Create it now from the content already discussed in this conversation: do not "
+                         f"re-send the other file, do not ask what to include, and finish with the [DOWNLOAD: file] link.")
+        sys_labels.append("missing-type")
     if resume_note:
         sys_parts.append(resume_note)
         sys_labels.append("build-resume")

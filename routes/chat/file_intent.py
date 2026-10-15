@@ -123,6 +123,19 @@ def pick_target(query: str, files: list) -> str:
     return files[-1]
 
 
+def missing_type(query: str, files: list) -> str:
+    """'spreadsheet' | 'pdf' | 'document' | 'presentation' when the message names a kind of file that this chat has not produced
+    yet ("where is the spreadsheet?" after only a .md came back), else ''. The old answer re-sent the newest file of ANY type."""
+    q = _norm_name(query)
+    label = {".pdf": "pdf", ".xlsx": "spreadsheet", ".docx": "document", ".pptx": "presentation"}
+    for rx, exts in _TYPE_WORDS:
+        if re.search(r"\b(?:" + rx + r")\b", q):
+            if not any(Path(f).suffix.lower() in exts for f in files):
+                return label[exts[0]]
+            return ""
+    return ""
+
+
 def file_followup_intent(query: str, has_prior: bool) -> Optional[str]:
     """'where' = user can't find / wants the existing file again;
     'edit' = user wants the existing file changed. None otherwise."""
