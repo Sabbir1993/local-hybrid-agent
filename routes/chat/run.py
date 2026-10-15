@@ -210,6 +210,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if has_data_attachment:
         from core.agent_tools import AGENT_TOOLS as _ALL_TOOLS
         chat_tools += [t for t in _ALL_TOOLS if t.get("function", {}).get("name") in ("data_query", "data_sql", "data_clean")]
+    pdf_work = prompt_scope.pdf_tools_wanted(own_q, prior_files)
+    if pdf_work:
+        from core.agent_tools import AGENT_TOOLS as _PDF_ALL
+        chat_tools += [t for t in _PDF_ALL if t.get("function", {}).get("name", "").startswith("pdf_")]
     if has_file:
         chat_tools += [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
         if pdf_build or resume_note or brief_phase or sheet_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
@@ -440,6 +444,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         sys_parts.append(prompt_scope.FILE_MANUAL_LEAN)
         sys_labels.append("file-lean")
 
+    if pdf_work:
+        sys_parts.append(prompt_scope.PDF_TOOLS_MANUAL)
+        sys_labels.append("pdf-tools")
     if has_data_attachment:
         sys_parts.append(prompt_scope.ATTACHED_DATA)
         sys_labels.append("attached-data")

@@ -287,6 +287,26 @@ built in pieces with a live preview). What the builders do beyond writing text:
 - **Not verifiable here:** how PowerPoint itself draws a deck (no renderer on the build machine; the check is a
   measurement proxy), and the factual accuracy of what the model writes.
 
+## PDF toolbox
+
+Eight tools (chat and agent mode, `core/pdf_tools/`, registered in `core/agent_tools/pdf_tools.py`) for PDFs that already
+exist; every change saves a NEW file and keeps the original.
+- `pdf_read` (text page by page with markers, paged, outline, which pages are scans) and `pdf_tables` (tables to markdown or a
+  workbook with one sheet per table, header row detected).
+- `pdf_pages`: merge, split (ranges or every N), extract, delete, reorder, rotate, page numbers, text watermark, metadata.
+- `pdf_form`: list and fill AcroForm fields (unknown field names are an error that lists the real ones; nothing is invented).
+- `pdf_redact`: true redaction (pages with a match are redrawn as pictures with the match painted out, then verified: the text can
+  no longer be extracted and is not in the file bytes), including payment card numbers (Luhn-valid, `pan: true`).
+- `pdf_protect`: AES-256 password protect / unprotect; passwords are used for the call only and never stored or echoed.
+- `pdf_see`: renders pages locally and asks the vision model (local only unless `chat.pdf_see_cloud` is true, because a page image
+  can carry card numbers no text guard can see). `pdf_ocr`: Tesseract when installed (searchable PDF with a hidden text layer;
+  `eng`, `eng+ben`), else the vision model transcribes (text only, labelled), else a message on how to enable it. Switch off with
+  `chat.pdf_ocr: false`.
+- Generated PDFs now carry a title, a language tag (`bn` for Bengali documents) and "show title" in the viewer, and the print asks
+  for tagged output and bookmarks from the headings (Chrome / Edge 118+; older builds ignore the switches).
+- Not claimed: PDF/UA or PDF/A conformance (nothing here validates it), digital signatures, comparing two PDFs, or recovering
+  content from a damaged file.
+
 ## Spreadsheets: analysis and workbooks
 
 - **Analysis** (`core/sheet_engine/sql.py`, tool `data_sql`): an attached xlsx / xls / csv is loaded (header row found below

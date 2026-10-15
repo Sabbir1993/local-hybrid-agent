@@ -4,6 +4,12 @@ Entries are kept short on purpose: this is a local single-dev project and long
 per-commit prose rots faster than it helps. Versioning starts where the repo
 has a tag or release; until then, dates + headline changes.
 
+## 2026-10-15 — PDF toolbox
+
+- New tools `pdf_read`, `pdf_tables`, `pdf_pages`, `pdf_form`, `pdf_redact`, `pdf_protect`, `pdf_see`, `pdf_ocr` (read, tables to Excel, page
+  operations, forms, verified redaction incl. card numbers, AES-256 passwords, local vision on pages, OCR). Offered in chat when a PDF
+  is in the conversation or the message asks for such an operation. Generated PDFs get a title, a language tag and viewer settings.
+
 ## 2026-10-15 — spreadsheets: real analysis and real workbooks
 
 - Analysis: the profile finds the header below title rows and reports formula columns; new `data_sql` runs read-only SQL

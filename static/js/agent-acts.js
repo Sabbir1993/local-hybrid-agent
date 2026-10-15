@@ -22,6 +22,8 @@ function toolIcon(name) {
     case 'kb_query': return '🏢';
     case 'kb_sql': return '🏢';
     case 'data_sql': return '📊';
+    case 'pdf_read': case 'pdf_tables': case 'pdf_see': case 'pdf_ocr': return '📕';
+    case 'pdf_pages': case 'pdf_form': case 'pdf_redact': case 'pdf_protect': return '📕';
     case 'data_clean': return '🧹';
     case 'create_plan': return '📋';
     case 'update_plan_item': return '✔️';

@@ -126,3 +126,24 @@ class Protection(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Chain(Base):
+    """A realistic multi-step job done with the tools only: merge two files, redact, number, protect, read it back."""
+
+    def test_merge_redact_number_protect_read(self):
+        self.put("a.pdf", text_pdf(2, prefix="Summary", extra={1: "Customer card 4111 1111 1111 1111"}))
+        self.put("b.pdf", text_pdf(1, prefix="Annex"))
+        merged = self.tool("pdf_pages", file="a.pdf", ops=[{"op": "merge", "files": ["b.pdf"]}])
+        self.put("m.pdf", self.out(merged))
+        red = self.tool("pdf_redact", file="m.pdf", pan=True)
+        self.put("r.pdf", self.out(red))
+        numbered = self.tool("pdf_pages", file="r.pdf", ops=[{"op": "add_page_numbers"}])
+        self.put("n.pdf", self.out(numbered))
+        locked = self.tool("pdf_protect", file="n.pdf", action="protect", user_password="board-2026")
+        self.put("l.pdf", self.out(locked))
+        text = self.tool("pdf_read", file="l.pdf", password="board-2026")
+        self.assertIn("PDF: 3 pages", text)
+        self.assertIn("Page 3 of 3", text)
+        self.assertNotIn("4111", text)
+        self.assertIn("Annex 1 heading", text)

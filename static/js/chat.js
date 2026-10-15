@@ -432,6 +432,22 @@ function formatToolStatus(name, args) {
       return 'Running SQL over the spreadsheet data...';
     case 'data_clean':
       return 'Cleaning the data...';
+    case 'pdf_read':
+      return 'Reading the PDF...';
+    case 'pdf_tables':
+      return 'Extracting tables from the PDF...';
+    case 'pdf_pages':
+      return 'Changing the PDF pages...';
+    case 'pdf_redact':
+      return 'Redacting the PDF...';
+    case 'pdf_see':
+      return 'Looking at the PDF pages...';
+    case 'pdf_ocr':
+      return 'Reading the scanned pages...';
+    case 'pdf_form':
+      return 'Filling the PDF form...';
+    case 'pdf_protect':
+      return 'Protecting the PDF...';
     case 'analyze_image':
       return 'Analyzing image with vision model...';
     case 'create_plan':

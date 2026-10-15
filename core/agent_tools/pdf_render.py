@@ -39,8 +39,49 @@ def _find_chromium_binary() -> Optional[str]:
 
 def _lock_down_html(html_content: str) -> str:
     body = _DOCTYPE_RX.sub("", html_content, count=1)
-    return ('<!doctype html><html><head><meta charset="utf-8">'
-            f'<meta http-equiv="Content-Security-Policy" content="{_PDF_CSP}"></head>' + body)
+    return (f'<!doctype html><html lang="{_doc_lang(body)}"><head><meta charset="utf-8">'
+            f'<meta http-equiv="Content-Security-Policy" content="{_PDF_CSP}"><title>{_doc_title(body)}</title></head>' + body)
+
+
+def _doc_lang(html_content: str) -> str:
+    """'bn' when the document is mostly Bengali, else 'en' (the language tag a PDF reader and a screen reader use)."""
+    text = re.sub(r"<(style|script)[^>]*>.*?</\1>", " ", html_content or "", flags=re.I | re.S)      # CSS is not text
+    text = re.sub(r"<[^>]+>", " ", text)
+    bn = sum(1 for ch in text if "\u0980" <= ch <= "\u09ff")
+    return "bn" if bn > 20 and bn > 0.2 * max(1, sum(1 for ch in text if ch.isalpha())) else "en"
+
+
+def _doc_title(html_content: str) -> str:
+    import html as _html
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", html_content or "", re.I | re.S) or re.search(r"<title[^>]*>(.*?)</title>", html_content or "", re.I | re.S)
+    t = re.sub(r"<[^>]+>", "", m.group(1)) if m else ""
+    return _html.escape(re.sub(r"\s+", " ", _html.unescape(t)).strip()[:120] or "Document")
+
+
+def finalize_pdf(path, html_content: str) -> None:
+    """Document properties a reader shows and indexers use: title, language, 'show the title in the window bar'.
+    Best effort: a PDF without them is still a valid PDF."""
+    try:
+        import io
+        import html as _html
+        from pypdf import PdfReader, PdfWriter
+        from pypdf.generic import BooleanObject, NameObject, TextStringObject
+        p = Path(path)
+        w = PdfWriter(clone_from=PdfReader(io.BytesIO(p.read_bytes())))
+        title = _html.unescape(_doc_title(html_content))
+        w.add_metadata({"/Title": title, "/Creator": "Local AI platform", "/Producer": "Local AI platform"})
+        w._root_object[NameObject("/Lang")] = TextStringObject(_doc_lang(html_content))
+        prefs = w._root_object.get("/ViewerPreferences")
+        if prefs is None:
+            from pypdf.generic import DictionaryObject
+            prefs = DictionaryObject()
+            w._root_object[NameObject("/ViewerPreferences")] = prefs
+        prefs[NameObject("/DisplayDocTitle")] = BooleanObject(True)
+        out = io.BytesIO()
+        w.write(out)
+        p.write_bytes(out.getvalue())
+    except Exception as e:
+        print(f"[pdf] could not set document properties ({type(e).__name__})", file=sys.stderr)
 
 
 def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
@@ -65,6 +106,8 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
             "--headless=new",
             "--disable-gpu",
             "--no-pdf-header-footer",
+            "--export-tagged-pdf",                 # structure tags for accessibility / reflow (Chrome and Edge 118+)
+            "--generate-pdf-document-outline",     # bookmarks from the headings
             f"--user-data-dir={profile_dir}",
             # no "--blink-settings=scriptEnabled=false": in current Edge/Chrome it makes --print-to-pdf hang without
             # writing a file. Scripts are blocked anyway by the page's CSP (script-src 'none', _lock_down_html).
@@ -93,6 +136,7 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
             if _pdf_looks_valid(Path(abs_pdf)):
                 size = os.path.getsize(abs_pdf)
                 if size == last_size:
+                    finalize_pdf(abs_pdf, html_content)
                     return True
                 last_size = size
             if time.monotonic() >= deadline:

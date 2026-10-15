@@ -702,3 +702,29 @@ def format_mismatch(ext: str, filename: str) -> str:
         return ""
     return (f"error: the user asked for a {_FORMAT_LABEL.get(ext, ext)}, not a {got} file. Create the {ext} file instead "
             f"(write_file / doc_create with a {ext} name).")
+
+
+# PDF tools: offered when the conversation has a PDF, or the message is about doing something to one.
+_PDF_OPS_RE = re.compile(r"\b(merge|combine|split|extract|rotate|reorder|delete pages?|remove pages?|watermark|redact\w*|blackout|ocr|scanned|"
+                         r"protect|password|unlock|fill|form|stamp|page numbers?|tables? (?:from|in)|compress)\b", re.I)
+
+
+def pdf_tools_wanted(query: str, prior_files=None) -> bool:
+    has_pdf = any(str(f).lower().endswith(".pdf") for f in (prior_files or []))
+    q = query or ""
+    if has_pdf and (_PDF_OPS_RE.search(q) or re.search(r"\bpdf\b|\bpages?\b|\bscan", q, re.I)):
+        return True
+    return bool(re.search(r"\bpdf\b", q, re.I) and _PDF_OPS_RE.search(q))
+
+
+PDF_TOOLS_MANUAL = (
+    "PDF TOOLS (files in this conversation; every change saves a NEW file and the original is kept):\n"
+    "- pdf_read: text page by page + outline + which pages are scanned (no text layer). pdf_tables: tables to markdown or a real "
+    "workbook (to='xlsx'). pdf_see: look at pages with the vision model (charts, layout). pdf_ocr: scanned pages to text / a "
+    "searchable PDF.\n"
+    "- pdf_pages: merge, split, extract, delete, reorder, rotate, add_page_numbers, watermark, set_metadata. pdf_form: list / fill "
+    "form fields (never invent values). pdf_redact: REAL redaction (terms, patterns, pan=true for card numbers). pdf_protect: "
+    "password protect / unprotect.\n"
+    "- Read before you act: for 'remove the signature page' find the page with pdf_read first. Do the whole request in as few "
+    "calls as possible (several ops in one pdf_pages call). Give the user the [DOWNLOAD: file] link from the result and say what "
+    "changed in one or two lines. Never write scripts; never put passwords or card numbers in your reply.")

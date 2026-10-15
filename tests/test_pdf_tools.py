@@ -195,5 +195,32 @@ class Encrypted(Base):
         self.assertIn("Page 2 heading", self.tool("pdf_read", file="locked.pdf", password="s3cret"))
 
 
+class Wiring(unittest.TestCase):
+    def test_when_the_tools_are_offered(self):
+        from core import prompt_scope as ps
+        pdfs = ["report-1234abcd.pdf"]
+        self.assertTrue(ps.pdf_tools_wanted("remove page 3 and add a watermark", pdfs))
+        self.assertTrue(ps.pdf_tools_wanted("what is on page 4?", pdfs))
+        self.assertTrue(ps.pdf_tools_wanted("merge these pdf files", []))
+        self.assertTrue(ps.pdf_tools_wanted("redact the card numbers", pdfs))
+        self.assertFalse(ps.pdf_tools_wanted("make me a budget spreadsheet", []))
+        self.assertFalse(ps.pdf_tools_wanted("what is a pdf?", []))
+        self.assertFalse(ps.pdf_tools_wanted("summarise the attached sheet", ["data.xlsx"]))
+
+    def test_the_route_and_surface_know_the_tools(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        src = (root / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("prompt_scope.pdf_tools_wanted(own_q, prior_files)", src)
+        self.assertIn("prompt_scope.PDF_TOOLS_MANUAL", src)
+        surface = (root / "core" / "tool_surface.py").read_text(encoding="utf-8")
+        for name in ("pdf_read", "pdf_tables", "pdf_pages", "pdf_form", "pdf_redact", "pdf_protect", "pdf_see", "pdf_ocr"):
+            self.assertIn(f'"{name}"', surface, name)
+        from core.agent_tools import AGENT_TOOLS, TOOL_IMPLS
+        names = {t["function"]["name"] for t in AGENT_TOOLS}
+        self.assertTrue({"pdf_read", "pdf_tables", "pdf_pages", "pdf_form", "pdf_redact", "pdf_protect", "pdf_see", "pdf_ocr"} <= names)
+        self.assertTrue({"pdf_read", "pdf_ocr"} <= set(TOOL_IMPLS))
+
+
 if __name__ == "__main__":
     unittest.main()
