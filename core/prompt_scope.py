@@ -35,7 +35,7 @@ FILE_MANUAL = (
     "You have the capability to create, write, generate, or fill files using the `write_file(path, content)` tool.\n"
     "All files you write are automatically saved to the shared common storage space and made available as direct download links.\n\n"
     "RULES FOR FILES:\n"
-    "1. When the user asks to create, fill, write, generate, or share a file (e.g. 'fill data on that excel file and share with me', 'create data.csv', 'make a script', 'create resume.pdf', 'make a presentation', 'create an HTML dashboard'):\n"
+    "1. When the user asks to create, fill, write, generate, or share a file (e.g. 'fill data on that excel file and share with me', 'create data.csv', 'create resume.pdf', 'make a presentation', 'create an HTML dashboard'):\n"
     "   - NEVER refuse by saying 'I don't have the ability to directly edit or open local files on your computer'.\n"
     "   - Call `write_file(path=..., content=...)` immediately with the complete content, code, or data rows.\n"
     "   - If not calling `write_file`, you MUST provide the complete, rich, runnable code inside a markdown code block (e.g. ```html ... ```). NEVER output `[DOWNLOAD: filename]` alone without either calling `write_file` or outputting the complete code block.\n"
@@ -56,7 +56,8 @@ FILE_MANUAL = (
     "version is saved with its own [DOWNLOAD: ...] link.\n"
     "8. ONE DELIVERABLE PER REQUEST: write exactly one file in the format the user asked for (a PDF request "
     "gets one .pdf, a slide request gets one .pptx). Never save drafts or numbered versions (v2, _final, "
-    "_proper), never write helper/generator scripts (.py) to build a document, and link only that one file."
+    "_proper), never write helper/generator scripts (.py, .sh) to build a document - chat cannot run them and refuses to save scripts or "
+    "programs at all (show code in a fenced code block instead) - and link only that one file."
 )
 
 # Deck format + style questions: appended to FILE_MANUAL only when the request is about slides.

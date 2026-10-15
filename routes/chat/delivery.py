@@ -106,17 +106,24 @@ _WRAP_REFUSAL = ("error: the picture is already saved and shown to the user - do
                  "or any other file. Reply with the markdown generate_image returned and one short sentence.")
 
 
-_SCRIPT_SUFFIXES = (".sh", ".bash", ".bat", ".cmd", ".ps1", ".py")
-_SCRIPT_REFUSAL = ("error: chat cannot run scripts, so a script file builds nothing. Build the deck / PDF with doc_create "
-                   "(first slides + total + plan), then doc_append, as the instructions say. Do not write helper scripts.")
+# Chat saves documents, not programs: nothing here can run them, and a saved script is one a user may later run by hand.
+# Agent mode (approval prompts, device workspace) is where code gets written to disk.
+EXECUTABLE_SUFFIXES = (".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1", ".psm1", ".py", ".pyw", ".vbs", ".wsf", ".exe", ".msi",
+                       ".com", ".scr", ".pif", ".dll", ".lnk", ".jar", ".reg", ".hta")
+_SCRIPT_REFUSAL = ("error: chat does not save scripts or programs (nothing here can run them). For a deck / PDF use doc_create "
+                   "then doc_append; for code, show it to the user in a fenced code block, or tell them Agent mode can write and run it.")
 _NO_TOOL_ANSWER = ("I could not finish that in this chat turn. Please say \"continue\" and I will carry on from where it stopped "
                    "(Agent mode can run scripts if you need that).")
 
 
-def _script_for_deck(args: dict, brief_phase: str, pdf_build: bool, last_query: str) -> bool:
-    """True when a deck / PDF request tries to 'build' by saving a script (chat has no shell to run it)."""
-    path = str((args or {}).get("path") or (args or {}).get("file") or (args or {}).get("filename") or "").lower()
-    if not path.endswith(_SCRIPT_SUFFIXES):
-        return False
-    from core import prompt_scope
-    return bool(brief_phase or pdf_build or prompt_scope._PPTX_RE.search(str(last_query or "")))
+def is_executable_path(path) -> bool:
+    return str(path or "").strip().lower().endswith(EXECUTABLE_SUFFIXES)
+
+
+def chat_write_file(args: dict) -> str:
+    """tool_write_file_common for chat: refuses executable file types (see EXECUTABLE_SUFFIXES)."""
+    from core.agent_tools import tool_write_file_common
+    a = args or {}
+    if is_executable_path(a.get("path") or a.get("file") or a.get("filename")):
+        return _SCRIPT_REFUSAL
+    return tool_write_file_common(args)

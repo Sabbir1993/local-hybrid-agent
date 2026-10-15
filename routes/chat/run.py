@@ -51,9 +51,8 @@ from ..common.sampling_extra import sampler_extra
 from .base import router
 from .delivery import (
     _NO_TOOL_ANSWER,
-    _SCRIPT_REFUSAL,
     _WRAP_REFUSAL,
-    _script_for_deck,
+    chat_write_file,
     _finalize_download_tags,
     _finalize_media,
     _prompt_tokens_of,
@@ -197,7 +196,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         chat_tools += [t for t in _ALL_TOOLS if t.get("function", {}).get("name") == "data_query"]
     if has_file:
         chat_tools += [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
-        if pdf_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
+        if pdf_build or resume_note or brief_phase or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
             chat_tools += [DOC_CREATE_SCHEMA, DOC_APPEND_SCHEMA]       # decks / PDFs are built in pieces
     from core.agent_tools import AGENT_TOOLS
     skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
@@ -934,7 +933,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             missing_dl.append(clean_fname)
 
                         if cand_code:
-                            res_str = (tool_write_file_common({"path": clean_fname, "content": cand_code})
+                            res_str = (chat_write_file({"path": clean_fname, "content": cand_code})
                                        if tool_allowed("write_file") else "error: tool 'write_file' is not enabled for the active custom agent")
                             if res_str.startswith("error:"):
                                 # the write failed: keep the tag as a dead link so the
@@ -990,7 +989,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         redactor.reset()
                         yield "event: delta_reset\ndata: {}\n\n"
                         yield sse("tool_call", {'id': tc_id, 'name': 'write_file', 'args': {'path': target_filename, 'content': data_to_save}})
-                        res_str = (tool_write_file_common({"path": target_filename, "content": data_to_save})
+                        res_str = (chat_write_file({"path": target_filename, "content": data_to_save})
                                    if tool_allowed("write_file") else "error: tool 'write_file' is not enabled for the active custom agent")
                         ok = not res_str.startswith("error:")
                         target_filename = _saved_filename(res_str, target_filename)
@@ -1187,11 +1186,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif t_name == "write_file" and _wraps_media(
                                 made_media, args.get("path") or args.get("file") or args.get("filename"), last_query):
                             res_str = _WRAP_REFUSAL
-                        elif t_name == "write_file" and _script_for_deck(args, brief_phase, pdf_build, last_query):
-                            res_str = _SCRIPT_REFUSAL
                         elif t_name == "write_file":
                             # off the event loop: a deck / PDF written here may look up pictures (web, image model)
-                            res_str = await run_in_executor_ctx(tool_write_file_common, args)
+                            res_str = await run_in_executor_ctx(chat_write_file, args)
                             p_name = args.get("path") or args.get("file") or args.get("filename")
                             # a failed write must not contribute a download link: every
                             # written_files entry later becomes a [DOWNLOAD:] marker, which
