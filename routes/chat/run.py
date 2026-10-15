@@ -188,6 +188,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     resume_note = builds.resume_note(user.id, last_query)                 # "continue" after a stop / restart mid-deck
     sheet_build = prompt_scope.sheet_build_wanted(last_query, msgs[:-1])        # "make me an Excel workbook ..."
     sheet_build = sheet_build or absent_type == "spreadsheet"
+    explicit_ext = prompt_scope.explicit_format(own_q)              # the user named the file type: that is the deliverable
+    if explicit_ext == ".xlsx":
+        sheet_build = sheet_build or prompt_scope.sheet_build_wanted(own_q + " create", msgs[:-1])
     wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or pdf_build or bool(resume_note) or sheet_build or bool(absent_type)
     has_file = bool(file_followup or wants_file)
     web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
@@ -518,6 +521,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if brief_phase:
         sys_parts.append(prompt_scope.BRIEF_BUILD_NOW if brief_phase == "build" else prompt_scope.BRIEF_ASK_NOW)
         sys_labels.append("brief-" + brief_phase)
+    if explicit_ext and has_file:
+        sys_parts.append(prompt_scope.format_note(explicit_ext))
+        sys_labels.append("explicit-format")
     if absent_type:
         sys_parts.append(f"[system note] The user is asking for a {absent_type} that has NOT been made in this chat yet (only other "
                          f"file types exist). Create it now from the content already discussed in this conversation: do not "
@@ -1197,6 +1203,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                     res_str, done = rest
                                     if done and done.get("markdown"):
                                         made_media.append(done["markdown"])
+                        elif t_name in ("write_file", "doc_create") and prompt_scope.format_mismatch(
+                                explicit_ext, args.get("path") or args.get("file") or args.get("filename")):
+                            res_str = prompt_scope.format_mismatch(
+                                explicit_ext, args.get("path") or args.get("file") or args.get("filename"))
                         elif t_name in ("doc_inspect", "doc_edit", "doc_create", "doc_append"):
                             impl = _DOC_CHAT_IMPLS[t_name]
                             res_str = await run_in_executor_ctx(impl, args)

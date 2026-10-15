@@ -585,8 +585,8 @@ def image_intent(query: str, prior_msgs=None) -> bool:
 
 
 # Spreadsheet / workbook BUILD requests: the model writes a workbook outline (core/sheet_engine/build.py) instead of a flat table.
-_SHEET_RE = re.compile(r"\b(xlsx|excel|spreadsheets?|workbooks?|worksheets?|budget sheet|tracker)\b", re.I)
-_SHEET_VERB_RE = re.compile(r"\b(creat\w*|mak(?:e|ing)|build\w*|generat\w*|prepar\w*|draft\w*|design\w*|set ?up|produce|give me|need|want|write)\b", re.I)
+_SHEET_RE = re.compile(r"\b(xlsx|excel|spreadsheets?|sp[a-z]{2,8}\s?sheets?|workbooks?|worksheets?|budget sheet|tracker)\b", re.I)
+_SHEET_VERB_RE = re.compile(r"\b(creat\w*|mak(?:e|ing)|build\w*|generat\w*|prepar\w*|draft\w*|design\w*|set ?up|produce|give me|need|want|write|share|send|provide|export|deliver|get me|final)\b", re.I)
 _SHEET_EDIT_RE = re.compile(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain|analy[sz]e|analysis|attached|uploaded)\b", re.I)
 
 
@@ -633,3 +633,40 @@ XLSX_MANUAL = (
     "- Dates as 2026-07-05, percentages as 15%, money as plain numbers with `format:`. Real data only: never invent rows; if the "
     "user gave none, build the structure with the headers and a few clearly-labelled example rows.\n"
     "- Reply with one short summary and the [DOWNLOAD: file] link. Do not describe the formulas at length.")
+
+
+# When the user NAMES the kind of file they want, that is the deliverable: a request for "the final spreadsheet" that comes back as a
+# slide deck (because the same message says "present it to the board") is a wrong answer however good the deck is.
+_FORMAT_FAMILIES = (
+    (".xlsx", _SHEET_RE),
+    (".pdf", re.compile(r"\bpdf\b", re.I)),
+    (".pptx", _PPTX_RE),
+    (".docx", re.compile(r"\b(docx|word (?:document|file)|ms word)\b", re.I)),
+)
+_DOC_EXTS = (".xlsx", ".xls", ".csv", ".pdf", ".pptx", ".ppt", ".docx", ".doc")
+_FORMAT_LABEL = {".xlsx": "spreadsheet (.xlsx)", ".pdf": "PDF (.pdf)", ".pptx": "presentation (.pptx)", ".docx": "Word document (.docx)"}
+
+
+def explicit_format(query: str) -> str:
+    """The one file extension the message asks for by name ('.xlsx' ...), or '' when it names none or several."""
+    hits = [ext for ext, rx in _FORMAT_FAMILIES if rx.search(query or "")]
+    return hits[0] if len(hits) == 1 else ""
+
+
+def format_note(ext: str) -> str:
+    return (f"[system note] The user explicitly asked for a {_FORMAT_LABEL.get(ext, ext)}. That is the ONLY deliverable: create exactly "
+            f"that file type, do not create any other format (no slides, no PDF, no Word, no markdown copy) even if the message also "
+            f"mentions presenting or sharing it, and finish with its [DOWNLOAD: file] link.")
+
+
+def format_mismatch(ext: str, filename: str) -> str:
+    """Refusal text when a tool call would create a document of another kind than the user asked for, else ''."""
+    from pathlib import PurePosixPath
+    got = PurePosixPath(str(filename or "").replace("\\", "/")).suffix.lower()
+    if not ext or got not in _DOC_EXTS:
+        return ""
+    same = (got == ext) or (ext == ".xlsx" and got in (".xls", ".csv")) or (ext == ".pptx" and got == ".ppt") or (ext == ".docx" and got == ".doc")
+    if same:
+        return ""
+    return (f"error: the user asked for a {_FORMAT_LABEL.get(ext, ext)}, not a {got} file. Create the {ext} file instead "
+            f"(write_file / doc_create with a {ext} name).")

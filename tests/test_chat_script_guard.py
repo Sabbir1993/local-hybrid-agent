@@ -130,3 +130,43 @@ class ToolMessages(unittest.TestCase):
         for line in w.splitlines():
             if 'msg = f"Wrote' in line:
                 self.assertEqual(line.count("[DOWNLOAD:"), 1, line)
+
+
+class ExplicitFormat(unittest.TestCase):
+    Q = "make TAP in detailed with easy to understand so that I can present it to board managements\nso share me the final spradesheet of it"
+
+    def test_the_reported_request_is_a_spreadsheet_even_with_the_typo(self):
+        from core import prompt_scope as ps
+        self.assertEqual(ps.explicit_format(self.Q), ".xlsx")
+        self.assertTrue(ps.sheet_build_wanted(self.Q))
+
+    def test_one_named_type_decides_several_or_none_do_not(self):
+        from core import prompt_scope as ps
+        self.assertEqual(ps.explicit_format("send me the pdf version"), ".pdf")
+        self.assertEqual(ps.explicit_format("create a PowerPoint deck"), ".pptx")
+        self.assertEqual(ps.explicit_format("I need an excel file"), ".xlsx")
+        self.assertEqual(ps.explicit_format("make a pdf and a spreadsheet"), "")
+        self.assertEqual(ps.explicit_format("present it to the board"), "")      # 'present' alone is not a deck
+
+    def test_a_tool_call_for_another_format_is_refused_with_the_right_instruction(self):
+        from core import prompt_scope as ps
+        msg = ps.format_mismatch(".xlsx", "Hercules_TAP_Bangladesh.pptx")
+        self.assertTrue(msg.startswith("error:"))
+        self.assertIn(".xlsx", msg)
+        for ok in ("plan.xlsx", "data.csv", "old.xls", "notes.txt", "sub/dir/Plan.XLSX"):
+            self.assertEqual(ps.format_mismatch(".xlsx", ok), "", ok)
+        self.assertEqual(ps.format_mismatch("", "a.pptx"), "")
+        self.assertEqual(ps.format_mismatch(".pptx", "a.ppt"), "")
+
+    def test_the_note_is_explicit_and_the_route_uses_it(self):
+        from pathlib import Path
+        from core import prompt_scope as ps
+        self.assertIn("ONLY deliverable", ps.format_note(".xlsx"))
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("explicit_ext = prompt_scope.explicit_format(own_q)", src)
+        self.assertIn("prompt_scope.format_note(explicit_ext)", src)
+        self.assertEqual(src.count("prompt_scope.format_mismatch("), 2)
+
+    def test_where_is_it_understands_the_typo(self):
+        from routes.chat import file_intent as fi
+        self.assertEqual(fi.missing_type("where is the spradesheet", ["a.md"]), "spreadsheet")

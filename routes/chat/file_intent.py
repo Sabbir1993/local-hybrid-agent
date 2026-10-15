@@ -82,7 +82,7 @@ def _norm_name(text: str) -> str:
 
 _TYPE_WORDS = (
     (r"pdf", (".pdf",)),
-    (r"sheet|spreadsheet|excel|xlsx|csv", (".xlsx", ".csv")),
+    (r"sheet|sp[a-z]{2,8}\s?sheet|spreadsheet|excel|xlsx|csv", (".xlsx", ".csv")),
     (r"word|docx|document", (".docx",)),
     (r"deck|ppt|pptx|powerpoint|presentation|slides?", (".pptx",)),
 )
