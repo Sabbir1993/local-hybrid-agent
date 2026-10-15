@@ -1,22 +1,42 @@
 """Deck / PDF builds in pieces survive a restart; a bare "continue" resumes them."""
+import sqlite3
+import tempfile
 import unittest
 import uuid
+from pathlib import Path
+from unittest import mock
 
 import core.agent_tools  # noqa: F401  (import order: the doc tools need the agent tools loaded first)
 from core.doc_tools import builds, operations
-from core.db import _projects_db
+from core.sqlite_util import ThreadLocalDB
 
 UID = 987001
+
+
+class TempBuilds(unittest.TestCase):
+    """Every test here uses its own database: deck builds of the test run must never land in the real projects.db."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = ThreadLocalDB(Path(self._tmp.name) / "p.db", row_factory=sqlite3.Row)
+        self._p = mock.patch.object(builds, "_projects_db", self.db)
+        self._p.start()
+        builds._init()
+        self.addCleanup(self._p.stop)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        try:
+            self._tmp.cleanup()
+        except OSError:
+            pass                                    # Windows keeps the sqlite file open a moment
 
 
 def fk():
     return "t-" + uuid.uuid4().hex[:10] + ".pptx"
 
 
-class Store(unittest.TestCase):
-    def tearDown(self):
-        _projects_db.execute("DELETE FROM deck_builds WHERE user_id = ?", (UID,))
-        _projects_db.commit()
+class Store(TempBuilds):
 
     def test_save_load_update_close(self):
         f = fk()
@@ -33,8 +53,8 @@ class Store(unittest.TestCase):
     def test_expired_builds_are_ignored(self):
         f = fk()
         builds.save(UID, f, total=4, have=1)
-        _projects_db.execute("UPDATE deck_builds SET updated_at = 1 WHERE user_id = ?", (UID,))
-        _projects_db.commit()
+        self.db.execute("UPDATE deck_builds SET updated_at = 1 WHERE user_id = ?", (UID,))
+        self.db.commit()
         self.assertIsNone(builds.load(UID, f))
         self.assertIsNone(builds.latest_open(UID))
 
@@ -48,10 +68,7 @@ class Store(unittest.TestCase):
         self.assertIn("Next in your plan: 2. Two", operations._plan_note(key, 1, ["One"], False))
 
 
-class Resume(unittest.TestCase):
-    def tearDown(self):
-        _projects_db.execute("DELETE FROM deck_builds WHERE user_id = ?", (UID,))
-        _projects_db.commit()
+class Resume(TempBuilds):
 
     def test_intent(self):
         for t in ("continue", "Continue.", "ok go on", "please keep going", "finish the deck", "resume"):

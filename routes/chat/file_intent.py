@@ -137,6 +137,8 @@ def missing_type(query: str, files: list) -> str:
 
 
 _SHEETISH_RE = re.compile(r"\b(sheets?|tabs?|columns?|rows?|cells?|headers?|formulas?|totals?|charts?|workbook|spreadsheet|excel|xlsx)\b", re.I)
+_DECKISH_RE = re.compile(r"\b(images?|pictures?|photos?|graphs?|charts?|infographics?|slides?|visuals?|theme|colou?rs?|fonts?|cover|title slide|"
+                         r"bullets?|speaker notes?|layout|design)\b", re.I)
 _NEW_FILE_RE = re.compile(r"\b(new|another|separate|second|different|fresh|brand new)\b.{0,25}\b(sheet|workbook|spreadsheet|excel|file|xlsx)\b", re.I)
 
 
@@ -148,6 +150,9 @@ def file_followup_intent(query: str, has_prior: bool, prior_files=None, asked: b
         return None
     if _FILE_WHERE_RE.search(q) and not _FILE_EDIT_RE.search(q):
         return "where"
+    has_deck = any(str(f).lower().endswith((".pptx", ".ppt")) for f in (prior_files or []))
+    if has_deck and not _NEW_FILE_RE.search(q) and _DECKISH_RE.search(q):
+        return "edit"                      # "where are the images, graphs?" after a deck: the deck already in this chat, not a new one
     has_book = any(str(f).lower().endswith((".xlsx", ".xls")) for f in (prior_files or []))
     if has_book and not _NEW_FILE_RE.search(q):
         if _SHEETISH_RE.search(q):

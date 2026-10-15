@@ -729,8 +729,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 if brief_phase == "build" and written_files:
                     research_over = True        # the deck exists: from here on only doc_append, no more searching
                 if turn == turn_limit - 1 and msgs and msgs[-1].get("role") == "tool":
-                    # final turn: must answer now; a requested file can still be written
-                    current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and tool_allowed("write_file")) else None
+                    # final turn: must answer now; a requested file can still be written. A deck / PDF being built in pieces keeps its
+                    # document tools: with write_file only, the model said "there is no doc_append tool" and left the deck half built.
+                    doc_names = ("doc_create", "doc_append", "doc_inspect", "doc_edit")
+                    doc_tools = [t for t in chat_tools if t.get("function", {}).get("name") in doc_names]
+                    if doc_tools and (brief_phase == "build" or resume_note or pdf_build) and wants_file:
+                        current_tools = doc_tools
+                    else:
+                        current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and tool_allowed("write_file")) else None
                 elif research_over:
                     current_tools = [t for t in chat_tools
                                      if t.get("function", {}).get("name") not in WEB_TOOL_NAMES]

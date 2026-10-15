@@ -15,6 +15,9 @@ import sys
 import time
 from typing import Optional
 
+import os
+
+from ..config import PROJECTS_DB_FILE
 from ..db import _projects_db
 
 OPEN_TTL_S = 24 * 3600
@@ -24,8 +27,18 @@ CONTINUE_INTENT = re.compile(
     r"(?:[\s,]+(?:it|now|please|then|the|deck|pdf|slides?|presentation|document|again|thanks?|thank you))*[\s.!]*$", re.I)
 
 
+def _db():
+    return _projects_db
+
+
+def _skip_write() -> bool:
+    """The test suite (tests/test_00_isolation.py sets the variable) must not leave decks in the real database: a leftover 'open'
+    build of a real user id would make the next "continue" resume a deck that never existed."""
+    return os.environ.get("A770_NO_USAGE_WRITES") == "1" and getattr(_db(), "path", "") == str(PROJECTS_DB_FILE)
+
+
 def _init() -> None:
-    _projects_db.execute("""CREATE TABLE IF NOT EXISTS deck_builds (
+    _db().execute("""CREATE TABLE IF NOT EXISTS deck_builds (
         user_id INTEGER NOT NULL,
         file_key TEXT NOT NULL,
         total INTEGER,
@@ -36,7 +49,7 @@ def _init() -> None:
         updated_at REAL NOT NULL,
         PRIMARY KEY (user_id, file_key)
     )""")
-    _projects_db.commit()
+    _db().commit()
 
 
 try:
@@ -48,16 +61,18 @@ except Exception as e:
 def save(uid: int, file_key: str, *, total: Optional[int] = None, plan: Optional[list] = None,
          have: Optional[int] = None) -> None:
     """Create or update the open build for this file. Fields left None keep their stored value."""
+    if _skip_write():
+        return
     try:
         now = time.time()
-        _projects_db.execute(
+        _db().execute(
             "INSERT INTO deck_builds (user_id, file_key, total, plan_json, have, status, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, COALESCE(?, 0), 'open', ?, ?) "
             "ON CONFLICT(user_id, file_key) DO UPDATE SET total = COALESCE(excluded.total, total), "
             "plan_json = COALESCE(excluded.plan_json, plan_json), have = COALESCE(?, have), "
             "status = 'open', updated_at = excluded.updated_at",
             (uid, file_key, total, json.dumps(plan) if plan else None, have, now, now, have))
-        _projects_db.commit()
+        _db().commit()
     except Exception as e:
         print(f"[deck_builds] save failed: {e}", file=sys.stderr)
 
@@ -65,7 +80,7 @@ def save(uid: int, file_key: str, *, total: Optional[int] = None, plan: Optional
 def load(uid: int, file_key: str) -> Optional[dict]:
     """The open, not-expired build for this file: {total, plan: [(title, purpose)], have, updated_at}."""
     try:
-        r = _projects_db.execute(
+        r = _db().execute(
             "SELECT total, plan_json, have, updated_at FROM deck_builds "
             "WHERE user_id = ? AND file_key = ? AND status = 'open' AND updated_at > ?",
             (uid, file_key, time.time() - OPEN_TTL_S)).fetchone()
@@ -83,17 +98,19 @@ def load(uid: int, file_key: str) -> Optional[dict]:
 
 
 def close(uid: int, file_key: str, status: str = "done") -> None:
+    if _skip_write():
+        return
     try:
-        _projects_db.execute("UPDATE deck_builds SET status = ?, updated_at = ? WHERE user_id = ? AND file_key = ?",
+        _db().execute("UPDATE deck_builds SET status = ?, updated_at = ? WHERE user_id = ? AND file_key = ?",
                              (status, time.time(), uid, file_key))
-        _projects_db.commit()
+        _db().commit()
     except Exception as e:
         print(f"[deck_builds] close failed: {e}", file=sys.stderr)
 
 
 def latest_open(uid: int) -> Optional[dict]:
     try:
-        r = _projects_db.execute(
+        r = _db().execute(
             "SELECT file_key FROM deck_builds WHERE user_id = ? AND status = 'open' AND updated_at > ? "
             "ORDER BY updated_at DESC LIMIT 1", (uid, time.time() - OPEN_TTL_S)).fetchone()
     except Exception as e:
