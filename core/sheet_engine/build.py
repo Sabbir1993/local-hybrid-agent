@@ -207,8 +207,9 @@ def _to_number(s: str):
 
 
 def _cell_value(raw, fmt: Optional[str], sheets: list, where: str, formulas: bool = True):
-    """(value, is_formula). Raises BuildError for a refused formula. With formulas=False (a plain table the author did not
-    mark up) a cell that starts with = stays text, as it always has."""
+    """(value, is_formula). A formula that is not allowed (unknown or unsafe function, external link ...) is stored as text and
+    reported (_warn): it never runs, and the rest of the workbook is still built. With formulas=False (a plain table the author did
+    not mark up) a cell that starts with = stays text, as it always has."""
     s = "" if raw is None else str(raw).strip()
     if s == "":
         return None, False
@@ -220,7 +221,8 @@ def _cell_value(raw, fmt: Optional[str], sheets: list, where: str, formulas: boo
             # points at sheets added later). Everything else is still checked; a wrong sheet name shows up as #REF! in the check report.
             return to_file_form(check_formula(s, sheets=None)), True
         except FormulaError as e:
-            raise BuildError(f"{where}: {e}")
+            _warn(f"{where}: {e}. The cell was kept as plain text (it is not a formula); write it with a supported function")
+            return s, False
     if fmt == "date" and _ISO_DATE.match(s):
         import datetime as dt
         try:

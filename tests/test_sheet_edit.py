@@ -79,11 +79,15 @@ class Outline(unittest.TestCase):
     def test_bad_ops_get_a_reason(self):
         for ops, needle in (([{"op": "add_chart", "sheet": "Nope", "chart": "bar"}], "not found"),
                             ([{"op": "set_format", "sheet": "Sales"}], "column required"),
-                            ([{"op": "add_column", "sheet": "Sales", "name": "x", "formula": "B2"}], "must start with ="),
-                            ([{"op": "add_column", "sheet": "Sales", "name": "x", "formula": "=HYPERLINK(\"u\")"}], "not allowed")):
+                            ([{"op": "add_column", "sheet": "Sales", "name": "x", "formula": "B2"}], "must start with =")):
             with self.assertRaises(Exception) as cm:
                 self.edit(ops)
             self.assertIn(needle, str(cm.exception))
+
+    def test_a_formula_column_with_a_refused_function_keeps_the_workbook_and_says_why(self):
+        out = self.edit([{"op": "add_column", "sheet": "Sales", "name": "x", "formula": "=HYPERLINK(\"u\")"}])
+        self.assertTrue(any("not allowed" in n for n in out.notes))
+        self.assertEqual(wb_of(out.data)["Sales"]["C2"].data_type, "s")        # kept as text, never a formula
 
     def test_a_rule_on_a_missing_column_is_skipped_with_a_note_not_an_error(self):
         out = self.edit([{"op": "add_highlight", "sheet": "Sales", "rule": "Coverage<50 red"}])

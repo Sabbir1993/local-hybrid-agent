@@ -101,13 +101,33 @@ class Workbook(unittest.TestCase):
 
 class Refusals(unittest.TestCase):
     def refused(self, text, needle):
-        with self.assertRaises(Exception) as cm:
-            D.create("x.xlsx", text)
-        self.assertIn(needle, str(cm.exception))
+        """The formula is not allowed: the workbook is STILL built, the cell stays plain text, and the reason is reported."""
+        from core.sheet_engine import build as sb
+        sb.take_warnings()
+        data, _ = D.create("x.xlsx", text)
+        ws = openpyxl.load_workbook(io.BytesIO(data)).active
+        cell = ws["A2"]
+        self.assertEqual(cell.data_type, "s", "a refused formula is never stored as a formula")
+        self.assertTrue(str(cell.value).startswith("="))
+        note = sb.warnings_note()
+        self.assertIn("kept as plain text", note)
+        self.assertIn(needle, note)
 
     def test_dangerous_functions(self):
         for fn in ('HYPERLINK("http://x","y")', 'WEBSERVICE("http://x")', 'INDIRECT("A1")', "CALL(\"a\")"):
             self.refused(f"## Sheet: A\n| a |\n|---|\n| ={fn} |\n", "not allowed")
+
+    def test_invented_functions_get_a_pointer(self):
+        self.refused("## Sheet: A\n| a |\n|---|\n| =MERGE(B1,C1) |\n", "no MERGE in Excel")
+        self.refused("## Sheet: A\n| a |\n|---|\n| =JOIN(B1,C1) |\n", "TEXTJOIN")
+
+    def test_one_bad_formula_does_not_cost_the_other_sheets_or_formulas(self):
+        data, _ = D.create("x.xlsx", "## Sheet: Budget\n| Item | Cost | Note |\n|---|---|---|\n| Dev | 100 | =MERGE(A2,B2) |\n| Ops | 50 | =B3*2 |\n"
+                                     "## Sheet: Other\n| x |\n|---|\n| 1 |\n")
+        wb = openpyxl.load_workbook(io.BytesIO(data))
+        self.assertEqual(wb.sheetnames, ["Budget", "Other"])
+        self.assertEqual(wb["Budget"]["C2"].data_type, "s")
+        self.assertEqual(wb["Budget"]["C3"].value, "=B3*2")                  # the good formula is live
 
     def test_external_references_and_unknown_sheets(self):
         self.refused("## Sheet: A\n| a |\n|---|\n| =[1]Sheet1!A1 |\n", "other workbooks")

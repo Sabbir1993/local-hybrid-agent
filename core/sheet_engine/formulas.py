@@ -27,6 +27,19 @@ _FUNC = re.compile(r"([A-Za-z_][A-Za-z0-9_.]*)\s*\(")
 _ERROR_LITERAL = re.compile(r"#(?:REF|NAME|DIV/0|VALUE|N/A|NUM|NULL)[!?]?", re.I)
 
 
+# Functions a model invents or borrows from another tool, and what to use in Excel instead.
+_SUGGEST = {
+    "MERGE": " (there is no MERGE in Excel: join text with CONCAT(a,b) or a&b; merged cells are a layout feature, not a formula)",
+    "JOIN": " (use TEXTJOIN(\", \",TRUE,A1:A5) or a&b)", "CONCATS": " (use CONCAT)", "LEN2": "",
+    "SUMTOTAL": " (use SUBTOTAL(109,range) or SUM)", "AVG": " (use AVERAGE)", "MEAN": " (use AVERAGE)", "SUMPRODUCTS": " (use SUMPRODUCT)",
+    "VLOOKUPS": " (use VLOOKUP or XLOOKUP)", "IFEMPTY": " (use IF(A1=\"\",x,y))", "ISEMPTY": " (use ISBLANK)", "NOW2": "",
+    "PERCENT": " (use A1/B1 and format the cell as percent)", "GROWTH": " (use (new-old)/old)", "COUNTIFS2": "",
+    "FILTER": " (not available here: use SUMIFS / COUNTIFS / INDEX-MATCH)", "SORT": " (sort the table rows when you write them)",
+    "UNIQUE": " (list the distinct values yourself when you write the table)", "LET": " (use helper columns)",
+    "LAMBDA": " (use helper columns)",
+}
+
+
 class FormulaError(ValueError):
     pass
 
@@ -61,7 +74,7 @@ def check_formula(formula: str, sheets=None, names=None) -> str:
         if base in ("INDIRECT", "OFFSET"):
             raise FormulaError(f"{base} builds references from text and is not allowed - use INDEX/MATCH or a direct reference")
         if base not in ALLOWED_FUNCTIONS:
-            raise FormulaError(f"function {base} is not supported here; use one of the standard functions "
+            raise FormulaError(f"function {base} is not supported here" + _SUGGEST.get(base, "") + "; standard functions work "
                                "(SUM, SUMIFS, COUNTIFS, AVERAGEIFS, IF, IFERROR, ROUND, INDEX, MATCH, VLOOKUP, XLOOKUP, TEXT, DATE, EOMONTH, ...)")
     if sheets is not None:
         known = {s.lower() for s in sheets}
