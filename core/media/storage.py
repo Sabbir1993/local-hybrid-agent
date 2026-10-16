@@ -80,3 +80,44 @@ def check_wav(data: bytes) -> None:
 def _clean_transcript(text: str) -> str:
     t = re.sub(r"\[(BLANK_AUDIO|MUSIC|NOISE|SILENCE)\]", "", str(text or ""), flags=re.I)
     return re.sub(r"[ \t]+", " ", t).strip()
+
+
+_PURGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".webm"}
+
+
+def purge_generated(days: int, root=None, now: Optional[float] = None) -> int:
+    """Delete generated pictures / clips older than `days` from every user's generated/ folder. -> files removed.
+    Only the media this module saves (by extension), only regular files directly in generated/, never a link or a folder."""
+    import time
+    if days <= 0:
+        return 0
+    if root is None:
+        from ..small_model import COMMON_ROOT as root
+    cutoff = (now if now is not None else time.time()) - days * 86400
+    removed = 0
+    for folder in root.glob("user_*/generated"):
+        if folder.is_symlink() or not folder.is_dir():
+            continue
+        for f in folder.iterdir():
+            try:
+                if f.is_symlink() or not f.is_file() or f.suffix.lower() not in _PURGE_EXTS:
+                    continue
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    removed += 1
+            except OSError:
+                continue
+    return removed
+
+
+def purge_generated_configured() -> int:
+    """Startup hook: chat.generated_retention_days in config/app.json (0 or absent = keep everything)."""
+    from ..small_model import APP_CONFIG
+    try:
+        days = int((APP_CONFIG.get("chat") or {}).get("generated_retention_days") or 0)
+    except (TypeError, ValueError):
+        return 0
+    n = purge_generated(days)
+    if n:
+        print(f"[media] retention: removed {n} generated file(s) older than {days} day(s)")
+    return n

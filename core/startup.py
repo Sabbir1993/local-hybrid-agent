@@ -133,6 +133,11 @@ async def lifespan(app: FastAPI):
     if stale:
         print(f"[server_manager] {stale} run(s) were interrupted by the last shutdown")
     runs.purge()
+    try:
+        from core.media.storage import purge_generated_configured
+        purge_generated_configured()          # chat.generated_retention_days (0 = keep everything)
+    except Exception as e:
+        print(f"[media] retention purge skipped: {e}", file=sys.stderr)
     _bootstrap_super_admin()
     _backfill_legacy_data_ownership()
     _backfill_legacy_cloud_providers()
