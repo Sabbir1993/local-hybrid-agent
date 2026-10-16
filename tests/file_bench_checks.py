@@ -31,8 +31,9 @@ def check_docx(data: bytes, markdown: str = "", min_words: int = 0) -> list:
     for t in doc.tables:
         for row in t.rows:
             text += "\n" + " ".join(c.text for c in row.cells)
+    body = "\n".join(p.text for p in paras)           # a "#" column header in a table is not a heading marker
     for rx, label in _MD_LEFTOVERS:
-        if rx.search(text):
+        if rx.search(body if label.startswith("literal #") else text):
             out.append(label)
     want_heads = len(re.findall(r"^#{1,3}\s+\S", markdown or "", re.M))
     got_heads = sum(1 for p in paras if (p.style.name or "").lower().startswith(("heading", "title")))

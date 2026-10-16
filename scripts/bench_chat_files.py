@@ -158,11 +158,16 @@ def run_prompt(base, client, fmt, name, spec, timeout_s):
     try:
         rec = _post_chat(base, client, msgs, timeout_s)
         if fmt == "pdf":                       # turn 1 is the questionnaire card; answer it like the UI does
-            if "questionnaire" in rec["text"] and not rec["tools"]:
-                rec_out["card_turn_tokens"] = (rec["done"] or {}).get("completion_tokens")
-                msgs += [{"role": "assistant", "content": rec["text"]},
-                         {"role": "user", "content": _card_answers(rec["text"], spec["answers"])}]
-                rec = _post_chat(base, client, msgs, timeout_s)
+            card = rec["text"]
+            rec_out["card_turn"] = "card" if ("questionnaire" in card and not rec["tools"]) else (
+                "card_saved_as_file" if any(t["name"] == "write_file" for t in rec["tools"]) else "no_card")
+            rec_out["card_turn_tokens"] = (rec["done"] or {}).get("completion_tokens")
+            if rec_out["card_turn"] != "card":     # the card never reached the user: answer the server's own copy so the build phase is still measured
+                from core import prompt_scope
+                card = prompt_scope.brief_card("pdf")
+            msgs += [{"role": "assistant", "content": card},
+                     {"role": "user", "content": _card_answers(card, spec["answers"])}]
+            rec = _post_chat(base, client, msgs, timeout_s)
     except Exception as e:                     # noqa: BLE001 - transport / timeout: reported, never fatal to the batch
         rec_out["error"] = f"{type(e).__name__}: {str(e)[:160]}"
         rec = {"tools": [], "results": [], "turns": [], "nudges": 0, "text": "", "done": None, "turn_tokens_est": [], "md": ""}
