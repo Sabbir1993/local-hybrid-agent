@@ -285,7 +285,7 @@ def create(name: str, content: str, template: Optional[bytes] = None,
     if ext == ".pptx":
         return pptx_ops.create(content, template=template, title=title, images=images), content
     if ext == ".docx":
-        return docx_ops.create(content, title=title), content
+        return docx_ops.create(content, title=title, images=images), content
     if ext == ".xlsx":
         from ..sheet_engine import build as sheet_build
         from ..sheet_engine import pseudo

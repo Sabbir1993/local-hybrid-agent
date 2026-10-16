@@ -220,7 +220,7 @@ async def prepare_build(ext: str, content: str, uid, *, template: bool = False, 
         if ext == ".pptx" and not template:
             images, notes, used_web = await slide_images.resolve(content, uid)
             note = slide_images.summary(images, notes, used_web)
-        elif ext == ".pdf" and not partial:
+        elif ext in (".pdf", ".docx") and not partial:
             images, notes, used_web = await slide_images.resolve_pdf(content, uid)
             note = slide_images.summary(images, notes, used_web)
     return content, images, note
@@ -354,7 +354,7 @@ async def _append(args: dict, location: str) -> str:
         images, pic_notes, used_web = await slide_images.resolve(new_spec, loc.uid)
         if slide_images.wants_images(content) or done:
             pic_note = slide_images.summary(images, pic_notes, used_web)
-    elif pictures_on and ext == ".pdf" and done and slide_images.wants_images(new_spec):
+    elif pictures_on and ext in (".pdf", ".docx") and done and slide_images.wants_images(new_spec):
         images, pic_notes, used_web = await slide_images.resolve_pdf(new_spec, loc.uid)
         pic_note = slide_images.summary(images, pic_notes, used_web)
     if ext == ".pdf" and not done:

@@ -9,6 +9,7 @@ on demand; until then it shows the section list.
 import datetime
 import io
 import re
+from typing import Optional
 
 _ACCENT, _INK, _MUTED, _HEAD2, _RULE, _BAND, _HEADFILL = "2563EB", "0F172A", "64748B", "1E40AF", "CBD5E1", "F8FAFC", "F1F5F9"
 COVER_MIN_SECTIONS = 4
@@ -357,11 +358,13 @@ def _toc(doc, headings: list):
     r._r.append(e)
 
 
-def create(md: str, title: str = "") -> bytes:
+def create(md: str, title: str = "", images: Optional[dict] = None) -> bytes:
+    """images: {index of the `image:` line: {data, credit_host, ...}} as fetched / generated for a PDF (slide_images.resolve_pdf)."""
     import docx
     from docx.enum.text import WD_BREAK
     from docx.shared import Pt
-    md = md or ""
+    from . import figures
+    md, figs, charts = figures.prepare(md or "", images)
     lines = md.splitlines()
     bengali = bool(_BENGALI.search(md) or _BENGALI.search(title or ""))
     sections = [_plain(m.group(1)) for m in re.finditer(r"^##\s+(.*)$", md, re.M)]
@@ -423,7 +426,7 @@ def create(md: str, title: str = "") -> bytes:
                 j = i + 1
                 while j < len(lines) and not lines[j].strip():
                     j += 1
-                if j < len(lines) and not re.match(r"^(#|[-*+]\s|\d+[.)]\s|\||```|>)", lines[j].strip()) \
+                if j < len(lines) and not re.match(r"^(#|[-*+]\s|\d+[.)]\s|\||```|>|!\[|PDFCHARTTOKEN)", lines[j].strip()) \
                         and len(lines[j].strip()) <= 320:
                     sp = doc.add_paragraph()
                     _add_inline(sp, lines[j].strip())
@@ -448,6 +451,12 @@ def create(md: str, title: str = "") -> bytes:
             p = doc.add_paragraph()
             _borders(p._p.get_or_add_pPr(), {"bottom": (6, _RULE)}, "w:pBdr")
             prev_kind = "rule"
+        elif (fm := figures.FIGURE_LINE.match(st)) and int(fm.group(2)) in figs:
+            figures.add_picture(doc, figs[int(fm.group(2))]["data"], alt=fm.group(1), caption=fm.group(1))
+            prev_kind = "figure"
+        elif (cm := figures.CHART_TOKEN.match(st)) and int(cm.group(1)) in charts:
+            figures.add_picture(doc, charts[int(cm.group(1))], alt="Chart")
+            prev_kind = "figure"
         elif st.startswith(">"):
             _add_inline(doc.add_paragraph(style="Quote"), re.sub(r"^>\s?", "", st))
             prev_kind = "quote"

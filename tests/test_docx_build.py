@@ -75,5 +75,56 @@ class DocxBuildTests(unittest.TestCase):
         self.assertIn("Nirmala UI", z.read("word/styles.xml").decode())
 
 
+def _png(w=400, h=200):
+    from PIL import Image
+    b = io.BytesIO()
+    Image.new("RGB", (w, h), (30, 120, 200)).save(b, "PNG")
+    return b.getvalue()
+
+
+CHART_MD = "# Sales\n\nIntro.\n\nchart: bar | unit=BDT\n- Dhaka: 120\n- Khulna: 80\n\nAfter.\n"
+
+
+class DocxFigureTests(unittest.TestCase):
+    def test_image_lines_become_captioned_pictures(self):
+        md = "# Trip\n\nimage: a river | caption=Padma river\n\nEnd.\n"
+        d = docx.Document(io.BytesIO(create(md, "T", images={0: {"data": _png(), "credit_host": "example.org"}})))
+        self.assertEqual(len(d.inline_shapes), 1)
+        texts = [p.text for p in d.paragraphs if p.text]
+        self.assertIn("Padma river - example.org", texts)
+        self.assertFalse(any(t.lower().startswith("image:") for t in texts))
+
+    def test_an_image_line_without_a_picture_is_dropped(self):
+        d = docx.Document(io.BytesIO(create("# Trip\n\nimage: a river\n\nEnd.\n", "T")))
+        self.assertEqual(len(d.inline_shapes), 0)
+        self.assertFalse(any("image:" in p.text for p in d.paragraphs))
+
+    def test_a_chart_becomes_a_picture(self):
+        from unittest import mock
+        from core.doc_ops.docx_ops import figures
+        with mock.patch.object(figures, "chart_png", return_value=_png()):
+            d = docx.Document(io.BytesIO(create(CHART_MD, "T")))
+        self.assertEqual(len(d.inline_shapes), 1)
+        texts = [p.text for p in d.paragraphs if p.text]
+        self.assertNotIn("chart: bar | unit=BDT", texts)
+        self.assertNotIn("Dhaka: 120", " ".join(texts))             # drawn, not repeated as text
+
+    def test_no_browser_keeps_the_numbers_as_text(self):
+        from unittest import mock
+        from core.doc_ops.docx_ops import figures
+        with mock.patch.object(figures, "chart_png", return_value=None):
+            d = docx.Document(io.BytesIO(create(CHART_MD, "T")))
+        self.assertEqual(len(d.inline_shapes), 0)
+        texts = " ".join(p.text for p in d.paragraphs)
+        self.assertIn("Dhaka: 120", texts)
+        self.assertNotIn("chart:", texts)
+
+    def test_picture_after_the_title_is_not_taken_for_the_cover_subtitle(self):
+        md = "# Report\n\nimage: a river\n\n" + "".join(f"## S{i}\ntext\n\n" for i in range(1, 5))
+        d = docx.Document(io.BytesIO(create(md, "T", images={0: {"data": _png()}})))
+        self.assertEqual(len(d.inline_shapes), 1)
+        self.assertFalse(any("pdfimg" in p.text for p in d.paragraphs))
+
+
 if __name__ == "__main__":
     unittest.main()

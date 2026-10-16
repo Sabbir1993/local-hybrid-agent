@@ -111,8 +111,8 @@ def tool_write_file_common(args: dict) -> str:
         extra = ""
         images: dict = {}
         try:
-            if p.suffix == ".pptx":
-                content, images, extra = _prepare(".pptx", content)
+            if p.suffix in (".pptx", ".docx"):
+                content, images, extra = _prepare(p.suffix, content)
             data, spec = doc_ops.create(p.name, content, images=images or None)
         except DocOpError as e:
             return f"error: {e}"
