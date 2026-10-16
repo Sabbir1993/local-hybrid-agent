@@ -224,8 +224,8 @@ def style_wanted(query: str, prior_msgs=None, voice: bool = False, enabled: bool
         return False
     for m in prior_msgs or []:
         if m.get("role") == "assistant" and "```questionnaire" in str(m.get("content") or ""):
-            # our deck / PDF cards have their own briefs (DECK_BRIEF / PDF_BRIEF): not a second, advice-style one
-            return not re.search(r"your (?:deck|pdf)", str(m.get("content") or ""), re.IGNORECASE)
+            # our deck / PDF / Word cards have their own briefs (DECK_BRIEF / PDF_BRIEF / DOCX_BRIEF): not a second, advice-style one
+            return not re.search(r"your (?:deck|pdf|word document)", str(m.get("content") or ""), re.IGNORECASE)
     q = (query or "").strip()
     if len(q) < 25 or _STYLE_SKIP_RE.search(q):
         return False
@@ -503,11 +503,38 @@ def pdf_brief_wanted(query: str, prior_msgs=None) -> bool:
     return not re.search(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain|read|open|convert)\b", q, re.IGNORECASE)
 
 
+# Word documents: the same ask-first, build-in-pieces flow as the PDF brief (a long .docx written in one call hits the turn cap).
+DOCX_BRIEF = (PDF_BRIEF.replace("PDF DOCUMENT REQUEST", "WORD DOCUMENT REQUEST").replace("your PDF", "your Word document")
+              .replace("How long should the PDF be?", "How long should the document be?").replace("Build my PDF", "Build my document")
+              .replace("file='<topic>.pdf'", "file='<topic>.docx'").replace("(that prints the PDF)", "(that saves the document)")
+              .replace("BUILD THE PDF IN PIECES", "BUILD THE DOCUMENT IN PIECES").replace("Never write the whole PDF in one call",
+                                                                           "Never write the whole document in one call"))
+
+_DOCX_ASK_RE = re.compile(r"\b(docx|word\s+(?:document|doc|file)|ms\s+word|microsoft\s+word)\b", re.IGNORECASE)
+
+
+def docx_brief_wanted(query: str, prior_msgs=None) -> bool:
+    """True for a request to produce a Word document (or the user's answers to our Word questionnaire). A PDF or deck request
+    goes to its own brief; edits and conversions of an existing file go to doc_inspect/doc_edit."""
+    for m in reversed(prior_msgs or []):
+        if m.get("role") == "assistant":
+            c = str(m.get("content") or "")
+            if "```questionnaire" in c and "your word document" in c.lower() and "sections" in c.lower():
+                return True
+            break
+    q = (query or "").strip()
+    if not q or not _DOCX_ASK_RE.search(q) or not _DECK_VERB_RE.search(q):
+        return False
+    if deck_brief_wanted(q, []) or pdf_brief_wanted(q, []):
+        return False
+    return not re.search(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain|read|open|convert)\b", q, re.IGNORECASE)
+
+
 def brief_phase(query: str, prior_msgs=None) -> str:
-    """For a deck / PDF request: "ask" (show the questionnaire card now) or "build" (the user just answered it), else "".
+    """For a deck / PDF / Word request: "ask" (show the questionnaire card now) or "build" (the user just answered it), else "".
     The two need opposite tool sets: asking needs no research (it was thrown away and burned the turn / web budget),
     building must not ask again."""
-    if not (deck_brief_wanted(query, prior_msgs) or pdf_brief_wanted(query, prior_msgs)):
+    if not (deck_brief_wanted(query, prior_msgs) or pdf_brief_wanted(query, prior_msgs) or docx_brief_wanted(query, prior_msgs)):
         return ""
     for m in reversed(prior_msgs or []):
         if m.get("role") == "assistant":
@@ -745,6 +772,11 @@ def brief_card(kind: str) -> str:
             radio("sections", "How long should the PDF be?", ["Short (4-5 sections)", "Standard (6-8 sections)", "Detailed (9-12 sections)"]),
             audience, radio("tone", "Style?", ["Formal report", "Friendly guide", "Step-by-step handbook"]), extra]}
         intro = "Before building your PDF, a few quick choices."
+    elif kind == "docx":
+        card = {"title": "A few quick choices for your Word document", "submit_label": "Build my document", "questions": [
+            radio("sections", "How long should the document be?", ["Short (4-5 sections)", "Standard (6-8 sections)", "Detailed (9-12 sections)"]),
+            audience, radio("tone", "Style?", ["Formal report", "Friendly guide", "Step-by-step handbook"]), extra]}
+        intro = "Before building your Word document, a few quick choices."
     else:
         card = {"title": "A few quick choices for your deck", "submit_label": "Build my deck", "questions": [
             radio("slides", "How many slides?", ["5-7 (short)", "8-12 (standard)", "13-20 (detailed)"]), audience,

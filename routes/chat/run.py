@@ -190,12 +190,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     deck_answer = (len(last_query) < 240 and "?" in prev_assistant and "[DOWNLOAD" not in prev_assistant
                    and bool(prompt_scope._PPTX_RE.search(prev_assistant)))
     pdf_build = prompt_scope.pdf_brief_wanted(last_query, msgs[:-1])      # a PDF request, or the answers to our PDF card
+    docx_build = prompt_scope.docx_brief_wanted(last_query, msgs[:-1])    # a Word request, or the answers to our Word card
+    longdoc_build = pdf_build or docx_build                               # both are written in pieces: doc_create, doc_append
     brief_phase = prompt_scope.brief_phase(last_query, msgs[:-1])         # "ask" (card now) / "build" (answered) / ""
     # The model writes the "few quick choices" card, as it always did. The server's copy of it (prompt_scope.brief_card) is used
     # only when the model fails to produce one (a local model sometimes narrates its reasoning instead), or always when
     # chat.brief_card_server is "always".
     card_mode = (APP_CONFIG.get("chat") or {}).get("brief_card_server", "fallback")
-    card = prompt_scope.brief_card("deck" if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]) else "pdf") if brief_phase == "ask" else ""
+    card = prompt_scope.brief_card("deck" if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]) else "docx" if docx_build else "pdf") if brief_phase == "ask" else ""
     if brief_phase == "ask" and card_mode == "always":
 
         async def _card_sse():
@@ -208,7 +210,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     explicit_ext = prompt_scope.explicit_format(own_q)              # the user named the file type: that is the deliverable
     if explicit_ext == ".xlsx":
         sheet_build = sheet_build or prompt_scope.sheet_build_wanted(own_q + " create", msgs[:-1])
-    wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or pdf_build or bool(resume_note) or sheet_build or bool(absent_type)
+    wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or longdoc_build or bool(resume_note) or sheet_build or bool(absent_type)
     has_file = bool(file_followup or wants_file)
     web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
                                                             explicit_only=voice_policy.web_explicit_only(req),
@@ -229,7 +231,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         chat_tools += [t for t in _PDF_ALL if t.get("function", {}).get("name", "").startswith("pdf_")]
     if has_file:
         chat_tools += [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
-        if pdf_build or resume_note or brief_phase or sheet_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
+        if longdoc_build or resume_note or brief_phase or sheet_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
             chat_tools += [DOC_CREATE_SCHEMA, DOC_APPEND_SCHEMA]       # decks / PDFs are built in pieces
     from core.agent_tools import AGENT_TOOLS
     skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
@@ -326,7 +328,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     effort = reasoning.resolve(req.reasoning_effort, deep)
     # Building or editing an Office file / PDF is writing, not puzzle solving: unrestricted ("Extra") thinking only burns
     # minutes before the first slide. The ceiling is app.json reasoning_effort.doc_build_ceiling (default "medium").
-    doc_build = (pdf_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]) or file_followup == "edit"
+    doc_build = (longdoc_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]) or file_followup == "edit"
                  or bool(_re.search(r"\.(?:pptx|docx|pdf)\b", prev_assistant, _re.IGNORECASE)))
     if brief_phase == "build":
         effort = deck_research.effort_for(effort, APP_CONFIG)       # a deck is not a quick answer: at least medium thinking
@@ -544,6 +546,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     elif pdf_build:
         sys_parts.append(prompt_scope.PDF_BRIEF)
         sys_labels.append("pdf-brief")
+    elif docx_build:
+        sys_parts.append(prompt_scope.DOCX_BRIEF)
+        sys_labels.append("docx-brief")
     if brief_phase:
         sys_parts.append(prompt_scope.BRIEF_BUILD_NOW if brief_phase == "build" else prompt_scope.BRIEF_ASK_NOW)
         sys_labels.append("brief-" + brief_phase)
@@ -737,7 +742,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     # document tools: with write_file only, the model said "there is no doc_append tool" and left the deck half built.
                     doc_names = ("doc_create", "doc_append", "doc_inspect", "doc_edit")
                     doc_tools = [t for t in chat_tools if t.get("function", {}).get("name") in doc_names]
-                    if doc_tools and (brief_phase == "build" or resume_note or pdf_build) and wants_file:
+                    if doc_tools and (brief_phase == "build" or resume_note or longdoc_build) and wants_file:
                         current_tools = doc_tools
                     else:
                         current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and tool_allowed("write_file")) else None

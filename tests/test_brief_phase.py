@@ -122,3 +122,41 @@ class BriefCardRecoveryTests(unittest.TestCase):
     def test_kb_tools_are_known_names(self):
         from routes.chat.file_intent import KB_TOOL_NAMES
         self.assertIn("search_knowledge_base", KB_TOOL_NAMES)
+
+
+DOCX_CARD = ("Before building your Word document, a few quick choices.\n```questionnaire\n"
+             '{"title":"A few quick choices for your Word document","questions":[{"id":"sections","type":"radio",'
+             '"q":"How long should the document be?","options":["Short (4-5 sections)"]}]}\n```')
+
+
+class WordBrief(unittest.TestCase):
+    def test_a_word_request_asks_first(self):
+        for q in ("create a Word document about onboarding", "write a docx report on payment risk", "make a ms word file for the policy"):
+            self.assertEqual(ps.brief_phase(q, []), "ask", q)
+            self.assertTrue(ps.docx_brief_wanted(q, []), q)
+
+    def test_the_answers_to_the_card_build(self):
+        prior = [{"role": "user", "content": "create a Word document about onboarding"}, {"role": "assistant", "content": DOCX_CARD}]
+        self.assertEqual(ps.brief_phase("How long should the document be?: Short\nWho is it for?: Customers", prior), "build")
+        self.assertTrue(ps.docx_brief_wanted("answers", prior))
+        self.assertFalse(ps.pdf_brief_wanted("answers", prior))
+
+    def test_other_formats_and_edits_keep_their_own_flow(self):
+        self.assertFalse(ps.docx_brief_wanted("create a PDF guide in Word format", []))        # the PDF flow takes it
+        self.assertFalse(ps.docx_brief_wanted("make a ppt about word documents", []))
+        self.assertFalse(ps.docx_brief_wanted("edit the Word document and fix the title", []))
+        self.assertFalse(ps.docx_brief_wanted("convert this docx to text", []))
+        self.assertFalse(ps.docx_brief_wanted("what is a docx file?", []))
+
+    def test_the_server_card_and_the_brief_text_match(self):
+        card = ps.brief_card("docx")
+        self.assertIn("```questionnaire", card)
+        self.assertIn("your Word document", card)
+        self.assertEqual(ps.brief_phase("whatever", [{"role": "assistant", "content": card}]), "build")
+        self.assertNotIn("pdf", ps.DOCX_BRIEF.lower())
+        self.assertIn(".docx", ps.DOCX_BRIEF)
+        self.assertIn("your Word document", ps.DOCX_BRIEF)
+
+    def test_no_advice_style_block_on_top_of_the_word_card(self):
+        prior = [{"role": "assistant", "content": DOCX_CARD}]
+        self.assertFalse(ps.style_wanted("How long should the document be?: Short", prior))

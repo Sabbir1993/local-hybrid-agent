@@ -31,7 +31,7 @@ class FinalTurn(unittest.TestCase):
     def test_the_last_turn_of_a_document_build_keeps_the_document_tools(self):
         src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
         self.assertIn('doc_names = ("doc_create", "doc_append", "doc_inspect", "doc_edit")', src)
-        self.assertIn('(brief_phase == "build" or resume_note or pdf_build) and wants_file', src)
+        self.assertIn('(brief_phase == "build" or resume_note or longdoc_build) and wants_file', src)
         self.assertIn("current_tools = doc_tools", src)
 
 
