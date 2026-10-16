@@ -105,3 +105,20 @@ class ServerCard(unittest.TestCase):
         self.assertEqual(src.count('"```questionnaire" not in content'), 2)        # fallback at both final-answer paths
         self.assertIn("DECK_BRIEF", ps.DECK_BRIEF.replace("POWERPOINT REQUEST", "DECK_BRIEF"))
         self.assertIn("```questionnaire", ps.DECK_BRIEF)                            # the model is still told to write the card
+
+
+class BriefCardRecoveryTests(unittest.TestCase):
+    """The questionnaire card is the reply to a PDF/deck request; file-intent recovery must not save its JSON as document.pdf."""
+
+    CARD = 'A few quick choices:\n```questionnaire\n{"title": "PDF brief", "questions": []}\n```'
+
+    def test_card_reply_is_served_not_saved(self):
+        from routes.chat.file_intent import serves_brief_card
+        self.assertTrue(serves_brief_card(self.CARD, ""))
+        self.assertTrue(serves_brief_card("no card here", "ask"))      # the server's brief_card fallback fills it in
+        self.assertFalse(serves_brief_card("| a | b |\n|---|---|\n| 1 | 2 |", "build"))
+        self.assertFalse(serves_brief_card("```json\n{}\n```", ""))
+
+    def test_kb_tools_are_known_names(self):
+        from routes.chat.file_intent import KB_TOOL_NAMES
+        self.assertIn("search_knowledge_base", KB_TOOL_NAMES)

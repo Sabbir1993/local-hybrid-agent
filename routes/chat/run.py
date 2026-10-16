@@ -77,6 +77,8 @@ from .file_intent import (
     session_files,
     shrink_old_tool_results,
     wants_file_output,
+    serves_brief_card,
+    KB_TOOL_NAMES,
 )
 from .models import ChatRunRequest
 
@@ -337,7 +339,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # can still call search_knowledge_base explicitly.
     kb_ids = allowed_source_ids_for(user)
     if not kb_ids:                       # nothing to search: do not offer the tools (the agent route already does this)
-        chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") not in ("search_knowledge_base", "kb_find_mentions", "kb_query")]
+        chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") not in KB_TOOL_NAMES]
     kb_used = False
     kb_hits = []
     kb_prompt_block = ""
@@ -352,6 +354,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # user's own words decide, attached data comes first, small talk never retrieves; /kb on|off overrides it.
     consult_kb, kb_reason = should_consult_kb(kb_query, has_attachments, voice_policy.kb_company_only(req), req.kb)
     skip_kb = not consult_kb
+    if req.kb == "off" and wants_file_output(own_q):    # a pure file request with the KB switched off: do not tempt the model into the KB tools
+        chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") not in KB_TOOL_NAMES]
     if kb_ids and kb_query.strip() and not file_followup and not skip_kb:
         try:
             from core.knowledge_router import fetch_company_knowledge, is_company_or_kb_query
@@ -998,7 +1002,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                     yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
 
-                if (is_file_refusal or is_file_intent) and turn == 0 and not tool_calls:
+                # the questionnaire card is the answer to a PDF / deck request: its JSON is not file content
+                if (is_file_refusal or is_file_intent) and turn == 0 and not tool_calls and not serves_brief_card(content, brief_phase):
 
                     table_match = _re.search(r'(\|.+?\|\n\|[\s\-:|]+\|\n(?:\|.+?\|\n?)+)', content)
                     code_match = _re.search(r'```(?:[a-zA-Z0-9_\-]+)?\n([\s\S]+?)\n```', content)

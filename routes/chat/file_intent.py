@@ -188,6 +188,14 @@ def wants_file_output(query: str) -> bool:
                 or re.search(_FILE_NOUN_RE + r'.{0,25}' + _FILE_VERB_RE, query or "", re.IGNORECASE))
 
 
+KB_TOOL_NAMES = ("search_knowledge_base", "kb_find_mentions", "kb_query", "kb_sql")
+
+
+def serves_brief_card(content: str, brief_phase: str) -> bool:
+    """True when the reply is (or must become) the "few quick choices" card, so file-intent recovery must not save it as a file."""
+    return brief_phase == "ask" or "```questionnaire" in (content or "")
+
+
 def looks_undelivered(content: str, wants_file: bool, delivered: bool) -> bool:
     """True when a text-only reply promised a deliverable but contains none."""
     if delivered:
