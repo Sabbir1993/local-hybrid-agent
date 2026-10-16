@@ -661,8 +661,9 @@ XLSX_MANUAL = (
     "- Allowed functions: SUM SUMIF(S) COUNTIF(S) AVERAGE(IF/IFS) MIN MAX MEDIAN IF IFS IFERROR ROUND INDEX MATCH VLOOKUP XLOOKUP "
     "SUMPRODUCT TEXT DATE EOMONTH YEAR MONTH PMT FV PV NPV IRR and similar. No INDIRECT/OFFSET/HYPERLINK/external links.\n"
     "- Summary / dashboard sheets are built from SUMIFS / COUNTIFS formulas over the data sheets (they stay live), with a chart.\n"
-    "- Dates as 2026-07-05, percentages as 15%, money as plain numbers with `format:`. Real data only: never invent rows; if the "
-    "user gave none, build the structure with the headers and a few clearly-labelled example rows.\n"
+    "- Dates as 2026-07-05, percentages as 15%, money as plain numbers with `format:`. Do not invent facts: figures the user gave "
+    "are used as given; where they gave none, put labelled assumptions on the Assumptions sheet and mark any placeholder rows "
+    "'Example' so they are never mistaken for real data.\n"
     "- Reply with one short summary and the [DOWNLOAD: file] link. Do not describe the formulas at length.")
 
 
