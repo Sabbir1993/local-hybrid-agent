@@ -303,6 +303,11 @@ def _crit(c):
         num = float(rhs)
     except (TypeError, ValueError):
         num = None
+    if num is None and isinstance(rhs, str):           # Excel reads ">=2026-01-01" as a date against date cells
+        try:
+            num = _to_serial(_dt.date.fromisoformat(rhs.strip()))
+        except ValueError:
+            pass
 
     def test(v):
         if num is not None and isinstance(v, (int, float)) and not isinstance(v, bool):
@@ -477,7 +482,7 @@ def _s(v):
 
 
 def _call(name, args, m, sheet):
-    lazy = {"IF", "IFERROR", "IFNA", "IFS", "SWITCH", "CHOOSE"}
+    lazy = {"IF", "IFERROR", "IFNA", "IFS", "SWITCH", "CHOOSE", "ISERROR", "ISERR", "ISNA"}
     if name == "IF":
         c = _bool(evaluate(args[0], m, sheet))
         pick = args[1] if c else (args[2] if len(args) > 2 else ("bool", False))
@@ -498,6 +503,40 @@ def _call(name, args, m, sheet):
         for i in range(0, len(args) - 1, 2):
             if _bool(evaluate(args[i], m, sheet)):
                 return evaluate(args[i + 1], m, sheet)
+        _err("#N/A")
+    if name in ("ISERROR", "ISERR", "ISNA"):
+        try:
+            v = evaluate(args[0], m, sheet)
+            if isinstance(v, Range):
+                v = v.rows[0][0]
+            if isinstance(v, XlError):
+                raise v
+            return False
+        except XlError as e:
+            return e.code == "#N/A" if name == "ISNA" else (name == "ISERROR" or e.code != "#N/A")
+    if name == "CHOOSE":
+        i = int(_num(evaluate(args[0], m, sheet)))
+        if not 1 <= i < len(args):
+            _err("#VALUE!")
+        return evaluate(args[i], m, sheet)
+    if name == "SWITCH":
+        key = evaluate(args[0], m, sheet)
+        if isinstance(key, Range):
+            key = key.rows[0][0]
+        if isinstance(key, XlError):
+            raise key
+        rest = args[1:]
+        for k in range(0, len(rest) - 1, 2):
+            cand = evaluate(rest[k], m, sheet)
+            if isinstance(cand, Range):
+                cand = cand.rows[0][0]
+            same = (float(key) == float(cand)) if all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                                                      for x in (key, cand)) else \
+                ("" if key is None else str(key)).lower() == ("" if cand is None else str(cand)).lower()
+            if same:
+                return evaluate(rest[k + 1], m, sheet)
+        if len(rest) % 2:
+            return evaluate(rest[-1], m, sheet)
         _err("#N/A")
     vals = [evaluate(a, m, sheet) for a in args] if name not in lazy else []
     for v in vals:
@@ -707,10 +746,39 @@ def _call(name, args, m, sheet):
         return s[st - 1: st - 1 + int(_num(vals[2]))]
     if name in ("CONCAT", "CONCATENATE"):
         return "".join(_s(v) for a in vals for v in (a.flat() if isinstance(a, Range) else [a]) if v is not None)
-    if name in ("ISBLANK", "ISNUMBER", "ISTEXT", "ISERROR"):
+    if name == "TEXTJOIN":
+        delim = "" if vals[0] is None else _s(vals[0])
+        skip = _bool(vals[1])
+        items = [v for a in vals[2:] for v in (a.flat() if isinstance(a, Range) else [a])]
+        return delim.join("" if v is None else _s(v) for v in items if not (skip and (v is None or v == "")))
+    if name == "SUBSTITUTE":
+        s, old, new = (("" if v is None else _s(v)) for v in vals[:3])
+        if not old:
+            return s
+        if n > 3:
+            k_, parts = int(_num(vals[3])), s.split(old)
+            if not 1 <= k_ < len(parts):
+                return s
+            return old.join(parts[:k_]) + new + old.join(parts[k_:])
+        return s.replace(old, new)
+    if name in ("FIND", "SEARCH"):
+        needle, hay = ("" if vals[0] is None else _s(vals[0])), ("" if vals[1] is None else _s(vals[1]))
+        start = int(_num(vals[2])) if n > 2 else 1
+        if name == "SEARCH":
+            needle, hay = needle.lower(), hay.lower()
+        at = hay.find(needle, max(start - 1, 0))
+        if at < 0:
+            _err("#VALUE!")
+        return float(at + 1)
+    if name in ("CEILING", "FLOOR"):
+        x, sig = _num(vals[0]), (_num(vals[1]) if n > 1 else 1.0)
+        if sig == 0:
+            return 0.0
+        return round((math.ceil if name == "CEILING" else math.floor)(x / sig) * sig, 10)
+    if name in ("ISBLANK", "ISNUMBER", "ISTEXT"):
         v = vals[0]
         return {"ISBLANK": v is None, "ISNUMBER": isinstance(v, (int, float)) and not isinstance(v, bool),
-                "ISTEXT": isinstance(v, str), "ISERROR": False}[name]
+                "ISTEXT": isinstance(v, str)}[name]
     if name == "DATE":
         y, mo, d = int(_num(vals[0])), int(_num(vals[1])), int(_num(vals[2]))
         y += (mo - 1) // 12
