@@ -56,6 +56,7 @@ from routes import (
     projects_router,
     proxy_router,
     custom_agents_router,
+    sandbox_router,
 )
 from routes import common
 from routes.pages import router as pages_router
@@ -114,6 +115,7 @@ app.include_router(knowledge_router, dependencies=_authed)
 app.include_router(input_guard_router, dependencies=_authed)
 app.include_router(db_explorer_router, dependencies=_authed)
 app.include_router(custom_agents_router, dependencies=_authed)
+app.include_router(sandbox_router, dependencies=_authed)
 # Own auth handling (session cookie checked inside the socket handler) since
 # Depends() on a websocket route doesn't compose with the HTTP auth flow above.
 # Must sit before the proxy catch-all, or /companion/pair and /companion/devices 404.

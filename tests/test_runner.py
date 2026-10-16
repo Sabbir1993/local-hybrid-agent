@@ -380,3 +380,29 @@ class ToolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WiringTests(unittest.TestCase):
+    """Source-level checks that the pieces are connected the way the design says."""
+
+    def test_chat_offers_the_tool_only_when_the_runner_answers(self):
+        src = (ROOT / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("sandbox_wanted(own_q, has_data_attachment) and await _sandbox.available()", src)
+        self.assertIn('t_name == "run_sandbox_python" and sandbox_on', src)
+
+    def test_every_admin_route_needs_users_manage_with_step_up(self):
+        src = (ROOT / "routes" / "sandbox.py").read_text(encoding="utf-8")
+        self.assertEqual(src.count("@router."), src.count('require_verified("users.manage")'))
+
+    def test_the_app_never_runs_code_itself(self):
+        import re
+        for p in (ROOT / "core" / "sandbox").glob("*.py"):
+            text = p.read_text(encoding="utf-8")
+            self.assertIsNone(re.search(r"\b(subprocess|os\.system|exec\(|eval\(|__import__\(\"subprocess)", text), p.name)
+
+    def test_the_runner_script_is_stdlib_only(self):
+        import ast
+        tree = ast.parse((ROOT / "tools" / "runner" / "runner_server.py").read_text(encoding="utf-8"))
+        names = {n.names[0].name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import)}
+        names |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
+        self.assertTrue(names <= set(sys.stdlib_module_names), names - set(sys.stdlib_module_names))

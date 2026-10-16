@@ -402,6 +402,10 @@
           <span class="tab-icon">⏱️</span>
           <span class="tab-label">Session Security</span>
         </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-runner" data-perm="users.manage">
+          <span class="tab-icon">🧪</span>
+          <span class="tab-label">Code Runner</span>
+        </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-mfa">
           <span class="tab-icon">🔐</span>
           <span class="tab-label">Two-Factor Auth</span>
@@ -776,6 +780,15 @@
         <div id="session-policy-content"><div class="mon-empty">Loading…</div></div>
       </div>
 
+      <!-- Section 10b2: Isolated code runner -->
+      <div class="card settings-panel" id="sec-runner" data-perm="users.manage">
+        <div class="settings-panel-head">
+          <h2>🧪 Code Runner</h2>
+          <p class="dim">An isolated machine that runs the code the chat writes for custom charts and data work. The app never runs that code itself; with no runner paired, the chat has no code tool.</p>
+        </div>
+        <div id="runner-content"><div class="mon-empty">Loading…</div></div>
+      </div>
+
       <!-- Section 10c: Two-factor authentication (personal; admins also get the enforcement toggle) -->
       <div class="card settings-panel" id="sec-mfa">
         <div class="settings-panel-head">
@@ -940,6 +953,7 @@
 <script src="/static/js/knowledge.js?v=1.3"></script>
 <script src="/static/js/input-guard.js?v=1.0"></script>
 <script src="/static/js/session-policy.js?v=1.0"></script>
+<script src="/static/js/runner.js?v=1.0"></script>
 <script src="/static/js/mfa-panel.js?v=1.0"></script>
 <script src="/static/js/lanes.js?v=1.10"></script>
 <script src="/static/js/custom-agents.js?v=1.9"></script>

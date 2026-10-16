@@ -233,6 +233,16 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         chat_tools += [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
         if longdoc_build or resume_note or brief_phase or sheet_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
             chat_tools += [DOC_CREATE_SCHEMA, DOC_APPEND_SCHEMA]       # decks / PDFs are built in pieces
+    # The isolated code runner (core/sandbox): offered only when it is paired, switched on, answering AND the request needs custom
+    # code. The app never runs model-written code itself; with no runner the tool does not exist for the model.
+    sandbox_on = False
+    try:
+        from core import sandbox as _sandbox
+        if _sandbox.sandbox_wanted(own_q, has_data_attachment) and await _sandbox.available():
+            chat_tools.append(_sandbox.RUN_SANDBOX_SCHEMA)
+            sandbox_on = True
+    except Exception as _e:
+        print(f"[chat] code runner check failed: {type(_e).__name__}", file=sys.stderr)
     from core.agent_tools import AGENT_TOOLS
     skb = next((t for t in AGENT_TOOLS if t.get("function", {}).get("name") == "search_knowledge_base"), None)
     if skb:
@@ -549,6 +559,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     elif docx_build:
         sys_parts.append(prompt_scope.DOCX_BRIEF)
         sys_labels.append("docx-brief")
+    if sandbox_on:
+        sys_parts.append(_sandbox.SANDBOX_MANUAL)
+        sys_labels.append("sandbox")
     if brief_phase:
         sys_parts.append(prompt_scope.BRIEF_BUILD_NOW if brief_phase == "build" else prompt_scope.BRIEF_ASK_NOW)
         sys_labels.append("brief-" + brief_phase)
@@ -1251,6 +1264,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                 explicit_ext, args.get("path") or args.get("file") or args.get("filename")):
                             res_str = prompt_scope.format_mismatch(
                                 explicit_ext, args.get("path") or args.get("file") or args.get("filename"))
+                        elif t_name == "run_sandbox_python" and sandbox_on:
+                            res_str = await _sandbox.tool_run_sandbox_python(args, user.id)
+                            written_files.extend(f for f in _DL_TAG_RE.findall(res_str) if f not in written_files)
                         elif t_name in ("doc_inspect", "doc_edit", "doc_create", "doc_append"):
                             impl = _DOC_CHAT_IMPLS[t_name]
                             res_str = await run_in_executor_ctx(impl, args)
