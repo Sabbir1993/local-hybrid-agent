@@ -38,7 +38,7 @@ def clean_opts(kind: str, opts: Optional[dict]) -> dict:
             w, h = size_for(size, aspect)
         out.setdefault("width", w)
         out.setdefault("height", h)
-    for k, lo, hi in (("width", 64, 4096), ("height", 64, 4096), ("seed", 0, 2 ** 31 - 1), ("seconds", 1, 60)):
+    for k, lo, hi in (("width", 64, 4096), ("height", 64, 4096), ("seed", 0, 2 ** 31 - 1), ("seconds", 1, 60), ("steps", 1, 60)):
         if o.get(k) not in (None, ""):
             try:
                 out[k] = max(lo, min(hi, int(o[k])))
@@ -111,7 +111,8 @@ def sdcpp_body(inst, kind: str, prompt: str, opts: dict) -> dict:
         sp["flow_shift"] = float(cfg["flow_shift"])
     if cfg.get("cfg_scale") is not None:
         sp["guidance"] = {"txt_cfg": float(cfg["cfg_scale"])}
-    body = {"prompt": prompt, "negative_prompt": opts.get("negative") or "",
+    # the model's own default list of things to avoid (config/app.json default_negative); a negative the caller gave replaces it
+    body = {"prompt": prompt, "negative_prompt": opts.get("negative") or ("" if video else str(cfg.get("default_negative") or "")),
             "width": w, "height": h,
             "seed": int(opts["seed"]) if opts.get("seed") is not None else -1,
             "sample_params": sp}

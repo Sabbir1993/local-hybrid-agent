@@ -16,6 +16,7 @@ from .constants import (
     media_cfg,
     plain_error,
 )
+from .enhance import enhance
 from .sdcpp_backend import clean_opts, edit_blocked, edit_targets, sdcpp_generate
 from .storage import _clean_transcript, check_wav, markdown_for, save_file
 
@@ -114,7 +115,7 @@ async def generate(kind: str, user, prompt: str, opts: Optional[dict] = None,
             elif _is_sdcpp(t.inst):
                 if not t.inst.is_up():
                     raise NotLoadedError(t.lane, label, kind)
-                blobs = await sdcpp_generate(t.inst, kind, prompt, opts, progress)
+                blobs = await sdcpp_generate(t.inst, kind, enhance(prompt, opts) if kind == "image" else prompt, opts, progress)
             else:
                 raise MediaError(f"'{label}' isn't an image/video model")
             sf_fn = getattr(sys.modules.get("core.media"), "save_file", save_file)

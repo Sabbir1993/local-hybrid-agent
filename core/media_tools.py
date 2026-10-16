@@ -63,7 +63,7 @@ async def generate_events(kind: str, args: dict):
     if user is None:
         yield ("result", "error: not signed in", None)
         return
-    opts = {k: args.get(k) for k in ("aspect", "size", "negative", "seconds", "seed") if args.get(k) not in (None, "")}
+    opts = {k: args.get(k) for k in ("aspect", "size", "negative", "seconds", "seed", "steps") if args.get(k) not in (None, "")}
     paths = [str(p) for p in (args.get("images") or []) if str(p or "").strip()] if kind == "image" else []
     if paths:
         # the user's own files only (e.g. generated/... from an earlier reply); this PC only
@@ -164,6 +164,8 @@ def register_media_tools() -> None:
                 "size": {"type": "string", "enum": ["small", "medium", "large", "xlarge"],
                          "description": "optional: only when the user asks for a size (smaller is faster)"},
                 "negative": {"type": "string", "description": "optional: things to avoid in the image"},
+                "steps": {"type": "integer", "minimum": 1, "maximum": 60,
+                          "description": "optional: leave unset (the model's tuned value is used); more steps is slower"},
                 "images": {"type": "array", "maxItems": 10, "items": {"type": "string"},
                            "description": "optional: paths of pictures in the user's files to start from "
                                           "(e.g. generated/... from an earlier reply)"},

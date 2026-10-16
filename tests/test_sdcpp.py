@@ -315,6 +315,23 @@ class SdCppAdapterTests(ModelsDirBase):
         self.assertNotIn("size", media.clean_opts("image", {"aspect": "wide", "size": "huge"}))
         self.assertEqual(media.clean_opts("video", {"aspect": "wide", "size": "small"})["width"], 1280)
 
+    def test_steps_are_honoured_and_clamped(self):
+        self.assertEqual(media.clean_opts("image", {"steps": 999})["steps"], 60)
+        self.assertNotIn("steps", media.clean_opts("image", {"steps": "many"}))
+        body = media.sdcpp_body(self.inst, "image", "x", media.clean_opts("image", {"steps": 9}))
+        self.assertEqual(body["sample_params"]["sample_steps"], 9)
+        body = media.sdcpp_body(self.inst, "image", "x", media.clean_opts("image", {}))
+        self.assertNotEqual(body["sample_params"]["sample_steps"], 9)          # the model's own value when none is given
+
+    def test_default_negative_prompt(self):
+        self.inst.cfg["default_negative"] = "blurry, watermark"
+        body = media.sdcpp_body(self.inst, "image", "x", media.clean_opts("image", {}))
+        self.assertEqual(body["negative_prompt"], "blurry, watermark")
+        body = media.sdcpp_body(self.inst, "image", "x", media.clean_opts("image", {"negative": "cats"}))
+        self.assertEqual(body["negative_prompt"], "cats")                      # the caller's own list replaces it
+        body = media.sdcpp_body(self.inst, "video", "x", media.clean_opts("video", {}))
+        self.assertEqual(body["negative_prompt"], "")                          # an image list is not applied to video
+
     def test_model_default_size(self):
         inst = self.add_sd(default_size="small")
         self.assertEqual(inst.cfg["default_size"], "small")

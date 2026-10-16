@@ -61,6 +61,7 @@
       "steps": 12,
       "cfg_scale": 2.0,
       "sampler": "euler",
+      "default_negative": "blurry, low quality, jpeg artifacts, distorted anatomy, extra fingers, watermark, cropped",
       "offload_to_cpu": false,
       "edit_refs": false,
       "kind": "image_gen",
