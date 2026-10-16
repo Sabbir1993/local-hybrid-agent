@@ -7,6 +7,7 @@ from .. import companion_bridge, doc_ops, doc_store
 from ..agent_tools import _common_resolve, _ws_resolve, require_device_workspace
 from ..doc_ops.base import sha256
 from . import builds, slide_images
+from .look import look_note
 from .location import (
     _Loc,
     _file_arg,
@@ -62,6 +63,9 @@ async def _edit(loc: _Loc, data: bytes, args: dict) -> str:
     lines += [f"- {c}" for c in out.changes]
     lines += [f"note: {n}" for n in out.notes]
     lines.append("Everything else in the document is unchanged (verified).")
+    seen = await look_note(target.suffix.lower(), out.data, loc.uid, doc_store.base_stem(loc.path.name))
+    if seen:
+        lines.append(seen)
     if loc.location == "common":
         lines.append(f"[DOWNLOAD: {target.name}]")
     return "\n".join(lines)
@@ -102,6 +106,9 @@ async def _create(args: dict, location: str) -> str:
         note = _layout_note(target.suffix.lower(), data, content)
         if note:
             msg += " " + note
+        seen = await look_note(target.suffix.lower(), data, uid, doc_store.base_stem(target.name))
+        if seen:
+            msg += " " + seen
     if args.get("total") and target.suffix.lower() in _APPENDABLE:
         try:
             bkey = (uid if location == "common" else dev_uid, key)
@@ -385,6 +392,9 @@ async def _append(args: dict, location: str) -> str:
         note = _layout_note(ext, out, new_spec)
         if note:
             msg += " " + note
+        seen = await look_note(ext, out, loc.uid, doc_store.base_stem(loc.path.name))
+        if seen:
+            msg += " " + seen
     if loc.location == "common":
         msg += f" [DOWNLOAD: {loc.path.name}]"
     return msg
