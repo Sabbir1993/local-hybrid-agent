@@ -221,11 +221,22 @@ def edit(data: bytes, name: str, ops, source_spec: Optional[str] = None) -> Edit
         except sheet_edit.EditError as e:
             raise DocOpError(str(e))
     before = full_text(data, name)
-    res = mod.apply(data, ops)
+    # A refused formula inside a multi-cell write (set_range / append_rows with formulas) is kept as text and reported instead of
+    # failing the whole edit. An explicit set_formula stays strict: a single formula the model chose should fail loudly.
+    soft = ext == ".xlsx" and not any(str(o.get("op")).lower() == "set_formula" for o in ops)
+    if ext == ".xlsx":
+        from ..sheet_engine import build as _sb
+        _sb.take_warnings()                # clear what an earlier build left behind: strict unless this edit collects
+        if soft:
+            _sb.start_warnings()
+    try:
+        res = mod.apply(data, ops)
+    finally:
+        skipped = [f"skipped: {w}" for w in _sb.take_warnings()] if soft else []
     if _pan_count(full_text(res.data, name)) > _pan_count(before):
         raise DocOpError("the edited document would contain a new payment card number (PCI DSS)")
     spec = res.data.decode("utf-8") if ext == ".md" else None
-    return EditOutcome(res.data, res.changes, res.notes, spec)
+    return EditOutcome(res.data, res.changes, list(res.notes or []) + skipped, spec)
 
 
 # ------------------------------------------------------------------

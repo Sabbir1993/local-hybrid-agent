@@ -68,6 +68,19 @@ class SetColumn(unittest.TestCase):
         ok = D.edit(data, "b.xlsx", [{"op": "set_formula", "addr": "Costs!D2", "formula": "=SUM(B2:B4)"}], source_spec=spec)
         self.assertEqual(vals(ok.data, "Costs")[1][3], "=SUM(B2:B4)")
 
+    def test_a_refused_formula_in_a_range_write_is_kept_as_text_and_reported(self):
+        data, spec = make()
+        out = D.edit(data, "b.xlsx", [{"op": "set_range", "addr": "Costs!D2", "formulas": True,
+                                       "values": [["=SUM(B2:B4)"], ['=INDIRECT("A1")'], ["=B3*2"]]}], source_spec=spec)
+        col = [r[3] for r in vals(out.data, "Costs")[1:4]]
+        self.assertEqual(col[0], "=SUM(B2:B4)")
+        self.assertEqual(col[2], "=B3*2")                              # the good formulas around it were still written
+        self.assertEqual(col[1], '=INDIRECT("A1")')                    # text, not a formula
+        self.assertTrue(any("skipped" in n and "not allowed" in n for n in out.notes))
+        import zipfile
+        xml = zipfile.ZipFile(io.BytesIO(out.data)).read("xl/worksheets/sheet1.xml").decode()
+        self.assertNotIn("INDIRECT</f>", xml)
+
 
 class FollowUp(unittest.TestCase):
     FILES = ["Hercules_TAP-3d384188.md", "Hercules_TAP_Bangladesh-a9978806.xlsx"]

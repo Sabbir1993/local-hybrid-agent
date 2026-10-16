@@ -72,6 +72,15 @@ def _warn(msg: str) -> None:
         w.append(msg)
 
 
+def warnings_active() -> bool:
+    """True while a caller collects warnings (and will report them): only then may a problem be softened instead of raised."""
+    return _warnings.get() is not None
+
+
+def start_warnings() -> None:
+    _warnings.set([])
+
+
 def take_warnings() -> list:
     w = _warnings.get() or []
     _warnings.set(None)

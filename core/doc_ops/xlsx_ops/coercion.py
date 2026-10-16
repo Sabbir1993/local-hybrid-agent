@@ -50,7 +50,12 @@ def _coerce(value, allow_formula: bool):
         try:
             check_formula(s)
         except FormulaError as e:
-            raise DocOpError(f"formula '{s[:40]}' is not allowed: {e}")
+            from ...sheet_engine import build as sheet_build
+            if not sheet_build.warnings_active():      # nobody reports a skip: stay strict
+                raise DocOpError(f"formula '{s[:40]}' is not allowed: {e}")
+            # one bad formula must not throw away the rest of a multi-cell edit: keep it as text and say so
+            sheet_build._warn(f"formula '{s[:40]}' is not allowed ({e}); kept as text")
+            return "str", s
         return "formula", to_file_form(s)[1:]
     t = s.strip()
     if len(t) > 1 and t[0] in "€£¥$":
