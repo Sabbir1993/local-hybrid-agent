@@ -39,7 +39,9 @@ KNOWLEDGE_UPLOADS_DIR = BASE_DIR / "knowledge_uploads"  # uploaded org knowledge
 CONFIG_DIR = BASE_DIR / "config"
 CONFIG_FILE = CONFIG_DIR / "app.json"          # main app config (models_dir, lanes, capabilities, ...)
 ROLES_FILE = CONFIG_DIR / "roles.json"         # multiagent role definitions (planner/coder/reviewer)
-MODEL_CONFIGS_FILE = CONFIG_DIR / "model_configs.json"
+# A770_MODEL_CONFIGS_FILE points the app at another per-GGUF launch file (benchmarks run a model at a different context
+# without touching the real one; the app also writes its autotune results there, so a temp copy stays temp).
+MODEL_CONFIGS_FILE = Path(os.environ.get("A770_MODEL_CONFIGS_FILE") or CONFIG_DIR / "model_configs.json")
 PROVIDERS_FILE = CONFIG_DIR / "providers.json"   # legacy shared file -- migrated into PROVIDERS_DIR on first boot
 PROVIDERS_DIR = CONFIG_DIR / "providers"         # per-user cloud providers + lane bindings: providers/user_<id>.json
 
