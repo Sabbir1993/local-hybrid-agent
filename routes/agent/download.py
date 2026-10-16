@@ -9,6 +9,14 @@ from core.agent_tools import common_workspace, _common_resolve, tool_write_file_
 from .base import router
 
 
+def _recovery_on() -> bool:
+    try:
+        from core.small_model import APP_CONFIG
+        return bool((APP_CONFIG.get("chat") or {}).get("download_recovery", False))
+    except Exception:
+        return False
+
+
 def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[Path]:
     import re as _re
     p = None
@@ -69,8 +77,10 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
 
     # 3. Fallback recovery: check if the file was created or provided in the
     # requesting user's own recent session messages (never other users')
+    # Off by default (chat.download_recovery): it writes a NEW file from text found in the user's chat history, so the file the
+    # user gets is not the one that was generated. A missing file is a 404 unless the admin opts in.
     uid = get_current_user_id()
-    if (p is None or not p.is_file()) and uid is not None:
+    if (p is None or not p.is_file()) and uid is not None and _recovery_on():
         try:
             from core.db import _projects_db
             rows = _projects_db.execute(
