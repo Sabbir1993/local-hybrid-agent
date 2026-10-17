@@ -1,4 +1,5 @@
 """Chat saves documents, not programs: executable file types are refused, tool markup never becomes the answer."""
+import sys
 import unittest
 from unittest import mock
 
@@ -188,3 +189,18 @@ class Typos(unittest.TestCase):
         from core import prompt_scope as ps
         self.assertIn("CHOOSING THE FORMAT", ps.FILE_MANUAL)
         self.assertIn("does not mean slides", ps.FILE_MANUAL)
+
+
+class EmptyWrites(unittest.TestCase):
+    def test_empty_html_is_refused_not_saved_as_0_bytes(self):
+        from core.agent_tools import tool_write_file_common
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(core.agent_tools, "COMMON_ROOT", Path(td)), \
+                mock.patch.object(sys.modules["core.agent_tools.workspace"], "get_current_user_id", return_value=7):
+            for body in ("", "   \n"):
+                r = tool_write_file_common({"path": "page.html", "content": body})
+                self.assertTrue(r.startswith("error:"), r)
+                self.assertNotIn("[DOWNLOAD", r)
+            self.assertEqual([f for f in Path(td).rglob("*") if f.is_file()], [])

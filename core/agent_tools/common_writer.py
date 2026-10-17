@@ -138,6 +138,10 @@ def tool_write_file_common(args: dict) -> str:
         msg += _after_build(".pdf", p.read_bytes(), content, extra)
 
     else:
+        if not content.strip():
+            # a 0 B file looks saved (green tick, download link) but opens blank: tell the model so it writes the content
+            return (f"error: refusing to create an empty {suffix.lstrip('.') or 'text'} file - the 'content' argument was empty. "
+                    "Call write_file again with the complete file text in 'content'.")
         p.write_text(content, encoding="utf-8")
         msg = f"Wrote {len(content)} chars as {unique_path_arg} (users get it only through the download link at the end of this message: never write a folder path or a file link yourself). [DOWNLOAD: {unique_path_arg}]"
 
