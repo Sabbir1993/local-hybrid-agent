@@ -155,7 +155,7 @@ def build_checks(rs) -> list:
     return [
         ("no_network", True, "a job cannot open a network connection", no_network),
         ("no_secret_env", True, "the runner's environment is not passed to a job", env_clean),
-        ("host_files_hidden", True, "/etc, /root, /home, /var and the runner state folder do not exist for a job", host_files_hidden),
+        ("host_files_hidden", True, "the runner state folder, /root, /home, /var and the files in /etc (shadow, passwd) are not visible to a job", host_files_hidden),
         ("system_read_only", True, "a job cannot write to /usr, /bin, /lib, /etc", system_read_only),
         ("symlink_not_returned", True, "a symlink in the output folder is not sent back", symlink_not_returned),
         ("fork_bomb_contained", True, "process creation is capped", fork_bomb),

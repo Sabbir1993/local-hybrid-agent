@@ -22,7 +22,7 @@ Agent mode is a different thing: it runs code on the *user's own PC* through the
 | Firewall (`tools/runner/lockdown.sh` and the host-only / private network) | only the app server reaches the runner, on one port; nothing goes out |
 | Pinned certificate + token | only this app talks to the runner, and the app only talks to this runner; a changed certificate is refused |
 | Pairing code bound to the certificate | a man in the middle cannot pair: the proof is `HMAC(code, certificate fingerprint)` |
-| bubblewrap per job | the job has no network and sees only its own folder and the read-only system |
+| bubblewrap per job | the job has no network and sees only its own folder and the read-only system (plus, on Debian/Ubuntu, two read-only entries of /etc that numpy and matplotlib need) |
 | CPU / memory / process / file limits, timeout | endless loops, fork bombs, huge files |
 | Throwaway folder per job | nothing survives a job; one user's files are never in another's job |
 | App-side vetting | card numbers in code, inputs or outputs are refused; only listed file types come back; output text is masked |

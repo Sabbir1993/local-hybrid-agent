@@ -169,6 +169,12 @@ def _command(work: Path, inp: Path) -> list:
     if STATE["sandbox"] == "bwrap":
         cmd = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session", "--clearenv",
                "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib", "--ro-bind", "/bin", "/bin",
+               # Debian/Ubuntu: libblas.so.3 (numpy, so matplotlib) is a symlink into /etc/alternatives and matplotlib's config is
+               # /etc/matplotlibrc. /etc is an empty read-only tmpfs holding just those two read-only entries (each skipped when absent,
+               # for example on Alpine): no shadow, passwd, ssl or any other host file.
+               "--tmpfs", "/etc",
+               "--ro-bind-try", "/etc/alternatives", "/etc/alternatives", "--ro-bind-try", "/etc/matplotlibrc", "/etc/matplotlibrc",
+               "--remount-ro", "/etc",
                "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
                "--bind", str(work), "/work", "--ro-bind", str(inp), "/in", "--chdir", "/work",
                "--setenv", "HOME", "/work", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "PYTHONDONTWRITEBYTECODE", "1",

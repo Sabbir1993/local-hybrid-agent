@@ -247,6 +247,41 @@ class AdminFlowTests(Live):
         self.assertTrue(next(c for c in out["checks"] if c["name"] == "writes_a_file")["ok"])
 
 
+class SandboxCommandTests(unittest.TestCase):
+    """The bubblewrap argv (built, not run: bubblewrap is Linux only; tools/runner/verify.py runs it for real)."""
+
+    def argv(self):
+        old = dict(rs.STATE)
+        rs.STATE["sandbox"] = "bwrap"
+        try:
+            return rs._command(Path("/tmp/w"), Path("/tmp/i"))
+        finally:
+            rs.STATE.clear()
+            rs.STATE.update(old)
+
+    def test_no_network_no_host_and_only_the_job_folders_are_writable(self):
+        a = self.argv()
+        self.assertIn("--unshare-all", a)
+        self.assertIn("--clearenv", a)
+        self.assertIn("--die-with-parent", a)
+        binds = [(a[i], a[i + 1]) for i in range(len(a) - 2) if a[i] in ("--bind", "--ro-bind", "--ro-bind-try")]
+        self.assertEqual([src for kind, src in binds if kind == "--bind"], [str(Path("/tmp/w"))], "only the work folder is writable")
+        self.assertNotIn(("--ro-bind", "/"), binds)
+        self.assertFalse([src for _, src in binds if src in ("/", "/etc", "/home", "/root", "/var")], binds)
+
+    def test_etc_is_an_empty_read_only_tmpfs_with_only_two_read_only_entries(self):
+        a = self.argv()
+        i = a.index("--tmpfs")
+        self.assertEqual(a[i + 1], "/etc")
+        self.assertLess(i, a.index("/etc/alternatives"))
+        for name in ("/etc/alternatives", "/etc/matplotlibrc"):
+            j = a.index(name)
+            self.assertEqual((a[j - 1], a[j + 1]), ("--ro-bind-try", name))
+        self.assertEqual(a[a.index("--remount-ro") + 1], "/etc")
+        self.assertGreater(a.index("--remount-ro"), a.index("/etc/matplotlibrc"), "remount only after the entries are in place")
+        self.assertEqual(sorted({x for x in a if x.startswith("/etc")}), ["/etc", "/etc/alternatives", "/etc/matplotlibrc"])
+
+
 class ConcurrencyTests(unittest.TestCase):
     """How many jobs run at once: bounded by --max-jobs, the rest wait for a slot and then get 'busy'."""
     SLEEP = "import time\ntime.sleep(3)\nprint('done')\n"
