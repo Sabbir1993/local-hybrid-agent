@@ -49,8 +49,16 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,99}$")
 _LIBS = ("openpyxl", "pptx", "docx", "PIL", "lxml", "matplotlib")
 
 STATE = {"dir": Path("/var/lib/a770-runner"), "cert": None, "allow_unsandboxed": False, "sandbox": "none"}
-_job_lock = threading.Lock()
+DEFAULT_MAX_JOBS = 2
+JOB_WAIT_S = 30                 # a request waits this long for a free slot, then answers "busy"
+_JOBS = {"max": DEFAULT_MAX_JOBS, "sem": threading.BoundedSemaphore(DEFAULT_MAX_JOBS), "running": 0, "wait_s": JOB_WAIT_S}
 _state_lock = threading.Lock()
+
+
+def set_max_jobs(n: int, wait_s: int = JOB_WAIT_S) -> None:
+    """How many jobs may run at once (each is capped at ~1.4 GB, so keep the host's RAM above n x 1.5 GB). Call before serving."""
+    n = max(1, min(int(n), 32))
+    _JOBS.update({"max": n, "sem": threading.BoundedSemaphore(n), "running": 0, "wait_s": wait_s})
 
 
 # ---- state: pairing code, token ---------------------------------------------------------------------------------------
@@ -196,8 +204,11 @@ def run_job(code: str, inputs: list, timeout_s: int) -> dict:
     if not isinstance(inputs, list) or len(inputs) > MAX_INPUT_FILES:
         return {"ok": False, "error": f"at most {MAX_INPUT_FILES} input files"}
     timeout_s = max(5, min(int(timeout_s or DEFAULT_TIMEOUT_S), MAX_TIMEOUT_S))
-    if not _job_lock.acquire(timeout=30):
+    sem = _JOBS["sem"]
+    if not sem.acquire(timeout=_JOBS["wait_s"]):
         return {"ok": False, "error": "the runner is busy: try again in a moment", "busy": True}
+    with _state_lock:
+        _JOBS["running"] += 1
     root = Path(tempfile.mkdtemp(prefix="job_", dir=os.environ.get("RUNNER_TMP") or None))
     try:
         work, inp = root / "work", root / "in"
@@ -246,7 +257,9 @@ def run_job(code: str, inputs: list, timeout_s: int) -> dict:
                 "stdout": _tail(out), "stderr": _tail(err), "files": files, "ms": int((time.time() - t0) * 1000)}
     finally:
         shutil.rmtree(root, ignore_errors=True)
-        _job_lock.release()
+        with _state_lock:
+            _JOBS["running"] -= 1
+        sem.release()
 
 
 SELFTEST_NET = ("import socket\n"
@@ -308,7 +321,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.split("?")[0] == "/health":
             self._send(200, {"ok": True, "service": "a770-runner", "version": VERSION, "sandbox": STATE["sandbox"],
-                             "paired": _path("token.sha256").exists()})
+                             "paired": _path("token.sha256").exists(), "running": _JOBS["running"], "max_jobs": _JOBS["max"]})
         else:
             self._send(404, {"error": "not found"})
 
@@ -358,7 +371,10 @@ def main(argv=None) -> int:
     ap.add_argument("--cert")
     ap.add_argument("--key")
     ap.add_argument("--allow-unsandboxed", action="store_true", help="tests only: run jobs without bubblewrap")
+    ap.add_argument("--max-jobs", type=int, default=DEFAULT_MAX_JOBS,
+                    help="jobs running at once (each up to ~1.4 GB: keep host RAM above max-jobs x 1.5 GB)")
     a = ap.parse_args(argv)
+    set_max_jobs(a.max_jobs)
     STATE["dir"] = Path(a.state_dir)
     cert = Path(a.cert or _path("cert.pem"))
     key = Path(a.key or _path("key.pem"))

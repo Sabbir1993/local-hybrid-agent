@@ -93,6 +93,8 @@ class PairingTests(Live):
         r = self.req("GET", "/health")
         self.assertEqual((r["status"], r["json"]["service"], r["json"]["paired"]), (200, "a770-runner", False))
         self.assertEqual(r["fingerprint"], rs.cert_fingerprint(rs.STATE["cert"]))
+        self.assertEqual(sorted(k for k in r["json"] if k in ("running", "max_jobs")), ["max_jobs", "running"])
+        self.assertIsInstance(r["json"]["max_jobs"], int)
 
     def test_pairing_with_the_code_gives_a_token_once(self):
         code = rs.new_pair_code()
@@ -243,6 +245,57 @@ class AdminFlowTests(Live):
         names = {c["name"] for c in out["checks"]}
         self.assertEqual(names, {"sandbox", "no_network", "no_secrets", "writes_a_file", "libraries"})
         self.assertTrue(next(c for c in out["checks"] if c["name"] == "writes_a_file")["ok"])
+
+
+class ConcurrencyTests(unittest.TestCase):
+    """How many jobs run at once: bounded by --max-jobs, the rest wait for a slot and then get 'busy'."""
+    SLEEP = "import time\ntime.sleep(3)\nprint('done')\n"
+
+    def setUp(self):
+        self.old_state = dict(rs.STATE)
+        self.old_jobs = dict(rs._JOBS)
+        rs.STATE.update(allow_unsandboxed=True, sandbox="none")
+
+    def tearDown(self):
+        rs.STATE.clear()
+        rs.STATE.update(self.old_state)
+        rs._JOBS.clear()
+        rs._JOBS.update(self.old_jobs)
+
+    def _burst(self, n):
+        results, peak = [None] * n, [0]
+
+        def one(i):
+            results[i] = rs.run_job(self.SLEEP, [], 5)
+        threads = [threading.Thread(target=one, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        while any(t.is_alive() for t in threads):
+            peak[0] = max(peak[0], rs._JOBS["running"])
+            threading.Event().wait(0.05)
+        for t in threads:
+            t.join()
+        return results, peak[0]
+
+    def test_at_most_max_jobs_run_together_and_extra_requests_wait(self):
+        rs.set_max_jobs(2, wait_s=20)
+        results, peak = self._burst(3)
+        self.assertEqual(peak, 2)
+        self.assertTrue(all(r["ok"] for r in results), results)
+        self.assertEqual(rs._JOBS["running"], 0)
+
+    def test_a_request_that_waits_too_long_gets_busy(self):
+        rs.set_max_jobs(1, wait_s=1)
+        results, peak = self._burst(2)
+        self.assertEqual(peak, 1)
+        self.assertEqual(sorted(bool(r.get("busy")) for r in results), [False, True])
+        self.assertEqual(rs._JOBS["running"], 0, "a refused request must not leave a slot taken")
+
+    def test_the_setting_is_clamped(self):
+        rs.set_max_jobs(0)
+        self.assertEqual(rs._JOBS["max"], 1)
+        rs.set_max_jobs(500)
+        self.assertEqual(rs._JOBS["max"], 32)
 
 
 class AddressTests(unittest.TestCase):
