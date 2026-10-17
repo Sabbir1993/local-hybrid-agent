@@ -47,6 +47,48 @@ class FoldTests(unittest.TestCase):
         self.assertEqual(B.classify_run("docx", rec, []), "ok")
         self.assertEqual(B.classify_run("docx", rec, [], "ReadTimeout: x"), "timeout")
 
+    def test_question_and_card_outcomes(self):
+        ask = B.fold_chat_sse(sse(("delta", {"text": "Which audience should it be for?"}), ("done", {"prompt_tokens": 1})))
+        self.assertEqual(B.classify_run("docx", ask, ["no file delivered"]), "asked_question")
+        card = B.fold_chat_sse(sse(("delta", {"text": "```questionnaire\n{}\n```"}), ("done", {"prompt_tokens": 1})))
+        self.assertTrue(B.is_card(card))
+        self.assertEqual(B.classify_run("docx", card, ["no file delivered"], card_pending=True), "card_unanswered")
+
+    def test_wilson_interval(self):
+        lo, hi = B.wilson(12, 15)
+        self.assertLess(lo, 0.8)
+        self.assertGreater(hi, 0.8)
+        self.assertEqual(B.wilson(0, 0), (0.0, 0.0))
+        self.assertEqual(B.wilson(10, 10)[1], 1.0)
+
+    def test_reply_excerpt_is_short_and_masked(self):
+        out = B.reply_excerpt("Card [PLACEHOLDER] 4111 1111 1111 1111 " + "word " * 100)
+        self.assertLessEqual(len(out), 200)
+        self.assertNotIn("4111 1111 1111 1111", out)
+        self.assertNotIn("\n", out)
+
+    def test_docx_card_is_answered_like_the_ui(self):
+        card = B.fold_chat_sse(sse(("delta", {"text": '```questionnaire\n{"questions":[{"q":"Who is it for?"}]}\n```'}),
+                                   ("done", {"prompt_tokens": 1, "completion_tokens": 1})))
+        built = B.fold_chat_sse(sse(("tool_call", {"id": "1", "name": "doc_create", "args": {"file": "r.docx", "content": "# R"}}),
+                                    ("tool_result", {"id": "1", "name": "doc_create", "ok": True, "result": "saved"}),
+                                    ("delta", {"text": "[DOWNLOAD: r.docx]"}), ("done", {"prompt_tokens": 5, "completion_tokens": 5})))
+        sent = []
+        replies = iter([card, built])
+        orig = B._post_chat
+        B._post_chat = lambda base, client, msgs, t: (sent.append(list(msgs)), next(replies))[1]
+        try:
+            class NoDownload:
+                def get(self, *a, **k):
+                    raise OSError("no")
+            row = B.run_prompt("http://x", NoDownload(), "docx", "p", {"prompt": "Create a Word document (.docx): a memo"}, 5)
+        finally:
+            B._post_chat = orig
+        self.assertEqual(row["rounds"], 2)
+        self.assertEqual(len(sent), 2)
+        self.assertIn("Who is it for?: Technical team", sent[1][-1]["content"])
+        self.assertTrue(row["outcome"].startswith("ok"))
+
     def test_report_renders(self):
         row = {"format": "docx", "prompt": "p", "label": "ctx32k", "ctx": 32768, "outcome": "ok", "tool_ok": 1, "tool_total": 1,
                "nudges": 0, "max_turn_tokens_est": 100, "turns_over_cap": 0, "prompt_tokens": 10, "completion_tokens": 5,
