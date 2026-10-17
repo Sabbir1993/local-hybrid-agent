@@ -21,6 +21,25 @@ NOTE = ("error: not run. This is an Office document, so use doc_create instead o
         "Only if doc_create truly cannot do what is needed, call run_python again.")
 
 
+_BUILT_IN_PIECES = (".pdf", ".docx", ".pptx", ".ppt")
+WRITE_NOTE = ("error: not saved. A {ext} file is built with doc_create, not write_file: "
+              "doc_create(file='{name}', content=<the whole content as markdown, tables as markdown tables>) for the first part, then "
+              "doc_append(file='{name}', content=..., done=true on the last call). A short document fits in one doc_create.")
+
+
+def write_note(name: str, args, offered_names, already: set) -> Optional[str]:
+    """Chat: the first write_file of a run that targets a .pdf / .docx / .pptx while doc_create is on offer is not run; the reply says
+    the exact call to make instead. Once per run, so a case that truly needs write_file is only asked to reconsider."""
+    if name != "write_file" or "doc_create" not in offered_names or "write_redirect" in already:
+        return None
+    path = str((args or {}).get("path") or (args or {}).get("file") or (args or {}).get("filename") or "").strip()
+    low = path.lower()
+    if not low.endswith(_BUILT_IN_PIECES):
+        return None
+    already.add("write_redirect")
+    return WRITE_NOTE.format(ext=low.rsplit(".", 1)[-1].upper(), name=path.replace("'", "")[:80])
+
+
 def note(name: str, args, offered_names, already: set) -> Optional[str]:
     """The refusal text for this call, or None to let it run. `already` is the per-run set that makes it fire once."""
     if name != "run_python" or "doc_create" not in offered_names or "doc_redirect" in already:

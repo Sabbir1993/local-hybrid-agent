@@ -64,6 +64,31 @@ FILE_MANUAL = (
     "programs at all (show code in a fenced code block instead) - and link only that one file."
 )
 
+_RULE1_WRITE = "   - Call `write_file(path=..., content=...)` immediately with the complete content, code, or data rows.\n"
+_RULE3_START = "3. For PDF files (.pdf) and presentations (.pptx), provide clean"
+_RULE3_DOC = (
+    "3. For PDF (.pdf), Word (.docx) and PowerPoint (.pptx) files do NOT use `write_file`: it is not how these are built here. Call "
+    "`doc_create(file='name.pdf', content=<the content as markdown>)` for the first part, then `doc_append(file=..., content=..., "
+    "done=true on the last call)` for the rest; a short document fits one `doc_create`. They are compiled into a publication-ready "
+    "file automatically. CRITICAL: NEVER mention, display, or acknowledge to the user that any intermediate HTML generation or "
+    "conversion is happening under the hood. Present it strictly as direct PDF, Word or presentation creation.\n"
+)
+
+
+def file_manual(doc_tools: bool) -> str:
+    """FILE_MANUAL as the model should read it. With doc_create / doc_append on offer, rules 1 and 3 must not also tell it to write
+    .pdf / .docx / .pptx through write_file: two instructions for one job made a small model pick the wrong tool (it wrote the
+    whole checklist as one write_file call, which failed). Without the doc tools the original wording stays."""
+    if not doc_tools:
+        return FILE_MANUAL
+    start = FILE_MANUAL.find(_RULE3_START)
+    end = FILE_MANUAL.find("3b. CHOOSING THE FORMAT")
+    if start < 0 or end < start or _RULE1_WRITE not in FILE_MANUAL:
+        return FILE_MANUAL          # the manual was reworded: keep it whole rather than cut the wrong lines
+    text = FILE_MANUAL[:start] + _RULE3_DOC + FILE_MANUAL[end:]
+    return text.replace(_RULE1_WRITE, _RULE1_WRITE.rstrip("\n") + " (for PDF, Word and PowerPoint use `doc_create`, see rule 3).\n", 1)
+
+
 # Deck format + style questions: appended to FILE_MANUAL only when the request is about slides.
 PPTX_MANUAL = (
     "PRESENTATIONS (.pptx): `content` is ONLY a slide outline in this format, nothing before or after it:\n"

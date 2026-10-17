@@ -27,6 +27,7 @@ from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA, _co
 from core.request_context import run_in_executor_ctx, set_tool_allowlist, tool_allowed
 from core.doc_tools import (CHAT_IMPLS as _DOC_CHAT_IMPLS, DOC_APPEND_SCHEMA, DOC_CREATE_SCHEMA, DOC_EDIT_SCHEMA,
                             DOC_INSPECT_SCHEMA, tool_doc_inspect_common)
+from core.agent_loop import doc_redirect as _doc_redirect
 from core.agent_loop import (
     run_tool,
     safe_parse_and_repair_args,
@@ -459,7 +460,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     # S1: the full manual only on file intent, else a lean pointer (S4).
     if has_file:
-        sys_parts.append(prompt_scope.FILE_MANUAL)
+        sys_parts.append(prompt_scope.file_manual(DOC_CREATE_SCHEMA in chat_tools))
         sys_labels.append("file-manual")
         if prompt_scope.pptx_intent(last_query, prior_files, msgs):
             sys_parts.append(prompt_scope.PPTX_MANUAL)
@@ -653,6 +654,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         continued = False
         finish_reason = None
         written_files = []
+        write_redirected = set()     # core.agent_loop.doc_redirect: the "use doc_create for a PDF / Word / deck" refusal is said once
         made_media = []              # markdown of pictures/videos generate_image made this turn
         final_prompt_toks = None     # same figure goes to the done event and the monitor
         # Budget from the shared accounting, not a hardcoded fraction: the probed window
@@ -780,6 +782,16 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                 shrink_old_tool_results(msgs, ctx_budget, tools=current_tools)
 
+                # chat.force_doc_tool (off by default): the first build turn of a PDF / Word document must be a tool call. The API
+                # enforces it, the prompt only asks. Not while web tools are on offer (research may come first), not after tool
+                # results (the model then chooses), and a server that rejects tool_choice is remembered and asked without it.
+                _names = {t.get("function", {}).get("name") for t in (current_tools or [])}
+                tc_kw = ({"tool_choice": "required"}
+                         if (chat_cfg.get("force_doc_tool", False) and brief_phase == "build" and not written_files
+                             and "doc_create" in _names and not (_names & set(WEB_TOOL_NAMES))
+                             and not (msgs and msgs[-1].get("role") == "tool"))
+                         else {})
+
                 if cloud_main and cloud.cloud_bindings(user.id).get("fallback_local", True):
                     fb_local = None
                     target = state.profile_path or state.profile or common.initial_profile_path
@@ -794,12 +806,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     chat_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, current_tools, req.temperature,
                         turn_max_tokens, repeat_penalty=chat_rep, rid=chat_rid, lane="main", effort=effort,
-                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
+                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
+                        **tc_kw)
                 else:
                     chat_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
                     chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature,
                                                    max_tokens=turn_max_tokens, repeat_penalty=chat_rep, rid=chat_rid, effort=effort,
-                                                   top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
+                                                   top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
+                                                   **tc_kw)
                 # Estimate of what this turn actually sends, for anchoring below. Must be
                 # taken post-shrink with the exact tools of this turn - an estimate from
                 # before compaction, or without the schemas, would teach the budget learner
@@ -1099,8 +1113,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 # Announced-but-not-delivered: "Let me compile the HTML now:" and
                 # stop. Nudge once to actually produce it (granting one extra turn
                 # if the budget is spent) instead of accepting the preamble.
+                # In the build phase the user has already answered the card: any text-only reply with no file yet (the card asked
+                # again, the document dumped in a code fence, a question) is an undelivered build, which looks_undelivered misses
+                # when the reply holds a fence.
+                build_undelivered = brief_phase == "build" and not written_files
+                doc_flow = DOC_CREATE_SCHEMA in chat_tools
                 if (not tool_calls and chat_tools and not continued
-                        and (missing_dl or looks_undelivered(content, wants_file, bool(written_files)))):
+                        and (missing_dl or build_undelivered or looks_undelivered(content, wants_file, bool(written_files)))):
                     continued = True
                     if turn >= turn_limit - 1:
                         turn_limit += 1
@@ -1108,13 +1127,19 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         redactor.reset()
                         yield "event: delta_reset\ndata: {}\n\n"
                     msgs.append({"role": "assistant", "content": content or ""})
-                    msgs.append({"role": "user", "content": (
-                        "[system note] You announced the deliverable but did not produce it. Output it now, "
-                        "complete, with no preamble: "
-                        + ("call write_file with the full file content (for HTML: a complete standalone "
-                           "document), then give the [DOWNLOAD: filename] link."
-                           if (wants_file or missing_dl) else "write the full answer.")
-                        + " Use only data from the conversation and tool results; mark unverified figures as estimates.")})
+                    if doc_flow and build_undelivered:
+                        nudge = ("[system note] The user's answers are already in the conversation: do not ask anything and do not "
+                                 "write the document as text. Call doc_create now with the first part of the document as markdown "
+                                 "(tables as markdown tables), then doc_append for the rest (done=true on the last call); if you "
+                                 "already started it, call doc_append to continue.")
+                    else:
+                        nudge = ("[system note] You announced the deliverable but did not produce it. Output it now, "
+                                 "complete, with no preamble: "
+                                 + ("call write_file with the full file content (for HTML: a complete standalone "
+                                    "document), then give the [DOWNLOAD: filename] link."
+                                    if (wants_file or missing_dl) else "write the full answer.")
+                                 + " Use only data from the conversation and tool results; mark unverified figures as estimates.")
+                    msgs.append({"role": "user", "content": nudge})
                     continue
 
                 if missing_dl:
@@ -1257,6 +1282,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                     res_str, done = rest
                                     if done and done.get("markdown"):
                                         made_media.append(done["markdown"])
+                        elif t_name == "write_file" and (_redirect := _doc_redirect.write_note(
+                                t_name, args, {t.get("function", {}).get("name") for t in (current_tools or [])}, write_redirected)):
+                            res_str = _redirect
                         elif t_name in ("write_file", "doc_create") and _duplicate_workbook(
                                 prior_files + written_files, args, own_q):
                             res_str = _DUPLICATE_WORKBOOK.format(name=[f for f in prior_files + written_files if f.lower().endswith((".xlsx", ".xls"))][-1])
