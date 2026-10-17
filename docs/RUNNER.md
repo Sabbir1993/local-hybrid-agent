@@ -19,7 +19,7 @@ Agent mode is a different thing: it runs code on the *user's own PC* through the
 | Layer | What it stops |
 |---|---|
 | Separate VM on a private network | the code can reach nothing of the app: no database, no keys, no llama servers |
-| Firewall (`tools/runner/lockdown.sh` and the virtual switch) | only the app server reaches the runner, on one port; nothing goes out |
+| Firewall (`tools/runner/lockdown.sh` and the host-only / private network) | only the app server reaches the runner, on one port; nothing goes out |
 | Pinned certificate + token | only this app talks to the runner, and the app only talks to this runner; a changed certificate is refused |
 | Pairing code bound to the certificate | a man in the middle cannot pair: the proof is `HMAC(code, certificate fingerprint)` |
 | bubblewrap per job | the job has no network and sees only its own folder and the read-only system |
@@ -34,16 +34,39 @@ runner VM part of your PCI scope by itself - tell your QSA the VM exists, that i
 that input files containing card numbers are refused. Check the Bangladesh Bank ICT guideline for what it expects of isolated
 compute before production.
 
-## Dev: a VM on your own machine (Hyper-V, Windows 11 Pro)
+## Dev: a VM on your own machine (VirtualBox)
 
-1. Create a **Generation 2** VM, 2 vCPU, 1 GB RAM (dynamic off), 8 GB disk, with the Alpine "virt" ISO. Secure Boot: set the template
-   to *Microsoft UEFI Certificate Authority* (or turn Secure Boot off).
-2. Network: an **internal or private virtual switch**, not the external one. The app server must reach the VM; the VM must not reach
-   the internet. (Give it the external switch only while `tools/runner/setup.sh` installs packages, then move it.)
-3. VM settings -> Integration Services: turn off *Guest services* and everything you do not need. No shared folders, no enhanced
-   session, no clipboard sharing.
-4. Install Alpine (`setup-alpine`), then copy `tools/runner` to the VM and run `sh tools/runner/setup.sh` as root.
-5. `APP_IP=<address of your PC on that switch> sh lockdown.sh`.
+1. **Create the VM**: type *Linux*, version *Other Linux (64-bit)*, 2 CPUs, 1024 MB RAM, 8 GB disk (VDI, dynamically allocated).
+   Attach the Alpine **"virt" x86_64 ISO** and boot it. Leave *Enable EFI* off unless you want it.
+2. **Turn off everything the VM does not need** (VM must be powered off): Settings -> *Audio* off, *USB* off, *Shared Folders* empty,
+   *General -> Advanced*: Shared Clipboard and Drag'n'Drop **Disabled**. Do **not** install Guest Additions.
+3. **Network, two adapters**:
+   - *Adapter 1*: **Host-only Adapter** (VirtualBox Host-Only Ethernet Adapter). This is the only link the app uses. The host-only
+     network has no route to the internet. On Windows the host side is usually `192.168.56.1`; check with `ipconfig` under
+     "VirtualBox Host-Only Network". That address is your `APP_IP`.
+   - *Adapter 2*: **NAT**. Needed **only while `setup.sh` installs packages**. After setup, power off the VM and untick
+     *Cable Connected* on Adapter 2 (or set it to *Not attached*). With it gone the VM has no internet at all.
+4. **Install Alpine**: log in as `root`, run `setup-alpine` (interface `eth0` for DHCP is fine; pick `sys` mode on the disk), reboot and
+   remove the ISO. Note the VM's host-only address with `ip addr show eth0` (usually `192.168.56.x`).
+5. **Copy and run the setup** (from your PC, in a terminal; `scp` ships with Windows 11):
+   ```
+   scp -r tools/runner root@[RUNNER-ADDRESS]:/root/runner
+   ```
+   then on the VM: `sh /root/runner/setup.sh`. It needs the NAT adapter for `apk` and `pip`.
+6. **Lock it down**, on the VM: `APP_IP=[HOST-ONLY-ADDRESS-OF-YOUR-PC] sh /root/runner/lockdown.sh`. The firewall drops everything
+   else, including ssh. To keep ssh from your PC (for `pair-code` and updates) add `ADMIN_IP=[HOST-ONLY-ADDRESS-OF-YOUR-PC]`; without it use the
+   VirtualBox console. Then power off, detach Adapter 2 as in
+   step 3, and start the VM again. Take a **snapshot** now (clean, locked-down, paired-ready state).
+7. **Pair**: Settings -> Code Runner, address `https://[RUNNER-ADDRESS]:8470` (the `192.168.56.x` address is private, so it is accepted).
+
+Notes:
+- Prefer a headless start (`VBoxManage startvm "<name>" --type headless`) once it is set up; you need the console (or ssh, if you
+  set `ADMIN_IP`) only for `pair-code`.
+- Do not use *Bridged Adapter* for the runner: it puts the VM on your office LAN with a route to everything there.
+- If Hyper-V / Windows Sandbox / WSL2 is enabled on the PC, VirtualBox runs on top of it and is slower, but still works for a 1 GB
+  runner.
+- Your own firewall on the PC must allow the app to reach `[RUNNER-ADDRESS]:8470` on the host-only adapter; nothing on the PC
+  should be reachable *from* the VM except through the VM's own rules (lockdown.sh allows only `APP_IP`, and only the runner port inbound).
 
 ## Production: a dedicated VM
 
