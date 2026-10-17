@@ -204,3 +204,5 @@ class EmptyWrites(unittest.TestCase):
                 self.assertTrue(r.startswith("error:"), r)
                 self.assertNotIn("[DOWNLOAD", r)
             self.assertEqual([f for f in Path(td).rglob("*") if f.is_file()], [])
+            r = tool_write_file_common({"path": "page.html", "html": "<html><body>hi</body></html>"})   # body under another key
+            self.assertIn("Wrote 28 chars", r)

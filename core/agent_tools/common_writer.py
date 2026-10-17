@@ -70,7 +70,9 @@ def tool_write_file_common(args: dict) -> str:
 
     p = _common_resolve(unique_path_arg)
     p.parent.mkdir(parents=True, exist_ok=True)
-    content = args.get("content", "")
+    content = args.get("content")
+    if content is None or content == "":      # models sometimes name the body differently
+        content = next((args[k] for k in ("text", "html", "code", "body", "data", "file_content") if isinstance(args.get(k), str) and args[k].strip()), content or "")
     if len(content) > MAX_EDIT_BYTES:
         raise ValueError("content too large")
 
