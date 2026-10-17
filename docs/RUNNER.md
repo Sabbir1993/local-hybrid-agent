@@ -44,7 +44,7 @@ compute before production.
    - *Adapter 1*: **Host-only Adapter** (VirtualBox Host-Only Ethernet Adapter). This is the only link the app uses. The host-only
      network has no route to the internet. On Windows the host side is usually `192.168.56.1`; check with `ipconfig` under
      "VirtualBox Host-Only Network". That address is your `APP_IP`.
-   - *Adapter 2*: **NAT**. Needed **only while `setup.sh` installs packages**. After setup, power off the VM and untick
+   - *Adapter 2*: **NAT**. Needed **only while `tools/runner/setup.sh` installs packages**. After setup, power off the VM and untick
      *Cable Connected* on Adapter 2 (or set it to *Not attached*). With it gone the VM has no internet at all.
 4. **Install Alpine**: log in as `root`, run `setup-alpine` (interface `eth0` for DHCP is fine; pick `sys` mode on the disk), reboot and
    remove the ISO. Note the VM's host-only address with `ip addr show eth0` (usually `192.168.56.x`).
