@@ -73,6 +73,51 @@ Notes:
 Same steps, on its own VM (preferably another physical host) in a private subnet or security group: inbound from the app server on the
 runner port only, no outbound. Do not put it on the application server.
 
+## Platforms
+
+Bubblewrap is **Linux only** (it uses Linux namespaces). The runner host must be Linux: a VM, a separate machine or a cloud instance.
+There is no Windows or macOS runner: Windows has no equivalent sandbox here (Job Objects only limit CPU and memory) and macOS's
+Seatbelt is not used by this runner. The application server itself can run on any OS; it never runs the code. `tools/runner/setup.sh` is written
+for Alpine; the runner (`tools/runner/runner_server.py`) is plain Python and runs on Debian or Ubuntu too, started by hand
+(`apt install bubblewrap python3`, then `python3 runner_server.py serve --max-jobs 2`) until an apt setup script exists.
+
+## Sizing
+
+One runner serves many users: every job is a throwaway sandbox on the same host, not a machine per user.
+
+- `--max-jobs N` (default 2) is how many jobs run at once. A request that cannot get a slot within 30 s is answered "busy" and the
+  model tells the user to retry. `/health` shows `running` and `max_jobs`.
+- Each job may use up to about 1.4 GB, so keep the host's RAM above `max-jobs` x 1.5 GB (4 GB for 2 jobs) plus the OS.
+- Most chat requests never reach the runner (PDF, PPTX, DOCX, XLSX, CSV and pictures are built by the app); it is only for custom code.
+  If "busy" answers show up in real use, raise `--max-jobs` with the CPU count, or add a second runner host.
+
+## Check the isolation: `tools/runner/verify.py`
+
+On the Linux host, as the runner's unprivileged user (not root), before the runner is ever enabled:
+
+```
+python3 tools/runner/verify.py
+```
+
+It needs only bubblewrap and python3 (no server, no pairing, no network). It sends hostile programs through the runner's own job
+code and prints PASS / FAIL per check: no network, the runner's environment not visible, no `/etc`, `/root`, `/home`, `/var` or state
+folder, read-only system, symlinks not returned, fork bomb capped, endless loop killed, memory bomb stopped, oversize file stopped,
+output file count capped, job folder wiped, concurrency capped. The exit code is 0 only if every critical check passed. A FAIL is a
+real gap: do not enable the runner. The libraries line is only a warning (install the packages from `tools/runner/requirements.txt`).
+
+## Test on Linux without a VM (WSL2 on Windows)
+
+For a Windows-only developer PC, WSL2 gives a real Linux kernel to run `tools/runner/verify.py` and a test runner. It is a test aid, not the
+production boundary (WSL has full outbound internet and, by default, access to your Windows drives).
+
+1. `wsl --install -d Ubuntu-24.04` in an elevated PowerShell, reboot if asked, create the Linux user.
+2. Limit it in `%UserProfile%\.wslconfig` (or the WSL Settings app): `memory=4GB`, `processors=2`, nested virtualization off, GUI off.
+3. In Ubuntu: `sudo apt update && sudo apt install -y bubblewrap python3`.
+4. `bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev true && echo works` must print `works`.
+5. Run `python3 /mnt/<drive>/<path to repo>/tools/runner/verify.py`.
+6. Optional hardening of the test box: `/etc/wsl.conf` with `[automount] enabled=false` and `[interop] enabled=false` after copying
+   `tools/runner` into the Linux home, then `wsl --shutdown`.
+
 ## Pairing
 
 On the runner: `python3 /opt/a770-runner/runner_server.py pair-code --state-dir /var/lib/a770-runner` prints a code valid for 10
