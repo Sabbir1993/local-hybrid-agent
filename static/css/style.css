@@ -4287,9 +4287,15 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 }
 #settings-modal-box {
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-  width: 980px; max-width: 96vw; height: 90vh; max-height: 90vh;
+  width: 1480px; max-width: 96vw; height: 92vh; max-height: 94vh;
   display: flex; flex-direction: column; overflow: hidden;
   box-shadow: 0 24px 64px rgba(0,0,0,0.65);
+  transition: width 0.2s ease, height 0.2s ease;
+}
+#settings-modal-box.maximized {
+  width: 99vw !important; max-width: 99vw !important;
+  height: 98vh !important; max-height: 98vh !important;
+  border-radius: 6px;
 }
 #settings-modal-head {
   display: flex; align-items: center; justify-content: space-between;

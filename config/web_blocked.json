@@ -10,8 +10,8 @@
     "status": 403
   },
   "wikiwand.com": {
-    "fails": 1,
-    "until": 0,
+    "fails": 2,
+    "until": 1792401011.3232348,
     "status": 403
   },
   "pagepro.co": {
@@ -22,6 +22,31 @@
   "wikimedia.org": {
     "fails": 2,
     "until": 1792399144.6607249,
+    "status": 403
+  },
+  "depic.ai": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "macrotrends.net": {
+    "fails": 2,
+    "until": 1792401096.3492339,
+    "status": 403
+  },
+  "city-facts.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "britannica.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "wiktionary.org": {
+    "fails": 2,
+    "until": 1792401257.077696,
     "status": 403
   }
 }

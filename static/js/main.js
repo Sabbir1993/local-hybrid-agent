@@ -304,6 +304,10 @@ function openSettingsModal(targetTab) {
 
 function closeSettingsModal() {
   const m = $('settings-modal');
+  const frame = $('settings-frame');
+  if (frame && frame.contentWindow && typeof frame.contentWindow.stopTelemetryMonitoring === 'function') {
+    try { frame.contentWindow.stopTelemetryMonitoring(); } catch (_) {}
+  }
   if (m) {
     m.hidden = true;
     m.setAttribute('hidden', '');
@@ -321,6 +325,12 @@ if ($('btn-chat-cfg')) $('btn-chat-cfg').onclick = () => setSettings();
 if ($('settings-close')) $('settings-close').onclick = () => setSettings(false);
 if ($('btn-settings')) $('btn-settings').onclick = () => openSettingsModal();
 if ($('settings-modal-close')) $('settings-modal-close').onclick = () => closeSettingsModal();
+if ($('settings-modal-max')) {
+  $('settings-modal-max').onclick = () => {
+    const box = $('settings-modal-box');
+    if (box) box.classList.toggle('maximized');
+  };
+}
 
 /* header buttons are icon-only: the label becomes the accessible name, the long description a
    fast CSS tooltip (data-tip) instead of the slow native title */

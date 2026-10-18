@@ -220,7 +220,7 @@ async def monitor(user: Principal = Depends(require_permission("monitor.view")))
     recent = []
     for r in _monitor_state["recent"]:
         info = {k: r.get(k) for k in ("id", "endpoint", "model", "stream", "status",
-                                       "prompt_tokens", "completion_tokens",
+                                       "prompt_tokens", "completion_tokens", "prompt_cached", "completion_cached",
                                        "tps", "duration_s", "prompt_tps", "gen_tps",
                                        "source", "provider")}
         info["ago_s"] = round(now - r["end"], 1)
@@ -233,6 +233,13 @@ async def monitor(user: Principal = Depends(require_permission("monitor.view")))
         "llama_pid": state.process.pid if state.process and state.process.poll() is None else None,
         "keepalive": state.keepalive_enabled,
     }
+
+
+@router.get("/control/telemetry/live")
+async def telemetry_live(user: Principal = Depends(require_permission("monitor.view"))):
+    """Real-time system, hardware, and model inference telemetry snapshot for live monitoring dashboard."""
+    from core.telemetry import get_telemetry_snapshot
+    return await get_telemetry_snapshot()
 
 
 @router.get("/control/report/runs")

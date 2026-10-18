@@ -141,6 +141,15 @@ function setMonitor(open) {
 
 $('btn-monitor').onclick = () => setMonitor(!monOpen);
 $('mon-close').onclick = () => setMonitor(false);
+const btnOpenFull = $('mon-open-dashboard');
+if (btnOpenFull) {
+  btnOpenFull.onclick = () => {
+    setMonitor(false);
+    if (typeof openSettingsModal === 'function') {
+      openSettingsModal('sec-live-monitor');
+    }
+  };
+}
 
 function setSettings(open) {
   const d = $('settings-drawer');

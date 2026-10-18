@@ -22,6 +22,15 @@ function switchSettingsTab(tabId, updateHash = true) {
   }
 
   // Trigger special actions
+  if (tabId === 'sec-live-monitor') {
+    if (typeof isTelemetryPermitted === 'function' && !isTelemetryPermitted()) {
+      return;
+    }
+    if (typeof startTelemetryMonitoring === 'function') startTelemetryMonitoring();
+  } else {
+    if (typeof stopTelemetryMonitoring === 'function') stopTelemetryMonitoring();
+  }
+
   if (tabId === 'sec-gpus' && typeof triggerGpuQuery === 'function') {
     triggerGpuQuery();
   }
@@ -71,6 +80,17 @@ window.addEventListener('hashchange', () => {
     const targetId = hash.startsWith('sec-') ? hash : ('sec-' + hash);
     if (document.getElementById(targetId)) {
       switchSettingsTab(targetId, false);
+    }
+  }
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (typeof stopTelemetryMonitoring === 'function') stopTelemetryMonitoring();
+  } else {
+    const activePanel = document.querySelector('.settings-panel.active');
+    if (activePanel && activePanel.id === 'sec-live-monitor') {
+      if (typeof startTelemetryMonitoring === 'function') startTelemetryMonitoring();
     }
   }
 });

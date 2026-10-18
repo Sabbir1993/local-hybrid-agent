@@ -25,6 +25,7 @@ from .status_endpoints import (
     gpu,
     monitor,
     report,
+    telemetry_live,
 )
 from .model_endpoints import (
     profiles,
@@ -63,6 +64,7 @@ __all__ = [
     "gpu",
     "monitor",
     "report",
+    "telemetry_live",
     "profiles",
     "available_models",
     "stop_server",
