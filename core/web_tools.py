@@ -18,6 +18,7 @@ from urllib.parse import urlparse, quote_plus
 import httpx
 
 from . import web_search as ws
+from .web_search import blocklist
 from . import prompt_fence
 from .agent_tools import MAX_TOOL_OUTPUT
 from .net_guard import BlockedURLError
@@ -64,6 +65,9 @@ async def tool_web_fetch(args: dict) -> str:
         return f"error: invalid url: {args.get('url')}"
     page = ws.cache_get(("fetch", url))
     if page is None:
+        if blocklist.is_blocked(url):
+            return (f"error: {parsed.netloc} blocks automated access (HTTP {blocklist.status_of(url)}, "
+                    "remembered) - use a different source")
         try:
             # SSRF-guarded (core/net_guard.py): every redirect hop must resolve to a public address
             r = await asyncio.to_thread(ws.fetch_page, url, FETCH_TIMEOUT_S, ws.region()["accept"])

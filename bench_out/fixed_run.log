@@ -1,0 +1,108 @@
+[fixed_ctx32k] docx/incident_report #1 ...
+    -> ok 109.9s tools=2 nudges=0 findings=0+0
+[fixed_ctx32k] docx/policy_memo #1 ...
+    -> ok 120.8s tools=3 nudges=0 findings=0+0
+[fixed_ctx32k] docx/proposal #1 ...
+    -> ok 153.6s tools=6 nudges=0 findings=0+0
+[fixed_ctx32k] docx/meeting_minutes #1 ...
+    -> ok_findings 105.6s tools=2 nudges=0 findings=1+0
+[fixed_ctx32k] docx/bengali_notice #1 ...
+    -> ok_tool_errors 125.4s tools=2 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/security_guide #1 ...
+    -> error 121.8s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/annual_report #1 ...
+    -> error 2.0s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/onboarding_handbook #1 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/bengali_report #1 ...
+    -> error 2.0s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/compliance_checklist #1 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] docx/incident_report #2 ...
+    -> error 2.0s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] docx/policy_memo #2 ...
+    -> error 2.0s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] docx/proposal #2 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] docx/meeting_minutes #2 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] docx/bengali_notice #2 ...
+    -> error 2.0s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/security_guide #2 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/annual_report #2 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/onboarding_handbook #2 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/bengali_report #2 ...
+    -> error 2.0s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/compliance_checklist #2 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] docx/incident_report #3 ...
+    -> error 2.0s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] docx/policy_memo #3 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] docx/proposal #3 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] docx/meeting_minutes #3 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] docx/bengali_notice #3 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/security_guide #3 ...
+    -> error 2.0s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/annual_report #3 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/onboarding_handbook #3 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/bengali_report #3 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+[fixed_ctx32k] pdf/compliance_checklist #3 ...
+    -> error 2.1s tools=0 nudges=0 findings=0+0
+### DOCX
+
+| ctx | prompts | tool-call ok | built | clean (no findings) | no nudge | max turn tok (est) | turns near 8k cap | avg prompt tok | avg completion tok | avg s | built 95% interval | outcomes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 32768 | 15 | 13/15 | 5/15 | 4/15 | 15/15 | 2465 | 0 | 2192 | 169 | 42 | 15%-58% | error 10, ok 3, ok_findings 1, ok_tool_errors 1 |
+
+| prompt | ctx | outcome | tools | nudges | findings |
+|---|---|---|---|---|---|
+| incident_report | 32768 | ok | 2 | 0 | - |
+| policy_memo | 32768 | ok | 3 | 0 | - |
+| proposal | 32768 | ok | 6 | 0 | - |
+| meeting_minutes | 32768 | ok_findings | 2 | 0 | 3 tables for 5 in the outline |
+| bengali_notice | 32768 | ok_tool_errors | 2 | 0 | - |
+| incident_report | 32768 | error | 0 | 0 | - |
+| policy_memo | 32768 | error | 0 | 0 | - |
+| proposal | 32768 | error | 0 | 0 | - |
+| meeting_minutes | 32768 | error | 0 | 0 | - |
+| bengali_notice | 32768 | error | 0 | 0 | - |
+| incident_report | 32768 | error | 0 | 0 | - |
+| policy_memo | 32768 | error | 0 | 0 | - |
+| proposal | 32768 | error | 0 | 0 | - |
+| meeting_minutes | 32768 | error | 0 | 0 | - |
+| bengali_notice | 32768 | error | 0 | 0 | - |
+
+### PDF
+
+| ctx | prompts | tool-call ok | built | clean (no findings) | no nudge | max turn tok (est) | turns near 8k cap | avg prompt tok | avg completion tok | avg s | built 95% interval | outcomes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 32768 | 15 | 0/0 | 0/15 | 0/15 | 15/15 | 0 | 0 | 0 | 0 | 10 | 0%-20% | error 15 |
+
+| prompt | ctx | outcome | tools | nudges | findings |
+|---|---|---|---|---|---|
+| security_guide | 32768 | error | 0 | 0 | - |
+| annual_report | 32768 | error | 0 | 0 | - |
+| onboarding_handbook | 32768 | error | 0 | 0 | - |
+| bengali_report | 32768 | error | 0 | 0 | - |
+| compliance_checklist | 32768 | error | 0 | 0 | - |
+| security_guide | 32768 | error | 0 | 0 | - |
+| annual_report | 32768 | error | 0 | 0 | - |
+| onboarding_handbook | 32768 | error | 0 | 0 | - |
+| bengali_report | 32768 | error | 0 | 0 | - |
+| compliance_checklist | 32768 | error | 0 | 0 | - |
+| security_guide | 32768 | error | 0 | 0 | - |
+| annual_report | 32768 | error | 0 | 0 | - |
+| onboarding_handbook | 32768 | error | 0 | 0 | - |
+| bengali_report | 32768 | error | 0 | 0 | - |
+| compliance_checklist | 32768 | error | 0 | 0 | - |
+

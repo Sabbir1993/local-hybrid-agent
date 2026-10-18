@@ -2,6 +2,7 @@ import asyncio
 import re
 import sys
 from typing import Optional
+from . import blocklist
 from .backends import BACKENDS, _clean
 from .cache import cache_get, cache_put
 from .constants import MAX_RESULTS, RECENCY, _REWRITE_PROMPT, cfg
@@ -59,7 +60,9 @@ async def search(query: str, recency: str = "", auto_fetch: Optional[int] = None
             errors[name] = f"{type(res).__name__}: {res}"[:200]
         elif res:
             lists[name] = res
-    items = (await rerank_fn(query, merge_fn(lists)))[:MAX_RESULTS]
+    items = await rerank_fn(query, merge_fn(lists))
+    # drop sites known to refuse bots, unless that would leave nothing
+    items = ([i for i in items if not blocklist.is_blocked(i["url"])] or items)[:MAX_RESULTS]
     await attach_fn(query, items, n_fetch)
     out = {"query": query, "engines": list(lists), "results": items, "errors": errors}
     if items:

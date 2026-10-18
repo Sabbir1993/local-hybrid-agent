@@ -5,7 +5,9 @@ from typing import Optional
 from urllib.parse import urljoin
 from ..net_guard import guarded_get
 from .backends import _clean, _html
+from . import blocklist
 from .constants import (
+    cfg,
     UA,
     FETCH_MAX_BYTES,
     PASSAGE_CHARS,
@@ -163,9 +165,19 @@ async def best_passages(query: str, text: str, k: int = 2, max_chunks: int = 60)
     return [chunks[i] for i in sorted(top)]
 
 
+def _user_agent(url: str) -> str:
+    # Wikimedia blocks browser-spoofing agents from scripts (HTTP 403); it asks for a descriptive one
+    host = blocklist.host_of(url)
+    if host.endswith("wikipedia.org") or host.endswith("wikimedia.org"):
+        return f"SSLWirelessAssistant/1.0 (internal research tool; {cfg().get('contact') or '[CONTACT_EMAIL]'})"
+    return UA
+
+
 def fetch_page(url: str, timeout: float, accept_language: str):
-    return guarded_get(url, timeout, headers={"User-Agent": UA, "Accept-Language": accept_language},
-                       max_bytes=FETCH_MAX_BYTES)
+    r = guarded_get(url, timeout, headers={"User-Agent": _user_agent(url), "Accept-Language": accept_language},
+                    max_bytes=FETCH_MAX_BYTES)
+    blocklist.record_failure(url, r.status_code)   # remembered, so the same site is not retried
+    return r
 
 
 async def attach_passages(query: str, items: list, n: int) -> None:
@@ -176,6 +188,8 @@ async def attach_passages(query: str, items: list, n: int) -> None:
     accept = region_fn()["accept"]
 
     async def one(item):
+        if blocklist.is_blocked(item["url"]):
+            return
         try:
             r = await asyncio.to_thread(fetch_page, item["url"], AUTO_FETCH_BUDGET_S, accept)
             if r.status_code >= 400:

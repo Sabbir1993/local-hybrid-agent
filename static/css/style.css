@@ -1270,6 +1270,17 @@ header .icon-btn[data-tip]:focus-visible::after {
   color: var(--text);
 }
 
+.msg.user .bubble.user-long:not(.expanded) .user-text {
+  display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden;
+}
+.user-long-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.user-long-btn {
+  background: none; border: none; padding: 2px 4px; cursor: pointer;
+  color: var(--text-dim, var(--dim, #8b949e)); font-size: 12px;
+}
+.user-long-btn:hover { color: var(--accent); }
+.user-long-more { font-weight: 600; }
+
 .msg.bot .bubble {
   width: 100%;
   max-width: 100%;
@@ -1532,7 +1543,7 @@ header .icon-btn[data-tip]:focus-visible::after {
   max-height: none;
 }
 .agy-args-pre.open { display: block; }
-.agy-result-code { max-height: 420px; overflow-y: auto; color: var(--dim); }
+.agy-result-code { max-height: 240px; overflow-y: auto; color: var(--dim); }
 .agy-result-code[data-ok="err"] { color: var(--red); }
 .gpu-lane-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 11px; }
 .gpu-lane-name { flex: 0 0 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1797,9 +1808,15 @@ header .icon-btn[data-tip]:focus-visible::after {
   flex-direction: column;
   gap: 6px;
   margin: 6px 0 10px;
+  max-height: min(360px, 45vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-width: thin;
 }
 
 .codex-timeline-toolbar {
+  position: sticky; top: 0; z-index: 2; background: var(--panel2, var(--bg));
   display: flex;
   align-items: center;
   justify-content: space-between;

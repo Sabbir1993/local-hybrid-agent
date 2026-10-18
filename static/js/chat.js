@@ -295,7 +295,7 @@ function renderLast() {
   } else {
     // Agent step list + tool output blocks are re-created below; remember their scroll
     // so the fixed-height panels stay scrollable while the task streams
-    const SCROLLERS = '.agy-steps-list, .agy-detail-code, .agy-diff';
+    const SCROLLERS = '.agy-stream-timeline, .agy-steps-list, .agy-detail-code, .agy-diff';
     // D5d render-diff: while an agent run is streaming, only the acts block
     // changes (a new tool_call / tool_result arrives); the bubble's text,
     // thinking card and plan panel stay identical. Swap just the
@@ -321,7 +321,7 @@ function renderLast() {
         }
         newActs.querySelectorAll(SCROLLERS).forEach((el, i) => {
           const p = actScroll[i];
-          const follow = el.classList.contains('agy-steps-list') && (!p || p.atBottom);
+          const follow = el.matches('.agy-steps-list, .agy-stream-timeline') && (!p || p.atBottom);
           el.scrollTop = follow ? el.scrollHeight : (p ? p.top : 0);
         });
         _applyArgsOpen(newActs, m);
@@ -350,7 +350,7 @@ function renderLast() {
       _applyArgsOpen(newEl, m);
       newEl.querySelectorAll(SCROLLERS).forEach((el, i) => {
         const p = prevScroll[i];
-        const follow = el.classList.contains('agy-steps-list') && generating && (!p || p.atBottom);
+        const follow = el.matches('.agy-steps-list, .agy-stream-timeline') && generating && (!p || p.atBottom);
         el.scrollTop = follow ? el.scrollHeight : (p ? p.top : 0);
       });
 
@@ -584,23 +584,28 @@ function bubbleHtml(m, idx) {
   return typeof html === 'string' ? html.replace(/^(\s*<div)/, `$1 data-mi="${idx}"`) : html;
 }
 
+// clean user text: drop injected vision/file tags from what the bubble shows
+function userDisplayText(m) {
+  let t = m.displayContent || m.content || '';
+  if (t.includes('--- IMAGE:')) t = t.replace(/--- IMAGE:[\s\S]*?--- END [^\n]+ ---/g, '').trim();
+  if (t.includes('--- FILE:')) t = t.replace(/--- FILE:[\s\S]*?--- END [^\n]+ ---/g, '').trim();
+  if (t.includes('[Attached Files]')) t = t.replace(/\[Attached Files\][\s\S]*?--- END [^\n]+ ---(\s*\[NOTE:.*\])?/g, '').trim();
+  return t;
+}
+
 function _bubbleHtml(m, idx) {
   if (m.role === 'user') {
     const imgs = (m.images || []).map(u =>
       `<img src="${esc(u)}" class="chat-img-thumb" alt="Attachment" title="Click to enlarge" data-click="open-image" style="max-width:240px; max-height:180px; border-radius:8px; display:block; margin:6px 0; border:1px solid rgba(255,255,255,0.15); box-shadow:0 2px 8px rgba(0,0,0,0.3); cursor:zoom-in;">`).join('');
     const filesTag = m.files ? `<div class="dim" style="font-size:10.5px; margin-top:4px;">📎 ${esc(m.files)}</div>` : '';
-    // Display clean user text, strip any injected vision/file tags from the bubble UI
-    let displayText = m.displayContent || m.content || '';
-    if (displayText.includes('--- IMAGE:')) {
-      displayText = displayText.replace(/--- IMAGE:[\s\S]*?--- END [^\n]+ ---/g, '').trim();
-    }
-    if (displayText.includes('--- FILE:')) {
-      displayText = displayText.replace(/--- FILE:[\s\S]*?--- END [^\n]+ ---/g, '').trim();
-    }
-    if (displayText.includes('[Attached Files]')) {
-      displayText = displayText.replace(/\[Attached Files\][\s\S]*?--- END [^\n]+ ---(\s*\[NOTE:.*\])?/g, '').trim();
-    }
-    return `<div class="msg user"><div class="bubble">${imgs}${md(displayText || '(attachment)')}${filesTag}</div></div>`;
+    const displayText = userDisplayText(m);
+    // long prompts show ~8 lines; the footer offers copy + see more / see less
+    const long = displayText.split('\n').length > 8 || displayText.length > 700;
+    const foot = long
+      ? `<div class="user-long-foot"><button type="button" class="user-long-btn" data-click="user-copy" data-arg="${idx}" title="Copy prompt">⧉</button>`
+        + `<button type="button" class="user-long-btn user-long-more" data-click="user-more">See more</button></div>`
+      : '';
+    return `<div class="msg user"><div class="bubble${long ? ' user-long' : ''}">${imgs}<div class="user-text">${md(displayText || '(attachment)')}</div>${filesTag}${foot}</div></div>`;
   }
   // pending compaction indicator
   if (m.compactPending) {

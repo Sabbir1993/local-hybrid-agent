@@ -73,6 +73,19 @@ const CLICK_ACTIONS = {
   'submit-grill': (el) => submitGrillAnswers(parseInt(el.dataset.arg, 10)),
   'new-project': () => document.getElementById('btn-newproject').click(),
   'hud-close': () => setLiveHud(null),
+  'user-more': (el) => {
+    const b = el.closest('.bubble');
+    const open = b.classList.toggle('expanded');
+    el.textContent = open ? 'See less' : 'See more';
+  },
+  'user-copy': (el) => {
+    const m = messages[parseInt(el.dataset.arg, 10)];
+    if (!m) return;
+    const text = userDisplayText(m);
+    const done = () => { el.textContent = '✓'; setTimeout(() => { el.textContent = '⧉'; }, 1200); };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, () => { _copyFallback(text); done(); });
+    else { _copyFallback(text); done(); }
+  },
   'code-copy': (el) => copyCodeBlock(el),
   'copy-codex-code': (el) => (typeof copyCodexCode === 'function' ? copyCodexCode(el) : null),
   'code-preview': (el) => previewCodeBlock(el),

@@ -574,5 +574,11 @@
         "reason": "environment files usually hold secrets"
       }
     ]
+  },
+  "sandbox": {
+    "runner_url": "https://127.0.0.1:8470",
+    "fingerprint": "5c4a37043f401db8c5d86d1c306d2cd1cdba95d7cad924b36268f959fa13d921",
+    "enabled": true,
+    "verified_at": 1792264919.008499
   }
 }
