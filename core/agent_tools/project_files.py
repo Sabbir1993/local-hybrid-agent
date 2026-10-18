@@ -226,3 +226,36 @@ def tool_project_finish(args: dict) -> str:
         note += " WARNING: empty files: " + ", ".join(empty[:8]) + "."
     return (f"Project {slug}: {len(files)} files. Download the whole site as {zip_name} [DOWNLOAD: {zip_name}] and preview "
             f"{entry} as {page_name} [DOWNLOAD: {page_name}]. Reply now with a short summary and these two links." + note)
+
+
+def open_project_note(max_age_s: int = 3 * 24 * 3600) -> str:
+    """System note for a bare "continue" when a website project was left unfinished (stopped, restarted, cut off), else ''.
+    A project is open while no ZIP made by project_finish is newer than its files. Never raises."""
+    import time
+    try:
+        base = common_workspace() / PROJECTS_DIR
+        if not base.is_dir():
+            return ""
+        best = None
+        for d in base.iterdir():
+            files = [f for f in d.rglob("*") if f.is_file()] if d.is_dir() else []
+            if not files:
+                continue
+            newest = max(f.stat().st_mtime for f in files)
+            if time.time() - newest > max_age_s:
+                continue
+            if best is None or newest > best[0]:
+                best = (newest, d, files)
+        if not best:
+            return ""
+        newest, d, files = best
+        if any(z.stat().st_mtime >= newest for z in common_workspace().glob(f"{d.name}-*.zip")):
+            return ""
+        listing = ", ".join(f"{f.relative_to(d).as_posix()} ({len(f.read_text(encoding='utf-8', errors='replace').splitlines())} lines)"
+                            for f in sorted(files)[:40])
+        return (f"[system note] The user's website project `{d.name}` was interrupted before project_finish. Files so far: {listing}. "
+                f"Continue it now by tool calls only (never paste code into the reply): project_write the files that are still missing "
+                f"(use project=`{d.name}`), project_append to extend a file that is cut short, do not rewrite complete files, and "
+                "call project_finish when every file is written.")
+    except Exception:
+        return ""

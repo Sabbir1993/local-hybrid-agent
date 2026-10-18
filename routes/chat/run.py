@@ -83,7 +83,7 @@ from .file_intent import (
     CHAT_CUT_CALL_ERROR,
     KB_TOOL_NAMES,
 )
-from core.agent_tools.project_files import (PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, project_wanted,
+from core.agent_tools.project_files import (open_project_note, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, project_wanted,
                                             tool_project_append, tool_project_finish, tool_project_write)
 from .models import ChatRunRequest
 
@@ -225,7 +225,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # Tools for Chat Mode: write_file always (core), the rest on intent.
     chat_tools = [CHAT_WRITE_FILE_SCHEMA]
     # a website / multi-file front-end project: built file by file (project_write / project_append), delivered as one ZIP
-    project_build = (bool((APP_CONFIG.get("chat") or {}).get("project_builder", True)) and project_wanted(own_q)
+    project_resume = open_project_note() if (builds.is_continue(own_q) and not resume_note) else ""      # "continue" after a stop mid-site
+    project_build = (bool((APP_CONFIG.get("chat") or {}).get("project_builder", True)) and (project_wanted(own_q) or bool(project_resume))
                      and explicit_ext not in (".pptx", ".pdf", ".docx", ".xlsx")      # a deck / PDF / Word / sheet about websites is still that document
                      and not (pdf_build or sheet_build or brief_phase)
                      and not prompt_scope.deck_brief_wanted(last_query, msgs[:-1]))
@@ -580,6 +581,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         sys_labels.append("brief-" + brief_phase)
     if project_build:
         sys_parts.append(PROJECT_MANUAL)
+        if project_resume:
+            sys_parts.append(project_resume)
         sys_labels.append("project-build")
     if explicit_ext and has_file and not project_build:
         sys_parts.append(prompt_scope.format_note(explicit_ext))
