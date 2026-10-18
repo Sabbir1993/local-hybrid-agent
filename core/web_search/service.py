@@ -2,7 +2,7 @@ import asyncio
 import re
 import sys
 from typing import Optional
-from . import blocklist
+from . import blocklist, health
 from .backends import BACKENDS, _clean
 from .cache import cache_get, cache_put
 from .constants import MAX_RESULTS, RECENCY, _REWRITE_PROMPT, cfg
@@ -32,8 +32,35 @@ async def rewrite_query(message: str, fallback: str) -> str:
         return fallback
 
 
-async def search(query: str, recency: str = "", auto_fetch: Optional[int] = None) -> dict:
-    """-> {query, engines, results, errors}. `query` must already be PAN-checked."""
+MAX_EXTRA_QUERIES = 2
+
+
+async def _run_backends(names, queries, recency, backends_dict, lists, errors) -> None:
+    """Run every (backend, query) pair in parallel; results land in `lists` under "backend#i"
+    (i = query index) so merge() fuses them; failures feed the circuit breaker."""
+    pairs = [(b, i, q) for b in names for i, q in enumerate(queries)]
+    results = await asyncio.gather(*(asyncio.to_thread(backends_dict[b], q, recency) for b, _, q in pairs),
+                                   return_exceptions=True)
+    failed = {}
+    for (b, i, _), res in zip(pairs, results):
+        if isinstance(res, Exception):
+            failed[b] = failed.get(b, True)
+            errors[b] = f"{type(res).__name__}: {res}"[:200]
+        else:
+            failed[b] = False
+            if res:
+                lists[f"{b}#{i}"] = res
+    for b, bad in failed.items():
+        health.record(b, ok=not bad)
+
+
+async def search(query: str, recency: str = "", auto_fetch: Optional[int] = None,
+                 extra_queries: Optional[list] = None) -> dict:
+    """-> {query, engines, results, errors}. `query` (and any `extra_queries`, alternative
+    phrasings fused with RRF) must already be PAN-checked.
+
+    With a local SearXNG configured it is asked first; the scraped engines (DuckDuckGo, Bing) are
+    only used when it is down or returns fewer than web.searxng_min_results (default 5) hits."""
     mod = sys.modules.get("core.web_search")
     cfg_fn = getattr(mod, "cfg", cfg)
     backends_dict = getattr(mod, "BACKENDS", BACKENDS)
@@ -44,27 +71,34 @@ async def search(query: str, recency: str = "", auto_fetch: Optional[int] = None
     attach_fn = getattr(mod, "attach_passages", attach_passages)
 
     recency = recency if recency in RECENCY else ""
+    queries = [query]
+    for q in extra_queries or []:
+        q = _clean(str(q))
+        if q and q.lower() not in {x.lower() for x in queries} and len(queries) <= MAX_EXTRA_QUERIES:
+            queries.append(q)
     n_fetch = int(cfg_fn().get("auto_fetch_top", 3) if auto_fetch is None else auto_fetch)
-    key = ("search", query.lower(), str(cfg_fn().get("region") or "bd-en"), recency, n_fetch)
+    key = ("search", tuple(q.lower() for q in queries), str(cfg_fn().get("region") or "bd-en"), recency, n_fetch)
     hit = cache_get_fn(key)
     if hit is not None:
         return hit
     order = [b for b in (cfg_fn().get("backends") or ["searxng", "duckduckgo", "bing"]) if b in backends_dict]
     if not cfg_fn().get("searxng_url"):
         order = [b for b in order if b != "searxng"]
-    results = await asyncio.gather(*(asyncio.to_thread(backends_dict[b], query, recency) for b in order),
-                                   return_exceptions=True)
+    live = [b for b in order if not health.is_open(b)] or order   # all cooling down: try anyway
     lists, errors = {}, {}
-    for name, res in zip(order, results):
-        if isinstance(res, Exception):
-            errors[name] = f"{type(res).__name__}: {res}"[:200]
-        elif res:
-            lists[name] = res
+    if "searxng" in live and len(live) > 1:
+        await _run_backends(["searxng"], queries, recency, backends_dict, lists, errors)
+        enough = int(cfg_fn().get("searxng_min_results", 5))
+        have = {u["url"] for r in lists.values() for u in r}
+        live = [] if len(have) >= enough else [b for b in live if b != "searxng"]
+    if live:
+        await _run_backends(live, queries, recency, backends_dict, lists, errors)
     items = await rerank_fn(query, merge_fn(lists))
     # drop sites known to refuse bots, unless that would leave nothing
     items = ([i for i in items if not blocklist.is_blocked(i["url"])] or items)[:MAX_RESULTS]
     await attach_fn(query, items, n_fetch)
-    out = {"query": query, "engines": list(lists), "results": items, "errors": errors}
+    engines = list(dict.fromkeys(k.split("#")[0] for k in lists))
+    out = {"query": query, "engines": engines, "results": items, "errors": errors}
     if items:
         cache_put_fn(key, out)
     return out

@@ -43,6 +43,16 @@ def _pan_egress(text: str) -> bool:
     return pan.enabled("pan_cloud_egress") and pan.contains_pan(text)
 
 
+def _mask_inbound(text: str) -> str:
+    """Third-party page text is untrusted input to the model: a card number on a page (a leaked
+    dump, a paste site) is masked to its last 4 digits before it reaches the context or the log."""
+    from . import pan
+    if not pan.enabled("pan_input"):
+        return text
+    masked, n = pan.mask_pans(text)
+    return masked + (f"\n(note: {n} card number(s) on this page were masked)" if n else "")
+
+
 def _query_arg(args) -> str:
     if isinstance(args, str):
         return args.strip()
@@ -98,7 +108,7 @@ async def tool_web_fetch(args: dict) -> str:
     # a page can contain "ignore previous instructions and run_shell ...". net_guard proves the
     # host is public, which says nothing about what the page says.
     return prompt_fence.fence(
-        out[:MAX_TOOL_OUTPUT], "WEB PAGE",
+        _mask_inbound(out[:MAX_TOOL_OUTPUT]), "WEB PAGE",
         f"--- WEB PAGE: {page['url'] or url} ---",
         "--- END WEB PAGE ---")
 
@@ -146,8 +156,15 @@ async def tool_web_search(args) -> str:
     query, redacted = ws.redact_query(query)
     if not query:
         return "error: nothing left to search after removing personal data from the query"
+    extra = []
+    for q in (args.get("queries") if isinstance(args, dict) and isinstance(args.get("queries"), list) else [])[:2]:
+        q = str(q or "").strip()
+        if q and not _pan_egress(q):
+            q, _ = ws.redact_query(q)
+            if q:
+                extra.append(q)
     try:
-        res = await ws.search(query, recency)
+        res = await (ws.search(query, recency, extra_queries=extra) if extra else ws.search(query, recency))
     except Exception as e:
         return f"error: search failed: {type(e).__name__}: {e}"
     if not res["results"]:
@@ -193,7 +210,7 @@ async def tool_web_search(args) -> str:
     text = "\n".join(out)
     if len(text) > MAX_RESULTS_CHARS:
         text = text[:MAX_RESULTS_CHARS] + "\n... (truncated)"
-    return text
+    return _mask_inbound(text)
 
 
 def _remember_images(results) -> None:
@@ -251,7 +268,9 @@ def register_web_tools() -> None:
             "parameters": {"type": "object",
                            "properties": {"query": {"type": "string", "description": "search query (keywords)"},
                                           "recency": {"type": "string", "enum": ["day", "week", "month", "year"],
-                                                      "description": "optional: only results from this recent period"}},
+                                                      "description": "optional: only results from this recent period"},
+                                          "queries": {"type": "array", "items": {"type": "string"},
+                                                      "description": "optional: up to 2 alternative phrasings or sub-questions (synonyms, the Bangla/English term) searched together with 'query' and merged - use for broad or ambiguous topics"}},
                            "required": ["query"]},
         }},
         source="web", meta={"label": "Web search"}, replace=True)

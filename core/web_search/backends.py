@@ -105,7 +105,7 @@ def bing_search(query: str, recency: str = "") -> list:
 
 def searxng_search(query: str, recency: str = "") -> list:
     """Optional: an org-run SearXNG instance (web.searxng_url, JSON format enabled).
-    It's a fixed admin-configured endpoint (often on the LAN), so it isn'tカードSSRF-checked."""
+    It's a fixed admin-configured endpoint (often on the LAN), so it isn't SSRF-checked."""
     mod = sys.modules.get("core.web_search")
     cfg_fn = getattr(mod, "cfg", cfg)
     region_fn = getattr(mod, "region", region)
