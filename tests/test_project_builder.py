@@ -108,3 +108,10 @@ class PrefixedPaths(ProjectBuilder):
         self.assertIn("Created css/styles.css", r)
         self.assertTrue((self.root / "projects/dhaka-site/css/styles.css").is_file())
         self.assertFalse((self.root / "projects/dhaka-site/dhaka-site").exists())
+
+
+class UnfinishedBuildNudge(unittest.TestCase):
+    def test_text_only_reply_before_project_finish_is_nudged(self):
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("if (project_build and not tool_calls and not project_done and project_nudges < 3", src)
+        self.assertIn("project_done = True", src)
