@@ -28,7 +28,8 @@ PROJECT_WRITE_SCHEMA = {"type": "function", "function": {
     "parameters": {"type": "object", "properties": {
         "project": {"type": "string", "description": "short project name, the same in every call, e.g. dhaka-documentary"},
         "path": {"type": "string", "description": "relative file path inside the project, e.g. css/styles.css"},
-        "content": {"type": "string", "description": "the complete text of this file (or of its skeleton)"}},
+        "content": {"type": "string", "description": "the complete text of this file (or of its skeleton)"},
+        "replace": {"type": "boolean", "description": "true only to overwrite a file that is already complete, when the user asked to redo it"}},
         "required": ["project", "path", "content"]}}}
 
 PROJECT_APPEND_SCHEMA = {"type": "function", "function": {
@@ -235,6 +236,12 @@ def _store(args: dict, append: bool) -> str:
         return ("error: plan the site first: call project_plan with the complete list of files (at most 14, each with a one-line "
                 "purpose), then write them one at a time.")
     existed = target.is_file()
+    if existed and not append and not a.get("replace"):
+        done = {f["path"] for f in plan_status(a.get("project"))["done"]}
+        if rel in done:
+            nxt = _progress(a.get("project")).strip() or "Call project_finish if every file is written."
+            return (f"error: {rel} is already written ({_lines(target)} lines) and complete: do not write it again. "
+                    f"Use project_append to extend it, or pass replace=true only if the user asked to redo it. {nxt}")
     if append and not existed:
         return f"error: {rel} does not exist yet. Create it with project_write first (a short skeleton), then project_append."
     count, total = _size(root)

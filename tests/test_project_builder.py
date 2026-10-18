@@ -194,3 +194,15 @@ class Planning(ProjectBuilder):
         note = pf.open_project_note()
         self.assertIn("1 of 2 files done", note)
         self.assertIn("js/map.js (leaflet map)", note)
+
+
+class NoRewriteOfDoneFiles(Planning):
+    def test_a_complete_planned_file_is_not_written_again_unless_replace(self):
+        self.plan([{"path": "index.html", "purpose": "page", "min_lines": 1}, {"path": "js/a.js", "purpose": "a", "min_lines": 1}])
+        pf.tool_project_write({"project": self.P, "path": "index.html", "content": "<p>one</p>"})
+        r = pf.tool_project_write({"project": self.P, "path": "index.html", "content": "<p>two</p>"})
+        self.assertTrue(r.startswith("error: index.html is already written"), r)
+        self.assertIn("js/a.js", r)                                          # points at what is next
+        self.assertEqual((self.root / "projects/plan-site/index.html").read_text(), "<p>one</p>")
+        r = pf.tool_project_write({"project": self.P, "path": "index.html", "content": "<p>two</p>", "replace": True})
+        self.assertTrue(r.startswith("Replaced index.html"), r)

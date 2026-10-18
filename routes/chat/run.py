@@ -379,7 +379,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # one policy for "should the company KB be searched for this turn" (core/knowledge_router.should_consult_kb): the
     # user's own words decide, attached data comes first, small talk never retrieves; /kb on|off overrides it.
     consult_kb, kb_reason = should_consult_kb(kb_query, has_attachments, voice_policy.kb_company_only(req), req.kb)
-    skip_kb = not consult_kb
+    skip_kb = not consult_kb or bool(project_resume)      # "continue" must not search the KB for the old request
     if req.kb == "off" and wants_file_output(own_q):    # a pure file request with the KB switched off: do not tempt the model into the KB tools
         chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") not in KB_TOOL_NAMES]
     if kb_ids and kb_query.strip() and not file_followup and not skip_kb:
@@ -707,6 +707,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
         try:
             turn = -1
+            if project_resume:
+                # last in the conversation, where the model reads it: after a stop the whole original request is still above, and
+                # without this the model starts the site again from index.html
+                msgs.append({"role": "user", "content": project_resume + " Do NOT start over: index.html and the other files marked done already exist."})
             while True:
                 turn += 1
                 if turn >= turn_limit:
