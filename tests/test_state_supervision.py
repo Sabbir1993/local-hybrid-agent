@@ -342,5 +342,90 @@ class StatusEndpointReportsSupervision(unittest.TestCase):
         self.assertGreater(MAX_RESTART_COUNT, 0)
 
 
+class WatchdogDoesNotKillAFreshLoad(unittest.TestCase):
+    """A hot-swap that finished while the watchdog slept through its backoff used to be
+    killed by the stale restart: _load_locked stopped the fresh healthy server and
+    relaunched the dead profile. A live process that is not the dead one cancels the restart."""
+
+    def test_a_live_process_that_appeared_during_backoff_is_left_alone(self):
+        async def go():
+            st = _bare_state()
+            st._log_tasks = set()
+            st.process = FakePopen(alive=False)   # the death that started this restart
+            st.started_at = time.time() - RESTART_RESET_AFTER_S * 2   # up long: no breaker noise
+            st.profile = {"model_path": "old.gguf"}
+            st.profile_path = None
+            st.restart_count = 0
+            st.degraded = False
+            st.last_load_error = None
+            st.lock = asyncio.Lock()
+
+            fresh = FakePopen(alive=True)
+            loaded = mock.Mock(name="_load_locked")
+
+            async def spy(target):
+                loaded(target)
+                return None
+
+            st._load_locked = spy
+
+            task = asyncio.create_task(st.watchdog())
+            try:
+                # wait past the first tick (interval patched small) into the backoff sleep
+                await asyncio.sleep(0.05)
+                st.process = fresh   # a switch finished here mid-backoff
+                await asyncio.sleep(0.5)
+            finally:
+                task.cancel()
+                await asyncio.wait([task], timeout=1.0)
+            return fresh, loaded
+
+        with mock.patch.object(state_mod, "watchdog_interval_s", return_value=0.01), \
+             mock.patch.object(state_mod, "max_restart_backoff_s", return_value=0.03):
+            fresh, loaded = run(go())
+        self.assertFalse(fresh.killed, "the restart must not touch a server that loaded during the backoff")
+        self.assertFalse(loaded.called, "stale restart must not relaunch the dead profile")
+
+    def test_the_watchdog_still_restarts_a_plain_death(self):
+        """Same watchdog, no hot-swap interference: the dead process still gets relaunched."""
+        loaded = mock.Mock(name="_load_locked")
+        _load_done = asyncio.Event()
+
+        async def spy(target):
+            loaded(target)
+            _load_done.set()
+            return None
+
+        async def go():
+            st = _bare_state()
+            st._log_tasks = set()
+            st.process = FakePopen(alive=False, returncode=1)
+            st.started_at = time.time() - RESTART_RESET_AFTER_S * 2
+            st.profile = {"model_path": "old.gguf"}
+            st.profile_path = None
+            st.restart_count = 0
+            st.degraded = False
+            st.last_load_error = None
+            st.lock = asyncio.Lock()
+            st._load_locked = spy
+            task = asyncio.create_task(st.watchdog())
+            try:
+                await asyncio.wait_for(_load_done.wait(), timeout=3.0)
+            finally:
+                task.cancel()
+                await asyncio.wait([task], timeout=1.0)
+
+        with mock.patch.object(state_mod, "watchdog_interval_s", return_value=0.01), \
+             mock.patch.object(state_mod, "max_restart_backoff_s", return_value=0.03):
+            run(go())
+        self.assertTrue(loaded.called)
+
+    def test_restart_log_line_balances_its_parentheses(self):
+        # the operator-facing supervision banner; the unbalanced print consumed by
+        # scripts that parse the log no longer confuses them
+        src = (Path(__file__).resolve().parent.parent / "core" / "state.py").read_text(encoding="utf-8")
+        self.assertIn('"/{max_restart_count()})")', src)
+
+
 if __name__ == "__main__":
     unittest.main()

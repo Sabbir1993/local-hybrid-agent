@@ -412,7 +412,7 @@ class ProxyState:
             reason = self._exit_reason()
             print(f"[server_manager] llama-server died (code {code}), "
                   f"restarting in {backoff}s (restart #{self.restart_count}"
-                  f"/{max_restart_count()}")
+                  f"/{max_restart_count()})")
             if reason:
                 # what the server said, not merely that it died. This is the
                 # difference between "it crashed" and a diagnosis, and before B4 it
@@ -420,8 +420,19 @@ class ProxyState:
                 self.last_load_error = f"llama-server exited (code {code}): {reason}"
                 print(f"[server_manager] last error from the server: {reason}",
                       file=sys.stderr)
+            dead = self.process
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, max_restart_backoff_s())
+            # A switch/load that finished while we slept put ITS server up on this
+            # slot: the stale restart's _load_locked would stop that healthy
+            # process and relaunch the dead profile instead of the one the user
+            # asked for. A live process that is not the one whose death began
+            # this restart cancels the restart. The lock below is still acquired
+            # under the (unchanged) contract that ensure_running holds the lock.
+            if self.process and self.process is not dead and self.process.poll() is None:
+                print("[server_manager] restart dropped: a new server finished "
+                      "loading during the backoff", file=sys.stderr)
+                continue
             try:
                 target = self.profile_path or self.profile
                 if target:
