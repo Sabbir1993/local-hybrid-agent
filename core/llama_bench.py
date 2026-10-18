@@ -190,8 +190,14 @@ def run_bench(bench_path: Path, model_path: str, *, ngl: int, split_mode: str,
 
     bench_output = (proc.stdout or "") + (proc.stderr or "")
     lowered = bench_output.lower()
-    if proc.returncode != 0 or any(marker in lowered for marker in OOM_MARKERS):
-        return {"ok": False, "reason": "oom_or_error", "raw": bench_output[-2000:]}
+    # Marker first, exit code second: a crash whose stderr mentions an
+    # allocation is still an OOM, but plain nonzero exit (port clash, DLL
+    # load failure, segfault) is NOT "doesn't fit" - conflating the two made
+    # the MoE sweep back off its offload permanently on any transient error.
+    if any(marker in lowered for marker in OOM_MARKERS):
+        return {"ok": False, "reason": "oom", "raw": bench_output[-2000:]}
+    if proc.returncode != 0:
+        return {"ok": False, "reason": "crash", "raw": bench_output[-2000:]}
 
     parsed = parse_bench_json(proc.stdout)
     if parsed["ok"]:
