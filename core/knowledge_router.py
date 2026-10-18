@@ -12,7 +12,7 @@ import sys
 from typing import Optional, Set, List, Dict, Tuple
 from .auth_db import list_knowledge_sources
 from .memory import search_knowledge_hybrid, _db, _embed_texts, _store_vecs
-from . import prompt_fence
+from . import prompt_fence, kb_guard
 
 # Default trigger vocabulary for the internal/organizational knowledge base:
 # generic organization + HR terms, machine-independent. A deployment's own
@@ -195,7 +195,8 @@ async def ensure_knowledge_vectors():
     """Ensure any newly uploaded or unvectorized knowledge chunks are embedded."""
     try:
         rows = _db().execute(
-            "SELECT source, path, chunk_idx, text, version FROM chunks WHERE source='knowledge' AND vec IS NULL"
+            "SELECT source, path, chunk_idx, text, version FROM chunks WHERE source='knowledge' AND vec IS NULL "
+            "LIMIT 512"          # a chat request must not embed thousands of chunks after an embedder outage
         ).fetchall()
         if rows:
             vecs = await _embed_texts([r[3] for r in rows])
@@ -227,8 +228,8 @@ async def fetch_company_knowledge(query: str, allowed_source_ids: Set[int], k: i
     # Group chunks by source title
     by_source: Dict[str, List[str]] = {}
     for h in hits:
-        title = h.get("title") or f"Knowledge Source #{h.get('source_id')}"
-        by_source.setdefault(title, []).append(h["text"])
+        title = kb_guard.guard_text(h.get("title") or f"Knowledge Source #{h.get('source_id')}")
+        by_source.setdefault(title, []).append(kb_guard.guard_text(h["text"]))   # guard on read: upload stores verbatim
 
     sections = []
     for title, texts in by_source.items():

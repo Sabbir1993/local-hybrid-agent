@@ -22,7 +22,6 @@ from . import input_guard
 DEFAULT_REPLACEMENT = "█████"
 _MAX_HOLD = 400          # never hold back more than this many chars
 _MAX_PENDING = 50_000    # safety valve for pathologically long pending matches
-_TRAILING_NUM_RX = re.compile(r"[\d -]{1,40}$")
 _SENTENCE_END_RX = re.compile(r"[.!?।॥][\"')\]]*\s|\n")      # . ! ? or the Bengali danda, then a space; or a line end
 
 
@@ -72,7 +71,7 @@ def _active_rules(user, any_cloud_lane: bool) -> list:
         # with its own replacement wins. "builtin" marks it for the streaming
         # holdback (only a trailing run of digits needs holding).
         out.append({"name": pan.RULE_NAME, "scope": "block_all", "message": "",
-                    "builtin": "pan", "patterns": [(pan.PAN_RX, pan.mask_match)]})
+                    "builtin": "pan", "patterns": [(pan.PAN_RX, pan.mask_match), (pan.CVV_RX, pan.mask_cvv)]})
     return out
 
 
@@ -166,7 +165,8 @@ class OutputRedactor:
         hold = self.hold
         if self.pan:
             # a PAN can only still be growing inside the trailing digit run
-            m = _TRAILING_NUM_RX.search(self.buf)
+            from . import pan as _pan
+            m = _pan.TRAILING_RX.search(self.buf)
             hold = max(hold, len(m.group(0)) if m else 0)
         limit = len(self.buf) - hold
         if limit > _MAX_PENDING:      # safety valve: never buffer unbounded

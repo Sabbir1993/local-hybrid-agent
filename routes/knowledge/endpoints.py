@@ -301,6 +301,9 @@ async def get_source_file(source_id: int, user: Principal = Depends(require_perm
     if not p.exists():
         return JSONResponse({"error": "file missing on disk"}, status_code=404)
     media_type = mimetypes.guess_type(row["origin"] or p.name)[0] or "application/octet-stream"
+    # the original is served exactly as uploaded (a binary file cannot be masked), so who opened which
+    # document is recorded at access time
+    audit_log(user, action="knowledge.file_view", resource=str(source_id), result="allow", detail={})
     return FileResponse(str(p), media_type=media_type, filename=row["origin"] or p.name,
                         content_disposition_type="inline")
 

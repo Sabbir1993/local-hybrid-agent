@@ -170,9 +170,11 @@ async def index_knowledge_source(source_id: int, text: str, version: Optional[fl
     """Chunk, embed and store one source. `progress(done, total)` is called after each group of chunks is embedded."""
     path = f"kb:{source_id}"
     version = version if version is not None else time.time()
-    _db().execute("DELETE FROM chunks WHERE source='knowledge' AND path=?", (path,))
-    _db().commit()
+    # The old chunks stay searchable (and survive a crash) until the new ones are fully built; the swap
+    # (delete old + insert new) is one transaction, in _swap_in below.
     rows = await asyncio.to_thread(_kb_rows, path, text, version) if progress else _kb_rows(path, text, version)
+    store_fn = getattr(sys.modules.get("core.memory"), "_store_vecs", _store_vecs)
+    vecs = None
     if rows:
         embed_fn = getattr(sys.modules.get("core.memory"), "_embed_texts", _embed_texts)
         if progress:
@@ -187,12 +189,24 @@ async def index_knowledge_source(source_id: int, text: str, version: Optional[fl
             vecs = None if down else vecs
         else:
             vecs = await embed_fn([r[3] for r in rows])
-        store_fn = getattr(sys.modules.get("core.memory"), "_store_vecs", _store_vecs)
-        if progress:
-            await asyncio.to_thread(store_fn, rows, vecs)       # thousands of inserts must not stall the event loop
-        else:
-            store_fn(rows, vecs)
+    if progress:
+        await asyncio.to_thread(_swap_in, path, store_fn, rows, vecs)   # thousands of inserts must not stall the event loop
+    else:
+        _swap_in(path, store_fn, rows, vecs)
     return len(rows)
+
+
+def _swap_in(path: str, store_fn, rows: list, vecs) -> None:
+    """Replace a source's chunks atomically: readers see the old set until the commit, then the new one."""
+    db = _db()
+    try:
+        db.execute("DELETE FROM chunks WHERE source='knowledge' AND path=?", (path,))
+        if rows:
+            store_fn(rows, vecs)                 # _store_vecs commits, which also commits the delete above
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 async def ensure_indexed(max_age_s: float = 900) -> None:
