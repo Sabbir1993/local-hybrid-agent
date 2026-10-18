@@ -603,6 +603,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             max_turns = kb_coverage.rounds_for(max_web_calls, max_turns)
             if brief_phase == "build":
                 max_turns = deck_research.turns_for(max_web_calls, max_turns)      # research rounds + the build rounds
+    if project_build and chat_tools:
+        # a site is built a section per call (skeleton, css, js, a dozen sections, finish): 12-15 rounds would stop it half done
+        max_turns = max(max_turns, int(chat_cfg.get("project_max_rounds", 40)))
     if deep:
         sys_parts.append(
             "DEEP RESEARCH MODE:\n"
