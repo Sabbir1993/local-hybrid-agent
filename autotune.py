@@ -57,6 +57,7 @@ def ensure_autotune_block(profile: dict) -> dict:
         "bench_prompt_tokens": 512,
         "bench_gen_tokens": 128,
         "repetitions": 2,
+        "bench_runs": 3,
         "bench_timeout_s": DEFAULT_BENCH_TIMEOUT_S,
     }
     missing = [k for k, v in defaults.items() if auto.get(k) is None]
@@ -83,12 +84,30 @@ def _fmt_rates(r: dict) -> str:
             f"tg={tg} t/s{f' ±{sd_tg:.2f}' if sd_tg else ''}{tag}")
 
 
+def pick_median_run(results: list) -> dict:
+    """The run whose tg_ts is the median of the successful runs, rather than
+    whichever single run happened to spike highest: a jittery run (thermals,
+    a busy companion request landing mid-bench) used to be able to flip the
+    winner of the sweep on one lucky number. Even count: the higher middle
+    pair value is NOT returned - the lower middle is, so a borderline step
+    has to prove itself twice to win (conservative against OOM on the edge)."""
+    ok = [r for r in results if r.get("ok") and r.get("tg_ts") is not None]
+    if not ok:
+        return results[-1]
+    s = sorted(ok, key=lambda r: r["tg_ts"])
+    return s[(len(s) - 1) // 2]
+
+
 def _bench_candidate(bench_path, profile: dict, auto: dict, tensor_split: str,
                      n_cpu_moe: int | None, env) -> dict:
-    """One candidate measured with a retry: a non-OOM failure gets one more
-    run before the sweep passes over it, because a single segfault or a
-    slow-cold-load timeout says nothing about whether the config fits."""
+    """One candidate measured with the median of `bench_runs` runs: llama-bench's
+    internal -r repetitions average runs back-to-back inside one process spawn
+    and still share warmup/clock state, so an external median is spread across
+    fresh spawns. An OOM returns immediately - repeating an allocation failure
+    says nothing new - and non-OOM failures retry within the same run budget,
+    never counted as evidence a config doesn't fit."""
     timeout_s = auto["bench_timeout_s"]
+    runs = max(1, int(auto.get("bench_runs") or 1))
     kwargs = dict(
         ngl=auto["n_gpu_layers"], split_mode=auto["split_mode"],
         tensor_split=tensor_split, n_cpu_moe=n_cpu_moe,
@@ -96,12 +115,30 @@ def _bench_candidate(bench_path, profile: dict, auto: dict, tensor_split: str,
         n_prompt=auto["bench_prompt_tokens"], n_gen=auto["bench_gen_tokens"],
         repetitions=auto["repetitions"], env=env, timeout=timeout_s,
     )
-    r = run_bench(bench_path, profile["model_path"], **kwargs)
-    if r["ok"] or r["reason"] == "oom":
-        return r
-    print(f"   {r['reason']} - retrying once (a non-OOM failure does NOT "
-          "mean this config doesn't fit)")
-    return run_bench(bench_path, profile["model_path"], **kwargs)
+    results = []
+    last_failure = None
+    for attempt in range(runs):
+        r = run_bench(bench_path, profile["model_path"], **kwargs)
+        if r["ok"]:
+            results.append(r)
+        elif r["reason"] == "oom":
+            if results:
+                # at least one clean spawn measured this config: it fits. The
+                # OOM arrived on a later attempt (variance, memory pressure
+                # from a previous candidate not fully released) - the median
+                # of the real measurements is the honest number. A OOM with
+                # zero successes is the only run-level break signal.
+                print("   OOM on a later run, but earlier runs measured this "
+                      "config intact - keeping its measurements")
+                break
+            return r
+        else:
+            last_failure = r
+            print(f"   {r['reason']} - retrying (a non-OOM failure does NOT "
+                  "mean this config doesn't fit)")
+    if not results:
+        return last_failure
+    return pick_median_run(results)
 
 
 
