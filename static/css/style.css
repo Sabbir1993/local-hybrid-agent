@@ -5781,3 +5781,7 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 .comp-kb-btn:not(.active):hover { opacity: 1; border-color: var(--border); background: var(--panel2); }
 .comp-kb-btn[data-mode="off"] { opacity: .5; }
 .comp-kb-btn[data-mode="off"] svg { text-decoration: line-through; }
+
+/* tool-call rows are overflow:hidden flex items: inside a height-clamped message they shrank to bare lines. Pin their size. */
+.agy-stream-timeline > * { flex-shrink: 0; }
+.agy-stream-timeline, .agy-agent-container { scrollbar-width: thin; scrollbar-color: var(--scrollbar-hover) transparent; }
