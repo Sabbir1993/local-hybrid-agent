@@ -123,6 +123,8 @@ async def status(user: Principal = Depends(get_current_user)):
         # set when the crash-loop breaker trips, so the UI can say why nothing is running
         # instead of just showing no pid
         "degraded": state.degraded,
+        "loading": getattr(state, "loading", False),
+        "healthy": getattr(state, "healthy", False),
         "last_load_error": state.last_load_error,
         "log_tail": state.log_tail(20),
         "log_tail_lines": len(state._log_tail),

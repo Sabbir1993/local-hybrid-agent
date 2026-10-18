@@ -848,54 +848,58 @@
             <label for="cfg-fa">Flash attention <span class="info" title="Accelerates Vulkan context evaluation &amp; saves VRAM">ⓘ</span></label>
             <select id="cfg-fa" title="Flash attention setting"><option value="on">on</option><option value="off">off</option><option value="auto">auto</option></select>
           </div>
-          <div class="cfg-item cfg-full" title="Data type for KV cache. 'f16' is default; 'q8_0' cuts KV memory footprint in half">
+          <div class="cfg-item cfg-span-2" title="Data type for KV cache. 'f16' is default; 'q8_0' cuts KV memory footprint in half">
             <label for="cfg-ct">KV cache type <span class="info" title="q8_0 cuts KV memory usage by 50% with negligible loss">ⓘ</span></label>
             <select id="cfg-ct" title="KV cache quantization type"><option value="f16">f16</option><option value="q8_0">q8_0 (½ KV RAM)</option><option value="q5_0">q5_0</option><option value="q4_0">q4_0</option><option value="bf16">bf16</option><option value="f32">f32</option></select>
           </div>
-          <div class="cfg-item cfg-full" title="Unified KV pool (-kvu): all parallel slots share one context-sized KV pool instead of each getting context ÷ slots">
+        <div class="cfg-full cfg-switches-row">
+          <div class="cfg-item" title="Unified KV pool (-kvu): all parallel slots share one context-sized KV pool instead of each getting context ÷ slots">
             <label for="cfg-kvu">Unified KV pool <span class="info" title="With 2+ slots, each conversation can use up to the full context while idle slots reserve nothing">ⓘ</span></label>
             <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
               <label class="switch"><input type="checkbox" id="cfg-kvu"><span class="slider"></span></label>
-              <div style="flex:1"><small style="color:var(--dim); font-size:9px; display:block;">shared KV pool across parallel slots (-kvu)</small></div>
+              <div style="flex:1; min-width:0;"><small style="color:var(--dim); font-size:9px; display:block;">shared KV pool across parallel slots (-kvu)</small></div>
             </div>
           </div>
-          <div class="cfg-item cfg-full" title="Memory map (mmap): maps GGUF into virtual memory for faster launch. Disable (--load-mode none) to release ~20GB+ system RAM file cache after GPU load">
+          <div class="cfg-item" title="Memory map (mmap): maps GGUF into virtual memory for faster launch. Disable (--load-mode none) to release ~20GB+ system RAM file cache after GPU load">
             <label for="cfg-mmap">Memory map (mmap) <span class="info" title="Enabled (default): faster model startup, but keeps model file pages cached in system RAM. Disabled (--load-mode none): slower startup, but frees ~20GB+ host RAM after GPU load">ⓘ</span></label>
             <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
               <label class="switch"><input type="checkbox" id="cfg-mmap" checked><span class="slider"></span></label>
-              <div style="flex:1"><small style="color:var(--dim); font-size:9px; display:block;">memory-map model weights (disable to free host RAM file cache)</small></div>
+              <div style="flex:1; min-width:0;"><small style="color:var(--dim); font-size:9px; display:block;">memory-map model weights (disable to free host RAM file cache)</small></div>
             </div>
           </div>
-          <div class="cfg-full cfg-row3">
-            <div class="cfg-item" title="Max tokens one conversation may take from the unified pool (--kv-unified-per-slot). Only applied with 2+ slots and a value below the context size">
-              <label for="cfg-kvps">Per-slot cap <span class="info" title="0 = no cap. Ignored with 1 slot or when ≥ context size">ⓘ</span></label>
-              <input type="number" id="cfg-kvps" min="0" max="1048576" step="1024" value="0" title="Per-slot context cap in tokens (0 = no cap)">
-            </div>
-            <div class="cfg-item" title="Minimum chunk size reused from the KV cache via shifting (--cache-reuse). 0 = off">
-              <label for="cfg-cru">Cache reuse <span class="info" title="Min tokens per reused chunk (0 = off, default 256)">ⓘ</span></label>
-              <input type="number" id="cfg-cru" min="0" max="4096" value="256" title="Cache reuse chunk size (0 = off)">
-            </div>
-            <div class="cfg-item" title="Host-RAM prompt cache in MiB (-cram). 0 = llama default (8192)">
-              <label for="cfg-cram">Prompt RAM (MiB) <span class="info" title="Host-RAM prompt cache. 0 = llama default 8192 MiB">ⓘ</span></label>
-              <input type="number" id="cfg-cram" min="0" max="49152" step="1024" value="0" title="Host-RAM prompt cache in MiB (0 = default)">
-            </div>
-          </div>
-          <div class="cfg-item cfg-full" id="mtp-row" style="display:none" title="MTP speculative decoding: a small draft model proposes token chains the target model verifies in one pass — typically 1.5-2x tokens/sec on Vulkan">
-            <label for="cfg-mtp"><span class="cfg-cap-icon mtp"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5h6L9.5 22l9-12h-6.5L13 2z"/></svg></span> MTP draft <span class="info" title="Enables speculative decoding with the auto-detected MTP draft file">ⓘ</span></label>
-            <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
-              <label class="switch"><input type="checkbox" id="cfg-mtp"><span class="slider"></span></label>
-              <div style="flex:1"><b id="mtp-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">speculative decoding available</small><small id="mtp-note" style="color:var(--amber, #d29922); font-size:9px; display:none;"></small></div>
-            </div>
-            <label for="mtp-nmax" style="margin-top:6px">Draft tokens (n-max) <span class="info" title="Tokens drafted per step (default 3)">ⓘ</span></label>
-            <input type="number" id="mtp-nmax" min="1" max="16" value="3" title="Max draft tokens per speculative step">
-          </div>
-          <div class="cfg-item cfg-full" id="vision-row" style="display:none" title="Multimodal vision projector: enables the main model to understand images directly without needing a separate vision model">
+          <div class="cfg-item" id="vision-row" style="display:none" title="Multimodal vision projector: enables the main model to understand images directly without needing a separate vision model">
             <label for="cfg-vision"><span class="cfg-cap-icon vision"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg></span> Multimodal vision <span class="info" title="Enables vision support with the auto-detected mmproj projector file">ⓘ</span></label>
             <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
               <label class="switch"><input type="checkbox" id="cfg-vision"><span class="slider"></span></label>
-              <div style="flex:1"><b id="vision-file" class="mono" style="font-size:9.5px; word-break:break-all;"></b><small style="color:var(--dim); font-size:9px; display:block;">multimodal projector detected</small><small id="vision-note" style="color:var(--amber, #d29922); font-size:9px; display:none;"></small></div>
+              <div style="flex:1; min-width:0;"><b id="vision-file" class="mono" style="font-size:9.5px; word-break:break-all; display:block;"></b><small style="color:var(--dim); font-size:9px; display:block;">multimodal projector detected</small><small id="vision-note" style="color:var(--amber, #d29922); font-size:9px; display:none;"></small></div>
             </div>
           </div>
+          <div class="cfg-item" id="mtp-row" style="display:none" title="MTP speculative decoding: a small draft model proposes token chains the target model verifies in one pass — typically 1.5-2x tokens/sec on Vulkan">
+            <label for="cfg-mtp"><span class="cfg-cap-icon mtp"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5h6L9.5 22l9-12h-6.5L13 2z"/></svg></span> MTP draft <span class="info" title="Enables speculative decoding with the auto-detected MTP draft file">ⓘ</span></label>
+            <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
+              <label class="switch"><input type="checkbox" id="cfg-mtp"><span class="slider"></span></label>
+              <div style="flex:1; min-width:0;"><b id="mtp-file" class="mono" style="font-size:9.5px; word-break:break-all; display:block;"></b><small style="color:var(--dim); font-size:9px; display:block;">speculative decoding available</small><small id="mtp-note" style="color:var(--amber, #d29922); font-size:9px; display:none;"></small></div>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px; margin-top:4px;">
+              <label for="mtp-nmax" style="font-size:9.5px; margin:0; white-space:nowrap;">Draft tokens (n-max):</label>
+              <input type="number" id="mtp-nmax" min="1" max="16" value="3" style="width:50px; padding:2px 4px; font-size:11px;" title="Max draft tokens per speculative step">
+            </div>
+          </div>
+        </div>
+        <div class="cfg-full cfg-row3">
+          <div class="cfg-item" title="Max tokens one conversation may take from the unified pool (--kv-unified-per-slot). Only applied with 2+ slots and a value below the context size">
+            <label for="cfg-kvps">Per-slot cap <span class="info" title="0 = no cap. Ignored with 1 slot or when ≥ context size">ⓘ</span></label>
+            <input type="number" id="cfg-kvps" min="0" max="1048576" step="1024" value="0" title="Per-slot context cap in tokens (0 = no cap)">
+          </div>
+          <div class="cfg-item" title="Minimum chunk size reused from the KV cache via shifting (--cache-reuse). 0 = off">
+            <label for="cfg-cru">Cache reuse <span class="info" title="Min tokens per reused chunk (0 = off, default 256)">ⓘ</span></label>
+            <input type="number" id="cfg-cru" min="0" max="4096" value="256" title="Cache reuse chunk size (0 = off)">
+          </div>
+          <div class="cfg-item" title="Host-RAM prompt cache in MiB (-cram). 0 = llama default (8192)">
+            <label for="cfg-cram">Prompt RAM (MiB) <span class="info" title="Host-RAM prompt cache. 0 = llama default 8192 MiB">ⓘ</span></label>
+            <input type="number" id="cfg-cram" min="0" max="49152" step="1024" value="0" title="Host-RAM prompt cache in MiB (0 = default)">
+          </div>
+        </div>
         </div>
         <div class="cfg-note" title="Configuration note">Saved per-model into config/model_configs.json. Unload the model, then load it again to apply changes.</div>
         <button id="btn-apply" class="btn accent" style="margin-top:6px" title="Save configuration for this model. If the model is loaded, you will be asked to unload &amp; reload to apply.">💾 Save Config</button>

@@ -40,13 +40,68 @@
     "status": 403
   },
   "britannica.com": {
-    "fails": 1,
-    "until": 0,
+    "fails": 2,
+    "until": 1792402505.2727902,
     "status": 403
   },
   "wiktionary.org": {
     "fails": 2,
     "until": 1792401257.077696,
+    "status": 403
+  },
+  "zhihu.com": {
+    "fails": 2,
+    "until": 1792402466.451381,
+    "status": 403
+  },
+  "missav.live": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "rmgbd.net": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "baidu.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "tasteatlas.com": {
+    "fails": 2,
+    "until": 1792405486.2276764,
+    "status": 403
+  },
+  "csgoskins.gg": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "pixabay.com": {
+    "fails": 3,
+    "until": 1792426035.363166,
+    "status": 403
+  },
+  "shutterstock.com": {
+    "fails": 2,
+    "until": 1792426032.277152,
+    "status": 403
+  },
+  "pexels.com": {
+    "fails": 2,
+    "until": 1792426007.3554475,
+    "status": 403
+  },
+  "gettyimages.com": {
+    "fails": 2,
+    "until": 1792426032.1462505,
+    "status": 403
+  },
+  "dreamstime.com": {
+    "fails": 2,
+    "until": 1792426032.3711255,
     "status": 403
   }
 }

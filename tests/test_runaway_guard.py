@@ -66,6 +66,12 @@ class Detector(unittest.TestCase):
         self.assertEqual(find_runaway(table), -1)
         self.assertEqual(find_runaway("---\n" * 100 + "x" * 400), -1)
 
+    def test_cards_with_the_same_image_link_tail_are_markup_not_a_loop(self):
+        cards = "".join(f'<div class="card"><h3>Place {i} of the old city</h3><p>Fact number {i * 13} about it.</p>'
+                        f'<img src="https://images.unsplash.com/photo-{i}?auto=format&fit=crop&w=800&q=80" alt="photo" loading="lazy"></div>\n'
+                        for i in range(14))
+        self.assertEqual(find_runaway(cards), -1)
+
     def test_short_text_is_never_flagged(self):
         self.assertEqual(find_runaway(LOOP * 3), -1)
 

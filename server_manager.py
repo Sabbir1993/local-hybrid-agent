@@ -33,6 +33,7 @@ from core.deps import get_current_user, require_permission
 from core.limits import RequestLimitsMiddleware
 from core.agent_tools import WorkspaceAccessDenied
 from core.companion_bridge import router as companion_router
+from routes.telemetry_ws import router as telemetry_ws_router
 from routes.api_docs import router as api_docs_router
 from routes.api_tokens import router as api_tokens_router, self_router as my_tokens_router
 
@@ -120,6 +121,7 @@ app.include_router(sandbox_router, dependencies=_authed)
 # Depends() on a websocket route doesn't compose with the HTTP auth flow above.
 # Must sit before the proxy catch-all, or /companion/pair and /companion/devices 404.
 app.include_router(companion_router)
+app.include_router(telemetry_ws_router)
 # Reverse proxy catch-all must be mounted last
 app.include_router(proxy_router, dependencies=_authed)
 

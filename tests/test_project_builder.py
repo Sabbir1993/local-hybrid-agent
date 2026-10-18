@@ -324,6 +324,42 @@ class ProjectBuildHasNoWriteFile(unittest.TestCase):
         self.assertIn('elif project_build and t_name in ("write_file", "doc_create", "doc_append"):', src)
 
 
+class OneHtmlPageIsNotAProject(ProjectBuilder):
+    Q = "/frontend-design use this skill and Make a deep informative html of Dhaka with it's visual image and graph"
+
+    def test_slash_skill_name_is_not_a_website_request(self):
+        self.assertFalse(pf.project_wanted(self.Q))
+        self.assertTrue(pf.single_page_wanted(self.Q))
+        self.assertTrue(pf.project_wanted("/frontend-design build a multi-page website for Dhaka"))
+        self.assertFalse(pf.single_page_wanted("/frontend-design build a website with html, css and js"))
+        self.assertFalse(pf.single_page_wanted("what is an html tag"))
+        self.assertTrue(pf.project_wanted("build a frontend for my API"))
+
+    def test_one_file_project_returns_one_html_and_no_zip(self):
+        self.w("index.html", "<!doctype html><p>Dhaka</p>")
+        out = pf.tool_project_finish({"project": "Dhaka Site"})
+        names = re.findall(r"\[DOWNLOAD: ([^\]]+)\]", out)
+        self.assertEqual(len(names), 1, out)
+        self.assertTrue(names[0].endswith(".html"))
+        self.assertEqual(list(self.root.glob("*.zip")), [])
+
+    def test_oversize_write_says_too_big_not_empty(self):
+        from core.agent_tools.common_writer import tool_write_file_common
+        out = tool_write_file_common({"path": "a.html", "content": "", "_oversize_tokens": 6000})
+        self.assertIn("nothing was saved", out)
+        self.assertNotIn("empty", out)
+
+    def test_chat_fixup_and_images_follow_the_page_build(self):
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("single_page_wanted(str(m.get(\"content\")", src)
+        self.assertIn("project_wanted(own_q) or single_page_wanted(own_q) or single_page", src)
+
+    def test_chat_adds_the_one_page_manual(self):
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("single_page_wanted(own_q)", src)
+        self.assertIn("sys_parts.append(SINGLE_PAGE_MANUAL)", src)
+
+
 class InventedLinksAreDropped(unittest.TestCase):
     def test_example_com_address_after_a_download_chip_is_removed(self):
         from routes.chat.delivery import _finalize_download_tags

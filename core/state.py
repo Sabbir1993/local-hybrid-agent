@@ -96,6 +96,8 @@ class ProxyState:
         # set when the restart budget is exhausted: the watchdog stops trying, and the UI can
         # say why nothing is running
         self.degraded = False
+        self.loading = False
+        self.healthy = False
         # why the last load failed, for /control/status. Without it an operator sees only
         # "didn't become healthy" with nothing in the status endpoint to act on.
         self.last_load_error: Optional[str] = None
@@ -179,6 +181,8 @@ class ProxyState:
         await loop.run_in_executor(None, vram.check_or_raise, self.profile)
         cmd = build_launch_command(self.profile)
         print(f"[server_manager] launching: {' '.join(cmd)}")
+        self.loading = True
+        self.healthy = False
         self.process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -317,6 +321,8 @@ class ProxyState:
         that loop and the crash-loop breaker could never fire. The count is reset instead when
         a process has demonstrably stayed up - see the watchdog."""
         self.degraded = False
+        self.loading = False
+        self.healthy = True
         self.last_load_error = None
 
     def _load_failed(self, message: str) -> RuntimeError:
@@ -326,12 +332,16 @@ class ProxyState:
         llama-server's own last error line is appended when there is one: it names the real
         cause (bad model path, failed mmap, allocator failure) where our message can only say
         the load timed out. This is the text that makes the ring buffer worth keeping."""
+        self.loading = False
+        self.healthy = False
         reason = self._exit_reason()
         full = f"{message} | llama-server: {reason}" if reason else message
         self.last_load_error = full
         return RuntimeError(full)
 
     def _kill_loading_process(self, vram_idx=None) -> None:
+        self.loading = False
+        self.healthy = False
         if self.process and self.process.poll() is None:
             if vram_idx is not None:
                 print(f"[server_manager] VRAM wall hit on Vulkan{vram_idx} "
@@ -343,6 +353,8 @@ class ProxyState:
         self.process = None
 
     def _stop_process_locked(self):
+        self.loading = False
+        self.healthy = False
         self._cancel_log_pump()
         if self.process and self.process.poll() is None:
             print("[server_manager] stopping current llama-server...")

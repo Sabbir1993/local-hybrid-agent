@@ -84,7 +84,7 @@ from .file_intent import (
     CHAT_CUT_CALL_ERROR,
     KB_TOOL_NAMES,
 )
-from core.agent_tools.project_files import (open_project_note, plan_items, set_scope as set_project_scope, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, project_wanted,
+from core.agent_tools.project_files import (open_project_note, plan_items, set_scope as set_project_scope, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, SINGLE_PAGE_MANUAL, project_wanted, single_page_wanted,
                                             tool_project_append, tool_project_finish, tool_project_plan, tool_project_write)
 from .models import ChatRunRequest
 
@@ -228,7 +228,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     chat_tools = [CHAT_WRITE_FILE_SCHEMA]
     # a website / multi-file front-end project: built file by file (project_write / project_append), delivered as one ZIP
     project_resume = open_project_note() if (builds.is_continue(own_q) and not resume_note) else ""      # "continue" after a stop mid-site
-    project_build = (bool((APP_CONFIG.get("chat") or {}).get("project_builder", True)) and (project_wanted(own_q) or bool(project_resume))
+    single_page = single_page_wanted(own_q)      # one html page: written in pieces like a project, delivered as one .html
+    if not single_page and not project_wanted(own_q) and len(own_q.strip()) < 200 and re.search(
+            r"\b(blank|empty|nothing|broken|not working|fix|missing|add|change|update|improve|redo|again)\b", own_q, re.I):
+        # a short fix-up of the page just built ("nothing but a blank screen generated"): same piece-by-piece route, never one giant write_file
+        single_page = any(m.get("role") == "user" and single_page_wanted(str(m.get("content") or "")) for m in msgs[:-1][-6:])
+    project_build = (bool((APP_CONFIG.get("chat") or {}).get("project_builder", True)) and (project_wanted(own_q) or single_page or bool(project_resume))
                      and explicit_ext not in (".pptx", ".pdf", ".docx", ".xlsx")      # a deck / PDF / Word / sheet about websites is still that document
                      and not (pdf_build or sheet_build or brief_phase)
                      and not prompt_scope.deck_brief_wanted(last_query, msgs[:-1]))
@@ -272,7 +277,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     chat_media_tools = set()
     try:
         from core import media_tools
-        img_schema = media_tools.chat_image_tool_schema() if prompt_scope.image_intent(last_query, msgs[:-1]) else None
+        # a page build links its pictures by https address (PROJECT_MANUAL): "html with visual image" must not start the image generator
+        img_schema = (media_tools.chat_image_tool_schema()
+                      if prompt_scope.image_intent(last_query, msgs[:-1]) and not (project_wanted(own_q) or single_page_wanted(own_q) or single_page)
+                      else None)
         if img_schema:
             chat_tools.append(img_schema)
             chat_media_tools.add("generate_image")
@@ -587,6 +595,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         sys_labels.append("brief-" + brief_phase)
     if project_build:
         sys_parts.append(PROJECT_MANUAL)
+        if single_page and not project_resume:
+            sys_parts.append(SINGLE_PAGE_MANUAL)
         if project_resume:
             sys_parts.append(project_resume)
         sys_labels.append("project-build")

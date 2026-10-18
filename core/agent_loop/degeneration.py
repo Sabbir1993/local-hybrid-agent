@@ -59,7 +59,9 @@ def sanitize_user_facing_content(text: str) -> str:
 
 _SEP_LINE = re.compile(r"^[\s\-=_*#|:+.~`>]*$")
 RUNAWAY_MSG = ("error: your output started repeating itself and was cut off. Write it again shorter, "
-               "without repeating phrases, lines or URLs")
+               "without repeating phrases, lines or URLs. For a long file write only the first section now and add the rest "
+               "in later project_append calls")
+_MARKUP_TAIL = re.compile(r"https?://|<[a-zA-Z/!]|=\"[^\"]*\"|[{};]\s*$|\bclass=|\bsrc=|\bhref=")
 
 
 def _table_like(lines: list) -> bool:
@@ -104,6 +106,8 @@ def find_runaway(text: str, window: int = 6000) -> int:
         phrase = tail[-plen:]
         if len(re.findall(r"[A-Za-zঀ-৿0-9]{2,}", phrase)) < 5:
             continue
+        if _MARKUP_TAIL.search(phrase):
+            continue        # a shared tail of image links / tag attributes (cards, gallery) is markup, not a loop: identical lines still count above
         if tail.count(phrase) >= (8 if plen < 70 else 6):
             first = tail.find(phrase)
             return base + first + plen                   # keep the first copy

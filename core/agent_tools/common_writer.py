@@ -60,6 +60,14 @@ def tool_write_file_common(args: dict) -> str:
     if not path_arg:
         raise ValueError("path required")
 
+    if args.get("_oversize_tokens"):
+        # the stream was cut at the per-call cap and the body dropped: say so, not "empty" (the model would send the same giant call again)
+        from .limits import agent_limit
+        cap = agent_limit("write_file_max_tokens")
+        return (f"error: nothing was saved: the file was about {args['_oversize_tokens']} tokens and one write_file call may carry at most {cap}. "
+                f"Call write_file again with a COMPLETE but much shorter file (under {int(cap * 0.6)} tokens: fewer sections, short text, "
+                "inline CSS, no repeated cards). Do not repeat the same long content.")
+
     clean_name = Path(path_arg).name
     stem = Path(clean_name).stem
     suffix = Path(clean_name).suffix or ".txt"

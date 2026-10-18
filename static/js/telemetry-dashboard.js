@@ -240,6 +240,10 @@ function updateTelemetryUi(data) {
   if (cacheTotal) cacheTotal.textContent = `${(cs.total_reused || 0).toLocaleString()} tokens (${cs.cache_percentage || 0}% of all prompt tokens)`;
 }
 
+let tmSocket = null;
+let tmHttpFallbackTimer = null;
+let tmReconnectTimer = null;
+
 function isTelemetryPermitted() {
   if (window.__user && window.__user.is_super_admin) return true;
   if (typeof window.hasPerm === 'function') {
@@ -290,23 +294,105 @@ async function pollTelemetryOnce() {
   }
 }
 
+function startHttpFallback() {
+  if (!tmIsActive || tmHttpFallbackTimer) return;
+  pollTelemetryOnce();
+  tmHttpFallbackTimer = setInterval(pollTelemetryOnce, 1000);
+}
+
+function stopHttpFallback() {
+  if (tmHttpFallbackTimer) {
+    clearInterval(tmHttpFallbackTimer);
+    tmHttpFallbackTimer = null;
+  }
+}
+
+function connectTelemetryWebSocket() {
+  if (!tmIsActive) return;
+
+  if (typeof window.hasPerm === 'function' && !isTelemetryPermitted()) {
+    stopTelemetryMonitoring();
+    return;
+  }
+
+  const panel = document.getElementById('sec-live-monitor');
+  if (!panel || !panel.classList.contains('active')) {
+    stopTelemetryMonitoring();
+    return;
+  }
+
+  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProto}//${location.host}/ws/telemetry`;
+
+  try {
+    tmSocket = new WebSocket(wsUrl);
+
+    tmSocket.onopen = () => {
+      stopHttpFallback();
+      if (tmReconnectTimer) {
+        clearTimeout(tmReconnectTimer);
+        tmReconnectTimer = null;
+      }
+    };
+
+    tmSocket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        updateTelemetryUi(data);
+      } catch (_) {}
+    };
+
+    tmSocket.onerror = () => {
+      if (tmIsActive) startHttpFallback();
+    };
+
+    tmSocket.onclose = (event) => {
+      tmSocket = null;
+      if (event.code === 4401 || event.code === 4403) {
+        stopTelemetryMonitoring();
+        return;
+      }
+      if (tmIsActive) {
+        startHttpFallback();
+        if (!tmReconnectTimer) {
+          tmReconnectTimer = setTimeout(() => {
+            tmReconnectTimer = null;
+            if (tmIsActive) connectTelemetryWebSocket();
+          }, 2000);
+        }
+      }
+    };
+  } catch (err) {
+    startHttpFallback();
+  }
+}
+
 function startTelemetryMonitoring() {
   if (tmIsActive) return;
   if (typeof window.hasPerm === 'function' && !isTelemetryPermitted()) {
     return;
   }
   tmIsActive = true;
-  pollTelemetryOnce();
-  if (tmTimer) clearInterval(tmTimer);
-  tmTimer = setInterval(pollTelemetryOnce, 1000);
+  connectTelemetryWebSocket();
 }
 
 function stopTelemetryMonitoring() {
   tmIsActive = false;
-  if (tmTimer) {
-    clearInterval(tmTimer);
-    tmTimer = null;
+  if (tmReconnectTimer) {
+    clearTimeout(tmReconnectTimer);
+    tmReconnectTimer = null;
   }
+  if (tmSocket) {
+    try {
+      tmSocket.onopen = null;
+      tmSocket.onmessage = null;
+      tmSocket.onerror = null;
+      tmSocket.onclose = null;
+      tmSocket.close();
+    } catch (_) {}
+    tmSocket = null;
+  }
+  stopHttpFallback();
 }
 
 window.isTelemetryPermitted = isTelemetryPermitted;

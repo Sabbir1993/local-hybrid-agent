@@ -29,8 +29,14 @@ async function pollStatus() {
     curStatus = s;
     if (s.hardware_tag) updateHardwareTag(s.hardware_tag);
     const cloudMain = s.cloud_main || null;
-    // cloud main lane: report ☁️ instead of a misleading "Model unloaded"
-    setPill(cloudMain ? 'cloud' : (s.pid ? 'on' : 'off'), s);
+    const isLoading = !!(window.__isModelLoading || s.loading);
+    if (isLoading && !s.healthy && !s.pid) {
+      setPill('loading', s);
+    } else {
+      if (s.pid && s.healthy !== false) window.__isModelLoading = false;
+      // cloud main lane: report ☁️ instead of a misleading "Model unloaded"
+      setPill(cloudMain ? 'cloud' : (s.pid ? 'on' : 'off'), s);
+    }
     const ka = $('ka');
     if (ka && !ka._user) ka.checked = !!s.keepalive;
 

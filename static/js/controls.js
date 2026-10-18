@@ -35,47 +35,54 @@ async function loadSelectedModel() {
 
   if (curStatus && curStatus.pid) {  // loaded -> unload
     if (ctrl) ctrl.abort();
+    setLoadBtn('loading');
     try { await fetch('/control/stop', { method: 'POST' }); } catch (e) {}
     pollStatus();
     if (typeof loadProfiles === 'function') loadProfiles();
     toast('Model unloaded — VRAM freed on both A770s');
     return;
   }
+  window.__isModelLoading = true;
   setPill('loading');
+  setLoadBtn('loading');
   toast('Loading model into GPU VRAM (~10–60s)…');
-  // Preflight VRAM check: show suggestions before the manager refuses to load
   try {
-    const pr = await fetch('/control/preflight?target=' + encodeURIComponent(target));
-    if (pr.ok) {
-      const plan = await pr.json();
-      if (plan.status === 'nofit') {
-        const sugs = (plan.suggestions || []).slice(0, 3).map(s => s.desc).join(' | ');
-        setPill('off');
-        toast('VRAM check: it won\u2019t fit. ' + (sugs || plan.message || 'Reduce GPU offload.'), true);
-        return;
+    // Preflight VRAM check: show suggestions before the manager refuses to load
+    try {
+      const pr = await fetch('/control/preflight?target=' + encodeURIComponent(target));
+      if (pr.ok) {
+        const plan = await pr.json();
+        if (plan.status === 'nofit') {
+          const sugs = (plan.suggestions || []).slice(0, 3).map(s => s.desc).join(' | ');
+          window.__isModelLoading = false;
+          setPill('off');
+          toast('VRAM check: it won\u2019t fit. ' + (sugs || plan.message || 'Reduce GPU offload.'), true);
+          return;
+        }
+        if (plan.status === 'tight') {
+          toast('VRAM check: tight fit — loading anyway (watch the GPU panel).');
+        }
       }
-      if (plan.status === 'tight') {
-        toast('VRAM check: tight fit — loading anyway (watch the GPU panel).');
-      }
+    } catch (e) { /* preflight is advisory only */ }
+    try {
+      const r = await fetch('/control/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: target })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    } catch (e) {
+      toast('Load failed: ' + e.message, true);
+      return;
     }
-  } catch (e) { /* preflight is advisory only */ }
-  try {
-    const r = await fetch('/control/switch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target: target })
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-  } catch (e) {
-    toast('Load failed: ' + e.message, true);
+    await warmup();
+    toast('Model loaded ✅');
+  } finally {
+    window.__isModelLoading = false;
     pollStatus();
-    return;
+    loadConfig();
   }
-  await warmup();
-  pollStatus();
-  loadConfig();
-  toast('Model loaded ✅');
 }
 
 if ($('btn-load-header')) $('btn-load-header').onclick = loadSelectedModel;
@@ -83,7 +90,10 @@ if ($('btn-load-header')) $('btn-load-header').onclick = loadSelectedModel;
 function setLoadBtn(mode) {
   const b = $('btn-load-header');
   if (!b) return;
+  const grp = b.closest('.model-group');
   b.classList.remove('unload', 'loading');
+  if (grp) grp.classList.remove('loading');
+  b.disabled = false;
   if (mode === 'cloud') {
     b.innerHTML = '<span>\u2601</span>';
     b.title = 'Cloud model — nothing to load into VRAM. Pick a local GGUF to use the GPUs again.';
@@ -92,8 +102,10 @@ function setLoadBtn(mode) {
     b.classList.add('unload');
     b.title = 'Unload model — terminate llama-server and free VRAM/DRAM';
   } else if (mode === 'loading') {
-    b.innerHTML = '<span class="spinner"></span>';
+    b.innerHTML = '<span class="spinner" aria-label="Loading…"></span>';
     b.classList.add('loading');
+    b.disabled = true;
+    if (grp) grp.classList.add('loading');
     b.title = 'Loading model into VRAM…';
   } else {
     b.innerHTML = '<span>▶</span>';

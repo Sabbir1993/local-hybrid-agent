@@ -79,14 +79,42 @@ PROJECT_MANUAL = (
     "paths (css/styles.css, js/main.js). The page must read well without external libraries: CDN scripts are optional extras. "
     "Never write card numbers. Pictures are linked by https address, never invented as local files. Never paste code into the reply.")
 
+SINGLE_PAGE_MANUAL = (
+    "ONE HTML PAGE: the user asked for a single html page, not a website. Plan exactly ONE file, index.html, with CSS in a <style> "
+    "and JS in a <script> inside it. Write a short skeleton with project_write, then add one section per project_append call "
+    "(under about 100 lines each; vary the markup, never paste the same card or image line over and over). Then project_finish: "
+    "it returns the one .html link. Do not create css/ or js/ files and do not mention a ZIP. To fix or redo a page that already exists, "
+    "write a short skeleton with project_write and replace=true, then add the sections with project_append. Never generate pictures "
+    "for the page: link real photos by https address.")
+
 _WANTED = re.compile(
     r"\b(web ?site|web ?app|landing page|portfolio site|multi-?page|front-?end|single[- ]page|index\.html|styles\.css|main\.js|"
     r"project structure|html\s*,?\s*css|css\s*(?:and|,|&)\s*(?:vanilla\s*)?(?:js|javascript))\b", re.I)
 
 
+_SLASH_CMD = re.compile(r"^\s*(?:/[\w:-]+\s+)+")      # "/frontend-design use this skill ..." is a command name, not words of the request
+# "an html of Dhaka", "a single html page", "one html file": one page, unless the request also names real multi-file signals
+_SINGLE_HTML = re.compile(r"\b(?:an?|one|single|1)\s+(?:[\w-]+\s+){0,4}html\b|\bhtml\s+(?:page|file|document|report|guide)\b", re.I)
+_MULTI_FILE = re.compile(r"\b(web ?site|web ?app|multi-?page|index\.html|styles\.css|main\.js|project structure|zip|"
+                         r"html\s*,?\s*css|css\s*(?:and|,|&)\s*(?:vanilla\s*)?(?:js|javascript))\b", re.I)
+
+
+_MAKE = re.compile(r"\b(make|build|create|write|generate|design|produce|prepare|develop|give me|i (?:need|want))\b", re.I)
+
+
+def single_page_wanted(query: str) -> bool:
+    """A request to make ONE html page ("make a deep informative html of Dhaka"). It is still written in small pieces (one huge
+    write_file call is cut off), but the user gets one .html, not a project plan and a ZIP."""
+    q = _SLASH_CMD.sub("", str(query or ""))
+    return bool(_SINGLE_HTML.search(q) and _MAKE.search(q) and not _MULTI_FILE.search(q))
+
+
 def project_wanted(query: str) -> bool:
     """A request for a website or a multi-file front-end project (not a single html page or a report)."""
-    return bool(_WANTED.search(str(query or "")))
+    q = _SLASH_CMD.sub("", str(query or ""))
+    if _SINGLE_HTML.search(q) and not _MULTI_FILE.search(q):
+        return False
+    return bool(_WANTED.search(q))
 
 
 def _slug(name) -> str:
@@ -350,9 +378,11 @@ def tool_project_finish(args: dict) -> str:
     zip_name, page_name = f"{slug}-{uid8}.zip", f"{slug}-{uid8}.html"
     common = common_workspace()
     files = sorted(f for f in root.rglob("*") if f.is_file())
-    with zipfile.ZipFile(common / zip_name, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in files:
-            z.write(f, f"{slug}/{f.relative_to(root).as_posix()}")
+    single = len(files) == 1      # one html page: a ZIP of one file is noise, hand over just the page
+    if not single:
+        with zipfile.ZipFile(common / zip_name, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in files:
+                z.write(f, f"{slug}/{f.relative_to(root).as_posix()}")
     with (common / page_name).open("w", encoding="utf-8", newline="\n") as fh:
         fh.write(inline_entry(root, entry))
     note = ""
@@ -363,6 +393,8 @@ def tool_project_finish(args: dict) -> str:
     empty = [f.relative_to(root).as_posix() for f in files if f.stat().st_size == 0]
     if empty:
         note += " WARNING: empty files: " + ", ".join(empty[:8]) + "."
+    if single:
+        return f"Page {slug}: 1 file. Download it as {page_name} [DOWNLOAD: {page_name}]. Reply now with a short summary and this link." + note
     return (f"Project {slug}: {len(files)} files. Download the whole site as {zip_name} [DOWNLOAD: {zip_name}] and preview "
             f"{entry} as {page_name} [DOWNLOAD: {page_name}]. Reply now with a short summary and these two links." + note)
 
