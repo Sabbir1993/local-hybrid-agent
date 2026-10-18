@@ -64,7 +64,9 @@ def _pick_deliverables(written: list[str], query: str) -> list[str]:
     latest: dict[str, str] = {}
     for f in cands:  # later writes supersede earlier ones of the same type
         latest[Path(f).suffix.lower()] = f
-    return [f for f in cands if f in latest.values()]
+    picked = [f for f in cands if f in latest.values()]
+    # a project's ZIP (project_finish) is always a deliverable next to its preview page, whatever type the request names
+    return picked + [f for f in uniq if f.lower().endswith(".zip") and f not in picked]
 
 
 def _finalize_download_tags(content: str, written: list[str], query: str) -> tuple[str, bool]:

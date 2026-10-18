@@ -237,3 +237,14 @@ class PerChat(ProjectBuilder):
         self.assertTrue(r.startswith("error: plan the site first"), r)                   # no plan carried over
         self.assertEqual((self.root / "projects/s11/site/index.html").read_text(), "<p>x</p>")
         self.assertFalse((self.root / "projects/s22").exists() and any((self.root / "projects/s22").rglob("*.html")))
+
+
+class ZipIsADeliverable(unittest.TestCase):
+    def test_zip_stays_when_the_request_names_html(self):
+        from routes.chat.delivery import _finalize_download_tags, _pick_deliverables
+        q = "BUILD A WEBSITE with html, css and js"
+        written = ["site-ab12cd34.zip", "site-ab12cd34.html"]
+        self.assertEqual(sorted(_pick_deliverables(written, q)), sorted(written))
+        out, _ = _finalize_download_tags("Done. [DOWNLOAD: site-ab12cd34.html]", written, q)
+        self.assertIn("[DOWNLOAD: site-ab12cd34.zip]", out)
+        self.assertIn("[DOWNLOAD: site-ab12cd34.html]", out)
