@@ -128,7 +128,13 @@ function sseToolProgress(L, d) {
 
 // A deck / PDF built in pieces (doc_create, then doc_append...): after each step the right-hand pane shows the file as it is
 // now. Only files in the common space carry a [DOWNLOAD: name] tag, so device-side agent files are left to the Preview pill.
-function _sseLiveDoc(d) {
+// the right-hand pane belongs to the chat on screen: a run still going in another chat must not draw into it
+function _sseViewing(sessionId) {
+  return sessionId == null || (typeof curSession !== 'undefined' && curSession && String(curSession.id) === String(sessionId));
+}
+
+function _sseLiveDoc(d, sessionId) {
+  if (!_sseViewing(sessionId)) return;
   if (!['doc_create', 'doc_append', 'doc_edit', 'write_file'].includes(d.name) || d.ok === false) return;
   if (!window.RightDock || typeof window.RightDock.showLiveDoc !== 'function') return;
   const res = String(d.result || '');
@@ -142,7 +148,7 @@ function _sseLiveDoc(d) {
 }
 
 // tool_result: record it; a file write/edit also gets a toast + HUD with Preview/Reveal
-function sseToolResult(L, d) {
+function sseToolResult(L, d, sessionId) {
   if (!L.acts) L.acts = [];
   L.acts.push({ type: 'tool_result', ...d });
   L.statusText = 'Crunching tool results...';
@@ -151,7 +157,7 @@ function sseToolResult(L, d) {
       window.logTerminalResult({ id: d.id, ok: d.ok !== false, result: d.result });
     }
   }
-  _sseLiveDoc(d);
+  _sseLiveDoc(d, sessionId);
   if (!['write_file', 'edit_file', 'append_file', 'insert_at_line'].includes(d.name)) return;
   const p = _ssePath(d);
   const filename = p ? p.split(/[\\/]/).pop() : 'file';
@@ -242,12 +248,12 @@ if (typeof module !== 'undefined') module.exports = { parseSSEFrame, readSSE, sp
 
 
 // Task Plan checklist from the server (a website project's file plan): keep only the latest snapshot in acts
-function ssePlan(L, d) {
+function ssePlan(L, d, sessionId) {
   if (!L.acts) L.acts = [];
   const planAct = { type: 'plan', items: (d && d.items) || [] };
   const pi = L.acts.findIndex(a => a.type === 'plan');
   if (pi >= 0) L.acts[pi] = planAct; else L.acts.push(planAct);
-  if (window.RightDock && typeof window.RightDock.renderPlanView === 'function' && planAct.items.length) window.RightDock.renderPlanView(planAct.items);
+  if (_sseViewing(sessionId) && window.RightDock && typeof window.RightDock.renderPlanView === 'function' && planAct.items.length) window.RightDock.renderPlanView(planAct.items);
 }
 
 // A streamed event rebuilds the action list; swapping the node under a wheel / drag scroll stops it dead. Remember when the user last
