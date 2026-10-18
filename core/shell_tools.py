@@ -250,6 +250,12 @@ def _sanity(cmd: str) -> Optional[str]:
     return None
 
 
+def always_refused_reason(cmd: str) -> Optional[str]:
+    """Public face of _sanity for manual callers (dock terminal): the
+    deliberately destructive commands never run, from any entry point."""
+    return _sanity(cmd)
+
+
 def _background_args(args: dict) -> dict:
     """{"background": True, "wait_for_port": N, "wait": secs} for a dev-server style command, else {}."""
     truthy = lambda v: v is True or str(v).strip().lower() in ("1", "true", "yes")
