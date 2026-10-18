@@ -4,6 +4,7 @@ A reply is cut off by the output limit long before a whole website fits in one w
 person would: project_write one file at a time, project_append the next section of a long file, project_finish to get the ZIP and
 a single-file preview. Nothing here runs: files are inert text in the user's own common space (never another user's), the same
 folder the other chat documents use. Card numbers are refused on every write, like every other document the chat saves."""
+import json
 import re
 import zipfile
 from pathlib import Path
@@ -47,16 +48,34 @@ PROJECT_FINISH_SCHEMA = {"type": "function", "function": {
         "entry": {"type": "string", "description": "the page to preview, default index.html"}},
         "required": ["project"]}}}
 
-PROJECT_TOOL_NAMES = ("project_write", "project_append", "project_finish")
-PROJECT_SCHEMAS = [PROJECT_WRITE_SCHEMA, PROJECT_APPEND_SCHEMA, PROJECT_FINISH_SCHEMA]
+MAX_PLAN_FILES = 14
+
+PROJECT_PLAN_SCHEMA = {"type": "function", "function": {
+    "name": "project_plan",
+    "description": ("Declare the files of the website BEFORE writing any of them: the complete list, at most 14 files, each with a "
+                    "one-line purpose. Every tool result then shows how many are done and what is next, and project_finish refuses "
+                    "until every planned file is written. Call it again to add or drop files if the plan changes."),
+    "parameters": {"type": "object", "properties": {
+        "project": {"type": "string", "description": "short project name, the same in every call"},
+        "files": {"type": "array", "maxItems": MAX_PLAN_FILES, "items": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "relative path, e.g. js/charts.js"},
+            "purpose": {"type": "string", "description": "one line: what this file holds"},
+            "min_lines": {"type": "integer", "description": "rough size it must reach to count as done (default 5)"}},
+            "required": ["path", "purpose"]}}},
+        "required": ["project", "files"]}}}
+
+PROJECT_TOOL_NAMES = ("project_plan", "project_write", "project_append", "project_finish")
+PROJECT_SCHEMAS = [PROJECT_PLAN_SCHEMA, PROJECT_WRITE_SCHEMA, PROJECT_APPEND_SCHEMA, PROJECT_FINISH_SCHEMA]
 
 PROJECT_MANUAL = (
-    "WEBSITE / MULTI-FILE PROJECT (project_write, project_append, project_finish): a whole site never fits in one reply, so build it in "
-    "pieces. 1) project_write index.html as a short skeleton (head, nav, empty section tags). 2) project_write css/styles.css and "
-    "js/main.js (start small). 3) fill each section with project_append, one section per call, under about 150 lines each. "
-    "4) project_finish, then reply with a short summary and the two [DOWNLOAD: ...] links it returns. Use the same `project` name in "
-    "every call. Link files with relative paths (css/styles.css, js/main.js). The page must read well without external libraries: "
-    "CDN scripts are optional extras. Never write card numbers. Pictures are linked by https address, never invented as local files.")
+    "WEBSITE / MULTI-FILE PROJECT (project_plan, project_write, project_append, project_finish): a whole site never fits in one reply, "
+    "so plan it, then build it in pieces. 1) project_plan: the complete file list (at most 14) with a one-line purpose each. "
+    "2) project_write each planned file, starting with index.html as a short skeleton, then css/styles.css and js/main.js. "
+    "3) fill long files with project_append, one section per call, under about 150 lines each. Each tool result says how many planned "
+    "files are done and which is next: follow it. 4) project_finish (it refuses while planned files are missing), then reply with a "
+    "short summary and the two [DOWNLOAD: ...] links it returns. Use the same `project` name in every call. Link files with relative "
+    "paths (css/styles.css, js/main.js). The page must read well without external libraries: CDN scripts are optional extras. "
+    "Never write card numbers. Pictures are linked by https address, never invented as local files. Never paste code into the reply.")
 
 _WANTED = re.compile(
     r"\b(web ?site|web ?app|landing page|portfolio site|multi-?page|front-?end|single[- ]page|index\.html|styles\.css|main\.js|"
@@ -112,6 +131,90 @@ def _pan_check(content: str):
     return None
 
 
+# ---- the plan: the file list the model declares first; "done" is read from disk, never remembered ------------------------------
+
+def _plan_path(project) -> Path:
+    return _common_resolve(f"{PROJECTS_DIR}/{_slug(project)}.plan.json")
+
+
+def _load_plan(project) -> list:
+    try:
+        data = json.loads(_plan_path(project).read_text(encoding="utf-8"))
+        return [f for f in data.get("files", []) if isinstance(f, dict) and f.get("path")]
+    except Exception:
+        return []
+
+
+def _lines(f: Path) -> int:
+    try:
+        return len(f.read_text(encoding="utf-8", errors="replace").splitlines())
+    except OSError:
+        return 0
+
+
+def plan_status(project) -> dict:
+    """{'plan': [...], 'done': [...], 'todo': [...]} for a project: a planned file is done once it exists with its min_lines."""
+    plan = _load_plan(project)
+    root = _root(project)
+    done, todo = [], []
+    for f in plan:
+        target = root / f["path"]
+        need = max(1, int(f.get("min_lines") or 5))
+        (done if target.is_file() and _lines(target) >= need else todo).append(f)
+    return {"plan": plan, "done": done, "todo": todo}
+
+
+def _progress(project) -> str:
+    st = plan_status(project)
+    if not st["plan"]:
+        return ""
+    if not st["todo"]:
+        return f" Plan: all {len(st['plan'])} files done - call project_finish."
+    nxt = st["todo"][0]
+    return (f" Plan: {len(st['done'])} of {len(st['plan'])} files done. Next: {nxt['path']} ({nxt.get('purpose', '')}); "
+            f"still missing: {', '.join(f['path'] for f in st['todo'][:8])}.")
+
+
+def tool_project_plan(args: dict) -> str:
+    a = args or {}
+    files = a.get("files")
+    if isinstance(files, str):
+        try:
+            files = json.loads(files)
+        except ValueError:
+            files = None
+    if not isinstance(files, list) or not files:
+        return "error: send the plan as a list of files, each with a path and a one-line purpose."
+    clean, seen = [], set()
+    for item in files:
+        if isinstance(item, str):
+            item = {"path": item, "purpose": ""}
+        if not isinstance(item, dict):
+            continue
+        try:
+            _, _, rel = _file(a.get("project"), item.get("path"))
+        except ValueError as e:
+            return str(e)
+        if rel in seen:
+            continue
+        seen.add(rel)
+        try:
+            need = max(1, min(400, int(item.get("min_lines") or 5)))
+        except (TypeError, ValueError):
+            need = 5
+        clean.append({"path": rel, "purpose": str(item.get("purpose") or "")[:140], "min_lines": need})
+    if len(clean) > MAX_PLAN_FILES:
+        return f"error: plan at most {MAX_PLAN_FILES} files; merge small ones (one css file, one or two js files)."
+    if not any(f["path"].lower().endswith((".html", ".htm")) for f in clean):
+        return "error: the plan has no HTML page. Add index.html."
+    pp = _plan_path(a.get("project"))
+    pp.parent.mkdir(parents=True, exist_ok=True)
+    with pp.open("w", encoding="utf-8", newline="\n") as fh:
+        json.dump({"files": clean}, fh, ensure_ascii=False)
+    return (f"Plan saved for project {_slug(a.get('project'))}: {len(clean)} files." + _progress(a.get("project"))
+            + " Write them one at a time with project_write.")
+
+
 def _store(args: dict, append: bool) -> str:
     a = args or {}
     content = a.get("content")
@@ -128,6 +231,9 @@ def _store(args: dict, append: bool) -> str:
     refused = _pan_check(str(content))
     if refused:
         return refused
+    if not _load_plan(a.get("project")) and not (root.is_dir() and any(root.rglob("*"))):
+        return ("error: plan the site first: call project_plan with the complete list of files (at most 14, each with a one-line "
+                "purpose), then write them one at a time.")
     existed = target.is_file()
     if append and not existed:
         return f"error: {rel} does not exist yet. Create it with project_write first (a short skeleton), then project_append."
@@ -144,8 +250,12 @@ def _store(args: dict, append: bool) -> str:
     with target.open("w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
     verb = "Appended to" if append else ("Replaced" if existed else "Created")
-    return (f"{verb} {rel} in project {_slug(a.get('project'))} ({len(text.splitlines())} lines, {len(text)} chars). "
-            "Continue with the next piece, or call project_finish when every file is written.")
+    unplanned = ""
+    plan = _load_plan(a.get("project"))
+    if plan and rel not in {f["path"] for f in plan}:
+        unplanned = " (this file is not in the plan: fine, or add it with project_plan)"
+    return (f"{verb} {rel} in project {_slug(a.get('project'))} ({len(text.splitlines())} lines, {len(text)} chars){unplanned}."
+            + (_progress(a.get("project")) or " Continue with the next piece, or call project_finish when every file is written."))
 
 
 def tool_project_write(args: dict) -> str:
@@ -200,6 +310,11 @@ def tool_project_finish(args: dict) -> str:
     root = _root(a.get("project"))
     if not root.is_dir() or not any(f.is_file() for f in root.rglob("*")):
         return "error: this project has no files yet. Create them with project_write first."
+    st = plan_status(a.get("project"))
+    if st["todo"]:
+        return ("error: the plan is not finished: " + "; ".join(f"{f['path']} ({f.get('purpose', '')})" for f in st["todo"][:10])
+                + ". Write these with project_write (project_append to lengthen a short file), or drop one with project_plan, then call "
+                "project_finish again.")
     entry = str(a.get("entry") or "index.html").replace("\\", "/").lstrip("/")
     if not (root / entry).is_file():
         htmls = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.html"))
@@ -251,11 +366,16 @@ def open_project_note(max_age_s: int = 3 * 24 * 3600) -> str:
         newest, d, files = best
         if any(z.stat().st_mtime >= newest for z in common_workspace().glob(f"{d.name}-*.zip")):
             return ""
-        listing = ", ".join(f"{f.relative_to(d).as_posix()} ({len(f.read_text(encoding='utf-8', errors='replace').splitlines())} lines)"
-                            for f in sorted(files)[:40])
-        return (f"[system note] The user's website project `{d.name}` was interrupted before project_finish. Files so far: {listing}. "
-                f"Continue it now by tool calls only (never paste code into the reply): project_write the files that are still missing "
-                f"(use project=`{d.name}`), project_append to extend a file that is cut short, do not rewrite complete files, and "
-                "call project_finish when every file is written.")
+        listing = ", ".join(f"{f.relative_to(d).as_posix()} ({_lines(f)} lines)" for f in sorted(files)[:40])
+        st = plan_status(d.name)
+        if st["plan"]:
+            plan_txt = (f" Plan: {len(st['done'])} of {len(st['plan'])} files done; still to write: "
+                        + (", ".join(f"{f['path']} ({f.get('purpose', '')})" for f in st["todo"]) or "none - call project_finish") + ".")
+        else:
+            plan_txt = " It has no saved plan: call project_plan with the complete file list first."
+        return (f"[system note] The user's website project `{d.name}` was interrupted before project_finish. Files so far: {listing}."
+                f"{plan_txt} Continue it now by tool calls only (never paste code into the reply, use project=`{d.name}`): "
+                "project_write the missing files, project_append to lengthen a file that is cut short, do not rewrite complete files, "
+                "and call project_finish when the plan is done.")
     except Exception:
         return ""

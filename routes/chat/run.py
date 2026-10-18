@@ -84,7 +84,7 @@ from .file_intent import (
     KB_TOOL_NAMES,
 )
 from core.agent_tools.project_files import (open_project_note, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, project_wanted,
-                                            tool_project_append, tool_project_finish, tool_project_write)
+                                            tool_project_append, tool_project_finish, tool_project_plan, tool_project_write)
 from .models import ChatRunRequest
 
 
@@ -1147,9 +1147,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         yield "event: delta_reset\ndata: {}\n\n"
                     msgs.append({"role": "assistant", "content": content or ""})
                     msgs.append({"role": "user", "content": (
-                        "[system note] The website is not finished: do not describe it, call a tool now. Call project_write for the next "
-                        "file that is still missing (or project_append to extend a file that is too short), without rewriting files "
-                        "that are complete, and call project_finish once every file is written.")})
+                        (open_project_note() or
+                         "[system note] The website is not finished: do not describe it, call a tool now. Call project_plan if there is no "
+                         "plan yet, else project_write for the next missing file (or project_append to extend a short one), without "
+                         "rewriting complete files, and call project_finish once every file is written.")
+                        + " Do not describe it: call a tool now.")})
                     continue
 
                 # Announced-but-not-delivered: "Let me compile the HTML now:" and
@@ -1348,7 +1350,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             else:
                                 written_files.extend(f for f in _DL_TAG_RE.findall(res_str) if f not in written_files)   # one deck, many doc_append steps
                         elif t_name in PROJECT_TOOL_NAMES:
-                            impl = {"project_write": tool_project_write, "project_append": tool_project_append,
+                            impl = {"project_plan": tool_project_plan, "project_write": tool_project_write, "project_append": tool_project_append,
                                     "project_finish": tool_project_finish}[t_name]
                             res_str = await run_in_executor_ctx(impl, args)
                             written_files.extend(f for f in _DL_TAG_RE.findall(res_str) if f not in written_files)

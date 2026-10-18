@@ -30,6 +30,17 @@ class ProjectBuilder(unittest.TestCase):
         self.root = Path(self.td.name) / "user_7"
 
     def w(self, path, content, project="Dhaka Site"):
+        """project_write with the file added to the plan first (as the model must do), so older tests stay about one thing."""
+        try:
+            rel = pf._file(project, path)[2]
+            cur = pf._load_plan(project)
+            if rel not in {f["path"] for f in cur}:
+                pp = pf._plan_path(project)
+                pp.parent.mkdir(parents=True, exist_ok=True)
+                import json
+                pp.write_text(json.dumps({"files": cur + [{"path": rel, "purpose": "", "min_lines": 1}]}), encoding="utf-8")
+        except ValueError:
+            pass
         return pf.tool_project_write({"project": project, "path": path, "content": content})
 
     def test_intent(self):
@@ -76,7 +87,7 @@ class ProjectBuilder(unittest.TestCase):
     def test_empty_body_and_missing_target_are_errors(self):
         self.assertTrue(self.w("index.html", "  \n").startswith("error:"))
         r = pf.tool_project_append({"project": "p", "path": "index.html", "content": "<p>x</p>"})
-        self.assertIn("project_write first", r)
+        self.assertTrue(r.startswith("error:"), r)
         self.assertTrue(pf.tool_project_finish({"project": "nothing"}).startswith("error:"))
 
     def test_card_numbers_are_refused(self):
@@ -133,3 +144,53 @@ class ResumeAfterStop(ProjectBuilder):
         for z in self.root.glob("dhaka-site-*.zip"):
             os.utime(z, (time.time() - 60, time.time() - 60))
         self.assertIn("main.js", pf.open_project_note())
+
+
+class Planning(ProjectBuilder):
+    P = "Plan Site"
+
+    def plan(self, files):
+        return pf.tool_project_plan({"project": self.P, "files": files})
+
+    def test_write_without_a_plan_is_refused_with_the_instruction(self):
+        r = pf.tool_project_write({"project": self.P, "path": "index.html", "content": "<p>x</p>"})
+        self.assertTrue(r.startswith("error: plan the site first"), r)
+        self.assertEqual([f for f in self.root.rglob("*") if f.is_file()], [])
+
+    def test_plan_is_validated(self):
+        self.assertIn("no HTML page", self.plan([{"path": "js/a.js", "purpose": "x"}]))
+        self.assertIn("at most", self.plan([{"path": f"js/f{i}.js", "purpose": "x"} for i in range(15)] + [{"path": "index.html", "purpose": "x"}]))
+        self.assertTrue(self.plan([{"path": "../x.html", "purpose": "x"}]).startswith("error:"))
+        self.assertTrue(self.plan([]).startswith("error:"))
+
+    def test_progress_is_reported_and_finish_waits_for_the_plan(self):
+        r = self.plan([{"path": "index.html", "purpose": "page", "min_lines": 1}, {"path": "css/styles.css", "purpose": "style", "min_lines": 2},
+                       {"path": "js/main.js", "purpose": "logic", "min_lines": 1}])
+        self.assertIn("0 of 3 files done", r)
+        r = pf.tool_project_write({"project": self.P, "path": "index.html", "content": INDEX})
+        self.assertIn("1 of 3 files done. Next: css/styles.css", r)
+        r = pf.tool_project_write({"project": self.P, "path": "css/styles.css", "content": "body{}"})
+        self.assertIn("1 of 3 files done", r)                                   # one line is below its min_lines of 2
+        r = pf.tool_project_append({"project": self.P, "path": "css/styles.css", "content": "h1{}"})
+        self.assertIn("2 of 3 files done. Next: js/main.js", r)
+        fin = pf.tool_project_finish({"project": self.P})
+        self.assertTrue(fin.startswith("error: the plan is not finished"), fin)
+        self.assertIn("js/main.js", fin)
+        pf.tool_project_write({"project": self.P, "path": "js/main.js", "content": "var a=1"})
+        out = pf.tool_project_finish({"project": self.P})
+        self.assertIn("[DOWNLOAD:", out)
+        self.assertNotIn("error", out)
+
+    def test_dropping_a_file_from_the_plan_lets_finish_pass(self):
+        self.plan([{"path": "index.html", "purpose": "page", "min_lines": 1}, {"path": "js/map.js", "purpose": "map"}])
+        pf.tool_project_write({"project": self.P, "path": "index.html", "content": "<p>x</p>"})
+        self.assertTrue(pf.tool_project_finish({"project": self.P}).startswith("error: the plan is not finished"))
+        self.plan([{"path": "index.html", "purpose": "page", "min_lines": 1}])
+        self.assertIn("[DOWNLOAD:", pf.tool_project_finish({"project": self.P}))
+
+    def test_resume_note_lists_what_is_still_to_write(self):
+        self.plan([{"path": "index.html", "purpose": "page", "min_lines": 1}, {"path": "js/map.js", "purpose": "leaflet map"}])
+        pf.tool_project_write({"project": self.P, "path": "index.html", "content": "<p>x</p>"})
+        note = pf.open_project_note()
+        self.assertIn("1 of 2 files done", note)
+        self.assertIn("js/map.js (leaflet map)", note)
