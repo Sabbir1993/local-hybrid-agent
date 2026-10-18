@@ -225,7 +225,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # Tools for Chat Mode: write_file always (core), the rest on intent.
     chat_tools = [CHAT_WRITE_FILE_SCHEMA]
     # a website / multi-file front-end project: built file by file (project_write / project_append), delivered as one ZIP
-    project_build = bool((APP_CONFIG.get("chat") or {}).get("project_builder", True)) and project_wanted(own_q)
+    project_build = (bool((APP_CONFIG.get("chat") or {}).get("project_builder", True)) and project_wanted(own_q)
+                     and explicit_ext not in (".pptx", ".pdf", ".docx", ".xlsx")      # a deck / PDF / Word / sheet about websites is still that document
+                     and not (pdf_build or sheet_build or brief_phase)
+                     and not prompt_scope.deck_brief_wanted(last_query, msgs[:-1]))
     if project_build:
         wants_file = has_file = True
         chat_tools += PROJECT_SCHEMAS
