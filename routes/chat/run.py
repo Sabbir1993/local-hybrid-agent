@@ -80,6 +80,7 @@ from .file_intent import (
     shrink_old_tool_results,
     wants_file_output,
     serves_brief_card,
+    ASK_BLOCKED_TOOLS,
     CHAT_CUT_CALL_ERROR,
     KB_TOOL_NAMES,
 )
@@ -460,6 +461,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     has_web, web_lean, web_budget_n = plan_w["has_web"], plan_w["lean"], plan_w["budget"]
     if brief_phase == "ask":
         has_web = False          # nothing researched before the card is kept (only the final text is), so don't search
+        # the card comes first: with a file tool in reach the model built the PDF / deck and the card was added after it
+        chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") not in ASK_BLOCKED_TOOLS]
     if has_web:
         register_web_tools()
         for t_name in ("web_search", "web_fetch", "web_search_images"):
@@ -797,7 +800,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     elif project_build:
                         current_tools = [t for t in chat_tools if t.get("function", {}).get("name") in PROJECT_TOOL_NAMES]
                     else:
-                        current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and tool_allowed("write_file")) else None
+                        current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and brief_phase != "ask" and tool_allowed("write_file")) else None
                 elif research_over:
                     current_tools = [t for t in chat_tools
                                      if t.get("function", {}).get("name") not in WEB_TOOL_NAMES]
@@ -1304,6 +1307,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif args.get(INVALID_JSON_KEY):
                             # a file call whose JSON was cut off by the output limit: running it would save an empty or partial file
                             res_str = CHAT_CUT_CALL_ERROR
+                        elif brief_phase == "ask" and t_name in ASK_BLOCKED_TOOLS:
+                            # a text-parsed call can name a tool that was not offered: nothing is built before the user answers the card
+                            res_str = ("error: do not build the file yet. Reply with one short line and the questionnaire card; "
+                                       "the user answers it first, then you build.")
                         elif not tool_allowed(t_name):
                             # text-parsed calls can name any tool; the schema filter isn't enough
                             res_str = f"error: tool '{t_name}' is not enabled for the active custom agent"

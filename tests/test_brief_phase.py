@@ -160,3 +160,15 @@ class WordBrief(unittest.TestCase):
     def test_no_advice_style_block_on_top_of_the_word_card(self):
         prior = [{"role": "assistant", "content": DOCX_CARD}]
         self.assertFalse(ps.style_wanted("How long should the document be?: Short", prior))
+
+
+class AskFirstOffersNoFileTools(unittest.TestCase):
+    def test_file_tools_are_withheld_until_the_card_is_answered(self):
+        from pathlib import Path
+        from routes.chat.file_intent import ASK_BLOCKED_TOOLS
+        for name in ("write_file", "doc_create", "doc_append", "doc_edit"):
+            self.assertIn(name, ASK_BLOCKED_TOOLS)
+        self.assertNotIn("doc_inspect", ASK_BLOCKED_TOOLS)               # reading is still fine
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("not in ASK_BLOCKED_TOOLS]", src)
+        self.assertIn('elif brief_phase == "ask" and t_name in ASK_BLOCKED_TOOLS:', src)
