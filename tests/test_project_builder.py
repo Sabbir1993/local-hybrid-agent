@@ -104,7 +104,7 @@ class ProjectBuilder(unittest.TestCase):
 class ChatWiring(unittest.TestCase):
     def test_chat_offers_and_dispatches_project_tools(self):
         src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
-        self.assertIn("chat_tools += PROJECT_SCHEMAS", src)
+        self.assertIn("+ PROJECT_SCHEMAS", src)
         self.assertIn("elif t_name in PROJECT_TOOL_NAMES:", src)
         self.assertIn("sys_parts.append(PROJECT_MANUAL)", src)
 
@@ -315,3 +315,10 @@ class KeepaliveStaysOffTheChatSlot(unittest.TestCase):
         finally:
             llm_stream._llm_chat_stream_raw_inner = old_inner
             state.last_activity = old_act
+
+
+class ProjectBuildHasNoWriteFile(unittest.TestCase):
+    def test_write_file_is_replaced_by_the_project_tools_during_a_project_build(self):
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn('!= "write_file"] + PROJECT_SCHEMAS', src)
+        self.assertIn('elif project_build and t_name in ("write_file", "doc_create", "doc_append"):', src)

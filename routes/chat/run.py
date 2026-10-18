@@ -234,7 +234,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                      and not prompt_scope.deck_brief_wanted(last_query, msgs[:-1]))
     if project_build:
         wants_file = has_file = True
-        chat_tools += PROJECT_SCHEMAS
+        # the project tools replace write_file: a model with both wrote a single "dhaka_guide.html" outside the plan, in one huge
+        # call that was cut off, while its plan said the real files were still to do
+        chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") != "write_file"] + PROJECT_SCHEMAS
     # a spreadsheet attached to this conversation: the model gets its profile in the message and data_query for exact figures
     has_data_attachment = any(m.get("role") == "user" and prompt_scope.DATA_ATTACHMENT_RX.search(str(m.get("content") or ""))
                               for m in msgs)
@@ -1314,6 +1316,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif args.get(INVALID_JSON_KEY):
                             # a file call whose JSON was cut off by the output limit: running it would save an empty or partial file
                             res_str = CHAT_CUT_CALL_ERROR
+                        elif project_build and t_name in ("write_file", "doc_create", "doc_append"):
+                            res_str = ("error: this is a website project: write each planned file with project_write (project_append to "
+                                       "extend it) and finish with project_finish. Do not use " + t_name + ".")
                         elif brief_phase == "ask" and t_name in ASK_BLOCKED_TOOLS:
                             # a text-parsed call can name a tool that was not offered: nothing is built before the user answers the card
                             res_str = ("error: do not build the file yet. Reply with one short line and the questionnaire card; "
