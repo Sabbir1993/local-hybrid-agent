@@ -197,6 +197,10 @@ CHAT_CUT_CALL_ERROR = (
     "(CSS and JS inline or in separate short files) instead of one huge page, then give the [DOWNLOAD: ...] link.")
 
 
+# nothing that creates or changes a file is offered while the ask-first card is still to be answered
+ASK_BLOCKED_TOOLS = ("write_file", "doc_create", "doc_append", "doc_edit", "project_plan", "project_write", "project_append", "project_finish")
+
+
 def serves_brief_card(content: str, brief_phase: str) -> bool:
     """True when the reply is (or must become) the "few quick choices" card, so file-intent recovery must not save it as a file."""
     return brief_phase == "ask" or "```questionnaire" in (content or "")
