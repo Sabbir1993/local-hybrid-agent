@@ -343,9 +343,10 @@ class ProxyState:
         reason = self._exit_reason()
         full = f"{message} | llama-server: {reason}" if reason else message
         self.last_load_error = full
+        proc = getattr(self, "process", None)
         log_event("server.load_failed",
                   reason=reason or message[:120],
-                  code=self.process.returncode if self.process else None)
+                  code=proc.returncode if proc else None)
         return RuntimeError(full)
 
     def _kill_loading_process(self, vram_idx=None) -> None:
