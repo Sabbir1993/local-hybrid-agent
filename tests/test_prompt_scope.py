@@ -192,5 +192,28 @@ class AgentPromptTests(unittest.TestCase):
         self.assertIn("prompt_scope.hide_unmentioned_mcp", run)
 
 
+
+class HtmlIntentTests(unittest.TestCase):
+    def test_plain_chat_has_no_html_intent(self):
+        self.assertFalse(prompt_scope.html_wanted("what is photosynthesis?"))
+        self.assertFalse(prompt_scope.html_wanted("explain quicksort"))
+
+    def test_html_requests_detected(self):
+        self.assertTrue(prompt_scope.html_wanted("create an html dashboard"))
+        self.assertTrue(prompt_scope.html_wanted("make a landing page in html"))
+        self.assertTrue(prompt_scope.html_wanted("build dashboard.html"))
+        self.assertTrue(prompt_scope.html_wanted("generate an interactive web ui"))
+
+    def test_explicit_format_recognizes_html(self):
+        self.assertEqual(prompt_scope.explicit_format("make a dashboard.html"), ".html")
+        self.assertEqual(prompt_scope.explicit_format("write an html page"), ".html")
+
+    def test_html_manual_contents(self):
+        self.assertIn("Tailwind CSS", prompt_scope.HTML_MANUAL)
+        self.assertIn("Lucide Icons", prompt_scope.HTML_MANUAL)
+        self.assertIn("Chart.js", prompt_scope.HTML_MANUAL)
+        self.assertIn("write_file", prompt_scope.HTML_MANUAL)
+
+
 if __name__ == "__main__":
     unittest.main()

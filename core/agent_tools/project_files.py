@@ -80,9 +80,10 @@ PROJECT_MANUAL = (
     "Never write card numbers. Pictures are linked by https address, never invented as local files. Never paste code into the reply.")
 
 SINGLE_PAGE_MANUAL = (
-    "ONE HTML PAGE: the user asked for a single html page, not a website. Plan exactly ONE file, index.html, with CSS in a <style> "
-    "and JS in a <script> inside it. Write a short skeleton with project_write, then add one section per project_append call "
-    "(under about 100 lines each; vary the markup, never paste the same card or image line over and over). Then project_finish: "
+    "ONE HTML PAGE (Claude Artifacts standard): the user asked for a single html page, not a website. Plan exactly ONE file, index.html, with "
+    "Tailwind CSS CDN (<script src=\"https://cdn.tailwindcss.com\"></script>), Google Fonts (Plus Jakarta Sans), Lucide icons (<script src=\"https://unpkg.com/lucide@latest\"></script>), "
+    "and CSS in a <style> and JS in a <script> inside it. Write a short skeleton with project_write, then add one section per project_append call "
+    "(under about 120 lines each; vary the markup, use modern cards, tabs, and filters, never paste the same card or image line over and over). Then project_finish: "
     "it returns the one .html link. Do not create css/ or js/ files and do not mention a ZIP. To fix or redo a page that already exists, "
     "write a short skeleton with project_write and replace=true, then add the sections with project_append. Never generate pictures "
     "for the page: link real photos by https address.")

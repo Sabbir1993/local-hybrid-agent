@@ -141,3 +141,34 @@ def is_passive_refusal(content: str, last_query: str, actions_taken: list) -> bo
     )
     content_low = content.lower()
     return any(rp in content_low for rp in refusal_phrases)
+
+
+_INFO_QUESTION_RX = re.compile(
+    r"^(how (to|do|can|would)|what is|what are|explain|why|describe|tell me about|can you explain)\b",
+    re.IGNORECASE
+)
+
+
+def is_unwritten_code(content: str, last_query: str, actions_taken: list) -> bool:
+    """True when the user asked for code/files to be built or changed in the project,
+    but the model emitted markdown code blocks instead of invoking write_file/edit_file."""
+    if not content or not last_query:
+        return False
+    q = last_query.strip().lower()
+    if _INFO_QUESTION_RX.match(q):
+        return False
+    creation_keywords = (
+        "make", "create", "generate", "write", "build", "code", "landing page",
+        "script", "implement", "add", "setup", "fix", "update", "refactor"
+    )
+    if not any(w in q for w in creation_keywords):
+        return False
+    successful_mutations = any(
+        act.get("ok") and act.get("name") in ("write_file", "edit_file", "append_file", "insert_at_line")
+        for act in (actions_taken or [])
+    )
+    if successful_mutations:
+        return False
+    code_blocks = re.findall(r"```(?:\w+)?\n([\s\S]*?)```", content)
+    return any(len(b.strip()) >= 30 for b in code_blocks)
+

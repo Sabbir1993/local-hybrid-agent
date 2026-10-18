@@ -152,11 +152,12 @@ def _walk_js(root, src: bytes, rel: str, syms: list, calls: list) -> None:
             for c in node.children:
                 visit(c, klass=klass, enclosing=name)
             return
-        elif node.type == "class_declaration":
+        elif node.type in ("class_declaration", "interface_declaration", "enum_declaration"):
             name = _name_of(node, src)
-            body = next((c for c in node.children if c.type == "class_body"), None)
+            kind = "interface" if node.type == "interface_declaration" else ("enum" if node.type == "enum_declaration" else "class")
+            body = next((c for c in node.children if c.type in ("class_body", "interface_body", "enum_body")), None)
             syms.append({
-                "name": name, "kind": "class", "class": None, "file": rel,
+                "name": name, "kind": kind, "class": None, "file": rel,
                 "line": node.start_point[0] + 1,
                 "end_line": node.end_point[0] + 1,
                 "signature": "", "docstring": "",
@@ -164,6 +165,15 @@ def _walk_js(root, src: bytes, rel: str, syms: list, calls: list) -> None:
             if body is not None:
                 for c in _named(body):
                     visit(c, klass=name, enclosing=enclosing)
+            return
+        elif node.type == "type_alias_declaration":
+            name = _name_of(node, src)
+            syms.append({
+                "name": name, "kind": "type", "class": None, "file": rel,
+                "line": node.start_point[0] + 1,
+                "end_line": node.end_point[0] + 1,
+                "signature": "", "docstring": "",
+            })
             return
         elif node.type == "method_definition":
             name = _name_of(node, src)

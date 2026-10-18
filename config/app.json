@@ -173,6 +173,7 @@
     "fallback_local": true
   },
   "chat": {
+    "brief_card_server": "always",
     "style": true,
     "research_web": false,
     "force_doc_tool": false,
@@ -328,7 +329,7 @@
     "mcp_catalog_overrides": {}
   },
   "input_guard": {
-    "enabled": false,
+    "enabled": true,
     "rules": [
       {
         "id": "input_guard-2-secret-egress",
@@ -363,7 +364,7 @@
     ]
   },
   "output_guard": {
-    "enabled": false,
+    "enabled": true,
     "rules": [
       {
         "id": "output_guard-2-kb-leak",

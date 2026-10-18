@@ -151,6 +151,29 @@ async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optio
     except Exception:
         all_vecs = [None] * len(all_queries)
 
+    # Search FTS5 BM25 sparse index when available
+    bm25_scores = {}
+    try:
+        from .store import has_fts5
+        if has_fts5():
+            fts_hits = search_fts5(query, k=max(k * 3, 30), sources=sources,
+                                   allowed_knowledge_source_ids=allowed_knowledge_source_ids)
+            for fh in fts_hits:
+                bm25_scores[(fh["path"], fh["text"])] = fh["bm25"]
+    except Exception:
+        pass
+
+    # Query native vector store (sqlite-vec) when available
+    vec_scores = {}
+    if all_vecs and all_vecs[0] is not None:
+        try:
+            vec_hits = search_vec_sqlite(all_vecs[0], k=max(k * 3, 30), sources=sources,
+                                         allowed_knowledge_source_ids=allowed_knowledge_source_ids)
+            for vh in vec_hits:
+                vec_scores[(vh["path"], vh["text"])] = vh["cos"]
+        except Exception:
+            pass
+
     ranked_lists: List[List[dict]] = []
     for qi, q_text in enumerate(all_queries):
         qvec = all_vecs[qi] if all_vecs and qi < len(all_vecs) else None
@@ -163,6 +186,12 @@ async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optio
         for j, i in enumerate(idxs):
             src, path, text, _v = all_entries[i]
             score = (0.5 * cos_n[j] + 0.5 * lex_n[j]) if cos_n is not None else lex_n[j]
+            # If matched by FTS5 BM25, add bonus based on BM25 rank
+            if (path, text) in bm25_scores:
+                score += 0.25
+            # If matched by sqlite-vec native cosine index, blend
+            if (path, text) in vec_scores:
+                score += 0.15 * vec_scores[(path, text)]
             ranked.append({"source": src, "path": path, "text": text, "score": score})
         ranked.sort(key=lambda r: r["score"], reverse=True)
         ranked_lists.append(ranked)

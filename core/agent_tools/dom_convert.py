@@ -40,6 +40,35 @@ _DOC_CLASSES = (
 )
 
 
+_CALLOUT_ICONS = {
+    "NOTE": ("ℹ️", "Note"),
+    "TIP": ("💡", "Tip"),
+    "IMPORTANT": ("❗", "Important"),
+    "WARNING": ("⚠️", "Warning"),
+    "CAUTION": ("🛑", "Caution"),
+}
+
+
+def _convert_callouts(html: str) -> str:
+    def _sub(m):
+        kind = m.group(1).upper()
+        icon, title = _CALLOUT_ICONS.get(kind, ("ℹ️", kind.title()))
+        body = m.group(2).strip()
+        # if the body already starts with a paragraph tag or contains one, preserve it
+        prefix = '' if body.startswith('<p') else '<p class="doc-p">'
+        suffix = '' if body.startswith('<p') else '</p>'
+        return (f'<div class="doc-callout doc-callout-{kind.lower()}">'
+                f'<div class="doc-callout-header"><span class="doc-callout-icon">{icon}</span> '
+                f'<span class="doc-callout-title">{title}</span></div>'
+                f'{prefix}{body}{suffix}</div>')
+    return re.sub(
+        r'<blockquote class="doc-quote">\s*<p class="doc-p">\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(?:<br\s*/?>)?\s*([\s\S]*?)</blockquote\s*>',
+        _sub,
+        html,
+        flags=re.IGNORECASE
+    )
+
+
 def markdown_to_body_html(content: str):
     """Document body HTML from Markdown (GitHub tables, nested lists, quotes, ...) with the doc theme's classes,
     or None when markdown-it is not installed (the caller then uses the simple converter). Raw HTML in the
@@ -52,6 +81,7 @@ def markdown_to_body_html(content: str):
     html = md.render(normalize_tables(content))
     for pat, rep in _DOC_CLASSES:
         html = re.sub(pat, rep, html)
+    html = _convert_callouts(html)
     return html
 
 

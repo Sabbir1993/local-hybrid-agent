@@ -88,6 +88,7 @@ from core.agent_loop import (
     fast_sandbox_check,
     validate_and_finalize_response,
     is_passive_refusal,
+    is_unwritten_code,
     PASSIVE_REFUSAL_NOTE,
     safe_parse_and_repair_args,
     MAX_CUTOFF_RETRIES,
@@ -543,6 +544,8 @@ async def run_agent_stream(req, user, ctx):
         # The git calls are async and routed through the companion like every
         # other git op; the checkpoint table persists across restarts.
         _checkpoint_ref = None
+        _checkpoint_step = None
+        _checkpoint_rewound = False
         if bypass:
             audit_log(user, action="agent.permission_bypass", resource="agent.run", result="allow",
                       detail={"session_id": req.session_id, "personal": bool(personal)})
@@ -1259,18 +1262,30 @@ async def run_agent_stream(req, user, ctx):
                         continue
 
                 if not tool_calls and passivity_nudges < MAX_PASSIVITY_NUDGES and step < steps - 1:
-                    if is_passive_refusal(final_content, last_query, actions_taken):
+                    refusal = is_passive_refusal(final_content, last_query, actions_taken)
+                    unwritten = is_unwritten_code(final_content, last_query, actions_taken) if not refusal else False
+                    if refusal or unwritten:
                         passivity_nudges += 1
                         tree_text = await _get_workspace_tree_summary()
                         if final_content.strip():
                             msgs.append({"role": "assistant", "content": final_content})
-                        msgs.append({"role": "user", "content": (
-                            "[directive action required] Do not ask the user for file paths or starter code. "
-                            "You are an autonomous coding agent with full workspace write permissions to execute this task.\n"
-                            f"Current workspace files:\n{tree_text}\n\n"
-                            "Pick the standard target file path (e.g., 'index.html', 'src/main.py', etc.) and call "
-                            "write_file now to create the code. Answer in plain text only after the work is written."
-                        )})
+                        if unwritten:
+                            nudge_prompt = (
+                                "[directive action required] You displayed code in markdown instead of creating or editing the file on disk. "
+                                "You are an autonomous coding agent with full workspace write permissions to execute this task.\n"
+                                f"Current workspace files:\n{tree_text}\n\n"
+                                "Pick the target file path and call 'write_file' (or 'edit_file') NOW to apply the code into the workspace. "
+                                "Answer in plain text only after the work is saved and verified."
+                            )
+                        else:
+                            nudge_prompt = (
+                                "[directive action required] Do not ask the user for file paths or starter code. "
+                                "You are an autonomous coding agent with full workspace write permissions to execute this task.\n"
+                                f"Current workspace files:\n{tree_text}\n\n"
+                                "Pick the standard target file path (e.g., 'index.html', 'src/main.py', etc.) and call "
+                                "write_file now to create the code. Answer in plain text only after the work is written."
+                            )
+                        msgs.append({"role": "user", "content": nudge_prompt})
                         yield f"event: delta\ndata: {json.dumps({'text': chr(10) + chr(10)})}\n\n"
                         continue
 
@@ -1810,8 +1825,12 @@ async def run_agent_stream(req, user, ctx):
                                 cwd = Path(ws_path)
                                 _is_repo, _ = await _git_run(["rev-parse", "--is-inside-work-tree"], cwd)
                                 if _is_repo == 0:
+                                    async def _bound_git_cp(args):
+                                        return await _git_run(args, cwd)
                                     _checkpoint_ref = await create_checkpoint(
-                                        run_id, user.id, req.session_id, step, _git_run)
+                                        run_id, user.id, req.session_id, step, _bound_git_cp)
+                                    if _checkpoint_ref:
+                                        _checkpoint_step = step
                             except Exception as _ce:
                                 print(f"[agent] checkpoint skipped: {_ce}", file=sys.stderr)
                         try:
@@ -1901,10 +1920,57 @@ async def run_agent_stream(req, user, ctx):
                 elif _v.level == _lg.ESCALATE:
                     force_main_until = step + 1 + int(guard_cfg["escalate_steps"])
                     force_main_why = "loop_guard"
+                    if _checkpoint_ref and _checkpoint_step is not None and not _checkpoint_rewound and _v.tool in FILE_WRITE_TOOLS:
+                        try:
+                            from ..agent_loop.checkpoint import rewind as _rewind
+                            from ..git_tools import _run as _git_run
+                            cwd = Path(ws_path)
+                            async def _bound_git_rw(args):
+                                return await _git_run(args, cwd)
+                            _rw = await _rewind(run_id, _checkpoint_step, user.id, _bound_git_rw)
+                            if _rw and not _rw.get("error"):
+                                _checkpoint_rewound = True
+                                yield sse("checkpoint_rollback", {
+                                    "commit": _rw.get("commit"),
+                                    "step": _checkpoint_step,
+                                    "message": f"Workspace restored to clean checkpoint from step {_checkpoint_step}."
+                                })
+                                msgs.append({"role": "user", "content": (
+                                    f"[automated rollback] Multiple edits using {_v.tool} resulted in {_v.rule}. "
+                                    f"The workspace has been automatically restored to the clean checkpoint from step {_checkpoint_step}. "
+                                    "Do NOT repeat the previous failing edits. Inspect the files, plan an alternate fix, and try again."
+                                )})
+                        except Exception as _rwe:
+                            print(f"[agent] auto-rollback skipped: {_rwe}", file=sys.stderr)
                     msgs.append({"role": "user", "content": _lg.nudge_message(_v)})
                     yield sse("lane_warning", {"reason": "no_progress", "retrying": True,
                                                "message": "Still no progress: " + _lg.describe(_v.rule, _v.tool, _v.count) + ". Continuing on the main model."})
                 elif _v.level == _lg.STOP:
+                    if _checkpoint_ref and _checkpoint_step is not None and not _checkpoint_rewound and _v.tool in FILE_WRITE_TOOLS:
+                        try:
+                            from ..agent_loop.checkpoint import rewind as _rewind
+                            from ..git_tools import _run as _git_run
+                            cwd = Path(ws_path)
+                            async def _bound_git_rw(args):
+                                return await _git_run(args, cwd)
+                            _rw = await _rewind(run_id, _checkpoint_step, user.id, _bound_git_rw)
+                            if _rw and not _rw.get("error"):
+                                _checkpoint_rewound = True
+                                yield sse("checkpoint_rollback", {
+                                    "commit": _rw.get("commit"),
+                                    "step": _checkpoint_step,
+                                    "message": f"Workspace restored to clean checkpoint from step {_checkpoint_step}."
+                                })
+                                msgs.append({"role": "user", "content": (
+                                    f"[automated rollback] Loop guard triggered stop ({_v.rule} on {_v.tool}). "
+                                    f"The workspace has been restored to the clean checkpoint from step {_checkpoint_step}. "
+                                    "Take an alternate approach."
+                                )})
+                                force_main_until = step + 1 + int(guard_cfg["escalate_steps"])
+                                force_main_why = "loop_guard"
+                                continue
+                        except Exception as _rwe:
+                            print(f"[agent] auto-rollback on stop skipped: {_rwe}", file=sys.stderr)
                     print(f"[agent] no progress ({_v.detail}) - stopping run", file=sys.stderr)
                     stop_reason = "no_progress"
                     loop_detail = _v.detail

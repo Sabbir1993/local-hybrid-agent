@@ -202,7 +202,7 @@ async def tool_write_file(args: dict) -> str:
         return (f"error: {path_arg} already exists ({_lines(before)} lines). Change part of it with edit_file "
                 "(after read_file), add to the end with append_file, or pass overwrite=true to replace the "
                 "whole file.")
-    if args.get("pre_save_check") or args.get("pre_validate"):
+    if args.get("pre_save_check", True) and not args.get("skip_verify"):
         from .verify import validate_code_syntax
         is_ok, err = validate_code_syntax(path_arg, content)
         if not is_ok:
@@ -235,6 +235,11 @@ async def tool_append_file(args: dict) -> str:
     after = edit_engine.append_text(before, content)
     if len(after) > MAX_EDIT_BYTES * 4:
         return f"error: {path_arg} would grow past {MAX_EDIT_BYTES * 4 // 1024} KB - split it into several files."
+    if args.get("pre_save_check", True) and not args.get("skip_verify"):
+        from .verify import validate_code_syntax
+        is_ok, err = validate_code_syntax(path_arg, after)
+        if not is_ok:
+            return f"error: pre-save syntax validation failed for {path_arg}: {err} (file was not written)"
     await _store(uid, p, before, after)
     msg = (f"appended {len(content)} chars to {path_arg} (now {_lines(after)} lines, "
            f"{len(after)} bytes)")
@@ -267,7 +272,7 @@ async def tool_edit_file(args: dict) -> str:
         except edit_engine.EditError as e:
             return f"error: {e}"
         after = res["text"]
-        if args.get("pre_save_check") or args.get("pre_validate"):
+        if args.get("pre_save_check", True) and not args.get("skip_verify"):
             from .verify import validate_code_syntax
             is_ok, err = validate_code_syntax(path_arg, after)
             if not is_ok:
@@ -282,7 +287,7 @@ async def tool_edit_file(args: dict) -> str:
     except edit_engine.EditError as e:
         return f"error: {e}"
     after = res["text"]
-    if args.get("pre_save_check") or args.get("pre_validate"):
+    if args.get("pre_save_check", True) and not args.get("skip_verify"):
         from .verify import validate_code_syntax
         is_ok, err = validate_code_syntax(path_arg, after)
         if not is_ok:
@@ -315,6 +320,11 @@ async def tool_insert_at_line(args: dict) -> str:
         res = edit_engine.insert_at_line(before, args.get("line"), text)
     except edit_engine.EditError as e:
         return f"error: {e}"
+    if args.get("pre_save_check", True) and not args.get("skip_verify"):
+        from .verify import validate_code_syntax
+        is_ok, err = validate_code_syntax(path_arg, res["text"])
+        if not is_ok:
+            return f"error: pre-save syntax validation failed for {path_arg}: {err} (file was not modified)"
     await _store(uid, p, before, res["text"])
     msg = f"inserted {res['last_line'] - res['first_line'] + 1} line(s) at line {res['first_line']} of {path_arg}\n{res['snippet']}"
     return msg + await verify_after(uid, p, path_arg, res["text"], before, can_autorevert=True)

@@ -107,6 +107,31 @@ def validate_code_syntax(path: str, text: str) -> tuple[bool, str]:
             return True, ""
         except Exception:
             return True, ""
+    if ext in (".ts", ".mts", ".cts", ".tsx"):
+        try:
+            import tree_sitter
+            import tree_sitter_typescript as _tsts
+            fn = _tsts.language_tsx if ext == ".tsx" else _tsts.language_typescript
+            lang = tree_sitter.Language(fn())
+            p = tree_sitter.Parser(lang)
+            tree = p.parse(text.encode("utf-8"))
+            if tree.root_node.has_error:
+                def _find_err_ts(n):
+                    if n.is_missing or n.type == "ERROR":
+                        return n
+                    for c in n.children:
+                        if c.has_error:
+                            res = _find_err_ts(c)
+                            if res:
+                                return res
+                    return None
+                err = _find_err_ts(tree.root_node)
+                where = f"line {err.start_point[0] + 1}" if err else "unknown line"
+                kind = "TSX" if ext == ".tsx" else "TypeScript"
+                return False, f"{kind} syntax error at {where}"
+            return True, ""
+        except Exception:
+            return True, ""
     status, detail = verify_text(path, text)
     if status == "fail":
         return False, detail

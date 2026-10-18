@@ -17,6 +17,7 @@ from .constants import (
     SKIP_DIRS,
     TEXT_EXTS,
     _chunk_text,
+    chunk_source,
 )
 from .store import _already_indexed, _db, _delete_stale, _store_vecs
 
@@ -107,7 +108,7 @@ async def index_workspace(ws_path: Optional[Path] = None, force: bool = False) -
             text = f.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-        for idx, part in enumerate(_chunk_text(text)):
+        for idx, part in enumerate(chunk_source(rel, text)):
             new_rows.append(("workspace", rel, idx, part, mtime))
 
     _delete_stale("workspace", seen)

@@ -87,6 +87,34 @@ DOC_CSS = """
     border-radius: 0 6px 6px 0;
     font-style: italic;
   }
+  .doc-callout {
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 14px 0;
+    border-left: 4px solid #3b82f6;
+    background: #f8fafc;
+  }
+  .doc-callout-header {
+    font-weight: 700;
+    font-size: 12.5px;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .doc-callout p.doc-p {
+    margin-bottom: 4px;
+  }
+  .doc-callout-note { border-left-color: #2563eb; background: #eff6ff; }
+  .doc-callout-note .doc-callout-header { color: #1e40af; }
+  .doc-callout-tip { border-left-color: #10b981; background: #ecfdf5; }
+  .doc-callout-tip .doc-callout-header { color: #065f46; }
+  .doc-callout-important { border-left-color: #8b5cf6; background: #f5f3ff; }
+  .doc-callout-important .doc-callout-header { color: #5b21b6; }
+  .doc-callout-warning { border-left-color: #f59e0b; background: #fffbeb; }
+  .doc-callout-warning .doc-callout-header { color: #92400e; }
+  .doc-callout-caution { border-left-color: #ef4444; background: #fef2f2; }
+  .doc-callout-caution .doc-callout-header { color: #991b1b; }
   .doc-table {
     width: 100%;
     border-collapse: collapse;
@@ -155,7 +183,7 @@ PRINT_CSS = """
     h1, h2, h3 { break-after: avoid; page-break-after: avoid; }
     .doc-table { break-inside: auto; }
     .doc-table thead { display: table-header-group; }
-    .doc-table tr, .doc-quote, figure, img, li { break-inside: avoid; page-break-inside: avoid; }
+    .doc-table tr, .doc-quote, .doc-callout, figure, img, li { break-inside: avoid; page-break-inside: avoid; }
     img { max-width: 100%; height: auto; }
     .code-block { white-space: pre-wrap; overflow-wrap: anywhere; overflow: visible; }
     p { orphans: 3; widows: 3; }

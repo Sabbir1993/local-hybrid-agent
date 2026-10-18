@@ -264,11 +264,114 @@ def _query_nvidia_sensors_sync() -> list:
         return []
 
 
+_last_intel_energy: dict[int, tuple[int, int]] = {}
+
+
+def _query_intel_sensors_sync() -> list:
+    """[{gpu, name, temp_c, watts}] from Intel Level Zero Sysman (ze_loader.dll / libze_loader.so)."""
+    import ctypes
+    lib_name = "ze_loader.dll" if IS_WINDOWS else "libze_loader.so"
+    try:
+        ze = ctypes.CDLL(lib_name)
+    except (OSError, Exception):
+        return []
+
+    try:
+        if not hasattr(ze, "zesInit"):
+            return []
+        ze.zesInit.argtypes = [ctypes.c_uint32]
+        ze.zesInit.restype = ctypes.c_int32
+        if ze.zesInit(0) != 0:
+            return []
+
+        ze.zesDriverGet.argtypes = [ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_void_p)]
+        ze.zesDriverGet.restype = ctypes.c_int32
+        ze.zesDeviceGet.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_void_p)]
+        ze.zesDeviceGet.restype = ctypes.c_int32
+        ze.zesDeviceEnumTemperatureSensors.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_void_p)]
+        ze.zesDeviceEnumTemperatureSensors.restype = ctypes.c_int32
+        ze.zesTemperatureGetState.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+        ze.zesTemperatureGetState.restype = ctypes.c_int32
+        ze.zesDeviceEnumPowerDomains.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_void_p)]
+        ze.zesDeviceEnumPowerDomains.restype = ctypes.c_int32
+
+        class _ZesEnergyCounter(ctypes.Structure):
+            _fields_ = [("energy", ctypes.c_uint64), ("timestamp", ctypes.c_uint64)]
+
+        ze.zesPowerGetEnergyCounter.argtypes = [ctypes.c_void_p, ctypes.POINTER(_ZesEnergyCounter)]
+        ze.zesPowerGetEnergyCounter.restype = ctypes.c_int32
+
+        count = ctypes.c_uint32(0)
+        if ze.zesDriverGet(ctypes.byref(count), None) != 0 or count.value == 0:
+            return []
+        drivers = (ctypes.c_void_p * count.value)()
+        ze.zesDriverGet(ctypes.byref(count), drivers)
+
+        rows = []
+        gpu_idx = 0
+        for drv in drivers:
+            dev_count = ctypes.c_uint32(0)
+            if ze.zesDeviceGet(drv, ctypes.byref(dev_count), None) != 0:
+                continue
+            devs = (ctypes.c_void_p * dev_count.value)()
+            ze.zesDeviceGet(drv, ctypes.byref(dev_count), devs)
+
+            for dev in devs:
+                temp_c = None
+                t_count = ctypes.c_uint32(0)
+                if ze.zesDeviceEnumTemperatureSensors(dev, ctypes.byref(t_count), None) == 0 and t_count.value > 0:
+                    t_handles = (ctypes.c_void_p * t_count.value)()
+                    ze.zesDeviceEnumTemperatureSensors(dev, ctypes.byref(t_count), t_handles)
+                    temps = []
+                    for th in t_handles:
+                        t_val = ctypes.c_double(0.0)
+                        if ze.zesTemperatureGetState(th, ctypes.byref(t_val)) == 0 and t_val.value > 0:
+                            temps.append(float(t_val.value))
+                    if temps:
+                        temp_c = round(max(temps), 1)
+
+                watts = None
+                p_count = ctypes.c_uint32(0)
+                if ze.zesDeviceEnumPowerDomains(dev, ctypes.byref(p_count), None) == 0 and p_count.value > 0:
+                    p_handles = (ctypes.c_void_p * p_count.value)()
+                    ze.zesDeviceEnumPowerDomains(dev, ctypes.byref(p_count), p_handles)
+                    ec = _ZesEnergyCounter()
+                    if ze.zesPowerGetEnergyCounter(p_handles[0], ctypes.byref(ec)) == 0:
+                        now_e, now_t = int(ec.energy), int(ec.timestamp)
+                        prev = _last_intel_energy.get(gpu_idx)
+                        if not prev:
+                            time.sleep(0.04)
+                            ec2 = _ZesEnergyCounter()
+                            if ze.zesPowerGetEnergyCounter(p_handles[0], ctypes.byref(ec2)) == 0:
+                                dt = int(ec2.timestamp) - now_t
+                                de = int(ec2.energy) - now_e
+                                if dt > 0:
+                                    watts = round(de / dt, 1)
+                                now_e, now_t = int(ec2.energy), int(ec2.timestamp)
+                        else:
+                            prev_e, prev_t = prev
+                            dt = now_t - prev_t
+                            de = now_e - prev_e
+                            if dt > 0:
+                                watts = round(de / dt, 1)
+                        _last_intel_energy[gpu_idx] = (now_e, now_t)
+
+                if temp_c is not None or watts is not None:
+                    rows.append({"gpu": gpu_idx, "name": f"Intel Arc #{gpu_idx}", "temp_c": temp_c, "watts": watts})
+                    gpu_idx += 1
+        return rows
+    except Exception:
+        return []
+
+
 def query_gpu_sensors_sync() -> Optional[dict]:
     """Real GPU temperature/power readings, or None when this machine offers
-    no source. Order: nvidia-smi (CUDA rig) -> LibreHardwareMonitor WMI (if
+    no source. Order: Intel Level Zero Sysman (Intel Arc) -> nvidia-smi (CUDA rig) -> LibreHardwareMonitor WMI (if
     the operator runs it). Nothing is modeled; an unknown stack gets None and
     the UI shows N/A instead of a thermometer drawn from the load percent."""
+    intel_rows = _query_intel_sensors_sync()
+    if intel_rows:
+        return {"source": "intel-sysman", "gpus": intel_rows}
     if IS_WINDOWS and shutil.which("nvidia-smi"):
         rows = _query_nvidia_sensors_sync()
         if rows:

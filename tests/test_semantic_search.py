@@ -356,12 +356,53 @@ class ConfigDrivenVocabularyTests(unittest.TestCase):
             self.assertIn("megalocorp", kw)       # deployment terms added
             self.assertIn("employee", kw)         # generic defaults retained
             self.assertTrue(is_company_or_kb_query("megalocorp policy", {1}))
-        # without config: defaults only
         with mock.patch.dict("core.small_model.APP_CONFIG", {}, clear=False):
             kw = active_company_keywords()
             self.assertNotIn("megalocorp", kw)
             self.assertIn("employee", kw)
 
 
+class ASTChunkingTests(unittest.TestCase):
+    """AST boundary chunking for code repositories (Phase 2 SOTA rail)."""
+
+    def test_chunk_source_splits_python_functions_and_classes(self):
+        from core.memory.constants import chunk_source
+        py_code = (
+            "import os\n"
+            "import sys\n\n"
+            "def calculate_total(price, tax):\n"
+            "    '''Calculate final price.'''\n"
+            "    return price * (1 + tax)\n\n"
+            "class InvoiceProcessor:\n"
+            "    def process(self, invoice):\n"
+            "        return True\n"
+        )
+        chunks = chunk_source("app/processor.py", py_code)
+        self.assertGreaterEqual(len(chunks), 2)
+        # Verify preamble contains imports
+        self.assertIn("import os", chunks[0])
+        # Verify calculate_total is kept intact
+        fn_chunk = next((c for c in chunks if "def calculate_total" in c), None)
+        self.assertIsNotNone(fn_chunk)
+        self.assertIn("return price * (1 + tax)", fn_chunk)
+        # Verify class is kept intact
+        class_chunk = next((c for c in chunks if "class InvoiceProcessor" in c), None)
+        self.assertIsNotNone(class_chunk)
+        self.assertIn("def process(self, invoice):", class_chunk)
+
+    def test_chunk_source_falls_back_for_markdown(self):
+        from core.memory.constants import chunk_source
+        md_text = "# Documentation\n\nThis is a long markdown doc.\n" * 20
+        chunks = chunk_source("docs/readme.md", md_text)
+        self.assertGreater(len(chunks), 0)
+        self.assertTrue(all(isinstance(c, str) for c in chunks))
+
+    def test_chunk_source_handles_empty_or_whitespace(self):
+        from core.memory.constants import chunk_source
+        self.assertEqual(chunk_source("empty.py", ""), [])
+        self.assertEqual(chunk_source("empty.py", "   \n\n  "), [])
+
+
 if __name__ == "__main__":
     unittest.main()
+

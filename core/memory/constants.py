@@ -80,6 +80,45 @@ def _chunk_text(text: str, max_chunks: int = MAX_CHUNKS_PER_DOC) -> list:
     return chunks
 
 
+def chunk_source(rel: str, text: str, max_chunks: int = MAX_CHUNKS_PER_DOC) -> list:
+    """Chunk a file for vector memory: AST-boundary splitting for code (.py, .js, .ts, .jsx, .tsx),
+    falling back to line/paragraph boundary chunking for text and documents."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    ext = ("." + rel.split(".")[-1].lower()) if "." in rel else ""
+    if ext in {".py", ".js", ".ts", ".jsx", ".tsx"}:
+        try:
+            from ..code_intel.ast_index import parse_source
+            status, syms, _ = parse_source(rel, text.encode("utf-8", "ignore"))
+            if status == "ok" and syms:
+                lines = text.splitlines(keepends=True)
+                chunks = []
+                top_syms = [s for s in syms if not s.get("class")]
+                if top_syms:
+                    first_line = min(s["line"] for s in top_syms)
+                    if first_line > 1:
+                        preamble = "".join(lines[:first_line - 1]).strip()
+                        if preamble:
+                            chunks.append(preamble)
+                    for s in top_syms:
+                        s_text = "".join(lines[s["line"] - 1:s["end_line"]]).strip()
+                        if not s_text:
+                            continue
+                        if len(s_text) <= CHUNK_CHARS * 2:
+                            chunks.append(s_text)
+                        else:
+                            chunks.extend(_chunk_text(s_text, max_chunks=max(1, max_chunks - len(chunks))))
+                        if len(chunks) >= max_chunks:
+                            return chunks[:max_chunks]
+                    if chunks:
+                        return chunks[:max_chunks]
+        except Exception:
+            pass
+    return _chunk_text(text, max_chunks=max_chunks)
+
+
+
 def _snap_cut(text: str, start: int, end: int) -> int:
     """Pull a chunk cut back to a paragraph, line, or word boundary.
 

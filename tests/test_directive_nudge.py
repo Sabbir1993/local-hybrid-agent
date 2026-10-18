@@ -11,7 +11,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import unittest
-from core.agent_loop.sandbox import is_passive_refusal, PASSIVE_REFUSAL_NOTE, validate_and_finalize_response
+from core.agent_loop.sandbox import (
+    is_passive_refusal,
+    is_unwritten_code,
+    PASSIVE_REFUSAL_NOTE,
+    validate_and_finalize_response,
+)
 
 
 class TestDirectiveNudge(unittest.TestCase):
@@ -50,6 +55,38 @@ class TestDirectiveNudge(unittest.TestCase):
         good_ans = "I will write the test script in `benchmark.py` and run it."
         self.assertFalse(is_passive_refusal(good_ans, query, []))
 
+    def test_unwritten_code_detected_on_markdown_blocks(self):
+        query = "Create a snake game using pygame"
+        code_ans = (
+            "Here is the snake game code:\n"
+            "```python\n"
+            "import pygame\n"
+            "import sys\n"
+            "pygame.init()\n"
+            "screen = pygame.display.set_mode((640, 480))\n"
+            "```\n"
+            "Enjoy the game!"
+        )
+        self.assertTrue(is_unwritten_code(code_ans, query, []))
+
+    def test_unwritten_code_ignored_when_files_were_written(self):
+        query = "Create a snake game using pygame"
+        code_ans = "```python\nimport pygame\n```"
+        actions = [{"name": "write_file", "ok": True, "args": {"path": "snake.py"}}]
+        self.assertFalse(is_unwritten_code(code_ans, query, actions))
+
+    def test_unwritten_code_ignored_on_informational_queries(self):
+        query = "How to write a binary search in Python?"
+        code_ans = (
+            "Here is how binary search works:\n"
+            "```python\n"
+            "def binary_search(arr, target):\n"
+            "    low, high = 0, len(arr) - 1\n"
+            "```"
+        )
+        self.assertFalse(is_unwritten_code(code_ans, query, []))
+
 
 if __name__ == "__main__":
     unittest.main()
+

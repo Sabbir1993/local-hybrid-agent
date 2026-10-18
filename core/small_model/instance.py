@@ -199,6 +199,20 @@ class SmallModelInstance:
             cmd += ["--mmproj", str(self.mmproj_path)]
         if self.kind == "embed":
             cmd += ["--embedding"]
+        # Speculative draft decoding support (MTP or smaller draft model)
+        draft_model = self.cfg.get("draft_model") or self.cfg.get("mtp_draft_path")
+        if draft_model:
+            from pathlib import Path
+            dp = Path(draft_model)
+            if dp.exists():
+                spec_type = self.cfg.get("spec_type", "draft-mtp" if "mtp" in dp.name.lower() else "draft")
+                draft_n = str(self.cfg.get("draft_n_max", self.cfg.get("mtp_draft_n_max", 3)))
+                cmd += [
+                    "--spec-type", spec_type,
+                    "-md", str(dp),
+                    "--spec-draft-n-max", draft_n,
+                    "-ngld", str(self.cfg.get("draft_ngl", "auto")),
+                ]
         return cmd, None
 
     def _stop(self) -> None:

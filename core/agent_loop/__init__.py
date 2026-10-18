@@ -27,6 +27,7 @@ from .sandbox import (
     validate_and_finalize_response,
     PASSIVE_REFUSAL_NOTE,
     is_passive_refusal,
+    is_unwritten_code,
 )
 from .compaction import (
     estimate_prompt_tokens,
@@ -76,6 +77,7 @@ __all__ = [
     "validate_and_finalize_response",
     "PASSIVE_REFUSAL_NOTE",
     "is_passive_refusal",
+    "is_unwritten_code",
     "estimate_prompt_tokens",
     "_digest_message",
     "compact_messages",

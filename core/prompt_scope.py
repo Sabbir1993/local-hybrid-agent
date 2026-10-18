@@ -92,7 +92,9 @@ def file_manual(doc_tools: bool) -> str:
 # Deck format + style questions: appended to FILE_MANUAL only when the request is about slides.
 PPTX_MANUAL = (
     "PRESENTATIONS (.pptx): `content` is ONLY a slide outline in this format, nothing before or after it:\n"
-    "   # Deck title\n   subtitle: one line\n   theme: editorial|ember|midnight|corporate|forest|sunset|minimal|royal\n"
+    "   theme: editorial|ember|midnight|corporate|forest|sunset|minimal|royal\n"
+    "   mode: designer   (use when designer or richest visual style is requested for high-res infographics & cards)\n"
+    "   # Deck title\n   subtitle: one line\n"
     "   art: arches|waves|skyline|geometric|network   (optional drawing on the cover: pick the one that fits the topic)\n"
     "   ---\n   ## Slide title\n   eyebrow: SHORT LABEL ABOVE THE TITLE   (1-3 words: AT A GLANCE, HISTORY, ECONOMY)\n"
     "   - a line that carries a fact (up to 22 words; 3-5 lines)\n   source: where the facts on this slide come from\n"
@@ -443,25 +445,24 @@ DECK_BRIEF = (
     '"Designer (image slides, richest look, not editable)"]},'
     '{"id":"extra","type":"text","q":"Anything it must include? (optional)"}],"submit_label":"Build my deck"}\n'
     "```\n"
-    "- After the answers (or when the user already specified them), BUILD THE DECK IN PIECES so the user watches it grow:\n"
-    "  1. First work out the slide plan: exactly N slides (the number they chose, mid-range if a range), one "
-    "title + one-line purpose each, last slide a closing/thank-you slide. Pass it as the `plan` argument of doc_create, one "
-    "line per slide ('1. Title - purpose'); the tool plays it back after every doc_append.\n"
-    "  2. Call doc_create(file='<topic>.pptx', total=N, content=...) with ONLY: first line `theme: <editorial|ember|midnight|"
-    "corporate|forest|sunset|minimal|royal>` (the palette they chose), `mode: designer` right after it when they chose the "
-    "Designer style, `# Deck title`, a subtitle line, an `art:` line for the cover, then slides 1-2 (each `## Slide title` + an "
-    "`eyebrow:` label + 3-5 lines of up to 22 words + a `source:` line + a `notes:` line, slides separated by a line "
-    "containing only `---`). Each line carries a concrete fact, number or name from your research; use stats, timeline, cards, "
-    "a table beside text or a chart where the content fits instead of repeating bullet slides. Write for the audience they "
-    "chose: executives = outcomes, numbers, decisions; customers = benefits in plain words; technical team = specifics and "
-    "trade-offs; general = no jargon.\n"
-    "  3. If the user wants pictures/visuals/images in the deck, add an `image: <3-6 search words>` line under the title of the "
-    "cover and of roughly every other content slide (see the picture rules in the presentation format); read the tool result "
-    "for slides that got no picture and do not retry them.\n"
-    "  4. Then call doc_append(file=<the exact name doc_create returned>, content=<next 2-3 slides>) again and again, following "
-    "your plan, until N slides exist; put done=true on the last call. Plain text only: no emoji, no `>` quotes, "
-    "no ASCII diagrams (a markdown table is fine for a comparison). The second-to-last slide is 'Key takeaways' (or 'Sources' "
-    "naming where facts came from), the last is the closing. Never write a .md file for a PowerPoint request and never send the whole deck in one call.")
+    "- After the answers (or when the user already specified them), BUILD THE COMPLETE PRESENTATION IN A SINGLE PASS:\n"
+    "  1. Call `doc_create(file='<topic>.pptx', content=...)` immediately with the ENTIRE slide outline containing ALL N slides (the number they chose, mid-range if a range). "
+    "Do NOT build in pieces, do NOT pass `total`, and do NOT use `doc_append`: emitting the whole presentation in one call maximizes generation speed (~38 t/s), avoids multi-turn prefill latency, and guarantees cohesive visual presentation.\n"
+    "  2. CONTENT FORMAT: Slide outline separated by lines containing only `---`:\n"
+    "     - First line: `theme: <editorial|ember|midnight|corporate|forest|sunset|minimal|royal>` (the palette they chose).\n"
+    "     - Second line: `mode: designer` (whenever Designer style or graphical look was chosen, creating high-definition visual slides).\n"
+    "     - `# <Deck title>`\n"
+    "     - `subtitle: <Compelling subtitle>`\n"
+    "     - `art: <arches|waves|skyline|geometric|network>` (cover motif matching the topic).\n"
+    "     - `image: <3-6 concrete search keywords>` under the cover title and roughly every second content slide for relevant background/visual photography (e.g. `image: Lalbagh Fort Dhaka Bangladesh`).\n"
+    "  3. INFOGRAPHICS & VISUAL VARIETY (Crucial - vary layouts, never repetitive plain bullets):\n"
+    "     - `layout: stats` for key metrics/KPIs (e.g. `- 23.2M | Greater Dhaka Population`, `- $75B+ | Regional GDP`).\n"
+    "     - `layout: cards` for structured knowledge briefs, pillars, or core takeaways (e.g. `- Pillar Heading | 1-2 dense sentences explaining the fact`).\n"
+    "     - `layout: timeline` for chronological history or progression (e.g. `- 1608 | Mughal capital foundation`).\n"
+    "     - `layout: textside` with a markdown comparison table or chart beside text bullets.\n"
+    "     - `chart: bar|hbar|line|pie|stacked | unit=%` with `Label: value` bullets for trends and share breakdowns.\n"
+    "     - Every slide has `eyebrow: <SHORT CATEGORY>` above the title, `source: <source>` for attribution, and `notes: <2-3 spoken sentences>` for the presenter.\n"
+    "  4. The second-to-last slide is 'Key takeaways' or 'Summary', the last is a closing/thank-you slide. Plain text only: no emoji, no `>` quotes, no ASCII diagrams. Never write a .md file for a PowerPoint request and do not output chat commentary before or after the tool call.")
 _DECK_ASK_RE = re.compile(
     r"\b(ppt|pptx|power\s*point|presentation|slide\s*deck|slides?|deck)\b", re.IGNORECASE)
 _DECK_VERB_RE = re.compile(
@@ -593,13 +594,13 @@ BRIEF_BUILD_NOW = (
     "pages in full with web_fetch, not just the snippets. Every search and every page read counts against one budget: when a "
     "result says it is used up, STOP researching and write. Never fetch image-search or stock-photo pages (pixabay, "
     "unsplash...): pictures are the system's job. Keep track of where each fact came from.\n"
-    "2. PLAN: the slide plan goes in the `plan` argument of doc_create.\n"
-    "3. BUILD: doc_create, then doc_append until the planned count exists, done=true on the last call. Every content slide "
-    "carries figures, dates and names from your research, a `source:` line, and the slide type that fits it (stats for numbers, "
-    "timeline for dates, cards for a list of things, textside for a table beside text, chart for trends or shares). A figure you "
-    "could not verify is labelled an estimate in its source line; never invent numbers.\n"
-    "4. After the first doc_create do not search again. For pictures write `image:` lines only: the system fetches them; never "
-    "call web_search_images."
+    "2. PLAN: for presentations or multi-section documents, structure the content to cover the chosen length.\n"
+    "3. BUILD: Call `doc_create(file='...', content=...)` with the full content. "
+    "For presentations (.pptx), ALWAYS send the complete presentation with ALL slides in ONE single `doc_create` call with "
+    "`mode: designer` when requested, using diverse layouts (stats for numbers, timeline for dates, cards for knowledge brief pillars, "
+    "textside for tables beside text, chart for trends or shares), `image:` search lines, `eyebrow:`, and `source:` attribution lines. "
+    "Every content slide carries real figures, dates, and names from your research; never invent numbers.\n"
+    "4. For pictures write `image:` lines only: the system fetches them automatically; never call web_search_images."
 )
 
 BRIEF_ASK_NOW = (
@@ -678,6 +679,44 @@ def sheet_build_wanted(query: str, prior_msgs=None) -> bool:
     return not _SHEET_EDIT_RE.search(q)
 
 
+_HTML_RE = _Family(
+    re.compile(r"\b(html|htm|webpage|web page|landing page|web ?app|web ?ui|dashboard|interactive (?:web )?ui|frontend|front-end)\b", re.I),
+    ("html", "webpage", "dashboard", "landingpage", "frontend"), short=("htm", "dasboard", "dashbaord"))
+_HTML_VERB_RE = re.compile(r"\b(creat\w*|mak(?:e|ing)|build\w*|generat\w*|prepar\w*|draft\w*|design\w*|code|program|develop|write|share|send|provide|give me|render)\b", re.I)
+
+
+def html_wanted(query: str, prior_files=None, msgs=None) -> bool:
+    """True for requests to create/design an HTML deliverable (dashboard, webpage, interactive artifact)."""
+    q = (query or "").strip()
+    if not q:
+        return False
+    if any(str(f).lower().endswith((".html", ".htm")) for f in (prior_files or [])):
+        recent = [str(m.get("content") or "")[-600:] for m in (msgs or [])[-3:] if isinstance(m, dict)]
+        if any(re.search(r"\b(edit|change|update|fix|improve|redo|restyle|add|redesign)\b", t, re.I) for t in [q, *recent]):
+            return True
+    return bool(_HTML_RE.search(q) and (_HTML_VERB_RE.search(q) or re.search(r"\.html\b", q, re.I)))
+
+
+HTML_MANUAL = (
+    "HTML ARTIFACTS & WEB DASHBOARDS (deliver as standalone .html via `write_file(path='<name>.html', content=...)` or ```html block):\n"
+    "When creating an HTML page, dashboard, tool, game, or visualization, build a publication-grade, self-contained application matching modern SaaS quality (Claude Artifacts standard):\n"
+    "1. COMPLETE & STANDALONE: Write a single, completely runnable HTML file (<!DOCTYPE html>, <html>, <head>, <body>). Never omit code, never write placeholders like '<!-- add logic here -->', never truncate. End with [DOWNLOAD: <name>.html] so the preview dock opens it.\n"
+    "2. MODERN DESIGN SYSTEM & TYPOGRAPHY:\n"
+    "   - Tailwind CSS: `<script src=\"https://cdn.tailwindcss.com\"></script>`.\n"
+    "   - Font: `<link href=\"https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap\" rel=\"stylesheet\">` and set `body { font-family: 'Plus Jakarta Sans', sans-serif; }` in a `<style>` block.\n"
+    "   - Color & Contrast: Default to sleek dark mode (`bg-slate-950 text-slate-100 border-slate-800/80`) or clean crisp light mode (`bg-slate-50 text-slate-900 border-slate-200`). Use backdrop-blur glassmorphism (`backdrop-blur-md bg-slate-900/60`). Avoid raw primary colors or dated boxy designs.\n"
+    "3. ICONS & CHARTS:\n"
+    "   - Lucide Icons: `<script src=\"https://unpkg.com/lucide@latest\"></script>` and execute `<script>lucide.createIcons();</script>` after DOM load.\n"
+    "   - Chart.js (for analytics/data): `<script src=\"https://cdn.jsdelivr.net/npm/chart.js\"></script>` with responsive styling and matching palette.\n"
+    "4. COMPONENT HIERARCHY:\n"
+    "   - Header / Navigation Bar: App icon, title, subtitle, live status badge (e.g. `<span class=\"px-2.5 py-0.5 text-xs font-medium rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20\">Active</span>`), and search/action controls.\n"
+    "   - KPI Metric Cards: 3-4 cards showing bold large numbers (`text-2xl font-bold`), delta indicators (`+14.2%`), icons, and clear labels.\n"
+    "   - Main Content Area: Responsive card grid or clean data table with hover row highlights, tab switchers, and filter pills.\n"
+    "   - Interactive Detail View: Modal dialog or slide-over drawer for viewing item details.\n"
+    "5. WORKING INTERACTIVITY: Include clean vanilla JavaScript event handlers for all UI controls: real search filtering, real tab switching, modal toggles, and live computations. Ensure all clickable elements respond immediately."
+)
+
+
 XLSX_MANUAL = (
     "EXCEL WORKBOOK REQUEST (build it with doc_create, file=<name>.xlsx):\n"
     "Write a WORKBOOK OUTLINE, not a flat table:\n"
@@ -727,9 +766,16 @@ _FORMAT_FAMILIES = (
     (".pptx", _Family(_PPTX_RE, ("presentation", "presentations", "powerpoint", "slideshow"),
                       short=("powerpiont", "powerpont", "slidedeck"))),
     (".docx", re.compile(r"\b(docx|word (?:document|file)|ms word)\b", re.I)),
+    (".html", _HTML_RE),
 )
 _DOC_EXTS = (".xlsx", ".xls", ".csv", ".pdf", ".pptx", ".ppt", ".docx", ".doc")
-_FORMAT_LABEL = {".xlsx": "spreadsheet (.xlsx)", ".pdf": "PDF (.pdf)", ".pptx": "presentation (.pptx)", ".docx": "Word document (.docx)"}
+_FORMAT_LABEL = {
+    ".xlsx": "spreadsheet (.xlsx)",
+    ".pdf": "PDF (.pdf)",
+    ".pptx": "presentation (.pptx)",
+    ".docx": "Word document (.docx)",
+    ".html": "HTML page (.html)",
+}
 
 
 def explicit_format(query: str) -> str:

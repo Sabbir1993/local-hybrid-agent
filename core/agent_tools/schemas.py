@@ -322,9 +322,10 @@ AGENT_TOOLS = [
     },
 ]
 
-from .finish import FINISH_SCHEMA
+from .finish import FINISH_SCHEMA, COMPLETE_TASK_SCHEMA
 
 AGENT_TOOLS.append(FINISH_SCHEMA)
+AGENT_TOOLS.append(COMPLETE_TASK_SCHEMA)
 
 AGENT_CORE_TOOLS = [
     t for t in AGENT_TOOLS

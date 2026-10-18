@@ -171,6 +171,15 @@ class BrowserRenderTests(unittest.TestCase):
         self.assertTrue(any("Primary engine" in ln and "Corporate" in ln and "SME" in ln for ln in lines), lines)
         self.assertTrue(any("Moat" in ln and "Shariah" in ln and "Agents" in ln for ln in lines), lines)
 
+    def test_callout_blocks_rendered(self):
+        from core.agent_tools import dom_convert
+        md = "> [!NOTE]\n> Executive finding: Latency dropped by 42%.\n\n> [!WARNING]\n> High VRAM threshold."
+        html = dom_convert.markdown_to_body_html(md)
+        self.assertIn('class="doc-callout doc-callout-note"', html)
+        self.assertIn('class="doc-callout doc-callout-warning"', html)
+        self.assertIn("Executive finding: Latency dropped by 42%", html)
+        self.assertIn("High VRAM threshold", html)
+
 
 if __name__ == "__main__":
     unittest.main()

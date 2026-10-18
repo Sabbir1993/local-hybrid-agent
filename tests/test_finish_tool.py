@@ -35,9 +35,17 @@ class ApplyFinishTests(unittest.TestCase):
         self.assertEqual(apply_finish("", [call("finish")])[0], "")   # empty answer -> empty reply
 
     def test_without_finish(self):
-        tools = [{"function": {"name": "finish"}}, {"function": {"name": "read_file"}}]
+        tools = [{"function": {"name": "finish"}}, {"function": {"name": "complete_task"}}, {"function": {"name": "read_file"}}]
         self.assertEqual([t["function"]["name"] for t in without_finish(tools)], ["read_file"])
         self.assertEqual(without_finish(None), None)
+
+    def test_complete_task_becomes_structured_final_reply(self):
+        c = call("complete_task", summary="Implemented feature", files_modified=["main.py"], verification="pytest passed")
+        content, calls, done = apply_finish("", [c])
+        self.assertTrue(done)
+        self.assertIn("Implemented feature", content)
+        self.assertIn("`main.py`", content)
+        self.assertIn("pytest passed", content)
 
 
 class FinishInThePolicyTests(unittest.TestCase):
@@ -60,6 +68,11 @@ class FinishInThePolicyTests(unittest.TestCase):
         self.assertIn("finish", TOOL_IMPLS)
         self.assertEqual(TOOL_IMPLS["finish"]({"answer": " done "}), "done")
         self.assertIn("finish", [t["function"]["name"] for t in AGENT_TOOLS])
+        self.assertIn("complete_task", TOOL_IMPLS)
+        self.assertIn("complete_task", [t["function"]["name"] for t in AGENT_TOOLS])
+        res = TOOL_IMPLS["complete_task"]({"summary": "Done work", "files_modified": ["test.py"]})
+        self.assertIn("Done work", res)
+        self.assertIn("`test.py`", res)
 
 
 if __name__ == "__main__":

@@ -25,8 +25,8 @@
     "status": 403
   },
   "depic.ai": {
-    "fails": 1,
-    "until": 0,
+    "fails": 2,
+    "until": 1792436885.1130278,
     "status": 403
   },
   "macrotrends.net": {
@@ -102,6 +102,11 @@
   "dreamstime.com": {
     "fails": 2,
     "until": 1792426032.3711255,
+    "status": 403
+  },
+  "factsnippet.com": {
+    "fails": 1,
+    "until": 0,
     "status": 403
   }
 }

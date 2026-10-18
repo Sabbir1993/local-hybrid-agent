@@ -214,10 +214,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     resume_note = builds.resume_note(user.id, last_query)                 # "continue" after a stop / restart mid-deck
     sheet_build = prompt_scope.sheet_build_wanted(last_query, msgs[:-1])        # "make me an Excel workbook ..."
     sheet_build = sheet_build or absent_type == "spreadsheet"
+    html_build = prompt_scope.html_wanted(last_query, prior_files, msgs[:-1])
     explicit_ext = prompt_scope.explicit_format(own_q)              # the user named the file type: that is the deliverable
     if explicit_ext == ".xlsx":
         sheet_build = sheet_build or prompt_scope.sheet_build_wanted(own_q + " create", msgs[:-1])
-    wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or longdoc_build or bool(resume_note) or sheet_build or bool(absent_type)
+    if explicit_ext in (".html", ".htm"):
+        html_build = True
+    wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or longdoc_build or bool(resume_note) or sheet_build or html_build or bool(absent_type)
     has_file = bool(file_followup or wants_file)
     web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
                                                             explicit_only=voice_policy.web_explicit_only(req),
@@ -495,6 +498,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if sheet_build:
             sys_parts.append(prompt_scope.XLSX_MANUAL)
             sys_labels.append("xlsx-manual")
+        if html_build or prompt_scope.html_wanted(last_query, prior_files, msgs):
+            sys_parts.append(prompt_scope.HTML_MANUAL)
+            sys_labels.append("html-manual")
     else:
         sys_parts.append(prompt_scope.FILE_MANUAL_LEAN)
         sys_labels.append("file-lean")
