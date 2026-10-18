@@ -603,6 +603,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             max_turns = kb_coverage.rounds_for(max_web_calls, max_turns)
             if brief_phase == "build":
                 max_turns = deck_research.turns_for(max_web_calls, max_turns)      # research rounds + the build rounds
+    if project_build and chat_tools:
+        # a site is built a section per call (skeleton, css, js, a dozen sections, finish): 12-15 rounds would stop it half done
+        max_turns = max(max_turns, int(chat_cfg.get("project_max_rounds", 40)))
     if deep:
         sys_parts.append(
             "DEEP RESEARCH MODE:\n"
@@ -667,6 +670,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         web_seen = set()
         research_nudged = False
         continued = False
+        project_done = False      # project_finish has produced the ZIP
+        project_nudges = 0
         finish_reason = None
         written_files = []
         write_redirected = set()     # core.agent_loop.doc_redirect: the "use doc_create for a PDF / Word / deck" refusal is said once
@@ -1127,6 +1132,23 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
                         return
 
+                # A website build that stops with a text-only reply ("Now let me recreate charts.js:") before project_finish is not
+                # done, however many files are saved: say so and let the model carry on, a few times.
+                if (project_build and not tool_calls and not project_done and project_nudges < 3 and tool_allowed("project_write")
+                        and not _re.search(r"\[DOWNLOAD:[^\]]*\.zip\]", content or "")):
+                    project_nudges += 1
+                    if turn >= turn_limit - 1:
+                        turn_limit += 1
+                    if streamed_content:
+                        redactor.reset()
+                        yield "event: delta_reset\ndata: {}\n\n"
+                    msgs.append({"role": "assistant", "content": content or ""})
+                    msgs.append({"role": "user", "content": (
+                        "[system note] The website is not finished: do not describe it, call a tool now. Call project_write for the next "
+                        "file that is still missing (or project_append to extend a file that is too short), without rewriting files "
+                        "that are complete, and call project_finish once every file is written.")})
+                    continue
+
                 # Announced-but-not-delivered: "Let me compile the HTML now:" and
                 # stop. Nudge once to actually produce it (granting one extra turn
                 # if the budget is spent) instead of accepting the preamble.
@@ -1327,6 +1349,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                     "project_finish": tool_project_finish}[t_name]
                             res_str = await run_in_executor_ctx(impl, args)
                             written_files.extend(f for f in _DL_TAG_RE.findall(res_str) if f not in written_files)
+                            if t_name == "project_finish" and not res_str.startswith("error:"):
+                                project_done = True
                         elif t_name == "write_file" and _wraps_media(
                                 made_media, args.get("path") or args.get("file") or args.get("filename"), last_query):
                             res_str = _WRAP_REFUSAL
