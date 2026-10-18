@@ -2,7 +2,7 @@ import sys
 import threading
 import time
 
-from .constants import _decode_vec
+from .constants import _decode_vec, _knowledge_id_from_path
 from .store import _db
 
 try:
@@ -52,8 +52,14 @@ def _cached_entries() -> dict:
 def _build_cache(entries: list, gen=None) -> dict:
     """entries: [(source, path, text, vec_or_None)] -> the search cache."""
     built = {"gen": gen, "built_at": time.time(), "entries": entries, "lower": [e[2].lower() for e in entries],
-             "dim": None, "mat": None, "pos": None}
+             "dim": None, "mat": None, "pos": None, "kids": None, "wc": {}}
     if _np is not None:
+        # knowledge source id per row (-1 = not a knowledge row): the access filter becomes one np.isin
+        kids = []
+        for e in entries:
+            kid = _knowledge_id_from_path(e[1]) if e[0] == "knowledge" else None
+            kids.append(-1 if kid is None else kid)
+        built["kids"] = _np.asarray(kids, dtype=_np.int64)
         dims = [len(e[3]) for e in entries if e[3] is not None]
         if dims:
             dim = max(set(dims), key=dims.count)
@@ -66,6 +72,32 @@ def _build_cache(entries: list, gen=None) -> dict:
             pos[keep] = _np.arange(len(keep))
             built.update(dim=dim, mat=mat, pos=pos)
     return built
+
+
+_TERM_CACHE_MAX = 32          # query words whose per-row counts are kept (int32 per row each)
+
+
+def _term_counts(cache: dict, word: str):
+    """Occurrences of `word` in every cached row (np.int32, same order as entries). Counted once per word per
+    cache generation: repeat queries (and follow-ups sharing words) skip the O(rows) str.count pass."""
+    wc = cache["wc"]
+    arr = wc.get(word)
+    if arr is None:
+        lower = cache["lower"]
+        arr = _np.fromiter((tl.count(word) for tl in lower), dtype=_np.int32, count=len(lower))
+        if len(wc) >= _TERM_CACHE_MAX:
+            wc.pop(next(iter(wc)), None)
+        wc[word] = arr
+    return arr
+
+
+def _lex_counts(cache: dict, words: list, idxs: list) -> list:
+    """Same value as float(sum(row.count(w) for w in words)) for each row in idxs."""
+    ix = _np.asarray(idxs, dtype=_np.int64)
+    total = _np.zeros(len(ix), dtype=_np.float64)
+    for w in words:
+        total += _term_counts(cache, w)[ix]
+    return total.tolist()
 
 
 def _set_cache(built: dict) -> None:

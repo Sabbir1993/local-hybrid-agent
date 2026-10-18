@@ -122,30 +122,26 @@ class KbIngestPanTests(unittest.TestCase):
             out = asyncio.run(helpers._finish_ingest(7, text, mock.Mock()))
         return out, seen.get("text"), audit
 
-    def test_card_numbers_are_masked_before_chunking(self):
+    def test_upload_stores_card_numbers_verbatim(self):
+        # decision 2026-10-18: no guardrail at upload; the guard runs when the KB is read
         out, indexed, audit = self._run(f"Customer {VISA_TEST} holds an account.")
         self.assertTrue(out["ok"])
-        self.assertEqual(indexed, "Customer [card ****1111] holds an account.")
-        self.assertNotIn("4111 1111", indexed)          # never enters the vector index
-        self.assertEqual(out["pans_masked"], 1)
+        self.assertEqual(indexed, f"Customer {VISA_TEST} holds an account.")
 
-    def test_masking_is_audited(self):
+    def test_upload_is_audited_without_a_guard_verdict(self):
         out, _indexed, audit = self._run(f"card {MC_TEST} on file")
         detail = audit.call_args.kwargs["detail"]
-        self.assertEqual(detail["pans_masked"], 1)
         self.assertEqual(detail["chunks"], 3)
+        self.assertNotIn("pans_masked", detail)
 
     def test_a_clean_document_is_untouched(self):
         out, indexed, _audit = self._run("Refund policy: 30 days from delivery.")
         self.assertEqual(indexed, "Refund policy: 30 days from delivery.")
-        self.assertEqual(out["pans_masked"], 0)
 
     def test_ingest_is_not_rejected(self):
-        # rejecting would make a document *about* card handling impossible to upload,
-        # which is why masking replaced rejection rather than implementing it
         out, indexed, _audit = self._run(f"PCI guidance: never store {VISA_TEST} unencrypted.")
         self.assertTrue(out["ok"], out)
-        self.assertIn("[card ****1111]", indexed)
+        self.assertIn(VISA_TEST, indexed)
 
     def test_empty_text_is_still_reported_as_empty(self):
         out, _indexed, _audit = self._run("   \n  ")
@@ -162,7 +158,7 @@ class KbIngestPanTests(unittest.TestCase):
     def test_pan_module_docstring_matches_behaviour(self):
         import core.pan as p
         doc = p.__doc__
-        self.assertIn("KB ingest", doc)
+        self.assertIn("KB reads", doc)
         self.assertNotIn("deliberately NOT scanned", doc)
 
 

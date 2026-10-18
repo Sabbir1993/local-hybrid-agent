@@ -2,7 +2,7 @@ import re
 import sys
 from typing import Optional, List
 
-from .cache import _cached_entries, _cosines
+from .cache import _cached_entries, _cosines, _lex_counts, _np
 from .constants import (_knowledge_id_from_path, _norm, _normalize_query_words,
                         _session_id_from_path)
 from .indexing import _embed_texts
@@ -245,13 +245,25 @@ async def search_knowledge_hybrid(query: str, k: int = 6,
     cache = cached_fn()
     kid_fn = getattr(_pkg(), "_knowledge_id_from_path", _knowledge_id_from_path)
     idxs, entries = [], []
-    for i, (source, path, text, v) in enumerate(cache["entries"]):
-        if source != "knowledge":
-            continue
-        kid = kid_fn(path)
-        if kid is not None and kid in allowed_knowledge_source_ids:
+    # fast path: the cache carries a source-id array, so the access filter is one np.isin instead of
+    # parsing every row's path; identical result (tests that swap kid_fn take the plain loop)
+    fast = _np is not None and kid_fn is _knowledge_id_from_path and cache.get("kids") is not None
+    if fast:
+        kids_arr = cache["kids"]
+        sel = _np.flatnonzero(_np.isin(kids_arr, _np.fromiter(allowed_knowledge_source_ids, dtype=_np.int64)))
+        ents = cache["entries"]
+        for i in sel.tolist():
+            source, path, text, v = ents[i]
             idxs.append(i)
-            entries.append((source, path, text, v, kid))
+            entries.append((source, path, text, v, int(kids_arr[i])))
+    else:
+        for i, (source, path, text, v) in enumerate(cache["entries"]):
+            if source != "knowledge":
+                continue
+            kid = kid_fn(path)
+            if kid is not None and kid in allowed_knowledge_source_ids:
+                idxs.append(i)
+                entries.append((source, path, text, v, kid))
     if not entries:
         return []
 
@@ -285,13 +297,18 @@ async def search_knowledge_hybrid(query: str, k: int = 6,
     cosines_fn = getattr(_pkg(), "_cosines", _cosines)
     cos_raw = cosines_fn(cache, idxs, qvec)
     lower = cache["lower"]
+    lex_fast = fast and not use_title_lex and "wc" in cache
+    if lex_fast:                           # per-word counts are cached per cache generation (exact same numbers)
+        query_lex = _lex_counts(cache, words, idxs)
+        lex_raw = list(query_lex)
     for j, (_source, _path, text, v, kid) in enumerate(entries):
-        tl = lower[idxs[j]]
-        lex = float(sum(tl.count(w) for w in words))
-        query_lex.append(lex)
-        if use_title_lex and kid in source_titles:
-            lex += float(sum(tl.count(tw) for tw in title_lex_words.get(kid, ())))
-        lex_raw.append(lex)
+        if not lex_fast:
+            tl = lower[idxs[j]]
+            lex = float(sum(tl.count(w) for w in words))
+            query_lex.append(lex)
+            if use_title_lex and kid in source_titles:
+                lex += float(sum(tl.count(tw) for tw in title_lex_words.get(kid, ())))
+            lex_raw.append(lex)
 
         boost = 0.0
         if kid in matched_title_kids:

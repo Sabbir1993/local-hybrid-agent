@@ -2,7 +2,7 @@ import asyncio
 import shutil
 import sys
 import time
-from core import auth_db, pan
+from core import auth_db
 from core.audit import audit_log
 from core.auth import Principal
 from core.memory import index_knowledge_source, kb_chunk_count, kb_chunk_report, kb_total_chunk_limit
@@ -34,7 +34,7 @@ def _source_public(row) -> dict:
 
 
 async def _finish_ingest(source_id: int, text: str, user: Principal, progress=None) -> dict:
-    """Mask, store table rows, chunk and embed one source. With `progress` (the background queue) the CPU-heavy
+    """Store table rows, chunk and embed one source (verbatim, no guardrail at upload). With `progress` (the background queue) the CPU-heavy
     steps run in a thread so a large file does not stall the server."""
     async def _run(fn, *a):
         return await asyncio.to_thread(fn, *a) if progress else fn(*a)
@@ -42,13 +42,9 @@ async def _finish_ingest(source_id: int, text: str, user: Principal, progress=No
     if not text.strip():
         auth_db.update_knowledge_source_status(source_id, "error", "no extractable text")
         return {"ok": False, "error": "no extractable text found"}
-    # Mask payment card numbers to their last 4 digits before anything is chunked and
-    # embedded. Rejecting the upload would make a document that legitimately discusses card
-    # handling impossible to ingest, and masking already closes the path that matters: a PAN
-    # in the vector store can be retrieved into a prompt and sent to a cloud lane, a masked
-    # one cannot. Uses core/pan.py, the same detector as chat input, model output and cloud
-    # egress -- the count is audited so the uploading admin can see that redaction happened.
-    text, n_pans = await _run(pan.mask_pans, text)
+    # No guardrail at upload (decision 2026-10-18): the document is stored and indexed exactly as
+    # provided -- nothing is masked, blocked or rewritten here. The guard runs when the data is
+    # ACCESSED: every KB read path masks card numbers on the way out (core/kb_guard.py).
     report = await _run(kb_chunk_report, text)
     limit, others = kb_total_chunk_limit(), kb_chunk_count(exclude_source=source_id)
     if others + report["indexed"] > limit:          # refuse before the in-memory search index outgrows the server
@@ -68,8 +64,8 @@ async def _finish_ingest(source_id: int, text: str, user: Principal, progress=No
     auth_db.update_knowledge_source_index(source_id, report["indexed"], report["total"])
     partial = report["indexed"] < report["total"]
     audit_log(user, action="knowledge.ingest", resource=str(source_id), result="allow",
-              detail={"chunks": n_chunks, "pans_masked": n_pans, "partial": partial})
-    return {"ok": True, "chunks": n_chunks, "pans_masked": n_pans, "chunks_total": report["total"], "partial": partial}
+              detail={"chunks": n_chunks, "partial": partial})
+    return {"ok": True, "chunks": n_chunks, "chunks_total": report["total"], "partial": partial}
 
 
 async def _queue_file(source_id: int, path, user: Principal) -> None:

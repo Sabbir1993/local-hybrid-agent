@@ -4,6 +4,7 @@ import io
 from typing import Any, Dict, Optional, Tuple
 
 from .. import companion_bridge
+from ..kb_guard import guarded_tool as kb_guarded
 from ..request_context import get_current_user_id
 from ..small_model import describe_image_bytes
 from .workspace import _remote_uid, _ws_resolve
@@ -104,6 +105,7 @@ async def tool_search_memory(args: dict) -> str:
     return "\n".join(lines)
 
 
+@kb_guarded
 async def tool_search_knowledge_base(args: dict) -> str:
     from ..knowledge_router import KB_QUERY_MAX_CHARS, own_words
     query = own_words(str(args.get("query", "")), KB_QUERY_MAX_CHARS)      # never a pasted attachment / whole message
@@ -140,6 +142,7 @@ async def tool_search_knowledge_base(args: dict) -> str:
     return "\n\n---\n\n".join(lines) + (f"\n\n{note}" if note else "")
 
 
+@kb_guarded
 async def tool_kb_find_mentions(args: dict) -> str:
     """Every document line that mentions a person or term, not just the 6 best semantic chunks."""
     name = " ".join(str(args.get("name") or "").split())
@@ -204,6 +207,7 @@ def _kb_scope():
     return True, user, cloud, titles
 
 
+@kb_guarded
 async def tool_kb_sql(args: dict) -> str:
     """Read-only SQL (joins, pivots, medians, month buckets) over the Excel/CSV sources the user may read."""
     import hashlib
@@ -243,6 +247,7 @@ async def tool_kb_sql(args: dict) -> str:
     return out + (f"\n\n{note}" if note else "")
 
 
+@kb_guarded
 async def tool_kb_query(args: dict) -> str:
     """Exact counts, lists and group-bys over the Excel/CSV sources the user may read."""
     import json as _json
