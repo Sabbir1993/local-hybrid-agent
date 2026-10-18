@@ -275,3 +275,14 @@ class BuildSampling(unittest.TestCase):
         self.assertIn("deck_research.project_limits(APP_CONFIG)", src)
         self.assertIn("(brief_phase == \"build\" or project_build or pdf_build) and not cloud_main", src)
         self.assertNotIn("extra=sampler_extra(req)", src)
+
+
+class DockBelongsToTheChatOnScreen(unittest.TestCase):
+    def test_streamed_plan_and_live_doc_check_the_session(self):
+        root = Path(__file__).resolve().parents[1] / "static" / "js"
+        sse = (root / "sse-stream.js").read_text(encoding="utf-8")
+        self.assertIn("function _sseViewing(sessionId)", sse)
+        self.assertIn("if (!_sseViewing(sessionId)) return;", sse)
+        self.assertIn("_sseViewing(sessionId) && window.RightDock", sse)
+        self.assertIn("sseToolResult(L, d, sessionId)", (root / "chat.js").read_text(encoding="utf-8"))
+        self.assertIn("sseToolResult(L, d, sessionId)", (root / "agent-run.js").read_text(encoding="utf-8"))

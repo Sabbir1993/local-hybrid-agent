@@ -832,6 +832,18 @@ async function openSession(s) {
       curSession = s;
       messages = job.messages;
       if (window.RightDock && typeof window.RightDock.resetPreview === 'function') window.RightDock.resetPreview();
+      // the pane shows this chat's plan (the live run's, if it has one), never the previous chat's
+      {
+        let planActs = null;
+        for (let i = messages.length - 1; i >= 0 && !planActs; i--) {
+          const acts = messages[i].acts;
+          if (Array.isArray(acts) && acts.some(a => a.type === 'plan')) planActs = acts;
+        }
+        if (window.RightDock) {
+          if (planActs && typeof window.RightDock.updatePlanFromActs === 'function') window.RightDock.updatePlanFromActs(planActs);
+          else if (typeof window.RightDock.resetPlan === 'function') window.RightDock.resetPlan();
+        }
+      }
       try {
         localStorage.setItem(getActiveSessionKey(), String(s.id));
       } catch (e) {}

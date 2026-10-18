@@ -1274,9 +1274,9 @@ async function send(inputText) {
       } else if (ev === 'tool_call') {
         sseToolCall(L, d);
       } else if (ev === 'tool_result') {
-        sseToolResult(L, d);
+        sseToolResult(L, d, sessionId);
       } else if (ev === 'plan') {
-        ssePlan(L, d);
+        ssePlan(L, d, sessionId);
       } else if (ev === 'tool_progress') {
         sseToolProgress(L, d);
       } else if (ev === 'done') {
