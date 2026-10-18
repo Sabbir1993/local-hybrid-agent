@@ -258,8 +258,11 @@ function ssePlan(L, d, sessionId) {
 
 // A streamed event rebuilds the action list; swapping the node under a wheel / drag scroll stops it dead. Remember when the user last
 // scrolled one of those lists so the render waits for them to stop (chat.js).
+// Guarded so the module is loadable headlessly (the node tests vm-import it without a DOM).
 window._actsScrollAt = 0;
-['wheel', 'touchmove', 'scroll'].forEach(type => document.addEventListener(type, e => {
-  const t = e.target;
-  if (t && t.closest && (t.closest('.agy-stream-timeline') || t.closest('.agy-steps-list'))) window._actsScrollAt = Date.now();
-}, { capture: true, passive: true }));
+if (typeof document !== 'undefined') {
+  ['wheel', 'touchmove', 'scroll'].forEach(type => document.addEventListener(type, e => {
+    const t = e.target;
+    if (t && t.closest && (t.closest('.agy-stream-timeline') || t.closest('.agy-steps-list'))) window._actsScrollAt = Date.now();
+  }, { capture: true, passive: true }));
+}
