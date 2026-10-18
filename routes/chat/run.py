@@ -110,7 +110,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     from core.agent_tools import set_current_user
     from core import voice_policy
     set_current_user(user.id)
-    set_project_scope(req.session_id)                 # a website project belongs to this chat only
+    set_project_scope(getattr(req, "session_id", None))                 # a website project belongs to this chat only
     voice_policy.apply(req)     # a spoken turn: no hidden reasoning, short answer, no answer-check rewrite
     cloud_main = cloud.cloud_lane("main", user.id)
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)

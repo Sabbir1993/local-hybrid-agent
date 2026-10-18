@@ -1206,6 +1206,7 @@ async function send(inputText) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: msgs,
+        session_id: sessionId || undefined,        // a website project belongs to this chat
         web_search: !!chatWebSearch,
         kb: typeof window.chatKbMode === 'function' ? window.chatKbMode() : 'auto',
         deep_mode: !!chatDeepMode,

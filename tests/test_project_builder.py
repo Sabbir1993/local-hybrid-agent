@@ -248,3 +248,12 @@ class ZipIsADeliverable(unittest.TestCase):
         out, _ = _finalize_download_tags("Done. [DOWNLOAD: site-ab12cd34.html]", written, q)
         self.assertIn("[DOWNLOAD: site-ab12cd34.zip]", out)
         self.assertIn("[DOWNLOAD: site-ab12cd34.html]", out)
+
+
+class ChatRequestCarriesTheSession(unittest.TestCase):
+    def test_request_model_has_session_id(self):
+        from routes.chat.models import ChatRunRequest
+        self.assertEqual(ChatRunRequest(messages=[], session_id=858).session_id, 858)
+        self.assertIsNone(ChatRunRequest(messages=[]).session_id)
+        src = (Path(__file__).resolve().parents[1] / "static" / "js" / "chat.js").read_text(encoding="utf-8")
+        self.assertIn("session_id: sessionId || undefined", src)
