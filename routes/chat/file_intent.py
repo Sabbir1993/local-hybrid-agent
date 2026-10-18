@@ -191,6 +191,12 @@ def wants_file_output(query: str) -> bool:
 KB_TOOL_NAMES = ("search_knowledge_base", "kb_find_mentions", "kb_query", "kb_sql")
 
 
+CHAT_CUT_CALL_ERROR = (
+    "error: this write_file call was cut off by the output limit (its arguments were not complete JSON), so nothing was saved. "
+    "Write a smaller file: one file per call, and keep each under about 250 lines. For a website, save a compact index.html "
+    "(CSS and JS inline or in separate short files) instead of one huge page, then give the [DOWNLOAD: ...] link.")
+
+
 def serves_brief_card(content: str, brief_phase: str) -> bool:
     """True when the reply is (or must become) the "few quick choices" card, so file-intent recovery must not save it as a file."""
     return brief_phase == "ask" or "```questionnaire" in (content or "")

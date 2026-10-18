@@ -206,3 +206,16 @@ class EmptyWrites(unittest.TestCase):
             self.assertEqual([f for f in Path(td).rglob("*") if f.is_file()], [])
             r = tool_write_file_common({"path": "page.html", "html": "<html><body>hi</body></html>"})   # body under another key
             self.assertIn("Wrote 28 chars", r)
+
+
+class CutOffWrites(unittest.TestCase):
+    def test_truncated_write_file_arguments_are_flagged_and_chat_refuses_them(self):
+        from pathlib import Path
+        from core.agent_loop import safe_parse_and_repair_args
+        from core.agent_loop.repair import INVALID_JSON_KEY
+        raw = '{"path": "index.html", "content": "<!DOCTYPE html><html><body>' + "x" * 50      # cut off mid-string
+        args = safe_parse_and_repair_args(raw, "write_file")
+        self.assertTrue(args.get(INVALID_JSON_KEY))
+        self.assertNotIn("content", args)
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("elif args.get(INVALID_JSON_KEY):", src)

@@ -34,6 +34,7 @@ from core.agent_loop import (
     _extract_text_tool_calls,
     estimate_prompt_tokens,
 )
+from core.agent_loop.repair import INVALID_JSON_KEY
 from core.agent_loop.degeneration import RUNAWAY_MSG, sanitize_user_facing_content
 from core import prompt_scope
 from core.doc_tools import builds
@@ -79,6 +80,7 @@ from .file_intent import (
     shrink_old_tool_results,
     wants_file_output,
     serves_brief_card,
+    CHAT_CUT_CALL_ERROR,
     KB_TOOL_NAMES,
 )
 from .models import ChatRunRequest
@@ -1245,6 +1247,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             if runaway_hits > int(chat_cfg.get("runaway_retries", 2)):
                                 turn_limit = turn + 1
                                 res_str += ". Stop retrying: summarise what is done so far in plain text"
+                        elif args.get(INVALID_JSON_KEY):
+                            # a file call whose JSON was cut off by the output limit: running it would save an empty or partial file
+                            res_str = CHAT_CUT_CALL_ERROR
                         elif not tool_allowed(t_name):
                             # text-parsed calls can name any tool; the schema filter isn't enough
                             res_str = f"error: tool '{t_name}' is not enabled for the active custom agent"
