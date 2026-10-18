@@ -80,6 +80,89 @@ def normalize_ts_for_bench(tensor_split: str) -> str:
     return tensor_split.replace(",", "/")
 
 
+def _row_ts(row) -> tuple:
+    """tokens/sec for one llama-bench JSON row, distrustful of field generations.
+    Modern builds carry avg_ts (tokens/sec); some emit only avg_ns
+    (nanoseconds per token), which must be inverted - going through with
+    avg_ns as if it already were tokens/sec fed fake 1e9-scale numbers into
+    the sweep winner. Returns (ts, stddev_ts), either None when absent."""
+    try:
+        avg_ts = row.get("avg_ts")
+        if avg_ts is not None:
+            sd = row.get("stddev_ts")
+            return float(avg_ts), (float(sd) if sd is not None else None)
+        avg_ns = row.get("avg_ns")
+        if avg_ns is not None and float(avg_ns) > 0:
+            ns = float(avg_ns)
+            sd_ns = row.get("stddev_ns")
+            # ts = 1e9/ns, so the propagated deviation is d(ts) = 1e9*sd_ns/ns^2
+            sd = (1e9 * float(sd_ns) / (ns * ns)) if sd_ns else None
+            return 1e9 / ns, sd
+    except (TypeError, ValueError):
+        return None, None
+    return None, None
+
+
+def parse_bench_json(stdout: str) -> dict:
+    """Parse llama-bench -o json output into a result dict of the same shape
+    run_bench returns. Pure function so the parser, not the process spawn,
+    is what the tests pin down.
+
+    Row layout (verified against build b11429 / commit d81235049): with both
+    -p and -n set, the build emits two rows - a prefill row (n_prompt>0,
+    n_gen==0) and a generation row (n_prompt==0, n_gen>0). Older builds ram
+    both into one combined row; there, combined=True and its timestamp acts
+    as the generation-side number."""
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        # llama-bench sometimes writes a markdown table to stdout alongside
+        # JSON, or JSON to a different stream depending on version - try to
+        # salvage a JSON array from anywhere in stdout.
+        start = stdout.find("[")
+        end = stdout.rfind("]")
+        if start != -1 and end != -1:
+            try:
+                data = json.loads(stdout[start:end + 1])
+            except json.JSONDecodeError:
+                return {"ok": False, "reason": "unparseable"}
+        else:
+            return {"ok": False, "reason": "unparseable"}
+    if not isinstance(data, list):
+        return {"ok": False, "reason": "unparseable"}
+
+    pp_ts = tg_ts = pp_stddev = tg_stddev = None
+    combined = False
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        try:
+            np_ = int(row.get("n_prompt") or 0)
+            ng_ = int(row.get("n_gen") or 0)
+        except (TypeError, ValueError):
+            continue
+        ts, sd = _row_ts(row)
+        if ts is None:
+            continue
+        if np_ > 0 and ng_ == 0:
+            pp_ts, pp_stddev = ts, sd
+        elif ng_ > 0 and np_ == 0:
+            tg_ts, tg_stddev = ts, sd
+        elif np_ > 0 and ng_ > 0:
+            combined = True
+            tg_ts, tg_stddev = ts, sd
+
+    if pp_ts is None and tg_ts is None:
+        return {"ok": False, "reason": "no_recognizable_rows"}
+
+    result = {"ok": True, "pp_ts": pp_ts, "tg_ts": tg_ts, "combined": combined}
+    if pp_stddev is not None:
+        result["pp_stddev_ts"] = round(pp_stddev, 3)
+    if tg_stddev is not None:
+        result["tg_stddev_ts"] = round(tg_stddev, 3)
+    return result
+
+
 def run_bench(bench_path: Path, model_path: str, *, ngl: int, split_mode: str,
               tensor_split: str, n_cpu_moe: int | None, flash_attn: str,
               n_prompt: int, n_gen: int, repetitions: int, timeout: int = 180,
@@ -105,41 +188,12 @@ def run_bench(bench_path: Path, model_path: str, *, ngl: int, split_mode: str,
     except subprocess.TimeoutExpired:
         return {"ok": False, "reason": "timeout", "raw": ""}
 
-    combined = (proc.stdout or "") + (proc.stderr or "")
-    lowered = combined.lower()
+    bench_output = (proc.stdout or "") + (proc.stderr or "")
+    lowered = bench_output.lower()
     if proc.returncode != 0 or any(marker in lowered for marker in OOM_MARKERS):
-        return {"ok": False, "reason": "oom_or_error", "raw": combined[-2000:]}
+        return {"ok": False, "reason": "oom_or_error", "raw": bench_output[-2000:]}
 
-    try:
-        data = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        # llama-bench sometimes writes a markdown table to stdout alongside
-        # JSON, or JSON to a different stream depending on version - try to
-        # salvage a JSON array from anywhere in stdout.
-        start = proc.stdout.find("[")
-        end = proc.stdout.rfind("]")
-        if start != -1 and end != -1:
-            try:
-                data = json.loads(proc.stdout[start:end + 1])
-            except json.JSONDecodeError:
-                return {"ok": False, "reason": "unparseable", "raw": proc.stdout[-2000:]}
-        else:
-            return {"ok": False, "reason": "unparseable", "raw": proc.stdout[-2000:]}
-
-    pp_ts, tg_ts = None, None
-    for row in data:
-        try:
-            np_ = int(row.get("n_prompt", 0))
-            ng_ = int(row.get("n_gen", 0))
-            ts = float(row.get("avg_ts", row.get("avg_ns", 0)))
-        except (TypeError, ValueError):
-            continue
-        if ng_ > 0 and (pp_ts is None or ng_ >= ng_):  # generation row
-            tg_ts = ts
-        if np_ > 0 and ng_ == 0:
-            pp_ts = ts
-
-    if pp_ts is None and tg_ts is None:
-        return {"ok": False, "reason": "no_recognizable_rows", "raw": json.dumps(data)[:2000]}
-
-    return {"ok": True, "pp_ts": pp_ts, "tg_ts": tg_ts, "raw": data}
+    parsed = parse_bench_json(proc.stdout)
+    if parsed["ok"]:
+        return parsed
+    return {**parsed, "raw": proc.stdout[-2000:]}
