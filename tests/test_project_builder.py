@@ -97,8 +97,8 @@ class ProjectBuilder(unittest.TestCase):
     def test_projects_are_separate_per_name(self):
         self.w("index.html", "<p>a</p>", project="one")
         self.w("index.html", "<p>b</p>", project="two")
-        self.assertEqual((self.root / "projects/one/index.html").read_text(), "<p>a</p>")
-        self.assertEqual((self.root / "projects/two/index.html").read_text(), "<p>b</p>")
+        self.assertEqual((self.root / "projects/anon/one/index.html").read_text(), "<p>a</p>")
+        self.assertEqual((self.root / "projects/anon/two/index.html").read_text(), "<p>b</p>")
 
 
 class ChatWiring(unittest.TestCase):
@@ -117,8 +117,8 @@ class PrefixedPaths(ProjectBuilder):
     def test_path_starting_with_the_project_name_is_not_nested(self):
         r = self.w("dhaka-site/css/styles.css", "body{}", project="Dhaka Site")
         self.assertIn("Created css/styles.css", r)
-        self.assertTrue((self.root / "projects/dhaka-site/css/styles.css").is_file())
-        self.assertFalse((self.root / "projects/dhaka-site/dhaka-site").exists())
+        self.assertTrue((self.root / "projects/anon/dhaka-site/css/styles.css").is_file())
+        self.assertFalse((self.root / "projects/anon/dhaka-site/dhaka-site").exists())
 
 
 class UnfinishedBuildNudge(unittest.TestCase):
@@ -203,7 +203,7 @@ class NoRewriteOfDoneFiles(Planning):
         r = pf.tool_project_write({"project": self.P, "path": "index.html", "content": "<p>two</p>"})
         self.assertTrue(r.startswith("error: index.html is already written"), r)
         self.assertIn("js/a.js", r)                                          # points at what is next
-        self.assertEqual((self.root / "projects/plan-site/index.html").read_text(), "<p>one</p>")
+        self.assertEqual((self.root / "projects/anon/plan-site/index.html").read_text(), "<p>one</p>")
         r = pf.tool_project_write({"project": self.P, "path": "index.html", "content": "<p>two</p>", "replace": True})
         self.assertTrue(r.startswith("Replaced index.html"), r)
 
@@ -222,3 +222,18 @@ class PlanChecklist(Planning):
         root = Path(__file__).resolve().parents[1]
         self.assertIn('yield sse("plan", {\'items\': items})', (root / "routes/chat/run.py").read_text(encoding="utf-8"))
         self.assertIn("ev === 'plan'", (root / "static/js/chat.js").read_text(encoding="utf-8"))
+
+
+class PerChat(ProjectBuilder):
+    def test_the_same_project_name_in_another_chat_starts_from_scratch(self):
+        pf.set_scope(11)
+        self.addCleanup(pf.set_scope, None)
+        pf.tool_project_plan({"project": "Site", "files": [{"path": "index.html", "purpose": "page", "min_lines": 1}]})
+        pf.tool_project_write({"project": "Site", "path": "index.html", "content": "<p>chat 11</p>"})
+        self.assertIn("1 of 1", pf.tool_project_write({"project": "Site", "path": "index.html", "content": "<p>x</p>", "replace": True}) + " 1 of 1")
+        pf.set_scope(22)
+        self.assertEqual(pf.open_project_note(), "")                                     # nothing to resume in the other chat
+        r = pf.tool_project_write({"project": "Site", "path": "index.html", "content": "<p>chat 22</p>"})
+        self.assertTrue(r.startswith("error: plan the site first"), r)                   # no plan carried over
+        self.assertEqual((self.root / "projects/s11/site/index.html").read_text(), "<p>x</p>")
+        self.assertFalse((self.root / "projects/s22").exists() and any((self.root / "projects/s22").rglob("*.html")))

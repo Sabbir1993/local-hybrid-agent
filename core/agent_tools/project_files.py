@@ -4,6 +4,7 @@ A reply is cut off by the output limit long before a whole website fits in one w
 person would: project_write one file at a time, project_append the next section of a long file, project_finish to get the ZIP and
 a single-file preview. Nothing here runs: files are inert text in the user's own common space (never another user's), the same
 folder the other chat documents use. Card numbers are refused on every write, like every other document the chat saves."""
+import contextvars
 import json
 import re
 import zipfile
@@ -93,8 +94,24 @@ def _slug(name) -> str:
     return s or "project"
 
 
+# Projects belong to the chat that made them: the same prompt in another chat starts from scratch, with its own plan, files and ZIP.
+_scope_var: contextvars.ContextVar = contextvars.ContextVar("project_scope", default="anon")
+
+
+def set_scope(session_id) -> None:
+    """Called once per chat request (like set_current_user); tools run in a copy of this context."""
+    try:
+        _scope_var.set(f"s{int(session_id)}")
+    except (TypeError, ValueError):
+        _scope_var.set("anon")
+
+
+def _scope() -> str:
+    return _scope_var.get()
+
+
 def _root(project) -> Path:
-    return _common_resolve(f"{PROJECTS_DIR}/{_slug(project)}")
+    return _common_resolve(f"{PROJECTS_DIR}/{_scope()}/{_slug(project)}")
 
 
 def _file(project, path) -> tuple:
@@ -135,7 +152,7 @@ def _pan_check(content: str):
 # ---- the plan: the file list the model declares first; "done" is read from disk, never remembered ------------------------------
 
 def _plan_path(project) -> Path:
-    return _common_resolve(f"{PROJECTS_DIR}/{_slug(project)}.plan.json")
+    return _common_resolve(f"{PROJECTS_DIR}/{_scope()}/{_slug(project)}.plan.json")
 
 
 def _load_plan(project) -> list:
@@ -355,7 +372,7 @@ def open_project_note(max_age_s: int = 3 * 24 * 3600) -> str:
     A project is open while no ZIP made by project_finish is newer than its files. Never raises."""
     import time
     try:
-        base = common_workspace() / PROJECTS_DIR
+        base = common_workspace() / PROJECTS_DIR / _scope()
         if not base.is_dir():
             return ""
         best = None

@@ -249,3 +249,11 @@ function ssePlan(L, d) {
   if (pi >= 0) L.acts[pi] = planAct; else L.acts.push(planAct);
   if (window.RightDock && typeof window.RightDock.renderPlanView === 'function' && planAct.items.length) window.RightDock.renderPlanView(planAct.items);
 }
+
+// A streamed event rebuilds the action list; swapping the node under a wheel / drag scroll stops it dead. Remember when the user last
+// scrolled one of those lists so the render waits for them to stop (chat.js).
+window._actsScrollAt = 0;
+['wheel', 'touchmove', 'scroll'].forEach(type => document.addEventListener(type, e => {
+  const t = e.target;
+  if (t && t.closest && (t.closest('.agy-stream-timeline') || t.closest('.agy-steps-list'))) window._actsScrollAt = Date.now();
+}, { capture: true, passive: true }));

@@ -83,7 +83,7 @@ from .file_intent import (
     CHAT_CUT_CALL_ERROR,
     KB_TOOL_NAMES,
 )
-from core.agent_tools.project_files import (open_project_note, plan_items, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, project_wanted,
+from core.agent_tools.project_files import (open_project_note, plan_items, set_scope as set_project_scope, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, project_wanted,
                                             tool_project_append, tool_project_finish, tool_project_plan, tool_project_write)
 from .models import ChatRunRequest
 
@@ -110,6 +110,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     from core.agent_tools import set_current_user
     from core import voice_policy
     set_current_user(user.id)
+    set_project_scope(req.session_id)                 # a website project belongs to this chat only
     voice_policy.apply(req)     # a spoken turn: no hidden reasoning, short answer, no answer-check rewrite
     cloud_main = cloud.cloud_lane("main", user.id)
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)

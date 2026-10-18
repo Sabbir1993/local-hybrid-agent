@@ -303,6 +303,12 @@ function renderLast() {
     // every SSE chunk - that is what made tool output lag and reflow under load.
     const existingActs = lastEl.querySelector('.agy-agent-container');
     if (generating && existingActs && m.acts && m.acts.length) {
+      // the user is scrolling an action list: swapping it now would stop the scroll, so draw once they pause
+      if (Date.now() - (window._actsScrollAt || 0) < 350) {
+        clearTimeout(window._actsScrollTimer);
+        window._actsScrollTimer = setTimeout(scheduleRenderLast, 380);
+        return;
+      }
       _syncCardStatesFromDom(existingActs, m);
       const actScroll = Array.from(existingActs.querySelectorAll(SCROLLERS)).map(el => ({
         top: el.scrollTop,
