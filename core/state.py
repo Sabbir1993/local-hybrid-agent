@@ -31,6 +31,7 @@ from .supervision import (
 )
 from .process import build_launch_command, kill_process_tree
 from .profiles import build_dynamic_profile
+from .events import log_event
 from . import vram
 
 # ---------------- llama-server log file ----------------
@@ -194,6 +195,8 @@ class ProxyState:
         # keep the handle: the pump read from the process pipe forever and nothing held a
         # reference, so every load added an untracked task that only died with the process
         self._log_task = self._spawn_log_pump(self.process)
+        log_event("server.load_started", pid=self.process.pid,
+                  model=Path(str(self.profile.get("model_path") or "")).name)
         await self._wait_healthy()
 
     async def stop(self, clear_profile: bool = False):
@@ -324,6 +327,9 @@ class ProxyState:
         self.loading = False
         self.healthy = True
         self.last_load_error = None
+        started = getattr(self, "started_at", None)
+        log_event("server.healthy", load_seconds=round(time.time() - started, 1)
+                  if started else None)
 
     def _load_failed(self, message: str) -> RuntimeError:
         """Record why the load failed so /control/status can say it. Operators otherwise only
@@ -337,6 +343,9 @@ class ProxyState:
         reason = self._exit_reason()
         full = f"{message} | llama-server: {reason}" if reason else message
         self.last_load_error = full
+        log_event("server.load_failed",
+                  reason=reason or message[:120],
+                  code=self.process.returncode if self.process else None)
         return RuntimeError(full)
 
     def _kill_loading_process(self, vram_idx=None) -> None:
@@ -359,6 +368,8 @@ class ProxyState:
         if self.process and self.process.poll() is None:
             print("[server_manager] stopping current llama-server...")
             kill_process_tree(self.process, timeout=15)
+        if self.process is not None:
+            log_event("server.stopped", pid=self.process.pid)
         self.process = None
 
     def _spawn_log_pump(self, proc) -> Optional[asyncio.Task]:
@@ -405,6 +416,8 @@ class ProxyState:
                     f"above), then load a model again to re-arm it.")
                 print(f"[server_manager] giving up after {self.restart_count} restarts: "
                       f"automatic restart disabled", file=sys.stderr)
+                log_event("server.degraded", restarts=self.restart_count,
+                          code=self.process.returncode)
                 self._kill_process_silently()
                 continue
             self.restart_count += 1
@@ -413,6 +426,8 @@ class ProxyState:
             print(f"[server_manager] llama-server died (code {code}), "
                   f"restarting in {backoff}s (restart #{self.restart_count}"
                   f"/{max_restart_count()})")
+            log_event("server.restart", restart=self.restart_count, code=code,
+                      backoff_s=backoff, reason=reason)
             if reason:
                 # what the server said, not merely that it died. This is the
                 # difference between "it crashed" and a diagnosis, and before B4 it
@@ -432,6 +447,7 @@ class ProxyState:
             if self.process and self.process is not dead and self.process.poll() is None:
                 print("[server_manager] restart dropped: a new server finished "
                       "loading during the backoff", file=sys.stderr)
+                log_event("server.restart_dropped")
                 continue
             try:
                 target = self.profile_path or self.profile

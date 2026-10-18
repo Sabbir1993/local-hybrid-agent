@@ -31,6 +31,7 @@ from pathlib import Path
 
 from core.config import apply_runtime, atomic_write_json
 from core import vram
+from core.events import log_event
 from core.llama_bench import build_gpu_env, find_llama_bench, run_bench
 
 # A bench pass pays a full cold model load inside its own timeout. 180 s used
@@ -140,8 +141,6 @@ def _bench_candidate(bench_path, profile: dict, auto: dict, tensor_split: str,
         return last_failure
     return pick_median_run(results)
 
-
-
 def default_tensor_split_candidates(profile) -> list[str]:
     """Algorithmic candidates for any GPU count, used when the profile has no
     (or an empty) "tensor_split_candidates" list. Seeds from a VRAM-proportional
@@ -183,13 +182,19 @@ def sweep_tensor_split(bench_path, profile, n_cpu_moe_for_sweep):
         r = _bench_candidate(bench_path, profile, auto, ts, n_cpu_moe_for_sweep, env)
         if r["ok"]:
             print(f"   {_fmt_rates(r)}")
+            log_event("autotune.candidate", stage="tensor_split", value=ts,
+                      pp_ts=r.get("pp_ts"), tg_ts=r.get("tg_ts"))
             results.append((ts, r))
         else:
             print(f"   FAILED ({r['reason']}) - skipping this split")
+            log_event("autotune.failure", stage="tensor_split", value=ts,
+                      reason=r["reason"])
     if not results:
         sys.exit("No tensor-split candidate produced a usable result. See raw output above.")
     best_ts, best_r = max(results, key=lambda kv: kv[1]["tg_ts"] or 0)
     print(f"\nBest tensor-split: {best_ts} ({_fmt_rates(best_r)})")
+    log_event("autotune.winner", stage="tensor_split", value=best_ts,
+              pp_ts=best_r.get("pp_ts"), tg_ts=best_r.get("tg_ts"))
     return best_ts, best_r, results
 
 
@@ -205,12 +210,17 @@ def sweep_n_cpu_moe(bench_path, profile, tensor_split):
         r = _bench_candidate(bench_path, profile, auto, tensor_split, ncmoe, env)
         if r["ok"]:
             print(f"   {_fmt_rates(r)} -> OK")
+            log_event("autotune.candidate", stage="n_cpu_moe", value=ncmoe,
+                      pp_ts=r.get("pp_ts"), tg_ts=r.get("tg_ts"))
             last_good = (ncmoe, r)
         elif r["reason"] == "oom":
             print(f"   OOM - this offload level doesn't fit. Using last good value.")
+            log_event("autotune.stage_break", value=ncmoe, reason="oom")
             break
         else:
             print(f"   FAILED ({r['reason']}) - skipping (not an OOM), trying lower offload")
+            log_event("autotune.failure", stage="n_cpu_moe", value=ncmoe,
+                      reason=r["reason"])
     if last_good is None:
         sys.exit(
             "Every --n-cpu-moe candidate failed, including the most conservative one.\n"
