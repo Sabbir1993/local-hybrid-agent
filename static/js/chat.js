@@ -319,13 +319,15 @@ function renderLast() {
             else if (m._cardOpen[i] !== undefined) d.open = m._cardOpen[i];
           });
         }
+        _applyArgsOpen(newActs, m);
+        lastEl.replaceChild(newActs, existingActs);
+        // restore the scroll positions only once the new block is in the page: a detached element has no height, so
+        // setting scrollTop on it is ignored and every list jumped back to the top on each streamed event
         newActs.querySelectorAll(SCROLLERS).forEach((el, i) => {
           const p = actScroll[i];
           const follow = el.matches('.agy-steps-list, .agy-stream-timeline') && (!p || p.atBottom);
           el.scrollTop = follow ? el.scrollHeight : (p ? p.top : 0);
         });
-        _applyArgsOpen(newActs, m);
-        lastEl.replaceChild(newActs, existingActs);
       }
       return;
     }
