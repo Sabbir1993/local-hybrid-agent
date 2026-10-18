@@ -83,6 +83,8 @@ from .file_intent import (
     CHAT_CUT_CALL_ERROR,
     KB_TOOL_NAMES,
 )
+from core.agent_tools.project_files import (PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, project_wanted,
+                                            tool_project_append, tool_project_finish, tool_project_write)
 from .models import ChatRunRequest
 
 
@@ -222,6 +224,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     # Tools for Chat Mode: write_file always (core), the rest on intent.
     chat_tools = [CHAT_WRITE_FILE_SCHEMA]
+    # a website / multi-file front-end project: built file by file (project_write / project_append), delivered as one ZIP
+    project_build = bool((APP_CONFIG.get("chat") or {}).get("project_builder", True)) and project_wanted(own_q)
+    if project_build:
+        wants_file = has_file = True
+        chat_tools += PROJECT_SCHEMAS
     # a spreadsheet attached to this conversation: the model gets its profile in the message and data_query for exact figures
     has_data_attachment = any(m.get("role") == "user" and prompt_scope.DATA_ATTACHMENT_RX.search(str(m.get("content") or ""))
                               for m in msgs)
@@ -568,7 +575,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if brief_phase:
         sys_parts.append(prompt_scope.BRIEF_BUILD_NOW if brief_phase == "build" else prompt_scope.BRIEF_ASK_NOW)
         sys_labels.append("brief-" + brief_phase)
-    if explicit_ext and has_file:
+    if project_build:
+        sys_parts.append(PROJECT_MANUAL)
+        sys_labels.append("project-build")
+    if explicit_ext and has_file and not project_build:
         sys_parts.append(prompt_scope.format_note(explicit_ext))
         sys_labels.append("explicit-format")
     if absent_type:
@@ -761,6 +771,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     doc_tools = [t for t in chat_tools if t.get("function", {}).get("name") in doc_names]
                     if doc_tools and (brief_phase == "build" or resume_note or longdoc_build) and wants_file:
                         current_tools = doc_tools
+                    elif project_build:
+                        current_tools = [t for t in chat_tools if t.get("function", {}).get("name") in PROJECT_TOOL_NAMES]
                     else:
                         current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and tool_allowed("write_file")) else None
                 elif research_over:
@@ -1307,6 +1319,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                 res_str = "error: " + res_str
                             else:
                                 written_files.extend(f for f in _DL_TAG_RE.findall(res_str) if f not in written_files)   # one deck, many doc_append steps
+                        elif t_name in PROJECT_TOOL_NAMES:
+                            impl = {"project_write": tool_project_write, "project_append": tool_project_append,
+                                    "project_finish": tool_project_finish}[t_name]
+                            res_str = await run_in_executor_ctx(impl, args)
+                            written_files.extend(f for f in _DL_TAG_RE.findall(res_str) if f not in written_files)
                         elif t_name == "write_file" and _wraps_media(
                                 made_media, args.get("path") or args.get("file") or args.get("filename"), last_query):
                             res_str = _WRAP_REFUSAL
@@ -1350,7 +1367,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     yield sse("tool_result", {'id': tc_id, 'name': t_name, 'ok': ok, 'result': res_str})
 
                     hist_args = dict(args)
-                    if t_name in ("write_file", "edit_file"):
+                    if t_name in ("write_file", "edit_file", "project_write", "project_append"):
                         if "content" in hist_args and len(str(hist_args["content"])) > 400:
                             f_path = hist_args.get("path") or hist_args.get("file") or "file"
                             c_len = len(str(hist_args["content"]))

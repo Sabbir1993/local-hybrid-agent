@@ -2,6 +2,7 @@ MIME_MAP = {
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".xls":  "application/vnd.ms-excel",
     ".csv":  "text/csv",
+    ".zip":  "application/zip",
     ".pdf":  "application/pdf",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".ppt":  "application/vnd.ms-powerpoint",
