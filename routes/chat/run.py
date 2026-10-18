@@ -83,7 +83,7 @@ from .file_intent import (
     CHAT_CUT_CALL_ERROR,
     KB_TOOL_NAMES,
 )
-from core.agent_tools.project_files import (open_project_note, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, project_wanted,
+from core.agent_tools.project_files import (open_project_note, plan_items, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, project_wanted,
                                             tool_project_append, tool_project_finish, tool_project_plan, tool_project_write)
 from .models import ChatRunRequest
 
@@ -1360,6 +1360,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             written_files.extend(f for f in _DL_TAG_RE.findall(res_str) if f not in written_files)
                             if t_name == "project_finish" and not res_str.startswith("error:"):
                                 project_done = True
+                            items = await run_in_executor_ctx(plan_items, args.get("project"))
+                            if items:
+                                yield sse("plan", {'items': items})      # the chat's Task Plan checklist, ticked from the disk
                         elif t_name == "write_file" and _wraps_media(
                                 made_media, args.get("path") or args.get("file") or args.get("filename"), last_query):
                             res_str = _WRAP_REFUSAL

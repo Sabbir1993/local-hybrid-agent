@@ -386,3 +386,13 @@ def open_project_note(max_age_s: int = 3 * 24 * 3600) -> str:
                 "and call project_finish when the plan is done.")
     except Exception:
         return ""
+
+
+def plan_items(project) -> list:
+    """The plan as the chat's checklist shows it: [{ord, text, status}] with the first unfinished file marked in progress."""
+    st = plan_status(project)
+    todo = {f["path"] for f in st["todo"]}
+    first = st["todo"][0]["path"] if st["todo"] else None
+    return [{"ord": i + 1, "text": f["path"] + (f" - {f['purpose']}" if f.get("purpose") else ""),
+             "status": "done" if f["path"] not in todo else ("in_progress" if f["path"] == first else "pending")}
+            for i, f in enumerate(st["plan"])]

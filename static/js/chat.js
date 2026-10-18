@@ -1268,6 +1268,8 @@ async function send(inputText) {
         sseToolCall(L, d);
       } else if (ev === 'tool_result') {
         sseToolResult(L, d);
+      } else if (ev === 'plan') {
+        ssePlan(L, d);
       } else if (ev === 'tool_progress') {
         sseToolProgress(L, d);
       } else if (ev === 'done') {

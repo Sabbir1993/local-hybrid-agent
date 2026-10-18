@@ -206,3 +206,19 @@ class NoRewriteOfDoneFiles(Planning):
         self.assertEqual((self.root / "projects/plan-site/index.html").read_text(), "<p>one</p>")
         r = pf.tool_project_write({"project": self.P, "path": "index.html", "content": "<p>two</p>", "replace": True})
         self.assertTrue(r.startswith("Replaced index.html"), r)
+
+
+class PlanChecklist(Planning):
+    def test_plan_items_follow_the_disk(self):
+        self.plan([{"path": "index.html", "purpose": "page", "min_lines": 1}, {"path": "js/a.js", "purpose": "a", "min_lines": 1}])
+        self.assertEqual([i["status"] for i in pf.plan_items(self.P)], ["in_progress", "pending"])
+        pf.tool_project_write({"project": self.P, "path": "index.html", "content": "<p>x</p>"})
+        items = pf.plan_items(self.P)
+        self.assertEqual([i["status"] for i in items], ["done", "in_progress"])
+        self.assertEqual(items[1]["text"], "js/a.js - a")
+        self.assertEqual(pf.plan_items("no such project"), [])
+
+    def test_chat_streams_the_plan_and_the_client_handles_it(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assertIn('yield sse("plan", {\'items\': items})', (root / "routes/chat/run.py").read_text(encoding="utf-8"))
+        self.assertIn("ev === 'plan'", (root / "static/js/chat.js").read_text(encoding="utf-8"))

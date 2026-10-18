@@ -239,3 +239,13 @@ function sseDeltaToThought(L) {
 }
 
 if (typeof module !== 'undefined') module.exports = { parseSSEFrame, readSSE, splitThink, sseApplyThinkSplit, sseDeltaToThought };
+
+
+// Task Plan checklist from the server (a website project's file plan): keep only the latest snapshot in acts
+function ssePlan(L, d) {
+  if (!L.acts) L.acts = [];
+  const planAct = { type: 'plan', items: (d && d.items) || [] };
+  const pi = L.acts.findIndex(a => a.type === 'plan');
+  if (pi >= 0) L.acts[pi] = planAct; else L.acts.push(planAct);
+  if (window.RightDock && typeof window.RightDock.renderPlanView === 'function' && planAct.items.length) window.RightDock.renderPlanView(planAct.items);
+}
