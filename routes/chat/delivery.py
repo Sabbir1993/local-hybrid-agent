@@ -76,6 +76,9 @@ def _finalize_download_tags(content: str, written: list[str], query: str) -> tup
     out = content or ""
     for f in set(written) - set(keep):
         out = re.sub(rf"[ \t]*\[DOWNLOAD:\s*{re.escape(f)}\s*\][ \t]*\n?", "", out)
+    # an invented address for a file the app already links ("(https://example.com/site-ab12.zip)") is dead: drop it
+    for f in set(written):
+        out = re.sub(r"[ \t]*\(?<?https?://[^\s)>\]]*" + re.escape(f) + r">?\)?", "", out)
     out = re.sub(r"\n{3,}", "\n\n", out).rstrip()
     for f in keep:
         if f"[DOWNLOAD: {f}]" not in out and f"download?path={f}" not in out.lower():
