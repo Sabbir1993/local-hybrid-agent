@@ -83,6 +83,8 @@ def _file(project, path) -> tuple:
     if rel.lower().startswith(("project/", "projects/")):
         rel = rel.split("/", 1)[1]
     parts = [p for p in rel.split("/") if p not in ("", ".")]
+    if len(parts) > 1 and _slug(parts[0]) == _slug(project):
+        parts = parts[1:]                    # "dhaka-site/index.html" in project "dhaka-site": the folder is already the project
     if not parts or ".." in parts or re.match(r"^[A-Za-z]:", parts[0]) or len(parts) > 5:
         raise ValueError("error: path must be a relative file path inside the project, like css/styles.css")
     rel = "/".join(parts)

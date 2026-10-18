@@ -100,3 +100,11 @@ class ChatWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrefixedPaths(ProjectBuilder):
+    def test_path_starting_with_the_project_name_is_not_nested(self):
+        r = self.w("dhaka-site/css/styles.css", "body{}", project="Dhaka Site")
+        self.assertIn("Created css/styles.css", r)
+        self.assertTrue((self.root / "projects/dhaka-site/css/styles.css").is_file())
+        self.assertFalse((self.root / "projects/dhaka-site/dhaka-site").exists())
