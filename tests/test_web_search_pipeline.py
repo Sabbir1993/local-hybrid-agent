@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import unittest
 from unittest import mock
 
@@ -87,6 +88,72 @@ class InboundPanTests(unittest.TestCase):
     def test_disabled_leaves_text(self):
         with mock.patch("core.pan.enabled", lambda k: False):
             self.assertEqual(web_tools._mask_inbound("plain"), "plain")
+
+
+class RankingTests(unittest.TestCase):
+    def test_deny_and_boost(self):
+        rerank = importlib.import_module("core.web_search.rerank")
+        items = [{"url": "https://spam.com/a", "score": 0.9}, {"url": "https://www.bb.org.bd/x", "score": 0.5},
+                 {"url": "https://other.com/y", "score": 0.6}]
+        out = rerank.apply_domain_prefs(items, deny=["spam.com"], boost=["bb.org.bd"])
+        self.assertEqual([i["url"] for i in out], ["https://www.bb.org.bd/x", "https://other.com/y"])
+
+    def test_dedup_near_copies(self):
+        rerank = importlib.import_module("core.web_search.rerank")
+        a = {"title": "Bangladesh Bank issues new PSP licensing rules", "snippet": "The central bank said on Monday new rules apply"}
+        b = {"title": "Bangladesh Bank issues new PSP licensing rules!", "snippet": "The central bank said on Monday new rules apply"}
+        c = {"title": "bKash fees", "snippet": "cash out charges"}
+        self.assertEqual(len(rerank.dedup_items([a, b, c])), 2)
+
+    def test_detect_recency(self):
+        rerank = importlib.import_module("core.web_search.rerank")
+        self.assertEqual(rerank.detect_recency("dollar rate today"), "day")
+        self.assertEqual(rerank.detect_recency("latest PCI DSS version"), "month")
+        self.assertEqual(rerank.detect_recency("what is tokenization"), "")
+
+
+class RateLimitTests(unittest.TestCase):
+    def test_calls_are_spaced(self):
+        import time
+        health.wait_turn("t:rl", 0.15)
+        t0 = time.monotonic()
+        health.wait_turn("t:rl", 0.15)
+        self.assertGreaterEqual(time.monotonic() - t0, 0.1)
+
+
+class CitationTests(unittest.TestCase):
+    def setUp(self):
+        from core.web_search import citations
+        self.c = citations
+        citations.reset()
+
+    def test_invented_link_is_unlinked(self):
+        self.c.remember(7, ["https://real.com/a?utm_source=x"])
+        out, n = self.c.strip_unverified(7, "See [1](https://real.com/a) and [2](https://fake.example/z).")
+        self.assertEqual(n, 1)
+        self.assertIn("[1](https://real.com/a)", out)
+        self.assertIn("and [2].", out)
+        self.assertNotIn("fake.example", out)
+
+    def test_other_users_sources_do_not_count(self):
+        self.c.remember(1, ["https://real.com/a"])
+        self.assertEqual(self.c.unverified_links(2, "[1](https://real.com/a)"), ["https://real.com/a"])
+
+
+class PersistentCacheTests(unittest.TestCase):
+    def test_search_results_survive_memory_clear_and_pans_are_masked(self):
+        import tempfile
+        from pathlib import Path
+        from core.web_search import cache
+        tmp = Path(tempfile.mkdtemp()) / "c.sqlite"
+        with mock.patch.object(cache, "PATH", tmp), mock.patch.object(cache, "cfg", lambda: {}), mock.patch("core.pan.enabled", lambda k: True):
+            key = ("search", ("q",), "bd-en", "", 3)
+            cache.cache_put(key, {"results": [{"snippet": "card 4111 1111 1111 1111 leaked"}]})
+            cache._cache.clear()
+            got = cache.cache_get(key)
+            self.assertIsNotNone(got)
+            self.assertNotIn("4111 1111 1111 1111", got["results"][0]["snippet"])
+            self.assertIsNone(cache.cache_get(("fetch", "u")))
 
 
 if __name__ == "__main__":

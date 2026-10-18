@@ -29,6 +29,53 @@ def merge(ranked_lists: dict) -> list:
     return sorted(pool.values(), key=lambda x: -x["rrf"])
 
 
+_DAY_RX = re.compile(r"\b(today|tonight|right now|breaking|live score|this morning)\b", re.I)
+_MONTH_RX = re.compile(r"\b(latest|news|recent(ly)?|current|newest|this week|this month|just (released|announced)|"
+                       r"update[sd]?|rate today|price today|exchange rate)\b", re.I)
+
+
+def detect_recency(query: str) -> str:
+    """'' for evergreen queries; day/month when the wording asks for fresh information."""
+    if _DAY_RX.search(query or ""):
+        return "day"
+    if _MONTH_RX.search(query or ""):
+        return "month"
+    return ""
+
+
+def _host_in(url: str, names) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    host = host[4:] if host.startswith("www.") else host
+    return any(host == n or host.endswith("." + n)
+               for n in (str(x).lower().strip().lstrip(".") for x in names or []) if n)
+
+
+def apply_domain_prefs(items: list, deny=None, boost=None, bonus: float = 0.15) -> list:
+    """web.deny_hosts are dropped; web.boost_hosts (official sources: gov.bd, bb.org.bd, vendor
+    docs) get `bonus` added to their rerank score, so they win ties and near-ties, not everything."""
+    items = [i for i in items if not _host_in(i["url"], deny)]
+    if boost:
+        for i in items:
+            if _host_in(i["url"], boost):
+                i["score"] = round(i.get("score", 0.0) + bonus, 4)
+                i["boosted"] = True
+        items.sort(key=lambda x: -x.get("score", 0.0))
+    return items
+
+
+def dedup_items(items: list, threshold: float = 0.8) -> list:
+    """Drop a result whose title+snippet is a near-copy (term Jaccard >= threshold) of a
+    better-ranked one - mirrors and scrapers of the same article."""
+    kept, sigs = [], []
+    for i in items:
+        sig = terms(f"{i.get('title', '')} {i.get('snippet', '')}")
+        if sig and any(len(sig & s) / len(sig | s) >= threshold for s in sigs):
+            continue
+        kept.append(i)
+        sigs.append(sig)
+    return kept
+
+
 def terms(text: str) -> set:
     return {t for t in re.findall(r"\w+", (text or "").lower()) if len(t) > 1 and t not in _STOP}
 

@@ -8,6 +8,11 @@ Config: config/app.json "web" block -
   backends          order of engines (default ["searxng", "duckduckgo", "bing"])
   searxng_url       optional org-run SearXNG instance (JSON format enabled)
   redact_query_pii  strip emails / phone / account numbers from queries (default true)
+  searxng_min_results  below this many SearXNG hits the scraped engines are asked too (default 5)
+  deny_hosts / boost_hosts  drop / prefer sites in results (e.g. boost gov.bd, bb.org.bd)
+  auto_recency      infer day/month recency from words like "today", "latest" (default true)
+  min_interval_s    {engine: seconds} between calls to scraped engines; min_host_interval_s per fetched host
+  persist_cache     keep search results across restarts (config/web_cache.sqlite, cache_ttl_s default 1800)
 """
 
 import asyncio
@@ -18,7 +23,7 @@ from urllib.parse import urlparse, quote_plus
 import httpx
 
 from . import web_search as ws
-from .web_search import blocklist
+from .web_search import blocklist, citations
 from . import prompt_fence
 from .agent_tools import MAX_TOOL_OUTPUT
 from .net_guard import BlockedURLError
@@ -89,6 +94,7 @@ async def tool_web_fetch(args: dict) -> str:
             return f"error: HTTP {r.status_code} fetching {url}"
         page = {**ws.extract_response(r), "url": str(r.url)}
         ws.cache_put(("fetch", url), page)
+    citations.remember(get_current_user_id(), [url, page["url"]] + [u for u, _ in page["links"]])
     body = page["text"]
     budget = MAX_TOOL_OUTPUT - 2000
     if len(body) > budget:
@@ -171,6 +177,7 @@ async def tool_web_search(args) -> str:
         errs = "; ".join(f"{k}: {v}" for k, v in res["errors"].items())
         return f"(no results for: {query})" + (f" [engine errors - {errs}]" if errs else "")
 
+    citations.remember(get_current_user_id(), [r["url"] for r in res["results"]])
     names = {"duckduckgo": "DuckDuckGo", "bing": "Bing", "searxng": "SearXNG"}
     engines = " + ".join(names.get(e, e) for e in res["engines"])
     out = [f"Web results for: {query} (via {engines}" + (f", past {recency}" if recency else "") + ")"]

@@ -5,7 +5,7 @@ from typing import Optional
 from urllib.parse import urljoin
 from ..net_guard import guarded_get
 from .backends import _clean, _html
-from . import blocklist
+from . import blocklist, health
 from .constants import (
     cfg,
     UA,
@@ -174,6 +174,7 @@ def _user_agent(url: str) -> str:
 
 
 def fetch_page(url: str, timeout: float, accept_language: str):
+    health.wait_turn("host:" + blocklist.host_of(url), float(cfg().get("min_host_interval_s", 0.3)))
     r = guarded_get(url, timeout, headers={"User-Agent": _user_agent(url), "Accept-Language": accept_language},
                     max_bytes=FETCH_MAX_BYTES)
     blocklist.record_failure(url, r.status_code)   # remembered, so the same site is not retried

@@ -73,3 +73,6 @@ companion/.env
 
 # SWE-bench runner output (scripts/run_swebench.py)
 bench_results/
+
+# web search persistent cache (runtime state)
+config/web_cache.sqlite*

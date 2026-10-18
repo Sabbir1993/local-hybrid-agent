@@ -101,7 +101,7 @@ def _load_app_config() -> dict:
         "provider": {},
         "cloud": {},
         "capabilities": {
-            "web": True, "web_search_api_key": "", "skills": True,
+            "web": True, "skills": True,
             "mcp": True, "mcp_servers": {}, "plugins": True,
             "shell": {"enabled": True, "ask_first": True, "timeout_s": 60,
                       "allow_patterns": ["git *", "npx *", "npm *", "pip *", "python *"]},

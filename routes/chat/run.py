@@ -1256,6 +1256,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         if _chg:
                             yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
+                    if web_calls > 0 or web_seen:
+                        from core.web_search import citations as _cit
+                        from core.request_context import get_current_user_id as _uid
+                        content, _chg = _cit.strip_unverified(_uid(), content)
+                        if _chg:
+                            yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+
                     gen_toks = 0
                     if res_dict:
                         if res_dict.get("usage"):

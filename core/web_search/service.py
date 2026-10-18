@@ -7,7 +7,7 @@ from .backends import BACKENDS, _clean
 from .cache import cache_get, cache_put
 from .constants import MAX_RESULTS, RECENCY, _REWRITE_PROMPT, cfg
 from .extraction import attach_passages
-from .rerank import merge, rerank
+from .rerank import apply_domain_prefs, dedup_items, detect_recency, merge, rerank
 
 
 async def rewrite_query(message: str, fallback: str) -> str:
@@ -71,6 +71,8 @@ async def search(query: str, recency: str = "", auto_fetch: Optional[int] = None
     attach_fn = getattr(mod, "attach_passages", attach_passages)
 
     recency = recency if recency in RECENCY else ""
+    if not recency and cfg_fn().get("auto_recency", True):
+        recency = detect_recency(query)
     queries = [query]
     for q in extra_queries or []:
         q = _clean(str(q))
@@ -94,6 +96,7 @@ async def search(query: str, recency: str = "", auto_fetch: Optional[int] = None
     if live:
         await _run_backends(live, queries, recency, backends_dict, lists, errors)
     items = await rerank_fn(query, merge_fn(lists))
+    items = apply_domain_prefs(dedup_items(items), cfg_fn().get("deny_hosts"), cfg_fn().get("boost_hosts"))
     # drop sites known to refuse bots, unless that would leave nothing
     items = ([i for i in items if not blocklist.is_blocked(i["url"])] or items)[:MAX_RESULTS]
     await attach_fn(query, items, n_fetch)

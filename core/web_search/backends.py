@@ -3,6 +3,7 @@ import re
 import sys
 from urllib.parse import unquote, urlencode
 import httpx
+from . import health
 from .constants import UA, SEARCH_TIMEOUT_S, SNIPPET_CHARS, RECENCY, cfg, region
 
 
@@ -73,11 +74,19 @@ def _get(url: str, headers: dict) -> httpx.Response:
         return c.get(url)
 
 
+def _throttle(name: str) -> None:
+    """web.min_interval_s {engine: seconds}: space out calls to the scraped engines."""
+    mod = sys.modules.get("core.web_search")
+    iv = (getattr(mod, "cfg", cfg)().get("min_interval_s") or {"duckduckgo": 0.8, "bing": 0.8})
+    health.wait_turn("engine:" + name, float(iv.get(name, 0) or 0))
+
+
 def ddg_search(query: str, recency: str = "") -> list:
     mod = sys.modules.get("core.web_search")
     region_fn = getattr(mod, "region", region)
     get_fn = getattr(mod, "_get", _get)
     reg = region_fn()
+    _throttle("duckduckgo")
     params = {"q": query, "kl": reg["ddg"]}
     if recency in RECENCY:
         params["df"] = RECENCY[recency][0]
@@ -92,6 +101,7 @@ def bing_search(query: str, recency: str = "") -> list:
     region_fn = getattr(mod, "region", region)
     get_fn = getattr(mod, "_get", _get)
     reg = region_fn()
+    _throttle("bing")
     params = {"q": query, "setlang": reg["bing_lang"], "count": "15"}
     if reg["bing_cc"]:
         params["cc"] = reg["bing_cc"]

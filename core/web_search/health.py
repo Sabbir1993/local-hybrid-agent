@@ -39,3 +39,23 @@ def snapshot() -> dict:
 def reset() -> None:
     with _lock:
         _state.clear()
+
+
+_next_slot: dict = {}   # key -> earliest monotonic time the next call may start
+
+
+def wait_turn(key: str, min_interval_s: float) -> None:
+    """Blocking (call from a worker thread): spaces calls under `key` at least min_interval_s apart,
+    so parallel searches don't hammer one scraped engine or one host."""
+    if min_interval_s <= 0:
+        return
+    with _lock:
+        now = time.monotonic()
+        slot = max(now, _next_slot.get(key, 0.0))
+        _next_slot[key] = slot + min_interval_s
+        if len(_next_slot) > 512:
+            for k in [k for k, v in _next_slot.items() if v < now]:
+                _next_slot.pop(k, None)
+    delay = slot - now
+    if delay > 0:
+        time.sleep(min(delay, 10.0))

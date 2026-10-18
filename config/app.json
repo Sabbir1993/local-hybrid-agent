@@ -266,7 +266,6 @@
   },
   "capabilities": {
     "web": true,
-    "web_search_api_key": "",
     "browser": true,
     "mobile": true,
     "screenshot_cloud_vision": false,

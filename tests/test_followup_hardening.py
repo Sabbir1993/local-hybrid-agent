@@ -394,7 +394,7 @@ class WebSearchTests(unittest.TestCase):
             calls.append(q)
             return self.ws.parse_ddg(DDG_HTML)
         with mock.patch.dict(self.ws.BACKENDS, {"duckduckgo": ddg, "bing": lambda q, r="": []}), \
-             mock.patch.dict(self.ws.APP_CONFIG, {"web": {"auto_fetch_top": 0}}):
+             mock.patch.dict(self.ws.APP_CONFIG, {"web": {"auto_fetch_top": 0, "persist_cache": False}}):
             a = asyncio.run(self.ws.search("bangladesh bank"))
             b = asyncio.run(self.ws.search("Bangladesh Bank"))
         self.assertEqual(len(calls), 1)
