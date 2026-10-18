@@ -1,8 +1,10 @@
 import asyncio
 import json
+import shutil
 import subprocess
 import sys
 import time
+from typing import Optional
 
 from .config import GPU_QUERY_INTERVAL_S, IGNORED_IGPU_LUIDS, CONFIG_FILE, CONFIG_DEFAULTS
 from . import vram
@@ -211,4 +213,106 @@ async def get_gpu_stats() -> dict:
         data.update(hw_info)
         _gpu_cache["ts"] = time.time()
         _gpu_cache["data"] = data
+        return data
+
+
+# --- real GPU temperature/power --------------------------------------------
+
+PS_LHM_SENSOR_SCRIPT = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+$sensors = Get-CimInstance -Namespace root/LibreHardwareMonitor -ClassName Sensor |
+  Where-Object { $_.Identifier -like '/gpu/*' -and ($_.SensorType -eq 'Temperature' -or $_.SensorType -eq 'Power') }
+$rows = @()
+foreach ($s in $sensors) {
+  $rows += [pscustomobject]@{ name = $s.Name; type = $s.SensorType; value = [double] $s.Value }
+}
+[pscustomobject]@{ source = 'lhm'; gpus = $rows } | ConvertTo-Json -Compress -Depth 3
+"""
+
+# A negative probe is cached long: sensors don't appear because the dashboard
+# polls. Re-running the WMI/console probe once a second proved nothing only
+# returns None slower.
+SENSOR_FAIL_TTL_S = 300.0
+SENSOR_OK_TTL_S = 3.0
+_sensor_cache = {"ts": 0.0, "data": None}
+_sensor_lock = asyncio.Lock()
+
+
+def _query_nvidia_sensors_sync() -> list:
+    """[{gpu, temp_c, watts}] from nvidia-smi, [] when it fails or has none."""
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,temperature.gpu,power.draw",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode != 0:
+            return []
+        rows = []
+        for line in (proc.stdout or "").strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 3:
+                continue
+            try:
+                temp = float(parts[1]) if parts[1] not in ("N/A", "") else None
+                watts = float(parts[2]) if parts[2] not in ("N/A", "") else None
+                rows.append({"gpu": int(float(parts[0])), "temp_c": temp, "watts": watts})
+            except (TypeError, ValueError):
+                continue
+        return rows
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
+def query_gpu_sensors_sync() -> Optional[dict]:
+    """Real GPU temperature/power readings, or None when this machine offers
+    no source. Order: nvidia-smi (CUDA rig) -> LibreHardwareMonitor WMI (if
+    the operator runs it). Nothing is modeled; an unknown stack gets None and
+    the UI shows N/A instead of a thermometer drawn from the load percent."""
+    if IS_WINDOWS and shutil.which("nvidia-smi"):
+        rows = _query_nvidia_sensors_sync()
+        if rows:
+            return {"source": "nvidia-smi", "gpus": rows}
+    if IS_WINDOWS:
+        try:
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                 PS_LHM_SENSOR_SCRIPT],
+                capture_output=True, text=True, timeout=10,
+            )
+            data = json.loads(proc.stdout.strip() or "null")
+            gpus = data.get("gpus") or [] if isinstance(data, dict) else []
+            # normalize to the same shape nvidia-smi rows use
+            rows = []
+            for g in gpus:
+                if not isinstance(g, dict) or g.get("value") is None:
+                    continue
+                t = float(g["value"]) if g.get("type") == "Temperature" else None
+                w = float(g["value"]) if g.get("type") == "Power" else None
+                if t is None and w is None:
+                    continue
+                rows.append({"name": g.get("name", ""), "temp_c": t, "watts": w})
+            if rows:
+                return {"source": "lhm", "gpus": rows}
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+            pass
+    return None
+
+
+def _sensor_cache_fresh() -> bool:
+    ttl = SENSOR_OK_TTL_S if _sensor_cache["data"] is not None else SENSOR_FAIL_TTL_S
+    return time.time() - _sensor_cache["ts"] < ttl
+
+
+async def get_gpu_sensors() -> Optional[dict]:
+    """Cached real-sensor probe for the telemetry snapshot (None = no source)."""
+    if _sensor_cache_fresh():
+        return _sensor_cache["data"]
+    async with _sensor_lock:
+        if _sensor_cache_fresh():
+            return _sensor_cache["data"]
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, query_gpu_sensors_sync)
+        _sensor_cache["data"] = data
+        _sensor_cache["ts"] = time.time()
         return data

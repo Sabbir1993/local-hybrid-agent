@@ -60,6 +60,12 @@ function fmtTokens(n) {
   return String(n);
 }
 
+// null entries in a history mean "unmeasured this tick"; the sparkline gets
+// only the real observations so the axis never invents a baseline
+function tmCleanHistory(values) {
+  return (values || []).filter(v => v !== null && v !== undefined);
+}
+
 function updateTelemetryUi(data) {
   if (!data) return;
 
@@ -102,42 +108,61 @@ function updateTelemetryUi(data) {
     if (spWrap) spWrap.innerHTML = generateSparklineSvg(cards.gpu_load.history, 240, 36, '#38bdf8');
   }
 
-  // VRAM Card
+  // VRAM Card (null total = device list not available yet)
   if (cards.vram) {
     const vVal = document.getElementById('tm-vram-val');
     const dVal = document.getElementById('tm-vram-detail');
     const spWrap = document.getElementById('tm-spark-vram');
-    if (vVal) vVal.innerHTML = `${cards.vram.used_gb} <span class="tm-card-unit">/ ${cards.vram.total_gb} GB</span>`;
+    if (vVal) {
+      vVal.innerHTML = (cards.vram.total_gb === null || cards.vram.total_gb === undefined)
+        ? `${cards.vram.used_gb} <span class="tm-card-unit">GB</span>`
+        : `${cards.vram.used_gb} <span class="tm-card-unit">/ ${cards.vram.total_gb} GB</span>`;
+    }
     if (dVal) dVal.textContent = cards.vram.detail || `${cards.vram.pct}% allocated`;
-    if (spWrap) spWrap.innerHTML = generateSparklineSvg(cards.vram.history, 240, 36, '#34d399');
+    if (spWrap) spWrap.innerHTML = generateSparklineSvg(tmCleanHistory(cards.vram.history), 240, 36, '#34d399');
   }
 
-  // GPU Temp Card
+  // GPU Temp Card (null = this stack has no temperature sensor)
   if (cards.gpu_temp) {
     const tVal = document.getElementById('tm-gpu-temp');
     const spWrap = document.getElementById('tm-spark-temp');
-    if (tVal) tVal.textContent = Math.round(cards.gpu_temp.temp_c || 45);
-    if (spWrap) spWrap.innerHTML = generateSparklineSvg(cards.gpu_temp.history, 240, 36, '#fb923c');
+    if (tVal) {
+      tVal.textContent = (cards.gpu_temp.temp_c === null || cards.gpu_temp.temp_c === undefined)
+        ? '—' : Math.round(cards.gpu_temp.temp_c);
+      tVal.title = (cards.gpu_temp.temp_c === null || cards.gpu_temp.temp_c === undefined)
+        ? 'No temperature sensor on this graphics stack - shown only when a real source (nvidia-smi / LibreHardwareMonitor) is present'
+        : '';
+    }
+    if (spWrap) spWrap.innerHTML = generateSparklineSvg(tmCleanHistory(cards.gpu_temp.history), 240, 36, '#fb923c');
   }
 
-  // Power Card
+  // Power Card (null = unmeasured)
   if (cards.power) {
     const pVal = document.getElementById('tm-power-val');
     const lVal = document.getElementById('tm-power-lim');
     const spWrap = document.getElementById('tm-spark-power');
-    if (pVal) pVal.textContent = Math.round(cards.power.watts || 55);
-    if (lVal) lVal.textContent = `of ${Math.round(cards.power.limit_watts || 450)} W limit`;
-    if (spWrap) spWrap.innerHTML = generateSparklineSvg(cards.power.history, 240, 36, '#38bdf8');
+    const powerNull = (cards.power.watts === null || cards.power.watts === undefined);
+    if (pVal) {
+      pVal.textContent = powerNull ? '—' : Math.round(cards.power.watts);
+      pVal.title = powerNull ? 'No power sensor on this graphics stack' : '';
+    }
+    if (lVal) lVal.textContent = powerNull ? 'sensor not available' : `of ${Math.round(cards.power.limit_watts || 450)} W limit`;
+    if (spWrap) spWrap.innerHTML = generateSparklineSvg(tmCleanHistory(cards.power.history), 240, 36, '#38bdf8');
   }
 
-  // PCIe Card
+  // PCIe Card (throughput is not measured; spec stays informational)
   if (cards.pcie) {
     const sVal = document.getElementById('tm-pcie-spec');
     const rVal = document.getElementById('tm-pcie-rate');
     const spWrap = document.getElementById('tm-spark-pcie');
     if (sVal) sVal.textContent = cards.pcie.spec || 'Gen4 x16';
-    if (rVal) rVal.textContent = `to GPU ${cards.pcie.rate_mb_s} MB/s`;
-    if (spWrap) spWrap.innerHTML = generateSparklineSvg(cards.pcie.history, 240, 36, '#38bdf8');
+    if (rVal) {
+      rVal.textContent = (cards.pcie.rate_mb_s === null || cards.pcie.rate_mb_s === undefined)
+        ? 'to GPU —' : `to GPU ${cards.pcie.rate_mb_s} MB/s`;
+      rVal.title = (cards.pcie.rate_mb_s === null || cards.pcie.rate_mb_s === undefined)
+        ? 'PCIe throughput is not measured on this stack' : '';
+    }
+    if (spWrap) spWrap.innerHTML = generateSparklineSvg(tmCleanHistory(cards.pcie.history), 240, 36, '#38bdf8');
   }
 
   // CPU Card
@@ -190,9 +215,15 @@ function updateTelemetryUi(data) {
   const tempBar = document.getElementById('tm-bar-temp');
   const tempVal = document.getElementById('tm-bar-temp-val');
   if (tempBar && tempVal) {
-    const tempPct = Math.min(100, (hw.gpu_temp_c / 100) * 100);
-    tempBar.style.width = `${tempPct}%`;
-    tempVal.textContent = `${Math.round(hw.gpu_temp_c)} °C`;
+    const tempC = hw.gpu_temp_c;
+    if (tempC === null || tempC === undefined) {
+      tempBar.style.width = '0%';
+      tempVal.textContent = '— °C (no sensor)';
+    } else {
+      const tempPct = Math.min(100, (tempC / 100) * 100);
+      tempBar.style.width = `${tempPct}%`;
+      tempVal.textContent = `${Math.round(tempC)} °C`;
+    }
   }
 
   // 4. Recent Requests Table

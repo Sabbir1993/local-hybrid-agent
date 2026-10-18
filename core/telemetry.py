@@ -1,10 +1,11 @@
 import asyncio
+import sys
 import time
 from collections import deque
 from typing import Dict, Any, List, Optional
 import psutil
 
-from .gpu import get_gpu_stats, get_hardware_engine_summary
+from .gpu import get_gpu_stats, get_gpu_sensors, get_hardware_engine_summary
 from .monitor import _monitor_state
 from .state import state
 
@@ -50,6 +51,21 @@ def _get_disk_rates() -> tuple[float, float]:
     return read_mb_s, write_mb_s
 
 
+def _weighted_tps(rows: List[dict]) -> tuple:
+    """(prefill tok/s, decode tok/s) weighted by the tokens each request
+    actually moved, or (0.0, 0.0). Unweighted, twelve 1-token requests would
+    count as much as one 4k-token hit, which reads wrong next to real traffic."""
+    prefill_weight = sum(int(r.get("prompt_tokens") or 0) for r in rows)
+    decode_weight = sum(int(r.get("completion_tokens") or 0) for r in rows)
+    prefill = sum((float(r.get("prompt_tps") or 0.0)) * int(r.get("prompt_tokens") or 0) for r in rows)
+    decode = sum((float(r.get("tps") or r.get("gen_tps") or 0.0)) * int(r.get("completion_tokens") or 0)
+                 for r in rows)
+    return (round(prefill / prefill_weight, 1) if prefill_weight > 0 else 0.0,
+            round(decode / decode_weight, 1) if decode_weight > 0 else 0.0)
+
+_slots_fail_count = 0
+
+
 async def get_telemetry_snapshot() -> Dict[str, Any]:
     now = time.time()
 
@@ -60,7 +76,7 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
     vram_totals = gpu_data.get("vram_totals_gb", [])
 
     used_vram_gb = sum(float(a.get("gb", 0)) for a in adapters)
-    total_vram_gb = sum(float(t) for t in vram_totals) if vram_totals else 32.0
+    total_vram_gb = sum(float(t) for t in vram_totals) if vram_totals else None
 
     # Aggregate compute engine load across discrete GPUs
     max_compute = 0.0
@@ -76,13 +92,23 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
     else:
         gpu_name = gpu_data.get("hardware_tag") or "Dual Intel Arc A770"
 
-    # Temperature & Power model based on hardware load & VRAM residence
-    # Idle Arc A770 rests around 40-45°C (50-55W total), under generation load scales to 65-72°C (180-280W)
-    base_temp = 44.0
-    dynamic_temp = round(base_temp + (gpu_load_pct * 0.28), 1)
-    base_power = 52.0  # idle watts with keepalive
-    dynamic_power = round(base_power + (gpu_load_pct * 2.1), 1)
-    power_limit = 450.0  # 2x 225W board limit
+    # Real sensors only (nvidia-smi / LibreHardwareMonitor): on this Vulkan
+    # box nothing measures temperature or power, so they stay None and the
+    # dashboard shows N/A. The previous linear model of load ("44 + load*0.28")
+    # was displayed as a thermometer, which is the exact pattern we refuse to
+    # ship anywhere else in the app.
+    sensor = await get_gpu_sensors()
+    gpu_temp_c = None
+    power_watts = None
+    gpu_count_sensed = 0
+    if sensor and sensor.get("gpus"):
+        temps = [g.get("temp_c") for g in sensor["gpus"] if g.get("temp_c") is not None]
+        watts = [g.get("watts") or 0.0 for g in sensor["gpus"] if g.get("watts") is not None]
+        gpu_count_sensed = len(sensor["gpus"])
+        if temps:
+            gpu_temp_c = round(max(temps), 1)
+        if watts:
+            power_watts = round(sum(watts), 1)
 
     # 2. System CPU & RAM & Disk
     cpu_pct = round(psutil.cpu_percent(interval=None), 1)
@@ -126,7 +152,8 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
             state_desc = "Reading prompt tokens (prefill)..."
 
     # Context Fill from llama-server /slots
-    ctx_info = {"n_ctx": 32768, "n_past": 0, "n_prompt": 0, "pct": 0.0}
+    global _slots_fail_count
+    ctx_info = {"n_ctx": None, "n_past": None, "n_prompt": None, "pct": None}
     if is_server_up:
         try:
             resp = await state.client.get("/slots", timeout=1.2)
@@ -134,19 +161,25 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
                 slots = resp.json()
                 if slots and isinstance(slots, list):
                     s0 = slots[0]
-                    n_ctx = s0.get("n_ctx") or 32768
+                    n_ctx = s0.get("n_ctx") or None
                     n_prompt = s0.get("n_prompt_tokens") or 0
                     n_decoded = (s0.get("next_token") or [{}])[0].get("n_decoded") or 0
                     n_past = n_prompt + n_decoded
-                    pct = round((n_past / max(1, n_ctx)) * 100, 1)
+                    pct = round((n_past / max(1, n_ctx or 0)) * 100, 1) if n_ctx else None
                     ctx_info = {
                         "n_ctx": n_ctx,
                         "n_past": n_past,
                         "n_prompt": n_prompt,
                         "pct": pct,
                     }
-        except Exception:
-            pass
+                _slots_fail_count = 0
+        except Exception as e:
+            # a quiet except here made a persistently broken /slots look like
+            # healthy zeros; every 20th failure surfaces
+            _slots_fail_count += 1
+            if _slots_fail_count in (1, 20, 200):
+                print(f"[telemetry] /slots read failed {_slots_fail_count}x "
+                      f"({type(e).__name__}: {e}), context-fill is not updating", file=sys.stderr)
 
     # Recent request statistics & speeds
     last_req_summary = "No requests yet"
@@ -161,15 +194,16 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
 
     display_decode_tps = active_tps if active_tps > 0 else last_decode_tps
 
-    # 4. Update Rolling History for Sparklines
+    # 4. Update Rolling History for Sparklines (None = unmeasured this tick;
+    # the dashboard filters those out instead of inventing a baseline)
     _telemetry_history["speed"].append(display_decode_tps)
     _telemetry_history["gpu_load"].append(gpu_load_pct)
     _telemetry_history["vram"].append(round(used_vram_gb, 1))
-    _telemetry_history["gpu_temp"].append(dynamic_temp)
-    _telemetry_history["power"].append(dynamic_power)
-    # PCIe rate based on prompt ingestion & disk transfers
-    pcie_rate = round(0.2 + (last_prefill_tps * 0.008) if model_state == "reading" else 0.2, 1)
-    _telemetry_history["pcie"].append(pcie_rate)
+    _telemetry_history["gpu_temp"].append(gpu_temp_c)
+    _telemetry_history["power"].append(power_watts)
+    # PCIe throughput is not measured anywhere on this stack; the card stays
+    # blank instead of deriving a number from the prefill rate.
+    _telemetry_history["pcie"].append(None)
     _telemetry_history["cpu"].append(cpu_pct)
     _telemetry_history["disk"].append(round(disk_read_mb + disk_write_mb, 1))
 
@@ -178,8 +212,6 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
     total_prompt_tok = 0
     total_reused_tok = 0
     total_output_tok = 0
-    weighted_prefill_sum = 0.0
-    weighted_decode_sum = 0.0
 
     for r in reversed(recent_reqs[-12:]):
         end_ts = r.get("end") or now
@@ -197,10 +229,6 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
         total_prompt_tok += p_tok
         total_reused_tok += p_cached
         total_output_tok += c_tok
-        if p_tps > 0:
-            weighted_prefill_sum += p_tps
-        if d_tps > 0:
-            weighted_decode_sum += d_tps
 
         formatted_recent.append({
             "id": r.get("id"),
@@ -219,8 +247,7 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
     # Lifetime / Session Cache Stats
     num_recent = len(formatted_recent)
     reused_req_count = sum(1 for r in formatted_recent if r["reused"] > 0)
-    avg_prefill = round(weighted_prefill_sum / max(1, num_recent), 1) if num_recent else 0.0
-    avg_decode = round(weighted_decode_sum / max(1, num_recent), 1) if num_recent else 0.0
+    avg_prefill, avg_decode = _weighted_tps(recent_reqs[-12:])
     overall_cache_pct = round((total_reused_tok / max(1, total_prompt_tok)) * 100, 1) if total_prompt_tok > 0 else 0.0
 
     return {
@@ -243,23 +270,26 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
             },
             "vram": {
                 "used_gb": round(used_vram_gb, 1),
-                "total_gb": round(total_vram_gb, 1),
-                "pct": round((used_vram_gb / max(0.1, total_vram_gb)) * 100, 1),
+                "total_gb": round(total_vram_gb, 1) if total_vram_gb is not None else None,
+                "pct": round((used_vram_gb / max(0.1, total_vram_gb)) * 100, 1)
+                       if total_vram_gb is not None else None,
                 "detail": f"{len(devices)} active GPU{'s' if len(devices) > 1 else ''}",
                 "history": list(_telemetry_history["vram"]),
             },
             "gpu_temp": {
-                "temp_c": dynamic_temp,
+                "temp_c": gpu_temp_c,
+                "sensed_gpus": gpu_count_sensed,
                 "history": list(_telemetry_history["gpu_temp"]),
             },
             "power": {
-                "watts": dynamic_power,
-                "limit_watts": power_limit,
+                "watts": power_watts,
+                "limit_watts": None,
+                "sensed_gpus": gpu_count_sensed,
                 "history": list(_telemetry_history["power"]),
             },
             "pcie": {
                 "spec": "Gen4 x16 / Gen3 x16",
-                "rate_mb_s": pcie_rate,
+                "rate_mb_s": None,
                 "history": list(_telemetry_history["pcie"]),
             },
             "cpu": {
@@ -279,9 +309,9 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
             "system_ram_used_gb": ram_used_gb,
             "system_ram_total_gb": ram_total_gb,
             "system_ram_pct": ram_pct,
-            "gpu_temp_c": dynamic_temp,
+            "gpu_temp_c": gpu_temp_c,
             "used_vram_gb": round(used_vram_gb, 1),
-            "total_vram_gb": round(total_vram_gb, 1),
+            "total_vram_gb": round(total_vram_gb, 1) if total_vram_gb is not None else None,
         },
         "recent_requests": formatted_recent,
         "cache_summary": {
