@@ -115,3 +115,21 @@ class UnfinishedBuildNudge(unittest.TestCase):
         src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
         self.assertIn("if (project_build and not tool_calls and not project_done and project_nudges < 3", src)
         self.assertIn("project_done = True", src)
+
+
+class ResumeAfterStop(ProjectBuilder):
+    def test_unfinished_project_gets_a_resume_note_and_finished_one_does_not(self):
+        self.assertEqual(pf.open_project_note(), "")
+        self.w("index.html", INDEX)
+        self.w("css/styles.css", "body{}")
+        note = pf.open_project_note()
+        self.assertIn("dhaka-site", note)
+        self.assertIn("index.html (1 lines)", note)
+        self.assertIn("project_finish", note)
+        pf.tool_project_finish({"project": "Dhaka Site"})
+        self.assertEqual(pf.open_project_note(), "")
+        self.w("js/main.js", "var a=1")                       # new work after the zip: open again
+        import os, time
+        for z in self.root.glob("dhaka-site-*.zip"):
+            os.utime(z, (time.time() - 60, time.time() - 60))
+        self.assertIn("main.js", pf.open_project_note())
