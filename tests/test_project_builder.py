@@ -322,3 +322,15 @@ class ProjectBuildHasNoWriteFile(unittest.TestCase):
         src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
         self.assertIn('!= "write_file"] + PROJECT_SCHEMAS', src)
         self.assertIn('elif project_build and t_name in ("write_file", "doc_create", "doc_append"):', src)
+
+
+class InventedLinksAreDropped(unittest.TestCase):
+    def test_example_com_address_after_a_download_chip_is_removed(self):
+        from routes.chat.delivery import _finalize_download_tags
+        text = ("[DOWNLOAD: dhaka-1a135e07.html] (https://example.com/dhaka-1a135e07.html)\n"
+                "[DOWNLOAD: dhaka-1a135e07.zip] (https://example.com/dhaka-1a135e07.zip)\nOpen it.")
+        out, _ = _finalize_download_tags(text, ["dhaka-1a135e07.zip", "dhaka-1a135e07.html"], "build a website html css js")
+        self.assertNotIn("example.com", out)
+        self.assertIn("[DOWNLOAD: dhaka-1a135e07.zip]", out)
+        self.assertIn("[DOWNLOAD: dhaka-1a135e07.html]", out)
+        self.assertIn("Open it.", out)
