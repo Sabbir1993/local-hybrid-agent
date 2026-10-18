@@ -176,7 +176,7 @@ def _tool_choice_key(client_or_state) -> str:
     return f"local:{getattr(client_or_state, 'base_url', '') or id(client_or_state)}"
 
 
-async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None, tool_choice: Optional[str] = None):
+async def _llm_chat_stream_raw_inner(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None, tool_choice: Optional[str] = None):
     msgs = normalize_system_messages(msgs)   # a system message mid-conversation 500s on Qwen/Llama templates (also the retry paths below)
     payload = {
         "messages": msgs,
@@ -352,3 +352,19 @@ async def _llm_chat_stream_raw(client_or_state, msgs: list, tools=None, temperat
 
         async for item in _process_sse_stream(response, rid=rid):
             yield item
+
+
+async def _llm_chat_stream_raw(client_or_state, *args, **kwargs):
+    """_llm_chat_stream_raw_inner, plus the "model is busy" mark the keepalive ping reads: a long generation used to look idle to it,
+    so the ping (a 155-token warm-up prompt) ran on the chat's own slot between turns and wiped its cache."""
+    local = client_or_state is state.client
+    if local:
+        state.last_activity = time.time()
+    try:
+        async for item in _llm_chat_stream_raw_inner(client_or_state, *args, **kwargs):
+            if local:
+                state.last_activity = time.time()
+            yield item
+    finally:
+        if local:
+            state.last_activity = time.time()

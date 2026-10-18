@@ -473,6 +473,16 @@ def keepalive_prompt(profile: Optional[dict]) -> str:
     return "ping"
 
 
+SINGLE_SLOT_KEEPALIVE_IDLE_S = 300
+
+
+def keepalive_idle_s(n_slots: int, interval_s: float) -> float:
+    """Seconds without model activity before a keepalive ping. With one slot the ping runs on the SAME slot as the chat: it replaces
+    that conversation's cached prompt, so the next request re-reads the whole prompt (35 s at 11k tokens) and starts from a slot
+    holding the warm-up text. So with one slot it only pings after a long real idle, never between the rounds of a tool loop."""
+    return float(interval_s) if int(n_slots or 1) > 1 else max(float(interval_s), SINGLE_SLOT_KEEPALIVE_IDLE_S)
+
+
 state = ProxyState()
 
 
@@ -483,13 +493,13 @@ async def keepalive_loop():
             continue
         if state.process is None or state.process.poll() is not None:
             continue
-        if time.time() - state.last_activity < state.keepalive_interval_s:
+        n_slots = int((state.profile or {}).get("n_slots") or 1)
+        if time.time() - state.last_activity < keepalive_idle_s(n_slots, state.keepalive_interval_s):
             continue
         try:
             # Pin the ping to the last slot so, with -np > 1, it doesn't land on
             # (and overwrite) whichever slot holds the most recent user's cached
             # conversation prefix. With -np 1 there is no spare slot to use.
-            n_slots = int((state.profile or {}).get("n_slots") or 1)
             await state.client.post("/completion", json={
                 "prompt": keepalive_prompt(state.profile),
                 "n_predict": 1,
