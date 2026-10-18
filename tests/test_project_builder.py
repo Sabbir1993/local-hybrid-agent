@@ -286,3 +286,32 @@ class DockBelongsToTheChatOnScreen(unittest.TestCase):
         self.assertIn("_sseViewing(sessionId) && window.RightDock", sse)
         self.assertIn("sseToolResult(L, d, sessionId)", (root / "chat.js").read_text(encoding="utf-8"))
         self.assertIn("sseToolResult(L, d, sessionId)", (root / "agent-run.js").read_text(encoding="utf-8"))
+
+
+class KeepaliveStaysOffTheChatSlot(unittest.TestCase):
+    def test_single_slot_pings_only_after_a_long_idle(self):
+        from core.state import keepalive_idle_s
+        self.assertEqual(keepalive_idle_s(2, 25), 25)          # a spare slot: the old behaviour
+        self.assertEqual(keepalive_idle_s(1, 25), 300)         # one slot: never between the rounds of a tool loop
+        self.assertEqual(keepalive_idle_s(1, 900), 900)        # a longer configured interval still wins
+
+    def test_local_streams_mark_the_model_busy(self):
+        import asyncio
+        import time
+        from core.state import state
+        from routes.common import llm_stream
+
+        async def fake_inner(client, *a, **k):
+            yield ("delta", "x")
+        old_inner, old_act = llm_stream._llm_chat_stream_raw_inner, state.last_activity
+        llm_stream._llm_chat_stream_raw_inner = fake_inner
+        state.last_activity = 0
+
+        async def run():
+            return [i async for i in llm_stream._llm_chat_stream_raw(state.client, [])]
+        try:
+            self.assertEqual(asyncio.run(run()), [("delta", "x")])
+            self.assertGreater(state.last_activity, time.time() - 5)
+        finally:
+            llm_stream._llm_chat_stream_raw_inner = old_inner
+            state.last_activity = old_act
