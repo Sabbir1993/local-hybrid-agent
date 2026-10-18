@@ -126,3 +126,29 @@ def topic_of(request: str) -> str:
         t = t[m.end():]
     t = _ASK_TAIL.sub("", t).strip(" .?!,")
     return t[:90]
+
+
+def project_limits(app_cfg: Optional[dict]) -> dict:
+    """Sampling limits for a website project turn: same as a deck build (penalty 1.0 - HTML / CSS / JS are full of repeats) and a
+    cap on one turn (a 150-line piece is ~3k tokens; a loop used to run 25k before the guard cut it)."""
+    chat = _cfg(app_cfg)
+    try:
+        mt = int(chat.get("project_max_tokens", 6000))
+    except (TypeError, ValueError):
+        mt = 6000
+    return {"repeat_penalty": 1.0, "max_tokens": mt if mt > 0 else None}
+
+
+def build_dry(app_cfg: Optional[dict]) -> dict:
+    """DRY sampler fields for the turns that write a document, deck or site. DRY penalises a long exact sequence that is about
+    to repeat (the loops the guard cuts: "andandand", the same URL again) without punishing single tokens the way the
+    repeat penalty does, which spells words wrong. chat.build_dry.multiplier 0 turns it off."""
+    cfg = (_cfg(app_cfg).get("build_dry") or {}) if isinstance(_cfg(app_cfg).get("build_dry"), dict) else {}
+    try:
+        mult = float(cfg.get("multiplier", 0.6))
+    except (TypeError, ValueError):
+        mult = 0.6
+    if mult <= 0:
+        return {}
+    return {"dry_multiplier": mult, "dry_base": float(cfg.get("base", 1.75)),
+            "dry_allowed_length": int(cfg.get("allowed_length", 10)), "dry_penalty_last_n": int(cfg.get("penalty_last_n", 1024))}

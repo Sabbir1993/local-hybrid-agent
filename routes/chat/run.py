@@ -621,7 +621,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             "Cite sources, and label any figure you could not verify as an estimate.")
         sys_labels.append("deep")
     deck_lim = deck_research.build_limits(APP_CONFIG, brief_phase)     # no repeat penalty, capped turn length while building
+    if project_build and deck_lim["repeat_penalty"] is None:
+        deck_lim = deck_research.project_limits(APP_CONFIG)
     turn_max_tokens = deck_research.clamp_tokens(req.max_tokens, deck_lim["max_tokens"])
+    # turns that write a deck / PDF / site: DRY on the local server unless the request sets its own (sampler panel) or the lane is cloud
+    sampler_fields = sampler_extra(req) or {}
+    if (brief_phase == "build" or project_build or pdf_build) and not cloud_main and "dry_multiplier" not in sampler_fields:
+        sampler_fields = {**deck_research.build_dry(APP_CONFIG), **sampler_fields}
+    sampler_fields = sampler_fields or None
     combined_sys = "\n\n".join(sys_parts).strip()
     if combined_sys:
         has_sys = False
@@ -836,13 +843,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     chat_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, current_tools, req.temperature,
                         turn_max_tokens, repeat_penalty=chat_rep, rid=chat_rid, lane="main", effort=effort,
-                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
+                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_fields,
                         **tc_kw)
                 else:
                     chat_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
                     chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature,
                                                    max_tokens=turn_max_tokens, repeat_penalty=chat_rep, rid=chat_rid, effort=effort,
-                                                   top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
+                                                   top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_fields,
                                                    **tc_kw)
                 # Estimate of what this turn actually sends, for anchoring below. Must be
                 # taken post-shrink with the exact tools of this turn - an estimate from
@@ -1444,12 +1451,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     final_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, None, req.temperature,
                         turn_max_tokens, repeat_penalty=final_rep, rid=chat_rid, lane="main", effort=effort,
-                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
+                        top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_fields)
                 else:
                     final_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
                     final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature,
                                                     max_tokens=turn_max_tokens, repeat_penalty=final_rep, rid=chat_rid, effort=effort,
-                                                    top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req))
+                                                    top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_fields)
 
                 async for ev, val in final_stream:
                     if ev == "queued":

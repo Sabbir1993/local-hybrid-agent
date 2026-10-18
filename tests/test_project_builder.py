@@ -257,3 +257,21 @@ class ChatRequestCarriesTheSession(unittest.TestCase):
         self.assertIsNone(ChatRunRequest(messages=[]).session_id)
         src = (Path(__file__).resolve().parents[1] / "static" / "js" / "chat.js").read_text(encoding="utf-8")
         self.assertIn("session_id: sessionId || undefined", src)
+
+
+class BuildSampling(unittest.TestCase):
+    def test_project_turns_have_no_repeat_penalty_a_token_cap_and_dry(self):
+        from core import deck_research as dr
+        lim = dr.project_limits({})
+        self.assertEqual(lim, {"repeat_penalty": 1.0, "max_tokens": 6000})
+        self.assertEqual(dr.project_limits({"chat": {"project_max_tokens": 4000}})["max_tokens"], 4000)
+        dry = dr.build_dry({})
+        self.assertEqual(dry["dry_multiplier"], 0.6)
+        self.assertEqual(dry["dry_allowed_length"], 10)
+        self.assertEqual(dr.build_dry({"chat": {"build_dry": {"multiplier": 0}}}), {})        # switched off
+
+    def test_chat_applies_it_to_local_build_turns_only(self):
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("deck_research.project_limits(APP_CONFIG)", src)
+        self.assertIn("(brief_phase == \"build\" or project_build or pdf_build) and not cloud_main", src)
+        self.assertNotIn("extra=sampler_extra(req)", src)
