@@ -70,13 +70,24 @@
       "default_size": "medium"
     },
     "whisper-large-v3": {
-      "model": "orchestrator/voice-models/ggml-large-v3.bin",
+      "model": "orchestrator/voice-models/ggml-large-v3-turbo-bn-q5_0.bin",
       "port": 8096,
       "gpu": 1,
       "threads": 8,
       "engine": "whisper",
       "language": "auto",
       "label": "Whisper large-v3",
+      "kind": "stt",
+      "fallback_enabled": false
+    },
+    "whisper-large-v3-turbo-bn": {
+      "model": "orchestrator/voice-models/ggml-large-v3-turbo-bn-q5_0.bin",
+      "port": 8097,
+      "gpu": 1,
+      "threads": 8,
+      "engine": "whisper",
+      "language": "bn",
+      "label": "Whisper turbo Bangla",
       "kind": "stt",
       "fallback_enabled": false
     }

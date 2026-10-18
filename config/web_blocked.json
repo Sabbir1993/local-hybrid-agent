@@ -1,0 +1,27 @@
+{
+  "wikipedia.org": {
+    "fails": 3,
+    "until": 1792396105.1879332,
+    "status": 403
+  },
+  "tripadvisor.com": {
+    "fails": 2,
+    "until": 1792396142.4022267,
+    "status": 403
+  },
+  "wikiwand.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "pagepro.co": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "wikimedia.org": {
+    "fails": 2,
+    "until": 1792399144.6607249,
+    "status": 403
+  }
+}

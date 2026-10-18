@@ -155,6 +155,9 @@ async def transcribe(user, wav: bytes, language: Optional[str] = None) -> dict:
         raise MediaError("Speech to text isn't set up yet - add a model in Settings -> Models & Jobs.")
     errors = []
     reg = lanes.registry(uid)
+    if lang and lang != "auto":
+        # a speech lane tuned for exactly this language (e.g. the Bangla fine-tune) goes first
+        route.sort(key=lambda t: str(getattr(t.inst, "language", "") or "").lower() != lang)
     for t in route:
         label = reg.get(t.lane, {}).get("label") or t.lane
         t0 = time.time()
