@@ -44,45 +44,79 @@ async function loadCapabilities() {
             <span class="cap-tool-desc">${esc(t.description || '')}</span>
           </div>`).join('')}
       </div>
-      <div class="cap-item" style="margin-top:12px; padding:12px; background:var(--panel2); border:1px solid var(--border); border-radius:8px;">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+      <div class="cap-item" style="margin-top:12px; padding:14px; background:var(--panel2); border:1px solid var(--border); border-radius:10px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
           <div>
-            <b style="font-size:12px;">🔍 Web Search &amp; Research Budget</b>
-            <div class="dim" style="font-size:10.5px;">Controls maximum web searches allowed per prompt turn before triggering budget cutoffs</div>
+            <b style="font-size:13px; display:flex; align-items:center; gap:6px;">📊 Thinking-Wise Tool Call &amp; Token Budget Matrix</b>
+            <div class="dim" style="font-size:11px; margin-top:2px;">Configure tool/web call limits, token budget, and max rounds per thinking level (as selected in the chat prompt bar)</div>
           </div>
-          ${canManageMcp ? '<button class="btn accent" id="web-budget-save" style="width:auto; margin:0; padding:4px 12px; font-size:11px;">💾 Save Budget</button>' : ''}
+          ${canManageMcp ? '<button class="btn accent" id="web-budget-save" style="width:auto; margin:0; padding:5px 14px; font-size:11.5px; font-weight:600; border-radius:6px;">💾 Save Budget</button>' : ''}
         </div>
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-top:8px;">
-          <div>
-            <label style="display:block; font-size:11px; font-weight:600; margin-bottom:4px;">Max Web Calls (Standard Chat)</label>
-            <input type="number" id="web-max-calls" min="1" max="50" value="${d.web.max_web_calls || 8}"
-              ${canManageMcp ? '' : 'disabled'} style="width:100%; box-sizing:border-box;">
-            <div class="dim" style="font-size:9.5px; margin-top:3px;">Search limit per normal chat round (default: 8)</div>
-          </div>
-          <div>
-            <label style="display:block; font-size:11px; font-weight:600; margin-bottom:4px;">Max Web Calls (Deep / Think Mode)</label>
-            <input type="number" id="web-deep-max-calls" min="1" max="100" value="${d.web.deep_max_web_calls || 12}"
-              ${canManageMcp ? '' : 'disabled'} style="width:100%; box-sizing:border-box;">
-            <div class="dim" style="font-size:9.5px; margin-top:3px;">Search limit when Deep thinking is on (default: 12)</div>
-          </div>
-          <div>
-            <label style="display:block; font-size:11px; font-weight:600; margin-bottom:4px;">Max Tool Rounds (Standard Chat)</label>
-            <input type="number" id="web-max-rounds" min="1" max="50" value="${d.web.max_tool_rounds || 12}"
-              ${canManageMcp ? '' : 'disabled'} style="width:100%; box-sizing:border-box;">
-            <div class="dim" style="font-size:9.5px; margin-top:3px;">Tool execution turn ceiling (default: 12)</div>
-          </div>
-          <div>
-            <label style="display:block; font-size:11px; font-weight:600; margin-bottom:4px;">Max Tool Rounds (Deep Mode)</label>
-            <input type="number" id="web-deep-max-rounds" min="1" max="100" value="${d.web.deep_max_tool_rounds || 20}"
-              ${canManageMcp ? '' : 'disabled'} style="width:100%; box-sizing:border-box;">
-            <div class="dim" style="font-size:9.5px; margin-top:3px;">Tool execution turn ceiling in Deep mode (default: 20)</div>
-          </div>
+        <div style="overflow-x:auto; margin-top:8px;">
+          <table class="cap-budget-matrix" style="width:100%; border-collapse:collapse; font-size:12px; min-width:480px;">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border-subtle); color:var(--dim); font-size:11px; text-align:left;">
+                <th style="padding:6px 10px; font-weight:600;">Thinking Level</th>
+                <th style="padding:6px 10px; font-weight:600;">Max Tool Calls</th>
+                <th style="padding:6px 10px; font-weight:600;">Token Budget</th>
+                <th style="padding:6px 10px; font-weight:600;">Max Tool Rounds</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(() => {
+                const matrix = d.web.thinking_budgets || {};
+                const defaults = {
+                  none: { tool_calls: 0, token_budget: 6000, max_rounds: 0 },
+                  low: { tool_calls: 4, token_budget: 8000, max_rounds: 4 },
+                  medium: { tool_calls: 8, token_budget: 12000, max_rounds: 12 },
+                  high: { tool_calls: 16, token_budget: 16000, max_rounds: 20 },
+                  extra: { tool_calls: 25, token_budget: 20000, max_rounds: 30 },
+                  deep: { tool_calls: 35, token_budget: 25000, max_rounds: 40 },
+                };
+                const levels = [
+                  { key: 'none', label: 'None', desc: 'No thinking (direct answer)' },
+                  { key: 'low', label: 'Low', desc: 'Quick check' },
+                  { key: 'medium', label: 'Medium', desc: 'Standard analysis' },
+                  { key: 'high', label: 'High', desc: 'Thorough research' },
+                  { key: 'extra', label: 'Extra', desc: 'Deep synthesis' },
+                  { key: 'deep', label: 'Deep research', desc: 'Exhaustive web discovery' },
+                ];
+                return levels.map(l => {
+                  const row = matrix[l.key] || defaults[l.key] || {};
+                  const tc = row.tool_calls !== undefined ? row.tool_calls : (l.key === 'none' ? 0 : 8);
+                  const tb = row.token_budget !== undefined ? row.token_budget : (l.key === 'none' ? 6000 : 12000);
+                  const mr = row.max_rounds !== undefined ? row.max_rounds : (l.key === 'none' ? 0 : 12);
+                  return `
+                    <tr style="border-bottom:1px solid rgba(255,255,255,0.04);" data-matrix-lvl="${l.key}">
+                      <td style="padding:8px 10px; font-weight:600; white-space:nowrap;">
+                        <div>${esc(l.label)}</div>
+                        <div class="dim" style="font-size:9.5px; font-weight:normal;">${esc(l.desc)}</div>
+                      </td>
+                      <td style="padding:6px 10px;">
+                        <input type="number" min="0" max="100" class="matrix-tool-calls" value="${tc}"
+                          ${canManageMcp ? '' : 'disabled'} style="width:85px; padding:4px 6px; border-radius:6px; font-size:12px; background:var(--panel); border:1px solid var(--border);">
+                        ${l.key === 'none' ? '<span class="dim" style="font-size:9.5px; display:block; margin-top:2px;">0 = no tool call</span>' : ''}
+                      </td>
+                      <td style="padding:6px 10px;">
+                        <input type="number" min="500" max="100000" step="500" class="matrix-token-budget" value="${tb}"
+                          ${canManageMcp ? '' : 'disabled'} style="width:105px; padding:4px 6px; border-radius:6px; font-size:12px; background:var(--panel); border:1px solid var(--border);">
+                      </td>
+                      <td style="padding:6px 10px;">
+                        <input type="number" min="0" max="100" class="matrix-max-rounds" value="${mr}"
+                          ${canManageMcp ? '' : 'disabled'} style="width:85px; padding:4px 6px; border-radius:6px; font-size:12px; background:var(--panel); border:1px solid var(--border);">
+                      </td>
+                    </tr>
+                  `;
+                }).join('');
+              })()}
+            </tbody>
+          </table>
         </div>
-        <div style="margin-top:10px;">
-          <label style="display:block; font-size:11px; font-weight:600; margin-bottom:4px;">Web Content Truncation Cap (Characters)</label>
-          <input type="number" id="web-soft-chars" min="500" max="50000" step="500" value="${d.web.soft_chars || 6000}"
-            ${canManageMcp ? '' : 'disabled'} style="width:140px;">
-          <span class="dim" style="font-size:9.5px; margin-left:6px;">characters (default: 6000). Trims long web search results to keep context clean.</span>
+        <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <label style="display:block; font-size:11px; font-weight:600;">Web Content Truncation Cap (Characters):</label>
+          <input type="number" id="web-soft-chars" min="500" max="50000" step="500" value="${d.web.soft_chars || 20000}"
+            ${canManageMcp ? '' : 'disabled'} style="width:120px; padding:4px 8px; border-radius:6px; font-size:12px; background:var(--panel); border:1px solid var(--border);">
+          <span class="dim" style="font-size:10px;">characters. Trims web search fetch results to keep context clean.</span>
         </div>
       </div>
     `;
@@ -321,12 +355,28 @@ async function loadCapabilities() {
     const webSaveBtn = box.querySelector('#web-budget-save');
     if (webSaveBtn) webSaveBtn.onclick = async () => {
       try {
+        const matrixRows = box.querySelectorAll('tr[data-matrix-lvl]');
+        const thinkingBudgets = {};
+        matrixRows.forEach(row => {
+          const lvl = row.dataset.matrixLvl;
+          const toolCalls = parseInt(row.querySelector('.matrix-tool-calls').value, 10);
+          const tokenBudget = parseInt(row.querySelector('.matrix-token-budget').value, 10);
+          const maxRounds = parseInt(row.querySelector('.matrix-max-rounds').value, 10);
+          thinkingBudgets[lvl] = {
+            tool_calls: isNaN(toolCalls) ? (lvl === 'none' ? 0 : 8) : toolCalls,
+            token_budget: isNaN(tokenBudget) ? (lvl === 'none' ? 6000 : 12000) : tokenBudget,
+            max_rounds: isNaN(maxRounds) ? (lvl === 'none' ? 0 : 12) : maxRounds,
+          };
+        });
+
+        const softChars = parseInt(box.querySelector('#web-soft-chars').value, 10) || 20000;
         const payload = {
-          max_web_calls: parseInt(box.querySelector('#web-max-calls').value, 10) || 8,
-          deep_max_web_calls: parseInt(box.querySelector('#web-deep-max-calls').value, 10) || 12,
-          max_tool_rounds: parseInt(box.querySelector('#web-max-rounds').value, 10) || 12,
-          deep_max_tool_rounds: parseInt(box.querySelector('#web-deep-max-rounds').value, 10) || 20,
-          soft_chars: parseInt(box.querySelector('#web-soft-chars').value, 10) || 6000,
+          thinking_budgets: thinkingBudgets,
+          max_web_calls: thinkingBudgets.medium ? thinkingBudgets.medium.tool_calls : 8,
+          deep_max_web_calls: thinkingBudgets.deep ? thinkingBudgets.deep.tool_calls : 25,
+          max_tool_rounds: thinkingBudgets.medium ? thinkingBudgets.medium.max_rounds : 12,
+          deep_max_tool_rounds: thinkingBudgets.deep ? thinkingBudgets.deep.max_rounds : 30,
+          soft_chars: softChars,
         };
         const r = await fetch('/control/web_settings', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -334,7 +384,7 @@ async function loadCapabilities() {
         });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || j.detail || r.status);
-        toast(`Web search budget saved: ${payload.max_web_calls} calls (normal) / ${payload.deep_max_web_calls} calls (deep) ✓`);
+        toast(`Thinking-wise budget matrix saved successfully ✓`);
       } catch (e) { toast('Save failed: ' + e.message, true); }
     };
 

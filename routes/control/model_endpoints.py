@@ -90,12 +90,16 @@ async def available_models(user: Principal = Depends(get_current_user)):
         })
 
     cloud_models = []
+    bound_main = cloud.cloud_lane("main", user.id)
     for cm in cloud.cloud_models(user.id):
+        is_active = bool(bound_main and bound_main.key == cm.key)
         cloud_models.append({
             "id": f"cloud:{cm.key}",
             "display": cm.display,
-            "currently_loaded": False,
+            "currently_loaded": is_active,
             "kind": "cloud",
+            "ctx": cm.ctx,
+            "context_size": cm.ctx,
             "provider": cm.provider,
             "provider_name": cm.provider_name,
             **_reasoning_caps(reasoning.cloud_mode(cm)),

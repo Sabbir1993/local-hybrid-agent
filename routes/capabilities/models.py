@@ -9,12 +9,19 @@ class CapToggleReq(BaseModel):
     enabled: bool
 
 
+class ThinkingBudgetRow(BaseModel):
+    tool_calls: Optional[int] = None
+    token_budget: Optional[int] = None
+    max_rounds: Optional[int] = None
+
+
 class WebSettingsReq(BaseModel):
     max_web_calls: Optional[int] = None
     deep_max_web_calls: Optional[int] = None
     max_tool_rounds: Optional[int] = None
     deep_max_tool_rounds: Optional[int] = None
     soft_chars: Optional[int] = None
+    thinking_budgets: Optional[dict[str, ThinkingBudgetRow]] = None
 
 
 

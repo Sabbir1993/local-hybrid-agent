@@ -5,6 +5,7 @@ person would: project_write one file at a time, project_append the next section 
 a single-file preview. Nothing here runs: files are inert text in the user's own common space (never another user's), the same
 folder the other chat documents use. Card numbers are refused on every write, like every other document the chat saves."""
 import contextvars
+from html.parser import HTMLParser
 import json
 import re
 import zipfile
@@ -82,11 +83,11 @@ PROJECT_MANUAL = (
 SINGLE_PAGE_MANUAL = (
     "ONE HTML PAGE (Claude Artifacts standard): the user asked for a single html page, not a website. Plan exactly ONE file, index.html, with "
     "Tailwind CSS CDN (<script src=\"https://cdn.tailwindcss.com\"></script>), Google Fonts (Plus Jakarta Sans), Lucide icons (<script src=\"https://unpkg.com/lucide@latest\"></script>), "
-    "and CSS in a <style> and JS in a <script> inside it. Write a short skeleton with project_write, then add one section per project_append call "
-    "(under about 120 lines each; vary the markup, use modern cards, tabs, and filters, never paste the same card or image line over and over). Then project_finish: "
-    "it returns the one .html link. Do not create css/ or js/ files and do not mention a ZIP. To fix or redo a page that already exists, "
-    "write a short skeleton with project_write and replace=true, then add the sections with project_append. Never generate pictures "
-    "for the page: link real photos by https address.")
+    "and CSS in a <style> and JS in a <script> inside it. Emit the complete, beautiful, production-ready page in ONE single project_write call "
+    "(varying markup, using modern cards, tabs, and interactive filters; never paste repetitive placeholder cards). Then call project_finish immediately: "
+    "it returns the one .html link. Do not create css/ or js/ files and do not mention a ZIP. Use project_append only if you need to extend an existing page. "
+    "To fix or redo a page that already exists, write the complete updated page with project_write and replace=true. Never generate pictures for the page: "
+    "link real photos by https address.")
 
 _WANTED = re.compile(
     r"\b(web ?site|web ?app|landing page|portfolio site|multi-?page|front-?end|single[- ]page|index\.html|styles\.css|main\.js|"
@@ -262,6 +263,206 @@ def tool_project_plan(args: dict) -> str:
             + " Write them one at a time with project_write.")
 
 
+_HTML_VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr"
+}
+_HTML_INLINE_TAGS = {
+    "a", "b", "strong", "i", "em", "span", "code", "small", "label",
+    "button", "sub", "sup", "mark", "u", "abbr"
+}
+_HTML_HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+_HTML_SECTIONING_TAGS = {"section", "article", "aside", "nav", "header", "footer", "main"}
+_HTML_BLOCK_TAGS = {
+    "address", "article", "aside", "blockquote", "canvas", "dd", "div",
+    "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+    "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main",
+    "nav", "noscript", "ol", "p", "pre", "section", "table", "tfoot",
+    "ul", "video"
+}
+
+
+class _TagStackParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.stack: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        t = tag.lower()
+        if t not in _HTML_VOID_TAGS:
+            self.stack.append(t)
+
+    def handle_endtag(self, tag):
+        t = tag.lower()
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i] == t:
+                self.stack = self.stack[:i]
+                break
+
+    def handle_startendtag(self, tag, attrs):
+        pass
+
+
+def _get_open_tags(html_str: str) -> list[str]:
+    cleaned = re.sub(r"<script\b[\s\S]*?</script>", "", html_str, flags=re.I)
+    cleaned = re.sub(r"<style\b[\s\S]*?</style>", "", cleaned, flags=re.I)
+    parser = _TagStackParser()
+    try:
+        parser.feed(cleaned)
+    except Exception:
+        pass
+    return parser.stack
+
+
+def _find_first_html_tag(snippet: str):
+    """Returns (is_closing: bool, tag_name: str) or None."""
+    s = re.sub(r"^\s*<!--[\s\S]*?-->\s*", "", snippet)
+    m = re.match(r"^\s*<(/)?([a-zA-Z0-9:-]+)", s)
+    if m:
+        return (bool(m.group(1)), m.group(2).lower())
+    return None
+
+
+def _calculate_auto_closing_tags(open_stack: list[str], incoming_snippet: str) -> list[str]:
+    """Calculate tags that must be closed before incoming_snippet is appended."""
+    if not open_stack:
+        return []
+
+    usable_stack = [t for t in open_stack if t not in ("html", "body")]
+    if not usable_stack:
+        return []
+
+    first_tag_info = _find_first_html_tag(incoming_snippet)
+    if not first_tag_info:
+        return []
+
+    is_closing, tag = first_tag_info
+
+    curr_stack = list(usable_stack)
+    if is_closing:
+        s = re.sub(r"^\s*<!--[\s\S]*?-->\s*", "", incoming_snippet)
+        for m in re.finditer(r"</([a-zA-Z0-9:-]+)>", s):
+            end_t = m.group(1).lower()
+            if curr_stack and curr_stack[-1] == end_t:
+                curr_stack.pop()
+            else:
+                break
+        return []
+
+    tags_to_close = []
+
+    # Case 1: Incoming is a sectioning element (section, header, footer, article, nav, aside)
+    if tag in _HTML_SECTIONING_TAGS:
+        found_idx = -1
+        for i in range(len(curr_stack) - 1, -1, -1):
+            if curr_stack[i] in _HTML_SECTIONING_TAGS:
+                found_idx = i
+                break
+        if found_idx != -1:
+            tags_to_close = curr_stack[found_idx:]
+            tags_to_close.reverse()
+            return tags_to_close
+        else:
+            while curr_stack and (curr_stack[-1] in _HTML_INLINE_TAGS or curr_stack[-1] in _HTML_HEADING_TAGS or curr_stack[-1] == "p"):
+                tags_to_close.append(curr_stack.pop())
+            return tags_to_close
+
+    # Case 2: Incoming is a block element, heading, or paragraph
+    if tag in _HTML_BLOCK_TAGS or tag in _HTML_HEADING_TAGS or tag == "p":
+        while curr_stack and (curr_stack[-1] in _HTML_INLINE_TAGS or curr_stack[-1] in _HTML_HEADING_TAGS or curr_stack[-1] == "p"):
+            tags_to_close.append(curr_stack.pop())
+        return tags_to_close
+
+    return tags_to_close
+
+
+def _balance_html_document(html_str: str) -> str:
+    """Ensure all open tags inside <body> are closed before </body> or </html>."""
+    m_body = re.search(r"</body\b[^>]*>", html_str, re.I)
+    if not m_body:
+        return html_str
+    idx = m_body.start()
+    before = html_str[:idx]
+    after = html_str[idx:]
+
+    m_script = re.search(r"(<script\b[\s\S]*?</script>\s*)$", before, re.I)
+    trailing_script = ""
+    if m_script and len(m_script.group(1)) < 3000:
+        s_idx = m_script.start()
+        trailing_script = before[s_idx:]
+        before = before[:s_idx]
+
+    open_tags = _get_open_tags(before)
+    dangling = [t for t in open_tags if t not in ("html", "body")]
+    if dangling:
+        close_html = "\n" + "\n".join(f"</{t}>" for t in reversed(dangling))
+        before = before.rstrip() + close_html + "\n"
+
+    return before + trailing_script + after
+
+
+def _smart_html_append(old: str, new_content: str) -> str:
+    """Intelligently stitch an HTML fragment into an existing HTML document.
+
+    Auto-closes unclosed/dangling tags from previous chunks (such as <p>, <div>, <section>)
+    when an appended chunk introduces a new section or block element, preventing broken DOM trees.
+    """
+    new_str = str(new_content or "").strip()
+    if not new_str:
+        return old
+
+    # 1. Full document update: if new_content starts with DOCTYPE or <html>, replace entirely
+    if re.search(r"^\s*<!DOCTYPE\s+html", new_str, re.I) or re.search(r"^\s*<html\b", new_str, re.I):
+        return new_str
+
+    # 2. Strip accidental trailing </body> or </html> from the appended fragment
+    cleaned = re.sub(r"</(?:body|html)>\s*$", "", new_str, flags=re.I).strip()
+    cleaned = re.sub(r"</(?:body|html)>\s*$", "", cleaned, flags=re.I).strip()
+
+    # 3. Locate injection boundaries
+    before_body, after_body = old, ""
+    m_body = re.search(r"</body\b[^>]*>", old, re.I)
+    if m_body:
+        idx = m_body.start()
+        before_body = old[:idx]
+        after_body = old[idx:]
+        m_script = re.search(r"(<script\b[\s\S]*?</script>\s*)$", before_body, re.I)
+        if m_script and len(m_script.group(1)) < 3000:
+            s_idx = m_script.start()
+            after_body = before_body[s_idx:] + after_body
+            before_body = before_body[:s_idx]
+    else:
+        m_html = re.search(r"</html\b[^>]*>", old, re.I)
+        if m_html:
+            idx = m_html.start()
+            before_body = old[:idx]
+            after_body = old[idx:]
+
+    # 4. Fix dangling unclosed markdown link at the end of before_body (e.g. `[2](https://...`)
+    b_trimmed = before_body.rstrip()
+    if re.search(r"\[[^\]]+\]\((?:https?://)?[^\s\)]*$", b_trimmed):
+        before_body = b_trimmed + ")"
+
+    # 5. Fix dangling incomplete opening tag (e.g. cut off `<div class="` at end)
+    b_trimmed = before_body.rstrip()
+    if re.search(r"<[a-zA-Z0-9:-]+(?:\s+[^>\"']*?(?:=\"[^\"]*\"|='[^']*')?)*\s*$", b_trimmed):
+        m_tag = re.search(r"(<[a-zA-Z0-9:-]+(?:\s+[^>\"']*?(?:=\"[^\"]*\"|='[^']*')?)*\s*)$", b_trimmed)
+        if m_tag and not m_tag.group(1).endswith(">"):
+            before_body = b_trimmed[:m_tag.start()]
+
+    # 6. Auto-close dangling tags from previous chunk if new chunk starts a section or block
+    open_tags = _get_open_tags(before_body)
+    to_close = _calculate_auto_closing_tags(open_tags, cleaned)
+    if to_close:
+        close_html = "\n".join(f"</{t}>" for t in to_close)
+        before_body = before_body.rstrip() + "\n" + close_html
+
+    # 7. Assemble
+    if after_body:
+        return before_body.rstrip() + "\n\n" + cleaned + "\n\n" + after_body.lstrip()
+    return before_body.rstrip() + ("\n\n" if not before_body.endswith("\n\n") else "") + cleaned + "\n"
+
+
 def _store(args: dict, append: bool) -> str:
     a = args or {}
     content = a.get("content")
@@ -282,12 +483,23 @@ def _store(args: dict, append: bool) -> str:
         return ("error: plan the site first: call project_plan with the complete list of files (at most 14, each with a one-line "
                 "purpose), then write them one at a time.")
     existed = target.is_file()
-    if existed and not append and not a.get("replace"):
-        done = {f["path"] for f in plan_status(a.get("project"))["done"]}
-        if rel in done:
-            nxt = _progress(a.get("project")).strip() or "Call project_finish if every file is written."
-            return (f"error: {rel} is already written ({_lines(target)} lines) and complete: do not write it again. "
-                    f"Use project_append to extend it, or pass replace=true only if the user asked to redo it. {nxt}")
+    if existed and not append:
+        try:
+            curr_text = target.read_text(encoding="utf-8", errors="replace")
+            if curr_text.strip() == str(content).strip():
+                nxt = _progress(a.get("project")).strip() or "Call project_finish when all planned files are written."
+                return (f"note: {rel} already has this exact content ({_lines(target)} lines). Do not rewrite identical files. "
+                        f"Use project_append to add new sections, or call project_finish if complete. {nxt}")
+        except Exception:
+            pass
+        if not a.get("replace"):
+            done = {f["path"] for f in plan_status(a.get("project"))["done"]}
+            plan = _load_plan(a.get("project"))
+            if rel in done or not plan or _lines(target) >= 10:
+                nxt = _progress(a.get("project")).strip() or "Call project_finish if every file is written."
+                return (f"error: {rel} is already written ({_lines(target)} lines): do not overwrite it again. "
+                        f"Use project_append to extend it, or call project_finish if complete. "
+                        f"(Pass replace=true only if redoing from scratch). {nxt}")
     if append and not existed:
         return f"error: {rel} does not exist yet. Create it with project_write first (a short skeleton), then project_append."
     count, total = _size(root)
@@ -299,7 +511,10 @@ def _store(args: dict, append: bool) -> str:
     text = str(content)
     if append:
         old = target.read_text(encoding="utf-8", errors="replace")
-        text = old + ("" if old.endswith("\n") else "\n") + text
+        if rel.lower().endswith((".html", ".htm")):
+            text = _smart_html_append(old, text)
+        else:
+            text = old + ("" if old.endswith("\n") else "\n") + text
     with target.open("w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
     verb = "Appended to" if append else ("Replaced" if existed else "Created")
@@ -334,6 +549,7 @@ def _local(root: Path, ref: str):
 def inline_entry(root: Path, entry: str) -> str:
     """The entry page with its local stylesheet and script files written into it, so one file previews like the site."""
     html = (root / entry).read_text(encoding="utf-8", errors="replace")
+    html = _balance_html_document(html)
 
     def css(m):
         h = _HREF.search(m.group(0))
@@ -379,6 +595,16 @@ def tool_project_finish(args: dict) -> str:
     zip_name, page_name = f"{slug}-{uid8}.zip", f"{slug}-{uid8}.html"
     common = common_workspace()
     files = sorted(f for f in root.rglob("*") if f.is_file())
+    # Ensure all HTML files are properly closed and balanced before packaging
+    for f in files:
+        if f.suffix.lower() in (".html", ".htm"):
+            try:
+                raw_h = f.read_text(encoding="utf-8", errors="replace")
+                bal_h = _balance_html_document(raw_h)
+                if bal_h != raw_h:
+                    f.write_text(bal_h, encoding="utf-8", newline="\n")
+            except Exception:
+                pass
     single = len(files) == 1      # one html page: a ZIP of one file is noise, hand over just the page
     if not single:
         with zipfile.ZipFile(common / zip_name, "w", zipfile.ZIP_DEFLATED) as z:

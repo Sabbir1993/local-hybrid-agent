@@ -73,6 +73,11 @@ function initEffortChip() {
       // switch row: keep the menu open so the level can be changed too
       chatDeepMode = !chatDeepMode;
       try { localStorage.setItem('chat_deep_mode', chatDeepMode ? '1' : '0'); } catch (err) {}
+      if (chatDeepMode) {
+        chatWebSearch = true;
+        try { localStorage.setItem('chat_web_search', '1'); } catch (e) {}
+        if (typeof updateWebToggleUI === 'function') updateWebToggleUI();
+      }
       updateEffortUI();
       return;
     }

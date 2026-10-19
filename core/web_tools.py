@@ -119,37 +119,121 @@ async def tool_web_fetch(args: dict) -> str:
         "--- END WEB PAGE ---")
 
 
-def _bing_images_search_sync(query: str, count: int = 8) -> list:
-    """Bing image search results."""
-    url = "https://www.bing.com/images/search?q=" + quote_plus(query)
-    with httpx.Client(follow_redirects=True, timeout=SEARCH_TIMEOUT_S,
-                      headers={"User-Agent": UA, "Accept-Language": ws.region()["accept"]}) as c:
-        r = c.get(url)
-    if r.status_code != 200:
-        raise RuntimeError(f"Bing images search returned HTTP {r.status_code}")
+_IMAGE_STOPWORDS = {
+    'the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by',
+    'photography', 'photo', 'photos', 'picture', 'pictures', 'image', 'images', 'high', 'quality',
+    'hd', '4k', 'aerial', 'view', 'wallpapers', 'wallpaper', 'background', 'download', 'stock'
+}
+
+
+def _extract_image_keywords(text: str) -> set:
+    words = re.findall(r'[\w]+', (text or "").lower())
+    return {w for w in words if len(w) >= 3 and w not in _IMAGE_STOPWORDS}
+
+
+def _is_image_result_relevant(query_kw: set, title: str, purl: str = "") -> bool:
+    if not query_kw:
+        return True
+    target_kw = _extract_image_keywords(title) | _extract_image_keywords(purl)
+    return len(query_kw.intersection(target_kw)) > 0
+
+
+def _search_wikimedia_commons_sync(query: str, count: int = 6) -> list:
+    url = f"https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch={quote_plus(query)}&gsrnamespace=6&prop=imageinfo&iiprop=url|size&iiurlwidth=800&format=json"
+    headers = {"User-Agent": "LocalAgent/1.0 (https://github.com/vulkan-arc; assistant@local.ai)"}
     results = []
-    matches = re.findall(r'class="iusc"[^>]*m="([^"]+)"', r.text)
-    for m_str in matches:
-        unescaped = m_str.replace('&quot;', '"')
-        try:
-            data = json.loads(unescaped)
-            murl = data.get("murl")
-            if not murl:
-                continue
-            turl = data.get("turl", "")
-            title = data.get("t", "")
-            purl = data.get("purl", "")
-            results.append({
-                "title": title or query,
-                "image_url": murl,
-                "thumbnail_url": turl,
-                "source_url": purl,
-            })
-            if len(results) >= count:
-                break
-        except Exception:
-            continue
+    try:
+        with httpx.Client(follow_redirects=True, timeout=SEARCH_TIMEOUT_S, headers=headers) as c:
+            r = c.get(url)
+        if r.status_code == 200:
+            pages = r.json().get("query", {}).get("pages", {})
+            for pid, p in pages.items():
+                title = p.get("title", "").replace("File:", "").strip()
+                clean_title = re.sub(r'\.(?:jpg|jpeg|png|webp|svg)$', '', title, flags=re.I)
+                ii = p.get("imageinfo", [{}])[0]
+                img = ii.get("url")
+                thumb = ii.get("thumburl") or img
+                if img and (img.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.svg')) or 'upload.wikimedia.org' in img):
+                    results.append({
+                        "title": clean_title or query,
+                        "image_url": img,
+                        "thumbnail_url": thumb,
+                        "source_url": f"https://commons.wikimedia.org/wiki/{quote_plus(p.get('title', ''))}",
+                    })
+                if len(results) >= count:
+                    break
+    except Exception:
+        pass
     return results
+
+
+def _raw_bing_images_search_sync(query: str, count: int = 8) -> list:
+    url = "https://www.bing.com/images/search?q=" + quote_plus(query) + "&form=HDRSC2"
+    q_kw = _extract_image_keywords(query)
+    results = []
+    try:
+        with httpx.Client(follow_redirects=True, timeout=SEARCH_TIMEOUT_S,
+                          headers={"User-Agent": UA, "Accept-Language": ws.region()["accept"]}) as c:
+            r = c.get(url)
+        if r.status_code == 200:
+            matches = re.findall(r'class="iusc"[^>]*m="([^"]+)"', r.text)
+            for m_str in matches:
+                try:
+                    data = json.loads(m_str.replace('&quot;', '"'))
+                    murl = data.get("murl")
+                    if not murl:
+                        continue
+                    title = data.get("t", "")
+                    purl = data.get("purl", "")
+                    # STRICT RELEVANCE FILTER: Discard off-topic/trending/spam hits completely
+                    if not _is_image_result_relevant(q_kw, title, purl):
+                        continue
+                    results.append({
+                        "title": title or query,
+                        "image_url": murl,
+                        "thumbnail_url": data.get("turl", "") or murl,
+                        "source_url": purl,
+                    })
+                    if len(results) >= count:
+                        break
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return results
+
+
+def _bing_images_search_sync(query: str, count: int = 8) -> list:
+    """Multi-source, verified-relevance image search. Queries Wikimedia Commons and
+    Bing with strict keyword relevance verification, eliminating spam/off-topic results."""
+    q_kw = _extract_image_keywords(query)
+    results = []
+
+    # 1. Try Wikimedia Commons first (authoritative, high-resolution, no clickbait)
+    wiki_hits = _search_wikimedia_commons_sync(query, count)
+    results.extend(wiki_hits)
+
+    # 2. Complement with filtered Bing image results
+    if len(results) < count:
+        bing_hits = _raw_bing_images_search_sync(query, count - len(results))
+        for b in bing_hits:
+            if not any(x["image_url"] == b["image_url"] for x in results):
+                results.append(b)
+
+    # 3. If query was complex (> 3 keywords) and yielded few results, simplify query
+    if len(results) < 2 and len(q_kw) > 3:
+        core_query = " ".join(list(q_kw)[:4])
+        wiki_extra = _search_wikimedia_commons_sync(core_query, count)
+        for w in wiki_extra:
+            if not any(x["image_url"] == w["image_url"] for x in results):
+                results.append(w)
+        if len(results) < count:
+            bing_extra = _raw_bing_images_search_sync(core_query, count - len(results))
+            for b in bing_extra:
+                if not any(x["image_url"] == b["image_url"] for x in results):
+                    results.append(b)
+
+    return results[:count]
 
 
 async def tool_web_search(args) -> str:

@@ -81,6 +81,8 @@ async def _create(args: dict, location: str) -> str:
     if args.get("plan"):
         doc_ops._check_ops_for_pan([{"op": "create", "content": str(args["plan"])}])      # the plan is echoed back to the model
     ext_ = Path(name).suffix.lower()
+    if ext_ == ".pptx":
+        content = _reorder_pptx_slides(content)
     # a PDF built in pieces is printed on its last doc_append, so its pictures are looked up then
     content, images, pic_note = await prepare_build(ext_, content, uid, template=bool(template),
                                                     partial=bool(args.get("total")))
@@ -325,6 +327,76 @@ def _leftover_markup(ext: str, spec: str) -> list:
     return bad
 
 
+_CLOSING_SLIDE_RE = re.compile(
+    r"^\s*##?\s*(?:thank\s*you|questions?\??|q\s*&\s*a\b|closing\b|conclusion\b|contact\s*us|wrap\s*up|summary\s*&\s*next\s*steps)",
+    re.IGNORECASE
+)
+
+
+def _is_closing_slide(slide_text: str) -> bool:
+    """True if this slide is a closing, thank-you, or Q&A slide."""
+    lines = [line.strip() for line in str(slide_text or "").strip().splitlines() if line.strip()]
+    for line in lines[:4]:
+        if _CLOSING_SLIDE_RE.match(line):
+            return True
+        clean = re.sub(r"^#+\s*", "", line).strip().lower()
+        if clean in ("thank you", "thank you!", "questions?", "q&a", "questions and answers", "closing", "conclusion"):
+            return True
+    return False
+
+
+def _stitch_pptx_slides(existing_spec: str, content: str) -> str:
+    """Stitch newly appended slides into an existing PPTX presentation outline.
+
+    Guarantees that closing slides (Thank You, Q&A, Conclusion) ALWAYS remain at the
+    very end of the presentation, never trapped in the middle between append passes.
+    """
+    if not str(content or "").strip():
+        return existing_spec
+
+    exist_slides = [s.strip() for s in re.split(r"\n\s*---\s*\n", str(existing_spec or "").strip()) if s.strip()]
+    new_slides = [s.strip() for s in re.split(r"\n\s*---\s*\n", str(content or "").strip()) if s.strip()]
+
+    if not exist_slides:
+        return content
+
+    content_slides = []
+    closing_slides = []
+
+    for s in exist_slides:
+        if _is_closing_slide(s):
+            closing_slides.append(s)
+        else:
+            content_slides.append(s)
+
+    for s in new_slides:
+        if _is_closing_slide(s):
+            closing_slides.append(s)
+        else:
+            content_slides.append(s)
+
+    final_slides = content_slides + ([closing_slides[-1]] if closing_slides else [])
+    return "\n\n---\n\n".join(final_slides)
+
+
+def _reorder_pptx_slides(spec: str) -> str:
+    """Ensure any closing slide in a single-pass deck sits at the very end."""
+    slides = [s.strip() for s in re.split(r"\n\s*---\s*\n", str(spec or "").strip()) if s.strip()]
+    if len(slides) <= 2:
+        return spec
+    content_slides = []
+    closing_slides = []
+    for s in slides:
+        if _is_closing_slide(s):
+            closing_slides.append(s)
+        else:
+            content_slides.append(s)
+    if not closing_slides:
+        return spec
+    final_slides = content_slides + [closing_slides[-1]]
+    return "\n\n---\n\n".join(final_slides)
+
+
 async def _append(args: dict, location: str) -> str:
     """Add the next slides / sections to a document that is being built in pieces and rebuild it IN PLACE, so every
     step leaves a real, valid file (the right-hand preview refreshes from it). The markdown source is the truth:
@@ -349,7 +421,10 @@ async def _append(args: dict, location: str) -> str:
             pass
     new_spec = spec.rstrip()
     if content:
-        new_spec += ("\n\n---\n\n" if ext == ".pptx" else "\n\n") + content
+        if ext == ".pptx":
+            new_spec = _stitch_pptx_slides(spec, content)
+        else:
+            new_spec += "\n\n" + content
     have, total = _unit_count(ext, new_spec), _total_for(key)
     if done and total and have < total:
         raise ValueError(f"not finished: {have} of {total} {'slides' if ext == '.pptx' else 'sections'} so far - "

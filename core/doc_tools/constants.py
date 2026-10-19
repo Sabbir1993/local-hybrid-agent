@@ -54,10 +54,10 @@ DOC_CREATE_SCHEMA = {"type": "function", "function": {
                    "markdown table per sheet; formulas are real when written as =SUM(B2:B9) in a cell (checked and calculated for "
                    "you), and lines under a table set 'format: Col=currency:BDT|percent|date|int', 'total: Col=sum', "
                    "'highlight: Col<0 red', 'scale: Col', 'validate: Col in [a, b]', 'table: Name', 'freeze: A2', 'name: Rate = "
-                   "Assumptions!B2', 'chart: bar|line|pie|column|scatter | title=.. | x=Col | y=Col[,Col]'. Tables as markdown tables or CSV. A deck or PDF of more than ~6 "
-                   "slides/sections is built in pieces: send ONLY the cover and the first 2 slides (or the first "
-                   "sections) here with total=<how many the user wants>, then add the rest with doc_append. Built so "
-                   "later doc_edit calls can change parts of it.",
+                   "Assumptions!B2', 'chart: bar|line|pie|column|scatter | title=.. | x=Col | y=Col[,Col]'. Tables as markdown tables or CSV. "
+                   "For presentations (.pptx), provide the complete slide outline with all slides in one single doc_create call. "
+                   "You may optionally pass total=<N> to build very large multi-section decks in pieces with doc_append. "
+                   "Built so later doc_edit calls can change parts of it.",
     "parameters": {"type": "object", "properties": {
         "file": {"type": "string", "description": "file name with extension"},
         "content": {"type": "string", "description": "markdown / table text"},

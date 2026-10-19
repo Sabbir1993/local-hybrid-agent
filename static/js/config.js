@@ -25,6 +25,7 @@ async function loadProfiles() {
         o.dataset.provider = m.provider_name || (isCloud ? 'Cloud' : 'Local');
         o.dataset.providerKey = m.provider || (isCloud ? 'cloud' : 'local');
         o.dataset.loaded = m.currently_loaded ? '1' : '0';
+        o.dataset.ctx = m.ctx || m.context_size || '';
         o.dataset.reasoning = m.reasoning_available ? '1' : '';
         o.dataset.reasoningMode = m.reasoning_mode || 'none';
         sel.appendChild(o);
@@ -157,6 +158,14 @@ function updateModelCapabilitiesBar(caps) {
 $('profile').onchange = e => {
   e.target._user = true;
   try { localStorage.setItem('app_model', e.target.value); } catch (err) {}
+  const selOpt = e.target.options ? e.target.options[e.target.selectedIndex] : null;
+  if (selOpt && selOpt.dataset.ctx) {
+    const cVal = parseInt(selOpt.dataset.ctx, 10);
+    if (cVal > 0) {
+      curCtxMax = cVal;
+      if (typeof updateContextChip === 'function') updateContextChip();
+    }
+  }
   updateModelCapabilitiesBar();
   if (typeof updateEffortUI === 'function') updateEffortUI();
   // Picking a cloud model means "this is my main lane": nudge the agent engine to
@@ -229,11 +238,9 @@ function _createPickerItem(o, sel, dd) {
     capsWrap +
     (isLoaded ? '<span class="mpi-badge">loaded</span>' : '');
   item.onclick = () => {
-    if (sel.value !== o.value) {
-      sel.value = o.value;
-      sel._user = true;
-      sel.dispatchEvent(new Event('change'));
-    }
+    sel.value = o.value;
+    sel._user = true;
+    sel.dispatchEvent(new Event('change'));
     const claudeTxt = $('claude-model-text');
     if (claudeTxt) {
       claudeTxt.textContent = _mpShorten(raw, 26);
@@ -468,7 +475,8 @@ function applyCloudConfigUI(c) {
   card.querySelectorAll('.cfg-grid input, .cfg-grid select, .cfg-grid button').forEach(el => {
     el.disabled = true; el.style.opacity = '0.45';
   });
-  if (c.context_size) { curCtxMax = c.context_size; updateContextChip(); }
+  const ctxVal = c.context_size || c.ctx;
+  if (ctxVal && ctxVal > 0) { curCtxMax = ctxVal; updateContextChip(); }
   const dl = $('btn-load-header');
   if (dl) dl.title = 'Cloud model — nothing to load into VRAM';
 }

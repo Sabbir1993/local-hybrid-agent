@@ -172,13 +172,26 @@
 
     // Only the profile pill (name / email row) opens and closes the menu. The menu is a child of the pill, so a click
     // on one of its items or password fields bubbles up to the pill: that used to toggle it shut mid-edit, which made
-    // the password form unusable. Clicks inside the menu are ignored here, and there is no click-outside close.
+    // the password form unusable. Clicks inside the menu are ignored here.
     trigger.onclick = (e) => {
       e.stopPropagation();
       if (dd.contains(e.target)) return;
       if (user.must_change_password) { dd.classList.add('open'); return; }
       dd.classList.toggle('open');
     };
+
+    // Close menu on click outside or Escape
+    document.addEventListener('click', (e) => {
+      if (!dd.classList.contains('open')) return;
+      if (trigger.contains(e.target)) return;
+      closeMenu();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && dd.classList.contains('open')) {
+        closeMenu();
+      }
+    });
 
     dd.addEventListener('click', (e) => {
       const item = e.target.closest('[data-action]');

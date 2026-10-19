@@ -25,6 +25,10 @@ async function loadSelectedModel() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       toast('\u2601 Main lane \u2192 ' + (j.display || target) + ' (' + (j.provider || '') + ') — no VRAM used');
+      if (j.ctx && j.ctx > 0) {
+        curCtxMax = j.ctx;
+        if (typeof updateContextChip === 'function') updateContextChip();
+      }
       pollStatus(); loadConfig();
       if (typeof loadCloudCard === 'function') loadCloudCard();
     } catch (e) {

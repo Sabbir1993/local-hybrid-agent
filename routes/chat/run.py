@@ -129,7 +129,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     main_client = cloud.CloudClient(cloud_main) if cloud_main else state.client
 
     web_cap_enabled = APP_CONFIG.get("capabilities", {}).get("web", False)
-    use_web = req.web_search and web_cap_enabled
+    use_web = (bool(req.web_search) or bool(req.deep_mode) or (req.reasoning_effort == "extra" and bool(req.deep_mode))) and web_cap_enabled
     # deck pictures: the web is searched only when the user switched web search on for this chat
     from core.doc_tools import slide_images
     slide_images.allow_web.set(bool(use_web))
@@ -266,7 +266,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if pdf_work:
         from core.agent_tools import AGENT_TOOLS as _PDF_ALL
         chat_tools += [t for t in _PDF_ALL if t.get("function", {}).get("name", "").startswith("pdf_")]
-    if has_file:
+    if has_file and not project_build:
         chat_tools += [DOC_INSPECT_SCHEMA, DOC_EDIT_SCHEMA]
         if longdoc_build or resume_note or brief_phase or sheet_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
             chat_tools += [DOC_CREATE_SCHEMA, DOC_APPEND_SCHEMA]       # decks / PDFs are built in pieces
@@ -376,6 +376,29 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # How much the model reasons: the composer's effort level, independent of
     # Deep research; mapped per local/cloud target in common._llm_chat_stream_raw
     effort = reasoning.resolve(req.reasoning_effort, deep)
+
+    # 2D Thinking-Wise Budget Matrix resolution (None, Low, Medium, High, Extra, Deep)
+    chat_cfg = APP_CONFIG.get("chat") or {}
+    thinking_budgets = chat_cfg.get("thinking_budgets") or {}
+    budget_key = "deep" if deep else (effort or "medium")
+    default_matrix = {
+        "none": {"tool_calls": 0, "token_budget": 6000, "max_rounds": 0},
+        "low": {"tool_calls": 4, "token_budget": 8000, "max_rounds": 4},
+        "medium": {"tool_calls": 8, "token_budget": 12000, "max_rounds": 12},
+        "high": {"tool_calls": 16, "token_budget": 16000, "max_rounds": 20},
+        "extra": {"tool_calls": 25, "token_budget": 20000, "max_rounds": 30},
+        "deep": {"tool_calls": 35, "token_budget": 25000, "max_rounds": 40},
+    }
+    b_row = thinking_budgets.get(budget_key) or default_matrix.get(budget_key, {"tool_calls": 8, "token_budget": 12000, "max_rounds": 12})
+    level_tool_calls = b_row.get("tool_calls", 8)
+    level_token_budget = b_row.get("token_budget", 12000)
+    level_max_rounds = b_row.get("max_rounds", 12)
+
+    # When thinking level specifies 0 tool calls (e.g. None), suppress tools for direct plain answer
+    if level_tool_calls == 0:
+        use_web = False
+        chat_tools.clear()
+
     # Building or editing an Office file / PDF is writing, not puzzle solving: unrestricted ("Extra") thinking only burns
     # minutes before the first slide. The ceiling is app.json reasoning_effort.doc_build_ceiling (default "medium").
     doc_build = (longdoc_build or prompt_scope.deck_brief_wanted(last_query, msgs[:-1]) or file_followup == "edit"
@@ -476,13 +499,40 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             cov = "none"
         plan = kb_coverage.decide_web(cov, kb_coverage.tier(effort, deep), bool(use_web), web_explicit)
         has_web, web_lean, web_budget_n = plan["web"], plan["lean"], plan["budget"]
+        if level_tool_calls == 0:
+            has_web = False
+            web_budget_n = 0
+        else:
+            if level_tool_calls is not None:
+                web_budget_n = int(level_tool_calls)
+            if deep and effort == "extra" and use_web:
+                has_web = True
+                web_budget_n = max(int(web_budget_n or 0), 25)
+                web_lean = False
         print(f"[chat] route kb={cov} web={'lean' if web_lean and has_web else ('full' if has_web else 'off')} "
               f"budget={web_budget_n} tier={kb_coverage.tier(effort, deep)}", file=sys.stderr)
     else:
-        has_web = web_explicit
+        has_web = use_web or web_explicit
+        if level_tool_calls == 0:
+            has_web = False
+            web_budget_n = 0
+        else:
+            if level_tool_calls is not None:
+                web_budget_n = int(level_tool_calls)
+            if deep and effort == "extra" and use_web:
+                has_web = True
+                web_budget_n = max(int(web_budget_n or 0), 25)
     # building a deck / PDF: its own, larger research budget (searches + full-page reads) before the first slide
     plan_w = deck_research.web_plan(APP_CONFIG, brief_phase, bool(use_web), cov, has_web, web_lean, web_budget_n)
     has_web, web_lean, web_budget_n = plan_w["has_web"], plan_w["lean"], plan_w["budget"]
+    if level_tool_calls == 0:
+        has_web = False
+        web_budget_n = 0
+    elif level_tool_calls is not None:
+        web_budget_n = int(level_tool_calls)
+    if deep and effort == "extra" and use_web and brief_phase != "ask" and level_tool_calls != 0:
+        has_web = True
+        web_budget_n = max(int(web_budget_n or 0), 25)
     if brief_phase == "ask":
         has_web = False          # nothing researched before the card is kept (only the final text is), so don't search
         # the card comes first: with a file tool in reach the model built the PDF / deck and the card was added after it
@@ -629,17 +679,27 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         sys_parts.append(resume_note)
         sys_labels.append("build-resume")
 
-    # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat"
+    # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat" / thinking_budgets
     chat_cfg = APP_CONFIG.get("chat") or {}
-    max_turns = int(chat_cfg.get("deep_max_tool_rounds" if deep else "max_tool_rounds", 25 if deep else 15)) if chat_tools else 1
-    max_web_calls = int(chat_cfg.get("deep_max_web_calls" if deep else "max_web_calls", 16 if deep else 8))
-    if web_budget_n is not None:                      # coverage-aware budget (scales with effort / Deep)
+    max_turns = int(level_max_rounds) if (chat_tools and level_max_rounds is not None) else (
+        int(chat_cfg.get("deep_max_tool_rounds" if deep else "max_tool_rounds", 30 if deep else 15)) if chat_tools else 1
+    )
+    max_web_calls = int(level_tool_calls) if level_tool_calls is not None else int(chat_cfg.get("deep_max_web_calls" if deep else "max_web_calls", 25 if deep else 8))
+    if deep and effort == "extra":
+        max_web_calls = max(max_web_calls, 25)
+        max_turns = max(max_turns, 30)
+    if level_tool_calls == 0:
+        max_web_calls = 0
+        max_turns = 1
+        chat_tools.clear()
+        has_web = False
+    elif web_budget_n is not None and web_budget_n > 0:                      # coverage-aware budget (scales with effort / Deep)
         max_web_calls = web_budget_n
         if has_web and chat_tools:
             max_turns = kb_coverage.rounds_for(max_web_calls, max_turns)
             if brief_phase == "build":
                 max_turns = deck_research.turns_for(max_web_calls, max_turns)      # research rounds + the build rounds
-    if project_build and chat_tools:
+    if project_build and chat_tools and level_tool_calls != 0:
         # a site is built a section per call (skeleton, css, js, a dozen sections, finish): 12-15 rounds would stop it half done
         max_turns = max(max_turns, int(chat_cfg.get("project_max_rounds", 40)))
     if deep:
@@ -657,7 +717,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         deck_lim = deck_research.project_limits(APP_CONFIG)
     if deck_lim["repeat_penalty"] is None and (wants_file or has_file or html_build or sheet_build or docx_build or chat_tools or bool(absent_type)):
         deck_lim = {**deck_lim, "repeat_penalty": 1.0}
-    turn_max_tokens = deck_research.clamp_tokens(req.max_tokens, deck_lim["max_tokens"])
+    if req.max_tokens and int(req.max_tokens) > 0:
+        turn_max_tokens = int(req.max_tokens)
+        if effort == "none" and level_token_budget and int(level_token_budget) > 0:
+            turn_max_tokens = min(turn_max_tokens, int(level_token_budget))
+    elif level_token_budget and int(level_token_budget) > 0:
+        turn_max_tokens = int(level_token_budget)
+    else:
+        turn_max_tokens = deck_research.clamp_tokens(req.max_tokens, deck_lim["max_tokens"])
     # turns that write a deck / PDF / site / document: DRY on the local server unless the request sets its own (sampler panel) or the lane is cloud
     sampler_fields = sampler_extra(req) or {}
     doc_write_turn = wants_file or has_file or html_build or sheet_build or docx_build or bool(absent_type)
@@ -711,7 +778,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         run_end_state, run_end_reason, turn = "completed", None, -1
         runaway_hits = 0
         consecutive_tool_failures = 0
-        last_tool_error = ""
+        recent_tool_signatures = []
         runs.begin(run_id, "chat", user.id, stage="stream")
         t0 = time.time()
         turn_limit = max_turns       # grows by one if a continuation nudge needs it
@@ -798,7 +865,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         and not url_matches):
                     pre_q = deck_research.parallel_queries(prompt_scope.brief_request(msgs[:-1]) or last_query, max_web_calls, APP_CONFIG)
                     if pre_q:
-                        cap = deck_research.web_cap(brief_phase)
+                        cap = deck_research.web_cap(brief_phase, APP_CONFIG)
                         ids = [f"prefetch_{i}" for i in range(len(pre_q))]
                         for tid, q in zip(ids, pre_q):
                             yield sse("tool_call", {'id': tid, 'name': 'web_search', 'args': {'query': q}})
@@ -1351,8 +1418,20 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                     yield sse("tool_call", {'id': tc_id, 'name': t_name, 'args': args})
 
+                    target_cand = (args.get("path") or args.get("file") or args.get("filename")
+                                   or args.get("query") or args.get("q") or args.get("url") or "")
+                    call_sig = f"{t_name}:{target_cand}" if target_cand else t_name
+                    repeat_count = recent_tool_signatures.count(call_sig)
+                    recent_tool_signatures.append(call_sig)
+                    if len(recent_tool_signatures) > 20:
+                        recent_tool_signatures.pop(0)
+
                     try:
-                        if args.get("_runaway"):
+                        if repeat_count >= 2:
+                            turn_limit = min(turn_limit, turn + 1)
+                            res_str = (f"error: `{t_name}` has been called repeatedly for `{target_cand or 'this target'}`. "
+                                       "Stop repeating identical tool calls. Conclude now and provide your final response with any completed files.")
+                        elif args.get("_runaway"):
                             # the stream guard cut this call while it was looping: never run it, ask once more, then stop
                             runaway_hits += 1
                             res_str = RUNAWAY_MSG
@@ -1362,8 +1441,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif args.get(INVALID_JSON_KEY):
                             # a file call whose JSON was cut off by the output limit: running it would save an empty or partial file
                             res_str = CHAT_CUT_CALL_ERROR
-                        elif project_build and t_name in ("write_file", "doc_create", "doc_append"):
-                            res_str = ("error: this is a website project: write each planned file with project_write (project_append to "
+                        elif project_build and t_name in ("write_file", "doc_create", "doc_append", "doc_inspect", "doc_edit"):
+                            res_str = ("error: this is a website / HTML project: write each planned file with project_write (project_append to "
                                        "extend it) and finish with project_finish. Do not use " + t_name + ".")
                         elif brief_phase == "ask" and t_name in ASK_BLOCKED_TOOLS:
                             # a text-parsed call can name a tool that was not offered: nothing is built before the user answers the card
@@ -1384,13 +1463,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                            "search for something different.")
                             else:
                                 web_seen.add(qk)
-                                res_str = kb_coverage.cap_web_result(await tool_web_search({"query": q}), web_calls, *deck_research.web_cap(brief_phase))
+                                res_str = kb_coverage.cap_web_result(await tool_web_search({"query": q}), web_calls, *deck_research.web_cap(brief_phase, APP_CONFIG))
                         elif t_name == "web_search_images":
                             q = args.get("query") or args.get("q") or ""
                             res_str = await tool_web_search_images({"query": q})
                         elif t_name == "web_fetch":
                             u = args.get("url") or ""
-                            res_str = kb_coverage.cap_web_result(await tool_web_fetch({"url": u}), web_calls, *deck_research.web_cap(brief_phase))
+                            res_str = kb_coverage.cap_web_result(await tool_web_fetch({"url": u}), web_calls, *deck_research.web_cap(brief_phase, APP_CONFIG))
                         elif t_name in ("generate_image", "generate_video") and t_name not in chat_media_tools:
                             res_str = ("error: making images isn't available in chat right now - "
                                        "ask the user to use /image or agent mode")
@@ -1437,6 +1516,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             written_files.extend(f for f in _DL_TAG_RE.findall(res_str) if f not in written_files)
                             if t_name == "project_finish" and not res_str.startswith("error:"):
                                 project_done = True
+                                turn_limit = min(turn_limit, turn + 1)
                             items = await run_in_executor_ctx(plan_items, args.get("project"))
                             if items:
                                 yield sse("plan", {'items': items})      # the chat's Task Plan checklist, ticked from the disk
@@ -1478,19 +1558,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         ok = False
 
                     if not ok:
-                        err_sig = f"{t_name}:{str(res_str)[:60]}"
-                        if err_sig == last_tool_error:
-                            consecutive_tool_failures += 1
-                        else:
-                            last_tool_error = err_sig
-                            consecutive_tool_failures = 1
+                        consecutive_tool_failures += 1
                         if consecutive_tool_failures >= 2:
                             # Circuit breaker: stop retrying failing tool calls, wrap up in plain text
                             turn_limit = min(turn_limit, turn + 1)
                             res_str += ". Stop retrying: provide your final answer in plain text with any completed files."
                     else:
                         consecutive_tool_failures = 0
-                        last_tool_error = ""
 
                     if not ok and t_name in chat_media_tools and "isn't loaded" in str(res_str):
                         # the image/video model is not running: stop offering the tool, or the model retries it every round

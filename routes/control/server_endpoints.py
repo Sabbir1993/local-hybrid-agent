@@ -118,7 +118,7 @@ async def switch(req: SwitchRequest, user: Principal = Depends(get_current_user)
               f"local llama-server not started")
         audit_log(user, action="model.load", resource=cm.key, detail={"cloud": True}, result="allow")
         return {"ok": True, "cloud": True, "model": cm.key, "display": cm.display,
-                "provider": cm.provider_name, "endpoint": cm.endpoint()}
+                "provider": cm.provider_name, "endpoint": cm.endpoint(), "ctx": cm.ctx}
 
     # Local GGUF: launching a process on the shared GPU rig stays privileged.
     if not user_has_permission(user, "model.local.load"):

@@ -134,6 +134,12 @@ class DecideWebTests(_Cfg):
         for cov in ("full", "partial", "none"):
             self.assertFalse(self.d(cov, "deep", web_on=False, explicit=True)["web"])
 
+    def test_extra_and_deep_combination_allows_web_and_budget(self):
+        src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
+        self.assertIn("use_web = (bool(req.web_search) or bool(req.deep_mode)", src)
+        self.assertIn("if deep and effort == \"extra\" and use_web:", src)
+        self.assertIn("web_budget_n = max(int(web_budget_n or 0), 25)", src)
+
 
 class HygieneTests(unittest.TestCase):
     def test_query_key_ignores_order_case_and_stopwords(self):

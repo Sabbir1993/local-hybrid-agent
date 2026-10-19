@@ -27,7 +27,8 @@ async def web_settings(req: WebSettingsReq,
                        user: Principal = Depends(require_permission("settings.orchestration.configure"))):
     """Edit web research call budgets and tool round limits; persists to config/app.json."""
     if (req.max_web_calls is None and req.deep_max_web_calls is None and
-        req.max_tool_rounds is None and req.deep_max_tool_rounds is None and req.soft_chars is None):
+        req.max_tool_rounds is None and req.deep_max_tool_rounds is None and
+        req.soft_chars is None and req.thinking_budgets is None):
         return JSONResponse({"error": "at least one web budget parameter required"}, status_code=400)
     try:
         cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
@@ -44,6 +45,15 @@ async def web_settings(req: WebSettingsReq,
         chat_cfg["deep_max_tool_rounds"] = max(1, min(100, int(req.deep_max_tool_rounds)))
     if req.soft_chars is not None:
         chat_cfg["web_soft_chars"] = max(500, min(50000, int(req.soft_chars)))
+    if req.thinking_budgets is not None:
+        tb_dict = chat_cfg.setdefault("thinking_budgets", {})
+        for lvl, row in req.thinking_budgets.items():
+            tb_dict[lvl] = {
+                "tool_calls": max(0, min(100, int(row.tool_calls))) if row.tool_calls is not None else 0,
+                "token_budget": max(500, min(100000, int(row.token_budget))) if row.token_budget is not None else 6000,
+                "max_rounds": max(0, min(100, int(row.max_rounds))) if row.max_rounds is not None else 0,
+            }
+        chat_cfg["thinking_budgets"] = tb_dict
     try:
         write_app_config(cfg, CONFIG_FILE)
     except Exception as e:

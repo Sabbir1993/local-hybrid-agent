@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="/static/css/lanes.css?v=1.2">
 <link rel="stylesheet" href="/static/css/media.css?v=1.2">
 <link rel="stylesheet" href="/static/css/voice.css?v=1.1">
-<link rel="stylesheet" href="/static/css/claude-ui.css?v=1.2">
+<link rel="stylesheet" href="/static/css/claude-ui.css?v=1.6">
 <link rel="icon" href="/static/logo/logo.jpg">
 <noscript><style>#splash{display:none}</style></noscript>
 </head>
@@ -18,6 +18,10 @@
 <div id="splash" aria-hidden="true"><div class="splash-logo"><img src="/static/logo/logo.jpg" alt=""></div></div>
 <div id="app">
   <aside id="sidebar">
+    <div class="sidebar-brand-header" id="sidebar-brand-header" title="Local Agent — Control Center">
+      <img src="/static/logo/logo.jpg" alt="Logo" class="sidebar-brand-logo">
+      <span class="sidebar-brand-title">Local Agent</span>
+    </div>
     <div class="claude-sidebar-top-block">
       <!-- Hidden compatibility button for shortcuts / scripts -->
       <button id="btn-newchat" style="display:none;" aria-hidden="true"></button>
@@ -1135,7 +1139,7 @@ Full instructions the agent reads via read_skill.</pre>
   </div>
 </div>
 
-<script src="/static/js/session.js?v=1.4"></script>
+<script src="/static/js/session.js?v=1.5"></script>
 <script src="/static/js/highlight.js"></script>
 <!-- Vendored copies of the CDN-pinned versions so the app works fully offline
      (this is a local-first product; diagrams and spreadsheets must not need the
@@ -1146,7 +1150,7 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/theme.js?v=3.0"></script>
 <script src="/static/vendor/marked.umd.js" integrity="sha384-IvVdUXkhyoD0shbjhiiOnuiTbervTaB0VJcnEcg3shUAMVOOF6lKj4ozJrCwvz6s" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="/static/vendor/purify.min.js" integrity="sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="/static/js/utils.js?v=3.2"></script>
+<script src="/static/js/utils.js?v=3.5"></script>
 <script src="/static/js/markdown.js?v=1.2"></script>
 <script src="/static/js/sse-stream.js?v=1.7"></script>
 <script src="/static/js/answer-check.js?v=1.1"></script>
@@ -1154,13 +1158,13 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/video-frames.js?v=1.1"></script>
 <script src="/static/js/sampling.js?v=1.3"></script>
 <script src="/static/js/preview.js?v=3.1"></script>
-<script src="/static/js/gpu-status.js?v=3.5"></script>
-<script src="/static/js/chat.js?v=3.26"></script>
+<script src="/static/js/gpu-status.js?v=3.7"></script>
+<script src="/static/js/chat.js?v=3.30"></script>
 <script src="/static/js/prompt-dots.js?v=1.0"></script>
 <script src="/static/js/controls.js?v=3.1"></script>
 <script src="/static/js/monitor.js?v=3.1"></script>
 <script src="/static/js/agent-memory-ui.js?v=1.3"></script>
-<script src="/static/js/capabilities.js?v=3.3"></script>
+<script src="/static/js/capabilities.js?v=3.4"></script>
 <script src="/static/js/git.js?v=1.0"></script>
 <script src="/static/js/usage-report.js?v=2.13"></script>
 <script src="/static/js/audit-log.js?v=1.0"></script>
@@ -1177,14 +1181,14 @@ Full instructions the agent reads via read_skill.</pre>
 <script src="/static/js/media.js?v=1.9"></script>
 <script src="/static/js/voice-core.js?v=1.1"></script>
 <script src="/static/js/voice.js?v=1.1"></script>
-<script src="/static/js/agent-acts.js?v=3.6"></script>
+<script src="/static/js/agent-acts.js?v=3.9"></script>
 <script src="/static/js/history-clip.js?v=1.0"></script>
 <script src="/static/js/agent-run.js?v=3.19"></script>
 <script src="/static/js/compact.js?v=2.9"></script>
 <script src="/static/js/export.js?v=1.0"></script>
 <script src="/static/js/custom-agents.js?v=2.2"></script>
-<script src="/static/js/main.js?v=4.4"></script>
-<script src="/static/js/claude-dock.js?v=1.4"></script>
+<script src="/static/js/main.js?v=4.6"></script>
+<script src="/static/js/claude-dock.js?v=1.5"></script>
 
 <script src="/static/js/password-toggle.js?v=1.2"></script>
 <script src="/static/js/kb-mode.js?v=1.0"></script>

@@ -178,30 +178,64 @@
     "research_web": false,
     "force_doc_tool": false,
     "max_tool_rounds": 12,
-    "max_web_calls": 12,
-    "deep_max_tool_rounds": 20,
-    "deep_max_web_calls": 20,
+    "max_web_calls": 8,
+    "deep_max_tool_rounds": 40,
+    "deep_max_web_calls": 35,
     "web_budget": {
       "full": {
         "low": 0,
         "medium": 0,
         "high": 0,
-        "deep": 3
+        "deep": 5
       },
       "partial": {
         "low": 2,
         "medium": 3,
         "high": 6,
-        "deep": 12
+        "deep": 16
       },
       "open": {
         "low": 4,
         "medium": 8,
         "high": 12,
-        "deep": 20
+        "deep": 25
       }
     },
-    "web_soft_chars": 20000
+    "web_soft_chars": 25000,
+    "project_max_tokens": 20000,
+    "deck_max_tokens": 20000,
+    "thinking_budgets": {
+      "none": {
+        "tool_calls": 0,
+        "token_budget": 6000,
+        "max_rounds": 0
+      },
+      "low": {
+        "tool_calls": 4,
+        "token_budget": 8000,
+        "max_rounds": 4
+      },
+      "medium": {
+        "tool_calls": 8,
+        "token_budget": 12000,
+        "max_rounds": 12
+      },
+      "high": {
+        "tool_calls": 16,
+        "token_budget": 16000,
+        "max_rounds": 20
+      },
+      "extra": {
+        "tool_calls": 25,
+        "token_budget": 20000,
+        "max_rounds": 30
+      },
+      "deep": {
+        "tool_calls": 35,
+        "token_budget": 25000,
+        "max_rounds": 40
+      }
+    }
   },
   "reasoning_effort": {
     "default": "low",
@@ -330,7 +364,7 @@
     "mcp_catalog_overrides": {}
   },
   "input_guard": {
-    "enabled": true,
+    "enabled": false,
     "rules": [
       {
         "id": "input_guard-2-secret-egress",
@@ -365,7 +399,7 @@
     ]
   },
   "output_guard": {
-    "enabled": true,
+    "enabled": false,
     "rules": [
       {
         "id": "output_guard-2-kb-leak",

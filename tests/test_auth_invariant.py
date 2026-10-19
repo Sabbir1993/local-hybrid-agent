@@ -51,6 +51,7 @@ PUBLIC_HTTP = {
 PUBLIC_WS = {
     "/ws/companion",
     "/ws/telemetry",      # authenticates in the handler (cookie / Bearer), closes 4401 / 4403 before accept; needs monitor.view
+    "/ws/status",         # authenticates in the handler (cookie / Bearer / token), closes 4401 before accept
 }
 
 # A few load-bearing routes pin their permission level, not just "some auth".

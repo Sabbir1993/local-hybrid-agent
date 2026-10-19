@@ -20,81 +20,164 @@ function updateHardwareTag(tag) {
 
 let pollFailures = 0;
 let _lastLocalPid = null;
-async function pollStatus() {
-  try {
-    const res = await fetch('/control/status', { background: true });
-    if (!res.ok) throw new Error('status not ok');
-    const s = await res.json();
-    pollFailures = 0;
-    curStatus = s;
-    if (s.hardware_tag) updateHardwareTag(s.hardware_tag);
-    const cloudMain = s.cloud_main || null;
-    const isLoading = !!(window.__isModelLoading || s.loading);
-    if (isLoading && !s.healthy && !s.pid) {
-      setPill('loading', s);
+let _statusWs = null;
+let _statusWsReconnectTimer = null;
+let _statusHttpFallbackInterval = null;
+
+function applyStatusPayload(s) {
+  if (!s) return;
+  pollFailures = 0;
+  curStatus = s;
+  if (s.hardware_tag) updateHardwareTag(s.hardware_tag);
+  const cloudMain = s.cloud_main || null;
+  const isLoading = !!(window.__isModelLoading || s.loading);
+  if (isLoading && !s.healthy && !s.pid) {
+    setPill('loading', s);
+  } else {
+    if (s.pid && s.healthy !== false) window.__isModelLoading = false;
+    // cloud main lane: report ☁️ instead of a misleading "Model unloaded"
+    setPill(cloudMain ? 'cloud' : (s.pid ? 'on' : 'off'), s);
+  }
+  const ka = $('ka');
+  if (ka && !ka._user) ka.checked = !!s.keepalive;
+
+  // Refresh model picker whenever local process load/unload state transitions
+  const hasPid = !!s.pid;
+  if (_lastLocalPid !== null && _lastLocalPid !== hasPid) {
+    if (typeof loadProfiles === 'function') loadProfiles();
+  }
+  _lastLocalPid = hasPid;
+
+  const sel = $('profile');
+  const selName = (sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'Model';
+  const m = s.model ? s.model.split('\\').pop().split('/').pop() : selName;
+  // The welcome card only exists on an empty chat. Its absence must not stop the rest of this refresh: with a
+  // conversation open, returning here left the model picker, the profile and the context ring stale until a reload.
+  if ($('empty-model')) {
+    if (cloudMain) {
+      $('empty-model').textContent =
+        `${cloudMain.display}  ·  via ${cloudMain.provider}  ·  cloud (no VRAM)`;
+      const ec = document.querySelector('.empty-card');
+      if (ec) {
+        ec.innerHTML = `<p><b>${esc(cloudMain.display)} is ready!</b></p><p class="dim" style="margin-top:6px;">Main lane is served by <b>${esc(cloudMain.provider)}</b> in the cloud — your local GPU(s) stay free. Type your message below and press Enter.</p>`;
+      }
+    } else if (s.model && s.pid) {
+      const visionTag = s.vision_capable ? '  ·  👁 vision' : '';
+      $('empty-model').textContent =
+        `${m}${visionTag}  ·  split ${s.tensor_split || 'auto'}  ·  bench ${Number(s.measured_tg_tokens_per_sec || 0).toFixed(1)} t/s`;
+      const ec = document.querySelector('.empty-card');
+      if (ec) {
+        ec.innerHTML = `<p><b>${m} is ready!</b></p><p class="dim" style="margin-top:6px;">GPU(s) loaded${s.vision_capable ? ' with <b>vision support</b> (mmproj)' : ''}. Type your message below and press Enter to chat.</p>`;
+      }
     } else {
-      if (s.pid && s.healthy !== false) window.__isModelLoading = false;
-      // cloud main lane: report ☁️ instead of a misleading "Model unloaded"
-      setPill(cloudMain ? 'cloud' : (s.pid ? 'on' : 'off'), s);
-    }
-    const ka = $('ka');
-    if (ka && !ka._user) ka.checked = !!s.keepalive;
-
-    // Refresh model picker whenever local process load/unload state transitions
-    const hasPid = !!s.pid;
-    if (_lastLocalPid !== null && _lastLocalPid !== hasPid) {
-      if (typeof loadProfiles === 'function') loadProfiles();
-    }
-    _lastLocalPid = hasPid;
-
-    const sel = $('profile');
-    const selName = (sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'Model';
-    const m = s.model ? s.model.split('\\').pop().split('/').pop() : selName;
-    // The welcome card only exists on an empty chat. Its absence must not stop the rest of this refresh: with a
-    // conversation open, returning here left the model picker, the profile and the context ring stale until a reload.
-    if ($('empty-model')) {
-      if (cloudMain) {
-        $('empty-model').textContent =
-          `${cloudMain.display}  ·  via ${cloudMain.provider}  ·  cloud (no VRAM)`;
-        const ec = document.querySelector('.empty-card');
-        if (ec) {
-          ec.innerHTML = `<p><b>${esc(cloudMain.display)} is ready!</b></p><p class="dim" style="margin-top:6px;">Main lane is served by <b>${esc(cloudMain.provider)}</b> in the cloud — your local GPU(s) stay free. Type your message below and press Enter.</p>`;
-        }
-      } else if (s.model && s.pid) {
-        const visionTag = s.vision_capable ? '  ·  👁 vision' : '';
-        $('empty-model').textContent =
-          `${m}${visionTag}  ·  split ${s.tensor_split || 'auto'}  ·  bench ${Number(s.measured_tg_tokens_per_sec || 0).toFixed(1)} t/s`;
-        const ec = document.querySelector('.empty-card');
-        if (ec) {
-          ec.innerHTML = `<p><b>${m} is ready!</b></p><p class="dim" style="margin-top:6px;">GPU(s) loaded${s.vision_capable ? ' with <b>vision support</b> (mmproj)' : ''}. Type your message below and press Enter to chat.</p>`;
-        }
-      } else {
-        $('empty-model').textContent = 'Model unloaded';
-        const ec = document.querySelector('.empty-card');
-        if (ec) {
-          ec.innerHTML = `<p><b>${m} is currently unloaded.</b></p><p class="dim" style="margin-top:6px;">Click <b>▶ Load</b> in the top bar, or simply type your message below to auto-load.</p>`;
-        }
+      $('empty-model').textContent = 'Model unloaded';
+      const ec = document.querySelector('.empty-card');
+      if (ec) {
+        ec.innerHTML = `<p><b>${m} is currently unloaded.</b></p><p class="dim" style="margin-top:6px;">Click <b>▶ Load</b> in the top bar, or simply type your message below to auto-load.</p>`;
       }
     }
+  }
 
-    // keep profile dropdown in sync if switched elsewhere (never for a cloud
-    // selection — that one is owned by the main-lane binding, not by s.profile)
-    const cloudSel = (typeof isCloudValue === 'function') && isCloudValue(sel && sel.value);
-    if (!cloudSel && s.profile && sel.value && !sel._user) {
-      const opt = [...sel.options].find(o => o.value === s.profile || o.textContent.includes(s.profile));
-      if (opt && sel.value !== opt.value) sel.value = opt.value;
+  // keep profile dropdown in sync if switched elsewhere
+  if (s.cloud_main && sel && !sel._user) {
+    const cloudKey = 'cloud:' + s.cloud_main.key;
+    const opt = [...sel.options].find(o => o.value === cloudKey || o.value === s.cloud_main.key);
+    if (opt && sel.value !== opt.value) {
+      sel.value = opt.value;
+      if (typeof ClaudeChatBar !== 'undefined' && ClaudeChatBar.syncModel) ClaudeChatBar.syncModel();
     }
-    if (typeof renderModelPicker === 'function') renderModelPicker();
+  } else if (!cloudSel && s.profile && sel.value && !sel._user) {
+    const opt = [...sel.options].find(o => o.value === s.profile || o.textContent.includes(s.profile));
+    if (opt && sel.value !== opt.value) sel.value = opt.value;
+  }
+  if (typeof renderModelPicker === 'function') renderModelPicker();
 
-    // update context consumption chip
-    if (s.context && s.context.n_ctx) {
-      curCtxMax = s.context.n_ctx;
+  // update context consumption chip
+  if (s.context && s.context.n_ctx) {
+    curCtxMax = s.context.n_ctx;
+  }
+  updateContextChip();
+}
+
+function connectStatusWebSocket() {
+  if (_statusWs && (_statusWs.readyState === WebSocket.OPEN || _statusWs.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const cookieMatch = document.cookie ? document.cookie.match(/(?:^|;\s*)a770_session=([^;]+)/) : null;
+  const token = cookieMatch ? cookieMatch[1] : '';
+  const wsUrl = `${wsProto}//${location.host}/ws/status${token ? '?token=' + encodeURIComponent(token) : ''}`;
+  try {
+    _statusWs = new WebSocket(wsUrl);
+    _statusWs.onopen = () => {
+      pollFailures = 0;
+      if (_statusHttpFallbackInterval) {
+        clearInterval(_statusHttpFallbackInterval);
+        _statusHttpFallbackInterval = null;
+      }
+      if (_statusWsReconnectTimer) {
+        clearTimeout(_statusWsReconnectTimer);
+        _statusWsReconnectTimer = null;
+      }
+    };
+    _statusWs.onmessage = (event) => {
+      try {
+        const s = JSON.parse(event.data);
+        applyStatusPayload(s);
+      } catch (_) {}
+    };
+    _statusWs.onclose = () => {
+      _statusWs = null;
+      ensureHttpFallback();
+      if (!_statusWsReconnectTimer) {
+        _statusWsReconnectTimer = setTimeout(connectStatusWebSocket, 4000);
+      }
+    };
+    _statusWs.onerror = () => {
+      try { _statusWs.close(); } catch (_) {}
+    };
+  } catch (_) {
+    ensureHttpFallback();
+    if (!_statusWsReconnectTimer) {
+      _statusWsReconnectTimer = setTimeout(connectStatusWebSocket, 5000);
     }
-    updateContextChip();
-  } catch (e) {
-    pollFailures++;
-    if (pollFailures >= 2) {
-      setPill('offline');
+  }
+}
+
+function ensureHttpFallback() {
+  if (pollFailures >= 3 && !_statusHttpFallbackInterval) {
+    _statusHttpFallbackInterval = setInterval(pollStatus, 8000);
+  }
+}
+
+window.connectStatusWebSocket = connectStatusWebSocket;
+
+// Auto-connect real-time status WebSocket immediately
+try {
+  connectStatusWebSocket();
+} catch (_) {}
+
+async function pollStatus() {
+  if (_statusWs && (_statusWs.readyState === WebSocket.OPEN || _statusWs.readyState === WebSocket.CONNECTING)) {
+    if (_statusWs.readyState === WebSocket.OPEN) {
+      try {
+        _statusWs.send('refresh');
+      } catch (_) {}
+    }
+    return;
+  }
+  connectStatusWebSocket();
+  if (!_statusWs || (_statusWs.readyState !== WebSocket.OPEN && _statusWs.readyState !== WebSocket.CONNECTING)) {
+    try {
+      const res = await fetch('/control/status', { background: true });
+      if (!res.ok) throw new Error('status not ok');
+      const s = await res.json();
+      applyStatusPayload(s);
+    } catch (e) {
+      pollFailures++;
+      if (pollFailures >= 2) {
+        setPill('offline');
+      }
     }
   }
 }

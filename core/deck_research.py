@@ -83,10 +83,16 @@ def clamp_tokens(requested, cap: Optional[int]):
     return requested
 
 
-def web_cap(phase: str) -> tuple:
+def web_cap(phase: str, app_cfg: Optional[dict] = None) -> tuple:
     """(soft_after, soft_chars) for trimming web results: a deck's research keeps its context small, because every later
     turn (and every slide written) is processed on top of it."""
-    return (1, 4500) if phase == "build" else (6, 6000)
+    soft_chars = 6000
+    if app_cfg:
+        try:
+            soft_chars = int((app_cfg.get("chat") or {}).get("web_soft_chars", 6000))
+        except (TypeError, ValueError):
+            soft_chars = 6000
+    return (1, 4500) if phase == "build" else (6, soft_chars)
 
 
 def turns_for(budget: int, configured: int) -> int:

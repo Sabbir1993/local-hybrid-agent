@@ -10,8 +10,8 @@
     "status": 403
   },
   "wikiwand.com": {
-    "fails": 1,
-    "until": 0,
+    "fails": 2,
+    "until": 1792523043.785716,
     "status": 403
   },
   "pagepro.co": {
@@ -30,8 +30,8 @@
     "status": 403
   },
   "macrotrends.net": {
-    "fails": 2,
-    "until": 1792401096.3492339,
+    "fails": 1,
+    "until": 0,
     "status": 403
   },
   "city-facts.com": {
@@ -180,8 +180,8 @@
     "status": 403
   },
   "fandom.com": {
-    "fails": 1,
-    "until": 0,
+    "fails": 2,
+    "until": 1792523043.7551475,
     "status": 403
   },
   "cisa.gov": {
@@ -202,6 +202,46 @@
   "openverse.org": {
     "fails": 2,
     "until": 1792507392.909988,
+    "status": 403
+  },
+  "acronymfinder.com": {
+    "fails": 2,
+    "until": 1792523015.9843194,
+    "status": 403
+  },
+  "marketwatch.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 401
+  },
+  "liquipedia.net": {
+    "fails": 2,
+    "until": 1792523049.8477056,
+    "status": 403
+  },
+  "allacronyms.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "chatgpt.com": {
+    "fails": 3,
+    "until": 1792523075.3418753,
+    "status": 403
+  },
+  "coca-colafemsa.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "travelalaska.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "mobygames.com": {
+    "fails": 1,
+    "until": 0,
     "status": 403
   }
 }

@@ -77,6 +77,14 @@ async def capabilities_status(user: Principal = Depends(get_current_user)):
             "max_tool_rounds": chat_cfg.get("max_tool_rounds", 12),
             "deep_max_tool_rounds": chat_cfg.get("deep_max_tool_rounds", 20),
             "soft_chars": chat_cfg.get("web_soft_chars", 6000),
+            "thinking_budgets": chat_cfg.get("thinking_budgets", {
+                "none": {"tool_calls": 0, "token_budget": 6000, "max_rounds": 0},
+                "low": {"tool_calls": 4, "token_budget": 8000, "max_rounds": 4},
+                "medium": {"tool_calls": 8, "token_budget": 12000, "max_rounds": 12},
+                "high": {"tool_calls": 16, "token_budget": 16000, "max_rounds": 20},
+                "extra": {"tool_calls": 25, "token_budget": 20000, "max_rounds": 30},
+                "deep": {"tool_calls": 35, "token_budget": 25000, "max_rounds": 40},
+            }),
             "tools": [{"name": t.name, "description": t.schema["function"]["description"][:120]}
                       for t in registry.list(source="web")],
         },

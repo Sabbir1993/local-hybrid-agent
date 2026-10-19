@@ -76,8 +76,12 @@
 
       // Keyboard shortcuts
       window.addEventListener('keydown', (e) => {
-        // Ctrl+Shift+F for files
-        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+        // Ctrl+Shift+B to toggle right dock
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'b') {
+          e.preventDefault();
+          if (this.isOpen) this.close();
+          else this.open(this.activeTab || 'plan');
+        } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
           e.preventDefault();
           this.open('files');
         } else if ((e.ctrlKey || e.metaKey) && e.key === '`') {
@@ -917,19 +921,16 @@
       });
       $('btn-tasks-report')?.addEventListener('click', () => $('btn-report')?.click());
 
-      try {
-        const r = await fetch('/control/status');
-        const d = await r.json();
-        const box = $('tasks-active-container');
-        if (box) {
-          box.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:6px; font-size:12px;">
-              <div><b>Loaded Model:</b> <code class="mono">${esc(d.model || 'None')}</code></div>
-              <div><b>Vulkan Runtime:</b> ${d.pid ? `<span style="color:var(--green);">PID ${d.pid} (Online)</span>` : '<span style="color:var(--dim);">Idle</span>'}</div>
-              <div><b>VRAM Keepalive:</b> ${d.keepalive_running ? '🟢 Active (25s ping)' : '⚪ Off'}</div>
-            </div>`;
-        }
-      } catch (_) {}
+      const d = (typeof curStatus !== 'undefined' && curStatus) ? curStatus : {};
+      const box = $('tasks-active-container');
+      if (box) {
+        box.innerHTML = `
+          <div style="display:flex; flex-direction:column; gap:6px; font-size:12px;">
+            <div><b>Loaded Model:</b> <code class="mono">${esc(d.model || 'None')}</code></div>
+            <div><b>Vulkan Runtime:</b> ${d.pid ? `<span style="color:var(--green);">PID ${d.pid} (Online)</span>` : '<span style="color:var(--dim);">Idle</span>'}</div>
+            <div><b>VRAM Keepalive:</b> ${d.keepalive_running ? '🟢 Active (25s ping)' : '⚪ Off'}</div>
+          </div>`;
+      }
     }
   };
 
@@ -1475,16 +1476,26 @@
   // Expose to window
   RightDock.syncModeVisibility = () => ClaudeChatBar.syncModeVisibility();
   window.RightDock = RightDock;
+  window.toggleRightDock = () => {
+    if (RightDock.isOpen) RightDock.close();
+    else RightDock.open(RightDock.activeTab || 'plan');
+  };
   window.SlotMachine = SlotMachine;
   window.GitStrip = GitStrip;
   window.ClaudeChatBar = ClaudeChatBar;
   window.logTerminal = (data) => RightDock.logTerminal(data);
   window.logTerminalResult = (data) => RightDock.logTerminalResult(data);
 
-  document.addEventListener('DOMContentLoaded', () => {
+  const initAll = () => {
     RightDock.init();
     SlotMachine.init();
     GitStrip.init();
     ClaudeChatBar.init();
-  });
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initAll);
+  } else {
+    initAll();
+  }
 })();

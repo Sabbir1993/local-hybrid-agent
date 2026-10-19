@@ -440,8 +440,7 @@ function _updateCloudModelSelVisibility() {
   }
 })();
 
-// The chat page has no GPU panel: the logo's hardware tag comes from
-// /control/status. /control/gpu needs settings.runtime.view, so polling it here
-// 403'd every 5s for other users and flooded the audit log with denials.
-pollStatus();
-setInterval(pollStatus, 4000);
+// /control/status live monitoring via real-time WebSocket with seamless HTTP fallback.
+if (typeof connectStatusWebSocket === 'function') {
+  connectStatusWebSocket();
+}

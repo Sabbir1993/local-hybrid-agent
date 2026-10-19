@@ -58,6 +58,7 @@ document.addEventListener('click', (e) => {
 const CLICK_ACTIONS = {
   'agent-continue': () => agentContinue(),
   'toggle-all-codex': (el) => toggleAllCodex(el),
+  'toggle-all-antigravity': (el) => toggleAllCodex(el),
   'toggle-tool-args': (el) => {
     const pre = el.closest('.codex-action-body, .agy-detail-bar') ?
       el.closest('.codex-action-body').querySelector('.agy-args-pre') : null;
@@ -90,6 +91,20 @@ const CLICK_ACTIONS = {
     };
     if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, () => { _copyFallback(text); done(); });
     else { _copyFallback(text); done(); }
+  },
+  'user-edit': (el) => {
+    const idx = parseInt(el.dataset.arg, 10);
+    const m = (typeof messages !== 'undefined' && Array.isArray(messages)) ? messages[idx] : null;
+    const text = m ? (typeof userDisplayText === 'function' ? userDisplayText(m) : (m.displayContent || m.content || '')) : (el.closest('.bubble')?.querySelector('.user-text')?.innerText || '');
+    if (!text) return;
+    const inp = document.getElementById('input');
+    if (!inp) return;
+    inp.value = text;
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+    if (window.renderInputHighlights) window.renderInputHighlights();
+    inp.focus();
+    inp.selectionStart = inp.selectionEnd = inp.value.length;
+    inp.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   },
   'code-copy': (el) => copyCodeBlock(el),
   'copy-codex-code': (el) => (typeof copyCodexCode === 'function' ? copyCodexCode(el) : null),
@@ -473,6 +488,29 @@ window.clearLiveHudIfBusy = clearLiveHudIfBusy;
 function setLiveHud(state) {
   const hud = $('live-state-hud');
   if (!hud) return;
+
+  // If active chat is generating in foreground, the inline Claude working pill (.claude-working-box)
+  // already provides the live status and duration timer directly in context.
+  // Suppress duplicate floating bottom toast during foreground chat generation.
+  const isForegroundGenerating = typeof generating !== 'undefined' && generating;
+  if (isForegroundGenerating && state && (state.phase === 'running' || state.phase === 'thinking' || state.phase === 'preparing' || state.phase === 'writing')) {
+    if (!state.actions || !state.actions.length) {
+      if (hud.style.display !== 'none') {
+        hud.style.display = 'none';
+        hud.innerHTML = '';
+      }
+      return;
+    }
+  }
+  // Suppress generic chat completion toast hovering over composer
+  if (state && state.phase === 'done' && state.text === 'Response complete') {
+    if (hud.style.display !== 'none') {
+      hud.style.display = 'none';
+      hud.innerHTML = '';
+    }
+    return;
+  }
+
   _hudPhase = state ? state.phase : null;
   if (!state) {
     if (hud.style.display !== 'none') {

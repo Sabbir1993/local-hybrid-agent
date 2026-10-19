@@ -288,6 +288,8 @@ class ResearchBudget(unittest.TestCase):
         for needle in ("deck_research.effort_for", "deck_research.web_plan", "deck_research.turns_for",
                        "deck_research.build_limits", "deck_research.clamp_tokens", "deck_research.web_cap"):
             self.assertIn(needle, src)
+        self.assertIn("if req.max_tokens and int(req.max_tokens) > 0:", src)
+        self.assertIn("turn_max_tokens = int(req.max_tokens)", src)
 
 
 if __name__ == "__main__":

@@ -114,8 +114,9 @@ class RunContext:
             n_slots = int(cfg.get("np") or 1)
             win = context_budget.window(lane_name, cfg_ctx=cfg.get("ctx") or 16384,
                                         n_slots=n_slots, kv_unified=n_slots > 1)
-            return (await context_budget.probe_window(lane_name, getattr(self.ex_inst, "client", None))) or win
-        win = common.main_ctx_tokens(None)
+        if lane_name == "main" and self.cloud_main is not None:
+            return int(getattr(self.cloud_main, "ctx", 0) or 32768)
+        win = common.main_ctx_tokens(self.cloud_main)
         return (await context_budget.probe_window("main", getattr(state, "client", None))) or win
 
 
@@ -255,8 +256,13 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
         # Bypass executor tiered routing and router completely.
         ctx.cloud_exec = None
     elif ctx.mode == "all-local":
-        ctx.cloud_main = None
-        ctx.cloud_exec = None
+        if ctx.cloud_main:
+            # Main model is cloud: keep cloud_main and let executor stay local
+            ctx.cloud_exec = None
+            ctx.mode = "main-cloud-rest-local"
+        else:
+            ctx.cloud_main = None
+            ctx.cloud_exec = None
     elif ctx.mode == "main-cloud-rest-local":
         ctx.cloud_exec = None       # executor stays local in this mode
     # When user picked an explicit cloud model for executor/vision lanes, use it

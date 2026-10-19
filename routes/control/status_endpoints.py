@@ -71,8 +71,7 @@ def _runtime_gpus() -> list:
     return ACTIVE_RUNTIME.get("gpu_devices") or []
 
 
-@router.get("/control/status")
-async def status(user: Principal = Depends(get_current_user)):
+async def get_system_status(user: Optional[Principal] = None) -> dict:
     ctx_info = {"n_ctx": 32768, "n_past": 0, "n_prompt": 0, "pct": 0.0}
     if state.process and state.process.poll() is None:
         try:
@@ -96,11 +95,11 @@ async def status(user: Principal = Depends(get_current_user)):
         except Exception:
             pass
 
-    cm_main = cloud.cloud_lane("main", user.id)
-    cm_exec = cloud.cloud_lane("executor", user.id)
-    # cloud main lane has no local /slots to query -- fall back to its
-    # configured ctx so the UI doesn't show the local-server default (32768)
-    if cm_main and not (state.process and state.process.poll() is None):
+    user_id = user.id if user else None
+    cm_main = cloud.cloud_lane("main", user_id)
+    cm_exec = cloud.cloud_lane("executor", user_id)
+    # When cloud main lane is active, the conversation context window is the cloud model's window
+    if cm_main:
         ctx_info = {"n_ctx": cm_main.ctx, "n_past": 0, "n_prompt": 0, "pct": 0.0}
     await refresh_hw_async()
     hw_info = get_hardware_engine_summary()
@@ -139,12 +138,18 @@ async def status(user: Principal = Depends(get_current_user)):
         "main_source": "cloud" if cm_main else "local",
         "executor_source": "cloud" if cm_exec else "local",
         "cloud_main": ({"key": cm_main.key, "model": cm_main.model_id,
-                        "display": cm_main.display, "provider": cm_main.provider_name}
+                        "display": cm_main.display, "provider": cm_main.provider_name,
+                        "ctx": cm_main.ctx}
                        if cm_main else None),
         "cloud_executor": ({"key": cm_exec.key, "model": cm_exec.model_id,
                             "display": cm_exec.display, "provider": cm_exec.provider_name}
                            if cm_exec else None),
     }
+
+
+@router.get("/control/status")
+async def status(user: Principal = Depends(get_current_user)):
+    return await get_system_status(user)
 
 
 @router.get("/control/gpu")

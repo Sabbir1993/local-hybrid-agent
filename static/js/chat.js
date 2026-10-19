@@ -168,7 +168,7 @@ window._rememberArgsOpen = _rememberArgsOpen;
 
 // a collapsed file card is rendered without its diff (agent-acts.js); build it when the card is first opened
 function _fillLazyCard(d) {
-  const body = d.querySelector(':scope > .codex-file-body[data-lazy]');
+  const body = d.querySelector(':scope > .codex-file-body[data-lazy], :scope > .antigravity-step-drawer[data-lazy]');
   if (!body) return;
   const fn = window._lazyCardBodies && window._lazyCardBodies.get(d.dataset.cardId);
   if (typeof fn === 'function') body.innerHTML = fn();
@@ -177,7 +177,7 @@ function _fillLazyCard(d) {
 
 document.addEventListener('toggle', e => {
   const d = e.target;
-  if (d && d.tagName === 'DETAILS' && d.open && d.classList.contains('codex-file-card')) _fillLazyCard(d);
+  if (d && d.tagName === 'DETAILS' && d.open && (d.classList.contains('codex-file-card') || d.classList.contains('antigravity-step-item'))) _fillLazyCard(d);
   if (d && d.tagName === 'DETAILS' && !d.classList.contains('think')) {
     _rememberCardOpen(d, d.open);
   }
@@ -600,19 +600,26 @@ function userDisplayText(m) {
   if (t.includes('[Attached Files]')) t = t.replace(/\[Attached Files\][\s\S]*?--- END [^\n]+ ---(\s*\[NOTE:.*\])?/g, '').trim();
   return t;
 }
+window.userDisplayText = userDisplayText;
 
 function _bubbleHtml(m, idx) {
   if (m.role === 'user') {
-    const imgs = (m.images || []).map(u =>
-      `<img src="${esc(u)}" class="chat-img-thumb" alt="Attachment" title="Click to enlarge" data-click="open-image" style="max-width:240px; max-height:180px; border-radius:8px; display:block; margin:6px 0; border:1px solid rgba(255,255,255,0.15); box-shadow:0 2px 8px rgba(0,0,0,0.3); cursor:zoom-in;">`).join('');
+    const rawImgs = (m.images || []).map(u =>
+      `<img src="${esc(u)}" class="chat-img-thumb" alt="Attachment" title="Click to enlarge" data-click="open-image">`).join('');
+    const imgs = rawImgs ? `<div class="user-imgs-gallery">${rawImgs}</div>` : '';
     const filesTag = m.files ? `<div class="dim" style="font-size:10.5px; margin-top:4px;">📎 ${esc(m.files)}</div>` : '';
     const displayText = userDisplayText(m);
     // long prompts show ~8 lines; the footer offers copy on all prompts + see more / see less on long prompts
     const long = displayText.split('\n').length > 8 || displayText.length > 500;
+    const timeStr = m.timeStr || (m.ts ? new Date(m.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : (m._displayTime || (m._displayTime = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))));
+    const timeTag = `<span class="user-msg-time">${timeStr}</span>`;
     const copyIconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; pointer-events:none;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
-    const copyBtn = `<button type="button" class="user-long-btn user-copy-btn" data-click="user-copy" data-arg="${idx}" title="Copy prompt">${copyIconSvg}</button>`;
+    const editIconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; pointer-events:none;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`;
+    const copyBtn = `<button type="button" class="user-long-btn user-action-btn user-copy-btn" data-click="user-copy" data-arg="${idx}" title="Copy prompt">${copyIconSvg}</button>`;
+    const editBtn = `<button type="button" class="user-long-btn user-action-btn user-edit-btn" data-click="user-edit" data-arg="${idx}" title="Edit prompt">${editIconSvg}</button>`;
     const moreBtn = long ? `<button type="button" class="user-long-btn user-long-more" data-click="user-more">See more</button>` : '';
-    const foot = `<div class="user-long-foot">${copyBtn}${moreBtn}</div>`;
+    const actions = `<div class="user-bubble-actions">${timeTag}${copyBtn}${editBtn}</div>`;
+    const foot = `<div class="user-long-foot">${moreBtn}${actions}</div>`;
     const bodyHtml = long
       ? `<div class="user-text">${md(displayText || '(attachment)')}</div>${filesTag}${foot}`
       : `<div class="user-bubble-row"><div class="user-text">${md(displayText || '(attachment)')}</div>${foot}</div>${filesTag}`;
@@ -649,9 +656,10 @@ function _bubbleHtml(m, idx) {
       + `</details></div>`;
   }
   let inner = '';
-  
-  // Structured plan checklist (create_plan / update_plan_item tracking)
-  if (m.acts && m.acts.length) {
+  const isChatMode = (typeof appMode !== 'undefined' ? appMode === 'chat' : (typeof agentMode !== 'undefined' ? !agentMode : true));
+
+  // Structured plan checklist (create_plan / update_plan_item tracking) - only in Agent/Code mode
+  if (m.acts && m.acts.length && !isChatMode) {
     inner += planPanelHtml(m.acts);
   }
 
@@ -671,7 +679,8 @@ function _bubbleHtml(m, idx) {
   const hasText = !!(m.content && m.content.trim());
 
   const actsHasThoughts = m.acts && m.acts.some(a => a.type === 'thought' || a.type === 'reasoning');
-  if (m.reasoning && !actsHasThoughts) {
+  // In Chat mode, remove the planning/thought section as requested
+  if (m.reasoning && !actsHasThoughts && !isChatMode) {
     const isGeneratingThis = generating && isLast;
     const isActivelyThinking = isGeneratingThis && !hasText;
     const job = (curSession && window.bgJobs) ? window.bgJobs.get(String(curSession.id)) : null;
@@ -687,14 +696,18 @@ function _bubbleHtml(m, idx) {
       ? `Thinking (${elapsedSec}s)...`
       : (finalSec ? `Thought for ${finalSec}s` : 'Thought');
     const thinkBody = esc(m.reasoning).replace(/\n/g, '<br>') + (isActivelyThinking ? '<span class="cursor">▍</span>' : '');
-    inner += `<details class="think codex-thought-card" ${isOpen ? 'open' : ''} data-think-idx="${idx}">
-      <summary class="codex-thought-head" data-click="think-summary" data-arg="${idx}">
-        <span class="codex-thought-icon">🧠</span>
-        <span class="codex-thought-title">${statusLabel}</span>
-        <span class="codex-chevron">▾</span>
+    inner += `<details class="think antigravity-step-item" ${isOpen ? 'open' : ''} data-think-idx="${idx}" style="margin:4px 0 8px 0;">
+      <summary class="antigravity-step-row" data-click="think-summary" data-arg="${idx}">
+        <div class="antigravity-step-main">
+          <span>${esc(statusLabel)}</span>
+        </div>
+        <span class="antigravity-step-spacer"></span>
+        <span class="antigravity-row-chev">›</span>
       </summary>
-      <div class="think-content codex-thought-body">${thinkBody}</div>
-    </details>`;
+      <div class="think-content antigravity-step-drawer">
+        <div class="antigravity-thought-box">${thinkBody}</div>
+      </div>
+    </details><div class="antigravity-divider"></div>`;
   }
 
   let body = '';
@@ -1124,10 +1137,14 @@ async function send(inputText) {
   if (window.renderInputHighlights) window.renderInputHighlights();
   clearAttachments();
 
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const userMsg = {
     role: 'user',
     content: text || (sentFiles ? `📎 ${sentFiles}` : '(attachment)'),
     displayContent: text,
+    ts: now.getTime(),
+    timeStr: timeStr,
     images: sentImages.length ? sentImages : undefined,
     files: sentFiles || undefined
   };
@@ -1210,7 +1227,7 @@ async function send(inputText) {
       body: JSON.stringify({
         messages: msgs,
         session_id: sessionId || undefined,        // a website project belongs to this chat
-        web_search: !!chatWebSearch,
+        web_search: !!chatWebSearch || !!chatDeepMode,
         kb: typeof window.chatKbMode === 'function' ? window.chatKbMode() : 'auto',
         deep_mode: !!chatDeepMode,
         reasoning_effort: window.customAgentRequestOverrides ? window.customAgentRequestOverrides().reasoning_effort : (typeof getReasoningEffort === 'function' ? getReasoningEffort() : undefined),

@@ -879,6 +879,8 @@ async function openSession(s) {
         displayContent: meta.displayContent || undefined,
         images: meta.images || undefined,
         files: meta.files || undefined,
+        ts: meta.ts || m.created_at || m.timestamp || undefined,
+        timeStr: meta.timeStr || undefined,
         reasoning: meta.reasoning || '',
         acts: meta.acts || [],
         tps: meta.tps,
@@ -1120,6 +1122,13 @@ const btnRecentAdd = $('btn-new-session');
 if (btnRecentAdd) {
   btnRecentAdd.onclick = () => {
     $('btn-newchat').click();
+  };
+}
+const sidebarBrand = $('sidebar-brand-header');
+if (sidebarBrand) {
+  sidebarBrand.onclick = () => {
+    const btn = $('btn-newchat');
+    if (btn) btn.click();
   };
 }
 

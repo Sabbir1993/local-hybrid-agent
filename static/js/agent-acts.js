@@ -191,13 +191,13 @@ function toolMeta(name) {
 }
 
 function toggleAllCodex(btn) {
-  const container = btn.closest('.agy-agent-container') || btn.closest('.agy-stream-timeline');
-  if (!container) return;
-  const cards = container.querySelectorAll('.codex-action-card, .codex-thought-card, .codex-file-card, .codex-cmd-card');
-  // the label follows what the cards actually are, so it stays right after a card is opened by hand
+  const container = (btn && btn.closest && (btn.closest('.agy-agent-container') || btn.closest('.antigravity-trace-group') || btn.closest('.agy-stream-timeline'))) || document;
+  const cards = container.querySelectorAll('.antigravity-step-item, .codex-action-card, .codex-thought-card, .codex-file-card, .codex-cmd-card');
   const isExpanding = ![...cards].some(c => c.open);
   cards.forEach(c => { c.open = isExpanding; if (window._rememberCardOpen) window._rememberCardOpen(c, isExpanding); });
-  btn.textContent = isExpanding ? '⤡ Collapse All' : '⤢ Expand All';
+  if (btn && btn.tagName === 'BUTTON') {
+    btn.textContent = isExpanding ? 'Collapse all' : 'Expand all';
+  }
 }
 const toggleAllSteps = toggleAllCodex;
 
@@ -364,11 +364,13 @@ function agentContinue() {
 
 function buildChronologicalStream(acts) {
   if (!acts || !acts.length) return [];
+  const isChatMode = (typeof appMode !== 'undefined' ? appMode === 'chat' : (typeof agentMode !== 'undefined' ? !agentMode : true));
   const stream = [];
   const toolMap = new Map();
 
   acts.forEach(a => {
     if (a.type === 'thought' || a.type === 'reasoning') {
+      if (isChatMode) return; // In Chat mode: completely suppress planning and internal thought blocks
       const text = (a.text || '').trim();
       if (!text) return;
       const last = stream[stream.length - 1];
@@ -683,6 +685,341 @@ function mediaProgressHtml(pr) {
   </div>`;
 }
 
+function getAntigravityLangBadge(filename, toolName) {
+  if (toolName === 'web_search' || toolName === 'web_fetch') {
+    return '<span class="antigravity-lang-badge web">WEB</span>';
+  }
+  if (!filename) return '';
+  const ext = (filename.includes('.') ? filename.split('.').pop() : '').toLowerCase();
+  switch (ext) {
+    case 'js':
+    case 'mjs':
+    case 'cjs':
+      return '<span class="antigravity-lang-badge js">JS</span>';
+    case 'ts':
+    case 'tsx':
+    case 'jsx':
+      return '<span class="antigravity-lang-badge ts">TS</span>';
+    case 'py':
+      return '<span class="antigravity-lang-badge py">🐍</span>';
+    case 'css':
+    case 'scss':
+    case 'sass':
+    case 'less':
+      return '<span class="antigravity-lang-badge css">CSS</span>';
+    case 'html':
+    case 'htm':
+      return '<span class="antigravity-lang-badge html">HTML</span>';
+    case 'json':
+      return '<span class="antigravity-lang-badge json">{}</span>';
+    case 'md':
+    case 'markdown':
+      return '<span class="antigravity-lang-badge md">MD</span>';
+    case 'sh':
+    case 'bash':
+    case 'zsh':
+    case 'ps1':
+    case 'bat':
+    case 'cmd':
+      return '<span class="antigravity-lang-badge sh">SH</span>';
+    case 'sql':
+      return '<span class="antigravity-lang-badge sql">SQL</span>';
+    default:
+      if (ext.length > 0 && ext.length <= 4 && /^[a-z0-9]+$/.test(ext)) {
+        return `<span class="antigravity-lang-badge default">${esc(ext.toUpperCase())}</span>`;
+      }
+      return '';
+  }
+}
+
+function buildAntigravitySubSummary(stream) {
+  let fileReads = 0;
+  let fileEdits = 0;
+  let commands = 0;
+  let searches = 0;
+  let thoughts = 0;
+
+  stream.forEach(s => {
+    if (s.type === 'thought') thoughts++;
+    else if (s.type === 'tool') {
+      if (['read_file', 'view_file', 'cat', 'head', 'tail'].includes(s.name)) fileReads++;
+      else if (['edit_file', 'write_file', 'append_file', 'insert_at_line', 'replace_file_content'].includes(s.name)) fileEdits++;
+      else if (['run_command', 'run_python', 'shell', 'exec', 'terminal'].includes(s.name)) commands++;
+      else if (['grep', 'web_search', 'search_knowledge_base', 'kb_query', 'find_symbol', 'find_references'].includes(s.name)) searches++;
+    }
+  });
+
+  const parts = [];
+  if (fileReads > 0) parts.push('Explored files');
+  if (searches > 0 && !fileReads) parts.push('Searched code');
+  if (commands > 0) parts.push('ran commands');
+  if (fileEdits > 0) parts.push('edited files');
+
+  if (parts.length === 0) {
+    if (thoughts > 0) return 'Reasoned and analyzed';
+    return `${stream.length} action${stream.length !== 1 ? 's' : ''}`;
+  }
+  return parts.join(', ');
+}
+
+function buildAntigravityWorkedFor(stream, isRunning, msg) {
+  let totalSec = 0;
+  if (msg && msg.secs != null) {
+    totalSec = Math.max(1, Math.round(msg.secs));
+  } else if (msg && msg._lastThinkSec != null) {
+    totalSec = Math.max(1, Math.round(msg._lastThinkSec));
+  } else if (isRunning && typeof _genStartTime === 'number' && _genStartTime > 0) {
+    totalSec = Math.max(1, Math.floor((performance.now() - _genStartTime) / 1000));
+  } else {
+    const thoughtSecs = stream.filter(s => s.type === 'thought').reduce((acc, s) => acc + (s.duration_s || 2), 0);
+    const toolSecs = stream.filter(s => s.type === 'tool').length * 2;
+    totalSec = Math.max(1, Math.round(thoughtSecs + toolSecs));
+  }
+
+  let durationStr = '';
+  if (totalSec < 60) {
+    durationStr = `${totalSec}s`;
+  } else {
+    const mins = Math.floor(totalSec / 60);
+    const rem = totalSec % 60;
+    durationStr = rem > 10 ? `${mins}m ${rem}s` : `${mins}m`;
+  }
+
+  return `Worked for ${durationStr}`;
+}
+
+function renderAntigravityStepItem(item, isItemRunning, isOpen, cardKey, idx) {
+  const openAttr = isOpen ? ' open' : '';
+  const keyAttr = cardKey ? ` data-card-id="${esc(cardKey)}" data-card-idx="${idx}"` : '';
+  const rightChev = '<span class="antigravity-row-chev">›</span>';
+
+  if (item.type === 'thought') {
+    const duration = item.duration_s ? Math.max(1, Math.round(item.duration_s)) : 2;
+    const title = isItemRunning ? `Thinking (${duration}s)...` : `Thought for ${duration}s`;
+    const statusSpinner = isItemRunning ? '<span class="antigravity-row-spinner"></span>' : '';
+    return `<details class="antigravity-step-item"${openAttr}${keyAttr}>
+      <summary class="antigravity-step-row">
+        <div class="antigravity-step-main">
+          <span>${esc(title)}</span>
+        </div>
+        <span class="antigravity-step-spacer"></span>
+        ${statusSpinner}
+        ${rightChev}
+      </summary>
+      <div class="antigravity-step-drawer">
+        <div class="antigravity-thought-box">${esc(item.text).replace(/\n/g, '<br>')}</div>
+      </div>
+    </details>`;
+  }
+
+  const t = item;
+  const isRunning = t.result === null;
+  const meta = toolMeta(t.name);
+  const p = t.args.path || t.args.file || t.args.filename || t.args.AbsolutePath || t.args.TargetFile || '';
+  const filename = p ? p.split(/[\\/]/).pop() : '';
+  const badge = getAntigravityLangBadge(filename, t.name);
+
+  let mainHtml = '';
+  let drawerBody = '';
+  let lazyAttr = '';
+
+  const isRead = ['read_file', 'view_file', 'cat', 'head', 'tail'].includes(t.name);
+  const isEdit = ['edit_file', 'write_file', 'append_file', 'insert_at_line', 'replace_file_content'].includes(t.name);
+  const isCmd = ['run_python', 'run_command', 'shell', 'exec', 'terminal'].includes(t.name);
+
+  if (isRead) {
+    const verb = isRunning ? 'Analyzing' : 'Analyzed';
+    const sLine = t.args.start_line != null ? t.args.start_line : (t.args.StartLine != null ? t.args.StartLine : null);
+    const eLine = t.args.end_line != null ? t.args.end_line : (t.args.EndLine != null ? t.args.EndLine : null);
+    const lines = (sLine != null && eLine != null) ? `#L${sLine}-${eLine}` : (sLine != null ? `#L${sLine}` : '');
+
+    mainHtml = `<span>${verb}</span> ${badge} <span class="antigravity-filename">${esc(filename || 'file')}</span>${lines ? ` <span class="antigravity-line-range">${esc(lines)}</span>` : ''}`;
+
+    drawerBody = `
+      <div class="antigravity-drawer-meta">${p ? esc(p) : esc(filename)} ${lines ? '· ' + esc(lines) : ''}</div>
+      ${t.result != null ? `
+        <div class="antigravity-drawer-header">
+          <span>CONTENT</span>
+          <button type="button" class="btn ghost codex-head-btn" data-click="copy-codex-code" style="font-size:10px; padding:2px 8px;">Copy</button>
+        </div>
+        <pre class="agy-detail-code"><code>${(typeof hlCode === 'function') ? hlCode(String(t.result).slice(0, 10000), (filename.split('.').pop() || '')) : esc(String(t.result).slice(0, 10000))}</code></pre>
+      ` : ''}
+    `;
+  } else if (isEdit) {
+    const diff = (t.diff && ['write_file', 'edit_file', 'append_file', 'insert_at_line', 'replace_file_content'].includes(t.name)) ? t.diff : null;
+    const isRunaway = Boolean(t.args._runaway || (t.result && typeof t.result === 'string' && t.result.includes('repeating itself')));
+    const isNew = t.name === 'write_file' || (diff && diff.created);
+    const verb = isRunning
+      ? (isNew ? 'Creating' : 'Editing')
+      : (isRunaway ? 'Interrupted' : (isNew ? 'Created' : 'Edited'));
+
+    let diffPill = '';
+    if (diff) {
+      if (diff.added) diffPill += `<span class="codex-diff-pill add">+${diff.added}</span> `;
+      if (diff.removed) diffPill += `<span class="codex-diff-pill del">-${diff.removed}</span>`;
+    }
+
+    mainHtml = `<span>${verb}</span> ${badge} <span class="antigravity-filename">${esc(filename || 'file')}</span> ${diffPill}`;
+
+    const bodyInner = () => `
+      ${p ? `<div class="antigravity-drawer-meta">${esc(p)}</div>` : ''}
+      ${diff ? agentDiffHtml(diff, p) : (t.name === 'write_file' && typeof t.args.content === 'string' ? `<pre class="agy-detail-code"><code>${esc(t.args.content)}</code></pre>` : '')}
+      ${t.result !== null && !(diff && t.ok) ? `
+        <div class="antigravity-drawer-header"><span>RESULT</span></div>
+        <pre class="agy-detail-code" style="color:${t.ok ? 'var(--dim)' : 'var(--red)'};"><code>${esc(t.result || '(empty)')}</code></pre>
+      ` : ''}
+    `;
+
+    if (isOpen || !cardKey) drawerBody = bodyInner();
+    else {
+      (window._lazyCardBodies = window._lazyCardBodies || new Map()).set(cardKey, bodyInner);
+      lazyAttr = ' data-lazy="1"';
+    }
+  } else if (isCmd) {
+    const isPython = t.name === 'run_python';
+    let fullCmd = '';
+    if (isPython) {
+      fullCmd = (t.args.code || t.args.command || (t.args.file ? `python ${t.args.file}` : '')).trim();
+    } else {
+      fullCmd = (t.args.command || t.args.cmd || t.args.code || t.args.CommandLine || '').trim();
+    }
+    const lines = fullCmd ? fullCmd.split('\n') : [];
+    const shortCmd = lines[0] || t.name;
+    const preview = shortCmd.length > 55 ? shortCmd.slice(0, 52) + '…' : shortCmd;
+
+    if (/kill|cancel/i.test(shortCmd) || /manage_task.*kill/i.test(shortCmd)) {
+      mainHtml = `<span>Killed task</span> <code class="antigravity-cmd-snippet">${esc(preview)}</code>`;
+    } else if (/status|manage_task.*status/i.test(shortCmd)) {
+      mainHtml = `<span>Checked task</span> <code class="antigravity-cmd-snippet">${esc(preview)}</code>`;
+    } else if (isPython) {
+      mainHtml = `${getAntigravityLangBadge('script.py')} <span>Ran Python</span> <code class="antigravity-cmd-snippet">${esc(preview)}</code>`;
+    } else {
+      mainHtml = `<span>Ran command</span> <code class="antigravity-cmd-snippet">${esc(preview)}</code>`;
+    }
+
+    drawerBody = `
+      <div class="antigravity-cmd-prompt"><span class="antigravity-prompt-sym">$</span> ${esc(fullCmd || shortCmd)}</div>
+      ${!isRunning ? `
+        <div class="antigravity-drawer-header">
+          <span>OUTPUT</span>
+          ${t.result ? '<button type="button" class="btn ghost codex-head-btn" data-click="copy-codex-code" style="font-size:10px; padding:2px 8px;">Copy</button>' : ''}
+        </div>
+        <pre class="codex-cmd-terminal codex-result-block"${!t.ok ? ' style="color:var(--red);"' : ''}><code>${esc(t.result != null ? String(t.result).trim() : '(no output)')}</code></pre>
+      ` : `
+        <div class="antigravity-running"><span class="antigravity-row-spinner"></span> Executing...</div>
+      `}
+    `;
+  } else if (t.name === 'web_search') {
+    const q = t.args.query || '';
+    mainHtml = `<span class="antigravity-lang-badge web">WEB</span> <span>Search</span> <span class="antigravity-filename">${esc(q || 'web')}</span>`;
+    drawerBody = `
+      <div class="antigravity-drawer-meta">Web Search: ${esc(q)}</div>
+      ${t.result != null ? `
+        <div class="antigravity-drawer-header"><span>RESULTS</span></div>
+        <pre class="agy-detail-code"><code>${esc(String(t.result).slice(0, 5000))}</code></pre>
+      ` : ''}
+    `;
+  } else if (t.name === 'web_search_images') {
+    const q = t.args.query || '';
+    mainHtml = `<span class="antigravity-lang-badge media">IMAGES</span> <span>Search images</span> <span class="antigravity-filename">${esc(q || 'web')}</span>`;
+    drawerBody = `
+      <div class="antigravity-drawer-meta">Image Search: ${esc(q)}</div>
+      ${t.result != null ? `
+        <div class="antigravity-drawer-header"><span>RESULTS</span></div>
+        <pre class="agy-detail-code"><code>${esc(String(t.result).slice(0, 5000))}</code></pre>
+      ` : ''}
+    `;
+  } else if (t.name === 'grep') {
+    const pat = t.args.pattern || t.args.query || '';
+    const inPath = t.args.path || '';
+    mainHtml = `<span>Search for</span> <span class="antigravity-filename">${esc(pat || 'pattern')}</span>${inPath ? ` in <span class="antigravity-path">${esc(inPath)}</span>` : ''}`;
+    drawerBody = `
+      <div class="antigravity-drawer-meta">Grep: ${esc(pat)} ${inPath ? ' in ' + esc(inPath) : ''}</div>
+      ${t.result != null ? `
+        <div class="antigravity-drawer-header"><span>MATCHES</span></div>
+        <pre class="agy-detail-code"><code>${esc(String(t.result).slice(0, 8000))}</code></pre>
+      ` : ''}
+    `;
+  } else if (t.name === 'find_symbol') {
+    const sym = t.args.symbol || t.args.name || '';
+    mainHtml = `<span>Find</span> <span class="antigravity-filename">${esc(sym)}</span> <span>definition</span>`;
+    drawerBody = `
+      <div class="antigravity-drawer-meta">Symbol: ${esc(sym)}</div>
+      ${t.result != null ? `
+        <div class="antigravity-drawer-header"><span>RESULT</span></div>
+        <pre class="agy-detail-code"><code>${esc(String(t.result).slice(0, 5000))}</code></pre>
+      ` : ''}
+    `;
+  } else if (t.name === 'find_references') {
+    const sym = t.args.symbol || t.args.name || '';
+    mainHtml = `<span>Find references to</span> <span class="antigravity-filename">${esc(sym)}</span>`;
+    drawerBody = `
+      <div class="antigravity-drawer-meta">References: ${esc(sym)}</div>
+      ${t.result != null ? `
+        <div class="antigravity-drawer-header"><span>RESULT</span></div>
+        <pre class="agy-detail-code"><code>${esc(String(t.result).slice(0, 5000))}</code></pre>
+      ` : ''}
+    `;
+  } else if (t.name === 'spawn_agent' || t.name === 'invoke_subagent') {
+    const role = (t.args && (t.args.Role || t.args.role || t.args.TypeName || t.args.name)) || 'subagent';
+    mainHtml = `<span>Delegated task to</span> <span class="antigravity-filename">${esc(role)}</span>`;
+    drawerBody = `
+      <div class="antigravity-drawer-meta">Subagent: ${esc(role)}</div>
+      ${t.result != null ? `
+        <div class="antigravity-drawer-header"><span>RESULT</span></div>
+        <pre class="agy-detail-code"><code>${esc(String(t.result))}</code></pre>
+      ` : ''}
+    `;
+  } else if (t.args && (t.args.toolAction || t.args.toolSummary)) {
+    const actText = t.args.toolAction || t.args.toolSummary;
+    mainHtml = `<span>${esc(actText)}</span>`;
+    drawerBody = `
+      <div class="antigravity-drawer-meta">${esc(t.name)} ${p ? '· ' + esc(p) : ''}</div>
+      ${t.args && Object.keys(t.args).length > 0 ? `
+        <div class="antigravity-drawer-header"><span>ARGUMENTS</span></div>
+        <pre class="agy-detail-code agy-args-pre"><code>${esc(formatToolArgs(t.name, t.args))}</code></pre>
+      ` : ''}
+      ${t.result != null ? `
+        <div class="antigravity-drawer-header"><span>RESULT</span></div>
+        <pre class="agy-detail-code agy-result-code" data-ok="${t.ok ? 'ok' : 'err'}"><code>${esc(t.result || '(empty)')}</code></pre>
+      ` : ''}
+    `;
+  } else {
+    const rawTarget = p || quickArgPreview(t.name, t.args);
+    const targetEsc = rawTarget ? esc(rawTarget) : '';
+    const verb = isRunning && meta.running ? meta.running : meta.verb;
+    mainHtml = `<span>${verb}</span>${targetEsc ? ` <span class="antigravity-filename">${targetEsc}</span>` : ''}`;
+    drawerBody = `
+      <div class="antigravity-drawer-meta">${esc(t.name)} ${p ? '· ' + esc(p) : ''}</div>
+      ${t.args && Object.keys(t.args).length > 0 ? `
+        <div class="antigravity-drawer-header"><span>ARGUMENTS</span></div>
+        <pre class="agy-detail-code agy-args-pre"><code>${esc(formatToolArgs(t.name, t.args))}</code></pre>
+      ` : ''}
+      ${agentShotHtml(t.image)}
+      ${t.result != null ? `
+        <div class="antigravity-drawer-header"><span>RESULT</span></div>
+        <pre class="agy-detail-code agy-result-code" data-ok="${t.ok ? 'ok' : 'err'}"><code>${esc(t.result || '(empty)')}</code></pre>
+      ` : ''}
+    `;
+  }
+
+  const statusSpinner = isRunning ? '<span class="antigravity-row-spinner"></span>' : (!t.ok ? '<span class="antigravity-status-pill err">Failed</span>' : '');
+
+  return `<details class="antigravity-step-item"${openAttr}${keyAttr}>
+    <summary class="antigravity-step-row">
+      <div class="antigravity-step-main">
+        ${mainHtml}
+      </div>
+      <span class="antigravity-step-spacer"></span>
+      ${statusSpinner}
+      ${rightChev}
+    </summary>
+    <div class="antigravity-step-drawer"${lazyAttr}>
+      ${drawerBody}
+    </div>
+  </details>`;
+}
+
 // live: this message is the run still streaming. Anything else (a finished or reloaded message) cannot have a tool
 // still executing, so a call with no result is shown as interrupted instead of "Executing..." forever.
 function agentActsHtml(acts, live = true, msg = null) {
@@ -698,16 +1035,24 @@ function agentActsHtml(acts, live = true, msg = null) {
   const toolOps = stream.filter(s => s.type === 'tool');
   const isAllDone = toolOps.length === 0 || toolOps.every(t => t.result !== null);
 
-  let h = '<div class="agy-agent-container"><div class="agy-stream-timeline" data-acts-idx>';
-
-  if (stream.length > 2) {
-    h += `<div class="codex-timeline-toolbar">
-      <span class="codex-timeline-count">${toolOps.length} action${toolOps.length !== 1 ? 's' : ''}</span>
-      <button type="button" class="btn ghost codex-toggle-all" data-click="toggle-all-codex">⤡ Collapse All</button>
-    </div>`;
-  }
+  const workedText = buildAntigravityWorkedFor(stream, live && !isAllDone, msg);
+  const subSummaryText = buildAntigravitySubSummary(stream);
 
   const cardOpenMap = (msg && msg._cardOpen) ? msg._cardOpen : null;
+  const isGroupOpen = (cardOpenMap && cardOpenMap['trace-group'] !== undefined) ? cardOpenMap['trace-group'] : true;
+
+  let h = `<div class="agy-agent-container">`;
+  h += `<details class="antigravity-trace-group"${isGroupOpen ? ' open' : ''} data-card-id="trace-group">`;
+  h += `<summary class="antigravity-trace-summary">`;
+  h += `<span class="antigravity-trace-worked">${esc(workedText)}</span>`;
+  h += `<svg class="antigravity-trace-chev" viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>`;
+  h += `</summary>`;
+  h += `<div class="antigravity-trace-body">`;
+  h += `<div class="antigravity-sub-summary" data-click="toggle-all-antigravity" title="Click to collapse / expand all steps">`;
+  h += `<span>${esc(subSummaryText)}</span>`;
+  h += `<svg class="antigravity-sub-chev" viewBox="0 0 16 16" width="11" height="11"><path fill="currentColor" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>`;
+  h += `</div>`;
+  h += `<div class="antigravity-steps-list">`;
 
   stream.forEach((item, idx) => {
     const isLast = idx === stream.length - 1;
@@ -719,26 +1064,11 @@ function agentActsHtml(acts, live = true, msg = null) {
       else if (cardOpenMap[idx] !== undefined) cardOpen = cardOpenMap[idx];
     }
 
-    if (item.type === 'thought') {
-      h += renderThoughtCard(item, isItemRunning, cardOpen !== null ? cardOpen : false, cardKey, idx);
-    } else if (item.type === 'tool') {
-      const isCmd = ['run_python', 'run_command', 'shell', 'exec', 'terminal'].includes(item.name);
-      const isFile = ['edit_file', 'write_file', 'append_file', 'insert_at_line'].includes(item.name);
-      if (isCmd) {
-        h += renderCommandCard(item, isItemRunning, cardOpen !== null ? cardOpen : true, cardKey, idx);
-      } else if (isFile) {
-        h += renderFileCard(item, isItemRunning, cardOpen, cardKey, idx);
-      } else {
-        h += renderGenericToolCard(item, isItemRunning, cardOpen !== null ? cardOpen : false, cardKey, idx);
-      }
-    }
+    h += renderAntigravityStepItem(item, isItemRunning, cardOpen !== null ? cardOpen : false, cardKey, idx);
   });
 
-  if (!isAllDone) {
-    h += `<div class="agy-working-bar"><span class="agy-spinner" style="width:12px; height:12px;"></span> Working…</div>`;
-  }
-
-  h += '</div></div>';
+  h += `</div></div></details>`;
+  h += `<div class="antigravity-divider"></div></div>`;
   return h;
 }
 

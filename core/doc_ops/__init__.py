@@ -20,7 +20,10 @@ from typing import Optional
 from . import csv_ops, docx_ops, md_ops, pptx_ops, xlsx_ops
 from .base import MACRO_EXTS, DocOpError, check_size, require
 
-EDITABLE = {".pptx": pptx_ops, ".xlsx": xlsx_ops, ".csv": csv_ops, ".docx": docx_ops, ".md": md_ops}
+EDITABLE = {
+    ".pptx": pptx_ops, ".xlsx": xlsx_ops, ".csv": csv_ops, ".docx": docx_ops, ".md": md_ops,
+    ".html": md_ops, ".htm": md_ops, ".txt": md_ops, ".json": md_ops, ".js": md_ops, ".css": md_ops,
+}
 LEGACY = {".ppt": ".pptx", ".xls": ".xlsx", ".doc": ".docx"}
 DOC_EXTS = set(EDITABLE) | {".pdf"}
 DEFAULT_MAX_CHARS = 12_000
