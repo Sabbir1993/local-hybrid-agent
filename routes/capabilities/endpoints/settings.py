@@ -16,12 +16,47 @@ from ..models import (
     AgentLimitsReq,
     AgentSettingsReq,
     ShellSettingsReq,
+    WebSettingsReq,
 )
 
 from .base import router
 
 
+@router.post("/control/web_settings")
+async def web_settings(req: WebSettingsReq,
+                       user: Principal = Depends(require_permission("settings.orchestration.configure"))):
+    """Edit web research call budgets and tool round limits; persists to config/app.json."""
+    if (req.max_web_calls is None and req.deep_max_web_calls is None and
+        req.max_tool_rounds is None and req.deep_max_tool_rounds is None and req.soft_chars is None):
+        return JSONResponse({"error": "at least one web budget parameter required"}, status_code=400)
+    try:
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        return JSONResponse({"error": f"config/app.json unreadable: {e}"}, status_code=500)
+    chat_cfg = cfg.setdefault("chat", {})
+    if req.max_web_calls is not None:
+        chat_cfg["max_web_calls"] = max(1, min(50, int(req.max_web_calls)))
+    if req.deep_max_web_calls is not None:
+        chat_cfg["deep_max_web_calls"] = max(1, min(100, int(req.deep_max_web_calls)))
+    if req.max_tool_rounds is not None:
+        chat_cfg["max_tool_rounds"] = max(1, min(50, int(req.max_tool_rounds)))
+    if req.deep_max_tool_rounds is not None:
+        chat_cfg["deep_max_tool_rounds"] = max(1, min(100, int(req.deep_max_tool_rounds)))
+    if req.soft_chars is not None:
+        chat_cfg["web_soft_chars"] = max(500, min(50000, int(req.soft_chars)))
+    try:
+        write_app_config(cfg, CONFIG_FILE)
+    except Exception as e:
+        return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
+    APP_CONFIG.setdefault("chat", {}).update(chat_cfg)
+    audit_log(user, action="settings.web.configure", resource="capabilities.web",
+              permission_key="settings.orchestration.configure",
+              detail={k: v for k, v in req.model_dump().items() if v is not None})
+    return {"ok": True, "chat": chat_cfg}
+
+
 @router.post("/control/shell_settings")
+
 async def shell_settings(req: ShellSettingsReq,
                           user: Principal = Depends(require_permission("settings.shell.configure"))):
     """Edit the GLOBAL shell permission settings; persists to config/app.json.

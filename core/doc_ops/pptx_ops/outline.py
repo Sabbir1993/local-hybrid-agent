@@ -14,17 +14,23 @@ MAX_TABLE_ROWS = 24          # longer tables are split across slides by design._
 MAX_TABLE_COLS = 6
 
 LAYOUTS = {"bullets", "cards", "stats", "two-column", "timeline", "quote", "section", "table", "cover", "closing", "full",
-           "chart", "comparison", "agenda", "gallery", "textside"}
+           "chart", "comparison", "agenda", "gallery", "textside",
+           "kpi-grid", "chart-kpis", "leaderboard", "roadmap", "dimension-table"}
 IMAGE_KINDS = ("cover", "bullets", "section", "full", "gallery")   # slide kinds the renderer can put a picture on
 MAX_IMAGE_QUERY = 120
 _LAYOUT_ALIAS = {"columns": "two-column", "two-columns": "two-column", "twocolumn": "two-column", "2-column": "two-column",
                  "list": "bullets", "content": "bullets", "numbers": "stats", "metrics": "stats", "steps": "timeline",
-                 "roadmap": "timeline", "grid": "cards", "title": "cover", "divider": "section", "thanks": "closing",
+                 "grid": "cards", "title": "cover", "divider": "section", "thanks": "closing",
                  "end": "closing", "split": "bullets", "image": "bullets", "picture": "bullets", "full-image": "full",
                  "fullscreen": "full", "hero": "full", "versus": "comparison", "vs": "comparison",
                  "contents": "agenda", "toc": "agenda", "graph": "chart", "photos": "gallery", "images": "gallery",
                  "pictures": "gallery", "text-table": "textside", "split-table": "textside", "side-table": "textside",
-                 "text-chart": "textside", "text-side": "textside"}
+                 "text-chart": "textside", "text-side": "textside",
+                 "kpi-grid": "kpi-grid", "kpigrid": "kpi-grid", "kpi": "kpi-grid", "kpis": "kpi-grid", "dashboard": "kpi-grid",
+                 "chart-kpis": "chart-kpis", "chartkpis": "chart-kpis", "chart-cards": "chart-kpis", "chart-delta": "chart-kpis",
+                 "leaderboard": "leaderboard", "profiles": "leaderboard", "team": "leaderboard", "champions": "leaderboard",
+                 "roadmap": "roadmap", "stepper": "roadmap", "timeline-stepper": "roadmap", "milestones": "roadmap",
+                 "dimension-table": "dimension-table", "dimension": "dimension-table", "table-callout": "dimension-table", "alert-table": "dimension-table"}
 
 _META = re.compile(
     r"^(markdown source|source for conversion|here(?:'s| is| are)\b|below is|sure[,!. ]|certainly|of course|"
@@ -47,7 +53,7 @@ _ARROW_ONLY = re.compile(r"^[\s↓↑→←⇒⇓⬇▼▲|│┃:·.\-–—]+$
 _CHECKBOX = re.compile(r"^\[[ xX✓✔]?\]\s*")
 _SLIDE_PREFIX = re.compile(r"^(?:slide|section|part)\s*\d+\s*[:.\-–—)]*\s*", re.I)
 _GLOBAL_THEME = re.compile(r"^(?:global\s+(?:theme|style|design)|style|design|palette|colou?r palette|colou?rs?)\s*:\s*(.*)$", re.I)
-_FIELD = re.compile(r"^(subtitle|tagline|theme|accent|layout|notes?|speaker notes?|title|image|picture|photo|chart|graph|font|eyebrow|kicker|source|sources|art|motif|mode)\s*:\s*(.*)$", re.I)
+_FIELD = re.compile(r"^(subtitle|tagline|theme|accent|layout|notes?|speaker notes?|title|image|picture|photo|chart|graph|font|eyebrow|kicker|source|sources|art|motif|mode|callout|alert)\s*:\s*(.*)$", re.I)
 _SLIDE_MARK = re.compile(r"^\**\s*slide\s+(\d+)\s*(?:\(([^)]*)\))?\s*[:.\-–—]*\**\s*(.*)$", re.I)
 _BULLET = re.compile(r"^([-*+•●▪◦]|\d+[.)])\s+(.*)$")
 _TABLE_SEP = re.compile(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$")
@@ -94,7 +100,7 @@ def _strip_citations(text: str, found: list) -> str:
 
 def _new() -> dict:
     return {"title": "", "subtitle": "", "bullets": [], "notes": "", "layout": "", "table": [], "image": None,
-            "image_extra": [], "chart": None, "eyebrow": "", "source": "", "art": "", "_cite": []}
+            "image_extra": [], "chart": None, "eyebrow": "", "source": "", "art": "", "callout": "", "alert": "", "_cite": []}
 
 
 CHART_KINDS = ("bar", "hbar", "line", "pie", "share")
@@ -197,7 +203,7 @@ def parse_image_spec(val: str):
 
 
 def _empty(sl: dict) -> bool:
-    return not (sl["title"] or sl["bullets"] or sl["table"] or sl["subtitle"] or sl["notes"])
+    return not (sl["title"] or sl["bullets"] or sl["table"] or sl["subtitle"] or sl["notes"] or sl.get("callout") or sl.get("alert"))
 
 
 def _slide_title_from_marker(cat: str, rest: str) -> str:
@@ -354,6 +360,10 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
                 cur["art"] = a if a in ART_KINDS else ""
             elif key == "mode":
                 deck["mode"] = "designer" if re.sub(r"[^a-z]", "", val.lower()) in ("designer", "image", "images", "visual") else ""
+            elif key == "callout":
+                cur["callout"] = clean(val)[:400]
+            elif key == "alert":
+                cur["alert"] = clean(val)[:400]
             else:
                 cur["notes"] = (cur["notes"] + " " + val).strip()
             continue
@@ -398,6 +408,8 @@ def _finish(deck: dict, slides: list, deck_title: str) -> dict:
             prev["image"] = prev["image"] or s["image"]
             prev["chart"] = prev["chart"] or s["chart"]
             prev["source"] = prev["source"] or s["source"]
+            prev["callout"] = prev.get("callout") or s.get("callout", "")
+            prev["alert"] = prev.get("alert") or s.get("alert", "")
             prev["notes"] = (prev["notes"] + " " + s["notes"]).strip()
         else:
             merged.append(s)
@@ -491,6 +503,24 @@ def _classify(s: dict, idx: int, n: int) -> None:
     if lay == "gallery" and s["image"] and s["image_extra"] and idx > 0:    # 2-3 pictures on one slide
         s["kind"] = "gallery"
         return
+    if lay == "chart-kpis" and idx > 0:
+        data = chart_data(s) if (s["chart"] or s["table"]) else None
+        if data:
+            s["chart_data"] = data
+            s["kind"] = "chart-kpis"
+            return
+    if lay == "kpi-grid" and idx > 0:
+        s["kind"] = "kpi-grid"
+        return
+    if lay == "leaderboard" and idx > 0:
+        s["kind"] = "leaderboard"
+        return
+    if lay == "roadmap" and idx > 0:
+        s["kind"] = "roadmap"
+        return
+    if lay == "dimension-table" and idx > 0:
+        s["kind"] = "dimension-table"
+        return
     if lay == "textside" and idx > 0 and s["bullets"] and (s["table"] or s["chart"]):
         data = chart_data(s) if s["chart"] else None
         if data:
@@ -520,13 +550,19 @@ def _classify(s: dict, idx: int, n: int) -> None:
     if lay == "section" or (lay == "" and not s["bullets"] and not s["table"] and idx > 0):
         s["kind"] = "section"
         return
-    if s["table"] and lay in ("", "table"):
+    if s["table"] and (lay in ("", "table", "dimension-table") or s.get("alert")):
+        if s.get("alert") or lay == "dimension-table":
+            s["kind"] = "dimension-table"
+            return
         s["kind"] = "table"
         return
     if lay == "quote" and s["bullets"]:
         s["kind"] = "quote"
         return
-    if lay == "timeline" and 2 <= len(top) <= 6:
+    if lay in ("timeline", "roadmap") and 2 <= len(top) <= 8:
+        if lay == "roadmap" or any("status=" in h or re.match(r"^\d+\s*\|", h) for h, _ in top):
+            s["kind"] = "roadmap"
+            return
         s["kind"] = "timeline"
         return
     if lay == "comparison" and len(top) == 2 and all(c for _, c in top) and all(h for h, _ in top):
@@ -534,6 +570,12 @@ def _classify(s: dict, idx: int, n: int) -> None:
         return
     if lay == "agenda" and 2 <= len(top) <= 8:
         s["kind"] = "agenda"
+        return
+    if (lay in ("", "kpi-grid") and s.get("callout") and 2 <= len(top) <= 5) or lay == "kpi-grid":
+        s["kind"] = "kpi-grid"
+        return
+    if (lay in ("", "leaderboard") and 4 <= len(top) <= 10 and all(h.count("|") >= 2 for h, _ in top)) or lay == "leaderboard":
+        s["kind"] = "leaderboard"
         return
     if lay in ("", "cards") and 2 <= len(top) <= MAX_CARDS and all(c for _, c in top) and all(h for h, _ in top):
         s["kind"] = "cards"

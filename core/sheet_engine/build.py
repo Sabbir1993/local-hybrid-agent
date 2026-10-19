@@ -35,7 +35,7 @@ MAX_COLS = 100
 MAX_ROWS_TOTAL = 50_000
 
 DIRECTIVES = ("format", "total", "freeze", "filter", "highlight", "scale", "databar", "validate", "table", "name", "chart",
-              "widths", "note", "print", "tab", "wrap", "hide")
+              "widths", "note", "print", "tab", "wrap", "hide", "merge", "color", "align", "border")
 _DIRECTIVE_RX = re.compile(r"^\s*(" + "|".join(DIRECTIVES) + r")\s*:\s*(.*?)\s*$", re.I)
 _SHEET_RX = re.compile(r"^\s*##\s*sheet\s*:\s*(.+?)\s*$", re.I)
 _TITLE_RX = re.compile(r"^\s*#\s+(.+?)\s*$")
@@ -103,7 +103,7 @@ def is_outline(text: str) -> bool:
     t = str(text or "")
     if re.search(r"(?mi)^\s*##\s*sheet\s*:", t):
         return True
-    return bool(re.search(r"(?m)^\s*\|", t)) and bool(re.search(r"(?mi)^\s*(format|total|chart|highlight|scale|databar|validate|table|name|freeze|widths)\s*:", t))
+    return bool(re.search(r"(?m)^\s*\|", t)) and bool(re.search(r"(?mi)^\s*(format|total|chart|highlight|scale|databar|validate|table|name|freeze|widths|merge|color|align|border)\s*:", t))
 
 
 def _split_row(line: str) -> list:
@@ -262,10 +262,10 @@ def col_letter(n: int) -> str:
 
 def _kv_pairs(text: str) -> dict:
     out = {}
-    for part in re.split(r"\s*,\s*", text.strip()):
+    for part in re.split(r"(?:,\s*|\s+)(?=[A-Za-z0-9_]+=)", text.strip()):
         if "=" in part:
             k, v = part.split("=", 1)
-            out[k.strip().lower()] = v.strip()
+            out[k.strip().lower()] = v.strip().strip("\"'")
     return out
 
 
@@ -414,21 +414,32 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
         from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule
         rng = lambda ci: f"{col_letter(ci)}2:{col_letter(ci)}{max(last, 2)}"      # noqa: E731
         for v in dirs.get("highlight", []):
-            m = re.match(r"^(?P<col>.+?)\s*(?P<op>>=|<=|!=|<>|=|>|<)\s*(?P<val>.+?)\s+(?P<color>red|green|amber|yellow|blue|grey|gray)$", v.strip(), re.I)
-            if not m:
-                _warn(f"sheet '{s['name']}': highlight '{v}': expects `Column<value red`")
+            m = re.match(r"^(?P<col>.+?)\s*(?P<op>>=|<=|!=|<>|=|>|<|is)\s*(?P<val>.+?)\s+(?P<color>red|green|amber|yellow|blue|grey|gray)$", v.strip(), re.I)
+            m_bw = re.match(r"^(?P<col>.+?)\s+between\s+(?P<a>.+?)\s+and\s+(?P<b>.+?)\s+(?P<color>red|green|amber|yellow|blue|grey|gray)$", v.strip(), re.I)
+            if not (m or m_bw):
+                _warn(f"sheet '{s['name']}': highlight '{v}': expects `Column<value red` or `Column between a and b color`")
                 continue
-            idx = next((i for i, h in enumerate(header, 1) if h.lower() == m.group("col").strip().lower()), None)
+            cname = (m or m_bw).group("col").strip()
+            idx = next((i for i, h in enumerate(header, 1) if h.lower() == cname.lower()), None)
             if idx is None:
-                _warn(f"sheet '{s['name']}': highlight: column '{m.group('col')}' not found" + _cols_hint(header))
+                _warn(f"sheet '{s['name']}': highlight: column '{cname}' not found" + _cols_hint(header))
                 continue
-            op = {">": "greaterThan", "<": "lessThan", ">=": "greaterThanOrEqual", "<=": "lessThanOrEqual", "=": "equal",
-                  "!=": "notEqual", "<>": "notEqual"}[m.group("op")]
-            val = m.group("val").strip().strip("'\"")
-            formula = val if _to_number(val) is not None else f'"{val}"'
-            bg, fg = _FILLS[m.group("color").lower()]
-            ws.conditional_formatting.add(rng(idx), CellIsRule(operator=op, formula=[formula],
-                                          fill=PatternFill("solid", bgColor=bg, fgColor=bg), font=Font(color=fg)))
+            color_name = (m or m_bw).group("color").lower()
+            bg, fg = _FILLS[color_name]
+            if m_bw:
+                a_val, b_val = m_bw.group("a").strip(), m_bw.group("b").strip()
+                fa = a_val if _to_number(a_val) is not None else f'"{a_val}"'
+                fb = b_val if _to_number(b_val) is not None else f'"{b_val}"'
+                ws.conditional_formatting.add(rng(idx), CellIsRule(operator="between", formula=[fa, fb],
+                                              fill=PatternFill("solid", bgColor=bg, fgColor=bg), font=Font(color=fg)))
+            else:
+                op_raw = m.group("op").lower()
+                op = {"=": "equal", "is": "equal", ">": "greaterThan", "<": "lessThan",
+                      ">=": "greaterThanOrEqual", "<=": "lessThanOrEqual", "!=": "notEqual", "<>": "notEqual"}[op_raw]
+                val = m.group("val").strip().strip("'\"")
+                formula = val if _to_number(val) is not None else f'"{val}"'
+                ws.conditional_formatting.add(rng(idx), CellIsRule(operator=op, formula=[formula],
+                                              fill=PatternFill("solid", bgColor=bg, fgColor=bg), font=Font(color=fg)))
         for key in ("scale", "databar"):
             for v in dirs.get(key, []):
                 reverse = v.strip().lower().endswith(" reverse")
@@ -467,6 +478,155 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
             dv.error, dv.errorTitle, dv.showErrorMessage = "Please pick a valid value", "Invalid entry", True
             ws.add_data_validation(dv)
             dv.add(f"{col_letter(idx)}2:{col_letter(idx)}{max(last + 200, 500)}")      # a few hundred rows of room to add data
+
+        # cell merging (rows and columns)
+        for v in dirs.get("merge", []):
+            parts = [p.strip() for p in re.split(r",\s*(?=[A-Za-z0-9_\"':])", v) if p.strip()]
+            for part in parts:
+                val_to_set = None
+                if "=" in part and not re.match(r"^[A-Za-z]{1,3}\d+:", part):
+                    val_to_set, rng_part = part.split("=", 1)
+                    val_to_set = val_to_set.strip().strip('"\'')
+                    rng_part = rng_part.strip()
+                else:
+                    rng_part = part
+                m = re.match(r"^([A-Za-z]{1,3}\d+)\s*:\s*([A-Za-z]{1,3}\d+)$", rng_part)
+                if not m:
+                    _warn(f"sheet '{s['name']}': merge '{part}': expects format `A1:D1` or `\"Title\"=A1:D1`")
+                    continue
+                start_ref, end_ref = m.group(1).upper(), m.group(2).upper()
+                try:
+                    ws.merge_cells(f"{start_ref}:{end_ref}")
+                    top_cell = ws[start_ref]
+                    if val_to_set is not None:
+                        top_cell.value = val_to_set
+                        top_cell.font = Font(bold=True)
+                        top_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                except Exception as e:
+                    _warn(f"sheet '{s['name']}': merge '{part}': {e}")
+
+        # custom cell and range coloring
+        for v in dirs.get("color", []):
+            tokens = v.strip().split(None, 1)
+            if not tokens:
+                continue
+            target = tokens[0].strip()
+            rest = tokens[1] if len(tokens) > 1 else ""
+            opts = _kv_pairs(rest)
+            if not opts and "=" in v:
+                opts = _kv_pairs(v)
+                target = list(opts.keys())[0] if opts else ""
+            fill_c = opts.get("fill") or opts.get("bg")
+            font_c = opts.get("font") or opts.get("fg") or opts.get("color")
+            is_bold = opts.get("bold", "").lower() in ("true", "1", "yes")
+            align_h = opts.get("align", "").lower() or None
+
+            target_cells = []
+            m_rng = re.match(r"^([A-Za-z]{1,3}\d+)(?::([A-Za-z]{1,3}\d+))?$", target, re.I)
+            if m_rng:
+                start_c = m_rng.group(1).upper()
+                end_c = m_rng.group(2).upper() if m_rng.group(2) else start_c
+                for r_row in ws[f"{start_c}:{end_c}"]:
+                    for c_cell in (r_row if isinstance(r_row, tuple) else [r_row]):
+                        target_cells.append(c_cell)
+            elif target.lower() == "total" and total_row:
+                for ci in range(1, ncols + 1):
+                    target_cells.append(ws.cell(row=total_row, column=ci))
+            else:
+                idx = next((i for i, h in enumerate(header, 1) if h.lower() == target.lower()), None)
+                if idx is not None:
+                    for ri in range(2, last + 1):
+                        target_cells.append(ws.cell(row=ri, column=idx))
+
+            if not target_cells:
+                _warn(f"sheet '{s['name']}': color: target '{target}' not found (use cell range like A1:D1, column name, or 'total')")
+                continue
+
+            fg_hex = None
+            if fill_c:
+                clean_fill = fill_c.lstrip("#").lower()
+                if clean_fill in _FILLS:
+                    fg_hex = _FILLS[clean_fill][0]
+                elif clean_fill in THEMES:
+                    fg_hex = THEMES[clean_fill][0]
+                elif re.fullmatch(r"[0-9A-Fa-f]{6}", clean_fill):
+                    fg_hex = clean_fill.upper()
+
+            txt_hex = None
+            if font_c:
+                clean_font = font_c.lstrip("#").lower()
+                if clean_font in ("white", "w"):
+                    txt_hex = "FFFFFF"
+                elif clean_font in ("black", "b"):
+                    txt_hex = "000000"
+                elif clean_font in _FILLS:
+                    txt_hex = _FILLS[clean_font][1]
+                elif re.fullmatch(r"[0-9A-Fa-f]{6}", clean_font):
+                    txt_hex = clean_font.upper()
+
+            for cell in target_cells:
+                if fg_hex:
+                    cell.fill = PatternFill("solid", fgColor=fg_hex)
+                if txt_hex or is_bold:
+                    cf = cell.font or Font()
+                    cell.font = Font(
+                        name=cf.name or "Calibri",
+                        size=cf.size or 11,
+                        bold=is_bold if is_bold else cf.bold,
+                        italic=cf.italic,
+                        color=txt_hex if txt_hex else cf.color
+                    )
+                if align_h and align_h in ("left", "center", "right"):
+                    cv = cell.alignment.vertical if cell.alignment else "center"
+                    cell.alignment = Alignment(horizontal=align_h, vertical=cv)
+
+        # explicit alignment
+        for v in dirs.get("align", []):
+            for part in re.split(r"\s*,\s*", v.strip()):
+                if "=" not in part:
+                    continue
+                col_ref, side = (x.strip() for x in part.split("=", 1))
+                side = side.lower()
+                if side not in ("left", "center", "right"):
+                    continue
+                m_single = re.match(r"^([A-Za-z]{1,3})(\d+)?$", col_ref)
+                if m_single and m_single.group(2):
+                    ws[col_ref.upper()].alignment = Alignment(horizontal=side)
+                else:
+                    idx = None
+                    if m_single and not m_single.group(2) and len(col_ref) <= 3:
+                        try:
+                            from openpyxl.utils import column_index_from_string
+                            idx = column_index_from_string(col_ref)
+                        except Exception:
+                            pass
+                    if idx is None:
+                        idx = next((i for i, h in enumerate(header, 1) if h.lower() == col_ref.lower()), None)
+                    if idx is not None:
+                        for ri in range(2, last + 1):
+                            ws.cell(row=ri, column=idx).alignment = Alignment(horizontal=side)
+
+        # explicit borders
+        for v in dirs.get("border", []):
+            tokens = v.strip().split()
+            if not tokens:
+                continue
+            b_target = tokens[0].strip()
+            b_style = tokens[1].lower() if len(tokens) > 1 else "thin"
+            if b_style not in ("thin", "medium", "thick", "double", "dashed", "dotted"):
+                b_style = "thin"
+            b_side = Side(style=b_style, color=accent if b_style in ("medium", "thick") else "D9D9D9")
+            m_rng = re.match(r"^([A-Za-z]{1,3}\d+)(?::([A-Za-z]{1,3}\d+))?$", b_target, re.I)
+            if m_rng:
+                start_c = m_rng.group(1).upper()
+                end_c = m_rng.group(2).upper() if m_rng.group(2) else start_c
+                for r_row in ws[f"{start_c}:{end_c}"]:
+                    for c_cell in (r_row if isinstance(r_row, tuple) else [r_row]):
+                        c_cell.border = Border(top=b_side, bottom=b_side, left=b_side, right=b_side)
+            elif b_target.lower() == "total" and total_row:
+                for ci in range(1, ncols + 1):
+                    ws.cell(row=total_row, column=ci).border = Border(top=Side(style="medium", color=accent),
+                                                                      bottom=Side(style="double", color=accent))
 
         # notes under the table
         nrow = (total_row or last) + 2

@@ -196,15 +196,26 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     prev_assistant = next((str(m.get("content") or "") for m in reversed(msgs[:-1]) if m.get("role") == "assistant"), "")[-500:]
     deck_answer = (len(last_query) < 240 and "?" in prev_assistant and "[DOWNLOAD" not in prev_assistant
                    and bool(prompt_scope._PPTX_RE.search(prev_assistant)))
-    pdf_build = prompt_scope.pdf_brief_wanted(last_query, msgs[:-1])      # a PDF request, or the answers to our PDF card
-    docx_build = prompt_scope.docx_brief_wanted(last_query, msgs[:-1])    # a Word request, or the answers to our Word card
-    longdoc_build = pdf_build or docx_build                               # both are written in pieces: doc_create, doc_append
-    brief_phase = prompt_scope.brief_phase(last_query, msgs[:-1])         # "ask" (card now) / "build" (answered) / ""
+    has_deck_prior = any(str(f).lower().endswith((".pptx", ".ppt")) for f in (prior_files or []))
+    has_pdf_prior = any(str(f).lower().endswith(".pdf") for f in (prior_files or []))
+    has_docx_prior = any(str(f).lower().endswith((".docx", ".doc")) for f in (prior_files or []))
+    is_doc_edit_query = bool(re.search(r"\b(editable|after\s+\d+|\d+\s*no\s*(?:deck|slide|page)|slide\s*\d+|add\s+a\s+(?:new\s+)?(?:slide|deck|section|page))\b", own_q, re.I))
+    if file_followup == "edit" or ((has_deck_prior or has_pdf_prior or has_docx_prior) and is_doc_edit_query):
+        file_followup = "edit"
+        brief_phase = ""
+        pdf_build = False
+        docx_build = False
+        longdoc_build = False
+    else:
+        pdf_build = prompt_scope.pdf_brief_wanted(last_query, msgs[:-1], prior_files)      # a PDF request, or the answers to our PDF card
+        docx_build = prompt_scope.docx_brief_wanted(last_query, msgs[:-1], prior_files)    # a Word request, or the answers to our Word card
+        longdoc_build = pdf_build or docx_build                               # both are written in pieces: doc_create, doc_append
+        brief_phase = prompt_scope.brief_phase(last_query, msgs[:-1], prior_files)         # "ask" (card now) / "build" (answered) / ""
     # The model writes the "few quick choices" card, as it always did. The server's copy of it (prompt_scope.brief_card) is used
     # only when the model fails to produce one (a local model sometimes narrates its reasoning instead), or always when
     # chat.brief_card_server is "always".
     card_mode = (APP_CONFIG.get("chat") or {}).get("brief_card_server", "fallback")
-    card = prompt_scope.brief_card("deck" if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]) else "docx" if docx_build else "pdf") if brief_phase == "ask" else ""
+    card = prompt_scope.brief_card("deck" if prompt_scope.deck_brief_wanted(last_query, msgs[:-1], prior_files) else "docx" if docx_build else "pdf") if brief_phase == "ask" else ""
     if brief_phase == "ask" and card_mode == "always":
 
         async def _card_sse():
@@ -525,11 +536,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 outline = None
             if outline and not outline.startswith("doc error"):
                 prior_block += (
-                    f"\n\nThe user wants changes to `{latest}`. Do NOT regenerate it and do NOT call write_file. "
-                    f"Call doc_edit(file='{latest}', ops=[...]) with ops that target ONLY the parts the user "
-                    "asked to change; every other slide, cell, paragraph, style and layout is kept exactly. "
-                    "Its current outline (with the addresses ops use) is below. Then give the user the "
-                    "[DOWNLOAD: ...] link from the doc_edit result and list what changed.\n"
+                    f"\n\nThe user wants changes to `{latest}`. "
+                    f"For targeted slide/cell/text edits, call doc_edit(file='{latest}', ops=[...]) (e.g. op='add_slide', after=10, or op='set_text'). "
+                    f"If the user asks to make it editable (native PowerPoint shapes), change the theme, or rebuild/restyle the document, "
+                    f"call doc_create(file='{latest}', content=...) with the complete updated outline incorporating the requested changes. "
+                    "Its current outline is below. Then give the user the [DOWNLOAD: ...] link and list what changed.\n"
                     f"----- OUTLINE {latest} -----\n{outline}\n----- END OUTLINE -----")
             else:
                 prior_block += (f"\n\nThe user wants changes to `{latest}`. Call doc_inspect(file='{latest}') "
@@ -699,6 +710,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         run_id = uuid.uuid4().hex
         run_end_state, run_end_reason, turn = "completed", None, -1
         runaway_hits = 0
+        consecutive_tool_failures = 0
+        last_tool_error = ""
         runs.begin(run_id, "chat", user.id, stage="stream")
         t0 = time.time()
         turn_limit = max_turns       # grows by one if a continuation nudge needs it
@@ -811,18 +824,18 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 research_over = bool(use_web and web_calls > 0 and (
                     web_calls >= max_web_calls or turn >= turn_limit - 2))
                 if brief_phase == "build" and written_files:
-                    research_over = True        # the deck exists: from here on only doc_append, no more searching
+                    research_over = True
                 if turn == turn_limit - 1 and msgs and msgs[-1].get("role") == "tool":
                     # final turn: must answer now; a requested file can still be written. A deck / PDF being built in pieces keeps its
                     # document tools: with write_file only, the model said "there is no doc_append tool" and left the deck half built.
                     doc_names = ("doc_create", "doc_append", "doc_inspect", "doc_edit")
                     doc_tools = [t for t in chat_tools if t.get("function", {}).get("name") in doc_names]
-                    if doc_tools and (brief_phase == "build" or resume_note or longdoc_build) and wants_file:
+                    if doc_tools and (brief_phase == "build" or resume_note or longdoc_build) and wants_file and not (written_files and not longdoc_build):
                         current_tools = doc_tools
-                    elif project_build:
+                    elif project_build and not project_done:
                         current_tools = [t for t in chat_tools if t.get("function", {}).get("name") in PROJECT_TOOL_NAMES]
                     else:
-                        current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and brief_phase != "ask" and tool_allowed("write_file")) else None
+                        current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and brief_phase != "ask" and tool_allowed("write_file") and not written_files) else None
                 elif written_files and not project_build and not (brief_phase == "build" and longdoc_build):
                     current_tools = None
                 elif research_over:
@@ -832,10 +845,21 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     current_tools = chat_tools
                 if research_over and not research_nudged and brief_phase == "build":
                     research_nudged = True
-                    msgs.append({"role": "user", "content": (
-                        "[system note] Do not search and do not ask the user anything: their answers are already in the "
-                        "conversation. Continue building the document: call doc_append with the next slides/sections of "
-                        "your plan (done=true on the last call).")})
+                    if written_files and not (brief_phase == "build" and longdoc_build):
+                        msgs.append({"role": "user", "content": (
+                            f"[system note] The deliverable `{written_files[-1]}` has been created. "
+                            "Do not call any more tools; summarize what was built and conclude your response "
+                            f"with the [DOWNLOAD: {written_files[-1]}] link.")})
+                    elif not written_files:
+                        msgs.append({"role": "user", "content": (
+                            "[system note] Do not search and do not ask the user anything: their answers are already in the "
+                            "conversation. Create the document now: call doc_create with the full content "
+                            "(or start with the first section/slides if building in pieces).")})
+                    else:
+                        msgs.append({"role": "user", "content": (
+                            "[system note] Do not search and do not ask the user anything: their answers are already in the "
+                            "conversation. Continue building the document: call doc_append with the next slides/sections of "
+                            "your plan (done=true on the last call).")})
                 elif research_over and not research_nudged:
                     research_nudged = True
                     msgs.append({"role": "user", "content": (
@@ -1402,6 +1426,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                 res_str = "error: " + res_str
                             else:
                                 written_files.extend(f for f in _DL_TAG_RE.findall(res_str) if f not in written_files)   # one deck, many doc_append steps
+                                if t_name == "doc_create" and not args.get("total") and not (brief_phase == "build" and longdoc_build):
+                                    turn_limit = min(turn_limit, turn + 1)
+                                elif t_name == "doc_append" and (args.get("done") or "Finished" in res_str):
+                                    turn_limit = min(turn_limit, turn + 1)
                         elif t_name in PROJECT_TOOL_NAMES:
                             impl = {"project_plan": tool_project_plan, "project_write": tool_project_write, "project_append": tool_project_append,
                                     "project_finish": tool_project_finish}[t_name]
@@ -1448,6 +1476,21 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     except Exception as e:
                         res_str = f"error: {e}"
                         ok = False
+
+                    if not ok:
+                        err_sig = f"{t_name}:{str(res_str)[:60]}"
+                        if err_sig == last_tool_error:
+                            consecutive_tool_failures += 1
+                        else:
+                            last_tool_error = err_sig
+                            consecutive_tool_failures = 1
+                        if consecutive_tool_failures >= 2:
+                            # Circuit breaker: stop retrying failing tool calls, wrap up in plain text
+                            turn_limit = min(turn_limit, turn + 1)
+                            res_str += ". Stop retrying: provide your final answer in plain text with any completed files."
+                    else:
+                        consecutive_tool_failures = 0
+                        last_tool_error = ""
 
                     if not ok and t_name in chat_media_tools and "isn't loaded" in str(res_str):
                         # the image/video model is not running: stop offering the tool, or the model retries it every round

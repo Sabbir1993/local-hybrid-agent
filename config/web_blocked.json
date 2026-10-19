@@ -1,17 +1,17 @@
 {
   "wikipedia.org": {
-    "fails": 3,
-    "until": 1792396105.1879332,
+    "fails": 2,
+    "until": 1792488463.7693913,
     "status": 403
   },
   "tripadvisor.com": {
     "fails": 2,
-    "until": 1792396142.4022267,
+    "until": 1792507006.7272372,
     "status": 403
   },
   "wikiwand.com": {
-    "fails": 2,
-    "until": 1792401011.3232348,
+    "fails": 1,
+    "until": 0,
     "status": 403
   },
   "pagepro.co": {
@@ -21,7 +21,7 @@
   },
   "wikimedia.org": {
     "fails": 2,
-    "until": 1792399144.6607249,
+    "until": 1792507270.8478224,
     "status": 403
   },
   "depic.ai": {
@@ -35,13 +35,13 @@
     "status": 403
   },
   "city-facts.com": {
-    "fails": 1,
-    "until": 0,
+    "fails": 2,
+    "until": 1792494052.341234,
     "status": 403
   },
   "britannica.com": {
     "fails": 2,
-    "until": 1792402505.2727902,
+    "until": 1792489153.4613628,
     "status": 403
   },
   "wiktionary.org": {
@@ -50,8 +50,8 @@
     "status": 403
   },
   "zhihu.com": {
-    "fails": 2,
-    "until": 1792402466.451381,
+    "fails": 4,
+    "until": 1792490172.7926776,
     "status": 403
   },
   "missav.live": {
@@ -125,13 +125,83 @@
     "status": 403
   },
   "elevenforum.com": {
-    "fails": 1,
-    "until": 0,
+    "fails": 3,
+    "until": 1792488364.5051353,
     "status": 403
   },
   "techlandbd.com": {
     "fails": 2,
     "until": 1792486385.7944233,
+    "status": 403
+  },
+  "openai.com": {
+    "fails": 3,
+    "until": 1792488363.3445258,
+    "status": 403
+  },
+  "elevenlabs.io": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "mit.edu": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "the-crossword-solver.org": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "nutaku.net": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "digitalcitizen.life": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "cybo.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "bizsouthasia.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "placedigger.com": {
+    "fails": 2,
+    "until": 1792493089.9573646,
+    "status": 403
+  },
+  "fandom.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "cisa.gov": {
+    "fails": 3,
+    "until": 1792507060.941601,
+    "status": 403
+  },
+  "unesco.org": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "unsplash.com": {
+    "fails": 2,
+    "until": 1792507373.09716,
+    "status": 403
+  },
+  "openverse.org": {
+    "fails": 2,
+    "until": 1792507392.909988,
     "status": 403
   }
 }

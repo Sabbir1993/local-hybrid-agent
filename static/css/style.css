@@ -1304,6 +1304,28 @@ header .icon-btn[data-tip]:focus-visible::after {
 .msg.user .bubble.user-long:not(.expanded) .user-text {
   display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden;
 }
+.msg.user .user-bubble-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+.msg.user .user-bubble-row .user-text {
+  flex: 1;
+}
+.msg.user .user-bubble-row .user-text > p:first-child {
+  margin-top: 0;
+}
+.msg.user .user-bubble-row .user-text > p:last-child {
+  margin-bottom: 0;
+}
+.msg.user .user-bubble-row .user-long-foot {
+  margin-top: 0;
+  padding-top: 0;
+  flex-shrink: 0;
+  align-self: flex-end;
+  margin-bottom: -1px;
+}
 .user-long-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; padding-top: 2px; }
 .user-long-btn {
   background: none; border: none; padding: 2px 4px; cursor: pointer;

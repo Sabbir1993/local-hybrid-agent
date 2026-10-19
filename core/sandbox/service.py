@@ -108,16 +108,16 @@ async def run(uid, code: str, input_names: list, timeout_s: int = 60) -> dict:
         raise SandboxRefused("the last runs failed three times: stop retrying, tell the user what went wrong and what you tried")
     _rate(uid)
     files_in = _inputs(uid, list(input_names or []))
+    from . import runners
+    runner = runners.get_runner()
     try:
-        r = await client.request(config.runner_url(), "POST", "/run",
-                                {"code": code, "inputs": files_in, "timeout_s": int(timeout_s or 60)},
-                                token=config.get_token(), pin=config.fingerprint(), allow_public=config.allow_public(),
-                                timeout=int(timeout_s or 60) + 30)
+        res = await runner.execute(code, files_in, timeout_s=int(timeout_s or 60))
     except RunnerError as e:
         raise SandboxRefused(str(e))
-    res = r["json"]
-    if r["status"] != 200 or ("error" in res and not res.get("stdout") and not res.get("stderr")):
-        raise SandboxRefused(str(res.get("error") or f"the runner answered {r['status']}")[:200])
+    except Exception as e:
+        raise SandboxRefused(f"the runner failed: {e}")
+    if "error" in res and not res.get("stdout") and not res.get("stderr"):
+        raise SandboxRefused(str(res.get("error") or "the runner failed")[:200])
     saved, refused = [], []
     for f in (res.get("files") or [])[:MAX_OUTPUT_FILES]:
         name = Path(str((f or {}).get("name") or "")).name

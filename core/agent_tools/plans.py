@@ -26,6 +26,11 @@ def _format_plan(items: list) -> str:
     for it in items:
         mark = _PLAN_STATUS_MARKS.get(it.get("status", "pending"), "☐")
         line = f"{it['ord']}. {mark} {it['text']}"
+        deps = it.get("deps")
+        if deps:
+            line += f" [deps: #{', #'.join(map(str, deps))}]"
+        if it.get("phase"):
+            line += f" ({it['phase']})"
         if it.get("note"):
             line += f"  — {it['note']}"
         lines.append(line)
@@ -36,7 +41,7 @@ def tool_create_plan(args: dict) -> str:
     from ..db import db_get_plan_items, db_set_plan_item_status, db_set_plan_items
     if get_plan_context() is None:
         raise ValueError("no active session for plan tracking (session_id missing from /agent/run)")
-    raw = args.get("items")
+    raw = args.get("items") or args.get("tasks")
     if isinstance(raw, str):
         raw = [s.strip() for s in raw.replace(";", "\n").split("\n") if s.strip()]
     if not isinstance(raw, list) or not raw:
@@ -44,10 +49,12 @@ def tool_create_plan(args: dict) -> str:
     from .limits import agent_limit
     max_items, max_chars = agent_limit("plan_max_items"), agent_limit("plan_item_max_chars")
     texts = []
+    items_to_store = []
     for it in raw:
-        t = str(it.get("text") or "").strip() if isinstance(it, dict) else str(it).strip()
+        t = str(it.get("text") or it.get("title") or "").strip() if isinstance(it, dict) else str(it).strip()
         if t:
             texts.append(t)
+            items_to_store.append(it if isinstance(it, dict) else t)
     if not texts:
         raise ValueError("plan contained no usable step text")
     if len(texts) > max_items:
@@ -71,7 +78,7 @@ def tool_create_plan(args: dict) -> str:
             and not args.get("replace")):
         raise ValueError("a plan is already in progress and some steps are finished. Do not recreate it: continue "
                          "with the current step, or pass replace=true if the task really changed.")
-    db_set_plan_items(sid, texts)
+    db_set_plan_items(sid, items_to_store)
     db_set_plan_item_status(sid, 1, "in_progress")          # work starts on step 1
     return (f"Plan created with {len(texts)} steps. Work on step #1 now; mark it done before starting #2.\n"
             + _format_plan(db_get_plan_items(sid)))

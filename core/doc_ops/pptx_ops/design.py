@@ -54,6 +54,15 @@ def _ink(fg: str, bg: str, ratio: float = 4.5) -> str:
     return "%02X%02X%02X" % target
 
 
+def _tint(hex_: str, factor: float = 0.85) -> str:
+    """Blend hex_ with white (1.0 = all white, 0.0 = original hex)."""
+    r, g, b = (int(hex_[i:i + 2], 16) for i in (0, 2, 4))
+    r = round(r + (255 - r) * factor)
+    g = round(g + (255 - g) * factor)
+    b = round(b + (255 - b) * factor)
+    return "%02X%02X%02X" % (min(255, max(0, r)), min(255, max(0, g)), min(255, max(0, b)))
+
+
 def _fit(texts: list, width: float, height: float, base: float, floor: float, gap_pt: float = 6.0,
          font: str = "Calibri", bold: bool = False) -> float:
     """Largest font size (pt) in [floor, base] at which the texts fit width x height, measured on the real font."""
@@ -167,18 +176,41 @@ def _drop_empty_placeholders(slide):
             ph._element.getparent().remove(ph._element)
 
 
-def _chrome(slide, t, title, deck_title, num, eyebrow=""):
+def _chrome(slide, t, title, deck_title, num, eyebrow="", subtitle=""):
     _bg(slide, t["bg"])
-    if eyebrow:                                           # small spaced capitals above the title: "AT A GLANCE"
-        tb = _textbox(slide, MX, 0.3, 10.0, 0.3,
-                      [(eyebrow, t["body"], 11, _ink(t["accent"], t["bg"], 4.5), True, False, 0)],
-                      name=DECO + "-eyebrow", anchor=MSO_ANCHOR.MIDDLE)
+    if eyebrow:                                           # rounded pastel pill badge above the title
+        pill_w = min(max(len(eyebrow) * 0.11 + 0.35, 1.6), 5.5)
+        pill = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(MX), Inches(0.30), Inches(pill_w), Inches(0.28))
+        pill.name = DECO + "-eyebrow-bg"
+        pill.fill.solid()
+        pill.fill.fore_color.rgb = _rgb(_tint(t["accent"], 0.85))
+        pill.line.fill.background()
+        pill.shadow.inherit = False
+        _back(pill)
+        tb = _textbox(slide, MX, 0.30, pill_w, 0.28,
+                      [(eyebrow, t["body"], 9.5, _ink(t["accent"], t["bg"], 4.5), True, False, 0)],
+                      name=DECO + "-eyebrow", anchor=MSO_ANCHOR.MIDDLE, align=PP_ALIGN.CENTER)
         for r in tb.text_frame.paragraphs[0].runs:
-            r._r.get_or_add_rPr().set("spc", "180")
-        _title(slide, title, t, y=0.6, h=0.9)
+            r._r.get_or_add_rPr().set("spc", "120")
+        if subtitle:
+            _title(slide, title, t, y=0.62, h=0.65, base=28)
+            _textbox(slide, MX, 1.28, W - 2 * MX, 0.26,
+                     [(subtitle, t["body"], 11, _ink(t["muted"], t["bg"], 4.5), False, False, 0)],
+                     name=DECO + "-subtitle", anchor=MSO_ANCHOR.TOP)
+            _deco(slide, MSO_SHAPE.RECTANGLE, MX, 1.62, W - 2 * MX, 0.01, t["line"])
+        else:
+            _title(slide, title, t, y=0.65, h=0.85)
+            _deco(slide, MSO_SHAPE.RECTANGLE, MX, 1.55, 0.9, 0.07, t["accent"])
     else:
-        _title(slide, title, t)
-    _deco(slide, MSO_SHAPE.RECTANGLE, MX, 1.55, 0.9, 0.07, t["accent"])
+        if subtitle:
+            _title(slide, title, t, y=0.45, h=0.70, base=30)
+            _textbox(slide, MX, 1.18, W - 2 * MX, 0.26,
+                     [(subtitle, t["body"], 11, _ink(t["muted"], t["bg"], 4.5), False, False, 0)],
+                     name=DECO + "-subtitle", anchor=MSO_ANCHOR.TOP)
+            _deco(slide, MSO_SHAPE.RECTANGLE, MX, 1.55, W - 2 * MX, 0.01, t["line"])
+        else:
+            _title(slide, title, t)
+            _deco(slide, MSO_SHAPE.RECTANGLE, MX, 1.55, 0.9, 0.07, t["accent"])
 
 
 def _fit_image(data: bytes, w: float, h: float, fit: str = "cover"):
@@ -923,6 +955,423 @@ def _textside(slide, s, t):
         _table(slide, s, t, box=(rx, 2.1, rw, 4.4))
 
 
+def _kpi_grid(slide, s, t):
+    """4 top KPI stat cards + full-width executive narrative callout box with vertical accent stripe."""
+    metric_bullets = []
+    callout_text = s.get("callout") or ""
+    for b in s["bullets"]:
+        b_clean = b.strip()
+        if "|" in b_clean:
+            metric_bullets.append(b_clean)
+        elif not callout_text and len(b_clean) > 30:
+            callout_text = b_clean
+    if not callout_text and s.get("subtitle"):
+        callout_text = s["subtitle"]
+    if not metric_bullets:
+        metric_bullets = [b.strip() for b in s["bullets"][:4]]
+    n = min(len(metric_bullets), 4) or 4
+    gap = 0.25
+    area_w = W - 2 * MX
+    cw = (area_w - gap * (n - 1)) / n
+    y0 = 1.95
+    ch = 2.15
+
+    tone_colors = {
+        "blue": ("1D4ED8", "DBEAFE"),
+        "green": ("15803D", "DCFCE7"),
+        "navy": ("0F172A", "E2E8F0"),
+        "amber": ("B45309", "FEF3C7"),
+        "red": ("B91C1C", "FEE2E2"),
+        "purple": ("7E22CE", "F3E8FF"),
+        "gray": ("374151", "F3F4F6"),
+    }
+    for i in range(n):
+        x = MX + i * (cw + gap)
+        item = metric_bullets[i] if i < len(metric_bullets) else ""
+        parts = [p.strip() for p in item.split("|")] if "|" in item else [item, ""]
+        val = parts[0] if len(parts) > 0 else ""
+        delta = ""
+        caption = ""
+        tone = "blue"
+        for p in parts[1:]:
+            p_clean = p.strip()
+            if p_clean.startswith("tone="):
+                tone = p_clean.split("=")[1].strip().lower()
+            elif p_clean.startswith(("^", "↑", "+", "-")) or re.match(r"(?i)^(up|down|doubled|tripled|\d+%)", p_clean):
+                delta = p_clean.replace("^", "↑ ")
+            elif not caption:
+                caption = p_clean
+            elif not delta:
+                delta = p_clean
+
+        if not delta and len(parts) >= 3 and not parts[1].startswith("tone="):
+            delta = parts[1].replace("^", "↑ ")
+            caption = parts[2]
+        elif not caption and len(parts) >= 2 and not parts[1].startswith("tone="):
+            caption = parts[1]
+
+        fg_col, _ = tone_colors.get(tone, (t["accent"] if i % 2 == 0 else t["accent2"], t["surface"]))
+        tile = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y0), Inches(cw), Inches(ch))
+        tile.name = f"KPI Card {i + 1}"
+        tile.fill.solid()
+        tile.fill.fore_color.rgb = _rgb(t["surface"])
+        tile.line.color.rgb = _rgb(t["line"])
+        tile.line.width = Pt(1)
+        tile.shadow.inherit = False
+
+        tf = tile.text_frame
+        _frame(tf, MSO_ANCHOR.MIDDLE, (0.25, 0.15, 0.25, 0.15))
+        p0 = tf.paragraphs[0]
+        p0.text = val
+        p0.alignment = PP_ALIGN.CENTER
+        p0.space_after = Pt(4)
+        val_size = min(M.fit_one_line(val, t["head"], cw - 0.5, 38, 20, True), 36)
+        _style_runs(p0, t["head"], val_size, fg_col, True)
+
+        if delta:
+            p1 = tf.add_paragraph()
+            p1.text = delta
+            p1.alignment = PP_ALIGN.CENTER
+            p1.space_after = Pt(4)
+            d_col = "15803D" if delta.startswith(("+", "↑", "^")) or "up" in delta.lower() else ("B91C1C" if delta.startswith("-") else "1D4ED8")
+            _style_runs(p1, t["body"], 12, d_col, True)
+
+        if caption:
+            p2 = tf.add_paragraph()
+            p2.text = caption
+            p2.alignment = PP_ALIGN.CENTER
+            _style_runs(p2, t["body"], 11, t["text"], False)
+
+    if callout_text:
+        box_y = 4.35
+        box_h = 2.3
+        cbox = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(MX), Inches(box_y), Inches(area_w), Inches(box_h))
+        cbox.name = "Executive Callout"
+        cbox.fill.solid()
+        cbox.fill.fore_color.rgb = _rgb(t["surface"])
+        cbox.line.color.rgb = _rgb(t["line"])
+        cbox.line.width = Pt(1)
+        cbox.shadow.inherit = False
+        _deco(slide, MSO_SHAPE.RECTANGLE, MX, box_y, 0.12, box_h, t["accent"], back=False, name="deco-callout-stripe")
+        tb = slide.shapes.add_textbox(Inches(MX + 0.35), Inches(box_y + 0.2), Inches(area_w - 0.6), Inches(box_h - 0.4))
+        tb.name = "Callout Text"
+        _frame(tb.text_frame, MSO_ANCHOR.MIDDLE)
+        p = tb.text_frame.paragraphs[0]
+        p.text = callout_text
+        p.alignment = PP_ALIGN.LEFT
+        c_size = _fit([callout_text], area_w - 0.6, box_h - 0.4, 15, 12, gap_pt=4, font=t["body"])
+        _style_runs(p, t["body"], c_size, t["text"], False)
+
+
+def _chart_kpis(slide, s, t):
+    """Clustered chart on the left + 4 vertically stacked colored delta cards on the right."""
+    chart_w = 7.4
+    chart_h = 4.75
+    y0 = 1.95
+    cards_x = MX + chart_w + 0.35
+    cards_w = W - MX - cards_x
+
+    if s.get("chart_data"):
+        _chart(slide, s, t, box=(MX, y0, chart_w, chart_h))
+
+    raw_cards = [b.strip() for b in s["bullets"] if "|" in b or O.stat_split(b)]
+    if not raw_cards:
+        raw_cards = [b.strip() for b in s["bullets"]]
+    raw_cards = raw_cards[:4]
+    n = max(len(raw_cards), 1)
+
+    gap = 0.18
+    ch = (chart_h - gap * (n - 1)) / n
+
+    tone_themes = {
+        "green": ("DCFCE7", "166534"),
+        "blue": ("DBEAFE", "1E40AF"),
+        "gray": ("F3F4F6", "374151"),
+        "red": ("FEE2E2", "991B1B"),
+        "amber": ("FEF3C7", "92400E"),
+        "navy": ("E2E8F0", "0F172A"),
+    }
+    default_tones = ["green", "blue", "gray", "red"]
+
+    for i, item in enumerate(raw_cards):
+        cy = y0 + i * (ch + gap)
+        parts = [p.strip() for p in item.split("|")] if "|" in item else [item, ""]
+        num = parts[0] if len(parts) > 0 else ""
+        label = parts[1] if len(parts) > 1 else ""
+        tone = default_tones[i % len(default_tones)]
+        for p in parts[2:]:
+            if p.startswith("tone="):
+                tone = p.split("=")[1].strip().lower()
+
+        bg_col, fg_col = tone_themes.get(tone, tone_themes["blue"])
+        card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(cards_x), Inches(cy), Inches(cards_w), Inches(ch))
+        card.name = f"Delta Card {i + 1}"
+        card.fill.solid()
+        card.fill.fore_color.rgb = _rgb(bg_col)
+        card.line.fill.background()
+        card.shadow.inherit = False
+
+        num_w = 1.3
+        num_tb = slide.shapes.add_textbox(Inches(cards_x + 0.15), Inches(cy), Inches(num_w), Inches(ch))
+        _frame(num_tb.text_frame, MSO_ANCHOR.MIDDLE)
+        np = num_tb.text_frame.paragraphs[0]
+        np.text = num
+        np.alignment = PP_ALIGN.CENTER
+        _style_runs(np, t["head"], 28, fg_col, True)
+
+        lbl_w = cards_w - num_w - 0.3
+        lbl_tb = slide.shapes.add_textbox(Inches(cards_x + num_w + 0.15), Inches(cy), Inches(lbl_w), Inches(ch))
+        _frame(lbl_tb.text_frame, MSO_ANCHOR.MIDDLE)
+        lp = lbl_tb.text_frame.paragraphs[0]
+        lp.text = label
+        lp.alignment = PP_ALIGN.LEFT
+        lbl_size = _fit([label], lbl_w, ch - 0.2, 14, 11, gap_pt=0, font=t["body"])
+        _style_runs(lp, t["body"], lbl_size, t["text"], False)
+
+
+def _leaderboard(slide, s, t):
+    """2x5 or 2x4 grid of executive profile cards with circular avatar initials, bold scores, tier pills, names & notes."""
+    items = [b.strip() for b in s["bullets"] if b.strip()][:10]
+    n = len(items)
+    cols = 5 if n > 4 else max(n, 2)
+    rows = math.ceil(n / cols)
+
+    gap_x = 0.22
+    gap_y = 0.22
+    area_w = W - 2 * MX
+    cw = (area_w - gap_x * (cols - 1)) / cols
+    ch = 2.25 if rows == 2 else 3.8
+    y0 = 1.95
+
+    avatar_colors = [
+        "0F172A", "1D4ED8", "047857", "7C3AED", "0F766E",
+        "C2410C", "0284C7", "334155", "8B5CF6", "1E3A8A",
+    ]
+
+    for i, raw in enumerate(items):
+        r, c = divmod(i, cols)
+        x = MX + c * (cw + gap_x)
+        y = y0 + r * (ch + gap_y)
+
+        parts = [p.strip() for p in raw.split("|")]
+        initials = parts[0] if len(parts) > 0 else f"{i + 1}"
+        score = parts[1] if len(parts) > 1 else ""
+        tier = parts[2] if len(parts) > 2 else ""
+        name = parts[3] if len(parts) > 3 else ""
+        note = parts[4] if len(parts) > 4 else ""
+
+        if len(parts) == 2:
+            name, score = parts[0], parts[1]
+            initials = "".join([w[0] for w in name.split()[:2]]).upper() or "AI"
+
+        card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y), Inches(cw), Inches(ch))
+        card.name = f"Profile Card {i + 1}"
+        card.fill.solid()
+        card.fill.fore_color.rgb = _rgb(t["surface"])
+        card.line.color.rgb = _rgb(t["line"])
+        card.line.width = Pt(1)
+        card.shadow.inherit = False
+
+        av_dia = 0.52
+        av_x = x + (cw - av_dia) / 2
+        av_y = y + 0.12
+        av_col = avatar_colors[i % len(avatar_colors)]
+        dot = _deco(slide, MSO_SHAPE.OVAL, av_x, av_y, av_dia, av_dia, av_col, back=False, name=f"deco-av-{i + 1}")
+        _frame(dot.text_frame, MSO_ANCHOR.MIDDLE)
+        dot.text_frame.text = initials
+        dot.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+        _style_runs(dot.text_frame.paragraphs[0], t["head"], 11, "FFFFFF", True)
+
+        if score:
+            sc_tb = slide.shapes.add_textbox(Inches(x + 0.1), Inches(y + 0.68), Inches(cw - 0.2), Inches(0.38))
+            _frame(sc_tb.text_frame, MSO_ANCHOR.MIDDLE)
+            sp = sc_tb.text_frame.paragraphs[0]
+            sp.text = score
+            sp.alignment = PP_ALIGN.CENTER
+            _style_runs(sp, t["head"], 19, t["text"], True)
+
+        if tier:
+            pill_w = min(cw - 0.4, 1.25)
+            pill_h = 0.22
+            pill_x = x + (cw - pill_w) / 2
+            pill_y = y + 1.10
+            is_l5 = "l5" in tier.lower() or "native" in tier.lower()
+            pill_bg = "0F172A" if is_l5 else "DBEAFE"
+            pill_fg = "FFFFFF" if is_l5 else "1E40AF"
+            tpill = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(pill_x), Inches(pill_y), Inches(pill_w), Inches(pill_h))
+            tpill.name = f"Tier Pill {i + 1}"
+            tpill.fill.solid()
+            tpill.fill.fore_color.rgb = _rgb(pill_bg)
+            tpill.line.fill.background()
+            tpill.shadow.inherit = False
+            _frame(tpill.text_frame, MSO_ANCHOR.MIDDLE)
+            tp = tpill.text_frame.paragraphs[0]
+            tp.text = tier
+            tp.alignment = PP_ALIGN.CENTER
+            _style_runs(tp, t["body"], 8.5, pill_fg, True)
+
+        if name:
+            nm_tb = slide.shapes.add_textbox(Inches(x + 0.05), Inches(y + 1.36), Inches(cw - 0.1), Inches(0.35))
+            _frame(nm_tb.text_frame, MSO_ANCHOR.MIDDLE)
+            np = nm_tb.text_frame.paragraphs[0]
+            np.text = name
+            np.alignment = PP_ALIGN.CENTER
+            _style_runs(np, t["head"], 9.5, t["text"], True)
+
+        if note:
+            nt_tb = slide.shapes.add_textbox(Inches(x + 0.05), Inches(y + 1.70), Inches(cw - 0.1), Inches(0.48))
+            _frame(nt_tb.text_frame, MSO_ANCHOR.TOP)
+            ntp = nt_tb.text_frame.paragraphs[0]
+            ntp.text = note
+            ntp.alignment = PP_ALIGN.CENTER
+            _style_runs(ntp, t["body"], 8, _ink(t["muted"], t["surface"], 4.5), False)
+
+
+def _roadmap(slide, s, t):
+    """Horizontal 4-8 station milestone track with status circles (Done / Now / Planned), station dates & detail cards."""
+    items = [b.strip() for b in s["bullets"] if b.strip()][:8]
+    n = max(len(items), 3)
+    area_w = W - 2 * MX
+    sw = area_w / n
+    track_y = 3.0
+
+    _deco(slide, MSO_SHAPE.RECTANGLE, MX + sw / 2, track_y - 0.02, area_w - sw, 0.04, t["line"])
+
+    now_idx = -1
+    for i, item in enumerate(items):
+        if "status=now" in item.lower() or "now" in item.lower():
+            now_idx = i
+            break
+    if now_idx == -1:
+        now_idx = max(0, n // 2 - 1)
+
+    for i in range(n):
+        cx = MX + sw * i + sw / 2
+        item = items[i] if i < len(items) else ""
+        parts = [p.strip() for p in item.split("|")]
+
+        step_num = parts[0] if len(parts) > 0 else f"{i + 1}"
+        title = parts[1] if len(parts) > 1 else f"Phase {i + 1}"
+        date_str = parts[2] if len(parts) > 2 else ""
+        detail = parts[3] if len(parts) > 3 else ""
+        status = "planned"
+
+        for p in parts[1:]:
+            if p.startswith("status="):
+                status = p.split("=")[1].strip().lower()
+
+        if status == "planned":
+            if i < now_idx:
+                status = "done"
+            elif i == now_idx:
+                status = "now"
+
+        if status == "done":
+            node_col = "0F172A"
+            node_fg = "FFFFFF"
+            title_col = t["text"]
+            date_col = _ink(t["muted"], t["bg"], 4.5)
+        elif status == "now":
+            node_col = "2563EB"
+            node_fg = "FFFFFF"
+            title_col = "2563EB"
+            date_col = "2563EB"
+        else:
+            node_col = "CBD5E1"
+            node_fg = "64748B"
+            title_col = _ink(t["muted"], t["bg"], 4.5)
+            date_col = _ink(t["muted"], t["bg"], 4.5)
+
+        _textbox(slide, cx - (sw - 0.1) / 2, track_y - 0.65, sw - 0.1, 0.4,
+                 [(title, t["head"], 10.5, title_col, True, False, 0)],
+                 name=f"Roadmap Title {i + 1}", anchor=MSO_ANCHOR.BOTTOM, align=PP_ALIGN.CENTER)
+
+        dia = 0.58 if status != "now" else 0.68
+        node = _deco(slide, MSO_SHAPE.OVAL, cx - dia / 2, track_y - dia / 2, dia, dia, node_col, back=False, name=f"Node {i + 1}")
+        _frame(node.text_frame, MSO_ANCHOR.MIDDLE)
+        node.text_frame.text = step_num
+        node.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+        _style_runs(node.text_frame.paragraphs[0], t["head"], 13 if status != "now" else 15, node_fg, True)
+
+        if date_str:
+            d_text = f"{date_str} ◀" if status == "now" and "◀" not in date_str else date_str
+            _textbox(slide, cx - (sw - 0.1) / 2, track_y + 0.38, sw - 0.1, 0.3,
+                     [(d_text, t["body"], 9.5, date_col, status == "now", False, 0)],
+                     name=f"Roadmap Date {i + 1}", anchor=MSO_ANCHOR.TOP, align=PP_ALIGN.CENTER)
+
+        card_x = MX + sw * i + 0.05
+        card_w = sw - 0.1
+        card_y = 3.85
+        card_h = 2.3
+
+        card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(card_x), Inches(card_y), Inches(card_w), Inches(card_h))
+        card.name = f"Station Card {i + 1}"
+        card.fill.solid()
+        card_bg = "EFF6FF" if status == "now" else t["surface"]
+        card.fill.fore_color.rgb = _rgb(card_bg)
+        card.line.color.rgb = _rgb("2563EB" if status == "now" else t["line"])
+        card.line.width = Pt(1.5 if status == "now" else 1)
+        card.shadow.inherit = False
+
+        if status == "now":
+            _deco(slide, MSO_SHAPE.RECTANGLE, card_x, card_y, 0.08, card_h, "2563EB", back=False, name=f"deco-now-bar-{i + 1}")
+
+        if detail:
+            tb = slide.shapes.add_textbox(Inches(card_x + (0.15 if status == "now" else 0.08)),
+                                          Inches(card_y + 0.12),
+                                          Inches(card_w - (0.23 if status == "now" else 0.16)),
+                                          Inches(card_h - 0.24))
+            _frame(tb.text_frame, MSO_ANCHOR.TOP)
+            p = tb.text_frame.paragraphs[0]
+            p.text = detail
+            p.alignment = PP_ALIGN.LEFT
+            det_size = _fit([detail], card_w - 0.2, card_h - 0.3, 10, 8.5, gap_pt=2, font=t["body"])
+            _style_runs(p, t["body"], det_size, "1E40AF" if status == "now" else t["text"], False)
+
+    leg_x = MX
+    leg_y = 6.35
+    for li, (l_name, l_col) in enumerate([("Done", "0F172A"), ("Now", "2563EB"), ("Planned", "CBD5E1")]):
+        lx = leg_x + li * 1.5
+        _deco(slide, MSO_SHAPE.OVAL, lx, leg_y + 0.05, 0.16, 0.16, l_col, back=False, name=f"deco-leg-{li}")
+        _textbox(slide, lx + 0.25, leg_y, 1.1, 0.26,
+                 [(l_name, t["body"], 10, t["text"], False, False, 0)],
+                 name=f"Legend Label {li}", anchor=MSO_ANCHOR.MIDDLE)
+
+
+def _dimension_table(slide, s, t):
+    """Structured dimension table with status pills + bottom alert/callout banner."""
+    has_alert = bool(s.get("alert") or s.get("callout"))
+    alert_text = s.get("alert") or s.get("callout") or ""
+
+    table_h = 3.9 if has_alert else 4.75
+    y0 = 1.95
+
+    if s.get("table"):
+        _table(slide, s, t, box=(MX, y0, W - 2 * MX, table_h))
+
+    if has_alert:
+        ay = y0 + table_h + 0.15
+        ah = 0.72
+        area_w = W - 2 * MX
+
+        abox = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(MX), Inches(ay), Inches(area_w), Inches(ah))
+        abox.name = "Alert Banner"
+        abox.fill.solid()
+        abox.fill.fore_color.rgb = _rgb("FEE2E2")
+        abox.line.fill.background()
+        abox.shadow.inherit = False
+
+        _deco(slide, MSO_SHAPE.RECTANGLE, MX, ay, 0.1, ah, "B91C1C", back=False, name="deco-alert-stripe")
+
+        tb = slide.shapes.add_textbox(Inches(MX + 0.25), Inches(ay), Inches(area_w - 0.4), Inches(ah))
+        _frame(tb.text_frame, MSO_ANCHOR.MIDDLE)
+        p = tb.text_frame.paragraphs[0]
+        p.text = alert_text
+        p.alignment = PP_ALIGN.LEFT
+        a_size = _fit([alert_text], area_w - 0.4, ah - 0.1, 12, 10, gap_pt=0, font=t["head"], bold=True)
+        _style_runs(p, t["head"], a_size, "991B1B", True)
+
+
 def _bullet_box(s: dict) -> tuple:
     """(width, height, floor) of the bullet text area, as _bullets lays it out."""
     if s.get("image_data"):
@@ -1038,10 +1487,12 @@ def _render_slide(prs, lays, s: dict, t: dict, deck_title: str, i: int, sec_no: 
     else:
         ts = _variant(t, cn)                                   # alternate palette on every second content slide
         cn += 1
-        _chrome(slide, ts, s["title"], deck_title, i + 1, s.get("eyebrow", ""))
+        _chrome(slide, ts, s["title"], deck_title, i + 1, s.get("eyebrow", ""), s.get("subtitle", ""))
         {"bullets": _bullets, "columns": _columns, "cards": _cards, "stats": _stats,
          "timeline": _timeline, "quote": _quote, "table": _table, "chart": _chart,
-         "comparison": _comparison, "agenda": _agenda, "gallery": _gallery, "textside": _textside}[kind](slide, s, ts)
+         "comparison": _comparison, "agenda": _agenda, "gallery": _gallery, "textside": _textside,
+         "kpi-grid": _kpi_grid, "chart-kpis": _chart_kpis, "leaderboard": _leaderboard,
+         "roadmap": _roadmap, "dimension-table": _dimension_table}[kind](slide, s, ts)
     _drop_empty_placeholders(slide)
     if kind not in ("cover", "closing", "section", "full"):
         src = s.get("source") or ""

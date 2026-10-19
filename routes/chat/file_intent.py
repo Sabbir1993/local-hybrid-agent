@@ -150,12 +150,26 @@ def missing_type(query: str, files: list) -> str:
 
 
 _SHEETISH_RE = re.compile(r"\b(sheets?|tabs?|columns?|rows?|cells?|headers?|formulas?|totals?|charts?|workbook|spreadsheet|excel|xlsx)\b", re.I)
-_DECKISH_RE = re.compile(r"\b(images?|pictures?|photos?|graphs?|charts?|infographics?|slides?|visuals?|theme|colou?rs?|fonts?|cover|title slide|"
-                         r"bullets?|speaker notes?|layout|design)\b", re.I)
+_DECKISH_RE = re.compile(
+    r"\b(images?|pictures?|photos?|graphs?|charts?|infographics?|slides?|visuals?|theme|colou?rs?|fonts?|cover|title slide|"
+    r"bullets?|speaker notes?|layout|design|editable|presentation)\b"
+    r"|\b(?:after|before|on|at|insert\s+into)\s+(?:slide|deck|page)?\s*\d+\b"
+    r"|\b\d+\s*(?:no|number)\s*(?:deck|slide)\b",
+    re.I
+)
+_PDFISH_RE = re.compile(r"\b(sections?|pages?|paragraphs?|headings?|report|document|pdf|callouts?|tables?|cover)\b", re.I)
+_EXPLICIT_EDIT_TARGET_RE = re.compile(
+    r"\b(make\s+it|turn\s+it|convert\s+it|add\s+to\s+it|update\s+it|change\s+it|in\s+it|on\s+it|expand\s+it)\b"
+    r"|\b(?:after|before|on|at|insert\s+into)\s+(?:slide|deck|page|section)?\s*\d+\b"
+    r"|\b\d+\s*(?:no|number)\s*(?:deck|slide|page)\b"
+    r"|\b(editable|restyle\s+it|redesign\s+it)\b"
+    r"|\badd\s+(?:a\s+)?(?:new\s+)?(?:slide|deck|section|page|chart|graph|table|kpi)\b",
+    re.I
+)
 _NEW_FILE_RE = re.compile(
     r"\b(new|another|separate|second|different|fresh|brand new|next|next up|following)\b.{0,30}"
-    r"\b(sheet|workbook|spreadsheet|excel|file|xlsx|ppt|pptx|deck|presentation|slides?|pdf|report|doc|docx|document|html|page|dashboard)\b"
-    r"|\b(next|next file|next one|generate next|make next|create next|now make|now create|now generate|convert to|make a|create a)\b",
+    r"\b(sheet|workbook|spreadsheet|excel|file|xlsx|ppt|pptx|presentation|pdf|report|doc|docx|document|html|dashboard)\b"
+    r"|\b(next|next file|next one|generate next|make next|create next|now make\s+(?:a|another|new)|now create\s+(?:a|another|new)|now generate\s+(?:a|another|new)|convert to|make a|create a)\b",
     re.I
 )
 
@@ -166,20 +180,24 @@ def file_followup_intent(query: str, has_prior: bool, prior_files=None, asked: b
     q = (query or "").strip()
     if not has_prior or not q:
         return None
-    if _NEW_FILE_RE.search(q):
+    is_explicit_edit = bool(_EXPLICIT_EDIT_TARGET_RE.search(q))
+    if _NEW_FILE_RE.search(q) and not is_explicit_edit:
         return None
     if _FILE_WHERE_RE.search(q) and not _FILE_EDIT_RE.search(q):
         return "where"
     has_deck = any(str(f).lower().endswith((".pptx", ".ppt")) for f in (prior_files or []))
-    if has_deck and _DECKISH_RE.search(q):
+    if has_deck and (_DECKISH_RE.search(q) or is_explicit_edit):
         return "edit"                      # "where are the images, graphs?" after a deck: the deck already in this chat, not a new one
+    has_pdf = any(str(f).lower().endswith(".pdf") for f in (prior_files or []))
+    if has_pdf and (_PDFISH_RE.search(q) or is_explicit_edit):
+        return "edit"
     has_book = any(str(f).lower().endswith((".xlsx", ".xls")) for f in (prior_files or []))
     if has_book:
-        if _SHEETISH_RE.search(q):
+        if _SHEETISH_RE.search(q) or is_explicit_edit:
             return "edit"                  # "the cost sheet needs a Month column": the workbook already in this chat, not a new one
         if asked and len(q) < 500:
             return "edit"                  # the user is answering a question the assistant asked while working on it
-    if _FILE_EDIT_RE.search(q) and re.search(
+    if (_FILE_EDIT_RE.search(q) or is_explicit_edit) and re.search(
             r"\b" + _FILE_REF_RE + r"\b|\b(it|this|that|previous|last|same|ui|design|style|colou?rs?|layout"
             r"|section|chart|table|theme|font)\b|/frontend-design", q, re.IGNORECASE):
         return "edit"

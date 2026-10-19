@@ -7,20 +7,9 @@ from ..pan import mask_pans
 from .runner import run_subagent
 
 
-def parse_reviewer_verdict(reviewer_text: str) -> tuple[bool, str]:
-    """Parse a reviewer's response into (approved: bool, feedback: str).
+import json
 
-    Looks for an explicit 'VERDICT: APPROVED' or 'VERDICT: REJECTED - <reason>' line.
-    Falls back to semantic keyword detection if no explicit VERDICT prefix exists.
-
-    FAILS CLOSED when nothing is parseable. This used to end with
-    `return True, "No critical defects flagged by reviewer"`, which meant any reviewer output
-    that matched none of the four defect phrases and none of the approval keywords was
-    APPROVED - a 500-word critique that never typed "VERDICT:" and never said the word
-    "regression" sailed through the gate. For a verification gate, "could not tell" is not
-    "fine": the correct outcome is a rejection carrying the reason, so the loop retries with a
-    stricter reviewer prompt instead of accepting code nobody checked.
-    """
+def _legacy_parse_reviewer_verdict(reviewer_text: str) -> tuple[bool, str]:
     text = (reviewer_text or "").strip()
     if not text:
         return False, "Reviewer returned an empty response"
@@ -51,21 +40,9 @@ def parse_reviewer_verdict(reviewer_text: str) -> tuple[bool, str]:
         return False, reason or ("Rejected" if v_type == "REJECTED" else "Fail")
 
     upper = text.upper()
-    # Check for approval keywords without rejection keywords. The "VERDICT: X" members are
-    # redundant - they are substrings of "APPROVED"/"REJECTED" - but they are kept because
-    # they document the intended vocabulary and cost nothing.
     has_approval = any(w in upper for w in ("APPROVED", "VERDICT: APPROVED", "LOOKS GOOD TO ME", "LGTM"))
     has_rejection = any(w in upper for w in ("REJECTED", "VERDICT: REJECTED", "CHANGES REQUIRED", "DISAPPROVED", "FAIL"))
 
-    # Precedence is rejection > explicit defect term > approval.
-    #
-    # Rejection first: a reviewer that says both has raised a concern, and resolving that
-    # ambiguity towards "ship it" is the wrong direction for a gate.
-    #
-    # Defect terms are checked BEFORE approval because they are the stronger signal. This
-    # ordering was previously approval-first, which made the defect heuristic unreachable
-    # whenever the review also contained the word "APPROVED" - so "Mostly APPROVED, but this
-    # is a regression" passed the gate.
     if has_rejection:
         return False, "Reviewer requested changes or rejected the diff"
 
@@ -81,6 +58,69 @@ def parse_reviewer_verdict(reviewer_text: str) -> tuple[bool, str]:
     # Unparseable and silent: fail closed.
     return False, ("Reviewer gave no APPROVED/REJECTED verdict and no recognised defect term, "
                    "so the review cannot be trusted; rejected for retry")
+
+
+def parse_reviewer_verdict_detailed(reviewer_text: str) -> tuple[bool, str, dict]:
+    """Parse a reviewer's response into (approved: bool, feedback: str, details: dict).
+
+    Supports structured JSON reviews:
+    {
+      "verdict": "APPROVED" | "REJECTED",
+      "defect_type": "REGRESSION_TEST_FAIL" | "SYNTAX_ERROR" | "LOGIC_DEFECT" | "SECURITY" | "NONE",
+      "blocking_issues": ["..."],
+      "patch_suggestion": "..."
+    }
+    as well as standard VERDICT: APPROVED / REJECTED header lines.
+    """
+    text = (reviewer_text or "").strip()
+    if not text:
+        return False, "Reviewer returned an empty response", {}
+
+    # 1. Attempt structured JSON block extraction
+    json_candidate = None
+    if "```json" in text:
+        m = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if m:
+            json_candidate = m.group(1)
+    elif "{" in text and "}" in text:
+        m = re.search(r"(\{[^{}]*\"verdict\"[^{}]*\})", text, re.DOTALL)
+        if m:
+            json_candidate = m.group(1)
+
+    if json_candidate:
+        try:
+            data = json.loads(json_candidate)
+            if isinstance(data, dict) and "verdict" in data:
+                v_str = str(data.get("verdict", "")).strip().upper()
+                approved = v_str in ("APPROVED", "PASS")
+                defect_type = str(data.get("defect_type") or ("NONE" if approved else "DEFECT"))
+                blocking = data.get("blocking_issues") or []
+                suggestion = str(data.get("patch_suggestion") or "")
+                reason = "Approved" if approved else ("; ".join(blocking) if blocking else (suggestion or "Rejected"))
+                return approved, reason, {
+                    "verdict": "APPROVED" if approved else "REJECTED",
+                    "defect_type": defect_type,
+                    "blocking_issues": blocking,
+                    "patch_suggestion": suggestion,
+                }
+        except Exception:
+            pass
+
+    # 2. Fall back to standard regex parsing
+    approved, reason = _legacy_parse_reviewer_verdict(text)
+    details = {
+        "verdict": "APPROVED" if approved else "REJECTED",
+        "defect_type": "NONE" if approved else "DEFECT",
+        "blocking_issues": [reason] if not approved else [],
+        "patch_suggestion": "",
+    }
+    return approved, reason, details
+
+
+def parse_reviewer_verdict(reviewer_text: str) -> tuple[bool, str]:
+    """Parse a reviewer's response into (approved: bool, feedback: str)."""
+    approved, feedback, _ = parse_reviewer_verdict_detailed(reviewer_text)
+    return approved, feedback
 
 
 def get_workspace_changes_diff(baseline_changes: Optional[dict] = None) -> tuple[list[str], str]:
@@ -231,16 +271,51 @@ async def run_critic_actor_cycle(
         touched, cycle_diff = get_workspace_changes_diff(baseline_changes)
         all_modified.update(touched)
 
-        # 3. Dispatch Reviewer
+        # 2b. Collect hard execution telemetry (syntax verification of modified files)
+        syntax_errors = []
+        try:
+            from ..agent_tools.verify import validate_code_syntax
+            from ..agent_tools.workspace import _ws_changes
+            from ..request_context import get_current_user_id
+
+            uid = get_current_user_id()
+            current_ws = _ws_changes.get(uid) or {}
+            for p in touched:
+                rec = current_ws.get(p)
+                content = rec.get("after") if rec else None
+                if content is not None:
+                    is_ok, err = validate_code_syntax(Path(p).name, content)
+                    if not is_ok:
+                        syntax_errors.append(f"{Path(p).name}: {err}")
+        except Exception:
+            pass
+
+        telemetry_lines = [
+            f"- Touched Files: {len(touched)} ({', '.join(Path(p).name for p in touched) if touched else 'none'})",
+            f"- Syntax Integrity: {'FAIL (' + '; '.join(syntax_errors) + ')' if syntax_errors else 'PASS (0 syntax errors)'}",
+        ]
+        telemetry_str = "\n".join(telemetry_lines)
+
+        # 3. Dispatch Reviewer with hard telemetry and structured JSON prompt
         mod_names = ", ".join(Path(p).name for p in touched) if touched else "(no files modified)"
         reviewer_prompt = (
             f"You are the Critic Reviewer inspecting code changes for the following task:\n"
             f"Task:\n{task}\n\n"
             f"Coder Summary:\n{coder_res}\n\n"
             f"Modified Files: {mod_names}\n\n"
+            f"Execution Telemetry:\n{telemetry_str}\n\n"
             f"Diff of Changes:\n{cycle_diff}\n\n"
             "Review these changes for correctness, edge cases, code quality, and security.\n"
-            "End your review with a clear verdict line:\n"
+            "End your review with a structured JSON block:\n"
+            "```json\n"
+            "{\n"
+            '  "verdict": "APPROVED" or "REJECTED",\n'
+            '  "defect_type": "NONE" or "SYNTAX_ERROR" or "REGRESSION_TEST_FAIL" or "LOGIC_DEFECT" or "SECURITY",\n'
+            '  "blocking_issues": ["specific issue description"],\n'
+            '  "patch_suggestion": "concrete fix recommendation"\n'
+            "}\n"
+            "```\n"
+            "or an explicit verdict line:\n"
             "VERDICT: APPROVED\n"
             "or\n"
             "VERDICT: REJECTED - <specific defects to fix>"
@@ -254,8 +329,16 @@ async def run_critic_actor_cycle(
         )
         last_reviewer_res = reviewer_res
 
-        approved, feedback = parse_reviewer_verdict(reviewer_res)
+        approved, feedback, details = parse_reviewer_verdict_detailed(reviewer_res)
+        # If static syntax analysis failed but reviewer hallucinated approval, override with rejection
+        if approved and syntax_errors:
+            approved = False
+            feedback = f"Syntax errors detected in modified code: {'; '.join(syntax_errors)}"
+            details["verdict"] = "REJECTED"
+            details["defect_type"] = "SYNTAX_ERROR"
+            details["blocking_issues"] = syntax_errors
         last_feedback = feedback
+        last_details = details
 
         history.append({
             "iteration": iter_idx,
@@ -263,6 +346,7 @@ async def run_critic_actor_cycle(
             "reviewer_result": reviewer_res,
             "approved": approved,
             "feedback": feedback,
+            "details": details,
             "modified_files": list(touched),
         })
 
@@ -290,6 +374,9 @@ async def run_critic_actor_cycle(
         "status": status,
         "iterations": len(history),
         "verdict": verdict,
+        "defect_type": last_details.get("defect_type", "NONE" if approved else "DEFECT") if 'last_details' in locals() else ("NONE" if approved else "DEFECT"),
+        "blocking_issues": last_details.get("blocking_issues", []) if 'last_details' in locals() else [],
+        "patch_suggestion": last_details.get("patch_suggestion", "") if 'last_details' in locals() else "",
         "summary": last_coder_res,
         "reviewer_feedback": last_feedback,
         "modified_files": sorted(list(all_modified)),

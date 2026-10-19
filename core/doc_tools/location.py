@@ -24,8 +24,27 @@ def _uid() -> int:
 def _file_arg(args: dict) -> str:
     f = args.get("file") or args.get("path") or args.get("filename") or args.get("name")
     if not f:
+        # Fallback 1: check if there is an active open build in deck_builds
+        try:
+            from . import builds
+            uid = _uid()
+            b = builds.latest_open(uid)
+            if b and b.get("file"):
+                return str(b["file"]).strip()
+        except Exception:
+            pass
+        # Fallback 2: check if there is a recent appendable file in the caller's workspace
+        try:
+            folder = common_workspace()
+            recent = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in (".pptx", ".pdf", ".docx")]
+            if recent:
+                recent.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                return recent[0].name
+        except Exception:
+            pass
         raise ValueError("file required")
     return str(f).strip()
+
 
 
 def resolve_common(name: str) -> Optional[Path]:

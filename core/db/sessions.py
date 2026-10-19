@@ -133,27 +133,54 @@ def db_append_message(sid: int, role: str, content: str, meta: dict = None, owne
 _VALID_PLAN_STATUS = ("pending", "in_progress", "done", "failed")
 
 
-def db_set_plan_items(sid: int, texts: list) -> list:
-    """Replace the session's plan with an ordered list of step texts (status reset to pending)."""
+def db_set_plan_items(sid: int, items_data: list) -> list:
+    """Replace the session's plan with an ordered list of step texts or DAG dicts (status reset to pending)."""
     now = time.time()
+    rows = []
+    for i, it in enumerate(items_data, start=1):
+        if isinstance(it, dict):
+            text = str(it.get("text") or it.get("title") or "").strip()[:1000]
+            deps = json.dumps(it.get("deps") or [])
+            phase = it.get("phase")
+            verification = it.get("verification")
+        else:
+            text = str(it)[:1000]
+            deps = "[]"
+            phase = None
+            verification = None
+        rows.append((sid, i, text, "pending", deps, phase, verification, now, now))
     with transaction(_projects_db) as c:
         c.execute("DELETE FROM plan_items WHERE session_id = ?", (sid,))
         c.executemany(
-            "INSERT INTO plan_items (session_id, ord, text, status, created_at, updated_at) "
-            "VALUES (?, ?, ?, 'pending', ?, ?)",
-            [(sid, i, str(t)[:1000], now, now) for i, t in enumerate(texts, start=1)])
+            "INSERT INTO plan_items (session_id, ord, text, status, deps, phase, verification, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows)
     return db_get_plan_items(sid)
 
 
 def db_get_plan_items(sid: int) -> list:
     if sid is None:
         return []
-    return [
-        {"id": r["id"], "ord": r["ord"], "text": r["text"],
-         "status": r["status"], "note": r["note"]}
-        for r in _projects_db.execute(
-            "SELECT * FROM plan_items WHERE session_id = ? ORDER BY ord", (sid,))
-    ]
+    out = []
+    for r in _projects_db.execute(
+        "SELECT * FROM plan_items WHERE session_id = ? ORDER BY ord", (sid,)):
+        d = {
+            "id": r["id"], "ord": r["ord"], "text": r["text"],
+            "status": r["status"], "note": r["note"]
+        }
+        if "deps" in r.keys() and r["deps"]:
+            try:
+                d["deps"] = json.loads(r["deps"])
+            except Exception:
+                d["deps"] = []
+        else:
+            d["deps"] = []
+        if "phase" in r.keys():
+            d["phase"] = r["phase"]
+        if "verification" in r.keys():
+            d["verification"] = r["verification"]
+        out.append(d)
+    return out
 
 
 def db_set_plan_item_status(sid: int, ord_no: int, status: str, note: Optional[str] = None) -> Optional[dict]:
@@ -171,5 +198,17 @@ def db_set_plan_item_status(sid: int, ord_no: int, status: str, note: Optional[s
         "SELECT * FROM plan_items WHERE session_id = ? AND ord = ?", (sid, int(ord_no))).fetchone()
     if row is None:
         return None
-    return {"id": row["id"], "ord": row["ord"], "text": row["text"],
-            "status": row["status"], "note": row["note"]}
+    d = {"id": row["id"], "ord": row["ord"], "text": row["text"],
+         "status": row["status"], "note": row["note"]}
+    if "deps" in row.keys() and row["deps"]:
+        try:
+            d["deps"] = json.loads(row["deps"])
+        except Exception:
+            d["deps"] = []
+    else:
+        d["deps"] = []
+    if "phase" in row.keys():
+        d["phase"] = row["phase"]
+    if "verification" in row.keys():
+        d["verification"] = row["verification"]
+    return d

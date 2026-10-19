@@ -510,8 +510,8 @@
           <div class="cfg-note smp-sub">DRY repetition prevention (multiplier 0 = off)</div>
           <div class="smp-row" title="Strength of DRY repetition prevention; 0 = off. Try 0.5 only if the model loops on code or phrases">
             <label for="drym">DRY multiplier <span class="info" title="Strength of DRY repetition prevention; 0 = off. Try 0.5 only if the model loops on code or phrases">ⓘ</span></label>
-            <input type="range" id="drym" min="0" max="5" step="0.05" value="0" title="DRY multiplier slider (0 to 5)">
-            <span class="mono smp-val" id="drymv">0.00</span>
+            <input type="range" id="drym" min="0" max="5" step="0.05" value="0.6" title="DRY multiplier slider (0 to 5)">
+            <span class="mono smp-val" id="drymv">0.60</span>
           </div>
           <div class="smp-row" title="Base of the DRY penalty growth for longer repeats">
             <label for="dryb">DRY base <span class="info" title="Base of the DRY penalty growth for longer repeats">ⓘ</span></label>
@@ -520,12 +520,12 @@
           </div>
           <div class="smp-row" title="Repeated sequences up to this length are not penalized">
             <label for="dryl">DRY allowed length <span class="info" title="Repeated sequences up to this length are not penalized">ⓘ</span></label>
-            <input type="number" id="dryl" value="2" min="0" max="64" title="DRY allowed length (0 to 64)">
+            <input type="number" id="dryl" value="4" min="0" max="64" title="DRY allowed length (0 to 64)">
             <span class="mono smp-val"></span>
           </div>
           <div class="smp-row" title="Recent tokens DRY looks at (-1 = whole context)">
             <label for="dryn">DRY penalty last N <span class="info" title="Recent tokens DRY looks at (-1 = whole context)">ⓘ</span></label>
-            <input type="number" id="dryn" value="4096" min="-1" max="32768" title="DRY penalty last N (-1 to 32768)">
+            <input type="number" id="dryn" value="2048" min="-1" max="32768" title="DRY penalty last N (-1 to 32768)">
             <span class="mono smp-val"></span>
           </div>
           <div class="cfg-note smp-sub">Dynamic temperature (range 0 = off)</div>

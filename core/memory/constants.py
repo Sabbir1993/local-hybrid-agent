@@ -94,25 +94,53 @@ def chunk_source(rel: str, text: str, max_chunks: int = MAX_CHUNKS_PER_DOC) -> l
             if status == "ok" and syms:
                 lines = text.splitlines(keepends=True)
                 chunks = []
+                # Preamble: lines before the first defined symbol
+                first_line = min(s["line"] for s in syms)
+                if first_line > 1:
+                    preamble = "".join(lines[:first_line - 1]).strip()
+                    if preamble:
+                        chunks.append(preamble)
+
+                # Collect top-level symbols and methods grouped by class
+                methods_by_class: dict = {}
+                for s in syms:
+                    if s.get("class"):
+                        methods_by_class.setdefault(s["class"], []).append(s)
+
                 top_syms = [s for s in syms if not s.get("class")]
-                if top_syms:
-                    first_line = min(s["line"] for s in top_syms)
-                    if first_line > 1:
-                        preamble = "".join(lines[:first_line - 1]).strip()
-                        if preamble:
-                            chunks.append(preamble)
-                    for s in top_syms:
-                        s_text = "".join(lines[s["line"] - 1:s["end_line"]]).strip()
-                        if not s_text:
-                            continue
-                        if len(s_text) <= CHUNK_CHARS * 2:
-                            chunks.append(s_text)
+                for s in top_syms:
+                    s_text = "".join(lines[s["line"] - 1:s["end_line"]]).strip()
+                    if not s_text:
+                        continue
+                    if s.get("kind") == "class" and len(s_text) > CHUNK_CHARS * 2:
+                        # Large class: chunk class header / docstring first, then methods individually
+                        cls_methods = methods_by_class.get(s["name"], [])
+                        if cls_methods:
+                            first_m_line = min(m["line"] for m in cls_methods)
+                            cls_header = "".join(lines[s["line"] - 1:first_m_line - 1]).strip()
+                            if cls_header:
+                                chunks.append(cls_header)
+                            for m in cls_methods:
+                                m_text = "".join(lines[m["line"] - 1:m["end_line"]]).strip()
+                                if not m_text:
+                                    continue
+                                enriched = f"# Class: {s['name']}\n{m_text}"
+                                if len(enriched) <= CHUNK_CHARS * 2:
+                                    chunks.append(enriched)
+                                else:
+                                    chunks.extend(_chunk_text(enriched, max_chunks=max(1, max_chunks - len(chunks))))
+                                if len(chunks) >= max_chunks:
+                                    return chunks[:max_chunks]
                         else:
                             chunks.extend(_chunk_text(s_text, max_chunks=max(1, max_chunks - len(chunks))))
-                        if len(chunks) >= max_chunks:
-                            return chunks[:max_chunks]
-                    if chunks:
+                    elif len(s_text) <= CHUNK_CHARS * 2:
+                        chunks.append(s_text)
+                    else:
+                        chunks.extend(_chunk_text(s_text, max_chunks=max(1, max_chunks - len(chunks))))
+                    if len(chunks) >= max_chunks:
                         return chunks[:max_chunks]
+                if chunks:
+                    return chunks[:max_chunks]
         except Exception:
             pass
     return _chunk_text(text, max_chunks=max_chunks)

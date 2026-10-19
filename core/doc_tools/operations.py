@@ -375,7 +375,10 @@ async def _append(args: dict, location: str) -> str:
     if total and not done:
         builds.save(key[0], str(key[1]), total=total, have=have)
     unit = "slides" if ext == ".pptx" else "sections"
-    msg = f"Added to {loc.path.name}: now {have} {unit}" + (f" of {total}." if total else ".")
+    if not content and done:
+        msg = f"Document {loc.path.name} is complete ({have} {unit})."
+    else:
+        msg = f"Added to {loc.path.name}: now {have} {unit}" + (f" of {total}." if total else ".")
     plan_note = _plan_note(key, have, _built_titles(ext, new_spec), done)
     if plan_note:
         msg += " " + plan_note

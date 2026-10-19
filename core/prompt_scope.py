@@ -100,6 +100,11 @@ PPTX_MANUAL = (
     "   - a line that carries a fact (up to 22 words; 3-5 lines)\n   source: where the facts on this slide come from\n"
     "   notes: 2-3 sentences the presenter would say\n   ---\n   (next slide...)\n"
     "   SLIDE TYPES - pick the one that fits the content and vary them (never three of the same kind in a row):\n"
+    "   `layout: kpi-grid` + 3-4 bullets `- Value | ^ Delta | Label | tone=blue|green|navy|amber` + `callout: Executive takeaway narrative` (executive summaries/dashboards);\n"
+    "   `layout: chart-kpis` + `chart: bar|hbar|line` + table for series + 3-4 bullets `- +38 | Moved up >=1 level | tone=green` (cohorts/comparisons with delta cards);\n"
+    "   `layout: leaderboard` + 6-10 bullets `- Initials | Score | Tag | Full Name | Description` (executive performers/rankings grid);\n"
+    "   `layout: roadmap` + 4-8 bullets `- 1 | Phase | Date | Detail | status=done|now|planned` (milestones/stepper track);\n"
+    "   `layout: dimension-table` + markdown table + `alert: Warning or key action note` (assessments/metrics with alert banner);\n"
     "   `layout: stats` + bullets `- 36.6M | what it measures` (3-5 big numbers);  `layout: timeline` + `- 21 Feb 1952 | what "
     "happened` (3-5 dated steps);  `layout: cards` + `- Heading | one or two sentences` (3-6 cards);  `layout: textside` = 2-4 "
     "text bullets plus a markdown table (or `chart:` lines) shown beside them;  `layout: comparison` = exactly two `Heading:` "
@@ -456,11 +461,12 @@ DECK_BRIEF = (
     "     - `art: <arches|waves|skyline|geometric|network>` (cover motif matching the topic).\n"
     "     - `image: <3-6 concrete search keywords>` under the cover title and roughly every second content slide for relevant background/visual photography (e.g. `image: Lalbagh Fort Dhaka Bangladesh`).\n"
     "  3. INFOGRAPHICS & VISUAL VARIETY (Crucial - vary layouts, never repetitive plain bullets):\n"
-    "     - `layout: stats` for key metrics/KPIs (e.g. `- 23.2M | Greater Dhaka Population`, `- $75B+ | Regional GDP`).\n"
-    "     - `layout: cards` for structured knowledge briefs, pillars, or core takeaways (e.g. `- Pillar Heading | 1-2 dense sentences explaining the fact`).\n"
-    "     - `layout: timeline` for chronological history or progression (e.g. `- 1608 | Mughal capital foundation`).\n"
-    "     - `layout: textside` with a markdown comparison table or chart beside text bullets.\n"
-    "     - `chart: bar|hbar|line|pie|stacked | unit=%` with `Label: value` bullets for trends and share breakdowns.\n"
+    "     - `layout: kpi-grid` for executive summaries with 4 KPI cards (`- Value | ^ Delta | Label | tone=blue|green|navy|amber`) + `callout: Complete narrative analysis...`.\n"
+    "     - `layout: chart-kpis` for comparisons: clustered chart + table series on left with 4 stacked delta stat cards on right (`- +38 | Moved up >=1 level | tone=green`).\n"
+    "     - `layout: leaderboard` for top performers/rankings: 6-10 cards (`- GS | 3.94 | L5 Native | Full Name | Achievement note`).\n"
+    "     - `layout: roadmap` for milestones: 4-8 stations (`- 1 | Foundation | Jan-Feb 2026 | Milestone detail | status=done|now|planned`).\n"
+    "     - `layout: dimension-table` for multi-attribute assessments: table with status column + `alert: Urgent takeaway...`.\n"
+    "     - `layout: stats` for standalone big metrics, `layout: cards` for structured pillars, `layout: textside` for text + chart/table side-by-side.\n"
     "     - Every slide has `eyebrow: <SHORT CATEGORY>` above the title, `source: <source>` for attribution, and `notes: <2-3 spoken sentences>` for the presenter.\n"
     "  4. The second-to-last slide is 'Key takeaways' or 'Summary', the last is a closing/thank-you slide. Plain text only: no emoji, no `>` quotes, no ASCII diagrams. Never write a .md file for a PowerPoint request and do not output chat commentary before or after the tool call.")
 _DECK_ASK_RE = re.compile(
@@ -469,7 +475,17 @@ _DECK_VERB_RE = re.compile(
     r"\b(make|create|generate|build|prepare|design|draft|write|produce|need|want|give|convert)\b", re.IGNORECASE)
 
 
-def deck_brief_wanted(query: str, prior_msgs=None) -> bool:
+_DOC_EDIT_EXCLUSION_RE = re.compile(
+    r"\b(edit\w*|change|fix|update|modify|revise|refine|restyle|rebuild|redo|rewrite|rename|translate|summari[sz]e|explain|read|open|convert)\b"
+    r"|\b(make\s+it|turn\s+it|convert\s+it|add\s+to\s+it|expand\s+it|in\s+it|on\s+it)\b"
+    r"|\b(?:after|before|on|at|insert\s+into)\s+(?:slide|deck|page|section)?\s*\d+\b"
+    r"|\b\d+\s*(?:no|number)\s*(?:deck|slide|page)\b"
+    r"|\badd\s+(?:a\s+)?(?:new\s+)?(?:slide|deck|section|page|chart|image|card|table)\b",
+    re.I
+)
+
+
+def deck_brief_wanted(query: str, prior_msgs=None, prior_files=None) -> bool:
     """True for a request to make a PowerPoint (or the user's answers to our deck questionnaire), so the model asks
     for slide count / audience / palette before building. Edits of an existing deck are left to doc_inspect/doc_edit."""
     for m in reversed(prior_msgs or []):
@@ -481,7 +497,12 @@ def deck_brief_wanted(query: str, prior_msgs=None) -> bool:
     q = (query or "").strip()
     if not q or not _DECK_ASK_RE.search(q) or not _DECK_VERB_RE.search(q):
         return False
-    return not re.search(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain)\b", q, re.IGNORECASE)
+    if _DOC_EDIT_EXCLUSION_RE.search(q):
+        return False
+    has_deck = any(str(f).lower().endswith((".pptx", ".ppt")) for f in (prior_files or []))
+    if has_deck and not re.search(r"\b(new|another|different|brand\s*new)\s+(?:presentation|deck|slideshow)\s+about\b", q, re.I):
+        return False
+    return True
 
 
 # PDF documents (guide / report / handbook): same ask-first, build-in-pieces flow as the deck brief. The PDF is
@@ -512,7 +533,7 @@ PDF_BRIEF = (
 _PDF_ASK_RE = re.compile(r"\b(pdf|report|guide|handbook|whitepaper|white paper|manual|ebook|e-book)\b", re.IGNORECASE)
 
 
-def pdf_brief_wanted(query: str, prior_msgs=None) -> bool:
+def pdf_brief_wanted(query: str, prior_msgs=None, prior_files=None) -> bool:
     """True for a request to produce a PDF document (or the user's answers to our PDF questionnaire). Decks go to the
     deck brief, edits of an existing file to doc_inspect/doc_edit, and a plain question about PDFs is not a request."""
     for m in reversed(prior_msgs or []):
@@ -522,11 +543,16 @@ def pdf_brief_wanted(query: str, prior_msgs=None) -> bool:
                 return True
             break
     q = (query or "").strip()
-    if not q or not re.search(r"\bpdf\b", q, re.IGNORECASE) or deck_brief_wanted(q, []):
+    if not q or not re.search(r"\bpdf\b", q, re.IGNORECASE) or deck_brief_wanted(q, [], prior_files):
         return False
     if not _DECK_VERB_RE.search(q):
         return False
-    return not re.search(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain|read|open|convert)\b", q, re.IGNORECASE)
+    if _DOC_EDIT_EXCLUSION_RE.search(q):
+        return False
+    has_pdf = any(str(f).lower().endswith(".pdf") for f in (prior_files or []))
+    if has_pdf and not re.search(r"\b(new|another|different|brand\s*new)\s+(?:pdf|report|guide)\s+about\b", q, re.I):
+        return False
+    return True
 
 
 # Word documents: the same ask-first, build-in-pieces flow as the PDF brief (a long .docx written in one call hits the turn cap).
@@ -539,7 +565,7 @@ DOCX_BRIEF = (PDF_BRIEF.replace("PDF DOCUMENT REQUEST", "WORD DOCUMENT REQUEST")
 _DOCX_ASK_RE = re.compile(r"\b(docx|word\s+(?:document|doc|file)|ms\s+word|microsoft\s+word)\b", re.IGNORECASE)
 
 
-def docx_brief_wanted(query: str, prior_msgs=None) -> bool:
+def docx_brief_wanted(query: str, prior_msgs=None, prior_files=None) -> bool:
     """True for a request to produce a Word document (or the user's answers to our Word questionnaire). A PDF or deck request
     goes to its own brief; edits and conversions of an existing file go to doc_inspect/doc_edit."""
     for m in reversed(prior_msgs or []):
@@ -551,16 +577,23 @@ def docx_brief_wanted(query: str, prior_msgs=None) -> bool:
     q = (query or "").strip()
     if not q or not _DOCX_ASK_RE.search(q) or not _DECK_VERB_RE.search(q):
         return False
-    if deck_brief_wanted(q, []) or pdf_brief_wanted(q, []):
+    if deck_brief_wanted(q, [], prior_files) or pdf_brief_wanted(q, [], prior_files):
         return False
-    return not re.search(r"\b(edit|change|fix|update|modify|rename|translate|summari[sz]e|explain|read|open|convert)\b", q, re.IGNORECASE)
+    if _DOC_EDIT_EXCLUSION_RE.search(q):
+        return False
+    has_docx = any(str(f).lower().endswith((".docx", ".doc")) for f in (prior_files or []))
+    if has_docx and not re.search(r"\b(new|another|different|brand\s*new)\s+(?:word|docx|document)\s+about\b", q, re.I):
+        return False
+    return True
 
 
-def brief_phase(query: str, prior_msgs=None) -> str:
+def brief_phase(query: str, prior_msgs=None, prior_files=None) -> str:
     """For a deck / PDF / Word request: "ask" (show the questionnaire card now) or "build" (the user just answered it), else "".
     The two need opposite tool sets: asking needs no research (it was thrown away and burned the turn / web budget),
     building must not ask again."""
-    if not (deck_brief_wanted(query, prior_msgs) or pdf_brief_wanted(query, prior_msgs) or docx_brief_wanted(query, prior_msgs)):
+    if not (deck_brief_wanted(query, prior_msgs, prior_files) or 
+            pdf_brief_wanted(query, prior_msgs, prior_files) or 
+            docx_brief_wanted(query, prior_msgs, prior_files)):
         return ""
     for m in reversed(prior_msgs or []):
         if m.get("role") == "assistant":
@@ -731,6 +764,10 @@ XLSX_MANUAL = (
     "format: Revenue=currency:BDT, Tax=currency:BDT, Date=date\n"
     "total: Revenue=sum, Tax=sum\n"
     "highlight: Revenue<500 red\nscale: Revenue\nvalidate: Region in [Dhaka, Khulna]\ntable: SalesTbl\n"
+    "merge: A6:D6\n"
+    "color: A6:D6 fill=#1F3864 font=#FFFFFF bold=true align=center\n"
+    "align: Region=center\n"
+    "border: A1:D4 thin\n"
     "chart: bar | title=Revenue by region | x=Region | y=Revenue\n"
     "```\n"
     "SIZE AND DEPTH: a workbook for a business request (analysis, plan, report, tracker, budget, TAP, market study) is NOT one "

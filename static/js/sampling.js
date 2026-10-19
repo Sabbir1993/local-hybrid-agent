@@ -6,7 +6,7 @@ const SAMPLING_DEFAULTS = {
   sysprompt: '', temp: 0.6, topp: 0.95, minp: 0.0, rep: 1.0,
   presence: 0.0, topk: 20, maxtok: -1,
   rlast: 64, freq: 0.0, seed: -1,
-  drym: 0.0, dryb: 1.75, dryl: 2, dryn: 4096,
+  drym: 0.6, dryb: 1.75, dryl: 4, dryn: 2048,
   dynr: 0.0, dyne: 1.0,
 };
 

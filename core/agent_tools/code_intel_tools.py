@@ -92,6 +92,27 @@ async def tool_find_symbol(args: dict) -> str:
     if not name:
         raise ValueError("name required")
     hint = str(args.get("path") or "").strip() or None
+    line = args.get("line")
+    col = args.get("character") or args.get("col") or 1
+    if hint and line is not None:
+        try:
+            from ..code_intel import lsp_client
+            ws_path = str(_ws())
+            p = _workspace._ws_resolve(hint)
+            lang = lsp_client.detect_language(p)
+            if lang:
+                client = await lsp_client.get_lsp_client(ws_path, lang)
+                if client and client.is_running:
+                    lsp_defs = await client.get_definition(str(p), int(line) - 1, int(col) - 1)
+                    if lsp_defs:
+                        lines = [f"{len(lsp_defs)} type-resolved LSP definition(s) of '{name}':"]
+                        for ld in lsp_defs[:MAX_RESULTS]:
+                            lines.append(f"{ld['file']}:{ld['line']}:{ld['character']} (to line {ld['end_line']})")
+                        lines.append("Read a definition with read_file(path, offset=<line>, limit=<lines>).")
+                        return "\n".join(lines)
+        except Exception:
+            pass
+
     res, notes = await _synced()
     data = res.index.data()
     if not data["files"]:

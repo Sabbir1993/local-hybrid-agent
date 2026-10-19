@@ -1497,8 +1497,10 @@ async def run_agent_stream(req, user, ctx):
                         try:
                             _no = int((args or {}).get("item", 0))
                             _pi = db_get_plan_items(req.session_id)
+                            _target_item = next((i for i in _pi if i["ord"] == _no), None)
                             _rec_err = (plan_guard.check_execution_receipt(_pi, _no, actions_taken, plan_warned)
-                                        or plan_guard.check_files_before_done(_no, _file_state.failing_files(), plan_warned))
+                                        or plan_guard.check_files_before_done(_no, _file_state.failing_files(), plan_warned)
+                                        or plan_guard.check_verification_gate(_target_item, ws_path, actions_taken, _file_state.failing_files()))
                             if _rec_err:
                                 result = f"error: {_rec_err}"
                                 yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
@@ -1820,11 +1822,11 @@ async def run_agent_stream(req, user, ctx):
                             # workspace isn't a git repo or the companion can't
                             # run git - failures degrade to "no checkpoint".
                             try:
-                                from ..agent_loop.checkpoint import create_checkpoint
-                                from ..git_tools import _run as _git_run
+                                from core.agent_loop.checkpoint import create_checkpoint
+                                from core.git_tools import _run as _git_run
                                 cwd = Path(ws_path)
-                                _is_repo, _ = await _git_run(["rev-parse", "--is-inside-work-tree"], cwd)
-                                if _is_repo == 0:
+                                _code, _out, _err = await _git_run(["rev-parse", "--is-inside-work-tree"], cwd)
+                                if _code == 0 and (_out or "").strip() == "true":
                                     async def _bound_git_cp(args):
                                         return await _git_run(args, cwd)
                                     _checkpoint_ref = await create_checkpoint(
@@ -1920,10 +1922,12 @@ async def run_agent_stream(req, user, ctx):
                 elif _v.level == _lg.ESCALATE:
                     force_main_until = step + 1 + int(guard_cfg["escalate_steps"])
                     force_main_why = "loop_guard"
-                    if _checkpoint_ref and _checkpoint_step is not None and not _checkpoint_rewound and _v.tool in FILE_WRITE_TOOLS:
+                    _should_rewind = (_checkpoint_ref and _checkpoint_step is not None and not _checkpoint_rewound
+                                      and (_v.tool in FILE_WRITE_TOOLS or _v.tool in ("run_python", "run_shell", "run_tests") or _v.rule in ("error_streak", "identical_result")))
+                    if _should_rewind:
                         try:
-                            from ..agent_loop.checkpoint import rewind as _rewind
-                            from ..git_tools import _run as _git_run
+                            from core.agent_loop.checkpoint import rewind as _rewind
+                            from core.git_tools import _run as _git_run
                             cwd = Path(ws_path)
                             async def _bound_git_rw(args):
                                 return await _git_run(args, cwd)
@@ -1936,9 +1940,9 @@ async def run_agent_stream(req, user, ctx):
                                     "message": f"Workspace restored to clean checkpoint from step {_checkpoint_step}."
                                 })
                                 msgs.append({"role": "user", "content": (
-                                    f"[automated rollback] Multiple edits using {_v.tool} resulted in {_v.rule}. "
+                                    f"[automated rollback] Multiple actions ({_v.tool}) resulted in {_v.rule}. "
                                     f"The workspace has been automatically restored to the clean checkpoint from step {_checkpoint_step}. "
-                                    "Do NOT repeat the previous failing edits. Inspect the files, plan an alternate fix, and try again."
+                                    "Do NOT repeat the previous failing edits or commands. Inspect the files, plan an alternate fix, and try again."
                                 )})
                         except Exception as _rwe:
                             print(f"[agent] auto-rollback skipped: {_rwe}", file=sys.stderr)
@@ -1946,10 +1950,12 @@ async def run_agent_stream(req, user, ctx):
                     yield sse("lane_warning", {"reason": "no_progress", "retrying": True,
                                                "message": "Still no progress: " + _lg.describe(_v.rule, _v.tool, _v.count) + ". Continuing on the main model."})
                 elif _v.level == _lg.STOP:
-                    if _checkpoint_ref and _checkpoint_step is not None and not _checkpoint_rewound and _v.tool in FILE_WRITE_TOOLS:
+                    _should_rewind = (_checkpoint_ref and _checkpoint_step is not None and not _checkpoint_rewound
+                                      and (_v.tool in FILE_WRITE_TOOLS or _v.tool in ("run_python", "run_shell", "run_tests") or _v.rule in ("error_streak", "identical_result")))
+                    if _should_rewind:
                         try:
-                            from ..agent_loop.checkpoint import rewind as _rewind
-                            from ..git_tools import _run as _git_run
+                            from core.agent_loop.checkpoint import rewind as _rewind
+                            from core.git_tools import _run as _git_run
                             cwd = Path(ws_path)
                             async def _bound_git_rw(args):
                                 return await _git_run(args, cwd)
@@ -2029,7 +2035,8 @@ async def run_agent_stream(req, user, ctx):
                     if plan_items_now and plan_guard.open_items(plan_items_now):
                         # one step at a time: name the current step, and count the steps spent on it
                         sig = tuple(i["status"] for i in plan_items_now)
-                        made_progress = any(a.get("ok") and a.get("name") in FILE_WRITE_TOOLS
+                        made_progress = any(a.get("ok") and (a.get("name") in FILE_WRITE_TOOLS
+                                            or a.get("name") in ("run_tests", "run_python", "run_shell"))
                                             for a in actions_taken[n_actions_before:])
                         if sig != item_key or made_progress:
                             item_key, item_steps, item_nudges = sig, 0, 0

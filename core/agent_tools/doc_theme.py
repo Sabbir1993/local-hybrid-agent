@@ -172,6 +172,47 @@ DOC_CSS = """
     display: flex;
     justify-content: space-between;
   }
+  .doc-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+  }
+  .doc-kpi-card {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 12px;
+    text-align: center;
+  }
+  .doc-kpi-val {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1e40af;
+    line-height: 1.2;
+    margin-bottom: 3px;
+  }
+  .doc-kpi-delta {
+    font-size: 11px;
+    font-weight: 600;
+    color: #166534;
+    margin-bottom: 3px;
+  }
+  .doc-kpi-label {
+    font-size: 11px;
+    color: #475569;
+  }
+  .doc-badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+  .doc-badge-strong { background: #dcfce7; color: #166534; }
+  .doc-badge-alert { background: #fee2e2; color: #991b1b; }
+  .doc-badge-info { background: #dbeafe; color: #1e40af; }
+  .doc-badge-neutral { background: #f1f5f9; color: #475569; }
 """
 
 

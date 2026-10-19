@@ -178,9 +178,9 @@
     "research_web": false,
     "force_doc_tool": false,
     "max_tool_rounds": 12,
-    "max_web_calls": 8,
+    "max_web_calls": 12,
     "deep_max_tool_rounds": 20,
-    "deep_max_web_calls": 12,
+    "deep_max_web_calls": 20,
     "web_budget": {
       "full": {
         "low": 0,
@@ -200,7 +200,8 @@
         "high": 12,
         "deep": 20
       }
-    }
+    },
+    "web_soft_chars": 20000
   },
   "reasoning_effort": {
     "default": "low",
@@ -220,7 +221,7 @@
     "executor_max_tokens": 4096,
     "main_max_tokens": 16000,
     "vision_max_tokens": 4096,
-    "write_file_max_tokens": 4000,
+    "write_file_max_tokens": 10000,
     "chunk_target_tokens": 3000,
     "read_file_default_limit": 500,
     "read_file_max_chars": 40000,
@@ -587,9 +588,11 @@
     ]
   },
   "sandbox": {
+    "runner_backend": "wsl2",
+    "wsl_distro": "Ubuntu-24.04",
     "runner_url": "https://127.0.0.1:8470",
     "fingerprint": "5c4a37043f401db8c5d86d1c306d2cd1cdba95d7cad924b36268f959fa13d921",
     "enabled": true,
-    "verified_at": 1792264919.008499
+    "verified_at": 1792423129.6497436
   }
 }

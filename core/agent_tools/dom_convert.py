@@ -1,3 +1,4 @@
+import html as _html
 import re
 from .dom_theme import render_doc_page, render_slides_page
 
@@ -69,6 +70,33 @@ def _convert_callouts(html: str) -> str:
     )
 
 
+def _convert_kpis(html_text: str) -> str:
+    """Convert fenced kpis/stats code blocks into responsive .doc-kpi-grid."""
+    def _sub(m):
+        raw = m.group(1).strip()
+        cards = []
+        for line in raw.splitlines():
+            line = line.strip().lstrip("-*• ")
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            val = parts[0] if len(parts) > 0 else ""
+            delta = parts[1].replace("^", "↑ ") if len(parts) > 1 else ""
+            label = parts[2] if len(parts) > 2 else ""
+            if not label and delta:
+                label, delta = delta, ""
+            delta_html = f'<div class="doc-kpi-delta">{_html.escape(delta)}</div>' if delta else ""
+            label_html = f'<div class="doc-kpi-label">{_html.escape(label)}</div>' if label else ""
+            cards.append(
+                f'<div class="doc-kpi-card">'
+                f'<div class="doc-kpi-val">{_html.escape(val)}</div>'
+                f'{delta_html}{label_html}</div>'
+            )
+        return f'<div class="doc-kpi-grid">{"".join(cards)}</div>' if cards else m.group(0)
+
+    return re.sub(r'<pre class="code-block"><code class="language-(?:kpis?|stats?)">([\s\S]*?)</code></pre>', _sub, html_text)
+
+
 def markdown_to_body_html(content: str):
     """Document body HTML from Markdown (GitHub tables, nested lists, quotes, ...) with the doc theme's classes,
     or None when markdown-it is not installed (the caller then uses the simple converter). Raw HTML in the
@@ -82,6 +110,7 @@ def markdown_to_body_html(content: str):
     for pat, rep in _DOC_CLASSES:
         html = re.sub(pat, rep, html)
     html = _convert_callouts(html)
+    html = _convert_kpis(html)
     return html
 
 

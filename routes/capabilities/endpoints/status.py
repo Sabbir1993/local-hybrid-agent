@@ -66,11 +66,17 @@ async def models_status(user: Principal = Depends(get_current_user)):
 @router.get("/control/capabilities")
 async def capabilities_status(user: Principal = Depends(get_current_user)):
     caps = APP_CONFIG.get("capabilities", {})
+    chat_cfg = APP_CONFIG.get("chat", {})
     skills = load_skills() if caps.get("skills") else {}
     sh = shell_cfg()
     return {
         "web": {
             "enabled": bool(caps.get("web")),
+            "max_web_calls": chat_cfg.get("max_web_calls", 8),
+            "deep_max_web_calls": chat_cfg.get("deep_max_web_calls", 12),
+            "max_tool_rounds": chat_cfg.get("max_tool_rounds", 12),
+            "deep_max_tool_rounds": chat_cfg.get("deep_max_tool_rounds", 20),
+            "soft_chars": chat_cfg.get("web_soft_chars", 6000),
             "tools": [{"name": t.name, "description": t.schema["function"]["description"][:120]}
                       for t in registry.list(source="web")],
         },

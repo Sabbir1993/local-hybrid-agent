@@ -158,17 +158,63 @@ class TestCriticActor(unittest.TestCase):
             self.assertNotIn("4111111111111111", res["output"])
             self.assertIn("[card ****1111]", res["output"])
 
-    def test_tool_spawn_reviewed_coder(self):
-        async def mock_cycle(task, **kwargs):
-            return {"output": f"[critic-actor · iterations=1/2 · verdict=APPROVED · status=success]\nDone: {task}"}
+    def test_structured_json_review_parsing(self):
+        from core.subagent.critic import parse_reviewer_verdict_detailed
 
-        with mock.patch("core.subagent.critic.run_critic_actor_cycle", side_effect=mock_cycle):
-            out = asyncio.run(tool_spawn_reviewed_coder({"task": "Build feature X"}))
-            self.assertIn("Done: Build feature X", out)
+        json_review = '''
+        Here is my analysis of the diff:
+        ```json
+        {
+          "verdict": "REJECTED",
+          "defect_type": "REGRESSION_TEST_FAIL",
+          "blocking_issues": ["test_auth_invariant failed on line 42 with KeyError"],
+          "patch_suggestion": "Preserve old dictionary key while mapping new schema"
+        }
+        ```
+        '''
+        approved, reason, details = parse_reviewer_verdict_detailed(json_review)
+        self.assertFalse(approved)
+        self.assertEqual(details["defect_type"], "REGRESSION_TEST_FAIL")
+        self.assertIn("test_auth_invariant failed", details["blocking_issues"][0])
+        self.assertIn("Preserve old dictionary key", details["patch_suggestion"])
+        self.assertIn("test_auth_invariant failed", reason)
 
-            err = asyncio.run(tool_spawn_reviewed_coder({"task": ""}))
-            self.assertEqual(err, "error: task is required")
+        json_approved = '''
+        ```json
+        {
+          "verdict": "APPROVED",
+          "defect_type": "NONE",
+          "blocking_issues": [],
+          "patch_suggestion": ""
+        }
+        ```
+        '''
+        app, r, det = parse_reviewer_verdict_detailed(json_approved)
+        self.assertTrue(app)
+        self.assertEqual(det["defect_type"], "NONE")
+
+    def test_critic_actor_syntax_error_telemetry_blocks_approval(self):
+        fake_ws = {1: {}}
+
+        async def mock_run_subagent(task, role=None, **kwargs):
+            if role == "coder":
+                fake_ws[1]["e:/test/broken.py"] = {
+                    "before": "def valid(): pass\n",
+                    "after": "def broken(\n",  # Syntax error
+                }
+                return "[sub-agent · role=coder · status=success]\nImplemented feature with broken syntax"
+            return "VERDICT: APPROVED"
+
+        with mock.patch("core.subagent.critic.run_subagent", side_effect=mock_run_subagent), \
+             mock.patch("core.agent_tools.workspace._ws_changes", fake_ws), \
+             mock.patch("core.request_context.get_current_user_id", return_value=1):
+            res = asyncio.run(run_critic_actor_cycle("Write broken file", max_iterations=1))
+            self.assertEqual(res["status"], "critic_rejected")
+            self.assertEqual(res["verdict"], "REJECTED")
+            self.assertEqual(res["defect_type"], "SYNTAX_ERROR")
+            self.assertTrue(any("broken.py" in str(b) for b in res["blocking_issues"]))
 
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -458,7 +458,31 @@ def create(md: str, title: str = "", images: Optional[dict] = None) -> bytes:
             figures.add_picture(doc, charts[int(cm.group(1))], alt="Chart")
             prev_kind = "figure"
         elif st.startswith(">"):
-            _add_inline(doc.add_paragraph(style="Quote"), re.sub(r"^>\s?", "", st))
+            raw_text = re.sub(r"^>\s?", "", st)
+            cm = re.match(r"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION|ALERT)\]\s*(.*)", raw_text, re.I)
+            if cm:
+                kind = cm.group(1).upper()
+                body = cm.group(2).strip()
+                color_map = {
+                    "NOTE": ("2563EB", "EFF6FF", "Note: "),
+                    "TIP": ("10B981", "ECFDF5", "Tip: "),
+                    "IMPORTANT": ("8B5CF6", "F5F3FF", "Important: "),
+                    "WARNING": ("F59E0B", "FFFBEB", "Warning: "),
+                    "CAUTION": ("EF4444", "FEF2F2", "Caution: "),
+                    "ALERT": ("DC2626", "FEE2E2", "Alert: "),
+                }
+                border_col, fill_col, prefix = color_map.get(kind, ("2563EB", "EFF6FF", f"{kind.title()}: "))
+                p = doc.add_paragraph()
+                ppr = p._p.get_or_add_pPr()
+                _borders(ppr, {"left": (24, border_col)}, "w:pBdr")
+                _put(ppr, _shade(fill_col))
+                r = p.add_run(prefix)
+                r.bold = True
+                r.font.color.rgb = _hex(border_col)
+                if body:
+                    _add_inline(p, body)
+            else:
+                _add_inline(doc.add_paragraph(style="Quote"), raw_text)
             prev_kind = "quote"
         elif re.match(r"^\s*[-*+]\s+", line):
             depth = _depth(line)

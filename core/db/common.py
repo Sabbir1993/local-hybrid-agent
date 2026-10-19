@@ -44,6 +44,9 @@ def _init_projects_db() -> ThreadLocalDB:
         text TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending',
         note TEXT,
+        deps TEXT DEFAULT '[]',
+        phase TEXT,
+        verification TEXT,
         created_at REAL NOT NULL,
         updated_at REAL NOT NULL
     );
@@ -86,6 +89,13 @@ def _init_projects_db() -> ThreadLocalDB:
         conn.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
     if "agent_id" not in session_cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN agent_id INTEGER")
+    plan_cols = [r[1] for r in conn.execute("PRAGMA table_info(plan_items)")]
+    if "deps" not in plan_cols:
+        conn.execute("ALTER TABLE plan_items ADD COLUMN deps TEXT DEFAULT '[]'")
+    if "phase" not in plan_cols:
+        conn.execute("ALTER TABLE plan_items ADD COLUMN phase TEXT")
+    if "verification" not in plan_cols:
+        conn.execute("ALTER TABLE plan_items ADD COLUMN verification TEXT")
     try:
         conn.execute("""
             UPDATE sessions SET agent_id = 1

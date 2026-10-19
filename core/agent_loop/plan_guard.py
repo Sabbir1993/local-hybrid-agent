@@ -4,6 +4,7 @@ Pure functions over the plan rows (db_get_plan_items): routes/agent/run.py calls
 on their own because the loop itself cannot be driven without servers.
 """
 import re
+from pathlib import Path
 from typing import Optional
 
 OPEN = ("pending", "in_progress")
@@ -94,13 +95,19 @@ def focus_message(items: list, chunk_tokens: int = 3000) -> str:
     done = sum(1 for i in items if i.get("status") == "done")
     failed = sum(1 for i in items if i.get("status") == "failed")
     nxt = next((i for i in items if i["ord"] > cur["ord"] and i.get("status") in OPEN), None)
-    return (f"[plan reminder] {done}/{len(items)} steps done"
-            + (f", {failed} failed" if failed else "")
-            + f". Current step #{cur['ord']}: \"{cur['text']}\". Work ONLY on this step now - "
-            f"one file or one section per call, each write under about {chunk_tokens} tokens. "
-            f"When it is finished call update_plan_item(item={cur['ord']}, status='done'); if it cannot be done "
+    msg = (f"[plan reminder] {done}/{len(items)} steps done"
+           + (f", {failed} failed" if failed else "")
+           + f". Current step #{cur['ord']}: \"{cur['text']}\". Work ONLY on this step now - "
+           f"one file or one section per call, each write under about {chunk_tokens} tokens. ")
+    deps = cur.get("deps")
+    if deps:
+        msg += f"Prerequisites: #{', #'.join(map(str, deps))} (satisfied). "
+    if cur.get("verification"):
+        msg += f"Verification requirement: {cur['verification']}. "
+    msg += (f"When it is finished call update_plan_item(item={cur['ord']}, status='done'); if it cannot be done "
             "use status='failed' with a note."
             + (f" Do not start step #{nxt['ord']} first." if nxt else ""))
+    return msg
 
 
 # Tools that only manage the plan: they are never evidence that work was done.
@@ -177,18 +184,66 @@ def check_files_before_done(item: int, broken: list, warned: Optional[set] = Non
             "again to confirm.")
 
 
+def check_verification_gate(target_item: dict, ws_path: str, actions: list, failing_files: Optional[list] = None) -> Optional[str]:
+    """Programmatic verification gate before a task node can transition to 'done'.
+    Ensures that steps requiring test verification or specific file checks have concrete evidence."""
+    if not target_item:
+        return None
+    ord_no = target_item.get("ord", 1)
+    phase = str(target_item.get("phase") or "").strip().lower()
+    verif = str(target_item.get("verification") or "").strip()
+
+    if failing_files:
+        return f"step #{ord_no} cannot be marked done: {', '.join(failing_files[:3])} still fails syntax check."
+
+    recent_acts = work_since_last_plan_change(actions)
+    evidence_names = {a.get("name") for a in recent_acts if a.get("ok", True)}
+
+    if phase in ("test", "verify"):
+        has_run = any(_is_run_tool(n) for n in evidence_names)
+        if not has_run:
+            return (f"step #{ord_no} is a '{phase}' step, but no test/verification command was executed. "
+                    "Run tests (run_tests or run_python) before marking this step done.")
+
+    if verif:
+        if verif.startswith(("file_exists:", "file:")):
+            target_file = verif.split(":", 1)[1].strip()
+            p = Path(ws_path) / target_file
+            if not p.is_file() or p.stat().st_size == 0:
+                return f"step #{ord_no} verification failed: expected file '{target_file}' does not exist or is empty."
+        elif verif.startswith("test_pass") or verif.startswith("test:"):
+            has_run = any(_is_run_tool(n) for n in evidence_names)
+            if not has_run:
+                return f"step #{ord_no} verification failed: requirement '{verif}' needs test execution. Run the test first."
+    return None
+
+
 def check_update(items: list, item: int, status: str):
-    """Error text when the status change breaks the one-step-at-a-time rule, else None."""
+    """Error text when the status change breaks DAG dependencies or the one-step-at-a-time rule, else None."""
+    target = next((i for i in items if i["ord"] == item), None)
     if status == "in_progress":
         other = next((i for i in items if i.get("status") == "in_progress" and i["ord"] != item), None)
         if other:
             return (f"step #{other['ord']} is already in progress. Finish it (done or failed) before "
                     f"starting step #{item}.")
+        if target and target.get("deps"):
+            for dep_ord in target["deps"]:
+                dep = next((i for i in items if i["ord"] == dep_ord), None)
+                if dep and dep.get("status") in OPEN:
+                    return (f"step #{item} cannot be started: dependency step #{dep_ord} "
+                            f"('{dep.get('text', '')[:40]}') is not finished (status: {dep.get('status')}).")
     if status == "done":
-        earlier = next((i for i in items if i["ord"] < item and i.get("status") in OPEN), None)
-        if earlier:
-            return (f"step #{earlier['ord']} ({earlier['text'][:80]}) is not finished. Do the steps in order: "
-                    f"finish #{earlier['ord']} first, or mark it failed with a note.")
+        if target and target.get("deps"):
+            for dep_ord in target["deps"]:
+                dep = next((i for i in items if i["ord"] == dep_ord), None)
+                if dep and dep.get("status") not in ("done", "completed"):
+                    return (f"step #{item} cannot be marked done: dependency step #{dep_ord} "
+                            f"('{dep.get('text', '')[:40]}') is not finished (status: {dep.get('status')}).")
+        else:
+            earlier = next((i for i in items if i["ord"] < item and i.get("status") in OPEN), None)
+            if earlier:
+                return (f"step #{earlier['ord']} ({earlier['text'][:80]}) is not finished. Do the steps in order: "
+                        f"finish #{earlier['ord']} first, or mark it failed with a note.")
     return None
 
 

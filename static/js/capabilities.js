@@ -31,13 +31,62 @@ async function loadCapabilities() {
       ${tabBtn('router', '🧭 Router', null)}
     </div>`;
 
+    // global servers: admin-managed; personal ("just for me") servers: any user, for themselves
+    const canManageMcp = !!(window.hasPerm && window.hasPerm('settings.orchestration.configure'));
+    const canAddMcp = canManageMcp || !!(window.hasPerm && window.hasPerm('chat.use'));
+
     // 1. Web Pane
-    h += capSection('web', '🌐 Web Browsing', d.web.enabled,
-      (d.web.tools || []).map(t => `
-        <div class="cap-tool-entry">
-          <span class="cap-tool-badge web"><span class="tool-badge-ico">🌐</span><code>${esc(t.name)}</code></span>
-          <span class="cap-tool-desc">${esc(t.description || '')}</span>
-        </div>`).join(''),
+    const webInner = `
+      <div style="margin-bottom:12px;">
+        ${(d.web.tools || []).map(t => `
+          <div class="cap-tool-entry">
+            <span class="cap-tool-badge web"><span class="tool-badge-ico">🌐</span><code>${esc(t.name)}</code></span>
+            <span class="cap-tool-desc">${esc(t.description || '')}</span>
+          </div>`).join('')}
+      </div>
+      <div class="cap-item" style="margin-top:12px; padding:12px; background:var(--panel2); border:1px solid var(--border); border-radius:8px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+          <div>
+            <b style="font-size:12px;">🔍 Web Search &amp; Research Budget</b>
+            <div class="dim" style="font-size:10.5px;">Controls maximum web searches allowed per prompt turn before triggering budget cutoffs</div>
+          </div>
+          ${canManageMcp ? '<button class="btn accent" id="web-budget-save" style="width:auto; margin:0; padding:4px 12px; font-size:11px;">💾 Save Budget</button>' : ''}
+        </div>
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-top:8px;">
+          <div>
+            <label style="display:block; font-size:11px; font-weight:600; margin-bottom:4px;">Max Web Calls (Standard Chat)</label>
+            <input type="number" id="web-max-calls" min="1" max="50" value="${d.web.max_web_calls || 8}"
+              ${canManageMcp ? '' : 'disabled'} style="width:100%; box-sizing:border-box;">
+            <div class="dim" style="font-size:9.5px; margin-top:3px;">Search limit per normal chat round (default: 8)</div>
+          </div>
+          <div>
+            <label style="display:block; font-size:11px; font-weight:600; margin-bottom:4px;">Max Web Calls (Deep / Think Mode)</label>
+            <input type="number" id="web-deep-max-calls" min="1" max="100" value="${d.web.deep_max_web_calls || 12}"
+              ${canManageMcp ? '' : 'disabled'} style="width:100%; box-sizing:border-box;">
+            <div class="dim" style="font-size:9.5px; margin-top:3px;">Search limit when Deep thinking is on (default: 12)</div>
+          </div>
+          <div>
+            <label style="display:block; font-size:11px; font-weight:600; margin-bottom:4px;">Max Tool Rounds (Standard Chat)</label>
+            <input type="number" id="web-max-rounds" min="1" max="50" value="${d.web.max_tool_rounds || 12}"
+              ${canManageMcp ? '' : 'disabled'} style="width:100%; box-sizing:border-box;">
+            <div class="dim" style="font-size:9.5px; margin-top:3px;">Tool execution turn ceiling (default: 12)</div>
+          </div>
+          <div>
+            <label style="display:block; font-size:11px; font-weight:600; margin-bottom:4px;">Max Tool Rounds (Deep Mode)</label>
+            <input type="number" id="web-deep-max-rounds" min="1" max="100" value="${d.web.deep_max_tool_rounds || 20}"
+              ${canManageMcp ? '' : 'disabled'} style="width:100%; box-sizing:border-box;">
+            <div class="dim" style="font-size:9.5px; margin-top:3px;">Tool execution turn ceiling in Deep mode (default: 20)</div>
+          </div>
+        </div>
+        <div style="margin-top:10px;">
+          <label style="display:block; font-size:11px; font-weight:600; margin-bottom:4px;">Web Content Truncation Cap (Characters)</label>
+          <input type="number" id="web-soft-chars" min="500" max="50000" step="500" value="${d.web.soft_chars || 6000}"
+            ${canManageMcp ? '' : 'disabled'} style="width:140px;">
+          <span class="dim" style="font-size:9.5px; margin-left:6px;">characters (default: 6000). Trims long web search results to keep context clean.</span>
+        </div>
+      </div>
+    `;
+    h += capSection('web', '🌐 Web Browsing', d.web.enabled, webInner,
       'web_fetch pulls page text; web_search queries DuckDuckGo (keyless)');
 
     // 2. Skills Pane
@@ -50,9 +99,7 @@ async function loadCapabilities() {
       'Reusable instruction packs loaded from .agents/skills/*/SKILL.md');
 
     // 3. MCP Pane
-    // global servers: admin-managed; personal ("just for me") servers: any user, for themselves
-    const canManageMcp = !!(window.hasPerm && window.hasPerm('settings.orchestration.configure'));
-    const canAddMcp = canManageMcp || !!(window.hasPerm && window.hasPerm('chat.use'));
+
     const mcpInner = (d.mcp.servers || []).length
       ? d.mcp.servers.map(s => `
           <details class="mcp-server-fold cap-item" style="margin-bottom:6px;">
@@ -268,6 +315,26 @@ async function loadCapabilities() {
         box.querySelector('#agent-run-timeout').value = Math.round((j.run_timeout_s || 0) / 60);
         box.querySelector('#agent-run-budget').value = ((j.run_token_budget || 0) / 1000000).toFixed(1).replace(/[.]0$/, '');
         toast(`Agent limits set: ${j.max_steps} steps, ${Math.round((j.run_timeout_s || 0) / 60)} min, ${((j.run_token_budget || 0) / 1000000).toFixed(1)}M tokens ✓`);
+      } catch (e) { toast('Save failed: ' + e.message, true); }
+    };
+
+    const webSaveBtn = box.querySelector('#web-budget-save');
+    if (webSaveBtn) webSaveBtn.onclick = async () => {
+      try {
+        const payload = {
+          max_web_calls: parseInt(box.querySelector('#web-max-calls').value, 10) || 8,
+          deep_max_web_calls: parseInt(box.querySelector('#web-deep-max-calls').value, 10) || 12,
+          max_tool_rounds: parseInt(box.querySelector('#web-max-rounds').value, 10) || 12,
+          deep_max_tool_rounds: parseInt(box.querySelector('#web-deep-max-rounds').value, 10) || 20,
+          soft_chars: parseInt(box.querySelector('#web-soft-chars').value, 10) || 6000,
+        };
+        const r = await fetch('/control/web_settings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || j.detail || r.status);
+        toast(`Web search budget saved: ${payload.max_web_calls} calls (normal) / ${payload.deep_max_web_calls} calls (deep) ✓`);
       } catch (e) { toast('Save failed: ' + e.message, true); }
     };
 

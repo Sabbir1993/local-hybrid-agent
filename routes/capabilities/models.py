@@ -9,6 +9,15 @@ class CapToggleReq(BaseModel):
     enabled: bool
 
 
+class WebSettingsReq(BaseModel):
+    max_web_calls: Optional[int] = None
+    deep_max_web_calls: Optional[int] = None
+    max_tool_rounds: Optional[int] = None
+    deep_max_tool_rounds: Optional[int] = None
+    soft_chars: Optional[int] = None
+
+
+
 class LibraryListReq(BaseModel):
     allow: Optional[list] = None
     deny: Optional[list] = None

@@ -613,7 +613,10 @@ function _bubbleHtml(m, idx) {
     const copyBtn = `<button type="button" class="user-long-btn user-copy-btn" data-click="user-copy" data-arg="${idx}" title="Copy prompt">${copyIconSvg}</button>`;
     const moreBtn = long ? `<button type="button" class="user-long-btn user-long-more" data-click="user-more">See more</button>` : '';
     const foot = `<div class="user-long-foot">${copyBtn}${moreBtn}</div>`;
-    return `<div class="msg user"><div class="bubble${long ? ' user-long' : ''}">${imgs}<div class="user-text">${md(displayText || '(attachment)')}</div>${filesTag}${foot}</div></div>`;
+    const bodyHtml = long
+      ? `<div class="user-text">${md(displayText || '(attachment)')}</div>${filesTag}${foot}`
+      : `<div class="user-bubble-row"><div class="user-text">${md(displayText || '(attachment)')}</div>${foot}</div>${filesTag}`;
+    return `<div class="msg user"><div class="bubble${long ? ' user-long' : ''}">${imgs}${bodyHtml}</div></div>`;
   }
   // pending compaction indicator
   if (m.compactPending) {

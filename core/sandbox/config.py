@@ -57,4 +57,11 @@ def save(**fields) -> None:
 
 def configured() -> bool:
     """Everything needed to talk to the runner is present. The chat uses it only when this AND enabled() AND a live check pass."""
+    backend = (cfg().get("runner_backend") or os.environ.get("SANDBOX_BACKEND") or "").lower().strip()
+    if backend == "wsl2":
+        from . import runners
+        return runners.WSL2Runner.is_available()
+    if backend in ("local", "job", "localjob"):
+        return True
     return bool(runner_url() and fingerprint() and get_token())
+
