@@ -250,6 +250,45 @@ terminal for `[vram]` and `llama-server` lines. Then stop it with `Ctrl+C`.
 Only run **one** server instance per Mac: a second `server_manager` kills the
 running `llama-server` processes (`pkill -x llama-server` on startup).
 
+### 7.1. Isolated Code Runner Sandbox on macOS
+
+The chat offers `run_sandbox_python` for isolated data analysis, custom charts,
+and conversions. Note that **Bubblewrap (`bwrap`) is Linux-only** and does not run on macOS Darwin.
+
+You have two options for the sandbox runner on macOS:
+
+- **Option A (Recommended for production): Remote Linux Runner VM**
+  Set up an isolated Ubuntu/Alpine Linux VM or external machine with Bubblewrap:
+  1. On the Linux VM: `sudo apt install bubblewrap python3-pip && pip install -r sandbox-requirements.txt`
+  2. Start the runner: `python3 tools/runner/runner_server.py serve --port 8470`
+  3. Generate a pairing code: `python3 tools/runner/runner_server.py pair-code`
+  4. In the Mac app UI, go to **Settings -> Code Runner**, enter the address `https://[RUNNER_IP]:8470` and the pairing code.
+  5. In `config/app.json`: `"runner_backend": "remote"`.
+
+- **Option B: Local Fallback Process Runner**
+  Runs jobs in an isolated temporary folder with process timeouts and clean environment:
+  1. Install sandbox dependencies in your Mac virtual environment:
+     ```bash
+     .venv/bin/python -m pip install -r sandbox-requirements.txt
+     ```
+  2. In `config/app.json`:
+     ```json
+     "sandbox": {
+       "runner_backend": "local",
+       "enabled": true
+     }
+     ```
+
+### 7.2. Unified Memory & Context Sizing (MoE Models)
+
+Apple Silicon uses unified RAM for both the OS and GPU (Metal).
+- **Context Size Impact**: In large models (e.g. 26B+ MoE), setting context to `96,000` (96K)
+  reserves **~23+ GB** for the KV cache alone.
+- **MoE Expert Offloading**: When VRAM/unified memory is insufficient, the preflight
+  automatically offloads expert layers to CPU RAM (`--n-cpu-moe N`).
+- **To avoid swap or RAM spill**: For models like `Gemma-4-26B-A4B`, set **Context size**
+  to `32768` (32K) or `16384` (16K) in the Model Config drawer.
+
 ## 8. Secrets and the keychain
 
 API keys and MCP OAuth tokens are stored with the `keyring` package, which uses

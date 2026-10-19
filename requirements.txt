@@ -56,5 +56,18 @@ laya>=0.3
 lxml>=5.0
 defusedxml>=0.7            # openpyxl uses it automatically when installed (XXE / billion laughs)
 
+# --- Image & media processing (core/media/images.py, vision tools) ---
+pillow>=10.2
+
+# --- Process & system monitoring (core/state.py, memory tracking) ---
+psutil>=5.9
+
+# --- Serialization & agent configuration (YAML parser) ---
+pyyaml>=6.0
+
+# --- Cryptography & security (MFA, certificates, TLS pairing) ---
+cryptography>=42.0
+
 # --- transitive, pinned above known CVEs ---
 jinja2>=3.1.6              # CVE-2024-56201 / -56326 / CVE-2025-27516
+

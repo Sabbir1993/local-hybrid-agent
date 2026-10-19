@@ -71,7 +71,7 @@
   },
   "tasteatlas.com": {
     "fails": 2,
-    "until": 1792405486.2276764,
+    "until": 1792524813.5284293,
     "status": 403
   },
   "csgoskins.gg": {
@@ -240,6 +240,11 @@
     "status": 403
   },
   "mobygames.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "cambridge.org": {
     "fails": 1,
     "until": 0,
     "status": 403

@@ -140,6 +140,40 @@ first):
 **14.** Open `http://[SERVER_IP]:8000`, log in, then enter your cloud API keys
 and connect MCP servers in Settings.
 
+**15. Setup the Code Runner Sandbox (Bubblewrap / Isolated Runner)**
+The chat offers `run_sandbox_python` for isolated data analysis, custom charts,
+and calculations. On Linux, execution uses unprivileged **Bubblewrap (`bwrap`)**
+namespaces:
+
+1. Install Bubblewrap and sandbox Python packages:
+```bash
+sudo apt install -y bubblewrap python3-pip
+pip install -r sandbox-requirements.txt --break-system-packages
+```
+2. Test the sandbox containment and isolation:
+```bash
+python3 tools/runner/verify.py
+```
+3. In `config/app.json`:
+   - For a local runner on the same box: set `"runner_backend": "local"` (or `"wsl2"` if running inside WSL2).
+   - For an isolated dedicated VM: run `python3 tools/runner/runner_server.py serve` on the runner VM, then pair in Settings -> Code Runner.
+
+---
+
+## Model Sizing & MoE VRAM Tuning
+
+- **Context Window vs VRAM**:
+  The KV cache is sized directly by context length. For large models (e.g. 26B+), a
+  `96,000` (96K) context with `q8_0` KV cache requires **~23.4 GB of VRAM** for
+  the KV cache alone.
+- **MoE Models (e.g. Gemma-4-26B-A4B)**:
+  When the KV cache consumes most of the GPU VRAM, the automated preflight will
+  offload expert layers to System RAM (`--n-cpu-moe N`) to avoid an OOM crash.
+  - To load **100% of the model into VRAM** on dual 16GB Arc A770s (with 0 GB offloaded to RAM):
+    Set **Context size** to `32768` (32K) or `16384` (16K) in the Model Config drawer.
+  - For dual GPUs, **Split mode: `row`** distributes expert matrices evenly across both cards,
+    while `layer` assigns whole sequential layers.
+
 ---
 
 ## Databases

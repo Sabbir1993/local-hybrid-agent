@@ -76,6 +76,43 @@ account; save the password.
 connect MCP servers in Settings. API keys are stored in Windows Credential
 Manager.
 
+**11. Setup the Code Runner Sandbox (WSL2)**
+The chat offers `run_sandbox_python` for isolated data analysis, custom charts,
+and file conversions. On Windows, execution runs inside a sandboxed WSL2 environment:
+
+1. Install WSL2 with Ubuntu 24.04 (in an elevated PowerShell, reboot if prompted):
+```powershell
+wsl --install -d Ubuntu-24.04
+```
+2. Install the required sandbox packages into Ubuntu:
+```powershell
+wsl -d Ubuntu-24.04 -- bash -c "sudo apt update && sudo apt install -y python3 python3-pip && pip install -r sandbox-requirements.txt --break-system-packages"
+```
+3. In `config/app.json`, verify the sandbox config:
+```json
+"sandbox": {
+  "runner_backend": "wsl2",
+  "wsl_distro": "Ubuntu-24.04",
+  "enabled": true
+}
+```
+
+---
+
+## Model Sizing & MoE VRAM Tuning
+
+- **Context Window vs VRAM**:
+  The KV cache is sized directly by context length. For large models (e.g. 26B+), a
+  `96,000` (96K) context with `q8_0` KV cache requires **~23.4 GB of VRAM** for
+  the KV cache alone.
+- **MoE Models (e.g. Gemma-4-26B-A4B)**:
+  When the KV cache consumes most of the GPU VRAM, the automated preflight will
+  offload expert layers to System RAM (`--n-cpu-moe N`) to avoid an OOM crash.
+  - To load **100% of the model into VRAM** on dual 16GB Arc A770s (with 0 GB offloaded to RAM):
+    Set **Context size** to `32768` (32K) or `16384` (16K) in the Model Config drawer.
+  - For dual GPUs, **Split mode: `row`** distributes expert matrices evenly across both cards,
+    while `layer` assigns whole sequential layers.
+
 ---
 
 ## Databases

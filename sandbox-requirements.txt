@@ -1,0 +1,35 @@
+# sandbox-requirements.txt
+# Dependencies for the Isolated Code Runner (run_sandbox_python)
+#
+# These packages must be installed inside the execution sandbox environment:
+#   - WSL2 Guest (e.g., Ubuntu 24.04):
+#       wsl -d Ubuntu-24.04 -- sudo apt update && sudo apt install -y python3-pip
+#       wsl -d Ubuntu-24.04 -- pip install -r sandbox-requirements.txt --break-system-packages
+#   - Linux Host / Dedicated Runner VM / Docker:
+#       pip install -r sandbox-requirements.txt
+#
+# The execution sandbox is airgapped (network is disabled during execution).
+# All dependencies must be pre-installed before running jobs.
+
+# --- Numerical, Data Science & Statistics ---
+numpy>=1.26.0
+pandas>=2.2.0
+scipy>=1.12.0
+sympy>=1.12.0
+
+# --- Plotting & Visualizations (Non-interactive Agg backend) ---
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# --- Image Processing ---
+pillow>=10.2.0
+
+# --- Document & Spreadsheet Generation ---
+openpyxl>=3.1.0
+XlsxWriter>=3.2.0
+python-docx>=1.1.0
+python-pptx>=1.0.0
+
+# --- Structured Data & XML Parsing ---
+lxml>=5.1.0
+defusedxml>=0.7.1
