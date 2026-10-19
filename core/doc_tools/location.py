@@ -1,4 +1,5 @@
 import base64
+import re
 from pathlib import Path
 from typing import Optional
 from .. import companion_bridge, doc_store
@@ -36,9 +37,40 @@ def resolve_common(name: str) -> Optional[Path]:
     if p.is_file():
         return p
     folder = common_workspace()
-    stem, suf = doc_store.base_stem(Path(name).name), Path(name).suffix.lower()
+
+    # Normalize stuttered or duplicated extensions / stems (e.g. .html.html -> .html, annual_annual -> annual)
+    clean_name = re.sub(r'(\.[a-zA-Z0-9]+)\1+', r'\1', str(name or ""))
+    clean_name = re.sub(r'([a-zA-Z0-9]+)(?:_\1)+', r'\1', clean_name)
+    if clean_name != name:
+        try:
+            p_clean = _common_resolve(clean_name)
+            if p_clean.is_file():
+                return p_clean
+        except PermissionError:
+            pass
+
+    stem, suf = doc_store.base_stem(Path(name).name), Path(clean_name).suffix.lower()
     cands = [f for f in folder.glob(f"{stem}*{suf}") if f.is_file() and doc_store.base_stem(f.name) == stem]
-    return max(cands, key=lambda f: f.stat().st_mtime) if cands else None
+    if cands:
+        return max(cands, key=lambda f: f.stat().st_mtime)
+
+    # Fuzzy recovery 1: match on 8-char hex hash suffix if present in name
+    m_hex = re.search(r'([0-9a-fA-F]{8})', name)
+    if m_hex:
+        hex_sub = m_hex.group(1).lower()
+        hex_cands = [f for f in folder.glob(f"*{hex_sub}*{suf}") if f.is_file()]
+        if hex_cands:
+            return max(hex_cands, key=lambda f: f.stat().st_mtime)
+
+    # Fuzzy recovery 2: substring overlap on stem among files with matching suffix
+    suf_files = [f for f in folder.glob(f"*{suf}") if f.is_file()]
+    if suf_files:
+        clean_stem = doc_store.base_stem(Path(clean_name).name).lower()
+        matching = [f for f in suf_files if (doc_store.base_stem(f.name).lower() in clean_stem or clean_stem in doc_store.base_stem(f.name).lower())]
+        if matching:
+            return max(matching, key=lambda f: f.stat().st_mtime)
+
+    return None
 
 
 class _Loc:

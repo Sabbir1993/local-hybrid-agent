@@ -970,7 +970,7 @@ async def run_agent_stream(req, user, ctx):
                 res_dict = None
                 streamed_content = []
                 try:
-                    agent_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
+                    agent_rep = req.repeat_penalty if req.repeat_penalty is not None else (1.0 if tools_for_lane else 1.15)
                     # one generation is capped per lane: a 4B executor that runs on for 8k tokens holds a GPU slot
                     # for minutes and fills its context; a cut-off call is retried smaller (see truncation.py)
                     step_max_tokens = effective_max_tokens(req.max_tokens, lane_name, cloud=bool(getattr(active_client, "is_cloud", False)))

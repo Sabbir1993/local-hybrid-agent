@@ -61,15 +61,15 @@ _SEP_LINE = re.compile(r"^[\s\-=_*#|:+.~`>]*$")
 RUNAWAY_MSG = ("error: your output started repeating itself and was cut off. Write it again shorter, "
                "without repeating phrases, lines or URLs. For a long file write only the first section now and add the rest "
                "in later project_append calls")
-_MARKUP_TAIL = re.compile(r"https?://|<[a-zA-Z/!]|=\"[^\"]*\"|[{};]\s*$|\bclass=|\bsrc=|\bhref=")
+_MARKUP_TAIL = re.compile(r"https?://|<[a-zA-Z/!]|=(?:\"|\\\"|')[^\"'\\]*(?:\"|\\\"|')|[{};]\s*$|\bclass=|\bsrc=|\bhref=|<\/?(?:div|tr|td|th|li|span|p|table|tbody|thead)\b")
 
 
 def _table_like(lines: list) -> bool:
-    """Most non-empty lines are table rows (pipes, tabs) or csv rows: repeated cell values there are data, not a loop."""
+    """Most non-empty lines are table rows (pipes, tabs, html rows) or csv rows: repeated cell values there are data, not a loop."""
     body = [ln for ln in lines if ln.strip()]
     if len(body) < 4:
         return False
-    rows = sum(1 for ln in body if ln.count("|") >= 2 or ln.count("	") >= 2 or ln.count('","') >= 2 or ln.count(",") >= 4)
+    rows = sum(1 for ln in body if ln.count("|") >= 2 or ln.count("\t") >= 2 or ln.count('","') >= 2 or ln.count(",") >= 4 or "<td" in ln or "<tr" in ln or "<th" in ln)
     return rows >= 0.3 * len(body)
 
 

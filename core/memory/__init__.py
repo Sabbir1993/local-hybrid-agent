@@ -50,6 +50,19 @@ from .search import (
     search_memory_hybrid,
     search_vec_sqlite,
 )
+from .okf import (
+    backfill_okf_from_chunks,
+    delete_okf_source,
+    extract_okf_graph,
+    index_okf_source,
+    init_okf_tables,
+    search_okf,
+)
+from .reranker import (
+    calculate_cross_features,
+    deduplicate_candidates,
+    rerank_and_filter,
+)
 from .store import (
     _already_indexed,
     _conn,
@@ -118,4 +131,10 @@ __all__ = [
     "reciprocal_rank_fusion",
     "has_fts5",
     "has_sqlite_vec",
+    "search_okf",
+    "index_okf_source",
+    "delete_okf_source",
+    "rerank_and_filter",
+    "deduplicate_candidates",
+    "calculate_cross_features",
 ]

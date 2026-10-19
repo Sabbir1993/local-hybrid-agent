@@ -531,11 +531,16 @@ function renderCommandCard(t, isItemRunning, isOpen = true, cardKey = '', idx = 
 
 function renderFileCard(t, isItemRunning, isOpen = null, cardKey = '', idx = 0) {
   const p = t.args.path || t.args.file || t.args.filename || '';
-  const filename = p ? p.split(/[\\/]/).pop() : 'file';
+  const isRunaway = Boolean(t.args._runaway || (t.result && typeof t.result === 'string' && t.result.includes('repeating itself')));
+  const filename = p ? p.split(/[\\/]/).pop() : (isRunaway ? 'document' : 'file');
   const diff = (t.diff && ['write_file', 'edit_file', 'append_file', 'insert_at_line'].includes(t.name)) ? t.diff : null;
   const isRunning = t.result === null;
   const isEdit = t.name === 'edit_file' || t.name === 'insert_at_line' || t.name === 'append_file' || (diff && !diff.created);
-  const verb = isRunning ? (isEdit ? 'Editing file' : 'Writing file') : (isEdit ? 'Edited file' : 'Created file');
+  const verb = isRunning
+    ? (isEdit ? 'Editing file' : 'Writing file')
+    : (isRunaway
+      ? (isEdit ? 'Editing interrupted' : 'Writing interrupted')
+      : (isEdit ? 'Edited file' : 'Created file'));
   const icon = isEdit ? '✏️' : '💾';
   const badgeCls = isEdit ? 'edit' : 'write';
 

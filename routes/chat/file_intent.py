@@ -85,6 +85,7 @@ _TYPE_WORDS = (
     (r"sheet|sp[a-z]{2,8}\s?sheet|spreadsheet|excel|xlsx|csv", (".xlsx", ".csv")),
     (r"word|docx|document", (".docx",)),
     (r"deck|ppt|pptx|powerpoint|presentation|slides?", (".pptx",)),
+    (r"html|web\s?page|dashboard", (".html", ".htm")),
 )
 
 
@@ -124,22 +125,39 @@ def pick_target(query: str, files: list) -> str:
 
 
 def missing_type(query: str, files: list) -> str:
-    """'spreadsheet' | 'pdf' | 'document' | 'presentation' when the message names a kind of file that this chat has not produced
-    yet ("where is the spreadsheet?" after only a .md came back), else ''. The old answer re-sent the newest file of ANY type."""
+    """'spreadsheet' | 'pdf' | 'document' | 'presentation' | 'HTML dashboard' when the message names a kind of file that this chat has not produced
+    yet, or when 'next' is requested and earlier conversation mentioned upcoming formats."""
     q = _norm_name(query)
-    label = {".pdf": "pdf", ".xlsx": "spreadsheet", ".docx": "document", ".pptx": "presentation"}
+    label = {".pdf": "pdf", ".xlsx": "spreadsheet", ".docx": "document", ".pptx": "presentation", ".html": "HTML dashboard"}
     for rx, exts in _TYPE_WORDS:
         if re.search(r"\b(?:" + rx + r")\b", q):
             if not any(Path(f).suffix.lower() in exts for f in files):
                 return label[exts[0]]
             return ""
+    # Sequential follow-up: user says "next", "next file", "now make next"
+    if re.search(r"\b(next|next file|next one|generate next|make next)\b", q):
+        standard_sequence = (
+            ("presentation", (".pptx", ".ppt")),
+            ("spreadsheet", (".xlsx", ".csv")),
+            ("pdf", (".pdf",)),
+            ("HTML dashboard", (".html", ".htm")),
+            ("document", (".docx",)),
+        )
+        for name, exts in standard_sequence:
+            if not any(Path(f).suffix.lower() in exts for f in files):
+                return name
     return ""
 
 
 _SHEETISH_RE = re.compile(r"\b(sheets?|tabs?|columns?|rows?|cells?|headers?|formulas?|totals?|charts?|workbook|spreadsheet|excel|xlsx)\b", re.I)
 _DECKISH_RE = re.compile(r"\b(images?|pictures?|photos?|graphs?|charts?|infographics?|slides?|visuals?|theme|colou?rs?|fonts?|cover|title slide|"
                          r"bullets?|speaker notes?|layout|design)\b", re.I)
-_NEW_FILE_RE = re.compile(r"\b(new|another|separate|second|different|fresh|brand new)\b.{0,25}\b(sheet|workbook|spreadsheet|excel|file|xlsx)\b", re.I)
+_NEW_FILE_RE = re.compile(
+    r"\b(new|another|separate|second|different|fresh|brand new|next|next up|following)\b.{0,30}"
+    r"\b(sheet|workbook|spreadsheet|excel|file|xlsx|ppt|pptx|deck|presentation|slides?|pdf|report|doc|docx|document|html|page|dashboard)\b"
+    r"|\b(next|next file|next one|generate next|make next|create next|now make|now create|now generate|convert to|make a|create a)\b",
+    re.I
+)
 
 
 def file_followup_intent(query: str, has_prior: bool, prior_files=None, asked: bool = False) -> Optional[str]:
@@ -148,13 +166,15 @@ def file_followup_intent(query: str, has_prior: bool, prior_files=None, asked: b
     q = (query or "").strip()
     if not has_prior or not q:
         return None
+    if _NEW_FILE_RE.search(q):
+        return None
     if _FILE_WHERE_RE.search(q) and not _FILE_EDIT_RE.search(q):
         return "where"
     has_deck = any(str(f).lower().endswith((".pptx", ".ppt")) for f in (prior_files or []))
-    if has_deck and not _NEW_FILE_RE.search(q) and _DECKISH_RE.search(q):
+    if has_deck and _DECKISH_RE.search(q):
         return "edit"                      # "where are the images, graphs?" after a deck: the deck already in this chat, not a new one
     has_book = any(str(f).lower().endswith((".xlsx", ".xls")) for f in (prior_files or []))
-    if has_book and not _NEW_FILE_RE.search(q):
+    if has_book:
         if _SHEETISH_RE.search(q):
             return "edit"                  # "the cost sheet needs a Month column": the workbook already in this chat, not a new one
         if asked and len(q) < 500:

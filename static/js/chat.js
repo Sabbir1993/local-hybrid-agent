@@ -607,12 +607,12 @@ function _bubbleHtml(m, idx) {
       `<img src="${esc(u)}" class="chat-img-thumb" alt="Attachment" title="Click to enlarge" data-click="open-image" style="max-width:240px; max-height:180px; border-radius:8px; display:block; margin:6px 0; border:1px solid rgba(255,255,255,0.15); box-shadow:0 2px 8px rgba(0,0,0,0.3); cursor:zoom-in;">`).join('');
     const filesTag = m.files ? `<div class="dim" style="font-size:10.5px; margin-top:4px;">📎 ${esc(m.files)}</div>` : '';
     const displayText = userDisplayText(m);
-    // long prompts show ~8 lines; the footer offers copy + see more / see less
-    const long = displayText.split('\n').length > 8 || displayText.length > 700;
-    const foot = long
-      ? `<div class="user-long-foot"><button type="button" class="user-long-btn" data-click="user-copy" data-arg="${idx}" title="Copy prompt">⧉</button>`
-        + `<button type="button" class="user-long-btn user-long-more" data-click="user-more">See more</button></div>`
-      : '';
+    // long prompts show ~8 lines; the footer offers copy on all prompts + see more / see less on long prompts
+    const long = displayText.split('\n').length > 8 || displayText.length > 500;
+    const copyIconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; pointer-events:none;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+    const copyBtn = `<button type="button" class="user-long-btn user-copy-btn" data-click="user-copy" data-arg="${idx}" title="Copy prompt">${copyIconSvg}</button>`;
+    const moreBtn = long ? `<button type="button" class="user-long-btn user-long-more" data-click="user-more">See more</button>` : '';
+    const foot = `<div class="user-long-foot">${copyBtn}${moreBtn}</div>`;
     return `<div class="msg user"><div class="bubble${long ? ' user-long' : ''}">${imgs}<div class="user-text">${md(displayText || '(attachment)')}</div>${filesTag}${foot}</div></div>`;
   }
   // pending compaction indicator

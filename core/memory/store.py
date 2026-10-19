@@ -100,6 +100,13 @@ def _db() -> ThreadLocalDB:
         except Exception:
             pass
 
+        # OKF entity & link graph tables
+        try:
+            from .okf import init_okf_tables
+            init_okf_tables(conn)
+        except Exception as e:
+            print(f"[memory] could not initialize okf tables: {e}", file=sys.stderr)
+
         conn.commit()
         if pkg:
             pkg._conn = conn
@@ -158,6 +165,11 @@ def delete_knowledge_chunks(source_id: int) -> None:
         kb_tables.delete_source(source_id)
     except Exception as e:
         print(f"[memory] could not remove table rows of source {source_id}: {e}", file=sys.stderr)
+    try:
+        from .okf import delete_okf_source
+        delete_okf_source(source_id)
+    except Exception as e:
+        print(f"[memory] could not remove okf graph of source {source_id}: {e}", file=sys.stderr)
 
 
 def delete_session_chunks(session_ids) -> None:

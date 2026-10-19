@@ -79,10 +79,15 @@ const CLICK_ACTIONS = {
     el.textContent = open ? 'See less' : 'See more';
   },
   'user-copy': (el) => {
-    const m = messages[parseInt(el.dataset.arg, 10)];
-    if (!m) return;
-    const text = userDisplayText(m);
-    const done = () => { el.textContent = '✓'; setTimeout(() => { el.textContent = '⧉'; }, 1200); };
+    const idx = parseInt(el.dataset.arg, 10);
+    const m = (typeof messages !== 'undefined' && Array.isArray(messages)) ? messages[idx] : null;
+    const text = m ? (typeof userDisplayText === 'function' ? userDisplayText(m) : (m.displayContent || m.content || '')) : (el.closest('.bubble')?.querySelector('.user-text')?.innerText || '');
+    if (!text) return;
+    const origHtml = el.innerHTML;
+    const done = () => {
+      el.innerHTML = '<span style="color:var(--accent,#10b981);font-weight:bold;font-size:12px;">✓</span>';
+      setTimeout(() => { el.innerHTML = origHtml; }, 1200);
+    };
     if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, () => { _copyFallback(text); done(); });
     else { _copyFallback(text); done(); }
   },

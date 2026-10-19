@@ -193,9 +193,10 @@ async def tool_write_file(args: dict) -> str:
         return await tool_doc_create({"file": path_arg, "content": content})
     if append:
         return await tool_append_file({"path": path_arg, "content": content, "_create": True})
-    big = _too_big(content, "write_file")
-    if big:
-        return big
+    if p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".svg"):
+        big = _too_big(content, "write_file")
+        if big:
+            return big
 
     before = await _read_existing(uid, p)
     if before and not args.get("overwrite"):

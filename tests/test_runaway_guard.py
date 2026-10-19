@@ -115,7 +115,8 @@ class Stream(unittest.TestCase):
         self.assertEqual(res["aborted"], "tool")
         self.assertLess(resp.consumed, len(chunks))
         args = json.loads(res["tool_calls"][0]["function"]["arguments"])
-        self.assertEqual(args, {"_runaway": True})
+        self.assertEqual(args.get("_runaway"), True)
+        self.assertEqual(args.get("path"), "a.pptx")
         self.assertEqual(asyncio.run(run_tool("doc_append", args)), RUNAWAY_MSG)
 
     def test_normal_stream_is_untouched(self):

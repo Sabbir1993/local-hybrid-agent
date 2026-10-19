@@ -194,6 +194,18 @@ async def index_knowledge_source(source_id: int, text: str, version: Optional[fl
         await asyncio.to_thread(_swap_in, path, store_fn, rows, vecs)   # thousands of inserts must not stall the event loop
     else:
         _swap_in(path, store_fn, rows, vecs)
+
+    # OKF entity & link extraction
+    chunk_texts = [r[3] for r in rows] if rows else []
+    try:
+        from .okf import index_okf_source
+        if progress:
+            await asyncio.to_thread(index_okf_source, source_id, text, chunk_texts)
+        else:
+            index_okf_source(source_id, text, chunk_texts)
+    except Exception as e:
+        print(f"[memory] okf indexing error for source {source_id}: {e}", file=sys.stderr)
+
     return len(rows)
 
 

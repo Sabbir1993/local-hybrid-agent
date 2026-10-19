@@ -171,9 +171,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     _prev_a = next((str(m.get("content") or "") for m in reversed(msgs[:-1]) if m.get("role") == "assistant"), "")
     _asked = "```questionnaire" in _prev_a or _prev_a.rstrip()[-300:].rstrip("*_ ").endswith("?")
     file_followup = file_followup_intent(own_q, bool(prior_files), prior_files, _asked)
-    absent_type = missing_type(own_q, prior_files) if file_followup == "where" else ""
+    absent_type = missing_type(own_q, prior_files)
     if absent_type:
-        file_followup = None            # "where is the spreadsheet?" when only a .md exists: build it, do not re-send the .md
+        file_followup = None            # user wants a new type that has NOT been made in this chat: build it, do not edit existing file
     if file_followup == "where":
         # "where is the file?" - answer with the existing link instead of
         # asking a slow local model to regenerate (and usually invent) it.
@@ -644,11 +644,15 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     deck_lim = deck_research.build_limits(APP_CONFIG, brief_phase)     # no repeat penalty, capped turn length while building
     if project_build and deck_lim["repeat_penalty"] is None:
         deck_lim = deck_research.project_limits(APP_CONFIG)
+    if deck_lim["repeat_penalty"] is None and (wants_file or has_file or html_build or sheet_build or docx_build or chat_tools or bool(absent_type)):
+        deck_lim = {**deck_lim, "repeat_penalty": 1.0}
     turn_max_tokens = deck_research.clamp_tokens(req.max_tokens, deck_lim["max_tokens"])
-    # turns that write a deck / PDF / site: DRY on the local server unless the request sets its own (sampler panel) or the lane is cloud
+    # turns that write a deck / PDF / site / document: DRY on the local server unless the request sets its own (sampler panel) or the lane is cloud
     sampler_fields = sampler_extra(req) or {}
-    if (brief_phase == "build" or project_build or pdf_build) and not cloud_main and "dry_multiplier" not in sampler_fields:
-        sampler_fields = {**deck_research.build_dry(APP_CONFIG), **sampler_fields}
+    doc_write_turn = wants_file or has_file or html_build or sheet_build or docx_build or bool(absent_type)
+    if ((brief_phase == "build" or project_build or pdf_build) and not cloud_main or (doc_write_turn and not cloud_main)):
+        if "dry_multiplier" not in sampler_fields or not sampler_fields.get("dry_multiplier"):
+            sampler_fields = {**deck_research.build_dry(APP_CONFIG), **(sampler_fields or {})}
     sampler_fields = sampler_fields or None
     combined_sys = "\n\n".join(sys_parts).strip()
     if combined_sys:
@@ -819,6 +823,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         current_tools = [t for t in chat_tools if t.get("function", {}).get("name") in PROJECT_TOOL_NAMES]
                     else:
                         current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and brief_phase != "ask" and tool_allowed("write_file")) else None
+                elif written_files and not project_build and not (brief_phase == "build" and longdoc_build):
+                    current_tools = None
                 elif research_over:
                     current_tools = [t for t in chat_tools
                                      if t.get("function", {}).get("name") not in WEB_TOOL_NAMES]
@@ -860,14 +866,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             fb_local = state.client
                         except Exception as e:
                             print(f"[chat] local fallback unavailable: {e}", file=sys.stderr)
-                    chat_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
+                    chat_rep = deck_lim["repeat_penalty"] or (1.0 if current_tools else (req.repeat_penalty if req.repeat_penalty is not None else 1.15))
                     chat_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, current_tools, req.temperature,
                         turn_max_tokens, repeat_penalty=chat_rep, rid=chat_rid, lane="main", effort=effort,
                         top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_fields,
                         **tc_kw)
                 else:
-                    chat_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
+                    chat_rep = deck_lim["repeat_penalty"] or (1.0 if current_tools else (req.repeat_penalty if req.repeat_penalty is not None else 1.15))
                     chat_stream = _llm_chat_stream(main_client, msgs, tools=current_tools, temperature=req.temperature,
                                                    max_tokens=turn_max_tokens, repeat_penalty=chat_rep, rid=chat_rid, effort=effort,
                                                    top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_fields,
@@ -1434,6 +1440,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                 if orig_clean != real_name and content:
                                     content = _re.sub(rf'\[DOWNLOAD:\s*{_re.escape(orig_clean)}\]', f'[DOWNLOAD: {real_name}]', content)
                                     yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+                                if not project_build and not (brief_phase == "build" and longdoc_build):
+                                    turn_limit = min(turn_limit, turn + 1)
                         else:
                             res_str = await run_tool(t_name, args)
                         ok = not (isinstance(res_str, str) and (res_str.startswith("error:") or res_str.startswith("File not found")))

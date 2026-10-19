@@ -11,7 +11,14 @@ import re
 import sys
 from typing import Optional, Set, List, Dict, Tuple
 from .auth_db import list_knowledge_sources
-from .memory import search_knowledge_hybrid, _db, _embed_texts, _store_vecs
+from .memory import (
+    search_knowledge_hybrid,
+    search_okf,
+    rerank_and_filter,
+    _db,
+    _embed_texts,
+    _store_vecs,
+)
 from . import prompt_fence, kb_guard
 
 # Default trigger vocabulary for the internal/organizational knowledge base:
@@ -206,6 +213,73 @@ async def ensure_knowledge_vectors():
         print(f"[knowledge_router] vector backfill failed: {e}", file=sys.stderr)
 
 
+_okf_backfilled = False
+
+
+def ensure_okf_indexed():
+    """Ensure existing knowledge chunks are indexed into OKF entity graph."""
+    global _okf_backfilled
+    if _okf_backfilled:
+        return
+    try:
+        from .memory.okf import backfill_okf_from_chunks
+        backfill_okf_from_chunks()
+        _okf_backfilled = True
+    except Exception as e:
+        print(f"[knowledge_router] okf backfill failed: {e}", file=sys.stderr)
+
+
+def determine_retrieval_scope(query: str) -> dict:
+    """Analyze query intent to dynamically determine retrieval type and scope.
+
+    Returns scope routing decisions and multi-modal weights.
+    """
+    q_lower = (query or "").lower()
+
+    # Relational & organizational cues -> prioritize OKF / Links
+    is_structural = any(re.search(r"\b" + re.escape(phrase) + r"\b", q_lower) for phrase in [
+        "who reports to", "who is the manager", "who leads", "reports to", "managed by",
+        "hierarchy", "belongs to", "depends on", "dependency", "governed by", "definition of",
+        "defined as", "responsible for", "role of", "structure of", "org chart"
+    ])
+
+    # Exact symbols, IDs, code variables, or error codes -> prioritize BM25
+    is_symbolic = bool(re.search(r"\b[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+\b|\b[A-Z]{2,}\b|\b\d{3,}\b|\b[A-Z][a-z]+[A-Z]\w*\b", query or ""))
+
+    if is_structural and not is_symbolic:
+        return {
+            "scope": "structured",
+            "needs_okf": True,
+            "needs_bm25": True,
+            "needs_vec": True,
+            "weights": {"okf": 0.50, "bm25": 0.25, "vec": 0.25}
+        }
+    elif is_symbolic and not is_structural:
+        return {
+            "scope": "symbolic",
+            "needs_okf": False,
+            "needs_bm25": True,
+            "needs_vec": True,
+            "weights": {"okf": 0.10, "bm25": 0.60, "vec": 0.30}
+        }
+    elif is_structural and is_symbolic:
+        return {
+            "scope": "hybrid_deep",
+            "needs_okf": True,
+            "needs_bm25": True,
+            "needs_vec": True,
+            "weights": {"okf": 0.40, "bm25": 0.40, "vec": 0.20}
+        }
+    else:
+        return {
+            "scope": "semantic",
+            "needs_okf": True,
+            "needs_bm25": True,
+            "needs_vec": True,
+            "weights": {"okf": 0.20, "bm25": 0.30, "vec": 0.50}
+        }
+
+
 async def fetch_company_knowledge(query: str, allowed_source_ids: Set[int], k: int = 6) -> Tuple[List[Dict], str]:
     """Fetch relevant knowledge chunks and generate the authoritative reference prompt block.
 
@@ -215,23 +289,34 @@ async def fetch_company_knowledge(query: str, allowed_source_ids: Set[int], k: i
         return [], ""
 
     await ensure_knowledge_vectors()
+    ensure_okf_indexed()
 
     from .small_model import APP_CONFIG
     # R4-calibrated fallback (grid knee: real fallout 0.771 -> 0.407). An
     # explicit config value still wins; the fallback is the measured default.
     min_cos = float((APP_CONFIG.get("knowledge") or {}).get("min_cos", 0.55))
-    hits = await search_knowledge_hybrid(query, k=k, allowed_knowledge_source_ids=allowed_source_ids,
-                                         min_cos=min_cos)
-    if not hits:
+    raw_hits = await search_knowledge_hybrid(query, k=k * 2, allowed_knowledge_source_ids=allowed_source_ids,
+                                             min_cos=min_cos)
+    okf_facts = search_okf(query, allowed_source_ids=allowed_source_ids, k=4)
+
+    # Re-rank, deduplicate and evidence filter
+    hits = rerank_and_filter(query, raw_hits, top_k=k, okf_facts=okf_facts)
+    if not hits and not okf_facts:
         return [], ""
 
-    # Group chunks by source title
+    sections = []
+    # If OKF structured facts exist, surface them as high-precision relational context
+    if okf_facts:
+        fact_lines = [f"- {f['fact']} (Source #{f['source_id']})" for f in okf_facts]
+        sections.append("### Structured Entity Relationships (OKF):\n" + "\n".join(fact_lines))
+
+    # Group chunks by source title with provenance metadata
     by_source: Dict[str, List[str]] = {}
     for h in hits:
         title = kb_guard.guard_text(h.get("title") or f"Knowledge Source #{h.get('source_id')}")
-        by_source.setdefault(title, []).append(kb_guard.guard_text(h["text"]))   # guard on read: upload stores verbatim
+        chunk_meta = f"<!-- Chunk {h.get('chunk_idx', '')} | Conf: {h.get('final_score', '')} -->\n"
+        by_source.setdefault(title, []).append(chunk_meta + kb_guard.guard_text(h["text"]))
 
-    sections = []
     for title, texts in by_source.items():
         doc_content = "\n\n".join(texts)
         sections.append(f"### Source: {title}\n{doc_content}")

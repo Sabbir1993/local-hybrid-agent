@@ -212,11 +212,11 @@ _BARE_CALL_RX = re.compile(r"(?m)^[ \t]*`?([A-Za-z_][\w.\-]*)`?\(\s*(\{[^\n]*\})
 # XML-style function call: Hermes <function=name><parameter=k>v</parameter></function>,
 # attribute <function name="name"><param name="k">v</param>, or colon <function:name>...
 _XML_FUNC_RX = re.compile(
-    r"<function[=:\s](?:name=[\"'])?([A-Za-z0-9_\.\-]+)[\"']?>([\s\S]*?)(?:</function(?::[A-Za-z0-9_\.\-]+)?>|$)",
+    r"<function[=:\s](?:name=[\"'])?([A-Za-z0-9_\.\-]+)[\"']?>([\s\S]*?)(?:</(?:function)+(?::[A-Za-z0-9_\.\-]+)?>|$)",
     re.IGNORECASE,
 )
 _XML_PARAM_RX = re.compile(
-    r"<(?:parameter|param)[=:\s](?:name=[\"'])?([A-Za-z0-9_\.\-]+)[\"']?>([\s\S]*?)(?:</(?:parameter|param)(?::[A-Za-z0-9_\.\-]+)?>|$)",
+    r"<(?:parameter|param)[=:\s](?:name=[\"'])?([A-Za-z0-9_\.\-]+)[\"']?>([\s\S]*?)(?:</(?:parameter|param)+(?::[A-Za-z0-9_\.\-]+)?>|$)",
     re.IGNORECASE,
 )
 

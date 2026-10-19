@@ -25,6 +25,8 @@ class OversizeWriteTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(_oversize_write("write_file", "a.php", "x" * 1000))
         self.assertTrue(_oversize_write("write_file", "a.php", "x" * 30000))
         self.assertFalse(_oversize_write("write_file", "a.docx", "x" * 30000))
+        self.assertFalse(_oversize_write("write_file", "a.html", "x" * 30000))
+        self.assertFalse(_oversize_write("write_file", "data.csv", "x" * 30000))
         self.assertFalse(_oversize_write("read_file", "a.php", "x" * 30000))
 
     async def test_stream_is_cut_and_args_are_valid_json(self):

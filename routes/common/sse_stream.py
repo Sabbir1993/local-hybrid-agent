@@ -9,7 +9,7 @@ from .think_splitter import ThinkSplitter, _emit_split
 
 
 _CAPPED_WRITE_TOOLS = ("write_file", "append_file")
-_DOC_SUFFIXES = (".xlsx", ".xls", ".pptx", ".ppt", ".docx", ".doc", ".pdf")
+_DOC_SUFFIXES = (".xlsx", ".xls", ".pptx", ".ppt", ".docx", ".doc", ".pdf", ".html", ".htm", ".csv", ".tsv", ".svg")
 
 
 def _arg_path(args_str: str) -> str:
@@ -177,7 +177,11 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
     if isinstance(runaway, tuple):
         # a looping tool call must not run: valid JSON the dispatchers turn into RUNAWAY_MSG
         tc = accumulated_tcs[runaway[1]]
-        tc["function"]["arguments"] = json.dumps({"_runaway": True})
+        p = _arg_path(tc["function"]["arguments"])
+        payload = {"_runaway": True}
+        if p:
+            payload["path"] = p
+        tc["function"]["arguments"] = json.dumps(payload)
     tool_calls = [accumulated_tcs[k] for k in sorted(accumulated_tcs.keys())]
     full_content = "".join(content_acc)
     full_reasoning = "".join(reasoning_acc)

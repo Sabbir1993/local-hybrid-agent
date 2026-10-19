@@ -86,6 +86,16 @@ class MissingType(unittest.TestCase):
         self.assertEqual(fi.missing_type("where is the file", ["a.md"]), "")
         self.assertEqual(fi.missing_type("where is my csv", ["data.csv"]), "")
 
+    def test_next_and_sequential_format_requests_never_treated_as_edits(self):
+        from routes.chat import file_intent as fi
+        prior = ["report.html"]
+        self.assertEqual(fi.missing_type("now make ppt", prior), "presentation")
+        self.assertEqual(fi.missing_type("next", prior), "presentation")
+        self.assertIsNone(fi.file_followup_intent("next", True, prior))
+        self.assertIsNone(fi.file_followup_intent("next file", True, prior))
+        self.assertIsNone(fi.file_followup_intent("now make ppt with graphs and charts", True, prior))
+        self.assertIsNone(fi.file_followup_intent("create next file", True, prior))
+
     def test_the_route_builds_instead_of_resending(self):
         from pathlib import Path
         src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")

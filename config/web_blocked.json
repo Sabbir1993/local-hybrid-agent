@@ -108,5 +108,30 @@
     "fails": 1,
     "until": 0,
     "status": 403
+  },
+  "gitnux.org": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "techspot.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "ryans.com": {
+    "fails": 2,
+    "until": 1792484883.528661,
+    "status": 403
+  },
+  "elevenforum.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "techlandbd.com": {
+    "fails": 2,
+    "until": 1792486385.7944233,
+    "status": 403
   }
 }

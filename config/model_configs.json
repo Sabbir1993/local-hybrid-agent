@@ -37,7 +37,7 @@
     "batch_size": 2048,
     "ubatch_size": 512,
     "n_slots": 1,
-    "tensor_split": "1,0",
+    "tensor_split": "0,1",
     "split_mode": "layer",
     "flash_attn": "on",
     "kv_cache_type": "f16",
@@ -49,7 +49,7 @@
       2
     ],
     "vision_capable": false,
-    "kv_unified": false,
+    "kv_unified": true,
     "kv_unified_per_slot": 0,
     "cache_reuse": 256,
     "cache_ram": 1024,
