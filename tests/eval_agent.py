@@ -790,6 +790,7 @@ def main() -> int:
                          "or cached nomic vectors (tests/.eval_vec_cache.json, report-only "
                          "hybrid_real_* keys, GPU-free reruns)")
     ap.add_argument("--no-router", action="store_true", help="skip the router slice")
+    ap.add_argument("--no-snip", action="store_true", help="skip the snip A/B slice")
     ap.add_argument("--no-offline", action="store_true",
                     help="skip the offline pure-function suite (stages CI: unit vs loop)")
     ap.add_argument("--regression", action="store_true",
@@ -991,7 +992,8 @@ def main() -> int:
         suite = run_mock_suite(
             repeats=args.repeats, task_filter=task_filter,
             include_retrieval=not args.no_retrieval, include_router=not args.no_router,
-            retrieval_embedder=args.embedder, include_code=not args.no_code,
+            retrieval_embedder=args.embedder,
+            include_code=not args.no_code, include_snip=not args.no_snip,
             progress=lambda name, ok: print(f"  [{'PASS' if ok else 'FAIL'}] {name}"))
         print(f"  aggregate: {suite['aggregate']['pass_rate']} "
               f"({suite['aggregate']['passes']}/{suite['aggregate']['total']}) "
@@ -1021,6 +1023,14 @@ def main() -> int:
         if suite.get("router") is not None:
             print(f"  router: shortcut_on={suite['router']['shortcut_on']['ok']} "
                   f"shortcut_off={suite['router']['shortcut_off']['ok']}")
+        if suite.get("snip") is not None:
+            s = suite["snip"]
+            print(f"  snip A/B: on={s['snip_on']['ok']} off={s['snip_off']['ok']} "
+                  f"reduction={s.get('reduction_pct')}% "
+                  f"(on {s['snip_on']['bytes']}B vs off {s['snip_off']['bytes']}B)")
+            for side in ("snip_on", "snip_off"):
+                for p in suite["snip"][side]["problems"][:2]:
+                    print(f"  snip {side} problem: {p}")
         if suite.get("code") is not None:
             c = suite["code"]
             print(f"  code: recall={c.get('recall')} "
@@ -1051,6 +1061,9 @@ def main() -> int:
         if suite.get("router") is not None:
             results["router"] = {k: {"ok": v["ok"], "problems": v["problems"]}
                                  for k, v in suite["router"].items() if isinstance(v, dict)}
+        if suite.get("snip") is not None:
+            results["snip"] = {k: {"ok": v["ok"], "problems": v["problems"]}
+                               for k, v in suite["snip"].items() if isinstance(v, dict)}
         if suite.get("code") is not None:
             results["code"] = suite["code"]
         if not args.regression:
@@ -1062,6 +1075,8 @@ def main() -> int:
             if suite.get("retrieval") is not None and not suite["retrieval"].get("ok", True):
                 failed += 1
             if suite.get("router") is not None and not suite["router"].get("ok", True):
+                failed += 1
+            if suite.get("snip") is not None and not suite["snip"].get("ok", True):
                 failed += 1
             if suite.get("code") is not None and not suite["code"].get("ok", True):
                 failed += 1

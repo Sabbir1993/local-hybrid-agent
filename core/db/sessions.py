@@ -129,6 +129,55 @@ def db_append_message(sid: int, role: str, content: str, meta: dict = None, owne
     return cur.lastrowid
 
 
+def db_fork_session(sid: int, owner_user_id: int, upto_message_id: Optional[int] = None) -> dict:
+    """Fork a session at (and including) message `upto_message_id`, or copy all of it.
+
+    Branch, not truncation: the source session is untouched, so a resume/rewrite attempt
+    from an earlier point can never lose the original history. Plan items (statuses included,
+    so a retry resumes exactly where the plan stands) and the session's working memory are
+    carried over; ids are re-issued. The new session keeps project_id/user_id/agent_id and
+    records `fork_of`, its title is the parent's prefixed with an arrow (still <=80 chars,
+    PAN-masked like every title).
+
+    Raises PermissionError when the caller does not own the session, ValueError when
+    `upto_message_id` is not a message of this session (the caller asked to fork at a
+    message that does not exist - saying so loudly beats silently forking everything)."""
+    if owner_user_id is None or db_session_owner(sid) != owner_user_id:
+        raise PermissionError("not your session")
+    src = _projects_db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+    if src is None:
+        raise PermissionError("not your session")
+    upto_sql, upto_args = "", ()
+    if upto_message_id is not None:
+        has = _projects_db.execute("SELECT 1 FROM messages WHERE id = ? AND session_id = ?",
+                                   (int(upto_message_id), sid)).fetchone()
+        if has is None:
+            raise ValueError("message not in this session")
+        upto_sql, upto_args = " AND id <= ?", (int(upto_message_id),)
+    title = _at_rest("↳ " + str(src["title"]))[:80]
+    with transaction(_get_projects_db()) as c:
+        cur = c.execute(
+            "INSERT INTO sessions (project_id, title, created_at, user_id, agent_id, fork_of) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (src["project_id"], title, time.time(), src["user_id"], src["agent_id"], sid))
+        new_id = cur.lastrowid
+        c.execute(
+            f"INSERT INTO messages (session_id, role, content, meta, created_at) "
+            f"SELECT ?, role, content, meta, created_at FROM messages "
+            f"WHERE session_id = ?{upto_sql}",
+            (new_id, sid, *upto_args))
+        c.execute(
+            "INSERT INTO plan_items (session_id, ord, text, status, deps, phase, verification, created_at, updated_at) "
+            "SELECT ?, ord, text, status, deps, phase, verification, ?, ? FROM plan_items WHERE session_id = ?",
+            (new_id, time.time(), time.time(), sid))
+        c.execute(
+            "INSERT INTO session_working_memory (session_id, user_id, content, updated_at) "
+            "SELECT ?, user_id, content, ? FROM session_working_memory WHERE session_id = ?",
+            (new_id, time.time(), sid))
+    n_messages = _projects_db.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (new_id,)).fetchone()[0]
+    return {"id": new_id, "title": title, "fork_of": sid, "messages": n_messages}
+
+
 # ---------------- structured plan tracking ----------------
 _VALID_PLAN_STATUS = ("pending", "in_progress", "done", "failed")
 

@@ -61,8 +61,10 @@ def _sse_turn(turn: dict, call_id: str = "call_0") -> bytes:
     def data(obj):
         out.append("data: " + json.dumps(obj) + "\n\n")
 
-    if "content" in turn and turn.get("tool_calls"):
-        raise ValueError("a scripted turn is either text or tool calls, not both")
+    if "content" in turn and turn.get("tool_calls") and not turn.get("narrate"):
+        raise ValueError("a scripted turn is either text or tool calls, not both "
+                         "(pass narrate=True to stream narration before the call, "
+                         "as real models do)")
     text = turn.get("content", "")
     # two text chunks: exercises the delta-accumulation path without timing flakes
     if text:
@@ -99,6 +101,9 @@ def _mock_handler(request: httpx.Request) -> httpx.Response:
         # context_budget.probe_window: report the configured window, nothing more
         return httpx.Response(200, json=[{"n_ctx": _current["n_ctx"], "n_past": 0}])
     if request.method == "POST" and path == "/v1/chat/completions":
+        # payload observability: the snip A/B slice compares total request
+        # body bytes for identical scripts, on vs off the snip flag
+        _current.setdefault("prompt_chars", []).append(len(request.content or b""))
         fifo = _current["fifo"]
         try:
             turn = fifo.get_nowait()
@@ -708,9 +713,14 @@ def _plan_all_done(env) -> "str | None":
 # Part 5: task set (smoke first; more batches follow once green)
 # ---------------------------------------------------------------------------
 
-def T(tool_calls=None, content=None):
-    if tool_calls is not None and content is not None:
+def T(tool_calls=None, content=None, narrate=False):
+    if tool_calls is not None and content is not None and not narrate:
         raise ValueError("turn is either text or tool calls")
+    if narrate:
+        # a real model narrates prose before calling the tool in the SAME turn;
+        # _sse_turn streams the content deltas then the call deltas
+        return {"narrate": True, "content": content or "",
+                "tool_calls": tool_calls or []}
     if tool_calls is not None:
         return {"tool_calls": tool_calls}
     return {"content": content}
@@ -1229,6 +1239,140 @@ def run_router_scenario(shortcut_on: bool) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Part 6c: snip A/B slice (context.snip.enabled, DEFAULT-OFF flag gate)
+# ---------------------------------------------------------------------------
+
+def _snip_narration(i: int) -> str:
+    """~4000 chars of deterministic, UNIQUE prose. Two guards must not trip:
+    find_runaway cuts a 40+ char phrase repeated 6x in the tail window, and
+    is_degeneration_or_loop fires on repeated sentences/lines - so every token
+    is position-stamped and unique to this step."""
+    words = ("alpha", "beta", "gamma", "delta", "epsilon", "zeta",
+             "eta", "theta", "iota", "kappa")
+    filler = " ".join(f"{words[p % 10]}{p}" for p in range(410))
+    return f"Step {i} notes: {filler} end-of-narration-{i}"
+
+
+def run_snip_scenario(snip_on: bool) -> dict:
+    """A/B the narration snip layer (context.snip.enabled) over one long run.
+
+    The scripted model narrates ~4000 chars alongside a read_file call in the
+    SAME turn, 60 steps (~80k estimated tokens), so the snip trigger (50000)
+    fires and old assistant prose is stubbed from the first snippable message
+    on. The mock transport records every chat POST body length; the gate is
+    that the snip=on run posts strictly fewer payload bytes than the snip=off
+    run for the IDENTICAL script, with both runs completing their tools and
+    final answer. It measures request payload, not wall time: the layer exists
+    to spend fewer tokens per step on the same conversation.
+
+    Lane note: the snip layer runs on the MAIN lane only (executor steps get a
+    fresh view and never snip `msgs`, by design), so the scenario pins the
+    tool-step job to main via the global role_map - otherwise the run
+    exercises the executor lane exclusively and the A/B halves come out
+    byte-identical.
+
+    Housekeeping in the scenario: n_ctx is raised to 262k while the probe runs
+    so COMPACTION (0.70 threshold) can never merge old turns first - the A/B
+    must isolate the snip layer, not re-measure compaction; and the
+    context_budget probe cache is reset afterwards so nothing leaks into a
+    later slice."""
+    import copy as _copy
+    from core.small_model import APP_CONFIG
+    from core import context_budget
+
+    rec = {"snip_on": snip_on, "ok": False, "problems": [],
+           "tools": [], "final_text": "", "turns": 0, "bytes": 0}
+    steps = 60
+    # NOTE: every call reads a DIFFERENT file - identical tool calls every step
+    # would trip the loop guard (escalate_reason -> "loop") before the snip
+    # trigger is ever reached
+    seed = {f"step_{i:02d}.txt": f"content {i}\n" for i in range(steps)}
+    seed["step_input.txt"] = "input content\n"
+    script = [T(tool_calls=[TC("read_file", path=f"step_{i:02d}.txt")],
+                content=_snip_narration(i), narrate=True) for i in range(steps)]
+    script.append(T(content="Final: the input was read 60 times, marker snip-final."))
+    task = {"name": "snip_ab_probe",
+            "prompt": "Read the per-step files and narrate loudly.",
+            "script": script, "grade": {}, "max_steps": steps + 6,
+            "seed_files": seed}
+    saved_ctx = _copy.deepcopy(APP_CONFIG.get("context") or {})
+    saved_role_map = dict(APP_CONFIG.get("role_map") or {})
+    saved_n_ctx = _current.get("n_ctx")
+    # cloud.role_map reads the config FROM DISK (cached in _CACHE) and ignores
+    # in-memory APP_CONFIG - the only honest way to pin tool steps to the main
+    # lane (where the snip layer runs) is to patch the reader for the duration
+    # of the scenario, then restore and reload the cache.
+    import core.cloud.config as _cc
+    _orig_read = _cc._read_json
+    _saved_cache = dict(_cc._CACHE)
+
+    def _patched_read(p):
+        d = _orig_read(p)
+        if isinstance(d, dict):
+            rm = d.setdefault("role_map", {})
+            rm.update({"agent.tool_step": "main"})
+        return d
+    try:
+        APP_CONFIG.setdefault("context", {},
+                              )["snip"] = dict((saved_ctx.get("snip") or {}) | {"enabled": snip_on})
+        # pin tool steps to the MAIN lane so the snip layer (main-lane branch)
+        # actually sees the full history every step
+        APP_CONFIG["role_map"] = {**saved_role_map, "agent.tool_step": "main"}
+        _cc._read_json = _patched_read
+        _cc.reload()
+        _current["n_ctx"] = 262144
+        _current["prompt_chars"] = []
+        with MockEvalEnv() as env:
+            _current["fifo"] = queue.Queue()
+            for turn in task["script"]:
+                _current["fifo"].put(dict(turn))
+            _current["extra_calls"] = 0
+            _current["requests"] = 0
+            for rel, content in (task.get("seed_files") or {}).items():
+                p = env.ws / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content, encoding="utf-8")
+            payload = {"messages": [{"role": "user", "content": task["prompt"]}],
+                       "mode": "all-local", "max_steps": task["max_steps"],
+                       "temperature": 0, "session_id": env.sid}
+            with env.client.stream(
+                    "POST", "/agent/run", json=payload,
+                    headers={"User-Agent": "A770NativeApp/1.0",
+                             "X-Device-Id": DEVICE}, timeout=600) as resp:
+                if resp.status_code != 200:
+                    rec["problems"].append(f"HTTP {resp.status_code}")
+                    return rec
+                parsed = _parse_sse(resp)
+        rec["tools"] = [t["name"] for t in parsed["tools"]]
+        rec["final_text"] = parsed["final_text"]
+        rec["turns"] = _current["requests"]
+        rec["bytes"] = sum(_current["prompt_chars"])
+        rec["bytes_per_turn"] = rec["bytes"] // max(1, rec["turns"])
+        if rec["turns"] not in (steps + 1, steps + 2):
+            # +2 tolerance: one escalation replay or one fifo-emptied fallback
+            # turn is plumbing latency, not a different task; both halves must
+            # still agree structurally before bytes are compared
+            rec["problems"].append(f"expected {steps + 1} model turns, got {rec['turns']}")
+        if "read_file" not in rec["tools"]:
+            rec["problems"].append("read_file never ran")
+        if "snip-final" not in rec["final_text"]:
+            rec["problems"].append("final answer missing")
+        rec["ok"] = not rec["problems"]
+    except Exception as e:
+        import traceback
+        rec["problems"].append(f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=6)}")
+    finally:
+        APP_CONFIG["context"] = saved_ctx
+        APP_CONFIG["role_map"] = saved_role_map
+        _cc._read_json = _orig_read
+        _cc._CACHE = _saved_cache
+        _current["n_ctx"] = saved_n_ctx
+        _current["prompt_chars"] = []
+        context_budget.reset(None)
+    return rec
+
+
+# ---------------------------------------------------------------------------
 # Part 6b: code-intel slice (R9 symbol search over a staged fixture repo)
 # ---------------------------------------------------------------------------
 
@@ -1657,11 +1801,12 @@ def wilson_ci(passes: int, n: int, z: float = 1.96) -> tuple:
 def run_mock_suite(repeats: int = 3, task_filter: "list | None" = None,
                    include_retrieval: bool = True, include_router: bool = True,
                    retrieval_embedder: str = "fake", include_code: bool = True,
+                   include_snip: bool = True,
                    progress=None) -> dict:
     """The whole mock suite. Every repeat gets a fresh hermetic env."""
     tasks = [t for t in MOCK_TASKS if task_filter is None or t["name"] in task_filter]
     suite = {"harness": "mock", "repeats": repeats, "tasks": {}, "aggregate": {},
-             "retrieval": None, "router": None, "code": None}
+             "retrieval": None, "router": None, "snip": None, "code": None}
     passes = 0
     for task in tasks:
         runs = []
@@ -1700,6 +1845,26 @@ def run_mock_suite(repeats: int = 3, task_filter: "list | None" = None,
                              "tools": off["tools"], "router_calls": off.get("router_calls")},
             "ok": on["ok"] and off["ok"],
         }
+    if include_snip:
+        s_on = run_snip_scenario(True)
+        s_off = run_snip_scenario(False)
+        reduction = None
+        if s_on["ok"] and s_off["ok"] and s_off.get("bytes"):
+            reduction = round(100.0 * (1.0 - s_on["bytes"] / s_off["bytes"]), 1)
+        suite["snip"] = {
+            "snip_on": {"ok": s_on["ok"], "problems": s_on["problems"],
+                        "bytes": s_on.get("bytes"), "turns": s_on.get("turns")},
+            "snip_off": {"ok": s_off["ok"], "problems": s_off["problems"],
+                         "bytes": s_off.get("bytes"), "turns": s_off.get("turns")},
+            "reduction_pct": reduction,
+            # the gate: both runs complete AND the flag measurably shrinks the
+            # request payload for identical scripts. 15% is far below what the
+            # layer should deliver on a narration-heavy run (~one third of the
+            # history is snippable after the trigger) but far above noise:
+            # identical scripts on identical machinery drift by nothing.
+            "ok": bool(s_on["ok"] and s_off["ok"] and reduction is not None
+                       and reduction >= 15.0),
+        }
     if include_code:
         suite["code"] = run_code_slice()
     return suite
@@ -1724,6 +1889,7 @@ def _summarize_suite(suite: dict, offline: "list | None" = None) -> dict:
         "aggregate_rate": (suite.get("aggregate") or {}).get("pass_rate"),
         "retrieval": None,
         "router": None,
+        "snip": None,
         "code": None,
     }
     if suite.get("retrieval") is not None:
@@ -1744,6 +1910,10 @@ def _summarize_suite(suite: dict, offline: "list | None" = None) -> dict:
                             if suite["retrieval"].get(k) is not None}
     if suite.get("router") is not None:
         out["router"] = {"ok": suite["router"].get("ok")}
+    out["snip"] = None
+    if suite.get("snip") is not None:
+        out["snip"] = {"ok": suite["snip"].get("ok"),
+                       "reduction_pct": suite["snip"].get("reduction_pct")}
     out["code"] = None
     if suite.get("code") is not None:
         out["code"] = {"recall": suite["code"].get("recall")}
@@ -1805,6 +1975,10 @@ def compare_baseline(current: dict, baseline: dict, tolerance: float = 0.001) ->
         pass  # slice skipped (--no-router): absence is not a regression
     elif (base.get("router") or {}).get("ok") and not (cur.get("router") or {}).get("ok", True):
         problems.append("REGRESSION router slice: was ok, now failing")
+    if cur.get("snip") is None:
+        pass  # slice skipped (--no-snip): absence is not a regression
+    elif (base.get("snip") or {}).get("ok") and not (cur.get("snip") or {}).get("ok", True):
+        problems.append("REGRESSION snip slice: was ok, now failing")
     if cur.get("code") is not None:
         # Deterministic fixture, exact index: recall below 1.0 is breakage.
         # Latency is report-only (machine variance must never gate CI).

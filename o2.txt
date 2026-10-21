@@ -1,0 +1,77 @@
+C:\Users\SABBIR\AppData\Local\Programs\Python\Python311\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+[server_manager] executor repeating identical tool calls - escalating to main model
+[server_manager] executor repeating identical tool calls - escalating to main model
+[agent] step 1 cut off by the output limit (tool call); retry 1
+============================================================
+ MOCK SUITE (29 tasks x 1, hermetic: scripted model, no server/GPU/network)
+============================================================
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] smoke_list_files
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] write_and_verify
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] compute_only
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] read_after_write
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] symbol_navigation
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] edit_flow
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] append_build
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] grep_search
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] json_repair_truncated
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] unknown_tool_graceful
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] missing_arg_recovery
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] missing_arg_hard_error
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] escalation_on_repeat
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] loop_thrash_uses_budget
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] refusal_graceful
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] parallel_reads
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] cutoff_write_recovery
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] insert_flow
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] revert_flow
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] pan_masked_output
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] traversal_blocked
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] forbidden_name_blocked
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] shell_refused_cleanly
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] memory_write_read
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] memory_delete_allowed
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] memory_delete_refused
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] subagent_delegate
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] plan_complete
+[agent] lanes: main=local executor=local mode=all-local
+  [PASS] plan_guard_violation
+[agent] lanes: main=local executor=local mode=all-local
+[agent] lanes: main=local executor=local mode=all-local
+  aggregate: 1.0 (29/29) ci95=[0.883, 1.0]
+  retrieval: recall@6=0.556 (lexical 0.692, lexonly 1.0, paraphrase 0.2) rank~1.0
+  retrieval fallout: hybrid~0.111 (lexical 0.0, paraphrase 0.4) lexonly~0.369
+  router: shortcut_on=True shortcut_off=True
+  code: recall=1.0 p95=1.12ms
+  mock suite took 12.4s
+
+results saved -> E:\AI\vulkan-arc\a770-dual-runtime\tests\eval_results.json
+SUITE: ALL OK

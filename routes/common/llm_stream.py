@@ -169,6 +169,22 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
 _TOOL_CHOICE_UNSUPPORTED: set = set()
 
 
+def _purge_local_tool_choice_verdicts() -> None:
+    """A llama-server swap changes the process behind the FIXED local port, so a
+    verdict learned from the old model ("this server rejects tool_choice") does
+    not describe the new one. Cloud verdicts survive: their provider key bound a
+    different endpoint that was not touched by the swap."""
+    _TOOL_CHOICE_UNSUPPORTED.difference_update(
+        k for k in list(_TOOL_CHOICE_UNSUPPORTED) if k.startswith("local:"))
+
+
+try:
+    from core import state as _state_mod
+    _state_mod.register_swap_hook(_purge_local_tool_choice_verdicts)
+except Exception:        # noqa: BLE001 - standalone import without the app package
+    pass
+
+
 def _tool_choice_key(client_or_state) -> str:
     cm = getattr(client_or_state, "cm", None)
     if cm is not None:

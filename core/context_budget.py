@@ -333,6 +333,21 @@ def reset_tps(lane: Optional[str] = None) -> None:
         _TPS_STATE.pop(lane, None)
 
 
+def _on_model_swap() -> None:
+    """A new llama-server process invalidates EVERYTHING learned about the old
+    one: window/anchor and tok/s EMA are descriptions of a model that no longer
+    runs. Fired by core/state.register_swap_hook after a healthy load."""
+    reset(None)
+    reset_tps(None)
+
+
+try:
+    from . import state as _state_mod
+    _state_mod.register_swap_hook(_on_model_swap)
+except Exception:        # noqa: BLE001 - state absent (standalone use): keep working
+    pass
+
+
 def budget_latency_advice(lane: str, profile: Optional[dict] = None,
                           system_prompt: str = "",
                           tools_json: str = "",

@@ -10,13 +10,14 @@ from core.db import (
     db_append_message,
     db_create_session,
     db_delete_session,
+    db_fork_session,
     db_list_sessions_page,
     db_load_messages,
     db_update_session_title,
     db_update_session_agent_id,
 )
 from core.deps import get_current_user
-from .models import MessageReq, SessionReq
+from .models import ForkReq, MessageReq, SessionReq
 
 router = APIRouter()
 
@@ -86,3 +87,24 @@ async def post_message(sid: int, req: MessageReq, user: Principal = Depends(get_
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True, "id": mid}
+
+
+@router.post("/control/sessions/{sid}/fork")
+async def fork_session(sid: int, req: ForkReq, user: Principal = Depends(get_current_user)):
+    """Copy this session (up to and including `upto_message_id`, or all of it) into a NEW
+    session and return its id. Branch, never truncation: the original stays untouched.
+    DEFAULT-OFF: sessions.fork_enabled in config/app.json - a 403 until it is armed, so
+    the surface only appears when the operator deliberately turns it on."""
+    from core.small_model import APP_CONFIG
+    if not ((APP_CONFIG.get("sessions") or {}).get("fork_enabled")):
+        return JSONResponse({"error": "session forking is disabled (config: sessions.fork_enabled)"},
+                            status_code=403)
+    try:
+        out = db_fork_session(sid, owner_user_id=user.id, upto_message_id=req.upto_message_id)
+    except PermissionError:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "session": out}

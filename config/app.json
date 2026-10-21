@@ -286,7 +286,17 @@
     "clear_at_least_tokens": 8000,
     "aging": {
       "keep_recent_results": 3
+    },
+    "snip": {
+      "enabled": false,
+      "trigger_tokens": 50000,
+      "keep_recent_narration": 3,
+      "min_chars": 600,
+      "at_least_tokens": 8000
     }
+  },
+  "sessions": {
+    "fork_enabled": false
   },
   "preflight": {
     "mode": "block",
@@ -628,6 +638,6 @@
     "fingerprint": "5c4a37043f401db8c5d86d1c306d2cd1cdba95d7cad924b36268f959fa13d921",
     "enabled": true,
     "verified_at": 1792423129.6497436,
-	"allow_public_runner": false
+    "allow_public_runner": false
   }
 }

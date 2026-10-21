@@ -6,14 +6,20 @@ agent system prompt (token-cheap); the model pulls full bodies via read_skill.
 
 Catalog: skill_catalog/<name>/SKILL.md is the curated, in-repo (reviewed) set the
 Customize page can browse and install. Installing copies the folder into
-.agents/skills/<name>/. A skill body becomes agent instructions, so - like plugins -
-nothing is downloaded from the internet; new skills enter the catalog via code review.
+.agents/skills/<name>/ and writes a .provenance.json sidecar inside the copy
+recording the installed tree hash, so every installed skill keeps its trust
+state: reviewed (still matches the recorded hash), modified (tree moved since
+install), handwritten (no usable sidecar). A skill body becomes agent
+instructions, so - like plugins - nothing is downloaded from the internet;
+new skills enter the catalog via code review.
 """
 
 import hashlib
+import json
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +29,7 @@ from .registry import registry
 SKILLS_DIR = BASE_DIR / ".agents" / "skills"
 CATALOG_DIR = BASE_DIR / "skill_catalog"
 MAX_SKILL_BODY_CHARS = 12000   # safety cap for read_skill output
+PROVENANCE_NAME = ".provenance.json"
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
 
@@ -88,6 +95,7 @@ def load_skills() -> dict:
             continue
         sk = parse_skill_md(d / "SKILL.md")
         if sk:
+            sk["trust"] = trust_of(d.name)
             out[d.name] = sk
     return out
 
@@ -147,7 +155,7 @@ def _tree_hash(d: Path) -> Optional[str]:
     h = hashlib.sha256()
     try:
         for p in sorted(d.rglob("*")):
-            if p.is_file() and "__pycache__" not in p.parts:
+            if p.is_file() and "__pycache__" not in p.parts and p.name != PROVENANCE_NAME:
                 h.update(p.relative_to(d).as_posix().encode())
                 h.update(p.read_bytes())
     except OSError:
@@ -208,6 +216,35 @@ def install_from_catalog(name: str) -> None:
         raise ValueError(f".agents/skills/{name} already exists with local changes — remove it manually first")
     SKILLS_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    (dst / PROVENANCE_NAME).write_text(json.dumps({
+        "source": "skill_catalog",
+        "catalog_sha256": _tree_hash(src),
+        "installed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }, indent=2), encoding="utf-8")
+
+
+def trust_of(name: str) -> str:
+    """One of the three trust tiers, or "" for anything not installed.
+
+    reviewed   - provenance sidecar present and the tree still hashes to the
+                 recorded catalog hash (installed, unmodified, reviewed)
+    modified   - sidecar present but the tree moved since the install
+    handwritten- no usable sidecar (absent, unreadable, or bad shape)
+    """
+    if not is_installed(name):
+        return ""
+    side = SKILLS_DIR / name / PROVENANCE_NAME
+    if not side.is_file():
+        return "handwritten"
+    try:
+        data = json.loads(side.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "handwritten"
+    if not isinstance(data, dict) or not data.get("catalog_sha256"):
+        return "handwritten"
+    if _tree_hash(SKILLS_DIR / name) == data["catalog_sha256"]:
+        return "reviewed"
+    return "modified"
 
 
 def uninstall(name: str) -> None:

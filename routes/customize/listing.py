@@ -23,6 +23,7 @@ def _skills_items(uid: Optional[int] = None) -> list:
             "version": src.get("version", ""),
             "in_catalog": cat is not None,
             "installed": inst is not None,
+            "trust": (inst or {}).get("trust") or None,
             "modified": bool(cat) and modified,
             "can_uninstall": bool(inst) and bool(cat) and not modified,
             "triggers": (cat or inst)["triggers"][:10],

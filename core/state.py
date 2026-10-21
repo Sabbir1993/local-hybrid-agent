@@ -40,6 +40,30 @@ from . import vram
 _log_fh = None
 _log_day = ""
 
+# ---------------- model-swap hooks ----------------
+# Learned per-model state (context-budget anchor/TPS EMA, tool_choice verdicts)
+# describes the OLD llama-server process: a swap to a different GGUF must not
+# let it silently carry onto the new one. Owners of such state register a hook
+# here instead of state importing them (dependency direction: hooks point
+# INTO state). Hooks run after a HEALTHY load only, each guarded - hygiene must
+# never fail the load it decorates. Firing on every healthy load (including the
+# very first at boot) is harmless: a fresh process has no stale state anyway.
+_SWAP_HOOKS: list = []
+
+
+def register_swap_hook(fn) -> None:
+    """Register fn() to run after each healthy model load. Idempotent."""
+    if fn not in _SWAP_HOOKS:
+        _SWAP_HOOKS.append(fn)
+
+
+def notify_swap() -> None:
+    for fn in list(_SWAP_HOOKS):
+        try:
+            fn()
+        except Exception:        # noqa: BLE001 - a broken hook must not fail a load
+            pass
+
 
 def _write_log_file(line: str) -> None:
     global _log_fh, _log_day
@@ -198,6 +222,7 @@ class ProxyState:
         log_event("server.load_started", pid=self.process.pid,
                   model=Path(str(self.profile.get("model_path") or "")).name)
         await self._wait_healthy()
+        notify_swap()
 
     async def stop(self, clear_profile: bool = False):
         async with self.lock:

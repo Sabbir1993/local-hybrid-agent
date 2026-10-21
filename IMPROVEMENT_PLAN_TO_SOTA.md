@@ -282,3 +282,200 @@ Salvageable items from this plan, mapped onto the measurement-first sequencing a
 - **Critic-reviewer swarm (Â§4.2):** gated behind report-only evidence per the F2 rule. No build until disagreement predicts defects.
 - **Container sandbox (Â§4.1):** re-scoped as an investigation spike (Docker Desktop + Vulkan passthrough feasibility for llama-server lanes; inventory of host-assuming flows). Build phase only if the spike resolves.
 - **Playwright agent (Â§4.3):** after the sandbox question is answered â€” an authenticated browser without isolation is new attack surface, not a feature.
+
+### C-snip â€” narration snip layer (P1, shipped 2026-10-20, DEFAULT-OFF) â€” DONE, unmeasured live
+- **Premise (verified in-tree):** clearing.py stubs old *tool results* and compaction.py digest-rolls whole turns at `compaction_threshold` (0.70 of the window), but old *assistant narration* stayed verbatim until full compaction and re-sent on every step â€” the temporal-depth gap vs Claude Code's snip layer (5-layer pipeline, arXiv:2604.14228).
+- **Shipped:** `core/agent_loop/snip.py` â stubs old assistant prose (content only; `tool_calls`, pairing, system/user/tool results untouched), newest `context.snip.keep_recent_narration` messages kept verbatim, batch discipline identical to clearing (`trigger_tokens` + `at_least_tokens` cache-prefix protection), idempotent via `SNIP_PREFIX`, squeeze mode halves the keep. Wired into `routes/agent/stream.py` main lane between clearing and compaction; `route_events` gains a free-form `snip` event with `outcome=snipped:<tokens>`. Config block `context.snip` in `config/app.json` with `enabled: false`.
+- **DEFAULT-OFF guarantee:** `tests/test_context_snip.py::NoOpGuarantee` pins byte-identical history with the flag absent/false/broken. Nothing changes until the flag is armed in config â no code change needed to roll back.
+- **Verification at merge (all green):** ruff clean; 15 new tests + the 15 clearing tests OK; full discover run has the same pre-existing environment-dependent failures as a clean tree (confirmed by `git stash -u` A/B: test_runner/test_file_tools etc. fail identically without this change); eval gates `--mock --no-offline --regression --repeats 3` and `--regression` both report "no regressions vs baseline"; branch coverage `core/*,routes/*` TOTAL 74% (floor 65), `core/agent_loop/snip.py` 86%.
+- **Still open (the live half, standard for this repo):** the offline A/B long-run slice (`tests/eval_mock.py` grammar, flag on vs off, compare est. prompt tokens/step + answered/synth rates) must pass before `context.snip.enabled` is armed; then fresh `usage.db` traffic confirms the freed tokens actually landed. Do not flip the flag before that.
+- **C-deferred (deferred MCP tool schemas) â PREMISE PARTLY FALSIFIED, not built.** The plan-item assumed every MCP tool schema shipped in every request. Measured in-tree: `prompt_scope.hide_unmentioned_mcp` (stream.py, S1) already hides schemas of servers the request does not name, and `tool_surface.hidden_families` withholds situational families (the 14 browser/device schemas alone were several thousand tokens of the executor's 32k window, already handled). The residual population â *many* schemas across several *named* servers â is an edge, and ToolSearch-style indirection is unproven on small local executors. Not scheduled: revisit only with usage.db evidence that named-server schema cost actually shows up, and then only on the main lane, default-off, by the same gate as E-dispatch.
+
+
+### P2-session-fork ? branch a session from an earlier point (shipped 2026-10-20, DEFAULT-OFF)
+- **Why fork, not truncate-in-place:** a destructive rewind can lose work the user asked to keep; a fork copies, so retrying from an earlier point is strictly additive. The head "moves" by continuing the new branch, which is what the OpenHands movable-head model buys in practice.
+- **Shipped:** `core/db/sessions.py::db_fork_session` ? a new session (project/user/agent carried, `fork_of` recorded on `sessions` via a `PRAGMA table_info` migration in `core/db/common.py`, title prefixed with an arrow), messages copied up to and including `upto_message_id` (all when omitted), plan items copied **with statuses** so a retry resumes the standing plan, `session_working_memory` copied, ids re-issued, message count returned. Ownership enforced via `db_session_owner`; a `upto_message_id` outside the session is a loud ValueError, not a silent full fork. All of it lands inside one `core.sqlite_util.transaction`.
+- **Surface:** `POST /control/sessions/{sid}/fork` in `routes/projects/session_endpoints.py`, body `{"upto_message_id": int|null}` (`ForkReq` in `routes/projects/models.py`), exported through `core/db/__init__.py`. **DEFAULT-OFF:** the endpoint answers 403 (`sessions.fork_enabled`) until armed in `config/app.json`; config ships with `sessions: {"fork_enabled": false}` and no UI change at merge ? the surface appears only when the operator arms it, and a rollback is the flag, not a revert. Fork/rewind anchors to the messages table, the only *persisted* history (the run-manager journal is deliberately in-memory and code-only), so a branch survives restarts and directly benefits the "Continue" path (plan re-injection reads `db_get_plan_items(session_id)`, which the copy satisfies).
+- **Deliberately same-shape safety notes:** copied messages keep the at-rest PAN-masked content already stored in projects.db (nothing new reaches disk unmasked); forked sessions do not pre-allocate memory-search chunks (ingest happens downstream, unchanged); `db_delete_session` needs no new cascade rules because `fork_of` carries no FK.
+- **Verification at merge (all green):** red-first 9 tests in `tests/test_session_fork.py` (copy boundary + `fork_of`, plan/working-memory carry, count, ownership refusal, unknown-message refusal, legacy-DB migration, endpoint flag gate + wiring); `tests/test_session_paging.py`, `tests/test_step_outcome.py`, `tests/test_working_memory.py` green (31 combined); ruff clean; both eval gates "no regressions vs baseline"; full discover run hit failures=23 where the 23rd WAS `tests/test_doc_refs.py` (a bare snip.py filename reference my own P1 entry had written; the meta-test caught it, full path fixed) — the remaining 22 failures + 2 errors are the same pre-existing environment-dependent set confirmed on a clean tree. app.json parses; the fork route is registered.
+
+### P4-tool-duration - remote/MCP read-only batching: PREMISE FALSIFIED FOR NOW; the reopen instrument shipped (2026-10-20)
+- **Census first (usage.db route_events, 3621 recorded tool calls, 2977 tool steps):** multi-call steps: 460; read-only multi-call steps: 240, and ALL 240 are already served by the existing all-read gather fast path in `routes/agent/stream.py` (web_search/web_fetch are among the batchable reads - remote latency already hides for them). Named mcp-prefixed tool calls found in telemetry: ZERO (only 4 plugin__devtools__report_file_stats calls, a different prefix). Population for MCP batching on this machine: none.
+- **Verdict:** batch-parallel dispatch for read-only MCP tools is speculative infrastructure for a population of zero - not built, per the measurement-before-features rule and the same treatment the C-deferred entry got. The web_* tools stay covered by the existing fast path; read-only MCP would join it only if its population appears.
+- **The real gap the census exposed - shipped as P4 (red-first, pure telemetry):** route_events reason=tool rows never recorded duration_s, so the documented reopen condition (tool time dominating step latency) was permanently unmeasurable. Now the tool event in `routes/agent/stream.py` carries duration_s for both dispatch paths: the all-read gather fast path times each call individually (new per-call timing wrapper around run_tool; calls finish out of order), and the sequential gauntlet is timed around its run only (approval-card and permission-card user wait time is deliberately excluded - user thinking latency is not tool latency). The schema column existed since day one in `core/route_log.py`; only the call site fed it.
+- **Verification at merge (all green):** red-first 4 wiring tests in `tests/test_tool_duration.py` (event carries duration_s; sequential timer sits between the device-approval line and the parallel_results branch; per-call timing wrapper plus per-id storage in the gather; the duration expression covers the fast path); `tests/test_doc_refs.py` clean; ruff clean; both eval gates no-regressions; full discover run 3421 tests with only the pre-existing 22 failures + 2 errors confirmed on a clean tree.
+- **Reopen condition (now measurable):** once a real population of MCP usage lands, read scripts/perf_report.py data from route_events: if median tool duration_s meaningfully exceeds the read-only fast-path dispatch cost, extend the all_reads eligibility predicate to read-only MCP tools (their read_only metadata) behind a config flag with its D4 negative control. Until then this stays closed-by-measurement, not by fiat.
+- **Safety notes checked, not just assumed:** read-only MCP tools raise no permission cards even in tainted runs (`mcp_call_needs_approval` returns False for read_only=True), so extending the fast path would bypass no card; the all-spawn fan-out gating in `core/agent_loop/policy.py` already checks plan mode; fast_sandbox_check silently drops calls it cannot clear, which for tool names it does not recognize would double-announce the tool card - one more reason the extension is not a five-line change and stays closed until there is a population to justify handling that edge properly.
+
+### P5-ACDI - Windows AppContainer isolation spike: PROVEN FEASIBLE 8/8 on this machine; NOT wired (2026-10-20)
+- **Census first (usage.db tool schema events, the whole 2026-10/2026-11 window):** `run_sandbox_python` was called ZERO times ever (the WSL2 runner from `core/sandbox/runners.py` sits unexercised), while `run_shell` hit n=541 (535 ok) and `run_python` n=412 (408 ok) executing directly on the host - only the ask-first card stands between the model and the machine. Phase 4 of the plan names AppContainer exactly for this; the code-only spike (no wiring, no flag) was the gate before any build.
+- **Shipped for the spike:** `core/sandbox/appcontainer.py` (pure SID derivation + userenv/advapi32/kernel32 ctypes bindings; profile create/delete; ACE-append grants; a `run()` launcher with attribute list + inherited log handles + timeout kill) and `scripts/appcontainer_probe.py` (the 8-case gauntlet). The derived AC profile SID formula is pinned LIVE natively: SHA-256 of the UTF-16LE name truncated to 28 bytes as 7 little-endian dwords under `S-1-15-2-` (11 dash-separated parts).
+- **The gauntlet, all 8 green on the local machine:** profile created with zero capabilities; grants appended idempotently without replacing any DACL; a REAL python child runs inside the container and writes only the granted scratch dir; the NETWORK control - the contained child cannot complete a TCP connect to a live host-side listener (WFP drops, prints TimeoutError, never the connect-success marker) while the HOST child on the same listener succeeds; the workspace dir lists through the read grant; an un-granted sibling dir refuses the child (PermissionError, no leak); spawn latency host=25ms container=26ms (3-round avg) - the overhead is about one millisecond.
+- **Hard-won facts this machine taught (each was a dead end before the fix):**
+  1. `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES` is 131081 (0x20009), not the 0x20014 shape seen in third-party code - a wrong value is accepted and silently spawns an UNCONTAINED child (is_appcontainer=0).
+  2. Grant masks must be SPECIFIC rights, never GENERIC_*. The auto-remap at inherit time turned a parent `GENERIC_READ|GENERIC_EXECUTE` ACE into file entries at 0x001200A0 (FILE_GENERIC_EXECUTE, losing FILE_READ_DATA 0x1), and every image load then died with 0xC0000022. Specific 0x001200A9 (read+execute) and 0x001F01FF (file all) pass through unchanged.
+  3. The lowbox token KEEPS Everyone / Users / Authenticated Users (verified by `whoami /groups` INSIDE the container), so path traversal and reading system installs (git under C:/Program Files) work with NO custom ACE at all; Administrators rides along deny-only and Local-integrity is Low (4096).
+  4. DACL writes go only to objects the caller OWNS: the grant function resolves ancestors leaf-first and returns a skip list for the rest. Setting ANY inherit-flagged ACE on a shared ancestor (C:/Users) makes Windows re-propagate the ACL across the whole subtree (multi-minute), and un-owned ancestors reject SetNamedSecurityInfoW with error 5 outright.
+  5. A directory ACE does NOT refresh inheritance on files created BEFORE it: git status inside the container failed reading .git objects with "Unable to read current working directory" style denies. Granting a whole tree to a container would need file-level ACEs or a refresh pass - explicitly not done in the spike.
+- **Known debt, recorded so it is never a surprise:** the failed probe runs of the session left a handful of read-side ACEs for one-off derived SIDs on user-dir and repo DACLs (the names are unrecorded, so revoke-by-name is impossible; they grant read/list only). A `revoke_dirs` helper was deliberately not built before wiring is decided.
+- **Decision:** NOT wired. `config/app.json` unchanged; `routes/agent/stream.py` imports nothing from the module (a scan test pins this in `tests/test_appcontainer.py`). The wiring question (which of run_shell/run_python calls go through the container, the file-refresh question for tree grants, the revoke story, and the flag) is a separate build decision for the user, exactly like P1 and P2.
+- **Verification at merge (all green):** 13 tests in `tests/test_appcontainer.py` (pure core: the native-pinned derivation vector, parts/prefix, name rules, quoting round-trips, the not-wired scan; windows-only: win32 binding shape, SID binary form, and ONE live containment smoke that spawns cmd inside a zero-capability container and asserts the echo lands). ruff clean; `tests/test_doc_refs.py` green; the probe prints 8/8; appcontainer spawn cost measured negligible next to any model step.
+
+
+## P6 entry - P6-B skill trust tiers (done) + P6-A ACP adapter spike (done).
+
+### P6-B: skill provenance + trust levels - SHIPPED.
+- module: core/skills.py. Constant: PROVENANCE_NAME = ".provenance.json".
+  install_from_catalog now writes a sidecar INSIDE the installed skill dir:
+  {"source": "skill_catalog", "catalog_sha256": _tree_hash(src), "installed_at": <iso>}.
+- trust_of(name) -> "reviewed" (tree hash matches the recorded one) / "modified"
+  (tree moved since install) / "handwritten" (sidecar absent or corrupt) / "" (not
+  installed, or name would escape). - _tree_hash must EXCLUDE the sidecar file
+  and __pycache__ or every install immediately reads back as "modified" and the
+  reinstall guard trips on its own artifact.
+- load_skills() entries now carry a "trust" key; the prompt fragment stays
+  byte-identical (pinned in tests/test_skill_tiers.py) so nothing drifts.
+- routes/customize/listing.py::_skills_items adds the same "trust" field for the
+  customize page.
+- TRUST IS INFORMATIVE ONLY: nothing gates on it; the agent's file tools still
+  cannot reach .agents/skills (core/agent_tools/workspace.py _ws_resolve raises
+  "path escapes workspace"), so a handwritten skill stays structurally
+  un-loadable by the model. read_skill telemetry n=31 (21 ok) at spike time.
+- tests: tests/test_skill_tiers.py - 9 tests green.
+
+### P6-A: ACP (Agent Client Protocol) adapter spike - SHIPPED, NOT WIRED.
+- new files: core/acp/__init__.py, core/acp/protocol.py,
+  scripts/acp_agent.py, tests/test_acp_adapter.py.
+- core/acp/protocol.py: AcpConnection - PURE framing layer. parse_lines() turns
+  newline-delimited JSON-RPC 2.0 into frames (bad line -> None and the caller
+  answers -32700 with id null); handle_frames() dispatches:
+    initialize -> echoes the client protocolVersion (default 4),
+    session/new -> session id from backend.new_session(cwd) when it exists
+      (async-safe), else a local uuid; meta (cwd, mcpServers) stored privately.
+    session/prompt -> streams session/update pushes BEFORE the response;
+      converts backend dicts {"content":...} / {"tool_call":...} /
+      {"tool_call_update":...} into ACP update frames; text-only prompts;
+      stopReason end_turn / cancelled / error.
+    session/cancel -> cooperative notification, honored between prompts.
+  Errors: -32601 unknown method, -32602 unknown session, -32700 parse error.
+  Async backends are driven with asyncio.run(); running the layer inside an
+  existing event loop raises ValueError (documented, pinned by test).
+- scripts/acp_agent.py: stdio wrapper. DEFAULT backend = SubagentBackend
+  bridging core/subagent.runner.run_subagent (tool_allowlist=[], role=None):
+  one prompt = one subagent task, the FINAL reply becomes ONE
+  agent_message_chunk; StreamingBehaviour SPIKE LIMITS: no incremental
+  step/tool streaming (run_subagent returns a single string - faithful wiring
+  is a core contract change = the wiring decision), no cancellation, no
+  fs/* agent-to-client requests, no auth (the process IS the operator).
+  --echo: offline scripted backend, no model needed.
+- LIVE PROBE (one process, --echo): initialize echo -> session id -> 3 streamed
+  updates (agent_message_chunk, tool_call_update, agent_message_chunk) ->
+  stopReason end_turn -> unknown session -32602 -> parse error -32700 ->
+  unknown method -32601 -> cancel then prompt -> stopReason cancelled. Exit 0.
+- tests: tests/test_acp_adapter.py - 11 tests green.
+- LESSON (Windows pipe protocol servers): `for line in sys.stdin` uses buffered
+  read-ahead and STALLS a pipe client until EOF; scripts/acp_agent.py must use
+  sys.stdin.readline() per line (comment in place).
+- NOT DONE on purpose: no wired agent route (fusion_mode stays single), no
+  revocation story, no flag. Rollback = delete core/acp/, scripts/acp_agent.py,
+  tests/test_acp_adapter.py (+ the P6-B files keep independently).
+
+### P6 battery.
+- ruff clean (core/acp, scripts/acp_agent.py, tests/test_acp_adapter.py added);
+  tests/test_doc_refs OK; eval gates: mock (SUITE: ALL OK) and offline
+  (SUITE: ALL OK); full discover: 3454 tests, failures=23, errors=2, skipped=2.
+  Baseline was 22F+2E in the same environment-dependent families
+  (test_runner/test_file_tools/test_diagnostics/test_guard_persistence/
+  test_kb_policy/test_kb_residency/test_oversize_write/test_plan_guard/
+  test_project_builder/test_tenant_isolation) - the +-1 is an environment
+  flake inside those families; no new-family failure appeared.
+
+### Up next (per roadmap, unchanged).
+- P0 = LIVE EVAL, needs the user at the keyboard. P3 = model-swap hot lane.
+  P7 (critic) stays UNSCHEDULED behind F2 evidence. Owed flag arming:
+  context.snip.enabled (offline A/B), sessions.fork_enabled (anytime).
+- Wiring decisions the user owns after this entry: (1) fuse P5 flag into
+  routes (armed), (2) skill-trust surfaced in the UI or telemetry, (3) ACP
+  rollout = streaming bridge rework of core/subagent.runner.py or buffered
+  single-chunk mode first.
+
+
+### P3-SH swap hygiene - SHIPPED 2026-10-21. (P3 slice 1; the swap path itself stays a restart, that is llama-server's single -model reality and is not a bug.)
+- **Census first (whole-tree sweep, subagent-verified file:line):** a local main-lane
+  model swap = `POST /control/switch` -> `core/state.py _load_locked`: kill the
+  llama-server process, spawn a new one (or the watchdog does the same after a death);
+  three kinds of learned per-model state silently carried onto the NEW process:
+  (1) `core/context_budget.py` `_STATE` (prompt window/anchor) + `_TPS_STATE` (tok/s
+  EMA) - keyed by lane name only; `reset()` even has "useful on a model (re)load"
+  in its docstring with NO caller, and `routes/agent/setup.py` comments admit the
+  switched-to model stays pinned to the previous window;
+  (2) `routes/common/llm_stream.py` `_TOOL_CHOICE_UNSUPPORTED` - keyed
+  `local:<base_url>` where the base_url is the FIXED port 8090, so a swap to a
+  tool-capable model inherits the old model's rejected-tool_choice verdict forever;
+  (3) lane trackers like `core/lane_health.py` are keyed by (lane, category) and
+  deliberately untouched (lane-level history is not per-model).
+- **Shipped:** a swap-hook seam in `core/state.py` (`_SWAP_HOOKS` +
+  `register_swap_hook` + `notify_swap()` called at the end of `_load_locked`
+  only after a HEALTHY load; each hook guarded so a broken one can never fail
+  the load). Owners register at module import (dependency direction: hooks
+  point INTO state, no import cycle):
+  - `core/context_budget.py::_on_model_swap` -> `reset(None)` + `reset_tps(None)`
+    (both fully-pruned states, all lanes - a new process invalidates everything
+    learned about the old one).
+  - `routes/common/llm_stream.py::_purge_local_tool_choice_verdicts` -> difference-
+    update away every `local:` verdict; cloud verdicts survive (their provider key
+    bound a different endpoint untouched by the swap).
+- **Verification at merge (all green):** red-first 7 tests in
+  `tests/test_swap_hygiene.py`: registration dedup; `notify_swap()` pinned in the
+  `_load_locked` source; a REAL `_load_locked` (faked spawn/health/VRAM preflight)
+  fires the hooks exactly once on success, ZERO on a failed load, and a raising
+  hook never breaks the load; owner-reset tests for both registrants. The tests
+  restore a `_BASELINE_HOOKS` snapshot rather than clearing the global list (their
+  first draft destroyed the canonical registrations for later test modules in the
+  same process - caught immediately by running the three files together). ruff
+  clean; tests/test_doc_refs OK; both eval gates no-regressions; full discover
+  3461 tests, failures=22, errors=2, skipped=2 - the PRE-EXISTING baseline exactly.
+- Firing on the FIRST boot load (no process before it) is deliberate: a fresh
+  process has nothing stale and the hook work is one dict clear.
+
+### Snip A/B slice - SHIPPED 2026-10-21, measured, gate lives in the eval suite. FLAG STILL UNARMED.
+- Where: `tests/eval_mock.py Part 6c` (`run_snip_scenario`) wired into
+  `run_mock_suite` (include_snip), `_summarize_suite`, `compare_baseline`
+  (router-style: was-ok -> now-failing is a REGRESSION), and `tests/eval_agent.py`
+  (`--no-snip`, print, results, raw-verdict gate).
+- The scenario killed two confounders it had to design around, each of which
+  produced a misleading A/B before it was found:
+  1. **The snip layer runs on the MAIN lane only.** `routes/agent/stream.py`
+     keeps the executor on a fresh view (`build_executor_view(msgs)`,
+     `executor_fresh_context` default on) and never snips `msgs` there - an
+     all-executor run made the A/B halves byte-identical. The slice pins tool
+     steps to main via `role_map.agent.tool_step = main`;
+     `core/cloud/config.py` role_map is read FROM DISK (`_read_json(_get_config_file())`,
+     cached in `_CACHE`) and ignores the live `APP_CONFIG` dict, so the scenario
+     monkeypatches `core.cloud.config._read_json` for the duration and restores it
+     in `finally` (never writes to the real app.json).
+  2. **The runaway guard eats repetitive synthetic filler.** A 4000-char body of a
+     repeated unit phrase trips `core/agent_loop/degeneration.py::find_runaway`
+     (a 40+ char phrase 6x in the tail window) mid-stream: the cut happens BEFORE
+     the tool-call deltas arrive, the step escalates, tools never run. Narration
+     is now position-stamped (`alpha0 beta1 gamma2...`, one token per position) -
+     unique prose ~4000 chars that no guard can legally object to.
+- Measurement: the mock transport records every chat POST body length
+  (`_current['prompt_chars']`) and `T(..., narrate=True)` streams narration
+  deltas + tool-call deltas in the SAME assistant turn, the way real models
+  emit. 60 steps x ~4200 unique chars (~84k estimated tokens) crosses the
+  50000-token snip trigger around step 37; n_ctx is raised to 262k during the
+  scenario so COMPACTION (0.70 threshold) can never pre-empt the A/B, and
+  `context_budget.reset(None)` afterwards keeps the 120s /slots probe cache from
+  leaking into later slices. Both halves must complete the same 60 tool calls
+  and the marker answer; the gate demands >= 15% fewer payload bytes ON; the
+  verdict is rounded to 0.1%.
+- **Result: 36.6% fewer request bytes over the identical run**
+  (ON 5,976,614B vs OFF 9,430,742B, same 62 model turns, both halves ok) - way
+  past the 15% gate and stable across two consecutive runs.
+- NOT DONE on purpose: `context.snip.enabled` stays FALSE in `config/app.json`.
+  This slice proves the transport saving but is NOT the live answered/synth
+  A/B the C-snip entry demanded before arming; the remaining precondition is
+  the P0 live-traffic comparison (armed on/off over real runs' answered/
+  synthesized rates), then flip the flag. Rollback before arming = delete the
+  flag block; after arming = flip the flag back (no code path).

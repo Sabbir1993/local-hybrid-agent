@@ -78,6 +78,7 @@ from core.agent_loop import loop_guard as _lg
 from core.tool_args import shell_command
 from core.agent_loop.tool_output import cap_tool_result, cap_from_config
 from core.agent_loop.clearing import clear_old_results
+from core.agent_loop.snip import snip_old_narration
 from core.agent_loop import (
     run_tool,
     AGENT_SYSTEM_PROMPT,
@@ -913,6 +914,21 @@ async def run_agent_stream(req, user, ctx):
                         yield (f"event: ctx\ndata: "
                                + json.dumps({'lane': lane_name, 'cleared_tokens': _freed, 'after_tokens': pre_tokens,
                                              'hidden': hidden_fams}) + "\n\n")
+                    # second layer: old assistant narration becomes one-line stubs (core/agent_loop/snip.py).
+                    # DEFAULT-OFF (context.snip.enabled, false): a strict no-op until the offline A/B proves
+                    # freed context without a regression in answered/synth rates, then it is armed in config
+                    # only. tool results were just handled by clearing; this covers the prose between them.
+                    _snip_freed = snip_old_narration(msgs, pre_tokens, squeeze=budget_squeeze)
+                    if _snip_freed:
+                        _step_rewrote = True
+                        try:
+                            route_log.event(run_id, step, q_category, lane_name, "snip", outcome=f"snipped:{_snip_freed}")
+                        except Exception:
+                            pass
+                        pre_tokens = context_budget.prompt_tokens_for(lane_name, msgs, tools_for_lane)
+                        yield (f"event: ctx\ndata: "
+                               + json.dumps({'lane': lane_name, 'snipped_tokens': _snip_freed, 'after_tokens': pre_tokens,
+                                             'hidden': hidden_fams}) + "\n\n")
                     sent_tokens = pre_tokens
                     if pre_tokens > budget:
                         _step_rewrote = True
@@ -1421,6 +1437,17 @@ async def run_agent_stream(req, user, ctx):
 
                 n_actions_before = len(actions_taken)
                 parallel_results = {}
+                parallel_dur = {}
+                # Per-call wall time is recorded for every tool event below. The
+                # all-read gather finishes out of order, so each coro is timed
+                # individually; the sequential gauntlet is timed around its run.
+                async def _timed(coro):
+                    _t = time.perf_counter()
+                    try:
+                        _res = await coro
+                    except Exception as _e:      # execute result (return_exceptions) keeps the exception itself
+                        return _e, time.perf_counter() - _t
+                    return _res, time.perf_counter() - _t
                 # Two parallelizable classes: an all-spawn_agent fan-out (the
                 # historical path) and an all-read step (read_file/grep/web_fetch
                 # etc. from PARALLEL_READ_TOOLS). Anything else - writes, code,
@@ -1451,14 +1478,15 @@ async def run_agent_stream(req, user, ctx):
                         approved, _ = fast_sandbox_check(name, args)
                         if approved:
                             valid_ids.append(tc_id)
-                            valid_coros.append(run_tool(name, args, unique_done=personal))
+                            valid_coros.append(_timed(run_tool(name, args, unique_done=personal)))
                     if valid_coros:
                         async for _k, _v in keepalive(asyncio.gather(*valid_coros, return_exceptions=True)):
                             if _k == 'ping':
                                 yield _v
                             else:
-                                for tid, res in zip(valid_ids, _v):
-                                    parallel_results[tid] = res
+                                for tid, (_res, _dur) in zip(valid_ids, _v):
+                                    parallel_results[tid] = _res
+                                    parallel_dur[tid] = _dur
 
                 for name, tc_id, args in parsed_actions:
                     if personal and name in ("write_file", "doc_create"):
@@ -1840,6 +1868,7 @@ async def run_agent_stream(req, user, ctx):
                         except Exception:
                             pass
                         set_device_approved(_dev_ok)      # read by core.companion_bridge.call for this one tool call
+                        _t0 = time.perf_counter()         # wall time of the run only - approval-card waits are not the tool's
                         if tc_id in parallel_results:
                             _pres = parallel_results[tc_id]
                             result = f"error: {type(_pres).__name__}: {_pres}" if isinstance(_pres, Exception) else _pres
@@ -1885,7 +1914,9 @@ async def run_agent_stream(req, user, ctx):
                         ok = False
                     try:
                         route_log.event(run_id, step, q_category, lane_name, "tool", tool_name=name, tool_ok=ok,
-                                        tool_err=None if ok else _tool_failure_code(name, result))
+                                        tool_err=None if ok else _tool_failure_code(name, result),
+                                        duration_s=(parallel_dur.pop(tc_id) if tc_id in parallel_dur
+                                                    else (time.perf_counter() - _t0)))
                     except Exception:
                         pass
                     _tool_audit.audit_tool_call(

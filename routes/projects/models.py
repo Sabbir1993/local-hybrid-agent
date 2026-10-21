@@ -37,6 +37,10 @@ class MessageReq(BaseModel):
     meta: Optional[dict] = None
 
 
+class ForkReq(BaseModel):
+    upto_message_id: Optional[int] = None
+
+
 class RenameDeviceReq(BaseModel):
     new_name: str
     old_name: Optional[str] = None

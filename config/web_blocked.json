@@ -1,12 +1,12 @@
 {
   "wikipedia.org": {
-    "fails": 2,
-    "until": 1792488463.7693913,
+    "fails": 1,
+    "until": 0,
     "status": 403
   },
   "tripadvisor.com": {
-    "fails": 2,
-    "until": 1792507006.7272372,
+    "fails": 1,
+    "until": 0,
     "status": 403
   },
   "wikiwand.com": {

@@ -42,13 +42,22 @@ _BUILD_PLAN_VERBS = ("Build ", "Create ", "Add ", "Write ")
 _NOT_A_PATH = ("http://", "https://", "<", ">", " ", "{", "}")
 
 def _doc_files() -> list:
-    docs = sorted(REPO.glob("*.md"))
-    if (REPO / "docs").is_dir():
-        # archives are a frozen snapshot of an older tree; checking them for
-        # freshness would fail forever on purpose, so only scan one level deep
-        # under docs/ (the live docs), not docs/history/ archives
-        docs += sorted((REPO / "docs").glob("*.md"))
-    return sorted(set(docs))
+    # tracked .md only (the docstring promise): an untracked scratch file on
+    # someone's disk is not something CI can review or fix
+    try:
+        import subprocess
+        out = subprocess.run(["git", "ls-files", "*.md"], cwd=str(REPO),
+                             capture_output=True, text=True, timeout=30)
+        names = [n.replace("\\", "/") for n in out.stdout.splitlines() if n.strip()]
+    except Exception:
+        names = []
+    files = [REPO / n for n in names if (REPO / n).exists()]
+    # archives are a frozen snapshot of an older tree; checking them for
+    # freshness would fail forever on purpose, so keep only the repo root
+    # and the live docs/ (one level deep), not docs/history/
+    files = [f for f in files
+             if f.parent in (REPO, REPO / "docs")]
+    return sorted(set(files))
 
 
 class DocReferencesResolve(unittest.TestCase):
