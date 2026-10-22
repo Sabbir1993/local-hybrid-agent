@@ -296,6 +296,26 @@ marked.use({
   gfm: true,
   breaks: true,
   renderer: {
+    // Web links always open in a new tab. A link whose text is a citation number ([1]), a bare address or a domain becomes
+    // a source pill (site icon + domain), so a "Sources:" line reads as a row of chips.
+    link({ href, title, tokens, text }: Tokens.Link): string {
+      const url = String(href || '');
+      const inner = this.parser.parseInline(tokens);
+      const t = title ? ` title="${escAttr(title)}"` : '';
+      if (url.startsWith('/') && !url.startsWith('//')) return `<a href="${escAttr(url)}"${t}>${inner}</a>`;   // the app's own files and pages
+      if (!/^https?:\/\//i.test(url)) return url ? `${inner} (${escAttr(url)})` : inner;                     // mailto:, javascript: ... stay inert text
+      let domain = '';
+      try { domain = new URL(url).hostname.replace(/^www\./i, ''); } catch (_) { /* no domain: a plain link */ }
+      const label = String(text || '').trim();
+      const isSource = /^(\d+|\[\d+\]|ref\.?\s*\d+|\^?\d+\^?)$/i.test(label) || /^https?:\/\//i.test(label) || /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(label);
+      if (domain && isSource) {
+        const d = escAttr(domain);
+        const fav = escAttr(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`);
+        return `<a href="${escAttr(url)}" target="_blank" rel="noopener noreferrer" class="citation-pill" title="${d} - Click to open source">`
+          + `<img src="${fav}" class="citation-favicon" alt="" loading="lazy" referrerpolicy="no-referrer" data-hide-on-error /><span class="citation-host">${d}</span></a>`;
+      }
+      return `<a href="${escAttr(url)}"${t} target="_blank" rel="noopener noreferrer">${inner}</a>`;
+    },
     code({ text, lang }: Tokens.Code): string {
       const rawLang = (lang || '').trim();
       if (rawLang === 'visual') {
@@ -412,6 +432,15 @@ function transformTokens(raw: string): string {
   return t;
 }
 
+// A favicon that fails to load (offline, blocked) disappears instead of leaving a broken-image icon. The error event does
+// not bubble, so listen in the capture phase; sanitized markup cannot carry an onerror handler.
+if (typeof document !== 'undefined') {
+  document.addEventListener('error', (e) => {
+    const el = e.target as HTMLElement | null;
+    if (el && el.tagName === 'IMG' && el.hasAttribute('data-hide-on-error')) el.style.display = 'none';
+  }, true);
+}
+
 if (typeof window !== 'undefined') {
   try {
     DOMPurify.removeHook('afterSanitizeAttributes');
@@ -460,6 +489,9 @@ function sanitizeHtml(html: string): string {
         'src',
         'alt',
         'loading',
+        'rel',
+        'referrerpolicy',
+        'data-hide-on-error',
       ],
     };
     if (typeof DOMPurify.sanitize === 'function') {
