@@ -97,8 +97,9 @@ def db_update_session_agent_id(sid: int, agent_id: Optional[int], owner_user_id:
     _projects_db.commit()
 
 
-def db_delete_session(sid: int, owner_user_id: int) -> None:
-    if db_session_owner(sid) != owner_user_id:
+def db_delete_session(sid: int, owner_user_id: int, is_super_admin: bool = False) -> None:
+    owner = db_session_owner(sid)
+    if not is_super_admin and owner is not None and owner != owner_user_id:
         raise PermissionError("not your session")
     pdb = _get_projects_db()
     with transaction(pdb) as c:
@@ -113,7 +114,7 @@ def db_load_messages(sid: int, owner_user_id: int) -> list:
     if db_session_owner(sid) != owner_user_id:
         raise PermissionError("not your session")
     return [
-        {"role": r["role"], "content": r["content"], "meta": _load_meta(r["meta"])}
+        {"role": r["role"], "content": r["content"], "meta": _load_meta(r["meta"]), "created_at": r["created_at"]}
         for r in _projects_db.execute(
             "SELECT * FROM messages WHERE session_id = ? ORDER BY id", (sid,))
     ]

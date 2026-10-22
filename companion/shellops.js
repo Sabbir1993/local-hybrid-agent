@@ -141,6 +141,10 @@ function killTree(child) {
 function run({ command, cwd, timeout, background, wait_for_port, wait, shell }) {
   if (background) return runBackground({ command, cwd, wait_for_port, wait, shell });
   const resolvedShell = resolveShell(shell);
+  // A missing working folder makes spawn fail with "spawn <shell> ENOENT", which reads like a missing shell.
+  if (cwd && !require("fs").existsSync(cwd)) {
+    return Promise.reject(new Error(`the project folder no longer exists on this device: ${cwd}`));
+  }
   return new Promise((resolve) => {
     // Rolling tails, not an unbounded buffer: a command that prints without end costs a fixed amount of memory
     // and the model still gets the part that matters (the end).

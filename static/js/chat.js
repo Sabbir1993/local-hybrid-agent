@@ -742,13 +742,7 @@ function _bubbleHtml(m, idx) {
     }
   }
 
-  // Render dedicated media preview section for images and videos found in assistant response
-  if (hasText && !m.media && typeof renderMediaPreviewSection === 'function') {
-    const mediaPreview = renderMediaPreviewSection(m.content);
-    if (mediaPreview) {
-      body += mediaPreview;
-    }
-  }
+  // Dedicated media preview section disabled per user request (shown inline as compact cards)
 
   if (body || m.errorAlert) {
     const isWorkingPill = generating && isLast && !hasText && !m.errorAlert;

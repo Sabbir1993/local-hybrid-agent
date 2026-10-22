@@ -33,6 +33,13 @@ PUBLIC_HTTP = {
     # shell pages that check the session inside the handler (redirect to /login)
     ("GET", "/"),
     ("GET", "/settings"),
+    ("GET", "/report"),
+    ("GET", "/audit"),
+    ("GET", "/db"),
+    # the React app shell hosts its own login page, and its built bundle is public like /static (no data in either);
+    # every API it calls still resolves a principal
+    ("GET", "/react"),
+    ("GET", "/assets/{file_path:path}"),
     # docs that check the session inside the handler
     ("GET", "/openapi.json"),
     ("GET", "/docs"),

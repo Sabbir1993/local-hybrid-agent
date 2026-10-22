@@ -64,7 +64,7 @@ async def update_session(sid: int, req: SessionReq, user: Principal = Depends(ge
 @router.delete("/control/sessions/{sid}")
 async def delete_session(sid: int, user: Principal = Depends(get_current_user)):
     try:
-        db_delete_session(sid, owner_user_id=user.id)
+        db_delete_session(sid, owner_user_id=user.id, is_super_admin=getattr(user, "is_super_admin", False))
     except PermissionError:
         return JSONResponse({"error": "session not found"}, status_code=404)
     return {"ok": True}

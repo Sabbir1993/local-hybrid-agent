@@ -1,0 +1,21 @@
+/* Start-up splash: covers the page from the first paint until the app's scripts and first status poll are done, so the
+   user never sees the unthemed / half-filled layout. Colours come from the active theme (data-theme is set in <head>). */
+#splash {
+  position: fixed; inset: 0; z-index: 99999; display: flex; align-items: center; justify-content: center;
+  background: var(--bg, #0d1117); transition: opacity .3s ease;
+}
+#splash.splash-out { opacity: 0; pointer-events: none; }
+#splash .splash-logo { position: relative; width: 84px; height: 84px; display: flex; align-items: center; justify-content: center; }
+#splash .splash-logo img {
+  width: 56px; height: 56px; border-radius: 14px; object-fit: cover; animation: splash-pulse 1.6s ease-in-out infinite;
+}
+#splash .splash-logo::before {
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  border: 2px solid var(--border, rgba(128,128,128,.3)); border-top-color: var(--accent, #58a6ff);
+  animation: splash-spin 1s linear infinite;
+}
+@keyframes splash-spin { to { transform: rotate(360deg); } }
+@keyframes splash-pulse { 0%, 100% { transform: scale(1); opacity: .9; } 50% { transform: scale(1.06); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  #splash .splash-logo img, #splash .splash-logo::before { animation: none; }
+}

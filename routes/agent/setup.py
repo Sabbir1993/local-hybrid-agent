@@ -225,6 +225,18 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     elif ctx.mode == "agent":
         ctx.mode = "all-local"
     ctx.cloud_main = cloud.cloud_lane("main", user.id)
+    if getattr(req, "model", None):
+        target_model = str(req.model).strip()
+        cm = cloud.get_cloud(target_model, user.id)
+        if not cm:
+            clean_key = target_model.replace("cloud:", "")
+            for candidate in cloud.cloud_models(user.id):
+                if candidate.key == clean_key or candidate.display == target_model or candidate.model_id == target_model:
+                    cm = candidate
+                    break
+        if cm:
+            cloud.set_lanes(user.id, {"main": cm.key})
+            ctx.cloud_main = cm
     ctx.cloud_exec = cloud.cloud_lane("executor", user.id)
     # Jobs mapped in Settings -> Models (core/lanes.py): "Thinking & planning" may
     # point at a cloud model, "Routine tool calls" at any text model. Unmapped

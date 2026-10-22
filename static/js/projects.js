@@ -724,6 +724,7 @@ async function loadMoreSessions(silent = false) {
 
 async function loadSessions(autoRestore = false) {
   const list = $('session-list');
+  if (!list) return;
   const base = sessionsUrl();
   const curAppMode = window.appMode || (agentMode ? 'code' : 'chat');
   if (_sessFilter.mode && _sessFilter.mode !== curAppMode) closeSessionFilter(false);     // a filter belongs to one list
@@ -1080,7 +1081,9 @@ function ensureSession(promptText) {
     .catch(() => null);
 }
 
-$('btn-newchat').onclick = () => {
+const _btnNewChat = $('btn-newchat');
+if (_btnNewChat) {
+  _btnNewChat.onclick = () => {
   const isCurRunning = curSession && window.bgJobs && window.bgJobs.has(String(curSession.id));
   const curAppMode = window.appMode || (agentMode ? 'code' : 'chat');
   curSession = null;
@@ -1114,14 +1117,20 @@ $('btn-newchat').onclick = () => {
   }
 };
 
+}
+
 const btnNewSession = $('btn-newsession');
 if (btnNewSession) {
-  btnNewSession.onclick = () => $('btn-newchat').click();
+  btnNewSession.onclick = () => {
+    const _nc = $('btn-newchat');
+    if (_nc) _nc.click();
+  };
 }
 const btnRecentAdd = $('btn-new-session');
 if (btnRecentAdd) {
   btnRecentAdd.onclick = () => {
-    $('btn-newchat').click();
+    const _nc = $('btn-newchat');
+    if (_nc) _nc.click();
   };
 }
 const sidebarBrand = $('sidebar-brand-header');
@@ -1147,13 +1156,16 @@ window.addEventListener('keydown', e => {
 });
 
 // Project modal handling
-$('btn-newproject').onclick = () => {
-  $('new-proj-name').value = '';
-  $('new-proj-dir').value = '';
-  $('proj-modal').hidden = false;
-  setTimeout(() => $('new-proj-name').focus(), 50);
-  refreshCompanionStatus();
-};
+const btnNewProj = $('btn-newproject');
+if (btnNewProj) {
+  btnNewProj.onclick = () => {
+    $('new-proj-name').value = '';
+    $('new-proj-dir').value = '';
+    $('proj-modal').hidden = false;
+    setTimeout(() => $('new-proj-name').focus(), 50);
+    refreshCompanionStatus();
+  };
+}
 
 async function refreshCompanionStatus() {
   const el = $('companion-status');

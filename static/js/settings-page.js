@@ -27,6 +27,7 @@ function switchSettingsTab(tabId, updateHash = true) {
       return;
     }
     if (typeof startTelemetryMonitoring === 'function') startTelemetryMonitoring();
+    if (typeof triggerGpuQuery === 'function') triggerGpuQuery();
   } else {
     if (typeof stopTelemetryMonitoring === 'function') stopTelemetryMonitoring();
   }
@@ -91,6 +92,7 @@ document.addEventListener('visibilitychange', () => {
     const activePanel = document.querySelector('.settings-panel.active');
     if (activePanel && activePanel.id === 'sec-live-monitor') {
       if (typeof startTelemetryMonitoring === 'function') startTelemetryMonitoring();
+    if (typeof triggerGpuQuery === 'function') triggerGpuQuery();
     }
   }
 });
@@ -159,6 +161,7 @@ window.__sessionReady.then((data) => {
   if (document.getElementById('devices-content')) loadDevicesPanel();
   if (document.getElementById('sec-users')) loadUsersPanel();
   if (document.getElementById('sec-knowledge')) loadKnowledgePanel();
+  if (document.getElementById('sec-custom-agents') && typeof loadCustomAgents === 'function') loadCustomAgents();
   if (document.getElementById('sec-guard')) loadInputGuardPanel();
   if (document.getElementById('sec-session') && window.loadSessionPolicyPanel) loadSessionPolicyPanel();
   if (document.getElementById('sec-runner') && window.loadRunnerPanel) loadRunnerPanel();

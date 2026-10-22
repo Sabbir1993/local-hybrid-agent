@@ -353,15 +353,7 @@
         <div class="settings-group-label">Hardware &amp; Models</div>
         <button type="button" class="settings-tab-btn" data-tab="sec-live-monitor" data-perm="monitor.view">
           <span class="tab-icon">📊</span>
-          <span class="tab-label">Realtime Monitor</span>
-        </button>
-        <button type="button" class="settings-tab-btn" data-tab="sec-gpus" data-perm="settings.runtime.view">
-          <span class="tab-icon">⚡</span>
-          <span class="tab-label">GPUs (Discrete)</span>
-        </button>
-        <button type="button" class="settings-tab-btn" data-tab="sec-runtime" data-perm="settings.runtime.view">
-          <span class="tab-icon">🔌</span>
-          <span class="tab-label">Runtime &amp; Keepalive</span>
+          <span class="tab-label">Realtime Monitor &amp; VRAM</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-cfg" data-perm="model.local.configure">
           <span class="tab-icon">⚙️</span>
@@ -548,17 +540,6 @@
         </div>
       </div>
 
-      <!-- Section 3: Runtime -->
-      <div class="card settings-panel" id="sec-runtime" data-perm="settings.runtime.view">
-        <div class="settings-panel-head">
-          <h2>🔌 Runtime</h2>
-          <p class="dim">Live runtime behavior for the currently active model</p>
-        </div>
-        <div class="keep-row" title="Windows demotes GPU VRAM to system RAM ~70s after idle, causing throughput drop (14.4 → 7.7 t/s). A 1-token ping every 25s while idle keeps VRAM resident.">
-          <label class="switch" title="Toggle keepalive background pings"><input type="checkbox" id="ka"><span class="slider"></span></label>
-          <div><b title="Keep VRAM resident in Arc GPUs">Keepalive</b><small>1-token ping while idle — keeps A770s at full speed</small></div>
-        </div>
-      </div>
 
       <!-- Section: Realtime Telemetry Monitor -->
       <div class="card settings-panel" id="sec-live-monitor" data-perm="monitor.view">
@@ -707,6 +688,14 @@
                   <div class="tm-bar-info"><span>GPU Temperature</span><span class="val" id="tm-bar-temp-val">45 °C</span></div>
                   <div class="tm-bar-track"><div class="tm-bar-fill bar-amber" id="tm-bar-temp" style="width:45%;"></div></div>
                 </div>
+                <!-- Keepalive Toggle inside Hardware & Context Allocation -->
+                <div class="tm-bar-row keep-row" style="margin-top:12px; padding-top:10px; border-top:1px solid var(--border-subtle); display:flex; flex-direction:column; gap:3px;" title="Windows demotes GPU VRAM to system RAM ~70s after idle, causing throughput drop (14.4 → 7.7 t/s). A 1-token ping every 25s while idle keeps VRAM resident.">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <b style="font-size:11.5px; color:var(--text);" title="Keep VRAM resident in Arc GPUs">⚡ VRAM Keepalive</b>
+                    <label class="switch" title="Toggle keepalive background pings" style="margin:0; transform:scale(0.85); transform-origin:left center;"><input type="checkbox" id="ka"><span class="slider"></span></label>
+                  </div>
+                  <small style="font-size:10px; color:var(--dim);">1-token background ping while idle — keeps A770s at full speed</small>
+                </div>
               </div>
             </div>
 
@@ -759,20 +748,20 @@
               The engine caches conversation KV slots so follow-up requests evaluate only new tokens, accelerating response times and saving GPU memory bandwidth.
             </div>
           </div>
-        </div>
-      </div>
 
-      <!-- Section 4: GPUs (Discrete) -->
-      <div class="card settings-panel" id="sec-gpus" data-perm="settings.runtime.view">
-        <div class="settings-panel-head" style="display:flex; align-items:center; justify-content:space-between;">
-          <div>
-            <h2>⚡ GPUs (Discrete)</h2>
-            <p class="dim">Dedicated VRAM usage &amp; compute engine utilization for discrete Arc A770 GPUs</p>
+          <!-- GPUs (Discrete) section embedded inside Realtime Monitor -->
+          <div class="card" id="sec-gpus" style="margin-top:16px; padding:16px; background:var(--panel2); border:1px solid var(--border-subtle); border-radius:10px;">
+            <div class="settings-panel-head" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+              <div>
+                <h3 style="margin:0; font-size:14px; font-weight:700;">⚡ GPUs (Discrete)</h3>
+                <p class="dim" style="margin:2px 0 0; font-size:11px;">Dedicated VRAM usage &amp; compute engine utilization for discrete Arc A770 GPUs</p>
+              </div>
+              <button type="button" id="btn-refresh-gpu" class="btn" style="width:auto; flex:none; margin:0 0 0 auto; padding:4px 12px; font-size:11px; height:26px; border-radius:6px; white-space:nowrap;" title="Query discrete GPU status on-demand">⚡ Check GPU</button>
+            </div>
+            <div id="gpu-list" style="margin-top:8px;"><div class="dim" style="font-size:12px">Click "⚡ Check GPU" or select tab to query status…</div></div>
+            <div id="gpu-lane-vram" style="margin-top:4px;"></div>
           </div>
-          <button type="button" id="btn-refresh-gpu" class="btn" style="width:auto; flex:none; margin:0 0 0 auto; padding:4px 12px; font-size:11px; height:26px; border-radius:6px; white-space:nowrap;" title="Query discrete GPU status on-demand">⚡ Check GPU</button>
         </div>
-        <div id="gpu-list" style="margin-top:8px;"><div class="dim" style="font-size:12px">Click "⚡ Check GPU" or select tab to query status…</div></div>
-        <div id="gpu-lane-vram" style="margin-top:4px;"></div>
       </div>
 
       <!-- Section 5: Model Config -->
@@ -938,7 +927,7 @@
             <h2>🤖 User-Wise Custom Agents</h2>
             <p class="dim">Design and manage specialized agents with tailored personas, custom tools, and lane configurations</p>
           </div>
-          <button type="button" class="btn blue" id="btn-create-agent-settings">＋ New Custom Agent</button>
+          <button type="button" class="btn blue" id="btn-create-agent-settings" style="width:auto; flex:none; margin:0 0 0 auto; padding:5px 14px; font-size:11.5px; height:28px; white-space:nowrap; border-radius:6px; font-weight:600;">＋ New Custom Agent</button>
         </div>
         <div id="settings-agents-content" class="settings-agents-grid">
           <div class="mon-empty">Loading custom agents…</div>
@@ -1132,6 +1121,15 @@
         <div id="ca-tools-container"></div>
       </div>
 
+      <div class="ca-field">
+        <label for="ca-workdir">Work folder on your computer (Optional)</label>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="ca-workdir" placeholder="D:/reports/weekly" autocomplete="off" spellcheck="false" style="flex:1;">
+          <button type="button" class="ca-browse" id="ca-workdir-browse"><span aria-hidden="true">📁</span> Browse…</button>
+        </div>
+        <span class="ca-field-hint">With a folder set, this agent can read, write and analyse files there when you chat with it in the desktop app, and repeat the same task from the same place every time. It cannot leave the folder. Without one it only chats. The folder is private to you and is never shared or copied to forks.</span>
+      </div>
+
       <div class="ca-field-check">
         <label><input type="checkbox" id="ca-public"> Share with other users on this server (Public Template)</label>
       </div>
@@ -1140,6 +1138,46 @@
       <button type="button" class="btn red" id="ca-btn-delete" style="display:none; margin-right:auto;">Delete Agent</button>
       <button type="button" class="btn ghost" id="ca-btn-cancel">Cancel</button>
       <button type="button" class="btn blue" id="ca-btn-save">Save Agent</button>
+    </div>
+  </div>
+</div>
+
+<!-- Fork Agent for Device Modal -->
+<div id="ca-fork-modal" class="ca-modal-overlay" style="display:none;">
+  <div class="ca-modal-box" style="max-width:520px;">
+    <div class="ca-modal-head">
+      <div class="ca-modal-title-wrap">
+        <div id="ca-fork-device-badge" class="ca-modal-device-badge">
+          <span>💻</span>
+          <span id="ca-fork-target-device">Target Device: Windows PC</span>
+        </div>
+        <span id="ca-fork-modal-title">Fork Agent for This Device</span>
+      </div>
+      <button id="ca-fork-modal-close" class="rep-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="ca-modal-body" style="padding:16px 20px;">
+      <div id="ca-fork-source-banner" style="background:var(--panel2, rgba(255,255,255,0.04)); border:1px solid var(--border-subtle, rgba(255,255,255,0.08)); border-radius:6px; padding:10px 12px; margin-bottom:14px; font-size:12px; line-height:1.5;">
+        <div id="ca-fork-source-text" style="color:var(--text); font-weight:600;">System &amp; Metric Reporter</div>
+        <div id="ca-fork-source-reason" style="color:var(--dim); font-size:11px; margin-top:2px;">This agent is bound to another device. Fork it to bind a copy to this machine with its own local workspace directory.</div>
+      </div>
+
+      <div class="ca-field" style="margin-bottom:12px;">
+        <label for="ca-fork-name" style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:5px;">Agent Name *</label>
+        <input type="text" id="ca-fork-name" placeholder="Agent Name" style="width:100%; box-sizing:border-box;">
+      </div>
+
+      <div class="ca-field" style="margin-bottom:8px;">
+        <label for="ca-fork-workdir" style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:5px;">Workspace Path on This Device *</label>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="ca-fork-workdir" placeholder="e.g. D:\Projects\MyWorkspace or C:\Users\..." style="flex:1; box-sizing:border-box;">
+          <button type="button" class="btn secondary" id="ca-fork-browse-btn" style="width:auto; padding:6px 12px; white-space:nowrap;">Browse…</button>
+        </div>
+        <div style="font-size:10.5px; color:var(--dim); margin-top:4px;">Select the directory where this agent will read, write, and execute tasks on this machine.</div>
+      </div>
+    </div>
+    <div class="ca-modal-foot" style="display:flex; justify-content:flex-end; gap:8px; padding:12px 20px; border-top:1px solid var(--border-subtle, rgba(255,255,255,0.08));">
+      <button type="button" class="btn ghost" id="ca-fork-cancel-btn">Cancel</button>
+      <button type="button" class="btn blue" id="ca-fork-submit-btn">Fork &amp; Bind to Device</button>
     </div>
   </div>
 </div>
@@ -1167,6 +1205,7 @@
 <script src="/static/js/runner.js?v=1.0"></script>
 <script src="/static/js/mfa-panel.js?v=1.0"></script>
 <script src="/static/js/lanes.js?v=1.10"></script>
+<script src="/static/js/projects.js?v=1.0"></script>
 <script src="/static/js/custom-agents.js?v=1.9"></script>
 <script src="/static/js/telemetry-dashboard.js?v=1.0"></script>
 <script src="/static/js/settings-page.js?v=1.2"></script>

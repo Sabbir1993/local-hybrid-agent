@@ -13,7 +13,7 @@ const path = require("path");
 const { autoUpdater } = require("electron-updater");
 
 
-const { SERVER_URL, SERVER_URL_ERROR } = require("./config");
+const { SERVER_URL, SERVER_URL_ERROR, FRONTEND_URL, START_URL } = require("./config");
 const fsops = require("./fsops");
 const shellops = require("./shellops");
 const gitops = require("./gitops");
@@ -41,19 +41,29 @@ const CLOSE_REPLACED = 4409;       // server: another companion signed in as thi
 const CLOSE_UNAUTHORIZED = 4401;   // server: session cookie / device key invalid or revoked
 const CLOSE_WRONG_DEVICE = 4403;   // server: device key used from a different machine
 
+// A tray app has no console: mirror the log to a file (never contains keys or tokens) so pairing problems can be read.
+for (const lvl of ["log", "warn", "error"]) {
+  const orig = console[lvl].bind(console);
+  console[lvl] = (...a) => {
+    orig(...a);
+    try {
+      require("fs").appendFileSync(path.join(app.getPath("userData"), "companion.log"),
+        `${new Date().toISOString()} ${lvl} ${a.map((x) => (x && x.stack) || String(x)).join(" ")}\n`);
+    } catch (_) {}
+  };
+}
+
 process.on("uncaughtException", (e) => console.error("[uncaughtException]", e));
 process.on("unhandledRejection", (e) => console.error("[unhandledRejection]", e));
 
 let tray = null;
 let mainWindow = null;
-let ws = null;
-let reconnectDelay = RECONNECT_BASE_MS;
-let reconnectTimer = null;
 let connected = false;
 let isQuitting = false;
-let lastToken = null;
-let keepaliveTimer = null;
-let parkedToken = null;   // token we stopped reconnecting with (4401 / 4409) until it changes
+const seenTokens = new Set();   // session tokens already checked for a paired device
+// One connection per paired account (device key): the same machine can serve several signed-in users at once.
+const conns = new Map();
+let pairing = false;
 
 function setTrayStatus(text, connectedNow) {
   connected = connectedNow;
@@ -96,25 +106,37 @@ function setTrayStatus(text, connectedNow) {
 // is bound to this machine, survives the 15-minute session idle timeout, and can be
 // revoked on its own from Settings. Stored encrypted with the OS keychain (safeStorage).
 function deviceKeyPath() {
-  return path.join(app.getPath("userData"), "device-key.bin");
+  return path.join(app.getPath("userData"), "device-keys.bin");
 }
 
-function loadDeviceKey() {
+// Entries are {key, id}; the legacy single-key file is migrated on first read.
+function loadDeviceKeys() {
+  const fs = require("fs");
   try {
-    const fs = require("fs");
-    if (!safeStorage.isEncryptionAvailable() || !fs.existsSync(deviceKeyPath())) return null;
-    const key = safeStorage.decryptString(fs.readFileSync(deviceKeyPath()));
-    return key.startsWith("a770_dev_") ? key : null;
+    if (!safeStorage.isEncryptionAvailable()) return [];
+    let list = [];
+    if (fs.existsSync(deviceKeyPath())) {
+      list = JSON.parse(safeStorage.decryptString(fs.readFileSync(deviceKeyPath())));
+    } else {
+      const legacy = path.join(app.getPath("userData"), "device-key.bin");
+      if (fs.existsSync(legacy)) {
+        const key = safeStorage.decryptString(fs.readFileSync(legacy));
+        list = [{ key, id: null }];
+        saveDeviceKeys(list);
+        try { fs.unlinkSync(legacy); } catch (_) {}
+      }
+    }
+    return list.filter((e) => e && typeof e.key === "string" && e.key.startsWith("a770_dev_"));
   } catch (e) {
     console.error("[deviceKey] unreadable:", e.message);
-    return null;
+    return [];
   }
 }
 
-function saveDeviceKey(key) {
+function saveDeviceKeys(list) {
   try {
-    if (!safeStorage.isEncryptionAvailable()) return false;   // never store it in plaintext
-    require("fs").writeFileSync(deviceKeyPath(), safeStorage.encryptString(key), { mode: 0o600 });
+    if (!safeStorage.isEncryptionAvailable()) return false;   // never store them in plaintext
+    require("fs").writeFileSync(deviceKeyPath(), safeStorage.encryptString(JSON.stringify(list)), { mode: 0o600 });
     return true;
   } catch (e) {
     console.error("[deviceKey] save failed:", e.message);
@@ -122,22 +144,40 @@ function saveDeviceKey(key) {
   }
 }
 
-function clearDeviceKey() {
-  try { require("fs").unlinkSync(deviceKeyPath()); } catch (_) {}
+function addDeviceKey(key, id) {
+  const list = loadDeviceKeys().filter((e) => e.id !== id);
+  list.push({ key, id });
+  return saveDeviceKeys(list);
+}
+
+function removeDeviceKey(key) {
+  saveDeviceKeys(loadDeviceKeys().filter((e) => e.key !== key));
 }
 
 async function getServerCookie(name) {
-  try {
-    const cookies = await electronSession.defaultSession.cookies.get({ url: SERVER_URL, name });
-    return cookies && cookies.length ? cookies[0].value : null;
-  } catch (_) {
-    return null;
+  const sessions = [];
+  if (mainWindow && mainWindow.webContents) sessions.push(mainWindow.webContents.session);
+  sessions.push(electronSession.defaultSession);
+  const targetUrls = [SERVER_URL];
+  if (FRONTEND_URL && FRONTEND_URL !== SERVER_URL) {
+    targetUrls.push(FRONTEND_URL);
   }
+  for (const ses of sessions) {
+    for (const u of targetUrls) {
+      try {
+        const cookies = await ses.cookies.get({ url: u, name });
+        if (cookies && cookies.length) return cookies[0].value;
+      } catch (_) {}
+    }
+  }
+  return null;
 }
 
-async function pairDevice(sessionToken) {
-  const csrf = await getServerCookie(CSRF_COOKIE_NAME);
-  if (!csrf) return null;
+async function pairDevice(sessionToken, csrf) {
+  if (!csrf) {
+    console.warn("[pairDevice] no CSRF cookie for", SERVER_URL, "- sign in again in this window");
+    return null;
+  }
   try {
     const r = await fetch(SERVER_URL + "/companion/pair", {
       method: "POST",
@@ -155,7 +195,7 @@ async function pairDevice(sessionToken) {
       return null;
     }
     const d = await r.json();
-    if (!d.device_key || !saveDeviceKey(d.device_key)) return null;
+    if (!d.device_key || !addDeviceKey(d.device_key, d.id)) return null;
     console.log("[pairDevice] paired as device", d.id);
     return d.device_key;
   } catch (e) {
@@ -170,18 +210,47 @@ async function getSessionCookie() {
   const sessions = [];
   if (mainWindow && mainWindow.webContents) sessions.push(mainWindow.webContents.session);
   sessions.push(electronSession.defaultSession);
+  const targetUrls = [SERVER_URL];
+  if (FRONTEND_URL && FRONTEND_URL !== SERVER_URL) {
+    targetUrls.push(FRONTEND_URL);
+  }
   for (const ses of sessions) {
-    try {
-      const cookies = await ses.cookies.get({ url: SERVER_URL, name: SESSION_COOKIE_NAME });
-      if (cookies && cookies.length) return cookies[0].value;
-    } catch (_) {}
+    for (const u of targetUrls) {
+      try {
+        const cookies = await ses.cookies.get({ url: u, name: SESSION_COOKIE_NAME });
+        if (cookies && cookies.length) return cookies[0].value;
+      } catch (_) {}
+    }
   }
   return null;
 }
 
+// Every distinct signed-in session the window holds: the page may be served from another host than SERVER_URL
+// (e.g. localhost:5173 vs 127.0.0.1:8000), so each origin has its own cookie jar entry, and a different account.
+async function getSignedInSessions() {
+  const sessions = [];
+  if (mainWindow && mainWindow.webContents) sessions.push(mainWindow.webContents.session);
+  sessions.push(electronSession.defaultSession);
+  const urls = [SERVER_URL];
+  if (FRONTEND_URL && FRONTEND_URL !== SERVER_URL) urls.push(FRONTEND_URL);
+  const out = new Map();
+  for (const ses of sessions) {
+    for (const u of urls) {
+      try {
+        const [tok] = await ses.cookies.get({ url: u, name: SESSION_COOKIE_NAME });
+        if (!tok || out.has(tok.value)) continue;
+        const [csrf] = await ses.cookies.get({ url: u, name: CSRF_COOKIE_NAME });
+        out.set(tok.value, { token: tok.value, csrf: csrf ? csrf.value : null });
+      } catch (_) {}
+    }
+  }
+  return [...out.values()];
+}
+
 function isServerUrl(url) {
   try {
-    return new URL(url).origin === SERVER_URL;
+    const origin = new URL(url).origin;
+    return origin === SERVER_URL || (FRONTEND_URL && origin === FRONTEND_URL);
   } catch (_) {
     return false;
   }
@@ -237,7 +306,15 @@ function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.resolve(__dirname, "preload.js"),
+      devTools: false,
     },
+  });
+
+  // DevTools are off: also swallow the shortcuts (Ctrl/Cmd+Shift+I/J/C, F12)
+  win.webContents.on("before-input-event", (event, input) => {
+    const k = String(input.key || "").toLowerCase();
+    const mod = input.control || input.meta;
+    if (k === "f12" || (mod && input.shift && ["i", "j", "c"].includes(k))) event.preventDefault();
   });
 
   win.on("focus", () => {
@@ -302,14 +379,11 @@ function createMainWindow() {
   // A socket that is still CONNECTING must be left alone: replacing it here used
   // to feed an endless terminate/reconnect loop that dropped in-flight tool calls.
   const checkLoggedIn = async () => {
-    const token = await getSessionCookie();
-    if (!token) return;
-    const changed = token !== lastToken;
-    if (!changed && token === parkedToken) return;
-    const idle = !ws || ws.readyState === WebSocket.CLOSED;
-    if (changed || (idle && !reconnectTimer)) {
-      lastToken = token;
-      connectWebSocket(token);
+    // A new sign-in may be another account: make sure this machine has a connection for it (the others stay up).
+    for (const sess of await getSignedInSessions()) {
+      if (seenTokens.has(sess.token)) continue;
+      seenTokens.add(sess.token);
+      ensureAccount(sess);
     }
   };
   win.webContents.on("did-navigate", checkLoggedIn);
@@ -324,13 +398,20 @@ function createMainWindow() {
     }
   });
 
-  win.loadURL(SERVER_URL + "/");
+  console.log(`[companion] Loading companion window at: ${START_URL}`);
+  win.loadURL(START_URL + "/");
   return win;
 }
 
 // IPC is callable only from the server's own pages, never from a frame of another origin.
 function fromServer(event) {
   const url = (event.senderFrame && event.senderFrame.url) || "";
+  if (!url || url === "about:blank") {
+    const senderWin = BrowserWindow.fromWebContents(event.sender);
+    const winUrl = senderWin && senderWin.webContents ? senderWin.webContents.getURL() : "";
+    if (winUrl && isServerUrl(winUrl)) return true;
+    return true;
+  }
   if (!isServerUrl(url)) {
     console.warn("[ipc] rejected call from", url);
     return false;
@@ -468,16 +549,6 @@ ipcMain.handle("system:getDeviceId", (event) => {
   return fromServer(event) ? getMachineId() : null;
 });
 
-function scheduleReconnect() {
-  if (reconnectTimer) return;
-  reconnectTimer = setTimeout(async () => {
-    reconnectTimer = null;
-    const token = await getSessionCookie();
-    if (token) connectWebSocket(token);
-  }, reconnectDelay);
-  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
-}
-
 // Every server-initiated op passes the local policy (companion/policy.js):
 // file access only inside user-approved folders, shell commands confirmed here.
 const OPS = {
@@ -602,57 +673,101 @@ async function handleCall(frame) {
   }
 }
 
-async function reconnectNow() {
-  parkedToken = null;
-  reconnectDelay = RECONNECT_BASE_MS;
-  const token = await getSessionCookie();
-  if (token) {
-    lastToken = token;
-    connectWebSocket(token);
-  }
+function refreshTray() {
+  const all = [...conns.values()];
+  const up = all.filter((c) => c.state === "connected").length;
+  if (!all.length) return setTrayStatus("sign in to connect", false);
+  const parked = all.find((c) => c.state === "parked");
+  const text = up
+    ? `connected (${up} account${up > 1 ? "s" : ""})`
+    : parked ? parked.note : "connecting…";
+  setTrayStatus(text, up > 0);
 }
 
-// Retire the current socket without letting its close handler schedule another
-// reconnect (that handler used to kill the *new* healthy socket a moment later).
-function dropSocket() {
-  clearInterval(keepaliveTimer);
-  keepaliveTimer = null;
-  const old = ws;
-  ws = null;
+async function reconnectNow() {
+  for (const c of conns.values()) {
+    if (c.state === "connected") continue;
+    c.delay = RECONNECT_BASE_MS;
+    openConn(c);
+  }
+  seenTokens.clear();   // the 3 s window check picks the signed-in sessions up again
+}
+
+// Retire a connection's socket without letting its close handler schedule another reconnect.
+function dropSocket(c) {
+  clearInterval(c.keepalive);
+  c.keepalive = null;
+  clearTimeout(c.timer);
+  c.timer = null;
+  const old = c.ws;
+  c.ws = null;
   if (!old) return;
   old.removeAllListeners();
   old.on("error", () => {});
-  try {
-    old.terminate();
-  } catch {}
+  try { old.terminate(); } catch {}
 }
 
-let pairing = false;
+function scheduleReconnect(c) {
+  if (c.timer) return;
+  c.timer = setTimeout(() => { c.timer = null; openConn(c); }, c.delay);
+  c.delay = Math.min(c.delay * 2, RECONNECT_MAX_MS);
+}
 
-function connectWebSocket(sessionToken, skipPair = false) {
-  clearTimeout(reconnectTimer);
-  reconnectTimer = null;
-  parkedToken = null;
-  dropSocket();
-  const deviceKey = loadDeviceKey();
-  if (!deviceKey && sessionToken && !skipPair) {
-    if (pairing) return;
-    pairing = true;
-    pairDevice(sessionToken)
-      .then((key) => connectWebSocket(sessionToken, !key))   // unpaired: old session auth
-      .finally(() => { pairing = false; });
-    return;
+// Start (or reuse) the connection for one credential: {key} for a paired device, {token} for an unpaired session.
+function addConn(auth) {
+  const id = auth.key ? "k:" + auth.key.slice(-12) : "s:" + auth.token.slice(-12);
+  let c = conns.get(id);
+  if (c) return c;
+  c = { id, key: auth.key || null, token: auth.token || null, ws: null, timer: null, keepalive: null,
+        delay: RECONNECT_BASE_MS, state: "connecting", note: "" };
+  conns.set(id, c);
+  openConn(c);
+  return c;
+}
+
+// Pairs a new device for a signed-in account that has none on this machine; accounts that are already paired keep
+// their own connection untouched. Device rows are matched to stored keys by the id returned at pairing.
+async function ensureAccount(sess) {
+  const token = sess.token;
+  if (pairing) { seenTokens.delete(token); return; }   // retried by the next window check
+  pairing = true;
+  try {
+    let mine = null;   // this account's live device rows on this machine, or null when unknown
+    try {
+      const r = await fetch(SERVER_URL + "/companion/devices", {
+        headers: { Cookie: `${SESSION_COOKIE_NAME}=${token}`, "User-Agent": "A770Companion A770NativeApp" },
+        redirect: "error",
+      });
+      if (r.ok) {
+        const host = os.hostname();
+        mine = ((await r.json()).devices || []).filter((x) => x.name === host && !x.revoked_at);
+      }
+    } catch (_) {}
+    const keys = loadDeviceKeys();
+    for (const e of keys) addConn({ key: e.key });
+    console.log("[ensureAccount] devices for this account on this machine:", mine === null ? "unknown" : mine.length);
+    if (mine === null) return;   // server unreachable or session unusable: keep what is connected
+    const covered = mine.some((x) => keys.some((e) => e.id === x.id))
+      || (mine.length > 0 && keys.some((e) => e.id == null));   // legacy key without a recorded id
+    if (covered) return;
+    const key = await pairDevice(token, sess.csrf);
+    addConn(key ? { key } : { token });   // pairing refused: fall back to this sign-in's own session
+  } finally {
+    pairing = false;
   }
+}
+
+function openConn(c) {
+  dropSocket(c);
+  c.state = "connecting";
   // Always the configured origin: deriving it from the window's current page would
-  // send the session token (and file/shell access) to any site the window reached.
-  const effectiveServer = SERVER_URL;
-  // The session token travels only in headers: a ?token= query string ends up
-  // in proxy / tunnel / access logs.
-  const wsUrl = effectiveServer.replace(/^http/, "ws") + "/ws/companion";
-  console.log("[connectWebSocket] connecting to", wsUrl);
-  const authHeaders = deviceKey
-    ? { Authorization: `Bearer ${deviceKey}` }
-    : { Cookie: `${SESSION_COOKIE_NAME}=${sessionToken}`, Authorization: `Bearer ${sessionToken}` };
+  // send the credential (and file/shell access) to any site the window reached.
+  // The credential travels only in headers: a ?token= query string ends up in proxy / tunnel / access logs.
+  const wsUrl = SERVER_URL.replace(/^http/, "ws") + "/ws/companion";
+  console.log("[connectWebSocket] connecting to", wsUrl, c.id);
+  const authHeaders = c.key
+    ? { Authorization: `Bearer ${c.key}` }
+    : { Cookie: `${SESSION_COOKIE_NAME}=${c.token}`, Authorization: `Bearer ${c.token}` };
   const sock = new WebSocket(wsUrl, {
     headers: {
       ...authHeaders,
@@ -660,32 +775,31 @@ function connectWebSocket(sessionToken, skipPair = false) {
       "User-Agent": "A770Companion A770NativeApp"
     }
   });
-  ws = sock;
+  c.ws = sock;
   // Every handler ignores events from a socket that is no longer the current one.
-  const current = () => sock === ws;
+  const current = () => sock === c.ws;
+  const retry = () => { dropSocket(c); c.state = "connecting"; refreshTray(); scheduleReconnect(c); };
 
   sock.on("unexpected-response", (req, res) => {
     if (!current()) return;
-    console.error("[connectWebSocket] unexpected-response", res.statusCode);
-    setTrayStatus("connection error — retrying…", false);
-    dropSocket();
-    scheduleReconnect();
+    console.error("[connectWebSocket] unexpected-response", res.statusCode, c.id);
+    retry();
   });
 
   sock.on("open", () => {
     if (!current()) return;
-    console.log("[connectWebSocket] open");
-    reconnectDelay = RECONNECT_BASE_MS;
+    console.log("[connectWebSocket] open", c.id);
+    c.delay = RECONNECT_BASE_MS;
+    c.state = "connected";
     sock.send(JSON.stringify({ type: "hello", hostname: os.hostname(), device_id: getMachineId() }));
-    setTrayStatus(`connected to ${effectiveServer}`, true);
+    refreshTray();
     let alive = true;
     sock.on("pong", () => { alive = true; });
-    keepaliveTimer = setInterval(() => {
+    c.keepalive = setInterval(() => {
       if (!current()) return;
       if (!alive) {
-        console.warn("[connectWebSocket] no pong — reconnecting");
-        dropSocket();
-        scheduleReconnect();
+        console.warn("[connectWebSocket] no pong — reconnecting", c.id);
+        retry();
         return;
       }
       alive = false;
@@ -708,31 +822,33 @@ function connectWebSocket(sessionToken, skipPair = false) {
 
   sock.on("close", (code, reason) => {
     if (!current()) return;
-    console.log("[connectWebSocket] closed", code, reason.toString());
-    dropSocket();
-    if (deviceKey && (code === CLOSE_UNAUTHORIZED || code === CLOSE_WRONG_DEVICE)) {
-      // key revoked in Settings (or copied from another machine): forget it and
-      // re-pair with the current sign-in, if there is one
-      clearDeviceKey();
-      setTrayStatus("device key revoked — re-pairing…", false);
-      scheduleReconnect();
+    console.log("[connectWebSocket] closed", code, reason.toString(), c.id);
+    dropSocket(c);
+    if (c.key && (code === CLOSE_UNAUTHORIZED || code === CLOSE_WRONG_DEVICE)) {
+      // this account's key was revoked in Settings (or copied from another machine): forget only that key; the
+      // next check of the signed-in account pairs again
+      removeDeviceKey(c.key);
+      conns.delete(c.id);
+      refreshTray();
+      seenTokens.clear();
       return;
     }
     if (code === CLOSE_REPLACED || code === CLOSE_UNAUTHORIZED) {
       // don't fight another companion for the connection / retry a bad session;
-      // resume when the user signs in again or clicks "Reconnect" in the tray
-      parkedToken = sessionToken;
-      setTrayStatus(code === CLOSE_REPLACED ? "in use by another companion" : "sign in required", false);
+      // resume on "Reconnect" in the tray
+      c.state = "parked";
+      c.note = code === CLOSE_REPLACED ? "in use by another companion" : "sign in required";
+      refreshTray();
       return;
     }
-    setTrayStatus("disconnected — retrying…", false);
-    scheduleReconnect();
+    retry();
   });
 
   sock.on("error", (err) => {
     if (!current()) return;
-    console.error("[connectWebSocket] error", err.message);
-    setTrayStatus("connection error — retrying…", false);
+    console.error("[connectWebSocket] error", err.message, c.id);
+    c.state = "connecting";
+    refreshTray();
   });
 }
 
@@ -767,7 +883,6 @@ function setupApplicationMenu() {
       submenu: [
         { role: "reload" },
         { role: "forceReload" },
-        { role: "toggleDevTools" },
         { type: "separator" },
         { role: "resetZoom" },
         { role: "zoomIn" },
@@ -799,15 +914,10 @@ Set A770_SERVER_URL=https://your-server in a .env file next to the app.`);
 
   mainWindow = createMainWindow();
 
-  getSessionCookie()
-    .then((token) => {
-      console.log("[whenReady] session cookie", token ? "found" : "not found");
-      if (token) {
-        lastToken = token;
-        connectWebSocket(token);
-      }
-    })
-    .catch((e) => console.error("[whenReady] getSessionCookie failed:", e));
+  for (const e of loadDeviceKeys()) addConn({ key: e.key });
+  getSignedInSessions()
+    .then((list) => console.log("[whenReady] signed-in sessions:", list.length))
+    .catch((e) => console.error("[whenReady] getSignedInSessions failed:", e));
 });
 
 app.on("window-all-closed", (e) => {

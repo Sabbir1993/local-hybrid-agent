@@ -1,0 +1,106 @@
+@import './styles/style.css';
+@import './styles/claude-ui.css';
+@import './styles/lanes.css';
+@import './styles/media.css';
+@import './styles/voice.css';
+@import './styles/knowledge.css';
+@import './styles/telemetry.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Ensure Markdown lists ALWAYS have visible bullets/numbers and proper indentation */
+.bubble ul,
+.bot-content ul,
+#chat-inner ul,
+.user-text ul {
+  list-style-type: disc !important;
+  padding-left: 1.6em !important;
+  margin: 0.5em 0 0.8em !important;
+}
+
+.bubble ol,
+.bot-content ol,
+#chat-inner ol,
+.user-text ol {
+  list-style-type: decimal !important;
+  padding-left: 1.6em !important;
+  margin: 0.5em 0 0.8em !important;
+}
+
+.bubble li,
+.bot-content li,
+#chat-inner li,
+.user-text li {
+  display: list-item !important;
+  list-style-type: inherit !important;
+  margin: 0.3em 0 !important;
+  line-height: 1.6 !important;
+}
+
+.bubble li > p,
+.bot-content li > p,
+.user-text li > p {
+  display: inline !important;
+  margin: 0 !important;
+}
+
+/* Chat body inline image size constraint (prevents giant unconstrained images) */
+.chat-inline-media {
+  display: inline-block !important;
+  margin: 8px 0 !important;
+  max-width: 100% !important;
+}
+
+.chat-inline-img,
+.bubble img:not(.avatar):not(.chat-img-thumb) {
+  max-width: min(480px, 100%) !important;
+  max-height: 280px !important;
+  width: auto !important;
+  height: auto !important;
+  border-radius: 8px !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3) !important;
+  cursor: pointer !important;
+  object-fit: cover !important;
+  display: block !important;
+}
+
+/* User Message Attachments Gallery - Compact thumbnails */
+.user-imgs-gallery {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  margin-bottom: 6px !important;
+}
+
+.user-imgs-gallery .chat-img-thumb {
+  width: 80px !important;
+  height: 56px !important;
+  max-width: 80px !important;
+  max-height: 56px !important;
+  min-width: 80px !important;
+  min-height: 56px !important;
+  object-fit: cover !important;
+  border-radius: 6px !important;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.15)) !important;
+  cursor: zoom-in !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25) !important;
+  transition: transform 0.15s ease, border-color 0.15s ease, opacity 0.15s ease !important;
+  display: inline-block !important;
+  flex-shrink: 0 !important;
+}
+
+.user-imgs-gallery .chat-img-thumb:hover {
+  transform: scale(1.05) !important;
+  border-color: var(--accent, #6366f1) !important;
+  opacity: 0.9 !important;
+}
+
+.media-card-thumb-wrap img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  cursor: pointer !important;
+}

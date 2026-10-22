@@ -70,6 +70,15 @@ from core.startup import lifespan
 
 # built-in docs are unauthenticated; routes/api_docs.py serves them behind login / API token
 app = FastAPI(title="Local Agent", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+@app.middleware("http")
+async def capture_audit_ip_middleware(request: Request, call_next):
+    forwarded = request.headers.get("x-forwarded-for")
+    client_ip = (forwarded.split(",")[0].strip() if forwarded else None) or (request.client.host if request.client else "127.0.0.1")
+    from core.audit import set_current_ip
+    set_current_ip(client_ip)
+    return await call_next(request)
+
 # Innermost of the three: body size and request rate are cheap rejections, so they run before
 # the CSRF check and the security headers rather than after
 app.add_middleware(RequestLimitsMiddleware)

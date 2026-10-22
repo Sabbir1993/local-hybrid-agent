@@ -14,6 +14,15 @@
 
   const $ = id => document.getElementById(id);
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  function checkIsNative() {
+    return Boolean(
+      (typeof window !== 'undefined' && window.electronAPI?.isNativeApp) ||
+      (typeof window !== 'undefined' && window.parent && window.parent.electronAPI?.isNativeApp) ||
+      (typeof window !== 'undefined' && (window.isCompanionApp || (window.parent && window.parent.isCompanionApp))) ||
+      (typeof navigator !== 'undefined' && navigator.userAgent && (navigator.userAgent.includes('Electron') || navigator.userAgent.includes('A770NativeApp'))) ||
+      (typeof window !== 'undefined' && (window.location.search.includes('companion=true') || (window.parent && window.parent.location && window.parent.location.search.includes('companion=true'))))
+    );
+  }
 
   async function api(url, opts = {}) {
     const res = await fetch(url, opts);
@@ -91,23 +100,77 @@
   function isAgentOnCurrentDevice(agent) {
     if (!agent) return true;
     if (agent.scope === 'template') return false;
-    const myDevId = (typeof getClientDeviceId === 'function') ? getClientDeviceId() : '';
-    const myDevLabel = (typeof getDeviceDisplayLabel === 'function') ? getDeviceDisplayLabel() : '';
-    const myDevName = (typeof getClientDeviceName === 'function') ? getClientDeviceName() : '';
 
-    if (agent.device_id && myDevId) {
-      return String(agent.device_id).toLowerCase() === String(myDevId).toLowerCase();
+    // 1. Check if running inside Electron / Companion App on desktop
+    const isNative = Boolean(
+      (typeof window !== 'undefined' && window.electronAPI?.isNativeApp) ||
+      (typeof window !== 'undefined' && window.parent && window.parent.electronAPI?.isNativeApp) ||
+      (typeof window !== 'undefined' && (window.isCompanionApp || (window.parent && window.parent.isCompanionApp))) ||
+      (typeof navigator !== 'undefined' && navigator.userAgent && (navigator.userAgent.includes('Electron') || navigator.userAgent.includes('A770NativeApp'))) ||
+      (typeof window !== 'undefined' && (window.location.search.includes('companion=true') || (window.parent && window.parent.location && window.parent.location.search.includes('companion=true'))))
+    );
+
+    // 2. Resolve client device ID
+    let myDevId = '';
+    try {
+      if (typeof getClientDeviceId === 'function') myDevId = getClientDeviceId();
+      else if (window.parent && typeof window.parent.getClientDeviceId === 'function') myDevId = window.parent.getClientDeviceId();
+      else if (window.electronAPI && window.electronAPI.deviceId) myDevId = window.electronAPI.deviceId;
+      else if (window.parent && window.parent.electronAPI && window.parent.electronAPI.deviceId) myDevId = window.parent.electronAPI.deviceId;
+      else myDevId = localStorage.getItem('antigravity_device_id') || (window.parent ? window.parent.localStorage.getItem('antigravity_device_id') : '') || '';
+    } catch (_) {}
+
+    // 3. Resolve client device display label
+    let myDevLabel = '';
+    try {
+      if (typeof getDeviceDisplayLabel === 'function') myDevLabel = getDeviceDisplayLabel();
+      else if (window.parent && typeof window.parent.getDeviceDisplayLabel === 'function') myDevLabel = window.parent.getDeviceDisplayLabel();
+    } catch (_) {}
+
+    // 4. Resolve client device name
+    let myDevName = '';
+    try {
+      if (typeof getClientDeviceName === 'function') myDevName = getClientDeviceName();
+      else if (window.parent && typeof window.parent.getClientDeviceName === 'function') myDevName = window.parent.getClientDeviceName();
+      else myDevName = localStorage.getItem('antigravity_device_name') || (window.parent ? window.parent.localStorage.getItem('antigravity_device_name') : '') || '';
+    } catch (_) {}
+
+    const agentDevId = agent.device_id ? String(agent.device_id).trim().toLowerCase() : '';
+    const agentDevName = agent.device_name ? String(agent.device_name).trim().toLowerCase() : '';
+
+    // If neither is set on the agent, it's a global agent usable anywhere
+    if (!agentDevId && !agentDevName) return true;
+
+    // Match by device ID
+    if (agentDevId && myDevId) {
+      if (agentDevId === String(myDevId).trim().toLowerCase()) return true;
     }
-    if (agent.device_name && (myDevName || myDevLabel)) {
-      const aName = String(agent.device_name).trim().toLowerCase();
-      const devNameMatch = myDevName && aName === String(myDevName).trim().toLowerCase();
-      const devLabelMatch = myDevLabel && aName === String(myDevLabel).trim().toLowerCase();
-      return !!(devNameMatch || devLabelMatch);
+
+    // Match by device display label or name
+    if (agentDevName) {
+      if (myDevLabel && agentDevName === String(myDevLabel).trim().toLowerCase()) return true;
+      if (myDevName && agentDevName === String(myDevName).trim().toLowerCase()) return true;
+      if (myDevId) {
+        const shortId = myDevId.replace(/^dev_/, '').replace(/_/g, '').slice(0, 12).toLowerCase();
+        if (shortId && agentDevName.includes(shortId)) return true;
+      }
     }
-    if (agent.device_id || agent.device_name) {
-      return false;
+
+    // If running in desktop/companion app, and the agent's device name matches this OS
+    if (isNative && agentDevName) {
+      const ua = (typeof navigator !== 'undefined' ? navigator.userAgent : '') || '';
+      if (ua.includes('Windows') && (agentDevName.includes('windows') || agentDevName.startsWith('windows pc'))) {
+        return true;
+      }
+      if ((ua.includes('Macintosh') || ua.includes('Mac OS')) && agentDevName.includes('mac')) {
+        return true;
+      }
+      if (ua.includes('Linux') && agentDevName.includes('linux')) {
+        return true;
+      }
     }
-    return true;
+
+    return false;
   }
   window.isAgentOnCurrentDevice = isAgentOnCurrentDevice;
 
@@ -642,7 +705,7 @@
     $('ca-temp').value = agent ? String(agent.temperature != null ? agent.temperature : 0.4) : '0.4';
     $('ca-temp-val').textContent = $('ca-temp').value;
     $('ca-public').checked = agent ? !!agent.is_public : false;
-    $('ca-workdir').value = agent ? (agent.work_dir || '') : '';
+    if ($('ca-workdir')) $('ca-workdir').value = agent ? (agent.work_dir || '') : '';
 
     // Render tool checkboxes
     renderToolCheckboxes(agent ? (agent.tool_allowlist || []) : []);
@@ -1080,18 +1143,30 @@
       const isStarter = a.scope === 'template';
       const canEdit = !!a.can_edit && !isStarter;
       const toolsCount = (a.tool_allowlist && a.tool_allowlist.length) ? a.tool_allowlist.length : 'All';
+      const isCurDev = isAgentOnCurrentDevice(a);
       html += `
         <div class="card agent-card" data-q="${esc([a.name, a.slug, a.description, a.work_dir, a.share_status].join(' ').toLowerCase())}" style="display:flex; flex-direction:column; gap:8px; padding:12px; border-radius:8px; background:var(--panel2); border:1px solid var(--border);">
-          <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:8px;">
-            <div style="display:flex; align-items:center; gap:8px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+            <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:200px;">
               <span style="font-size:22px; line-height:1;">${esc(a.icon || '🤖')}</span>
               <div>
-                <div style="font-weight:700; font-size:13px; color:var(--text);">${esc(a.name)}</div>
+                <div style="font-weight:700; font-size:13px; color:var(--text); display:flex; align-items:center; gap:6px;">
+                  <span>${esc(a.name)}</span>
+                  ${!isCurDev ? `<span class="chip" style="font-size:9px; color:var(--amber, #f59e0b); background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.3); padding:0 5px;" title="Bound to ${esc(a.device_name || 'another device')}">🔒 ${esc(a.device_name || 'Other PC')}</span>` : ''}
+                </div>
                 <div class="mono dim" style="font-size:10.5px;">/${esc(a.slug)} ${isStarter ? '· <span class="badge ok" style="font-size:9px; padding:1px 4px;">Template</span>' : a.scope === 'shared' ? '· <span class="badge" style="font-size:9px; padding:1px 4px;">Shared</span>' : ''}</div>
                 ${(a.subagent_warnings && a.subagent_warnings.length) ? `<div class="dim" style="font-size:10px; color:var(--amber, #d9a400);" title="spawn_agent sub-agents never get these tools">⚠ as a sub-agent: no ${esc(a.subagent_warnings.join(', '))}</div>` : ''}
               </div>
             </div>
-            <span class="chip mono" style="font-size:10px;">${esc(a.preferred_lane || 'auto')}</span>
+
+            <!-- Upper Row Right Side: Lane Chip + 4 Small Compact Buttons with Proper Borders & Colors -->
+            <div style="display:flex; align-items:center; gap:6px; margin-left:auto;">
+              <span class="chip mono" style="font-size:10px; height:24px; display:inline-flex; align-items:center; padding:0 8px; border:1px solid var(--border); border-radius:5px; background:var(--bg);">${esc(a.preferred_lane || 'auto')}</span>
+              <button type="button" class="btn btn-settings-fork" data-id="${a.id}" title="Clone into your personal agents" style="width:auto; margin:0; padding:4px 10px; font-size:11px; height:26px; border-radius:5px; line-height:1; background:var(--panel, rgba(255,255,255,0.04)); border:1px solid var(--border); color:var(--text); cursor:pointer; font-weight:500;">Fork</button>
+              ${canEdit ? `<button type="button" class="btn btn-settings-edit" data-id="${a.id}" ${!isCurDev ? `disabled title="Bound to ${esc(a.device_name || 'another device')}. Only that PC can edit it - fork it to get your own copy."` : ''} style="width:auto; margin:0; padding:4px 10px; font-size:11px; height:26px; border-radius:5px; line-height:1; background:var(--panel, rgba(255,255,255,0.04)); border:1px solid var(--border); color:var(--text); cursor:pointer; font-weight:500;">Edit</button>` : ''}
+              ${canEdit ? `<button type="button" class="btn btn-settings-del" data-id="${a.id}" style="width:auto; margin:0; padding:4px 10px; font-size:11px; height:26px; border-radius:5px; line-height:1; background:rgba(239, 68, 68, 0.1); border:1px solid rgba(239, 68, 68, 0.35); color:var(--red, #ef4444); cursor:pointer; font-weight:500;">Delete</button>` : ''}
+              <button type="button" class="btn btn-settings-run" data-id="${a.id}" ${!isCurDev ? 'disabled' : ''} title="${!isCurDev ? `Bound to ${esc(a.device_name || 'another device')}. Fork to use on this PC.` : 'Select active agent'}" style="width:auto; margin:0; padding:4px 12px; font-size:11px; height:26px; border-radius:5px; line-height:1; ${isCurDev ? 'background:var(--accent, #3b82f6); border:1px solid var(--accent, #3b82f6); color:#ffffff; cursor:pointer; font-weight:600;' : 'background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle, rgba(255,255,255,0.1)); color:var(--dim, #94a3b8); opacity:0.45; cursor:not-allowed; font-weight:500;'}">Select</button>
+            </div>
           </div>
 
           <div style="font-size:11.5px; color:var(--dim); line-height:1.4; flex:1;">
@@ -1104,13 +1179,6 @@
             ${a.share_status ? `<span class="chip ca-share-chip ca-share-${esc(a.share_status)}" style="font-size:9.5px;">${{ pending: 'Waiting for approval', approved: 'Shared', rejected: 'Not approved' }[a.share_status] || ''}</span>` : ''}
             <span class="chip" style="font-size:9.5px;">⚡ Effort: ${esc(a.reasoning_effort || 'medium')}</span>
             <span class="chip" style="font-size:9.5px;">🌡️ ${a.temperature != null ? a.temperature : 0.4}</span>
-          </div>
-
-          <div class="ca-actions">
-            <button class="ca-act btn-settings-fork" data-id="${a.id}" title="Clone into your personal agents">Fork</button>
-            ${canEdit ? `<button class="ca-act btn-settings-edit" data-id="${a.id}">Edit</button>` : ''}
-            ${canEdit ? `<button class="ca-act danger btn-settings-del" data-id="${a.id}">Delete</button>` : ''}
-            <button class="ca-act primary btn-settings-run" data-id="${a.id}">Select</button>
           </div>
         </div>
       `;
@@ -1126,11 +1194,22 @@
     gf.oninput = applyGridFilter;
     applyGridFilter();
 
+    const isNative = checkIsNative();
     grid.querySelectorAll('.btn-settings-fork').forEach(b => {
-      b.onclick = async () => { await forkCustomAgent(b.dataset.id); };
+      b.onclick = async () => {
+        if (!isNative) {
+          if (typeof toast === 'function') toast('Companion native app is required to use this feature.', true);
+          return;
+        }
+        await forkCustomAgent(b.dataset.id);
+      };
     });
     grid.querySelectorAll('.btn-settings-edit').forEach(b => {
       b.onclick = () => {
+        if (!isNative) {
+          if (typeof toast === 'function') toast('Companion native app is required to use this feature.', true);
+          return;
+        }
         const a = customAgentsList.find(x => String(x.id) === String(b.dataset.id));
         if (a) openAgentBuilder(a);
       };
@@ -1143,6 +1222,10 @@
     });
     grid.querySelectorAll('.btn-settings-run').forEach(b => {
       b.onclick = () => {
+        if (!isNative) {
+          if (typeof toast === 'function') toast('Companion native app is required to use this feature.', true);
+          return;
+        }
         const a = customAgentsList.find(x => String(x.id) === String(b.dataset.id));
         if (a) {
           setActiveCustomAgent(a);
@@ -1153,7 +1236,13 @@
 
     const createSettingsBtn = $('btn-create-agent-settings');
     if (createSettingsBtn) {
-      createSettingsBtn.onclick = () => openAgentBuilder();
+      createSettingsBtn.onclick = () => {
+        if (!isNative) {
+          if (typeof toast === 'function') toast('Companion native app is required to use this feature.', true);
+          return;
+        }
+        openAgentBuilder();
+      };
     }
   }
 

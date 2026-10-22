@@ -6,6 +6,7 @@ from ..common.sampling_extra import SamplerFields
 class ChatRunRequest(SamplerFields):
     messages: list
     session_id: Optional[int] = None      # the chat this run belongs to (website projects are kept per chat)
+    model: Optional[str] = None           # requested model target / cloud key override
     web_search: bool = True
     deep_mode: bool = False
     temperature: Optional[float] = None   # None -> the custom agent's value, else 0.7

@@ -1,0 +1,61 @@
+/* ---------- voice conversation (static/js/voice.js) ---------- */
+
+/* 🗣 button next to 🎤 */
+.comp-voice-btn { min-width: 30px; font-size: 13px; }
+.comp-voice-btn[hidden] { display: none !important; }
+.comp-voice-btn.recording { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent);
+                            background: color-mix(in srgb, var(--green) 14%, transparent); }
+.comp-voice-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* voice chat is shown on the mic pill itself (no floating panel): colour = state, ring = mic level */
+.claude-mic-split-pill.voice-live { background: color-mix(in srgb, var(--voice-c, var(--accent)) 14%, transparent);
+  border-color: color-mix(in srgb, var(--voice-c, var(--accent)) 45%, transparent);
+  box-shadow: 0 0 0 calc(var(--voice-level, 0) * 5px) color-mix(in srgb, var(--voice-c, var(--accent)) 30%, transparent);
+  transition: box-shadow .06s linear, background .2s, border-color .2s; }
+.claude-mic-split-pill.voice-live .claude-mic-main-btn { color: var(--voice-c, var(--accent)); }
+.claude-mic-split-pill[data-voice-state="listening"] { --voice-c: var(--accent); }
+.claude-mic-split-pill[data-voice-state="hearing"]   { --voice-c: var(--green); }
+.claude-mic-split-pill[data-voice-state="thinking"]  { --voice-c: var(--amber); }
+.claude-mic-split-pill[data-voice-state="speaking"]  { --voice-c: var(--blue, #60a5fa); }
+
+/* dictation (speech to text): red while recording */
+.claude-mic-split-pill.recording {
+  background: rgba(239, 68, 68, 0.12) !important;
+  border-color: rgba(239, 68, 68, 0.5) !important;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.25) !important;
+}
+.claude-mic-split-pill.recording .claude-mic-main-btn {
+  animation: micPulseListening 1.2s ease-in-out infinite;
+  color: var(--red, #ef4444) !important;
+}
+
+@keyframes micPulseListening {
+  0% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(239, 68, 68, 0)); }
+  50% { transform: scale(1.18); filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.7)); }
+  100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(239, 68, 68, 0)); }
+}
+
+/* voice chat: the waveform icon is the status. Colour = state, bars move = someone is talking.
+   listening: slow wave in the accent colour; hearing: bars follow your voice level; thinking: a pause pulse;
+   speaking: a lively wave. */
+.claude-mic-split-pill.voice-live .claude-mic-main-btn { animation: none; }
+.claude-mic-split-pill.voice-live .claude-mic-main-btn svg line {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: voice-bar 1.6s ease-in-out infinite;
+}
+.claude-mic-split-pill.voice-live .claude-mic-main-btn svg line:nth-child(2) { animation-delay: .15s; }
+.claude-mic-split-pill.voice-live .claude-mic-main-btn svg line:nth-child(3) { animation-delay: .3s; }
+.claude-mic-split-pill.voice-live .claude-mic-main-btn svg line:nth-child(4) { animation-delay: .45s; }
+.claude-mic-split-pill.voice-live .claude-mic-main-btn svg line:nth-child(5) { animation-delay: .6s; }
+.claude-mic-split-pill[data-voice-state="hearing"] .claude-mic-main-btn svg line {
+  animation: none;
+  transform: scaleY(calc(.55 + var(--voice-level, 0) * 1.5));
+  transition: transform .06s linear;
+}
+.claude-mic-split-pill[data-voice-state="thinking"] .claude-mic-main-btn svg line { animation: voice-bar .9s ease-in-out infinite; }
+.claude-mic-split-pill[data-voice-state="speaking"] .claude-mic-main-btn svg line { animation: voice-bar .55s ease-in-out infinite; }
+@keyframes voice-bar { 0%, 100% { transform: scaleY(.45); } 50% { transform: scaleY(1.15); } }
+
+@keyframes voice-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.14); } }
+@media (prefers-reduced-motion: reduce) { .claude-mic-split-pill .claude-mic-main-btn, .claude-mic-split-pill .claude-mic-main-btn svg line { animation: none !important; } }

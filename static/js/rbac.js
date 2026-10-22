@@ -40,6 +40,18 @@ function _rbacShowTab(box, tab) {
   box.querySelectorAll('.ru-pane').forEach(p => { p.style.display = p.dataset.pane === tab ? '' : 'none'; });
 }
 
+/* Organization email domain (set by the React shell from VITE_ORG_DOMAIN; empty = plain usernames). The admin types
+   only the part before the @ and the domain is appended. */
+function orgDomain() {
+  try { return String(window.__ORG_DOMAIN__ || (window.parent && window.parent.__ORG_DOMAIN__) || '').replace(/^@/, ''); }
+  catch (e) { return String(window.__ORG_DOMAIN__ || ''); }
+}
+function withOrgDomain(v) {
+  v = (v || '').trim();
+  const d = orgDomain();
+  return (!v || !d || v.includes('@')) ? v : v + '@' + d;
+}
+
 function renderUsersPanel(box, users) {
   const roleOpts = _rbacRoles.map(r => `<option value="${esc(r.name)}">${esc(r.name)}</option>`).join('');
   const tabBtn = (id, label) => `<button type="button" role="tab" class="ru-tab btn ghost" data-tab="${id}"
@@ -50,13 +62,14 @@ function renderUsersPanel(box, users) {
     </div>
     <div class="ru-pane" data-pane="users">
       <div class="cap-item" style="margin-bottom:10px;">
-        <b>Create user</b>
+        <b>Create user</b>${orgDomain() ? ` <span class="dim" style="font-size:11px;">(type the part before @${esc(orgDomain())})</span>` : ''}
         <div class="ru-create">
-          <input type="text" id="ru-username" placeholder="username" autocomplete="off">
+          <input type="text" id="ru-username" placeholder="${orgDomain() ? 'first.last' : 'username'}" autocomplete="off">
           <input type="password" id="ru-password" placeholder="password (12+ characters, letters and digits)" autocomplete="new-password">
           <select id="ru-role" aria-label="Role for the new user">${roleOpts}</select>
           <button class="ru-btn primary" id="ru-create" type="button">+ Create</button>
         </div>
+        ${orgDomain() ? '<div id="ru-username-preview" class="mono dim" style="font-size:11px; margin-top:5px; min-height:14px;"></div>' : ''}
       </div>
       <div id="ru-list" style="display:flex; flex-direction:column; gap:4px;">
         ${users.map(u => userRow(u)).join('') || '<div class="dim" style="font-size:11px;">No users yet.</div>'}
@@ -72,8 +85,19 @@ function renderUsersPanel(box, users) {
 }
 
 function _rbacWire(box) {
+  const uInput = $('ru-username');
+  const uPrev = $('ru-username-preview');
+  if (uInput && uPrev) {
+    const showPreview = () => {
+      const full = withOrgDomain(uInput.value);
+      uPrev.innerHTML = full ? 'Account will be created as <b style="color:var(--text);">' + esc(full) + '</b>' : '';
+    };
+    uInput.addEventListener('input', showPreview);
+    uInput.addEventListener('keyup', showPreview);
+    showPreview();
+  }
   $('ru-create').onclick = async () => {
-    const username = $('ru-username').value.trim();
+    const username = withOrgDomain($('ru-username').value);
     const password = $('ru-password').value;
     const role = $('ru-role').value;
     if (!username || !password) { toast('Username and password required', true); return; }

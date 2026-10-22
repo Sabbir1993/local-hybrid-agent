@@ -114,6 +114,18 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     set_project_scope(getattr(req, "session_id", None))                 # a website project belongs to this chat only
     voice_policy.apply(req)     # a spoken turn: no hidden reasoning, short answer, no answer-check rewrite
     cloud_main = cloud.cloud_lane("main", user.id)
+    if getattr(req, "model", None):
+        target_model = str(req.model).strip()
+        cm = cloud.get_cloud(target_model, user.id)
+        if not cm:
+            clean_key = target_model.replace("cloud:", "")
+            for candidate in cloud.cloud_models(user.id):
+                if candidate.key == clean_key or candidate.display == target_model or candidate.model_id == target_model:
+                    cm = candidate
+                    break
+        if cm:
+            cloud.set_lanes(user.id, {"main": cm.key})
+            cloud_main = cm
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
     if not main_ready and not cloud_main:
         target = state.profile_path or state.profile or common.initial_profile_path

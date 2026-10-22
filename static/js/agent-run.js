@@ -162,6 +162,7 @@ async function runAgentSSE(text, opts = {}) {
       const ctxMsgs = typeof buildContextMessages === 'function' ? buildContextMessages() : job.messages;
       const histFull = ctxMsgs.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
       // earlier turns are sent shortened (attached file text, long answers): static/js/history-clip.js
+      const hist = (typeof clipHistoryForRun === 'function') ? clipHistoryForRun(histFull) : histFull;
       const selectedModel = $('profile') ? $('profile').value : '';
       let engineMode = $('agent-engine') ? $('agent-engine').value : 'all-local';
       if ((typeof isCloudValue === 'function' && isCloudValue(selectedModel)) || (typeof curStatus !== 'undefined' && curStatus && curStatus.cloud_main)) {
