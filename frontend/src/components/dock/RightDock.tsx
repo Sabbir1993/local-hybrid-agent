@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAppStore, type DockTab } from '../../stores/useAppStore';
 import { PlanView } from './PlanView';
+import { TasksView } from './TasksView';
 import { TerminalPanel } from './TerminalPanel';
 import { WorkspaceTree } from './WorkspaceTree';
 
@@ -158,6 +159,15 @@ export const RightDock: React.FC = () => {
             📋 Plan
           </button>
 
+          <button
+            className={`dock-tab-btn ${dockTab === 'tasks' ? 'active' : ''}`}
+            id="dock-btn-tasks"
+            title="Background tasks: what is running, and stop"
+            onClick={() => handleTabClick('tasks')}
+          >
+            🗂 Tasks
+          </button>
+
           {showCodeAndTerminal && (
             <button
               className={`dock-tab-btn ${dockTab === 'files' ? 'active' : ''}`}
@@ -213,6 +223,11 @@ export const RightDock: React.FC = () => {
       {/* Dock View: Plan */}
       <div className={`dock-view-body ${dockTab === 'plan' ? 'active' : ''}`} id="dock-view-plan">
         <PlanView />
+      </div>
+
+      {/* Dock View: Background tasks (polls only while this tab is open) */}
+      <div className={`dock-view-body ${dockTab === 'tasks' ? 'active' : ''}`} id="dock-view-tasks">
+        {dockTab === 'tasks' && !dockCollapsed && <TasksView />}
       </div>
 
       {/* Dock View: Files */}

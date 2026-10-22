@@ -73,6 +73,7 @@ PLAN_MODE_TOOLS = {"list_files", "project_overview", "read_file", "grep", "find_
 # capabilities.browser / capabilities.mobile are on)
 EXECUTOR_TEST_TOOLS = ("browser_navigate", "browser_snapshot", "browser_click", "browser_type",
                        "browser_console", "browser_screenshot",
+                       "browser_audit", "browser_check", "browser_check_report",
                        "browser_wait", "browser_press", "browser_select", "browser_eval", "browser_close",
                        "mobile_devices", "mobile_install", "mobile_launch", "mobile_ui", "mobile_tap",
                        "mobile_type", "mobile_screenshot", "mobile_logs")

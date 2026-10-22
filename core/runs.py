@@ -125,6 +125,20 @@ def open_runs(user_id: Optional[int] = None, kind: Optional[str] = None) -> list
     return _rows(sql + " ORDER BY created_at", tuple(params))
 
 
+def recent(user_id: int, kind: Optional[str] = None, state: Optional[str] = None, limit: int = 50) -> list:
+    """This user's runs, running ones first then newest - what the Taskboard lists."""
+    sql, params = "SELECT * FROM runs WHERE user_id = ?", [user_id]
+    if kind:
+        sql += " AND kind = ?"
+        params.append(kind)
+    if state:
+        sql += " AND state = ?"
+        params.append(state)
+    sql += " ORDER BY (state = 'running') DESC, updated_at DESC LIMIT ?"
+    params.append(max(1, min(int(limit), 200)))
+    return _rows(sql, tuple(params))
+
+
 def interrupted(user_id: Optional[int] = None, kind: Optional[str] = None) -> list:
     sql, params = "SELECT * FROM runs WHERE state = 'interrupted'", []
     if user_id is not None:

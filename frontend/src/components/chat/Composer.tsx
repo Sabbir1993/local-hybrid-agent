@@ -458,6 +458,15 @@ export const Composer: React.FC = () => {
   const [menu, setMenu] = useState<{ kind: 'slash' | 'files'; items: CmdItem[]; sel: number; start: number } | null>(null);
   const customAgentsRef = useRef<any[]>([]);
   const menuReq = useRef(0);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // keep the highlighted row in view when arrowing through a long list (the first row also reveals its group label)
+  useEffect(() => {
+    const box = menuRef.current;
+    if (!box || !menu) return;
+    if (menu.sel === 0) { box.scrollTop = 0; return; }
+    box.querySelector<HTMLElement>('.cmd-item.sel')?.scrollIntoView({ block: 'nearest' });
+  }, [menu?.sel, menu?.items]);
 
   const refreshMenu = async (value: string, caret: number) => {
     const tok = currentToken(value, caret);
@@ -475,7 +484,7 @@ export const Composer: React.FC = () => {
         // the menu still works without custom agents
       }
     }
-    const items = tok.ch === '@' ? await fileItems(tok.text) : await slashItems(tok.text, appMode === 'code', customAgentsRef.current);
+    const items = tok.ch === '@' ? await fileItems(tok.text) : await slashItems(tok.text, appMode, customAgentsRef.current);
     if (req !== menuReq.current) return;   // a newer keystroke superseded this lookup
     setMenu(items.length ? { kind: tok.ch === '@' ? 'files' : 'slash', items, sel: 0, start: tok.start } : null);
   };
@@ -530,6 +539,7 @@ export const Composer: React.FC = () => {
       await compactConversation(arg);
       return true;
     }
+    if (appMode === 'chat') return false;   // chat only knows /image, /video and /compact: anything else is the user's words
     if (name === 'plan' || name === 'build') {
       setAgentMode(name === 'plan' ? 'plan' : agentMode === 'plan' ? 'auto' : agentMode);
       setInputVal('');
@@ -916,7 +926,7 @@ export const Composer: React.FC = () => {
           >
             <div id="input-backdrop" ref={backdropRef} className="input-backdrop" aria-hidden="true" dangerouslySetInnerHTML={{ __html: inputTokens.html }} />
             {menu && (
-              <div id="cmd-menu" role="listbox" style={{ display: 'block' }}>
+              <div id="cmd-menu" ref={menuRef} role="listbox" style={{ display: 'block' }}>
                 {menu.items.map((it, i) => (
                   <React.Fragment key={it.name + i}>
                     {it.category && it.category !== menu.items[i - 1]?.category && <div className="cmd-group-label">{CMD_GROUP_LABELS[it.category] || it.category}</div>}

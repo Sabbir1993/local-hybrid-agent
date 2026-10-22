@@ -22,6 +22,7 @@ from .input_guard import router as input_guard_router
 from .db_explorer import router as db_explorer_router
 from .custom_agents import router as custom_agents_router
 from .sandbox import router as sandbox_router
+from .taskboard import router as taskboard_router
 
 __all__ = [
     "auth_router",
@@ -44,4 +45,5 @@ __all__ = [
     "db_explorer_router",
     "custom_agents_router",
     "sandbox_router",
+    "taskboard_router",
 ]

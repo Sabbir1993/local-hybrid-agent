@@ -89,5 +89,6 @@ def register_browser_tools() -> None:
     from ..small_model import APP_CONFIG as _cfg
     if not _cfg.get("capabilities", {}).get("browser", False):
         return
-    for name, fn, schema in BROWSER_TOOLS:
+    from ..webcheck.registry_ops import WEBCHECK_TOOLS   # imports this module, so only at call time
+    for name, fn, schema in BROWSER_TOOLS + WEBCHECK_TOOLS:
         registry.register(name, fn, schema, source="browser", meta={"label": name.replace("_", " ")}, replace=True)

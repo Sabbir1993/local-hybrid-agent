@@ -135,7 +135,7 @@ class TestFilter(unittest.TestCase):
         q = "open the website and take a screenshot"
         self.assertEqual(set(ts.hidden_families(q)),
                          set(ts.FAMILIES) - set(ts.needed_families(q)))
-        self.assertEqual(ts.hidden_families(q), ["docs", "git", "image_gen", "mobile"])
+        self.assertEqual(ts.hidden_families(q), ["docs", "git", "image_gen", "mobile", "tasks"])
 
 
 def _register_everything():

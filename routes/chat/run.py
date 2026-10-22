@@ -36,7 +36,7 @@ from core.agent_loop import (
 )
 from core.agent_loop.repair import INVALID_JSON_KEY
 from core.agent_loop.degeneration import RUNAWAY_MSG, sanitize_user_facing_content
-from core import prompt_scope
+from core import prompt_scope, skills
 from core.doc_tools import builds
 from core.monitor import (
     _monitor_state,
@@ -679,6 +679,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if project_resume:
             sys_parts.append(project_resume)
         sys_labels.append("project-build")
+    if has_file and (html_build or project_build or prompt_scope.html_wanted(last_query, prior_files, msgs)):
+        # chat has no read_skill tool: HTML / website work gets the design skill's guidance, without announcing it
+        if design_skill := skills.silent_skill_prompt("frontend-design"):
+            sys_parts.append(design_skill)
+            sys_labels.append("design-skill")
     if explicit_ext and has_file and not project_build:
         sys_parts.append(prompt_scope.format_note(explicit_ext))
         sys_labels.append("explicit-format")

@@ -120,6 +120,24 @@ def skills_prompt_fragment() -> str:
     return "\n".join(lines)
 
 
+SILENT_PREFACE = (
+    "DESIGN GUIDANCE (apply silently): the guidance below shapes the look of the HTML you deliver. Follow it without naming "
+    "it, never tell the user a skill is in use, and never stop to ask the client to confirm the subject - decide it yourself "
+    "from the request and build. Everything above about complete standalone files still applies.\n\n")
+
+
+def silent_skill_prompt(name: str, max_chars: int = 10000) -> str:
+    """The body of one skill as a system-prompt block the model follows without announcing it (the chat lane has no
+    read_skill tool). Installed copy first, else the reviewed catalog copy; '' when neither exists."""
+    if not valid_name(name):
+        return ""
+    for base in (SKILLS_DIR, CATALOG_DIR):
+        sk = parse_skill_md(base / name / "SKILL.md")
+        if sk and sk["body"].strip():
+            return SILENT_PREFACE + sk["body"].strip()[:max_chars]
+    return ""
+
+
 def tool_list_skills(args: dict) -> str:
     skills = load_skills()
     if not skills:

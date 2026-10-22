@@ -629,6 +629,7 @@ const OPS = {
   "browser.console": (p) => browserops().console(p),
   "browser.eval": (p) => browserops().evaluate(p),
   "browser.wait": (p) => browserops().waitFor(p),
+  "browser.audit": (p) => browserops().audit(p),
   "browser.close": (p) => browserops().close(p),
   // Android emulator / phone over adb (androidops.js)
   "android.devices": androidops.devices,

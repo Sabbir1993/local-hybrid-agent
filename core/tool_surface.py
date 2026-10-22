@@ -56,6 +56,11 @@ FAMILIES: dict = {
         "keywords": ["git", "commit", "branch", "merge", "rebase", "pull request", "version control",
                      "repo history", "repository history", "changelog"],
     },
+    "tasks": {
+        "prefix": "task_",
+        "keywords": ["background task", "background job", "in the background", "what is running",
+                     "what's running", "running tasks", "task list", "stop the task", "stop that job"],
+    },
     "image_gen": {
         "names": ("generate_image",),
         "keywords": ["generate image", "generate a picture", "create an image", "draw",

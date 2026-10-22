@@ -402,6 +402,82 @@ async function waitFor(p) {
   return { ...(await pageInfo(sess)), snapshot: await snapshotText(sess) };
 }
 
+// ---------------- audit (read-only, fixed checks) ----------------
+
+const MAX_AUDIT_ISSUES = 100;
+
+// Runs inside the page. Fixed and in this file on purpose: no model-supplied code,
+// so browser.audit needs no per-call confirmation (unlike browser.eval).
+function auditInPage() {
+  const issues = [];
+  const checked = { images: 0, controls: 0, fields: 0 };
+  const sel = (el) => {
+    if (!el || !el.tagName) return null;
+    let s = el.tagName.toLowerCase();
+    if (el.id) return `${s}#${el.id}`;
+    const cls = String(el.getAttribute("class") || "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
+    return cls.length ? `${s}.${cls.join(".")}` : s;
+  };
+  const add = (kind, severity, message, el) => issues.push({ kind, severity, message, selector: sel(el) });
+  const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+
+  for (const img of document.querySelectorAll("img")) {
+    checked.images++;
+    if (img.complete && img.naturalWidth === 0 && img.getAttribute("src")) add("broken_image", "warning", `${sel(img)} failed to load`, img);
+    if (!img.hasAttribute("alt") && img.getAttribute("role") !== "presentation") add("missing_alt", "warning", "image without alt text", img);
+  }
+  for (const el of document.querySelectorAll("button, a[href], [role=button]")) {
+    if (!visible(el)) continue;
+    checked.controls++;
+    const name = (el.getAttribute("aria-label") || el.getAttribute("title") || el.textContent || "").trim()
+      || (el.querySelector("img[alt]") && el.querySelector("img[alt]").getAttribute("alt")) || "";
+    const labelledBy = el.getAttribute("aria-labelledby");
+    if (!name && !labelledBy) add("unnamed_control", "warning", `${el.tagName.toLowerCase()} with no accessible name`, el);
+  }
+  for (const el of document.querySelectorAll("input, select, textarea")) {
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    if (type === "hidden" || type === "submit" || type === "button" || type === "reset" || !visible(el)) continue;
+    checked.fields++;
+    const labelled = el.getAttribute("aria-label") || el.getAttribute("aria-labelledby") || el.closest("label")
+      || (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`));
+    if (!labelled) add("unlabelled_field", "warning", `${sel(el)} has no label${el.getAttribute("placeholder") ? " (placeholder only)" : ""}`, el);
+  }
+  const de = document.documentElement;
+  if (de.scrollWidth > window.innerWidth + 2) add("horizontal_overflow", "warning", `page scrolls sideways by ${de.scrollWidth - window.innerWidth}px`, de);
+  const text = (document.body && document.body.innerText || "").trim();
+  if (text.length < 20 && !document.querySelector("img, canvas, svg, video")) add("empty_render", "error", "page body is empty", document.body);
+  return { issues, checked };
+}
+
+async function audit(p) {
+  // audits the page browser.navigate already opened: navigation (and its origin approval) stays in that op
+  const sess = await getSession(p, false);
+  const ignore = (Array.isArray(p.ignore) ? p.ignore : []).map(String);
+  const skip = (u) => ignore.some((s) => s && String(u).includes(s));
+  const { issues, checked } = await sess.page.evaluate(auditInPage);
+  for (const c of sess.console) {
+    if (c.type === "error" || c.type === "pageerror") issues.unshift({ kind: c.type === "pageerror" ? "page_error" : "console_error", severity: "error", message: c.text, selector: null });
+  }
+  for (const n of sess.network) {
+    if (skip(n.url)) continue;
+    issues.unshift({ kind: "http_error", severity: n.status >= 500 || n.failure ? "error" : "warning",
+                     message: `${n.method || "GET"} ${n.url} -> ${n.status || n.failure}`, selector: null });
+  }
+  const rank = { error: 0, warning: 1 };
+  issues.sort((a, b) => (rank[a.severity] ?? 2) - (rank[b.severity] ?? 2));
+  const total = issues.length;
+  const kept = issues.slice(0, MAX_AUDIT_ISSUES);
+  const out = {
+    ...(await pageInfo(sess)), issues: kept, dropped: total - kept.length,
+    summary: { errors: issues.filter((i) => i.severity === "error").length, warnings: issues.filter((i) => i.severity === "warning").length, checked },
+  };
+  if (p.screenshot !== false) {
+    const buf = await sess.page.screenshot({ type: "png", fullPage: false, timeout: 15000, animations: "disabled", caret: "hide" }).catch(() => null);
+    if (buf) out.png_b64 = buf.toString("base64");
+  }
+  return out;
+}
+
 async function close(p) {
   const id = String((p && p.session) || "default");
   const sess = sessions.get(id);
@@ -416,7 +492,7 @@ async function close(p) {
 
 module.exports = {
   navigate, snapshot, click, type, press, select, screenshot,
-  console: consoleLog, evaluate, waitFor, close,
+  console: consoleLog, evaluate, waitFor, audit, close,
   target, getTargetLocators,
   DEVICE_PRESETS: Object.keys(DEVICE_PRESETS),
 };

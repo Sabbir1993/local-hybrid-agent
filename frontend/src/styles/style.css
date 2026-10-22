@@ -2950,7 +2950,8 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
   display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 7px;
   cursor: pointer; font-size: 12px;
 }
-.cmd-item:hover, .cmd-item.sel { background: var(--accent-bg); }
+.cmd-item:hover { background: var(--accent-bg); }
+.cmd-item.sel { background: var(--accent-bg); box-shadow: inset 3px 0 0 var(--accent, #388bfd); font-weight: 600; }
 .cmd-icon { width: 18px; text-align: center; }
 .cmd-name { font-weight: 600; white-space: nowrap; }
 .cmd-desc {

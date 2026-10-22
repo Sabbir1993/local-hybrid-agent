@@ -67,8 +67,15 @@ export function isLibraryCommand(name: string): boolean {
   return libraryNames.has(String(name || '').toLowerCase());
 }
 
-export async function slashItems(query: string, codeMode: boolean, customAgents: any[]): Promise<CmdItem[]> {
-  const base: CmdItem[] = codeMode
+export type SlashMode = 'chat' | 'agent' | 'code';
+
+/** Chat is plain conversation: no plan/build/goal, skills or custom agents there. Only /compact, /image and /video. */
+export async function slashItems(query: string, mode: SlashMode, customAgents: any[]): Promise<CmdItem[]> {
+  const codeMode = mode === 'code';
+  const chatMode = mode === 'chat';
+  const base: CmdItem[] = chatMode
+    ? [{ icon: '🧹', name: 'compact', desc: 'compress conversation history', category: 'utility' }]
+    : codeMode
     ? [
         { icon: '📋', name: 'plan', desc: 'switch to Plan mode (read-only, propose)', category: 'mode' },
         { icon: '🔨', name: 'build', desc: 'switch to Build mode (execute)', category: 'mode' },
@@ -92,6 +99,10 @@ export async function slashItems(query: string, codeMode: boolean, customAgents:
     { icon: '🎬', name: 'video', desc: mediaReady('video', ms) ? 'make a short video clip' : 'make a video (set up a model in Settings first)', category: 'create' },
   );
   const has = (n: string) => base.some((x) => x.name.toLowerCase() === n.toLowerCase());
+  if (chatMode) {
+    const q = query.toLowerCase();
+    return base.filter((i) => !q || i.name.toLowerCase().includes(q));
+  }
   const d = await capabilities();
   ((d.skills && d.skills.items) || []).forEach((s: any) => {
     if (!has(s.name)) base.push({ icon: '🎯', name: s.name, desc: s.description || '', isSkill: true, category: 'skills' });

@@ -26,6 +26,7 @@ from core.state import keepalive_loop, state
 from core.web_tools import register_web_tools
 from core.browser_tools import register_browser_tools
 from core.device_tools import register_device_tools
+from core.taskboard.tools import register_task_tools
 from core.router_tuner import tuner_background_task
 from core.small_model import classifier as routing_classifier
 from core.file_tools import register_file_tools
@@ -149,6 +150,7 @@ async def lifespan(app: FastAPI):
     register_media_tools()
     register_browser_tools()
     register_device_tools()
+    register_task_tools()
     load_plugins()
     print(f"[server_manager] runtime={ACTIVE_RUNTIME['name']} backend={ACTIVE_RUNTIME['backend']} "
           f"bin={ACTIVE_RUNTIME['llama_bin_dir']} devices={ACTIVE_RUNTIME['gpu_devices']}")

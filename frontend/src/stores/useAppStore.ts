@@ -10,7 +10,7 @@ import { logger } from '../utils/logger';
 export type AppMode = 'chat' | 'agent' | 'code';
 export type AgentMode = 'auto' | 'manual' | 'accept_edits' | 'plan' | 'bypass';
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'extra';
-export type DockTab = 'plan' | 'files' | 'preview' | 'terminal';
+export type DockTab = 'plan' | 'tasks' | 'files' | 'preview' | 'terminal';
 export type ActiveModal = 'none' | 'audit' | 'settings' | 'report' | 'db' | 'monitor' | 'customize' | 'docs' | 'preview';
 
 export const isCompanionClient = (): boolean => {
