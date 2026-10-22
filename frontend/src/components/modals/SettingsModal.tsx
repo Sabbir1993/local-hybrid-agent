@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
+import { openAgentMemory } from './AgentMemory';
 
 export const SettingsModal: React.FC = () => {
   const { activeModal, setActiveModal, settingsTab } = useAppStore();
@@ -12,6 +13,16 @@ export const SettingsModal: React.FC = () => {
         window.history.pushState({ modal: 'settings' }, '', '/settings');
       } catch (_) {}
     }
+  }, [isOpen]);
+
+  // the Settings page (an iframe) asks for the memory editor, which is part of this app
+  useEffect(() => {
+    if (!isOpen) return;
+    const onMsg = (e: MessageEvent) => {
+      if (e.origin === window.location.origin && e.data && e.data.type === 'open-agent-memory') openAgentMemory();
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
   }, [isOpen]);
 
   if (!isOpen) return null;

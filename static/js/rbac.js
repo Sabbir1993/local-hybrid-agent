@@ -127,6 +127,28 @@ function _rbacWire(box) {
     };
   });
 
+  // forgotten password: the admin sets a temporary one (suggested below), shares it, and the user must replace it at next sign-in
+  box.querySelectorAll('.ru-reset-pw').forEach(btn => {
+    btn.onclick = async () => {
+      const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      const rnd = new Uint32Array(14); crypto.getRandomValues(rnd);
+      const suggestion = Array.from(rnd, n => chars[n % chars.length]).join('') + '7a';
+      const pw = prompt(`Temporary password for ${btn.dataset.name}.
+They are signed out everywhere and must choose a new password at next sign-in.
+(12+ characters with letters and digits - this one is suggested)`, suggestion);
+      if (!pw) return;
+      try {
+        const r = await fetch(`/admin/users/${btn.dataset.id}/password`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pw.trim() }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+        toast(`Temporary password set for ${btn.dataset.name}. Share it with them privately.`);
+      } catch (e) { toast('Reset failed: ' + e.message, true); }
+    };
+  });
+
   box.querySelectorAll('.ru-delete').forEach(btn => {
     btn.onclick = async () => {
       if (!confirm('Delete this user? This cannot be undone.')) return;
@@ -155,10 +177,12 @@ function userRow(u) {
   const roleSel = _rbacRoles.map(r =>
     `<option value="${esc(r.name)}" ${u.roles.includes(r.name) ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
   const state = u.is_active ? '' : '<span class="ru-state">disabled</span>';
+  const resetBtn = `<button type="button" class="ru-btn ru-reset-pw" data-id="${u.id}" data-name="${esc(u.username)}" title="Set a temporary password for someone who forgot theirs">Reset password</button>`;
   const actions = u.is_super_admin
-    ? '<span class="ru-role-fixed dim">all permissions</span>'
+    ? '<span class="ru-role-fixed dim">all permissions</span>' + resetBtn
     : `<select class="ru-role-select" data-id="${u.id}" aria-label="Role for ${esc(u.username)}">${roleSel}</select>
        <button type="button" class="ru-btn ru-toggle-active" data-id="${u.id}" data-active="${u.is_active ? '1' : '0'}">${u.is_active ? 'Disable' : 'Enable'}</button>
+       ${resetBtn}
        <button type="button" class="ru-btn ru-delete" data-id="${u.id}">Delete</button>`;
   return `<div class="ru-row${u.is_active ? '' : ' off'}">
     <span class="ru-name" title="${esc(u.username)}">${esc(u.username)}${u.is_super_admin ? '<span class="ru-badge">super admin</span>' : ''}${state}</span>

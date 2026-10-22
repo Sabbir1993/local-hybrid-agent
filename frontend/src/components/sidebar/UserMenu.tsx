@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { type UserProfile, api } from '../../services/api';
-import { openAgentMemory } from '../modals/AgentMemory';
 
 interface UserMenuProps {
   user: UserProfile | null;
@@ -10,7 +9,7 @@ interface UserMenuProps {
 
 const THEMES = ['slate', 'claude', 'tokyonight', 'light'];
 
-export const UserMenu: React.FC<UserMenuProps> = ({ user, onClose }) => {
+export const UserMenu: React.FC<UserMenuProps> = ({ onClose }) => {
   const { theme, setTheme, openSettingsModal, setActiveModal, logout } = useAppStore();
   const [showPwdForm, setShowPwdForm] = useState(false);
   const [currentPwd, setCurrentPwd] = useState('');
@@ -18,9 +17,6 @@ export const UserMenu: React.FC<UserMenuProps> = ({ user, onClose }) => {
   const [confirmPwd, setConfirmPwd] = useState('');
   const [pwdMsg, setPwdMsg] = useState<{ text: string; isError?: boolean } | null>(null);
   const [isSavingPwd, setIsSavingPwd] = useState(false);
-
-  const isSuper = !!user?.is_super_admin;
-  const canManageUsers = isSuper || (user?.permissions && user.permissions.includes('users.manage'));
 
   const cycleNextTheme = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -115,21 +111,6 @@ export const UserMenu: React.FC<UserMenuProps> = ({ user, onClose }) => {
         <span>Docs & Guide</span>
       </button>
 
-      {/* Agent memory */}
-      <button
-        type="button"
-        className="user-menu-item"
-        onClick={(e) => handleAction(e, openAgentMemory)}
-        title="What the agent remembers about you"
-      >
-        <svg className="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
-          <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
-          <path d="M12 5v13" />
-        </svg>
-        <span>My agent memory</span>
-      </button>
-
       {/* Settings */}
       <button
         type="button"
@@ -143,53 +124,6 @@ export const UserMenu: React.FC<UserMenuProps> = ({ user, onClose }) => {
         </svg>
         <span>Settings</span>
       </button>
-
-      {/* 2FA */}
-      <button
-        type="button"
-        className="user-menu-item"
-        onClick={(e) => handleAction(e, () => openSettingsModal('sec-mfa'))}
-        title="Configure Two-Factor Authentication (TOTP)"
-      >
-        <svg className="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-        </svg>
-        <span>Two-Factor Auth (2FA)</span>
-      </button>
-
-      {/* Users & Roles (if admin) */}
-      {canManageUsers && (
-        <>
-          <button
-            type="button"
-            className="user-menu-item"
-            onClick={(e) => handleAction(e, () => openSettingsModal('sec-users'))}
-            title="Manage Users and RBAC Roles"
-          >
-            <svg className="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-            </svg>
-            <span>Users & Roles</span>
-          </button>
-
-          <button
-            type="button"
-            className="user-menu-item"
-            onClick={(e) => handleAction(e, () => openSettingsModal('sec-session'))}
-            title="Manage Session Expiry & Security Policy"
-          >
-            <svg className="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-            <span>Session Security</span>
-          </button>
-        </>
-      )}
 
       <div className="user-menu-sep" />
 

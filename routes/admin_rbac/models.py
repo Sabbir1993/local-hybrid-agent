@@ -30,3 +30,7 @@ class RolePermissionsBody(BaseModel):
 
 class ClearAllDataBody(BaseModel):
     confirm: str  # must equal "DELETE" -- a lightweight typed-confirmation guard
+
+
+class ResetPasswordBody(BaseModel):
+    password: str                    # temporary: the user must replace it at next sign-in

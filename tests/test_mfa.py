@@ -427,6 +427,20 @@ class StepUpWiring(_TempAuthDb):
         self.assertEqual(self.client.post("/companion/pair",
                                           json={"device_id": "dev_win_00aa11bb22cc33dd"}).status_code, 200)
 
+    def test_admin_password_reset(self):
+        from core.auth_provider import verify_password
+        victim = auth_db.create_user(username="pwv", password_hash=None)
+        self.holder.update(mfa=False, verified=False)
+        url = f"/admin/users/{victim}/password"
+        self.assertEqual(self.client.post(url, json={"password": "short"}).status_code, 400)       # policy applies
+        r = self.client.post(url, json={"password": "Temporary-pass-2026"})
+        self.assertEqual(r.status_code, 200, r.text[:200])
+        row = auth_db.get_user_by_id(victim)
+        self.assertTrue(verify_password("Temporary-pass-2026", row["password_hash"]))
+        self.assertEqual(row["must_change_password"], 1)                                            # they must replace it
+        self.assertEqual(self.client.post(f"/admin/users/{self.uid}/password", json={"password": "Temporary-pass-2026"}).status_code, 400)
+        self.assertEqual(self.client.post("/admin/users/424242/password", json={"password": "Temporary-pass-2026"}).status_code, 404)
+
     def test_admin_reset(self):
         victim = auth_db.create_user(username="v", password_hash=None)
         secret = totp.generate_secret()

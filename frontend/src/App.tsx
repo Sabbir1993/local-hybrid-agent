@@ -6,6 +6,7 @@ import { Header } from './components/header/Header';
 import { ChatArea } from './components/chat/ChatArea';
 import { Composer } from './components/chat/Composer';
 import { RightDock } from './components/dock/RightDock';
+import { AppLoader } from './components/common/AppLoader';
 import { ProjectModal } from './components/modals/ProjectModal';
 import { AgentMemoryModal } from './components/modals/AgentMemory';
 import { AgentModals } from './components/modals/AgentModals';
@@ -182,17 +183,8 @@ export function App() {
     return <LoginPage />;
   }
 
-  // Show splash while checking initial authentication
-  if (isAuthenticated === null) {
-    return (
-      <div className="flex h-screen w-screen items-center justify-center bg-bg">
-        <div className="flex flex-col items-center gap-3">
-          <img src="/static/logo/logo.jpg" alt="Logo" width={40} height={40} className="rounded-lg animate-pulse" />
-          <span className="text-xs text-text-muted font-medium">Connecting to Local Agent…</span>
-        </div>
-      </div>
-    );
-  }
+  // Start-up screen while the sign-in check runs
+  if (isAuthenticated === null) return <AppLoader />;
 
   if (activeModal === 'settings') {
     return (

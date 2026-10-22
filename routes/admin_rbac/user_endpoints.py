@@ -10,7 +10,7 @@ from core.auth import Principal, password_policy_error
 from core.auth_provider import hash_password
 from core.deps import require_verified
 from .helpers import _check_assignable_roles, _check_can_modify, _user_public
-from .models import CreateUserBody, UpdateUserBody
+from .models import CreateUserBody, ResetPasswordBody, UpdateUserBody
 
 router = APIRouter()
 
@@ -114,4 +114,28 @@ async def reset_user_mfa(user_id: int, user: Principal = Depends(require_verifie
     auth_db.admin_reset_mfa(user_id)
     audit_log(user, action="mfa.admin_reset", resource=target["username"],
               detail={"was_enabled": was_on}, result="allow")
+    return {"ok": True}
+
+
+@router.post("/users/{user_id}/password")
+async def reset_user_password(user_id: int, body: ResetPasswordBody,
+                              user: Principal = Depends(require_verified("users.manage"))):
+    """Forgotten-password recovery: the admin sets a temporary password. It is never stored or logged in clear;
+    the user is signed out everywhere and must choose their own at next sign-in. Own account: use Change password."""
+    target = auth_db.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="user not found")
+    if user_id == user.id:
+        raise HTTPException(status_code=400, detail="change your own password with Change password")
+    _check_can_modify(user, target)
+    err = password_policy_error(body.password, target["username"])
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    auth_db.db().execute(
+        "UPDATE users SET password_hash = ?, must_change_password = 1, updated_at = ? WHERE id = ?",
+        (hash_password(body.password), time.time(), user_id))
+    auth_db.db().commit()
+    auth_db.unlock_user(user_id)
+    auth_db.revoke_all_sessions_for_user(user_id)
+    audit_log(user, action="password.admin_reset", resource=target["username"], result="allow")
     return {"ok": True}

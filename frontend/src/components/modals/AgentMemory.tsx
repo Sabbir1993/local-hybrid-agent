@@ -30,7 +30,31 @@ interface Editing {
   original?: string;
 }
 
-const NEW_TEMPLATE = '---\ndescription: what this file covers and when to read it\n---\n- ';
+// "Add" is a plain form: pick what it is about, type points in your own words. The file name, description and
+// "- " bullets are built here, so nobody has to know about paths or the file format.
+type Topic = 'about' | 'prefs' | 'lessons' | 'project' | 'other';
+const TOPICS: { key: Topic; label: string; hint: string; path?: string; desc?: string }[] = [
+  { key: 'about', label: 'About me', hint: 'who you are, your role, your team', path: 'profile.md', desc: 'Who the user is and what they do' },
+  { key: 'prefs', label: 'How I like things done', hint: 'tone, language, format, tools you prefer', path: 'preferences.md', desc: 'How the user likes answers and work done' },
+  { key: 'lessons', label: 'Lessons and corrections', hint: 'mistakes the agent should not repeat', path: 'lessons.md', desc: 'Corrections and lessons from earlier work' },
+  { key: 'project', label: 'A project', hint: 'facts about one project or product' },
+  { key: 'other', label: 'Something else', hint: 'any other topic' },
+];
+const slugOf = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const bulletLines = (notes: string) =>
+  notes.split('\n').map((l) => l.trim().replace(/^[-*•]\s*/, '')).filter(Boolean).map((l) => '- ' + l);
+
+interface Adding { topic: Topic; name: string; notes: string }
+
+/** A friendly name for a memory file in the list (the real path stays visible in small print). */
+function friendly(path: string): string {
+  const t = TOPICS.find((x) => x.path === path);
+  if (t) return t.label;
+  const m = path.match(/^projects\/(.+)\.md$/);
+  const raw = m ? m[1] : path.replace(/\.md$/, '');
+  const nice = raw.replace(/[-_]+/g, ' ');
+  return (m ? 'Project: ' : '') + nice.charAt(0).toUpperCase() + nice.slice(1);
+}
 
 const memUrl = (path = '') => '/agent/memory' + (path ? '/' + path.split('/').map(encodeURIComponent).join('/') : '');
 
@@ -60,6 +84,7 @@ export const AgentMemoryModal: React.FC = () => {
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<Editing | null>(null);
+  const [adding, setAdding] = useState<Adding | null>(null);
   const [saving, setSaving] = useState(false);
   // a pending delete: a single path, or 'all'
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
@@ -93,10 +118,14 @@ export const AgentMemoryModal: React.FC = () => {
     }
   }, []);
 
+  const addingRef = useRef(adding);
+  addingRef.current = adding;
+
   const isDirty = () => {
+    if (addingRef.current && addingRef.current.notes.trim()) return true;
     const ed = editingRef.current;
     if (!ed) return false;
-    if (!ed.file) return ed.text !== NEW_TEMPLATE || ed.path.trim() !== '';
+    if (!ed.file) return false;
     return ed.text !== (ed.original ?? ed.file.text ?? '');
   };
 
@@ -118,6 +147,7 @@ export const AgentMemoryModal: React.FC = () => {
   useEffect(() => {
     if (!open) return;
     setEditing(null);
+    setAdding(null);
     setConflict(false);
     setConfirmDel(null);
     setSearch('');
@@ -228,6 +258,51 @@ export const AgentMemoryModal: React.FC = () => {
     }
   };
 
+  const saveAdded = async () => {
+    if (!adding) return;
+    const topic = TOPICS.find((t) => t.key === adding.topic)!;
+    const lines = bulletLines(adding.notes);
+    if (!lines.length) { setError('Type at least one thing for the agent to remember.'); return; }
+    let path = topic.path || '';
+    let desc = topic.desc || '';
+    if (!path) {
+      const slug = slugOf(adding.name);
+      if (!slug) { setError(topic.key === 'project' ? 'Give the project a name.' : 'Give this topic a name.'); return; }
+      path = (topic.key === 'project' ? 'projects/' : '') + slug + '.md';
+      desc = topic.key === 'project' ? `Notes about the ${adding.name.trim()} project` : `Notes: ${adding.name.trim()}`;
+    }
+    if (!PATH_RX.test(path)) { setError('Use letters and numbers for the name.'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      // an existing note gets the new points added at the end instead of being replaced
+      const ex = await apiFetch(memUrl(path));
+      let content = `---\ndescription: ${desc}\n---\n${lines.join('\n')}`;
+      let version: string | null = null;
+      if (ex.ok) {
+        const f: MemoryFile = await ex.json();
+        content = (f.text || '').replace(/\s*$/, '') + '\n' + lines.join('\n');
+        version = f.version;
+      } else if (ex.status !== 404) {
+        throw new HttpError(await errorOf(ex), ex.status);
+      }
+      const r = await apiFetch(memUrl(path), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, if_version: version }),
+      });
+      if (!r.ok) throw new HttpError(await errorOf(r), r.status);
+      setAdding(null);
+      await refresh();
+    } catch (e: any) {
+      setError(e instanceof HttpError && e.status === 409
+        ? 'That note changed a moment ago. Press Save again to add your points to the latest version.'
+        : 'Save failed: ' + (e?.message || e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const doDelete = async () => {
     const target = confirmDel;
     if (!target) return;
@@ -263,8 +338,8 @@ export const AgentMemoryModal: React.FC = () => {
           <div>
             <h3 className="font-bold text-sm text-text">🧠 My agent memory</h3>
             <p className="text-[11px] text-text-muted mt-0.5">
-              What the agent remembers about you, as small files. Only you can see them; they are never used for anyone else.
-              Passwords, keys, card and ID numbers are refused.
+              Things the agent keeps in mind about you between chats, so you do not have to repeat yourself.
+              Only you can see them. Passwords, keys, card and ID numbers are refused.
             </p>
           </div>
           <button
@@ -285,10 +360,65 @@ export const AgentMemoryModal: React.FC = () => {
             </div>
           )}
 
-          {editing ? (
+          {adding ? (
+            <div className="flex flex-col gap-3">
+              <div className="text-text-muted">The agent reads these notes at the start of a chat and uses them to answer the way you like.</div>
+              <div>
+                <div className="font-semibold text-text mb-1.5">What is it about?</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {TOPICS.map((t) => (
+                    <button
+                      key={t.key}
+                      type="button"
+                      title={t.hint}
+                      onClick={() => setAdding({ ...adding, topic: t.key })}
+                      className={btn + (adding.topic === t.key ? ' !border-accent !text-text bg-accent/10' : '')}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-[11px] text-text-muted mt-1">{TOPICS.find((t) => t.key === adding.topic)!.hint}</div>
+              </div>
+              {(adding.topic === 'project' || adding.topic === 'other') && (
+                <input
+                  value={adding.name}
+                  onChange={(e) => setAdding({ ...adding, name: e.target.value })}
+                  placeholder={adding.topic === 'project' ? 'Project name, e.g. Payment portal' : 'Topic name, e.g. Travel'}
+                  className="w-full bg-panel border border-border rounded-lg px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
+                />
+              )}
+              <div>
+                <div className="font-semibold text-text mb-1.5">What should the agent remember?</div>
+                <textarea
+                  value={adding.notes}
+                  onChange={(e) => setAdding({ ...adding, notes: e.target.value })}
+                  rows={7}
+                  placeholder={'One point per line, in your own words. For example:\nI work in the payments team\nKeep answers short and use simple English'}
+                  className="w-full bg-bg border border-border rounded-lg p-2 text-xs text-text outline-none focus:border-accent"
+                />
+                {limits.file_max_bytes ? (
+                  <div className="text-[10px] text-text-muted mt-1">{new Blob([adding.notes]).size} / {limits.file_max_bytes} characters in one note</div>
+                ) : null}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="px-4 py-1.5 bg-accent text-white font-semibold text-xs rounded-lg hover:brightness-110 transition-all disabled:opacity-50"
+                  disabled={saving}
+                  onClick={saveAdded}
+                >
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+                <button className={btn} onClick={() => { if (isDirty() && !window.confirm('Discard what you typed?')) return; setAdding(null); setError(''); }}>Cancel</button>
+              </div>
+            </div>
+          ) : editing ? (
             <div className="flex flex-col gap-2">
               {editing.file ? (
-                <b className="font-mono text-text">{editing.file.path}</b>
+                <div>
+                  <b className="text-text">{friendly(editing.file.path)}</b> <span className="font-mono text-[10px] text-text-muted">{editing.file.path}</span>
+                  <div className="text-[11px] text-text-muted mt-0.5">One point per line, starting with “- ”. The agent reads this note when it is relevant.</div>
+                </div>
               ) : (
                 <input
                   value={editing.path}
@@ -326,11 +456,11 @@ export const AgentMemoryModal: React.FC = () => {
                   type="search"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search files by path or description…"
+                  placeholder="Search your notes…"
                   className="flex-1 min-w-[180px] bg-panel border border-border rounded-lg px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
                 />
-                <button className={btn} onClick={() => { setEditing({ file: null, path: '', text: NEW_TEMPLATE }); setError(''); }}>
-                  ＋ New file
+                <button className={btn} onClick={() => { setAdding({ topic: 'about', name: '', notes: '' }); setError(''); }}>
+                  ＋ Add something to remember
                 </button>
                 <button
                   className={btn + ' !text-rose-400'}
@@ -358,24 +488,26 @@ export const AgentMemoryModal: React.FC = () => {
               {loading && !files.length ? (
                 <div className="text-text-muted">Loading…</div>
               ) : !files.length ? (
-                <div className="text-text-muted">Nothing remembered yet. Tell the agent a preference and it will be saved here.</div>
+                <div className="text-text-muted">Nothing remembered yet. Press “Add something to remember”, or just tell the agent a preference in a chat and it will be saved here.</div>
               ) : !shown.length ? (
                 <div className="text-text-muted">No files match the search.</div>
               ) : (
                 <div className="flex flex-col divide-y divide-border/40">
                   {shown.map((f) => (
                     <div key={f.path} className="flex items-center gap-3 py-1.5">
-                      <code className="min-w-[150px] text-text break-all">{f.path}</code>
+                      <div className="min-w-[150px] max-w-[220px]">
+                        <div className="text-text font-medium">{friendly(f.path)}</div>
+                        <code className="text-[10px] text-text-muted break-all">{f.path}</code>
+                      </div>
                       <span className="flex-1 text-[11px] text-text-muted">{f.description}</span>
-                      <span className="text-[10px] text-text-muted whitespace-nowrap">{f.bytes} B</span>
-                      <button className={btn} onClick={() => openFile(f.path)}>View / edit</button>
+                      <button className={btn} onClick={() => openFile(f.path)}>Edit</button>
                       <button className={btn + ' !text-rose-400'} onClick={() => setConfirmDel(f.path)}>Delete</button>
                     </div>
                   ))}
                 </div>
               )}
               {limits.max_files ? (
-                <div className="text-[10px] text-text-muted">{files.length} / {limits.max_files} files</div>
+                <div className="text-[10px] text-text-muted">{files.length} of {limits.max_files} notes</div>
               ) : null}
             </>
           )}

@@ -260,3 +260,8 @@ async function loadDevicesPanel() {
   const home = document.getElementById('settings-home');
   if (home && window.self === window.top) home.hidden = false;
 })();
+
+// "My Agent Memory": the editor lives in the React app, which listens for this message while Settings is open
+document.getElementById('btn-open-agent-memory')?.addEventListener('click', () => {
+  if (window.parent && window.parent !== window) window.parent.postMessage({ type: 'open-agent-memory' }, location.origin);
+});

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
+import { Spinner } from '../common/AppLoader';
 import { fetchTasks, stopTask, type Task } from '../../services/tasks';
 
 const POLL_MS = 3000;
@@ -58,10 +59,10 @@ export const TasksView: React.FC = () => {
   };
 
   if (tasks === null) {
-    return (
-      <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--dim)', fontSize: '12.5px' }}>
-        {failed ? 'Could not load tasks.' : 'Loading…'}
-      </div>
+    return failed ? (
+      <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--dim)', fontSize: '12.5px' }}>Could not load tasks. Retrying…</div>
+    ) : (
+      <Spinner label="Loading tasks…" />
     );
   }
 

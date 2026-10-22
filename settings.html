@@ -385,6 +385,10 @@
           <span class="tab-icon">📚</span>
           <span class="tab-label">Knowledge Base</span>
         </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-memory">
+          <span class="tab-icon">🧠</span>
+          <span class="tab-label">My Agent Memory</span>
+        </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-guard" data-perm="settings.input_guard">
           <span class="tab-icon">🛡️</span>
           <span class="tab-label">Input/Output Sanitizer</span>
@@ -689,7 +693,7 @@
                   <div class="tm-bar-track"><div class="tm-bar-fill bar-amber" id="tm-bar-temp" style="width:45%;"></div></div>
                 </div>
                 <!-- Keepalive Toggle inside Hardware & Context Allocation -->
-                <div class="tm-bar-row keep-row" style="margin-top:12px; padding-top:10px; border-top:1px solid var(--border-subtle); display:flex; flex-direction:column; gap:3px;" title="Windows demotes GPU VRAM to system RAM ~70s after idle, causing throughput drop (14.4 → 7.7 t/s). A 1-token ping every 25s while idle keeps VRAM resident.">
+                <div class="tm-bar-row keep-row" style="margin-top:12px; padding-top:10px; border-top:1px solid var(--border-subtle); display:flex; flex-direction:column; align-items:flex-start; text-align:left; gap:3px;" title="Windows demotes GPU VRAM to system RAM ~70s after idle, causing throughput drop (14.4 → 7.7 t/s). A 1-token ping every 25s while idle keeps VRAM resident.">
                   <div style="display:flex; align-items:center; gap:8px;">
                     <b style="font-size:11.5px; color:var(--text);" title="Keep VRAM resident in Arc GPUs">⚡ VRAM Keepalive</b>
                     <label class="switch" title="Toggle keepalive background pings" style="margin:0; transform:scale(0.85); transform-origin:left center;"><input type="checkbox" id="ka"><span class="slider"></span></label>
@@ -935,6 +939,12 @@
       </div>
 
       <!-- Section 7: Capabilities -->
+      <div class="card settings-panel" id="sec-memory">
+        <h3>🧠 My Agent Memory</h3>
+        <p class="dim" style="font-size:12px; line-height:1.5;">Things the agent keeps in mind about you between chats, so you do not have to repeat yourself. Only you can see them. Passwords, keys, card and ID numbers are refused.</p>
+        <button type="button" class="btn accent" id="btn-open-agent-memory" style="width:auto;">Open my agent memory</button>
+      </div>
+
       <div class="card settings-panel" id="sec-caps" data-perm="settings.orchestration.configure">
         <div class="settings-panel-head">
           <h2>🧩 Capabilities</h2>
