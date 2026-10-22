@@ -896,6 +896,9 @@ function setupApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// Windows shows this id as the sender of toasts: without it they read "electron.app..." instead of the app name
+try { app.setAppUserModelId("com.local-agent.companion"); } catch (_) {}
+
 app.whenReady().then(() => {
   setupApplicationMenu();
   if (!SERVER_URL) {

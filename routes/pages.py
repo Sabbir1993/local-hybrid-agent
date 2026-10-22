@@ -55,6 +55,7 @@ async def serve_static(file_path: str):
             ".svg": "image/svg+xml",
             ".ico": "image/x-icon",
             ".webp": "image/webp",
+            ".webmanifest": "application/manifest+json",
         }
         media = media_types.get(p.suffix.lower())
         return FileResponse(p, media_type=media,
