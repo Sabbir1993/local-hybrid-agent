@@ -556,11 +556,25 @@ def keepalive_prompt(profile: Optional[dict]) -> str:
 SINGLE_SLOT_KEEPALIVE_IDLE_S = 300
 
 
-def keepalive_idle_s(n_slots: int, interval_s: float) -> float:
+def single_slot_keepalive_idle_s(profile: Optional[dict] = None) -> float:
+    """How long a one-slot server must sit idle before a keepalive ping (profile or app.json "keepalive_single_slot_idle_s",
+    default 300). Windows demotes idle VRAM to system RAM after about 70 s, so with the default the model can slip to RAM before the
+    first ping; a smaller value (for example 45) pings sooner, at the price that a ping replaces the cached prompt of the chat."""
+    try:
+        from .small_model import APP_CONFIG
+        v = (profile or {}).get("keepalive_single_slot_idle_s")
+        if v is None:
+            v = APP_CONFIG.get("keepalive_single_slot_idle_s")
+        return max(10.0, float(v)) if v is not None else float(SINGLE_SLOT_KEEPALIVE_IDLE_S)
+    except (TypeError, ValueError):
+        return float(SINGLE_SLOT_KEEPALIVE_IDLE_S)
+
+
+def keepalive_idle_s(n_slots: int, interval_s: float, profile: Optional[dict] = None) -> float:
     """Seconds without model activity before a keepalive ping. With one slot the ping runs on the SAME slot as the chat: it replaces
     that conversation's cached prompt, so the next request re-reads the whole prompt (35 s at 11k tokens) and starts from a slot
     holding the warm-up text. So with one slot it only pings after a long real idle, never between the rounds of a tool loop."""
-    return float(interval_s) if int(n_slots or 1) > 1 else max(float(interval_s), SINGLE_SLOT_KEEPALIVE_IDLE_S)
+    return float(interval_s) if int(n_slots or 1) > 1 else max(float(interval_s), single_slot_keepalive_idle_s(profile))
 
 
 state = ProxyState()
@@ -574,7 +588,7 @@ async def keepalive_loop():
         if state.process is None or state.process.poll() is not None:
             continue
         n_slots = int((state.profile or {}).get("n_slots") or 1)
-        if time.time() - state.last_activity < keepalive_idle_s(n_slots, state.keepalive_interval_s):
+        if time.time() - state.last_activity < keepalive_idle_s(n_slots, state.keepalive_interval_s, state.profile):
             continue
         try:
             # Pin the ping to the last slot so, with -np > 1, it doesn't land on

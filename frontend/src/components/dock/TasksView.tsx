@@ -1,15 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { Spinner } from '../common/AppLoader';
+import '../../styles/tasks.css';
 import { fetchTasks, stopTask, type Task } from '../../services/tasks';
 
 const POLL_MS = 3000;
 
 const MARK: Record<string, string> = {
-  running: '⏳', completed: '✅', failed: '❌', cancelled: '⏹', stopped: '⏹', interrupted: '⚠️',
-};
-const CLS: Record<string, string> = {
-  running: 'st-in_progress', completed: 'st-done', failed: 'st-failed', interrupted: 'st-failed',
+  running: '⏳', completed: '✓', failed: '✕', cancelled: '■', stopped: '■', interrupted: '!',
 };
 
 function ago(ts: number | null): string {
@@ -25,15 +23,15 @@ function ago(ts: number | null): string {
 export const TasksView: React.FC = () => {
   const showToast = useAppStore((s) => s.showToast);
   const [tasks, setTasks] = useState<Task[] | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | false>(false);
   const [stopping, setStopping] = useState<string | null>(null);
 
   const load = useCallback(async (alive: () => boolean) => {
     try {
       const rows = await fetchTasks();
       if (alive()) { setTasks(rows); setFailed(false); }
-    } catch {
-      if (alive()) setFailed(true);
+    } catch (e: any) {
+      if (alive()) setFailed(String(e?.message || 'network error'));   // shown, so a failing poll says why
     }
   }, []);
 
@@ -60,7 +58,7 @@ export const TasksView: React.FC = () => {
 
   if (tasks === null) {
     return failed ? (
-      <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--dim)', fontSize: '12.5px' }}>Could not load tasks. Retrying…</div>
+      <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--dim)', fontSize: '12.5px' }}>Could not load tasks ({failed}). Retrying…</div>
     ) : (
       <Spinner label="Loading tasks…" />
     );
@@ -80,26 +78,17 @@ export const TasksView: React.FC = () => {
   }
 
   const row = (t: Task) => (
-    <div key={t.id} className={`plan-doc-step-item ${CLS[t.state] || ''}`} data-task-id={t.id}>
-      <span className="plan-doc-step-mark">{MARK[t.state] || '☐'}</span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: t.state === 'running' ? 600 : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.title}>
-          {t.title}
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--dim)', marginTop: 2 }}>
+    <div key={t.id} className={`tk-row tk-${t.state}`} data-task-id={t.id}>
+      <span className="tk-mark" aria-hidden="true">{MARK[t.state] || '•'}</span>
+      <div className="tk-body">
+        <div className="tk-title" title={t.title}>{t.title}</div>
+        <div className="tk-meta">
           {t.state}{t.stage ? ` · ${t.stage}` : ''}{t.step ? ` · step ${t.step}` : ''}{t.reason ? ` · ${t.reason}` : ''}
           {' · '}{t.state === 'running' ? `running ${ago(t.created_at).replace(' ago', '')}` : ago(t.updated_at)}
         </div>
       </div>
       {t.can_stop && (
-        <button
-          type="button"
-          className="dock-icon-btn"
-          title="Stop this task"
-          disabled={stopping === t.id}
-          onClick={() => onStop(t)}
-          style={{ cursor: 'pointer', padding: '2px 8px', border: '1px solid var(--border)', borderRadius: 4 }}
-        >
+        <button type="button" className="tk-stop" title="Stop this task" disabled={stopping === t.id} onClick={() => onStop(t)}>
           {stopping === t.id ? '…' : 'Stop'}
         </button>
       )}
@@ -107,25 +96,23 @@ export const TasksView: React.FC = () => {
   );
 
   return (
-    <>
-      <div className="plan-doc-header">
-        <div className="plan-doc-title">Background tasks</div>
-        <div style={{ fontSize: 12, color: 'var(--dim)' }}>
-          <b>{active.length}</b> running{failed ? <> · <span style={{ color: 'var(--amber)' }}>refresh failed</span></> : null}
-        </div>
-      </div>
+    <div className="tk-panel">
+      <header className="tk-head">
+        <h3>Background tasks</h3>
+        <span><b>{active.length}</b> running{failed ? <> · <span className="tk-warn">refresh failed</span></> : null}</span>
+      </header>
       {active.length > 0 && (
-        <>
-          <div className="plan-doc-section-title">Running</div>
-          <div className="plan-doc-steps-list">{active.map(row)}</div>
-        </>
+        <section>
+          <h4 className="tk-section">Running</h4>
+          <div className="tk-list">{active.map(row)}</div>
+        </section>
       )}
       {recent.length > 0 && (
-        <>
-          <div className="plan-doc-section-title">Recent</div>
-          <div className="plan-doc-steps-list">{recent.map(row)}</div>
-        </>
+        <section>
+          <h4 className="tk-section">Recent</h4>
+          <div className="tk-list">{recent.map(row)}</div>
+        </section>
       )}
-    </>
+    </div>
   );
 };

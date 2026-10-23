@@ -44,5 +44,18 @@ class UnknownArchitectureTests(unittest.TestCase):
         self.assertIn("not a path or VRAM problem", text)
 
 
+class KeepaliveWaitTests(unittest.TestCase):
+    def test_one_slot_waits_300s_unless_the_profile_says_otherwise(self):
+        from core.state import keepalive_idle_s
+        self.assertEqual(keepalive_idle_s(1, 25), 300)
+        self.assertEqual(keepalive_idle_s(1, 25, {"keepalive_single_slot_idle_s": 45}), 45)
+        self.assertEqual(keepalive_idle_s(1, 25, {"keepalive_single_slot_idle_s": 3}), 25)      # never below the interval or 10 s
+        self.assertEqual(keepalive_idle_s(2, 25, {"keepalive_single_slot_idle_s": 45}), 25)     # a spare slot: the plain interval
+
+    def test_a_bad_value_falls_back_to_the_default(self):
+        from core.state import keepalive_idle_s
+        self.assertEqual(keepalive_idle_s(1, 25, {"keepalive_single_slot_idle_s": "soon"}), 300)
+
+
 if __name__ == "__main__":
     unittest.main()

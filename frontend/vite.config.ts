@@ -24,6 +24,7 @@ export default defineConfig({
       '/media': { target: BACKEND_URL, changeOrigin: true },
       '/chat': { target: BACKEND_URL, changeOrigin: true },
       '/agent': { target: BACKEND_URL, changeOrigin: true },
+      '/tasks': { target: BACKEND_URL, changeOrigin: true },
       '/git': { target: BACKEND_URL, changeOrigin: true },
       '/mcp': { target: BACKEND_URL, changeOrigin: true },
       '/plugins': { target: BACKEND_URL, changeOrigin: true },
