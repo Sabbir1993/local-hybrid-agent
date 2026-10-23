@@ -5,31 +5,28 @@ async function loadCapabilities() {
   try {
     const d = await (await fetch('/control/capabilities')).json();
     if (d.error) { box.innerHTML = '<div class="mon-empty">' + esc(d.error) + '</div>'; return; }
-    let _capActiveTab = window._capTab || 'web';
+    let _capActiveTab = window._capTab || 'memory';
     const tabBtn = (id, label, enabled) => {
       let badge = '';
       if (enabled === true) badge = `<span class="cap-pill-badge on">ON</span>`;
       else if (enabled === false) badge = `<span class="cap-pill-badge off">OFF</span>`;
-      return `<button type="button" role="tab" class="ru-tab cap-tab btn ghost" data-tab="${id}"
-        style="width:auto; margin:0; padding:6px 14px; font-size:12px; border-radius:6px 6px 0 0; display:inline-flex; align-items:center; gap:6px; white-space:nowrap;">
-        <span>${label}</span>${badge}
-      </button>`;
+      return `<button type="button" role="tab" class="cap-tab" data-tab="${id}"><span>${label}</span>${badge}</button>`;
     };
 
     let h = `<div class="rep-bar" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;"><span><b>${d.total_tools}</b> tools registered</span></div>`;
     
-    // Tab strip
-    h += `<div role="tablist" class="ru-tabs cap-tabs" style="display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:14px; flex-wrap:wrap; padding-bottom:1px;">
-      ${tabBtn('web', '🌐 Web', d.web.enabled)}
-      ${tabBtn('skills', '🎯 Skills', d.skills.enabled)}
-      ${tabBtn('mcp', '🔌 MCP Servers', d.mcp.enabled)}
-      ${tabBtn('plugins', '🧩 Plugins', d.plugins.enabled)}
-      ${tabBtn('shell', '⌨️ Shell', (d.shell || {}).enabled)}
-      ${tabBtn('task', '🤖 Agent Task', null)}
-      ${tabBtn('memory', '🧠 Memory', null)}
-      ${tabBtn('library', '📚 Library', null)}
-      ${tabBtn('router', '🧭 Router', null)}
-    </div>`;
+    // Navigation: grouped by what the person is doing, not one long row of tabs
+    const navGroups = [
+      ['About you', 'Notes that follow you between chats', [['memory', '🧠 My memory', null]]],
+      ['What the agent can use', 'Switch abilities on or off', [
+        ['web', '🌐 Web', d.web.enabled], ['shell', '⌨️ Shell', (d.shell || {}).enabled],
+        ['skills', '🎯 Skills', d.skills.enabled], ['mcp', '🔌 MCP servers', d.mcp.enabled], ['plugins', '🧩 Plugins', d.plugins.enabled]]],
+      ['How it works', 'Limits, routing and shared commands', [
+        ['task', '🤖 Task limits', null], ['router', '🧭 Router', null], ['library', '📚 Library', null]]],
+    ];
+    h += `<div class="cap-layout"><nav role="tablist" class="cap-rail" aria-label="Agent capabilities">
+      ${navGroups.map(([title, sub, tabs]) => `<div class="cap-rail-group"><div class="cap-rail-title">${title}</div><div class="cap-rail-sub">${sub}</div>${tabs.map(([id, label, en]) => tabBtn(id, label, en)).join('')}</div>`).join('')}
+    </nav><div class="cap-panes">`;
 
     // global servers: admin-managed; personal ("just for me") servers: any user, for themselves
     const canManageMcp = !!(window.hasPerm && window.hasPerm('settings.orchestration.configure'));
@@ -283,6 +280,7 @@ async function loadCapabilities() {
       h += `<div class="ru-pane cap-pane" data-pane="router" style="display:none;"><div class="dim" style="padding:10px;">Router stats not available.</div></div>`;
     }
 
+    h += '</div></div>';
     box.innerHTML = h;
 
     const _capShowTab = (tab) => {
@@ -301,13 +299,6 @@ async function loadCapabilities() {
     });
     _capShowTab(_capActiveTab);
 
-    if (limits) wireAgentLimits(box);
-    wireAgentMemory(box);
-    if (lib && !lib.error && canManageLib) wireAgentLibrary(box, lib);
-    if (rt && canManageRouter) wireRouter(box, rt);
-    if (canAddMcp) wireMcpEditor(box, canManageMcp);
-    if (canManagePlugins) wirePlugins(box);
-    scheduleMcpStatusPoll(d.mcp.servers || []);
     if (limits) wireAgentLimits(box);
     wireAgentMemory(box);
     if (lib && !lib.error && canManageLib) wireAgentLibrary(box, lib);

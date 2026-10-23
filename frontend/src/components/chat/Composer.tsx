@@ -750,7 +750,11 @@ export const Composer: React.FC = () => {
     : reasoningEffort.charAt(0).toUpperCase() + reasoningEffort.slice(1);
 
   const contextStats = useMemo(() => {
-    const nCtx = (serverStatus?.context?.n_ctx) || 32768;
+    // the picked cloud model's own window: the server only knows it once a run has bound the lane, so right after a
+    // reload the status still reports the local 32k. Agent mode never uses a cloud model.
+    const sel = availableModels.find((m) => m.id === selectedModel || m.display === selectedModel);
+    const pickedCloudCtx = appMode !== 'agent' && sel && (sel.kind === 'cloud' || String(sel.id).startsWith('cloud:')) ? Number(sel.ctx) || 0 : 0;
+    const nCtx = pickedCloudCtx || (serverStatus?.context?.n_ctx) || 32768;
     let totalToks = 0;
     // the latest reply with a server-reported prompt size already covers the system prompt, tools and all history:
     // add only its own completion and what came after it
@@ -781,7 +785,7 @@ export const Composer: React.FC = () => {
         ? `${(n / 1000).toFixed(1).replace('.0', '')}k`
         : `${n}`;
     return { nCtx, totalToks, pct, offset, color, fmtK };
-  }, [messages, serverStatus]);
+  }, [messages, serverStatus, availableModels, selectedModel, appMode]);
 
   const groupedModels = useMemo(() => {
     const q = modelSearch.toLowerCase();

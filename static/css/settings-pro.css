@@ -252,6 +252,46 @@
 #settings-page .am-card { padding: 18px 20px; border: 1px solid var(--sp-line); border-radius: 14px; background: color-mix(in srgb, var(--bg) 38%, var(--sp-surface)); }
 #settings-page .am-title { margin: 0 0 6px; font: 600 17px var(--sp-display); color: var(--text); }
 #settings-page .am-card > p { margin: 0 0 14px; max-width: 62ch; }
+#settings-page .am-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+#settings-page .am-head p { margin: 0 0 14px; max-width: 62ch; }
+#settings-page .am-full { width: auto; margin: 0; white-space: nowrap; }
+#settings-page .am-add { display: grid; gap: 10px; padding: 14px 16px; border: 1px solid var(--sp-line); border-radius: 12px; background: color-mix(in srgb, var(--bg) 55%, transparent); }
+#settings-page .am-step { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; color: var(--text); }
+#settings-page .am-step .dim { font-weight: 400; font-size: 12px; }
+#settings-page .am-num { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--sp-tint); color: var(--accent); font: 700 11px var(--sp-display); }
+#settings-page .am-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+#settings-page .am-chip { padding: 5px 12px; border-radius: 999px; border: 1px solid var(--sp-line-strong); background: transparent; color: var(--dim); font-size: 12px; cursor: pointer; }
+#settings-page .am-chip:hover { color: var(--text); }
+#settings-page .am-chip.on { color: var(--text); border-color: var(--accent); background: var(--sp-tint); }
+#settings-page .am-name, #settings-page .am-add textarea { width: 100%; box-sizing: border-box; margin: 0; }
+#settings-page .am-actions { display: flex; align-items: center; gap: 12px; }
+#settings-page .am-actions .btn { margin: 0; }
+#settings-page .am-list-title { margin: 18px 0 8px; }
+#settings-page .am-list { display: grid; gap: 6px; }
+#settings-page .am-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid var(--sp-line); border-radius: 10px; }
+#settings-page .am-row-main { display: grid; gap: 2px; min-width: 0; }
+#settings-page .am-row-main .dim { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#settings-page .am-del { width: auto; margin: 0; padding: 3px 10px; font-size: 11.5px; }
+#settings-page .am-empty { padding: 10px 2px; }
+
+/* Capabilities: grouped navigation rail + the open section */
+#settings-page .cap-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 22px; align-items: start; }
+#settings-page .cap-rail { position: sticky; top: 8px; display: grid; gap: 16px; }
+#settings-page .cap-rail-group { display: grid; gap: 2px; }
+#settings-page .cap-rail-title { font: 700 11px var(--sp-display); letter-spacing: .08em; text-transform: uppercase; color: var(--text); }
+#settings-page .cap-rail-sub { font-size: 11.5px; color: var(--dim); margin: 0 0 6px; line-height: 1.35; }
+#settings-page .cap-tab { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin: 0; padding: 8px 10px; border: 0; border-left: 2px solid transparent; border-radius: 8px; background: transparent; color: var(--dim); font-size: 13px; text-align: left; cursor: pointer; }
+#settings-page .cap-tab:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
+#settings-page .cap-tab.on { color: var(--text); font-weight: 600; background: var(--sp-tint); border-left-color: var(--accent); }
+#settings-page .cap-panes { min-width: 0; }
+@media (max-width: 820px) {
+  #settings-page .cap-layout { grid-template-columns: 1fr; gap: 14px; }
+  #settings-page .cap-rail { position: static; grid-auto-flow: column; overflow-x: auto; gap: 18px; padding-bottom: 6px; }
+  #settings-page .cap-rail-group { grid-auto-flow: column; align-items: center; gap: 6px; }
+  #settings-page .cap-rail-sub { display: none; }
+  #settings-page .cap-tab { width: auto; white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; }
+  #settings-page .cap-tab.on { border-bottom-color: var(--accent); }
+}
 
 /* ---------------- cloud models: providers and their models ---------------- */
 #settings-page .cp-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; color: var(--dim); font-size: 13px; }

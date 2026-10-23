@@ -96,23 +96,116 @@ function wireAgentLimits(box) {
 }
 
 /* ----- the signed-in user's own memory: the editor is the app's friendly "Add something to remember" screen ----- */
+// topics mirror frontend/src/components/modals/AgentMemory.tsx: the file name, description and "- " bullets are built here
+const AM_TOPICS = [
+  ['about', 'About me', 'who you are, your role, your team', 'profile.md', 'Who the user is and what they do'],
+  ['prefs', 'How I like things done', 'tone, language, format, tools you prefer', 'preferences.md', 'How the user likes answers and work done'],
+  ['lessons', 'Lessons and corrections', 'mistakes the agent should not repeat', 'lessons.md', 'Corrections and lessons from earlier work'],
+  ['project', 'A project', 'facts about one project or product', '', ''],
+  ['other', 'Something else', 'any other topic', '', ''],
+];
+
 function agentMemoryHtml() {
   return `<div id="agent-memory-group" class="am-card">
-    <h3 class="am-title">🧠 My agent memory</h3>
-    <p class="dim">Things the agent keeps in mind about you between chats, so you do not have to repeat yourself.</p>
-    <ul class="sp-points">
-      <li><b>You decide what it knows.</b> Add short notes such as your role, how you like answers, or lessons from earlier work.</li>
-      <li><b>Only you can see it.</b> Your notes are never used for anyone else.</li>
-      <li><b>Nothing sensitive.</b> Passwords, keys, card and ID numbers are refused.</li>
-    </ul>
-    <button type="button" class="btn accent" id="btn-open-agent-memory" style="width:auto;">Open my agent memory</button>
+    <div class="am-head">
+      <div>
+        <h3 class="am-title">🧠 My agent memory</h3>
+        <p class="dim">Short notes the agent keeps in mind about you between chats, so you do not have to repeat yourself. Only you can see them. Passwords, keys, card and ID numbers are refused.</p>
+      </div>
+      <button type="button" class="btn ghost am-full" id="btn-open-agent-memory" title="Edit whole notes, search and erase all">Open full editor</button>
+    </div>
+    <div class="am-add">
+      <div class="am-step"><span class="am-num">1</span> What is it about?</div>
+      <div class="am-chips" id="am-topics">
+        ${AM_TOPICS.map(([k, label, hint], i) => `<button type="button" class="am-chip${i ? '' : ' on'}" data-topic="${k}" title="${esc(hint)}">${esc(label)}</button>`).join('')}
+      </div>
+      <input type="text" id="am-name" class="am-name" style="display:none;" maxlength="60">
+      <div class="am-step"><span class="am-num">2</span> What should it remember? <span class="dim">one point per line, in your own words</span></div>
+      <textarea id="am-notes" rows="4" placeholder="I work in the payments team&#10;Keep answers short and use simple English"></textarea>
+      <div class="am-actions"><button type="button" class="btn accent" id="am-save" style="width:auto;">Save to memory</button><span id="am-msg" class="dim"></span></div>
+    </div>
+    <div class="am-step am-list-title">Saved notes <span class="dim" id="am-count"></span></div>
+    <div id="am-list" class="am-list"><div class="dim">Loading…</div></div>
   </div>`;
+}
+
+async function amLoadList(box) {
+  const list = box.querySelector('#am-list');
+  if (!list) return;
+  try {
+    const r = await fetch('/agent/memory');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || j.detail || r.status);
+    const files = j.files || [];
+    box.querySelector('#am-count').textContent = files.length ? `${files.length}${j.limits && j.limits.max_files ? ' of ' + j.limits.max_files : ''}` : '';
+    if (!files.length) { list.innerHTML = '<div class="dim am-empty">Nothing saved yet. Add your first note above, or just tell the agent a preference in a chat and it is saved here.</div>'; return; }
+    const nice = (p) => {
+      const t = AM_TOPICS.find(x => x[3] === p);
+      if (t) return t[1];
+      const m = p.match(/^projects\/(.+)\.md$/);
+      const raw = (m ? m[1] : p.replace(/\.md$/, '')).replace(/[-_]+/g, ' ');
+      return (m ? 'Project: ' : '') + raw.charAt(0).toUpperCase() + raw.slice(1);
+    };
+    list.innerHTML = files.map(f => `<div class="am-row"><div class="am-row-main"><b>${esc(nice(f.path))}</b><span class="dim">${esc(f.description || f.path)}</span></div>
+      <button type="button" class="btn ghost am-del" data-path="${esc(f.path)}" title="Delete this note">Delete</button></div>`).join('');
+    list.querySelectorAll('.am-del').forEach(b => {
+      b.onclick = async () => {
+        if (!confirm('Delete "' + b.dataset.path + '"?')) return;
+        try {
+          const rr = await fetch('/agent/memory/' + b.dataset.path.split('/').map(encodeURIComponent).join('/'), { method: 'DELETE' });
+          if (!rr.ok) throw new Error((await rr.json().catch(() => ({}))).error || rr.status);
+          amLoadList(box);
+        } catch (e) { toast('Delete failed: ' + e.message, true); }
+      };
+    });
+  } catch (e) { list.innerHTML = '<div class="dim am-empty">Could not load your notes: ' + esc(e.message) + '</div>'; }
 }
 
 /* The editor lives in the React app that hosts this page; ask it to open (see SettingsModal.tsx). */
 function wireAgentMemory(box) {
   const b = box.querySelector('#btn-open-agent-memory');
   if (!b) return;
+  amLoadList(box);
+  let topic = 'about';
+  const name = box.querySelector('#am-name'), notes = box.querySelector('#am-notes'), msg = box.querySelector('#am-msg');
+  box.querySelectorAll('#am-topics .am-chip').forEach(c => {
+    c.onclick = () => {
+      topic = c.dataset.topic;
+      box.querySelectorAll('#am-topics .am-chip').forEach(x => x.classList.toggle('on', x === c));
+      const needsName = topic === 'project' || topic === 'other';
+      name.style.display = needsName ? '' : 'none';
+      name.placeholder = topic === 'project' ? 'Project name, e.g. Payment portal' : 'Topic name, e.g. Travel';
+    };
+  });
+  box.querySelector('#am-save').onclick = async () => {
+    const t = AM_TOPICS.find(x => x[0] === topic);
+    const lines = notes.value.split('\n').map(l => l.trim().replace(/^[-*•]\s*/, '')).filter(Boolean).map(l => '- ' + l);
+    msg.textContent = '';
+    if (!lines.length) { msg.textContent = 'Type at least one thing for the agent to remember.'; return; }
+    let path = t[3], desc = t[4];
+    if (!path) {
+      const slug = name.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      if (!slug) { msg.textContent = topic === 'project' ? 'Give the project a name.' : 'Give this topic a name.'; return; }
+      path = (topic === 'project' ? 'projects/' : '') + slug + '.md';
+      desc = topic === 'project' ? `Notes about the ${name.value.trim()} project` : `Notes: ${name.value.trim()}`;
+    }
+    try {
+      const url = '/agent/memory/' + path.split('/').map(encodeURIComponent).join('/');
+      const ex = await fetch(url);
+      let content = `---\ndescription: ${desc}\n---\n${lines.join('\n')}`, version = null;
+      if (ex.ok) {                      // an existing note gets the new points at the end instead of being replaced
+        const f = await ex.json();
+        content = (f.text || '').replace(/\s*$/, '') + '\n' + lines.join('\n');
+        version = f.version;
+      } else if (ex.status !== 404) throw new Error((await ex.json().catch(() => ({}))).error || ex.status);
+      const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, if_version: version }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || j.detail || r.status);
+      notes.value = ''; name.value = '';
+      toast('Saved to your agent memory ✓');
+      amLoadList(box);
+    } catch (e) { msg.textContent = 'Save failed: ' + e.message; }
+  };
   b.onclick = () => {
     if (window.parent && window.parent !== window) window.parent.postMessage({ type: 'open-agent-memory' }, location.origin);
     else toast('Open the agent memory from the app.', true);
