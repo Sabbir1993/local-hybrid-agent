@@ -6,7 +6,7 @@ import { Header } from './components/header/Header';
 import { ChatArea } from './components/chat/ChatArea';
 import { Composer } from './components/chat/Composer';
 import { RightDock } from './components/dock/RightDock';
-import { AppLoader } from './components/common/AppLoader';
+import { AppLoader, dismissBootLoader } from './components/common/AppLoader';
 import { ProjectModal } from './components/modals/ProjectModal';
 import { AgentMemoryModal } from './components/modals/AgentMemory';
 import { AgentModals } from './components/modals/AgentModals';
@@ -105,6 +105,11 @@ export function App() {
       fetchSessions();
     }
   }, [isAuthenticated, fetchModels, fetchProjects, fetchSessions]);
+
+  // The HTML boot loader stays up until we know whether the user is signed in; then the real screen fades in under it
+  useEffect(() => {
+    if (isAuthenticated !== null) dismissBootLoader();
+  }, [isAuthenticated]);
 
   // URL routing synchronization for /settings, /report, /audit, and /db
   useEffect(() => {
