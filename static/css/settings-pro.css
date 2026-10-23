@@ -1,0 +1,325 @@
+/* settings-pro.css - the Settings page look. A skin only: no element ids, data attributes or behaviour change, so every
+   panel script keeps working. It reads the active theme's variables (--bg, --panel, --accent ...) so all themes keep
+   working; everything is scoped under #settings-page so it also beats the older class rules without !important.
+
+   Idea: a control room for a local agent harness. The left rail is an instrument rail (tinted icon tiles, an accent
+   bar on the active item); each section opens with a header band that stays pinned while the form scrolls, with a
+   one-time accent sweep when you switch sections. Everything else stays quiet.
+
+   Type: Bahnschrift (DIN-like, ships with Windows) for titles and numbers, Segoe UI Variable for text. System fonts
+   only - the CSP blocks web fonts. */
+
+#settings-page {
+  --sp-display: "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --sp-body: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --sp-mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+  --sp-line: color-mix(in srgb, var(--text) 9%, transparent);
+  --sp-line-strong: color-mix(in srgb, var(--text) 16%, transparent);
+  --sp-tint: color-mix(in srgb, var(--accent) 13%, transparent);
+  --sp-tint-strong: color-mix(in srgb, var(--accent) 24%, transparent);
+  --sp-surface: color-mix(in srgb, var(--panel) 86%, var(--bg));
+  --sp-raised: color-mix(in srgb, var(--panel2) 70%, var(--panel));
+  font-family: var(--sp-body);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------- rail ---------------- */
+#settings-page #settings-sidebar {
+  width: 268px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, var(--accent)) 0%, var(--panel) 38%);
+  border-right: 1px solid var(--sp-line);
+}
+#settings-page .settings-search-wrap { position: relative; padding: 14px 14px 10px; border-bottom: 0; }
+#settings-page #settings-tab-search {
+  height: 36px; padding: 0 34px 0 12px; border-radius: 10px; font-size: 12.5px; font-family: var(--sp-body);
+  background: color-mix(in srgb, var(--bg) 70%, var(--panel)); border: 1px solid var(--sp-line);
+}
+#settings-page #settings-tab-search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--sp-tint); }
+#settings-page .settings-search-wrap::after {
+  content: "/"; position: absolute; right: 24px; top: 50%; transform: translateY(-50%); margin-top: 2px;
+  width: 18px; height: 18px; display: grid; place-items: center; border-radius: 5px;
+  font: 600 11px var(--sp-mono); color: var(--dim); border: 1px solid var(--sp-line-strong); pointer-events: none;
+}
+#settings-page .settings-search-wrap:focus-within::after { opacity: 0; }
+
+#settings-page #settings-nav { padding: 4px 10px 18px; gap: 1px; scrollbar-width: thin; }
+#settings-page .settings-group-label {
+  display: flex; align-items: center; gap: 10px; margin: 18px 0 6px; padding: 0 8px;
+  font: 600 11.5px var(--sp-display); letter-spacing: .02em; text-transform: none; color: var(--dim); opacity: 1;
+}
+#settings-page .settings-group-label::after { content: ""; flex: 1; height: 1px; background: var(--sp-line); }
+#settings-page .settings-group-label:first-child { margin-top: 4px; }
+
+#settings-page .settings-tab-btn {
+  position: relative; gap: 11px; min-height: 38px; padding: 5px 10px 5px 8px; border-radius: 10px;
+  font: 500 13px var(--sp-body); color: color-mix(in srgb, var(--text) 72%, var(--dim));
+  border: 1px solid transparent; transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+#settings-page .settings-tab-btn .tab-icon {
+  width: 26px; height: 26px; border-radius: 8px; font-size: 14px; flex-shrink: 0;
+  background: color-mix(in srgb, var(--text) 6%, transparent); transition: background .14s ease;
+}
+#settings-page .settings-tab-btn:hover { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text); }
+#settings-page .settings-tab-btn:hover .tab-icon { background: color-mix(in srgb, var(--text) 10%, transparent); }
+#settings-page .settings-tab-btn.active {
+  background: linear-gradient(90deg, var(--sp-tint-strong), var(--sp-tint) 70%, transparent);
+  color: var(--text); font-weight: 600; border-color: transparent;
+}
+#settings-page .settings-tab-btn.active::before {
+  content: ""; position: absolute; left: -10px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0;
+  background: var(--accent); box-shadow: 0 0 12px var(--accent);
+}
+#settings-page .settings-tab-btn.active .tab-icon { background: var(--sp-tint-strong); }
+#settings-page .settings-tab-btn.tab-danger:hover,
+#settings-page .settings-tab-btn.tab-danger.active { background: rgba(244, 63, 94, .13); color: #fb7185; }
+#settings-page .settings-tab-btn.tab-danger.active::before { background: #f43f5e; box-shadow: 0 0 12px #f43f5e; }
+#settings-page .settings-tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------------- content ---------------- */
+#settings-page #settings-content {
+  padding: 0 clamp(16px, 3vw, 36px) 72px; scrollbar-width: thin;   /* no top padding: the pinned header must touch the top edge, or content scrolls through the gap above it */
+  background:
+    radial-gradient(900px 360px at 85% -80px, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%),
+    var(--bg);
+}
+#settings-page .card.settings-panel {
+  width: 100%; max-width: 1040px; margin: 22px auto 0; flex: 0 0 auto; align-self: flex-start; padding: 0 28px 30px; border-radius: 16px;
+  background: var(--sp-surface); border: 1px solid var(--sp-line); box-shadow: 0 1px 0 var(--sp-line) inset, 0 18px 40px -28px rgba(0, 0, 0, .55);
+}
+#settings-page .settings-panel { animation: none; }
+#settings-page .settings-panel.active { animation: sp-panel-in .22s ease-out; }
+@keyframes sp-panel-in { from { opacity: .0; } to { opacity: 1; } }
+
+/* header band: pinned while the section scrolls; a one-time accent sweep marks the switch */
+#settings-page .settings-panel > .settings-panel-head {
+  position: sticky; top: 0; z-index: 6; margin: 0 -28px 24px; padding: 24px 28px 18px; border-bottom: 1px solid var(--sp-line);
+  border-radius: 16px 16px 0 0; overflow: hidden;
+  background:
+    radial-gradient(color-mix(in srgb, var(--accent) 30%, transparent) 1px, transparent 1.2px) 0 0 / 16px 16px,
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, var(--sp-surface)), var(--sp-surface));
+  -webkit-mask-image: none;
+}
+#settings-page .settings-panel > .settings-panel-head::before {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(90deg, var(--sp-surface) 0%, color-mix(in srgb, var(--sp-surface) 92%, transparent) 38%, transparent 100%);
+}
+#settings-page .settings-panel > .settings-panel-head::after {
+  content: ""; position: absolute; left: 0; bottom: -1px; height: 2px; width: 100%;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 0%, transparent));
+  transform-origin: left; transform: scaleX(0);
+}
+#settings-page .settings-panel.active > .settings-panel-head::after { animation: sp-sweep .9s cubic-bezier(.2, .8, .2, 1) .05s forwards; }
+@keyframes sp-sweep { to { transform: scaleX(.55); } }
+
+#settings-page .settings-panel > .settings-panel-head h2 {
+  flex-wrap: wrap; gap: 8px 12px; font: 600 26px/1.15 var(--sp-display); letter-spacing: -.01em; color: var(--text);
+}
+#settings-page .settings-panel > .settings-panel-head h2 .sp-ico {
+  width: 38px; height: 38px; display: inline-grid; place-items: center; flex-shrink: 0; border-radius: 11px;
+  font-size: 20px; letter-spacing: 0; background: var(--sp-tint); border: 1px solid var(--sp-tint-strong);
+}
+#settings-page .settings-panel > .settings-panel-head p {
+  margin: 8px 0 0; max-width: 62ch; font: 400 13.5px/1.5 var(--sp-body); color: color-mix(in srgb, var(--text) 66%, var(--dim));
+}
+#settings-page .settings-panel > .settings-panel-head .sp-crumb {
+  margin-left: auto; align-self: center; padding: 4px 11px; border-radius: 999px; white-space: nowrap;
+  font: 600 11.5px var(--sp-body); color: var(--dim); background: color-mix(in srgb, var(--bg) 60%, transparent);
+  border: 1px solid var(--sp-line-strong);
+}
+
+/* ---------------- form controls ---------------- */
+#settings-page .settings-panel label:not(.switch):not(.ln-radio):not(.ln-check):not(.ca-tool-item):not(.tagpicker label):not(.mcp-env-secret) {
+  font: 600 12.5px var(--sp-body); color: color-mix(in srgb, var(--text) 80%, var(--dim));
+}
+#settings-page .settings-panel input[type="text"],
+#settings-page .settings-panel input[type="password"],
+#settings-page .settings-panel input[type="number"],
+#settings-page .settings-panel input[type="search"],
+#settings-page .settings-panel input[type="url"],
+#settings-page .settings-panel input[type="email"],
+#settings-page .settings-panel input:not([type]),
+#settings-page .settings-panel select,
+#settings-page .settings-panel textarea,
+#settings-page .ca-modal-box input[type="text"],
+#settings-page .ca-modal-box input[type="password"],
+#settings-page .ca-modal-box input[type="number"],
+#settings-page .ca-modal-box input[type="url"],
+#settings-page .ca-modal-box input[type="email"],
+#settings-page .ca-modal-box input:not([type]),
+#settings-page .ca-modal-box select,
+#settings-page .ca-modal-box textarea {
+  min-height: 38px; padding: 8px 12px !important; border-radius: 10px !important; font: 400 13px var(--sp-body) !important;
+  background: color-mix(in srgb, var(--bg) 62%, var(--panel)) !important; border: 1px solid var(--sp-line-strong) !important;
+}
+#settings-page .settings-panel textarea,
+#settings-page .ca-modal-box textarea { line-height: 1.5; }
+#settings-page .settings-panel input:focus,
+#settings-page .settings-panel select:focus,
+#settings-page .settings-panel textarea:focus,
+#settings-page .ca-modal-box input:focus,
+#settings-page .ca-modal-box select:focus,
+#settings-page .ca-modal-box textarea:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--sp-tint) !important; }
+#settings-page .settings-panel input[type="range"] { accent-color: var(--accent); }
+#settings-page .mono, #settings-page .smp-val { font-family: var(--sp-mono); }
+
+#settings-page .btn {
+  min-height: 36px; padding: 7px 16px; border-radius: 10px; font: 600 13px var(--sp-body);
+  border: 1px solid var(--sp-line-strong); background: var(--sp-raised); color: var(--text);
+  transition: background .14s ease, border-color .14s ease, transform .1s ease, box-shadow .14s ease;
+}
+#settings-page .btn:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--sp-line-strong)); background: var(--sp-tint); }
+#settings-page .btn:active { transform: translateY(1px); }
+#settings-page .btn.accent, #settings-page .btn.blue {
+  background: var(--accent); border-color: var(--accent); color: #06121f;
+  box-shadow: 0 6px 18px -8px var(--accent), 0 1px 0 rgba(255, 255, 255, .25) inset;
+}
+#settings-page .btn.accent:hover, #settings-page .btn.blue:hover { background: color-mix(in srgb, var(--accent) 88%, #fff); }
+#settings-page .btn.ghost { background: transparent; }
+#settings-page .btn.red { background: rgba(244, 63, 94, .12); border-color: rgba(244, 63, 94, .45); color: #fb7185; }
+#settings-page .btn.red:hover { background: rgba(244, 63, 94, .22); }
+#settings-page .btn:focus-visible, #settings-page button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+#settings-page .switch .slider { border-radius: 999px; background: color-mix(in srgb, var(--text) 14%, transparent); }
+#settings-page .switch input:checked + .slider { background: var(--accent); box-shadow: 0 0 14px -2px var(--accent); }
+
+#settings-page .info { color: var(--dim); cursor: help; }
+#settings-page .dim, #settings-page .cfg-note { color: color-mix(in srgb, var(--text) 58%, var(--dim)); }
+#settings-page .mon-empty { padding: 28px 16px; border: 1px dashed var(--sp-line-strong); border-radius: 12px; text-align: center; color: var(--dim); background: color-mix(in srgb, var(--bg) 40%, transparent); }
+
+/* groups of related settings read as quiet tiles, not boxes inside boxes */
+#settings-page .cfg-item, #settings-page .cap-item, #settings-page .smp-grid, #settings-page details.cap-group {
+  border-radius: 12px; border-color: var(--sp-line);
+}
+#settings-page .tm-panel-card, #settings-page .tm-card { border-radius: 14px; border-color: var(--sp-line); }
+#settings-page .theme-opt { border-radius: 12px; }
+#settings-page .theme-opt.active, #settings-page .theme-opt.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--sp-tint); }
+
+/* ---------------- header strip on the left ---------------- */
+#settings-page * { scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent; }
+
+/* ---------------- narrow screens ---------------- */
+@media (max-width: 860px) {
+  #settings-page #settings-sidebar { width: 100%; background: var(--panel); border-right: 0; border-bottom: 1px solid var(--sp-line); }
+  #settings-page .settings-search-wrap { display: none; }
+  #settings-page .settings-group-label { display: none; }
+  #settings-page #settings-nav { flex-direction: row; overflow-x: auto; padding: 8px; gap: 6px; }
+  #settings-page .settings-tab-btn { width: auto; flex-shrink: 0; min-height: 36px; padding: 5px 12px 5px 6px; }
+  #settings-page .settings-tab-btn.active::before { display: none; }
+  #settings-page .card.settings-panel { padding: 0 16px 22px; border-radius: 14px; }
+  #settings-page .settings-panel > .settings-panel-head { margin: 0 -16px 18px; padding: 18px 16px 14px; }
+  #settings-page .settings-panel > .settings-panel-head h2 { font-size: 21px; }
+  #settings-page .settings-panel > .settings-panel-head h2 .sp-ico { width: 32px; height: 32px; font-size: 17px; }
+  #settings-page .settings-panel > .settings-panel-head .sp-crumb { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #settings-page .settings-panel.active, #settings-page .settings-panel.active > .settings-panel-head::after { animation: none; }
+  #settings-page .settings-panel.active > .settings-panel-head::after { transform: scaleX(.55); }
+  #settings-page .btn, #settings-page .settings-tab-btn { transition: none; }
+}
+
+/* theme picker: readable on every theme, a larger target, the chosen one clearly marked */
+#settings-page .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+#settings-page .theme-opt {
+  grid-column: auto !important; display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 14px; text-align: left;
+  font: 600 13px var(--sp-body); color: var(--text); background: var(--sp-raised); border: 1px solid var(--sp-line-strong);
+  transition: border-color .14s ease, background .14s ease, box-shadow .14s ease;
+}
+#settings-page .theme-opt:hover { border-color: color-mix(in srgb, var(--accent) 60%, var(--sp-line-strong)); background: var(--sp-tint); }
+#settings-page .theme-opt .theme-swatch { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 10%, transparent); }
+
+/* chat and sampling: each setting is a small tile (name and value on top, slider below) in two columns, instead of one long strip */
+#settings-page .smp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px 16px; margin-top: 18px; }
+#settings-page .smp-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; align-content: center; min-height: 78px; gap: 10px 12px; margin: 0; padding: 13px 16px;
+  border: 1px solid var(--sp-line); border-radius: 12px; background: color-mix(in srgb, var(--bg) 38%, var(--sp-surface));
+}
+#settings-page .smp-row:hover { border-color: var(--sp-line-strong); }
+#settings-page .smp-row > label { grid-column: 1; grid-row: 1; margin: 0; }
+#settings-page .smp-row > input[type="range"] { grid-column: 1 / -1; grid-row: 2; width: 100%; margin: 0; }
+#settings-page .smp-row > .smp-val { grid-column: 2; grid-row: 1; min-width: 0; text-align: right; font: 600 13px var(--sp-mono); color: var(--accent); }
+#settings-page .smp-row > input[type="number"] { grid-column: 2; grid-row: 1; width: 118px; text-align: right; }
+#settings-page .smp-grid > .smp-sub { grid-column: 1 / -1; margin: 12px 0 0; padding: 0 0 8px; border-bottom: 1px solid var(--sp-line); font: 600 15px var(--sp-display); color: var(--text); }
+#settings-page #sec-sampling > label { display: block; margin: 0 0 8px; }
+#settings-page .settings-panel > .settings-panel-head h2 { width: 100%; }
+
+/* short "what to expect" lists on simple sections */
+#settings-page .sp-points { list-style: none; margin: 0 0 22px; padding: 0; display: grid; gap: 10px; max-width: 68ch; }
+#settings-page .sp-points li { position: relative; padding-left: 22px; line-height: 1.55; color: color-mix(in srgb, var(--text) 78%, var(--dim)); }
+#settings-page .sp-points li::before { content: ""; position: absolute; left: 2px; top: .6em; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+#settings-page .sp-points b { color: var(--text); font-weight: 600; }
+#settings-page .am-card { padding: 18px 20px; border: 1px solid var(--sp-line); border-radius: 14px; background: color-mix(in srgb, var(--bg) 38%, var(--sp-surface)); }
+#settings-page .am-title { margin: 0 0 6px; font: 600 17px var(--sp-display); color: var(--text); }
+#settings-page .am-card > p { margin: 0 0 14px; max-width: 62ch; }
+
+/* ---------------- cloud models: providers and their models ---------------- */
+#settings-page .cp-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; color: var(--dim); font-size: 13px; }
+#settings-page .cp-bar b { color: var(--text); font-family: var(--sp-display); font-size: 15px; }
+#settings-page .cp-card { margin-bottom: 14px; border: 1px solid var(--sp-line); border-radius: 14px; background: color-mix(in srgb, var(--bg) 34%, var(--sp-surface)); overflow: hidden; }
+#settings-page .cp-head { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-bottom: 1px solid var(--sp-line); flex-wrap: wrap; }
+#settings-page .cp-avatar {
+  width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex-shrink: 0;
+  font: 700 18px var(--sp-display); color: #fff; background: linear-gradient(135deg, hsl(var(--h) 62% 48%), hsl(calc(var(--h) + 40) 62% 38%));
+  box-shadow: 0 6px 16px -8px hsl(var(--h) 70% 40%);
+}
+#settings-page .cp-title { display: grid; gap: 2px; min-width: 0; flex: 1 1 200px; }
+#settings-page .cp-title b { font: 600 16px var(--sp-display); color: var(--text); }
+#settings-page .cp-host { font: 12px var(--sp-mono); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#settings-page .cp-actions, #settings-page .cp-model-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+#settings-page .cp-mini {
+  min-height: 30px; padding: 4px 12px; border-radius: 8px; font: 600 12px var(--sp-body); cursor: pointer; color: var(--text);
+  background: var(--sp-raised); border: 1px solid var(--sp-line-strong); transition: background .14s ease, border-color .14s ease;
+}
+#settings-page .cp-mini:hover { background: var(--sp-tint); border-color: color-mix(in srgb, var(--accent) 55%, var(--sp-line-strong)); }
+#settings-page .cp-mini.cp-danger { color: #fb7185; }
+#settings-page .cp-mini.cp-danger:hover { background: rgba(244, 63, 94, .16); border-color: rgba(244, 63, 94, .5); }
+#settings-page .cp-key { display: flex; align-items: center; gap: 10px; padding: 11px 16px; border-bottom: 1px solid var(--sp-line); flex-wrap: wrap; }
+#settings-page .cp-label { font: 600 12px var(--sp-body); color: var(--dim); }
+#settings-page .cp-key code { padding: 3px 9px; border-radius: 7px; font: 12.5px var(--sp-mono); background: color-mix(in srgb, var(--bg) 60%, transparent); border: 1px solid var(--sp-line); word-break: break-all; }
+#settings-page .cp-chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font: 600 11.5px var(--sp-body); color: var(--dim); background: color-mix(in srgb, var(--text) 7%, transparent); border: 1px solid var(--sp-line); }
+#settings-page .cp-chip.cp-warn { color: #fbbf24; border-color: rgba(251, 191, 36, .4); background: rgba(251, 191, 36, .1); }
+#settings-page .cp-models { display: grid; }
+#settings-page .cp-model { display: flex; align-items: center; gap: 12px; padding: 11px 16px; flex-wrap: wrap; }
+#settings-page .cp-model + .cp-model { border-top: 1px solid var(--sp-line); }
+#settings-page .cp-model:hover { background: color-mix(in srgb, var(--text) 3%, transparent); }
+#settings-page .cp-model-main { display: grid; gap: 2px; flex: 1 1 220px; min-width: 0; }
+#settings-page .cp-model-main b { font: 600 13.5px var(--sp-body); color: var(--text); }
+#settings-page .cp-model-main code { font: 11.5px var(--sp-mono); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#settings-page .cp-toggle { min-height: 28px; padding: 3px 11px; border-radius: 999px; font: 600 11.5px var(--sp-body); cursor: pointer; color: var(--dim); background: transparent; border: 1px dashed var(--sp-line-strong); }
+#settings-page .cp-toggle.on { color: var(--text); background: var(--sp-tint); border: 1px solid var(--accent); }
+#settings-page .cp-toggle::before { content: "○ "; }
+#settings-page .cp-toggle.on::before { content: "● "; color: var(--accent); }
+#settings-page .cp-none { padding: 16px; color: var(--dim); }
+#settings-page .cp-empty { display: grid; justify-items: center; gap: 8px; padding: 40px 20px; text-align: center; border: 1px dashed var(--sp-line-strong); border-radius: 14px; }
+#settings-page .cp-empty-icon { width: 56px; height: 56px; display: grid; place-items: center; font-size: 28px; border-radius: 16px; background: var(--sp-tint); border: 1px solid var(--sp-tint-strong); }
+#settings-page .cp-empty b { font: 600 18px var(--sp-display); }
+#settings-page .cp-empty p { margin: 0; max-width: 52ch; color: var(--dim); line-height: 1.55; }
+#settings-page .cp-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--sp-line); color: var(--dim); flex-wrap: wrap; }
+#settings-page .cp-result { min-height: 18px; margin-top: 8px; font: 12px var(--sp-mono); color: var(--dim); }
+
+#settings-page .cp-form { margin-top: 18px; padding: 20px; border: 1px solid var(--sp-line-strong); border-radius: 14px; background: color-mix(in srgb, var(--bg) 42%, var(--sp-surface)); }
+#settings-page .cp-form[hidden] { display: none; }
+#settings-page .cp-form-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+#settings-page .cp-form-head > b { font: 600 18px var(--sp-display); }
+#settings-page .cp-presets { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#settings-page .cp-presets[hidden] { display: none; }
+#settings-page .cp-preset { cursor: pointer; }
+#settings-page .cp-preset:hover { color: var(--text); border-color: var(--accent); }
+#settings-page .cp-set { margin: 0 0 14px; padding: 14px 16px 16px; border: 1px solid var(--sp-line); border-radius: 12px; }
+#settings-page .cp-set legend { padding: 0 8px; font: 600 13px var(--sp-display); color: var(--text); }
+#settings-page .cp-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; }
+#settings-page .cp-span { grid-column: 1 / -1; }
+#settings-page .cp-field { display: grid; gap: 6px; align-content: start; }
+#settings-page .cp-field input { width: 100%; }
+#settings-page .cp-hint { font: 12px/1.45 var(--sp-body); color: var(--dim); }
+#settings-page .cp-check { grid-column: 1 / -1; display: flex; gap: 10px; align-items: flex-start; cursor: pointer; font: 13px var(--sp-body); }
+#settings-page .cp-check input { margin-top: 3px; accent-color: var(--accent); }
+#settings-page .cp-adv { margin: 0 0 14px; border: 1px solid var(--sp-line); border-radius: 12px; padding: 0 16px; }
+#settings-page .cp-adv > summary { cursor: pointer; padding: 12px 0; font: 600 13px var(--sp-display); color: var(--dim); }
+#settings-page .cp-adv[open] > summary { color: var(--text); }
+#settings-page .cp-adv .cp-grid { padding-bottom: 16px; }
+#settings-page .cp-form-foot { display: flex; justify-content: flex-end; gap: 10px; }
+#settings-page #cf-prov[readonly] { opacity: .65; cursor: not-allowed; }
+@media (max-width: 700px) { #settings-page .cp-grid { grid-template-columns: 1fr; } }
+#settings-page .cp-bar .btn, #settings-page .cp-foot .btn, #settings-page .cp-form-foot .btn { width: auto; flex: none; margin: 0; }

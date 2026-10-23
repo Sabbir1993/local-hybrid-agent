@@ -280,6 +280,15 @@ class ProxyState:
         flat = re.sub(r"\s+", " ", errs[-1]).strip()
         return mask_pans(flat[-300:])[0] or None
 
+    def _unknown_architecture(self):
+        """The model family llama-server refused ("unknown model architecture: 'flint'"), or None. A model newer than the
+        server program is the cause; the generic "bad path or VRAM" hint sent people looking in the wrong place."""
+        for line in reversed(self._log_tail):
+            m = re.search(r"unknown model architecture:\s*'([^'\n]{1,60})'", line)
+            if m:
+                return m.group(1)
+        return None
+
     async def _wait_healthy(self):
         deadline = time.time() + health_timeout_s()
         # VRAM wall watch: if free VRAM on a target card collapses while the
@@ -300,6 +309,12 @@ class ProxyState:
                 # is_running() does not report on a process that exited
                 code = self.process.returncode
                 self._kill_loading_process()
+                arch = self._unknown_architecture()
+                if arch:
+                    raise self._load_failed(
+                        f"This model uses the '{arch}' architecture, which the installed llama.cpp does not know yet "
+                        f"(the model is newer than the server program). It is not a path or VRAM problem. Update the "
+                        f"llama.cpp build in the Vulkan runtime to one that supports '{arch}', or pick a model it already supports.")
                 raise self._load_failed(
                     f"llama-server exited immediately (code {code}) - "
                     f"check the log lines above, this is almost always a bad model path "

@@ -23,6 +23,7 @@ class ChatRunRequest(SamplerFields):
     top_k: Optional[int] = None
     custom_agent_id: Optional[int] = None
     kb: Literal["auto", "on", "off"] = "auto"    # company knowledge base: auto = intent policy, on = always, off = never
+    client_run_id: Optional[str] = None   # the browser's id for this run, so it can re-attach after a refresh
     voice: bool = False       # spoken conversation: answer in short plain sentences (core/voice_prompt.py)
 
 

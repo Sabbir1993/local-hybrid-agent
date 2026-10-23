@@ -68,6 +68,37 @@ function parseUserMessage(raw: string): ParsedUserMessage {
   return { cleanText: cleanText || (images.length || files.length ? '' : raw), images, files };
 }
 
+// Which <details> (tool calls, thoughts, the "worked for" group) the reader opened or closed, per message. The answer's HTML is
+// rebuilt on every streamed update, which would otherwise snap every opened step shut again.
+const detailsState = new Map<string, boolean>();
+
+/** An assistant message body. Re-applies the reader's open / closed choices to the freshly rebuilt markup before it paints. */
+const BotContent: React.FC<{ id: string; html: string }> = ({ id, html }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    root.querySelectorAll('details').forEach((el, i) => {
+      const want = detailsState.get(`${id}:${i}`);
+      if (want !== undefined && el.open !== want) el.open = want;
+    });
+  }, [id, html]);
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    // `toggle` does not bubble, so listen in the capture phase
+    const onToggle = (e: Event) => {
+      const el = e.target as HTMLDetailsElement | null;
+      if (!el || el.tagName !== 'DETAILS') return;
+      const i = Array.from(root.querySelectorAll('details')).indexOf(el);
+      if (i >= 0) detailsState.set(`${id}:${i}`, el.open);
+    };
+    root.addEventListener('toggle', onToggle, true);
+    return () => root.removeEventListener('toggle', onToggle, true);
+  }, [id]);
+  return <div ref={ref} className="bot-content" dangerouslySetInnerHTML={{ __html: html }} />;
+};
+
 /** The prompt text, clamped to 4 lines; reports whether it actually overflows so "See more" shows only then. */
 const ClampedUserText: React.FC<{ html: string; expanded: boolean; onOverflow: (over: boolean) => void }> = ({ html, expanded, onOverflow }) => {
   const ref = useRef<HTMLDivElement>(null);
@@ -805,23 +836,15 @@ export const ChatArea: React.FC = () => {
                         </details>
                       )}
 
-                      {m.statusText && (
-                        <div className="dim" style={{ fontSize: '12px', fontStyle: 'italic', marginBottom: '8px' }}>
-                          {m.statusText}
-                        </div>
-                      )}
-
                       {/* Complete Antigravity Agent Actions + Markdown Prose + Media Preview Grid */}
                       {m.meta?.media ? (
                         <MediaCard m={m} />
                       ) : (m.check && m.check.mode === 'gate' && m.check.state !== 'done' && !m.check.skipped) ? (
                         <AnswerGate m={m} />
                       ) : (
-                      <div
-                        className="bot-content"
-                        dangerouslySetInnerHTML={{
-                          __html: renderCached(answering ? null : `${m.id}|${contentText.length}|${thinkingText.length}|${(m.acts || []).length}|${m.secs || 0}|${isChatMode}|${qz ? 'q' : ''}`, () => renderCompleteChatMessage(qz ? qz.prose : contentText, m.acts, m.secs, isChatMode, thinkingText)),
-                        }}
+                      <BotContent
+                        id={String(m.id)}
+                        html={renderCached(answering ? null : `${m.id}|${contentText.length}|${thinkingText.length}|${(m.acts || []).length}|${m.secs || 0}|${isChatMode}|${qz ? 'q' : ''}`, () => renderCompleteChatMessage(qz ? qz.prose : contentText, m.acts, m.secs, isChatMode, thinkingText))}
                       />
                       )}
                       <AnswerBadge m={m} />
@@ -841,6 +864,13 @@ export const ChatArea: React.FC = () => {
                       )}
 
                       {!held && <BotActions m={m} isLast={messages[messages.length - 1] === m} streaming={isStreaming} />}
+
+                      {/* what the run is doing right now ("Crunching tool results…"): at the bottom, just above the model line */}
+                      {m.statusText && (
+                        <div className="dim" role="status" style={{ fontSize: '12px', fontStyle: 'italic', marginTop: '10px' }}>
+                          {m.statusText}
+                        </div>
+                      )}
 
                       {Boolean(m.model || m.ntok || m.tps) && (
                         <div

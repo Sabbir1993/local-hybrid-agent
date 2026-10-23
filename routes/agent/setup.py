@@ -484,6 +484,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     kb_prompt = ""
     cov_hits = []
     _consult, _kb_reason = False, "error"          # recorded in the KB decision log (core/kb_log.py)
+    from core.request_context import set_user_text
+    set_user_text(_kb_query)
     if ctx.kb_ids and _kb_query.strip():
         try:
             from core.knowledge_router import (fetch_company_knowledge, has_attachment_text, is_company_or_kb_query,

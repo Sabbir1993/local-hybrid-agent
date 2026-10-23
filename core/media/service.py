@@ -94,6 +94,9 @@ async def generate(kind: str, user, prompt: str, opts: Optional[dict] = None,
         raise MediaError(f"{lanes.JOBS[job]['label']} isn't set up yet - add a model in "
                          "Settings -> Models & Jobs.")
     await _policy_check(user, [prompt, opts.get("negative")], any(t.is_cloud for t in route))
+    if enforce_quota:       # the daily cap counts every image / video a person makes, whichever model makes it
+        q_fn = getattr(sys.modules.get("core.media"), "check_cloud_quota", check_cloud_quota)
+        q_fn(uid, kind)
 
     errors = []
     not_loaded = None
@@ -106,9 +109,6 @@ async def generate(kind: str, user, prompt: str, opts: Optional[dict] = None,
         t0 = time.time()
         try:
             if t.is_cloud:
-                if enforce_quota:
-                    q_fn = getattr(sys.modules.get("core.media"), "check_cloud_quota", check_cloud_quota)
-                    q_fn(uid, kind)
                 blobs = await _cloud_generate(kind, t.cm, _cloud_text(prompt),
                                               {**opts, "negative": _cloud_text(opts.get("negative") or "")},
                                               progress)

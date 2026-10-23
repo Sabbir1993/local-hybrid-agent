@@ -723,6 +723,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ serverStatus });
     // Follow the server only when what it runs changed; otherwise every status tick would undo a pick the user just made.
     const changed = !prev || prev.model !== serverStatus.model || prev.cloud_main?.key !== serverStatus.cloud_main?.key;
+    // The picker lists the model that is running: refresh it when a model starts, finishes loading or stops, not only on a page reload.
+    const listStale = !prev || prev.model !== serverStatus.model || Boolean(prev.pid) !== Boolean(serverStatus.pid)
+      || Boolean(prev.healthy) !== Boolean(serverStatus.healthy) || Boolean(prev.loading) !== Boolean(serverStatus.loading)
+      || prev.cloud_main?.key !== serverStatus.cloud_main?.key;
+    if (listStale && get().isAuthenticated) void get().fetchModels();
     if (!changed) return;
     // A bound cloud main lane wins over the (possibly stale) local model name.
     if (serverStatus.cloud_main?.display) {
@@ -1266,7 +1271,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const releaseSession = holdSession();   // an open stream is not idle
     if (!reattachId) requestNotificationPermission();
     const agentRunId = reattachId || 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-    runs.get(sidKey)!.agentRunId = useAgent ? agentRunId : null;
+    runs.get(sidKey)!.agentRunId = agentRunId;     // chat answers run detached on the server too: Stop must cancel them there
     const agentState = newAgentRunState();
     let agentSawTerminal = false;
     let agentFailed = false;
@@ -1367,6 +1372,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           timeStr: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         });
       }
+      // the answer is saved here: release the server's copy (and never save it again if this browser re-attaches)
+      if (detachedRun && !errorText) {
+        markRunSaved(agentRunId);
+        apiFetch(`/agent/run/${encodeURIComponent(agentRunId)}/ack`, { method: 'POST' }).catch(() => {});
+      }
     };
 
     // a reattach that found nothing: drop the empty bubble instead of leaving "Reconnecting..." on screen
@@ -1377,6 +1387,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let detachedRun = false;   // the server accepted the run and keeps it going without this page
     try {
       const kbParam = kbMode === 'always' ? 'on' : kbMode;   // the server's values are auto | on | off
       const customAgentId = ca && ca.id != null && !isNaN(Number(ca.id)) ? Number(ca.id) : undefined;
@@ -1413,6 +1424,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            client_run_id: agentRunId,
             messages: msgsPayload,
             session_id: currentSessionId || undefined,
             model: targetModelId || undefined,
@@ -1430,6 +1442,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       reattachStatus = reattachId ? res.status : 0;
+      detachedRun = res.ok && Boolean(res.headers.get('X-Run-Id'));
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
         throw new Error(errJson.error || errJson.detail || `HTTP ${res.status}`);
@@ -1541,6 +1554,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         // a server `error` event is a failed run, not a dropped connection
         if (started) finishAgentRun(aborted ? 'cancelled' : agentFailed ? 'failed' : 'interrupted', aborted ? 'you stopped the run' : err.message);
         else set((st) => (st.permRequest && st.permRequest.sid === sidKey ? { permRequest: null } : {}));
+      } else if (!aborted && detachedRun) {
+        // the connection dropped (a refresh, a network blip) but the server is still writing the answer: show nothing
+        // wrong, and pick it up again. Nothing is saved from here; the re-attached run saves it when it ends.
+        logger.warn('Chat', 'Connection lost mid-answer; re-attaching to the run on the server: ' + (err.message || err));
+        setRun((state) => ({ messages: state.messages.filter((m) => m.id !== assistantMsgId) }));
+        if (currentSessionId) window.setTimeout(() => { void get().reattachDetachedRuns(currentSessionId); }, 1500);
       } else {
         if (!aborted) logger.error('Chat', 'Error during /chat/run generation', err);
         // Stop keeps (and saves) the partial answer; an error shows its message

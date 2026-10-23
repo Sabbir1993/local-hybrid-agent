@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="/static/css/lanes.css?v=1.3">
 <link rel="stylesheet" href="/static/css/knowledge.css?v=1.0">
 <link rel="stylesheet" href="/static/css/telemetry.css?v=1.0">
+<link rel="stylesheet" href="/static/css/settings-pro.css?v=1.2">
 <link rel="icon" href="/static/logo/logo.jpg">
 <style>
   html, body {
@@ -384,10 +385,6 @@
         <button type="button" class="settings-tab-btn" data-tab="sec-knowledge" data-perm="knowledge.manage">
           <span class="tab-icon">📚</span>
           <span class="tab-label">Knowledge Base</span>
-        </button>
-        <button type="button" class="settings-tab-btn" data-tab="sec-memory">
-          <span class="tab-icon">🧠</span>
-          <span class="tab-label">My Agent Memory</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-guard" data-perm="settings.input_guard">
           <span class="tab-icon">🛡️</span>
@@ -939,12 +936,6 @@
       </div>
 
       <!-- Section 7: Capabilities -->
-      <div class="card settings-panel" id="sec-memory">
-        <h3>🧠 My Agent Memory</h3>
-        <p class="dim" style="font-size:12px; line-height:1.5;">Things the agent keeps in mind about you between chats, so you do not have to repeat yourself. Only you can see them. Passwords, keys, card and ID numbers are refused.</p>
-        <button type="button" class="btn accent" id="btn-open-agent-memory" style="width:auto;">Open my agent memory</button>
-      </div>
-
       <div class="card settings-panel" id="sec-caps" data-perm="settings.orchestration.configure">
         <div class="settings-panel-head">
           <h2>🧩 Capabilities</h2>
@@ -1204,9 +1195,9 @@
 <script src="/static/js/gpu-status.js?v=3.4"></script>
 <script src="/static/js/config.js?v=3.1"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
-<script src="/static/js/agent-memory-ui.js?v=1.3"></script>
+<script src="/static/js/agent-memory-ui.js?v=1.4"></script>
 <script src="/static/js/capabilities.js?v=3.3"></script>
-<script src="/static/js/cloud.js?v=3.1"></script>
+<script src="/static/js/cloud.js?v=3.2"></script>
 <script src="/static/js/rbac.js?v=1.6"></script>
 <script src="/static/js/knowledge-policy.js?v=1.1"></script>
 <script src="/static/js/knowledge.js?v=1.3"></script>
@@ -1214,11 +1205,11 @@
 <script src="/static/js/session-policy.js?v=1.0"></script>
 <script src="/static/js/runner.js?v=1.0"></script>
 <script src="/static/js/mfa-panel.js?v=1.0"></script>
-<script src="/static/js/lanes.js?v=1.10"></script>
+<script src="/static/js/lanes.js?v=1.11"></script>
 <script src="/static/js/projects.js?v=1.0"></script>
 <script src="/static/js/custom-agents.js?v=1.9"></script>
 <script src="/static/js/telemetry-dashboard.js?v=1.0"></script>
-<script src="/static/js/settings-page.js?v=1.2"></script>
+<script src="/static/js/settings-page.js?v=1.3"></script>
 <script src="/static/js/password-toggle.js?v=1.2"></script>
 </body>
 </html>

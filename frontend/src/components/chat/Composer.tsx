@@ -796,7 +796,7 @@ export const Composer: React.FC = () => {
     matches.forEach((m) => {
       const isLocal = m.kind === 'local' || (!String(m.id).startsWith('cloud:') && m.kind !== 'cloud');
       const providerKey = isLocal ? 'local' : (m.provider_name || m.provider || 'Cloud');
-      const groupDisplayName = isLocal ? 'Local GPU (Arc A770)' : (m.provider_name || m.provider || 'Cloud');
+      const groupDisplayName = isLocal ? 'Local' : (m.provider_name || m.provider || 'Cloud');
 
       if (!groups[providerKey]) {
         groups[providerKey] = {

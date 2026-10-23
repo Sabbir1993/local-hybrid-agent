@@ -45,12 +45,12 @@ def running(user_id: int, kind: str) -> int:
 
 
 def used_today(user_id: int, kind: str) -> int:
-    """Cloud generations this user made today (from the audit log)."""
+    """Generations this user made today, on this PC or in the cloud (from the audit log)."""
     try:
         from ..auth_db import db
         start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         row = db().execute(
-            "SELECT COUNT(*) FROM audit_log WHERE user_id=? AND action=? AND resource='cloud' "
+            "SELECT COUNT(*) FROM audit_log WHERE user_id=? AND action=? "
             "AND result='allow' AND ts>=?", (user_id, f"media.{kind}", start)).fetchone()
         return int(row[0] or 0)
     except Exception:
@@ -76,7 +76,7 @@ def _get_used_today(user_id: int, kind: str) -> int:
 def check_cloud_quota(user_id: int, kind: str) -> None:
     lim = daily_limit(kind)
     if lim > 0 and _get_used_today(user_id, kind) >= lim:
-        raise MediaError(f"Daily limit reached for cloud {kind}s ({lim}). It resets at midnight.")
+        raise MediaError(f"Daily limit reached for {kind}s ({lim}). It resets at midnight.")
 
 
 async def _run(job: Job) -> None:

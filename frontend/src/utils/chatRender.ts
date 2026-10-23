@@ -377,7 +377,9 @@ function transformTokens(raw: string): string {
   });
 
   // 2. Download / Preview tokens: [DOWNLOAD: filename]
-  t = t.replace(/\[DOWNLOAD:\s*([^\]]+)\]/g, (_, fname) => {
+  // a tag the model cut off (no closing bracket) is dropped; it must not swallow the real one after it
+  t = t.replace(/[ \t]*\[DOWNLOAD:[^\]\n[]*(?=\n|$|\[)/g, '');
+  t = t.replace(/\[DOWNLOAD:\s*([^\]\n[]+)\]/g, (_, fname) => {
     const cleanName = escAttr(fname.trim());
     const rawName = fname.trim();
     const isZip = cleanName.toLowerCase().endsWith('.zip');

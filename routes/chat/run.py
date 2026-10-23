@@ -153,6 +153,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if m.get("role") == "user":
             last_query = str(m.get("content", ""))
             break
+    from core.request_context import set_user_text
+    set_user_text(last_query)
     from core.doc_tools import operations as deck_operations
     _style = re.search(r"slide style\??\s*:\s*(designer|editable)", last_query or "", re.I)
     deck_operations.forced_mode.set(_style.group(1).lower() if _style else "")      # the questionnaire's answer wins
@@ -681,7 +683,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         sys_labels.append("project-build")
     if has_file and (html_build or project_build or prompt_scope.html_wanted(last_query, prior_files, msgs)):
         # chat has no read_skill tool: HTML / website work gets the design skill's guidance, without announcing it
-        if design_skill := skills.silent_skill_prompt("frontend-design"):
+        if design_skill := skills.silent_skill_prompt("frontend-design", compact=not cloud_main):
             sys_parts.append(design_skill)
             sys_labels.append("design-skill")
     if explicit_ext and has_file and not project_build:
@@ -1143,7 +1145,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 )
 
                 # Check if model output contains [DOWNLOAD: ...] or code blocks intended as files
-                dl_tags = _re.findall(r'\[DOWNLOAD:\s*([^\]]+)\]', content)
+                dl_tags = _re.findall(r'\[DOWNLOAD:\s*([^\]\n\[]+)\]', content)
                 missing_dl = []   # tags the model wrote without producing any content
                 for dl_f in dl_tags:
                     clean_fname = Path(dl_f.strip()).name
@@ -1383,7 +1385,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         content = _clean
                         yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
                     if written_files:
-                        content, _chg = _finalize_download_tags(content, written_files, last_query)
+                        content, _chg = _finalize_download_tags(content, written_files, last_query, prior_files)
                         if _chg:
                             yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
                     if made_media:
@@ -1702,7 +1704,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 content = _clean
                 yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
             if written_files:
-                content, _chg = _finalize_download_tags(content, written_files, last_query)
+                content, _chg = _finalize_download_tags(content, written_files, last_query, prior_files)
                 if _chg:
                     yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
             if made_media:
@@ -1754,4 +1756,16 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                               prompt_cached_tokens=pcached, completion_cached_tokens=0, is_orchestrator=False,
                               source=model_source, provider=model_provider, user_id=user.id, run_id=run_id)
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    resp = StreamingResponse(event_stream(), media_type="text/event-stream")
+    # Run the answer as a detached server-side task and reply with a subscriber of its output, so a refresh, a closed tab or a
+    # dropped connection no longer kills it: the page re-attaches (GET /agent/run/{id}/events) and the answer is still there.
+    from routes.agent import run_manager
+    if not run_manager.enabled():
+        return resp
+    try:
+        handle = run_manager.start(user.id, req.session_id, resp.body_iterator, req.client_run_id, kind="chat", journal=False)
+    except run_manager.TooManyRuns as e:
+        await resp.body_iterator.aclose()          # never started: nothing was run
+        return JSONResponse({"error": "too_many_runs", "message": str(e)}, status_code=429)
+    return StreamingResponse(run_manager.subscribe(handle), media_type="text/event-stream",
+                             headers={"X-Run-Id": handle.id, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

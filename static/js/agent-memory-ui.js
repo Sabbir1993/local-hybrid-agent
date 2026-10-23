@@ -95,79 +95,26 @@ function wireAgentLimits(box) {
   };
 }
 
-/* ----- the signed-in user's own memory files ----- */
+/* ----- the signed-in user's own memory: the editor is the app's friendly "Add something to remember" screen ----- */
 function agentMemoryHtml() {
-  return `<details class="cap-group fold" style="margin-top:10px;" id="agent-memory-group">
-    <summary class="cap-head"><span class="cap-head-title" style="display:flex; align-items:center; gap:6px;">
-      <span class="cap-chevron">▶</span><span>🧠 My agent memory</span></span></summary>
-    <div class="cap-body">
-      <div class="dim" style="font-size:10px;">What the agent remembers about you, as small files. Only you can see them. Edit or delete anything; it is never used for anyone else. Passwords, keys, card and ID numbers are refused.</div>
-      <div id="agent-memory-list" class="dim" style="margin-top:6px;">Loading…</div>
-      <div id="agent-memory-edit" style="display:none; margin-top:8px;"></div>
-      <div style="margin-top:8px; display:flex; gap:6px;">
-        <button class="btn ghost" id="agent-memory-new" style="width:auto; margin:0; padding:2px 10px; font-size:10.5px;">＋ New file</button>
-        <button class="btn ghost" id="agent-memory-erase" style="width:auto; margin:0; padding:2px 10px; font-size:10.5px; color:var(--red);">Erase all my memory</button>
-      </div>
-    </div></details>`;
+  return `<div id="agent-memory-group" class="am-card">
+    <h3 class="am-title">🧠 My agent memory</h3>
+    <p class="dim">Things the agent keeps in mind about you between chats, so you do not have to repeat yourself.</p>
+    <ul class="sp-points">
+      <li><b>You decide what it knows.</b> Add short notes such as your role, how you like answers, or lessons from earlier work.</li>
+      <li><b>Only you can see it.</b> Your notes are never used for anyone else.</li>
+      <li><b>Nothing sensitive.</b> Passwords, keys, card and ID numbers are refused.</li>
+    </ul>
+    <button type="button" class="btn accent" id="btn-open-agent-memory" style="width:auto;">Open my agent memory</button>
+  </div>`;
 }
 
-async function wireAgentMemory(box) {
-  const list = box.querySelector('#agent-memory-list'), edit = box.querySelector('#agent-memory-edit');
-  if (!list) return;
-  const api = (p, opt) => fetch('/agent/memory' + (p ? '/' + p : ''), opt);
-  const closeEdit = () => { edit.style.display = 'none'; edit.innerHTML = ''; };
-  const openEdit = (f) => {
-    const isNew = !f;
-    edit.style.display = 'block';
-    edit.innerHTML = `
-      ${isNew ? '<input id="am-path" placeholder="path, e.g. projects/my-app.md" style="width:100%; margin:0 0 4px;">' : `<b>${esc(f.path)}</b>`}
-      <textarea id="am-text" rows="10" style="width:100%; box-sizing:border-box; font-family:monospace; font-size:11px; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:6px;">${esc(isNew ? '---\ndescription: what this file covers and when to read it\n---\n- ' : f.text)}</textarea>
-      <div style="margin-top:4px; display:flex; gap:6px;">
-        <button class="btn accent" id="am-save" style="width:auto; margin:0; padding:2px 10px; font-size:10.5px;">Save</button>
-        <button class="btn ghost" id="am-cancel" style="width:auto; margin:0; padding:2px 10px; font-size:10.5px;">Cancel</button>
-      </div>`;
-    edit.querySelector('#am-cancel').onclick = closeEdit;
-    edit.querySelector('#am-save').onclick = async () => {
-      const path = isNew ? edit.querySelector('#am-path').value.trim() : f.path;
-      if (!path) { toast('Enter a file path', true); return; }
-      try {
-        const r = await api(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: edit.querySelector('#am-text').value, if_version: isNew ? null : f.version }) });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j.error || r.status);
-        toast('Saved ✓'); closeEdit(); refresh();
-      } catch (e) { toast('Save failed: ' + e.message, true); }
-    };
+/* The editor lives in the React app that hosts this page; ask it to open (see SettingsModal.tsx). */
+function wireAgentMemory(box) {
+  const b = box.querySelector('#btn-open-agent-memory');
+  if (!b) return;
+  b.onclick = () => {
+    if (window.parent && window.parent !== window) window.parent.postMessage({ type: 'open-agent-memory' }, location.origin);
+    else toast('Open the agent memory from the app.', true);
   };
-  const refresh = async () => {
-    try {
-      const j = await (await api('')).json();
-      const files = j.files || [];
-      list.innerHTML = files.length ? files.map(f => `
-        <div style="display:flex; align-items:center; gap:8px; margin:3px 0;">
-          <code style="min-width:150px;">${esc(f.path)}</code>
-          <span class="dim" style="flex:1; font-size:10.5px;">${esc(f.description)}</span>
-          <span class="dim" style="font-size:9.5px;">${f.bytes} B</span>
-          <button class="btn ghost am-open" data-p="${esc(f.path)}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">View / edit</button>
-          <button class="btn ghost am-del" data-p="${esc(f.path)}" style="width:auto; margin:0; padding:1px 8px; font-size:10px; color:var(--red);">Delete</button>
-        </div>`).join('') : 'Nothing remembered yet. Tell the agent a preference and it will be saved here.';
-      list.querySelectorAll('.am-open').forEach(b => b.onclick = async () => {
-        const f = await (await api(b.dataset.p)).json();
-        if (f.error) { toast(f.error, true); return; }
-        openEdit(f);
-      });
-      list.querySelectorAll('.am-del').forEach(b => b.onclick = async () => {
-        if (!confirm(`Delete ${b.dataset.p}?`)) return;
-        await api(b.dataset.p, { method: 'DELETE' });
-        closeEdit(); refresh();
-      });
-    } catch (e) { list.textContent = 'Could not load memory: ' + e.message; }
-  };
-  box.querySelector('#agent-memory-new').onclick = () => openEdit(null);
-  box.querySelector('#agent-memory-erase').onclick = async () => {
-    if (!confirm('Erase everything the agent remembers about you? This cannot be undone.')) return;
-    const j = await (await api('', { method: 'DELETE' })).json();
-    toast(`Erased ${j.deleted || 0} file(s)`); closeEdit(); refresh();
-  };
-  refresh();
 }

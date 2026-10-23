@@ -24,7 +24,7 @@ _ANNOUNCE_RE = re.compile(
 # Follow-ups about a file produced earlier in this chat. The frontend only
 # resends assistant text (big code blocks stubbed, tool args never sent), so
 # without help the model can't see the old file and invents a new one.
-_DL_TAG_RE = re.compile(r"\[DOWNLOAD:\s*([^\]]+)\]")
+_DL_TAG_RE = re.compile(r"\[DOWNLOAD:\s*([^\]\n\[]+)\]")      # one line, no nested "[": a cut-off tag must not swallow the next one
 
 
 _FILE_REF_RE = r"(file|report|html|page|dashboard|document|doc|pdf|sheet|excel|csv|deck|slides|presentation|link)"

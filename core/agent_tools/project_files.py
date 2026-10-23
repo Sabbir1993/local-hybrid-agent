@@ -81,13 +81,15 @@ PROJECT_MANUAL = (
     "Never write card numbers. Pictures are linked by https address, never invented as local files. Never paste code into the reply.")
 
 SINGLE_PAGE_MANUAL = (
-    "ONE HTML PAGE (Claude Artifacts standard): the user asked for a single html page, not a website. Plan exactly ONE file, index.html, with "
+    "ONE HTML PAGE (Claude Artifacts standard): the user asked for a single html page, not a website. "
+    "MATCH THE KIND OF PAGE. A report, guide, overview, comparison or \"detailed html\" about findings is a long-form READING page: a title with a one-paragraph summary, a table of contents, numbered sections with clear headings, tables for the facts, short callouts for the key risks and for each fix or solution, and the sources at the end. Build a dashboard (KPI cards, tabs, filters, charts) only when the user said dashboard or asked for charts or interactivity. "
+    "Plan exactly ONE file, index.html, with "
     "Tailwind CSS CDN (<script src=\"https://cdn.tailwindcss.com\"></script>), Google Fonts (Plus Jakarta Sans), Lucide icons (<script src=\"https://unpkg.com/lucide@latest\"></script>), "
     "and CSS in a <style> and JS in a <script> inside it. Emit the complete, beautiful, production-ready page in ONE single project_write call "
-    "(varying markup, using modern cards, tabs, and interactive filters; never paste repetitive placeholder cards). Then call project_finish immediately: "
+    "(varying markup with modern cards and tables, and tabs or filters where they help; never paste repetitive placeholder cards). Then call project_finish immediately: "
     "it returns the one .html link. Do not create css/ or js/ files and do not mention a ZIP. Use project_append only if you need to extend an existing page. "
     "To fix or redo a page that already exists, write the complete updated page with project_write and replace=true. Never generate pictures for the page: "
-    "link real photos by https address.")
+    "link real photos by https address. In your final reply, copy the [DOWNLOAD: ...] link exactly as project_finish returned it.")
 
 _WANTED = re.compile(
     r"\b(web ?site|web ?app|landing page|portfolio site|multi-?page|front-?end|single[- ]page|index\.html|styles\.css|main\.js|"

@@ -126,10 +126,32 @@ SILENT_PREFACE = (
     "from the request and build. Everything above about complete standalone files still applies.\n\n")
 
 
-def silent_skill_prompt(name: str, max_chars: int = 10000) -> str:
+# The full frontend-design skill is ~2,700 tokens. A local model has to read every token of it before it writes the first
+# one (slow on a GPU shared with the rest of the app, and it crowds a small context), so local models get this ~350-token
+# digest of the same guidance; cloud models read the whole skill.
+SKILL_DIGESTS = {
+    "frontend-design": (
+        "Before coding, choose a direction that fits THIS subject: 4-6 named colours (not the default cream and terracotta, nor "
+        "near-black with one acid accent), one or two typefaces with a clear size scale, and a layout idea. Open with the most "
+        "characteristic thing in the subject's world, not a big number over a gradient by default. Keep lines under 80 characters. "
+        "Avoid all-caps labels above every heading, one accented word in a headline, and numbered markers unless the content is a "
+        "sequence; borders and dividers must carry information. Spend boldness in one place and keep the rest quiet; use motion "
+        "sparingly (one page-load moment, hover only where it helps). Meet the quality floor: responsive down to a phone, visible "
+        "keyboard focus, reduced-motion respected, readable contrast, harmonious colours. Write plain sentence-case copy in the "
+        "user's words: specific labels, active verbs, empty states that say what to do."),
+}
+
+
+def silent_skill_prompt(name: str, max_chars: int = 10000, compact: bool = False) -> str:
     """The body of one skill as a system-prompt block the model follows without announcing it (the chat lane has no
-    read_skill tool). Installed copy first, else the reviewed catalog copy; '' when neither exists."""
+    read_skill tool). `compact` gives the short digest when there is one (local models). Installed copy first, else the
+    reviewed catalog copy; '' when neither exists."""
     if not valid_name(name):
+        return ""
+    if compact and name in SKILL_DIGESTS:
+        for base in (SKILLS_DIR, CATALOG_DIR):
+            if (base / name / "SKILL.md").is_file():
+                return SILENT_PREFACE + SKILL_DIGESTS[name]
         return ""
     for base in (SKILLS_DIR, CATALOG_DIR):
         sk = parse_skill_md(base / name / "SKILL.md")

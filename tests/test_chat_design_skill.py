@@ -47,13 +47,22 @@ class SilentSkillTests(unittest.TestCase):
         with mock.patch.object(skills, "SKILLS_DIR", self._skills_dir("x" * 50000)):
             self.assertLess(len(skills.silent_skill_prompt("frontend-design", max_chars=500)), 500 + len(skills.SILENT_PREFACE) + 1)
 
+    def test_local_models_get_the_short_digest_and_cloud_models_the_whole_skill(self):
+        with mock.patch.object(skills, "SKILLS_DIR", self._skills_dir("x" * 9000)):
+            full = skills.silent_skill_prompt("frontend-design")
+            small = skills.silent_skill_prompt("frontend-design", compact=True)
+        self.assertGreater(len(full), 8000)
+        self.assertLess(len(small), 2200)                       # about 350 tokens plus the preface
+        self.assertIn("4-6 named colours", small)
+        self.assertIn("apply silently", small)
+
     def test_real_skill_loads_when_present(self):
         out = skills.silent_skill_prompt("frontend-design")
         if out:
             self.assertIn("Frontend Design", out)
 
     def test_chat_run_wires_it_for_html_and_project_builds_only(self):
-        self.assertIn('skills.silent_skill_prompt("frontend-design")', RUN_SRC)
+        self.assertIn('skills.silent_skill_prompt("frontend-design", compact=not cloud_main)', RUN_SRC)
         self.assertIn("if has_file and (html_build or project_build or prompt_scope.html_wanted(", RUN_SRC)
 
 

@@ -731,8 +731,9 @@ def html_wanted(query: str, prior_files=None, msgs=None) -> bool:
 
 
 HTML_MANUAL = (
-    "HTML ARTIFACTS & WEB DASHBOARDS (deliver as standalone .html via `write_file(path='<name>.html', content=...)` or ```html block):\n"
-    "When creating an HTML page, dashboard, tool, game, or visualization, build a publication-grade, self-contained application matching modern SaaS quality (Claude Artifacts standard):\n"
+    "HTML ARTIFACTS (deliver as standalone .html via `write_file(path='<name>.html', content=...)` or ```html block):\n"
+    "When creating an HTML page, report, dashboard, tool, game, or visualization, build a publication-grade, self-contained page matching modern SaaS quality (Claude Artifacts standard). "
+    "MATCH THE KIND OF PAGE. A report, guide, overview, comparison or \"detailed html\" about findings is a long-form READING page: a title with a one-paragraph summary, a table of contents, numbered sections with clear headings, tables for the facts, short callouts for the key risks and for each fix or solution, and the sources at the end. Build a dashboard (KPI cards, tabs, filters, charts) only when the user said dashboard or asked for charts or interactivity. \n"
     "1. COMPLETE & STANDALONE: Write a single, completely runnable HTML file (<!DOCTYPE html>, <html>, <head>, <body>). Never omit code, never write placeholders like '<!-- add logic here -->', never truncate. End with [DOWNLOAD: <name>.html] so the preview dock opens it.\n"
     "2. MODERN DESIGN SYSTEM & TYPOGRAPHY:\n"
     "   - Tailwind CSS: `<script src=\"https://cdn.tailwindcss.com\"></script>`.\n"
@@ -741,7 +742,7 @@ HTML_MANUAL = (
     "3. ICONS & CHARTS:\n"
     "   - Lucide Icons: `<script src=\"https://unpkg.com/lucide@latest\"></script>` and execute `<script>lucide.createIcons();</script>` after DOM load.\n"
     "   - Chart.js (for analytics/data): `<script src=\"https://cdn.jsdelivr.net/npm/chart.js\"></script>` with responsive styling and matching palette.\n"
-    "4. COMPONENT HIERARCHY:\n"
+    "4. COMPONENT HIERARCHY (for a dashboard or tool; a report or guide uses the long-form layout above):\n"
     "   - Header / Navigation Bar: App icon, title, subtitle, live status badge (e.g. `<span class=\"px-2.5 py-0.5 text-xs font-medium rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20\">Active</span>`), and search/action controls.\n"
     "   - KPI Metric Cards: 3-4 cards showing bold large numbers (`text-2xl font-bold`), delta indicators (`+14.2%`), icons, and clear labels.\n"
     "   - Main Content Area: Responsive card grid or clean data table with hover row highlights, tab switchers, and filter pills.\n"

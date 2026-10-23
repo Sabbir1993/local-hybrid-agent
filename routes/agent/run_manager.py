@@ -55,6 +55,7 @@ class RunHandle:
         self.session_id = session_id
         self.started = time.time()
         self.finished_at: Optional[float] = None
+        self.kind = "agent"
         self.state = "running"          # running | completed | stopped | failed | cancelled | interrupted
         self.reason: Optional[str] = None
         self.frames: list = []
@@ -71,7 +72,7 @@ class RunHandle:
         return self.base_seq + len(self.frames)
 
     def summary(self) -> dict:
-        return {"id": self.id, "session_id": self.session_id, "state": self.state, "reason": self.reason,
+        return {"id": self.id, "kind": self.kind, "session_id": self.session_id, "state": self.state, "reason": self.reason,
                 "running": not self.done, "started": self.started, "finished_at": self.finished_at,
                 "frames": self.next_seq}
 
@@ -203,8 +204,10 @@ async def _pump(handle: RunHandle, agen) -> None:
         await handle._finish()
 
 
-def start(user_id: int, session_id: Optional[int], agen, run_id: Optional[str] = None) -> RunHandle:
-    """Run `agen` (an async generator of SSE frames) as a detached task and return its handle."""
+def start(user_id: int, session_id: Optional[int], agen, run_id: Optional[str] = None, *,
+          kind: str = "agent", journal: bool = True) -> RunHandle:
+    """Run `agen` (an async generator of SSE frames) as a detached task and return its handle.
+    `journal=False` is for a loop that already keeps its own run-journal row (the chat route)."""
     _purge()
     limit = int(_cfg("max_active_runs_per_user", DEFAULT_MAX_ACTIVE_PER_USER))
     if limit > 0 and active_count(user_id) >= limit:
@@ -212,8 +215,10 @@ def start(user_id: int, session_id: Optional[int], agen, run_id: Optional[str] =
     rid = run_id if valid_id(run_id) and run_id not in _RUNS else uuid.uuid4().hex
     handle = RunHandle(rid, user_id, session_id)
     _RUNS[rid] = handle
-    from core import runs
-    runs.begin(rid, "agent", user_id, session_id=session_id)
+    handle.kind = kind
+    if journal:
+        from core import runs
+        runs.begin(rid, kind, user_id, session_id=session_id)
     # created here, inside the request, so the task inherits the request's context (user, device, plan session)
     handle.task = asyncio.get_running_loop().create_task(_pump(handle, agen))
     return handle

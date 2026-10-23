@@ -236,10 +236,37 @@ def _bing_images_search_sync(query: str, count: int = 8) -> list:
     return results[:count]
 
 
+_YEAR_TOKEN = re.compile(r"(?<![\w-])(20\d\d)(?![\w-])(?!\.\d)")
+
+
+_HISTORY_WORDS = re.compile(r"\b(history|historical|timeline|retrospective|archive|back in|since|in the past|years ago)\b", re.I)
+
+
+def freshen_years(query: str, user_text: str, this_year: int) -> str:
+    """A model searches with the year its training ended ("... 2025 ...") even when it is later. Replace a past year in
+    the query with the current one, unless the user named that year themselves. CVE ids ("CVE-2024-1234") and
+    versions ("2024.1") are not years and stay as they are."""
+    if _HISTORY_WORDS.search(query or "") or _HISTORY_WORDS.search(user_text or ""):
+        return query            # a look back ("history of", "timeline", "since") keeps the years it names
+    named = set(_YEAR_TOKEN.findall(user_text or ""))
+
+    def sub(m):
+        y = m.group(1)
+        return str(this_year) if this_year - 6 <= int(y) < this_year and y not in named else y
+    out = _YEAR_TOKEN.sub(sub, query or "")
+    return re.sub(rf"(?<![\w-]){this_year}(?:\s+{this_year})+(?![\w-])", str(this_year), out)
+
+
 async def tool_web_search(args) -> str:
     query = _query_arg(args)
     if not query:
         raise ValueError("query required")
+    from datetime import datetime
+    from .request_context import get_user_text
+    asked = query
+    query = freshen_years(query, get_user_text(), datetime.now().year)
+    if isinstance(args, dict) and isinstance(args.get("queries"), list):
+        args = {**args, "queries": [freshen_years(str(q or ""), get_user_text(), datetime.now().year) for q in args["queries"]]}
     if _pan_egress(query):
         return _PAN_EGRESS_ERROR.format(what="search query")
     recency = str(args.get("recency") or "").lower() if isinstance(args, dict) else ""
@@ -265,6 +292,9 @@ async def tool_web_search(args) -> str:
     names = {"duckduckgo": "DuckDuckGo", "bing": "Bing", "searxng": "SearXNG"}
     engines = " + ".join(names.get(e, e) for e in res["engines"])
     out = [f"Web results for: {query} (via {engines}" + (f", past {recency}" if recency else "") + ")"]
+    if query != asked and not redacted:
+        out.append(f"Note: an out-of-date year in the query was changed to {datetime.now().year} (today's year); "
+                   "the user did not ask for a specific year.")
     if redacted:
         out.append(f"Note: removed {', '.join(redacted)} from the query before sending it to the "
                    "search engine (privacy).")

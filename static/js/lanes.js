@@ -406,18 +406,14 @@ function sttSetupHtml(l) {
 function mediaAdminHtml() {
   const media = LN.d.media || {};
   const lim = media.limits || {};
-  return `<details class="ln-adv"><summary>Admin: cloud limits and cloud speech</summary>
-    <label class="ln-check"><input type="checkbox" data-ln="allow-cloud-audio"${media.allow_cloud_audio ? ' checked' : ''}>
-      Allow cloud speech to text</label>
-    <div class="ln-warn">⚠ Recordings can't be checked for card numbers or personal details before they are sent.
-      Leave this off unless the provider is approved for this data (PCI DSS / Bangladesh Bank rules).</div>
+  return `<details class="ln-adv"><summary>Admin: daily limits</summary>
     <div class="ln-lim">
-      <label class="ln-lbl" for="ln-lim-image">Cloud images per person per day (0 = no limit)</label>
+      <label class="ln-lbl" for="ln-lim-image">Images per person per day (0 = no limit)</label>
       <input id="ln-lim-image" type="number" min="0" max="10000" data-ln="lim-image" value="${esc(lim.image_per_day ?? 50)}">
-      <label class="ln-lbl" for="ln-lim-video">Cloud videos per person per day (0 = no limit)</label>
+      <label class="ln-lbl" for="ln-lim-video">Videos per person per day (0 = no limit)</label>
       <input id="ln-lim-video" type="number" min="0" max="1000" data-ln="lim-video" value="${esc(lim.video_per_day ?? 5)}">
     </div>
-    <div class="dim ln-hint">Image models and Whisper on this PC have no daily limit.</div>
+    <div class="dim ln-hint">The limits count everything a person makes, on this PC and in the cloud. They reset at midnight.</div>
   </details>`;
 }
 
@@ -1225,14 +1221,6 @@ document.addEventListener('change', async (e) => {
       lanesRender();
       undoToast(t.value ? `${(jobSpec(job) || {}).label} now uses “${laneLabel(t.value)}”` : `${(jobSpec(job) || {}).label} turned off`,
                 () => lanesApi('/control/lanes/roles', 'POST', { map: { [job]: prev } }));
-    }
-    else if (k === 'allow-cloud-audio') {
-      if (t.checked && !confirm('Allow sending recordings to cloud speech-to-text?\n\nThey can’t be checked for card numbers or personal details before they leave this PC.')) {
-        t.checked = false; return;
-      }
-      await lanesApi('/control/media-settings', 'POST', { allow_cloud_audio: t.checked });
-      lanesRender();
-      toast(t.checked ? 'Cloud speech to text is allowed' : 'Speech to text stays on this PC');
     }
     else if (k === 'lim-image' || k === 'lim-video') {
       const v = Math.max(0, parseInt(t.value || '0', 10) || 0);

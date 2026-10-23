@@ -69,11 +69,32 @@ def _pick_deliverables(written: list[str], query: str) -> list[str]:
     return picked + [f for f in uniq if f.lower().endswith(".zip") and f not in picked]
 
 
-def _finalize_download_tags(content: str, written: list[str], query: str) -> tuple[str, bool]:
+def _misspelled_tags(content: str, written: list[str], known: list[str]) -> list[str]:
+    """Tags in the reply that name no real file but are a near miss of one written this turn: a model copying a random
+    file name ("report-6cb.4a5dc.html" for "report-6cb4a5dc.html") gets one character wrong, and the link is dead."""
+    import difflib
+    real = set(written) | set(known or [])
+    bad = []
+    for name in re.findall(r"\[DOWNLOAD:\s*([^\]\n\[]+)\]", content or ""):
+        name = name.strip()
+        if name in real:
+            continue
+        near = [w for w in written if Path(w).suffix.lower() == Path(name).suffix.lower()
+                and difflib.SequenceMatcher(None, name.lower(), w.lower()).ratio() >= 0.75]
+        if near:
+            bad.append(name)
+    return bad
+
+
+def _finalize_download_tags(content: str, written: list[str], query: str, known: list[str] = ()) -> tuple[str, bool]:
     """Drop [DOWNLOAD:] tags for superseded files written this turn and append
     tags for deliverables the reply doesn't link yet. Returns (content, changed)."""
     keep = _pick_deliverables(written, query)
     out = content or ""
+    for name in _misspelled_tags(out, written, list(known or [])):
+        out = re.sub(rf"[ \t]*\[DOWNLOAD:\s*{re.escape(name)}\s*\][ \t]*\n?", "", out)
+    # a tag the model cut off ("[DOWNLOAD: report-ab12" with no "]") is junk that would swallow the real one below it
+    out = re.sub(r"[ \t]*\[DOWNLOAD:[^\]\n\[]*(?=\n|$|\[)", "", out)
     for f in set(written) - set(keep):
         out = re.sub(rf"[ \t]*\[DOWNLOAD:\s*{re.escape(f)}\s*\][ \t]*\n?", "", out)
     # an invented address for a file the app already links ("(https://example.com/site-ab12.zip)") is dead: drop it

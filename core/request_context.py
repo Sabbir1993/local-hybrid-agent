@@ -82,6 +82,19 @@ async def run_in_executor_ctx(fn: Callable[..., Any], *args: Any) -> Any:
     return await loop.run_in_executor(None, functools.partial(ctx.run, fn, *args))
 
 
+# What the user typed in this request (their latest message). A tool that rewrites its own input, such as the web
+# search bringing a stale year up to date, must leave alone anything the user asked for by name.
+_user_text: contextvars.ContextVar[str] = contextvars.ContextVar("user_text", default="")
+
+
+def set_user_text(text: str) -> None:
+    _user_text.set(str(text or "")[:4000])
+
+
+def get_user_text() -> str:
+    return _user_text.get()
+
+
 # Tool allowlist of the active custom agent for this request (None = no limit).
 # Checked by core.agent_loop.run_tool, the one choke point every lane's tool call
 # passes through -- filtering the schemas sent to the model is not enough, since a

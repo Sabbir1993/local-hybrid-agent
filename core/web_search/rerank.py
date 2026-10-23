@@ -34,12 +34,22 @@ _MONTH_RX = re.compile(r"\b(latest|news|recent(ly)?|current|newest|this week|thi
                        r"update[sd]?|rate today|price today|exchange rate)\b", re.I)
 
 
+# Topics whose answers go stale within months: what is "found" or "top" now is a question about this year, unless the query
+# names an exact case (a CVE id) or a year itself.
+_YEAR_RX = re.compile(r"\b(vulnerabilit(?:y|ies)|exploits?|zero[- ]?days?|security (?:flaws?|issues?|advisor(?:y|ies)|patch(?:es)?)|"
+                      r"ransomware|data breach(?:es)?|malware campaigns?|top \d+)\b", re.I)
+_CVE_ID_RX = re.compile(r"\bCVE-\d{4}-\d{3,}\b", re.I)
+_EXPLICIT_YEAR_RX = re.compile(r"(?<![\w-])(?:19|20)\d\d(?![\w-])")
+
+
 def detect_recency(query: str) -> str:
-    """'' for evergreen queries; day/month when the wording asks for fresh information."""
+    """'' for evergreen queries; day/month/year when the wording asks for fresh information."""
     if _DAY_RX.search(query or ""):
         return "day"
     if _MONTH_RX.search(query or ""):
         return "month"
+    if _YEAR_RX.search(query or "") and not _CVE_ID_RX.search(query or ""):
+        return "year"
     return ""
 
 

@@ -261,7 +261,48 @@ async function loadDevicesPanel() {
   if (home && window.self === window.top) home.hidden = false;
 })();
 
-// "My Agent Memory": the editor lives in the React app, which listens for this message while Settings is open
-document.getElementById('btn-open-agent-memory')?.addEventListener('click', () => {
-  if (window.parent && window.parent !== window) window.parent.postMessage({ type: 'open-agent-memory' }, location.origin);
-});
+// --- Look and feel helpers (see settings-pro.css): nothing here changes what a setting does ---
+(function () {
+  // 1. each section header: the leading emoji becomes an icon tile, and the nav group names the section's home
+  const emojiRx = /^(\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic})*)\s*/u;
+  document.querySelectorAll('.settings-panel > .settings-panel-head').forEach((head) => {
+    const h2 = head.querySelector('h2');
+    if (h2 && !h2.querySelector('.sp-ico')) {
+      const first = h2.firstChild;
+      if (first && first.nodeType === 3) {
+        const m = emojiRx.exec(first.nodeValue);
+        if (m) {
+          const ico = document.createElement('span');
+          ico.className = 'sp-ico';
+          ico.setAttribute('aria-hidden', 'true');
+          ico.textContent = m[1];
+          first.nodeValue = first.nodeValue.slice(m[0].length);
+          h2.insertBefore(ico, first);
+        }
+      }
+    }
+    const panel = head.closest('.settings-panel');
+    const btn = panel && document.querySelector(`.settings-tab-btn[data-tab="${panel.id}"]`);
+    let group = btn && btn.previousElementSibling;
+    while (group && !group.classList.contains('settings-group-label')) group = group.previousElementSibling;
+    if (group && h2 && !head.querySelector('.sp-crumb')) {
+      const crumb = document.createElement('span');
+      crumb.className = 'sp-crumb';
+      crumb.textContent = group.textContent.trim();
+      h2.appendChild(crumb);
+    }
+  });
+
+  // 2. "/" jumps to the settings search, Escape clears it
+  const search = document.getElementById('settings-tab-search');
+  if (search) {
+    document.addEventListener('keydown', (e) => {
+      const el = document.activeElement;
+      const typing = el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable);
+      if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); search.focus(); search.select(); }
+    });
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && search.value) { search.value = ''; search.dispatchEvent(new Event('input')); }
+    });
+  }
+})();
