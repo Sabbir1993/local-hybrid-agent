@@ -80,18 +80,26 @@ def _ws_diff_lines(before: Optional[str], after: str) -> list:
 
 
 @router.get("/agent/ws/tree")
-async def agent_ws_tree(path: str = "", user: Principal = Depends(get_current_user)):
+async def agent_ws_tree(path: str = "", user: Principal = Depends(get_current_user), agent: Optional[int] = None):
+    """One level of the files the Code tab shows. With `agent` it is THAT agent's own work folder; without it the active
+    project. One never stands in for the other: an agent with no folder is an error, not the project's files."""
+    folder, bad = _personal_folder(agent, user)
+    if bad:
+        return bad
     curr_proj = get_active_project(user.id)
-    if not curr_proj or curr_proj in ("scratch", "default"):
+    if not folder and (not curr_proj or curr_proj in ("scratch", "default")):
         return JSONResponse({"error": "No project selected", "root": "", "project": None, "nodes": [], "changes": []})
 
-    ws = active_workspace()
+    try:
+        ws = active_workspace()
+    except WorkspaceAccessDenied as e:
+        return JSONResponse({"error": str(e), "root": "", "nodes": [], "changes": []}, status_code=409)
     changes = []
     for k, rec in (_ws_changes.get(user.id) or {}).items():
         try:
             rel = str(Path(k).relative_to(ws)).replace("\\", "/")
         except ValueError:
-            rel = Path(k).name
+            continue          # a file of another workspace is not a change of this one
         changes.append({
             "path": rel,
             "status": "created" if rec.get("before") is None else "modified",
@@ -101,7 +109,8 @@ async def agent_ws_tree(path: str = "", user: Principal = Depends(get_current_us
         nodes = await _ws_tree_scan(path)
     except (ConnectionError, TimeoutError, RuntimeError) as e:
         return JSONResponse({"error": f"SSL Local Agent: {e}"}, status_code=502)
-    return {"root": ws.name, "project": curr_proj, "nodes": nodes, "changes": changes}
+    return {"root": ws.name, "project": None if folder else curr_proj, "agent": agent if folder else None,
+            "nodes": nodes, "changes": changes}
 
 
 @router.get("/agent/ws/file")

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../../services/api';
 import { hlCode, hlLangFor } from '../../utils/highlight';
 import { useAppStore } from '../../stores/useAppStore';
+import { agentWsParam } from '../../utils/wsTarget';
 
 interface WsNode {
   name: string;
@@ -33,9 +34,9 @@ function fmtSize(n: number): string {
 
 async function loadDir(path: string): Promise<{ root?: string; nodes: WsNode[]; changes: WsChange[]; error?: string }> {
   try {
-    const r = await apiFetch('/agent/ws/tree?path=' + encodeURIComponent(path));
-    const d = await r.json().catch(() => ({ error: `Could not load project files (server error ${r.status})` }));
-    if (!r.ok || d.error || !d.root) return { nodes: [], changes: [], error: d.error || 'No project workspace active' };
+    const r = await apiFetch('/agent/ws/tree?path=' + encodeURIComponent(path) + agentWsParam());
+    const d = await r.json().catch(() => ({ error: `Could not load files (server error ${r.status})` }));
+    if (!r.ok || d.error || !d.root) return { nodes: [], changes: [], error: d.error || 'No workspace folder is active' };
     return { root: d.root, nodes: d.nodes || [], changes: d.changes || [] };
   } catch (e: any) {
     return { nodes: [], changes: [], error: e?.message || 'Failed to load files' };
@@ -142,7 +143,7 @@ const Level: React.FC<LevelProps> = ({ path, filter, reloadKey, onOpenFile, dept
 };
 
 export const WorkspaceTree: React.FC = () => {
-  const { activeProjectId, projects, dockTab, isStreaming } = useAppStore();
+  const { activeProjectId, projects, dockTab, isStreaming, appMode, activeCustomAgent } = useAppStore();
   const [filter, setFilter] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
   const [root, setRoot] = useState('');
@@ -157,17 +158,25 @@ export const WorkspaceTree: React.FC = () => {
   const [opError, setOpError] = useState('');
 
   const project = projects.find((p) => p.id === activeProjectId);
+  // Agent mode reads the agent's own folder, Code mode the project: never the other one
+  const inAgent = appMode === 'agent';
+  const agentId = inAgent && activeCustomAgent?.id != null ? String(activeCustomAgent.id) : '';
+  const agentDir = inAgent ? String(activeCustomAgent?.work_dir || '').trim() : '';
   const hasProject = Boolean(project && project.name && project.name !== 'scratch' && project.name !== 'default');
+  const problem = inAgent
+    ? (!agentId ? 'Select an agent to see its files.' : !agentDir ? 'This agent has no work folder. Set one in Settings → Custom Agents.' : '')
+    : (hasProject ? '' : 'No project active');
+  const scopeKey = inAgent ? `agent:${agentId}:${agentDir}` : `project:${activeProjectId}`;
 
   useEffect(() => {
-    setFile(null);   // a file of the previous project must not stay on screen
+    setFile(null);   // a file of the previous folder must not stay on screen
     setChanges([]);
     setRoot('');
-  }, [activeProjectId]);
+  }, [scopeKey]);
 
   useEffect(() => {
     if (dockTab === 'files') setReloadKey((k) => k + 1);
-  }, [dockTab, activeProjectId]);
+  }, [dockTab, scopeKey]);
 
   // the agent may have written files: show the final state when a run ends
   useEffect(() => {
@@ -193,7 +202,7 @@ export const WorkspaceTree: React.FC = () => {
       return;
     }
     // the tree reports only the folder's name as its root: the project's full path is the real base
-    const base = project?.workspace_dir || project?.path || root;
+    const base = (inAgent ? agentDir : project?.workspace_dir || project?.path) || root;
     const sep = base.includes('\\') && !base.includes('/') ? '\\' : '/';
     const parentAbs = mkParent ? base.replace(/[\\/]+$/, '') + sep + mkParent.split('/').join(sep) : base;
     setMkBusy(true);
@@ -221,7 +230,7 @@ export const WorkspaceTree: React.FC = () => {
   const openFile = async (path: string) => {
     setFileError('');
     try {
-      const r = await apiFetch('/agent/ws/file?path=' + encodeURIComponent(path));
+      const r = await apiFetch('/agent/ws/file?path=' + encodeURIComponent(path) + agentWsParam());
       const d = await r.json().catch(() => ({ error: `server error ${r.status}` }));
       if (!r.ok || d.error) {
         setFileError('File view failed: ' + (d.error || r.status));
@@ -233,12 +242,12 @@ export const WorkspaceTree: React.FC = () => {
     }
   };
 
-  if (!hasProject) {
+  if (problem) {
     return (
       <div className="ws-empty" style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--dim)', fontSize: '12.5px' }}>
         <div style={{ fontSize: 26, marginBottom: 8 }}>📁</div>
-        <b>No project active</b>
-        <p style={{ marginTop: 6, fontSize: '11.5px' }}>Select or create a project to explore workspace files, diffs, and code.</p>
+        <b>{problem}</b>
+        {!inAgent && <p style={{ marginTop: 6, fontSize: '11.5px' }}>Select or create a project to explore workspace files, diffs, and code.</p>}
       </div>
     );
   }
@@ -289,7 +298,7 @@ export const WorkspaceTree: React.FC = () => {
   return (
     <div id="ws-tree-view">
       <div id="ws-root-path" className="mono" title="Workspace root directory on disk" style={{ padding: 8, fontSize: 11, color: 'var(--dim)' }}>
-        📁 {root || project?.path || ''}
+        📁 {root || (inAgent ? agentDir : project?.path) || ''}
       </div>
       {changes.length > 0 && (
         <div id="ws-changes" style={{ display: 'block' }}>

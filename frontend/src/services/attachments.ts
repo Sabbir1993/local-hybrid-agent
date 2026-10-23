@@ -1,6 +1,7 @@
 // Attachment preparation and prompt building (port of static/js/attachments.js).
 // Images are described by the vision lane, documents are extracted server-side, text/code is read locally.
 import { apiFetch } from './api';
+import { useAppStore } from '../stores/useAppStore';
 import { audioAttachmentContent, videoAttachmentContent } from './media';
 
 export const IMAGE_RE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
@@ -75,11 +76,12 @@ export function describeImage(b64: string, mime: string, signal?: AbortSignal): 
 
 async function describeImageNow(b64: string, mime: string, signal?: AbortSignal): Promise<string> {
   return (async () => {
-    const override = localStorage.getItem('cloud_model_override') || undefined;
+    const agentMode = useAppStore.getState().appMode === 'agent';   // Agent mode never sends a picture to a cloud model
+    const override = agentMode ? undefined : localStorage.getItem('cloud_model_override') || undefined;
     const res = await apiFetch('/agent/vision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image_b64: b64, mime, question: VISION_QUESTION, cloud_model_override: override }),
+      body: JSON.stringify({ image_b64: b64, mime, question: VISION_QUESTION, cloud_model_override: override, local_only: agentMode || undefined }),
       signal,
     });
     const j = await res.json().catch(() => ({}));

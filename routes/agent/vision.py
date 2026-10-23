@@ -40,6 +40,9 @@ async def agent_vision(req: VisionReq, user: Principal = Depends(get_current_use
     from core import lanes
     vision_route = lanes.targets("vision", user.id)
     vision_explicit = "vision" in cloud.role_map(user.id)
+    if req.local_only:
+        vision_route = [t for t in vision_route if not t.is_cloud]
+        req.cloud_model_override = None
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
     first = vision_route[0] if vision_route else None
     picked_main = bool(first and first.lane == "main" and not first.is_cloud)   # explicit pick of main

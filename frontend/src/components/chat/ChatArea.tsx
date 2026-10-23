@@ -71,9 +71,11 @@ function parseUserMessage(raw: string): ParsedUserMessage {
 // Which <details> (tool calls, thoughts, the "worked for" group) the reader opened or closed, per message. The answer's HTML is
 // rebuilt on every streamed update, which would otherwise snap every opened step shut again.
 const detailsState = new Map<string, boolean>();
+// Where the reader left each scrollable action list: rebuilding the HTML would otherwise send it back to the top on every new tool call.
+const listScroll = new Map<string, { top: number; stick: boolean }>();
 
 /** An assistant message body. Re-applies the reader's open / closed choices to the freshly rebuilt markup before it paints. */
-const BotContent: React.FC<{ id: string; html: string }> = ({ id, html }) => {
+const BotContent: React.FC<{ id: string; html: string; follow?: boolean }> = ({ id, html, follow }) => {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const root = ref.current;
@@ -82,7 +84,13 @@ const BotContent: React.FC<{ id: string; html: string }> = ({ id, html }) => {
       const want = detailsState.get(`${id}:${i}`);
       if (want !== undefined && el.open !== want) el.open = want;
     });
-  }, [id, html]);
+    // action list: stay where the reader scrolled to; while the run is live and they have not scrolled up, follow the newest step
+    root.querySelectorAll<HTMLElement>('.antigravity-steps-list').forEach((el, i) => {
+      const st = listScroll.get(`${id}:${i}`);
+      if (st) el.scrollTop = st.stick ? el.scrollHeight : st.top;
+      else if (follow) el.scrollTop = el.scrollHeight;
+    });
+  }, [id, html, follow]);
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
@@ -94,7 +102,15 @@ const BotContent: React.FC<{ id: string; html: string }> = ({ id, html }) => {
       if (i >= 0) detailsState.set(`${id}:${i}`, el.open);
     };
     root.addEventListener('toggle', onToggle, true);
-    return () => root.removeEventListener('toggle', onToggle, true);
+    // `scroll` does not bubble either
+    const onScroll = (e: Event) => {
+      const el = e.target as HTMLElement | null;
+      if (!el || !el.classList || !el.classList.contains('antigravity-steps-list')) return;
+      const i = Array.from(root.querySelectorAll('.antigravity-steps-list')).indexOf(el);
+      if (i >= 0) listScroll.set(`${id}:${i}`, { top: el.scrollTop, stick: el.scrollHeight - el.scrollTop - el.clientHeight < 24 });
+    };
+    root.addEventListener('scroll', onScroll, true);
+    return () => { root.removeEventListener('toggle', onToggle, true); root.removeEventListener('scroll', onScroll, true); };
   }, [id]);
   return <div ref={ref} className="bot-content" dangerouslySetInnerHTML={{ __html: html }} />;
 };
@@ -844,6 +860,7 @@ export const ChatArea: React.FC = () => {
                       ) : (
                       <BotContent
                         id={String(m.id)}
+                        follow={answering}
                         html={renderCached(answering ? null : `${m.id}|${contentText.length}|${thinkingText.length}|${(m.acts || []).length}|${m.secs || 0}|${isChatMode}|${qz ? 'q' : ''}`, () => renderCompleteChatMessage(qz ? qz.prose : contentText, m.acts, m.secs, isChatMode, thinkingText))}
                       />
                       )}

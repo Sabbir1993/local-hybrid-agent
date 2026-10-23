@@ -62,3 +62,4 @@ class VisionReq(BaseModel):
     mime: str = "image/png"
     question: str = "Describe this image in detail for a coding agent."
     cloud_model_override: Optional[str] = None
+    local_only: bool = False   # Agent mode: the picture never goes to a cloud model

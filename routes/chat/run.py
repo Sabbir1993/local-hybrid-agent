@@ -116,8 +116,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     set_current_user(user.id)
     set_project_scope(getattr(req, "session_id", None))                 # a website project belongs to this chat only
     voice_policy.apply(req)     # a spoken turn: no hidden reasoning, short answer, no answer-check rewrite
-    cloud_main = cloud.cloud_lane("main", user.id)
-    if getattr(req, "model", None):
+    # a custom agent works on the user's own files: local models only (same rule as routes/agent/setup.py)
+    local_only = bool(getattr(req, "custom_agent_id", None)) and bool((APP_CONFIG.get("agent") or {}).get("agent_local_only", True))
+    cloud_main = None if local_only else cloud.cloud_lane("main", user.id)
+    if getattr(req, "model", None) and not local_only:
         target_model = str(req.model).strip()
         cm = cloud.get_cloud(target_model, user.id)
         if not cm:

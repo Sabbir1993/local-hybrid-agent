@@ -36,7 +36,10 @@ DEFAULTS = {
     "identical_result": 3,      # same call, same result, this many times
     "error_streak": 6,          # this many failed calls in a row
     "cycle_repeats": 2,         # a 2- or 3-call pattern of (call, result) pairs repeated this many times
-    "grace_calls": 3,           # calls to wait after a trigger before judging again
+    "repeat_write": 3,          # new files written under one name (the writer adds a unique id to each): the model is
+                                # re-saving the same document instead of finishing. Ignored again after a nudge:
+                                # the next trigger ends the run
+    "grace_calls": 3,          # calls to wait after a trigger before judging again
     "escalate_steps": 3,        # steps forced onto main after the second trigger
     "graduated": True,          # False: stop at the first trigger (only when "stop" is on)
     "stop": False,              # True: end the run at the third trigger. Off by default: a run that
@@ -68,6 +71,19 @@ def _sig(args) -> str:
         return str(args)[:600]
 
 
+def _write_key(sig: str) -> str:
+    """The logical file a write_file call targets: folder-less name without the unique id the writer appends."""
+    try:
+        a = json.loads(sig) if sig.startswith("{") else {}
+    except ValueError:
+        a = {}
+    p = str(a.get("path") or a.get("file") or a.get("filename") or "")
+    name = p.replace("\\", "/").rsplit("/", 1)[-1]
+    stem, dot, ext = name.rpartition(".")
+    stem = re.sub(r"([-_][0-9a-fA-F]{8})+$", "", stem if dot else name)
+    return (stem + dot + ext).lower() if stem else ""
+
+
 def _rhash(result) -> str:
     """Hash of a tool result with whitespace collapsed (a re-run that only reflows output is the
     same result). Only the head is hashed: the tail of very long output is often a timestamp."""
@@ -88,6 +104,7 @@ class LoopGuard:
         self.cfg = config(cfg)
         self.calls = []            # (name, args_sig, result_hash, ok)
         self.triggers = 0
+        self.write_triggers = 0
         self._start = 0            # calls before this index were already judged (see check)
 
     # ------------------------------------------------------------------ input
@@ -107,6 +124,16 @@ class LoopGuard:
             top, cnt = Counter((c[0], c[1], c[2]) for c in calls).most_common(1)[0]
             if cnt >= n_ident:
                 return "identical_result", top[0], cnt
+        # the same document saved again and again: each write is a new file and a "new" result, so the rules
+        # above never see it
+        n_w = int(cfg["repeat_write"])
+        if n_w > 0:
+            names = Counter(_write_key(c[1]) for c in calls if c[0] == "write_file" and c[3])
+            names.pop("", None)
+            if names:
+                top, cnt = names.most_common(1)[0]
+                if cnt >= n_w:
+                    return "repeat_write", "write_file", cnt
         # a run of failures
         n_err = int(cfg["error_streak"])
         if n_err > 0 and len(calls) >= n_err and not any(c[3] for c in calls[-n_err:]):
@@ -138,7 +165,9 @@ class LoopGuard:
         rule, tool, count = found
         self.triggers += 1
         self._start = len(self.calls)
-        if self.cfg["stop"] and (not self.cfg["graduated"] or self.triggers >= 3):
+        if rule == "repeat_write":
+            self.write_triggers += 1
+        if (self.cfg["stop"] and (not self.cfg["graduated"] or self.triggers >= 3)) or self.write_triggers >= 2:
             level = STOP
         else:
             level = NUDGE if self.triggers == 1 else ESCALATE
@@ -149,6 +178,8 @@ def describe(rule: str, tool: str, count: int) -> str:
     """Plain-language reason, for the nudge, the stop summary and the UI banner."""
     if rule == "identical_result":
         return f"`{tool}` was called {count} times with the same arguments and gave the same result each time"
+    if rule == "repeat_write":
+        return f"the same file was saved {count} times under one name (each save created another copy)"
     if rule == "error_streak":
         return f"the last {count} tool calls all failed"
     if rule == "cycle":
@@ -159,6 +190,10 @@ def describe(rule: str, tool: str, count: int) -> str:
 
 
 def nudge_message(v: Verdict) -> str:
+    if v.rule == "repeat_write":
+        return ("[stuck] " + describe(v.rule, v.tool, v.count).capitalize() + ". Every save creates a NEW file, so those copies are "
+                "already on disk. Do not write this file again. Give the user your final answer now, in this reply, and mention "
+                "the file that is already saved.")
     return (f"[stuck] {describe(v.rule, v.tool, v.count).capitalize()}, so nothing new is being learned. "
             "Do not repeat those calls. Change approach: use a different tool or different inputs, "
             "look at the actual error, or summarise what you have found so far. If you are missing "

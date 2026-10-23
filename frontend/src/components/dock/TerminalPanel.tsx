@@ -55,6 +55,63 @@ export const TerminalPanel: React.FC = () => {
   const history = useRef<string[]>((() => { try { return JSON.parse(sessionStorage.getItem(HISTORY_KEY) || '[]'); } catch (_) { return []; } })());
   const histIdx = useRef(-1);
   const draft = useRef('');
+  // System (administrator) terminal: asked every time, never remembered, Windows only
+  const [sys, setSys] = useState(false);
+  const [askAdmin, setAskAdmin] = useState(false);
+  const [adminBusy, setAdminBusy] = useState(false);
+  const [adminErr, setAdminErr] = useState('');
+  const [adminAllowed, setAdminAllowed] = useState(false);
+  const isWindows = /windows/i.test(navigator.userAgent);
+  const sysRef = useRef(false);
+  sysRef.current = sys;
+
+  const endSystem = (note?: string) => {
+    if (!sysRef.current) return;
+    setSys(false);
+    setCwd(target.ok ? target.dir! : '');
+    apiFetch('/control/companion/admin-terminal/stop', { method: 'POST', background: true }).catch(() => {});
+    if (note) addTermEntry({ id: 't' + Date.now(), cmd: 'System terminal', source: 'system', status: 'done', stderr: note, exitCode: 0, time: Date.now() });
+  };
+
+  const startSystem = async () => {
+    setAdminBusy(true);
+    setAdminErr('');
+    try {
+      const r = await apiFetch('/control/companion/admin-terminal/start', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        setAdminErr(typeof d.error === 'string' ? d.error : typeof d.detail === 'string' ? d.detail : `Could not start (HTTP ${r.status}).`);
+      } else {
+        setSys(true);
+        setAskAdmin(false);
+        setCwd(target.ok ? target.dir! : 'C:\\');
+        if (shell !== 'powershell' && shell !== 'cmd') setShell('powershell');
+      }
+    } catch (e: any) {
+      setAdminErr('Could not start: ' + (e?.message || e));
+    } finally {
+      setAdminBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    apiFetch('/control/companion/admin-terminal', { background: true }).then((r) => r.json()).then((d) => setAdminAllowed(Boolean(d?.allowed))).catch(() => {});
+  }, []);
+
+  // while System is on: follow the server (idle expiry) and fall back to a regular terminal when it ends
+  useEffect(() => {
+    if (!sys) return;
+    const t = window.setInterval(() => {
+      apiFetch('/control/companion/admin-terminal', { background: true }).then((r) => r.json()).then((d) => {
+        if (sysRef.current && d && d.active === false) { setSys(false); setCwd(target.ok ? target.dir! : ''); addTermEntry({ id: 't' + Date.now(), cmd: 'System terminal', source: 'system', status: 'done', stderr: 'The administrator terminal timed out and was switched off. This is a regular terminal again.', exitCode: 0, time: Date.now() }); }
+      }).catch(() => {});
+    }, 20000);
+    return () => window.clearInterval(t);
+  }, [sys]);
+
+  // leaving the panel, or changing project/agent, always ends administrator rights
+  useEffect(() => () => { if (sysRef.current) apiFetch('/control/companion/admin-terminal/stop', { method: 'POST', background: true }).catch(() => {}); }, []);
+  useEffect(() => { if (sysRef.current) endSystem('Switched to a regular terminal.'); }, [appMode, activeProjectId, activeCustomAgent?.id]);
 
   // Where commands run: the project folder (Code) or the agent's work folder (Agent)
   const target = useMemo(() => {
@@ -97,7 +154,7 @@ export const TerminalPanel: React.FC = () => {
   };
 
   const run = async (command: string) => {
-    if (!target.ok) {
+    if (!target.ok && !sys) {
       addTermEntry({ id: 't' + Date.now(), cmd: command, source: 'system', status: 'done', stderr: (target as any).reason, exitCode: 1, time: Date.now() });
       return;
     }
@@ -116,7 +173,7 @@ export const TerminalPanel: React.FC = () => {
       const r = await apiFetch('/control/companion/shell', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: send, cwd: cwd || target.dir, shell }),
+        body: JSON.stringify({ command: send, cwd: cwd || (target.ok ? target.dir : 'C:\\'), shell, ...(sys ? { elevated: true } : {}) }),
         signal: ctl.current.signal,
       });
       const d = await r.json().catch(() => ({ ok: false, error: 'Non-JSON server response' }));
@@ -126,6 +183,7 @@ export const TerminalPanel: React.FC = () => {
         const lines = stdout.trim().split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean);
         if (lines.length) { setCwd(lines[lines.length - 1]); stdout = ''; }   // the folder line is the new prompt, not output
       }
+      if (d.admin_required && sys) { setSys(false); setCwd(target.ok ? target.dir! : ''); }
       const err = d.stderr || d.error || d.detail || (!r.ok ? `HTTP Error ${r.status}` : '');
       updateTermEntry(id, { status: 'done', stdout, stderr: typeof err === 'string' ? err : JSON.stringify(err), exitCode: code });
     } catch (e: any) {
@@ -187,18 +245,53 @@ export const TerminalPanel: React.FC = () => {
         </div>
         <div className="term-toolbar-actions" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <select
+            id="term-mode-select" title={isWindows ? (adminAllowed ? 'Project: regular rights. System: administrator rights (asks for confirmation)' : 'System (administrator) needs the terminal.admin permission') : 'The administrator terminal is available on Windows only'}
+            value={sys ? 'system' : 'project'} disabled={adminBusy}
+            onChange={(e) => { if (e.target.value === 'system') { setAdminErr(''); setAskAdmin(true); } else endSystem('Switched to a regular terminal.'); }}
+            style={{ padding: '2px 6px', fontSize: 11, background: sys ? '#7f1d1d' : 'var(--panel2)', border: '1px solid var(--border)', borderRadius: 4, color: 'inherit' }}
+          >
+            <option value="project">{appMode === 'agent' ? 'Agent' : 'Project'}</option>
+            <option value="system" disabled={!isWindows || !adminAllowed}>System (admin)</option>
+          </select>
+          <select
             id="term-shell-select" className="term-shell-select" title="Choose shell interpreter" value={shell}
             onChange={(e) => { setShell(e.target.value); try { localStorage.setItem('default_terminal_shell', e.target.value); } catch (_) {} }}
             style={{ padding: '2px 6px', fontSize: 11, background: 'var(--panel2)', border: '1px solid var(--border)', borderRadius: 4, color: 'inherit' }}
           >
             <option value="powershell">PowerShell</option>
             <option value="cmd">CMD</option>
-            <option value="bash">Bash</option>
+            <option value="bash" disabled={sys}>Bash</option>
             <option value="pwsh">PWSH</option>
           </select>
           <button className="btn ghost ln-small" id="term-btn-clear" title="Clear console (Ctrl+L)" style={{ width: 'auto', margin: 0, padding: '2px 8px', fontSize: 11 }} onClick={clearTerm}>Clear</button>
         </div>
       </div>
+
+      {sys && (
+        <div role="alert" style={{ background: '#7f1d1d', color: '#fff', fontSize: 11, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <strong>ADMINISTRATOR</strong>
+          <span style={{ flex: 1 }}>Commands you type here run with full rights on your PC. Ends after inactivity.</span>
+          <button className="btn ghost ln-small" style={{ width: 'auto', margin: 0, padding: '1px 8px', fontSize: 11, color: '#fff', borderColor: '#fca5a5' }} onClick={() => endSystem('Switched to a regular terminal.')}>Switch to regular</button>
+        </div>
+      )}
+      {askAdmin && (
+        <div role="dialog" aria-modal="true" aria-label="Enable administrator terminal" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: 'var(--panel, #161b22)', border: '1px solid var(--border)', borderRadius: 10, padding: 18, maxWidth: 440, fontSize: 13 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Turn on the administrator terminal?</div>
+            <p style={{ margin: '0 0 8px' }}>Commands you type will run with <strong>administrator rights</strong> on your PC, so they can read and change system files and settings. Use it for system analysis only.</p>
+            <ul style={{ margin: '0 0 8px', paddingLeft: 18, color: 'var(--dim)' }}>
+              <li>You will be asked again in a window on your PC, then by Windows (UAC).</li>
+              <li>Only commands you type here are elevated. The agent never is.</li>
+              <li>Each command is recorded in the audit log. It is not remembered: it ends when you switch back, close this panel, or after inactivity.</li>
+            </ul>
+            {adminErr && <div style={{ color: '#f87171', marginBottom: 8 }}>{adminErr}</div>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn ghost" style={{ width: 'auto', margin: 0 }} disabled={adminBusy} onClick={() => setAskAdmin(false)}>Cancel</button>
+              <button className="btn" style={{ width: 'auto', margin: 0, background: '#b91c1c' }} disabled={adminBusy} onClick={startSystem}>{adminBusy ? 'Waiting for confirmation on your PC…' : 'Continue'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="term-body" id="term-output" ref={outRef} tabIndex={-1} style={{ flex: 1, overflowY: 'auto', padding: 10, fontFamily: 'monospace', fontSize: '11.5px', background: 'var(--bg-code, #0d1117)' }}>
         {termEntries.length === 0 && (

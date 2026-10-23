@@ -16,6 +16,7 @@ const { autoUpdater } = require("electron-updater");
 const { SERVER_URL, SERVER_URL_ERROR, FRONTEND_URL, START_URL } = require("./config");
 const fsops = require("./fsops");
 const shellops = require("./shellops");
+const adminops = require("./adminops");
 const gitops = require("./gitops");
 const policy = require("./policy");
 const oauthops = require("./oauthops");
@@ -585,6 +586,10 @@ const OPS = {
     }
     return shellops.run(p);
   },
+  // Administrator terminal (Windows): start always asks on this PC and then Windows asks again (UAC); never skippable from the web app
+  "shell.admin_start": (p) => adminops.start(p),
+  "shell.admin_run": (p) => adminops.run(p),
+  "shell.admin_stop": () => adminops.stop(),
   "git.run": async (p) => {
     // git must run inside an approved folder, like every other fs-touching op.
     // The args are the server's; the companion's destructive-op guard in
@@ -931,4 +936,5 @@ app.on("window-all-closed", (e) => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  adminops.stop().catch(() => {});      // an administrator session never outlives the companion
 });

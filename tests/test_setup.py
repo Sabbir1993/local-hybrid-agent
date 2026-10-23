@@ -124,5 +124,47 @@ class SetupErrorShape(unittest.TestCase):
         self.assertEqual(ctx.hidden_tools, frozenset())
 
 
+class AgentModeStaysLocal(unittest.TestCase):
+    """A custom agent (Agent mode) never uses a cloud lane, whatever the picker, job mapping or agent say."""
+
+    def _lanes(self, agent, req_kw=None, local_only_cfg=None):
+        import io
+        from contextlib import redirect_stdout
+        cm = SimpleNamespace(key="gpt", display="GPT", model_id="gpt", provider_name="p", ctx=32768)
+        cfg = {"agent": {"max_steps": 10}}
+        if local_only_cfg is not None:
+            cfg["agent"]["agent_local_only"] = local_only_cfg
+        st = SimpleNamespace(process=SimpleNamespace(poll=lambda: None), client=object(), profile=None, profile_path=None)
+        buf = io.StringIO()
+        with mock.patch("routes.agent.setup.db_session_owner", return_value=None), \
+             mock.patch("core.auth_db.db_get_custom_agent", return_value=agent), \
+             mock.patch("routes.agent.setup.companion_bridge") as cb, \
+             mock.patch("routes.agent.setup.require_device_workspace"), \
+             mock.patch("routes.agent.setup.state", st), \
+             mock.patch("routes.agent.setup.APP_CONFIG", cfg), \
+             mock.patch("routes.agent.setup.cloud.cloud_lane", return_value=cm), \
+             mock.patch("routes.agent.setup.cloud.get_cloud", return_value=cm), \
+             mock.patch("routes.agent.setup.cloud.cloud_models", return_value=[cm]), \
+             mock.patch("routes.agent.setup.cloud.role_map", return_value={}), \
+             mock.patch("routes.agent.setup.cloud.set_lanes") as set_lanes, \
+             mock.patch("core.lanes.registry", return_value={}), \
+             redirect_stdout(buf):
+            cb.is_connected.return_value = True
+            try:
+                run(setup_run(make_req(custom_agent_id=5, model="cloud:gpt", **(req_kw or {})), make_request(), make_user(7)))
+            except Exception:
+                pass                     # later steps need a full environment; the lane line is printed first
+        return buf.getvalue(), set_lanes
+
+    def test_agent_mode_ignores_cloud_model_and_preferred_lane(self):
+        out, set_lanes = self._lanes({"user_id": 7, "preferred_lane": "cloud"})
+        self.assertIn("[agent] lanes: main=local executor=local", out)
+        set_lanes.assert_not_called()          # the picked model is not even saved as the user's main lane
+
+    def test_the_rule_can_be_lifted_in_config(self):
+        out, _ = self._lanes({"user_id": 7, "preferred_lane": "auto"}, local_only_cfg=False)
+        self.assertIn("main=cloud:gpt", out)
+
+
 if __name__ == "__main__":
     unittest.main()

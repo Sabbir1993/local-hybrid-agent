@@ -5,6 +5,7 @@ import time
 from .common import (
     _BUILTIN_ROLES,
     _DEFAULT_USER_PERMISSIONS,
+    _NOT_AUTO_GRANTED,
     _RETIRED_PERMISSIONS,
     PERMISSIONS,
 )
@@ -242,7 +243,8 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
 
     admin_role = conn.execute("SELECT id FROM roles WHERE name = 'admin'").fetchone()
     if admin_role:
-        all_perm_ids = [r["id"] for r in conn.execute("SELECT id FROM permissions")]
+        all_perm_ids = [r["id"] for r in conn.execute("SELECT id FROM permissions WHERE key NOT IN (%s)"
+                                                       % ",".join("?" * len(_NOT_AUTO_GRANTED)), _NOT_AUTO_GRANTED)]
         for pid in all_perm_ids:
             conn.execute(
                 "INSERT OR IGNORE INTO role_permissions (role_id, permission_id, granted_at) VALUES (?, ?, ?)",

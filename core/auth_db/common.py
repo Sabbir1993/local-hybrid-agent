@@ -27,6 +27,7 @@ PERMISSIONS = {
     "git.push": "Push to git remotes / open pull requests (uses the server's git & GitHub credentials)",
     "capabilities.install": "Install/remove skills, plugins and connectors from the Customize catalog (shared by every user)",
     "custom_agents.publish": "Approve custom agents that users want to share with everyone",
+    "terminal.admin": "Switch the terminal to Windows administrator rights on their own PC (asks every time)",
 }
 
 # How the Users & Roles screen presents each permission: a module (the part of the product it
@@ -79,11 +80,16 @@ PERMISSION_META = {
                      "Changes what each role is allowed to do. Whoever holds this can grant themselves more access."),
     "custom_agents.publish": ("sharing", "action", "Approve shared agents",
                               "Reviews agents that users ask to share, and makes approved ones available to everyone in Customize."),
+    "terminal.admin": ("access", "action", "Use the terminal with administrator rights",
+                       "Lets the person run commands as Windows administrator on their own PC for system analysis. "
+                       "They must confirm on that PC each time, and it switches off by itself when idle. Very powerful - grant with care."),
     "git.push": ("sharing", "action", "Push code and open pull requests",
                  "Sends code to remote repositories using this system's saved git credentials."),
 }
 
 _RETIRED_PERMISSIONS = ("settings.integrations.configure",)
+# never handed to the built-in admin role automatically: a Super Admin has it, anyone else is granted it by name
+_NOT_AUTO_GRANTED = ("terminal.admin",)
 _DEFAULT_USER_PERMISSIONS = ("chat.use",)
 
 MAX_FAILED_LOGINS = 10

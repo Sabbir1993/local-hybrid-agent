@@ -52,5 +52,6 @@ class ShellExecReq(BaseModel):
     cwd: Optional[str] = None
     timeout: Optional[int] = 60
     shell: Optional[str] = "powershell"
+    elevated: bool = False          # run as Windows administrator: only inside a started administrator session
 
 

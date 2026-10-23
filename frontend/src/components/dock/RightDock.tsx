@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAppStore, type DockTab } from '../../stores/useAppStore';
+import { agentWsParam } from '../../utils/wsTarget';
 import { PlanView } from './PlanView';
 import { TasksView } from './TasksView';
 import { TerminalPanel } from './TerminalPanel';
@@ -90,7 +91,7 @@ export const RightDock: React.FC = () => {
   const rawUrl = isDirectUrl
     ? filePath
     : previewModal?.source === 'ws'
-      ? `/agent/ws/raw?path=${enc}`
+      ? `/agent/ws/raw?path=${enc}${agentWsParam()}`
       : `/agent/raw?path=${enc}`;
 
   useEffect(() => {

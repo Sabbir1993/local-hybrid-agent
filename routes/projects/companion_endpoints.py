@@ -11,7 +11,8 @@ from core import companion_bridge
 from core.audit import audit_log
 from core.auth import Principal
 from core.db import db_list_user_devices, db_rename_device
-from core.deps import get_current_user, require_permission
+from core import admin_terminal
+from core.deps import get_current_user, require_permission, require_verified
 from core.request_context import normalize_device_id, set_current_device
 from core.shell_tools import always_refused_reason
 from .helpers import _ask_directory_native
@@ -141,6 +142,19 @@ async def companion_shell(request: Request,
 
     sh_type = (req.shell or "powershell").lower().strip()
 
+    if req.elevated:
+        # administrator rights are never implied: the person must have started an administrator session on their own PC,
+        # still hold the permission, and that session must not have gone idle
+        from core.auth import user_has_permission
+        if not user_has_permission(user, "terminal.admin"):
+            audit_log(user, action="companion.shell.admin", permission_key="terminal.admin", result="deny")
+            return JSONResponse({"ok": False, "error": "missing permission: terminal.admin"}, status_code=403)
+        if not admin_terminal.active(user.id):
+            return JSONResponse({"ok": False, "admin_required": True,
+                                 "error": "The administrator terminal is off (or timed out). Switch to System and confirm again."}, status_code=403)
+        if sh_type not in ("powershell", "pwsh", "cmd"):
+            return JSONResponse({"ok": False, "error": "Administrator mode supports PowerShell and CMD."}, status_code=400)
+
     if not companion_bridge.is_connected(user.id):
         return JSONResponse({
             "ok": False,
@@ -153,13 +167,15 @@ async def companion_shell(request: Request,
     # Audit records the action and the command's first word, never the full
     # text (a command line can contain arguments that are secrets in themselves).
     first_word = cmd.split()[0][:40].lower() if cmd.split() else ""
-    audit_log(user, action="companion.shell", result="allow",
-              detail={"shell": sh_type, "command_name": first_word, "cwd": target_cwd},
+    audit_log(user, action="companion.shell.admin" if req.elevated else "companion.shell", result="allow",
+              detail={"shell": sh_type, "command_name": first_word, "cwd": target_cwd, "elevated": bool(req.elevated)},
               ip=request.client.host if request.client else None)
     try:
+        if req.elevated:
+            admin_terminal.touch(user.id)
         data = await companion_bridge.call(
             user.id,
-            "shell.run",
+            "shell.admin_run" if req.elevated else "shell.run",
             {"command": cmd, "cwd": target_cwd, "timeout": timeout_s, "approved_in_app": True, "shell": sh_type},
             timeout=timeout_s + 10,
         )
@@ -171,7 +187,50 @@ async def companion_shell(request: Request,
             "cwd": target_cwd,
             "shell": sh_type,
             "source": "companion",
+            "elevated": bool(req.elevated),
         }
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"companion: {e}"}, status_code=502)
 
+
+
+# ---------------------------------------------------------------------------
+# Administrator ("System") terminal. Opt-in, per session, confirmed on the user's own PC (a native window from the companion,
+# then Windows UAC). Never stored, ends by itself when idle, and only commands the person types run elevated.
+# ---------------------------------------------------------------------------
+
+@router.get("/control/companion/admin-terminal")
+async def admin_terminal_status(user: Principal = Depends(get_current_user)):
+    from core.auth import user_has_permission
+    return {"allowed": user_has_permission(user, "terminal.admin"), "active": admin_terminal.active(user.id),
+            "expires_in": admin_terminal.remaining_seconds(user.id)}
+
+
+@router.post("/control/companion/admin-terminal/start")
+async def admin_terminal_start(request: Request, user: Principal = Depends(require_verified("terminal.admin"))):
+    ip = request.client.host if request.client else None
+    if not companion_bridge.is_connected(user.id):
+        return JSONResponse({"ok": False, "error": "The administrator terminal needs the SSL Local Agent app running on your PC."},
+                            status_code=400)
+    try:
+        # the companion shows its own confirmation window and then Windows asks for elevation (UAC): both can be declined
+        data = await companion_bridge.call(user.id, "shell.admin_start", {"idle_min": admin_terminal.idle_seconds() / 60.0}, timeout=180)
+    except Exception as e:
+        audit_log(user, action="companion.admin_terminal.start", result="deny", detail={"reason": str(e)[:120]}, ip=ip)
+        return JSONResponse({"ok": False, "error": f"{e}"}, status_code=502)
+    admin_terminal.start(user.id)
+    audit_log(user, action="companion.admin_terminal.start", result="allow", detail={"idle_min": admin_terminal.idle_seconds() / 60.0}, ip=ip)
+    return {"ok": True, "active": True, "expires_in": admin_terminal.remaining_seconds(user.id), "user": (data or {}).get("user")}
+
+
+@router.post("/control/companion/admin-terminal/stop")
+async def admin_terminal_stop(request: Request, user: Principal = Depends(get_current_user)):
+    was = admin_terminal.end(user.id)
+    try:
+        if companion_bridge.is_connected(user.id):
+            await companion_bridge.call(user.id, "shell.admin_stop", {}, timeout=15)
+    except Exception:
+        pass                     # the companion's helper also ends by itself
+    if was:
+        audit_log(user, action="companion.admin_terminal.stop", result="allow", ip=request.client.host if request.client else None)
+    return {"ok": True, "active": False}

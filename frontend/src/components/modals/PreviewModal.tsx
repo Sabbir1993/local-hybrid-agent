@@ -1,3 +1,4 @@
+import { agentWsParam } from '../../utils/wsTarget';
 import React, { useState, useEffect } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 
@@ -23,7 +24,7 @@ export const PreviewModal: React.FC = () => {
   const rawUrl = isDirectUrl
     ? filePath
     : isWs
-      ? `/agent/ws/raw?path=${enc}`
+      ? `/agent/ws/raw?path=${enc}${agentWsParam()}`
       : `/agent/raw?path=${enc}`;
   const dlUrl = filePath.startsWith('http') || filePath.startsWith('data:') || filePath.startsWith('blob:')
     ? filePath

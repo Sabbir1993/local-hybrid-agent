@@ -113,7 +113,7 @@ export const Composer: React.FC = () => {
       const name = unnamedImage ? `${prefix}_${stamp}.png` : f.name;
       setAttachments((prev) => [...prev, { id: attId, file: f, name, size: f.size, type: f.type, uploading: true }]);
       // a picture is described by the cloud model when one is chosen for helper jobs: say so once
-      if (f.type.startsWith('image/') && localStorage.getItem('cloud_model_override') && !sessionStorage.getItem('cloud_vision_warned')) {
+      if (f.type.startsWith('image/') && useAppStore.getState().appMode !== 'agent' && localStorage.getItem('cloud_model_override') && !sessionStorage.getItem('cloud_vision_warned')) {
         sessionStorage.setItem('cloud_vision_warned', '1');
         showToast('Pictures are described by a cloud model. Do not attach pictures that show card numbers or personal data.', 'warn');
       }

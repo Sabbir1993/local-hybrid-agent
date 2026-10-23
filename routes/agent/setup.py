@@ -224,8 +224,12 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
         ctx.mode = "main-cloud-rest-local"
     elif ctx.mode == "agent":
         ctx.mode = "all-local"
+    # Agent mode (a custom agent) reads and writes the user's own files, so it never leaves the machine: every
+    # lane stays on the local models whatever the picker, the job mapping or the agent's preferred lane say.
+    # agent.agent_local_only = false in config/app.json lifts it.
+    local_only = bool(ctx.custom_agent) and bool((APP_CONFIG.get("agent") or {}).get("agent_local_only", True))
     ctx.cloud_main = cloud.cloud_lane("main", user.id)
-    if getattr(req, "model", None):
+    if getattr(req, "model", None) and not local_only:
         target_model = str(req.model).strip()
         cm = cloud.get_cloud(target_model, user.id)
         if not cm:
@@ -263,6 +267,12 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     elif ctx.ca_lane == "cloud" and not ctx.cloud_main:
         # main isn't bound to a cloud model: use the user's first configured one
         ctx.cloud_main = next(iter(cloud.cloud_models(user.id)), None)
+    if local_only:
+        ctx.cloud_main = None
+        ctx.cloud_exec = None
+        ctx.mode = "all-local"
+        if ctx.ca_lane == "cloud":
+            ctx.ca_lane = "auto"
     if ctx.mode in ("no-orchestration", "all-cloud", "direct"):
         # No Orchestration mode: run every request directly on the selected model.
         # Bypass executor tiered routing and router completely.

@@ -118,6 +118,38 @@ class Messages(unittest.TestCase):
         self.assertIn("back and forth", lg.describe("cycle", "run_shell", 3))
 
 
+class RepeatWrite(unittest.TestCase):
+    """The writer gives every save a new unique id, so re-saving one report never repeats a result."""
+
+    def _write(self, g, i, name="system_log_analysis"):
+        g.record("write_file", {"path": f"{name}_{i:08x}.md", "content": "c" * i}, f"Wrote {name}-{i:08x}.md", True)
+
+    def test_the_same_document_saved_three_times_is_stuck(self):
+        g = lg.LoopGuard()
+        for i in range(2):
+            self._write(g, i + 1)
+            self.assertEqual(g.check().level, lg.OK)
+        self._write(g, 3)
+        v = g.check()
+        self.assertEqual((v.level, v.rule), (lg.NUDGE, "repeat_write"))
+        self.assertIn("Do not write this file again", lg.nudge_message(v))
+
+    def test_ignoring_the_nudge_ends_the_run_even_with_stop_off(self):
+        g = lg.LoopGuard()
+        for i in range(3):
+            self._write(g, i + 1)
+        self.assertEqual(g.check().level, lg.NUDGE)
+        for i in range(3, 7):
+            self._write(g, i + 1)
+        self.assertEqual(g.check().level, lg.STOP)
+
+    def test_different_files_are_not_a_repeat(self):
+        g = lg.LoopGuard()
+        for i, n in enumerate(["overview", "findings", "risks", "plan", "summary"]):
+            self._write(g, i + 1, n)
+            self.assertEqual(g.check().level, lg.OK)
+
+
 class RecordedRun(unittest.TestCase):
     def test_the_28_step_debugging_run_that_used_to_stop_is_not_a_loop(self):
         """Tool sequence of run 79e01f21 (run_shell x9, run_python x4, read_file x4, browser calls...),
