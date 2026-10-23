@@ -81,7 +81,7 @@
       "fallback_enabled": false
     },
     "whisper-large-v3-turbo-bn": {
-      "model": "orchestrator/voice-models/ggml-large-v3-turbo-bn-q5_0.bin",
+      "model": "orchestrator/voice-models/ggml-large-v3.bin",
       "port": 8097,
       "gpu": 1,
       "threads": 8,

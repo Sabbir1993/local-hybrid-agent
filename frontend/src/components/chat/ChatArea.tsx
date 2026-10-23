@@ -75,8 +75,43 @@ const detailsState = new Map<string, boolean>();
 const listScroll = new Map<string, { top: number; stick: boolean }>();
 
 /** An assistant message body. Re-applies the reader's open / closed choices to the freshly rebuilt markup before it paints. */
-const BotContent: React.FC<{ id: string; html: string; follow?: boolean }> = ({ id, html, follow }) => {
+const BotContent: React.FC<{ id: string; html: string; follow?: boolean }> = ({ id, html: liveHtml, follow }) => {
   const ref = useRef<HTMLDivElement>(null);
+  // While the reader is pressing, clicking or scrolling inside the message, a rebuilt DOM would swallow the click (mouse down and
+  // up land on different elements) or yank the scrollbar from under the pointer. New content waits until they let go.
+  const [html, setHtml] = useState(liveHtml);
+  const latest = useRef(liveHtml);
+  latest.current = liveHtml;
+  const busy = useRef({ down: false, at: 0 });
+  useEffect(() => {
+    if (liveHtml === html) return;
+    const apply = () => {
+      const b = busy.current;
+      if (b.down || Date.now() - b.at < 350) { timer = window.setTimeout(apply, 120); return; }
+      setHtml(latest.current);
+    };
+    let timer = 0;
+    apply();
+    return () => window.clearTimeout(timer);
+  }, [liveHtml, html]);
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const touch = (down?: boolean) => () => { busy.current = { down: down === undefined ? busy.current.down : down, at: Date.now() }; };
+    const dn = touch(true), up = touch(false), tick = touch();
+    root.addEventListener('pointerdown', dn, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+    root.addEventListener('wheel', tick, { capture: true, passive: true });
+    root.addEventListener('click', tick, true);
+    return () => {
+      root.removeEventListener('pointerdown', dn, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+      root.removeEventListener('wheel', tick, true);
+      root.removeEventListener('click', tick, true);
+    };
+  }, []);
   useLayoutEffect(() => {
     const root = ref.current;
     if (!root) return;

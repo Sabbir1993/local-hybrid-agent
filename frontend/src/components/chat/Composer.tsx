@@ -1048,8 +1048,11 @@ export const Composer: React.FC = () => {
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
-                    background: isRecording ? 'rgba(239, 68, 68, 0.15)' : 'var(--panel2, rgba(255,255,255,0.06))',
-                    border: isRecording ? '1px solid #ef4444' : '1px solid var(--border)',
+                    // during a voice conversation the state colours (voice.css) own these: inline values would hide them
+                    ...(voiceState ? { border: '1px solid transparent' } : {
+                      background: isRecording ? 'rgba(239, 68, 68, 0.15)' : 'var(--panel2, rgba(255,255,255,0.06))',
+                      border: isRecording ? '1px solid #ef4444' : '1px solid var(--border)',
+                    }),
                     borderRadius: '20px',
                     padding: '2px 6px',
                   }}
@@ -1072,7 +1075,7 @@ export const Composer: React.FC = () => {
                     style={{
                       background: 'none',
                       border: 'none',
-                      color: isRecording ? '#ef4444' : 'var(--dim)',
+                      color: voiceState ? undefined : isRecording ? '#ef4444' : 'var(--dim)',
                       cursor: 'pointer',
                       padding: '2px 4px',
                       display: 'flex',

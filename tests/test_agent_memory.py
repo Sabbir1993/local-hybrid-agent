@@ -212,6 +212,15 @@ class SessionBlockTests(TempAuth):
         self.assertIn("projects/acme.md - Acme project decisions", block)
         self.assertNotIn("detail xyz", block)
 
+    def test_chat_block_has_the_profile_but_no_listing(self):
+        """Chat has no memory_read tool: it gets profile/preferences only, and nothing when there are none."""
+        self.call("memory_append", path="projects/acme.md", line="detail xyz", description="Acme")
+        self.assertEqual(agent_memory.session_block(1, listing=False), "")
+        self.call("memory_append", path="profile.md", line="I work in payments", description="Who the user is")
+        block = agent_memory.session_block(1, listing=False)
+        self.assertIn("I work in payments", block)
+        self.assertNotIn("acme", block)
+
     def test_long_file_is_cut(self):
         with mock.patch.dict("core.small_model.APP_CONFIG", {"memory": {"file_max_bytes": 20000}}):
             for i in range(200):

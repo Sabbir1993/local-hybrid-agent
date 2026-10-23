@@ -386,6 +386,19 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if mcp_prompt:
         sys_parts.append(mcp_prompt)
         sys_labels.append("mcp")
+    # What the user keeps in "My agent memory" (profile and preferences): chat answers with it too, so "who am I" is
+    # answered from it instead of a knowledge-base search. Same gate as the agent: never to a cloud model unless allowed.
+    _mem_cfg = APP_CONFIG.get("memory") or {}
+    if bool(_mem_cfg.get("enabled", True)) and (cloud_main is None or bool(_mem_cfg.get("allow_cloud", False))):
+        try:
+            from core import agent_memory
+            _blk = agent_memory.session_block(user.id, listing=False)
+            if _blk:
+                _blk, _ = output_guard.redact_full(_blk, user, cloud_main is not None)
+                sys_parts.append(_blk)
+                sys_labels.append("memory")
+        except Exception as e:
+            print(f"[chat] memory load failed: {e}", file=sys.stderr)
     if req.voice:
         from core.voice_prompt import VOICE_RULES
         sys_parts.append(VOICE_RULES)

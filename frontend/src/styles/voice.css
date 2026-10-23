@@ -12,7 +12,26 @@
   border-color: color-mix(in srgb, var(--voice-c, var(--accent)) 45%, transparent);
   box-shadow: 0 0 0 calc(var(--voice-level, 0) * 5px) color-mix(in srgb, var(--voice-c, var(--accent)) 30%, transparent);
   transition: box-shadow .06s linear, background .2s, border-color .2s; }
-.claude-mic-split-pill.voice-live .claude-mic-main-btn { color: var(--voice-c, var(--accent)); }
+.claude-mic-split-pill.voice-live { position: relative; overflow: hidden; transition: background .35s, border-color .35s, box-shadow .06s linear; }
+.claude-mic-split-pill.voice-live .claude-mic-main-btn { color: var(--voice-c, var(--accent)); transition: color .35s; }
+.claude-mic-split-pill.voice-live .claude-mic-arrow-btn { color: color-mix(in srgb, var(--voice-c, var(--accent)) 70%, var(--dim)); }
+/* a soft colour wash that moves across the pill: slow while listening, quick while it thinks or talks */
+.claude-mic-split-pill.voice-live::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .9;
+  background: linear-gradient(110deg, transparent 20%, color-mix(in srgb, var(--voice-c, var(--accent)) 38%, transparent) 50%, transparent 80%);
+  background-size: 220% 100%; animation: voice-wash 3.2s ease-in-out infinite; }
+.claude-mic-split-pill[data-voice-state="hearing"]::before { animation-duration: 1.4s; }
+.claude-mic-split-pill[data-voice-state="thinking"]::before { animation-duration: 1.1s; }
+.claude-mic-split-pill[data-voice-state="speaking"]::before { animation-duration: 1.8s; }
+@keyframes voice-wash { 0% { background-position: 120% 0; } 100% { background-position: -120% 0; } }
+/* breathing ring: the pill glows in the state colour even when nobody is making a sound */
+.claude-mic-split-pill[data-voice-state="listening"], .claude-mic-split-pill[data-voice-state="thinking"], .claude-mic-split-pill[data-voice-state="speaking"] {
+  animation: voice-glow 2.4s ease-in-out infinite; }
+.claude-mic-split-pill[data-voice-state="thinking"] { animation-duration: 1.2s; }
+.claude-mic-split-pill[data-voice-state="speaking"] { animation-duration: 1.6s; }
+@keyframes voice-glow {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--voice-c, var(--accent)) 0%, transparent), 0 0 4px color-mix(in srgb, var(--voice-c, var(--accent)) 20%, transparent); }
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--voice-c, var(--accent)) 28%, transparent), 0 0 14px color-mix(in srgb, var(--voice-c, var(--accent)) 45%, transparent); }
+}
 .claude-mic-split-pill[data-voice-state="listening"] { --voice-c: var(--accent); }
 .claude-mic-split-pill[data-voice-state="hearing"]   { --voice-c: var(--green); }
 .claude-mic-split-pill[data-voice-state="thinking"]  { --voice-c: var(--amber); }
@@ -58,4 +77,4 @@
 @keyframes voice-bar { 0%, 100% { transform: scaleY(.45); } 50% { transform: scaleY(1.15); } }
 
 @keyframes voice-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.14); } }
-@media (prefers-reduced-motion: reduce) { .claude-mic-split-pill .claude-mic-main-btn, .claude-mic-split-pill .claude-mic-main-btn svg line { animation: none !important; } }
+@media (prefers-reduced-motion: reduce) { .claude-mic-split-pill, .claude-mic-split-pill::before, .claude-mic-split-pill .claude-mic-main-btn, .claude-mic-split-pill .claude-mic-main-btn svg line { animation: none !important; } }

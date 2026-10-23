@@ -247,9 +247,10 @@ def _neutralize(text: str) -> str:
     return prompt_fence._neutralize(text, BLOCK_OPEN, BLOCK_CLOSE)
 
 
-def session_block(uid: int) -> str:
+def session_block(uid: int, listing: bool = True) -> str:
     """The memory section of a session's system prompt: preferences and profile in full, the rest as
-    a listing. Empty when the user has no memory files."""
+    a listing (listing=False: only the always-loaded files, for chat, which has no memory_read tool).
+    Empty when there is nothing of the user's to show."""
     files = list_files(uid)
     if not files:
         return ""
@@ -265,7 +266,9 @@ def session_block(uid: int) -> str:
             if len(body) > LOAD_CHARS_PER_FILE:
                 body = body[:LOAD_CHARS_PER_FILE] + f"\n... (cut; memory_read {name} for the rest)"
             parts.append(f"## {name}\n{_neutralize(body)}")
-    others = [f for f in files if f["path"] not in ALWAYS_LOADED]
+    others = [f for f in files if f["path"] not in ALWAYS_LOADED] if listing else []
+    if len(parts) == 2 and not others:
+        return ""
     if others:
         parts.append("Other memory files (memory_read one when the request is about its subject):")
         parts += [f"- {f['path']} - {_neutralize(f['description'])}" for f in others]
