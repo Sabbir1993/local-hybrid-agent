@@ -118,6 +118,22 @@ export function buildAntigravitySubSummary(acts: any[]): string {
   return 'Searched code';
 }
 
+/** Text from a tool call (an argument, a label) shown on one line of the action list: escaped, flattened, shortened.
+ *  Arguments can be whole files (a page the model is writing); they must never be put into the page as markup. */
+function rowText(v: unknown, max = 140): string {
+  const flat = (typeof v === 'string' ? v : v == null || typeof v === 'object' ? '' : String(v)).replace(/\s+/g, ' ').trim();
+  const cut = flat.length > max ? flat.slice(0, max) + '…' : flat;
+  return cut.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** Whole text (formatting kept) made safe for inside <pre><code>. */
+function escText(v: unknown): string {
+  return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// the argument that names what a tool works on, in order of how well it describes the call
+const ROW_KEYS = ['path', 'file', 'filename', 'query', 'url', 'command', 'cmd', 'name', 'project', 'pattern', 'text', 'prompt'];
+
 export function renderAgentActsHtml(acts: any[], secs?: number): string {
   if (!acts || !acts.length) return '';
 
@@ -186,8 +202,8 @@ export function renderAgentActsHtml(acts: any[], secs?: number): string {
         detail = `project: ${args.project || ''}`;
       } else {
         label = (a.name || '').replace(/_/g, ' ');
-        const k = Object.keys(args);
-        detail = k.length ? `${args[k[0]]}` : '';
+        const key = ROW_KEYS.find((x) => typeof args[x] === 'string' && args[x]);
+        detail = key ? String(args[key]) : '';
       }
 
       const item = {
@@ -250,11 +266,11 @@ export function renderAgentActsHtml(acts: any[], secs?: number): string {
     h += `<details class="antigravity-step-item" style="margin:2px 0; border:none; background:transparent;">`;
     h += `<summary class="antigravity-step-row" style="cursor:pointer; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--dim, #8b949e); padding:4px 6px; border-radius:6px; user-select:none; transition:background 0.15s ease;">`;
     if (it.badge) {
-      h += `<span style="background:rgba(56,189,248,0.15); color:#38bdf8; font-size:9.5px; font-weight:700; padding:1px 5px; border-radius:3px;">${it.badge}</span>`;
+      h += `<span style="background:rgba(56,189,248,0.15); color:#38bdf8; font-size:9.5px; font-weight:700; padding:1px 5px; border-radius:3px;">${rowText(it.badge, 12)}</span>`;
     }
-    h += `<span style="color:var(--dim);">${it.label}</span>`;
+    h += `<span style="color:var(--dim);">${rowText(it.label, 60)}</span>`;
     if (it.detail) {
-      h += `<span style="color:var(--text); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:480px;">${it.detail}</span>`;
+      h += `<span style="color:var(--text); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:480px;">${rowText(it.detail)}</span>`;
     }
     if (it.failed) {
       h += `<span style="margin-left:auto; background:rgba(239,68,68,0.15); color:#ef4444; font-size:9.5px; font-weight:600; padding:1px 6px; border-radius:4px;">Failed</span>`;
@@ -277,11 +293,11 @@ export function renderAgentActsHtml(acts: any[], secs?: number): string {
     }
     if (it.args && Object.keys(it.args).length > 0) {
       h += `<div style="font-size:10px; font-weight:700; text-transform:uppercase; color:var(--dim); margin-bottom:4px;">ARGUMENTS</div>`;
-      h += `<pre style="margin:0 0 8px 0; padding:6px 8px; font-size:11px; font-family:monospace; background:var(--bg-code, #0f172a); border-radius:4px; border:1px solid var(--border-subtle); overflow-x:auto;"><code>${JSON.stringify(it.args, null, 2).replace(/</g, '&lt;')}</code></pre>`;
+      h += `<pre style="margin:0 0 8px 0; padding:6px 8px; font-size:11px; font-family:monospace; background:var(--bg-code, #0f172a); border-radius:4px; border:1px solid var(--border-subtle); overflow-x:auto;"><code>${escText(JSON.stringify(it.args, null, 2))}</code></pre>`;
     }
     if (rawResult && rawResult !== '""' && rawResult !== 'null') {
       h += `<div style="font-size:10px; font-weight:700; text-transform:uppercase; color:var(--dim); margin-bottom:4px;">RESULT</div>`;
-      h += `<pre style="margin:0; padding:6px 8px; font-size:11px; font-family:monospace; background:var(--bg-code, #0f172a); border-radius:4px; border:1px solid var(--border-subtle); overflow-x:auto; max-height:240px; color:${it.failed ? 'var(--red, #ef4444)' : 'inherit'};"><code>${rawResult.replace(/</g, '&lt;')}</code></pre>`;
+      h += `<pre style="margin:0; padding:6px 8px; font-size:11px; font-family:monospace; background:var(--bg-code, #0f172a); border-radius:4px; border:1px solid var(--border-subtle); overflow-x:auto; max-height:240px; color:${it.failed ? 'var(--red, #ef4444)' : 'inherit'};"><code>${escText(rawResult)}</code></pre>`;
     }
     h += `</div></details>`;
   });
