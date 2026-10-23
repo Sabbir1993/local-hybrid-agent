@@ -54,6 +54,12 @@ class RunReport(unittest.TestCase):
         self.assertEqual(len(usage.db_report_runs(7, 2)), 2)
         self.assertIn("OLD", [r["run_id"] for r in usage.db_report_runs(60, 10)])
 
+    def test_an_explicit_date_range_replaces_the_rolling_window(self):
+        today = time.strftime("%Y-%m-%d")
+        self.assertNotIn("OLD", [r["run_id"] for r in usage.db_report_runs(7, 10, today, today)])
+        self.assertEqual({r["run_id"] for r in usage.db_report_runs(7, 10, today, today)}, {"A", "B", "C"})
+        self.assertEqual(usage.db_report_runs(7, 10, "2000-01-01", "2000-01-02"), [])
+
     def test_a_missing_table_is_an_empty_report_not_an_error(self):
         broken = ThreadLocalDB(os.path.join(self.tmp.name, "empty.db"))
         with mock.patch.object(usage, "_usage_db", broken):

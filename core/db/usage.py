@@ -259,10 +259,14 @@ def db_report(days: int = 30, model: Optional[str] = None,
     }
 
 
-def db_report_runs(days: int = 7, limit: int = 10) -> list:
+def db_report_runs(days: int = 7, limit: int = 10, start: Optional[str] = None, end: Optional[str] = None) -> list:
     """The agent runs that used the most prompt tokens in the window, with how each ended: the answer to
     "which task was expensive?". Counts and codes only (no text). Only requests logged with a run_id."""
     since = time.time() - max(1, int(days)) * 86400
+    a, until = _day_bounds(start, end)
+    if a is not None:
+        since = a
+    until = until if until is not None else time.time() + 86400 * 366
     try:
         rows = _usage_db.execute(
             "SELECT q.run_id, MIN(q.ts) AS started, COUNT(*) AS reqs, SUM(q.prompt_tokens) AS prompt, "
@@ -270,8 +274,8 @@ def db_report_runs(days: int = 7, limit: int = 10) -> list:
             "SUM(CASE WHEN q.source = 'cloud' THEN q.prompt_tokens ELSE 0 END) AS cloud_prompt, "
             "r.steps, r.outcome, r.mode "
             "FROM requests q LEFT JOIN route_runs r ON r.run_id = q.run_id "
-            "WHERE q.run_id IS NOT NULL AND q.ts >= ? GROUP BY q.run_id ORDER BY prompt DESC LIMIT ?",
-            (since, max(1, min(50, int(limit))))).fetchall()
+            "WHERE q.run_id IS NOT NULL AND q.ts >= ? AND q.ts < ? GROUP BY q.run_id ORDER BY prompt DESC LIMIT ?",
+            (since, until, max(1, min(50, int(limit))))).fetchall()
     except Exception as e:
         print(f"[usage] run report failed: {e}", file=sys.stderr)
         return []
@@ -299,9 +303,15 @@ def db_report_users(days: int = 30, start: Optional[str] = None, end: Optional[s
             "WHERE q.ts >= ? AND q.ts < ? GROUP BY uid ORDER BY SUM(q.total_tokens) DESC",
             (since, until)).fetchall()
         top: dict = {}
-        for uid, model, tok in _usage_db.execute(
-                "SELECT COALESCE(q.user_id, r.user_id) AS uid, q.model, SUM(q.total_tokens) FROM requests q "
-                "LEFT JOIN route_runs r ON r.run_id = q.run_id WHERE q.ts >= ? AND q.ts < ? GROUP BY uid, q.model", (since, until)).fetchall():
+        models: dict = {}      # uid -> that user's usage per model (the report's expandable row)
+        for uid, model, src, prov, n, pt, ct, tok, tps in _usage_db.execute(
+                "SELECT COALESCE(q.user_id, r.user_id) AS uid, q.model, COALESCE(q.source, 'local'), q.provider, COUNT(*), "
+                "COALESCE(SUM(q.prompt_tokens),0), COALESCE(SUM(q.completion_tokens),0), COALESCE(SUM(q.total_tokens),0), "
+                "COALESCE(AVG(q.tps),0) FROM requests q "
+                "LEFT JOIN route_runs r ON r.run_id = q.run_id WHERE q.ts >= ? AND q.ts < ? "
+                "GROUP BY uid, q.model, COALESCE(q.source, 'local'), q.provider ORDER BY SUM(q.total_tokens) DESC", (since, until)).fetchall():
+            models.setdefault(uid, []).append({"model": model or "unknown", "source": src, "provider": prov, "requests": n,
+                                                "prompt_tokens": pt, "completion_tokens": ct, "total_tokens": tok, "avg_tps": round(tps, 2)})
             if uid not in top or (tok or 0) > top[uid][1]:
                 top[uid] = (model or "unknown", tok or 0)
     except Exception as e:
@@ -309,4 +319,5 @@ def db_report_users(days: int = 30, start: Optional[str] = None, end: Optional[s
         return []
     return [{"user_id": r[0], "requests": r[1], "prompt_tokens": r[2], "prompt_cached_tokens": r[3],
              "completion_tokens": r[4], "total_tokens": r[5], "cloud_tokens": r[6], "runs": r[7],
-             "last_active": r[8], "avg_tps": round(r[9], 2), "top_model": top.get(r[0], ("", 0))[0]} for r in rows]
+             "last_active": r[8], "avg_tps": round(r[9], 2), "top_model": top.get(r[0], ("", 0))[0],
+             "models": models.get(r[0], [])} for r in rows]

@@ -41,6 +41,24 @@ function repPresetRange(id: string) {
   return { from: '', to: '' };
 }
 
+// One date range drives every tab. Presets are local dates; "all" starts at a fixed early date (the server caps rolling windows at a year).
+type RepRange = { preset: 'today' | '7d' | '30d' | 'all' | 'custom'; from: string; to: string };
+const REP_PRESETS: { id: RepRange['preset']; label: string }[] = [
+  { id: 'today', label: 'Today' },
+  { id: '7d', label: '7d' },
+  { id: '30d', label: '30d' },
+  { id: 'all', label: 'All' },
+];
+const presetRange = (id: RepRange['preset']): RepRange => {
+  if (id === 'all') return { preset: id, from: '2000-01-01', to: repPresetRange('today').to };
+  return { preset: id, ...repPresetRange(id) };
+};
+const rangeQs = (r: RepRange) => new URLSearchParams({ days: '365', start: r.from, end: r.to });
+const shortDay = (iso: string) => {
+  const d = new Date(iso + 'T00:00:00');
+  return isNaN(d.getTime()) ? iso : d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
 const REP_TABS = [
   { id: 'analytics', label: '📊 Overview & Analytics' },
   { id: 'runs', label: '⚡ Heaviest Runs (50 Rows)' },
@@ -78,7 +96,10 @@ export const ReportModal: React.FC = () => {
   const isOpen = activeModal === 'report';
 
   const [activeTab, setActiveTab] = useState<string>('analytics');
-  const [summaryDays, setSummaryDays] = useState<number>(7);
+  const [range, setRange] = useState<RepRange>(() => presetRange('7d'));
+  const [customOpen, setCustomOpen] = useState<boolean>(false);
+  const [expandedUser, setExpandedUser] = useState<string | null>(null);
+  const rangeKey = `${range.from}|${range.to}`;
   const [loading, setLoading] = useState<boolean>(true);
 
   // Hover states for interactive SVG charts
@@ -106,11 +127,11 @@ export const ReportModal: React.FC = () => {
   // Raw data from server
   const [summaryData, setSummaryData] = useState<any>(null);
   const [runsData, setRunsData] = useState<any[]>([]);
-  const [runsLoaded, setRunsLoaded] = useState<boolean>(false);
+  const [, setRunsLoaded] = useState<boolean>(false);
   const [runsLoading, setRunsLoading] = useState<boolean>(false);
 
   const [usersData, setUsersData] = useState<any[]>([]);
-  const [usersLoaded, setUsersLoaded] = useState<boolean>(false);
+  const [, setUsersLoaded] = useState<boolean>(false);
   const [usersLoading, setUsersLoading] = useState<boolean>(false);
 
   // Filter state for Model breakdown
@@ -133,49 +154,57 @@ export const ReportModal: React.FC = () => {
     size: 50,
   }));
 
-  // Load summary analytics whenever modal opens or summaryDays changes
+  // Every tab reads the same date range. A response that arrives after the range changed again is dropped.
   useEffect(() => {
     if (!isOpen) return;
+    let stale = false;
     setLoading(true);
-    apiFetch(`/control/report?days=${summaryDays}`)
+    apiFetch(`/control/report?${rangeQs(range)}`)
       .then((r) => r.json())
       .then((summary) => {
+        if (stale) return;
         setSummaryData(summary);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
-  }, [isOpen, summaryDays]);
+      .catch(() => { if (!stale) setLoading(false); });
+    return () => { stale = true; };
+  }, [isOpen, rangeKey]);
 
-  // Lazy Load 50 runs when user switches to 'runs' tab
+  // The other tabs load when opened and again whenever the range changes while they are open
   useEffect(() => {
-    if (!isOpen || activeTab !== 'runs' || runsLoaded) return;
+    if (!isOpen || activeTab !== 'runs') return;
+    let stale = false;
     setRunsLoading(true);
-    apiFetch(`/control/report/runs?days=${summaryDays}&limit=50`)
+    const qs = rangeQs(range);
+    qs.set('limit', '50');
+    apiFetch(`/control/report/runs?` + qs.toString())
       .then((r) => r.json())
       .then((j) => {
+        if (stale) return;
         setRunsData(j.runs || []);
         setRunsLoaded(true);
         setRunsLoading(false);
       })
-      .catch(() => setRunsLoading(false));
-  }, [isOpen, activeTab, summaryDays, runsLoaded]);
+      .catch(() => { if (!stale) setRunsLoading(false); });
+    return () => { stale = true; };
+  }, [isOpen, activeTab, rangeKey]);
 
-  // Lazy Load users when user switches to 'user' tab
   useEffect(() => {
-    if (!isOpen || activeTab !== 'user' || usersLoaded) return;
+    if (!isOpen || activeTab !== 'user') return;
+    let stale = false;
     setUsersLoading(true);
-    const qs = new URLSearchParams({ days: String(summaryDays) });
-    if (userFilter.from) qs.set('start', userFilter.from);
-    if (userFilter.to) qs.set('end', userFilter.to);
-    apiFetch(`/control/report/users?` + qs.toString())
+    apiFetch(`/control/report/users?` + rangeQs(range).toString())
       .then((r) => r.json())
       .then((j) => {
+        if (stale) return;
         setUsersData(j.users || []);
         setUsersLoaded(true);
         setUsersLoading(false);
+        setExpandedUser(null);
       })
-      .catch(() => setUsersLoading(false));
-  }, [isOpen, activeTab, summaryDays, usersLoaded, userFilter.from, userFilter.to]);
+      .catch(() => { if (!stale) setUsersLoading(false); });
+    return () => { stale = true; };
+  }, [isOpen, activeTab, rangeKey]);
 
   if (!isOpen) return null;
 
@@ -306,6 +335,12 @@ export const ReportModal: React.FC = () => {
 
   const topModels = [...rawModels].sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0)).slice(0, 5);
 
+  // User table: the search box filters by name, account or e-mail
+  const shownUsers = usersData.filter((u) => {
+    const q = userFilter.q.trim().toLowerCase();
+    return !q || [u.name, u.username, u.email].some((v) => (v || '').toLowerCase().includes(q));
+  });
+
   // User insights calculations
   const totalUserTokens = usersData.reduce((acc, u) => acc + (u.total_tokens || 0), 0);
   const totalCloudTokens = usersData.reduce((acc, u) => acc + (u.cloud_tokens || 0), 0);
@@ -344,43 +379,66 @@ export const ReportModal: React.FC = () => {
 
         {/* Menu title after left sidebar divider */}
         <div className="flex items-center justify-between px-5 flex-1 min-w-0">
-          <span className="font-bold text-xs tracking-wider flex items-center gap-2 text-text whitespace-nowrap flex-shrink-0">
+          <span className="font-bold text-xs tracking-wider flex items-center gap-2 text-text whitespace-nowrap min-w-0 truncate mr-3">
             📊 Token Usage &amp; Analytics Report
           </span>
 
-          {/* Timeframe Presets Filter */}
-          <div className="flex items-center gap-1.5">
-            {[
-              { label: 'Today', val: 1 },
-              { label: '7d', val: 7 },
-              { label: '30d', val: 30 },
-              { label: 'All', val: 365 },
-            ].map((d) => {
-              const isActive = summaryDays === d.val;
-              return (
-                <button
-                  key={d.val}
-                  type="button"
-                  className="btn text-xs rounded-lg transition-colors font-medium"
-                  style={{
-                    padding: '4px 12px',
-                    fontSize: '11px',
-                    background: isActive ? '#3c2415' : 'var(--panel)',
-                    color: isActive ? '#f97316' : 'var(--dim)',
-                    border: isActive ? '1px solid rgba(249, 115, 22, 0.5)' : '1px solid var(--border)',
-                    fontWeight: isActive ? 700 : 500,
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => {
-                    setSummaryDays(d.val);
-                    setRunsLoaded(false);
-                    setUsersLoaded(false);
-                  }}
-                >
-                  {d.label}
-                </button>
-              );
-            })}
+          {/* Date range: one control for every tab */}
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <span className="text-[11px] text-text-muted whitespace-nowrap hidden xl:inline" title="The range every tab is showing">
+              {range.preset === 'all' ? 'All time' : range.from === range.to ? shortDay(range.from) : `${shortDay(range.from)} – ${shortDay(range.to)}`}
+            </span>
+            {customOpen && (
+              <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
+                <input
+                  type="date" aria-label="From date" value={range.from} max={range.to || undefined}
+                  onChange={(e) => e.target.value && setRange({ preset: 'custom', from: e.target.value, to: range.to < e.target.value ? e.target.value : range.to })}
+                  className="rounded-lg border border-border bg-panel px-2 text-[11px] text-text"
+                  style={{ height: 26, colorScheme: 'dark' }}
+                />
+                <span>to</span>
+                <input
+                  type="date" aria-label="To date" value={range.to} min={range.from || undefined}
+                  onChange={(e) => e.target.value && setRange({ preset: 'custom', from: range.from > e.target.value ? e.target.value : range.from, to: e.target.value })}
+                  className="rounded-lg border border-border bg-panel px-2 text-[11px] text-text"
+                  style={{ height: 26, colorScheme: 'dark' }}
+                />
+              </div>
+            )}
+            <div className="flex items-center rounded-lg border border-border overflow-hidden" role="group" aria-label="Date range" style={{ height: 28 }}>
+              {[...REP_PRESETS, { id: 'custom' as const, label: 'Custom' }].map((d, i) => {
+                const isActive = range.preset === d.id;
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    aria-pressed={isActive}
+                    className="text-[11px] transition-colors"
+                    style={{
+                      minWidth: d.id === 'custom' ? 64 : 48,
+                      height: '100%',
+                      padding: '0 12px',
+                      background: isActive ? '#3c2415' : 'var(--panel)',
+                      color: isActive ? '#f97316' : 'var(--dim)',
+                      borderLeft: i ? '1px solid var(--border)' : 'none',
+                      fontWeight: isActive ? 700 : 500,
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => {
+                      if (d.id === 'custom') {
+                        setCustomOpen(true);
+                        setRange((r) => (r.preset === 'all' ? { ...presetRange('7d'), preset: 'custom' } : { ...r, preset: 'custom' }));
+                      } else {
+                        setCustomOpen(false);
+                        setRange(presetRange(d.id));
+                      }
+                    }}
+                  >
+                    {d.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
@@ -1245,67 +1303,136 @@ export const ReportModal: React.FC = () => {
                       <table className="rep-table w-full text-left border-collapse text-xs">
                         <thead>
                           <tr className="border-b border-border text-text-muted">
+                            <th className="py-2.5 px-2 w-6" aria-label="Expand" />
                             <th className="py-2.5 px-3">User</th>
                             <th className="py-2.5 px-3">Account</th>
-                            <th className="py-2.5 px-3">Requests</th>
-                            <th className="py-2.5 px-3">Total Tokens</th>
-                            <th className="py-2.5 px-3">Prompt</th>
-                            <th className="py-2.5 px-3">Generated</th>
-                            <th className="py-2.5 px-3">Cloud Share</th>
-                            <th className="py-2.5 px-3">Agent Runs</th>
+                            <th className="py-2.5 px-3 text-right">Requests</th>
+                            <th className="py-2.5 px-3 text-right">Total Tokens</th>
+                            <th className="py-2.5 px-3 text-right">Prompt</th>
+                            <th className="py-2.5 px-3 text-right">Generated</th>
+                            <th className="py-2.5 px-3 text-center">Cloud Share</th>
+                            <th className="py-2.5 px-3 text-right">Agent Runs</th>
                             <th className="py-2.5 px-3">Top Model</th>
-                            <th className="py-2.5 px-3">Speed</th>
+                            <th className="py-2.5 px-3 text-right">Speed</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {usersData.length === 0 ? (
+                          {shownUsers.length === 0 ? (
                             <tr>
-                              <td colSpan={10} className="py-8 text-center text-text-muted">
-                                No user records found.
+                              <td colSpan={11} className="py-8 text-center text-text-muted">
+                                {usersLoading ? 'Loading…' : 'No user records found.'}
                               </td>
                             </tr>
                           ) : (
-                            usersData
-                              .filter((u) => !userFilter.q || (u.name || '').toLowerCase().includes(userFilter.q.toLowerCase()))
+                            shownUsers
                               .slice(userFilter.page * userFilter.size, (userFilter.page + 1) * userFilter.size)
-                              .map((u, idx) => (
-                                <tr key={idx} className="border-b border-border/40 hover:bg-panel transition-colors">
-                                  <td className="py-2.5 px-3 font-semibold text-text flex items-center gap-2">
-                                    <span className="w-5 h-5 rounded-full bg-accent/20 border border-accent/40 text-accent flex items-center justify-center text-[10px] font-bold">
-                                      {(u.name || u.username || 'U')[0].toUpperCase()}
-                                    </span>
-                                    <span>{u.name || 'Unattributed'}</span>
-                                  </td>
-                                  <td className="py-2.5 px-3 text-text-muted font-mono">{u.email || u.username || '-'}</td>
-                                  <td className="py-2.5 px-3">{repFmt(u.requests)}</td>
-                                  <td className="py-2.5 px-3 font-mono font-bold text-accent" title={repFmt(u.total_tokens)}>
-                                    {repTok(u.total_tokens)}
-                                  </td>
-                                  <td className="py-2.5 px-3 font-mono text-sky-400">{repTok(u.prompt_tokens)}</td>
-                                  <td className="py-2.5 px-3 font-mono text-orange-400">{repTok(u.completion_tokens)}</td>
-                                  <td className="py-2.5 px-3">
-                                    <span className="px-1.5 py-0.5 rounded text-[10px] border border-border bg-panel text-sky-400 font-mono">
-                                      {repPct(u.cloud_tokens, u.total_tokens)}
-                                    </span>
-                                  </td>
-                                  <td className="py-2.5 px-3 font-semibold">{repFmt(u.runs || u.runs_count || 0)}</td>
-                                  <td className="py-2.5 px-3">
-                                    <span className="text-[10.5px] text-text-muted truncate max-w-[120px] block" title={u.top_model}>
-                                      {u.top_model || '-'}
-                                    </span>
-                                  </td>
-                                  <td className="py-2.5 px-3 font-mono text-text-muted">
-                                    {u.avg_tps ? `${u.avg_tps.toFixed(1)} t/s` : '-'}
-                                  </td>
-                                </tr>
-                              ))
+                              .map((u) => {
+                                const key = String(u.user_id ?? 'none');
+                                const open = expandedUser === key;
+                                const models: any[] = u.models || [];
+                                return (
+                                  <React.Fragment key={key}>
+                                    <tr
+                                      className={`border-b border-border/40 hover:bg-panel transition-colors cursor-pointer ${open ? 'bg-panel' : ''}`}
+                                      onClick={() => setExpandedUser(open ? null : key)}
+                                      aria-expanded={open}
+                                      tabIndex={0}
+                                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpandedUser(open ? null : key); } }}
+                                      title="Click to see this user's usage per model"
+                                    >
+                                      <td className="py-2.5 px-2 text-text-muted w-6 text-center">{open ? '▾' : '▸'}</td>
+                                      <td className="py-2.5 px-3 font-semibold text-text">
+                                        <div className="flex items-center gap-2">
+                                          <span className="w-5 h-5 flex-shrink-0 rounded-full bg-accent/20 border border-accent/40 text-accent flex items-center justify-center text-[10px] font-bold">
+                                            {(u.name || u.username || 'U')[0].toUpperCase()}
+                                          </span>
+                                          <span>{u.name || 'Unattributed'}</span>
+                                        </div>
+                                      </td>
+                                      <td className="py-2.5 px-3 text-text-muted font-mono">{u.email || u.username || '-'}</td>
+                                      <td className="py-2.5 px-3 text-right tabular-nums">{repFmt(u.requests)}</td>
+                                      <td className="py-2.5 px-3 text-right font-mono font-bold text-accent tabular-nums" title={repFmt(u.total_tokens)}>
+                                        {repTok(u.total_tokens)}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right font-mono text-sky-400 tabular-nums">{repTok(u.prompt_tokens)}</td>
+                                      <td className="py-2.5 px-3 text-right font-mono text-orange-400 tabular-nums">{repTok(u.completion_tokens)}</td>
+                                      <td className="py-2.5 px-3 text-center">
+                                        <span className="px-1.5 py-0.5 rounded text-[10px] border border-border bg-panel text-sky-400 font-mono">
+                                          {repPct(u.cloud_tokens, u.total_tokens)}
+                                        </span>
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right font-semibold tabular-nums">{repFmt(u.runs || u.runs_count || 0)}</td>
+                                      <td className="py-2.5 px-3">
+                                        <span className="text-[10.5px] text-text-muted truncate max-w-[140px] block" title={u.top_model}>
+                                          {u.top_model || '-'}
+                                        </span>
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right font-mono text-text-muted tabular-nums whitespace-nowrap">
+                                        {u.avg_tps ? `${u.avg_tps.toFixed(1)} t/s` : '-'}
+                                      </td>
+                                    </tr>
+                                    {open && (
+                                      <tr className="border-b border-border/40 bg-bg/40">
+                                        <td />
+                                        <td colSpan={10} className="px-3 py-3">
+                                          <div className="text-[11px] text-text-muted mb-2">
+                                            {u.name || 'Unattributed'}: usage by model, {range.preset === 'all' ? 'all time' : `${shortDay(range.from)} – ${shortDay(range.to)}`}
+                                          </div>
+                                          {models.length === 0 ? (
+                                            <div className="text-text-muted text-[11px]">No model usage in this range.</div>
+                                          ) : (
+                                            <table className="w-full text-left border-collapse text-[11px]">
+                                              <thead>
+                                                <tr className="text-text-muted border-b border-border/60">
+                                                  <th className="py-1.5 px-2 font-medium">Model</th>
+                                                  <th className="py-1.5 px-2 font-medium">Where</th>
+                                                  <th className="py-1.5 px-2 font-medium text-right">Requests</th>
+                                                  <th className="py-1.5 px-2 font-medium text-right">Total</th>
+                                                  <th className="py-1.5 px-2 font-medium text-right">Prompt</th>
+                                                  <th className="py-1.5 px-2 font-medium text-right">Generated</th>
+                                                  <th className="py-1.5 px-2 font-medium" style={{ width: '22%' }}>Share of this user</th>
+                                                  <th className="py-1.5 px-2 font-medium text-right">Speed</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody>
+                                                {models.map((m, i) => {
+                                                  const share = u.total_tokens ? Math.round(((m.total_tokens || 0) / u.total_tokens) * 100) : 0;
+                                                  return (
+                                                    <tr key={i} className="border-b border-border/30 last:border-0">
+                                                      <td className="py-1.5 px-2 text-text font-mono truncate max-w-[260px]" title={m.model}>{m.model}</td>
+                                                      <td className="py-1.5 px-2 text-text-muted">{m.source === 'cloud' ? `Cloud${m.provider ? ` · ${m.provider}` : ''}` : 'Local'}</td>
+                                                      <td className="py-1.5 px-2 text-right tabular-nums">{repFmt(m.requests)}</td>
+                                                      <td className="py-1.5 px-2 text-right font-mono font-bold text-accent tabular-nums" title={repFmt(m.total_tokens)}>{repTok(m.total_tokens)}</td>
+                                                      <td className="py-1.5 px-2 text-right font-mono text-sky-400 tabular-nums">{repTok(m.prompt_tokens)}</td>
+                                                      <td className="py-1.5 px-2 text-right font-mono text-orange-400 tabular-nums">{repTok(m.completion_tokens)}</td>
+                                                      <td className="py-1.5 px-2">
+                                                        <div className="flex items-center gap-2">
+                                                          <div className="flex-1 h-1.5 bg-panel rounded-full overflow-hidden border border-border-subtle">
+                                                            <div className="h-full bg-gradient-to-r from-orange-500 to-sky-400" style={{ width: `${Math.max(share, 2)}%` }} />
+                                                          </div>
+                                                          <span className="text-text-muted tabular-nums w-8 text-right">{share}%</span>
+                                                        </div>
+                                                      </td>
+                                                      <td className="py-1.5 px-2 text-right font-mono text-text-muted tabular-nums whitespace-nowrap">{m.avg_tps ? `${m.avg_tps.toFixed(1)} t/s` : '-'}</td>
+                                                    </tr>
+                                                  );
+                                                })}
+                                              </tbody>
+                                            </table>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </React.Fragment>
+                                );
+                              })
                           )}
                         </tbody>
                       </table>
                     </div>
 
                     {renderPager(
-                      usersData.length,
+                      shownUsers.length,
                       userFilter.page,
                       userFilter.size,
                       (p) => setUserFilter({ ...userFilter, page: p }),

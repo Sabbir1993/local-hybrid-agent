@@ -70,7 +70,7 @@ function renderCloudCard(d) {
     provs.forEach(p => {
       const hue = cloudHue(p.provider);
       h += `<section class="cp-card">
-        <header class="cp-head">
+        <div class="cp-head">
           <span class="cp-avatar" style="--h:${hue}" aria-hidden="true">${esc((p.name || p.provider).charAt(0).toUpperCase())}</span>
           <div class="cp-title"><b>${esc(p.name)}</b><span class="cp-host" title="${esc(p.base_url || '')}">${esc(cloudHost(p.base_url) || 'no web address')}</span></div>
           <div class="cp-actions">
@@ -79,7 +79,7 @@ function renderCloudCard(d) {
             <button type="button" class="cp-mini cloud-edit" data-prov="${esc(p.provider)}" title="Change the name, web address or key">Edit</button>
             <button type="button" class="cp-mini cp-danger cloud-del" data-prov="${esc(p.provider)}" title="Remove this provider and its key">Remove</button>
           </div>
-        </header>
+        </div>
         <div class="cp-key">
           <span class="cp-label">API key</span>
           <code class="cloud-key" data-prov="${esc(p.provider)}" data-masked="${esc(p.key_masked || '(none)')}">${esc(p.key_masked || '(none)')}</code>

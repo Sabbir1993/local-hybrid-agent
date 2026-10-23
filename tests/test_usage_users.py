@@ -63,6 +63,25 @@ class UserReportTests(unittest.TestCase):
         self.assertEqual(usage.db_report_users(7)[0]["total_tokens"], 20)
         self.assertEqual(usage.db_report_users(365)[0]["total_tokens"], 30)
 
+    def test_each_user_row_carries_its_own_per_model_usage(self):
+        self._row(1, "small", 100)
+        self._row(1, "small", 50)
+        self._row(1, "big", 900, source="cloud")
+        self._row(2, "small", 7)
+        rows = {r["user_id"]: r for r in usage.db_report_users(7)}
+        m1 = rows[1]["models"]
+        self.assertEqual([(m["model"], m["source"], m["requests"], m["total_tokens"]) for m in m1],
+                         [("big", "cloud", 1, 900), ("small", "local", 2, 150)], "heaviest model first")
+        self.assertEqual([m["model"] for m in rows[2]["models"]], ["small"])
+        self.assertEqual(sum(m["total_tokens"] for m in m1), rows[1]["total_tokens"])
+
+    def test_models_follow_the_date_range(self):
+        self._row(1, "old", 500, ts=time.time() - 40 * 86400)
+        self._row(1, "new", 5)
+        today = time.strftime("%Y-%m-%d")
+        rows = usage.db_report_users(365, today, today)
+        self.assertEqual([m["model"] for m in rows[0]["models"]], ["new"])
+
     def test_record_request_defaults_to_the_current_user(self):
         set_current_user(9)
         usage.db_record_request("chat/run", "m", 5, 5, 1.0, 1.0, None, True, 200)

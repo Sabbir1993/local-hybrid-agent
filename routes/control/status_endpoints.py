@@ -250,10 +250,10 @@ async def telemetry_live(user: Principal = Depends(require_permission("monitor.v
 
 
 @router.get("/control/report/runs")
-async def report_runs(days: int = 7, limit: int = 10,
+async def report_runs(days: int = 7, limit: int = 10, start: Optional[str] = None, end: Optional[str] = None,
                       user: Principal = Depends(require_permission("usage.report.view"))):
     """Heaviest agent runs (prompt tokens, peak step, steps, how each ended)."""
-    return {"days": max(1, min(365, days)), "runs": db_report_runs(days, limit)}
+    return {"days": max(1, min(365, days)), "runs": db_report_runs(days, limit, start, end)}
 
 
 @router.get("/control/report/kb")

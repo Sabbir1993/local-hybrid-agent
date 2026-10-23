@@ -297,13 +297,13 @@
 #settings-page .cp-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; color: var(--dim); font-size: 13px; }
 #settings-page .cp-bar b { color: var(--text); font-family: var(--sp-display); font-size: 15px; }
 #settings-page .cp-card { margin-bottom: 14px; border: 1px solid var(--sp-line); border-radius: 14px; background: color-mix(in srgb, var(--bg) 34%, var(--sp-surface)); overflow: hidden; }
-#settings-page .cp-head { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-bottom: 1px solid var(--sp-line); flex-wrap: wrap; }
+#settings-page .cp-head { display: flex; align-items: center; gap: 14px; padding: 16px; border-bottom: 1px solid var(--sp-line); flex-wrap: wrap; }
 #settings-page .cp-avatar {
   width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex-shrink: 0;
   font: 700 18px var(--sp-display); color: #fff; background: linear-gradient(135deg, hsl(var(--h) 62% 48%), hsl(calc(var(--h) + 40) 62% 38%));
-  box-shadow: 0 6px 16px -8px hsl(var(--h) 70% 40%);
+  box-shadow: 0 0 0 1px hsl(var(--h) 60% 60% / .25) inset;
 }
-#settings-page .cp-title { display: grid; gap: 2px; min-width: 0; flex: 1 1 200px; }
+#settings-page .cp-title { display: grid; gap: 4px; line-height: 1.25; min-width: 0; flex: 1 1 200px; }
 #settings-page .cp-title b { font: 600 16px var(--sp-display); color: var(--text); }
 #settings-page .cp-host { font: 12px var(--sp-mono); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #settings-page .cp-actions, #settings-page .cp-model-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
