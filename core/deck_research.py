@@ -145,6 +145,22 @@ def project_limits(app_cfg: Optional[dict]) -> dict:
     return {"repeat_penalty": 1.0, "max_tokens": mt if mt > 0 else None}
 
 
+def build_turn_sampler(panel: Optional[dict], app_cfg: Optional[dict]) -> Optional[dict]:
+    """Sampler fields for a turn that writes a file, page or document on a local model. `panel` is what the request's sampler
+    panel asked for. The build DRY (chat.build_dry: allowed length 10) is used when the panel has no DRY, or has a stricter one
+    (a shorter allowed length or a larger multiplier): a strict DRY corrupts repeated markup and table rows."""
+    panel = dict(panel or {})
+    build = build_dry(app_cfg)
+    if not build:
+        return panel or None                      # chat.build_dry.multiplier 0: the operator turned build DRY off
+    mult = float(panel.get("dry_multiplier") or 0)
+    stricter = mult > 0 and (int(panel.get("dry_allowed_length", 10**6)) < build["dry_allowed_length"]
+                             or mult > build["dry_multiplier"])
+    if mult <= 0 or stricter:
+        panel.update(build)
+    return panel or None
+
+
 def build_dry(app_cfg: Optional[dict]) -> dict:
     """DRY sampler fields for the turns that write a document, deck or site. DRY penalises a long exact sequence that is about
     to repeat (the loops the guard cuts: "andandand", the same URL again) without punishing single tokens the way the

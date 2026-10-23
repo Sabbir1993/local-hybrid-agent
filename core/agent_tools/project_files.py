@@ -612,9 +612,11 @@ def tool_project_finish(args: dict) -> str:
         with zipfile.ZipFile(common / zip_name, "w", zipfile.ZIP_DEFLATED) as z:
             for f in files:
                 z.write(f, f"{slug}/{f.relative_to(root).as_posix()}")
+    from ..html_quality import repair as _repair_html
+    page_html, typos = _repair_html(inline_entry(root, entry))      # near-miss class names and stray tags a small model leaves behind
     with (common / page_name).open("w", encoding="utf-8", newline="\n") as fh:
-        fh.write(inline_entry(root, entry))
-    note = ""
+        fh.write(page_html)
+    note = f" (fixed {typos} typo(s) in the page's class names and tags automatically)" if typos else ""
     missing = _missing_links(root, entry)
     if missing:
         note = (" WARNING: the page links to files that do not exist yet: " + ", ".join(missing[:8])

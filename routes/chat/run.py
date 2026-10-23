@@ -36,6 +36,9 @@ from core.agent_loop import (
 )
 from core.agent_loop.repair import INVALID_JSON_KEY
 from core.agent_loop.degeneration import RUNAWAY_MSG, sanitize_user_facing_content
+
+# the start of a tool call a model writes as text ("<tool_call>", "<function=write_file>"): never streamed to the reader
+_TOOL_TEXT_RX = re.compile(r"<tool_call>|<function[=:\s]", re.I)
 from core import prompt_scope, skills
 from core.doc_tools import builds
 from core.monitor import (
@@ -257,8 +260,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # a website / multi-file front-end project: built file by file (project_write / project_append), delivered as one ZIP
     project_resume = open_project_note() if (builds.is_continue(own_q) and not resume_note) else ""      # "continue" after a stop mid-site
     single_page = single_page_wanted(own_q)      # one html page: written in pieces like a project, delivered as one .html
-    if not single_page and not project_wanted(own_q) and len(own_q.strip()) < 200 and re.search(
-            r"\b(blank|empty|nothing|broken|not working|fix|missing|add|change|update|improve|redo|again)\b", own_q, re.I):
+    if not single_page and not project_wanted(own_q) and len(own_q.strip()) < 200 and (builds.is_continue(own_q) or re.search(
+            r"\b(blank|empty|nothing|broken|not working|fix|missing|add|change|update|improve|redo|again)\b", own_q, re.I)):
         # a short fix-up of the page just built ("nothing but a blank screen generated"): same piece-by-piece route, never one giant write_file
         single_page = any(m.get("role") == "user" and single_page_wanted(str(m.get("content") or "")) for m in msgs[:-1][-6:])
     project_build = (bool((APP_CONFIG.get("chat") or {}).get("project_builder", True)) and (project_wanted(own_q) or single_page or bool(project_resume))
@@ -748,9 +751,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     sampler_fields = sampler_extra(req) or {}
     doc_write_turn = wants_file or has_file or html_build or sheet_build or docx_build or bool(absent_type)
     if ((brief_phase == "build" or project_build or pdf_build) and not cloud_main or (doc_write_turn and not cloud_main)):
-        if "dry_multiplier" not in sampler_fields or not sampler_fields.get("dry_multiplier"):
-            sampler_fields = {**deck_research.build_dry(APP_CONFIG), **(sampler_fields or {})}
+        # Markup is made of repeats: the sampler panel's DRY (allowed length 2) makes a model spell the same class twice
+        # differently (bg-slate-80, py-18). A file-writing turn gets the build DRY unless the panel's is no stricter.
+        sampler_fields = deck_research.build_turn_sampler(sampler_fields, APP_CONFIG)
     sampler_fields = sampler_fields or None
+    if (project_build or pdf_build or doc_write_turn) and not cloud_main and req.temperature is not None:
+        # writing a file wants steady output: a high panel temperature turns repeated markup into near-miss spellings
+        req.temperature = min(float(req.temperature), float((APP_CONFIG.get("chat") or {}).get("build_temperature", 0.3)))
     combined_sys = "\n\n".join(sys_parts).strip()
     if combined_sys:
         has_sys = False
@@ -807,6 +814,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         continued = False
         project_done = False      # project_finish has produced the ZIP
         project_nudges = 0
+        size_retried = False      # a write_file refused as too big gets one more round, even on the last one
         finish_reason = None
         written_files = []
         write_redirected = set()     # core.agent_loop.doc_redirect: the "use doc_create for a PDF / Word / deck" refusal is said once
@@ -903,6 +911,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                 res_dict = None
                 streamed_content = []
+                tool_text_open, _win = False, ""
 
                 # Research budget: once web calls are used up (or only the last two
                 # turns remain) drop the web tools but keep write_file, so the
@@ -1027,7 +1036,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     elif ev == "content_delta":
                         _safe = redactor.feed(val)
                         streamed_content.append(_safe)
-                        if _safe:
+                        if not tool_text_open:
+                            _win = (_win + _safe)[-48:]
+                            if _TOOL_TEXT_RX.search(_win):
+                                tool_text_open = True        # the model is writing a tool call as text: not for the reader
+                        if _safe and not tool_text_open:
                             yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
                         _n = _guard_notice()
                         if _n:
@@ -1550,6 +1563,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif t_name == "write_file":
                             # off the event loop: a deck / PDF written here may look up pictures (web, image model)
                             res_str = await run_in_executor_ctx(chat_write_file, args)
+                            if res_str.startswith("error:") and re.search(r"one write_file call may carry|too big|too long", res_str, re.I) and not size_retried:
+                                size_retried = True
+                                turn_limit = max(turn_limit, turn + 2)      # the model is told to write it shorter: let it
                             p_name = args.get("path") or args.get("file") or args.get("filename")
                             # a failed write must not contribute a download link: every
                             # written_files entry later becomes a [DOWNLOAD:] marker, which

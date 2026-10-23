@@ -1,6 +1,24 @@
 // Sampling settings (port of static/js/sampling.js). They are edited on the Settings page, which saves them to
 // localStorage ('sampling_config') and to the server; this module only reads them and builds request fields.
 
+import { apiFetch } from './api';
+
+/** A browser with no saved sampler settings (first visit, cleared storage, a new desktop profile) starts from the values the
+ *  admin saved on the server (config/sampling_config.json) rather than the built-in defaults. Same rule as the old UI. */
+export async function syncSamplingFromServer(): Promise<void> {
+  try {
+    if (localStorage.getItem('sampling_config')) return;
+    const r = await apiFetch('/control/sampling', { background: true });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d && typeof d === 'object' && !d.error && !localStorage.getItem('sampling_config')) {
+      localStorage.setItem('sampling_config', JSON.stringify(d));
+    }
+  } catch (_) {
+    // offline or storage blocked: the built-in defaults stay
+  }
+}
+
 const DEFAULTS = {
   sysprompt: '', temp: 0.6, topp: 0.95, minp: 0.0, rep: 1.0,
   presence: 0.0, topk: 20, maxtok: -1,

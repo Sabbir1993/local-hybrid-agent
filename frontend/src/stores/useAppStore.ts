@@ -1,4 +1,4 @@
-import { samplingBody } from '../services/sampling';
+import { samplingBody, syncSamplingFromServer } from '../services/sampling';
 import { notifyTaskFinished, requestNotificationPermission } from '../services/notify';
 import { clipHistoryContent } from '../services/attachments';
 import { holdSession, startSessionWatch, stopSessionWatch } from '../services/session';
@@ -692,6 +692,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       get().fetchModels();
       get().fetchProjects();
       get().fetchSessions();
+      void syncSamplingFromServer();
     }
   },
 
@@ -727,7 +728,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const listStale = !prev || prev.model !== serverStatus.model || Boolean(prev.pid) !== Boolean(serverStatus.pid)
       || Boolean(prev.healthy) !== Boolean(serverStatus.healthy) || Boolean(prev.loading) !== Boolean(serverStatus.loading)
       || prev.cloud_main?.key !== serverStatus.cloud_main?.key;
-    if (listStale && get().isAuthenticated) void get().fetchModels();
+    if (listStale && get().isAuthenticated) {
+      void get().fetchModels().then(() => {
+        // The model that was selected is gone (unloaded, stopped): the picker no longer lists it, so select what it does list.
+        // Not while one is still starting: it only appears in the list once it is up.
+        const st = get();
+        if (st.serverStatus?.pid || st.serverStatus?.loading || st.serverStatus?.cloud_main) return;
+        const known = st.availableModels.some((m) => m.display === st.selectedModel || m.id === st.selectedModel);
+        if (!known) set({ selectedModel: st.availableModels[0]?.display || '' });
+      });
+    }
     if (!changed) return;
     // A bound cloud main lane wins over the (possibly stale) local model name.
     if (serverStatus.cloud_main?.display) {

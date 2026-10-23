@@ -50,6 +50,9 @@ def sanitize_user_facing_content(text: str) -> str:
     is_loop, cleaned = is_degeneration_or_loop(text)
     text = cleaned if is_loop else text
     text = re.sub(r"<tool_call>[\s\S]*?</tool_call>", "", text)
+    # an envelope cut off before it closed (the model was stopped mid-file): everything from its opening tag on is not an answer
+    text = re.sub(r"<tool_call>[\s\S]*$", "", text)
+    text = re.sub(r"<function[=:][\s\S]*$", "", text)
     text = re.sub(r'<function\s+name=["\'][\s\S]*?</function>', "", text)
     text = re.sub(r"</?(?:tool_call|function|param|tool_response|tool_sep|im_start|im_end)>", "", text)
     text = text.replace("<![CDATA[", "").replace("]]>", "")
