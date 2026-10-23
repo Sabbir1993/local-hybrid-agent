@@ -1004,6 +1004,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       bgMessages: prev.isStreaming || externalBusy.has(sessionKey(prev.activeSessionId)) ? { ...state.bgMessages, [sessionKey(prev.activeSessionId)]: prev.messages } : state.bgMessages,
       sessions: state.sessions.map((s) => ({ ...s, active: false })),
     }));
+    // a new chat opens with the cursor in the message box (the composer listens for this; any draft stays)
+    window.setTimeout(() => window.dispatchEvent(new CustomEvent('edit-user-prompt', { detail: { focusOnly: true } })), 0);
   },
 
   deleteSession: async (id: string | number) => {

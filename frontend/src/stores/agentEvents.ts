@@ -272,7 +272,9 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       acts.push({ type: 'tool_result', id: 'kb_blocked', name: 'search_knowledge_base', ok: false, result: d.message || '' });
       break;
     case 'lane_warning':
-      toast('⚠️ ' + (d.message || 'The executor model is not being used for this run.'), d.retrying ? 'warn' : 'error');
+      // "Routine steps run on the main model" is a choice in Settings, not a failure: a plain info toast. The toast draws its own icon.
+      toast(d.message || 'The executor model is not being used for this run.',
+            d.reason === 'steps_on_main' ? 'info' : d.retrying ? 'warn' : 'error');
       break;
     case 'guard':
       acts.push({ type: 'guard', rule: d.rule, message: d.message });
