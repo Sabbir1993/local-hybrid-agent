@@ -55,8 +55,38 @@ Expand-Archive -Path "$HOME\Downloads\[LLAMA_ZIP_NAME].zip" -DestinationPath "C:
 .\scripts\list_devices.ps1 -BinDir "C:\llama-vulkan"
 ```
 
-**7. Edit the config.** Set `models_dir`, `common_dir`,
-`runtimes.vulkan.llama_bin_dir`, `gpu_devices` and `media_dirs`:
+**6b. Download the models and helper programs.** One command fetches the models
+(`routing` executor, `vision` image reader, `embedder`, `voice` speech-to-text + spoken replies, `image` local image maker;
+about 20 GB in total, pick groups to save disk) and, with `--binaries`, the llama.cpp and stable-diffusion.cpp builds.
+`--write-config` points `config/app.json` at everything. Re-running skips what exists and resumes partial files.
+```powershell
+.\.venv\Scripts\python.exe scripts/download_models.py
+```
+```powershell
+.\.venv\Scripts\python.exe scripts/download_models.py --all --binaries --backend vulkan --write-config
+```
+The CPU routers (`laya`, `cactus-needle`) download from Hugging Face on first use, or with the `routing` group.
+
+Or do steps 4-6b in one go: `.\scripts\setup_windows.ps1 -InstallDir "C:\llama-vulkan" -Download`
+(`-Backend cuda` for NVIDIA; the last folder of `-InstallDir` must be `llama-<backend>`).
+
+**Voice (speech to text).** whisper.cpp publishes no Vulkan build, so build `whisper-server.exe` once
+(needs Visual Studio Build Tools, CMake and the Vulkan SDK):
+```powershell
+git clone https://github.com/ggml-org/whisper.cpp
+```
+```powershell
+cmake -S whisper.cpp -B whisper.cpp\build -DGGML_VULKAN=1
+```
+```powershell
+cmake --build whisper.cpp\build -j --config Release
+```
+Copy everything from `whisper.cpp\build\bin\Release` into a `whisper-vulkan` folder next to your `llama-vulkan` folder
+(or set `runtimes.<name>.whisper_bin_dir`). The `ggml-large-v3*.bin` models come from the `voice` group of the download script.
+Spoken replies need no extra program: `sherpa-onnx` is in `requirements.txt`, the voices come from the same group.
+
+**7. Edit the config.** `--write-config` already set `models_dir`, `media_dirs` and the
+`llama_bin_dir` / `sd_bin_dir` paths. Still yours: `common_dir`, and `gpu_devices` (the indices from step 6):
 ```powershell
 notepad config\app.json
 ```

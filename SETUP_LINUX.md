@@ -56,13 +56,13 @@ was pinned to a Windows-only wheel.
 ./scripts/setup_linux.sh ~/llama-vulkan
 ```
 
-**7. Get llama.cpp.** Download `llama-<build>-bin-ubuntu-vulkan-x64.zip` from
-https://github.com/ggml-org/llama.cpp/releases:
+**7. Get llama.cpp.** Download `llama-<build>-bin-ubuntu-vulkan-x64.tar.gz` from
+https://github.com/ggml-org/llama.cpp/releases (or let step 9b do it):
 ```bash
-wget -P ~/Downloads [LLAMA_RELEASE_ZIP_URL]
+wget -P ~/Downloads [LLAMA_RELEASE_URL]
 ```
 ```bash
-unzip ~/Downloads/[LLAMA_ZIP_NAME].zip -d ~/llama-vulkan
+mkdir -p ~/llama-vulkan && tar -xzf ~/Downloads/[LLAMA_ARCHIVE_NAME].tar.gz -C ~/llama-vulkan
 ```
 
 Or build it from source instead (NVIDIA: `-DGGML_CUDA=ON`):
@@ -90,9 +90,35 @@ find ~/llama-vulkan ~/llama.cpp -name llama-server 2>/dev/null
 [LLAMA_BIN_DIR]/llama-bench --list-devices
 ```
 
-**10. Edit the config.** Change every `E:/...` path to a Linux path:
-`models_dir`, `common_dir`, `runtimes.vulkan.llama_bin_dir`, `gpu_devices`
-and `media_dirs`.
+**9b. Download the models and helper programs.** One command fetches the models
+(`routing` executor, `vision` image reader, `embedder`, `voice` speech-to-text + spoken replies, `image` local image maker;
+about 20 GB in total, pick groups to save disk) and, with `--binaries`, the llama.cpp and stable-diffusion.cpp builds
+(steps 7-8 can be skipped then). `--write-config` points `config/app.json` at everything. Re-running skips what exists
+and resumes partial files.
+```bash
+.venv/bin/python scripts/download_models.py
+```
+```bash
+.venv/bin/python scripts/download_models.py --all --binaries --backend vulkan --write-config
+```
+Or do steps 6-9b in one go: `DOWNLOAD=1 ./scripts/setup_linux.sh ~/llama-vulkan` (`BACKEND=cuda` for NVIDIA).
+The CPU routers (`laya`, `cactus-needle`) download from Hugging Face on first use, or with the `routing` group.
+
+**Voice (speech to text).** whisper.cpp publishes no Vulkan server build, so build `whisper-server` once:
+```bash
+git clone https://github.com/ggml-org/whisper.cpp ~/whisper.cpp
+```
+```bash
+cmake -S ~/whisper.cpp -B ~/whisper.cpp/build -DGGML_VULKAN=1 && cmake --build ~/whisper.cpp/build -j --config Release
+```
+```bash
+mkdir -p ~/whisper-vulkan && cp -r ~/whisper.cpp/build/bin/* ~/whisper-vulkan/
+```
+The server finds `whisper-server` in a `whisper-vulkan` folder next to your llama.cpp folder, or in
+`runtimes.<name>.whisper_bin_dir`. Spoken replies need no extra program: `sherpa-onnx` is in `requirements.txt`.
+
+**10. Edit the config.** `--write-config` already set `models_dir`, `media_dirs` and the
+`llama_bin_dir` / `sd_bin_dir` paths. Still yours: `common_dir` and `gpu_devices` (the indices from step 9).
 ```bash
 nano config/app.json
 ```

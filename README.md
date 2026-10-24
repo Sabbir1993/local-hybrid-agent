@@ -349,6 +349,11 @@ exist; every change saves a NEW file and keeps the original.
 This is the actual "clone the repo and go" path. For a copy-paste command
 list, see [SETUP_WINDOWS.md](SETUP_WINDOWS.md) or [SETUP_LINUX.md](SETUP_LINUX.md).
 
+> **Shortcut for every OS:** `python scripts/download_models.py --all --binaries --write-config` downloads the models
+> (routing executor, vision, embedder, voice, image), the llama.cpp and stable-diffusion.cpp builds, and fills in
+> `config/app.json`. Run it with no arguments to list the groups. Speech to text still needs `whisper-server` built once
+> (see the SETUP files).
+
 1. **Get the right llama.cpp binary for your GPU.**
    - Intel Arc / any Vulkan-capable GPU: download a **Vulkan** Windows
      release from https://github.com/ggml-org/llama.cpp/releases — the
@@ -438,7 +443,7 @@ kill, orphan cleanup, GPU panel, folder picker) branch on `os.name`
 1. **Driver:** Intel Arc uses Mesa's ANV Vulkan driver
    (`mesa-vulkan-drivers vulkan-tools`, kernel 6.2+); check with
    `vulkaninfo --summary`. NVIDIA: proprietary driver + CUDA toolkit.
-2. **llama.cpp:** the `llama-<build>-bin-ubuntu-vulkan-x64.zip` release, or
+2. **llama.cpp:** the `llama-<build>-bin-ubuntu-vulkan-x64.tar.gz` release, or
    build it: `cmake -B build -DGGML_VULKAN=ON && cmake --build build -j`
    (`-DGGML_CUDA=ON` for NVIDIA). Verify with
    `./llama-bench --list-devices`.

@@ -177,8 +177,29 @@ Create the folders:
 mkdir -p ~/Models ~/common
 ```
 
-Copy your `.gguf` files into `~/Models` (use `scp`/`rsync` over SSH, not a shared
-drive).
+Download the models (`routing` executor, `vision` image reader, `embedder`, `voice` speech-to-text +
+spoken replies, `image` local image maker; about 20 GB in total, name some groups instead of `--all` to save disk).
+`--write-config` points `config/app.json` at the folders; re-running skips what exists and resumes partial files:
+
+```bash
+.venv/bin/python scripts/download_models.py --all --models-dir ~/Models --write-config
+```
+
+The same script can fetch the prebuilt macOS llama.cpp and stable-diffusion.cpp programs instead of building them
+(`--binaries --bin-dir ~`; Metal is built in). The image maker needs a Mac with enough unified memory.
+
+For speech to text build `whisper-server` once (Metal is on by default):
+
+```bash
+git clone https://github.com/ggml-org/whisper.cpp ~/whisper.cpp && cmake -S ~/whisper.cpp -B ~/whisper.cpp/build && cmake --build ~/whisper.cpp/build -j --config Release
+```
+
+```bash
+mkdir -p ~/whisper-vulkan && cp -r ~/whisper.cpp/build/bin/* ~/whisper-vulkan/
+```
+
+(The folder name `whisper-vulkan` is just where the server looks next to your llama.cpp folder; or set
+`runtimes.metal.whisper_bin_dir`.) Models can also be copied from another machine with `scp`/`rsync` over SSH, not a shared drive.
 
 ```bash
 rsync -avP [USER]@[SOURCE_HOST]:[PATH_TO_MODELS]/ ~/Models/
