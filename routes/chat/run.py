@@ -54,6 +54,7 @@ from ..common import _llm_chat_stream
 from ..common.sampling_extra import sampler_extra
 
 from .base import router
+from .wrapup import LOW_ROUNDS_NOTE, WRAPUP_NOTE, ToolTextFilter, finish_text
 from .delivery import (
     _NO_TOOL_ANSWER,
     _WRAP_REFUSAL,
@@ -118,8 +119,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     voice_policy.apply(req)     # a spoken turn: no hidden reasoning, short answer, no answer-check rewrite
     # a custom agent works on the user's own files: local models only (same rule as routes/agent/setup.py)
     local_only = bool(getattr(req, "custom_agent_id", None)) and bool((APP_CONFIG.get("agent") or {}).get("agent_local_only", True))
-    cloud_main = None if local_only else cloud.cloud_lane("main", user.id)
     if getattr(req, "model", None) and not local_only:
+        # this chat's own model, for this request only: the saved main-lane binding is the user's default and is not
+        # rewritten (that would switch every other chat). A model that is not a configured cloud one means "local".
         target_model = str(req.model).strip()
         cm = cloud.get_cloud(target_model, user.id)
         if not cm:
@@ -128,9 +130,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 if candidate.key == clean_key or candidate.display == target_model or candidate.model_id == target_model:
                     cm = candidate
                     break
-        if cm:
-            cloud.set_lanes(user.id, {"main": cm.key})
-            cloud_main = cm
+        cloud.request_main.set(cm.key if cm else "local")
+    cloud_main = None if local_only else cloud.cloud_lane("main", user.id)
     main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
     if not main_ready and not cloud_main:
         target = state.profile_path or state.profile or common.initial_profile_path
@@ -739,6 +740,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if project_build and chat_tools and level_tool_calls != 0:
         # a site is built a section per call (skeleton, css, js, a dozen sections, finish): 12-15 rounds would stop it half done
         max_turns = max(max_turns, int(chat_cfg.get("project_max_rounds", 40)))
+    if chat_tools and level_tool_calls != 0 and (longdoc_build or explicit_ext in (".xlsx", ".docx", ".pptx")):
+        # a workbook, report or deck is built in pieces (create, then several edits / appends, then checks): the ordinary
+        # 12-15 rounds stop it half done, and the model then has nothing left to say where it stands
+        max_turns = max(max_turns, int(chat_cfg.get("doc_max_rounds", 24)))
     if deep:
         sys_parts.append(
             "DEEP RESEARCH MODE:\n"
@@ -826,6 +831,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         web_calls = 0
         web_seen = set()
         research_nudged = False
+        wrapup_warned = False     # the "few rounds left" note is given once
         continued = False
         project_done = False      # project_finish has produced the ZIP
         project_nudges = 0
@@ -862,6 +868,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
         try:
             turn = -1
+            budget_hit = False      # the run stopped because it used its rounds or its time, not because the model was done
             if project_resume:
                 # last in the conversation, where the model reads it: after a stop the whole original request is still above, and
                 # without this the model starts the site again from index.html
@@ -869,10 +876,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             while True:
                 turn += 1
                 if turn >= turn_limit:
+                    budget_hit = True
                     break
                 run_cap = float(chat_cfg.get("run_timeout_s", 1800) or 0)
                 if run_cap and turn and time.time() - t0 > run_cap:
                     run_end_reason = "timeout"      # chat had no wall-clock stop: the tool-free wrap-up below answers
+                    budget_hit = True
                     break
                 # Turn 0 proactive URL fetch: if user specifically asks to summarize or inspect a URL
                 if turn == 0 and use_web and chat_tools and url_matches and tool_allowed("web_fetch"):
@@ -977,6 +986,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         "results above, produce the complete answer now"
                         + (" and call write_file with the full file content." if wants_file else ".")
                         + " Do not announce what you will do; just do it.")})
+
+                # Reserve the end of the run: with three rounds left the model is told to batch what matters and say where it
+                # stands, so the forced tool-free wrap-up below is rarely the first time it hears about the limit.
+                if chat_tools and turn > 0 and not wrapup_warned and turn_limit > 4 and turn >= turn_limit - 3 \
+                        and msgs and msgs[-1].get("role") == "tool":
+                    wrapup_warned = True
+                    msgs.append({"role": "user", "content": LOW_ROUNDS_NOTE.format(n=turn_limit - turn)})
 
                 shrink_old_tool_results(msgs, ctx_budget, tools=current_tools)
 
@@ -1644,9 +1660,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             # Guaranteed synthesis pass: if the turn loop finished and the last message in msgs is a tool response,
             # the model executed tools but hasn't yet synthesized the final text answer for the user.
             # Call the model with tools=None to force it to formulate a comprehensive final answer!
-            if msgs and msgs[-1].get("role") == "tool":
+            budget_cut = bool(msgs and msgs[-1].get("role") == "tool")
+            if budget_cut:
                 streamed_content = []
                 res_dict = None
+                wrap_filter = ToolTextFilter()
+                wrap_msgs = list(msgs) + ([{"role": "user", "content": WRAPUP_NOTE}] if budget_hit else [])
                 if cloud_main and cloud.cloud_bindings(user.id).get("fallback_local", True):
                     fb_local = None
                     target = state.profile_path or state.profile or common.initial_profile_path
@@ -1659,12 +1678,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             pass
                     final_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
                     final_stream = common._llm_chat_stream_with_fallback(
-                        main_client, fb_local, msgs, None, req.temperature,
+                        main_client, fb_local, wrap_msgs, None, req.temperature,
                         turn_max_tokens, repeat_penalty=final_rep, rid=chat_rid, lane="main", effort=effort,
                         top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_fields)
                 else:
                     final_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
-                    final_stream = _llm_chat_stream(main_client, msgs, tools=None, temperature=req.temperature,
+                    final_stream = _llm_chat_stream(main_client, wrap_msgs, tools=None, temperature=req.temperature,
                                                     max_tokens=turn_max_tokens, repeat_penalty=final_rep, rid=chat_rid, effort=effort,
                                                     top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_fields)
 
@@ -1684,8 +1703,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     elif ev == "content_delta":
                         _safe = redactor.feed(val)
                         streamed_content.append(_safe)
-                        if _safe:
-                            yield f"event: delta\ndata: {json.dumps({'text': _safe})}\n\n"
+                        _shown = wrap_filter.feed(_safe)      # a tool call written as text is never streamed to the reader
+                        if _shown:
+                            yield f"event: delta\ndata: {json.dumps({'text': _shown})}\n\n"
                         _n = _guard_notice()
                         if _n:
                             yield _n
@@ -1698,10 +1718,22 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 _tail = redactor.flush()
                 if _tail:
                     streamed_content.append(_tail)
-                    yield f"event: delta\ndata: {json.dumps({'text': _tail})}\n\n"
+                    _shown = wrap_filter.feed(_tail)
+                    if _shown:
+                        yield f"event: delta\ndata: {json.dumps({'text': _shown})}\n\n"
+                _shown = wrap_filter.flush()
+                if _shown:
+                    yield f"event: delta\ndata: {json.dumps({'text': _shown})}\n\n"
                 content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
                 if res_dict and res_dict.get("reasoning"):
                     reasoning = res_dict["reasoning"]
+                # the run was cut off with work open: show a real status instead of markup / the provider's placeholder, and let
+                # the person press Continue
+                if budget_hit:
+                    content, _replaced = finish_text(content, turn_limit, written_files)
+                    if _replaced:
+                        yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+                    yield f"event: budget_stop\ndata: {json.dumps({'turns': turn_limit})}\n\n"
 
             # Robust fallback: if content is still empty, never terminate silently without output
             if not (content and content.strip()):

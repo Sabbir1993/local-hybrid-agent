@@ -29,6 +29,7 @@ from .config import (
 from .lanes import (
     providers,
     cloud_bindings,
+    request_main,
     cloud_models,
     get_cloud,
     user_lanes,
@@ -67,6 +68,7 @@ __all__ = [
     "_KEY_REF",
     "providers",
     "cloud_bindings",
+    "request_main",
     "cloud_models",
     "get_cloud",
     "user_lanes",

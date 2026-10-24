@@ -20,6 +20,7 @@ class UpdateWorkspaceReq(BaseModel):
 class SessionReq(BaseModel):
     title: Optional[str] = None
     agent_id: Optional[int] = None
+    model: Optional[str] = None
 
 
 class BrowseFolderReq(BaseModel):

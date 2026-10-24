@@ -1,6 +1,6 @@
 import { GitStrip } from './GitStrip';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { useAppStore, type ReasoningEffort, type AgentMode } from '../../stores/useAppStore';
+import { useAppStore, sessionKey, type ReasoningEffort, type AgentMode } from '../../stores/useAppStore';
 import { prepareFile, buildPromptText, type AttachmentData } from '../../services/attachments';
 import { loadLibraryNames, CMD_GROUP_LABELS, TEMPLATES, currentToken, expandAtTags, expandLibraryCommand, fileItems, initPrompt, isLibraryCommand, slashItems, type CmdItem } from '../../services/commands';
 import { apiFetch } from '../../services/api';
@@ -26,6 +26,20 @@ export interface AttachedFile extends AttachmentData {
   dataUrl?: string;
   previewUrl?: string;
 }
+
+// An unsent message belongs to the chat it was typed in. Text also survives a reload (sessionStorage, this tab only, never
+// localStorage); attachments hold File objects, so they are kept for the life of the page only.
+const draftStore = new Map<string, { text: string; atts: AttachedFile[] }>();
+const draftStoreKey = (k: string) => 'draft:' + k;
+const readDraft = (k: string) => {
+  const d = draftStore.get(k);
+  if (d) return d;
+  try { const t = sessionStorage.getItem(draftStoreKey(k)); return t ? { text: t, atts: [] as AttachedFile[] } : undefined; } catch (_) { return undefined; }
+};
+const writeDraft = (k: string, text: string, atts: AttachedFile[]) => {
+  if (text.trim() || atts.length) draftStore.set(k, { text, atts }); else draftStore.delete(k);
+  try { if (text.trim()) sessionStorage.setItem(draftStoreKey(k), text); else sessionStorage.removeItem(draftStoreKey(k)); } catch (_) {}
+};
 
 export const Composer: React.FC = () => {
   const {
@@ -54,7 +68,7 @@ export const Composer: React.FC = () => {
     compactConversation,
   } = useAppStore();
 
-  const [inputVal, setInputVal] = useState('');
+  const [inputVal, setInputVal] = useState(() => { const st = useAppStore.getState(); return readDraft(`${st.appMode}:${sessionKey(st.activeSessionId)}`)?.text || ''; });
   const backdropRef = useRef<HTMLDivElement>(null);
   // /image and /video armed like the old UI: the command leaves the text box and becomes a pill; Send puts it back in front
   const [armed, setArmed] = useState<'image' | 'video' | null>(null);
@@ -436,6 +450,28 @@ export const Composer: React.FC = () => {
     }
     };
   }, []);
+
+  // each chat keeps its own unsent text and attachments: leaving a chat files them away, entering one brings its own back
+  const attachmentsRef = useRef<AttachedFile[]>([]);
+  attachmentsRef.current = attachments;
+  const draftKey = `${appMode}:${sessionKey(useAppStore((st) => st.activeSessionId))}`;
+  const prevDraftKeyRef = useRef(draftKey);
+  useEffect(() => {
+    const prev = prevDraftKeyRef.current;
+    if (prev === draftKey) return;
+    prevDraftKeyRef.current = draftKey;
+    // a first message creating its chat (new -> id while it is being sent) is not a chat change: keep what is typed
+    if (prev.endsWith(':0') && useAppStore.getState().isStreaming) return;
+    writeDraft(prev, inputValRef.current, attachmentsRef.current);
+    const d = readDraft(draftKey);
+    setInputVal(d?.text || '');
+    setAttachments(d?.atts || []);
+    setArmed(null);
+  }, [draftKey]);
+  // keep the reload copy of the open chat's text current
+  useEffect(() => {
+    try { if (inputVal.trim()) sessionStorage.setItem(draftStoreKey(draftKey), inputVal); else sessionStorage.removeItem(draftStoreKey(draftKey)); } catch (_) {}
+  }, [inputVal, draftKey]);
 
   // a picture kept for editing belongs to the chat it was picked in: New chat / another chat drops it
   const sessionId = useAppStore((s) => s.activeSessionId);

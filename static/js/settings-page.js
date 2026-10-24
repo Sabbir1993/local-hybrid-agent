@@ -291,6 +291,7 @@ async function loadDevicesPanel() {
       crumb.textContent = group.textContent.trim();
       h2.appendChild(crumb);
     }
+    if (h2 && panel && window.secHelpAttach) window.secHelpAttach(h2, panel.id);
   });
 
   // 2. "/" jumps to the settings search, Escape clears it

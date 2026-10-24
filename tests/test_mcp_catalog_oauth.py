@@ -147,15 +147,21 @@ class OAuthTests(_McpApp):
         self.assertEqual(r.status_code, 200)
 
     def test_callback_error_is_400(self):
-        r = self.client.get("/mcp/oauth/callback", params={"error": "denied"})
+        r = self.client.get("/mcp/oauth/finish", params={"error": "denied"})
         self.assertEqual(r.status_code, 400)
         self.assertIn("denied", r.text)
+
+    def test_callback_forwards_to_finish_without_a_session(self):
+        r = self.client.get("/mcp/oauth/callback", params={"state": "a b", "code": "x&y", "junk": "1"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("/mcp/oauth/finish?state=a+b&amp;code=x%26y", r.text)
+        self.assertNotIn("junk", r.text)
 
     def test_callback_for_other_account_is_403(self):
         from core import mcp_oauth
         mcp_oauth._flows["st9"] = {"owner": 4242, "name": "s"}
         try:
-            r = self.client.get("/mcp/oauth/callback", params={"state": "st9", "code": "c"})
+            r = self.client.get("/mcp/oauth/finish", params={"state": "st9", "code": "c"})
         finally:
             mcp_oauth._flows.pop("st9", None)
         self.assertEqual(r.status_code, 403)

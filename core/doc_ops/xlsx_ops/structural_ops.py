@@ -116,8 +116,18 @@ def apply(data: bytes, ops: list[dict]) -> EditResult:
         return res
     book = _Book(data)
     ctx = _Ctx(book)
-    for op, k in zip(ops, kinds):
-        XML_OPS[k](ctx, op)
+    # Every op is tried before anything is saved, and ALL the problems come back together: one failing op used to cost a whole
+    # round per mistake (fix one, resend the batch, meet the next). Nothing is written unless the whole batch is good.
+    errors = []
+    for n, (op, k) in enumerate(zip(ops, kinds), 1):
+        try:
+            XML_OPS[k](ctx, op)
+        except DocOpError as e:
+            errors.append(f"op {n} ({k} {op_arg(op, 'addr', 'cell', 'range', 'target') or ''}): {e}".replace("  ", " "))
+    if errors:
+        shown = "\n- ".join(errors[:8]) + (f"\n- ... and {len(errors) - 8} more" if len(errors) > 8 else "")
+        raise DocOpError(f"{len(errors)} of {len(ops)} ops failed and nothing was saved. Fix all of these, then send the whole "
+                         f"batch again in ONE call:\n- {shown}")
     out = _finish_xml(ctx)
     problems = check_package(data, out, ctx.rules)
     if problems:

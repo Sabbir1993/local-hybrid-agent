@@ -235,6 +235,9 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       L.content = d.text || '';
       L.statusText = '';
       break;
+    case 'budget_stop':
+      L.canContinue = true;
+      break;
     case 'delta_reset':
       if (d && d.purge) {
         // a policy withheld the answer: neither it nor the thinking that quoted it stays on screen

@@ -66,7 +66,7 @@ async def run_tool(name: str, args: dict, unique_done: bool = False) -> str:
             return await impl(args)
         return await run_in_executor_ctx(impl, args)
     except Exception as e:
-        return f"error: {type(e).__name__}: {e}"
+        return f"error: {type(e).__name__}: {str(e)[:300]}"      # never echo a whole document back into the model's context
 
 
 def _personal_refusal(name: str, args: dict) -> str:

@@ -5880,3 +5880,10 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 /* tool-call rows are overflow:hidden flex items: inside a height-clamped message they shrank to bare lines. Pin their size. */
 .agy-stream-timeline > * { flex-shrink: 0; }
 .agy-stream-timeline, .agy-agent-container { scrollbar-width: thin; scrollbar-color: var(--scrollbar-hover) transparent; }
+
+#settings-agents-content .ca-toolbar { grid-column: 1 / -1; display: flex; gap: 10px; align-items: stretch; }
+#settings-agents-content .ca-toolbar .ca-filter { flex: 1; min-width: 0; }
+#settings-agents-content .ca-toolbar .ca-filter, #settings-agents-content .ca-toolbar .btn { height: 40px; box-sizing: border-box; margin: 0; padding-top: 0; padding-bottom: 0; }
+#settings-agents-content .ca-toolbar .btn { padding-left: 18px; padding-right: 18px; display: inline-flex; align-items: center; }
+#settings-agents-content { display: flex; flex-direction: column; gap: 14px; }
+#settings-agents-content > .agent-card { margin: 0; }

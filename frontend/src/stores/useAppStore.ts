@@ -65,6 +65,7 @@ export interface ChatMessage {
   promptTokens?: number;   // the server's real prompt size at the end of this reply: anchors the context ring
   tps?: number;
   errorAlert?: string;
+  canContinue?: boolean;   // the run stopped because it used its steps: the answer offers a Continue button
   images?: string[];
   files?: string;
   meta?: any;
@@ -95,6 +96,7 @@ export interface SessionItem {
   title: string;
   updatedAt?: string;
   active?: boolean;
+  model?: string | null;   // the model this chat was last used with
 }
 
 interface AppState {
@@ -337,6 +339,9 @@ function filterRawSessions(rawSessions: any[], appMode: AppMode, activeCustomAge
   return rawSessions;
 }
 
+// the dock's Preview belongs to the chat it was opened from: a new or different chat starts with it empty
+const EMPTY_PREVIEW: PreviewModalState = { isOpen: false, filePath: '', title: '', directContent: null, source: 'common' };
+
 function formatSessionItem(s: any, appMode: AppMode, activeSessionId: string | number | null): SessionItem {
   const ts = s.created_at || s.updated_at;
   let dateStr = 'Recent';
@@ -351,6 +356,7 @@ function formatSessionItem(s: any, appMode: AppMode, activeSessionId: string | n
     title: s.title || s.name || (appMode === 'code' ? 'Task' : 'Chat'),
     updatedAt: dateStr,
     active: activeSessionId === s.id,
+    model: s.model || null,
   };
 }
 
@@ -739,6 +745,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     }
     if (!changed) return;
+    const ownModel = get().sessions.find((x) => sessionKey(x.id) === sessionKey(get().activeSessionId))?.model;
+    if (ownModel) return;   // this chat keeps the model it was started with
     // A bound cloud main lane wins over the (possibly stale) local model name.
     if (serverStatus.cloud_main?.display) {
       set({ selectedModel: serverStatus.cloud_main.display });
@@ -789,33 +797,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleWebSearch: () => set((state) => ({ webSearchEnabled: !state.webSearchEnabled })),
   setKbMode: (kbMode) => set({ kbMode }),
   setSelectedModel: async (modelIdentifier: string) => {
-    const { availableModels, serverStatus } = get();
+    const { availableModels } = get();
     const match = availableModels.find((m) => m.id === modelIdentifier || m.display === modelIdentifier);
-    const targetId = match ? match.id : modelIdentifier;
     const targetDisplay = match ? match.display : modelIdentifier;
 
     set({ selectedModel: targetDisplay });
-
-    const isCloud = String(targetId).startsWith('cloud:') || match?.kind === 'cloud';
-    if (isCloud) {
-      try {
-        logger.info('Control', `Switching active main lane to cloud model: ${targetId}`);
-        await api.control.switchModel(targetId);
-        await get().fetchStatus();
-        await get().fetchModels();
-      } catch (err) {
-        logger.error('Control', `Failed to switch to cloud model ${targetId}:`, err);
-      }
-    } else if (serverStatus?.cloud_main) {
-      try {
-        await apiFetch('/control/cloud/lanes', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clear: ['main'] }),
-        });
-        await get().fetchStatus();
-        await get().fetchModels();
-      } catch (_) {}
+    // the choice belongs to this chat (stored with it, so it survives a reload); a chat that does not exist yet gets it when it is created.
+    // Each request carries its own model, so nothing is switched on the server here and other chats keep theirs.
+    const sid = get().activeSessionId;
+    if (sid) {
+      set((st) => ({ sessions: st.sessions.map((x) => (sessionKey(x.id) === sessionKey(sid) ? { ...x, model: targetDisplay } : x)) }));
+      apiFetch(`/control/sessions/${sid}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: targetDisplay }),
+      }).catch(() => {});
     }
   },
   setActiveProjectId: (activeProjectId) => {
@@ -879,6 +875,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // a run in that chat keeps going in the background; its messages are parked, not dropped
       set((st) => ({
         activeSessionId: null,
+        previewModal: EMPTY_PREVIEW,
         messages: [],
         isStreaming: false,
         bgMessages: cur.isStreaming || externalBusy.has(sessionKey(cur.activeSessionId)) ? { ...st.bgMessages, [sessionKey(cur.activeSessionId)]: cur.messages } : st.bgMessages,
@@ -931,12 +928,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (key === sessionKey(prev.activeSessionId)) delete bgNext[key];
     set((state) => ({
       activeSessionId: id,
+      ...(key !== prevKey ? { previewModal: EMPTY_PREVIEW } : {}),
       sessions: state.sessions.map((s) => ({ ...s, active: s.id === id })),
       messages: isBusy(key) ? liveMsgs || [] : [],
       sessionLoading: !isBusy(key),
       isStreaming: runs.has(key),
       bgMessages: bgNext,
     }));
+    const own = get().sessions.find((x) => sessionKey(x.id) === key)?.model;
+    if (own) set({ selectedModel: own });
     if (isBusy(key)) return;
 
     try {
@@ -999,6 +999,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const prev = get();
     set((state) => ({
       activeSessionId: null,
+      previewModal: EMPTY_PREVIEW,
       messages: [],
       isStreaming: false,
       bgMessages: prev.isStreaming || externalBusy.has(sessionKey(prev.activeSessionId)) ? { ...state.bgMessages, [sessionKey(prev.activeSessionId)]: prev.messages } : state.bgMessages,
@@ -1109,6 +1110,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     if (!target) return;
+    if (runs.size > 0 && serverStatus?.model && serverStatus.model !== target) {
+      get().showToast('Another chat is still answering with the loaded model. Load a different local model after it finishes.', 'warn');
+      return;
+    }
     set({ isModelLoading: true });
     logger.info('Control', `Switching/Loading model: ${target}`);
     try {
@@ -1139,14 +1144,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     const targetModelId = matchModel ? matchModel.id : selectedModel;
     const isCloud = !reattachId && (String(targetModelId).startsWith('cloud:') || matchModel?.kind === 'cloud');
 
-    if (isCloud && (!serverStatus?.cloud_main || serverStatus.cloud_main.key !== targetModelId.replace('cloud:', ''))) {
-      try {
-        await api.control.switchModel(targetModelId);
-        await get().fetchStatus();
-      } catch (e) {
-        logger.warn('Chat', `Failed to ensure cloud model binding before prompt:`, e);
-      }
-    }
     if ((!reattachId && !text.trim() && (!options?.images || !options.images.length)) || get().isStreaming) return;
 
     // Coding Agent mode (and a personal agent that has a work folder) runs through the agent loop, not plain chat
@@ -1164,6 +1161,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     let currentSessionId = get().activeSessionId;
     const startKey = sessionKey(currentSessionId);
     let createdHere = false;
+    if (currentSessionId && targetModelId) {
+      const stored = get().sessions.find((x) => sessionKey(x.id) === startKey)?.model;
+      if (!stored) {
+        set((st) => ({ sessions: st.sessions.map((x) => (sessionKey(x.id) === startKey ? { ...x, model: matchModel?.display || targetModelId } : x)) }));
+        apiFetch(`/control/sessions/${currentSessionId}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: matchModel?.display || targetModelId }),
+        }).catch(() => {});
+      }
+    }
 
     // If no active session, ensure/create one now with first prompt title
     if (!currentSessionId) {
@@ -1178,7 +1185,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const res = await apiFetch(`/control/projects/${pid}/sessions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title, agent_id: agentId }),
+          body: JSON.stringify({ title, agent_id: agentId, model: targetModelId || undefined }),
         });
         const data = await res.json();
         if (!res.ok || !data || !data.session) throw new Error((data && data.error) || `HTTP ${res.status}`);

@@ -11,10 +11,48 @@ INVALID_JSON_KEY = "__invalid_json__"
 _WHOLE_CALL_ONLY = ("write_file", "edit_file", "append_file", "insert_at_line")
 
 
+_LEAKED_PARAM_RX = re.compile(r"</?\s*(?:parameter|param)+\s*[=:>\s]", re.IGNORECASE)
+_BAD_PATH_CHARS = re.compile(r"[\x00-\x1f<>|?*\"]")
+_PATH_KEYS = ("path", "file", "filename", "output_path")
+
+
+def split_leaked_params(args: dict) -> dict:
+    """Some servers parse a Qwen/Hermes XML tool call badly: the closing tag of the first parameter is lost and the rest of
+    the call (the next <parameter=content> block, the whole file) ends up inside that parameter's value. Cut the value at the
+    first tag and give each leaked block back to its own argument (a value the model also sent properly is kept)."""
+    out = dict(args)
+    for k, v in list(out.items()):
+        if not isinstance(v, str):
+            continue
+        m = _LEAKED_PARAM_RX.search(v)
+        if not m:
+            continue
+        out[k] = v[:m.start()].strip()
+        for pm in _XML_PARAM_RX.finditer(v[m.start():]):
+            key, val = pm.group(1).strip(), pm.group(2).strip()
+            if key and not out.get(key):
+                out[key] = val
+    return out
+
+
+def _bad_path_error(args: dict) -> Optional[str]:
+    for k in _PATH_KEYS:
+        v = args.get(k)
+        if isinstance(v, str) and v and (_BAD_PATH_CHARS.search(v) or len(v) > 260):
+            shown = re.sub(r"\s+", " ", v)[:60]
+            return (f"error: '{k}' is not a file name (it holds line breaks, tags or {len(v)} characters: \"{shown}...\"). "
+                    f"Pass only the file name, for example \"reports/summary.xlsx\", and send the content as the separate "
+                    f"\"content\" argument. Do not repeat the same call.")
+    return None
+
+
 def validate_and_repair_tool_args(tool_name: str, args: dict, query_hint: str = "") -> tuple[dict, Optional[str]]:
-    repaired = dict(args) if isinstance(args, dict) else {}
+    repaired = split_leaked_params(args) if isinstance(args, dict) else {}
     if repaired.get(INVALID_JSON_KEY):
         return repaired, INVALID_ARGS_ERROR
+    bad = _bad_path_error(repaired)
+    if bad:
+        return repaired, bad
 
     if tool_name in ("write_file", "edit_file", "append_file", "insert_at_line", "read_file", "revert"):
         p = repaired.get("path") or repaired.get("file") or repaired.get("filename")

@@ -239,7 +239,7 @@ const AnswerBadge: React.FC<{ m: any }> = ({ m }) => {
 
 /** Copy / regenerate / thumbs under an assistant answer; visible on hover (always on touch). */
 const BotActions: React.FC<{ m: any; isLast: boolean; streaming: boolean }> = ({ m, isLast, streaming }) => {
-  const { regenerateLast, showToast } = useAppStore();
+  const { regenerateLast, showToast, sendPrompt } = useAppStore();
   const [copied, setCopied] = useState(false);
   const [rating, setRating] = useState<number>(Number(m.meta?.rating || 0));
   if (streaming && isLast) return null;
@@ -281,6 +281,11 @@ const BotActions: React.FC<{ m: any; isLast: boolean; streaming: boolean }> = ({
 
   const btn: React.CSSProperties = { background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--dim)', padding: '2px 6px', fontSize: 12, borderRadius: 4 };
   return (
+    <>
+    {isLast && m.canContinue && (
+      <button type="button" className="btn accent" style={{ width: 'auto', margin: '8px 0 0', padding: '6px 16px', fontSize: 12.5 }}
+        title="Carry on from where it stopped" onClick={() => { void sendPrompt('continue'); }}>Continue</button>
+    )}
     <div className="bot-actions" style={{ display: 'flex', gap: 2, marginTop: 6 }}>
       <button type="button" style={btn} title="Copy answer" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
       {isLast && <button type="button" style={btn} title="Answer again" onClick={() => regenerateLast()}>Regenerate</button>}
@@ -291,6 +296,7 @@ const BotActions: React.FC<{ m: any; isLast: boolean; streaming: boolean }> = ({
         </>
       )}
     </div>
+    </>
   );
 };
 

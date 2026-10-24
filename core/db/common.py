@@ -89,6 +89,9 @@ def _init_projects_db() -> ThreadLocalDB:
         conn.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
     if "agent_id" not in session_cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN agent_id INTEGER")
+    # the model a chat was last used with (each chat keeps its own: picking one never changes another chat)
+    if "model" not in session_cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN model TEXT")
     # P2 fork/branch: a forked session points at the session it was copied from
     if "fork_of" not in session_cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN fork_of INTEGER")

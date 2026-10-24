@@ -76,6 +76,9 @@ def _table_like(lines: list) -> bool:
     return rows >= 0.3 * len(body)
 
 
+_GLUED_REPEAT = re.compile(r"([A-Za-z]{3,24})\1{9,}")
+
+
 def find_runaway(text: str, window: int = 6000) -> int:
     """Index to cut `text` at when its tail has clearly started to loop, else -1.
 
@@ -87,6 +90,11 @@ def find_runaway(text: str, window: int = 6000) -> int:
         return -1
     base = max(0, len(text) - window)
     tail = text[base:]
+    glued = next((m for m in _GLUED_REPEAT.finditer(tail) if len(set(m.group(1).lower())) > 1), None)   # "xxxx..." is padding, not a loop
+    if glued:
+        # a word repeated with no space or newline between copies ("totaltotaltotal...", "ExtraExtraExtra..."): a model loop even
+        # inside a table, so it is checked before the table exemption below. Keep two copies.
+        return base + glued.start() + 2 * len(glued.group(1))
     lines = tail.split("\n")
     run, pos = 1, 0
     starts = []

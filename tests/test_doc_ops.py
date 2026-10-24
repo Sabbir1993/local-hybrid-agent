@@ -223,6 +223,25 @@ class XlsxTests(unittest.TestCase):
         r = xlsx_ops.apply(self.book, [{"op": "set_formula", "addr": "Sales!D4", "formula": "SUM(D2:D3)"}])
         self.assertIn("D4==SUM(D2:D3)", D.inspect(r.data, "x.xlsx"))
 
+    def test_a_plain_formula_in_set_cell_is_written_as_a_formula(self):
+        import openpyxl
+        r = xlsx_ops.apply(self.book, [{"op": "set_cell", "addr": "Sales!D4", "value": "=SUM(B2:C3)"},
+                                       {"op": "set_range", "addr": "Sales!F2", "values": [["=B2*2"]]}])
+        ws = openpyxl.load_workbook(io.BytesIO(r.data))["Sales"]
+        self.assertEqual((ws["D4"].value, ws["F2"].value), ("=SUM(B2:C3)", "=B2*2"))
+
+    def test_every_failing_op_is_reported_at_once_and_nothing_is_saved(self):
+        ops = [{"op": "set_cell", "addr": "Sales!A2", "value": "=cmd|' /C calc'!A0"},
+               {"op": "set_cell", "addr": "Sales!B2", "value": 5},
+               {"op": "set_cell", "addr": "Sales!A3", "value": "=HYPERLINK(\"http://x\",\"y\")"}]
+        with self.assertRaises(DocOpError) as cm:
+            xlsx_ops.apply(self.book, ops)
+        msg = str(cm.exception)
+        self.assertIn("2 of 3 ops failed", msg)
+        self.assertIn("op 1", msg)
+        self.assertIn("op 3", msg)
+        self.assertIn("nothing was saved", msg)
+
     def test_created_text_never_becomes_formula(self):
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(xlsx_ops.create([["Name"], ["=cmd"]])))

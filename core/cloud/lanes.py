@@ -1,4 +1,5 @@
 import sys
+from contextvars import ContextVar
 from copy import deepcopy
 from typing import Optional
 
@@ -6,6 +7,12 @@ from ..config import CLOUD_LANES
 from .client import CloudClient
 from .config import _WARNED, _merged
 from .models import CloudModel
+
+
+# The model THIS request was sent with ("<provider>/<model>", or "local" to force the local model). A chat picks its own
+# model, so it must not rewrite the user's saved main-lane binding (that would change every other chat); each request
+# carries its choice here instead, and the executor / vision lanes that follow main in "auto" routing follow it too.
+request_main: ContextVar[Optional[str]] = ContextVar("request_main", default=None)
 
 
 def providers(user_id: Optional[int] = None) -> dict:
@@ -17,6 +24,9 @@ def cloud_bindings(user_id: Optional[int] = None) -> dict:
     routing_mode: 'auto'|'custom'} - stripped and defaulted, whatever app.json / the user file hold."""
     cl = _merged(user_id).get("cloud") or {}
     out = {lane: (str(cl.get(lane) or "").strip() or None) for lane in CLOUD_LANES}
+    ov = request_main.get()
+    if ov:
+        out["main"] = ov
     out["fallback_local"] = bool(cl.get("fallback_local", True))
     mode = str(cl.get("routing_mode") or "auto").strip().lower()
     out["routing_mode"] = mode if mode in ("auto", "custom") else "auto"

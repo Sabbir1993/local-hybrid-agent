@@ -40,6 +40,9 @@ PUBLIC_HTTP = {
     # every API it calls still resolves a principal
     ("GET", "/react"),
     ("GET", "/assets/{file_path:path}"),
+    # MCP sign-in landing page: forwards the provider's redirect to /mcp/oauth/finish (which needs the session) because
+    # the SameSite=Strict cookie is not sent on a navigation that starts on the provider's site; it holds no data
+    ("GET", "/mcp/oauth/callback"),
     # docs that check the session inside the handler
     ("GET", "/openapi.json"),
     ("GET", "/docs"),

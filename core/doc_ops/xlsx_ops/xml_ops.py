@@ -13,6 +13,20 @@ from .xml_context import _Ctx, _sheet_items
 from .xml_writer import _cell_el, _row_el, _write
 
 
+def _allow_formula(value, explicit: bool) -> bool:
+    """A value that starts with "=" and passes the formula whitelist is a formula even when the model used set_cell or forgot
+    formulas:true. Making it a text-or-error round trip cost whole rounds; anything the whitelist refuses still goes down the
+    strict path and is reported."""
+    if explicit or not (isinstance(value, str) and value.startswith("=")):
+        return explicit
+    from ...sheet_engine.formulas import FormulaError, check_formula
+    try:
+        check_formula(value)
+    except FormulaError:
+        return False
+    return True
+
+
 def _op_set_cell(ctx: _Ctx, op: dict, formula: bool = False):
     sheet, ref = _split_addr(op_arg(op, "addr", "cell", "target"))
     value = op.get("formula") if formula and "formula" in op else op.get("value", op.get("text"))
@@ -20,7 +34,7 @@ def _op_set_cell(ctx: _Ctx, op: dict, formula: bool = False):
         value = "=" + str(value)
     name, part, root = ctx.sheet(sheet)
     r, c = split_ref(ref)
-    _write(ctx, part, root, r, c, value, allow_formula=formula)
+    _write(ctx, part, root, r, c, value, allow_formula=_allow_formula(value, formula))
     ctx.changes.append(f"{name}!{ref} = {_fmt(value)}")
 
 
@@ -38,7 +52,7 @@ def _op_set_range(ctx: _Ctx, op: dict):
     n = 0
     for i, rowvals in enumerate(values):
         for j, v in enumerate(rowvals):
-            _write(ctx, part, root, r0 + i, c0 + j, v, allow_formula=bool(op.get("formulas")))
+            _write(ctx, part, root, r0 + i, c0 + j, v, allow_formula=_allow_formula(v, bool(op.get("formulas"))))
             n += 1
     ctx.changes.append(f"{name}!{ref}: {n} cells set")
 
@@ -81,7 +95,7 @@ def _op_append_rows(ctx: _Ctx, op: dict):
         r = last + 1 + i
         for j, v in enumerate(vals):
             c = first_col + j
-            _write(ctx, part, root, r, c, v, allow_formula=bool(op.get("formulas")), style_from_above=False)
+            _write(ctx, part, root, r, c, v, allow_formula=_allow_formula(v, bool(op.get("formulas"))), style_from_above=False)
             if last_row is not None:
                 src, _ = _cell_el(last_row, last, c, create=False)
                 cel, _ = _cell_el(_row_el(sd, r), r, c, create=False)

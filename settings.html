@@ -5,11 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Settings — Local Agent</title>
 <script src="/static/js/theme-boot.js?v=1.2"></script>
-<link rel="stylesheet" href="/static/css/style.css?v=5.14">
+<link rel="stylesheet" href="/static/css/style.css?v=5.17">
 <link rel="stylesheet" href="/static/css/lanes.css?v=1.3">
 <link rel="stylesheet" href="/static/css/knowledge.css?v=1.0">
 <link rel="stylesheet" href="/static/css/telemetry.css?v=1.0">
-<link rel="stylesheet" href="/static/css/settings-pro.css?v=1.5">
+<link rel="stylesheet" href="/static/css/settings-pro.css?v=2.0">
 <link rel="icon" href="/static/logo/logo.jpg">
 <style>
   html, body {
@@ -923,14 +923,12 @@
 
       <!-- Section: Custom Agents -->
       <div class="card settings-panel" id="sec-custom-agents">
-        <div class="settings-panel-head" style="display:flex; justify-content:space-between; align-items:center;">
-          <div>
+        <div class="settings-panel-head">
             <h2>🤖 User-Wise Custom Agents</h2>
             <p class="dim">Design and manage specialized agents with tailored personas, custom tools, and lane configurations</p>
-          </div>
-          <button type="button" class="btn blue" id="btn-create-agent-settings" style="width:auto; flex:none; margin:0 0 0 auto; padding:5px 14px; font-size:11.5px; height:28px; white-space:nowrap; border-radius:6px; font-weight:600;">＋ New Custom Agent</button>
         </div>
         <div id="settings-agents-content" class="settings-agents-grid">
+          <button type="button" class="btn blue" id="btn-create-agent-settings" style="width:auto; flex:none; margin:0; padding:9px 16px; font-size:12px; white-space:nowrap; border-radius:8px; font-weight:600;">＋ New Custom Agent</button>
           <div class="mon-empty">Loading custom agents…</div>
         </div>
       </div>
@@ -1196,7 +1194,9 @@
 <script src="/static/js/config.js?v=3.1"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
 <script src="/static/js/agent-memory-ui.js?v=1.5"></script>
-<script src="/static/js/capabilities.js?v=3.4"></script>
+<script src="/static/js/cap-help.js?v=1.3"></script>
+<script src="/static/js/sec-help.js?v=1.4"></script>
+<script src="/static/js/capabilities.js?v=3.9"></script>
 <script src="/static/js/cloud.js?v=3.3"></script>
 <script src="/static/js/rbac.js?v=1.6"></script>
 <script src="/static/js/knowledge-policy.js?v=1.1"></script>
@@ -1207,9 +1207,9 @@
 <script src="/static/js/mfa-panel.js?v=1.0"></script>
 <script src="/static/js/lanes.js?v=1.11"></script>
 <script src="/static/js/projects.js?v=1.0"></script>
-<script src="/static/js/custom-agents.js?v=1.9"></script>
+<script src="/static/js/custom-agents.js?v=2.0"></script>
 <script src="/static/js/telemetry-dashboard.js?v=1.0"></script>
-<script src="/static/js/settings-page.js?v=1.3"></script>
+<script src="/static/js/settings-page.js?v=1.4"></script>
 <script src="/static/js/password-toggle.js?v=1.2"></script>
 </body>
 </html>

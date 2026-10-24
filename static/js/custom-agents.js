@@ -10,6 +10,24 @@
   let customAgentsList = [];
   let availableToolsList = [];
   let activeCustomAgent = null;
+  // the "New Custom Agent" button lives in the card, beside the filter; the grid is rebuilt with innerHTML, so lift it out first
+  let createBtnEl = null;
+  function stashCreateBtn(grid) {
+    createBtnEl = createBtnEl || document.getElementById('btn-create-agent-settings');
+    if (createBtnEl && grid.contains(createBtnEl)) createBtnEl.remove();
+  }
+  function mountCreateBtn(grid) {
+    const bar = grid.querySelector('#ca-toolbar');
+    if (!bar || !createBtnEl) return;
+    bar.appendChild(createBtnEl);
+    createBtnEl.onclick = () => {
+      if (!checkIsNative()) {
+        if (typeof toast === 'function') toast('Companion native app is required to use this feature.', true);
+        return;
+      }
+      openAgentBuilder();
+    };
+  }
   let agentGridFilter = '';
 
   const $ = id => document.getElementById(id);
@@ -1134,7 +1152,10 @@
 
     const mine = customAgentsList.filter(a => a.scope === 'mine');
     if (!mine.length) {
+      stashCreateBtn(grid);
       grid.innerHTML = '<div class="mon-empty">You have no agents yet. Click "+ New Custom Agent", or fork a starter from Customize → Agents.</div>';
+      grid.insertAdjacentHTML('afterbegin', '<div class="ca-toolbar" id="ca-toolbar"></div>');
+      mountCreateBtn(grid);
       return;
     }
 
@@ -1184,7 +1205,9 @@
       `;
     }
 
-    grid.innerHTML = `<input type="search" id="ca-grid-filter" class="ca-filter" placeholder="Filter your agents by name, folder or status" autocomplete="off" value="${esc(agentGridFilter)}">` + html;
+    stashCreateBtn(grid);
+    grid.innerHTML = `<div class="ca-toolbar" id="ca-toolbar"><input type="search" id="ca-grid-filter" class="ca-filter" placeholder="Filter your agents by name, folder or status" autocomplete="off" value="${esc(agentGridFilter)}"></div>` + html;
+    mountCreateBtn(grid);
     const gf = grid.querySelector('#ca-grid-filter');
     const applyGridFilter = () => {
       agentGridFilter = gf.value;

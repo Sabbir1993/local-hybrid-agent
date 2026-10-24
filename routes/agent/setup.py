@@ -228,8 +228,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     # lane stays on the local models whatever the picker, the job mapping or the agent's preferred lane say.
     # agent.agent_local_only = false in config/app.json lifts it.
     local_only = bool(ctx.custom_agent) and bool((APP_CONFIG.get("agent") or {}).get("agent_local_only", True))
-    ctx.cloud_main = cloud.cloud_lane("main", user.id)
     if getattr(req, "model", None) and not local_only:
+        # this chat's own model, for this request only (see routes/chat/run.py); executor / vision follow it in "auto"
         target_model = str(req.model).strip()
         cm = cloud.get_cloud(target_model, user.id)
         if not cm:
@@ -238,9 +238,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
                 if candidate.key == clean_key or candidate.display == target_model or candidate.model_id == target_model:
                     cm = candidate
                     break
-        if cm:
-            cloud.set_lanes(user.id, {"main": cm.key})
-            ctx.cloud_main = cm
+        cloud.request_main.set(cm.key if cm else "local")
+    ctx.cloud_main = cloud.cloud_lane("main", user.id)
     ctx.cloud_exec = cloud.cloud_lane("executor", user.id)
     # Jobs mapped in Settings -> Models (core/lanes.py): "Thinking & planning" may
     # point at a cloud model, "Routine tool calls" at any text model. Unmapped

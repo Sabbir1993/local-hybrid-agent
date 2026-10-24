@@ -299,6 +299,7 @@ async function loadCapabilities() {
     });
     _capShowTab(_capActiveTab);
 
+    capHelpAttach(box);
     if (limits) wireAgentLimits(box);
     wireAgentMemory(box);
     if (lib && !lib.error && canManageLib) wireAgentLibrary(box, lib);
@@ -587,130 +588,248 @@ function wireAgentLibrary(box, lib) {
 }
 
 /* ---------------- Router: usage stats, tuner suggestions, rules ---------------- */
+/* ---------------- Router pane ---------------- */
+const RT_TYPE_HINT = {
+  action: 'Do something: run commands, edit files, use tools',
+  creation: 'Build something: write a file, page or document',
+  question: 'Answer a question',
+  other: 'Anything that fits no other type',
+  greeting: 'Hello and thanks, answered directly',
+};
+
+// the "how routing works" diagram; every box maps to a setting in Routing rules
+function routerFlowSvg() {
+  const box = (x, y, w, h, cls, t1, t2) => `<g class="rtf-node ${cls}"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10"/>
+      <text x="${x + w / 2}" y="${y + (t2 ? h / 2 - 4 : h / 2 + 4)}" text-anchor="middle" class="rtf-t1">${t1}</text>
+      ${t2 ? `<text x="${x + w / 2}" y="${y + h / 2 + 12}" text-anchor="middle" class="rtf-t2">${t2}</text>` : ''}</g>`;
+  const lbl = (x, y, t, a = 'middle') => `<text x="${x}" y="${y}" text-anchor="${a}" class="rtf-lbl">${t}</text>`;
+  return `<svg viewBox="0 0 780 490" class="rtf-svg" role="img" aria-label="Routing flow: classify the request, then router, executor or main model, then record the outcome">
+    <defs><marker id="rtf-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="rtf-head"/></marker></defs>
+    <g class="rtf-edges" marker-end="url(#rtf-arr)">
+      <path d="M380 50V80"/>
+      <path d="M380 128V150H115V170"/><path d="M380 128V170"/><path d="M380 128V150H645V170"/>
+      <path d="M380 218V250"/>
+      <path d="M290 272H240"/>
+      <path d="M380 294V340"/>
+      <path d="M470 364H645V218" class="rtf-esc"/>
+      <path d="M140 294V430"/><path d="M380 388V430"/><path d="M740 194H760V450H740"/>
+    </g>
+    ${box(280, 10, 200, 40, 'rtf-n', 'Your request')}
+    ${box(280, 80, 200, 48, 'rtf-n', 'Classify the request', 'keywords, optional Laya model')}
+    ${box(20, 170, 190, 48, 'rtf-n', 'Greeting', 'answered directly, no tools')}
+    ${box(285, 170, 190, 48, 'rtf-cpu', 'Router (CPU)', 'fast tool matcher')}
+    ${box(550, 170, 190, 48, 'rtf-main', 'Main model', 'reasons and plans')}
+    ${box(290, 250, 180, 44, 'rtf-n', 'Confident enough?', 'score at or above the threshold')}
+    ${box(40, 250, 200, 44, 'rtf-cpu', 'Runs the tool directly', 'no model call needed')}
+    ${box(290, 340, 180, 48, 'rtf-exec', 'Executor', 'small local model')}
+    ${box(40, 430, 700, 40, 'rtf-n', 'Every run is recorded: type, lane and outcome (no prompt text)')}
+    ${lbl(122, 148, 'greeting', 'middle')}${lbl(388, 164, 'everything else', 'start')}${lbl(640, 148, 'start-on-main types', 'middle')}
+    ${lbl(265, 266, 'yes', 'end')}${lbl(388, 322, 'no', 'start')}
+    ${lbl(560, 388, 'escalates after repeats, no tool call,', 'middle')}${lbl(560, 404, 'a refusal, or a failing lane', 'middle')}
+  </svg>`;
+}
+
+function routerHelpHtml() {
+  const step = (n, t, d) => `<li><span class="rtm-n">${n}</span><div><b>${t}</b><p>${d}</p></div></li>`;
+  const knob = (t, d) => `<div class="rtm-knob"><b>${t}</b><span>${d}</span></div>`;
+  return `<div class="rtm-back" id="rt-help" role="dialog" aria-modal="true" aria-labelledby="rtm-title">
+    <div class="rtm">
+      <div class="rtm-head">
+        <div><h2 id="rtm-title">How routing works</h2>
+          <p>Every agent request is sorted by type, then handed to the cheapest lane that can do it well. The router learns from past runs.</p></div>
+        <button class="rtm-x" data-rt-close aria-label="Close">&times;</button>
+      </div>
+      <div class="rtm-body">
+        <section>
+          <h3>The path of one request</h3>
+          <div class="rtf-wrap">${routerFlowSvg()}</div>
+          <div class="rtf-legend"><span class="rtf-k cpu"></span>CPU router <span class="rtf-k exec"></span>Executor <span class="rtf-k main"></span>Main model <span class="rtf-k esc"></span>Escalation</div>
+        </section>
+        <section>
+          <h3>Step by step</h3>
+          <ol class="rtm-steps">
+            ${step(1, 'Classify', 'The request is sorted into a type: action, creation, question, other or greeting. The keyword lists in Routing rules decide this. The optional Laya model can double-check the type.')}
+            ${step(2, 'Pick a lane', 'Greetings are answered at once. Types ticked under <i>Start on main</i> skip the executor. For the rest, the CPU router tries to match a tool. If its score is at or above the confidence threshold, it runs the tool itself.')}
+            ${step(3, 'Execute', 'Otherwise the small executor model does the work step by step. For types ticked under <i>Main plans first</i>, the main model writes a short plan first and the executor then follows it.')}
+            ${step(4, 'Escalate if stuck', 'If the executor repeats itself, skips the tool call on an action or creation request, refuses, or its lane keeps failing, the request moves to the main model. A failing lane is retried later.')}
+            ${step(5, 'Record and learn', 'The run is saved with its type, lane and result. Once enough runs exist, the tuner suggests rule changes. You approve them, or turn on automatic tuning. A change that makes runs worse is rolled back.')}
+          </ol>
+        </section>
+        <section>
+          <h3>What each setting does</h3>
+          <div class="rtm-knobs">
+            ${knob('Router confidence', 'Higher means the CPU router acts only when it is very sure. Lower means fewer model calls, more mistakes.')}
+            ${knob('Escalate after repeats', 'How many identical steps in a row before the request moves to main.')}
+            ${knob('Executor success', 'If the executor succeeds less often than this on a type, adaptive routing sends that type to main.')}
+            ${knob('Require a tool call', 'Action requests must start with a tool call, not chat text.')}
+            ${knob('Executor sees only the current request', 'Keeps the small model focused and its context short.')}
+            ${knob('Offer the finish tool', 'Gives the model a clear way to say it is done and hand back the answer.')}
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>`;
+}
+
 function routerHtml(rt, canEdit) {
   const pct = v => (v == null ? '–' : Math.round(v * 100) + '%');
   const st = rt.stats_30d || {};
   const cats = st.categories || {};
-  const rows = Object.keys(cats).sort().map(c => {
+  const catNames = Object.keys(cats).sort();
+  const totalRuns = catNames.reduce((n, c) => n + (cats[c].runs || 0), 0);
+  const maxRuns = Math.max(1, ...catNames.map(c => cats[c].runs || 0));
+  const escRuns = catNames.reduce((n, c) => n + (cats[c].runs || 0) * (cats[c].escalation_rate || 0), 0);
+  const rows = catNames.map(c => {
     const x = cats[c];
     const rated = (x.thumbs_up || 0) + (x.thumbs_down || 0);
-    return `<tr><td><code>${esc(c)}</code></td><td>${x.runs || 0}</td><td>${x.avg_steps || 0}</td>
-      <td>${pct(x.escalation_rate)}</td><td>${pct(x.router_hit_rate)}</td>
-      <td>${rated ? `👍 ${x.thumbs_up || 0} · 👎 ${x.thumbs_down || 0}` : '–'}</td></tr>`;
+    const hint = RT_TYPE_HINT[c] || '';
+    return `<tr><td><span class="rt-type" ${hint ? `title="${esc(hint)}"` : ''}>${esc(c)}</span></td>
+      <td><span class="rt-bar"><i style="width:${Math.round(((x.runs || 0) / maxRuns) * 100)}%"></i></span><span class="rt-num">${x.runs || 0}</span></td>
+      <td class="rt-num">${x.avg_steps || 0}</td><td class="rt-num">${pct(x.escalation_rate)}</td><td class="rt-num">${pct(x.router_hit_rate)}</td>
+      <td class="rt-num">${rated ? `${x.thumbs_up || 0} up · ${x.thumbs_down || 0} down` : '–'}</td></tr>`;
   }).join('');
-  const lanes = Object.entries(st.lanes || {}).map(([l, x]) =>
-    `<span style="margin-right:10px;"><code>${esc(l)}</code> ${x.tool_calls} tool calls · ok ${pct(x.tool_ok_rate)}</span>`).join('');
-  const outcomes = Object.entries(st.outcomes || {}).map(([o, n]) => `${esc(o)}: ${n}`).join(' · ');
+  const lanes = st.lanes || {};
+  const laneTile = (name, label) => {
+    const x = lanes[name];
+    return `<div class="rt-tile"><span>${label} tool calls</span><b>${x ? pct(x.tool_ok_rate) : '–'}</b><em>${x ? x.tool_calls + ' calls ok' : 'no calls yet'}</em></div>`;
+  };
+  const outcomes = Object.entries(st.outcomes || {}).map(([o, n]) => `<span class="rt-chip">${esc(o)} <b>${n}</b></span>`).join('');
   const fmtVal = v => esc(Array.isArray(v) ? (v.length ? v.join(', ') : '(none)') : String(v));
-  const sugg = (rt.suggestions || []).map(sg => `<div class="cap-tool-entry" style="flex-wrap:wrap;">
-      <span class="cap-tool-badge skill"><span class="tool-badge-ico">🧭</span><code>${esc(sg.key)}</code></span>
-      <span style="font-size:10.5px;">${fmtVal(sg.current)} → <b>${fmtVal(sg.proposed)}</b></span>
-      ${canEdit ? `<span style="margin-left:auto; display:flex; gap:4px;">
-        <button class="btn accent rt-decide" data-id="${sg.id}" data-d="apply" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">Apply</button>
-        <button class="btn ghost rt-decide" data-id="${sg.id}" data-d="dismiss" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">Dismiss</button></span>` : ''}
-      <span class="cap-tool-desc" style="flex-basis:100%;">${esc((sg.evidence || {}).why || '')}</span>
-      <details style="flex-basis:100%; font-size:9.5px;"><summary class="dim">evidence</summary><pre class="mono" style="white-space:pre-wrap; margin:2px 0;">${esc(JSON.stringify(sg.evidence, null, 1))}</pre></details>
-    </div>`).join('') || '<div class="dim" style="font-size:10.5px;">No pending suggestions. The tuner runs daily and needs at least 30 samples per rule.</div>';
+  const sugg = (rt.suggestions || []).map(sg => `<div class="rt-sugg">
+      <div class="rt-sugg-top"><code>${esc(sg.key)}</code><span class="rt-chg">${fmtVal(sg.current)} <i>to</i> <b>${fmtVal(sg.proposed)}</b></span>
+      ${canEdit ? `<span class="rt-act">
+        <button class="btn accent rt-decide" data-id="${sg.id}" data-d="apply">Apply</button>
+        <button class="btn ghost rt-decide" data-id="${sg.id}" data-d="dismiss">Dismiss</button></span>` : ''}</div>
+      <p>${esc((sg.evidence || {}).why || '')}</p>
+      <details><summary>Evidence</summary><pre class="mono">${esc(JSON.stringify(sg.evidence, null, 1))}</pre></details>
+    </div>`).join('') || '<div class="rt-empty">No pending suggestions. The tuner runs daily and needs at least 30 runs per rule.</div>';
   const s = rt.settings || {};
-  const inp = 'background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px;';
   const dis = canEdit ? '' : 'disabled';
-  const listField = (k, label) => `<div style="margin-top:4px;"><b style="font-size:10.5px;">${label}</b>
-      <input type="text" class="rt-list" data-key="${k}" value="${esc((s[k] || []).join(', '))}" ${dis}
-        style="width:100%; box-sizing:border-box; ${inp} font-family:monospace;"></div>`;
+  const listField = (k, label, hint) => `<label class="rt-field rt-wide"><span>${label}</span><small>${hint}</small>
+      <input type="text" class="rt-list" data-key="${k}" value="${esc((s[k] || []).join(', '))}" ${dis}></label>`;
   const mainCats = (rt.categories || []).filter(c => c !== 'greeting');
   const hist = (rt.history || []).slice(0, 8).map(h =>
-    `<div class="dim" style="font-size:9.5px;">${esc(h.status)} · <code>${esc(h.key)}</code> → ${fmtVal(h.proposed)} · ${esc(h.decided_by || '')} · ${h.decided_at ? new Date(h.decided_at * 1000).toLocaleString() : ''}</div>`).join('');
-  // lane health: rolling success of recent turns per lane and request type (core/lane_health.py)
+    `<div>${esc(h.status)} · <code>${esc(h.key)}</code> to ${fmtVal(h.proposed)} · ${esc(h.decided_by || '')} · ${h.decided_at ? new Date(h.decided_at * 1000).toLocaleString() : ''}</div>`).join('');
   const healthRows = Object.entries(rt.lane_health || {}).map(([lane, h]) => {
     const cells = Object.entries(h.categories || {}).map(([c, x]) => {
       const r = x.success_rate;
-      const col = r == null ? 'var(--text-dim)' : r >= 0.85 ? 'var(--ok, #3fb950)' : r >= 0.7 ? '#d29922' : '#f85149';
-      return `<span style="margin-right:10px;"><code>${esc(c)}</code> <b style="color:${col};">${pct(r)}</b> <span class="dim">(${x.turns})</span></span>`;
+      const tone = r == null ? '' : r >= 0.85 ? 'good' : r >= 0.7 ? 'warn' : 'bad';
+      return `<span class="rt-health ${tone}" title="${x.turns} recent turns">${esc(c)} <b>${pct(r)}</b></span>`;
     }).join('');
     const brk = h.breaker_open
-      ? `<span style="color:#f85149; margin-left:6px;" title="Recent turns kept failing; requests go to main and this lane is re-tried periodically">● breaker open</span>`
-      : (h.consecutive_failures ? `<span class="dim" style="margin-left:6px;">${h.consecutive_failures} failed in a row</span>` : '');
-    return `<div style="font-size:10.5px; margin-top:2px;"><code>${esc(lane)}</code>${brk}<div>${cells}</div></div>`;
-  }).join('') || '<div class="dim" style="font-size:10.5px;">No turns recorded since start-up.</div>';
+      ? `<span class="rt-breaker" title="Recent turns kept failing; requests go to main and this lane is re-tried periodically">Paused</span>`
+      : (h.consecutive_failures ? `<span class="rt-note">${h.consecutive_failures} failed in a row</span>` : '');
+    return `<div class="rt-lane"><div class="rt-lane-name"><code>${esc(lane)}</code>${brk}</div><div class="rt-lane-cells">${cells}</div></div>`;
+  }).join('') || '<div class="rt-empty">No turns recorded since start-up.</div>';
   const applied = (rt.applied || []).slice(0, 6).map(a => {
-    const badge = { watching: '👀 watching', kept: '✅ kept', rolled_back: '↩ rolled back', superseded: '⚠ superseded' }[a.status] || esc(a.status);
+    const badge = { watching: 'Watching', kept: 'Kept', rolled_back: 'Rolled back', superseded: 'Superseded' }[a.status] || esc(a.status);
     const res = a.result || {};
     const rates = (res.before_rate != null || res.after_rate != null)
-      ? ` · bad runs ${pct(res.before_rate)} → ${pct(res.after_rate)}` : '';
+      ? ` · bad runs ${pct(res.before_rate)} to ${pct(res.after_rate)}` : '';
     const canUndo = canEdit && (a.status === 'watching' || a.status === 'kept');
-    return `<div class="cap-tool-entry" style="flex-wrap:wrap; font-size:10px;">
-      <span>${badge}</span> <code>${esc(a.key)}</code> ${fmtVal(a.old)} → <b>${fmtVal(a.new)}</b>
-      <span class="dim">${a.category ? '· ' + esc(a.category) : ''}${rates}${res.reason ? ' · ' + esc(res.reason) : ''}</span>
-      ${canUndo ? `<button class="btn ghost rt-undo" data-id="${a.id}" style="width:auto; margin:0 0 0 auto; padding:1px 8px; font-size:10px;">Roll back</button>` : ''}
-    </div>`;
+    return `<div class="rt-applied"><span class="rt-state ${esc(a.status)}">${badge}</span> <code>${esc(a.key)}</code> ${fmtVal(a.old)} to <b>${fmtVal(a.new)}</b>
+      <span class="rt-note">${a.category ? '· ' + esc(a.category) : ''}${rates}${res.reason ? ' · ' + esc(res.reason) : ''}</span>
+      ${canUndo ? `<button class="btn ghost rt-undo" data-id="${a.id}">Roll back</button>` : ''}</div>`;
   }).join('');
-  const chk = (k, label, tip) => `<label style="margin-right:12px;" title="${esc(tip)}"><input type="checkbox" class="rt-flag" data-key="${k}" ${s[k] ? 'checked' : ''} ${dis}> ${label}</label>`;
-  return `<div class="ru-pane cap-pane" data-pane="router" style="display:none;">
-    <div class="cap-pane-card" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; padding:12px 16px; background:var(--panel2); border-radius:8px; border:1px solid var(--border); gap:12px;">
+  const sw = (k, label, tip) => `<label class="rt-switch" title="${esc(tip)}"><input type="checkbox" class="rt-flag" data-key="${k}" ${s[k] ? 'checked' : ''} ${dis}><i></i><span>${label}<small>${esc(tip)}</small></span></label>`;
+  const num = (id, label, hint, attrs, val) => `<label class="rt-field"><span>${label}</span><small>${hint}</small>
+      <input type="number" id="${id}" ${attrs} value="${val}" ${dis}></label>`;
+  const catPick = (cls, picked) => mainCats.map(c => `<label class="rt-pick"><input type="checkbox" class="${cls}" value="${c}" ${(picked || []).includes(c) ? 'checked' : ''} ${dis}><span>${c}</span></label>`).join('');
+  const clf = s.classifier || {};
+  return `<div class="ru-pane cap-pane rt-pane" data-pane="router" style="display:none;">
+    <div class="rt-hero">
       <div>
-        <div style="font-weight:600; font-size:14px; color:var(--text); display:flex; align-items:center; gap:8px;">
-          <span>🧭 Router (usage-tuned)</span>
-          <span class="cap-pill-badge on">${esc(rt.engine || '')} router ${rt.router_available ? 'ready' : 'unavailable'}</span>
-        </div>
-        <div class="dim" style="font-size:11px; margin-top:3px;">Usage-based routing statistics and adaptive tuning</div>
+        <h3>Router</h3>
+        <p>Sorts each request and sends it to the lane that handles it best. Learns from your usage.</p>
+      </div>
+      <div class="rt-hero-r">
+        <span class="cap-pill-badge ${rt.router_available ? 'on' : 'off'}">${esc(rt.engine || '')} router ${rt.router_available ? 'ready' : 'unavailable'}</span>
+        <button class="btn ghost" id="rt-help-open">How it works</button>
       </div>
     </div>
-    <div class="cap-pane-body">
-      <div class="cap-item"><b>Last 30 days by request type</b>
-        ${rows ? `<table class="rt-table" style="width:100%; font-size:10.5px; border-collapse:collapse; margin-top:3px;">
-          <tr class="dim"><th align="left">type</th><th align="left">runs</th><th align="left">avg steps</th>
-            <th align="left" title="executor first step re-run on main">escalated</th><th align="left" title="CPU router picked the tool directly">router hit</th><th align="left">feedback</th></tr>
-          ${rows}</table>` : '<div class="dim" style="font-size:10.5px;">No agent runs recorded yet.</div>'}
-        ${lanes ? `<div style="font-size:10px; margin-top:4px;">${lanes}</div>` : ''}
-        ${outcomes ? `<div class="dim" style="font-size:9.5px; margin-top:2px;">outcomes: ${outcomes}</div>` : ''}
+    <div class="cap-pane-body rt-body">
+      <div class="rt-tiles">
+        <div class="rt-tile"><span>Runs, last 30 days</span><b>${totalRuns}</b><em>${catNames.length} request types</em></div>
+        <div class="rt-tile"><span>Moved to main</span><b>${totalRuns ? pct(escRuns / totalRuns) : '–'}</b><em>executor could not finish</em></div>
+        ${laneTile('main', 'Main')}${laneTile('executor', 'Executor')}
       </div>
-      <div class="cap-item"><b>Lane health</b> <span class="dim" style="font-size:10px;">(recent turns; a failing lane hands requests to main and is re-tried later)</span>
+
+      <section class="rt-card">
+        <h4>Requests by type</h4>
+        ${rows ? `<div class="rt-scroll"><table class="rt-table">
+          <thead><tr><th>Type</th><th>Runs</th><th>Avg steps</th><th title="The executor's first step was re-run on main">Moved to main</th><th title="The CPU router picked the tool directly">Router hit</th><th>Feedback</th></tr></thead>
+          <tbody>${rows}</tbody></table></div>` : '<div class="rt-empty">No agent runs recorded yet.</div>'}
+        ${outcomes ? `<div class="rt-chips"><span class="rt-note">How runs ended</span>${outcomes}</div>` : ''}
+      </section>
+
+      <section class="rt-card">
+        <h4>Lane health <small>Recent success per lane. A failing lane hands requests to main and is retried later.</small></h4>
         ${healthRows}
-      </div>
-      <div class="cap-item"><b>Suggestions</b>
-        ${canEdit ? '<button class="btn ghost" id="rt-tune" style="width:auto; margin:0 0 0 8px; padding:1px 8px; font-size:10px;">↻ Analyze now</button>' : ''}
-        <div style="margin-top:4px;">${sugg}</div>
-        ${hist ? `<details style="margin-top:4px;"><summary class="dim" style="font-size:10px;">decision history</summary>${hist}</details>` : ''}
-        <div style="margin-top:6px; font-size:10.5px;">
-          ${chk('auto_apply', 'Apply safe suggestions automatically', 'Applies one suggestion at a time, watches the runs that follow, and rolls it back by itself if they end badly more often. Every step is audited.')}
+      </section>
+
+      <section class="rt-card">
+        <h4>Suggestions ${canEdit ? '<button class="btn ghost rt-sm" id="rt-tune">Analyze now</button>' : ''}</h4>
+        ${sugg}
+        ${canEdit || s.auto_apply !== undefined ? sw('auto_apply', 'Apply safe suggestions automatically', 'Applies one at a time, watches the runs that follow, and rolls it back if they end badly more often. Every step is audited.') : ''}
+        ${applied ? `<div class="rt-sub">Automatic changes</div>${applied}` : ''}
+        ${hist ? `<details class="rt-hist"><summary>Decision history</summary>${hist}</details>` : ''}
+      </section>
+
+      <details class="rt-card rt-rules" open>
+        <summary><h4>Routing rules <small>${canEdit ? 'Edit, then save at the bottom' : 'Only admins can change these'}</small></h4></summary>
+
+        <div class="rt-group">
+          <div class="rt-gt">Thresholds</div>
+          <div class="rt-fields">
+            ${num('rt-thresh', 'Router confidence', 'The CPU router acts alone at or above this score', 'min="0.5" max="0.99" step="0.01"', s.confidence_threshold)}
+            ${num('rt-streak', 'Escalate after', 'Identical repeated steps before main takes over', 'min="1" max="5"', s.repeat_streak_limit)}
+            ${num('rt-minsucc', 'Executor success', 'Below this, adaptive routing sends the type to main', 'min="0.1" max="0.99" step="0.05"', s.min_executor_success)}
+          </div>
         </div>
-        ${applied ? `<div style="margin-top:4px;"><b style="font-size:10.5px;">Automatic changes</b>${applied}</div>` : ''}
-      </div>
-      <details class="cap-item"><summary><b>Routing rules</b> <span class="dim">(${canEdit ? 'editable' : 'admin-only'})</span></summary>
-        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:4px; font-size:10.5px;">
-          <label>router confidence ≥ <input type="number" id="rt-thresh" min="0.5" max="0.99" step="0.01" value="${s.confidence_threshold}" ${dis} style="width:58px; ${inp}"></label>
-          <label>escalate after <input type="number" id="rt-streak" min="1" max="5" value="${s.repeat_streak_limit}" ${dis} style="width:44px; ${inp}"> repeats</label>
+
+        <div class="rt-group">
+          <div class="rt-gt">Behaviour</div>
+          <div class="rt-switches">
+            ${sw('adaptive', 'Adaptive routing', 'Send a request type to main while the executor is failing on it (see Lane health)')}
+            ${sw('tool_choice_required', 'Require a tool call on action requests', 'Ask the model server to make the first step of an action request a tool call')}
+            ${sw('executor_fresh_context', 'Executor sees only the current request', 'The small executor gets this request and this run, not the whole chat')}
+            ${sw('finish_tool', 'Offer the finish tool', 'An explicit end-of-run signal the model can call with its final answer')}
+          </div>
         </div>
-        <div style="margin-top:6px; font-size:10.5px; line-height:1.9;">
-          ${chk('adaptive', 'Adaptive routing', 'Send a request type to main while the executor is failing on it (see Lane health)')}
-          ${chk('tool_choice_required', 'Require a tool call on action requests', 'Ask the model server to make the first step of an action request a tool call')}
-          ${chk('executor_fresh_context', 'Executor sees only the current request', 'The small executor gets this request and this run, not the whole chat')}
-          ${chk('finish_tool', 'Offer the finish tool', 'An explicit end-of-run signal the model can call with its final answer')}
-          <label>executor success ≥ <input type="number" id="rt-minsucc" min="0.1" max="0.99" step="0.05" value="${s.min_executor_success}" ${dis} style="width:58px; ${inp}"></label>
+
+        <div class="rt-group">
+          <div class="rt-gt">Request classifier (Laya)</div>
+          <div class="rt-clf">
+            <label class="rt-switch"><input type="checkbox" id="rt-clf-on" ${clf.enabled ? 'checked' : ''} ${dis}><i></i><span>Use the classifier<small>A small model that double-checks the request type.</small></span></label>
+            <select id="rt-clf-mode" ${dis}>
+              <option value="shadow" ${clf.mode !== 'active' ? 'selected' : ''}>Shadow: log only</option>
+              <option value="active" ${clf.mode === 'active' ? 'selected' : ''}>Active: correct the request type</option>
+            </select>
+          </div>
+          <p class="rt-hint">Shadow mode records what it would decide next to each run so you can compare. Active mode corrects the keyword-based type when it is confident. Test it with <code>python scripts/eval_classifier.py</code> first.</p>
         </div>
-        <div style="margin-top:6px; font-size:10.5px;"><b>Request classifier (Laya)</b>
-          <label style="margin-left:8px;"><input type="checkbox" id="rt-clf-on" ${(s.classifier || {}).enabled ? 'checked' : ''} ${dis}> on</label>
-          <select id="rt-clf-mode" ${dis} style="${inp} margin-left:6px;">
-            <option value="shadow" ${(s.classifier || {}).mode !== 'active' ? 'selected' : ''}>shadow (log only)</option>
-            <option value="active" ${(s.classifier || {}).mode === 'active' ? 'selected' : ''}>active (refines request type)</option>
-          </select>
-          <div class="dim" style="font-size:9.5px;">Shadow mode records what it would decide next to each run so you can compare it with the rules; active mode lets it correct the keyword-based request type when it is confident. Check it with <code>python scripts/eval_classifier.py</code> first.</div>
+
+        <div class="rt-group">
+          <div class="rt-gt">Which lane starts</div>
+          <div class="rt-row"><span>Start on main, skip the executor</span><div class="rt-picks">${catPick('rt-cat', s.start_on_main_categories)}</div></div>
+          <div class="rt-row"><span>Main plans first, then the executor follows</span><div class="rt-picks">${catPick('rt-plan-cat', s.plan_first_categories)}
+            <label class="rt-steps">up to <input type="number" id="rt-plan-steps" min="0" max="6" value="${s.plan_first_max_steps}" ${dis}> planning steps</label></div></div>
+          <p class="rt-hint">With plan first, main is used only for the planning steps. Set 0 steps or tick no type to turn it off.</p>
         </div>
-        <div style="margin-top:4px; font-size:10.5px;"><b>Start on main (skip executor) for:</b>
-          ${mainCats.map(c => `<label style="margin-right:8px;"><input type="checkbox" class="rt-cat" value="${c}" ${(s.start_on_main_categories || []).includes(c) ? 'checked' : ''} ${dis}> ${c}</label>`).join('')}
+
+        <div class="rt-group">
+          <div class="rt-gt">Keyword lists</div>
+          <div class="rt-fields">
+            ${listField('creation_keywords', 'Creation keywords', 'Marks a request as creation. Escalates if no tool is called.')}
+            ${listField('action_keywords', 'Action keywords', 'Marks a request as action.')}
+            ${listField('refusal_phrases', 'Refusal phrases', 'If the executor says one of these, the request moves to main.')}
+            ${listField('greetings', 'Greetings', 'Answered directly, no tools.')}
+          </div>
         </div>
-        <div style="margin-top:4px; font-size:10.5px;"><b>Main plans first for:</b>
-          ${mainCats.map(c => `<label style="margin-right:8px;"><input type="checkbox" class="rt-plan-cat" value="${c}" ${(s.plan_first_categories || []).includes(c) ? 'checked' : ''} ${dis}> ${c}</label>`).join('')}
-          <label style="margin-left:6px;">up to <input type="number" id="rt-plan-steps" min="0" max="6" value="${s.plan_first_max_steps}" ${dis} style="width:44px; ${inp}"> planning steps</label>
-          <div class="dim" style="font-size:9.5px;">Main reasons and writes the plan, then the executor carries it out. Unlike "Start on main", main is used only for the planning steps. 0 or no type ticked = off.</div>
-        </div>
-        ${listField('creation_keywords', 'Creation keywords (→ creation type, escalate if no tool call)')}
-        ${listField('action_keywords', 'Action keywords (→ action type)')}
-        ${listField('refusal_phrases', 'Refusal phrases (executor refusal → escalate)')}
-        ${listField('greetings', 'Greetings (answered directly, no tools)')}
-        ${canEdit ? '<button class="btn accent" id="rt-save" style="width:auto; margin:6px 0 0; padding:4px 12px; font-size:10.5px;">💾 Save rules</button>' : ''}
+        ${canEdit ? '<div class="rt-save"><button class="btn accent" id="rt-save">Save rules</button></div>' : ''}
       </details>
-      <div class="dim" style="font-size:9.5px; margin-top:4px;">Only request types, lanes and tool outcomes are recorded (no prompt text) and kept 90 days. Suggestions apply only when you approve them, or when automatic tuning is on (one change at a time, rolled back if runs get worse); every change is audited.</div>
+
+      <p class="rt-privacy">Only request types, lanes and tool outcomes are recorded (no prompt text), and kept 90 days. Suggestions apply only when you approve them or automatic tuning is on. Every change is audited.</p>
     </div>
   </div>`;
 }
@@ -723,6 +842,20 @@ function wireRouter(box, rt) {
       if (!r.ok) throw new Error(d.error || d.detail || r.status);
       toast(typeof msg === 'function' ? msg(d) : msg); loadCapabilities();
     } catch (e) { toast('Router: ' + e.message, true); }
+  };
+  // "How it works" modal lives on <body> so the settings pane's overflow never clips it
+  const helpBtn = box.querySelector('#rt-help-open');
+  if (helpBtn) helpBtn.onclick = () => {
+    document.getElementById('rt-help')?.remove();
+    document.body.insertAdjacentHTML('beforeend', routerHelpHtml());
+    const m = document.getElementById('rt-help');
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const close = () => { m.remove(); document.body.style.overflow = prevOverflow; document.removeEventListener('keydown', onKey); helpBtn.focus(); };
+    const onKey = e => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    m.addEventListener('click', e => { if (e.target === m || e.target.closest('[data-rt-close]')) close(); });
+    m.querySelector('.rtm-x').focus();
   };
   const tune = box.querySelector('#rt-tune');
   if (tune) tune.onclick = () => call('/control/router/tune', null,

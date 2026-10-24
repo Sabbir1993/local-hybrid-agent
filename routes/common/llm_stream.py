@@ -235,7 +235,10 @@ async def _llm_chat_stream_raw_inner(client_or_state, msgs: list, tools=None, te
     if max_tokens is not None and int(max_tokens) > 0:
         payload["max_tokens"] = int(max_tokens)
     else:
-        payload["max_tokens"] = -1
+        # never unlimited: a model that falls into a loop would otherwise generate until the context is full (tens of
+        # thousands of tokens, GPU busy the whole time). agent.max_output_tokens in config/app.json changes it, 0 lifts it.
+        _cap = (APP_CONFIG.get("agent") or {}).get("max_output_tokens", 32768)
+        payload["max_tokens"] = int(_cap) if _cap and int(_cap) > 0 else -1
     if tools:
         payload["tools"] = tools
         # "required" makes a tool call the only possible reply. Servers/providers that

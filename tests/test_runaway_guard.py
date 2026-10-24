@@ -143,5 +143,19 @@ class Stream(unittest.TestCase):
         self.assertEqual(res["finish_reason"], "timeout")
 
 
+class GluedRepeat(unittest.TestCase):
+    def test_words_glued_together_are_a_loop_even_in_a_table(self):
+        rows = "".join(f"| {i} | Prepayment Penalty = 28,240 * 0.0{i % 9} | {i * 100} |\n" for i in range(12))
+        text = rows + "| 13 | format: note=" + "total" * 40 + " description"
+        cut = find_runaway(text)
+        self.assertGreater(cut, 0)
+        self.assertLess(len(text[:cut]), len(text) - 150)
+        self.assertTrue(text[:cut].endswith("totaltotal"))
+
+    def test_ordinary_text_and_numbers_do_not_trip_it(self):
+        words = " ".join(f"item{i} grew by {i * 7} percent while costs stayed flat in region {i}" for i in range(60))
+        self.assertEqual(find_runaway(words + " 0000000000000000 ha ha ha ha | Total | Total | Total |"), -1)
+
+
 if __name__ == "__main__":
     unittest.main()

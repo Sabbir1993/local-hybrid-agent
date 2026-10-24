@@ -117,8 +117,24 @@ _DONE_PAGE = """<!doctype html><meta charset=utf-8><title>Signed in</title>
 
 
 @router.get("/oauth/callback", response_class=HTMLResponse)
-async def oauth_callback(state: str = "", code: str = "", error: str = "", user: Principal = Depends(_use)):
-    """Server-side redirect target (only with capabilities.mcp_oauth_redirect_base)."""
+async def oauth_callback(request: Request):
+    """Where the provider sends the browser back to. The session cookie is SameSite=Strict, so a navigation that
+    starts on the provider's site arrives WITHOUT it and /oauth/finish would answer 'not authenticated'. This landing
+    page holds no data and does nothing itself: it forwards the same parameters to /oauth/finish from this site, a
+    same-site navigation that carries the cookie. The sign-in is still completed only for the signed-in owner."""
+    import html as _html
+    from urllib.parse import urlencode
+    keep = {k: v for k, v in request.query_params.items() if k in ("state", "code", "error")}
+    url = _html.escape(f"{request.url.path.rsplit('/', 1)[0]}/finish?{urlencode(keep)}", quote=True)
+    return HTMLResponse(f'<!doctype html><meta charset=utf-8><title>Signing in</title>'
+                        f'<meta http-equiv="refresh" content="0;url={url}">'
+                        f'<body style="font:15px system-ui;padding:40px">Finishing sign-in... '
+                        f'<a href="{url}">Continue</a></body>')
+
+
+@router.get("/oauth/finish", response_class=HTMLResponse)
+async def oauth_finish(state: str = "", code: str = "", error: str = "", user: Principal = Depends(_use)):
+    """Completes the server-side redirect flow for the signed-in user (reached from /oauth/callback)."""
     import html as _html
     if error or not code:
         return HTMLResponse(_DONE_PAGE.format(msg=_html.escape(f"Sign-in failed: {error or 'no code'}")), status_code=400)
