@@ -130,6 +130,12 @@ class DecideWebTests(_Cfg):
         self.assertEqual((e["web"], e["lean"], e["budget"]), (True, False, 8))
         self.assertTrue(self.d("none", "deep")["web"])
 
+    def test_globe_on_offers_lean_web_even_without_web_wording(self):
+        o = kc.decide_web("none", "medium", True, False, offer=True)
+        self.assertEqual((o["web"], o["lean"]), (True, False))
+        self.assertFalse(kc.decide_web("none", "medium", False, False, offer=True)["web"])
+        self.assertFalse(kc.decide_web("none", "low", True, False, offer=False)["web"])
+
     def test_web_switch_off_always_wins(self):
         for cov in ("full", "partial", "none"):
             self.assertFalse(self.d(cov, "deep", web_on=False, explicit=True)["web"])

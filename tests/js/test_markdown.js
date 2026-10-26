@@ -47,6 +47,21 @@ ok(h.includes('<em>which model is advantaged</em>'), '*italic*');
 ok(/<h2>2\. Revenue Model<\/h2>/.test(h), '## heading is a real heading');
 ok(!h.includes('|---|'), 'no raw table syntax left');
 
+// a "|" inside a citation address must not cut the table cell
+h = md('| Model | Power |\n|---|---|\n| **Vision VSN-120** | 2200W [1](https://x.com/a|b) |');
+ok((h.match(/<td[ >]/g) || []).length === 2 && !h.includes('[1]('), 'table: "|" inside a link address keeps the row whole');
+
+// product cards
+const pj = '[{"title":"Tefal <b>Slim</b>","price":"Tk 9,870","image":"https://shop.example/a.jpg","url":"https://shop.example/p","store":"Rangs","facts":["2200W"],"note":"Top pick"},{"title":"x","image":"http://bad/a.jpg","url":"javascript:alert(1)"}]';
+h = md('Intro\n\n```products\n' + pj + '\n```\n\nafter');
+ok((h.match(/class="prod-card"/g) || []).length === 2, 'products: one card per item');
+ok(h.includes('/media/product-image?u=' + encodeURIComponent('https://shop.example/p') + '&amp;i=' + encodeURIComponent('https://shop.example/a.jpg')), 'products: picture goes through the server (/media/product-image)');
+ok(!h.includes('<b>Slim</b>') && h.includes('&lt;b&gt;Slim'), 'products: title is escaped');
+ok(!h.includes('http://bad') && !h.includes('javascript:'), 'products: only https pictures and links survive');
+ok(h.includes('View at Rangs'), 'products: store link');
+h = md('```products\nnot json\n```');
+ok(!h.includes('prod-card'), 'products: invalid JSON stays a code block');
+
 // lists
 h = md('1. first\n2. second\n   - nested a\n   - nested b\n3. third\n\n- [x] done\n- [ ] todo');
 ok(/<ol>[\s\S]*<li>first/.test(h) && /<ul>[\s\S]*nested a/.test(h), 'ordered list with a nested bullet list');

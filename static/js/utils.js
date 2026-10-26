@@ -266,6 +266,12 @@ function md(s, opts) {
         if (spec) out += renderVisualHtml(spec);
         else if (unclosed && opts && opts.streaming) out += '<div class="vis-pending dim">Drawing diagram…</div>';
         else out += codeBlockHtml(rawLang, code, esc(code));
+      } else if (rawLang === 'products' && typeof parseProducts === 'function') {
+        const spec = parseProducts(code);
+        const unclosed = i === parts.length - 1;
+        if (spec) out += renderProductsHtml(spec);
+        else if (unclosed && opts && opts.streaming) out += '<div class="vis-pending dim">Finding products…</div>';
+        else out += codeBlockHtml(rawLang, code, esc(code));
       } else {
         const lang = hlLangFor(rawLang);
         out += codeBlockHtml(rawLang, code, lang ? hlCode(code, lang) : esc(code));

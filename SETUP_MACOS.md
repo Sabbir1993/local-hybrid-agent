@@ -495,6 +495,7 @@ launchctl kickstart -k gui/$(id -u)/com.sslwireless.localagent
 - [ ] `config/app.json` paths and `metal` runtime set, `autotune.py` re-run
 - [ ] Models in `~/Models`, voice models copied if voice is used
 - [ ] Tests run, first login and a chat succeed
+- [ ] Web search answers with the globe on (DuckDuckGo + Bing by default; SearXNG/Google optional, see SETUP_LINUX.md); the server has outbound HTTPS
 - [ ] Admin account created, bootstrap env vars unset
 - [ ] API keys re-entered in Settings, Keychain "Always Allow" granted
 - [ ] LaunchAgent loaded, `pmset` set, auto-login configured

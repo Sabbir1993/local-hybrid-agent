@@ -106,6 +106,12 @@ account; save the password.
 connect MCP servers in Settings. API keys are stored in Windows Credential
 Manager.
 
+**10b. Web search (works out of the box; check it).** Ask something recent with the globe in the chat box turned on
+("latest induction cooker prices in Bangladesh"). The answer should list sources with a line such as
+`via DuckDuckGo + Bing`. Product questions also show picture cards (pictures are fetched by the server through
+`/media/product-image`, so the server needs outbound HTTPS to the shops). Optional Google/SearXNG upgrade:
+see "Web search engines" below.
+
 **11. Setup the Code Runner Sandbox (WSL2)**
 The chat offers `run_sandbox_python` for isolated data analysis, custom charts,
 and file conversions. On Windows, execution runs inside a sandboxed WSL2 environment:
@@ -128,6 +134,12 @@ wsl -d Ubuntu-24.04 -- bash -c "sudo apt update && sudo apt install -y python3 p
 ```
 
 ---
+
+## Web search engines (optional: add Google)
+
+Web search scrapes DuckDuckGo and Bing by default. For Google results, run SearXNG inside WSL2 and set
+`"web": { "searxng_url": "http://[WSL_ADDRESS]:8888" }` in `config\app.json`; the steps are in
+[SETUP_LINUX.md](SETUP_LINUX.md#web-search-engines-optional-add-google).
 
 ## Model Sizing & MoE VRAM Tuning
 

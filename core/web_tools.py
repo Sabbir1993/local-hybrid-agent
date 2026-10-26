@@ -303,7 +303,14 @@ async def tool_web_search(args) -> str:
         out.append(f"[{i}] {r['title']}\n    {r['url']}")
         if r.get("snippet"):
             out.append(f"    {r['snippet']}")
-        room = 1200                                  # excerpt budget per source
+        meta = r.get("meta") or {}
+        if meta.get("image") or meta.get("price"):
+            if meta.get("image"):
+                image_proxy.remember(get_current_user_id(), [meta["image"]])
+                out.append(f"    image: {meta['image']}")
+            if meta.get("price"):
+                out.append(f"    price: {meta['price']} {meta.get('currency', '')}".rstrip())
+        room = 1200                                # excerpt budget per source
         for p in r.get("passages") or []:
             if room <= 80:
                 break

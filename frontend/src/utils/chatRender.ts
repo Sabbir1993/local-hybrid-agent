@@ -1,5 +1,5 @@
 import { hlCode, hlLangFor } from './highlight';
-import { parseVisual, renderVisualHtml } from './visual';
+import { parseVisual, renderVisualHtml, parseProducts, renderProductsHtml } from './visual';
 import { marked, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
 
@@ -339,6 +339,10 @@ marked.use({
         const spec = parseVisual(text);
         if (spec) return renderVisualHtml(spec);
       }
+      if (rawLang === 'products') {
+        const spec = parseProducts(text);
+        if (spec) return renderProductsHtml(spec);
+      }
       const label = rawLang || 'code';
       const escaped = hlCode(text, hlLangFor(rawLang));   // escapes, then wraps tokens
       return `<div class="code-block" style="margin:10px 0; border:1px solid var(--border, #334155); border-radius:8px; overflow:hidden; background:var(--bg-code, #0f172a);"><div class="code-block-head" style="display:flex; align-items:center; justify-content:space-between; padding:6px 12px; background:rgba(255,255,255,0.03); border-bottom:1px solid var(--border, #334155);"><span class="code-block-lang" style="font-size:11px; font-weight:600; color:var(--dim, #8b949e); text-transform:uppercase;">${label}</span><span class="code-block-actions"><button type="button" class="code-block-btn" data-click="code-copy" title="Copy code" style="padding:2px 8px; font-size:11px; background:transparent; border:none; color:var(--dim); cursor:pointer;">📋 Copy</button></span></div><pre style="margin:0; padding:12px; overflow-x:auto;"><code style="font-family:monospace; font-size:12.5px; line-height:1.5;">${escaped}</code></pre></div>`;
@@ -550,7 +554,8 @@ export function renderCompleteChatMessage(content: string, acts?: any[], secs?: 
     rawContent = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^[\s\S]*?<\/think>/i, '').trim();
   }
 
-  const transformed = transformMarkdownSpecialTokens(rawContent);
+  // a "|" inside a link address would cut a table cell in two (cells are split before inline parsing)
+  const transformed = transformMarkdownSpecialTokens(rawContent).replace(/\]\((https?:\/\/[^)\s]*\|[^)\s]*)\)/g, (_m, u: string) => '](' + u.replace(/\|/g, '%7C') + ')');
   const parsedMarkdown = marked.parse(transformed, { async: false }) as string;
   const sanitized = sanitizeHtml(parsedMarkdown);
 

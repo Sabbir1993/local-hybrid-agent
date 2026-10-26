@@ -166,6 +166,12 @@ first):
 **14.** Open `http://[SERVER_IP]:8000`, log in, then enter your cloud API keys
 and connect MCP servers in Settings.
 
+**14b. Web search (works out of the box; check it).** Ask something recent with the globe in the chat box turned on
+("latest induction cooker prices in Bangladesh"). The answer should list sources with a line such as
+`via DuckDuckGo + Bing`. Product questions also show picture cards (pictures are fetched by the server through
+`/media/product-image`, so the server needs outbound HTTPS to the shops). Optional Google/SearXNG upgrade:
+see "Web search engines" below.
+
 **15. Setup the Code Runner Sandbox (Bubblewrap / Isolated Runner)**
 The chat offers `run_sandbox_python` for isolated data analysis, custom charts,
 and calculations. On Linux, execution uses unprivileged **Bubblewrap (`bwrap`)**
@@ -185,6 +191,58 @@ python3 tools/runner/verify.py
    - For an isolated dedicated VM: run `python3 tools/runner/runner_server.py serve` on the runner VM, then pair in Settings -> Code Runner.
 
 ---
+
+## Web search engines (optional: add Google)
+
+Out of the box web search scrapes DuckDuckGo and Bing (no key, no account). To add **Google** results, run your own
+[SearXNG](https://github.com/searxng/searxng) meta-search next to the app and point the app at it. No Docker needed.
+
+```bash
+sudo apt install -y python3-venv python3-dev build-essential git libxslt-dev zlib1g-dev libffi-dev libssl-dev
+```
+```bash
+git clone https://github.com/searxng/searxng ~/searxng && cd ~/searxng && python3 -m venv .venv
+```
+```bash
+.venv/bin/pip install -U pip setuptools wheel pyyaml msgspec typing_extensions && .venv/bin/pip install --use-pep517 --no-build-isolation -e .
+```
+
+Create `~/searxng/settings.yml` (use your own random secret, never commit it):
+```yaml
+use_default_settings: true
+server:
+  bind_address: "127.0.0.1"
+  port: 8888
+  secret_key: "[SEARXNG_SECRET]"
+  limiter: false
+search:
+  formats: [html, json]
+engines:
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+```
+```bash
+SEARXNG_SETTINGS_PATH=~/searxng/settings.yml ~/searxng/.venv/bin/python -m searx.webapp
+```
+Then add a `web` section to `config/app.json` and restart the app:
+```json
+"web": { "searxng_url": "http://127.0.0.1:8888" }
+```
+SearXNG is asked first; DuckDuckGo and Bing are used when it returns fewer than `web.searxng_min_results` (5) hits
+or is down. **Check that Google really answers** before relying on it:
+```bash
+curl -s "http://127.0.0.1:8888/search?q=test&format=json&engines=google" | head -c 300
+```
+If `unresponsive_engines` says `access denied` / `Suspended`, Google is blocking that machine's IP (tested on the
+Arc server's connection: HTTP 403 on the first request). SearXNG then still serves its other engines (Brave,
+DuckDuckGo), but nothing comes from Google; a different network or a proxy may help, or use Google's paid
+Programmable Search API instead (not built in yet). Search queries leave your network
+(card-like numbers and e-mail addresses are stripped first); keep SearXNG bound to `127.0.0.1` or the LAN only.
+On Windows run SearXNG inside WSL2 (same steps) and use the WSL address in `searxng_url`.
 
 ## Model Sizing & MoE VRAM Tuning
 

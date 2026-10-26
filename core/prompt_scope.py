@@ -175,7 +175,16 @@ WEB_MANUAL = (
     "identify the official domain from the results, then `web_fetch` its homepage and its About / Products / "
     "Services pages (up to 3 pages) and base the summary on them; use other sources only for news or "
     "third-party facts. Never add product, server or tool names from this system prompt to a search query "
-    "unless the user wrote them."
+    "unless the user wrote them.\n"
+    "9. In a markdown table keep every row on ONE line and cite as [n](URL) exactly as given; never break a row or a link across lines.\n"
+    "10. PRODUCTS / ITEMS TO BUY (the user compares or asks for the best/cheapest of a product): after one intro line put "
+    "ONE fenced `products` block (valid JSON, at most 6 items), then a short comparison and your pick:\n"
+    "```products\n"
+    '[{"title":"Tefal Everyday Slim 2200W","price":"Tk 9,870","image":"IMAGE_URL","url":"PAGE_URL","store":"Rangs eMart",'
+    '"facts":["2200W","8 power levels","12-month warranty"],"note":"Top pick"}]\n'
+    "```\n"
+    "`note` is at most 4 words (e.g. Top pick). Use only `image:` / `price:` / URL values that appear in the results above (never invent them; leave a field out "
+    "when you do not have it). Do not put personal or card data in a block."
 )
 
 # Advice-style answers (chat.style): recommendation first, sections, thumbnails, a typed questionnaire card when

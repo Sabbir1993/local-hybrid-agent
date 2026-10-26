@@ -5887,3 +5887,17 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 #settings-agents-content .ca-toolbar .btn { padding-left: 18px; padding-right: 18px; display: inline-flex; align-items: center; }
 #settings-agents-content { display: flex; flex-direction: column; gap: 14px; }
 #settings-agents-content > .agent-card { margin: 0; }
+
+/* product cards (markdown.js renderProductsHtml; pictures come from /media/proxy) */
+.prod-list { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.prod-card { display: flex; gap: 16px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid var(--border-subtle, rgba(128,128,128,.25)); }
+.prod-img { flex: 0 0 112px; width: 112px; height: 112px; border-radius: 12px; overflow: hidden; background: var(--surface-2, #1b1b1b); display: flex; align-items: center; justify-content: center; }
+.prod-img img { width: 100%; height: 100%; object-fit: contain; display: block; background: #fff; }
+.prod-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.prod-note { align-self: flex-start; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: rgba(46, 160, 67, .18); color: #3fb950; }
+.prod-title { font-weight: 600; font-size: 15px; }
+.prod-price { font-size: 18px; font-weight: 700; }
+.prod-facts, .prod-store { font-size: 12.5px; color: var(--dim, #8b949e); }
+.prod-link { font-size: 13px; color: var(--accent, #58a6ff); text-decoration: none; }
+.prod-link:hover { text-decoration: underline; }
+@media (max-width: 520px) { .prod-img { flex-basis: 84px; width: 84px; height: 84px; } }

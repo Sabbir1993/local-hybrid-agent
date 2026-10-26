@@ -128,9 +128,10 @@ async def resolve(query: str, hits, blocked: bool = False) -> str:
     return await judge(query, hits, blocked) or "partial"
 
 
-def decide_web(cov: str, tier_name: str, web_on: bool, explicit: bool) -> dict:
+def decide_web(cov: str, tier_name: str, web_on: bool, explicit: bool, offer: bool = False) -> dict:
     """What to offer. -> {"web": bool, "lean": bool, "budget": int}. `web_on` = the user's web switch and
-    the web capability; `explicit` = the wording is a clear web request."""
+    the web capability; `explicit` = the wording is a clear web request; `offer` = the user switched the web on
+    in the composer, so the tools are always available (lean hint) even when the wording is not a web request."""
     if not web_on:
         return {"web": False, "lean": False, "budget": 0}
     budget = web_budget(cov, tier_name, explicit)
@@ -142,6 +143,8 @@ def decide_web(cov: str, tier_name: str, web_on: bool, explicit: bool) -> dict:
         return {"web": budget > 0, "lean": True, "budget": budget}
     if tier_name == "deep":           # Deep research with nothing in the KB: its whole method is web research
         return {"web": True, "lean": False, "budget": budget}
+    if offer:                         # globe on, nothing in the KB: the full web manual, so the model knows it can search
+        return {"web": budget > 0, "lean": False, "budget": budget}
     return {"web": False, "lean": False, "budget": 0}
 
 

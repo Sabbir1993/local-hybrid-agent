@@ -530,7 +530,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             cov = await kb_coverage.resolve(kb_query, cov_hits, blocked=bool(kb_blocked_reason))
         else:
             cov = "none"
-        plan = kb_coverage.decide_web(cov, kb_coverage.tier(effort, deep), bool(use_web), web_explicit)
+        plan = kb_coverage.decide_web(cov, kb_coverage.tier(effort, deep), bool(use_web), web_explicit,
+                                     offer=not voice_policy.active(req))
         has_web, web_lean, web_budget_n = plan["web"], plan["lean"], plan["budget"]
         if level_tool_calls == 0:
             has_web = False

@@ -185,3 +185,43 @@ export function renderVisualHtml(spec) {
   return `<div class="vis-box">${title}<div class="vis-flow">${body}</div></div>`;
 }
 
+/* Product cards: ```products [{"title","price","image","url","store","facts":[..],"note"}] - up to 6 items. Every string is
+ * escaped and clamped, only https image / page addresses survive, and pictures load through /media/proxy (never from the
+ * shop's own host; the server only serves pictures a search tool returned). Invalid JSON stays a normal code block. */
+const PROD_MAX = 6;
+export function parseProducts(code) {
+  let data;
+  try { data = JSON.parse(String(code ?? '')); } catch (_) { return null; }
+  if (data && !Array.isArray(data) && Array.isArray(data.items)) data = data.items;
+  if (!Array.isArray(data)) return null;
+  const str = (v, n) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, n) : '');
+  const https = v => (typeof v === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(v.trim()) ? v.trim().slice(0, 600) : '');
+  const items = data.slice(0, PROD_MAX).map(o => {
+    if (!o || typeof o !== 'object') return null;
+    const title = str(o.title, 90);
+    if (!title) return null;
+    const url = https(o.url);
+    let store = str(o.store, 40);
+    if (!store && url) { try { store = new URL(url).hostname.replace(/^www\./, ''); } catch (_) { /* no store name */ } }
+    return { title, price: str(o.price, 30), image: https(o.image), url, store, note: str(o.note, 40),
+      facts: (Array.isArray(o.facts) ? o.facts : []).slice(0, 4).map(f => str(f, 60)).filter(Boolean) };
+  }).filter(Boolean);
+  return items.length ? { type: 'products', items } : null;
+}
+
+export function renderProductsHtml(spec) {
+  const card = it => {
+    // the server serves the model's picture if a search returned it, else the og:image of the card's own page
+    const img = (it.image || it.url)
+      ? `<img src="${esc('/media/product-image?u=' + encodeURIComponent(it.url) + '&i=' + encodeURIComponent(it.image))}" alt="" loading="lazy" referrerpolicy="no-referrer" data-hide-on-error />` : '';
+    const link = it.url
+      ? `<a class="prod-link" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">View${it.store ? ' at ' + esc(it.store) : ''} &#8599;</a>` : '';
+    return `<div class="prod-card"><div class="prod-img">${img}</div><div class="prod-body">`
+      + (it.note ? `<span class="prod-note">${esc(it.note)}</span>` : '')
+      + `<div class="prod-title">${esc(it.title)}</div>`
+      + (it.price ? `<div class="prod-price">${esc(it.price)}</div>` : '')
+      + (it.facts.length ? `<div class="prod-facts">${it.facts.map(esc).join(' &middot; ')}</div>` : '')
+      + (it.store && !it.url ? `<div class="prod-store">${esc(it.store)}</div>` : '') + link + `</div></div>`;
+  };
+  return `<div class="prod-list">${spec.items.map(card).join('')}</div>`;
+}

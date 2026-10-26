@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, File as FastAPIFile, Form, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from core import image_proxy, lanes, media, media_images
+from core import image_proxy, lanes, media, media_images, product_image
 from core.media import tts as media_tts
 from core.audit import audit_log
 from core.auth import Principal, user_has_permission
@@ -302,6 +302,19 @@ async def media_proxy(u: str = "", user: Principal = Depends(get_current_user)):
     the third-party host, and only URLs a search tool gave this user are served."""
     try:
         ctype, data = await asyncio.to_thread(image_proxy.fetch, user.id, u)
+    except image_proxy.ProxyRefused as e:
+        return _err(str(e), 404)
+    return Response(content=data, media_type=ctype, headers={
+        "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox"})
+
+
+@router.get("/media/product-image")
+async def media_product_image(u: str = "", i: str = "", user: Principal = Depends(get_current_user)):
+    """The picture of a product card: the search result's own image address (i) or the og:image of its page (u).
+    Both must have come from a web tool result for this user (core/product_image.py)."""
+    try:
+        ctype, data = await asyncio.to_thread(product_image.resolve, user.id, u, i)
     except image_proxy.ProxyRefused as e:
         return _err(str(e), 404)
     return Response(content=data, media_type=ctype, headers={

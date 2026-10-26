@@ -111,6 +111,70 @@ def extract_html(html_text: str, base_url: str) -> dict:
     return {"title": title, "text": _render(root), "links": links}
 
 
+def _jsonld_products(doc) -> list:
+    """schema.org Product / Offer objects from the page's JSON-LD blocks."""
+    import json
+    found = []
+
+    def walk(o):
+        if isinstance(o, list):
+            for x in o:
+                walk(x)
+        elif isinstance(o, dict):
+            t = o.get("@type")
+            t = t if isinstance(t, list) else [t]
+            if "Product" in t or "Offer" in t or "AggregateOffer" in t:
+                found.append(o)
+            for v in o.values():
+                if isinstance(v, (dict, list)):
+                    walk(v)
+
+    for s in doc.xpath("//script[@type='application/ld+json']")[:6]:
+        try:
+            walk(json.loads(s.text or ""))
+        except ValueError:
+            continue
+    return found
+
+
+def extract_product_meta(html_text: str, base_url: str) -> dict:
+    """-> {image, price, currency, name}: the picture and price a page declares about itself (Open Graph,
+    schema.org JSON-LD). Only https images are kept; any missing field is simply absent."""
+    doc = _html(html_text)
+
+    def meta(*names):
+        for n in names:
+            v = doc.xpath(f"//meta[@property='{n}' or @name='{n}']/@content")
+            if v and v[0].strip():
+                return _clean(v[0])
+        return ""
+
+    image = meta("og:image:secure_url", "og:image", "twitter:image")
+    price = meta("product:price:amount", "og:price:amount")
+    currency = meta("product:price:currency", "og:price:currency")
+    name = meta("og:title")
+    for p in _jsonld_products(doc):
+        offers = p.get("offers") if isinstance(p.get("offers"), (dict, list)) else p
+        for o in (offers if isinstance(offers, list) else [offers]):
+            if not isinstance(o, dict):
+                continue
+            price = price or str(o.get("price") or o.get("lowPrice") or "")
+            currency = currency or str(o.get("priceCurrency") or "")
+        if not image:
+            im = p.get("image")
+            im = im[0] if isinstance(im, list) and im else im
+            image = (im.get("url") if isinstance(im, dict) else im) or ""
+        name = name or str(p.get("name") or "")
+    if not price:
+        v = doc.xpath("//*[@itemprop='price']/@content|//*[@itemprop='price']/text()")
+        price = _clean(str(v[0])) if v else ""
+    image = urljoin(base_url, str(image).strip()) if image else ""
+    if not image.lower().startswith("https://"):
+        image = ""
+    out = {"image": image[:500], "price": price[:30], "currency": currency[:8], "name": name[:140]}
+    return {k: v for k, v in out.items() if v}
+
+
 def extract_response(r) -> dict:
     """guarded_get FetchResult -> {title, text, links, kind}."""
     ctype = (r.headers.get("content-type") or "").lower()
@@ -197,6 +261,13 @@ async def attach_passages(query: str, items: list, n: int) -> None:
                 return
             page = extract_response(r)
             item["passages"] = await best_passages(query, page["text"])
+            if page.get("kind") == "html":
+                try:
+                    meta = extract_product_meta(decode_html(r.content, r.encoding), str(r.url))
+                    if meta:
+                        item["meta"] = meta
+                except Exception:
+                    pass
         except Exception as e:   # blocked / slow / unparsable page: never fails the search
             print(f"[web] auto-fetch skipped {item['url'][:80]}: {type(e).__name__}", file=sys.stderr)
 
