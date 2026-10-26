@@ -59,6 +59,10 @@ ok(h.includes('/media/product-image?u=' + encodeURIComponent('https://shop.examp
 ok(!h.includes('<b>Slim</b>') && h.includes('&lt;b&gt;Slim'), 'products: title is escaped');
 ok(!h.includes('http://bad') && !h.includes('javascript:'), 'products: only https pictures and links survive');
 ok(h.includes('View at Rangs'), 'products: store link');
+h = md('```products\n[{"title":"A","url":"https://s.example/a"},{"title":"B","url":"https://s.example/b"},\n```');
+ok((h.match(/class="prod-card"/g) || []).length === 2, 'products: trailing comma is tolerated');
+h = md('```products\n[{"title":"A","url":"https://s.example/a"},{"title":"B","pri\n```');
+ok((h.match(/class="prod-card"/g) || []).length === 1, 'products: a cut-off tail keeps the complete items');
 h = md('```products\nnot json\n```');
 ok(!h.includes('prod-card'), 'products: invalid JSON stays a code block');
 

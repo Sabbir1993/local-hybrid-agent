@@ -1444,6 +1444,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         content, _chg = _cit.strip_unverified(_uid(), content)
                         if _chg:
                             yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+                        # product cards: links and pictures must be real search results, not the model's guesses
+                        from core import products_ground as _pg
+                        content, _chg = _pg.ground_text(_uid(), content)
+                        if _chg:
+                            yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
                     gen_toks = 0
                     if res_dict:

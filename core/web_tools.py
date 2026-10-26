@@ -27,7 +27,7 @@ from .web_search import blocklist, citations
 from . import prompt_fence
 from .agent_tools import MAX_TOOL_OUTPUT
 from .net_guard import BlockedURLError
-from . import image_proxy
+from . import image_proxy, products_ground
 from .request_context import get_current_user_id
 from .registry import registry
 
@@ -304,6 +304,7 @@ async def tool_web_search(args) -> str:
         if r.get("snippet"):
             out.append(f"    {r['snippet']}")
         meta = r.get("meta") or {}
+        products_ground.note_result(get_current_user_id(), r["url"], r["title"], meta)
         if meta.get("image") or meta.get("price"):
             if meta.get("image"):
                 image_proxy.remember(get_current_user_id(), [meta["image"]])

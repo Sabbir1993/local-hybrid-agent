@@ -416,9 +416,29 @@ function renderVisualHtml(spec) {
  * escaped and clamped, only https image / page addresses survive, and pictures load through /media/proxy (never from the
  * shop's own host; the server only serves pictures a search tool returned). Invalid JSON stays a normal code block. */
 const PROD_MAX = 6;
+
+// the model's JSON is often almost valid: trailing commas, curly quotes, text around it, or a cut-off tail
+function _prodJson(code) {
+  const src = String(code ?? '').replace(/[“”]/g, '"').trim();
+  const tries = [src];
+  const a = src.indexOf('['), b = src.lastIndexOf(']');
+  if (a >= 0 && b > a) tries.push(src.slice(a, b + 1));
+  if (a >= 0) {                                  // cut off mid-item: keep the complete objects
+    const cut = src.slice(a).lastIndexOf('},');
+    if (cut > 0) tries.push(src.slice(a, a + cut + 1) + ']');
+    const end = src.slice(a).lastIndexOf('}');
+    if (end > 0) tries.push(src.slice(a, a + end + 1) + ']');
+  }
+  for (const t of tries) {
+    for (const s of [t, t.replace(/,\s*([\]}])/g, '$1')]) {
+      try { return JSON.parse(s); } catch (_) { /* next attempt */ }
+    }
+  }
+  return null;
+}
+
 function parseProducts(code) {
-  let data;
-  try { data = JSON.parse(String(code ?? '')); } catch (_) { return null; }
+  let data = _prodJson(code);
   if (data && !Array.isArray(data) && Array.isArray(data.items)) data = data.items;
   if (!Array.isArray(data)) return null;
   const str = (v, n) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, n) : '');
