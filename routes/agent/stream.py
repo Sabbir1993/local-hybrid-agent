@@ -1453,22 +1453,23 @@ async def run_agent_stream(req, user, ctx):
                 # etc. from PARALLEL_READ_TOOLS). Anything else - writes, code,
                 # permissions, ordered plan state - keeps the sequential loop.
                 all_spawn = all(a[0] == "spawn_agent" for a in parsed_actions)
-                all_reads = bool(parsed_actions) and all(a[0] in PARALLEL_READ_TOOLS
-                                                        for a in parsed_actions)
-                if len(parsed_actions) > 1 and (all_spawn or all_reads):
-                    # Pre-emit all tool_call events so the UI displays all cards
-                    # concurrently. Calls the plan gates would stop are not
-                    # pre-emitted: the sequential loop below emits their card
-                    # together with the plan-mode error.
-                    # a call an admin rule denies or asks about goes through the sequential gauntlet too
-                    for name, tc_id, args in parsed_actions:
+                # Parallelize any leading batch of read-only actions before any mutating action
+                parallel_batch = []
+                for a in parsed_actions:
+                    if a[0] in PARALLEL_READ_TOOLS or (all_spawn and a[0] == "spawn_agent"):
+                        parallel_batch.append(a)
+                    else:
+                        break  # Stop at first mutating action to ensure reads finish before write
+                if len(parallel_batch) > 1:
+                    # Pre-emit tool_call events for the parallel batch so the UI displays cards concurrently
+                    for name, tc_id, args in parallel_batch:
                         pending_tool[tc_id] = name
                         if (parallel_spawn_eligible(name, bool(req.plan or plan_gate), PLAN_MODE_TOOLS)
                                 and _rule_verdict_or_hook(name, args) is None):
                             yield sse("tool_call", {'id': tc_id, 'name': name, 'args': args})
                     valid_coros = []
                     valid_ids = []
-                    for name, tc_id, args in parsed_actions:
+                    for name, tc_id, args in parallel_batch:
                         if (not parallel_spawn_eligible(name, bool(req.plan or plan_gate), PLAN_MODE_TOOLS)
                                 or _rule_verdict_or_hook(name, args) is not None):
                             # plan mode / plan-first would stop this call in the

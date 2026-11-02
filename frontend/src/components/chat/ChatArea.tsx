@@ -6,6 +6,7 @@ import { QuestionCard } from './QuestionCard';
 import { MediaCard } from './MediaCard';
 import { parseProseQuestions, parseQuestionnaire } from '../../utils/questions';
 import { apiFetch } from '../../services/api';
+import { cleanModelName } from '../../utils/models';
 
 interface ParsedUserMessage {
   cleanText: string;
@@ -473,9 +474,11 @@ export const ChatArea: React.FC = () => {
 
   const isModelLoaded = Boolean(serverStatus?.pid || serverStatus?.cloud_main);
   const isCloudActive = Boolean(serverStatus?.cloud_main);
-  const modelName = serverStatus?.cloud_main?.display
-    || (serverStatus?.model ? serverStatus.model.split('\\').pop()?.split('/').pop()?.replace(/\.gguf$/i, '') : null)
-    || (selectedModel || 'No model');
+  const rawModelName =
+    serverStatus?.cloud_main?.display ||
+    serverStatus?.model ||
+    selectedModel;
+  const modelName = cleanModelName(rawModelName) || 'Please select a model';
 
   const _copyFallback = (str: string) => {
     const ta = document.createElement('textarea');
@@ -573,21 +576,27 @@ export const ChatArea: React.FC = () => {
                 <>
                   <p><b>No model is currently loaded in GPU VRAM.</b></p>
                   <p className="dim" style={{ marginTop: '6px' }}>
-                    Click{' '}
-                    <button
-                      onClick={loadSelectedModel}
-                      style={{
-                        fontWeight: 700,
-                        color: 'var(--blue, #38bdf8)',
-                        background: 'transparent',
-                        border: 'none',
-                        cursor: 'pointer',
-                        padding: 0,
-                      }}
-                    >
-                      ▶ Load
-                    </button>{' '}
-                    in the bottom bar, or simply type a message below.
+                    {modelName !== 'Please select a model' ? (
+                      <>
+                        Click{' '}
+                        <button
+                          onClick={loadSelectedModel}
+                          style={{
+                            fontWeight: 700,
+                            color: 'var(--blue, #38bdf8)',
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: 0,
+                          }}
+                        >
+                          ▶ Load ({modelName})
+                        </button>{' '}
+                        in the bottom bar, or simply type a message below.
+                      </>
+                    ) : (
+                      'Please select a model to begin.'
+                    )}
                   </p>
                 </>
               )}
@@ -845,7 +854,7 @@ export const ChatArea: React.FC = () => {
                       </div>
                       {Boolean(m.model || m.ntok || m.tps) && (
                         <div className="meta" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--dim)' }}>
-                          <span>{m.model}</span>
+                          <span>{cleanModelName(m.model)}</span>
                           {m.ntok ? <span>· {m.ntok} tok</span> : null}
                           {m.tps ? <span>· {m.tps.toFixed(1)} t/s</span> : null}
                           {m.secs ? <span>· {m.secs.toFixed(1)}s</span> : null}
@@ -945,7 +954,7 @@ export const ChatArea: React.FC = () => {
                             borderRadius: '4px',
                           }}
                         >
-                          <span>{m.model}</span>
+                          <span>{cleanModelName(m.model)}</span>
                           {m.ntok ? <span>· {m.ntok} tok</span> : null}
                           {m.tps ? <span>· {m.tps.toFixed(1)} t/s</span> : null}
                           {m.secs ? <span>· {m.secs.toFixed(1)}s</span> : null}

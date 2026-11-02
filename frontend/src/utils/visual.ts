@@ -230,18 +230,37 @@ export function parseProducts(code) {
 }
 
 export function renderProductsHtml(spec) {
+  const SKELETON_NO_IMG = `
+    <div class="prod-no-img" aria-hidden="true">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+        <circle cx="9" cy="9" r="2"/>
+        <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+      </svg>
+      <span class="prod-no-img-text">No image</span>
+    </div>`.trim();
+
   const card = it => {
-    // the server serves the model's picture if a search returned it, else the og:image of the card's own page
-    const img = (it.image || it.url)
-      ? `<img src="${esc('/media/product-image?u=' + encodeURIComponent(it.url) + '&i=' + encodeURIComponent(it.image))}" alt="" loading="lazy" referrerpolicy="no-referrer" data-hide-on-error />` : '';
-    const link = it.url
-      ? `<a class="prod-link" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">View${it.store ? ' at ' + esc(it.store) : ''} &#8599;</a>` : '';
-    return `<div class="prod-card"><div class="prod-img">${img}</div><div class="prod-body">`
+    const hasMedia = Boolean(it.image || it.url);
+    const imgTag = hasMedia
+      ? `<img src="${esc('/media/product-image?u=' + encodeURIComponent(it.url || '') + '&i=' + encodeURIComponent(it.image || ''))}" alt="${esc(it.title)}" loading="lazy" referrerpolicy="no-referrer" data-hide-on-error />`
+      : '';
+    const imgContent = imgTag ? `${imgTag}${SKELETON_NO_IMG}` : SKELETON_NO_IMG;
+
+    // Authentic link or authentic search query fallback so user is never left without a link
+    const targetUrl = it.url || `https://www.google.com/search?q=${encodeURIComponent(it.title + (it.store ? ' ' + it.store : '') + ' price in Bangladesh')}`;
+    const linkText = it.url
+      ? `View${it.store ? ' at ' + esc(it.store) : ''} &#8599;`
+      : `Search ${it.store ? esc(it.store) : 'Retailers'} &#8599;`;
+
+    const link = `<a class="prod-link" href="${esc(targetUrl)}" target="_blank" rel="noopener noreferrer">${linkText}</a>`;
+
+    return `<div class="prod-card"><div class="prod-img">${imgContent}</div><div class="prod-body">`
       + (it.note ? `<span class="prod-note">${esc(it.note)}</span>` : '')
       + `<div class="prod-title">${esc(it.title)}</div>`
       + (it.price ? `<div class="prod-price">${esc(it.price)}</div>` : '')
-      + (it.facts.length ? `<div class="prod-facts">${it.facts.map(esc).join(' &middot; ')}</div>` : '')
-      + (it.store && !it.url ? `<div class="prod-store">${esc(it.store)}</div>` : '') + link + `</div></div>`;
+      + (it.facts && it.facts.length ? `<div class="prod-facts">${it.facts.map(esc).join(' &middot; ')}</div>` : '')
+      + link + `</div></div>`;
   };
   return `<div class="prod-list">${spec.items.map(card).join('')}</div>`;
 }

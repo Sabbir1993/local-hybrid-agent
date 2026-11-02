@@ -459,7 +459,9 @@ function transformTokens(raw: string): string {
 if (typeof document !== 'undefined') {
   document.addEventListener('error', (e) => {
     const el = e.target as HTMLElement | null;
-    if (el && el.tagName === 'IMG' && el.hasAttribute('data-hide-on-error')) el.style.display = 'none';
+    if (el && el.tagName === 'IMG' && el.hasAttribute('data-hide-on-error')) {
+      el.style.display = 'none';
+    }
   }, true);
 }
 

@@ -40,6 +40,13 @@ class SessionModel(unittest.TestCase):
         with self.assertRaises(PermissionError):
             sessions.db_update_session_model(a, "evil", owner_user_id=2)
 
+    def test_strips_path_and_gguf_extension(self):
+        s = sessions.db_create_session(0, "a", owner_user_id=1, model=r"E:\AI\Models\Ornith\Ornith-1.5-35B-Q4_K_M.gguf")
+        self.assertEqual(s["model"], "Ornith-1.5-35B-Q4_K_M")
+        self.assertEqual(sessions.db_list_sessions_page(0, 1)[0][0]["model"], "Ornith-1.5-35B-Q4_K_M")
+        sessions.db_update_session_model(s["id"], r"/var/models/qwen2.5.gguf", owner_user_id=1)
+        self.assertEqual(sessions.db_list_sessions_page(0, 1)[0][0]["model"], "qwen2.5")
+
     def test_empty_means_no_model(self):
         a = sessions.db_create_session(0, "a", owner_user_id=1, model="m1")["id"]
         sessions.db_update_session_model(a, "  ", owner_user_id=1)

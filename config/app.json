@@ -161,8 +161,8 @@
     "adaptive": true,
     "min_executor_success": 0.7,
     "classifier": {
-      "enabled": false,
-      "mode": "shadow"
+      "enabled": true,
+      "mode": "active"
     }
   },
   "provider": {},
@@ -281,18 +281,18 @@
   "context": {
     "compaction_threshold": 0.7,
     "cloud_budget_tokens": 60000,
-    "clear_trigger_tokens": 50000,
-    "clear_keep_results": 10,
-    "clear_at_least_tokens": 8000,
+    "clear_trigger_tokens": 14000,
+    "clear_keep_results": 3,
+    "clear_at_least_tokens": 3000,
     "aging": {
       "keep_recent_results": 3
     },
     "snip": {
-      "enabled": false,
-      "trigger_tokens": 50000,
+      "enabled": true,
+      "trigger_tokens": 14000,
       "keep_recent_narration": 3,
       "min_chars": 600,
-      "at_least_tokens": 8000
+      "at_least_tokens": 3000
     }
   },
   "sessions": {
@@ -637,7 +637,7 @@
     "runner_url": "https://127.0.0.1:8470",
     "fingerprint": "5c4a37043f401db8c5d86d1c306d2cd1cdba95d7cad924b36268f959fa13d921",
     "enabled": true,
-    "verified_at": 1792697517.0333686,
+    "verified_at": 1793096223.238357,
     "allow_public_runner": false
   }
 }

@@ -1,12 +1,12 @@
 {
   "wikipedia.org": {
-    "fails": 1,
-    "until": 0,
+    "fails": 2,
+    "until": 1793713012.2708743,
     "status": 403
   },
   "tripadvisor.com": {
-    "fails": 1,
-    "until": 0,
+    "fails": 2,
+    "until": 1793713524.5035753,
     "status": 403
   },
   "wikiwand.com": {
@@ -15,8 +15,8 @@
     "status": 403
   },
   "pagepro.co": {
-    "fails": 1,
-    "until": 0,
+    "fails": 2,
+    "until": 1792851666.2531943,
     "status": 403
   },
   "wikimedia.org": {
@@ -41,17 +41,17 @@
   },
   "britannica.com": {
     "fails": 2,
-    "until": 1792489153.4613628,
+    "until": 1793713093.5076282,
     "status": 403
   },
   "wiktionary.org": {
     "fails": 2,
-    "until": 1792401257.077696,
+    "until": 1793179052.5390105,
     "status": 403
   },
   "zhihu.com": {
-    "fails": 4,
-    "until": 1792490172.7926776,
+    "fails": 2,
+    "until": 1793117473.1119635,
     "status": 403
   },
   "missav.live": {
@@ -71,7 +71,7 @@
   },
   "tasteatlas.com": {
     "fails": 2,
-    "until": 1792524813.5284293,
+    "until": 1793179813.3209596,
     "status": 403
   },
   "csgoskins.gg": {
@@ -121,12 +121,12 @@
   },
   "ryans.com": {
     "fails": 2,
-    "until": 1792484883.528661,
+    "until": 1793093177.2869601,
     "status": 403
   },
   "elevenforum.com": {
-    "fails": 3,
-    "until": 1792488364.5051353,
+    "fails": 2,
+    "until": 1793180128.023475,
     "status": 403
   },
   "techlandbd.com": {
@@ -135,8 +135,8 @@
     "status": 403
   },
   "openai.com": {
-    "fails": 3,
-    "until": 1792488363.3445258,
+    "fails": 4,
+    "until": 1793173473.7189612,
     "status": 403
   },
   "elevenlabs.io": {
@@ -225,8 +225,8 @@
     "status": 403
   },
   "chatgpt.com": {
-    "fails": 3,
-    "until": 1792523075.3418753,
+    "fails": 4,
+    "until": 1792855322.1897006,
     "status": 403
   },
   "coca-colafemsa.com": {
@@ -245,6 +245,106 @@
     "status": 403
   },
   "cambridge.org": {
+    "fails": 2,
+    "until": 1793117444.4530585,
+    "status": 403
+  },
+  "gemini.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "moja-ostroleka.pl": {
+    "fails": 3,
+    "until": 1792850805.2354996,
+    "status": 403
+  },
+  "cvedetails.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "aha.org": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "thessaloniki.travel": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "genealogy.com": {
+    "fails": 3,
+    "until": 1792855335.510997,
+    "status": 403
+  },
+  "bb.org.bd": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "noon.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "sslcommerz.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "merriam-webster.com": {
+    "fails": 2,
+    "until": 1793179054.3457603,
+    "status": 403
+  },
+  "thefreedictionary.com": {
+    "fails": 2,
+    "until": 1793179711.4108164,
+    "status": 403
+  },
+  "waltonplaza.com.bd": {
+    "fails": 4,
+    "until": 1793180573.2873304,
+    "status": 403
+  },
+  "canva.com": {
+    "fails": 4,
+    "until": 1793180573.7448635,
+    "status": 403
+  },
+  "bdris.gov.bd": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "softwareadvice.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "seedtable.com": {
+    "fails": 2,
+    "until": 1793713008.7841094,
+    "status": 403
+  },
+  "startupblink.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "f6s.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "allevents.in": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "timeanddate.com": {
     "fails": 1,
     "until": 0,
     "status": 403

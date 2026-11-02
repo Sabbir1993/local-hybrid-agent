@@ -14,6 +14,9 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+	allowedHosts: [
+      'finance-text-aluminium-beijing.trycloudflare.com'
+    ],
     proxy: {
       '/auth': { target: BACKEND_URL, changeOrigin: true },
       '/control': { target: BACKEND_URL, changeOrigin: true },

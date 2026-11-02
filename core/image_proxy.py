@@ -64,12 +64,12 @@ def sniff(data: bytes) -> str:
     return ""
 
 
-def fetch(user_id: Optional[int], url: str) -> tuple:
+def fetch(user_id: Optional[int], url: str, allow_trusted: bool = False) -> tuple:
     """(content type, bytes) for an allowed URL. Blocking: call it from a worker thread."""
     url = (url or "").strip()
     if not url.lower().startswith("https://"):
         raise ProxyRefused("only https images")
-    if not is_allowed(user_id, url):
+    if not allow_trusted and not is_allowed(user_id, url):
         raise ProxyRefused("this image did not come from a search result")
     hit = _cache.get(url)
     if hit:

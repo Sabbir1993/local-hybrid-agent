@@ -79,9 +79,15 @@ async def available_models(user: Principal = Depends(get_current_user)):
     if loaded_name and is_running:
         # template header read (cached per file): drives the composer's effort chip
         local_mode = await asyncio.to_thread(reasoning.local_mode, loaded_path)
+        clean_name = str(loaded_name)
+        if ("\\" in clean_name) or ("/" in clean_name):
+            import os
+            clean_name = os.path.basename(clean_name.replace("\\", "/"))
+        if clean_name.lower().endswith(".gguf"):
+            clean_name = clean_name[:-5]
         local_models.append({
             "id": loaded_path or loaded_name,
-            "display": loaded_name,
+            "display": clean_name,
             "currently_loaded": True,
             "kind": "local",
             "provider": "local",

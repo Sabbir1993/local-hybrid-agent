@@ -91,7 +91,13 @@ def ground_items(uid: Optional[int], items: list) -> list:
         if scored and scored[0][0] >= 0.6:
             _, _, url, rec = scored[0]
             it["url"] = url
-            it["image"] = rec.get("image", "")
+            img = rec.get("image", "")
+            # Avoid using generic store delivery banners or placeholders as product photos
+            low_img = (img or "").lower()
+            if not any(k in low_img for k in ("delivery-charge", "homepage-og", "placeholder", "logo-1200x630")):
+                it["image"] = img
+            else:
+                it["image"] = "" 
             if not it.get("price") and rec.get("price"):
                 it["price"] = f"{rec['price']} {rec.get('currency', '')}".strip()
             if not it.get("store"):

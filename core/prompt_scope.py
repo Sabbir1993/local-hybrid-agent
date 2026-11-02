@@ -176,27 +176,28 @@ WEB_MANUAL = (
     "Services pages (up to 3 pages) and base the summary on them; use other sources only for news or "
     "third-party facts. Never add product, server or tool names from this system prompt to a search query "
     "unless the user wrote them.\n"
-    "9. In a markdown table keep every row on ONE line and cite as [n](URL) exactly as given; never break a row or a link across lines.\n"
-    "10. PRODUCTS / ITEMS TO BUY (the user compares or asks for the best/cheapest of a product): after one intro line put "
-    "ONE fenced `products` block (valid JSON, at most 6 items), then a short comparison and your pick:\n"
+    "9. In a markdown table keep every row on ONE line and cite as [n](URL) exactly as given; never break a row or a link across lines. (Use tables ONLY for non-product data like benchmark numbers or schedules; NEVER use tables for product recommendations!).\n"
+    "10. PRODUCTS & PRODUCT RECOMMENDATIONS (phones, laptops, hardware, appliances, gadgets, or any items to buy): "
+    "NEVER format product options as a markdown table or plain text bullet list! "
+    "After one short intro line, ALWAYS format the options using ONE fenced `products` block (valid JSON, at most 6 items), then your short final recommendation:\n"
     "```products\n"
-    '[{"title":"Tefal Everyday Slim 2200W","price":"Tk 9,870","image":"IMAGE_URL","url":"PAGE_URL","store":"Rangs eMart",'
-    '"facts":["2200W","8 power levels","12-month warranty"],"note":"Top pick"}]\n'
+    '[{"title":"OnePlus 12 (512GB)","price":"৳65,000–75,000","image":"IMAGE_URL","url":"PAGE_URL","store":"Star Tech",'
+    '"facts":["Snapdragon 8 Gen 3","120W charging","5000mAh battery"],"note":"Best overall"}]\n'
     "```\n"
-    "`note` is at most 4 words (e.g. Top pick). Use only `image:` / `price:` / URL values that appear in the results above (never invent them; leave a field out "
-    "when you do not have it). Do not put personal or card data in a block."
+    "`note` is at most 4 words (e.g. Best overall, Top pick, Best value). Use only `image:` / `price:` / URL values that appear in the results above (or omit image/url if absent; never invent them). Do not put personal data in a block."
 )
 
 # Advice-style answers (chat.style): recommendation first, sections, thumbnails, a typed questionnaire card when
 # key facts are missing. ~250 tokens; added only when style_wanted() says the question is advice/research-like.
 CHAT_STYLE = (
     "ANSWER STYLE (advice / how-to / recommendation questions):\n"
+    "- Recommending phones, laptops, electronics, or items to buy: NEVER use a markdown table! ALWAYS format the top items as ONE fenced `products` block so the UI renders visual product cards.\n"
     "- Lead with a 1-2 sentence direct answer or recommendation, then 2-4 numbered sections with `##` headings. "
     "Be concise: at most 4 items per section, 1-2 sentences each.\n"
     "- List items that name a product, food, place or thing: `- ![name](THUMBNAIL_URL) **Title** - one or two sentences`, "
     "using the Thumbnail URL from web_search_images when you called it; no image if you have none (never invent URLs).\n"
     "- Medical, legal or safety topics: say what to check with a professional (e.g. a vet) and when it is urgent.\n"
-    "- If key facts are missing (age, weight, budget, symptoms...), end with ONE fenced block and nothing after it:\n"
+    "- If key facts are missing to recommend or choose an item (budget, brand, use-case, preferences...), NEVER write a numbered question list in plain prose text! ALWAYS end with ONE interactive fenced questionnaire block:\n"
     "```questionnaire\n"
     '{"title":"Tell me a little about ...","questions":[{"id":"age","type":"radio","q":"How old is it?",'
     '"options":["Under 1 year","1-7 years","Over 7 years"]},{"id":"signs","type":"checkbox","q":"Any of these?",'
@@ -209,8 +210,8 @@ CHAT_STYLE = (
 # Visual explainers (chat.visuals): a "how does X work / architecture / flow" answer may carry one drawn block. The
 # client renders the JSON itself (static/js/markdown.js parseVisual), so the model never writes HTML or styles.
 VISUAL_STYLE = (
-    "VISUAL BLOCKS: when explaining how something works (a flow, pipeline, architecture or sequence of 3-6 stages), "
-    "put ONE fenced `visual` block right after your short intro, then continue in normal markdown. Format (valid "
+    "VISUAL BLOCKS: when explaining how something works (a flow, pipeline, architecture, layers, stack, or sequence of 3-6 stages), "
+    "put ONE fenced `visual` block right after your short intro, then continue in normal markdown. NEVER draw ASCII box-drawing characters (┌─┐, │, └──┘) or plain text boxes for architecture, layers, or flows; ALWAYS use a fenced `visual` block instead. Format (valid "
     "JSON only):\n"
     "```visual\n"
     '{"type":"flow","title":"How it works","steps":[{"title":"Public internet","text":"User visits `https://app.example.com`",'
@@ -233,25 +234,35 @@ VISUAL_STYLE = (
 
 _VISUAL_RE = re.compile(
     r"\b(diagram|flow\s*chart|flowchart|architecture|work\s*flow|workflow|pipeline|life\s*cycle|lifecycle|sequence"
-    r"|visuali[sz]\w*|step[- ]by[- ]step|overview|request\s+flow|charts?|graphs?|plot|trends?|statistics|stats)\b"
+    r"|visuali[sz]\w*|step[- ]by[- ]step|overview|request\s+flow|charts?|graphs?|plot|trends?|statistics|stats"
+    r"|layers?|tiers?|components?|stack|structure|breakdown)\b"
     r"|\bhow\b.{0,60}\b(works?|flows?|happens?|communicates?|connects?)\b",
     re.IGNORECASE)
 _VISUAL_SKIP_RE = re.compile(r"```|\bmermaid\b|\b(pptx|docx|xlsx|pdf|slides?|deck)\b", re.IGNORECASE)
 
 
-def visual_wanted(query: str, voice: bool = False, enabled: bool = True) -> bool:
+def visual_wanted(query: str, voice: bool = False, enabled: bool = True, prior_msgs=None) -> bool:
     """True when the visual-block instructions earn their ~300 tokens: an explain-how-it-works / diagram question
     (not voice, not code or document building, not an explicit mermaid request)."""
     if not enabled or voice:
         return False
     q = str(query or "")
-    return bool(_VISUAL_RE.search(q)) and not _VISUAL_SKIP_RE.search(q)
+    if bool(_VISUAL_RE.search(q)) and not _VISUAL_SKIP_RE.search(q):
+        return True
+    if prior_msgs:
+        for m in reversed(prior_msgs[-3:]):
+            if m.get("role") == "user":
+                uq = str(m.get("content") or "")
+                if bool(_VISUAL_RE.search(uq)) and not _VISUAL_SKIP_RE.search(uq):
+                    return True
+    return False
 
 
 _STYLE_ADVICE_RE = re.compile(
     r"\b(recommend\w*|suggest\w*|advice|advise|should\s+i|can\s+i|how\s+(can|do|to|should)|best|which|compare"
     r"|versus|vs\.?|safe|healthy|health|diet|supplements?|vitamins?|medicine|treatment|remed\w+"
-    r"|improve|boost|raise|reduce|lose|gain|plan|tips?|ideas?|better)\b", re.IGNORECASE)
+    r"|improve|boost|raise|reduce|lose|gain|plan|tips?|ideas?|better"
+    r"|buy\w*|purchas\w*|shopping|looking\s+for|help\s+me\s+(?:find|choose|pick|buy|select)|need\s+to\s+buy)\b", re.IGNORECASE)
 _STYLE_SKIP_RE = re.compile(
     r"```|\b(python|javascript|typescript|java|c\+\+|sql|bash|regex|function|class|traceback|stack\s*trace|compile\w*"
     r"|exception|git|commit|docker|api|endpoint|json|html|css|file|folder|pptx|docx|xlsx|pdf|slides?)\b", re.IGNORECASE)
@@ -268,7 +279,7 @@ def style_wanted(query: str, prior_msgs=None, voice: bool = False, enabled: bool
             # our deck / PDF / Word cards have their own briefs (DECK_BRIEF / PDF_BRIEF / DOCX_BRIEF): not a second, advice-style one
             return not re.search(r"your (?:deck|pdf|word document)", str(m.get("content") or ""), re.IGNORECASE)
     q = (query or "").strip()
-    if len(q) < 25 or _STYLE_SKIP_RE.search(q):
+    if len(q) < 15 or _STYLE_SKIP_RE.search(q):
         return False
     return bool(_STYLE_ADVICE_RE.search(q))
 

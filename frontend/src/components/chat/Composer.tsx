@@ -8,6 +8,7 @@ import { VoiceMode } from './VoiceMode';
 import { editPicsStore, imageComposeMode, loadMediaStatus, mediaReady, picAttachments, runMedia, setEditPics, setupMessage, takeMediaPics, transcribeBlob } from '../../services/media';
 import { MediaOptions } from './MediaOptions';
 import { startLiveDictation, type LiveDictation } from '../../services/dictation';
+import { cleanModelName } from '../../utils/models';
 
 const AGENT_MODES: { key: AgentMode; label: string; desc: string; hotkey: string }[] = [
   { key: 'auto', label: 'Auto', desc: 'Agent handles permission decisions', hotkey: '1' },
@@ -771,15 +772,29 @@ export const Composer: React.FC = () => {
 
   const currentModeObj = AGENT_MODES.find((m) => m.key === agentMode) || AGENT_MODES[0];
   const currentModelDisplay = useMemo(() => {
-    if (serverStatus?.cloud_main?.display) return serverStatus.cloud_main.display;
+    if (serverStatus?.cloud_main?.display) return cleanModelName(serverStatus.cloud_main.display);
     if (selectedModel) {
-      const match = availableModels.find((m) => m.id === selectedModel || m.display === selectedModel);
-      return match?.display || selectedModel;
+      const cleanSel = cleanModelName(selectedModel);
+      const match = availableModels.find(
+        (m) =>
+          m.id === selectedModel ||
+          m.display === selectedModel ||
+          cleanModelName(m.id) === cleanSel ||
+          cleanModelName(m.display) === cleanSel
+      );
+      if (match) return cleanModelName(match.display || match.id);
+      if (cleanSel) return cleanSel;
     }
-    return availableModels[0]?.display || 'No model available';
+    const fallback = availableModels.find((m) => m.currently_loaded) || availableModels[0];
+    if (fallback) return cleanModelName(fallback.display || fallback.id);
+    return 'Please select a model';
   }, [serverStatus, selectedModel, availableModels]);
 
-  const placeholderModel = currentModelDisplay === 'No model available' ? 'model' : currentModelDisplay;
+  const hasModel =
+    Boolean(currentModelDisplay) &&
+    currentModelDisplay !== 'Please select a model' &&
+    currentModelDisplay !== 'No model available';
+  const placeholderModel = hasModel ? currentModelDisplay : '';
 
   const effortDisplay = deepResearch
     ? `${reasoningEffort.charAt(0).toUpperCase() + reasoningEffort.slice(1)} · Deep`
@@ -991,7 +1006,17 @@ export const Composer: React.FC = () => {
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               onScroll={(e) => { if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop; }}
-              placeholder={armed ? (armed === 'image' ? 'Describe the picture (subject, style, light…) — Enter to make it' : 'Describe the scene and what moves — Enter to make the video (takes a few minutes)') : appMode === 'code' ? 'Describe a coding task (e.g. "Find and fix bug in main.py", "Refactor the database queries")...' : `Message ${placeholderModel}... (Enter to send, Shift+Enter for newline)`}
+              placeholder={
+                armed
+                  ? (armed === 'image'
+                      ? 'Describe the picture (subject, style, light…) — Enter to make it'
+                      : 'Describe the scene and what moves — Enter to make the video (takes a few minutes)')
+                  : appMode === 'code'
+                  ? 'Describe a coding task (e.g. "Find and fix bug in main.py", "Refactor the database queries")...'
+                  : placeholderModel
+                  ? `Message ${placeholderModel}... (Enter to send, Shift+Enter for newline)`
+                  : 'Please select a model...'
+              }
               title="Type your prompt here. Press Enter to send, Shift+Enter for newline."
               style={{
                 flex: 1,
@@ -1581,7 +1606,17 @@ export const Composer: React.FC = () => {
                             {/* Provider Models */}
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                               {grp.items.map((m: any) => {
-                                const isCurrent = selectedModel === m.display || selectedModel === m.id || (serverStatus?.cloud_main && ('cloud:' + serverStatus.cloud_main.key === m.id || serverStatus.cloud_main.display === m.display));
+                                const cleanSel = cleanModelName(selectedModel);
+                                const cleanDisp = cleanModelName(m.display);
+                                const cleanId = cleanModelName(m.id);
+                                const isCurrent =
+                                  cleanSel === cleanDisp ||
+                                  cleanSel === cleanId ||
+                                  selectedModel === m.display ||
+                                  selectedModel === m.id ||
+                                  (serverStatus?.cloud_main &&
+                                    ('cloud:' + serverStatus.cloud_main.key === m.id ||
+                                      cleanModelName(serverStatus.cloud_main.display) === cleanDisp));
                                 return (
                                   <button
                                     key={m.id}
@@ -1608,7 +1643,7 @@ export const Composer: React.FC = () => {
                                   >
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
                                       <span style={{ fontWeight: isCurrent ? 700 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                        {m.display || m.id}
+                                        {cleanModelName(m.display || m.id)}
                                       </span>
                                       {m.currently_loaded && (
                                         <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontWeight: 600 }}>

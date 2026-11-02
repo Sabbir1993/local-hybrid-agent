@@ -35,6 +35,20 @@ def _load_meta(raw):
         return None
 
 
+def _clean_model_name(m: Optional[str]) -> Optional[str]:
+    if not m:
+        return None
+    s = str(m).strip()
+    if not s:
+        return None
+    if ("\\" in s) or ("/" in s):
+        import os
+        s = os.path.basename(s.replace("\\", "/"))
+    if s.lower().endswith(".gguf"):
+        s = s[:-5]
+    return s.strip()[:200] or None
+
+
 def db_list_sessions_page(pid: Optional[int], owner_user_id: int, limit: Optional[int] = None,
                           before_id: Optional[int] = None) -> tuple:
     """(sessions, has_more): newest first; `before_id` continues after the last id of the previous page."""
@@ -60,7 +74,7 @@ def db_list_sessions_page(pid: Optional[int], owner_user_id: int, limit: Optiona
         "title": r["title"],
         "created_at": r["created_at"],
         "agent_id": r["agent_id"] if "agent_id" in r.keys() else None,
-        "model": r["model"] if "model" in r.keys() else None,
+        "model": _clean_model_name(r["model"]) if "model" in r.keys() else None,
     } for r in rows], has_more)
 
 
@@ -79,9 +93,9 @@ def db_create_session(pid: Optional[int], title: str = None, owner_user_id: int 
         raise PermissionError("not your project")
     cur = _projects_db.execute(
         "INSERT INTO sessions (project_id, title, created_at, user_id, agent_id, model) VALUES (?, ?, ?, ?, ?, ?)",
-        (actual_pid, title, now, owner_user_id, agent_id, (model or "").strip()[:200] or None))
+        (actual_pid, title, now, owner_user_id, agent_id, _clean_model_name(model)))
     _projects_db.commit()
-    return {"id": cur.lastrowid, "title": title, "created_at": now, "agent_id": agent_id, "model": (model or "").strip()[:200] or None}
+    return {"id": cur.lastrowid, "title": title, "created_at": now, "agent_id": agent_id, "model": _clean_model_name(model)}
 
 
 def db_update_session_title(sid: int, title: str, owner_user_id: int) -> None:
@@ -102,7 +116,7 @@ def db_update_session_agent_id(sid: int, agent_id: Optional[int], owner_user_id:
 def db_update_session_model(sid: int, model: Optional[str], owner_user_id: int) -> None:
     if db_session_owner(sid) != owner_user_id:
         raise PermissionError("not your session")
-    _projects_db.execute("UPDATE sessions SET model = ? WHERE id = ?", ((model or "").strip()[:200] or None, sid))
+    _projects_db.execute("UPDATE sessions SET model = ? WHERE id = ?", (_clean_model_name(model), sid))
     _projects_db.commit()
 
 

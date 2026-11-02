@@ -42,14 +42,17 @@ def _meta_image(page_url: str) -> str:
 def resolve(user_id: Optional[int], page_url: str, image_url: str) -> tuple:
     """(content type, bytes). Blocking: call it from a worker thread. Raises image_proxy.ProxyRefused."""
     page_url, image_url = (page_url or "").strip(), (image_url or "").strip()
-    if image_url and image_proxy.is_allowed(user_id, image_url):
+    # Try the given image address first (allow_trusted=True keeps past chat images alive across days/restarts)
+    if image_url and image_url.lower().startswith("https://"):
         try:
-            return image_proxy.fetch(user_id, image_url)
+            return image_proxy.fetch(user_id, image_url, allow_trusted=True)
         except image_proxy.ProxyRefused:
-            pass                      # blocked hot-linking, expired file ...: try the page's own picture
-    if page_url.lower().startswith("https://") and citations.known(user_id, page_url):
+            pass                      # 404, blocked host or expired: fall back to page's og:image
+    if page_url.lower().startswith("https://"):
         img = _meta_image(page_url)
-        if img:
-            image_proxy.remember(user_id, [img])
-            return image_proxy.fetch(user_id, img)
+        if img and img != image_url:
+            try:
+                return image_proxy.fetch(user_id, img, allow_trusted=True)
+            except image_proxy.ProxyRefused:
+                pass
     raise image_proxy.ProxyRefused("no picture available for this product")

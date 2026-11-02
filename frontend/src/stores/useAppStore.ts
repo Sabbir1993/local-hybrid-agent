@@ -6,6 +6,7 @@ import { GAP_NOTE, answerCheckEnd, applyAgentEvent, interruptRun, newAgentRunSta
 import { create } from 'zustand';
 import { api, type ServerStatusPayload, type AvailableModelItem, type UserProfile, apiFetch } from '../services/api';
 import { logger } from '../utils/logger';
+import { cleanModelName } from '../utils/models';
 
 export type AppMode = 'chat' | 'agent' | 'code';
 export type AgentMode = 'auto' | 'manual' | 'accept_edits' | 'plan' | 'bypass';
@@ -356,7 +357,7 @@ function formatSessionItem(s: any, appMode: AppMode, activeSessionId: string | n
     title: s.title || s.name || (appMode === 'code' ? 'Task' : 'Chat'),
     updatedAt: dateStr,
     active: activeSessionId === s.id,
-    model: s.model || null,
+    model: s.model ? cleanModelName(s.model) : null,
   };
 }
 
@@ -736,25 +737,45 @@ export const useAppStore = create<AppState>((set, get) => ({
       || prev.cloud_main?.key !== serverStatus.cloud_main?.key;
     if (listStale && get().isAuthenticated) {
       void get().fetchModels().then(() => {
-        // The model that was selected is gone (unloaded, stopped): the picker no longer lists it, so select what it does list.
-        // Not while one is still starting: it only appears in the list once it is up.
         const st = get();
-        if (st.serverStatus?.pid || st.serverStatus?.loading || st.serverStatus?.cloud_main) return;
-        const known = st.availableModels.some((m) => m.display === st.selectedModel || m.id === st.selectedModel);
-        if (!known) set({ selectedModel: st.availableModels[0]?.display || '' });
+        const cur = cleanModelName(st.selectedModel);
+        const known = st.availableModels.some(
+          (m) => cleanModelName(m.display) === cur || cleanModelName(m.id) === cur
+        );
+        if (!known) {
+          // Model was unloaded or no longer available: switch to another available model
+          const next = st.availableModels.find((m) => m.currently_loaded) || st.availableModels[0];
+          set({ selectedModel: next ? cleanModelName(next.display || next.id) : '' });
+        }
       });
     }
     if (!changed) return;
     const ownModel = get().sessions.find((x) => sessionKey(x.id) === sessionKey(get().activeSessionId))?.model;
-    if (ownModel) return;   // this chat keeps the model it was started with
+    const cleanOwn = cleanModelName(ownModel);
+    const ownAvailable = cleanOwn && get().availableModels.some(
+      (m) => cleanModelName(m.display) === cleanOwn || cleanModelName(m.id) === cleanOwn
+    );
+    if (ownAvailable) {
+      set({ selectedModel: cleanOwn });
+      return;
+    }
     // A bound cloud main lane wins over the (possibly stale) local model name.
     if (serverStatus.cloud_main?.display) {
-      set({ selectedModel: serverStatus.cloud_main.display });
-    } else if (serverStatus.model) {
-      // the model list names a loaded model by its display name; the status gives its file path
-      const listed = get().availableModels.find((m) => m.id === serverStatus.model);
-      const base = serverStatus.model.split('\\').pop()?.split('/').pop() || serverStatus.model;
-      set({ selectedModel: listed ? listed.display : base.replace(/\.gguf$/i, '') });
+      set({ selectedModel: cleanModelName(serverStatus.cloud_main.display) });
+    } else if (serverStatus.model && (serverStatus.pid || serverStatus.healthy)) {
+      const listed = get().availableModels.find((m) => m.id === serverStatus.model || cleanModelName(m.id) === cleanModelName(serverStatus.model));
+      set({ selectedModel: listed ? cleanModelName(listed.display) : cleanModelName(serverStatus.model) });
+    } else {
+      // Local model is stopped/unloaded: auto move to another available model
+      const { availableModels, selectedModel } = get();
+      const cur = cleanModelName(selectedModel);
+      const stillAvailable = availableModels.some(
+        (m) => cleanModelName(m.display) === cur || cleanModelName(m.id) === cur
+      );
+      if (!stillAvailable) {
+        const next = availableModels.find((m) => m.currently_loaded) || availableModels[0];
+        set({ selectedModel: next ? cleanModelName(next.display || next.id) : '' });
+      }
     }
   },
 
@@ -798,8 +819,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   setKbMode: (kbMode) => set({ kbMode }),
   setSelectedModel: async (modelIdentifier: string) => {
     const { availableModels } = get();
-    const match = availableModels.find((m) => m.id === modelIdentifier || m.display === modelIdentifier);
-    const targetDisplay = match ? match.display : modelIdentifier;
+    const cleanId = cleanModelName(modelIdentifier);
+    const match = availableModels.find(
+      (m) =>
+        m.id === modelIdentifier ||
+        m.display === modelIdentifier ||
+        cleanModelName(m.id) === cleanId ||
+        cleanModelName(m.display) === cleanId
+    );
+    const targetDisplay = match ? cleanModelName(match.display || match.id) : cleanId;
 
     set({ selectedModel: targetDisplay });
     // the choice belongs to this chat (stored with it, so it survives a reload); a chat that does not exist yet gets it when it is created.
@@ -936,7 +964,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       bgMessages: bgNext,
     }));
     const own = get().sessions.find((x) => sessionKey(x.id) === key)?.model;
-    if (own) set({ selectedModel: own });
+    if (own) {
+      const cleanOwn = cleanModelName(own);
+      const isAvailable = get().availableModels.some(
+        (m) => cleanModelName(m.display) === cleanOwn || cleanModelName(m.id) === cleanOwn
+      );
+      if (isAvailable) {
+        set({ selectedModel: cleanOwn });
+      } else {
+        const fallback = get().availableModels.find((m) => m.currently_loaded) || get().availableModels[0];
+        set({ selectedModel: fallback ? cleanModelName(fallback.display || fallback.id) : '' });
+      }
+    }
     if (isBusy(key)) return;
 
     try {
@@ -1058,12 +1097,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   fetchModels: async () => {
-    const models = await api.control.getAvailableModels();
+    const rawModels = await api.control.getAvailableModels();
+    const models = (rawModels || []).map((m) => ({
+      ...m,
+      display: cleanModelName(m.display || m.id),
+    }));
     set({ availableModels: models });
-    if (models.length > 0 && !get().selectedModel) {
-      const loaded = models.find((m) => m.currently_loaded);
-      const chosen = loaded ? loaded.display : models[0].display;
-      set({ selectedModel: chosen });
+    const current = cleanModelName(get().selectedModel);
+    if (models.length > 0) {
+      const known = models.some(
+        (m) => cleanModelName(m.display) === current || cleanModelName(m.id) === current
+      );
+      if (!current || !known) {
+        const loaded = models.find((m) => m.currently_loaded);
+        const chosen = loaded ? cleanModelName(loaded.display || loaded.id) : cleanModelName(models[0].display || models[0].id);
+        set({ selectedModel: chosen });
+      }
+    } else {
+      set({ selectedModel: '' });
     }
   },
 
@@ -1098,13 +1149,49 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   loadSelectedModel: async () => {
     const { selectedModel, availableModels, serverStatus } = get();
-    const match = availableModels.find((m) => m.display === selectedModel || m.id === selectedModel);
+    const cleanCurrent = cleanModelName(selectedModel);
+    const match = availableModels.find(
+      (m) =>
+        m.display === selectedModel ||
+        m.id === selectedModel ||
+        cleanModelName(m.display) === cleanCurrent ||
+        cleanModelName(m.id) === cleanCurrent
+    );
     const target = match ? match.id : selectedModel;
 
     if (serverStatus?.pid) {
       set({ isModelLoading: true });
       logger.info('Control', 'Unloading current model from GPU VRAM...');
-      await api.control.stopModel();
+      try {
+        await api.control.stopModel();
+      } catch (err) {
+        logger.error('Control', 'Failed to stop model:', err);
+      }
+      await get().fetchStatus();
+      await get().fetchModels();
+
+      const { availableModels: modelsAfter } = get();
+      // Move to another model: active first, then first available
+      const next = modelsAfter.find((m) => m.currently_loaded) || modelsAfter[0];
+      const nextDisplay = next ? cleanModelName(next.display || next.id) : '';
+      set({ selectedModel: nextDisplay });
+
+      const sid = get().activeSessionId;
+      if (sid) {
+        set((st) => ({
+          sessions: st.sessions.map((x) =>
+            sessionKey(x.id) === sessionKey(sid) ? { ...x, model: nextDisplay } : x
+          ),
+        }));
+        if (nextDisplay) {
+          apiFetch(`/control/sessions/${sid}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: nextDisplay }),
+          }).catch(() => {});
+        }
+      }
+
       set({ isModelLoading: false });
       return;
     }
@@ -1115,13 +1202,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
     set({ isModelLoading: true });
-    logger.info('Control', `Switching/Loading model: ${target}`);
+    logger.info('Control', `Switching/Loading model: ${cleanModelName(target)}`);
     try {
       await api.control.switchModel(target);
       await get().fetchStatus();
       await get().fetchModels();
     } catch (err) {
-      logger.error('Control', `Failed to switch/load model ${target}:`, err);
+      logger.error('Control', `Failed to switch/load model ${cleanModelName(target)}:`, err);
     } finally {
       set({ isModelLoading: false });
     }
@@ -1140,7 +1227,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const reattachId = options?.reattachRunId || '';
     if ((!reattachId && !text.trim() && (!options?.images || !options.images.length)) || get().isStreaming) return;
 
-    const matchModel = availableModels.find((m) => m.display === selectedModel || m.id === selectedModel);
+    const cleanSel = cleanModelName(selectedModel);
+    const matchModel = availableModels.find(
+      (m) =>
+        m.display === selectedModel ||
+        m.id === selectedModel ||
+        cleanModelName(m.display) === cleanSel ||
+        cleanModelName(m.id) === cleanSel
+    );
     const targetModelId = matchModel ? matchModel.id : selectedModel;
     const isCloud = !reattachId && (String(targetModelId).startsWith('cloud:') || matchModel?.kind === 'cloud');
 

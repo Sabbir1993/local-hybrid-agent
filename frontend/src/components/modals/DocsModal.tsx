@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { apiFetch } from '../../services/api';
+import { cleanModelName } from '../../utils/models';
 
 export const DocsModal: React.FC = () => {
   const { activeModal, setActiveModal, selectedModel, serverStatus } = useAppStore();
@@ -18,22 +19,22 @@ export const DocsModal: React.FC = () => {
       .then((r) => r.json())
       .then((status) => {
         if (status && status.model) {
-          setModelId(status.model);
+          setModelId(cleanModelName(status.model));
           setIsLoaded(Boolean(status.pid || status.healthy));
         } else if (selectedModel) {
-          setModelId(selectedModel);
+          setModelId(cleanModelName(selectedModel));
           setIsLoaded(Boolean(serverStatus?.pid || serverStatus?.healthy));
         } else {
-          setModelId('E:\\AI\\Models\\nemotron-3.5-lightning.gguf');
+          setModelId('nemotron-3.5-lightning');
           setIsLoaded(false);
         }
       })
       .catch(() => {
         if (selectedModel) {
-          setModelId(selectedModel);
+          setModelId(cleanModelName(selectedModel));
           setIsLoaded(Boolean(serverStatus?.pid || serverStatus?.healthy));
         } else {
-          setModelId('E:\\AI\\Models\\nemotron-3.5-lightning.gguf');
+          setModelId('nemotron-3.5-lightning');
           setIsLoaded(false);
         }
       });
