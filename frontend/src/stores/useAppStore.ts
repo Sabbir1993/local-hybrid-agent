@@ -1511,6 +1511,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       } else if (useAgent) {
         logger.info('Agent', 'Dispatching /agent/run SSE stream');
         const cloudBound = isCloud || Boolean(serverStatus?.cloud_main);
+        let runMode = cloudBound ? 'main-cloud-rest-local' : 'all-local';
+        try {
+          const savedEngine = localStorage.getItem('agent_engine');
+          if (savedEngine === 'no-orchestration' || savedEngine === 'direct') {
+            runMode = 'no-orchestration';
+          }
+        } catch (_) {}
         res = await apiFetch('/agent/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1518,7 +1525,8 @@ export const useAppStore = create<AppState>((set, get) => ({
             client_run_id: agentRunId,
             kb: kbParam,
             messages: msgsPayload,
-            mode: cloudBound ? 'main-cloud-rest-local' : 'all-local',
+            mode: runMode,
+            model: targetModelId || undefined,
             plan: get().agentMode === 'plan',
             permission_mode: get().agentMode,
             session_id: currentSessionId || null,

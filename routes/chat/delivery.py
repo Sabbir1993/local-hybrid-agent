@@ -217,7 +217,10 @@ _DUPLICATE_WORKBOOK = ("error: this chat already has the workbook {name}. Change
                        "doc_edit(file='{name}', ops=[...]) with set_column (one column of one sheet), set_range / set_cell, "
                        "add_outline_sheet (a new sheet), add_column, set_format, add_chart ... Only the parts the user asked for "
                        "change. Create a new file only if the user asked for a separate workbook.")
-_SEPARATE_RE = re.compile(r"\b(new|another|separate|second|different|fresh|brand new)\b", re.I)
+_SEPARATE_RE = re.compile(
+    r"\b(new|another|separate|second|different|fresh|brand new|merge|merged|combining|combine|consolidate|consolidated|deliverable|join|joined)\b",
+    re.I,
+)
 
 
 def _duplicate_workbook(files: list, args: dict, query: str) -> bool:
@@ -225,4 +228,7 @@ def _duplicate_workbook(files: list, args: dict, query: str) -> bool:
     p = str((args or {}).get("path") or (args or {}).get("file") or (args or {}).get("filename") or "").lower()
     if not p.endswith((".xlsx", ".xls")) or _SEPARATE_RE.search(query or ""):
         return False
-    return any(str(f).lower().endswith((".xlsx", ".xls")) for f in files)
+    wb_files = [f for f in files if str(f).lower().endswith((".xlsx", ".xls"))]
+    if len(wb_files) > 1:
+        return False
+    return bool(wb_files)

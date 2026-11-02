@@ -301,7 +301,7 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
 
     ctx.main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
     if not ctx.main_ready and not ctx.use_cloud_main and ctx.mode != "main-local-rest-cloud":
-        target = state.profile_path or state.profile or common.initial_profile_path
+        target = getattr(req, "model", None) or state.profile_path or state.profile or common.initial_profile_path
         if target:
             try:
                 print(f"[server_manager] agent/run: model not running — auto-starting on demand...")

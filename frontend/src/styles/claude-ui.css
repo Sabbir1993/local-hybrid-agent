@@ -1886,16 +1886,20 @@ body.is-native-app .tri-mode-switch {
 .claude-ctx-popup {
   position: absolute;
   bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: #111215;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 8px;
-  padding: 6px 10px;
+  right: 0;
+  left: auto;
+  transform: none;
+  background: var(--panel2, #1c1c21);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: 6px;
+  padding: 4px 8px;
   color: #ffffff;
+  font-size: 11px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   white-space: nowrap;
-  z-index: 1100;
+  width: max-content;
+  max-width: none;
+  z-index: 9999;
   pointer-events: none;
   animation: claudePopIn 0.12s ease;
 }

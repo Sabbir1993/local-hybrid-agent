@@ -60,20 +60,23 @@ def strip_markup(text: str) -> str:
     return text.strip()
 
 
-def status_text(turns: int, files) -> str:
+def status_text(turns: int, files, reason: str = "budget") -> str:
     done = ""
     names = [str(f) for f in (files or []) if f]
     if names:
         done = " Already saved: " + ", ".join(dict.fromkeys(names[-4:])) + "."
+    if reason == "circuit_breaker":
+        return (f"I stopped after repeated tool errors to prevent an infinite loop.{done} "
+                "Press **Continue** and I will carry on from where it stopped.")
     return (f"I used all {turns} steps for this reply before the work was finished.{done} "
             "Press **Continue** and I will carry on from where it stopped.")
 
 
-def finish_text(content: str, turns: int, files) -> tuple:
+def finish_text(content: str, turns: int, files, reason: str = "budget") -> tuple:
     """(text to show, whether it replaced what the model wrote). Empty text, a provider's 'tool not available' message or
     leftover tool markup become the status; a real summary is kept with those parts removed."""
     raw = content or ""
     cleaned = _PROVIDER_NO_TOOL.sub("", strip_markup(raw)).strip()
     if len(cleaned) < 20:
-        return status_text(turns, files), True
+        return status_text(turns, files, reason=reason), True
     return cleaned, cleaned != raw.strip()

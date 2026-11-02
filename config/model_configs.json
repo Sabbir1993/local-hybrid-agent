@@ -1,7 +1,7 @@
 {
   "qwen3.8-27b-q4_k_m.gguf": {
-    "context_size": 32768,
-    "n_gpu_layers": 48,
+    "context_size": 64000,
+    "n_gpu_layers": 999,
     "threads": 10,
     "threads_batch": 0,
     "batch_size": 2048,
@@ -10,14 +10,20 @@
     "tensor_split": "10,10",
     "split_mode": "layer",
     "flash_attn": "auto",
-    "kv_cache_type": "q4_0",
+    "kv_cache_type": "q8_0",
     "mtp_enabled": true,
     "mtp_draft_n_max": 3,
     "keepalive_interval_s": 25,
     "gpu_devices": [
       1,
       2
-    ]
+    ],
+    "vision_capable": false,
+    "kv_unified": false,
+    "kv_unified_per_slot": 0,
+    "cache_reuse": 256,
+    "cache_ram": 0,
+    "use_mmap": false
   },
   "qwen3.8-flash-next-ud-q2_k_xl.gguf": {
     "context_size": 32768,

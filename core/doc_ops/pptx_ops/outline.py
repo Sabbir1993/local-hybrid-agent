@@ -371,6 +371,8 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
         if bm:
             indent = (len(raw) - len(raw.lstrip(" "))) // 2
             txt = _CHECKBOX.sub("", clean(bm.group(2)))
+            if cur.get("layout") not in ("kpi-grid", "chart-kpis"):
+                txt = re.sub(r'\s*\|\s*tone=[a-zA-Z]+', '', txt)
             if not txt or _FOOTER_META.match(txt):
                 continue
             if group_open:
@@ -574,7 +576,7 @@ def _classify(s: dict, idx: int, n: int) -> None:
     if (lay in ("", "kpi-grid") and s.get("callout") and 2 <= len(top) <= 5) or lay == "kpi-grid":
         s["kind"] = "kpi-grid"
         return
-    if (lay in ("", "leaderboard") and 4 <= len(top) <= 10 and all(h.count("|") >= 2 for h, _ in top)) or lay == "leaderboard":
+    if lay == "leaderboard":
         s["kind"] = "leaderboard"
         return
     if lay in ("", "cards") and 2 <= len(top) <= MAX_CARDS and all(c for _, c in top) and all(h for h, _ in top):

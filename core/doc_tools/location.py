@@ -3,14 +3,14 @@ import re
 from pathlib import Path
 from typing import Optional
 from .. import companion_bridge, doc_store
-from ..agent_tools import (
+from ..agent_tools.workspace import (
     _common_resolve,
     _ws_resolve,
     common_workspace,
-    get_current_user_id,
     require_device_workspace,
 )
 from ..doc_ops.base import DocOpError
+from ..request_context import get_current_user_id
 from .constants import DEVICE_MAX_BYTES
 
 
@@ -81,9 +81,26 @@ def resolve_common(name: str) -> Optional[Path]:
         if hex_cands:
             return max(hex_cands, key=lambda f: f.stat().st_mtime)
 
-    # Fuzzy recovery 2: substring overlap on stem among files with matching suffix
+    # Fuzzy recovery 2: normalize spaces, unicode numbers, typos and match skeleton
+    import unicodedata
+    norm_name = unicodedata.normalize('NFKD', str(name or ''))
+    norm_name = re.sub(r'[₀-₉]', lambda m: str(ord(m.group(0)) - ord('₀')), norm_name)
+    norm_name = re.sub(r'([0-9])\s+([0-9])', r'\1\2', norm_name)
+    norm_name = re.sub(r'([a-zA-Z])\s+([a-zA-Z])', r'\1\2', norm_name)
+    norm_name = re.sub(r'2[oO]26', '2026', norm_name)
+    norm_name = re.sub(r'([a-zA-Z0-9]){2,}', r'\1', norm_name)
+    sk_query = re.sub(r'[^a-zA-Z0-9]', '', doc_store.base_stem(norm_name)).lower()
+
     suf_files = [f for f in folder.glob(f"*{suf}") if f.is_file()]
+    if not suf_files and suf:
+        suf_files = [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in ('.xlsx', '.xls', '.csv', '.docx', '.pptx', '.pdf')]
     if suf_files:
+        for f in suf_files:
+            f_sk = re.sub(r'[^a-zA-Z0-9]', '', doc_store.base_stem(f.name)).lower()
+            if f_sk == sk_query:
+                return f
+            if re.sub(r'(.)\1+', r'\1', f_sk) == re.sub(r'(.)\1+', r'\1', sk_query):
+                return f
         clean_stem = doc_store.base_stem(Path(clean_name).name).lower()
         matching = [f for f in suf_files if (doc_store.base_stem(f.name).lower() in clean_stem or clean_stem in doc_store.base_stem(f.name).lower())]
         if matching:

@@ -826,6 +826,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         run_end_state, run_end_reason, turn = "completed", None, -1
         runaway_hits = 0
         consecutive_tool_failures = 0
+        circuit_breaker_tripped = False
         recent_tool_signatures = []
         runs.begin(run_id, "chat", user.id, stage="stream")
         t0 = time.time()
@@ -1632,8 +1633,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                     if not ok:
                         consecutive_tool_failures += 1
-                        if consecutive_tool_failures >= 2:
+                        if consecutive_tool_failures >= 4:
                             # Circuit breaker: stop retrying failing tool calls, wrap up in plain text
+                            circuit_breaker_tripped = True
                             turn_limit = min(turn_limit, turn + 1)
                             res_str += ". Stop retrying: provide your final answer in plain text with any completed files."
                     else:
@@ -1736,11 +1738,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     reasoning = res_dict["reasoning"]
                 # the run was cut off with work open: show a real status instead of markup / the provider's placeholder, and let
                 # the person press Continue
-                if budget_hit:
-                    content, _replaced = finish_text(content, turn_limit, written_files)
+                if budget_hit or circuit_breaker_tripped:
+                    reason = "circuit_breaker" if circuit_breaker_tripped else "budget"
+                    content, _replaced = finish_text(content, turn_limit, written_files, reason=reason)
                     if _replaced:
                         yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
-                    yield f"event: budget_stop\ndata: {json.dumps({'turns': turn_limit})}\n\n"
+                    yield f"event: budget_stop\ndata: {json.dumps({'turns': turn_limit, 'reason': reason})}\n\n"
 
             # Robust fallback: if content is still empty, never terminate silently without output
             if not (content and content.strip()):

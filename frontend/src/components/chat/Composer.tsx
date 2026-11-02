@@ -1870,20 +1870,6 @@ export const Composer: React.FC = () => {
                     className="claude-ctx-popup"
                     id="claude-ctx-popup"
                     role="tooltip"
-                    style={{
-                      display: 'block',
-                      position: 'absolute',
-                      bottom: '100%',
-                      right: 0,
-                      marginBottom: '6px',
-                      background: 'var(--panel2, #1c1c21)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '6px',
-                      padding: '4px 8px',
-                      fontSize: '11px',
-                      whiteSpace: 'nowrap',
-                      zIndex: 9999,
-                    }}
                   >
                     <span>
                       {contextStats.fmtK(contextStats.totalToks)} / {contextStats.fmtK(contextStats.nCtx)} tokens ({contextStats.pct}%)

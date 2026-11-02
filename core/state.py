@@ -553,28 +553,34 @@ def keepalive_prompt(profile: Optional[dict]) -> str:
     return "ping"
 
 
-SINGLE_SLOT_KEEPALIVE_IDLE_S = 300
+SINGLE_SLOT_KEEPALIVE_IDLE_S = 25
 
 
 def single_slot_keepalive_idle_s(profile: Optional[dict] = None) -> float:
     """How long a one-slot server must sit idle before a keepalive ping (profile or app.json "keepalive_single_slot_idle_s",
-    default 300). Windows demotes idle VRAM to system RAM after about 70 s, so with the default the model can slip to RAM before the
-    first ping; a smaller value (for example 45) pings sooner, at the price that a ping replaces the cached prompt of the chat."""
+    default 25s). Windows WDDM demotes idle VRAM to system DRAM after ~70s, so this must stay well below 70s to keep VRAM resident."""
     try:
         from .small_model import APP_CONFIG
         v = (profile or {}).get("keepalive_single_slot_idle_s")
         if v is None:
+            v = (profile or {}).get("keepalive_interval_s")
+        if v is None:
             v = APP_CONFIG.get("keepalive_single_slot_idle_s")
+        if v is None:
+            v = APP_CONFIG.get("keepalive_interval_s", 25)
         return max(10.0, float(v)) if v is not None else float(SINGLE_SLOT_KEEPALIVE_IDLE_S)
     except (TypeError, ValueError):
         return float(SINGLE_SLOT_KEEPALIVE_IDLE_S)
 
 
 def keepalive_idle_s(n_slots: int, interval_s: float, profile: Optional[dict] = None) -> float:
-    """Seconds without model activity before a keepalive ping. With one slot the ping runs on the SAME slot as the chat: it replaces
-    that conversation's cached prompt, so the next request re-reads the whole prompt (35 s at 11k tokens) and starts from a slot
-    holding the warm-up text. So with one slot it only pings after a long real idle, never between the rounds of a tool loop."""
-    return float(interval_s) if int(n_slots or 1) > 1 else max(float(interval_s), single_slot_keepalive_idle_s(profile))
+    """Seconds without model activity before a keepalive ping. Must stay below Windows WDDM ~70s eviction threshold."""
+    if int(n_slots or 1) > 1:
+        return float(interval_s) if interval_s and interval_s > 0 else 25.0
+    slot_s = single_slot_keepalive_idle_s(profile)
+    if interval_s and interval_s > 0:
+        slot_s = min(slot_s, float(interval_s))
+    return max(10.0, slot_s)
 
 
 state = ProxyState()
