@@ -353,5 +353,50 @@
     "fails": 2,
     "until": 1793765458.4599447,
     "status": 403
+  },
+  "tripo3d.ai": {
+    "fails": 2,
+    "until": 1793777308.2409365,
+    "status": 403
+  },
+  "visualcapitalist.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "imf.org": {
+    "fails": 2,
+    "until": 1793781954.7604966,
+    "status": 403
+  },
+  "measuredworld.com": {
+    "fails": 2,
+    "until": 1793782079.5763853,
+    "status": 403
+  },
+  "worldeconomics.com": {
+    "fails": 2,
+    "until": 1793786753.804656,
+    "status": 403
+  },
+  "spglobal.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "oecd.org": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "quizlet.com": {
+    "fails": 1,
+    "until": 0,
+    "status": 403
+  },
+  "91mobiles.com": {
+    "fails": 2,
+    "until": 1793789062.5133815,
+    "status": 403
   }
 }

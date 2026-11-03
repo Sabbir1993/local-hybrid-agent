@@ -470,7 +470,7 @@
   "serving": {
     "slot_affinity": true,
     "queue_enabled": true,
-    "max_inflight_per_user": 1,
+    "max_inflight_per_user": 2,
     "max_body_bytes": 8388608,
     "body_limit_paths": {
       "/knowledge/upload": 54525952,
