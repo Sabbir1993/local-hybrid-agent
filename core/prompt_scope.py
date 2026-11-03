@@ -774,6 +774,12 @@ def three_d_wanted(query: str, prior_files=None, msgs=None) -> bool:
         return False
     if _3D_RE.search(q) and (_HTML_VERB_RE.search(q) or _HTML_RE.search(q)):
         return True
+    # "create a single html of it" right after a conversation about a 3D village: the 3D is in the recent messages, not the request
+    if (html_wanted(q, prior_files, msgs) or re.search(r"\bhtml\b", q, re.I)) and _HTML_VERB_RE.search(q):
+        recent_user = " ".join(str(m.get("content") or "")[:1500] for m in (msgs or [])[-6:]
+                               if isinstance(m, dict) and m.get("role") == "user")
+        if _3D_RE.search(recent_user) and not _3D_NOT_RE.search(recent_user):
+            return True
     # a follow-up on a page that is already 3D ("fix the SyntaxError", "make the boats move")
     if html_wanted(q, prior_files, msgs) or re.search(r"\b(syntaxerror|uncaught|is not defined|cannot read|undefined)\b", q, re.I):
         recent = " ".join(str(m.get("content") or "")[:4000] for m in (msgs or [])[-4:] if isinstance(m, dict))

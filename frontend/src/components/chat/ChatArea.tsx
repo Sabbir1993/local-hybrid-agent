@@ -429,6 +429,19 @@ export const ChatArea: React.FC = () => {
       img.setAttribute('data-preview-path', src);
       img.setAttribute('data-preview-title', alt);
       img.style.cursor = 'pointer';
+      img.referrerPolicy = 'no-referrer';
+      img.onerror = () => {
+        if (!img.dataset.viaProxy && /^https:\/\//i.test(src)) {
+          img.dataset.viaProxy = '1';                       // second try: the server fetches it (only pictures a search returned)
+          img.src = '/media/proxy?u=' + encodeURIComponent(src);
+          return;
+        }
+        const a = document.createElement('a');                // third: say so, and keep the source one click away
+        a.href = src; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.textContent = 'Image could not be loaded - open it';
+        a.style.fontSize = '10.5px';
+        img.replaceWith(a);
+      };
 
       const thumbWrap = loadImgBtn.closest('.media-card-thumb-wrap');
       if (thumbWrap) {

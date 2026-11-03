@@ -24,6 +24,13 @@ class ThreeDIntentTests(unittest.TestCase):
         for q in ("explain how webgl works", "3D printing guide, make a model", "make a dashboard", "write a blender script to make a cube"):
             self.assertFalse(prompt_scope.three_d_wanted(q), q)
 
+    def test_html_followup_in_a_3d_conversation(self):
+        msgs = [{"role": "user", "content": "Make a 3D village with bangladeshi style"},
+                {"role": "assistant", "content": "Here are some Blender models to download."}]
+        self.assertTrue(prompt_scope.three_d_wanted("create an single html of it", [], msgs))
+        self.assertFalse(prompt_scope.three_d_wanted("create an single html of it", [], [{"role": "user", "content": "hello"}]))
+        self.assertFalse(prompt_scope.three_d_wanted("make a dashboard html", [], [{"role": "user", "content": "explain cats"}]))
+
     def test_error_followup_on_a_three_page(self):
         msgs = [{"role": "assistant", "content": "<script>const scene = new THREE.Scene()</script>"}]
         self.assertTrue(prompt_scope.three_d_wanted("Uncaught SyntaxError: missing ) after argument list index.html:694", [], msgs))
@@ -31,15 +38,25 @@ class ThreeDIntentTests(unittest.TestCase):
 
 
 class LanePickTests(unittest.TestCase):
-    def run_pick(self, route, client=None, boom=False):
+    def run_pick(self, route, client=None, boom=False, small_models=None, explicit=None):
+        from core.small_model import APP_CONFIG
+
         class T(Target):
             async def client(self_inner):
                 if boom:
                     raise RuntimeError("did not load")
                 return client or object()
         routed = [T(n) for n in route]
+        # a Target the hint code builds is the real class: make every Target load a stand-in client instead of a server
+        async def fake_client(self_t):
+            if boom:
+                raise RuntimeError("did not load")
+            return client or object()
         with mock.patch.object(creative, "targets", return_value=routed), \
-                mock.patch.object(Target, "available", return_value=True):
+                mock.patch.object(Target, "available", return_value=True), \
+                mock.patch.object(Target, "client", fake_client), \
+                mock.patch("core.cloud.role_map", return_value=explicit or {}), \
+                mock.patch.dict(APP_CONFIG, {"small_models": small_models or {}}):
             return asyncio.run(creative.pick("html3d", 1))
 
     def test_job_exists_local_only_default_main(self):
@@ -54,6 +71,16 @@ class LanePickTests(unittest.TestCase):
         got = self.run_pick(["html3d", "main"], client=c)
         self.assertEqual((got.lane, got.client), ("html3d", c))
         self.assertGreaterEqual(got.max_tokens, 256)
+
+    def test_unmapped_job_finds_the_lane_named_3d(self):
+        lanes_cfg = {"qwen3-3d-coder": {"model": "x.gguf", "kind": "chat", "label": "Qwen3 3D Coder"},
+                     "executor": {"model": "y.gguf", "kind": "chat", "label": "executor"}}
+        got = self.run_pick(["main"], small_models=lanes_cfg)
+        self.assertEqual(got.lane, "qwen3-3d-coder")
+
+    def test_explicit_mapping_to_main_is_respected(self):
+        lanes_cfg = {"qwen3-3d-coder": {"model": "x.gguf", "kind": "chat", "label": "Qwen3 3D Coder"}}
+        self.assertIsNone(self.run_pick(["main"], small_models=lanes_cfg, explicit={"html3d": "main"}))
 
     def test_lane_that_will_not_load_falls_back_to_main(self):
         self.assertIsNone(self.run_pick(["html3d", "main"], boom=True))

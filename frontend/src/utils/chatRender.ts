@@ -382,7 +382,7 @@ function transformTokens(raw: string): string {
     const cleanTitle = escAttr(alt || 'Image');
     const safeUrl = escAttr(url);
     const safeHost = escAttr(host);
-    return `<div class="chat-inline-media-card" style="display:inline-flex; align-items:center; gap:10px; margin:6px 0; padding:6px 10px; border-radius:8px; background:var(--panel2, rgba(255,255,255,0.03)); border:1px solid var(--border, #334155); max-width:440px; vertical-align:middle;">
+    const card = `<div class="chat-inline-media-card" style="display:inline-flex; align-items:center; gap:10px; margin:6px 0; padding:6px 10px; border-radius:8px; background:var(--panel2, rgba(255,255,255,0.03)); border:1px solid var(--border, #334155); max-width:440px; vertical-align:middle;">
       <div class="media-card-thumb-wrap" style="position:relative; width:44px; height:44px; min-width:44px; border-radius:6px; overflow:hidden; background:rgba(0,0,0,0.3); display:flex; align-items:center; justify-content:center; border:1px solid var(--border-subtle, rgba(255,255,255,0.08));">
         <button type="button" data-load-src="${safeUrl}" data-load-alt="${cleanTitle}" title="Load image from ${safeHost}" style="background:none; border:none; cursor:pointer; font-size:16px; color:inherit;">🖼️</button>
       </div>
@@ -394,6 +394,9 @@ function transformTokens(raw: string): string {
         </div>
       </div>
     </div>`;
+    // One line of inline <span>s: a line that starts with a block <div> is an HTML block for the markdown parser, which then
+    // leaves the rest of the line ("- **Creator:** ...") as raw text with its asterisks.
+    return card.replace(/>\s*\n\s*</g, '><').replace(/<div/g, '<span').replace(/<\/div>/g, '</span>');
   });
 
   // 2. Download / Preview tokens: [DOWNLOAD: filename]
