@@ -46,6 +46,14 @@ JOBS = {
         "hint": "Turns your question into a short web search. Only used when that model is already running.",
         "local_only": True,
     },
+    "html3d": {
+        "kind": "chat",
+        "default": "main",
+        "label": "3D web pages",
+        "hint": "Builds 3D / WebGL / Three.js pages and games with its own coder model. "
+                "Not set up, not running or failing to load: the main model does it. Always on this PC.",
+        "local_only": True,
+    },
     "input_guard": {
         "kind": "chat",
         "default": "executor",

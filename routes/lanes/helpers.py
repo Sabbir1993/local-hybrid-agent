@@ -18,6 +18,8 @@ def _view(user: Principal) -> dict:
                            "vision": cm.can_vision}
                            for cm in cloud.cloud_models(user.id)]
     out["gpus"] = list(ACTIVE_RUNTIME.get("gpu_devices") or [])
+    from core.config import GPU_STATUS
+    out["gpu_status"] = dict(GPU_STATUS)           # detected GPUs, and any the list misses or names wrongly
     out["suggested_port"] = lanes.suggest_port()
     out["verification"] = verifier.settings(user.id)
     out["fallback_local"] = bool(cloud.cloud_bindings(user.id).get("fallback_local", True))

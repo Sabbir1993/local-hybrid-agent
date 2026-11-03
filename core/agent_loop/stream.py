@@ -86,7 +86,7 @@ async def drain_llm_stream(stream, user, spec: StreamSpec, model_info: dict,
     The redactor is created here (not passed in) so the fallback reset cannot drift:
     every copy constructed it the same way and reset it the same way.
     """
-    redactor = OutputRedactor(user, is_cloud, sentence_release=spec.sentence_release)
+    redactor = OutputRedactor(user, is_cloud, sentence_release=spec.sentence_release, fx=True)
     out.redactor = redactor
     out.model_info = model_info
     async for ev, val in stream:
@@ -95,7 +95,7 @@ async def drain_llm_stream(stream, user, spec: StreamSpec, model_info: dict,
             continue
         if ev == "fallback":
             yield f"event: lane\ndata: {json.dumps(spec.fallback_payload)}\n\n"
-            redactor = OutputRedactor(user, False, sentence_release=spec.sentence_release)   # lane now local
+            redactor = OutputRedactor(user, False, sentence_release=spec.sentence_release, fx=True)   # lane now local
             out.redactor = redactor
             out.fell_back = True
             if spec.adopt_fallback_model and spec.fallback_payload:

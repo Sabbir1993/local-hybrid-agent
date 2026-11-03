@@ -115,23 +115,52 @@ def bing_search(query: str, recency: str = "") -> list:
 
 def searxng_search(query: str, recency: str = "") -> list:
     """Optional: an org-run SearXNG instance (web.searxng_url, JSON format enabled).
-    It's a fixed admin-configured endpoint (often on the LAN), so it isn't SSRF-checked."""
+    It's a fixed admin-configured endpoint (often on the LAN), so it isn't SSRF-checked.
+
+    Keeps what SearXNG knows about each hit: the upstream engines that returned it ("src"), its own score and the
+    publish date. Page 2 is read when page 1 has fewer than web.searxng_min_results hits. Engines that failed
+    (Google blocked, timeouts) are listed in searxng_search.unresponsive so the tool can say so."""
     mod = sys.modules.get("core.web_search")
     cfg_fn = getattr(mod, "cfg", cfg)
     region_fn = getattr(mod, "region", region)
-    base = str(cfg_fn().get("searxng_url") or "").rstrip("/")
+    c = cfg_fn()
+    base = str(c.get("searxng_url") or "").rstrip("/")
     if not base:
         return []
     params = {"q": query, "format": "json", "language": region_fn()["accept"].split(",")[0]}
     if recency in ("day", "week", "month", "year"):
         params["time_range"] = recency
-    with httpx.Client(timeout=SEARCH_TIMEOUT_S, follow_redirects=False) as c:
-        r = c.get(base + "/search", params=params)
-    if r.status_code != 200:
-        raise RuntimeError(f"SearXNG HTTP {r.status_code}")
-    return [{"title": _clean(x.get("title")), "url": x.get("url") or "",
-             "snippet": _clean(x.get("content"))[:SNIPPET_CHARS]}
-            for x in (r.json().get("results") or []) if str(x.get("url") or "").startswith("http")]
+    if c.get("searxng_engines"):                      # optional: pin the upstream engines, e.g. ["google", "brave"]
+        eng = c["searxng_engines"]
+        params["engines"] = ",".join(eng) if isinstance(eng, list) else str(eng)
+    want = int(c.get("searxng_min_results", 5))
+    out, seen, unresponsive = [], set(), []
+    with httpx.Client(timeout=SEARCH_TIMEOUT_S, follow_redirects=False) as client:
+        for page in (1, 2):
+            r = client.get(base + "/search", params={**params, "pageno": page})
+            if r.status_code != 200:
+                if page == 1:
+                    raise RuntimeError(f"SearXNG HTTP {r.status_code}")
+                break
+            data = r.json()
+            unresponsive += [f"{e[0]}: {e[1]}" if isinstance(e, (list, tuple)) and len(e) > 1 else str(e)
+                             for e in (data.get("unresponsive_engines") or [])]
+            for x in data.get("results") or []:
+                url = str(x.get("url") or "")
+                if not url.startswith("http") or url in seen:
+                    continue
+                seen.add(url)
+                src = x.get("engines") or ([x["engine"]] if x.get("engine") else [])
+                out.append({"title": _clean(x.get("title")), "url": url, "snippet": _clean(x.get("content"))[:SNIPPET_CHARS],
+                            "src": list(src), "sx_score": float(x.get("score") or 0.0),
+                            "published": str(x.get("publishedDate") or "")})
+            if len(out) >= want:
+                break
+    searxng_search.unresponsive = list(dict.fromkeys(unresponsive))
+    return out
+
+
+searxng_search.unresponsive = []
 
 
 BACKENDS = {"searxng": searxng_search, "duckduckgo": ddg_search, "bing": bing_search}

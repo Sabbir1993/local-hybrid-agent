@@ -4,6 +4,16 @@ Entries are kept short on purpose: this is a local single-dev project and long
 per-commit prose rots faster than it helps. Versioning starts where the repo
 has a tag or release; until then, dates + headline changes.
 
+## 2026-11-03 — BDT conversion, SearXNG search, 3D lane, GPU auto-detect
+
+- Foreign amounts in answers are converted to Taka at a live rate (`core/currency.py`, `fx.*` in app.json); never a symbol swap.
+- pptx / pdf / spreadsheet requests run behind their skill digests; web search asks SearXNG first (`scripts/setup_searxng_wsl.sh`)
+  with DuckDuckGo/Bing as fallback and a ranking that weighs engines and authoritative sites.
+- A broken questionnaire card is repaired (server and page); download links are checked against real files, and a pasted HTML page
+  is saved.
+- New job `html3d` (3D web pages) in chat and agent mode: its own coder lane, main model as fallback.
+- `gpu_devices: "auto"` detects the machine's GPUs; the Add a model wizard lists them with free memory.
+
 ## 2026-10-15 — Excel as the formula engine
 
 - New companion op `excel.recalc` (companion 0.2.106, Windows): real Excel on the user's PC calculates a built workbook (hidden,

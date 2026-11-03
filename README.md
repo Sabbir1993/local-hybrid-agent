@@ -72,11 +72,19 @@ serving a single-page web UI (`ui.html` + `static/js/`) with:
   admins add local ones (a `.gguf` on a chosen GPU/port), each user adds
   their own cloud ones. Every kind of work is a fixed *job* (thinking &
   planning, routine tool calls, summarizing, commit messages, sub-agents,
-  checking answers, reading images, search memory…) that you map to a model;
+  checking answers, reading images, search memory, 3D web pages…) that you map to a model;
 unmapped jobs keep today's defaults. Each model has an "if it fails, use…"
   backup, so a failed cloud call falls back automatically. Agent presets:
   Private (all on this PC), Balanced, Best quality, Main model only
   (`core/lanes/`).
+- **3D web pages (`html3d` job).** Add a coder model as a text lane (Settings → Models → Add a model) and map it to
+  "3D web pages" in Jobs & backup: chat and agent requests for a Three.js / WebGL page or game then run on it (one turn is capped
+  at 16k tokens, `small_models.<lane>.max_tokens`). Not set up, not running or failing to load: the main model answers as before.
+  Always on this PC.
+- **Any number of GPUs.** `runtimes.<name>.gpu_devices` may be `"auto"`: every discrete GPU llama.cpp lists is used (iGPUs are
+  skipped), so 1, 2, 3 or 4 cards need no edit; a fixed list still works and startup warns about indices the machine lacks or
+  cards left unused. One model split over several GPUs uses Tensor split (one share per GPU, `0` skips a GPU); each helper
+  model sits on one GPU chosen in the Add a model wizard.
 - **One model, many jobs (helper + vision on one port).** A vision-kind lane
   may serve `chat` jobs too (`core/lanes/constants.py` `_KIND_OK`), and the
   agent loop keys executor behaviour on the lane NAME — so a single

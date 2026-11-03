@@ -41,7 +41,8 @@ def _set_port_gpu(name: str, cur: dict, data: dict, sm: dict, cpu_ok: bool = Fal
         if gpu not in (ACTIVE_RUNTIME.get("gpu_devices") or []) and not (cpu_ok and gpu == -1):
             raise ValueError(f"GPU {gpu} isn't available in the active runtime")
         cur["gpu"] = gpu
-    cur.setdefault("gpu", ACTIVE_RUNTIME.get("small_model_gpu") or 1)
+    from ..config import default_small_gpu
+    cur.setdefault("gpu", default_small_gpu())
 
 
 def _save_sdcpp_lane(name: str, kind: str, cur: dict, data: dict) -> dict:

@@ -10,7 +10,7 @@ from .extraction import attach_passages
 from .rerank import apply_domain_prefs, dedup_items, detect_recency, merge, rerank
 
 
-async def rewrite_query(message: str, fallback: str) -> str:
+async def rewrite_query(message: str, fallback: str, timeout: float = 8) -> str:
     """Turn a conversational message into a search query -- the "Web search queries"
     job (core/lanes.py; the small executor by default, always local). Only used when
     that model is already running - never loads one just for this."""
@@ -24,7 +24,7 @@ async def rewrite_query(message: str, fallback: str) -> str:
         r = await asyncio.wait_for(client.post("/v1/chat/completions", json={
             "messages": [{"role": "system", "content": _REWRITE_PROMPT},
                          {"role": "user", "content": message[:1500]}],
-            "max_tokens": 40, "temperature": 0.0}), timeout=8)
+            "max_tokens": 40, "temperature": 0.0}), timeout=timeout)
         q = ((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         q = _clean(re.sub(r"<think>.*?</think>", "", q, flags=re.S)).strip("\"'` ")
         return q if 2 <= len(q) <= 200 else fallback
@@ -78,6 +78,12 @@ async def search(query: str, recency: str = "", auto_fetch: Optional[int] = None
         q = _clean(str(q))
         if q and q.lower() not in {x.lower() for x in queries} and len(queries) <= MAX_EXTRA_QUERIES:
             queries.append(q)
+    if len(queries) == 1 and cfg_fn().get("expand_queries", True):
+        # a second phrasing from the small local model (only when it is already running): two phrasings fused by RRF
+        # find pages one wording misses. Adds nothing when the rewrite equals the query.
+        alt = await rewrite_query(query, query, timeout=4)
+        if alt and alt.lower() != query.lower():
+            queries.append(alt)
     n_fetch = int(cfg_fn().get("auto_fetch_top", 3) if auto_fetch is None else auto_fetch)
     key = ("search", tuple(q.lower() for q in queries), str(cfg_fn().get("region") or "bd-en"), recency, n_fetch)
     hit = cache_get_fn(key)
@@ -98,9 +104,12 @@ async def search(query: str, recency: str = "", auto_fetch: Optional[int] = None
     items = await rerank_fn(query, merge_fn(lists))
     items = apply_domain_prefs(dedup_items(items), cfg_fn().get("deny_hosts"), cfg_fn().get("boost_hosts"))
     # drop sites known to refuse bots, unless that would leave nothing
-    items = ([i for i in items if not blocklist.is_blocked(i["url"])] or items)[:MAX_RESULTS]
+    items = ([i for i in items if not blocklist.is_blocked(i["url"])] or items)[:int(cfg_fn().get("max_results") or MAX_RESULTS)]
     await attach_fn(query, items, n_fetch)
     engines = list(dict.fromkeys(k.split("#")[0] for k in lists))
+    sx = getattr(backends_dict.get("searxng"), "unresponsive", None)
+    if sx and "searxng" in engines:                    # SearXNG answered, but some upstream engines (Google ...) did not
+        errors["searxng engines"] = "; ".join(sx)[:200]
     out = {"query": query, "engines": engines, "results": items, "errors": errors}
     if items:
         cache_put_fn(key, out)

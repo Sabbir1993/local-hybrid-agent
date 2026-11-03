@@ -39,7 +39,8 @@ from core.agent_loop.degeneration import RUNAWAY_MSG, sanitize_user_facing_conte
 
 # the start of a tool call a model writes as text ("<tool_call>", "<function=write_file>"): never streamed to the reader
 _TOOL_TEXT_RX = re.compile(r"<tool_call>|<function[=:\s]", re.I)
-from core import prompt_scope, skills
+from core import prompt_scope, skills, questionnaire
+from core.lanes import creative
 from core.doc_tools import builds
 from core.monitor import (
     _monitor_state,
@@ -64,6 +65,7 @@ from .delivery import (
     _duplicate_workbook,
     _already_written,
     _finalize_download_tags,
+    finalize_reply_files,
     scrub_server_paths,
     _finalize_media,
     _prompt_tokens_of,
@@ -707,6 +709,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if design_skill := skills.silent_skill_prompt("frontend-design", compact=not cloud_main):
             sys_parts.append(design_skill)
             sys_labels.append("design-skill")
+    if has_file:
+        # PPT/PPTX, PDF and Excel work always runs behind its skill (design and quality guidance, silently)
+        for _doc_skill, _wanted in (("pptx", prompt_scope.pptx_intent(last_query, prior_files, msgs)),
+                                    ("pdf", pdf_build or explicit_ext == ".pdf"),
+                                    ("spreadsheet", sheet_build)):
+            if _wanted and (_ds := skills.silent_skill_prompt(_doc_skill)):
+                sys_parts.append(_ds)
+                sys_labels.append(f"{_doc_skill}-skill")
     if explicit_ext and has_file and not project_build:
         sys_parts.append(prompt_scope.format_note(explicit_ext))
         sys_labels.append("explicit-format")
@@ -796,6 +806,15 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     prompt_scope.maybe_log("chat/run", list(zip(sys_labels, sys_parts)), chat_tools,
                            extra=f"hist={len(msgs)}")
 
+    # A 3D / WebGL page goes to the dedicated "html3d" lane when the admin set one up and it loads; else the main model answers.
+    lane3d = None
+    if (not cloud_main and (html_build or project_build or has_file or wants_file)
+            and prompt_scope.three_d_wanted(own_q, prior_files, msgs[:-1])):
+        lane3d = await creative.pick("html3d", user.id)
+        if lane3d:
+            main_client = lane3d.client
+            turn_max_tokens = min(int(turn_max_tokens), lane3d.max_tokens)
+
     # Report the model actually answering: cloud model when the main lane is
     # cloud-bound, else the loaded local gguf (fallback label matches the old
     # "Main LLM" placeholder for a lane with nothing loaded yet).
@@ -804,6 +823,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         model_display = cloud_main.display
         model_source = "cloud"
         model_provider = cloud_main.provider_name
+    elif lane3d:
+        clean_model_name = lane3d.name
+        model_display = f"\U0001F9E0 {clean_model_name}"
+        model_source = "local"
+        model_provider = None
     else:
         m_name = state.profile.get("model_path", "") if state.profile else ""
         clean_model_name = Path(m_name).name.replace(".gguf", "") if m_name else "Main LLM"
@@ -813,7 +837,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     async def event_stream():
         nonlocal clean_model_name, model_display, model_source, model_provider
-        lane_info = {"lane": "main", "model": clean_model_name, "display": model_display,
+        lane_info = {"lane": lane3d.lane if lane3d else "main", "model": clean_model_name, "display": model_display,
                      "source": model_source, "provider": model_provider}
         yield f"event: lane\ndata: {json.dumps(lane_info)}\n\n"
         if custom_agent:
@@ -856,7 +880,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         # client (cloud_only rules only fire while the lane is cloud; the
         # fallback event recreates the redactor for the local lane).
         redactor = output_guard.OutputRedactor(user, model_source == "cloud",
-                                               sentence_release=voice_policy.sentence_release(req))
+                                               sentence_release=voice_policy.sentence_release(req), fx=True)
         think_redactor = output_guard.OutputRedactor(user, model_source == "cloud")
         guard_event_sent = False
 
@@ -1055,7 +1079,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             streamed_content.append(_tail)
                             yield f"event: delta\ndata: {json.dumps({'text': _tail})}\n\n"
                         redactor = output_guard.OutputRedactor(user, False,
-                                                               sentence_release=voice_policy.sentence_release(req))
+                                                               sentence_release=voice_policy.sentence_release(req), fx=True)
                         think_redactor = output_guard.OutputRedactor(user, False)
                         continue
                     if ev == "thought_delta":
@@ -1424,6 +1448,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                 content = "I have processed your request."
                                 yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
 
+                    content, _qz_fixed = questionnaire.repair(content)      # a card the client cannot parse shows as raw JSON
+                    if _qz_fixed:
+                        yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
                     if card and card_mode is not False and "```questionnaire" not in content:
                         content = card                      # the model did not produce the card: send ours instead
                         yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
@@ -1431,10 +1458,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if _clean != content:
                         content = _clean
                         yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
-                    if written_files:
-                        content, _chg = _finalize_download_tags(content, written_files, last_query, prior_files)
-                        if _chg:
-                            yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+                    content, _chg = finalize_reply_files(content, written_files, last_query, prior_files, tool_allowed("write_file"))
+                    if _chg:
+                        yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
                     if made_media:
                         content, _chg = _finalize_media(content, made_media)
                         if _chg:
@@ -1769,6 +1795,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 content = sanitize_user_facing_content(re.sub(r"<function[=\s][\s\S]*?</function>", "", content)) or _NO_TOOL_ANSWER
                 yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
+            content, _qz_fixed = questionnaire.repair(content)
+            if _qz_fixed:
+                yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
             if card and card_mode is not False and "```questionnaire" not in content:
                 content = card
                 yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
@@ -1776,10 +1805,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             if _clean != content:
                 content = _clean
                 yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
-            if written_files:
-                content, _chg = _finalize_download_tags(content, written_files, last_query, prior_files)
-                if _chg:
-                    yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+            content, _chg = finalize_reply_files(content, written_files, last_query, prior_files, tool_allowed("write_file"))
+            if _chg:
+                yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
             if made_media:
                 content, _chg = _finalize_media(content, made_media)
                 if _chg:

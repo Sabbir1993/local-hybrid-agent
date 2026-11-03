@@ -2,7 +2,7 @@ import re
 import sys
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse
-from .constants import _STOP, _TRACKING
+from .constants import _STOP, _TRACKING, AUTHORITY_BONUS, DEFAULT_AUTHORITY, DEFAULT_ENGINE_WEIGHTS, cfg
 
 
 def norm_url(u: str) -> str:
@@ -14,9 +14,16 @@ def norm_url(u: str) -> str:
 
 
 def merge(ranked_lists: dict) -> list:
-    """Reciprocal-rank fusion across engines; a URL found by several engines ranks higher."""
+    """Weighted reciprocal-rank fusion across engines; a URL found by several engines ranks higher.
+
+    A backend's weight comes from web.engine_weights (default: SearXNG 1.25). A SearXNG hit that several of its upstream
+    engines returned ("src") gets +15% per extra engine (at most +45%): agreement between engines is the best popularity
+    signal a keyless setup has."""
+    user_w = cfg().get("engine_weights")
+    weights = {**DEFAULT_ENGINE_WEIGHTS, **(user_w if isinstance(user_w, dict) else {})}
     pool: dict = {}
     for engine, results in ranked_lists.items():
+        w = float(weights.get(engine.split("#")[0], 1.0))
         for rank, r in enumerate(results):
             key = norm_url(r["url"])
             e = pool.get(key)
@@ -25,7 +32,8 @@ def merge(ranked_lists: dict) -> list:
             elif len(r.get("snippet") or "") > len(e.get("snippet") or ""):
                 e["snippet"] = r["snippet"]
             e["engines"].append(engine)
-            e["rrf"] += 1.0 / (60 + rank)
+            agree = 1.0 + 0.15 * min(max(len(r.get("src") or []) - 1, 0), 3)
+            e["rrf"] += w * agree / (60 + rank)
     return sorted(pool.values(), key=lambda x: -x["rrf"])
 
 
@@ -64,6 +72,13 @@ def apply_domain_prefs(items: list, deny=None, boost=None, bonus: float = 0.15) 
     """web.deny_hosts are dropped; web.boost_hosts (official sources: gov.bd, bb.org.bd, vendor
     docs) get `bonus` added to their rerank score, so they win ties and near-ties, not everything."""
     items = [i for i in items if not _host_in(i["url"], deny)]
+    if cfg().get("default_authority", True):
+        extra = cfg().get("authority_hosts")
+        names = list(DEFAULT_AUTHORITY) + (extra if isinstance(extra, list) else [])
+        for i in items:
+            if _host_in(i["url"], names):
+                i["score"] = round(i.get("score", 0.0) + AUTHORITY_BONUS, 4)
+        items.sort(key=lambda x: -x.get("score", 0.0))
     if boost:
         for i in items:
             if _host_in(i["url"], boost):

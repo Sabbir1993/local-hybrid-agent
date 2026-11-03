@@ -272,6 +272,7 @@ async def run_agent_stream(req, user, ctx):
     ask_edits = pmode == "manual"
     hidden_tools = ctx.hidden_tools
     ex_inst = ctx.ex_inst
+    lane3d = ctx.lane3d
     mode = ctx.mode
     cloud_main = ctx.cloud_main
     cloud_exec = ctx.cloud_exec
@@ -377,6 +378,9 @@ async def run_agent_stream(req, user, ctx):
             return cloud_main.info("main")
         if lane == "executor" and cloud_exec:
             return cloud_exec.info("executor")
+        if lane == "main" and lane3d:
+            return {"lane": "main", "model": lane3d.name, "display": f"🧠 {lane3d.name}", "device": "GPU",
+                    "role": "3D web coder", "source": "local"}
         if lane == "main":
             m_name = state.profile.get("model_path", "") if state.profile else ""
             m_base = Path(m_name).name if m_name else "Main LLM"
@@ -748,7 +752,9 @@ async def run_agent_stream(req, user, ctx):
                             lane_reason = "executor_unavailable"
                             active_client = main_client
                 else:
-                    if not use_cloud_main:
+                    if lane3d:
+                        active_client = lane3d.client
+                    elif not use_cloud_main:
                         if not state.client or state.process is None:
                             target = state.profile_path or state.profile or common.initial_profile_path
                             if target:
@@ -990,6 +996,8 @@ async def run_agent_stream(req, user, ctx):
                     # one generation is capped per lane: a 4B executor that runs on for 8k tokens holds a GPU slot
                     # for minutes and fills its context; a cut-off call is retried smaller (see truncation.py)
                     step_max_tokens = effective_max_tokens(req.max_tokens, lane_name, cloud=bool(getattr(active_client, "is_cloud", False)))
+                    if lane3d and active_client is lane3d.client:
+                        step_max_tokens = lane3d.max_tokens if step_max_tokens <= 0 else min(step_max_tokens, lane3d.max_tokens)
                     # thinking counts against that cap: a small executor gets a short thinking budget however high the
                     # user set the effort for the main model (agent.executor_max_effort, default "low")
                     step_effort = (reasoning_mod.cap(effort, executor_effort_ceiling()) if lane_name == "executor" else effort)
@@ -2089,7 +2097,7 @@ async def run_agent_stream(req, user, ctx):
             # failure keeps the plain stop summary below.
             if stop_reason in ("loop", "loop_near_repeat", "budget", "no_progress", "max_steps", "timeout") and actions_taken:
                 wrap_parts = []
-                _red = output_guard.OutputRedactor(user, bool(getattr(main_client, "is_cloud", False)))
+                _red = output_guard.OutputRedactor(user, bool(getattr(main_client, "is_cloud", False)), fx=True)
                 try:
                     wrap_msgs = list(msgs) + [{"role": "user", "content": (
                         "[stopped] The run was stopped before you finished. Do not call any tools. "

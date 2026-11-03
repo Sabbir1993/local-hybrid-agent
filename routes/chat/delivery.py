@@ -232,3 +232,83 @@ def _duplicate_workbook(files: list, args: dict, query: str) -> bool:
     if len(wb_files) > 1:
         return False
     return bool(wb_files)
+
+
+_TAG_RX = re.compile(r"[ \t]*\[DOWNLOAD:\s*([^\]\n\[]+)\][ \t]*")
+
+
+def verify_download_tags(content: str, written: list[str], known: list[str], exists) -> tuple[str, bool]:
+    """Every [DOWNLOAD: name] tag must name a file that exists (`exists(name)` -> bool), or the page draws a Preview /
+    Download chip for a file that was never made. A name that matches no file is pointed at the one file of the same
+    type written this turn, if there is exactly one; otherwise the tag is dropped and the reply says so."""
+    real = set(written or []) | set(known or [])
+    out, changed, missing = content or "", False, []
+
+    def fix(m):
+        nonlocal changed
+        name = m.group(1).strip()
+        if name in real or exists(name):
+            return m.group(0)
+        same = [w for w in dict.fromkeys(written or []) if Path(w).suffix.lower() == Path(name).suffix.lower()]
+        changed = True
+        if len(same) == 1:
+            return f" [DOWNLOAD: {same[0]}] "
+        missing.append(name)
+        return ""
+
+    out = _TAG_RX.sub(fix, out)
+    if missing:
+        out = out.rstrip() + "\n\n*(No file was created for " + ", ".join(f"`{n}`" for n in dict.fromkeys(missing)) + \
+              " - please ask again.)*"
+    return out, changed
+
+
+_HTML_FENCE_RX = re.compile(r"```html[^\n]*\n([\s\S]*?)\n```", re.I)
+_HTML_DOC_RX = re.compile(r"<!DOCTYPE\s+html[\s\S]*?</html>", re.I)
+_NAMED_HTML_RX = re.compile(r"`?([\w\-]{2,60}\.html?)`?", re.I)
+
+
+def inline_html_deliverable(content: str, query: str):
+    """The model pasted one complete HTML page into the reply instead of saving it. -> (filename, html) or None.
+    The name is the first .html the reply or the request mentions, else a slug of the request."""
+    if not content or ".html" not in _requested_exts(query) and not _NAMED_HTML_RX.search(content):
+        return None
+    fences = _HTML_FENCE_RX.findall(content)
+    docs = [d.strip() for d in (_HTML_DOC_RX.findall("\n".join(fences)) if fences else [])]
+    if len(docs) != 1 or len(docs[0]) < 400:
+        return None
+    m = _NAMED_HTML_RX.search(content) or _NAMED_HTML_RX.search(query or "")
+    if m:
+        name = m.group(1)
+    else:
+        words = re.findall(r"[a-z0-9]+", (query or "").lower())
+        name = "-".join(w for w in words if w not in {"make", "a", "an", "the", "with", "me", "create", "build"})[:40] or "page"
+        name += ".html"
+    return Path(name).name, docs[0]
+
+
+def _file_exists(name: str) -> bool:
+    from core.agent_tools import _common_resolve
+    try:
+        return _common_resolve(Path(name.strip()).name).is_file()
+    except Exception:
+        return False
+
+
+def finalize_reply_files(content: str, written: list[str], query: str, known: list[str], can_write: bool) -> tuple[str, bool]:
+    """Last pass over a finished reply, so the page never shows a file link for a file that does not exist:
+    1. one complete HTML page pasted into the reply and never saved is saved now (`written` gets the file);
+    2. every [DOWNLOAD: x] tag must name a real file (see verify_download_tags);
+    3. links for the files written this turn are added / superseded ones dropped (_finalize_download_tags)."""
+    out = content or ""
+    if not written and can_write:
+        found = inline_html_deliverable(out, query)
+        if found:
+            res = chat_write_file({"path": found[0], "content": found[1]})
+            if not res.startswith("error:"):
+                written.append(_saved_filename(res, found[0]))
+                out = _TAG_RX.sub("", out)          # the model's own tags named invented files; the right one is added below
+    out, _ = verify_download_tags(out, written, known, _file_exists)
+    if written:
+        out, _ = _finalize_download_tags(out, written, query, known)
+    return out, out != (content or "")

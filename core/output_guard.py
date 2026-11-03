@@ -75,7 +75,7 @@ def _active_rules(user, any_cloud_lane: bool) -> list:
     return out
 
 
-def redact_full(text: str, user, any_cloud_lane: bool) -> tuple[str, Optional[dict]]:
+def redact_full(text: str, user, any_cloud_lane: bool, fx: bool = False) -> tuple[str, Optional[dict]]:
     """One-shot redaction of fully buffered text (summaries, final answers).
 
     Returns (redacted_text, first_matched_rule_or_None)."""
@@ -89,6 +89,9 @@ def redact_full(text: str, user, any_cloud_lane: bool) -> tuple[str, Optional[di
                 if matched is None:
                     matched = rule
                 text = new
+    if fx:
+        from . import currency
+        text, _ = currency.convert_text(text)
     return text, matched
 
 
@@ -122,13 +125,17 @@ class OutputRedactor:
     redacted in full before any of its characters are ever sent to the client.
     When no rules are active, feed() is a zero-overhead pass-through."""
 
-    def __init__(self, user, any_cloud_lane: bool, sentence_release: bool = False):
+    def __init__(self, user, any_cloud_lane: bool, sentence_release: bool = False, fx: bool = False):
         # sentence_release (spoken answers, core/voice_policy.py): a finished sentence is let through at once
         # instead of waiting for the rolling holdback, so speech can start with the first sentence
         self.sentence_release = bool(sentence_release)
         self.rules = _active_rules(user, any_cloud_lane)
         admin = [r for r in self.rules if not r.get("builtin")]
         self.pan = any(r.get("builtin") == "pan" for r in self.rules)
+        # fx (opt-in, chat/agent answers only): convert foreign amounts to BDT at the live rate (core/currency.py)
+        from . import currency
+        self.fx = bool(fx) and currency.enabled()
+        self.in_fence = False        # inside a ``` block across streamed chunks (fx skips code)
         if admin:
             longest = max(len(rx.pattern) for r in admin for rx, _ in r["patterns"])
             # matches can be longer than the pattern text (\d{13,19} matches 19
@@ -136,13 +143,15 @@ class OutputRedactor:
             self.hold = min(longest * 3 + 16, _MAX_HOLD)
         else:
             self.hold = 0
+        if self.fx:
+            self.hold = max(self.hold, currency.HOLD)
         self.buf = ""
         self.matched: Optional[dict] = None   # first matching rule (name/message)
         self.hits = 0
 
     def feed(self, text: str) -> str:
         """Consume a delta; return the safe-to-display prefix (may be '')."""
-        if not self.rules or not text:
+        if (not self.rules and not self.fx) or not text:
             return text
         self.buf += text
         return self._drain()
@@ -159,6 +168,7 @@ class OutputRedactor:
         """delta_reset: the UI discards streamed text, so drop any pending
         holdback too (it was never displayed). Match/hit bookkeeping stays."""
         self.buf = ""
+        self.in_fence = False        # the discarded text may have opened a fence; the replacement starts outside one
 
     def _safe_upto(self) -> int:
         """How many leading chars of buf are certainly settled."""
@@ -172,6 +182,12 @@ class OutputRedactor:
         if limit > _MAX_PENDING:      # safety valve: never buffer unbounded
             return len(self.buf) - self.hold
         cut = max(limit, 0)
+        if self.fx:
+            from . import currency
+            for m in currency.AMOUNT_RX.finditer(self.buf):
+                if m.end() > limit:
+                    cut = min(cut, m.start())
+                    break
         for rule in self.rules:
             for rx, _ in rule["patterns"]:
                 for m in rx.finditer(self.buf):
@@ -205,6 +221,9 @@ class OutputRedactor:
         return self._redact(emit)
 
     def _redact(self, s: str) -> str:
+        if self.fx:
+            from . import currency
+            s, self.in_fence = currency.convert_text(s, self.in_fence)
         for rule in self.rules:
             for rx, repl in rule["patterns"]:
                 new = rx.sub(repl, s)

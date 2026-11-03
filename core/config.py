@@ -173,9 +173,12 @@ def _load_runtime() -> dict:
         print(f"[server_manager] runtime '{name}' not in app.json runtimes "
               f"({', '.join(runtimes)}); using built-in defaults", file=sys.stderr)
     for k in RUNTIME_KEYS:
+        if isinstance(preset.get(k), str) and preset[k].strip().lower() == "auto":
+            continue                      # gpu_devices: "auto" is resolved from the machine at startup (resolve_gpu_devices)
         if preset.get(k) not in (None, "", []):
             CONFIG_DEFAULTS[k] = preset[k]
     return {"name": name, **{k: CONFIG_DEFAULTS[k] for k in RUNTIME_KEYS},
+            "gpu_auto": str(preset.get("gpu_devices") or "").strip().lower() == "auto",
             "small_model_gpu": preset.get("small_model_gpu"),
             # optional folder holding whisper-server(.exe) for speech to text
             "whisper_bin_dir": preset.get("whisper_bin_dir"),
@@ -184,6 +187,58 @@ def _load_runtime() -> dict:
 
 
 ACTIVE_RUNTIME = _load_runtime()
+
+# What the last device scan found, for the Settings screens: {configured, detected:[{index,name,total_gb}], missing, unused, auto}
+GPU_STATUS: dict = {"configured": list(ACTIVE_RUNTIME["gpu_devices"]), "detected": [], "missing": [], "unused": [],
+                    "auto": bool(ACTIVE_RUNTIME.get("gpu_auto")), "checked": False}
+
+
+def default_small_gpu() -> int:
+    """The GPU a helper lane gets when nothing says otherwise: the runtime's small_model_gpu if it is in use, else the last
+    GPU in use (the main model's split usually fills the first), else 0."""
+    devs = [int(d) for d in (ACTIVE_RUNTIME.get("gpu_devices") or [])]
+    v = ACTIVE_RUNTIME.get("small_model_gpu")
+    if v is not None and (not devs or int(v) in devs):
+        return int(v)
+    return devs[-1] if devs else 0
+
+
+def resolve_gpu_devices(force: bool = False) -> dict:
+    """Compare the GPUs the machine has with the runtime's gpu_devices, and fill the list in when it is "auto".
+
+    "auto" = every discrete GPU llama.cpp lists (iGPUs and anything under 2 GB are left out: core/gpu.py), so 1, 2, 3 or 4
+    cards work without editing app.json. A fixed list is kept as written; indices the machine does not have, and discrete GPUs
+    the list leaves out, are reported (GPU_STATUS) and printed once. Never raises: when the device list cannot be read the
+    configured list stays."""
+    try:
+        from .vram import devices as _dev
+        from . import gpu as _gpu
+        found = _gpu._discrete_devices(_dev.query_devices(ACTIVE_RUNTIME.get("llama_bin_dir"), force=force, strict=True))
+    except Exception as e:
+        print(f"[server_manager] GPU scan skipped: {e}", file=sys.stderr)
+        GPU_STATUS["checked"] = False
+        return dict(GPU_STATUS)
+    idx = sorted(int(d["index"]) for d in found)
+    if ACTIVE_RUNTIME.get("gpu_auto"):
+        if idx:
+            ACTIVE_RUNTIME["gpu_devices"] = idx
+            CONFIG_DEFAULTS["gpu_devices"] = list(idx)
+        else:
+            print("[server_manager] gpu_devices is 'auto' but no discrete GPU was found; keeping the default list", file=sys.stderr)
+    configured = [int(x) for x in (ACTIVE_RUNTIME.get("gpu_devices") or [])]
+    missing = [i for i in configured if i not in idx]
+    unused = [i for i in idx if i not in configured]
+    GPU_STATUS.update({"configured": configured, "auto": bool(ACTIVE_RUNTIME.get("gpu_auto")), "checked": True,
+                       "detected": [{"index": int(d["index"]), "name": d["name"], "total_gb": round(d["total_b"] / 2 ** 30, 1)}
+                                    for d in found],
+                       "missing": missing, "unused": unused})
+    if missing:
+        print(f"[server_manager] WARNING: gpu_devices {configured} lists GPU(s) {missing} that this machine does not report "
+              f"(found {idx}). Set \"gpu_devices\": \"auto\" in the runtime preset of config/app.json.", file=sys.stderr)
+    if unused and not ACTIVE_RUNTIME.get("gpu_auto"):
+        print(f"[server_manager] note: discrete GPU(s) {unused} are not used (gpu_devices is {configured}). "
+              f"Set \"gpu_devices\": \"auto\" to use every GPU.", file=sys.stderr)
+    return dict(GPU_STATUS)
 
 
 # One lock for every read-modify-write of config/app.json, so two saves can't

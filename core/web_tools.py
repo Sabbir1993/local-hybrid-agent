@@ -292,6 +292,8 @@ async def tool_web_search(args) -> str:
     names = {"duckduckgo": "DuckDuckGo", "bing": "Bing", "searxng": "SearXNG"}
     engines = " + ".join(names.get(e, e) for e in res["engines"])
     out = [f"Web results for: {query} (via {engines}" + (f", past {recency}" if recency else "") + ")"]
+    if res["errors"].get("searxng engines"):
+        out.append(f"Note: some search engines did not answer ({res['errors']['searxng engines']}); results may be thinner.")
     if query != asked and not redacted:
         out.append(f"Note: an out-of-date year in the query was changed to {datetime.now().year} (today's year); "
                    "the user did not ask for a specific year.")

@@ -549,7 +549,7 @@ function showCompanionNote(id, note) {
   el.style.display = note ? 'block' : 'none';
 }
 
-/* Tensor split drives GPU selection: 0,1 = GPU 2 only, 1,0 = GPU 1 only, 9,11 = dual */
+/* Tensor split drives GPU selection: one share per GPU in use, 0 skips a GPU (0,1 = the second GPU only, 9,11 = both) */
 function parseTensorSplit(v) {
   return String(v || '').split(',').map(s => s.trim()).filter(s => s !== '');
 }
@@ -557,7 +557,7 @@ function parseTensorSplit(v) {
 function activeGpuCount() {
   const shares = parseTensorSplit($('cfg-ts') ? $('cfg-ts').value : '');
   if (shares.length > 1) return shares.filter(s => parseInt(s) > 0).length;
-  return 2;   // default dual setup
+  return Math.max(1, (typeof cfgGpuIdx !== 'undefined' && cfgGpuIdx.length) || 1);   // the GPUs in use on this machine
 }
 
 function updateGpuDependentFields() {

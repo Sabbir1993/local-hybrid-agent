@@ -14,6 +14,11 @@ def _load_common_root() -> Path:
         if cfg.exists():
             d = json.loads(cfg.read_text())
             v = d.get("common_dir")
+            if v and not IS_WINDOWS and len(str(v)) > 1 and str(v)[1] == ":" and str(v)[0].isalpha():
+                # "E:/AI/common" on Linux is a relative path: mkdir would quietly create ./E:/AI/common in the working folder
+                print(f"[server_manager] WARNING: common_dir '{v}' is a Windows path; using {BASE_DIR / 'common'} instead. "
+                      f"Set common_dir in config/app.json to a Linux folder.", file=sys.stderr)
+                v = None
             if v:
                 p = Path(v)
                 p.mkdir(parents=True, exist_ok=True)

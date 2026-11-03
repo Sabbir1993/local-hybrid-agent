@@ -6,6 +6,17 @@ SEARCH_TIMEOUT_S = 12
 FETCH_MAX_BYTES = 5 * 1024 * 1024
 MAX_RESULTS = 8
 SNIPPET_CHARS = 300
+
+# Sources that tend to be the authoritative answer. A result from one gets AUTHORITY_BONUS added to its rerank score
+# (web.default_authority: false switches this off; web.authority_hosts adds more, web.boost_hosts uses the larger boost).
+AUTHORITY_BONUS = 0.12
+DEFAULT_AUTHORITY = (
+    "gov.bd", "edu.bd", "bb.org.bd", "bangladesh-bank.org", "gov", "edu",
+    "wikipedia.org", "github.com", "stackoverflow.com", "developer.mozilla.org", "learn.microsoft.com",
+    "docs.python.org", "who.int", "worldbank.org", "imf.org", "reuters.com", "bbc.com", "thedailystar.net",
+    "prothomalo.com", "tbsnews.net", "bdnews24.com", "dhakatribune.com", "financialexpress.com.bd")
+# Engine weights for the RRF merge (web.engine_weights overrides): SearXNG aggregates several engines and is asked first.
+DEFAULT_ENGINE_WEIGHTS = {"searxng": 1.25, "duckduckgo": 1.0, "bing": 1.0}
 PASSAGE_CHARS = 700
 AUTO_FETCH_BUDGET_S = 7.0
 CACHE_TTL_S = 600

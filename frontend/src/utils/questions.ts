@@ -92,6 +92,36 @@ export function parseProseQuestions(rawText: string): GrillQuestion[] {
 
 const QZ_MAX_Q = 6, QZ_MAX_OPT = 8;
 
+// The model's JSON often carries one slip (trailing comma, curly quotes, a raw line break inside a string): repair those
+// before giving up, so the card still shows (the server repairs the stored reply too: core/questionnaire.py).
+function parseCardJson(raw: string): any {
+  const attempts: string[] = [raw];
+  const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
+  const body = start >= 0 && end > start ? raw.slice(start, end + 1) : raw;
+  const fixStrings = (t: string) => {
+    let out = '', inStr = false, esc = false;
+    for (const ch of t) {
+      if (inStr) {
+        if (esc) { esc = false; out += ch; continue; }
+        const code = ch.charCodeAt(0);
+        if (code === 92) { esc = true; out += ch; continue; }                    // backslash
+        if (ch === '"') { inStr = false; out += ch; continue; }
+        if (code === 10) { out += String.fromCharCode(92) + 'n'; continue; }     // raw line break -> escaped
+        if (code === 13) continue;
+        if (code === 9) { out += String.fromCharCode(92) + 't'; continue; }      // raw tab -> escaped
+        out += ch;
+      } else { if (ch === '"') inStr = true; out += ch; }
+    }
+    return out;
+  };
+  const noComma = (t: string) => t.replace(/,(\s*[}\]])/g, '$1');
+  attempts.push(body, noComma(fixStrings(body)), noComma(fixStrings(body.replace(/[“”„]/g, '"').replace(/[‘’]/g, "'"))));
+  for (const a of attempts) {
+    try { const d = JSON.parse(a); if (d && typeof d === 'object') return d; } catch (_) { /* next repair */ }
+  }
+  return null;
+}
+
 export function parseQuestionnaire(text: string): { prose: string; quiz: { title: string; submit: string; questions: GrillQuestion[] } | null; partial: boolean } | null {
   const src = String(text ?? '');
   const m = /```questionnaire[ \t]*\r?\n([\s\S]*?)(```|$)/.exec(src);
@@ -100,7 +130,13 @@ export function parseQuestionnaire(text: string): { prose: string; quiz: { title
   const prose = (src.slice(0, m.index) + (closed ? src.slice(m.index + m[0].length) : '')).replace(/\s+$/, '');
   if (!closed) return { prose, quiz: null, partial: true };
   let data: any;
-  try { data = JSON.parse(m[1]); } catch (_) { return { prose: src, quiz: null, partial: false }; }
+  data = parseCardJson(m[1]);
+  if (!data) {
+    // still unreadable: a plain one-question card instead of raw JSON in a code block
+    const t = /"title"\s*:\s*"([^"]{1,120})"/.exec(m[1]);
+    return { prose, partial: false, quiz: { title: t ? t[1] : 'A few quick questions', submit: '', questions: [
+      { qId: 'details', qTitle: 'Tell me what matters (budget, brand, how you will use it)', hideId: true, recommendation: '', options: [], multi: false, kind: 'text' }] } };
+  }
   const str = (v: unknown, n: number) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
   const qs = Array.isArray(data && data.questions) ? data.questions.slice(0, QZ_MAX_Q) : [];
   const questions: GrillQuestion[] = [];

@@ -5,10 +5,11 @@ from core.state import state
 def current_date_prompt() -> str:
     """System-prompt line anchoring "now". Without it a local model assumes its
     training-cutoff year and searches the web for stale years."""
+    from core.prompt_scope import CURRENCY_RULE
     now = datetime.now().astimezone()
     return (f"CURRENT DATE: {now:%Y-%m-%d} ({now:%A}). Treat this as 'now' - your training data ends "
             f"earlier. For recent or current data, search with {now.year} (and {now.year - 1} for the "
-            f"latest full year); never assume your training-cutoff year is the current year.")
+            f"latest full year); never assume your training-cutoff year is the current year.\n{CURRENCY_RULE}")
 
 
 def main_ctx_tokens(cloud_main=None) -> int:

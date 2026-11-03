@@ -136,9 +136,20 @@ def _safe_extract(archive: Path, into: Path) -> None:
         return
     with tarfile.open(archive) as t:
         for m in t.getmembers():
-            if not (root / m.name).resolve().is_relative_to(root) or m.islnk() or m.issym():
+            if not (root / m.name).resolve().is_relative_to(root):
                 raise ValueError(f"unsafe entry in archive: {m.name}")
-        t.extractall(into)
+            # llama.cpp's Linux builds ship shared libraries as symlinks (libllama.so -> libllama.so.0): fine while the
+            # link stays inside the folder; a link that points outside it (or an absolute one) is refused
+            if m.issym() and not (root / Path(m.name).parent / m.linkname).resolve().is_relative_to(root):
+                raise ValueError(f"unsafe link in archive: {m.name} -> {m.linkname}")
+            if m.islnk() and not (root / m.linkname).resolve().is_relative_to(root):
+                raise ValueError(f"unsafe link in archive: {m.name} -> {m.linkname}")
+            if m.isdev():
+                raise ValueError(f"unsafe entry in archive: {m.name}")
+        if hasattr(tarfile, "data_filter"):
+            t.extractall(into, filter="data")        # Python 3.11.4+: also drops setuid bits and absolute paths
+        else:
+            t.extractall(into)
 
 
 def fetch_group(name: str, dirs: dict, dry: bool) -> bool:

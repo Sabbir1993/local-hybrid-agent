@@ -817,7 +817,15 @@ function wizardLocalHtml() {
   const kinds = [['chat', 'Text', 'Answers and tool calls'], ['vision', 'Image reader', 'Describes pictures (needs an mmproj file)'], ['embed', 'Search memory', 'Embeddings for memory search']];
   const models = helperFiles('models');
   const gpus = LN.d.gpus || [];
-  if (D.gpu == null && gpus.length) D.gpu = gpus[gpus.length - 1];
+  if (D.gpu == null && gpus.length) {
+    // the GPU with the most free memory, else the last one in use
+    const freeOf = g => { const v = (LN.vram || []).find(x => x.index === g); return v ? Number(v.free_gb) || 0 : 0; };
+    D.gpu = gpus.reduce((best, g) => (freeOf(g) > freeOf(best) ? g : best), gpus[gpus.length - 1]);
+  }
+  const gst = LN.d.gpu_status || {};
+  const gpuNote = (gst.unused && gst.unused.length)
+    ? `GPU ${gst.unused.join(', ')} ${gst.unused.length > 1 ? 'are' : 'is'} installed but not in use. Set "gpu_devices": "auto" in config/app.json to use ${gst.unused.length > 1 ? 'them' : 'it'}.`
+    : (gst.missing && gst.missing.length) ? `GPU ${gst.missing.join(', ')} in config/app.json ${gst.missing.length > 1 ? 'are' : 'is'} not found on this machine.` : '';
   const modelOpts = models.map(m => {
     const rel = m.path;
     const sel = D.model && (rel.replace(/\\/g, '/').endsWith(String(D.model).replace(/\\/g, '/')));
@@ -843,6 +851,7 @@ function wizardLocalHtml() {
       ${helperFiles('mmproj').map(m => `<option value="${esc(m.path)}"${D.mmproj && m.path === String(D.mmproj).replace(/\\/g, '/') ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select>` : ''}
     <label class="ln-lbl" for="wz-gpu">GPU</label>
     <select id="wz-gpu" data-wz="gpu">${gpuOpts}</select>
+    ${gpuNote ? `<div class="dim ln-hint">⚠ ${esc(gpuNote)}</div>` : ''}
     <div class="ln-hint">${chosen ? fitText(chosen.size_gb, D.gpu) : ''}</div>
     <label class="ln-lbl" for="wz-label">Name it</label>
     <input id="wz-label" data-wz="label" maxlength="40" value="${esc(D.label || '')}" placeholder="e.g. Coder, Reviewer, Big reader" autocomplete="off">

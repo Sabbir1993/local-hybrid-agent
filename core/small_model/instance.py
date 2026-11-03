@@ -50,10 +50,10 @@ class SmallModelInstance:
             self.mmproj_path = None
 
         self.port = int(cfg.get("port", 8091))
-        self.gpu = int(cfg.get("gpu", 1))
-        fallback = ACTIVE_RUNTIME.get("small_model_gpu")
-        if fallback is not None and self.gpu not in ACTIVE_RUNTIME["gpu_devices"]:
-            self.gpu = int(fallback)
+        from ..config import default_small_gpu
+        self.gpu = int(cfg.get("gpu", default_small_gpu()))
+        if self.gpu not in ACTIVE_RUNTIME["gpu_devices"] and ACTIVE_RUNTIME["gpu_devices"]:
+            self.gpu = default_small_gpu()        # the saved GPU is not in use on this machine (removed card, other runtime)
         self.ctx = int(cfg.get("ctx", 4096))
         self.n_slots = max(1, int(cfg.get("np", 1)))
         # optional per-conversation ceiling inside the shared pool (0 = unset, the

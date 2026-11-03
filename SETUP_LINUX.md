@@ -104,33 +104,82 @@ and resumes partial files.
 Or do steps 6-9b in one go: `DOWNLOAD=1 ./scripts/setup_linux.sh ~/llama-vulkan` (`BACKEND=cuda` for NVIDIA).
 The CPU routers (`laya`, `cactus-needle`) download from Hugging Face on first use, or with the `routing` group.
 
-**Voice (speech to text).** whisper.cpp publishes no Vulkan server build, so build `whisper-server` once:
+**The three helper programs at a glance** (the app finds each by folder name, so keep them side by side, for example in `~`):
+
+| Program | What it does | How to get it | Folder the app looks in |
+|---|---|---|---|
+| `llama-vulkan` (llama-server, llama-bench) | runs every text / vision / embedding model | step 7, or `download_models.py --binaries` (release asset `llama-<build>-bin-ubuntu-vulkan-x64.tar.gz`) | `runtimes.<name>.llama_bin_dir` |
+| `sd-vulkan` (sd-server) | local image maker | `download_models.py --binaries --backend vulkan` (release asset `sd-master-<hash>-bin-Linux-Ubuntu-24.04-x86_64-vulkan.zip` of https://github.com/leejet/stable-diffusion.cpp/releases; needs Ubuntu 24.04 or newer) | `runtimes.<name>.sd_bin_dir`, else `sd-vulkan` next to the llama folder |
+| `whisper-vulkan` (whisper-server) | speech to text | build once, see **Voice** below (no Vulkan release exists) | `runtimes.<name>.whisper_bin_dir`, else `whisper-vulkan` next to the llama folder |
+
+If `--binaries` cannot read the GitHub release list (offline or rate-limited), it prints the release page to use by hand:
+unpack the archive into the folder named above and `chmod +x` the `*-server` and `*-bench` files. Check each program with
+`[FOLDER]/llama-server --version`, `[FOLDER]/sd-server --help` and `[FOLDER]/whisper-server --help`.
+
+**Voice (speech to text).** whisper.cpp publishes no Vulkan build (its Linux release is CPU only), so build `whisper-server` once.
+The build tools are the same as for building llama.cpp:
+```bash
+sudo apt install -y build-essential cmake libvulkan-dev glslc
+```
 ```bash
 git clone https://github.com/ggml-org/whisper.cpp ~/whisper.cpp
 ```
+A static build keeps `whisper-server` self-contained, so copying it into another folder works:
 ```bash
-cmake -S ~/whisper.cpp -B ~/whisper.cpp/build -DGGML_VULKAN=1 && cmake --build ~/whisper.cpp/build -j --config Release
+cmake -S ~/whisper.cpp -B ~/whisper.cpp/build -DGGML_VULKAN=1 -DBUILD_SHARED_LIBS=OFF && cmake --build ~/whisper.cpp/build -j --config Release
 ```
 ```bash
-mkdir -p ~/whisper-vulkan && cp -r ~/whisper.cpp/build/bin/* ~/whisper-vulkan/
+mkdir -p ~/whisper-vulkan && cp -r ~/whisper.cpp/build/bin/* ~/whisper-vulkan/ && ~/whisper-vulkan/whisper-server --help | head -3
 ```
 The server finds `whisper-server` in a `whisper-vulkan` folder next to your llama.cpp folder, or in
 `runtimes.<name>.whisper_bin_dir`. Spoken replies need no extra program: `sherpa-onnx` is in `requirements.txt`.
 
 **10. Edit the config.** `--write-config` already set `models_dir`, `media_dirs` and the
-`llama_bin_dir` / `sd_bin_dir` paths. Still yours: `common_dir` and `gpu_devices` (the indices from step 9).
+`llama_bin_dir` / `sd_bin_dir` paths. Still yours: `common_dir` and `gpu_devices`.
+
+The `config/app.json` in the repo comes from a Windows PC. Before the first start, replace every Windows path with a Linux
+one; this lists what is left:
+```bash
+grep -n 'E:' config/app.json
+```
 ```bash
 nano config/app.json
 ```
+- `gpu_devices`: use `"auto"` (every discrete GPU is used, whatever their number: 1, 2, 3 or 4). A fixed list such as
+  `[0, 1]` also works; the numbers are the ones step 9 printed, and they differ from Windows (an Intel iGPU often takes index 0
+  there but not on Linux). At startup the log warns when a listed index does not exist or a GPU is left unused.
+- After the first start, open Settings -> Models and re-check the GPU of each helper model: the shipped file names Windows
+  indices (1 and 2), and a GPU that does not exist here is moved to the default one automatically.
+- `runtime`: the preset to use (`vulkan`, or `cuda` for NVIDIA).
 
 For example:
 ```json
 "models_dir": "/home/[USER]/Models",
 "common_dir": "/home/[USER]/common",
 "runtimes": {
-  "vulkan": { "llama_bin_dir": "[LLAMA_BIN_DIR]", "backend": "vulkan", "gpu_devices": [0, 1], "small_model_gpu": 0 }
+  "vulkan": { "llama_bin_dir": "[LLAMA_BIN_DIR]", "backend": "vulkan", "gpu_devices": "auto", "small_model_gpu": 0 }
 }
 ```
+
+**10b. Create the data folders and set their permissions.** The server runs as a normal user (never root) and creates what it
+needs, but it can only do that where that user may write. `common_dir` holds every user's generated files and uploads
+(one private `user_<id>/` sub-folder each, created on first use), so it may contain customer data: keep it private.
+```bash
+mkdir -p [COMMON_DIR] && chmod 700 [COMMON_DIR]
+```
+If the folder is on another disk or under `/srv` or `/mnt`, create it with `sudo` once and hand it to the server's user:
+```bash
+sudo mkdir -p [COMMON_DIR] && sudo chown "$USER":"$USER" [COMMON_DIR] && sudo chmod 700 [COMMON_DIR]
+```
+Rules of thumb:
+- the server user needs **write** access to the repo folder (databases, `config/`, `knowledge_uploads/`), `common_dir`,
+  `workspace_dir` and the folder the downloader fills (`media_dirs`, model folders for downloads), and **read + execute**
+  on the `llama-vulkan`, `sd-vulkan` and `whisper-vulkan` folders;
+- the model folder only needs read access once the models are downloaded;
+- a separate Unix account per app user is **not** needed: per-user separation is done by the app (`user_<id>/`);
+- if you run the server under systemd with `ProtectHome` or `ProtectSystem=strict`, add the folders above to
+  `ReadWritePaths=`;
+- no other local account should be able to read `common_dir` or the `*.db` files (`chmod 600 *.db`, see Databases).
 
 **11. Check the keychain backend.** It should print `SecretService`, not
 `fail` or `keyrings.alt`. On a headless server, run this inside the
@@ -194,8 +243,21 @@ python3 tools/runner/verify.py
 
 ## Web search engines (optional: add Google)
 
-Out of the box web search scrapes DuckDuckGo and Bing (no key, no account). To add **Google** results, run your own
-[SearXNG](https://github.com/searxng/searxng) meta-search next to the app and point the app at it. No Docker needed.
+Web search asks a local SearXNG first (Google, Brave, Startpage, Mojeek, Wikipedia, Bing, DuckDuckGo in one request) and
+scrapes DuckDuckGo and Bing when it is not running. The shipped `config/app.json` already points at
+`http://localhost:8888`; with nothing listening there, search simply uses the fallback. No Docker needed.
+
+**Quick way** (this script installs everything below for you; it also runs on a plain Linux server, not only WSL):
+```bash
+bash scripts/setup_searxng_wsl.sh install
+```
+```bash
+bash scripts/setup_searxng_wsl.sh start
+```
+```bash
+bash scripts/setup_searxng_wsl.sh check
+```
+`start` stays in the foreground: run it in `tmux`, or as a systemd service for the server's user. The manual steps follow.
 
 ```bash
 sudo apt install -y python3-venv python3-dev build-essential git libxslt-dev zlib1g-dev libffi-dev libssl-dev

@@ -23,6 +23,12 @@ import sys
 
 # Per-endpoint budgets for a trivial turn (repo estimator tokens).
 CHAT_LEAN_BUDGET = 1500
+
+# Always-on money policy (core/currency.py does the actual conversion in core/output_guard.py).
+CURRENCY_RULE = ("MONEY: write amounts in Taka (৳ / Tk / BDT), lakh-crore style (৳12,50,000). An amount from another "
+                 "currency (from a web page, file or the user): keep it as written ($100, ₹5,000, €20) - the system "
+                 "converts it to ৳ at the live rate. Never relabel it as Tk and never convert by hand. "
+                 "Amounts you estimate or invent: write them directly in ৳.")
 # Agent system prompt alone (was ~3.3k before the S4 compression).
 AGENT_SYSTEM_BUDGET = 2700
 
@@ -753,6 +759,26 @@ def html_wanted(query: str, prior_files=None, msgs=None) -> bool:
         if any(re.search(r"\b(edit|change|update|fix|improve|redo|restyle|add|redesign)\b", t, re.I) for t in [q, *recent]):
             return True
     return bool(_HTML_RE.search(q) and (_HTML_VERB_RE.search(q) or re.search(r"\.html\b", q, re.I)))
+
+
+_3D_RE = re.compile(r"\b(3\s?d|three\.?js|webgl|webgpu|babylon\.?js|a-?frame|react[- ]three[- ]fiber|r3f|glsl|shaders?|voxel|ray ?march\w*|"
+                    r"orbit ?controls|gltf|glb)\b", re.I)
+_3D_NOT_RE = re.compile(r"\b(3\s?d[- ]print\w*|stl|blender|autocad|cad|solidworks|3ds max|maya|unity|unreal|godot)\b", re.I)
+
+
+def three_d_wanted(query: str, prior_files=None, msgs=None) -> bool:
+    """True for a request to build / change a 3D or WebGL web page, game or scene (Three.js, a 3D village ...). These go to the
+    html3d lane when one is set up (core/lanes), else the main model. Not 3D printing or desktop 3D tools."""
+    q = (query or "").strip()
+    if not q or _3D_NOT_RE.search(q):
+        return False
+    if _3D_RE.search(q) and (_HTML_VERB_RE.search(q) or _HTML_RE.search(q)):
+        return True
+    # a follow-up on a page that is already 3D ("fix the SyntaxError", "make the boats move")
+    if html_wanted(q, prior_files, msgs) or re.search(r"\b(syntaxerror|uncaught|is not defined|cannot read|undefined)\b", q, re.I):
+        recent = " ".join(str(m.get("content") or "")[:4000] for m in (msgs or [])[-4:] if isinstance(m, dict))
+        return bool(re.search(r"three\.?js|webgl|THREE\.|<canvas|importmap", recent, re.I))
+    return False
 
 
 HTML_MANUAL = (

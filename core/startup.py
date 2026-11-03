@@ -152,6 +152,8 @@ async def lifespan(app: FastAPI):
     register_device_tools()
     register_task_tools()
     load_plugins()
+    from core.config import resolve_gpu_devices
+    await asyncio.get_event_loop().run_in_executor(None, resolve_gpu_devices)     # "auto" -> the GPUs this machine has
     print(f"[server_manager] runtime={ACTIVE_RUNTIME['name']} backend={ACTIVE_RUNTIME['backend']} "
           f"bin={ACTIVE_RUNTIME['llama_bin_dir']} devices={ACTIVE_RUNTIME['gpu_devices']}")
     from core.credentials import keyring_backend_warning

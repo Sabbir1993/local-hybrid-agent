@@ -78,6 +78,7 @@ class RunContext:
     ca_lane: str = "auto"
     main_ready: bool = False
     main_client: object = None
+    lane3d: object = None            # core.lanes.creative.CreativeLane: a 3D / WebGL task runs on the html3d lane's model
     cfg_steps: int = 100
     steps: int = 100
     msgs: list = field(default_factory=list)
@@ -633,6 +634,12 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
         if m.get("role") == "user":
             ctx.last_query = str(m.get("content", ""))
             break
+    # A 3D / WebGL page: the dedicated html3d lane when the admin set one up and it loads; else the main model, as before.
+    if not ctx.use_cloud_main and prompt_scope.three_d_wanted(ctx.last_query, [], ctx.msgs[:-1]):
+        from core.lanes import creative
+        ctx.lane3d = await creative.pick("html3d", user.id)
+        if ctx.lane3d:
+            ctx.main_client = ctx.lane3d.client
     ctx.surface_q = tool_surface.surface_query(ctx.msgs) or ctx.last_query
     # Web tools on demand (tool_surface.web_on_demand, off by default): offered when the request reads like a web
     # request or the KB only partly covers it; capped per run, and the cap grows with reasoning effort.

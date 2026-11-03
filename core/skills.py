@@ -113,6 +113,7 @@ def skills_prompt_fragment() -> str:
         "Available Skills:",
         "When the user's request starts with or mentions one or more skill names, slash commands, or triggers (e.g. /grill-me, /goal, /code-review, /<skill-name>):",
         "- You MUST call read_skill(<name>) on your FIRST step for EACH skill mentioned in the request.",
+        "- Building a PowerPoint/PPT/PPTX deck: call read_skill(pptx) first. Building a PDF: read_skill(pdf) first. Building an Excel/spreadsheet/xlsx file: read_skill(spreadsheet) first. Then follow it.",
         "- If multiple skills or commands are chained in a single request (e.g. [/grill-me ... /goal ...]): follow their instructions in sequence. First execute the earlier phase (e.g. ask clarifying interview questions for /grill-me), and then adhere to subsequent skills/guidelines (e.g. autonomous production readiness for /goal).",
     ]
     for sk in skills.values():
@@ -142,11 +143,49 @@ SKILL_DIGESTS = {
 }
 
 
+# Document skills (pptx / pdf / spreadsheet): the full SKILL.md bodies are written for a machine that runs scripts
+# (pptxgenjs, openpyxl, python scripts/...). The chat lane builds files with its own tools (doc_create ...), so it gets
+# the design and quality guidance of each skill as a digest, whatever the model.
+DOC_SKILLS = {
+    "pptx": "deck / slides / PowerPoint",
+    "pdf": "PDF",
+    "spreadsheet": "Excel / spreadsheet",
+}
+DOC_PREFACE = ("DOCUMENT SKILL (apply silently): guidance for the {what} you are building. Build the file with the file "
+               "tools you already have - do not write scripts. Never tell the user a skill is in use.\n\n")
+SKILL_DIGESTS.update({
+    "pptx": (
+        "Pick a palette and one visual motif that fit THIS topic (not generic blue, no cream backgrounds); one colour dominates, "
+        "one sharp accent. Dark title and closing slides, light content slides. Every slide carries a visual: chart, icon, "
+        "image or shape - no plain title-plus-bullets slides, and vary the layout (two columns, icon rows, grid, stat callouts, "
+        "timeline). Titles 36-44pt, body 14-16pt, captions 10-12pt; left-align body text, centre only titles; 0.5in margins. "
+        "Fonts: Arial, Calibri, Cambria. No accent lines under titles, no decorative colour bars. Use real charts for numbers, "
+        "speaker notes for detail. Text must fit its shape. Check the finished deck for overflow, leftover placeholder text and "
+        "wrong order. Money is shown in BDT."),
+    "pdf": (
+        "A PDF is a finished, read-only document: title block, clear heading hierarchy, short paragraphs, tables for comparisons "
+        "with a header row and aligned numbers, page numbers, consistent fonts (one serif or sans family) and generous margins. "
+        "Keep tables inside the page width and never split a heading from its first paragraph. Cite sources for facts. Check the "
+        "result for cut-off text, empty pages and missing sections. Money is shown in BDT."),
+    "spreadsheet": (
+        "Structure first: one header row, one record per row, one data type per column, no merged cells inside the data; "
+        "separate sheets for raw data, calculations and the summary/dashboard. Use formulas instead of typed totals so the "
+        "workbook stays live; freeze the header, size the columns, format numbers, dates and BDT amounts (lakh-crore style), "
+        "and add native charts only where they answer a question. State assumptions and data-quality limits in a notes sheet; "
+        "never invent data or columns. Re-check totals against the source."),
+})
+
+
 def silent_skill_prompt(name: str, max_chars: int = 10000, compact: bool = False) -> str:
     """The body of one skill as a system-prompt block the model follows without announcing it (the chat lane has no
     read_skill tool). `compact` gives the short digest when there is one (local models). Installed copy first, else the
     reviewed catalog copy; '' when neither exists."""
     if not valid_name(name):
+        return ""
+    if name in DOC_SKILLS:
+        for base in (SKILLS_DIR, CATALOG_DIR):
+            if (base / name / "SKILL.md").is_file():
+                return DOC_PREFACE.format(what=DOC_SKILLS[name]) + SKILL_DIGESTS[name]
         return ""
     if compact and name in SKILL_DIGESTS:
         for base in (SKILLS_DIR, CATALOG_DIR):

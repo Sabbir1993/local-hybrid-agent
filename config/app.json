@@ -6,10 +6,7 @@
     "vulkan": {
       "llama_bin_dir": "E:/AI/vulkan-arc/llama-vulkan",
       "backend": "vulkan",
-      "gpu_devices": [
-        1,
-        2
-      ],
+      "gpu_devices": "auto",
       "small_model_gpu": 1
     },
     "cuda": {
@@ -90,6 +87,16 @@
       "label": "Whisper turbo Bangla",
       "kind": "stt",
       "fallback_enabled": false
+    },
+    "qwen3-3d-coder": {
+      "model": "orchestrator/Qwen3.5-4B-3D-Coder-Q4_K_M.gguf",
+      "port": 8094,
+      "gpu": 2,
+      "ctx": 64000,
+      "label": "Qwen3 3D Coder",
+      "kind": "chat",
+      "fallback_enabled": true,
+      "fallback": "main"
     }
   },
   "router": {
@@ -297,6 +304,26 @@
   },
   "sessions": {
     "fork_enabled": false
+  },
+  "web": {
+    "searxng_url": "http://localhost:8888",
+    "backends": [
+      "searxng",
+      "duckduckgo",
+      "bing"
+    ],
+    "searxng_min_results": 5,
+    "expand_queries": true,
+    "max_results": 10,
+    "auto_fetch_top": 4,
+    "allow_hosts": [
+      "wikipedia.org"
+    ]
+  },
+  "fx": {
+    "auto_convert": true,
+    "cache_hours": 12,
+    "overrides": {}
   },
   "preflight": {
     "mode": "block",

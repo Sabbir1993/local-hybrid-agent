@@ -1,6 +1,7 @@
 ---
-name: advanced-excel-analytics
-description: Analyze large Excel and CSV files. Generate validated .xlsx reports with dashboards, editable charts, descriptive statistics, data-quality checks, trends, and evidence-based insights.
+name: spreadsheet
+triggers: excel, xlsx, spreadsheet, csv, workbook, dashboard, pivot, sheet
+description: Build, analyze and fix Excel/spreadsheet files (.xlsx, .csv) - structured sheets with live formulas, native charts and dashboards. Analyze large Excel and CSV files. Generate validated .xlsx reports with dashboards, editable charts, descriptive statistics, data-quality checks, trends, and evidence-based insights.
 ---
 
 # Advanced Excel Analytics

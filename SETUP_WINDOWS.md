@@ -137,9 +137,33 @@ wsl -d Ubuntu-24.04 -- bash -c "sudo apt update && sudo apt install -y python3 p
 
 ## Web search engines (optional: add Google)
 
-Web search scrapes DuckDuckGo and Bing by default. For Google results, run SearXNG inside WSL2 and set
-`"web": { "searxng_url": "http://[WSL_ADDRESS]:8888" }` in `config\app.json`; the steps are in
-[SETUP_LINUX.md](SETUP_LINUX.md#web-search-engines-optional-add-google).
+Web search asks a local SearXNG first (Google, Brave, Startpage, Mojeek, Wikipedia, Bing, DuckDuckGo in one request) and
+falls back to scraping DuckDuckGo and Bing when it is down or returns fewer than `web.searxng_min_results` (5) hits.
+
+**With WSL2** (no Docker). In a PowerShell window:
+```powershell
+powershell -File scripts\searxng_wsl.ps1 install
+```
+```powershell
+powershell -File scripts\searxng_wsl.ps1 start
+```
+Keep that window open while you use the app, and check it from a second window with
+`powershell -File scripts\searxng_wsl.ps1 check` (lists which engines answered and which did not).
+`config\app.json` already has `"web": { "searxng_url": "http://localhost:8888", "backends": ["searxng", "duckduckgo", "bing"] }`;
+WSL2 forwards `localhost` to the distro. If `localhost` does not reach it, use the WSL address from `wsl hostname -I`.
+Google often answers `access denied` to a server IP; SearXNG still returns the other engines, and the web tool says which
+engines did not answer.
+
+**Without WSL2:**
+1. Run the same script on any Linux machine or VM (`bash scripts/setup_searxng_wsl.sh install`, then `start` with
+   `SEARXNG_BIND=0.0.0.0`) and set `searxng_url` to `http://[LINUX_HOST]:8888`. Firewall port 8888 to this PC only.
+2. SearXNG has no supported native-Windows build. Installing it into a Windows Python venv works only partly, so it is not
+   recommended.
+3. Leave `searxng_url` empty (remove it from the `web` block): the app then uses DuckDuckGo and Bing only, with the same
+   ranking improvements (authority boost, engine weights, query expansion).
+
+Search queries leave your network (card numbers, e-mail addresses and phone numbers are stripped first), so keep SearXNG
+bound to `127.0.0.1` or a trusted LAN. More detail: [SETUP_LINUX.md](SETUP_LINUX.md#web-search-engines-optional-add-google).
 
 ## Model Sizing & MoE VRAM Tuning
 
