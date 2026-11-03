@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import json
 import sys
 import time
@@ -16,6 +17,22 @@ from .overflow import _is_context_overflow, _recover_context
 from .sse_stream import _process_sse_stream
 
 
+# Generations in flight per llama-server slot id, and the slot the current request was given (see _choose_slot).
+_slot_inflight: dict = {}
+_slot_choice: contextvars.ContextVar = contextvars.ContextVar("main_slot_choice", default=None)
+
+
+def _choose_slot(uid, n_slots: int) -> int:
+    """The user's own slot (uid % n_slots) keeps their conversation prefix cached between turns. When that slot is already
+    generating for the same user (a second tab, a second chat, a parallel agent run) the request goes to a free slot instead:
+    pinned to the busy one, llama-server would hold it back with 0 tokens although the other slots sit idle."""
+    pref = int(uid) % n_slots
+    if not _slot_inflight.get(pref):
+        return pref
+    free = [i for i in range(n_slots) if not _slot_inflight.get(i)]
+    return free[-1] if free else pref
+
+
 def _main_slot_fields() -> dict:
     """Slot affinity for the local main llama-server: pin each user to one slot
     so their conversation prefix stays cached there between turns (instead of
@@ -24,7 +41,8 @@ def _main_slot_fields() -> dict:
     n_slots = int((state.profile or {}).get("n_slots") or 1)
     uid = get_current_user_id()
     if n_slots > 1 and uid is not None and (APP_CONFIG.get("serving") or {}).get("slot_affinity", True):
-        fields["id_slot"] = int(uid) % n_slots
+        chosen = _slot_choice.get()
+        fields["id_slot"] = int(chosen) if chosen is not None else int(uid) % n_slots
     return fields
 
 
@@ -154,6 +172,13 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
             raise
     finally:
         admission.waiting -= 1
+    slot = None
+    n_slots = int((state.profile or {}).get("n_slots") or 1)
+    uid = get_current_user_id()
+    if n_slots > 1 and uid is not None and (APP_CONFIG.get("serving") or {}).get("slot_affinity", True):
+        slot = _choose_slot(uid, n_slots)
+        _slot_inflight[slot] = _slot_inflight.get(slot, 0) + 1
+        _slot_choice.set(slot)
     try:
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
                                                repeat_penalty, rid, grammar, extra=extra, effort=effort,
@@ -161,6 +186,9 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
                                                tool_choice=tool_choice):
             yield item
     finally:
+        if slot is not None:
+            _slot_inflight[slot] = max(0, _slot_inflight.get(slot, 1) - 1)
+            _slot_choice.set(None)
         glob.release()
         mine.release()
 
