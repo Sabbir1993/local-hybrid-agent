@@ -22,9 +22,10 @@ from ..db import _projects_db
 
 OPEN_TTL_S = 24 * 3600
 CONTINUE_INTENT = re.compile(
-    r"^\s*(?:ok(?:ay)?[,. ]*)?(?:please\s+)?(?:continue|carry on|go on|keep going|resume|proceed|finish (?:it|the (?:deck|pdf|presentation|slides?|document))|"
-    r"complete (?:it|the (?:deck|pdf|presentation|slides?|document)))"
-    r"(?:[\s,]+(?:it|now|please|then|the|deck|pdf|slides?|presentation|document|again|thanks?|thank you))*[\s.!]*$", re.I)
+    r"^\s*(?:ok(?:ay)?[,. ]*)?(?:please\s+)?(?:continue|carry on|go on|keep going|resume|proceed|finish (?:it|this|that|the (?:rest|code|page|html|file|script|deck|pdf|presentation|slides?|document))|"
+    r"complete (?:it|this|that|the (?:rest|code|page|html|file|script|deck|pdf|presentation|slides?|document)))"
+    r"(?:[\s,]+(?:it|this|that|now|please|then|the|rest|code|page|html|file|script|deck|pdf|slides?|presentation|document|again|"
+    r"from (?:there|here|where you (?:stopped|left off))|thanks?|thank you))*[\s.!]*$", re.I)
 
 
 def _db():

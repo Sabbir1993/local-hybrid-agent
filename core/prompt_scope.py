@@ -774,6 +774,13 @@ def three_d_wanted(query: str, prior_files=None, msgs=None) -> bool:
         return False
     if _3D_RE.search(q) and (_HTML_VERB_RE.search(q) or _HTML_RE.search(q)):
         return True
+    # "complete this" / "continue" after a 3D page that was cut off or stopped
+    from .doc_tools import builds as _builds
+    if _builds.is_continue(q):
+        recent_bot = " ".join(str(m.get("content") or "")[-6000:] for m in (msgs or [])[-4:]
+                              if isinstance(m, dict) and m.get("role") == "assistant")
+        if re.search(r"THREE\.|three\.?js|webgl|importmap", recent_bot, re.I):
+            return True
     # "create a single html of it" right after a conversation about a 3D village: the 3D is in the recent messages, not the request
     if (html_wanted(q, prior_files, msgs) or re.search(r"\bhtml\b", q, re.I)) and _HTML_VERB_RE.search(q):
         recent_user = " ".join(str(m.get("content") or "")[:1500] for m in (msgs or [])[-6:]
@@ -785,6 +792,23 @@ def three_d_wanted(query: str, prior_files=None, msgs=None) -> bool:
         recent = " ".join(str(m.get("content") or "")[:4000] for m in (msgs or [])[-4:] if isinstance(m, dict))
         return bool(re.search(r"three\.?js|webgl|THREE\.|<canvas|importmap", recent, re.I))
     return False
+
+
+# A reply that hit the length limit in the middle of a code block, or that the user stopped there: "continue" must resume at the
+# last character, not start the page again.
+CONTINUE_CUT_NOTE = (
+    "[system note] Your previous message was cut off before it was finished (it ends with: <<<{tail}>>>). Continue EXACTLY from that "
+    "last character: no greeting, no recap, do not repeat anything already written and do not start the file again. If it stopped "
+    "inside a code block, carry on inside the same block and close it at the end.")
+
+
+def cut_off_tail(msgs) -> str:
+    """The end of the last assistant message when it stops inside an open code fence (cut off), else ''."""
+    for m in reversed(msgs or []):
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            c = str(m.get("content") or "")
+            return c[-240:] if c.count("```") % 2 == 1 else ""
+    return ""
 
 
 HTML_MANUAL = (
