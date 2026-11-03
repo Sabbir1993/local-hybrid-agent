@@ -1,0 +1,404 @@
+{
+  "source_file": "/mnt/data/advanced-excel-analytics/examples/sample_transactions.xlsx",
+  "source_size": 102823,
+  "generated_at": "2026-11-03T04:17:30+00:00",
+  "source_sheet": "Transactions",
+  "all_source_sheets": [
+    "Transactions"
+  ],
+  "headers": [
+    "transaction_id",
+    "transaction_date",
+    "payment_method",
+    "amount",
+    "status",
+    "merchant",
+    "region",
+    "note"
+  ],
+  "row_count": 2402,
+  "roles": {
+    "date": "transaction_date",
+    "value": "amount",
+    "group": "payment_method",
+    "status": "status",
+    "numeric": [
+      "amount"
+    ],
+    "id_columns": [
+      "transaction_id"
+    ]
+  },
+  "mode": "deep",
+  "quality": {
+    "exact_duplicate_rows": 2,
+    "duplicate_check": "exact complete-row hash; SHA-independent BLAKE2b-128"
+  },
+  "value_sum": 2576658.22999999,
+  "value_valid_count": 2399,
+  "status": {
+    "success": 2082,
+    "failure": 246,
+    "unknown": 74,
+    "missing": 0,
+    "recognized": 2328
+  },
+  "status_counts": {
+    "SUCCESS": 2082,
+    "FAILED": 246,
+    "PENDING": 74
+  },
+  "categories": [
+    {
+      "name": "Card",
+      "count": 901,
+      "amount": 959275.4699999996,
+      "valid_amount": 899,
+      "success": 780,
+      "failure": 92
+    },
+    {
+      "name": "MFS",
+      "count": 726,
+      "amount": 805400.6900000006,
+      "valid_amount": 726,
+      "success": 634,
+      "failure": 74
+    },
+    {
+      "name": "Bank",
+      "count": 469,
+      "amount": 483276.5900000002,
+      "valid_amount": 469,
+      "success": 407,
+      "failure": 50
+    },
+    {
+      "name": "Wallet",
+      "count": 306,
+      "amount": 328705.48,
+      "valid_amount": 305,
+      "success": 261,
+      "failure": 30
+    }
+  ],
+  "months": [
+    {
+      "month": "2026-01",
+      "count": 247,
+      "amount": 270675.78,
+      "valid_amount": 247,
+      "success": 207,
+      "failure": 29
+    },
+    {
+      "month": "2026-02",
+      "count": 246,
+      "amount": 256690.37,
+      "valid_amount": 246,
+      "success": 211,
+      "failure": 28
+    },
+    {
+      "month": "2026-03",
+      "count": 265,
+      "amount": 288207.39999999985,
+      "valid_amount": 264,
+      "success": 237,
+      "failure": 21
+    },
+    {
+      "month": "2026-04",
+      "count": 283,
+      "amount": 306067.8100000002,
+      "valid_amount": 283,
+      "success": 248,
+      "failure": 32
+    },
+    {
+      "month": "2026-05",
+      "count": 288,
+      "amount": 303938.51,
+      "valid_amount": 288,
+      "success": 242,
+      "failure": 30
+    },
+    {
+      "month": "2026-06",
+      "count": 248,
+      "amount": 272789.47,
+      "valid_amount": 248,
+      "success": 228,
+      "failure": 14
+    },
+    {
+      "month": "2026-07",
+      "count": 274,
+      "amount": 295079.05000000016,
+      "valid_amount": 274,
+      "success": 235,
+      "failure": 32
+    },
+    {
+      "month": "2026-08",
+      "count": 287,
+      "amount": 297475.50000000023,
+      "valid_amount": 285,
+      "success": 250,
+      "failure": 29
+    },
+    {
+      "month": "2026-09",
+      "count": 264,
+      "amount": 285734.3400000001,
+      "valid_amount": 264,
+      "success": 224,
+      "failure": 31
+    }
+  ],
+  "anomalies": [
+    {
+      "type": "Potential sample outliers",
+      "detail": "amount",
+      "value": "61/2,399 sampled",
+      "note": "Tukey's 1.5xIQR rule on a bounded numeric sample; not a full-population count or proof of error."
+    },
+    {
+      "type": "Invalid numeric values",
+      "detail": "amount",
+      "value": "1",
+      "note": "Nonempty values could not be interpreted as finite numbers."
+    }
+  ],
+  "histogram": [
+    {
+      "bin": "53.19–511.24",
+      "count": 507
+    },
+    {
+      "bin": "511.24–969.28",
+      "count": 767
+    },
+    {
+      "bin": "969.28–1,427.33",
+      "count": 523
+    },
+    {
+      "bin": "1,427.33–1,885.38",
+      "count": 322
+    },
+    {
+      "bin": "1,885.38–2,343.43",
+      "count": 145
+    },
+    {
+      "bin": "2,343.43–2,801.47",
+      "count": 80
+    },
+    {
+      "bin": "2,801.47–3,259.52",
+      "count": 25
+    },
+    {
+      "bin": "3,259.52–3,717.57",
+      "count": 14
+    },
+    {
+      "bin": "3,717.57–4,175.61",
+      "count": 10
+    },
+    {
+      "bin": "4,175.61–4,633.66",
+      "count": 6
+    }
+  ],
+  "histogram_column": "amount",
+  "warnings": [
+    "74 statuses not recognized; excluded from known-outcome success rate.",
+    "Input_Preview contains only the first 1,000 rows; exact analysis covers all 2,402 data rows."
+  ],
+  "methodology": {
+    "exact": "Full-row counts; finite-number sums; group/month counts and sums; Welford mean/stddev; min/max; duplicate hash checks",
+    "sampled": "Deterministic reservoir-based quartiles/medians and histogram; results are approximate above sample size",
+    "sample_size_per_numeric": 10000,
+    "date_policy": "ISO and selected common date formats; serial dates for plausible Excel date columns",
+    "missing_policy": "Blank/null excluded from numeric aggregate and retained in source profiling",
+    "status_success_codes": [
+      "APPROVED",
+      "CAPTURED",
+      "COMPLETED",
+      "PAID",
+      "SUCCEEDED",
+      "SUCCESS"
+    ],
+    "status_failure_codes": [
+      "CANCELED",
+      "CANCELLED",
+      "DECLINED",
+      "ERROR",
+      "FAILED",
+      "FAILURE",
+      "REJECTED"
+    ]
+  },
+  "insights": [
+    {
+      "title": "Leading category by record volume",
+      "evidence": "Card: 901 of 2,402 rows (37.5%).",
+      "interpretation": "The selected grouping field is payment_method. The leading category accounts for 37.5% of observed records.",
+      "recommendation": "Review whether resource allocation and reporting focus match this concentration.",
+      "reference": "Category_Analysis"
+    },
+    {
+      "title": "Latest monthly record change",
+      "evidence": "2026-08: 287; 2026-09: 264; change -8.0%.",
+      "interpretation": "This is an observed month-over-month change, not a causal explanation. Partial calendar months may affect comparison.",
+      "recommendation": "Compare like-for-like reporting periods before attributing the change to operations.",
+      "reference": "Trend_Analysis"
+    },
+    {
+      "title": "Observed aggregate value",
+      "evidence": "amount sums to 2,576,658.23 across 2,399 valid records.",
+      "interpretation": "The sum excludes 3 missing or nonnumeric values. Units/currency were not inferred with certainty.",
+      "recommendation": "Confirm the financial meaning and currency of the value field before publication.",
+      "reference": "Executive_Summary"
+    },
+    {
+      "title": "Exact duplicate rows flagged",
+      "evidence": "2 of 2,402 rows (0.08%) match an earlier complete row.",
+      "interpretation": "Whole-row repetition is not necessarily a duplicated transaction; distinct business identifiers must be checked.",
+      "recommendation": "Investigate flagged records using business identifiers before removing anything.",
+      "reference": "Data_Quality"
+    },
+    {
+      "title": "Largest missing-data exposure",
+      "evidence": "amount: 2 missing entries (0.1% of rows).",
+      "interpretation": "Missingness can bias segmentation and weighted summaries depending on the affected variable.",
+      "recommendation": "Assess whether the missing-data pattern is systematic before imputing values.",
+      "reference": "Data_Quality"
+    },
+    {
+      "title": "Recognized-outcome success share",
+      "evidence": "2,082 successes / 2,328 recognized outcomes = 89.43%.",
+      "interpretation": "74 nonempty statuses were not matched to the selected success/failure vocabulary and are excluded.",
+      "recommendation": "Review status mapping and compare success share across periods and segments.",
+      "reference": "Executive_Dashboard"
+    }
+  ],
+  "checks": {
+    "column_nonmissing_reconciliation": true,
+    "group_count_reconciliation": true,
+    "value_count_reconciliation": true,
+    "status_reconciliation": true
+  },
+  "columns": {
+    "transaction_id": {
+      "missing": 0,
+      "nonmissing": 2402,
+      "invalid_numeric": 0,
+      "invalid_date": 0,
+      "missing_pct": 0.0,
+      "data_type": "categorical / text"
+    },
+    "transaction_date": {
+      "missing": 0,
+      "nonmissing": 2402,
+      "invalid_numeric": 0,
+      "invalid_date": 0,
+      "missing_pct": 0.0,
+      "data_type": "date"
+    },
+    "payment_method": {
+      "missing": 0,
+      "nonmissing": 2402,
+      "invalid_numeric": 0,
+      "invalid_date": 0,
+      "missing_pct": 0.0,
+      "data_type": "categorical / text"
+    },
+    "amount": {
+      "missing": 2,
+      "nonmissing": 2400,
+      "invalid_numeric": 1,
+      "invalid_date": 0,
+      "missing_pct": 0.08326394671107411,
+      "data_type": "numeric",
+      "stats": {
+        "count": 2399,
+        "sum": 2576658.22999999,
+        "mean": 1074.0551187995004,
+        "min": 53.19,
+        "max": 4633.66,
+        "stddev": 688.6546193882165,
+        "q1": 566.385,
+        "median": 933.98,
+        "q3": 1431.255,
+        "sample_size": 2399,
+        "quantile_is_sampled": false
+      }
+    },
+    "status": {
+      "missing": 0,
+      "nonmissing": 2402,
+      "invalid_numeric": 0,
+      "invalid_date": 0,
+      "missing_pct": 0.0,
+      "data_type": "categorical / text"
+    },
+    "merchant": {
+      "missing": 0,
+      "nonmissing": 2402,
+      "invalid_numeric": 0,
+      "invalid_date": 0,
+      "missing_pct": 0.0,
+      "data_type": "categorical / text"
+    },
+    "region": {
+      "missing": 0,
+      "nonmissing": 2402,
+      "invalid_numeric": 0,
+      "invalid_date": 0,
+      "missing_pct": 0.0,
+      "data_type": "categorical / text"
+    },
+    "note": {
+      "missing": 0,
+      "nonmissing": 2402,
+      "invalid_numeric": 0,
+      "invalid_date": 0,
+      "missing_pct": 0.0,
+      "data_type": "categorical / text"
+    }
+  },
+  "output": {
+    "path": "/mnt/data/advanced-excel-analytics/examples/Sample_Excel_Analysis_Report.xlsx",
+    "charts": 4,
+    "sheets": [
+      "Executive_Dashboard",
+      "Source_Metadata",
+      "Executive_Summary",
+      "Key_Insights",
+      "Data_Quality",
+      "Descriptive_Statistics",
+      "Category_Analysis",
+      "Trend_Analysis",
+      "Status_Analysis",
+      "Distribution",
+      "Anomaly_Analysis",
+      "Data_Dictionary",
+      "Methodology",
+      "Validation_Status",
+      "Input_Preview"
+    ],
+    "validation": {
+      "checks": {
+        "zip_integrity": true,
+        "workbook_xml_present": true,
+        "all_worksheets_present": true,
+        "native_chart_xml_present": true,
+        "expected_sheet_names": true
+      },
+      "passed": true
+    }
+  }
+}

@@ -178,61 +178,61 @@
     "research_web": false,
     "force_doc_tool": false,
     "max_tool_rounds": 12,
-    "max_web_calls": 8,
+    "max_web_calls": 16,
     "deep_max_tool_rounds": 40,
-    "deep_max_web_calls": 35,
+    "deep_max_web_calls": 60,
     "web_budget": {
       "full": {
         "low": 0,
         "medium": 0,
-        "high": 0,
-        "deep": 5
+        "high": 5,
+        "deep": 10
       },
       "partial": {
-        "low": 2,
-        "medium": 3,
-        "high": 6,
-        "deep": 16
-      },
-      "open": {
         "low": 4,
         "medium": 8,
         "high": 12,
-        "deep": 25
+        "deep": 16
+      },
+      "open": {
+        "low": 8,
+        "medium": 16,
+        "high": 25,
+        "deep": 40
       }
     },
-    "web_soft_chars": 25000,
+    "web_soft_chars": 32000,
     "project_max_tokens": 20000,
     "deck_max_tokens": 20000,
     "thinking_budgets": {
       "none": {
-        "tool_calls": 0,
+        "tool_calls": 2,
         "token_budget": 6000,
         "max_rounds": 0
       },
       "low": {
-        "tool_calls": 4,
-        "token_budget": 8000,
+        "tool_calls": 10,
+        "token_budget": 10000,
         "max_rounds": 4
       },
       "medium": {
-        "tool_calls": 8,
-        "token_budget": 12000,
+        "tool_calls": 16,
+        "token_budget": 16000,
         "max_rounds": 12
       },
       "high": {
-        "tool_calls": 16,
-        "token_budget": 16000,
+        "tool_calls": 25,
+        "token_budget": 20000,
         "max_rounds": 20
       },
       "extra": {
-        "tool_calls": 25,
-        "token_budget": 20000,
+        "tool_calls": 40,
+        "token_budget": 25000,
         "max_rounds": 30
       },
       "deep": {
-        "tool_calls": 35,
-        "token_budget": 25000,
+        "tool_calls": 60,
+        "token_budget": 32000,
         "max_rounds": 40
       }
     }
@@ -472,7 +472,7 @@
     "cloud_policy": "local_only",
     "min_cos": 0.45,
     "auto_inject_cos": 0.55,
-    "full_cos": 0.7,
+    "full_cos": 0.75,
     "web_gap_fill": true,
     "company_keywords": [
       "ssl wireless",

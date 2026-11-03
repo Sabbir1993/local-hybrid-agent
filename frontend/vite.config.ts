@@ -15,7 +15,7 @@ export default defineConfig({
   server: {
     port: 5173,
 	allowedHosts: [
-      'finance-text-aluminium-beijing.trycloudflare.com'
+      'positive-charts-donations-subtle.trycloudflare.com'
     ],
     proxy: {
       '/auth': { target: BACKEND_URL, changeOrigin: true },
