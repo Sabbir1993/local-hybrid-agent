@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import re
 import sys
@@ -52,6 +53,19 @@ async def run_tool(name: str, args: dict, unique_done: bool = False) -> str:
     approved, note = fast_sandbox_check(name, args)
     if not approved:
         return f"error: sandbox violation — {note}"
+    # A SQLite write lock held by another thread for longer than the busy timeout fails the tool with "database is locked" before
+    # anything was changed: wait a moment and run it again instead of handing the model an error it cannot fix.
+    res = ""
+    for attempt in range(3):
+        res = await _dispatch(name, args)
+        if not (isinstance(res, str) and res.startswith("error:") and "database is locked" in res) or attempt == 2:
+            break
+        print(f"[tools] {name}: database is locked, retrying ({attempt + 1}/2)", file=sys.stderr)
+        await asyncio.sleep(1.5 * (attempt + 1))
+    return res
+
+
+async def _dispatch(name: str, args: dict) -> str:
     # registry first (covers builtin + web + skills + mcp + plugins);
     # fall back to the raw builtin table for the executor lane's core set
     reg = getattr(sys.modules.get("core.registry"), "registry", registry)

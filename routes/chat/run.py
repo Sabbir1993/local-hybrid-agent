@@ -728,6 +728,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if resume_note:
         sys_parts.append(resume_note)
         sys_labels.append("build-resume")
+    elif builds.is_continue(own_q) and (_cut := prompt_scope.cut_off_tail(msgs[:-1])):
+        # "continue" after a reply that stopped inside a code block: resume at the last character, never from the top
+        sys_parts.append(prompt_scope.CONTINUE_CUT_NOTE.format(tail=_cut))
+        sys_labels.append("cut-off-resume")
 
     # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat" / thinking_budgets
     chat_cfg = APP_CONFIG.get("chat") or {}
@@ -808,7 +812,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     # A 3D / WebGL page goes to the dedicated "html3d" lane when the admin set one up and it loads; else the main model answers.
     lane3d = None
-    if (not cloud_main and (html_build or project_build or has_file or wants_file)
+    if (not cloud_main and (html_build or project_build or has_file or wants_file or builds.is_continue(own_q))
             and prompt_scope.three_d_wanted(own_q, prior_files, msgs[:-1])):
         lane3d = await creative.pick("html3d", user.id)
         if lane3d:
@@ -900,6 +904,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 # last in the conversation, where the model reads it: after a stop the whole original request is still above, and
                 # without this the model starts the site again from index.html
                 msgs.append({"role": "user", "content": project_resume + " Do NOT start over: index.html and the other files marked done already exist."})
+            cont_prefix = ""         # the part of the answer already sent when a cut-off reply is continued in the same message
+            auto_continues = 0
             while True:
                 turn += 1
                 if turn >= turn_limit:
@@ -1143,6 +1149,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     return
 
                 content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
+                if cont_prefix:
+                    content = cont_prefix + content          # the answer is the earlier part plus what this turn added
                 reasoning = res_dict.get("reasoning", "") if res_dict else ""
                 tool_calls = res_dict.get("tool_calls", []) if res_dict else []
                 finish_reason = res_dict.get("finish_reason") if res_dict else None
@@ -1159,6 +1167,20 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         parsed_tc = _extract_text_tool_calls(reasoning)
                     if parsed_tc:
                         tool_calls = parsed_tc
+
+                # The reply hit the length limit mid-text (a long page, cut inside the code block): carry on in the same message
+                # instead of leaving it cut off for the user to ask again (and have the model start over).
+                if (finish_reason == "length" and not tool_calls and content.strip() and not cloud_main
+                        and auto_continues < int(chat_cfg.get("auto_continue", 3))):
+                    auto_continues += 1
+                    cont_prefix = content
+                    msgs.append({"role": "assistant", "content": content})
+                    msgs.append({"role": "user", "content": prompt_scope.CONTINUE_CUT_NOTE.format(tail=content[-240:])})
+                    if turn >= turn_limit - 1:
+                        turn_limit += 1
+                    print(f"[chat] reply cut by the length limit; continuing it ({auto_continues}/{int(chat_cfg.get('auto_continue', 3))})",
+                          file=sys.stderr)
+                    continue
 
                 # Auto-recovery 1: if model emitted a refusal saying it can't browse the internet
                 is_refusal = any(w in content.lower() for w in (
@@ -1628,6 +1650,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif t_name == "write_file":
                             # off the event loop: a deck / PDF written here may look up pictures (web, image model)
                             res_str = await run_in_executor_ctx(chat_write_file, args)
+                            for _wait in (1.5, 3.0):        # a busy SQLite lock is momentary: write again before telling the model
+                                if "database is locked" not in res_str:
+                                    break
+                                await asyncio.sleep(_wait)
+                                res_str = await run_in_executor_ctx(chat_write_file, args)
                             if res_str.startswith("error:") and re.search(r"one write_file call may carry|too big|too long", res_str, re.I) and not size_retried:
                                 size_retried = True
                                 turn_limit = max(turn_limit, turn + 2)      # the model is told to write it shorter: let it
