@@ -566,6 +566,16 @@
 <pre><code>unset A770_BOOTSTRAP_USERNAME A770_BOOTSTRAP_PASSWORD</code></pre>
   </div>
   <p>Run only <strong>one</strong> copy of the application per machine: a second copy stops the running model servers.</p>
+  <h3>What the first start creates for you</h3>
+  <ul>
+    <li><strong>Databases:</strong> <code>auth.db</code>, <code>projects.db</code>, <code>memory.db</code> and <code>usage.db</code> appear in the application folder with all their tables. You copy nothing.</li>
+    <li><strong>Roles and permissions:</strong> the two built-in roles, <code>admin</code> and <code>user</code>, and the full permission list are created automatically, and refreshed at every start, so updates add new permissions by themselves. The <code>admin</code> role gets every permission except a few that are deliberately never granted automatically. The <code>user</code> role gets the normal-user set. Your super-admin account becomes an administrator.</li>
+    <li><strong>Your staff:</strong> accounts are not created for you. Add them afterwards in the application's admin settings; they receive the <code>user</code> role unless you change it.</li>
+    <li><strong>Starter content:</strong> a few starter agents and the knowledge categories are added.</li>
+  </ul>
+  <div class="warn"><p><strong>Lock the databases down once.</strong> The application does not set file permissions, so Ubuntu's default lets other accounts on the machine read them, and they hold chat history, documents and password hashes. Run this once after the first start (the installer window does it for you):</p>
+<pre><code>chmod 600 ~/a770-dual-runtime/*.db ~/a770-dual-runtime/*.db-*</code></pre>
+  <p>If it says <em>No such file</em> for the second pattern, that is fine. Run it again after later restarts only if new database files appear.</p></div>
   <h3>Check the models</h3>
   <p>Open <em>Settings</em> then <em>Models</em>. Every <code>.gguf</code> file from step 7 should be listed. Check which GPU each helper model uses. The shipped file names GPU 1 and 2 from the original two-card PC; this machine has one card, so set every helper to GPU 0 (a GPU that does not exist is moved to the default one automatically, but set it anyway so the screen is honest). Enter your cloud API keys in Settings too.</p>
   <figure class="shot">

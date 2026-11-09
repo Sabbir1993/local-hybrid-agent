@@ -57,7 +57,7 @@ STEPS = [
     ("config", "Point the settings at this machine", "Rewrites model and program paths in config/app.json. Then check the file by hand.", ["models_dir"]),
     ("folders", "Create the data folder", "Makes the private folder for users' files (mode 700).", ["common_dir"]),
     ("keyring", "Check the password store", "Checks that the keyring Python will use is SecretService.", []),
-    ("start", "Start the server", "Starts the application in the background. Needs the keyring password you choose.", ["keyring_password", "admin_user", "admin_password", "lan"]),
+    ("start", "Start the server", "Starts the application in the background and makes its databases private (mode 600). Needs the keyring password you choose.", ["keyring_password", "admin_user", "admin_password", "lan"]),
 ]
 STEP_IDS = {s[0] for s in STEPS}
 
@@ -313,6 +313,14 @@ def step_start(p) -> str:
         log("The server is still starting. Look at logs/server_gui.log, then use 'Open the app'.")
         return "warn"
     log(f"The server is running: http://127.0.0.1:{port}  (log: logs/server_gui.log)")
+    locked = 0
+    for f in ROOT.glob("*.db*"):      # the application does not set file permissions: keep the databases private
+        try:
+            f.chmod(0o600)
+            locked += 1
+        except OSError:
+            pass
+    log(f"Made {locked} database file(s) private (mode 600). Roles and permissions were created on this first start.")
     return "ok"
 
 
