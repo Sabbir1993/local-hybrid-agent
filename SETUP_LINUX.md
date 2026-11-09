@@ -5,6 +5,9 @@ Step-by-step commands to run after cloning the repo on a fresh Linux machine
 `[BRACKETED]` value with your own. Never paste real passwords, API keys or
 tokens into this file or any shared document.
 
+A beginner-friendly version with the full model list and download URLs is in
+[docs/INSTALL_LINUX.html](docs/INSTALL_LINUX.html).
+
 Windows: see [SETUP_WINDOWS.md](SETUP_WINDOWS.md). Background and config
 reference: [README.md](README.md), "Running on Linux".
 
@@ -43,17 +46,18 @@ git clone [REPO_URL]
 cd a770-dual-runtime
 ```
 
-**5. Make the scripts executable** (only needed until they are committed with
-`git add --chmod=+x`)
+**5. Create `.venv`**
 ```bash
-chmod +x scripts/start.sh scripts/setup_linux.sh
+python3 -m venv .venv
 ```
 
-**6. Create `.venv` and install the Python dependencies.** It installs the
-hash-locked `requirements.lock`, falling back to `requirements.txt` if a hash
-was pinned to a Windows-only wheel.
+**6. Install the Python dependencies.** Use the hash-locked `requirements.lock`,
+falling back to `requirements.txt` if a hash was pinned to a Windows-only wheel.
 ```bash
-./scripts/setup_linux.sh ~/llama-vulkan
+.venv/bin/python -m pip install --upgrade pip
+```
+```bash
+.venv/bin/python -m pip install --require-hashes -r requirements.lock || .venv/bin/python -m pip install -r requirements.txt
 ```
 
 **7. Get llama.cpp.** Download `llama-<build>-bin-ubuntu-vulkan-x64.tar.gz` from
@@ -101,7 +105,6 @@ and resumes partial files.
 ```bash
 .venv/bin/python scripts/download_models.py --all --binaries --backend vulkan --write-config
 ```
-Or do steps 6-9b in one go: `DOWNLOAD=1 ./scripts/setup_linux.sh ~/llama-vulkan` (`BACKEND=cuda` for NVIDIA).
 The CPU routers (`laya`, `cactus-needle`) download from Hugging Face on first use, or with the `routing` group.
 
 **The three helper programs at a glance** (the app finds each by folder name, so keep them side by side, for example in `~`):
@@ -198,18 +201,18 @@ account; save the password.
 
 On a desktop session:
 ```bash
-./scripts/start.sh --port 8000
+.venv/bin/python server_manager.py --port 8000
 ```
 
 On a headless server, start it with an unlocked keyring:
 ```bash
-dbus-run-session -- sh -c 'printf "%s" "[KEYRING_PASSWORD]" | gnome-keyring-daemon --unlock --components=secrets && ./scripts/start.sh --port 8000'
+dbus-run-session -- sh -c 'printf "%s" "[KEYRING_PASSWORD]" | gnome-keyring-daemon --unlock --components=secrets && .venv/bin/python server_manager.py --port 8000'
 ```
 
 To reach it from other machines, bind to all interfaces (see Security below
 first):
 ```bash
-./scripts/start.sh --host 0.0.0.0 --port 8000
+.venv/bin/python server_manager.py --host 0.0.0.0 --port 8000
 ```
 
 **14.** Open `http://[SERVER_IP]:8000`, log in, then enter your cloud API keys
@@ -247,17 +250,8 @@ Web search asks a local SearXNG first (Google, Brave, Startpage, Mojeek, Wikiped
 scrapes DuckDuckGo and Bing when it is not running. The shipped `config/app.json` already points at
 `http://localhost:8888`; with nothing listening there, search simply uses the fallback. No Docker needed.
 
-**Quick way** (this script installs everything below for you; it also runs on a plain Linux server, not only WSL):
-```bash
-bash scripts/setup_searxng_wsl.sh install
-```
-```bash
-bash scripts/setup_searxng_wsl.sh start
-```
-```bash
-bash scripts/setup_searxng_wsl.sh check
-```
-`start` stays in the foreground: run it in `tmux`, or as a systemd service for the server's user. The manual steps follow.
+The steps below work on a plain Linux server and inside WSL. The server stays in the foreground: run it in `tmux`, or as a
+systemd service for the server's user.
 
 ```bash
 sudo apt install -y python3-venv python3-dev build-essential git libxslt-dev zlib1g-dev libffi-dev libssl-dev

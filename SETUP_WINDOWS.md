@@ -40,7 +40,10 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 **4. Create `.venv` and install the Python dependencies**
 ```powershell
-.\scripts\setup_windows.ps1 -InstallDir "C:\llama-vulkan"
+python -m venv .venv
+```
+```powershell
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements.lock
 ```
 
 **5. Get llama.cpp.** In a browser, download `llama-<build>-bin-win-vulkan-x64.zip`
@@ -52,7 +55,7 @@ Expand-Archive -Path "$HOME\Downloads\[LLAMA_ZIP_NAME].zip" -DestinationPath "C:
 
 **6. Check that the GPUs are visible.** Note the device indices.
 ```powershell
-.\scripts\list_devices.ps1 -BinDir "C:\llama-vulkan"
+C:\llama-vulkan\llama-bench.exe --list-devices
 ```
 
 **6b. Download the models and helper programs.** One command fetches the models
@@ -66,9 +69,6 @@ about 20 GB in total, pick groups to save disk) and, with `--binaries`, the llam
 .\.venv\Scripts\python.exe scripts/download_models.py --all --binaries --backend vulkan --write-config
 ```
 The CPU routers (`laya`, `cactus-needle`) download from Hugging Face on first use, or with the `routing` group.
-
-Or do steps 4-6b in one go: `.\scripts\setup_windows.ps1 -InstallDir "C:\llama-vulkan" -Download`
-(`-Backend cuda` for NVIDIA; the last folder of `-InstallDir` must be `llama-<backend>`).
 
 **Voice (speech to text).** whisper.cpp publishes no Vulkan build, so build `whisper-server.exe` once
 (needs Visual Studio Build Tools, CMake and the Vulkan SDK):
@@ -99,7 +99,7 @@ notepad config\app.json
 **9. Start the server.** On first run it asks you to create the super-admin
 account; save the password.
 ```powershell
-.\scripts\start.ps1 -Port 8000
+.\.venv\Scripts\python.exe server_manager.py --port 8000
 ```
 
 **10.** Open http://localhost:8000, log in, then enter your cloud API keys and
@@ -140,23 +140,15 @@ wsl -d Ubuntu-24.04 -- bash -c "sudo apt update && sudo apt install -y python3 p
 Web search asks a local SearXNG first (Google, Brave, Startpage, Mojeek, Wikipedia, Bing, DuckDuckGo in one request) and
 falls back to scraping DuckDuckGo and Bing when it is down or returns fewer than `web.searxng_min_results` (5) hits.
 
-**With WSL2** (no Docker). In a PowerShell window:
-```powershell
-powershell -File scripts\searxng_wsl.ps1 install
-```
-```powershell
-powershell -File scripts\searxng_wsl.ps1 start
-```
-Keep that window open while you use the app, and check it from a second window with
-`powershell -File scripts\searxng_wsl.ps1 check` (lists which engines answered and which did not).
+**With WSL2** (no Docker). Inside the Ubuntu distro follow the SearXNG steps in [SETUP_LINUX.md](SETUP_LINUX.md) ("Web search engines"),
+and keep that window open while you use the app.
 `config\app.json` already has `"web": { "searxng_url": "http://localhost:8888", "backends": ["searxng", "duckduckgo", "bing"] }`;
 WSL2 forwards `localhost` to the distro. If `localhost` does not reach it, use the WSL address from `wsl hostname -I`.
 Google often answers `access denied` to a server IP; SearXNG still returns the other engines, and the web tool says which
 engines did not answer.
 
 **Without WSL2:**
-1. Run the same script on any Linux machine or VM (`bash scripts/setup_searxng_wsl.sh install`, then `start` with
-   `SEARXNG_BIND=0.0.0.0`) and set `searxng_url` to `http://[LINUX_HOST]:8888`. Firewall port 8888 to this PC only.
+1. Follow the SearXNG steps in [SETUP_LINUX.md](SETUP_LINUX.md) on any Linux machine or VM (bind it to `0.0.0.0` instead of `127.0.0.1`) and set `searxng_url` to `http://[LINUX_HOST]:8888`. Firewall port 8888 to this PC only.
 2. SearXNG has no supported native-Windows build. Installing it into a Windows Python venv works only partly, so it is not
    recommended.
 3. Leave `searxng_url` empty (remove it from the `web` block): the app then uses DuckDuckGo and Bing only, with the same

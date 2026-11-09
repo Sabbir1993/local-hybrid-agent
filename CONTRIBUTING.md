@@ -13,7 +13,7 @@ pip install --require-hashes -r requirements.lock
 pre-commit install
 ```
 
-Linux: `./scripts/setup_linux.sh` (needs a Secret Service backend for the
+Linux: follow `docs/INSTALL_LINUX.html` (needs a Secret Service backend for the
 keychain, see `README.md`).
 
 ## Before every commit

@@ -19,7 +19,7 @@ Agent mode is a different thing: it runs code on the *user's own PC* through the
 | Layer | What it stops |
 |---|---|
 | Separate VM on a private network | the code can reach nothing of the app: no database, no keys, no llama servers |
-| Firewall (`tools/runner/lockdown.sh` and the host-only / private network) | only the app server reaches the runner, on one port; nothing goes out |
+| Firewall (nftables rules on the VM and the host-only / private network) | only the app server reaches the runner, on one port; nothing goes out |
 | Pinned certificate + token | only this app talks to the runner, and the app only talks to this runner; a changed certificate is refused |
 | Pairing code bound to the certificate | a man in the middle cannot pair: the proof is `HMAC(code, certificate fingerprint)` |
 | bubblewrap per job | the job has no network and sees only its own folder and the read-only system (plus, on Debian/Ubuntu, two read-only entries of /etc that numpy and matplotlib need) |
@@ -44,17 +44,23 @@ compute before production.
    - *Adapter 1*: **Host-only Adapter** (VirtualBox Host-Only Ethernet Adapter). This is the only link the app uses. The host-only
      network has no route to the internet. On Windows the host side is usually `192.168.56.1`; check with `ipconfig` under
      "VirtualBox Host-Only Network". That address is your `APP_IP`.
-   - *Adapter 2*: **NAT**. Needed **only while `tools/runner/setup.sh` installs packages**. After setup, power off the VM and untick
+   - *Adapter 2*: **NAT**. Needed **only while you install packages** (step 5). After setup, power off the VM and untick
      *Cable Connected* on Adapter 2 (or set it to *Not attached*). With it gone the VM has no internet at all.
 4. **Install Alpine**: log in as `root`, run `setup-alpine` (interface `eth0` for DHCP is fine; pick `sys` mode on the disk), reboot and
    remove the ISO. Note the VM's host-only address with `ip addr show eth0` (usually `192.168.56.x`).
-5. **Copy and run the setup** (from your PC, in a terminal; `scp` ships with Windows 11):
+5. **Install the runner by hand** (it needs the NAT adapter for `apk` and `pip`). Copy the folder from your PC (`scp` ships with Windows 11):
    ```
    scp -r tools/runner root@[RUNNER-ADDRESS]:/root/runner
    ```
-   then on the VM: `sh /root/runner/setup.sh`. It needs the NAT adapter for `apk` and `pip`.
-6. **Lock it down**, on the VM: `APP_IP=[HOST-ONLY-ADDRESS-OF-YOUR-PC] sh /root/runner/lockdown.sh`. The firewall drops everything
-   else, including ssh. To keep ssh from your PC (for `pair-code` and updates) add `ADMIN_IP=[HOST-ONLY-ADDRESS-OF-YOUR-PC]`; without it use the
+   then on the VM, as root: `apk add --no-cache python3 py3-pip bubblewrap openssl py3-lxml py3-pillow py3-numpy py3-matplotlib py3-openpyxl`,
+   `pip install --no-cache-dir --break-system-packages -r /root/runner/requirements.txt`, make a no-login user (`adduser -S -D -H -s /sbin/nologin a770runner`),
+   a private state folder (`mkdir -p /var/lib/a770-runner && chown a770runner /var/lib/a770-runner && chmod 700 /var/lib/a770-runner`),
+   a self-signed certificate in it (`openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 -subj "/CN=a770-runner" -keyout key.pem -out cert.pem`),
+   and start it as that user: `python3 /root/runner/runner_server.py serve --state-dir /var/lib/a770-runner --port 8470 --max-jobs 2`
+   (run it from an OpenRC service so it survives a reboot).
+6. **Lock it down**, on the VM: install `nftables` and write rules that accept input only from `APP_IP` (`[HOST-ONLY-ADDRESS-OF-YOUR-PC]`) on
+   the runner port (plus loopback and established connections), with input, forward and output policy `drop`. Everything else is dropped,
+   including ssh. To keep ssh from your PC (for `pair-code` and updates) also accept `tcp dport 22` from that one address; otherwise use the
    VirtualBox console. Then power off, detach Adapter 2 as in
    step 3, and start the VM again. Take a **snapshot** now (clean, locked-down, paired-ready state).
 7. **Pair**: Settings -> Code Runner, address `https://[RUNNER-ADDRESS]:8470` (the `192.168.56.x` address is private, so it is accepted).
@@ -66,7 +72,7 @@ Notes:
 - If Hyper-V / Windows Sandbox / WSL2 is enabled on the PC, VirtualBox runs on top of it and is slower, but still works for a 1 GB
   runner.
 - Your own firewall on the PC must allow the app to reach `[RUNNER-ADDRESS]:8470` on the host-only adapter; nothing on the PC
-  should be reachable *from* the VM except through the VM's own rules (lockdown.sh allows only `APP_IP`, and only the runner port inbound).
+  should be reachable *from* the VM except through the VM's own rules (the firewall rules allow only `APP_IP`, and only the runner port inbound).
 
 ## Production: a dedicated VM
 
@@ -77,9 +83,9 @@ runner port only, no outbound. Do not put it on the application server.
 
 Bubblewrap is **Linux only** (it uses Linux namespaces). The runner host must be Linux: a VM, a separate machine or a cloud instance.
 There is no Windows or macOS runner: Windows has no equivalent sandbox here (Job Objects only limit CPU and memory) and macOS's
-Seatbelt is not used by this runner. The application server itself can run on any OS; it never runs the code. `tools/runner/setup.sh` is written
+Seatbelt is not used by this runner. The application server itself can run on any OS; it never runs the code. The setup in this guide is written
 for Alpine; the runner (`tools/runner/runner_server.py`) is plain Python and runs on Debian or Ubuntu too, started by hand
-(`apt install bubblewrap python3`, then `python3 runner_server.py serve --max-jobs 2`) until an apt setup script exists.
+(`apt install bubblewrap python3`, then `python3 runner_server.py serve --max-jobs 2`).
 
 ## Sizing
 

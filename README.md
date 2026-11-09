@@ -376,18 +376,17 @@ list, see [SETUP_WINDOWS.md](SETUP_WINDOWS.md) or [SETUP_LINUX.md](SETUP_LINUX.m
    ```
    C:\llama-vulkan\llama-bench.exe --list-devices
    ```
-   (or `.\scripts\list_devices.ps1 -BinDir "C:\llama-vulkan"`). Confirm you
+   Confirm you
    see one device per physical GPU, and note their indices.
 3. **Clone this repo** and install Python 3.10+ dependencies into a
    dedicated venv (`.venv/`, git-ignored):
    ```
    git clone <this-repo-url>
    cd a770-dual-runtime
-   .\scripts\setup_windows.ps1
    ```
-   or by hand: `python -m venv .venv`, `.\.venv\Scripts\Activate.ps1`,
+   then: `python -m venv .venv`, `.\.venv\Scripts\Activate.ps1`,
    `pip install --require-hashes -r requirements.lock`. Keep the venv
-   activated (or use `scripts\start.ps1`, which picks it up) so stdio MCP
+   activated (or start with `.venv\Scripts\python.exe server_manager.py`) so stdio MCP
    servers configured as `"command": "python"` run on the same interpreter.
    On Linux see [Running on Linux](#running-on-linux).
 4. **Tell it which backend and binary to use**: add one preset per llama.cpp
@@ -455,9 +454,10 @@ kill, orphan cleanup, GPU panel, folder picker) branch on `os.name`
    build it: `cmake -B build -DGGML_VULKAN=ON && cmake --build build -j`
    (`-DGGML_CUDA=ON` for NVIDIA). Verify with
    `./llama-bench --list-devices`.
-3. **Python venv + deps:** `./scripts/setup_linux.sh ~/llama-vulkan`. It creates
-   `.venv/` and installs `requirements.lock`, falling back to
-   `requirements.txt` if a hash was pinned to a Windows-only wheel.
+3. **Python venv + deps:** `python3 -m venv .venv`, then
+   `.venv/bin/python -m pip install --require-hashes -r requirements.lock`, falling back to
+   `requirements.txt` if a hash was pinned to a Windows-only wheel. Full beginner
+   walkthrough with the model list: [docs/INSTALL_LINUX.html](docs/INSTALL_LINUX.html).
 4. **Config:** `config/app.json` ships with Windows paths. Change
    `models_dir`, `common_dir`, `runtimes.<preset>.llama_bin_dir` and
    `media_dirs.*` to Linux paths, e.g.
@@ -469,8 +469,7 @@ kill, orphan cleanup, GPU panel, folder picker) branch on `os.name`
    `keyrings.alt`**, because it keeps secrets in a plaintext file. The server
    logs a `WARNING: insecure keyring backend` line at startup if no OS
    keychain is available.
-6. **Start:** `./scripts/start.sh --port 8000` (uses `.venv`, passes
-   arguments through to `server_manager.py`).
+6. **Start:** `.venv/bin/python server_manager.py --port 8000`.
 
 Linux differences you'll notice: the GPU panel shows VRAM in use per Vulkan
 device (from `llama-bench --list-devices`) but no per-process compute %,
@@ -554,11 +553,8 @@ curl -X POST http://localhost:8000/control/switch -d '{"profile":"E:/AI/Models/y
 - `ui.html` + `static/js/*` — the single-page web control center (chat,
   agent mode, settings, monitor, usage report). `static/js/theme.js` holds
   the (optional, cosmetic) machine-specific GPU display-name map.
-- `scripts/list_devices.ps1` — quick Vulkan/CUDA device check.
-- `scripts/start.ps1` / `scripts/start.sh` — convenience wrappers around
-  `server_manager.py` (Windows / Linux); both prefer the repo's `.venv`.
-- `scripts/setup_windows.ps1` / `scripts/setup_linux.sh` — one-time venv +
-  Python dependency install + a printed checklist of the manual steps above.
+- `scripts/download_models.py` — fetches the models and llama.cpp / stable-diffusion.cpp builds.
+- `docs/INSTALL_LINUX.html` — step-by-step Linux server install, with the model list and download URLs.
 
 ## Security note (payment-adjacent environments)
 

@@ -475,7 +475,7 @@ h = row(y, [
         "whisper STT, router classifier, MoE / big-model offload (-ncmoe, ngl < max)",
     ], "hw"),
     (1.3, "OS, drivers & measured speed", [
-        "Windows 11 WDDM, Arc driver 32.0.101.8991 · Linux: Mesa ANV Vulkan (setup_linux.sh / start.sh)",
+        "Windows 11 WDDM, Arc driver 32.0.101.8991 · Linux: Mesa ANV Vulkan",
         "llama.cpp Vulkan b10840 (SYCL avoided: ~85% MoE loss, llama.cpp#19918)",
         "Single A770 9.7 t/s → dual (split 9,11) 14.44 t/s gen · 252.6 t/s prompt",
     ], "hw"),

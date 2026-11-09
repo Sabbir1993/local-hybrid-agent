@@ -75,8 +75,7 @@ cd ~/a770-dual-runtime
 
 ## 4. Python environment
 
-`scripts/setup_linux.sh` is Linux-flavoured (it probes `vulkaninfo`), so create
-the venv by hand:
+Create the venv:
 
 ```bash
 python3.11 -m venv .venv
@@ -96,12 +95,6 @@ Try the locked install first, then fall back:
 ```
 
 Run only the second command if the first fails.
-
-Make the start script executable:
-
-```bash
-chmod +x scripts/start.sh
-```
 
 ## 5. Install llama.cpp with Metal
 
@@ -259,7 +252,7 @@ space keeps the line out of zsh history when `HIST_IGNORE_SPACE` is on:
  export A770_BOOTSTRAP_USERNAME=[ADMIN_USER] A770_BOOTSTRAP_PASSWORD=[ADMIN_PASSWORD]
 ```
 ```bash
-./scripts/start.sh --host 127.0.0.1 --port 8000
+.venv/bin/python server_manager.py --host 127.0.0.1 --port 8000
 ```
 ```bash
 unset A770_BOOTSTRAP_USERNAME A770_BOOTSTRAP_PASSWORD
@@ -348,7 +341,8 @@ sudo chown -R [SERVICE_USER] /Users/[SERVICE_USER]/a770-dual-runtime
   <key>Label</key><string>com.sslwireless.localagent</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/[SERVICE_USER]/a770-dual-runtime/scripts/start.sh</string>
+    <string>/Users/[SERVICE_USER]/a770-dual-runtime/.venv/bin/python</string>
+    <string>/Users/[SERVICE_USER]/a770-dual-runtime/server_manager.py</string>
     <string>--host</string><string>127.0.0.1</string>
     <string>--port</string><string>8000</string>
   </array>
@@ -416,7 +410,7 @@ Firewall: macOS Settings > Network > Firewall > on; allow only Caddy inbound
 If you must bind the app directly to the LAN (trusted network only):
 
 ```bash
-./scripts/start.sh --host 0.0.0.0 --port 8000
+.venv/bin/python server_manager.py --host 0.0.0.0 --port 8000
 ```
 
 Also: after first login, set the session idle timeout, API tokens and MFA in

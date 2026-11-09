@@ -4,6 +4,7 @@
 Standard library only, so it runs before (or without) the venv:
 
     python scripts/download_models.py                  # list the groups, download nothing
+    python scripts/download_models.py --small          # only the small helpers (~3.5 GB): routers, embedder, whisper (large-v3), tts
     python scripts/download_models.py --all            # every model group (~25 GB)
     python scripts/download_models.py routing vision embedder voice image
     python scripts/download_models.py --binaries --backend vulkan     # llama.cpp + stable-diffusion.cpp programs
@@ -46,6 +47,17 @@ GROUPS = {
         (HF.format(repo="nomic-ai/nomic-embed-text-v1.5-GGUF", file="nomic-embed-text-v1.5.Q8_0.gguf"),
          "nomic-embed-text-v1.5-Q8_0.gguf", 140),
     ]),
+    "routers": ("CPU routers (Laya), no GPU memory; fetched into the Hugging Face cache", "orch", []),
+    "whisper": ("Speech to text (whisper.cpp large-v3)", "voice", [
+        (HF.format(repo="ggerganov/whisper.cpp", file="ggml-large-v3.bin"),
+         "ggml-large-v3.bin", 3100),
+    ]),
+    "tts": ("Spoken replies (sherpa-onnx, English and Bangla), CPU", "voice", [
+        ("https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2",
+         "tts/", 65),
+        ("https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-coqui-bn-custom_female.tar.bz2",
+         "tts/", 100),
+    ]),
     "voice": ("Speech to text (whisper.cpp) + spoken replies (sherpa-onnx, English and Bangla)", "voice", [
         (HF.format(repo="ggerganov/whisper.cpp", file="ggml-large-v3-turbo-q5_0.bin"),
          "ggml-large-v3-turbo-q5_0.bin", 570),
@@ -66,7 +78,11 @@ GROUPS = {
     ]),
 }
 # CPU routers: fetched with huggingface_hub (installed by requirements.txt) into the Hugging Face cache
-HF_REPOS = {"routing": ["convaiinnovations/laya"]}   # router.engine = "laya"; "cactus_needle" fetches Needle on first use
+HF_REPOS = {"routing": ["convaiinnovations/laya"], "routers": ["convaiinnovations/laya"]}   # router.engine = "laya"; "cactus_needle" fetches Needle on first use
+
+
+# small helpers: no large chat model among them (those are copied by hand)
+SMALL = ('routers', 'embedder', 'whisper', 'tts')
 
 
 def _app_config() -> dict:
@@ -281,6 +297,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("groups", nargs="*", help="; ".join(GROUPS))
     ap.add_argument("--all", action="store_true", help="every model group")
+    ap.add_argument("--small", action="store_true", help="only the small helpers: " + ", ".join(SMALL))
     ap.add_argument("--binaries", action="store_true", help="also fetch llama.cpp + stable-diffusion.cpp builds")
     ap.add_argument("--backend", default="vulkan", choices=["vulkan", "cuda", "cpu", "metal"], help="GPU build for --binaries (macOS always uses Metal)")
     ap.add_argument("--bin-dir", help="where the programs go (default: next to the repo's parent folder)")
@@ -294,7 +311,7 @@ def main() -> int:
     bad = [g for g in args.groups if g not in GROUPS]
     if bad:
         ap.error(f"unknown group {bad}; choose from {', '.join(GROUPS)}")
-    chosen = list(GROUPS) if args.all else args.groups
+    chosen = list(GROUPS) if args.all else list(dict.fromkeys(args.groups + (list(SMALL) if args.small else [])))
     dirs = _dirs(args)
     if not chosen and not args.binaries:
         print("Model groups (name, size, what):")

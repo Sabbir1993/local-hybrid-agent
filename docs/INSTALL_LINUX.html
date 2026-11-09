@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install on a Linux server: step by step</title>
+<style>
+  :root {
+    --fog:#eaeff0; --paper:#f8fafa; --ink:#14212b; --muted:#566673; --line:#cdd8db;
+    --pine:#0e6b5c; --pine-d:#0a4d42; --pine-l:#d8eee9;
+    --amber:#b7740a; --amber-l:#fbefd4; --rust:#a63a2b; --rust-l:#f8e0db;
+    --term:#0d1a21; --term-fg:#dcebe6; --term-dim:#6f8a86;
+    --serif: "Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+    --sans: "Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;
+    --mono: ui-monospace,"Cascadia Mono","SF Mono",Consolas,"Liberation Mono",monospace;
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; scroll-padding-top:20px; }
+  body { margin:0; background:var(--fog); color:var(--ink); font:16px/1.65 var(--sans); }
+  a { color:var(--pine-d); }
+  :focus-visible { outline:3px solid var(--amber); outline-offset:2px; border-radius:3px; }
+
+  /* ---------- hero ---------- */
+  .hero { background:var(--term); color:var(--term-fg); padding:44px 24px 0; overflow:hidden; }
+  .hero-in { max-width:1180px; margin:0 auto; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.05fr); gap:36px; align-items:end; }
+  .hero h1 { font:600 clamp(32px,4.6vw,54px)/1.08 var(--serif); letter-spacing:-.01em; margin:0 0 16px; max-width:14em; }
+  .hero p { margin:0 0 14px; max-width:34em; color:#b4cbc5; }
+  .hero ul { list-style:none; margin:18px 0 36px; padding:0; display:flex; flex-wrap:wrap; gap:8px 10px; }
+  .hero li { border:1px solid #2c4540; border-radius:999px; padding:3px 12px; font-size:14px; color:#cfe3de; }
+  .hero figure { margin:0; }
+  .hero svg { display:block; width:100%; height:auto; }
+
+  /* ---------- layout ---------- */
+  .wrap { max-width:1180px; margin:0 auto; padding:28px 24px 60px; display:grid; grid-template-columns:250px minmax(0,1fr); gap:36px; align-items:start; }
+  .rail { position:sticky; top:16px; max-height:calc(100vh - 32px); overflow:auto; padding-right:6px; }
+  .rail h2 { font:600 15px/1.3 var(--serif); margin:0 0 10px; }
+  .meter { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin-bottom:6px; }
+  .meter i { display:block; height:100%; width:0; background:var(--pine); transition:width .3s; }
+  .rail small { color:var(--muted); display:block; margin-bottom:12px; }
+  .rail ol { list-style:none; margin:0; padding:0; counter-reset:s -1; }
+  .rail li a { display:flex; gap:10px; align-items:baseline; text-decoration:none; color:var(--muted); padding:5px 8px; border-radius:6px; font-size:14px; line-height:1.35; }
+  .rail li a::before { counter-increment:s; content:counter(s); flex:none; width:22px; font:600 13px var(--serif); color:var(--muted); text-align:right; }
+  .rail li a:hover { background:var(--paper); color:var(--ink); }
+  .rail li a.on { background:var(--paper); color:var(--ink); font-weight:600; box-shadow:inset 3px 0 0 var(--pine); }
+  .rail li a.done::before { content:"\2713"; color:var(--pine); }
+
+  /* ---------- steps ---------- */
+  main { min-width:0; }
+  .step { background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:26px 30px 28px; margin:0 0 22px; }
+  .step > header { display:flex; gap:18px; align-items:baseline; margin-bottom:6px; }
+  .step .no { font:600 52px/1 var(--serif); color:var(--pine); min-width:50px; }
+  .step h2 { font:600 25px/1.2 var(--serif); margin:0; letter-spacing:-.005em; }
+  .step .time { margin-left:auto; font-size:13px; color:var(--muted); white-space:nowrap; }
+  .step p, .step li { max-width:68ch; }
+  .step h3 { font:600 17px/1.3 var(--serif); margin:24px 0 4px; }
+  code { font:.9em var(--mono); background:#e5ecee; padding:1px 5px; border-radius:4px; }
+  kbd { font:600 .85em var(--mono); background:#fff; border:1px solid var(--line); border-bottom-width:2px; border-radius:5px; padding:0 6px; }
+
+  /* command blocks: the "$" gutter is drawn by CSS so copying gives the clean command */
+  .cmd { position:relative; margin:10px 0; background:var(--term); border-radius:10px; }
+  .cmd::before { content:"$"; position:absolute; left:16px; top:13px; color:var(--term-dim); font:14px/1.55 var(--mono); pointer-events:none; }
+  .cmd.plain::before { content:""; }
+  .cmd pre { margin:0; color:var(--term-fg); padding:13px 84px 13px 44px; overflow-x:auto; font:14px/1.55 var(--mono); border-radius:10px; }
+  .cmd.plain pre { padding-left:16px; }
+  pre code { background:none; padding:0; font:inherit; white-space:pre; }
+  .cmd button { position:absolute; top:9px; right:9px; border:1px solid #2c4540; background:#16282f; color:#bcd6cf; border-radius:6px; padding:3px 11px; font:600 12px var(--sans); cursor:pointer; }
+  .cmd button:hover { background:var(--pine); color:#fff; border-color:var(--pine); }
+
+  /* callouts: shape + colour, not only colour */
+  .note, .warn, .ok { margin:14px 0; padding:11px 16px 11px 16px; border-radius:8px; font-size:15px; border-left:5px solid; max-width:74ch; }
+  .note { background:#e6eef1; border-color:#4b7384; }
+  .ok { background:var(--pine-l); border-color:var(--pine); }
+  .warn { background:var(--amber-l); border-color:var(--amber); }
+  .note > :first-child, .ok > :first-child, .warn > :first-child { margin-top:0; }
+  .note > :last-child, .ok > :last-child, .warn > :last-child { margin-bottom:0; }
+
+  /* figures */
+  figure.shot { margin:18px 0; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:#fff; max-width:700px; }
+  figure.shot svg { display:block; width:100%; height:auto; }
+  figure.shot figcaption { font-size:13.5px; color:var(--muted); padding:8px 14px; border-top:1px solid var(--line); background:var(--paper); }
+
+  .done-row { margin-top:20px; padding-top:14px; border-top:1px dashed var(--line); }
+  .done-row label { cursor:pointer; font-size:15px; display:inline-flex; gap:9px; align-items:center; }
+  .done-row input { width:18px; height:18px; accent-color:var(--pine); }
+
+  details { margin:12px 0; border:1px solid var(--line); border-radius:10px; padding:2px 16px; background:#fff; }
+  summary { cursor:pointer; font-weight:600; padding:9px 0; }
+  details[open] summary { border-bottom:1px solid var(--line); margin-bottom:10px; }
+
+  /* tables */
+  .tw { overflow-x:auto; margin:12px 0; border:1px solid var(--line); border-radius:10px; background:#fff; }
+  table { border-collapse:collapse; width:100%; font-size:14px; min-width:640px; }
+  th, td { padding:9px 12px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); }
+  tr:last-child td { border-bottom:0; }
+  th { background:#edf3f4; font:600 13px var(--sans); color:var(--muted); }
+  td.sz { white-space:nowrap; text-align:right; font-variant-numeric:tabular-nums; }
+  td a { font-weight:600; }
+  td small { display:block; color:var(--muted); font-size:12.5px; }
+  tr.grp td { background:#f1f6f6; font:600 14px var(--serif); padding:7px 12px; color:var(--pine-d); }
+  .pill { display:inline-block; font-size:12px; font-weight:600; padding:0 8px; border-radius:999px; background:var(--pine-l); color:var(--pine-d); }
+  .pill.opt { background:#e5ecee; color:var(--muted); }
+  .pill.srch { background:var(--amber-l); color:#7a4d05; }
+
+  footer { max-width:1180px; margin:0 auto; padding:0 24px 40px; color:var(--muted); font-size:14px; }
+
+  @media (max-width:980px) {
+    .hero-in { grid-template-columns:1fr; }
+    .hero figure { display:none; }
+    .hero ul { margin-bottom:30px; }
+    .wrap { grid-template-columns:1fr; padding-top:18px; }
+    .rail { position:static; max-height:none; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:14px; }
+    .rail ol { columns:2; }
+  }
+  @media (max-width:560px) {
+    .rail ol { columns:1; }
+    .step { padding:18px 16px 20px; }
+    .step > header { flex-wrap:wrap; gap:4px 12px; }
+    .step .time { margin-left:0; width:100%; }
+    .step .no { font-size:40px; }
+  }
+  @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } .meter i { transition:none; } }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-in">
+    <div>
+      <h1>Put the AI server on your Linux machine</h1>
+      <p>This guide assumes you have never set up a Linux server. You will copy short commands into a terminal window, one at a time, and check a clear sign of success after each part.</p>
+      <p>Your server has a screen, so you can do everything with the mouse and keyboard on that machine. If you would rather work from your own computer, use SSH (step 1).</p>
+      <ul>
+        <li>About 90 minutes</li>
+        <li>60 GB free disk</li>
+        <li>Ubuntu 24.04</li>
+        <li>Intel Arc Pro B70</li>
+        <li>Models: step 7</li>
+      </ul>
+    </div>
+    <figure aria-label="Illustration of a server desktop with a terminal open">
+      <svg viewBox="0 0 640 330" role="img" aria-label="A Linux desktop with a terminal window running the server">
+        <rect width="640" height="330" rx="10" fill="#16282f"/>
+        <rect width="640" height="22" fill="#0a1419"/>
+        <text x="12" y="15" fill="#9fb9b3" font-size="11" font-family="sans-serif">Activities</text>
+        <text x="300" y="15" fill="#9fb9b3" font-size="11" font-family="sans-serif">Mon 09:41</text>
+        <rect y="22" width="48" height="308" fill="#0f1e25"/>
+        <rect x="9" y="36" width="30" height="30" rx="7" fill="#0e6b5c"/><text x="15" y="56" fill="#fff" font-size="15" font-family="monospace">&gt;_</text>
+        <rect x="9" y="76" width="30" height="30" rx="7" fill="#2b4650"/>
+        <rect x="9" y="116" width="30" height="30" rx="7" fill="#2b4650"/>
+        <rect x="9" y="156" width="30" height="30" rx="7" fill="#2b4650"/>
+        <rect x="80" y="48" width="520" height="250" rx="9" fill="#0d1a21" stroke="#2c4540"/>
+        <rect x="80" y="48" width="520" height="26" rx="9" fill="#1c3038"/><rect x="80" y="62" width="520" height="12" fill="#1c3038"/>
+        <text x="96" y="66" fill="#b4cbc5" font-size="11" font-family="sans-serif">[USER]@server: ~/a770-dual-runtime</text>
+        <g font-family="monospace" font-size="11.5">
+          <text x="96" y="100" fill="#6f8a86">$ .venv/bin/python server_manager.py --port 8000</text>
+          <text x="96" y="120" fill="#dcebe6">Models folder ........ /home/[USER]/Models</text>
+          <text x="96" y="138" fill="#dcebe6">GPUs found ........... 1 (Intel Arc Pro B70)</text>
+          <text x="96" y="156" fill="#dcebe6">Keyring .............. SecretService</text>
+          <text x="96" y="182" fill="#5fd0b8">Server is listening on http://0.0.0.0:8000</text>
+          <rect x="96" y="194" width="8" height="14" fill="#5fd0b8"/>
+        </g>
+        <rect x="330" y="236" width="248" height="46" rx="8" fill="#fff" opacity=".96"/>
+        <text x="344" y="256" fill="#14212b" font-size="12" font-weight="700" font-family="sans-serif">Open it in the browser</text>
+        <text x="344" y="272" fill="#0a4d42" font-size="12" font-family="monospace">http://[SERVER_IP]:8000</text>
+      </svg>
+    </figure>
+  </div>
+</header>
+
+<div class="wrap">
+  <aside class="rail" aria-label="Steps">
+    <h2>Your progress</h2>
+    <div class="meter" role="progressbar" aria-label="Steps done" aria-valuemin="0" aria-valuemax="16" aria-valuenow="0"><i></i></div>
+    <small id="meter-text">0 of 16 steps marked done</small>
+    <ol>
+      <li><a href="#basics">Read this first</a></li>
+      <li><a href="#connect">Open a terminal</a></li>
+      <li><a href="#packages">System programs</a></li>
+      <li><a href="#gpu">Check the graphics card</a></li>
+      <li><a href="#code">Get the application</a></li>
+      <li><a href="#python">Python parts</a></li>
+      <li><a href="#llama">llama.cpp and helpers</a></li>
+      <li><a href="#models">Download the models</a></li>
+      <li><a href="#whisper">Speech to text</a></li>
+      <li><a href="#config">Edit the settings</a></li>
+      <li><a href="#folders">Folders and permissions</a></li>
+      <li><a href="#keyring">Password store</a></li>
+      <li><a href="#start">First start</a></li>
+      <li><a href="#service">Keep it running</a></li>
+      <li><a href="#firewall">Firewall and access</a></li>
+      <li><a href="#optional">Web search, code runner</a></li>
+      <li><a href="#trouble">If something fails</a></li>
+    </ol>
+  </aside>
+
+<main>
+
+<section class="step" id="basics" data-step>
+  <header><span class="no">0</span><h2>Read this first</h2><span class="time">5 min</span></header>
+  <h3>What you need</h3>
+  <ul>
+    <li>A machine running <strong>Ubuntu 24.04 LTS</strong> with an <strong>Intel Arc Pro B70</strong> graphics card installed. This guide uses <em>Vulkan</em> through the open-source Mesa driver, so you do not install any Intel driver package. (NVIDIA cards would use CUDA instead; they are not covered here.)</li>
+    <li>The machine sits next to you with a monitor, keyboard and mouse. Everything is done on its own screen; no second computer is needed.</li>
+    <li>32 GB of RAM or more, and about <strong>60 GB of free disk</strong>. The helper models alone are about 20 GB.</li>
+    <li>A user account that may use <code>sudo</code> (run a command as administrator). <strong>Do not work as <code>root</code></strong>: the application must run as a normal user.</li>
+    <li>Internet access on the machine, to download packages and models.</li>
+  </ul>
+  <h3>How to read the commands</h3>
+  <ul>
+    <li>Each black box is one command. Click <strong>Copy</strong>, paste it into the terminal (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> in the Ubuntu terminal), press <kbd>Enter</kbd>, and wait until the prompt comes back before the next one. The <code>$</code> in front of a box is not part of the command.</li>
+    <li>Anything in <code>[SQUARE BRACKETS]</code> is a value you replace with your own, brackets included, for example <code>[REPO_URL]</code>, <code>[USER]</code>, <code>[SERVER_IP]</code>.</li>
+    <li><code>~</code> means your home folder, for example <code>/home/alice</code>. When <code>sudo</code> asks for a password, type your own; nothing appears on screen while you type, which is normal.</li>
+    <li>The screens in this guide are drawings of what you should see, not photos. Yours will differ in small ways.</li>
+  </ul>
+  <div class="note"><p><strong>Before you install anything, open the BIOS once</strong> (press <kbd>Del</kbd> or <kbd>F2</kbd> while the machine starts) and make sure <strong>Above 4G Decoding</strong> and <strong>Resizable BAR</strong> (sometimes called <em>Smart Access Memory</em> or <em>Re-Size BAR Support</em>) are <strong>enabled</strong>. Intel Arc cards run slowly or not at all without them. Save and exit.</p></div>
+  <div class="warn"><p>Never paste real passwords, API keys or tokens into chat, tickets or documents. Every secret in this guide is a placeholder on purpose.</p></div>
+</section>
+
+<section class="step" id="connect" data-step>
+  <header><span class="no">1</span><h2>Open a terminal</h2><span class="time">2 min</span></header>
+  <h3>On the server's own screen</h3>
+  <p>Press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd>. Or click <em>Show Apps</em> (the grid of dots at the bottom of the left bar), type <em>Terminal</em>, and click the icon.</p>
+  <figure class="shot">
+    <svg viewBox="0 0 640 340" role="img" aria-label="Ubuntu desktop with the Show Apps grid and a search for Terminal">
+      <rect width="640" height="340" fill="#3b2f4a"/>
+      <rect width="640" height="22" fill="#111"/>
+      <text x="12" y="15" fill="#ddd" font-size="11" font-family="sans-serif">Activities</text><text x="300" y="15" fill="#ddd" font-size="11" font-family="sans-serif">Mon 09:41</text>
+      <rect y="22" width="54" height="318" fill="#1d1d1d" opacity=".92"/>
+      <circle cx="27" cy="50" r="13" fill="#e95420"/><circle cx="27" cy="92" r="13" fill="#4a90d9"/><circle cx="27" cy="134" r="13" fill="#6aa84f"/>
+      <g fill="#fff"><circle cx="19" cy="310" r="2.4"/><circle cx="27" cy="310" r="2.4"/><circle cx="35" cy="310" r="2.4"/><circle cx="19" cy="318" r="2.4"/><circle cx="27" cy="318" r="2.4"/><circle cx="35" cy="318" r="2.4"/><circle cx="19" cy="326" r="2.4"/><circle cx="27" cy="326" r="2.4"/><circle cx="35" cy="326" r="2.4"/></g>
+      <circle cx="27" cy="318" r="22" fill="none" stroke="#f0b429" stroke-width="3"/>
+      <rect x="200" y="50" width="240" height="30" rx="15" fill="#fff"/>
+      <text x="222" y="70" font-size="13" fill="#14212b" font-family="sans-serif">Terminal</text>
+      <rect x="260" y="110" width="110" height="110" rx="14" fill="#241a30"/>
+      <text x="283" y="170" font-size="34" fill="#fff" font-family="monospace">&gt;_</text>
+      <text x="289" y="208" font-size="13" fill="#fff" font-family="sans-serif">Terminal</text>
+      <rect x="252" y="102" width="126" height="126" rx="16" fill="none" stroke="#f0b429" stroke-width="3"/>
+      <g font-family="sans-serif" font-size="12" font-weight="700">
+        <rect x="64" y="268" width="150" height="26" rx="6" fill="#f0b429"/><text x="74" y="285" fill="#14212b">1. Click Show Apps</text>
+        <rect x="446" y="108" width="170" height="26" rx="6" fill="#f0b429"/><text x="456" y="125" fill="#14212b">2. Type Terminal, click it</text>
+      </g>
+    </svg>
+    <figcaption>Open the Terminal from Show Apps. The shortcut Ctrl+Alt+T does the same.</figcaption>
+  </figure>
+  <h3>Make the terminal easy</h3>
+  <p>You only ever <em>paste</em> into it. You never have to type the long commands.</p>
+  <div class="tw"><table>
+    <thead><tr><th>You want to</th><th>Press</th></tr></thead>
+    <tbody>
+    <tr><td>Paste a copied command</td><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>, or right-click and choose Paste. (Plain <kbd>Ctrl</kbd>+<kbd>V</kbd> does not work in the terminal.)</td></tr>
+    <tr><td>Run it</td><td><kbd>Enter</kbd>. Pasting several lines runs them one after another.</td></tr>
+    <tr><td>Stop a command that is running</td><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td></tr>
+    <tr><td>Repeat the last command</td><td><kbd>&uarr;</kbd> then <kbd>Enter</kbd></td></tr>
+    <tr><td>Finish a long file name</td><td>Type the first letters, then <kbd>Tab</kbd></td></tr>
+    <tr><td>Clear the screen</td><td><kbd>Ctrl</kbd>+<kbd>L</kbd></td></tr>
+    <tr><td>Open a terminal in a folder from the Files app</td><td>Right-click an empty spot in the folder, then <em>Open in Terminal</em></td></tr>
+    <tr><td>Make the text bigger</td><td><kbd>Ctrl</kbd>+<kbd>+</kbd> (and <kbd>Ctrl</kbd>+<kbd>-</kbd> to shrink)</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><p><strong>Tip.</strong> Open this guide in the server's browser and keep the Terminal next to it (drag a window to the left or right edge of the screen to snap it to half the screen). Then each step is: click <em>Copy</em>, click the terminal, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>, <kbd>Enter</kbd>.</p></div>
+  <h3>From your own computer (optional)</h3>
+  <p>Windows 10/11, macOS and Linux all include <code>ssh</code>. In PowerShell or a terminal on your computer:</p>
+<pre><code>ssh [USER]@[SERVER_IP]</code></pre>
+  <p>The first time it asks <em>"Are you sure you want to continue connecting?"</em>. Type <code>yes</code>, then your password.</p>
+  <h3>Check where you are</h3>
+<pre><code>whoami &amp;&amp; lsb_release -ds &amp;&amp; free -h | head -2 &amp;&amp; df -h ~ | tail -1</code></pre>
+  <div class="ok"><p>You should see your user name (not <code>root</code>), <code>Ubuntu 24.04...</code>, your RAM, and your free disk space.</p></div>
+</section>
+
+<section class="step" id="packages" data-step>
+  <header><span class="no">2</span><h2>Install system programs</h2><span class="time">5 min</span></header>
+  <p>Refresh the package list, then install git, Python, the Vulkan graphics tools, the download tools, and the password store. The first command also brings the graphics firmware up to date.</p>
+<pre><code>sudo apt update &amp;&amp; sudo apt full-upgrade -y</code></pre>
+<pre><code>sudo apt install -y git curl wget unzip tmux python3 python3-venv python3-pip mesa-vulkan-drivers vulkan-tools pciutils linux-firmware gnome-keyring dbus-user-session</code></pre>
+  <p>The Arc Pro B70 is a recent card (Intel's "Battlemage" generation). It needs a recent Linux kernel and Mesa. Ubuntu 24.04's optional newer kernel ("HWE") provides that:</p>
+<pre><code>sudo apt install -y linux-generic-hwe-24.04</code></pre>
+<pre><code>sudo reboot</code></pre>
+  <p>The machine restarts. Open the Terminal again (Ctrl+Alt+T) and continue.</p>
+  <p>The Python version must be 3.10 or higher:</p>
+<pre><code>python3 --version</code></pre>
+  
+</section>
+
+<section class="step" id="gpu" data-step>
+  <header><span class="no">3</span><h2>Check the graphics card</h2><span class="time">3 min</span></header>
+  <p>First check that Linux sees the card and uses its driver. The kernel should be <code>6.14</code> or newer:</p>
+<pre><code>uname -r</code></pre>
+<pre><code>lspci -nnk | grep -A3 -iE 'vga|display'</code></pre>
+  <div class="ok"><p>The Intel card appears, with the line <code>Kernel driver in use: xe</code> (or <code>i915</code>). Both drivers work with the steps below.</p></div>
+  <p>Then ask Vulkan, the interface llama.cpp uses, what it sees:</p>
+<pre><code>vulkaninfo --summary</code></pre>
+  <figure class="shot">
+    <svg viewBox="0 0 640 210" role="img" aria-label="Terminal showing one Intel Arc Pro B70 discrete GPU">
+      <rect width="640" height="210" fill="#0d1a21"/>
+      <g font-family="monospace" font-size="12.5">
+        <text x="16" y="28" fill="#6f8a86">$ vulkaninfo --summary</text>
+        <text x="16" y="58" fill="#dcebe6">Devices:</text>
+        <text x="16" y="78" fill="#dcebe6">========</text>
+        <text x="16" y="102" fill="#dcebe6">GPU0:</text>
+        <text x="40" y="120" fill="#5fd0b8">deviceType = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU</text>
+        <text x="40" y="138" fill="#5fd0b8">deviceName = Intel(R) Arc(tm) Pro B70 Graphics</text>
+        <text x="40" y="156" fill="#5fd0b8">driverName = Mesa Intel</text>
+      </g>
+      <rect x="330" y="166" width="294" height="30" rx="6" fill="#f0b429"/>
+      <text x="342" y="186" font-size="12.5" font-weight="700" font-family="sans-serif" fill="#14212b">One discrete GPU: the B70 is device 0</text>
+    </svg>
+    <figcaption>Good output: a discrete Intel GPU is listed. The exact name text may differ on your machine.</figcaption>
+  </figure>
+  <div class="warn">
+    <p>If it says <em>command not found</em>, lists only <code>llvmpipe</code> (a slow software stand-in), or the card is missing from <code>lspci</code>:</p>
+    <ol>
+      <li>Re-check the BIOS settings from step 0 (Above 4G Decoding and Resizable BAR).</li>
+      <li>Make sure the monitor is connected to the Arc card, or at least that the card is firmly seated and has its power cables plugged in.</li>
+      <li>Check that the kernel is <code>6.14</code> or newer (<code>uname -r</code>). A brand-new card can need an even newer kernel and Mesa than Ubuntu 24.04 ships. Ask whoever supplied the hardware, or see the last step; do not carry on until the card is listed.</li>
+    </ol>
+  </div>
+</section>
+
+<section class="step" id="code" data-step>
+  <header><span class="no">4</span><h2>Get the application</h2><span class="time">3 min</span></header>
+  <p>Download the code from your company's repository. Ask the person who gave you this guide for <code>[REPO_URL]</code> and, for a private repository, for access (a deploy key or a token). Never paste a token into a shared document.</p>
+<pre><code>git clone [REPO_URL] ~/a770-dual-runtime</code></pre>
+<pre><code>cd ~/a770-dual-runtime</code></pre>
+  <div class="ok">
+    <p><strong>Prefer clicking to pasting?</strong> The folder contains a small installer window that does steps 2, 3 and 5 to 12 for you with buttons, a progress list and a live log. Start it with this one command, and a page opens in the server's browser:</p>
+<pre><code>python3 docs/install_gui.py</code></pre>
+    <p>It listens only on this machine, asks for your password in Ubuntu's own password window (it never sees it), and runs exactly the commands in this guide. Restart the machine when it asks you to, then run the same command again and carry on. To get the code onto the machine in the first place you still do steps 1, 2 and 4 by hand (git comes from step 2), or copy the folder from a USB disk.</p>
+  </div>
+  <p>From here on, run every command from this folder. If you close the terminal and come back, run the <code>cd</code> line again first.</p>
+</section>
+
+<section class="step" id="python" data-step>
+  <header><span class="no">5</span><h2>Install the Python parts</h2><span class="time">5 min</span></header>
+  <p>This makes a private Python environment called <code>.venv</code> inside the folder. Nothing is installed system-wide.</p>
+<pre><code>python3 -m venv .venv</code></pre>
+<pre><code>.venv/bin/python -m pip install --upgrade pip</code></pre>
+  <p>Install the exact, checked versions:</p>
+<pre><code>.venv/bin/python -m pip install --require-hashes -r requirements.lock</code></pre>
+  <p>If that fails with a <em>hash</em> error (the lock file was made on Windows), use the plain list instead:</p>
+<pre><code>.venv/bin/python -m pip install -r requirements.txt</code></pre>
+  <div class="ok"><p>The last line should say <em>Successfully installed ...</em>.</p></div>
+</section>
+
+<section class="step" id="llama" data-step>
+  <header><span class="no">6</span><h2>Install llama.cpp and the helper programs</h2><span class="time">5 min</span></header>
+  <p><strong>llama.cpp</strong> runs the language models. <strong>stable-diffusion.cpp</strong> makes images. The download tool fetches ready-made Linux builds from GitHub and unpacks them into <code>~/llama-vulkan</code> and <code>~/sd-vulkan</code>:</p>
+<pre><code>.venv/bin/python scripts/download_models.py --binaries --backend vulkan --bin-dir ~</code></pre>
+  <p>Check that the engine starts and sees your card(s). It should list one device, the B70, as device 0.</p>
+<pre><code>~/llama-vulkan/llama-bench --list-devices</code></pre>
+  <details>
+    <summary>The automatic download failed? Do it by hand</summary>
+    <p>Open <a href="https://github.com/ggml-org/llama.cpp/releases" target="_blank" rel="noopener">github.com/ggml-org/llama.cpp/releases</a>, copy the link of <code>llama-&lt;build&gt;-bin-ubuntu-vulkan-x64.tar.gz</code>, then:</p>
+<pre><code>wget -P ~/Downloads [LLAMA_RELEASE_URL]</code></pre>
+<pre><code>mkdir -p ~/llama-vulkan &amp;&amp; tar -xzf ~/Downloads/[LLAMA_ARCHIVE_NAME].tar.gz -C ~/llama-vulkan</code></pre>
+    <p>The archive may unpack into a sub-folder. Find where <code>llama-server</code> ended up; that folder is your <code>llama_bin_dir</code> in step 9:</p>
+<pre><code>find ~/llama-vulkan -name llama-server</code></pre>
+    <p>For the image maker, take the Ubuntu + Vulkan zip from <a href="https://github.com/leejet/stable-diffusion.cpp/releases" target="_blank" rel="noopener">github.com/leejet/stable-diffusion.cpp/releases</a> and unpack it into <code>~/sd-vulkan</code> the same way. Then make the programs runnable:</p>
+<pre><code>chmod +x ~/llama-vulkan/llama-server ~/llama-vulkan/llama-bench ~/sd-vulkan/sd-server</code></pre>
+  </details>
+  <details>
+    <summary>Build llama.cpp from source instead</summary>
+<pre><code>sudo apt install -y build-essential cmake libvulkan-dev glslc</code></pre>
+<pre><code>git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp</code></pre>
+<pre><code>cmake -S ~/llama.cpp -B ~/llama.cpp/build -DGGML_VULKAN=ON &amp;&amp; cmake --build ~/llama.cpp/build --config Release -j</code></pre>
+    <p>The programs end up in <code>~/llama.cpp/build/bin</code>. For NVIDIA use <code>-DGGML_CUDA=ON</code>.</p>
+  </details>
+</section>
+
+<section class="step" id="models" data-step>
+  <header><span class="no">7</span><h2>Download the models</h2><span class="time">30-60 min</span></header>
+  <p>Models are large files, so this is the slowest step. Make the folders first. Any disk with enough space works; if you choose another path, remember it for step 9.</p>
+<pre><code>mkdir -p ~/Models/orchestrator/voice-models/tts ~/Models/orchestrator/image-models</code></pre>
+
+  <h3>What the tool downloads, and what you copy yourself</h3>
+  <p><strong>Large chat models are not downloaded by the tool.</strong> You copy those into <code>~/Models</code> yourself (USB disk or the Files app; see "Copy from the Windows machine" below), one folder per model, as in the big table.</p>
+  <p>The tool fetches only the <strong>small helpers</strong>, about 3.5 GB in total: the Laya router (runs on the CPU), the embedder, the <strong>Whisper large-v3</strong> speech-to-text model (3.1 GB), and the two spoken-reply voices. Files you already have are skipped, and an interrupted download resumes, so you can run it again.</p>
+<pre><code>.venv/bin/python scripts/download_models.py --small --models-dir ~/Models</code></pre>
+  <p>Other groups are optional and left out on purpose: <code>vision</code> (image reader, 3.2 GB), <code>routing</code> (the Ornith 9B executor, 5.8 GB), <code>image</code> (image maker, 6.7 GB) and <code>voice</code> (Whisper turbo as well, plus both voices, 3.8 GB). Add any of them by name, for example <code>... download_models.py --small vision --models-dir ~/Models</code>. Run the tool without options to see the list. The old Needle router is not needed: this setup uses Laya.</p>
+
+  <h3>Helper models: direct download links</h3>
+  <p>These links come straight from the downloader and are checked. Files go under <code>~/Models/orchestrator/</code>.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Model</th><th>Used for</th><th>Group</th><th>Download</th><th class="sz">Size</th></tr></thead>
+    <tbody>
+    <tr><td>Ornith 1.5 9B Q4_K_M<small><code>Ornith-1.5-9B-Q4_K_M.gguf</code></small></td><td>Executor: tool calling and routing</td><td><span class="pill">routing</span></td><td><a href="https://huggingface.co/ornith-ai/Ornith-1.5-9B-GGUF/resolve/main/Ornith-1.5-9B-Q4_K_M.gguf">ornith-ai/Ornith-1.5-9B-GGUF</a></td><td class="sz">5.8 GB</td></tr>
+    <tr><td>Qwen2.5-VL 3B Instruct Q4_K_M<small><code>Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf</code></small></td><td>Reads pictures and screenshots</td><td><span class="pill">vision</span></td><td><a href="https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf">ggml-org/Qwen2.5-VL-3B-Instruct-GGUF</a></td><td class="sz">1.9 GB</td></tr>
+    <tr><td>Qwen2.5-VL 3B projector f16<small>saved as <code>mmproj-model-f16.gguf</code></small></td><td>Picture part of the model above</td><td><span class="pill">vision</span></td><td><a href="https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf">.../mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf</a></td><td class="sz">1.3 GB</td></tr>
+    <tr><td>nomic-embed-text v1.5 Q8_0<small><code>nomic-embed-text-v1.5-Q8_0.gguf</code></small></td><td>Memory and knowledge-base search</td><td><span class="pill">embedder</span></td><td><a href="https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf">nomic-ai/nomic-embed-text-v1.5-GGUF</a></td><td class="sz">146 MB</td></tr>
+    <tr><td>Whisper large-v3 turbo q5_0<small><code>voice-models/ggml-large-v3-turbo-q5_0.bin</code></small></td><td>Speech to text, fast</td><td><span class="pill opt">voice</span></td><td><a href="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin">ggerganov/whisper.cpp</a></td><td class="sz">574 MB</td></tr>
+    <tr><td>Whisper large-v3<small><code>voice-models/ggml-large-v3.bin</code></small></td><td>Speech to text, most accurate</td><td><span class="pill opt">voice</span></td><td><a href="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin">ggerganov/whisper.cpp</a></td><td class="sz">3.1 GB</td></tr>
+    <tr><td>Piper English voice (lessac, medium)<small>unpack into <code>voice-models/tts/</code></small></td><td>Spoken replies, English</td><td><span class="pill opt">voice</span></td><td><a href="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2">k2-fsa/sherpa-onnx tts-models</a></td><td class="sz">65 MB</td></tr>
+    <tr><td>Coqui Bangla voice (custom female)<small>unpack into <code>voice-models/tts/</code></small></td><td>Spoken replies, Bangla</td><td><span class="pill opt">voice</span></td><td><a href="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-coqui-bn-custom_female.tar.bz2">k2-fsa/sherpa-onnx tts-models</a></td><td class="sz">100 MB</td></tr>
+    <tr><td>Z-Image Turbo Q4_K<small><code>image-models/z_image_turbo-Q4_K.gguf</code></small></td><td>Local image maker</td><td><span class="pill opt">image</span></td><td><a href="https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q4_K.gguf">leejet/Z-Image-Turbo-GGUF</a></td><td class="sz">3.9 GB</td></tr>
+    <tr><td>Qwen3 4B Instruct 2507 Q4_K_M<small><code>image-models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf</code></small></td><td>Text reader of the image maker</td><td><span class="pill opt">image</span></td><td><a href="https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf">unsloth/Qwen3-4B-Instruct-2507-GGUF</a></td><td class="sz">2.5 GB</td></tr>
+    <tr><td>Z-Image VAE<small><code>image-models/ae.safetensors</code></small></td><td>Picture decoder of the image maker</td><td><span class="pill opt">image</span></td><td><a href="https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors">Comfy-Org/z_image_turbo</a></td><td class="sz">335 MB</td></tr>
+    <tr><td>Laya router<small><code>convaiinnovations/laya</code></small></td><td>Decides how a request is handled (runs on the CPU)</td><td><span class="pill">auto</span></td><td><a href="https://huggingface.co/convaiinnovations/laya">convaiinnovations/laya</a></td><td class="sz">small</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note"><p><strong>Choosing a chat model for the B70.</strong> The card has about 32 GB of video memory, shared by the main chat model, its context memory (which grows with long conversations) and every helper model that is loaded. As a rule, pick a main model whose file is <strong>16 to 20 GB or less</strong>, for example <em>Qwen3.8 27B Q4_K_M</em> (16.8 GB) or <em>Gemma 4 26B A4B</em> (16.8 GB). The 22 to 24 GB files (the 35B models, Sage, flint, KAT-Coder) fit only with a short context and few helpers loaded.</p></div>
+
+  <h3>Everything in your current model folder</h3>
+  <p>This is the full list of models in <code>E:\AI\Models</code> on the Windows machine. The application treats every <code>.gguf</code> file here as a model you can pick in the web page.</p>
+  <div class="note"><p><strong>About these links.</strong> Only the links in the table above are confirmed direct downloads. For the rest, the repository was not recorded, so the <span class="pill srch">search</span> link opens a Hugging Face search for the model name. Check that the publisher and file name match before downloading. The quickest and safest way to get them is to copy them from the Windows machine (next box), because those exact files are already known to work.</p></div>
+  <div class="tw"><table>
+    <thead><tr><th>Model</th><th>Folder under <code>~/Models</code></th><th>Find it</th><th class="sz">Size</th></tr></thead>
+    <tbody>
+    <tr class="grp"><td colspan="4">Main chat models</td></tr>
+    <tr><td>Gemma 4 26B A4B Instruct Q4_K_M<small><code>gemma-4-26B-A4B-it-Q4_K_M.gguf</code></small></td><td><code>Gemma4-26B-A4B/</code></td><td><a href="https://huggingface.co/models?search=gemma-4-26B-A4B-it-GGUF">search</a></td><td class="sz">16.8 GB</td></tr>
+    <tr><td>Gemma 4 26B projector BF16<small><code>mmproj-gemma-4-26B-A4B-it-BF16.gguf</code>, needed for images</small></td><td><code>Gemma4-26B-A4B/</code></td><td><a href="https://huggingface.co/models?search=gemma-4-26B-A4B-it-GGUF">search</a></td><td class="sz">1.2 GB</td></tr>
+    <tr><td>Qwen3.8 27B Q4_K_M<small><code>Qwen3.8-27B-Q4_K_M.gguf</code></small></td><td><code>Qwen3.8-27B/</code></td><td><a href="https://huggingface.co/models?search=Qwen3.8-27B-GGUF">search</a></td><td class="sz">16.8 GB</td></tr>
+    <tr><td>Qwen3.8 27B draft model Q4_0<small><code>mtp-Qwen3.8-27B-Q4_0.gguf</code>, speeds up generation</small></td><td><code>Qwen3.8-27B/</code></td><td><a href="https://huggingface.co/models?search=Qwen3.8-27B-GGUF">search</a></td><td class="sz">1.4 GB</td></tr>
+    <tr><td>Qwen3.8 27B GSQ-RCO projector BF16<small><code>mmproj-Qwen3.8-27B-BF16.gguf</code></small></td><td><code>Qwen3.8-27B-GSQ-RCO-GGUF/</code></td><td><a href="https://huggingface.co/models?search=Qwen3.8-27B-GSQ-RCO-GGUF">search</a></td><td class="sz">931 MB</td></tr>
+    <tr><td>Qwen3.6 35B A3B UD-Q4_K_M<small><code>Qwen3.6-35B-A3B-UD-Q4_K_M.gguf</code></small></td><td><code>Qwen3.6-35B-A3B/</code></td><td><a href="https://huggingface.co/models?search=Qwen3.6-35B-A3B-GGUF">search</a></td><td class="sz">22.7 GB</td></tr>
+    <tr><td>Qwen3.6 35B projector F16<small><code>mmproj-F16.gguf</code></small></td><td><code>Qwen3.6-35B-A3B/</code></td><td><a href="https://huggingface.co/models?search=Qwen3.6-35B-A3B-GGUF">search</a></td><td class="sz">899 MB</td></tr>
+    <tr><td>Ornith 1.5 35B Q4_K_M<small><code>Ornith-1.5-35B-Q4_K_M.gguf</code></small></td><td><code>Ornith-1.5-35B-A3B-GGUF/</code></td><td><a href="https://huggingface.co/models?search=Ornith-1.5-35B-A3B-GGUF">search</a></td><td class="sz">21.7 GB</td></tr>
+    <tr><td>Ornith 1.5 35B projector BF16<small><code>mmproj-Ornith-1.5-35B-BF16.gguf</code></small></td><td><code>Ornith-1.5-35B-A3B-GGUF/</code></td><td><a href="https://huggingface.co/models?search=Ornith-1.5-35B-A3B-GGUF">search</a></td><td class="sz">903 MB</td></tr>
+    <tr><td>Sage A1.5 Q4_K_M<small><code>Sage-A1.5-Q4_K_M.gguf</code></small></td><td><code>Sage-A1.5-Q4_K_M-GGUF/</code></td><td><a href="https://huggingface.co/models?search=Sage-A1.5-Q4_K_M-GGUF">search</a></td><td class="sz">21.7 GB</td></tr>
+    <tr><td>flint Q4_K_M<small><code>flint-Q4_K_M.gguf</code></small></td><td><code>flint-GGUF/</code></td><td><a href="https://huggingface.co/models?search=flint-GGUF">search</a></td><td class="sz">24.2 GB</td></tr>
+    <tr><td>Underdog Saluki 27B 1.0 IQ2-mix<small><code>Underdog-Saluki-27B-1.0-IQ2-mix.gguf</code></small></td><td><code>Saluki-27B/</code></td><td><a href="https://huggingface.co/models?search=Underdog-Saluki-27B">search</a></td><td class="sz">7.9 GB</td></tr>
+    <tr><td>Saluki 27B projector F16<small><code>mmproj-Underdog-Saluki-27B-1.0-F16.gguf</code></small></td><td><code>Saluki-27B/</code></td><td><a href="https://huggingface.co/models?search=Underdog-Saluki-27B">search</a></td><td class="sz">928 MB</td></tr>
+    <tr class="grp"><td colspan="4">Coding and smaller chat models</td></tr>
+    <tr><td>Kwaipilot KAT-Coder V2.5 Dev Q4_K_S<small><code>Kwaipilot_KAT-Coder-V2.5-Dev-Q4_K_S.gguf</code></small></td><td><code>Kwaipilot_KAT-Coder-V2.5/</code></td><td><a href="https://huggingface.co/models?search=KAT-Coder-V2.5">search</a></td><td class="sz">20.6 GB</td></tr>
+    <tr><td>Qwen2.5 Coder 14B Instruct Q4_K_M<small><code>Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf</code></small></td><td><code>Qwen2.5-Coder-14B/</code></td><td><a href="https://huggingface.co/models?search=Qwen2.5-Coder-14B-Instruct-GGUF">search</a></td><td class="sz">9.0 GB</td></tr>
+    <tr><td>Qwen3.5 9B Uncensored HauhauCS Aggressive Q4_K_M<small><code>Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf</code></small></td><td><code>Qwen3.5-9B/</code></td><td><a href="https://huggingface.co/models?search=Qwen3.5-9B-Uncensored-HauhauCS-Aggressive">search</a></td><td class="sz">5.6 GB</td></tr>
+    <tr><td>Qwen3.5 9B projector BF16<small><code>mmproj-Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-BF16.gguf</code></small></td><td><code>Qwen3.5-9B/</code></td><td><a href="https://huggingface.co/models?search=Qwen3.5-9B-Uncensored-HauhauCS-Aggressive">search</a></td><td class="sz">922 MB</td></tr>
+    <tr><td>NeoHorse 1 9B Q4_K_M<small><code>NeoHorse-1-9B-Q4_K_M.gguf</code></small></td><td><code>NeoHorse-1-9B-GGUF/</code></td><td><a href="https://huggingface.co/models?search=NeoHorse-1-9B-GGUF">search</a></td><td class="sz">5.6 GB</td></tr>
+    <tr><td>Spark X2.6 4B GSQ-RCO IQ4_XS<small><code>Spark-X2.6-4B-GSQ-RCO-IQ4_XS.gguf</code></small></td><td><code>Spark-2.6-4B/</code></td><td><a href="https://huggingface.co/models?search=Spark-X2.6-4B">search</a></td><td class="sz">2.6 GB</td></tr>
+    <tr class="grp"><td colspan="4">Helper folder: <code>orchestrator/</code> (extras beyond the direct links above)</td></tr>
+    <tr><td>Ornith 1.5 9B projector BF16<small><code>mmproj-Ornith-1.5-9B-BF16.gguf</code></small></td><td><code>orchestrator/</code></td><td><a href="https://huggingface.co/models?search=Ornith-1.5-9B-GGUF">search</a></td><td class="sz">922 MB</td></tr>
+    <tr><td>Spark X2.5 4B Q4_K_M<small><code>Spark-X2.5-4B-Q4_K_M.gguf</code></small></td><td><code>orchestrator/</code></td><td><a href="https://huggingface.co/models?search=Spark-X2.5-4B">search</a></td><td class="sz">2.6 GB</td></tr>
+    <tr><td>Gemma 4 E2B Instruct Q4_K_M<small><code>gemma-4-E2B-it-Q4_K_M.gguf</code></small></td><td><code>orchestrator/</code></td><td><a href="https://huggingface.co/models?search=gemma-4-E2B-it-GGUF">search</a></td><td class="sz">3.4 GB</td></tr>
+    <tr><td>Gemma 4 E2B projector BF16<small><code>mmproj-gemma-4-E2B-it-BF16.gguf</code></small></td><td><code>orchestrator/</code></td><td><a href="https://huggingface.co/models?search=gemma-4-E2B-it-GGUF">search</a></td><td class="sz">987 MB</td></tr>
+    <tr><td>Qwen3.5 4B 3D-Coder Q4_K_M<small><code>Qwen3.5-4B-3D-Coder-Q4_K_M.gguf</code>, the 3D web page lane</small></td><td><code>orchestrator/</code></td><td><a href="https://huggingface.co/models?search=Qwen3.5-4B-3D-Coder">search</a></td><td class="sz">2.7 GB</td></tr>
+    <tr class="grp"><td colspan="4">Images, in <code>orchestrator/image-models/</code></td></tr>
+    <tr><td>Qwen Image 2.1 Q5_K_M<small><code>qwen_image_2.1_Q5_K_M.gguf</code></small></td><td><code>orchestrator/image-models/</code></td><td><a href="https://huggingface.co/models?search=qwen_image_2.1">search</a></td><td class="sz">4.9 GB</td></tr>
+    <tr><td>Qwen Image 2.1 VAE bf16<small><code>qwen_image_2.1_vae_bf16.safetensors</code></small></td><td><code>orchestrator/image-models/</code></td><td><a href="https://huggingface.co/models?search=qwen_image_2.1">search</a></td><td class="sz">676 MB</td></tr>
+    <tr><td>Qwen3-VL 8B Instruct UD-Q4_K_XL<small><code>Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf</code></small></td><td><code>orchestrator/image-models/</code></td><td><a href="https://huggingface.co/models?search=Qwen3-VL-8B-Instruct-GGUF">search</a></td><td class="sz">5.1 GB</td></tr>
+    <tr class="grp"><td colspan="4">Voice, in <code>orchestrator/voice-models/</code></td></tr>
+    <tr><td>Whisper large-v3 turbo, Bangla q5_0<small><code>ggml-large-v3-turbo-bn-q5_0.bin</code></small></td><td><code>orchestrator/voice-models/</code></td><td><a href="https://huggingface.co/models?search=whisper+large-v3-turbo+bengali+ggml">search</a></td><td class="sz">574 MB</td></tr>
+    <tr><td>BanglaASR (test candidate)<small><code>bn-candidates/BanglaASR/model.safetensors</code></small></td><td><code>orchestrator/voice-models/</code></td><td><a href="https://huggingface.co/models?search=BanglaASR">search</a></td><td class="sz">967 MB</td></tr>
+    </tbody>
+  </table></div>
+  <p>Total of the whole folder: about 225 GB. You do not need all of it: pick the main chat model (or two) you will actually use, plus the helper models above.</p>
+
+  <h3>Copy from the Windows machine (recommended for the large chat models)</h3>
+  <p>If the Windows PC and the server are on the same network, copy a folder over directly. <code>[WINDOWS_USER]@[WINDOWS_PC_IP]</code> is a Windows account on that PC (it needs the optional Windows feature <em>OpenSSH Server</em> switched on). If the copy is interrupted, run it again.</p>
+<pre><code>scp -r "[WINDOWS_USER]@[WINDOWS_PC_IP]:/E:/AI/Models/Qwen3.8-27B" ~/Models/</code></pre>
+  <div class="note"><p>A USB disk is simpler and more private: plug it in, open it in the Files app (it appears in the left bar), and drag the folders into <code>~/Models</code>. Nothing crosses the network.</p></div>
+
+  <h3>Download a single file by hand</h3>
+  <p><code>wget -c</code> resumes a broken download. Example for one chat model once you have its link:</p>
+<pre><code>mkdir -p ~/Models/[MODEL_FOLDER] &amp;&amp; wget -c -P ~/Models/[MODEL_FOLDER] [MODEL_FILE_URL]</code></pre>
+  <p>Some models ask you to accept a licence or sign in. If a download answers <em>401</em> or <em>403</em>, open the model page in the browser, accept the licence, create a read-only access token in your Hugging Face settings, and add <code>--header="Authorization: Bearer [HF_TOKEN]"</code> to the <code>wget</code> command. Keep the token private.</p>
+  <h3>Check the result</h3>
+<pre><code>ls -lhR ~/Models | head -80</code></pre>
+  <div class="ok"><p>Every file should be as large as in the tables. A file of only a few kilobytes is an error page, not a model: delete it and download again.</p></div>
+</section>
+
+<section class="step" id="whisper" data-step>
+  <header><span class="no">8</span><h2>Speech to text (optional)</h2><span class="time">10 min</span></header>
+  <p>Needed only for voice input. whisper.cpp has no ready-made Vulkan build for Linux, so you build it once. Spoken replies need nothing extra.</p>
+<pre><code>sudo apt install -y build-essential cmake libvulkan-dev glslc</code></pre>
+<pre><code>git clone https://github.com/ggml-org/whisper.cpp ~/whisper.cpp</code></pre>
+<pre><code>cmake -S ~/whisper.cpp -B ~/whisper.cpp/build -DGGML_VULKAN=1 -DBUILD_SHARED_LIBS=OFF &amp;&amp; cmake --build ~/whisper.cpp/build -j --config Release</code></pre>
+<pre><code>mkdir -p ~/whisper-vulkan &amp;&amp; cp -r ~/whisper.cpp/build/bin/* ~/whisper-vulkan/ &amp;&amp; ~/whisper-vulkan/whisper-server --help | head -3</code></pre>
+  <p>The application finds <code>whisper-server</code> in a <code>whisper-vulkan</code> folder next to <code>llama-vulkan</code>, which is what you just made.</p>
+</section>
+
+<section class="step" id="config" data-step>
+  <header><span class="no">9</span><h2>Edit the settings</h2><span class="time">5 min</span></header>
+  <p>The file <code>config/app.json</code> still holds Windows paths such as <code>E:/AI/Models</code>. First let the downloader rewrite the paths it knows (files already downloaded are skipped):</p>
+<pre><code>.venv/bin/python scripts/download_models.py --binaries --backend vulkan --bin-dir ~ --models-dir ~/Models --write-config</code></pre>
+  <p>List any Windows paths that are left:</p>
+<pre><code>grep -n 'E:' config/app.json</code></pre>
+  <p>Open the file in a text editor. On the server's screen the easy way is the graphical editor:</p>
+<pre><code>xdg-open config/app.json</code></pre>
+  <figure class="shot">
+    <svg viewBox="0 0 640 300" role="img" aria-label="Text editor showing config/app.json with the paths to change highlighted">
+      <rect width="640" height="300" fill="#fff"/>
+      <rect width="640" height="30" fill="#e9e9e9"/><text x="14" y="20" font-size="12" font-family="sans-serif" fill="#333">app.json  ~/a770-dual-runtime/config</text>
+      <rect x="560" y="5" width="66" height="20" rx="5" fill="#3a7bd5"/><text x="572" y="19" font-size="12" font-family="sans-serif" fill="#fff">Save</text>
+      <g font-family="monospace" font-size="12.5" fill="#222">
+        <text x="14" y="58">{</text>
+        <rect x="14" y="66" width="300" height="20" fill="#d8eee9"/><text x="24" y="81">"models_dir": "/home/[USER]/Models",</text>
+        <rect x="14" y="88" width="320" height="20" fill="#d8eee9"/><text x="24" y="103">"common_dir": "/home/[USER]/common",</text>
+        <text x="24" y="125">"runtime": "vulkan",</text>
+        <text x="24" y="147">"runtimes": {</text>
+        <text x="40" y="169">"vulkan": {</text>
+        <rect x="40" y="176" width="470" height="20" fill="#d8eee9"/><text x="56" y="191">"llama_bin_dir": "/home/[USER]/llama-vulkan",</text>
+        <rect x="40" y="198" width="260" height="20" fill="#d8eee9"/><text x="56" y="213">"gpu_devices": "auto",</text>
+        <text x="40" y="235">}</text><text x="24" y="257">}</text>
+      </g>
+      <rect x="352" y="64" width="270" height="44" rx="6" fill="#f0b429"/>
+      <text x="364" y="83" font-size="12" font-weight="700" font-family="sans-serif" fill="#14212b">Green lines: change these to</text>
+      <text x="364" y="99" font-size="12" font-weight="700" font-family="sans-serif" fill="#14212b">paths that exist on this server</text>
+    </svg>
+    <figcaption>Change the highlighted values, then click Save. Keep the quotes and commas as they are.</figcaption>
+  </figure>
+  <p>If the file opens in a web browser instead, use <code>nano config/app.json</code> in the terminal (<kbd>Ctrl</kbd>+<kbd>O</kbd>, <kbd>Enter</kbd> saves; <kbd>Ctrl</kbd>+<kbd>X</kbd> quits).</p>
+  <h3>The values to check</h3>
+  <ul>
+    <li><code>"models_dir"</code>: <code>/home/[USER]/Models</code></li>
+    <li><code>"common_dir"</code>: a folder for users' generated files and uploads, for example <code>/home/[USER]/common</code> (made in step 10)</li>
+    <li><code>"runtime"</code>: <code>"vulkan"</code>, or <code>"cuda"</code> for NVIDIA</li>
+    <li>Under <code>"runtimes"</code> then <code>"vulkan"</code>: <code>"llama_bin_dir"</code> is the folder that holds <code>llama-server</code> (step 6). Set <code>"gpu_devices"</code> to <code>"auto"</code> to use every card found, or to <code>[0]</code>. With one card, every GPU number in the settings must be <code>0</code>.</li>
+  </ul>
+<pre class="plain"><code>"models_dir": "/home/[USER]/Models",
+"common_dir": "/home/[USER]/common",
+"runtimes": {
+  "vulkan": { "llama_bin_dir": "/home/[USER]/llama-vulkan", "backend": "vulkan", "gpu_devices": "auto", "small_model_gpu": 0 }
+}</code></pre>
+</section>
+
+<section class="step" id="folders" data-step>
+  <header><span class="no">10</span><h2>Folders and permissions</h2><span class="time">2 min</span></header>
+  <p>The application runs as your normal user and must be able to write in its own folder, in <code>common_dir</code>, and in the model folders. <code>common_dir</code> can hold customer files, so keep it private to your user:</p>
+<pre><code>mkdir -p ~/common &amp;&amp; chmod 700 ~/common</code></pre>
+  <p>For a folder on another disk (under <code>/srv</code> or <code>/mnt</code>), create it once with <code>sudo</code> and give it to your user:</p>
+<pre><code>sudo mkdir -p [COMMON_DIR] &amp;&amp; sudo chown "$USER":"$USER" [COMMON_DIR] &amp;&amp; sudo chmod 700 [COMMON_DIR]</code></pre>
+  <ul>
+    <li>No other Linux account should be able to read <code>common_dir</code> or the <code>*.db</code> database files.</li>
+    <li>You do <strong>not</strong> need one Linux account per application user. The application separates users itself.</li>
+  </ul>
+</section>
+
+<section class="step" id="keyring" data-step>
+  <header><span class="no">11</span><h2>Password store</h2><span class="time">2 min</span></header>
+  <p>Cloud API keys and connector tokens go into the system keyring, never into a file. Check which keyring Python can use:</p>
+<pre><code>dbus-run-session -- sh -c '.venv/bin/python -c "import keyring; print(keyring.get_keyring())"'</code></pre>
+  <div class="ok"><p>The answer should contain <code>SecretService</code>.</p></div>
+  <div class="warn"><p>If it says <code>fail</code> or <code>keyrings.alt</code>, stop and install <code>gnome-keyring</code> (step 2). <strong>Never</strong> install the package <code>keyrings.alt</code>: it keeps secrets in a plain text file.</p></div>
+</section>
+
+<section class="step" id="start" data-step>
+  <header><span class="no">12</span><h2>First start</h2><span class="time">5 min</span></header>
+  <p>Start the application in the terminal so you can watch it. Replace <code>[KEYRING_PASSWORD]</code> with a new password you choose and store it in your company's password manager.</p>
+<pre><code>dbus-run-session -- sh -c 'printf "%s" "[KEYRING_PASSWORD]" | gnome-keyring-daemon --unlock --components=secrets &amp;&amp; .venv/bin/python server_manager.py --port 8000'</code></pre>
+  <p>The first start creates the databases and asks you to create the <strong>super-admin account</strong>. Type a user name and a strong password, and save the password in your password manager. Leave this terminal open.</p>
+  <h3>Open it in the browser on the server</h3>
+  <p>Open Firefox (or any browser) on the server and go to:</p>
+<pre><code>http://localhost:8000</code></pre>
+  <figure class="shot">
+    <svg viewBox="0 0 640 330" role="img" aria-label="Browser window at localhost:8000 showing the sign-in page">
+      <rect width="640" height="330" fill="#f3f3f3"/>
+      <rect width="640" height="38" fill="#e2e2e2"/>
+      <rect x="70" y="8" width="400" height="22" rx="11" fill="#fff"/><text x="86" y="24" font-size="12.5" font-family="monospace" fill="#222">localhost:8000</text>
+      <rect x="64" y="4" width="412" height="30" rx="15" fill="none" stroke="#f0b429" stroke-width="3"/>
+      <rect x="170" y="62" width="300" height="230" rx="12" fill="#fff" stroke="#d8d8d8"/>
+      <text x="196" y="94" font-size="16" font-weight="700" font-family="sans-serif" fill="#14212b">Sign in</text>
+      <rect x="196" y="110" width="248" height="30" rx="6" fill="#f3f6f7" stroke="#cfd8db"/><text x="206" y="130" font-size="12" font-family="sans-serif" fill="#7a8a90">User name</text>
+      <rect x="196" y="152" width="248" height="30" rx="6" fill="#f3f6f7" stroke="#cfd8db"/><text x="206" y="172" font-size="12" font-family="sans-serif" fill="#7a8a90">Password</text>
+      <rect x="196" y="198" width="248" height="34" rx="7" fill="#0e6b5c"/><text x="288" y="220" font-size="13" font-weight="700" font-family="sans-serif" fill="#fff">Sign in</text>
+      <rect x="486" y="40" width="140" height="44" rx="6" fill="#f0b429"/>
+      <text x="496" y="59" font-size="12" font-weight="700" font-family="sans-serif" fill="#14212b">Type this address</text>
+      <text x="496" y="75" font-size="12" font-weight="700" font-family="sans-serif" fill="#14212b">in the top bar</text>
+    </svg>
+    <figcaption>The sign-in page. Use the admin account you just created.</figcaption>
+  </figure>
+  <p>From another computer on your network, use <code>http://[SERVER_IP]:8000</code>. That needs step 14 first. The server's address is shown by:</p>
+<pre><code>hostname -I</code></pre>
+  <p> To stop the application, click the terminal and press <kbd>Ctrl</kbd>+<kbd>C</kbd>.</p>
+  <div class="note">
+    <p><strong>Unattended first start.</strong> Instead of the prompt, you can set the admin account through variables for that one run. The leading space keeps the line out of the shell history. Clear them afterwards.</p>
+<pre><code> export A770_BOOTSTRAP_USERNAME=[ADMIN_USER] A770_BOOTSTRAP_PASSWORD=[ADMIN_PASSWORD]</code></pre>
+<pre><code>unset A770_BOOTSTRAP_USERNAME A770_BOOTSTRAP_PASSWORD</code></pre>
+  </div>
+  <p>Run only <strong>one</strong> copy of the application per machine: a second copy stops the running model servers.</p>
+  <h3>Check the models</h3>
+  <p>Open <em>Settings</em> then <em>Models</em>. Every <code>.gguf</code> file from step 7 should be listed. Check which GPU each helper model uses. The shipped file names GPU 1 and 2 from the original two-card PC; this machine has one card, so set every helper to GPU 0 (a GPU that does not exist is moved to the default one automatically, but set it anyway so the screen is honest). Enter your cloud API keys in Settings too.</p>
+  <figure class="shot">
+    <svg viewBox="0 0 640 300" role="img" aria-label="Settings, Models page with a list of models and a GPU selector">
+      <rect width="640" height="300" fill="#f7f9f9"/>
+      <rect width="150" height="300" fill="#14212b"/>
+      <g font-family="sans-serif" font-size="12.5" fill="#b4cbc5"><text x="18" y="34">Chat</text><text x="18" y="62">Agent</text><rect x="8" y="76" width="134" height="26" rx="6" fill="#0e6b5c"/><text x="18" y="94" fill="#fff" font-weight="700">Settings</text><text x="18" y="124">Monitor</text></g>
+      <text x="172" y="36" font-size="17" font-weight="700" font-family="sans-serif" fill="#14212b">Models</text>
+      <g font-family="sans-serif" font-size="12.5">
+        <rect x="172" y="52" width="450" height="40" rx="8" fill="#fff" stroke="#cfd8db"/><text x="186" y="77" fill="#14212b">Qwen3.8-27B-Q4_K_M.gguf</text><rect x="452" y="60" width="158" height="24" rx="6" fill="#edf3f4" stroke="#cfd8db"/><text x="464" y="76" fill="#14212b">GPU: auto</text>
+        <rect x="172" y="100" width="450" height="40" rx="8" fill="#fff" stroke="#cfd8db"/><text x="186" y="125" fill="#14212b">gemma-4-26B-A4B-it-Q4_K_M.gguf</text><rect x="452" y="108" width="158" height="24" rx="6" fill="#edf3f4" stroke="#cfd8db"/><text x="464" y="124" fill="#14212b">GPU: auto</text>
+        <rect x="172" y="148" width="450" height="40" rx="8" fill="#fff" stroke="#cfd8db"/><text x="186" y="173" fill="#14212b">Ornith-1.5-9B-Q4_K_M.gguf</text><rect x="452" y="156" width="158" height="24" rx="6" fill="#d8eee9" stroke="#0e6b5c"/><text x="464" y="172" fill="#0a4d42" font-weight="700">GPU: 0</text>
+      </g>
+      <rect x="172" y="214" width="300" height="50" rx="6" fill="#f0b429"/>
+      <text x="184" y="235" font-size="12" font-weight="700" font-family="sans-serif" fill="#14212b">Set every helper to GPU 0: this</text>
+      <text x="184" y="251" font-size="12" font-weight="700" font-family="sans-serif" fill="#14212b">machine has one card, the B70.</text>
+    </svg>
+    <figcaption>Settings, Models. Layout is illustrative.</figcaption>
+  </figure>
+</section>
+
+<section class="step" id="service" data-step>
+  <header><span class="no">13</span><h2>Keep it running</h2><span class="time">10 min</span></header>
+  <p>A program started in a terminal stops when the terminal closes. Choose <strong>one</strong> of these.</p>
+  <h3>Simple: tmux, a terminal that stays alive</h3>
+<pre><code>tmux new -s a770</code></pre>
+  <p>Run the start command from step 12 inside it. Then press <kbd>Ctrl</kbd>+<kbd>B</kbd>, let go, and press <kbd>D</kbd>. The application keeps running. Come back with:</p>
+<pre><code>tmux attach -t a770</code></pre>
+  <h3>Proper: a service that starts at boot</h3>
+  <p>A service has no logged-in desktop, so the keyring password goes into a file only you can read:</p>
+<pre><code>mkdir -p ~/.config/a770 &amp;&amp; (umask 077; printf '%s' '[KEYRING_PASSWORD]' &gt; ~/.config/a770/keyring-pass)</code></pre>
+  <p>Create the service file (replace <code>[USER]</code> with your user name). It is one command from <code>sudo tee</code> to the last <code>EOF</code>:</p>
+<pre><code>sudo tee /etc/systemd/system/a770.service &gt; /dev/null &lt;&lt;'EOF'
+[Unit]
+Description=a770 AI server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=[USER]
+WorkingDirectory=/home/[USER]/a770-dual-runtime
+ExecStart=/usr/bin/dbus-run-session -- sh -c 'gnome-keyring-daemon --unlock --components=secrets &lt; /home/[USER]/.config/a770/keyring-pass &amp;&amp; exec /home/[USER]/a770-dual-runtime/.venv/bin/python server_manager.py --port 8000'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF</code></pre>
+<pre><code>sudo systemctl daemon-reload &amp;&amp; sudo systemctl enable --now a770</code></pre>
+  <p>Afterwards you can check, watch the log, or restart it:</p>
+<pre><code>systemctl status a770</code></pre>
+<pre><code>journalctl -u a770 -f</code></pre>
+<pre><code>sudo systemctl restart a770</code></pre>
+  <div class="warn"><p>The service must run as your normal user, never as <code>root</code>. Do not switch on <code>ProtectHome</code> or <code>ProtectSystem=strict</code> unless you list the application, model and <code>common_dir</code> folders under <code>ReadWritePaths=</code>. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop watching the log.</p></div>
+</section>
+
+<section class="step" id="firewall" data-step>
+  <header><span class="no">14</span><h2>Firewall and access</h2><span class="time">5 min</span></header>
+  <p>By default the application listens only on this machine. To reach it from other computers, add <code>--host 0.0.0.0</code> to the start command (step 12 or the service file) and allow the port <strong>only from your office network</strong>. Allow SSH first, or you can lock yourself out:</p>
+<pre><code>sudo ufw allow OpenSSH</code></pre>
+<pre><code>sudo ufw allow from [LAN_SUBNET] to any port 8000 proto tcp</code></pre>
+<pre><code>sudo ufw enable</code></pre>
+  <p><code>[LAN_SUBNET]</code> looks like <code>192.168.1.0/24</code>.</p>
+  <div class="warn">
+    <p><strong>Data protection.</strong> The application stores chat history, uploaded documents and password hashes. If it can be reached from outside this machine, put TLS (HTTPS) in front of it with nginx or Caddy.</p>
+    <p>Card numbers in chats are masked by the application, but the databases can still hold sensitive data. Move them only over encrypted channels such as <code>scp</code>, keep them private with <code>chmod 600 ~/a770-dual-runtime/*.db</code>, and follow your PCI-DSS and Bangladesh Bank data-handling rules.</p>
+  </div>
+</section>
+
+<section class="step" id="optional" data-step>
+  <header><span class="no">15</span><h2>Web search and code runner (optional)</h2><span class="time">10 min</span></header>
+  <h3>Web search</h3>
+  <p>It works without any setup, using DuckDuckGo and Bing. To test it, switch on the globe icon in the chat and ask for something recent: the answer should list its sources. The server needs outgoing HTTPS. Search words leave your network; card-like numbers and e-mail addresses are removed first.</p>
+  <details>
+    <summary>Add Google and more engines with SearXNG</summary>
+<pre><code>sudo apt install -y python3-venv python3-dev build-essential git libxslt-dev zlib1g-dev libffi-dev libssl-dev</code></pre>
+<pre><code>git clone https://github.com/searxng/searxng ~/searxng &amp;&amp; cd ~/searxng &amp;&amp; python3 -m venv .venv</code></pre>
+<pre><code>.venv/bin/pip install -U pip setuptools wheel pyyaml msgspec typing_extensions &amp;&amp; .venv/bin/pip install --use-pep517 --no-build-isolation -e .</code></pre>
+    <p>Create <code>~/searxng/settings.yml</code> (<code>xdg-open ~/searxng/settings.yml</code> after <code>touch ~/searxng/settings.yml</code>) with this content. Make up a long random secret:</p>
+<pre class="plain"><code>use_default_settings: true
+server:
+  bind_address: "127.0.0.1"
+  port: 8888
+  secret_key: "[SEARXNG_SECRET]"
+  limiter: false
+search:
+  formats: [html, json]</code></pre>
+<pre><code>SEARXNG_SETTINGS_PATH=~/searxng/settings.yml ~/searxng/.venv/bin/python -m searx.webapp</code></pre>
+    <p>It stays in the foreground, so run it in its own <code>tmux</code> window. Then, in <code>config/app.json</code>, set <code>"web": { "searxng_url": "http://127.0.0.1:8888" }</code> and restart the application. Keep SearXNG on <code>127.0.0.1</code>.</p>
+  </details>
+  <h3>Code runner</h3>
+  <p>An isolated Python sandbox for charts and calculations:</p>
+<pre><code>sudo apt install -y bubblewrap</code></pre>
+<pre><code>.venv/bin/python -m pip install -r sandbox-requirements.txt</code></pre>
+<pre><code>.venv/bin/python tools/runner/verify.py</code></pre>
+  <p>When the check ends without failures, set <code>"runner_backend": "local"</code> in <code>config/app.json</code>. For a separate, locked-down runner machine see <code>docs/RUNNER.md</code>.</p>
+</section>
+
+<section class="step" id="trouble" data-step>
+  <header><span class="no">16</span><h2>If something fails</h2><span class="time"></span></header>
+  <div class="tw"><table>
+    <thead><tr><th>What you see</th><th>What to do</th></tr></thead>
+    <tbody>
+    <tr><td><code>sudo</code> says you are not in the sudoers file</td><td>Ask the machine's administrator to add your user to the <code>sudo</code> group.</td></tr>
+    <tr><td><code>python3 -m venv</code> fails</td><td>Run <code>sudo apt install -y python3-venv</code>, remove the half-made folder with <code>rm -rf .venv</code>, then repeat step 5.</td></tr>
+    <tr><td><code>vulkaninfo</code> lists no GPU, or only <code>llvmpipe</code></td><td>Update the system (<code>sudo apt full-upgrade</code>, then restart). The Arc Pro B70 needs kernel 6.14 or newer, plus Resizable BAR in the BIOS. Check that <code>ls /dev/dri</code> shows <code>renderD128</code>, and add yourself to the right groups with <code>sudo usermod -aG render,video [USER]</code>, then sign out and in.</td></tr>
+    <tr><td>"No space left on device" during a download</td><td>Check space with <code>df -h</code>, free some, and run the same download again: it resumes.</td></tr>
+    <tr><td>A download answers 401 or 403</td><td>The model needs a licence or a token: see the end of step 7.</td></tr>
+    <tr><td>The browser cannot open <code>http://[SERVER_IP]:8000</code></td><td>On the server itself try <code>http://localhost:8000</code>. From other machines the application needs <code>--host 0.0.0.0</code> and the firewall rule from step 14.</td></tr>
+    <tr><td>The log says "insecure keyring backend"</td><td>Start it inside <code>dbus-run-session</code> with the unlocked keyring, as in step 12.</td></tr>
+    <tr><td>A model stops with "out of memory"</td><td>The B70's 32 GB is shared by the main model, its context and the helper models. Choose a smaller main model (16 to 20 GB), a smaller context size in the model's settings drawer, or switch off helpers you do not use.</td></tr>
+    <tr><td>"Address already in use"</td><td>A copy is already running. Check <code>systemctl status a770</code> or <code>tmux ls</code>. Never start a second copy.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Updating later</h3>
+<pre><code>cd ~/a770-dual-runtime &amp;&amp; git pull &amp;&amp; .venv/bin/python -m pip install -r requirements.txt</code></pre>
+  <p>Then restart the service (<code>sudo systemctl restart a770</code>) or stop and start the terminal copy.</p>
+</section>
+
+</main>
+</div>
+
+<footer>Placeholders in [BRACKETS] must be replaced with your own values. Never share real passwords, tokens or keys.</footer>
+
+<script>
+(function () {
+  var steps = [].slice.call(document.querySelectorAll('[data-step]'));
+  var links = [].slice.call(document.querySelectorAll('.rail li a'));
+  var bar = document.querySelector('.meter i'), meter = document.querySelector('.meter');
+  var text = document.getElementById('meter-text');
+  var KEY = 'a770-install-done';
+  var done = {};
+  try { done = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) {}
+
+  /* copy buttons */
+  [].forEach.call(document.querySelectorAll('pre'), function (pre) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.textContent = 'Copy';
+    b.setAttribute('aria-label', 'Copy this command');
+    var box = document.createElement('div');
+    box.className = 'cmd' + (pre.classList.contains('plain') ? ' plain' : '');
+    pre.parentNode.insertBefore(box, pre);
+    box.appendChild(pre);
+    b.addEventListener('click', function () {
+      var t = pre.querySelector('code').textContent;
+      var ok = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+      if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(t).then(ok); return; }
+      var ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); ok(); } catch (e) {}
+      document.body.removeChild(ta);
+    });
+    box.appendChild(b);
+  });
+
+  /* "mark done" checkbox per step (stored in this browser only) */
+  var countable = steps.filter(function (s) { return s.id !== 'trouble'; });
+  function refresh() {
+    var n = 0;
+    countable.forEach(function (s) {
+      var d = !!done[s.id]; if (d) n++;
+      var a = document.querySelector('.rail a[href="#' + s.id + '"]');
+      if (a) a.classList.toggle('done', d);
+    });
+    bar.style.width = (100 * n / countable.length) + '%';
+    meter.setAttribute('aria-valuenow', n);
+    meter.setAttribute('aria-valuemax', countable.length);
+    text.textContent = n + ' of ' + countable.length + ' steps marked done';
+  }
+  countable.forEach(function (s) {
+    var row = document.createElement('div'); row.className = 'done-row';
+    var l = document.createElement('label'), c = document.createElement('input');
+    c.type = 'checkbox'; c.checked = !!done[s.id];
+    c.addEventListener('change', function () {
+      if (c.checked) done[s.id] = 1; else delete done[s.id];
+      try { localStorage.setItem(KEY, JSON.stringify(done)); } catch (e) {}
+      refresh();
+    });
+    l.appendChild(c); l.appendChild(document.createTextNode('This step is done')); row.appendChild(l); s.appendChild(row);
+  });
+  refresh();
+
+  /* highlight the step on screen */
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (es) {
+      es.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        links.forEach(function (a) { a.classList.toggle('on', a.getAttribute('href') === '#' + e.target.id); });
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    steps.forEach(function (s) { io.observe(s); });
+  }
+})();
+</script>
+</body>
+</html>
