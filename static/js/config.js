@@ -507,7 +507,11 @@ function fillConfigForm(c) {
     $('cfg-np').value = c.n_slots ?? CFG_DEFAULTS.np;
     $('cfg-kai').value = c.keepalive_interval_s ?? CFG_DEFAULTS.kai;
     $('cfg-ts').value = c.tensor_split ?? CFG_DEFAULTS.ts;
-    cfgGpuIdx = Array.isArray(c.gpu_devices) ? c.gpu_devices.slice() : [];
+    // The GPUs come from the machine's runtime (status: gpu_devices), not from this model's saved list, which can name
+    // Windows indices (1, 2) on a machine that numbers its GPUs 0..N-1. The saved list is only the fallback before a status arrives.
+    const runtimeIdx = (curStatus && Array.isArray(curStatus.gpu_devices) && curStatus.gpu_devices.length)
+      ? curStatus.gpu_devices : null;
+    cfgGpuIdx = (runtimeIdx || (Array.isArray(c.gpu_devices) ? c.gpu_devices : [])).slice();
     tsRowsFromText();
     updateGpuDependentFields();
     $('cfg-sm').value = c.split_mode || CFG_DEFAULTS.sm;

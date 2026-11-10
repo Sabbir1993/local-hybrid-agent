@@ -71,6 +71,11 @@ def _runtime_gpus() -> list:
     return ACTIVE_RUNTIME.get("gpu_devices") or []
 
 
+def _gpu_scan_error():
+    from core.config import GPU_STATUS
+    return GPU_STATUS.get("scan_error")
+
+
 async def get_system_status(user: Optional[Principal] = None) -> dict:
     ctx_info = {"n_ctx": 32768, "n_past": 0, "n_prompt": 0, "pct": 0.0}
     if state.process and state.process.poll() is None:
@@ -107,6 +112,9 @@ async def get_system_status(user: Optional[Principal] = None) -> dict:
         "hardware_tag": hw_info.get("hardware_tag"),
         "discrete_gpus": hw_info.get("discrete_gpus"),
         "gpu_devices_info": hw_info.get("devices", []),
+        # the runtime's GPU list (what llama-server actually gets), not a model's saved list
+        "gpu_devices": _runtime_gpus(),
+        "gpu_scan_error": _gpu_scan_error(),
         "engine": hw_info.get("engine"),
         "profile": state.profile.get("name") if state.profile else None,
         "model": state.profile.get("model_path") if state.profile else None,
