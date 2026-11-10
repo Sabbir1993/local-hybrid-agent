@@ -203,34 +203,42 @@ def default_small_gpu() -> int:
     return devs[-1] if devs else 0
 
 
+def _set_auto_devices(idx: list) -> None:
+    """Store the GPU list that "auto" resolved to (empty = no usable GPU), for the runtime and the defaults."""
+    ACTIVE_RUNTIME["gpu_devices"] = list(idx)
+    CONFIG_DEFAULTS["gpu_devices"] = list(idx)
+
+
 def resolve_gpu_devices(force: bool = False) -> dict:
     """Compare the GPUs the machine has with the runtime's gpu_devices, and fill the list in when it is "auto".
 
     "auto" = every discrete GPU llama.cpp lists (iGPUs and anything under 2 GB are left out: core/gpu.py), so 1, 2, 3 or 4
     cards work without editing app.json. A fixed list is kept as written; indices the machine does not have, and discrete GPUs
-    the list leaves out, are reported (GPU_STATUS) and printed once. Never raises: when the device list cannot be read the
-    configured list stays."""
+    the list leaves out, are reported (GPU_STATUS) and printed once. Never raises. With "auto", no GPU found (or the list cannot
+    be read) means an empty list, not the default: the machine's own answer is "none". A fixed list is never changed."""
     try:
         from .vram import devices as _dev
         from . import gpu as _gpu
         found = _gpu._discrete_devices(_dev.query_devices(ACTIVE_RUNTIME.get("llama_bin_dir"), force=force, strict=True))
     except Exception as e:
-        # Not silent: the Settings screens show scan_error, and "auto" then runs on the fallback list below. That list is
-        # the Windows default [1, 2], so on Linux it can hide GPUs; the usual cause is a Windows llama_bin_dir in app.json.
+        # Not silent: the Settings screens show scan_error. The usual causes are a Windows llama_bin_dir in app.json or a user
+        # without access to the GPU device nodes (Linux render/video groups).
         GPU_STATUS.update({"checked": False, "scan_error": str(e)})
         print(f"[server_manager] GPU scan FAILED: {e}", file=sys.stderr)
         if ACTIVE_RUNTIME.get("gpu_auto"):
-            print(f"[server_manager] ERROR: gpu_devices is 'auto' but the GPUs could not be listed, so the fallback list "
-                  f"{ACTIVE_RUNTIME.get('gpu_devices')} is used. Check runtimes.{ACTIVE_RUNTIME.get('name')}.llama_bin_dir "
-                  f"in config/app.json: it must be the folder that holds llama-bench for this OS.", file=sys.stderr)
+            # "auto" means "the GPUs this machine has": when none can be listed, the machine has none we can use, so no GPU
+            # is shown (never the Windows default). Launches are refused by the VRAM check until the scan works.
+            _set_auto_devices([])
+            GPU_STATUS.update({"configured": [], "detected": [], "missing": [], "unused": []})
+            print(f"[server_manager] ERROR: gpu_devices is 'auto' but no GPU could be listed; running with no GPU. "
+                  f"Check runtimes.{ACTIVE_RUNTIME.get('name')}.llama_bin_dir in config/app.json (the folder with llama-bench "
+                  f"for this OS) and the user's access to the GPU (render/video groups on Linux).", file=sys.stderr)
         return dict(GPU_STATUS)
     idx = sorted(int(d["index"]) for d in found)
     if ACTIVE_RUNTIME.get("gpu_auto"):
-        if idx:
-            ACTIVE_RUNTIME["gpu_devices"] = idx
-            CONFIG_DEFAULTS["gpu_devices"] = list(idx)
-        else:
-            print("[server_manager] gpu_devices is 'auto' but no discrete GPU was found; keeping the default list", file=sys.stderr)
+        _set_auto_devices(idx)
+        if not idx:
+            print("[server_manager] gpu_devices is 'auto' but no discrete GPU was found; running with no GPU", file=sys.stderr)
     configured = [int(x) for x in (ACTIVE_RUNTIME.get("gpu_devices") or [])]
     missing = [i for i in configured if i not in idx]
     unused = [i for i in idx if i not in configured]
