@@ -190,7 +190,7 @@ ACTIVE_RUNTIME = _load_runtime()
 
 # What the last device scan found, for the Settings screens: {configured, detected:[{index,name,total_gb}], missing, unused, auto}
 GPU_STATUS: dict = {"configured": list(ACTIVE_RUNTIME["gpu_devices"]), "detected": [], "missing": [], "unused": [],
-                    "auto": bool(ACTIVE_RUNTIME.get("gpu_auto")), "checked": False}
+                    "auto": bool(ACTIVE_RUNTIME.get("gpu_auto")), "checked": False, "scan_error": None}
 
 
 def default_small_gpu() -> int:
@@ -215,8 +215,14 @@ def resolve_gpu_devices(force: bool = False) -> dict:
         from . import gpu as _gpu
         found = _gpu._discrete_devices(_dev.query_devices(ACTIVE_RUNTIME.get("llama_bin_dir"), force=force, strict=True))
     except Exception as e:
-        print(f"[server_manager] GPU scan skipped: {e}", file=sys.stderr)
-        GPU_STATUS["checked"] = False
+        # Not silent: the Settings screens show scan_error, and "auto" then runs on the fallback list below. That list is
+        # the Windows default [1, 2], so on Linux it can hide GPUs; the usual cause is a Windows llama_bin_dir in app.json.
+        GPU_STATUS.update({"checked": False, "scan_error": str(e)})
+        print(f"[server_manager] GPU scan FAILED: {e}", file=sys.stderr)
+        if ACTIVE_RUNTIME.get("gpu_auto"):
+            print(f"[server_manager] ERROR: gpu_devices is 'auto' but the GPUs could not be listed, so the fallback list "
+                  f"{ACTIVE_RUNTIME.get('gpu_devices')} is used. Check runtimes.{ACTIVE_RUNTIME.get('name')}.llama_bin_dir "
+                  f"in config/app.json: it must be the folder that holds llama-bench for this OS.", file=sys.stderr)
         return dict(GPU_STATUS)
     idx = sorted(int(d["index"]) for d in found)
     if ACTIVE_RUNTIME.get("gpu_auto"):
@@ -228,7 +234,7 @@ def resolve_gpu_devices(force: bool = False) -> dict:
     configured = [int(x) for x in (ACTIVE_RUNTIME.get("gpu_devices") or [])]
     missing = [i for i in configured if i not in idx]
     unused = [i for i in idx if i not in configured]
-    GPU_STATUS.update({"configured": configured, "auto": bool(ACTIVE_RUNTIME.get("gpu_auto")), "checked": True,
+    GPU_STATUS.update({"configured": configured, "auto": bool(ACTIVE_RUNTIME.get("gpu_auto")), "checked": True, "scan_error": None,
                        "detected": [{"index": int(d["index"]), "name": d["name"], "total_gb": round(d["total_b"] / 2 ** 30, 1)}
                                     for d in found],
                        "missing": missing, "unused": unused})

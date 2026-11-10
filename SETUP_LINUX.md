@@ -151,6 +151,10 @@ nano config/app.json
 - `gpu_devices`: use `"auto"` (every discrete GPU is used, whatever their number: 1, 2, 3 or 4). A fixed list such as
   `[0, 1]` also works; the numbers are the ones step 9 printed, and they differ from Windows (an Intel iGPU often takes index 0
   there but not on Linux). At startup the log warns when a listed index does not exist or a GPU is left unused.
+- If the server shows fewer GPUs than the machine has, look for `GPU scan FAILED` or `GPU scan skipped` in the start log. It means
+  `llama_bin_dir` is wrong for Linux (a Windows `E:/...` path, or a folder without `llama-bench`), so `"auto"` could not list the
+  GPUs and fell back to the Windows default `[1, 2]`. Fix the path, check `[LLAMA_BIN_DIR]/llama-bench --list-devices` lists every
+  GPU, then restart. The same error is shown in Settings under the GPU status (`scan_error`).
 - After the first start, open Settings -> Models and re-check the GPU of each helper model: the shipped file names Windows
   indices (1 and 2), and a GPU that does not exist here is moved to the default one automatically.
 - `runtime`: the preset to use (`vulkan`, or `cuda` for NVIDIA).

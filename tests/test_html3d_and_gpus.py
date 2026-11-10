@@ -1,4 +1,5 @@
 """The html3d lane (job, intent, lane pick with fallback to main) and the machine's GPU list (auto detection, 1 to 4 GPUs)."""
+import os
 import asyncio
 import unittest
 from unittest import mock
@@ -119,6 +120,32 @@ class GpuListTests(unittest.TestCase):
             status = config.resolve_gpu_devices(force=True)
             self.assertFalse(status["checked"])
             self.assertEqual(config.ACTIVE_RUNTIME["gpu_devices"], [1, 2])
+            self.assertIn("no llama-bench", status["scan_error"])     # reported, not silent
+
+    @unittest.skipIf(os.name == "nt", "uses a POSIX shell script as a stand-in llama-bench")
+    def test_linux_llama_bench_with_three_gpus_is_fully_used(self):
+        # Real parse path (no mock): a llama-bench printing Linux-style device lines, 3 Arc cards and a UHD iGPU.
+        import tempfile
+        out = ("ggml_vulkan: Found 4 Vulkan devices:\n"
+               "Available devices:\n"
+               "  Vulkan0: Intel(R) UHD Graphics 770 (ADL-S GT1) (31500 MiB, 31000 MiB free)\n"
+               "  Vulkan1: Intel(R) Arc(tm) A770 Graphics (DG2) (16256 MiB, 15958 MiB free)\n"
+               "  Vulkan2: Intel(R) Arc(tm) A770 Graphics (DG2) (16256 MiB, 15958 MiB free)\n"
+               "  Vulkan3: Intel(R) Arc(tm) A770 Graphics (DG2) (16256 MiB, 15958 MiB free)\n")
+        with tempfile.TemporaryDirectory() as d:
+            bench = os.path.join(d, "llama-bench")
+            with open(bench, "w") as f:
+                f.write("#!/bin/sh\ncat <<'EOF'\n" + out + "EOF\n")
+            os.chmod(bench, 0o755)
+            rt = {**config.ACTIVE_RUNTIME, "gpu_auto": True, "gpu_devices": [1, 2], "llama_bin_dir": d,
+                  "small_model_gpu": None}
+            with mock.patch.dict(config.ACTIVE_RUNTIME, rt, clear=True), \
+                    mock.patch.dict(config.CONFIG_DEFAULTS, {"gpu_devices": [1, 2]}), \
+                    mock.patch.dict(config.GPU_STATUS, {}):
+                status = config.resolve_gpu_devices(force=True)
+                self.assertEqual(config.ACTIVE_RUNTIME["gpu_devices"], [1, 2, 3])
+                self.assertIsNone(status["scan_error"])
+                self.assertEqual(status["unused"], [])
 
 
 if __name__ == "__main__":
