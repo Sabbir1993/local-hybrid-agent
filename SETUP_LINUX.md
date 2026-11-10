@@ -71,7 +71,7 @@ mkdir -p ~/llama-vulkan && tar -xzf ~/Downloads/[LLAMA_ARCHIVE_NAME].tar.gz -C ~
 
 Or build it from source instead (NVIDIA: `-DGGML_CUDA=ON`):
 ```bash
-sudo apt install -y build-essential cmake libvulkan-dev glslc
+sudo apt install -y build-essential cmake libvulkan-dev glslc spirv-headers glslang-tools
 ```
 ```bash
 git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp
@@ -122,7 +122,7 @@ unpack the archive into the folder named above and `chmod +x` the `*-server` and
 **Voice (speech to text).** whisper.cpp publishes no Vulkan build (its Linux release is CPU only), so build `whisper-server` once.
 The build tools are the same as for building llama.cpp:
 ```bash
-sudo apt install -y build-essential cmake libvulkan-dev glslc
+sudo apt install -y build-essential cmake libvulkan-dev glslc spirv-headers glslang-tools
 ```
 ```bash
 git clone https://github.com/ggml-org/whisper.cpp ~/whisper.cpp
@@ -131,6 +131,15 @@ A static build keeps `whisper-server` self-contained, so copying it into another
 ```bash
 cmake -S ~/whisper.cpp -B ~/whisper.cpp/build -DGGML_VULKAN=1 -DBUILD_SHARED_LIBS=OFF && cmake --build ~/whisper.cpp/build -j --config Release
 ```
+If CMake says `Could not find a package configuration file provided by "SPIRV-Headers"`, the `spirv-headers` package
+is missing or does not ship its CMake file. Find the file and point CMake at it (adjust the path to what `find` prints):
+```bash
+find /usr -name "SPIRV-HeadersConfig.cmake" -o -name "spirv-headers-config.cmake" 2>/dev/null
+```
+```bash
+cmake -S ~/whisper.cpp -B ~/whisper.cpp/build -DGGML_VULKAN=1 -DBUILD_SHARED_LIBS=OFF -DSPIRV-Headers_DIR=[DIR_WITH_THE_CONFIG_FILE] && cmake --build ~/whisper.cpp/build -j --config Release
+```
+If no such file exists, install the SPIRV-Headers project from source (https://github.com/KhronosGroup/SPIRV-Headers) with CMake and retry.
 ```bash
 mkdir -p ~/whisper-vulkan && cp -r ~/whisper.cpp/build/bin/* ~/whisper-vulkan/ && ~/whisper-vulkan/whisper-server --help | head -3
 ```

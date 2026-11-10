@@ -359,7 +359,7 @@
   </details>
   <details>
     <summary>Build llama.cpp from source instead</summary>
-<pre><code>sudo apt install -y build-essential cmake libvulkan-dev glslc</code></pre>
+<pre><code>sudo apt install -y build-essential cmake libvulkan-dev glslc spirv-headers glslang-tools</code></pre>
 <pre><code>git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp</code></pre>
 <pre><code>cmake -S ~/llama.cpp -B ~/llama.cpp/build -DGGML_VULKAN=ON &amp;&amp; cmake --build ~/llama.cpp/build --config Release -j</code></pre>
     <p>The programs end up in <code>~/llama.cpp/build/bin</code>. For NVIDIA use <code>-DGGML_CUDA=ON</code>.</p>
@@ -460,7 +460,7 @@
 <section class="step" id="whisper" data-step>
   <header><span class="no">8</span><h2>Speech to text (optional)</h2><span class="time">10 min</span></header>
   <p>Needed only for voice input. whisper.cpp has no ready-made Vulkan build for Linux, so you build it once. Spoken replies need nothing extra.</p>
-<pre><code>sudo apt install -y build-essential cmake libvulkan-dev glslc</code></pre>
+<pre><code>sudo apt install -y build-essential cmake libvulkan-dev glslc spirv-headers glslang-tools</code></pre>
 <pre><code>git clone https://github.com/ggml-org/whisper.cpp ~/whisper.cpp</code></pre>
 <pre><code>cmake -S ~/whisper.cpp -B ~/whisper.cpp/build -DGGML_VULKAN=1 -DBUILD_SHARED_LIBS=OFF &amp;&amp; cmake --build ~/whisper.cpp/build -j --config Release</code></pre>
 <pre><code>mkdir -p ~/whisper-vulkan &amp;&amp; cp -r ~/whisper.cpp/build/bin/* ~/whisper-vulkan/ &amp;&amp; ~/whisper-vulkan/whisper-server --help | head -3</code></pre>
