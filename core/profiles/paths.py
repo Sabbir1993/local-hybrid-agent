@@ -74,11 +74,12 @@ def _rel(p: Path) -> str:
 
 
 def _entry(p: Path) -> dict:
+    from ..vram.gguf_parser import model_files, model_size_bytes
     try:
-        size_gb = round(p.stat().st_size / 1e9, 2)
+        size_gb = round(model_size_bytes(p) / 1e9, 2)      # all parts of a split model, so the fit hint is right
     except OSError:
         size_gb = None
-    return {"path": _rel(p), "name": p.name, "size_gb": size_gb}
+    return {"path": _rel(p), "name": p.name, "size_gb": size_gb, "parts": len(model_files(p)) or 1}
 
 
 def is_companion_file(p: Path) -> bool:

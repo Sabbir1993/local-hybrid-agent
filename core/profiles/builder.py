@@ -6,11 +6,13 @@ from ..config import (
     apply_runtime,
 )
 from .companions import companions
+from ..vram.gguf_parser import first_part
 from .config_store import load_model_configs
 
 
 def build_dynamic_profile(p: Path) -> dict:
-    """Profile dict for a raw GGUF picked from the models directory."""
+    """Profile dict for a raw GGUF picked from the models directory. A split model is always launched from part 1."""
+    p = first_part(p)
     comp = companions(p)
     mtp, mmproj = comp["mtp"], comp["mmproj"]
     prof = {

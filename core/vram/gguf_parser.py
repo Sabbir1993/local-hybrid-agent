@@ -1,3 +1,4 @@
+import glob
 import re
 import struct
 import threading
@@ -51,15 +52,44 @@ class _Cursor:
             n -= step
 
 
+def model_files(model_path) -> list:
+    """Every file of a model, in order: all parts of a split GGUF (name-00001-of-0000N.gguf ... -0000N-of-0000N.gguf, which
+    llama.cpp loads together from part 1), else just the file. Parts that are not on disk are simply not listed."""
+    p = Path(model_path)
+    m = _SHARD_RE.search(p.name)
+    if not m:
+        return [p]
+    prefix = glob.escape(p.name[:m.start()])
+    return sorted(p.parent.glob(f"{prefix}-?????-of-{m.group(2)}.gguf"))
+
+
+def model_size_bytes(model_path) -> int:
+    """Size of the whole model on disk: all parts of a split GGUF together."""
+    return sum(f.stat().st_size for f in (model_files(model_path) or [Path(model_path)]))
+
+
+def first_part(model_path) -> Path:
+    """The file to give llama.cpp: part 1 of a split GGUF (any part may be picked), the file itself otherwise. Raises
+    FileNotFoundError naming the missing parts when the set is incomplete, instead of llama-server failing mid-load."""
+    p = Path(model_path)
+    m = _SHARD_RE.search(p.name)
+    if not m:
+        return p
+    count = int(m.group(2))
+    base = p.name[:m.start()]
+    names = [f"{base}-{i:05d}-of-{m.group(2)}.gguf" for i in range(1, count + 1)]
+    missing = [i for i, n in enumerate(names, 1) if not (p.parent / n).is_file()]
+    if missing:
+        raise FileNotFoundError(f"{base} is split into {count} files; part {', '.join(map(str, missing))} "
+                                f"{'is' if len(missing) == 1 else 'are'} missing in {p.parent}")
+    return p.parent / names[0]
+
+
 def _gguf_files(model_path: Path):
     """(total_bytes_of_all_shards, path_of_first_shard) - handles split GGUFs."""
-    m = _SHARD_RE.search(model_path.name)
-    if m:
-        prefix = model_path.name[:m.start()]
-        parts = sorted(model_path.parent.glob(
-            f"{prefix}-?????-of-{m.group(2)}.gguf"))
-        if parts:
-            return sum(p.stat().st_size for p in parts), parts[0]
+    parts = model_files(model_path)
+    if parts:
+        return sum(p.stat().st_size for p in parts), parts[0]
     return model_path.stat().st_size, model_path
 
 

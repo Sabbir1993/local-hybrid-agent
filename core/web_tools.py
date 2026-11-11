@@ -276,6 +276,11 @@ def freshen_years(query: str, user_text: str, this_year: int) -> str:
 
 async def tool_web_search(args) -> str:
     query = _query_arg(args)
+    if not query and isinstance(args, dict) and isinstance(args.get("queries"), list):
+        # some models send only the list of phrasings: the first is the search, the next ones its alternatives
+        qs = [str(q or "").strip() for q in args["queries"] if str(q or "").strip()]
+        if qs:
+            query, args = qs[0], {**args, "queries": qs[1:]}
     if not query:
         raise ValueError("query required")
     from datetime import datetime

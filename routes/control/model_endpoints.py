@@ -4,6 +4,7 @@ from core.auth import Principal
 from core.deps import get_current_user
 from core import reasoning
 from core.profiles import companions, discover_models
+from core.vram.gguf_parser import model_files, model_size_bytes
 from core.state import state
 from core import cloud
 
@@ -21,14 +22,16 @@ async def profiles(user: Principal = Depends(get_current_user)):
             comp = companions(gfile)
             mtp, mmproj = comp["mtp"], comp["mmproj"]
             try:
-                size_gb = round(gfile.stat().st_size / (1024**3), 1)
+                size_gb = round(model_size_bytes(gfile) / (1024**3), 1)      # all parts of a split model
             except OSError:
                 size_gb = None
+            parts = len(model_files(gfile)) or 1
             out.append({
                 "type": "model",
                 "name": gfile.name,
                 "folder": folder,
                 "display": folder or gfile.stem,
+                "parts": parts,
                 "path": str(gfile),
                 "model_path": str(gfile),
                 "model_exists": True,

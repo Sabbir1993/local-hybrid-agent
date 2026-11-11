@@ -61,7 +61,8 @@ async function loadProfiles() {
       const base = (m.folder || m.name || '').trim();
       const name = m.folder && perFolder[m.folder] > 1 ? `${base} · ${m.name}` : base;
       const shortName = name.length > 28 ? (name.slice(0, 28) + '...') : name;
-      const size = m.size_gb != null ? ` · ${m.size_gb}GB` : '';
+      // a split GGUF is one model in several files (llama.cpp loads them all from part 1): show its full size and parts
+      const size = (m.size_gb != null ? ` · ${m.size_gb}GB` : '') + (m.parts > 1 ? ` · ${m.parts} parts` : '');
       const tags = [];
       if (m.mmproj_available) tags.push('👁 Vision');
       if (m.tools_available) tags.push('🔨 Tools');

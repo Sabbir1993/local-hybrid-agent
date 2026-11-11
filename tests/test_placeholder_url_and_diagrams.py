@@ -23,6 +23,29 @@ class PlaceholderUrlTests(unittest.TestCase):
             self.assertFalse(web_tools._placeholder_host(host), host)
 
 
+class QueriesOnlySearchTests(unittest.TestCase):
+    """Some models send web_search({"queries": [...]}) without "query": the first phrasing is the search."""
+    def run_search(self, args):
+        seen = {}
+
+        def fake_search(query, recency="", extra_queries=None):
+            seen.update(query=query, extra=list(extra_queries or []))
+            return {"results": [], "errors": {}}
+        with mock.patch.object(web_tools.ws, "search", side_effect=fake_search):
+            out = asyncio.run(web_tools.tool_web_search(args))
+        return out, seen
+
+    def test_first_phrasing_is_searched_with_the_next_two(self):
+        _, seen = self.run_search({"queries": ["casio watch price bangladesh", "amazfit price bd", "edifice price", "x"]})
+        self.assertEqual(seen["query"], "casio watch price bangladesh")
+        self.assertEqual(seen["extra"], ["amazfit price bd", "edifice price"])
+
+    def test_nothing_to_search_is_still_an_error(self):
+        for args in ({}, {"queries": []}, {"queries": ["", "  "]}):
+            with self.assertRaises(ValueError):
+                asyncio.run(web_tools.tool_web_search(args))
+
+
 class AttachedDataWebTests(unittest.TestCase):
     """A URL or a word like "page" inside an attached sheet must not start a web fetch or switch the web on."""
     MSG = ("make a knowledge graph html from these files\n--- FILE: rec.xlsx ---\n| Link | Evidence |\n"
