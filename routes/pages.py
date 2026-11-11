@@ -1,19 +1,22 @@
 """
 routes/pages.py - The React app (served at / and its client-side paths), its build assets, and static files.
 
-The only UI is the React app in frontend/ (built to frontend/dist). It shows its own login screen when there is no session,
-and every data endpoint checks authentication itself, so the page routes need no login check of their own.
+The UI is the React app in frontend/ (built to frontend/dist). It shows its own login screen when there is no session, and
+every data endpoint checks authentication itself. Its settings modal embeds settings.html (served at /settings).
 """
 
-from fastapi import APIRouter
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from core.config import BASE_DIR, STATIC_DIR
+from core.deps import get_current_user
 
 router = APIRouter()
 
 DIST_DIR = BASE_DIR / "frontend" / "dist"
 DIST_INDEX = DIST_DIR / "index.html"
 DIST_ASSETS_DIR = DIST_DIR / "assets"
+# The React settings modal shows this page in an iframe (frontend/src/components/modals/SettingsModal.tsx).
+SETTINGS_FILE = BASE_DIR / "settings.html"
 REACT_MISSING = {"error": "React build not found. Run `npm run build:prod` (or `npm run build`) in frontend/."}
 
 
@@ -56,9 +59,20 @@ async def react_alias():
 @router.get("/report")
 @router.get("/audit")
 @router.get("/db")
-@router.get("/settings")
 async def react_screens():
     return _react_index()
+
+
+@router.get("/settings")
+async def settings_page(request: Request):
+    """The settings page the React app embeds. Signed out: back to / where the React app shows its login."""
+    try:
+        await get_current_user(request)
+    except Exception:
+        return RedirectResponse(url="/")
+    if SETTINGS_FILE.exists():
+        return FileResponse(SETTINGS_FILE, media_type="text/html", headers={"Cache-Control": "no-store, max-age=0"})
+    return JSONResponse({"error": f"settings.html not found at {SETTINGS_FILE}"}, status_code=404)
 
 
 # --- Static assets (unauthenticated: CSS/JS/images carry no sensitive data) ---
