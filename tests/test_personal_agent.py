@@ -189,9 +189,6 @@ class WiringTests(unittest.TestCase):
 
 class CustomizeUiTests(unittest.TestCase):
     def test_agents_tab_and_disconnect_are_wired(self):
-        html = Path("ui.html").read_text(encoding="utf-8")
-        self.assertIn('data-kind="agents"', html)
-        self.assertIn('id="ca-workdir-browse"', html)
         js = Path("static/js/customize.js").read_text(encoding="utf-8")
         for needle in ("renderAgents", "data-agent-approve", "work_dir: dir", "data-remove", "Disconnect"):
             self.assertIn(needle, js)

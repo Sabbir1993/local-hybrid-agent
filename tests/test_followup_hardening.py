@@ -426,7 +426,7 @@ class WebSearchTests(unittest.TestCase):
 class NoInlineScriptTests(unittest.TestCase):
     def test_pages_and_templates_have_no_inline_handlers(self):
         bad = []
-        files = [ROOT / "ui.html", ROOT / "settings.html", ROOT / "login.html"] + \
+        files = [ROOT / "settings.html"] + \
             [Path(p) for p in glob.glob(str(ROOT / "static" / "js" / "*.js"))]
         for f in files:
             s = f.read_text(encoding="utf-8")
@@ -436,9 +436,10 @@ class NoInlineScriptTests(unittest.TestCase):
         self.assertEqual(bad, [])
 
     def test_cdn_scripts_have_sri(self):
-        s = (ROOT / "ui.html").read_text(encoding="utf-8")
-        for tag in re.findall(r'<script src="https://[^>]+>', s):
-            self.assertIn('integrity="sha384-', tag)
+        for page in (ROOT / "settings.html", ROOT / "frontend" / "index.html"):
+            s = page.read_text(encoding="utf-8")
+            for tag in re.findall(r'<script src="https://[^>]+>', s):
+                self.assertIn('integrity="sha384-', tag, page.name)
 
 
 if __name__ == "__main__":

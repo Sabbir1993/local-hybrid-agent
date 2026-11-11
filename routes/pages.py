@@ -1,19 +1,24 @@
 """
-routes/pages.py - The HTML shell pages (/, /login, /settings), React SPA, and static assets.
+routes/pages.py - The React app (served at / and its client-side paths), its build assets, static files, and the settings
+page.
+
+The UI is the React app in frontend/ (built to frontend/dist). It shows its own login screen when there is no session, and
+every data endpoint checks authentication itself. Its settings modal shows settings.html in an iframe
+(frontend/src/components/modals/SettingsModal.tsx), so that page is still served at /settings.
 """
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from core.config import BASE_DIR, STATIC_DIR, UI_FILE
+from core.config import BASE_DIR, STATIC_DIR
 from core.deps import get_current_user
 
 router = APIRouter()
 
-LOGIN_FILE = BASE_DIR / "login.html"
 SETTINGS_FILE = BASE_DIR / "settings.html"
 DIST_DIR = BASE_DIR / "frontend" / "dist"
 DIST_INDEX = DIST_DIR / "index.html"
 DIST_ASSETS_DIR = DIST_DIR / "assets"
+REACT_MISSING = {"error": "React build not found. Run `npm run build` in frontend/."}
 
 
 # --- React build assets ---
@@ -34,11 +39,21 @@ async def serve_react_assets(file_path: str):
     return JSONResponse({"error": "asset not found"}, status_code=404)
 
 
-@router.get("/react")
-async def react_ui(request: Request):
+def _react_index():
     if DIST_INDEX.exists():
         return FileResponse(DIST_INDEX, media_type="text/html", headers={"Cache-Control": "no-store, max-age=0"})
-    return JSONResponse({"error": "React build not found. Run npm run build in frontend/"}, status_code=404)
+    return JSONResponse(REACT_MISSING, status_code=404)
+
+
+# The React app handles these paths itself: login, report, audit and the database explorer are screens inside it.
+@router.get("/")
+@router.get("/react")
+@router.get("/login")
+@router.get("/report")
+@router.get("/audit")
+@router.get("/db")
+async def react_app():
+    return _react_index()
 
 
 # --- Static assets (unauthenticated: CSS/JS/images carry no sensitive data) ---
@@ -72,69 +87,13 @@ async def favicon():
     return JSONResponse({"error": "favicon not found"}, status_code=404)
 
 
-@router.get("/login")
-async def login_page():
-    if LOGIN_FILE.exists():
-        return FileResponse(LOGIN_FILE, media_type="text/html",
-                            headers={"Cache-Control": "no-store, max-age=0"})
-    return JSONResponse({"error": f"login.html not found at {LOGIN_FILE}"}, status_code=404)
-
-
-@router.get("/report")
-async def report_page(request: Request):
-    try:
-        await get_current_user(request)
-    except Exception:
-        return RedirectResponse(url="/login?next=/report")
-    if DIST_INDEX.exists():
-        return FileResponse(DIST_INDEX, media_type="text/html",
-                            headers={"Cache-Control": "no-store, max-age=0"})
-    return RedirectResponse(url="/")
-
-
-@router.get("/audit")
-async def audit_page(request: Request):
-    try:
-        await get_current_user(request)
-    except Exception:
-        return RedirectResponse(url="/login?next=/audit")
-    if DIST_INDEX.exists():
-        return FileResponse(DIST_INDEX, media_type="text/html",
-                            headers={"Cache-Control": "no-store, max-age=0"})
-    return RedirectResponse(url="/")
-
-
-@router.get("/db")
-async def db_page(request: Request):
-    try:
-        await get_current_user(request)
-    except Exception:
-        return RedirectResponse(url="/login?next=/db")
-    if DIST_INDEX.exists():
-        return FileResponse(DIST_INDEX, media_type="text/html",
-                            headers={"Cache-Control": "no-store, max-age=0"})
-    return RedirectResponse(url="/")
-
-
 @router.get("/settings")
 async def settings_page(request: Request):
+    """The settings page the React settings modal embeds. Signed out: to /, where the React app shows its login."""
     try:
         await get_current_user(request)
     except Exception:
-        return RedirectResponse(url="/login?next=/settings")
+        return RedirectResponse(url="/")
     if SETTINGS_FILE.exists():
-        return FileResponse(SETTINGS_FILE, media_type="text/html",
-                            headers={"Cache-Control": "no-store, max-age=0"})
+        return FileResponse(SETTINGS_FILE, media_type="text/html", headers={"Cache-Control": "no-store, max-age=0"})
     return JSONResponse({"error": f"settings.html not found at {SETTINGS_FILE}"}, status_code=404)
-
-
-@router.get("/")
-async def ui_root(request: Request):
-    try:
-        await get_current_user(request)
-    except Exception:
-        return RedirectResponse(url="/login?next=/")
-    if UI_FILE.exists():
-        return FileResponse(UI_FILE, media_type="text/html",
-                            headers={"Cache-Control": "no-store, max-age=0"})
-    return JSONResponse({"error": f"ui.html not found at {UI_FILE}"}, status_code=404)

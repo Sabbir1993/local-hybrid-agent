@@ -29,7 +29,6 @@ RESTART_RESET_AFTER_S = 300
 
 # File Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
-UI_FILE = BASE_DIR / "ui.html"
 STATIC_DIR = BASE_DIR / "static"
 USAGE_DB_FILE = BASE_DIR / "usage.db"
 PROJECTS_DB_FILE = BASE_DIR / "projects.db"
