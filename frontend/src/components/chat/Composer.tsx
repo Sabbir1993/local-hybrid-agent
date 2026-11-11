@@ -93,6 +93,7 @@ export const Composer: React.FC = () => {
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [showVoiceMenu, setShowVoiceMenu] = useState(false);
+  const [showMoreTools, setShowMoreTools] = useState(false);   // phones: voice / web / KB live behind a ⋯ button
   const [voiceMode, setVoiceMode] = useState<'transcribe' | 'voice'>('transcribe');
   const [voiceLang, setVoiceLang] = useState('Auto');
   const [voiceNoise, setVoiceNoise] = useState('Standard');
@@ -725,6 +726,7 @@ export const Composer: React.FC = () => {
       if (!target.closest('#claude-mode-wrap')) setShowModeMenu(false);
       if (!target.closest('#effort-wrap')) setShowEffortMenu(false);
       if (!target.closest('#model-picker-wrap')) setShowModelDropdown(false);
+      if (!target.closest('#composer-more-wrap')) setShowMoreTools(false);
     };
     window.addEventListener('click', handleClickOutside);
     const onEditPrompt = (e: any) => {
@@ -1111,8 +1113,28 @@ export const Composer: React.FC = () => {
                 onChange={handleFileChange}
                 style={{ display: 'none' }}
               />
+              {/* Phones: voice, web search and KB sit behind this button (a bottom sheet); on wider screens the wrapper uses
+                  display:contents, so the controls stay in the bar exactly as before (styles/responsive.css). */}
+              <div className="composer-more-wrap" id="composer-more-wrap">
+              <button
+                id="btn-composer-more"
+                className="claude-tool-icon-btn comp-tool"
+                type="button"
+                title="More options"
+                aria-label="More options"
+                aria-haspopup="menu"
+                aria-expanded={showMoreTools}
+                onClick={(e) => { e.stopPropagation(); setShowMoreTools(!showMoreTools); }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" />
+                </svg>
+              </button>
+              <div className={`composer-more-tools ${showMoreTools ? 'open' : ''}`} id="composer-more-tools">
+              <div className="composer-more-title">More options</div>
               {/* Split Mic Pill */}
               <div className="claude-mic-split-wrap" id="claude-mic-split-wrap" style={{ position: 'relative' }}>
+                <span className="composer-more-label">Voice</span>
                 <div
                   className={`claude-mic-split-pill ${voiceState ? 'voice-live' : isRecording ? 'recording' : ''}`}
                   id="claude-mic-split-pill"
@@ -1457,6 +1479,7 @@ export const Composer: React.FC = () => {
                       <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
                       <path d="M2 12h20" />
                     </svg>
+                    <span className="composer-more-label">Web search</span>
                   </button>
 
                   <button
@@ -1501,9 +1524,12 @@ export const Composer: React.FC = () => {
                     <span className="comp-kb-tag" style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
                       {kbMode}
                     </span>
+                    <span className="composer-more-label">Knowledge base</span>
                   </button>
                 </>
               )}
+              </div>
+              </div>
             </div>
 
             {/* Right Controls: Model   Medium ▾   ○ */}

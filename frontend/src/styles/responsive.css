@@ -5,6 +5,14 @@
      pointer: coarse  touch: tap targets of at least 36-44px
    Desktop (>= 1024px with a mouse) is unchanged. */
 
+/* "More options" (Composer.tsx #composer-more-wrap): on wider screens the wrapper is layout-transparent, so voice, web and
+   KB stay in the bar exactly as before; the ⋯ button, sheet title and row labels only exist on phones. */
+.composer-more-wrap,
+.composer-more-tools { display: contents; }
+#btn-composer-more,
+.composer-more-title,
+.composer-more-label { display: none !important; }   /* !important: .comp-tool sets a display of its own */
+
 /* the visible height on mobile browsers (100vh includes the area under the URL bar / keyboard) */
 @supports (height: 100dvh) {
   #app { height: 100dvh !important; }
@@ -88,7 +96,86 @@
   }
   .claude-bar-left { gap: 2px !important; min-width: 0; flex-shrink: 1; }
   .claude-bar-right { gap: 6px !important; min-width: 0; margin-left: auto; }
-  .comp-kb-btn .comp-kb-tag { display: none !important; }   /* the KB button keeps its icon and active colour */
+  /* one row: [+] [⋯] ........ [model] [reasoning] [context] - voice, web and KB move into the ⋯ sheet */
+  #btn-composer-more {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--dim);
+    cursor: pointer;
+    border-radius: 999px;
+  }
+  #btn-composer-more[aria-expanded="true"] { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+  .composer-more-tools { display: none !important; }
+  .composer-more-tools.open {
+    display: flex !important;
+    flex-direction: column;
+    gap: 4px;
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    z-index: 1990;                         /* the voice menu (2000) opens above it */
+    padding: 10px;
+    background: var(--panel, #18181b);
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+    border-radius: 18px;
+    box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.55), 0 -8px 32px rgba(0, 0, 0, 0.4);
+    animation: claudePopIn 0.12s ease;
+  }
+  .composer-more-tools.open::before {
+    content: "";
+    display: block;
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    margin: 0 auto 6px;
+    background: var(--border, rgba(148, 163, 184, 0.4));
+  }
+  .composer-more-tools.open .composer-more-title {
+    display: block !important;
+    padding: 2px 10px 6px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  /* each control is a full-width row: icon, label, status on the right */
+  .composer-more-tools.open > button,
+  .composer-more-tools.open > .claude-mic-split-wrap {
+    display: flex !important;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 50px;
+    padding: 8px 12px !important;
+    border-radius: 12px !important;
+    box-sizing: border-box;
+  }
+  .composer-more-tools.open > button {
+    justify-content: flex-start !important;
+    background: transparent !important;
+    color: var(--text) !important;
+  }
+  .composer-more-tools.open > button:active { background: rgba(255, 255, 255, 0.06) !important; }
+  .composer-more-tools.open > .claude-mic-split-wrap { justify-content: space-between; }
+  /* web search shows its state on the right, like the KB mode */
+  .composer-more-tools.open .comp-web-btn::after {
+    content: "Off";
+    order: 2;
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    color: var(--dim);
+  }
+  .composer-more-tools.open .comp-web-btn.active::after { content: "On"; color: var(--accent, #38bdf8); }
+  .composer-more-tools.open .composer-more-label { display: inline !important; order: 1; font-size: 15px; color: var(--text); }
+  .composer-more-tools.open > .claude-mic-split-wrap .composer-more-label { order: 0; }
+  .composer-more-tools.open .comp-kb-btn .comp-kb-tag { order: 2; margin-left: auto; }
 
   /* model and reasoning chips */
   #btn-claude-model,
@@ -101,7 +188,7 @@
     color: var(--text) !important;
     background: var(--panel2, rgba(255, 255, 255, 0.04)) !important;
   }
-  #claude-model-text { max-width: 38vw !important; }
+  #claude-model-text { max-width: 32vw !important; }
 
   /* menus open as bottom sheets: full width, above the keyboard area, big rows, dimmed page behind */
   #model-picker-dropdown,
