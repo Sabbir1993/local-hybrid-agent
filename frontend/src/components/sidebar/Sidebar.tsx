@@ -3,6 +3,7 @@ import { useAppStore } from '../../stores/useAppStore';
 import { DeviceRename } from './DeviceRename';
 import { UserMenu } from './UserMenu';
 import { api, apiFetch } from '../../services/api';
+import { useMediaQuery, NARROW_QUERY } from '../../hooks/useMediaQuery';
 
 export const Sidebar: React.FC = () => {
   const {
@@ -26,6 +27,9 @@ export const Sidebar: React.FC = () => {
     setActiveProjectId,
     fetchProjects,
   } = useAppStore();
+  const isNarrow = useMediaQuery(NARROW_QUERY);
+  // on a phone / tablet the drawer closes once a chat is picked or started
+  const closeIfNarrow = () => { if (isNarrow) useAppStore.setState({ sidebarCollapsed: true }); };
 
   const isNative = typeof window !== 'undefined' && Boolean(
     (window as any).electronAPI?.isNativeApp ||
@@ -215,6 +219,9 @@ export const Sidebar: React.FC = () => {
   }
 
   return (
+    <>
+    {/* narrow screens: the sidebar is a drawer over the chat; tapping outside it closes it */}
+    {isNarrow && <div className="sidebar-backdrop" aria-hidden="true" onClick={closeIfNarrow} />}
     <aside id="sidebar">
       {/* Brand Header */}
       <div
@@ -222,7 +229,7 @@ export const Sidebar: React.FC = () => {
         id="sidebar-brand-header"
         title="Local Agent — Control Center (Click for New Chat)"
         style={{ cursor: 'pointer' }}
-        onClick={() => createSession()}
+        onClick={() => { createSession(); closeIfNarrow(); }}
       >
         <img src="/static/logo/logo.jpg" alt="Logo" className="sidebar-brand-logo" />
         <span className="sidebar-brand-title">Local Agent</span>
@@ -498,7 +505,7 @@ export const Sidebar: React.FC = () => {
               id="btn-new-session"
               title={appMode === 'code' ? 'New Project Task (+)' : appMode === 'agent' ? 'New Agent Task (+)' : 'New Chat (+)'}
               aria-label="New Session"
-              onClick={() => createSession()}
+              onClick={() => { createSession(); closeIfNarrow(); }}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <path d="M12 5v14M5 12h14" />
@@ -563,7 +570,7 @@ export const Sidebar: React.FC = () => {
                 key={String(s.id)}
                 className={`session-row ${s.id === activeSessionId ? 'cur' : ''}`}
                 data-sid={String(s.id)}
-                onClick={() => openSession(s.id)}
+                onClick={() => { openSession(s.id); closeIfNarrow(); }}
                 style={{ position: 'relative' }}
               >
                 <span
@@ -746,5 +753,6 @@ export const Sidebar: React.FC = () => {
         )}
       </div>
     </aside>
+    </>
   );
 };

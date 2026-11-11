@@ -5,6 +5,7 @@
 @import './styles/voice.css';
 @import './styles/knowledge.css';
 @import './styles/telemetry.css';
+@import './styles/responsive.css';
 
 @tailwind base;
 @tailwind components;

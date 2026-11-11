@@ -1,4 +1,5 @@
 import { GitStrip } from './GitStrip';
+import { useMediaQuery, PHONE_QUERY, TOUCH_QUERY } from '../../hooks/useMediaQuery';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useAppStore, sessionKey, type ReasoningEffort, type AgentMode } from '../../stores/useAppStore';
 import { prepareFile, buildPromptText, type AttachmentData } from '../../services/attachments';
@@ -796,9 +797,19 @@ export const Composer: React.FC = () => {
     currentModelDisplay !== 'No model available';
   const placeholderModel = hasModel ? currentModelDisplay : '';
 
-  const effortDisplay = deepResearch
-    ? `${reasoningEffort.charAt(0).toUpperCase() + reasoningEffort.slice(1)} · Deep`
-    : reasoningEffort.charAt(0).toUpperCase() + reasoningEffort.slice(1);
+  const isPhone = useMediaQuery(PHONE_QUERY);
+  const isTouch = useMediaQuery(TOUCH_QUERY);
+  const effortFull = reasoningEffort.charAt(0).toUpperCase() + reasoningEffort.slice(1);
+  // phones: a short chip label so the model chip keeps its room ("Med", "Max"); Deep research shows as a small tag
+  const effortShort = ({ none: 'None', low: 'Low', medium: 'Med', high: 'High', extra: 'Extra' } as Record<string, string>)[reasoningEffort] || effortFull;
+  const effortDisplay = deepResearch ? `${isPhone ? effortShort : effortFull} · Deep` : (isPhone ? effortShort : effortFull);
+  const EFFORT_HINTS: Record<string, string> = {
+    none: 'Answer directly, no thinking',
+    low: 'Quick thinking, fastest',
+    medium: 'Balanced (default)',
+    high: 'Thinks longer on hard questions',
+    extra: 'Most thorough, slowest',
+  };
 
   const contextStats = useMemo(() => {
     // the picked cloud model's own window: the server only knows it once a run has bound the lane, so right after a
@@ -1014,7 +1025,7 @@ export const Composer: React.FC = () => {
                   : appMode === 'code'
                   ? 'Describe a coding task (e.g. "Find and fix bug in main.py", "Refactor the database queries")...'
                   : placeholderModel
-                  ? `Message ${placeholderModel}... (Enter to send, Shift+Enter for newline)`
+                  ? (isPhone ? `Message ${placeholderModel}` : `Message ${placeholderModel}... (Enter to send, Shift+Enter for newline)`)
                   : 'Please select a model...'
               }
               title="Type your prompt here. Press Enter to send, Shift+Enter for newline."
@@ -1550,7 +1561,7 @@ export const Composer: React.FC = () => {
                       placeholder="Search models…"
                       value={modelSearch}
                       onChange={(e) => setModelSearch(e.target.value)}
-                      autoFocus
+                      autoFocus={!isTouch}
                       style={{
                         width: '100%',
                         boxSizing: 'border-box',
@@ -1564,7 +1575,7 @@ export const Composer: React.FC = () => {
                         outline: 'none',
                       }}
                     />
-                    <div style={{ maxHeight: '260px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div className="model-picker-list" style={{ maxHeight: '260px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       {groupedModels.length === 0 ? (
                         <div className="dim" style={{ fontSize: '11.5px', padding: '12px', textAlign: 'center' }}>
                           No matching models found.
@@ -1752,7 +1763,10 @@ export const Composer: React.FC = () => {
                           textAlign: 'left',
                         }}
                       >
-                        <span style={{ textTransform: 'capitalize' }}>{level}</span>
+                        <span className="effort-item-text">
+                          <span style={{ textTransform: 'capitalize' }}>{level}</span>
+                          <span className="effort-item-hint">{EFFORT_HINTS[level]}</span>
+                        </span>
                       </button>
                     ))}
                     <div style={{ height: '1px', background: 'var(--border-subtle, rgba(255, 255, 255, 0.08))', margin: '6px 4px' }} />
@@ -1820,6 +1834,7 @@ export const Composer: React.FC = () => {
                 style={{ position: 'relative' }}
                 onMouseEnter={() => setShowCtxTooltip(true)}
                 onMouseLeave={() => setShowCtxTooltip(false)}
+                onClick={() => { if (isTouch) setShowCtxTooltip((v) => !v); }}
               >
                 <button
                   id="btn-claude-ctx"

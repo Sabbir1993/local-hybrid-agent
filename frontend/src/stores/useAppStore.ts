@@ -383,7 +383,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   isModelLoading: false,
 
   theme: 'slate',
-  sidebarCollapsed: false,
+  // phones and tablets start with the sidebar drawer closed (responsive.css turns it into an overlay there)
+  sidebarCollapsed: typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 1023px)').matches,
   dockCollapsed: true,
   dockExpanded: false,
   dockTab: 'plan',

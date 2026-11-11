@@ -1,0 +1,166 @@
+/* Phones and tablets. Imported last (index.css) so it can override the desktop layout, much of which is !important or inline.
+   Breakpoints (same numbers as src/hooks/useMediaQuery.ts):
+     <= 1023px  tablet: sidebar and right dock become overlays instead of columns
+     <=  640px  phone: compact composer bar, menus open as bottom sheets, tighter chat
+     pointer: coarse  touch: tap targets of at least 36-44px
+   Desktop (>= 1024px with a mouse) is unchanged. */
+
+/* the visible height on mobile browsers (100vh includes the area under the URL bar / keyboard) */
+@supports (height: 100dvh) {
+  #app { height: 100dvh !important; }
+}
+
+/* ------------------------------------------------------------------ tablet and phone */
+@media (max-width: 1023px) {
+  /* sidebar: a drawer over the chat instead of a 250px column that squeezes it */
+  #app aside,
+  #app #sidebar {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(86vw, 300px) !important;
+    min-width: 0 !important;
+    max-width: min(86vw, 300px) !important;
+    z-index: 1200 !important;
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.45);
+    padding-bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+  }
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1190;
+    background: rgba(0, 0, 0, 0.5);
+    animation: claudePopIn 0.12s ease;
+  }
+  main { min-width: 0 !important; width: 100% !important; }
+
+  /* right dock (preview, files, ...): a full-screen panel with its own close button, not a 300-480px column */
+  #right-dock:not(.dock-collapsed) {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    min-width: 0 !important;
+    height: 100% !important;
+    z-index: 1150 !important;
+  }
+  #right-dock .dock-grip { display: none !important; }
+}
+
+/* ------------------------------------------------------------------ phone */
+@media (max-width: 640px) {
+  header { padding: 0 8px !important; gap: 2px; }
+  header .header-tool-cluster { gap: 0 !important; padding: 2px !important; }
+  header .header-divider { display: none !important; }
+
+  /* chat column */
+  #chat-inner { padding: 0 12px !important; }
+  .msg.user .bubble { max-width: 88% !important; }
+  .msg .meta { flex-wrap: wrap; row-gap: 2px; }
+  .code-block { overflow: visible !important; }
+  .code-block > pre,
+  .code-block pre { overflow-x: auto !important; }
+  .mermaid-viewport { height: auto !important; max-height: 60dvh !important; }
+
+  /* composer: footer hugs the screen edge and clears the iPhone home indicator */
+  footer { padding: 0 8px calc(8px + env(safe-area-inset-bottom)) !important; }
+  #claude-input-pill-box {
+    height: auto !important;
+    min-height: 52px;
+    padding: 8px 8px 8px 14px !important;
+    border-radius: 20px !important;
+    align-items: flex-end !important;
+  }
+  #claude-input-pill-box #input {
+    height: 44px !important;
+    max-height: 40dvh;
+    overflow-y: auto !important;
+    font-size: 16px !important;          /* 16px stops iOS zooming into the field */
+  }
+
+  /* bar row: may wrap; both groups shrink; the model and reasoning chips stay together on the right */
+  .claude-input-bar-row {
+    flex-wrap: wrap !important;
+    row-gap: 6px;
+    column-gap: 6px;
+    padding: 6px 2px 0 !important;
+  }
+  .claude-bar-left { gap: 2px !important; min-width: 0; flex-shrink: 1; }
+  .claude-bar-right { gap: 6px !important; min-width: 0; margin-left: auto; }
+  .comp-kb-btn .comp-kb-tag { display: none !important; }   /* the KB button keeps its icon and active colour */
+
+  /* model and reasoning chips */
+  #btn-claude-model,
+  #effort-btn {
+    border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.25)) !important;
+    border-radius: 999px !important;
+    padding: 4px 10px !important;
+    min-height: 36px;
+    font-size: 12.5px !important;
+    color: var(--text) !important;
+    background: var(--panel2, rgba(255, 255, 255, 0.04)) !important;
+  }
+  #claude-model-text { max-width: 38vw !important; }
+
+  /* menus open as bottom sheets: full width, above the keyboard area, big rows, dimmed page behind */
+  #model-picker-dropdown,
+  #effort-menu,
+  .claude-mic-split-wrap [role="menu"],
+  #claude-mode-wrap [role="menu"] {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    bottom: calc(8px + env(safe-area-inset-bottom)) !important;
+    top: auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    max-height: 72dvh !important;
+    overflow-y: auto !important;
+    margin: 0 !important;
+    padding: 10px !important;
+    border-radius: 18px !important;
+    z-index: 2000 !important;
+    transform-origin: bottom center !important;
+    box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.55), 0 -8px 32px rgba(0, 0, 0, 0.4) !important;
+  }
+  #model-picker-dropdown::before,
+  #effort-menu::before {
+    content: "";
+    display: block;
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    margin: 0 auto 10px;
+    background: var(--border, rgba(148, 163, 184, 0.4));
+  }
+  #model-picker-dropdown .model-picker-list { max-height: 52dvh !important; }
+  #model-picker-dropdown input[type="search"] { font-size: 16px !important; padding: 10px 12px !important; }
+  #model-picker-dropdown .claude-menu-item { min-height: 46px; font-size: 14px !important; padding: 8px 12px !important; }
+  #effort-menu .effort-item { min-height: 50px; padding: 8px 14px !important; font-size: 15px !important; }
+  #effort-menu .effort-deep { min-height: 48px; }
+}
+
+/* the reasoning level hint only shows in the phone sheet */
+.effort-item-text { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; }
+.effort-item-hint { display: none; font-size: 11.5px; color: var(--dim); }
+@media (max-width: 640px) {
+  .effort-item-hint { display: block; }
+}
+
+/* ------------------------------------------------------------------ touch: tap targets */
+@media (pointer: coarse) {
+  .claude-bar-left > button,
+  .claude-bar-left .comp-tool,
+  #btn-web-toggle,
+  #btn-kb-toggle {
+    min-width: 36px;
+    min-height: 36px;
+  }
+  #btn-input-enter { min-width: 40px; min-height: 40px; }
+  #btn-claude-ctx { min-width: 32px; min-height: 32px; }
+  .msg.bot .bot-actions button { min-height: 36px; min-width: 36px; }
+  .msg.user .user-action-btn { width: 36px !important; height: 36px !important; }
+  header .icon-btn { min-width: 36px; min-height: 36px; }
+}
