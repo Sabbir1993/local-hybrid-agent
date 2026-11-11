@@ -4,6 +4,7 @@ from core.auth import Principal
 from core.deps import get_current_user
 from core import reasoning
 from core.profiles import companions, discover_models
+from core.profiles.paths import model_display_name
 from core.vram.gguf_parser import model_files, model_size_bytes
 from core.state import state
 from core import cloud
@@ -82,12 +83,7 @@ async def available_models(user: Principal = Depends(get_current_user)):
     if loaded_name and is_running:
         # template header read (cached per file): drives the composer's effort chip
         local_mode = await asyncio.to_thread(reasoning.local_mode, loaded_path)
-        clean_name = str(loaded_name)
-        if ("\\" in clean_name) or ("/" in clean_name):
-            import os
-            clean_name = os.path.basename(clean_name.replace("\\", "/"))
-        if clean_name.lower().endswith(".gguf"):
-            clean_name = clean_name[:-5]
+        clean_name = model_display_name(loaded_name)      # no folders, ".gguf" or split-part suffix
         local_models.append({
             "id": loaded_path or loaded_name,
             "display": clean_name,

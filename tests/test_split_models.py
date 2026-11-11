@@ -56,5 +56,13 @@ class SplitModelTests(unittest.TestCase):
         self.assertEqual(model_files(parts[0]), parts)
 
 
+class DisplayNameTests(unittest.TestCase):
+    def test_part_suffix_is_not_part_of_the_name(self):
+        from core.profiles.paths import model_display_name
+        self.assertEqual(model_display_name("/m/gpt-oss-120b/gpt-oss-120b-MXFP4-00001-of-00002.gguf"), "gpt-oss-120b-MXFP4")
+        self.assertEqual(model_display_name(r"E:\AI\Models\Ornith-1.5-35B-Q4_K_M.gguf"), "Ornith-1.5-35B-Q4_K_M")
+        self.assertEqual(model_display_name("gpt-oss-120b-MXFP4-00001-of-00002"), "gpt-oss-120b-MXFP4")
+
+
 if __name__ == "__main__":
     unittest.main()

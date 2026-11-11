@@ -16,5 +16,8 @@ export function cleanModelName(name?: string | null): string {
   }
   // Remove .gguf extension if present (case-insensitive)
   base = base.replace(/\.gguf$/i, '').trim();
+  // A split model is launched from its part-1 file ("...-00001-of-00002"): show the model's name, not the part's.
+  // Same rule as model_display_name in core/profiles/paths.py.
+  base = base.replace(/-\d{5}-of-\d{5}$/i, '').trim();
   return base;
 }

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from .constants import (
     HELPER_DIR_NAME,
@@ -99,3 +100,16 @@ def _is_flat(target: Path) -> bool:
     except OSError:
         return True
     return any(parent == r.resolve() for r in models_roots())
+
+
+_PART_SUFFIX_RE = re.compile(r"-\d{5}-of-\d{5}$", re.I)
+
+
+def model_display_name(name_or_path) -> str:
+    """A model's name for display: file name without folders, ".gguf" and the "-00001-of-00002" part suffix of a split
+    model (which is launched from its part-1 file). Same rule as cleanModelName in frontend/src/utils/models.ts."""
+    base = str(name_or_path or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if base.lower().endswith(".gguf"):
+        base = base[:-5]
+    return _PART_SUFFIX_RE.sub("", base).strip()
+
