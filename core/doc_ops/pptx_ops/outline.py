@@ -10,7 +10,7 @@ from . import theme as _theme
 MAX_DECK_SLIDES = 30
 MAX_BULLETS = 12
 MAX_CARDS = 6
-MAX_TABLE_ROWS = 24          # longer tables are split across slides by design._prepare
+MAX_TABLE_ROWS = 120         # read in full: design._prepare splits a long table across slides (header repeated)
 MAX_TABLE_COLS = 6
 
 LAYOUTS = {"bullets", "cards", "stats", "two-column", "timeline", "quote", "section", "table", "cover", "closing", "full",

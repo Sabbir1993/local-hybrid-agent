@@ -215,6 +215,12 @@ def _to_number(s: str):
     return None
 
 
+def _quoted(text: str) -> str:
+    """A text value as an Excel string literal for a conditional-format rule: inner quotes doubled, so the text can never
+    close the literal and continue as a formula."""
+    return '"' + str(text).replace('"', '""') + '"'
+
+
 def _cell_value(raw, fmt: Optional[str], sheets: list, where: str, formulas: bool = True):
     """(value, is_formula). A formula that is not allowed (unknown or unsafe function, external link ...) is stored as text and
     reported (_warn): it never runs, and the rest of the workbook is still built. With formulas=False (a plain table the author did
@@ -319,6 +325,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
         # header
         for ci, h in enumerate(header, 1):
             c = ws.cell(row=1, column=ci, value=h)
+            c.data_type = "s"                      # a header is text, even one that starts with "="
             c.font = Font(bold=True, color="FFFFFF")
             c.fill = PatternFill("solid", fgColor=accent)
             c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -428,8 +435,8 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
             bg, fg = _FILLS[color_name]
             if m_bw:
                 a_val, b_val = m_bw.group("a").strip(), m_bw.group("b").strip()
-                fa = a_val if _to_number(a_val) is not None else f'"{a_val}"'
-                fb = b_val if _to_number(b_val) is not None else f'"{b_val}"'
+                fa = a_val if _to_number(a_val) is not None else _quoted(a_val)
+                fb = b_val if _to_number(b_val) is not None else _quoted(b_val)
                 ws.conditional_formatting.add(rng(idx), CellIsRule(operator="between", formula=[fa, fb],
                                               fill=PatternFill("solid", bgColor=bg, fgColor=bg), font=Font(color=fg)))
             else:
@@ -437,7 +444,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                 op = {"=": "equal", "is": "equal", ">": "greaterThan", "<": "lessThan",
                       ">=": "greaterThanOrEqual", "<=": "lessThanOrEqual", "!=": "notEqual", "<>": "notEqual"}[op_raw]
                 val = m.group("val").strip().strip("'\"")
-                formula = val if _to_number(val) is not None else f'"{val}"'
+                formula = val if _to_number(val) is not None else _quoted(val)
                 ws.conditional_formatting.add(rng(idx), CellIsRule(operator=op, formula=[formula],
                                               fill=PatternFill("solid", bgColor=bg, fgColor=bg), font=Font(color=fg)))
         for key in ("scale", "databar"):
@@ -500,6 +507,8 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                     top_cell = ws[start_ref]
                     if val_to_set is not None:
                         top_cell.value = val_to_set
+                        if isinstance(val_to_set, str):
+                            top_cell.data_type = "s"       # a title is text, never a formula
                         top_cell.font = Font(bold=True)
                         top_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                 except Exception as e:
@@ -649,6 +658,10 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
         sh = re.match(r"^'?(.+?)'?!", ref)
         if not sh or sh.group(1).lower() not in by_name:
             _warn(f"name '{m.group(1)}': must point at a cell on a sheet of this workbook (got '{ref}')")
+            continue
+        cells = ref[sh.end():].replace("$", "")
+        if not re.match(r"^[A-Za-z]{1,3}\d{1,7}(:[A-Za-z]{1,3}\d{1,7})?$", cells):
+            _warn(f"name '{m.group(1)}': must be a cell or range such as Sheet!B2 or Sheet!A2:A50 (got '{ref}')")
             continue
         ref = ref.replace(sh.group(1), by_name[sh.group(1).lower()]["xname"], 1)
         if not ref.startswith("'") and re.search(r"[^A-Za-z0-9_.]", by_name[sh.group(1).lower()]["xname"]):

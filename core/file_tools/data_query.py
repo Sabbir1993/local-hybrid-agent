@@ -8,7 +8,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from .profile import Table, parse_number, profile_file, read_tables
+from .profile import Table, parse_number, plain_long_int, profile_file, read_tables
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
@@ -119,6 +119,10 @@ def _aggregate(rows: list, idx: int, fn: str):
 def _fmt(v) -> str:
     if v is None:
         return ""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        long_id = plain_long_int(v)
+        if long_id is not None:
+            return long_id
     if isinstance(v, float):
         return f"{v:,.2f}" if abs(v) < 1e15 and not v.is_integer() else f"{v:,.0f}"
     s = _text(v)
@@ -141,7 +145,13 @@ def _sort_key(v):
 
 
 def run_data_query(path, args: dict) -> str:
-    """Answer one data_query call against the file at `path`. Raises QueryError for a bad request."""
+    """Answer one data_query call against the file at `path`, with card numbers masked (as data_sql and doc_inspect do).
+    Raises QueryError for a bad request."""
+    from ..pan import mask_pans
+    return mask_pans(_run_data_query(path, args))[0]
+
+
+def _run_data_query(path, args: dict) -> str:
     p = Path(path)
     if args.get("describe"):
         text, _ = profile_file(p, max_chars=MAX_OUT_CHARS)

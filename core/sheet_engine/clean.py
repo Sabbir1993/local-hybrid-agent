@@ -39,7 +39,10 @@ def run(path, ops: list, sheet: Optional[str] = None) -> tuple:
     tables = read_tables(Path(path))
     if not tables:
         raise CleanError("no data found in the file")
-    t = next((x for x in tables if sheet and x.name.lower() == str(sheet).lower()), tables[0])
+    t = next((x for x in tables if sheet and x.name.lower() == str(sheet).lower()), None)
+    if t is None and sheet:
+        raise CleanError(f"sheet '{sheet}' not found (sheets: {', '.join(x.name for x in tables[:20])})")
+    t = t or tables[0]
     if t.truncated:
         raise CleanError(f"the sheet has {t.total_rows:,} rows and only {len(t.rows):,} can be cleaned at once - "
                          "split the data or filter it first")
@@ -190,6 +193,13 @@ def _write(name: str, headers: list, rows: list, log: list, before: int) -> byte
         c.font = Font(bold=True)
     ch.column_dimensions["A"].width = 20
     ch.column_dimensions["B"].width = 60
+    # the data came from someone else's file (or from the model): text that starts with "=" must stay text, not become
+    # a live formula in the workbook the user downloads
+    for sheet in wb.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.data_type == "f":
+                    cell.data_type = "s"
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()

@@ -53,6 +53,11 @@ async def agent_upload(files: list[UploadFile] = FastAPIFile(...), space: Option
         except Exception as e:
             preview = f"(extraction error: {e})"
             truncated = False
+        try:        # the preview goes into the prompt: card numbers in it are masked here, as everywhere else
+            from core.pan import mask_pans
+            preview = mask_pans(preview)[0] if isinstance(preview, str) else preview
+        except Exception:
+            pass
         results.append({
             "name": safe_name,
             "path": safe_name,

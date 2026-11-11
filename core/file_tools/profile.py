@@ -6,6 +6,7 @@ builds that picture with openpyxl / xlrd / csv only (no pandas).
 """
 import csv
 import datetime as _dt
+import io
 import re
 from collections import Counter
 from pathlib import Path
@@ -99,37 +100,85 @@ def _table_from_rows(name: str, rows_iter, max_rows: int) -> Optional[Table]:
     return t
 
 
+def read_csv_text(p: Path) -> Optional[str]:
+    """A csv file's text. UTF-8 (with or without BOM) first; UTF-16 only when the file starts with its byte-order mark
+    (without that check any even-length Windows-1252 file "decodes" as UTF-16 garbage); then Windows-1252, the usual
+    encoding of a csv saved by Excel on Windows; latin-1 never fails."""
+    try:
+        raw = p.read_bytes()
+    except OSError:
+        return None
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        try:
+            return raw.decode("utf-16")
+        except UnicodeError:
+            pass
+    for enc in ("utf-8-sig", "cp1252"):
+        try:
+            return raw.decode(enc)
+        except UnicodeError:
+            continue
+    return raw.decode("latin-1")
+
+
+def _xls_value(cell, datemode):
+    """An .xls cell as Python: dates as datetime (xlrd gives a serial number), whole numbers as int (it gives 5.0)."""
+    if cell.ctype == 3:                     # XL_CELL_DATE
+        try:
+            import xlrd
+            return xlrd.xldate_as_datetime(cell.value, datemode)
+        except Exception:
+            return cell.value
+    v = cell.value
+    if cell.ctype == 2 and isinstance(v, float) and v.is_integer() and abs(v) < 1e15:
+        return int(v)
+    return v
+
+
+MAX_UNZIPPED_BYTES = 400 * 1024 * 1024
+MAX_ZIP_PARTS = 5000
+
+
+def _zip_guard(p: Path) -> None:
+    """Refuse a workbook that unpacks to an absurd size (zip bomb) before openpyxl reads it. Same limits as doc_ops."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(str(p)) as z:
+            infos = z.infolist()
+    except (zipfile.BadZipFile, OSError):
+        return                               # not a zip: openpyxl reports the real problem
+    if len(infos) > MAX_ZIP_PARTS or sum(i.file_size for i in infos) > MAX_UNZIPPED_BYTES:
+        raise ValueError(f"{p.name} is too large to open safely (it unpacks to more than "
+                         f"{MAX_UNZIPPED_BYTES // (1024 * 1024)} MB)")
+
+
 def read_tables(path, max_rows: int = MAX_LOAD_ROWS) -> list:
     """All sheets of a workbook / the one table of a csv, as Table objects (header = first non-empty row)."""
     p = Path(path)
     suffix = p.suffix.lower()
     tables = []
     if suffix == ".csv":
-        text = None
-        for enc in ("utf-8-sig", "utf-16", "latin-1"):
-            try:
-                text = p.read_text(encoding=enc)
-                break
-            except (UnicodeError, OSError):
-                continue
+        text = read_csv_text(p)
         if text is None:
             return []
         try:
             dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
         except csv.Error:
             dialect = csv.excel
-        t = _table_from_rows(p.stem, csv.reader(text.splitlines(), dialect), max_rows)
+        # StringIO with newline="" (not splitlines): a line break inside a quoted cell stays part of that cell
+        t = _table_from_rows(p.stem, csv.reader(io.StringIO(text, newline=""), dialect), max_rows)
         return [t] if t else []
     if suffix == ".xls":
         import xlrd
         wb = xlrd.open_workbook(str(p))
         for sh in wb.sheets():
-            rows = ([sh.cell_value(r, c) for c in range(sh.ncols)] for r in range(sh.nrows))
+            rows = ([_xls_value(sh.cell(r, c), wb.datemode) for c in range(sh.ncols)] for r in range(sh.nrows))
             t = _table_from_rows(sh.name, rows, max_rows)
             if t:
                 tables.append(t)
         return tables
     import openpyxl
+    _zip_guard(p)
     wb = openpyxl.load_workbook(str(p), read_only=True, data_only=True)
     try:
         for ws in wb.worksheets:
@@ -174,6 +223,12 @@ def _note_formulas(path, tables: list) -> None:
 
 
 # ---- column typing -------------------------------------------------------------------------------------------------
+# digits with a leading zero, or 13+ digits: phone / account / card numbers. As numbers they would lose the leading zero.
+_ID_TEXT_RX = re.compile(r"^(0\d+|\d{13,})$")
+# currency marks around an amount: ৳1,200 · Tk 500 · BDT 1,200.50 · 500 BDT · $20 · ₹300
+_CURRENCY_RX = re.compile(r"^(?:৳|tk\.?|bdt|usd|eur|gbp|inr|\$|€|£|₹)\s*|\s*(?:৳|tk\.?|bdt|usd|eur|gbp|inr|/-)$", re.I)
+
+
 def parse_number(v) -> Optional[float]:
     """A number from a cell: real numbers, and text like '1,200.50', '(300)', '12%'. None for anything else."""
     if isinstance(v, bool):
@@ -181,7 +236,7 @@ def parse_number(v) -> Optional[float]:
     if isinstance(v, (int, float)):
         return float(v)
     if isinstance(v, str):
-        s = v.strip()
+        s = _CURRENCY_RX.sub("", v.strip()).strip()
         if s and _NUM_RX.match(s):
             neg = s.startswith("(") and s.endswith(")")
             try:
@@ -203,6 +258,8 @@ def _kind(v) -> str:
         s = v.strip()
         if _DATE_RX.match(s):
             return "date"
+        if _ID_TEXT_RX.match(s):
+            return "text"          # "01712345678", "0042", a 16-digit card or account number: an identifier, not an amount
         if parse_number(s) is not None:
             return "number"
         return "text"
@@ -241,7 +298,25 @@ def column_stats(values: list, header: str = "") -> dict:
     return out
 
 
+LONG_ID = 1e12      # 13 or more digits: an identifier (card, account, phone), never an amount to group with commas
+
+
+def plain_long_int(n) -> Optional[str]:
+    """Digits only for a whole number of 13+ digits, else None. "4,111,111,111,111,111" would pass the card-number masker
+    (grouped digits read as an amount), so long identifiers are always printed without separators and then masked."""
+    try:
+        f = float(n)
+    except (TypeError, ValueError):
+        return None
+    if f.is_integer() and LONG_ID <= abs(f) < 1e19:
+        return str(int(f))
+    return None
+
+
 def _num(n: float) -> str:
+    long_id = plain_long_int(n)
+    if long_id is not None:
+        return long_id
     if abs(n) >= 1000 or float(n).is_integer():
         return f"{n:,.0f}" if float(n).is_integer() else f"{n:,.2f}"
     return f"{n:.3g}"
@@ -317,4 +392,6 @@ def profile_file(path, max_chars: int = PROFILE_MAX_CHARS) -> tuple:
     text = "\n\n".join(parts)
     if len(text) > max_chars:
         text, complete = text[:max_chars].rsplit("\n", 1)[0] + "\n...", False
-    return text, complete
+    # sample rows, top values and min/max can hold card numbers: this text goes into the prompt (and to a cloud model)
+    from ..pan import mask_pans
+    return mask_pans(text)[0], complete

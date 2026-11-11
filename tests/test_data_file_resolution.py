@@ -51,6 +51,17 @@ class DataFileResolutionTests(unittest.TestCase):
         (agent_tools.common_workspace() / "Record - 150.xlsx").write_bytes(b"x")
         self.assertIsNone(resolve_common("Record - 1550.xlsx"))
 
+    def test_a_date_or_id_in_the_name_never_picks_another_file(self):
+        ws = agent_tools.common_workspace()
+        (ws / "payroll_20250101.xlsx").write_bytes(b"x")
+        (ws / "attendance_20250101_final.xlsx").write_bytes(b"x")
+        self.assertIsNone(resolve_common("bonus_20250101.xlsx"))
+
+    def test_our_own_build_id_still_resolves_when_unique(self):
+        ws = agent_tools.common_workspace()
+        (ws / "report-1a2b3c4d.xlsx").write_bytes(b"x")
+        self.assertEqual(resolve_common("summary-1a2b3c4d.xlsx").name, "report-1a2b3c4d.xlsx")
+
     def test_unique_part_of_a_name_still_resolves(self):
         self.assertEqual(resolve_common("Moinul Hasan Khan.xlsx").name, NAMES[2])
 

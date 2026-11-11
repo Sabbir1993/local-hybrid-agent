@@ -74,12 +74,14 @@ def resolve_common(name: str) -> Optional[Path]:
         return max(cands, key=lambda f: f.stat().st_mtime)
 
     # Fuzzy recovery 1: match on 8-char hex hash suffix if present in name
-    m_hex = re.search(r'([0-9a-fA-F]{8})', name)
-    if m_hex:
+    # Only the build id our own files end with ("report-1a2b3c4d.xlsx"), and only when one file has it: any 8 digits
+    # would also match a date (20250101) or an employee ID, i.e. somebody else's file.
+    m_hex = re.search(r'[-_]([0-9a-fA-F]{8})$', Path(clean_name).stem)
+    if m_hex and re.search(r"[a-fA-F]", m_hex.group(1)):      # eight plain digits are a date or an ID, not a build id
         hex_sub = m_hex.group(1).lower()
-        hex_cands = [f for f in folder.glob(f"*{hex_sub}*{suf}") if f.is_file()]
-        if hex_cands:
-            return max(hex_cands, key=lambda f: f.stat().st_mtime)
+        hex_cands = [f for f in folder.glob(f"*{suf}") if f.is_file() and f.stem.lower().endswith(hex_sub)]
+        if len(hex_cands) == 1:
+            return hex_cands[0]
 
     # Fuzzy recovery 2: normalize spaces, unicode numbers, typos and match skeleton
     import unicodedata

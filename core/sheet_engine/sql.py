@@ -15,7 +15,7 @@ import time
 from collections import Counter, OrderedDict
 from pathlib import Path
 
-from ..file_tools.profile import column_stats, parse_number, read_tables
+from ..file_tools.profile import column_stats, parse_number, plain_long_int, read_tables
 
 QUERY_TIMEOUT_S = 8.0
 DEFAULT_ROWS = 50
@@ -26,7 +26,9 @@ MAX_CACHED = 4
 
 _SQLITE_RECURSIVE = 33
 _ALLOWED_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, _SQLITE_RECURSIVE}
-_DENIED_FUNCTIONS = {"load_extension", "readfile", "writefile", "edit", "fts3_tokenizer"}
+_DENIED_FUNCTIONS = {"load_extension", "readfile", "writefile", "edit", "fts3_tokenizer",
+                     "randomblob", "zeroblob"}       # one call can allocate gigabytes; nothing here needs them
+MAX_VALUE_BYTES = 1_000_000                          # longest text / blob a query may build (SQLITE_LIMIT_LENGTH)
 _DMY = re.compile(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$")
 
 
@@ -164,6 +166,7 @@ def _add_table(conn, tname: str, headers: list, rows: list) -> list:
     for h, values in zip(headers, data):
         kind = column_stats(list(values), h)["kind"]
         kinds.append(kind)
+        h = str(h).replace('"', "'")              # a double quote in a header would end the quoted column name
         cname = h if h.lower() not in seen else f"{h}_{len(seen)}"
         seen.add(cname.lower())
         cols.append((cname, "REAL" if kind == "number" else "TEXT"))
@@ -176,6 +179,10 @@ def _add_table(conn, tname: str, headers: list, rows: list) -> list:
 
 def _lock(conn) -> None:
     conn.commit()
+    try:
+        conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)
+    except (AttributeError, sqlite3.Error):       # Python < 3.11 has no setlimit
+        pass
     conn.execute("PRAGMA query_only = ON")
     conn.set_authorizer(_authorizer)
 
@@ -265,6 +272,10 @@ def describe(wb: Workbook) -> str:
 def _fmt(v) -> str:
     if v is None:
         return ""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        long_id = plain_long_int(v)
+        if long_id is not None:
+            return long_id
     if isinstance(v, float):
         return f"{v:,.2f}" if abs(v) < 1e15 and not v.is_integer() else f"{v:,.0f}"
     s = re.sub(r"\s+", " ", str(v)).strip()

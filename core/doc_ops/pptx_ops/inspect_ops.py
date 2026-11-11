@@ -15,7 +15,8 @@ def inspect(data: bytes) -> dict:
     layouts = sorted({l.name for m in prs.slide_masters for l in m.slide_layouts})
     head = f"PowerPoint: {len(prs.slides)} slides ({ratio}). Layouts: {', '.join(layouts)}"
     for i, slide in enumerate(prs.slides, 1):
-        els.append({"addr": f"s{i}", "kind": "slide", "text": f"layout: {slide.slide_layout.name}"})
+        hidden = " (hidden slide)" if slide._element.get("show") == "0" else ""
+        els.append({"addr": f"s{i}", "kind": "slide", "text": f"layout: {slide.slide_layout.name}{hidden}"})
         for sh in _iter_shapes(slide.shapes):
             if sh.name.startswith("deco"):      # decoration drawn by design.py (footer, accents, badges)
                 continue

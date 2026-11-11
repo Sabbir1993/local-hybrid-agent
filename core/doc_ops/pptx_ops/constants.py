@@ -58,6 +58,11 @@ def _iter_shapes(shapes):
 
 def _shape_kind(sh) -> str:
     from pptx.enum.shapes import MSO_SHAPE_TYPE
+    # a table or chart placed in a content placeholder is still a table or chart: check these first, or it reads as empty
+    if getattr(sh, "has_table", False) and sh.has_table:
+        return "table"
+    if getattr(sh, "has_chart", False) and sh.has_chart:
+        return "chart"
     if sh.is_placeholder:
         try:
             t = sh.placeholder_format.type
