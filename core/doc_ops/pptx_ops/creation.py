@@ -163,9 +163,26 @@ def attach_images(deck: dict, images: Optional[dict]) -> None:
 
 
 def create(md: str, template: Optional[bytes] = None, title: str = "", images: Optional[dict] = None) -> bytes:
-    """Markdown / loose outline -> .pptx. Max outline.MAX_DECK_SLIDES slides; designed theme unless a template is given."""
+    """Markdown / loose outline -> .pptx. Max outline.MAX_DECK_SLIDES slides; designed theme unless a template is given.
+    What the builder changed on its own is kept for the tool result (notes.summary)."""
+    from . import notes
+    notes.start()
+    data = b""
+    try:
+        data = _create(md, template, title, images)
+        return data
+    finally:
+        notes.finish(data)
+
+
+def _create(md: str, template: Optional[bytes], title: str, images: Optional[dict]) -> bytes:
+    from . import notes
     deck = outline.parse_outline(md, title)
     attach_images(deck, images)
+    for n, s in enumerate(deck["slides"], 1):
+        if s.get("image") and s.get("kind") not in outline.IMAGE_KINDS:
+            notes.note(f"slide {n} '{s['title'][:40]}': the picture was left out (a {s.get('kind')} slide has no picture "
+                       f"area; use layout: bullets, full or gallery for a picture)")
     if template:
         return _create_from_template(deck, template)
     if deck.get("mode") == "designer":                     # picture slides drawn as HTML; None -> fall back to editable
@@ -173,5 +190,6 @@ def create(md: str, template: Optional[bytes] = None, title: str = "", images: O
         data = designer.build(deck)
         if data:
             return data
+        notes.note("the Designer style is not available on this server, so an editable deck was built")
         print("[deck] Designer style is not available here; built the editable deck instead", file=sys.stderr)
     return _save(design.build(deck))

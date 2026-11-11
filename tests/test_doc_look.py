@@ -99,13 +99,28 @@ class LookTests(Patched):
         self.assertIn("slide" if "slide" in out else "page 1", out)
         self.assertIn("doc_create", out)
 
-    def test_an_editable_deck_is_left_to_the_geometric_lint(self):
+    def editable_deck(self):
         from pptx import Presentation
         prs = Presentation()
         prs.slides.add_slide(prs.slide_layouts[1])
         buf = io.BytesIO()
         prs.save(buf)
-        self.assertEqual(self.see(["OK"], ".pptx", buf.getvalue()), "")
+        return buf.getvalue()
+
+    def test_an_editable_deck_is_left_to_the_geometric_lint_without_a_renderer(self):
+        with mock.patch("core.doc_tools.render.to_pdf", return_value=None):
+            self.assertEqual(self.see(["OK"], ".pptx", self.editable_deck()), "")
+
+    def test_an_editable_deck_is_looked_at_through_its_rendered_pdf(self):
+        with mock.patch("core.doc_tools.render.to_pdf", return_value=pdf_bytes()) as conv:
+            out = self.see(["Title overlaps the chart.", "OK", "OK"], ".pptx", self.editable_deck())
+        self.assertTrue(conv.called)
+        self.assertIn("Title overlaps the chart", out)
+        self.assertIn("doc_create", out)
+
+    def test_a_workbook_is_looked_at_too(self):
+        with mock.patch("core.doc_tools.render.to_pdf", return_value=pdf_bytes()):
+            self.assertIn("no layout problems", self.see(["OK", "OK", "OK"], ".xlsx", b"x"))
 
     def test_other_formats_are_ignored(self):
         self.assertEqual(self.see(["OK"], ".docx", b"x"), "")
@@ -115,9 +130,13 @@ class GatesTests(unittest.TestCase):
     def setUp(self):
         look._rounds.clear()
 
-    def test_off_by_default(self):
-        self.assertFalse(look.enabled())
-        self.assertEqual(run(look.look_note(".pdf", pdf_bytes(), 1, "r")), "")
+    def test_the_setting_is_auto_true_or_false(self):
+        from core import small_model
+        for value, want in (("auto", True), (True, True), (False, False), ("off", False)):
+            with mock.patch.object(small_model, "APP_CONFIG", {"chat": {"deck_vision": value}}):
+                self.assertEqual(look.enabled(), want, value)
+        with mock.patch.object(small_model, "APP_CONFIG", {}):
+            self.assertTrue(look.enabled())                  # auto by default: still needs a local vision model
 
     def test_no_vision_model_means_no_look(self):
         with mock.patch.object(look, "enabled", return_value=True), mock.patch("core.lanes.primary", return_value=None):

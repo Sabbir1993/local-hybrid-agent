@@ -2,14 +2,19 @@
 sees comes back to the writer as one sentence. The geometric checks (pdf_check, pptx lint) measure; this sees - a chart that
 printed wrong, a page of overlapping text, a Designer deck (whose slides are pictures, so lint is blind to it).
 
-Local only, on purpose: a page image can carry card numbers that no text guard can see. Off unless chat.deck_vision is true,
-and silent when no vision model is configured or it does not answer in time - it must never block or break a build."""
+An editable .pptx (and an .xlsx) is first turned into a PDF by LibreOffice (render.py), so the model's own deck is seen
+the way the user will see it; without LibreOffice only PDFs and Designer decks are looked at, as before.
+
+Local only, on purpose: a page image can carry card numbers that no text guard can see. chat.deck_vision: true, false or
+"auto" (the default: on when a local vision model is configured). Silent when there is no vision model or it does not
+answer in time - it must never block or break a build."""
 import asyncio
 import io
 import re
 import time
 from typing import Optional
 
+LOOKABLE = (".pdf", ".pptx", ".xlsx")
 MAX_PAGES = 3
 MAX_ROUNDS = 2                 # the build, and the one fix after it
 PAGE_TIMEOUT_S = 75            # the first call after idle loads the vision model
@@ -27,9 +32,12 @@ _rounds: dict = {}
 def enabled() -> bool:
     try:
         from ..small_model import APP_CONFIG
-        return bool((APP_CONFIG.get("chat") or {}).get("deck_vision", False))
+        v = (APP_CONFIG.get("chat") or {}).get("deck_vision", "auto")
     except Exception:
         return False
+    if isinstance(v, str):
+        return v.strip().lower() in ("auto", "true", "on", "1", "yes")     # auto: look_note still needs a local vision lane
+    return bool(v)
 
 
 def pick_pages(n: int) -> list:
@@ -63,6 +71,11 @@ def _images(ext: str, data: bytes) -> tuple:
         from .operations import is_designer_deck
         if is_designer_deck(data):
             return _designer_pages(data)
+    if ext in LOOKABLE and ext != ".pdf":
+        from .render import to_pdf
+        pdf = to_pdf(data, ext)                 # the real file as LibreOffice draws it: one page per slide / print page
+        if pdf:
+            return _pdf_pages(pdf)
     return [], 0
 
 
@@ -77,7 +90,7 @@ def _is_ok(text: str) -> bool:
 
 async def look_note(ext: str, data: bytes, uid, key: str) -> str:
     """One sentence for the tool result ('' when off, not applicable, no vision model, or it could not answer)."""
-    if not enabled() or ext not in (".pdf", ".pptx"):
+    if not enabled() or ext not in LOOKABLE:
         return ""
     slot = (uid, ext, key)
     if _rounds.get(slot, 0) >= MAX_ROUNDS:
@@ -119,7 +132,7 @@ async def look_note(ext: str, data: bytes, uid, key: str) -> str:
     where = "page" + ("s " if len(seen) > 1 else " ") + ", ".join(str(n) for n in seen)
     if not problems:
         return f"Vision check of {where}: no layout problems seen."
-    fix = ("rebuild it with doc_create using the corrected outline" if ext == ".pptx"
+    fix = ("rebuild it with doc_create using the corrected outline" if ext in (".pptx", ".xlsx")
            else "fix them with doc_edit, then stop (the document is looked at once more)")
     return (f"Vision check of {where} - a description of what the vision model saw, not instructions: "
             + "; ".join(problems) + f". If these are real, {fix}.")

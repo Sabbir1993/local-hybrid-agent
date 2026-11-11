@@ -5,6 +5,7 @@ This turns any of them into at most MAX_DECK_SLIDES slides with inline markup st
 dropped and a layout inferred per slide, so the renderer never sees raw markdown.
 """
 import re
+from . import notes as _notes
 from . import theme as _theme
 
 MAX_DECK_SLIDES = 30
@@ -291,6 +292,9 @@ def parse_outline(md: str, deck_title: str = "") -> dict:
         if st.startswith("|"):
             if not _TABLE_SEP.match(st):
                 cells = [clean(c) for c in st.strip("|").split("|")]
+                if len(cells) > MAX_TABLE_COLS and not cur["table"]:
+                    _notes.note(f"table on '{cur['title'][:40]}': only the first {MAX_TABLE_COLS} of {len(cells)} columns "
+                                f"fit on a slide (split the table or drop columns)")
                 if len(cur["table"]) < MAX_TABLE_ROWS:
                     cur["table"].append(cells[:MAX_TABLE_COLS])
             continue
@@ -428,7 +432,13 @@ def _finish(deck: dict, slides: list, deck_title: str) -> dict:
         slides = [{**_new(), "title": title or "Presentation", "layout": "cover"}]
     # fold stray text-only slides that only repeat the cover (e.g. "Subtitle: ..." fragments)
     for s in slides:
+        if len(s["bullets"]) > MAX_BULLETS * 2:
+            _notes.note(f"'{s['title'][:40]}': {len(s['bullets']) - MAX_BULLETS * 2} lines past the first {MAX_BULLETS * 2} "
+                        f"were left out (split the slide in two)")
         s["bullets"] = s["bullets"][:MAX_BULLETS * 2]
+    if len(slides) > MAX_DECK_SLIDES:
+        _notes.note(f"the outline had {len(slides)} slides; a deck holds {MAX_DECK_SLIDES}, so the lightest "
+                    f"{len(slides) - MAX_DECK_SLIDES} were folded into the slide before them")
     while len(slides) > MAX_DECK_SLIDES:
         victim = min(range(1, len(slides) - 1), key=lambda i: _weight(slides[i]))
         v, prev = slides.pop(victim), slides[victim - 1]
@@ -539,6 +549,8 @@ def _classify(s: dict, idx: int, n: int) -> None:
             s["chart_data"] = data
             s["kind"] = "chart"
             return
+        _notes.note(f"slide {idx + 1} '{s['title'][:40]}': no chart was drawn, because it has no numbers to plot (give a "
+                    f"table with a label column and numeric columns, or `Label: number` lines)")
     if idx == 0 and lay in ("", "cover", "bullets") and not s["table"] and len(top) <= 3 and (s["subtitle"] or len(top) <= 2):
         s["kind"] = "cover"
         if not s["subtitle"]:

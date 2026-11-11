@@ -48,9 +48,12 @@ DOC_EDIT_SCHEMA = {"type": "function", "function": {
 DOC_CREATE_SCHEMA = {"type": "function", "function": {
     "name": "doc_create",
     "description": "Create a new .pptx/.docx/.xlsx/.csv/.pdf from markdown. For .pptx use an outline: 'theme: "
-                   "midnight|corporate|forest|sunset|minimal|royal', '# Deck title', 'subtitle:', then slides separated "
-                   "by '---', each '## Title' + 3-5 short bullets (optional 'layout: cards|stats|timeline|two-column|"
-                   "quote|section', 'notes:'). For .xlsx write a workbook outline: '# Title', 'theme:', then one '## Sheet: Name' + a "
+                   "editorial|ember|midnight|corporate|forest|sunset|minimal|royal', '# Deck title', 'subtitle:', then slides "
+                   "separated by '---', each '## Title' + 3-5 short bullets (optional 'layout: kpi-grid|chart-kpis|"
+                   "leaderboard|roadmap|dimension-table|stats|timeline|cards|textside|comparison|agenda|two-column|quote|"
+                   "section|table|full|gallery', 'chart: bar|hbar|line|pie|stacked', 'image:', 'notes:'). The result tells "
+                   "you what was built differently from the outline and any layout problem found: fix those slides and "
+                   "call doc_create again. For .xlsx write a workbook outline: '# Title', 'theme:', then one '## Sheet: Name' + a "
                    "markdown table per sheet; formulas are real when written as =SUM(B2:B9) in a cell (checked and calculated for "
                    "you), and lines under a table set 'format: Col=currency:BDT|percent|date|int', 'total: Col=sum', "
                    "'highlight: Col<0 red', 'scale: Col', 'validate: Col in [a, b]', 'table: Name', 'freeze: A2', 'name: Rate = "

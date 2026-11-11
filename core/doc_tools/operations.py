@@ -287,8 +287,8 @@ def _layout_note(ext: str, data: bytes, markdown: str = "") -> str:
         return ""
     try:
         if ext == ".pptx":
-            from ..doc_ops.pptx_ops import lint
-            return lint.summary(lint.lint_deck(data))
+            from ..doc_ops.pptx_ops import lint, notes as deck_notes
+            return " ".join(x for x in (lint.summary(lint.lint_deck(data)), deck_notes.summary(data)) if x)
         if ext == ".pdf":
             from ..agent_tools import pdf_check
             return pdf_check.render_note(data, markdown)

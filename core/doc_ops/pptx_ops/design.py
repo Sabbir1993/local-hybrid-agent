@@ -33,6 +33,29 @@ def _lum(h: str) -> float:
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 
+# tone=green|red|amber... on KPI tiles and delta cards: (strong text colour, soft card fill), for light and dark themes
+_TONES_LIGHT = {"blue": ("1D4ED8", "DBEAFE"), "green": ("15803D", "DCFCE7"), "navy": ("0F172A", "E2E8F0"),
+                "amber": ("B45309", "FEF3C7"), "red": ("B91C1C", "FEE2E2"), "purple": ("7E22CE", "F3E8FF"),
+                "gray": ("374151", "F3F4F6")}
+_TONES_DARK = {"blue": "93C5FD", "green": "86EFAC", "navy": "E2E8F0", "amber": "FCD34D", "red": "FCA5A5",
+               "purple": "D8B4FE", "gray": "D1D5DB"}
+
+
+def _tone(t: dict, tone: str, fallback: str = "blue") -> tuple:
+    """(strong, soft) colours for a tone in this theme. The meaning of a tone stays (green = good, red = bad), but the
+    shades follow the theme: on a dark theme the text is the light shade on the theme's own surface, and "blue" / "navy"
+    are the theme's accent and text colours, so a KPI slide never looks like it came from another deck."""
+    tone = tone if tone in _TONES_LIGHT else fallback
+    dark = _lum(t["surface"]) < 0.4
+    if tone == "blue":
+        return t["accent"], (t["surface"] if dark else _TONES_LIGHT["blue"][1])
+    if tone == "navy":
+        return t["text"], (t["surface"] if dark else _TONES_LIGHT["navy"][1])
+    if dark:
+        return _TONES_DARK[tone], t["surface"]
+    return _TONES_LIGHT[tone]
+
+
 def _on(h: str) -> str:
     """Readable text colour on top of fill h: whichever of near-black / white has the higher WCAG contrast."""
     return "111111" if _contrast("111111", h) >= _contrast("FFFFFF", h) else "FFFFFF"
@@ -976,15 +999,6 @@ def _kpi_grid(slide, s, t):
     y0 = 1.95
     ch = 2.15
 
-    tone_colors = {
-        "blue": ("1D4ED8", "DBEAFE"),
-        "green": ("15803D", "DCFCE7"),
-        "navy": ("0F172A", "E2E8F0"),
-        "amber": ("B45309", "FEF3C7"),
-        "red": ("B91C1C", "FEE2E2"),
-        "purple": ("7E22CE", "F3E8FF"),
-        "gray": ("374151", "F3F4F6"),
-    }
     for i in range(n):
         x = MX + i * (cw + gap)
         item = metric_bullets[i] if i < len(metric_bullets) else ""
@@ -1010,7 +1024,8 @@ def _kpi_grid(slide, s, t):
         elif not caption and len(parts) >= 2 and not parts[1].startswith("tone="):
             caption = parts[1]
 
-        fg_col, _ = tone_colors.get(tone, (t["accent"] if i % 2 == 0 else t["accent2"], t["surface"]))
+        fg_col = _ink(_tone(t, tone)[0] if tone in _TONES_LIGHT else (t["accent"] if i % 2 == 0 else t["accent2"]),
+                      t["surface"], 4.5)
         tile = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y0), Inches(cw), Inches(ch))
         tile.name = f"KPI Card {i + 1}"
         tile.fill.solid()
@@ -1033,14 +1048,15 @@ def _kpi_grid(slide, s, t):
             p1.text = delta
             p1.alignment = PP_ALIGN.CENTER
             p1.space_after = Pt(4)
-            d_col = "15803D" if delta.startswith(("+", "↑", "^")) or "up" in delta.lower() else ("B91C1C" if delta.startswith("-") else "1D4ED8")
+            d_tone = "green" if delta.startswith(("+", "↑", "^")) or "up" in delta.lower() else ("red" if delta.startswith(("-", "v", "↓")) else "blue")
+            d_col = _ink(_tone(t, d_tone)[0], t["surface"], 4.5)
             _style_runs(p1, t["body"], 12, d_col, True)
 
         if caption:
             p2 = tf.add_paragraph()
             p2.text = caption
             p2.alignment = PP_ALIGN.CENTER
-            _style_runs(p2, t["body"], 11, t["text"], False)
+            _style_runs(p2, t["body"], 11, _ink(t["text"], t["surface"], 4.5), False)
 
     if callout_text:
         box_y = 4.35
@@ -1083,14 +1099,6 @@ def _chart_kpis(slide, s, t):
     gap = 0.18
     ch = (chart_h - gap * (n - 1)) / n
 
-    tone_themes = {
-        "green": ("DCFCE7", "166534"),
-        "blue": ("DBEAFE", "1E40AF"),
-        "gray": ("F3F4F6", "374151"),
-        "red": ("FEE2E2", "991B1B"),
-        "amber": ("FEF3C7", "92400E"),
-        "navy": ("E2E8F0", "0F172A"),
-    }
     default_tones = ["green", "blue", "gray", "red"]
 
     for i, item in enumerate(raw_cards):
@@ -1103,7 +1111,8 @@ def _chart_kpis(slide, s, t):
             if p.startswith("tone="):
                 tone = p.split("=")[1].strip().lower()
 
-        bg_col, fg_col = tone_themes.get(tone, tone_themes["blue"])
+        fg_col, bg_col = _tone(t, tone)
+        fg_col = _ink(_ink(fg_col, bg_col, 4.5), t["bg"], 4.5)        # readable on the card and on the slide behind it
         card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(cards_x), Inches(cy), Inches(cards_w), Inches(ch))
         card.name = f"Delta Card {i + 1}"
         card.fill.solid()
@@ -1126,7 +1135,7 @@ def _chart_kpis(slide, s, t):
         lp.text = label
         lp.alignment = PP_ALIGN.LEFT
         lbl_size = _fit([label], lbl_w, ch - 0.2, 14, 11, gap_pt=0, font=t["body"])
-        _style_runs(lp, t["body"], lbl_size, t["text"], False)
+        _style_runs(lp, t["body"], lbl_size, _ink(t["text"], bg_col, 4.5), False)
 
 
 def _leaderboard(slide, s, t):
@@ -1196,8 +1205,8 @@ def _leaderboard(slide, s, t):
             pill_x = x + (cw - pill_w) / 2
             pill_y = y + 1.10
             is_l5 = "l5" in tier.lower() or "native" in tier.lower()
-            pill_bg = "0F172A" if is_l5 else "DBEAFE"
-            pill_fg = "FFFFFF" if is_l5 else "1E40AF"
+            pill_bg = t["text"] if is_l5 else t["accent"]
+            pill_fg = _on(pill_bg)
             tpill = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(pill_x), Inches(pill_y), Inches(pill_w), Inches(pill_h))
             tpill.name = f"Tier Pill {i + 1}"
             tpill.fill.solid()
@@ -1239,11 +1248,15 @@ def _roadmap(slide, s, t):
 
     now_idx = -1
     for i, item in enumerate(items):
-        if "status=now" in item.lower() or "now" in item.lower():
+        if "status=now" in item.lower().replace(" ", ""):       # only the status field: "know" / "snow" are not "now"
             now_idx = i
             break
     if now_idx == -1:
         now_idx = max(0, n // 2 - 1)
+    # detail cards as tall as their longest text needs (2.3" at most): short notes no longer sit in large empty boxes
+    longest = max([len(([p.strip() for p in it.split("|")] + [""] * 4)[3]) for it in items] or [0])
+    per_line = max(12, int((sw - 0.3) * 11))
+    roadmap_card_h = min(2.3, max(0.95, 0.4 + 0.27 * -(-longest // per_line)))
 
     for i in range(n):
         cx = MX + sw * i + sw / 2
@@ -1266,24 +1279,25 @@ def _roadmap(slide, s, t):
             elif i == now_idx:
                 status = "now"
 
+        now_col = _ink(t["accent"], t["bg"], 4.5)          # the theme's accent, readable on the slide background
         if status == "done":
-            node_col = "0F172A"
-            node_fg = "FFFFFF"
+            node_col = t["text"]
+            node_fg = _on(node_col)
             title_col = t["text"]
             date_col = _ink(t["muted"], t["bg"], 4.5)
         elif status == "now":
-            node_col = "2563EB"
-            node_fg = "FFFFFF"
-            title_col = "2563EB"
-            date_col = "2563EB"
+            node_col = t["accent"]
+            node_fg = _on(node_col)
+            title_col = now_col
+            date_col = now_col
         else:
-            node_col = "CBD5E1"
-            node_fg = "64748B"
+            node_col = t["line"]
+            node_fg = _on(node_col)
             title_col = _ink(t["muted"], t["bg"], 4.5)
             date_col = _ink(t["muted"], t["bg"], 4.5)
 
-        _textbox(slide, cx - (sw - 0.1) / 2, track_y - 0.65, sw - 0.1, 0.4,
-                 [(title, t["head"], 10.5, title_col, True, False, 0)],
+        _textbox(slide, cx - (sw - 0.1) / 2, track_y - 0.86, sw - 0.1, 0.4,           # clear of the (larger) "now" node
+                 [(title, t["head"], 11, title_col, True, False, 0)],
                  name=f"Roadmap Title {i + 1}", anchor=MSO_ANCHOR.BOTTOM, align=PP_ALIGN.CENTER)
 
         dia = 0.58 if status != "now" else 0.68
@@ -1296,25 +1310,25 @@ def _roadmap(slide, s, t):
         if date_str:
             d_text = f"{date_str} ◀" if status == "now" and "◀" not in date_str else date_str
             _textbox(slide, cx - (sw - 0.1) / 2, track_y + 0.38, sw - 0.1, 0.3,
-                     [(d_text, t["body"], 9.5, date_col, status == "now", False, 0)],
+                     [(d_text, t["body"], 11, date_col, status == "now", False, 0)],
                      name=f"Roadmap Date {i + 1}", anchor=MSO_ANCHOR.TOP, align=PP_ALIGN.CENTER)
 
         card_x = MX + sw * i + 0.05
         card_w = sw - 0.1
         card_y = 3.85
-        card_h = 2.3
+        card_h = roadmap_card_h
 
         card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(card_x), Inches(card_y), Inches(card_w), Inches(card_h))
         card.name = f"Station Card {i + 1}"
         card.fill.solid()
-        card_bg = "EFF6FF" if status == "now" else t["surface"]
+        card_bg = t["surface"]
         card.fill.fore_color.rgb = _rgb(card_bg)
-        card.line.color.rgb = _rgb("2563EB" if status == "now" else t["line"])
+        card.line.color.rgb = _rgb(t["accent"] if status == "now" else t["line"])
         card.line.width = Pt(1.5 if status == "now" else 1)
         card.shadow.inherit = False
 
         if status == "now":
-            _deco(slide, MSO_SHAPE.RECTANGLE, card_x, card_y, 0.08, card_h, "2563EB", back=False, name=f"deco-now-bar-{i + 1}")
+            _deco(slide, MSO_SHAPE.RECTANGLE, card_x, card_y, 0.08, card_h, t["accent"], back=False, name=f"deco-now-bar-{i + 1}")
 
         if detail:
             tb = slide.shapes.add_textbox(Inches(card_x + (0.15 if status == "now" else 0.08)),
@@ -1325,16 +1339,16 @@ def _roadmap(slide, s, t):
             p = tb.text_frame.paragraphs[0]
             p.text = detail
             p.alignment = PP_ALIGN.LEFT
-            det_size = _fit([detail], card_w - 0.2, card_h - 0.3, 10, 8.5, gap_pt=2, font=t["body"])
-            _style_runs(p, t["body"], det_size, "1E40AF" if status == "now" else t["text"], False)
+            det_size = _fit([detail], card_w - 0.2, card_h - 0.3, 12, 11, gap_pt=2, font=t["body"])
+            _style_runs(p, t["body"], det_size, _ink(t["text"], t["surface"], 4.5), False)
 
     leg_x = MX
     leg_y = 6.35
-    for li, (l_name, l_col) in enumerate([("Done", "0F172A"), ("Now", "2563EB"), ("Planned", "CBD5E1")]):
+    for li, (l_name, l_col) in enumerate([("Done", t["text"]), ("Now", t["accent"]), ("Planned", t["line"])]):
         lx = leg_x + li * 1.5
         _deco(slide, MSO_SHAPE.OVAL, lx, leg_y + 0.05, 0.16, 0.16, l_col, back=False, name=f"deco-leg-{li}")
         _textbox(slide, lx + 0.25, leg_y, 1.1, 0.26,
-                 [(l_name, t["body"], 10, t["text"], False, False, 0)],
+                 [(l_name, t["body"], 11, t["text"], False, False, 0)],
                  name=f"Legend Label {li}", anchor=MSO_ANCHOR.MIDDLE)
 
 
@@ -1357,11 +1371,12 @@ def _dimension_table(slide, s, t):
         abox = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(MX), Inches(ay), Inches(area_w), Inches(ah))
         abox.name = "Alert Banner"
         abox.fill.solid()
-        abox.fill.fore_color.rgb = _rgb("FEE2E2")
+        alert_fg, alert_bg = _tone(t, "red")
+        abox.fill.fore_color.rgb = _rgb(alert_bg)
         abox.line.fill.background()
         abox.shadow.inherit = False
 
-        _deco(slide, MSO_SHAPE.RECTANGLE, MX, ay, 0.1, ah, "B91C1C", back=False, name="deco-alert-stripe")
+        _deco(slide, MSO_SHAPE.RECTANGLE, MX, ay, 0.1, ah, alert_fg, back=False, name="deco-alert-stripe")
 
         tb = slide.shapes.add_textbox(Inches(MX + 0.25), Inches(ay), Inches(area_w - 0.4), Inches(ah))
         _frame(tb.text_frame, MSO_ANCHOR.MIDDLE)
@@ -1369,7 +1384,7 @@ def _dimension_table(slide, s, t):
         p.text = alert_text
         p.alignment = PP_ALIGN.LEFT
         a_size = _fit([alert_text], area_w - 0.4, ah - 0.1, 12, 10, gap_pt=0, font=t["head"], bold=True)
-        _style_runs(p, t["head"], a_size, "991B1B", True)
+        _style_runs(p, t["head"], a_size, _ink(_ink(alert_fg, alert_bg, 4.5), t["bg"], 4.5), True)
 
 
 def _bullet_box(s: dict) -> tuple:
@@ -1467,6 +1482,9 @@ def build(deck: dict) -> Presentation:
         except Exception as e:                                            # one bad slide must not lose the deck
             print(f"[deck] slide {i + 1} ({s.get('kind')}) failed to render: {type(e).__name__}: {e}; "
                   "used a plain slide", file=sys.stderr)
+            from . import notes
+            notes.note(f"slide {i + 1} '{str(s.get('title'))[:40]}': the {s.get('kind')} layout could not be drawn, so a "
+                       f"plain title-and-text slide was used (simplify that slide or pick another layout)")
             while len(prs.slides) > n_before:
                 _drop_last_slide(prs)
             _plain_slide(prs, lays, s, t)

@@ -142,7 +142,11 @@ PPTX_MANUAL = (
     "+ cyan), corporate (white + blue), forest (green + amber), sunset (charcoal + coral), minimal (white + red accent), royal "
     "(indigo + gold), and a slide count (default 10). Skip the question when they already answered, said 'you choose' / 'just make "
     "it', or sent a detailed brief: then pick the theme that fits the topic. To change only the look of an existing deck, call "
-    "write_file again with the same slides and a new `theme:` line.\n"
+    "doc_create again with the same slides and a new `theme:` line.\n"
+    "   AFTER BUILDING: read the tool result. It lists layout problems (text that does not fit, overlaps), anything built "
+    "differently from your outline (a chart with no numbers, a picture left out, lines cut) and, when a vision model is "
+    "available, what the rendered slides look like. If it reports problems, correct only those slides and call doc_create "
+    "once more with the full outline; if it reports none, do not rebuild.\n"
 )
 
 _PPTX_RE = re.compile(r"\b(pptx?|power ?point|slides?|slide deck|deck|presentation)\b", re.I)
