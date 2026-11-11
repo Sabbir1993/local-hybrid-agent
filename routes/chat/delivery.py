@@ -240,8 +240,10 @@ _TAG_RX = re.compile(r"[ \t]*\[DOWNLOAD:\s*([^\]\n\[]+)\][ \t]*")
 def verify_download_tags(content: str, written: list[str], known: list[str], exists) -> tuple[str, bool]:
     """Every [DOWNLOAD: name] tag must name a file that exists (`exists(name)` -> bool), or the page draws a Preview /
     Download chip for a file that was never made. A name that matches no file is pointed at the one file of the same
-    type written this turn, if there is exactly one; otherwise the tag is dropped and the reply says so."""
-    real = set(written or []) | set(known or [])
+    type written this turn, if there is exactly one; otherwise the tag is dropped and the reply says so.
+    `known` (names from earlier replies' tags) is NOT trusted on its own: a tag a past reply carried for a page that was
+    never saved would otherwise keep drawing a dead Preview / Download button."""
+    real = set(written or [])
     out, changed, missing = content or "", False, []
 
     def fix(m):
@@ -264,7 +266,7 @@ def verify_download_tags(content: str, written: list[str], known: list[str], exi
 
 
 _HTML_FENCE_RX = re.compile(r"```html[^\n]*\n([\s\S]*?)\n```", re.I)
-_HTML_DOC_RX = re.compile(r"<!DOCTYPE\s+html[\s\S]*?</html>", re.I)
+_HTML_DOC_RX = re.compile(r"(?:<!DOCTYPE\s+html[^>]*>\s*)?<html\b[\s\S]*?</html>", re.I)   # DOCTYPE optional; a cut-off page has no </html>
 _NAMED_HTML_RX = re.compile(r"`?([\w\-]{2,60}\.html?)`?", re.I)
 
 
@@ -288,9 +290,12 @@ def inline_html_deliverable(content: str, query: str):
 
 
 def _file_exists(name: str) -> bool:
-    from core.agent_tools import _common_resolve
+    """True when the Preview / Download buttons for this name would open a file: the same lookup /agent/raw and
+    /agent/download use (the exact name, or its newest saved version such as name-1a2b3c4d.html)."""
+    from routes.agent.download import _resolve_requested_file
     try:
-        return _common_resolve(Path(name.strip()).name).is_file()
+        p = _resolve_requested_file(Path(name.strip()).name, space="common", recover=False)
+        return bool(p and p.is_file())
     except Exception:
         return False
 
@@ -301,7 +306,9 @@ def finalize_reply_files(content: str, written: list[str], query: str, known: li
     2. every [DOWNLOAD: x] tag must name a real file (see verify_download_tags);
     3. links for the files written this turn are added / superseded ones dropped (_finalize_download_tags)."""
     out = content or ""
-    if not written and can_write:
+    # a page pasted into the reply is saved unless an HTML file was already written this turn (another kind of file,
+    # e.g. a cleaned sheet, does not stand in for the page)
+    if can_write and not any(str(w).lower().endswith((".html", ".htm")) for w in written):
         found = inline_html_deliverable(out, query)
         if found:
             res = chat_write_file({"path": found[0], "content": found[1]})

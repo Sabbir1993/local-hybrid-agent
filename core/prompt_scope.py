@@ -170,7 +170,7 @@ WEB_MANUAL = (
     "- `web_fetch(url)`: Fetch and read the full readable text content of any website or page URL.\n\n"
     "CRITICAL OPERATING RULES:\n"
     "1. YOU HAVE ACTIVE REAL-TIME INTERNET ACCESS. NEVER say 'I cannot browse the live internet' or 'I don't have internet access'.\n"
-    "2. When the user provides a URL or asks to inspect, read, browse, or summarize a website (e.g. 'summarise https://...'), call `web_fetch(url=...)` immediately.\n"
+    "2. When the user pastes a link or asks to inspect, read, browse, or summarize a website they name, call `web_fetch` with that exact address immediately.\n"
     "3. When the user asks about recent events, real-time facts, current versions, weather, or anything outside your certain knowledge, call `web_search(query=...)` immediately.\n"
     "4. When the user asks for a photo, picture, image, or portrait (e.g. 'Can you give his photo?', 'show a picture of...'), call `web_search_images(query=...)` immediately, and in your final answer include the image links using markdown image syntax `![Description](URL)` (use the Thumbnail URL for list-item pictures).\n"
     "5. If you are confident in your knowledge (e.g. general explanations, basic math, creative writing, common programming concepts), answer directly without calling tools.\n"
@@ -696,6 +696,18 @@ ATTACHED_DATA = (
 
 _DATA_NOTE_RX = re.compile(r'data_query\(file="([^"\n]+)"\)')
 _DATA_HEADER_RX = re.compile(r"--- FILE:\s*([^\n]*?\.(?:xlsx?|csv))\s*---", re.IGNORECASE)
+
+
+def typed_urls(own_text: str) -> list:
+    """Links in what the user typed (pass the text with attachment blocks removed). A link cut short with an ellipsis is a
+    truncated table cell or a placeholder, not an address to open."""
+    return [u for u in re.findall(r'https?://[^\s<>")\]]+', own_text or "") if not u.endswith(("…", "..."))]
+
+
+def web_allowed_with_data(has_data_attachment: bool, web_explicit: bool, deep_research: bool) -> bool:
+    """With a spreadsheet attached, the answer comes from the files (data_query / data_sql). Web tools stay only when the
+    user asked for outside facts in their own words, or chose Deep research; a globe switched on is not such a request."""
+    return not has_data_attachment or web_explicit or deep_research
 
 
 def attached_data_files(msgs) -> list:

@@ -49,7 +49,21 @@ class DownloadTagTests(unittest.TestCase):
 
     def test_real_file_tag_kept(self):
         text = "[DOWNLOAD: a.html]"
-        self.assertEqual(delivery.verify_download_tags(text, [], ["a.html"], lambda n: False), (text, False))
+        self.assertEqual(delivery.verify_download_tags(text, [], ["a.html"], lambda n: True), (text, False))
+        self.assertEqual(delivery.verify_download_tags(text, ["a.html"], [], lambda n: False), (text, False))
+
+    def test_name_known_from_an_earlier_reply_but_never_saved_is_dropped(self):
+        out, changed = delivery.verify_download_tags("[DOWNLOAD: graph.html]", [], ["graph.html"], lambda n: False)
+        self.assertTrue(changed)
+        self.assertNotIn("[DOWNLOAD:", out)
+        self.assertIn("No file was created for `graph.html`", out)
+
+    def test_page_without_doctype_is_found_and_a_cut_off_page_is_not(self):
+        page = "<html><head><title>G</title></head><body>" + "x" * 500 + "</body></html>"
+        found = delivery.inline_html_deliverable("[DOWNLOAD: graph.html]\n```html\n" + page + "\n```", "make graph.html")
+        self.assertEqual(found, ("graph.html", page))
+        cut = "```html\n<html><body>" + "x" * 500 + "\n```"
+        self.assertIsNone(delivery.inline_html_deliverable("[DOWNLOAD: graph.html]\n" + cut, "make graph.html"))
 
     def test_inline_html_is_saved_and_linked(self):
         reply = ("Save the following as `village-3d.html`.\n[DOWNLOAD: village-3d-homes.html]\n```html\n" + HTML + "\n```")

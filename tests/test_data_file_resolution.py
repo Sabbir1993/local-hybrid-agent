@@ -44,6 +44,13 @@ class DataFileResolutionTests(unittest.TestCase):
     def test_ambiguous_part_of_a_name_is_refused(self):
         self.assertIsNone(resolve_common("Record Form 1.xlsx"))           # in every file's name
 
+    def test_punctuation_in_a_name_still_resolves(self):
+        self.assertEqual(resolve_common("Achivement Record Form 1 - Moinul Hasan Khan - 1,890.xlsx").name, NAMES[2])
+
+    def test_an_id_with_a_doubled_digit_is_not_another_record(self):
+        (agent_tools.common_workspace() / "Record - 150.xlsx").write_bytes(b"x")
+        self.assertIsNone(resolve_common("Record - 1550.xlsx"))
+
     def test_unique_part_of_a_name_still_resolves(self):
         self.assertEqual(resolve_common("Moinul Hasan Khan.xlsx").name, NAMES[2])
 

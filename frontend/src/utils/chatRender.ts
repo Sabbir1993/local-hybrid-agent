@@ -222,7 +222,9 @@ export function renderAgentActsHtml(acts: any[], secs?: number): string {
       const match = toolMap.get(a.id);
       if (match) {
         match.result = a.result;
-        if (a.ok === false || (typeof a.result === 'string' && a.result.includes('failed'))) {
+        // the server's verdict decides; a result that merely contains the word "failed" (a cell in a data table) is not
+        // a failure. Only older stored steps without `ok` fall back to an "error..." result.
+        if (a.ok === false || (a.ok === undefined && typeof a.result === 'string' && /^\s*error\b/i.test(a.result))) {
           match.failed = true;
         }
       }

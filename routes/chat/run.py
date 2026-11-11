@@ -181,13 +181,15 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         return JSONResponse({"error": _hit.get("message")}, status_code=403)
 
     import re as _re
-    url_matches = _re.findall(r'https?://[^\s<>")\]]+', last_query)
 
     prior_files = session_files(msgs)
     # what the user typed, without the attachment text the client pastes into the same message: every intent
     # check below must read this, or a word inside a sheet ("add", "ssl", "policy") decides what the turn is
     from core.knowledge_router import has_attachment_text, own_words, should_consult_kb
     own_q = own_words(last_query, 2000)
+    # only links the user typed: a URL inside an attached sheet (often cut to "https://…" by the profile) is data, not a
+    # request to open it
+    url_matches = prompt_scope.typed_urls(own_q)
     # attached data anywhere in the conversation (a follow-up like 'which status has the most rows' has none in its own message)
     has_attachments = any(m.get('role') == 'user' and has_attachment_text(str(m.get('content') or '')) for m in msgs)
     _prev_a = next((str(m.get("content") or "") for m in reversed(msgs[:-1]) if m.get("role") == "assistant"), "")
@@ -255,7 +257,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         html_build = True
     wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or longdoc_build or bool(resume_note) or sheet_build or html_build or bool(absent_type)
     has_file = bool(file_followup or wants_file)
-    web_explicit = bool(use_web and prompt_scope.web_intent(last_query, url_matches, msgs,
+    web_explicit = bool(use_web and prompt_scope.web_intent(own_q, url_matches, msgs,
                                                             explicit_only=voice_policy.web_explicit_only(req),
                                                             research=bool((APP_CONFIG.get("chat") or {}).get("research_web", False))))
     has_web = False   # decided after the KB lookup (core/kb_coverage.py): the web fills what the KB cannot
@@ -571,6 +573,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         web_budget_n = max(int(web_budget_n or 0), 25)
     if brief_phase == "ask":
         has_web = False          # nothing researched before the card is kept (only the final text is), so don't search
+    if not prompt_scope.web_allowed_with_data(has_data_attachment, web_explicit, deep and effort == "extra"):
+        has_web = False          # attached data: answer from the files; the web only when the user asked for outside facts
+        web_budget_n = 0
         # the card comes first: with a file tool in reach the model built the PDF / deck and the card was added after it
         chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") not in ASK_BLOCKED_TOOLS]
     if has_web:
@@ -925,10 +930,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     break
                 # Turn 0 proactive URL fetch: if user specifically asks to summarize or inspect a URL
                 if turn == 0 and use_web and chat_tools and url_matches and tool_allowed("web_fetch"):
-                    is_fetch_intent = any(w in last_query.lower() for w in (
+                    is_fetch_intent = any(w in own_q.lower() for w in (
                         "summarise", "summarize", "read", "fetch", "check", "browse", "what is on",
                         "site", "website", "page", "link", "article", "look at", "review", "tell me about"
-                    )) or len(last_query.strip()) <= len(url_matches[0]) + 15
+                    )) or len(own_q.strip()) <= len(url_matches[0]) + 15
                     if is_fetch_intent:
                         target_url = url_matches[0]
                         tc_id = "fetch_0"

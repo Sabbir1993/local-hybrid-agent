@@ -10,7 +10,8 @@ import re
 # what the model is told before the tool-free call
 WRAPUP_NOTE = ("[system note] The tool rounds for this reply are used up, so no tools are available now. Do not call a tool and "
                "do not write one out. In a few plain sentences say what is finished, what is not finished yet, and that the "
-               "person can press Continue to carry on.")
+               "person can press Continue to carry on. No file can be saved in this step: do not write a [DOWNLOAD: ...] "
+               "tag or claim a file was created.")
 # what the model is told while rounds are still left, once they are running low
 LOW_ROUNDS_NOTE = ("[system note] Only {n} tool rounds are left in this reply. Put the most important remaining work into as few "
                    "calls as possible (send many operations in ONE call), and do not retry a call that already failed in the same "

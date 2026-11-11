@@ -98,8 +98,7 @@ def resolve_common(name: str) -> Optional[Path]:
             f_sk = re.sub(r'[^a-zA-Z0-9]', '', doc_store.base_stem(f.name)).lower()
             if f_sk == sk_query:
                 return f
-            if re.sub(r'(.)\1+', r'\1', f_sk) == re.sub(r'(.)\1+', r'\1', sk_query):
-                return f
+            # (no "collapse repeated characters" match: it equates IDs like 1550 and 150, i.e. another person's record)
         clean_stem = doc_store.base_stem(Path(clean_name).name).lower()
         matching = [f for f in suf_files if (doc_store.base_stem(f.name).lower() in clean_stem or clean_stem in doc_store.base_stem(f.name).lower())]
         # Only an unambiguous match: files that differ by one name or ID (one employee's record vs another's) must never

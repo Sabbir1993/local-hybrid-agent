@@ -17,7 +17,8 @@ def _recovery_on() -> bool:
         return False
 
 
-def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[Path]:
+def _resolve_requested_file(path: str, space: Optional[str] = None, recover: bool = True) -> Optional[Path]:
+    """The saved file a Preview / Download request names. recover=False only looks (no history recovery, which writes)."""
     import re as _re
     p = None
     clean_name = Path(path).name
@@ -80,7 +81,7 @@ def _resolve_requested_file(path: str, space: Optional[str] = None) -> Optional[
     # Off by default (chat.download_recovery): it writes a NEW file from text found in the user's chat history, so the file the
     # user gets is not the one that was generated. A missing file is a 404 unless the admin opts in.
     uid = get_current_user_id()
-    if (p is None or not p.is_file()) and uid is not None and _recovery_on():
+    if recover and (p is None or not p.is_file()) and uid is not None and _recovery_on():
         try:
             from core.db import _projects_db
             rows = _projects_db.execute(
