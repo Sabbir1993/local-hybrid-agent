@@ -48,7 +48,7 @@ _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,99}$")
 _LIBS = ("openpyxl", "pptx", "docx", "PIL", "lxml", "matplotlib")
 
-STATE = {"dir": Path("/var/lib/a770-runner"), "cert": None, "allow_unsandboxed": False, "sandbox": "none"}
+STATE = {"dir": Path("/var/lib/local-agent-runner"), "cert": None, "allow_unsandboxed": False, "sandbox": "none"}
 DEFAULT_MAX_JOBS = 2
 JOB_WAIT_S = 30                 # a request waits this long for a free slot, then answers "busy"
 _JOBS = {"max": DEFAULT_MAX_JOBS, "sem": threading.BoundedSemaphore(DEFAULT_MAX_JOBS), "running": 0, "wait_s": JOB_WAIT_S}
@@ -273,7 +273,7 @@ SELFTEST_NET = ("import socket\n"
                 "except OSError:\n    print('NET_BLOCKED')\n")
 SELFTEST_SECRETS = ("import os\n"
                     "bad = [k for k in os.environ if any(w in k.upper() for w in ('TOKEN', 'SECRET', 'KEY', 'PASSWORD'))]\n"
-                    "seen = [p for p in ('/etc/shadow', '/var/lib/a770-runner', '/root') if os.path.exists(p)]\n"
+                    "seen = [p for p in ('/etc/shadow', '/var/lib/local-agent-runner', '/root') if os.path.exists(p)]\n"
                     "print('CLEAN' if not bad and not seen else 'LEAK ' + repr(bad + seen))\n")
 SELFTEST_HELLO = "open('hello.txt', 'w').write('hello from the runner')\nprint('done')\n"
 SELFTEST_LIBS = ("import importlib\nmiss = []\nfor m in %r:\n    try:\n        importlib.import_module(m)\n"
