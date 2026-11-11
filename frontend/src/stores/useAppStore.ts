@@ -221,7 +221,6 @@ interface AppState {
   fetchModels: () => Promise<void>;
   fetchProjects: () => Promise<void>;
   loadSelectedModel: () => Promise<void>;
-  unloadModel: () => Promise<void>;
   sendPrompt: (text: string, options?: { images?: string[]; files?: string; displayContent?: string; voice?: boolean; truncateTo?: number; reattachRunId?: string; onAccepted?: () => void }) => Promise<void>;
   abortGeneration: () => void;
   setActiveModal: (modal: ActiveModal) => void;
@@ -1145,18 +1144,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     } else {
       set({ projects: [] });
-    }
-  },
-
-  unloadModel: async () => {
-    set({ isModelLoading: true });
-    try {
-      const ok = await api.control.stopModel();
-      get().showToast(ok ? 'Model unloaded from GPU VRAM' : 'Could not unload the model', ok ? 'success' : 'error');
-    } finally {
-      await get().fetchStatus();
-      await get().fetchModels();
-      set({ isModelLoading: false });
     }
   },
 

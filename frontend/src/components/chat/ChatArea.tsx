@@ -485,8 +485,7 @@ export const ChatArea: React.FC = () => {
     }
   };
 
-  // A model is loaded when this app started it (pid), it answers its health check (healthy), or a cloud model is set.
-  const isModelLoaded = Boolean(serverStatus?.pid || serverStatus?.healthy || serverStatus?.cloud_main);
+  const isModelLoaded = Boolean(serverStatus?.pid || serverStatus?.cloud_main);
   const isCloudActive = Boolean(serverStatus?.cloud_main);
   const rawModelName =
     serverStatus?.cloud_main?.display ||

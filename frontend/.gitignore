@@ -25,6 +25,3 @@ dist-ssr
 
 # local environment (credentials, organization settings)
 .env
-
-# production server settings (copy from .env.production.example)
-.env.production

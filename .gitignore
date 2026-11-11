@@ -11,13 +11,6 @@ venv/
 scratch/
 companion/dist/
 config/providers.json
-# Local settings (created from config/*.example.json on first start; edits stay on this machine)
-config/app.json
-config/roles.json
-config/model_configs.json
-config/sampling_config.json
-config/fx_rates.json
-config/web_blocked.json
 config/providers.json.migrated
 config/providers/
 # NOTE: /.agents was previously listed here while 69 of its files were still tracked, which

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in — Local Agent</title>
+<script src="/static/js/theme-boot.js?v=1.2"></script>
+<link rel="icon" href="/static/logo/logo.jpg">
+<link rel="stylesheet" href="/static/css/style.css?v=3.0">
+<style>
+  body { display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; background:var(--bg); }
+  #login-box { width:340px; max-width:90vw; padding:28px 24px; border:1px solid var(--border); border-radius:12px; background:var(--bg-input, var(--bg)); }
+  #login-box h1 { font-size:16px; margin:0 0 4px; color:var(--fg, #eee); }
+  #login-box p.sub { color:var(--dim); font-size:12px; margin:0 0 18px; }
+  #login-box label { display:block; font-size:11px; color:var(--dim); margin:12px 0 4px; letter-spacing:0.5px; text-transform:uppercase; }
+  #login-box input { width:100%; box-sizing:border-box; padding:9px 10px; border-radius:8px; border:1px solid var(--border); background:var(--bg-input, transparent); color:inherit; font-size:13px; }
+  #login-err { color:#f85149; font-size:12px; min-height:16px; margin-top:10px; }
+  #login-submit { width:100%; margin-top:16px; padding:10px; }
+</style>
+</head>
+<body>
+<div id="login-box" class="card">
+  <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+    <img src="/static/logo/logo.jpg" alt="Logo" width="28" height="28" style="border-radius:6px; object-fit:cover;">
+    <h1 style="margin:0;">LOCAL AGENT</h1>
+  </div>
+  <p class="sub">Sign in to continue</p>
+  <form id="login-form">
+    <div id="step-password">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button id="login-submit" class="btn accent" type="submit" style="width:100%;margin-top:16px;padding:10px;">Sign in</button>
+    </div>
+  </form>
+  <form id="mfa-form" style="display:none">
+    <div id="step-mfa" style="display:none">
+      <label for="mfa-code">Authenticator code</label>
+      <input id="mfa-code" name="mfa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" required>
+      <button class="btn accent" type="submit" style="width:100%;margin-top:16px;padding:10px;">Verify</button>
+    </div>
+  </form>
+  <form id="enroll-form" style="display:none">
+    <div id="step-enroll" style="display:none">
+      <div style="display:flex;justify-content:center;margin:12px 0;">
+        <img id="enroll-qr" src="" alt="TOTP QR Code" width="160" height="160" style="display:none;background:#fff;padding:8px;border-radius:6px;border:1px solid var(--border);" />
+      </div>
+      <label>Secret (type into your authenticator app)</label>
+      <code id="enroll-secret" style="display:block;word-break:break-all;font-size:12px;margin:4px 0;"></code>
+      <label>Setup URI (copy into the app if it supports it)</label>
+      <code id="enroll-uri" style="display:block;word-break:break-all;font-size:10px;margin:4px 0;"></code>
+      <label>Backup codes (save these — each works once)</label>
+      <code id="enroll-codes" style="display:block;word-break:break-all;font-size:12px;margin:4px 0;"></code>
+      <label for="enroll-code">Authenticator code</label>
+      <input id="enroll-code" name="enroll-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" required>
+      <button class="btn accent" type="submit" style="width:100%;margin-top:16px;padding:10px;">Enable &amp; sign in</button>
+    </div>
+  </form>
+  <div id="login-err"></div>
+</div>
+<script src="/static/js/login.js?v=1.1"></script>
+<script src="/static/js/password-toggle.js?v=1.2"></script>
+</body>
+</html>

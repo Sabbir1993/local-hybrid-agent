@@ -86,9 +86,6 @@ SMALL = ('routers', 'embedder', 'whisper', 'tts')
 
 
 def _app_config() -> dict:
-    if not CONFIG.exists() and CONFIG.with_name("app.example.json").exists():
-        import shutil                                  # first run: start from the tracked example, as core/config.py does
-        shutil.copyfile(CONFIG.with_name("app.example.json"), CONFIG)
     try:
         return json.loads(CONFIG.read_text(encoding="utf-8"))
     except (OSError, ValueError):

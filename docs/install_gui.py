@@ -37,7 +37,7 @@ HOME = Path.home()
 GROUPS = {"routers", "embedder", "whisper", "tts", "vision", "routing", "voice", "image"}
 APT_PACKAGES = ("git curl wget unzip tmux python3 python3-venv python3-pip mesa-vulkan-drivers vulkan-tools pciutils "
                 "linux-firmware gnome-keyring dbus-user-session linux-generic-hwe-24.04")
-WHISPER_PACKAGES = "build-essential cmake libvulkan-dev glslc spirv-headers glslang-tools git"
+WHISPER_PACKAGES = "build-essential cmake libvulkan-dev glslc git"
 
 TOKEN = secrets.token_urlsafe(24)
 LOG: list = []                   # lines shown in the page

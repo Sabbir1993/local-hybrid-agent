@@ -54,9 +54,9 @@ compute before production.
    ```
    then on the VM, as root: `apk add --no-cache python3 py3-pip bubblewrap openssl py3-lxml py3-pillow py3-numpy py3-matplotlib py3-openpyxl`,
    `pip install --no-cache-dir --break-system-packages -r /root/runner/requirements.txt`, make a no-login user (`adduser -S -D -H -s /sbin/nologin a770runner`),
-   a private state folder (`mkdir -p /var/lib/local-agent-runner && chown a770runner /var/lib/local-agent-runner && chmod 700 /var/lib/local-agent-runner`),
+   a private state folder (`mkdir -p /var/lib/a770-runner && chown a770runner /var/lib/a770-runner && chmod 700 /var/lib/a770-runner`),
    a self-signed certificate in it (`openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 -subj "/CN=a770-runner" -keyout key.pem -out cert.pem`),
-   and start it as that user: `python3 /root/runner/runner_server.py serve --state-dir /var/lib/local-agent-runner --port 8470 --max-jobs 2`
+   and start it as that user: `python3 /root/runner/runner_server.py serve --state-dir /var/lib/a770-runner --port 8470 --max-jobs 2`
    (run it from an OpenRC service so it survives a reboot).
 6. **Lock it down**, on the VM: install `nftables` and write rules that accept input only from `APP_IP` (`[HOST-ONLY-ADDRESS-OF-YOUR-PC]`) on
    the runner port (plus loopback and established connections), with input, forward and output policy `drop`. Everything else is dropped,
@@ -126,7 +126,7 @@ production boundary (WSL has full outbound internet and, by default, access to y
 
 ## Pairing
 
-On the runner: `python3 /opt/a770-runner/runner_server.py pair-code --state-dir /var/lib/local-agent-runner` prints a code valid for 10
+On the runner: `python3 /opt/a770-runner/runner_server.py pair-code --state-dir /var/lib/a770-runner` prints a code valid for 10
 minutes (5 wrong tries burn it). In the app: **Settings -> Code Runner**, enter the runner address (`https://[RUNNER-ADDRESS]:8470`)
 and the code. The app pins the certificate, stores the token in the server's keychain (never in a file), runs the self-test and
 switches the tool on when it passes. Re-pairing replaces the token.

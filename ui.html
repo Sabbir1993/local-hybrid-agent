@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Local Agent — Control Center</title>
+<script src="/static/js/theme-boot.js?v=1.2"></script>
+<link rel="stylesheet" href="/static/css/splash.css?v=1.0">
+<link rel="stylesheet" href="/static/css/style.css?v=5.21">
+<link rel="stylesheet" href="/static/css/lanes.css?v=1.2">
+<link rel="stylesheet" href="/static/css/media.css?v=1.2">
+<link rel="stylesheet" href="/static/css/voice.css?v=1.1">
+<link rel="stylesheet" href="/static/css/claude-ui.css?v=1.6">
+<link rel="icon" href="/static/logo/logo.jpg">
+<noscript><style>#splash{display:none}</style></noscript>
+</head>
+<body>
+<div id="splash" aria-hidden="true"><div class="splash-logo"><img src="/static/logo/logo.jpg" alt=""></div></div>
+<div id="app">
+  <aside id="sidebar">
+    <div class="sidebar-brand-header" id="sidebar-brand-header" title="Local Agent — Control Center">
+      <img src="/static/logo/logo.jpg" alt="Logo" class="sidebar-brand-logo">
+      <span class="sidebar-brand-title">Local Agent</span>
+    </div>
+    <div class="claude-sidebar-top-block">
+      <!-- Hidden compatibility button for shortcuts / scripts -->
+      <button id="btn-newchat" style="display:none;" aria-hidden="true"></button>
+
+      <!-- Mode Switch: Chat | Agent | Code (Native/Companion only) -->
+      <div id="app-mode-switch" class="mode-switch full tri-mode-switch" title="Switch Mode" style="display:none;">
+        <button id="mode-chat" class="mode-btn active" type="button" title="Chat (Direct LLM conversation)">
+          <svg class="ui-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>Chat</span>
+        </button>
+        <button id="mode-agent" class="mode-btn" type="button" title="Custom Agents (Persona & tools)">
+          <svg class="ui-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M12 8V4H8"/><path d="M2 14h2"/><path d="M20 14h2"/><circle cx="9" cy="13" r="1" fill="currentColor"/><circle cx="15" cy="13" r="1" fill="currentColor"/><path d="M9 17h6"/></svg>
+          <span>Agent</span>
+        </button>
+        <button id="mode-code" class="mode-btn" type="button" title="Coding Agent (Project workspace & tools)">
+          <svg class="ui-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          <span>Code</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Custom Agents Section (Agent Mode) -->
+    <div id="custom-agents-card" class="sidebar-section" style="display:none;">
+      <div class="sidebar-section-head">
+        <span class="sidebar-section-title">My Agents</span>
+        <div style="display:flex; align-items:center; gap:2px;">
+          <button id="btn-new-custom-agent" class="claude-icon-tool" title="Create New Custom Agent (+)" aria-label="New Custom Agent">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="custom-agents-sidebar-list" class="claude-projects-scroll"></div>
+    </div>
+
+    <!-- Projects Section (Agent Task Mode) -->
+    <div id="projects-card" class="sidebar-section" style="display:none;">
+      <div class="sidebar-section-head">
+        <span class="sidebar-section-title">Projects</span>
+        <div style="display:flex; align-items:center; gap:2px;">
+          <button id="btn-newproject" class="claude-icon-tool" title="Create / Register New Project" aria-label="New Project">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="projects-list" class="claude-projects-scroll"></div>
+      <div id="device-bar" style="display:none;"><span id="device-label-text"></span></div>
+    </div>
+
+    <!-- Sessions Section (Chats or Project Tasks) -->
+    <div class="sidebar-section" style="flex:1; min-height:0; display:flex; flex-direction:column;">
+      <div class="sidebar-section-head">
+        <span class="sidebar-section-title" id="session-title">Recent Chats</span>
+        <div style="display:flex; align-items:center; gap:2px; margin-left:auto;">
+          <button class="claude-icon-tool" id="btn-new-session" title="New Session (+)" aria-label="New Session">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button class="claude-icon-tool" id="btn-sidebar-search" title="Filter sessions" aria-label="Filter sessions" aria-expanded="false" aria-controls="session-filter-bar">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="session-filter-bar" id="session-filter-bar" hidden>
+        <input type="search" id="session-filter-input" placeholder="Filter chats…" autocomplete="off" maxlength="100" aria-label="Filter sessions by title">
+        <span class="dim" id="session-filter-count" aria-live="polite"></span>
+        <button class="claude-icon-tool" id="session-filter-clear" title="Clear filter (Esc)" aria-label="Clear filter">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="claude-sessions-scroll" id="session-list">
+        <div class="dim" style="font-size:12px; padding:6px;">no chats yet</div>
+      </div>
+    </div>
+
+    <!-- Claude User Profile Pill at Bottom with User Menu attached -->
+    <div class="claude-profile-pill user-menu" id="btn-claude-user-profile" title="Account &amp; Preferences" style="margin-top:auto; position:relative;">
+      <div class="claude-avatar" id="claude-avatar-badge">SH</div>
+      <div class="claude-profile-info">
+        <span class="claude-profile-name" id="claude-user-name">Sabbir Hossain</span>
+        <span class="claude-profile-sub" id="claude-user-org">SSLWIRELESS</span>
+      </div>
+      <span style="font-size:10px; color:var(--dim); margin-left:auto;">▾</span>
+    </div>
+  </aside>
+
+  <main>
+    <header>
+      <button id="btn-sidebar-toggle" class="btn ghost icon-btn icon-only" title="Toggle Sidebar (Ctrl+B)" aria-label="Toggle Sidebar">
+        <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+      </button>
+
+      <!-- Claude Session Breadcrumb & Project Pill (hidden from top nav) -->
+      <button class="claude-header-title-btn" id="claude-header-title-btn" title="Current Chat Session" style="display:none !important;" aria-hidden="true">
+        <span id="claude-header-title-text" style="display:none;">New Chat</span>
+        <span class="slot-caret" style="display:none;">▾</span>
+      </button>
+      <span class="claude-project-pill" id="claude-project-pill" style="display:none !important;" aria-hidden="true"></span>
+
+      <!-- Hidden top model group & ctx (now shown in bottom composer bar) -->
+      <div class="model-group" style="display:none;" title="Model selection moved to bottom bar">
+        <select id="profile" title="Available models" style="display:none;"></select>
+        <button type="button" id="model-picker-btn" class="model-picker-btn" style="display:none;">
+          <span id="model-picker-icon" class="model-picker-icon"></span>
+          <span id="model-picker-label" class="model-picker-label">No model</span>
+          <span class="model-picker-caret">▾</span>
+        </button>
+      </div>
+      <span class="chip mono" id="chip-ctx" style="display:none;" title="Context window">
+        <span>0 / 32k (0%)</span>
+      </span>
+      <span class="chip bg-chip" id="chip-bg-indicator" style="display:none;" title="Active background tasks">
+        <span class="bg-pulse-dot"></span>⚡ <span id="chip-bg-count">1</span> in BG
+      </span>
+      <div class="spacer"></div>
+
+      <!-- Dev & System Tools Cluster (Customize, Report, Audit, DB, Monitor) -->
+      <div class="header-tool-cluster" id="header-dev-cluster">
+        <button id="btn-customize" class="btn ghost icon-btn" title="Customize: browse and install skills, connectors and plugins">
+          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M17.5 14v7M14 17.5h7"/></svg>
+          <span class="btn-label">Customize</span>
+        </button>
+        <button id="btn-report" class="btn ghost icon-btn" data-perm="usage.report.view" title="Token usage report: prompts vs completions, per-model and per-day totals">
+          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+          <span class="btn-label">Report</span>
+        </button>
+        <button id="btn-audit" class="btn ghost icon-btn" data-perm="audit.view" title="Audit log: who did what — model loads, provider changes, user/role edits, permission denials">
+          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m9 15 2 2 4-4"/></svg>
+          <span class="btn-label">Audit</span>
+        </button>
+        <button id="btn-db" class="btn ghost icon-btn" data-perm="database.manage" title="Database Explorer &amp; SQL Query Console: inspect tables, schema, and execute SQL">
+          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
+          <span class="btn-label">Database</span>
+        </button>
+        <button id="btn-monitor" class="btn ghost icon-btn" data-perm="monitor.view" title="Real-time request monitor: live generations, prompt/gen speed, endpoint calls">
+          <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          <span class="btn-label">Monitor</span>
+        </button>
+      </div>
+
+      <div class="header-divider"></div>
+
+      <!-- Action Tools Cluster: Toggle Right Dock Panel (Image 3 & Image 5) -->
+      <div class="header-actions-cluster">
+        <button id="btn-dock-toggle" class="btn ghost icon-btn icon-only" title="Toggle Right Panel (Ctrl+Shift+B)" aria-label="Toggle Right Panel">
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="prompt-dots" hidden aria-label="Jump to a prompt"></div>
+
+    <div id="chat"><div id="chat-inner">
+      <div id="empty">
+        <div class="big">⚡</div>
+        <h2>Local Agent</h2>
+        <p id="empty-model" class="mono">Model unloaded</p>
+        <div class="empty-card">
+          <p><b>No model is currently loaded in GPU VRAM.</b></p>
+          <p class="dim" style="margin-top: 6px;">Select a model from the top dropdown and click <b>▶ Load</b>, or simply type a message below.</p>
+        </div>
+      </div>
+    </div></div>
+
+    <button id="btn-scroll-bottom" class="chat-scroll-btn" style="display:none;" title="Jump to bottom">⬇ Jump to bottom</button>
+
+    <footer>
+      <div id="f-inner">
+        <div id="live-state-hud" class="live-state-hud" style="display:none;"></div>
+
+        <!-- Claude Git Status Bar -->
+        <div class="claude-git-status-strip" id="claude-git-status-strip" style="display:none;">
+          <div class="claude-git-status-left">
+            <span class="claude-git-branch" id="claude-git-branch"></span>
+            <span class="claude-git-diffs" id="claude-git-diffs"></span>
+          </div>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <button class="claude-git-action-btn" id="claude-git-action-btn">Source Control</button>
+            <button class="claude-icon-tool" id="claude-git-dismiss-btn" title="Dismiss bar">✕</button>
+          </div>
+        </div>
+
+        <div class="claude-chat-composer composer" id="claude-chat-composer">
+          <div id="attach-preview-bar" class="attach-preview-bar"></div>
+          <div id="media-pics-bar" class="media-pics-bar" hidden></div>
+          <div id="proj-init-bar" class="proj-init-bar" style="display:none;"></div>
+          <div id="cmd-chip-bar" class="cmd-chip-bar" title="Armed command — press Enter to run, Backspace on an empty box (or ✕) to remove"></div>
+
+          <!-- Top Rounded Input Box (matching screenshot) -->
+          <div class="claude-input-pill-box" id="claude-input-pill-box">
+            <div id="input-backdrop" class="input-backdrop" aria-hidden="true"></div>
+            <textarea id="input" placeholder="yes, add the personal data guard for web results" title="Type your prompt here. Press Enter to send, Shift+Enter for newline." rows="1"></textarea>
+            <div id="cmd-menu" style="display:none;"></div>
+            <button type="button" class="claude-enter-btn" id="btn-input-enter" title="Send (Enter)">⏎</button>
+          </div>
+
+          <!-- Bottom Toolbar Row (matching screenshot) -->
+          <div class="claude-input-bar-row">
+            <!-- Left: +   🎤   Auto ▾ -->
+            <div class="claude-bar-left">
+              <button id="btn-attach" class="claude-tool-icon-btn comp-tool" type="button" title="Attach files" aria-label="Attach files">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              </button>
+              <input type="file" id="file-input" multiple accept=".txt,.md,.py,.js,.ts,.json,.c,.cpp,.h,.cs,.java,.rs,.go,.html,.css,.xml,.yml,.yaml,.toml,.ini,.cfg,.log,.csv,.sql,.sh,.ps1,.bat,.png,.jpg,.jpeg,.webp,.gif,.xlsx,.xls,.pdf,.pptx,.ppt,.docx,.doc,.mp3,.m4a,.wav,.ogg,.opus,.flac,.aac,.webm,.mp4,.m4v,.mov,.mkv,.avi,.mpg,.mpeg,.wmv,audio/*,video/*" style="display:none">
+
+              <!-- Split Mic Pill (Image 2) -->
+              <div class="claude-mic-split-wrap" id="claude-mic-split-wrap">
+                <div class="claude-mic-split-pill" id="claude-mic-split-pill">
+                  <button id="btn-mic" class="claude-mic-main-btn comp-tool comp-mic-btn" type="button" title="Dictate voice (Transcribe)" aria-label="Dictate" aria-pressed="false">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+                  </button>
+                  <div class="claude-mic-divider" aria-hidden="true"></div>
+                  <button id="btn-mic-menu-toggle" class="claude-mic-arrow-btn" type="button" title="Voice options" aria-haspopup="menu" aria-expanded="false" aria-label="Voice options">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
+                  </button>
+                </div>
+                <!-- Voice Dropdown Menu (Image 2) -->
+                <div class="claude-voice-menu" id="claude-voice-menu" role="menu" style="display:none;">
+                  <button type="button" class="claude-menu-item active" data-voice-mode="transcribe" title="Dictate speech into the prompt box">
+                    <span class="claude-menu-icon">🎤</span>
+                    <span class="claude-menu-title">Dictate</span>
+                    <span class="claude-menu-check">✓</span>
+                  </button>
+                  <button type="button" class="claude-menu-item" data-voice-mode="voice" title="Talk with the assistant, hands-free">
+                    <span class="claude-menu-icon">🗣</span>
+                    <span class="claude-menu-title">Voice chat</span>
+                    <span class="claude-menu-check"></span>
+                  </button>
+                  <div class="claude-menu-sep" aria-hidden="true"></div>
+                  <button type="button" class="claude-menu-item" id="btn-voice-lang" title="The language you speak. Auto guesses for every sentence, which is less reliable on short ones">
+                    <span class="claude-menu-icon">🌐</span>
+                    <span class="claude-menu-title">I speak</span>
+                    <span class="claude-menu-value" id="voice-lang-value">Auto</span>
+                  </button>
+                  <button type="button" class="claude-menu-item" id="btn-voice-noise" title="Noise reduction. Crowd: for a noisy room, only a close, clear voice counts">
+                    <span class="claude-menu-icon">🎧</span>
+                    <span class="claude-menu-title">Noise reduction</span>
+                    <span class="claude-menu-value" id="voice-noise-value">Standard</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Mode Selector & Dropdown Menu (Image 1) -->
+              <div class="claude-mode-wrap" id="claude-mode-wrap">
+                <button id="btn-claude-mode" class="claude-tool-text-btn" type="button" title="Mode / Permissions" aria-haspopup="menu" aria-expanded="false">
+                  <span id="claude-mode-text">Auto</span>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <div class="claude-mode-menu" id="claude-mode-menu" role="menu" style="display:none;">
+                  <div class="claude-menu-header">Mode</div>
+                  <button type="button" class="claude-menu-item active" data-mode-key="auto" data-hotkey="1">
+                    <span class="claude-menu-check">✓</span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Auto</div>
+                      <div class="claude-menu-desc">Agent handles permission decisions</div>
+                    </div>
+                    <kbd class="claude-kbd-shortcut">1</kbd>
+                  </button>
+                  <button type="button" class="claude-menu-item" data-mode-key="manual" data-hotkey="2">
+                    <span class="claude-menu-check"></span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Manual</div>
+                      <div class="claude-menu-desc">Always ask before making changes</div>
+                    </div>
+                    <kbd class="claude-kbd-shortcut">2</kbd>
+                  </button>
+                  <button type="button" class="claude-menu-item" data-mode-key="accept_edits" data-hotkey="3">
+                    <span class="claude-menu-check"></span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Accept edits</div>
+                      <div class="claude-menu-desc">Automatically accept all file edits</div>
+                    </div>
+                    <kbd class="claude-kbd-shortcut">3</kbd>
+                  </button>
+                  <button type="button" class="claude-menu-item" data-mode-key="plan" data-hotkey="4">
+                    <span class="claude-menu-check"></span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Plan</div>
+                      <div class="claude-menu-desc">Create a plan before making changes</div>
+                    </div>
+                    <kbd class="claude-kbd-shortcut">4</kbd>
+                  </button>
+                  <button type="button" class="claude-menu-item" data-mode-key="bypass" data-hotkey="5">
+                    <span class="claude-menu-check"></span>
+                    <div class="claude-menu-text">
+                      <div class="claude-menu-title">Bypass permissions</div>
+                      <div class="claude-menu-desc">Accepts all permissions</div>
+                    </div>
+                    <kbd class="claude-kbd-shortcut">5</kbd>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Web Search Toggle (icon only, beside mode dropdown) -->
+              <button id="btn-web-toggle" class="claude-tool-icon-btn comp-tool comp-web-btn active" type="button" title="Toggle web search" aria-label="Toggle web search">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+              </button>
+
+              <!-- Company knowledge base: Auto (the app decides from your words) / Always / Off -->
+              <button id="btn-kb-toggle" class="claude-tool-icon-btn comp-tool comp-kb-btn" type="button" data-mode="auto" title="Company knowledge base: Auto" aria-label="Company knowledge base: Auto">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+                <span class="comp-kb-tag" aria-hidden="true"></span>
+              </button>
+            </div>
+
+            <!-- Right: Model   Medium   ◌   [Send / Abort] -->
+            <div class="claude-bar-right">
+              <button id="btn-claude-model" class="claude-tool-text-btn" type="button" title="Choose Model">
+                <span id="claude-model-text">Select model</span>
+              </button>
+
+              <div class="effort-wrap" id="effort-wrap" style="display:inline-flex;">
+                <button id="effort-btn" class="claude-tool-text-btn effort-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Reasoning effort">
+                  <span id="effort-label">Medium</span>
+                </button>
+                <div class="effort-menu" id="effort-menu" role="menu">
+                  <button type="button" class="effort-item" role="menuitemradio" data-level="none">None</button>
+                  <button type="button" class="effort-item" role="menuitemradio" data-level="low">Low</button>
+                  <button type="button" class="effort-item active" role="menuitemradio" data-level="medium">Medium</button>
+                  <button type="button" class="effort-item" role="menuitemradio" data-level="high">High</button>
+                  <button type="button" class="effort-item" role="menuitemradio" data-level="extra">Extra</button>
+                  <div class="effort-sep" id="effort-sep"></div>
+                  <button type="button" class="effort-deep" id="effort-deep" role="menuitemcheckbox" aria-checked="false" title="Deep research">
+                    <span>Deep research</span><span class="effort-switch" aria-hidden="true"></span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Context Window Pie Chart (Image 4) -->
+              <div class="claude-ctx-wrap" id="claude-ctx-wrap">
+                <button id="btn-claude-ctx" class="claude-tool-icon-btn claude-ctx-btn" type="button" title="Context usage" aria-label="Context usage">
+                  <svg class="claude-ctx-svg" width="16" height="16" viewBox="0 0 36 36">
+                    <circle class="claude-ctx-bg" cx="18" cy="18" r="14" fill="none" stroke="currentColor" stroke-width="3" opacity="0.25"/>
+                    <circle class="claude-ctx-fill" id="claude-ctx-fill" cx="18" cy="18" r="14" fill="none" stroke="var(--blue, #38bdf8)" stroke-width="3" stroke-dasharray="88 88" stroke-dashoffset="88" transform="rotate(-90 18 18)" stroke-linecap="round"/>
+                  </svg>
+                </button>
+                <div class="claude-ctx-popup" id="claude-ctx-popup" role="tooltip" style="display:none;">
+                  <div class="claude-ctx-popup-title" id="claude-ctx-popup-title">Context 0 / 32k (0%)</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Legacy & State Controls Tray (hidden, keeps all engine/web/voice code 100% working) -->
+          <div style="display:none;" id="legacy-comp-controls" aria-hidden="true">
+            <button id="btn-send" class="comp-btn comp-send-btn" type="button" title="Send prompt (Enter)" aria-label="Send prompt"></button>
+            <button id="btn-abort" class="comp-btn comp-abort-btn" type="button" title="Cancel generation" aria-label="Cancel"></button>
+            <select id="agent-plan-sel"><option value="build" selected>Build</option><option value="plan">Plan</option></select>
+            <button id="btn-git-icon" type="button"></button>
+            <select id="agent-engine">
+              <option value="all-local" selected>Private</option>
+              <option value="main-local-rest-cloud">Balanced</option>
+              <option value="main-cloud-rest-local">Cloud</option>
+              <option value="no-orchestration">Main</option>
+            </select>
+            <select id="cloud-model-sel"><option value="">Pick cloud</option></select>
+            <select id="comp-mode"><option value="chat" selected>Chat</option><option value="image">Image</option></select>
+            <span id="attach-info"></span>
+            <div class="simplistic-slot-machine" id="simplistic-slot-machine">
+              <div class="slot-reel" id="slot-reel-mode">💬 Chat</div>
+              <div class="slot-reel" id="slot-reel-engine">🔒 Local</div>
+              <div class="slot-reel" id="slot-reel-model">Model</div>
+            </div>
+            <button id="btn-voice" type="button"></button>
+            <button id="btn-answer-check" type="button"></button>
+          </div>
+        </div>
+      </div>
+    </footer>
+  </main>
+
+  <!-- Claude Docked Right Panel (Split View) -->
+  <div id="right-dock" class="right-dock dock-collapsed">
+    <div class="dock-grip" id="dock-grip" title="Drag to resize pane"></div>
+    <div class="dock-header">
+      <div class="dock-header-tools">
+        <button class="dock-tab-btn active" id="dock-btn-plan" title="Plan & Execution (12 steps)">📋 Plan</button>
+        <button class="dock-tab-btn" id="dock-btn-files" title="Code & Workspace Files (Ctrl+Shift+F)">&lt;/&gt; Code</button>
+        <button class="dock-tab-btn" id="dock-btn-preview" title="Web Preview (HTML / Artifacts)">🌐 Preview</button>
+        <button class="dock-tab-btn" id="dock-btn-terminal" title="Companion Shell Terminal">&gt;_ Terminal</button>
+      </div>
+      <div style="display:flex; align-items:center; gap:4px;">
+        <button class="dock-icon-btn" id="dock-btn-expand" title="Toggle expand width">⤢</button>
+        <button class="dock-icon-btn" id="dock-btn-close" title="Close panel">✕</button>
+      </div>
+    </div>
+
+    <!-- Dock Content Views -->
+    <div class="dock-view-body active" id="dock-view-plan">
+      <div style="padding:32px 16px; text-align:center; color:var(--dim); font-size:12.5px;">
+        <div style="font-size:24px; margin-bottom:8px;">📋</div>
+        <b>No active plan</b>
+        <p style="margin-top:6px; font-size:11.5px;">When the agent starts a multi-step task, the 12-step plan will be tracked live here.</p>
+      </div>
+    </div>
+
+    <!-- Code & Workspace Files View -->
+    <div class="dock-view-body" id="dock-view-files">
+      <div id="ws-panel" class="dock-ws-inner">
+        <div id="ws-tree-view">
+          <div id="ws-root-path" class="mono" title="Workspace root directory on disk">📁 (no project active)</div>
+          <div id="ws-changes" style="display:none;">
+            <div class="ws-changes-head" id="ws-changes-toggle" title="Files the agent created or modified this session">
+              <span class="caret">▶</span> Session Changes <span id="ws-changes-count" class="mono"></span>
+            </div>
+            <div id="ws-changes-list"></div>
+          </div>
+          <div id="ws-filter-bar">
+            <input type="text" id="ws-filter" placeholder="Filter files…" title="Filter tree by name">
+            <button class="btn ghost" id="ws-refresh" title="Refresh file tree" style="width:auto; margin:0; padding:3px 8px; font-size:11px;">⟳</button>
+          </div>
+          <div id="ws-tree"></div>
+        </div>
+        <div id="ws-file-view" style="display:none;">
+          <div id="ws-file-head">
+            <button class="btn ghost" id="ws-back" style="width:auto; margin:0; padding:3px 10px; font-size:11px;" title="Back to file tree">← Files</button>
+            <span id="ws-file-path" class="mono" title="Workspace-relative path"></span>
+            <span id="ws-file-badge" title="Session change status"></span>
+          </div>
+          <pre id="ws-file-code"></pre>
+        </div>
+      </div>
+      <span id="ws-title-name" style="display:none;">Workspace</span>
+      <button id="ws-close" style="display:none;"></button>
+    </div>
+
+    <!-- Web Preview View -->
+    <div class="dock-view-body" id="dock-view-preview">
+      <div style="padding:32px 16px; text-align:center; color:var(--dim); font-size:12.5px;">
+        <div style="font-size:24px; margin-bottom:8px;">🌐</div>
+        <b>Web Preview</b>
+        <p style="margin-top:6px; font-size:11.5px;">Open an HTML file or generate a web page to see live interactive preview here.</p>
+      </div>
+    </div>
+
+    <!-- Companion Shell Terminal View -->
+    <div class="dock-view-body" id="dock-view-terminal">
+      <div class="term-toolbar">
+        <div class="term-status-wrap">
+          <span class="term-indicator" id="term-status-dot"></span>
+          <span class="term-title" id="term-status-text">Companion Shell</span>
+          <span class="term-cwd" id="term-cwd-display" title="Active workspace directory">📁 (workspace)</span>
+        </div>
+        <div class="term-toolbar-actions">
+          <select id="term-shell-select" class="term-shell-select" title="Choose shell interpreter">
+            <option value="powershell" selected>PowerShell</option>
+            <option value="cmd">CMD</option>
+            <option value="bash">Bash</option>
+            <option value="pwsh">PWSH</option>
+          </select>
+          <button class="btn ghost ln-small" id="term-btn-clear" title="Clear console (Ctrl+L)" style="width:auto; margin:0; padding:3px 8px; font-size:11px;">Clear</button>
+        </div>
+      </div>
+      <div class="term-body" id="term-output" tabindex="-1">
+        <div class="term-welcome"><b>Console</b> · runs on your device through the companion. Commands the agent runs show here too.<br>↑ ↓ history · Ctrl+L clear · Ctrl+C stop waiting · <b>clear</b> / <b>cls</b> also clear</div>
+      </div>
+      <form class="term-input-bar" id="term-input-form">
+        <span class="term-prompt-char" id="term-prompt">$</span>
+        <input type="text" id="term-input" class="term-cmd-input" placeholder="" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Terminal command">
+        <button type="submit" class="term-run-btn" id="term-btn-run" tabindex="-1">Run</button>
+      </form>
+    </div>
+
+    <div class="dock-view-body" id="dock-view-tasks" style="display:none;">
+      <!-- Background tasks alias -->
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<div id="ws-rail" title="Project workspace files" style="display:none;"></div>
+<div id="monitor-drawer">
+  <div class="drawer-head">
+    <span>📡 Real-time Monitor</span>
+    <button class="btn ghost" id="mon-open-dashboard" data-perm="monitor.view" title="Open full inference telemetry dashboard in Settings" style="width:auto; margin:0 4px 0 auto; padding:3px 8px; font-size:11px; display:inline-flex; align-items:center; gap:4px;">📊 Full Dashboard ↗</button>
+    <button class="btn ghost" id="mon-close" style="width:auto; margin:0; padding:4px 10px;">✕</button>
+  </div>
+  <div class="drawer-body">
+    <div class="mon-section">
+      <h4>Active generations</h4>
+      <div id="mon-active-list"><div class="mon-empty">No active requests</div></div>
+    </div>
+    <div class="mon-section">
+      <h4>Agent runs</h4>
+      <div id="mon-runs-list"><div class="mon-empty">No agent runs</div></div>
+    </div>
+    <div class="mon-section">
+      <h4>Recent requests</h4>
+      <div id="mon-recent-list" style="display:flex; flex-direction:column; gap:4px;"><div class="mon-empty">Waiting…</div></div>
+    </div>
+  </div>
+</div>
+
+<div id="git-modal" hidden>
+  <div id="git-box">
+    <h2>
+      <span style="display:flex; align-items:center; gap:6px;">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0c-4.42 0-8 3.58-8 8a8.013 8.013 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path></svg>
+        <span>Source Control</span>
+      </span>
+      <button class="rep-close" id="git-modal-close">✕</button>
+    </h2>
+    <div class="cfg-note" style="margin:4px 0 10px;">Operates on the active project's workspace directory. Push and PR creation are side-effecting — you'll be asked to confirm. PR creation needs GitHub connected under Settings → Capabilities → MCP Servers.</div>
+    <div id="git-content"><div class="mon-empty">Loading…</div></div>
+  </div>
+</div>
+
+<div id="proj-modal" hidden>
+  <div id="proj-box">
+    <h2>📁 Create New Project <button class="rep-close" id="proj-modal-close">✕</button></h2>
+    <div style="display:flex; flex-direction:column; gap:12px; margin-top:14px;">
+      <div>
+        <label style="display:block; font-size:11px; color:var(--dim); font-weight:700; margin-bottom:5px; text-transform:uppercase; letter-spacing:1px;">Project Name *</label>
+        <input type="text" id="new-proj-name" placeholder="e.g. backend-api, my-agent-app" style="width:100%; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; font-family:inherit;">
+      </div>
+      <div>
+        <label style="display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--dim); font-weight:700; margin-bottom:5px; text-transform:uppercase; letter-spacing:1px;">
+          <span>Folder on Your Machine *</span>
+          <span id="companion-status" style="font-weight:normal; text-transform:none; letter-spacing:normal; font-size:10.5px;"></span>
+        </label>
+        <div style="display:flex; gap:8px; align-items:stretch;">
+          <input type="text" id="new-proj-dir" placeholder="e.g. C:\Users\...\my-code or /home/..." style="flex:1; min-width:0; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; font-family:inherit;">
+          <button type="button" class="btn ghost" id="btn-open-dir-picker" title="Browse filesystem" style="width:auto; margin:0; padding:0 10px; font-size:13px; cursor:pointer;">📂</button>
+          <button type="button" class="btn blue" id="btn-browse-dir" title="Choose local directory on this machine" style="width:auto; margin:0; padding:0 14px; white-space:nowrap; display:inline-flex; align-items:center; gap:6px; font-weight:600; font-size:11.5px; cursor:pointer;">
+            <span id="btn-browse-dir-icon">📁</span> <span id="btn-browse-dir-text">Browse…</span>
+          </button>
+        </div>
+        <small style="color:var(--dim); font-size:10px; line-height:1.4; display:block; margin-top:6px;">
+          Required. Agent tools (read, write, edit, shell, python) run only inside this folder on your machine, through the SSL Local Agent app — never on the server.
+        </small>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+        <button class="btn ghost" id="btn-proj-cancel" style="width:auto; margin:0; padding:6px 14px;">Cancel</button>
+        <button class="btn blue" id="btn-proj-submit" style="width:auto; margin:0; padding:6px 16px; font-weight:700;">Create Project</button>
+      </div>
+      <div id="proj-manage-section" style="margin-top:14px; border-top:1px solid var(--border); padding-top:12px;">
+        <div style="font-size:10px; color:var(--dim); font-weight:700; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+          <span>Registered Projects</span>
+          <span style="font-size:9.5px; font-weight:normal; text-transform:none; color:var(--dim);">🗑️ Only removes from agent (disk files kept)</span>
+        </div>
+        <div id="proj-manage-list" style="max-height:140px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; padding-right:2px;">
+          <div style="color:var(--dim); font-size:11px; padding:6px; text-align:center;">No projects registered.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="dir-picker-modal" hidden>
+  <div id="dir-picker-box">
+    <h2>📂 Choose Workspace Directory <button class="rep-close" id="dir-picker-close">✕</button></h2>
+    
+    <div style="display:flex; align-items:center; gap:8px; margin-top:10px; margin-bottom:8px;">
+      <span style="font-size:10.5px; color:var(--dim); font-weight:700; text-transform:uppercase; letter-spacing:0.5px;">Drives:</span>
+      <div id="dir-picker-drives" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:6px; background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:6px 10px; margin-bottom:10px;">
+      <button class="btn ghost" id="btn-dir-picker-up" title="Up to parent folder" style="width:auto; margin:0; padding:2px 8px; font-size:11px;">⬆ Up</button>
+      <div id="dir-picker-path" class="mono" style="font-size:11.5px; color:var(--text); word-break:break-all; flex:1;"></div>
+    </div>
+
+    <div id="dir-picker-list" style="max-height:260px; min-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; background:var(--panel2); padding:6px; display:flex; flex-direction:column; gap:2px;">
+      <div style="color:var(--dim); font-size:11px; padding:10px; text-align:center;">Loading directories...</div>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; gap:8px; flex-wrap:wrap;">
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="text" id="dir-picker-new-name" placeholder="New folder name" style="width:130px; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:5px 8px; font-size:11px;">
+        <button class="btn ghost" id="btn-dir-picker-mkdir" style="width:auto; margin:0; padding:5px 10px; font-size:11px;">+ New</button>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn ghost" id="btn-dir-picker-cancel" style="width:auto; margin:0; padding:5px 14px;">Cancel</button>
+        <button class="btn blue" id="btn-dir-picker-select" style="width:auto; margin:0; padding:5px 16px; font-weight:700;">✔ Select This Folder</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="report-modal" hidden>
+  <div id="report-box">
+    <h2>📊 Token Usage Report <button class="rep-close" id="rep-close">✕</button></h2>
+    <div id="rep-days" style="display:flex; gap:6px; margin-bottom:12px;">
+      <button class="btn ghost rep-day" data-days="1" style="width:auto; margin:0; padding:4px 10px;">Today</button>
+      <button class="btn blue rep-day" data-days="7" style="width:auto; margin:0; padding:4px 10px;">7d</button>
+      <button class="btn ghost rep-day" data-days="30" style="width:auto; margin:0; padding:4px 10px;">30d</button>
+      <button class="btn ghost rep-day" data-days="365" style="width:auto; margin:0; padding:4px 10px;">All</button>
+    </div>
+    <div id="rep-content"><div class="mon-empty">Loading…</div></div>
+  </div>
+</div>
+
+<div id="audit-modal" hidden>
+  <div id="audit-box" role="dialog" aria-labelledby="audit-title">
+    <h2><span id="audit-title">🧾 Audit Log</span> <button class="rep-close" id="audit-close" title="Close (Esc)">✕</button></h2>
+    <form id="audit-filters" class="audit-filters" autocomplete="off">
+      <div class="af-item">
+        <label for="af-range">Time</label>
+        <select id="af-range">
+          <option value="all">All time</option>
+          <option value="1">Last 24 hours</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="custom">Custom range…</option>
+        </select>
+      </div>
+      <div class="af-item af-custom" hidden>
+        <label for="af-from">From</label>
+        <input type="datetime-local" id="af-from">
+      </div>
+      <div class="af-item af-custom" hidden>
+        <label for="af-to">To</label>
+        <input type="datetime-local" id="af-to">
+      </div>
+      <div class="af-item">
+        <label for="af-user">User</label>
+        <select id="af-user"><option value="">All users</option></select>
+      </div>
+      <div class="af-item">
+        <label for="af-action">Action</label>
+        <select id="af-action"><option value="">All actions</option></select>
+      </div>
+      <div class="af-item">
+        <label for="af-result">Result</label>
+        <select id="af-result"><option value="">Any result</option></select>
+      </div>
+      <div class="af-item">
+        <label for="af-ip">IP</label>
+        <input type="text" id="af-ip" placeholder="e.g. 10.0." maxlength="64">
+      </div>
+      <div class="af-item af-grow">
+        <label for="af-q">Search</label>
+        <input type="search" id="af-q" placeholder="Resource, detail, permission, user…" maxlength="200">
+      </div>
+      <div class="af-actions">
+        <button type="button" class="btn ghost" id="af-reset" title="Clear all filters">Reset</button>
+        <button type="button" class="btn ghost" id="af-export" title="Download all rows matching the current filters as CSV (max 50,000)">⬇ CSV</button>
+      </div>
+    </form>
+    <div id="audit-content"><div class="mon-empty">Loading…</div></div>
+    <div class="audit-pager" id="audit-pager">
+      <span id="audit-count" class="dim"></span>
+      <div class="audit-pager-nav">
+        <label for="af-size" class="dim">Rows</label>
+        <select id="af-size"><option>25</option><option selected>50</option><option>100</option><option>200</option></select>
+        <button type="button" class="btn ghost" id="ap-first" title="First page">«</button>
+        <button type="button" class="btn ghost" id="ap-prev" title="Previous page">‹</button>
+        <span id="ap-label" class="mono"></span>
+        <button type="button" class="btn ghost" id="ap-next" title="Next page">›</button>
+        <button type="button" class="btn ghost" id="ap-last" title="Last page">»</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="cz-modal" hidden>
+  <div id="cz-box" role="dialog" aria-labelledby="cz-title">
+    <div class="cz-head">
+      <h2 id="cz-title">Customize</h2>
+      <button class="rep-close" id="cz-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="cz-bar">
+      <div class="cz-tabs" role="tablist">
+        <button class="cz-tab" data-kind="skills" role="tab">Skills</button>
+        <button class="cz-tab" data-kind="connectors" role="tab">Connectors</button>
+        <button class="cz-tab" data-kind="plugins" role="tab">Plugins</button>
+        <button class="cz-tab" data-kind="agents" role="tab">Agents</button>
+      </div>
+      <span class="cz-sep"></span>
+      <div class="cz-seg">
+        <button class="cz-view" data-view="yours">Yours</button>
+        <button class="cz-view" data-view="discover">Discover</button>
+      </div>
+      <input type="search" id="cz-q" class="cz-search" placeholder="Search…" maxlength="100" autocomplete="off">
+    </div>
+    <div id="cz-body"><div class="mon-empty">Loading…</div></div>
+  </div>
+</div>
+
+<div id="db-modal" hidden>
+  <div id="db-box">
+    <div class="db-modal-header">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:16px;">🗄️</span>
+        <h2 style="margin:0; font-size:14.5px; font-weight:700; letter-spacing:0.3px;">Database Explorer &amp; SQL Console</h2>
+      </div>
+      <button class="rep-close" id="db-modal-close" title="Close (Esc)">✕</button>
+    </div>
+
+    <!-- Top control bar: database selector & info badge -->
+    <div class="db-top-bar">
+      <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:240px;">
+        <label for="db-select" style="font-size:11px; font-weight:700; color:var(--dim); text-transform:uppercase; letter-spacing:0.8px;">Database:</label>
+        <select id="db-select" class="db-select-el"></select>
+      </div>
+      <div id="db-info-badge" class="db-info-badge"></div>
+    </div>
+
+    <!-- Main split pane -->
+    <div class="db-split-body">
+      <!-- Left sidebar: table list -->
+      <div class="db-sidebar">
+        <div class="db-sidebar-head">
+          <span style="font-size:10px; font-weight:700; color:var(--dim); text-transform:uppercase; letter-spacing:1px;">Tables &amp; Views</span>
+          <input type="text" id="db-table-filter" placeholder="Filter tables…" class="db-filter-input">
+        </div>
+        <div id="db-table-list" class="db-table-list">
+          <div class="dim" style="padding:10px; font-size:11px; text-align:center;">Loading tables…</div>
+        </div>
+      </div>
+
+      <!-- Right main area: editor & results / schema tabs -->
+      <div class="db-main-pane">
+        <!-- Editor section -->
+        <div class="db-editor-box">
+          <div class="db-editor-toolbar">
+            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+              <button id="db-btn-run" class="btn accent" style="width:auto; margin:0; padding:5px 14px; font-weight:700; font-size:11.5px;" title="Execute SQL query (Ctrl+Enter)">▶ Run</button>
+              <button id="db-btn-clear" class="btn ghost" style="width:auto; margin:0; padding:5px 10px; font-size:11.5px;" title="Clear query editor">✕ Clear</button>
+              <select id="db-preset-select" class="db-tool-select" title="Insert query snippet">
+                <option value="">⚡ Snippets / Presets…</option>
+                <option value="select_50">SELECT * (First 50)</option>
+                <option value="count">Count total rows</option>
+                <option value="columns">Inspect columns (PRAGMA)</option>
+                <option value="tables">List all tables (sqlite_master)</option>
+                <option value="recent_requests">Recent 20 API requests (usage.db)</option>
+                <option value="users_roles">Users &amp; Assigned Roles (auth.db)</option>
+              </select>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+              <select id="db-history-select" class="db-tool-select" title="Recall recent query">
+                <option value="">📜 Recent Queries</option>
+              </select>
+              <button id="db-btn-export" class="btn ghost" style="width:auto; margin:0; padding:5px 10px; font-size:11.5px;" disabled title="Export query result table to CSV">📥 CSV</button>
+            </div>
+          </div>
+          <textarea id="db-sql-input" class="db-sql-textarea mono" rows="4" placeholder="Enter SQL query here… (e.g. SELECT * FROM users;) · Press Ctrl+Enter to execute" spellcheck="false"></textarea>
+          <div class="db-editor-footer">
+            <div id="db-status-bar" class="db-status-bar">Ready · Press Ctrl+Enter to execute</div>
+            <span class="dim" style="font-size:10px;">Max 500 rows returned · Mutating queries auto-commit</span>
+          </div>
+        </div>
+
+        <!-- Output tabs -->
+        <div class="db-tabs-bar">
+          <button id="db-tab-results" class="db-tab-btn active" type="button">📊 Query Results</button>
+          <button id="db-tab-schema" class="db-tab-btn" type="button">📐 Table Schema &amp; DDL</button>
+        </div>
+
+        <!-- Results view -->
+        <div id="db-view-results" class="db-tab-view active">
+          <div id="db-results-container" class="db-results-container">
+            <div class="dim" style="padding:24px; text-align:center; font-size:12px;">Query output will appear here. Select a table on the left to preview it.</div>
+          </div>
+        </div>
+
+        <!-- Schema view -->
+        <div id="db-view-schema" class="db-tab-view" style="display:none;">
+          <div id="db-schema-details" class="db-schema-details">
+            <div class="dim" style="padding:24px; text-align:center; font-size:12px;">Select a table on the left to inspect its schema columns and DDL definition.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="docs-modal" hidden>
+  <div id="docs-box">
+    <h2>📖 Connect an Agent <button class="rep-close" id="docs-close">✕</button></h2>
+    <div class="doc-step">
+      <div class="doc-num">1</div>
+      <div>
+        <b>Load a model</b>
+        <p>Pick a model from the dropdown and press <b>▶ Load</b>. The server must show <span class="pill on" style="padding:2px 8px; font-size:10px;"><i></i>Loaded</span> before any agent can connect.</p>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-num">2</div>
+      <div>
+        <b>Point your agent at the base URL</b>
+        <div class="doc-copy">
+          <code id="doc-base-url">http://localhost:8000/v1</code>
+          <button class="btn ghost doc-copy-btn" data-copy="doc-base-url">📋 Copy</button>
+        </div>
+        <p class="doc-note">OpenAI-compatible. Works with any client that accepts a custom base URL — Continue, Cline, LibreChat, Open WebUI, LangChain, the OpenAI SDKs, etc.</p>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-num">3</div>
+      <div>
+        <b>Use this exact Model ID</b>
+        <div class="doc-copy">
+          <code id="doc-model-id">—</code>
+          <button class="btn ghost doc-copy-btn" data-copy="doc-model-id">📋 Copy</button>
+        </div>
+        <p class="doc-note">This is the <b>currently loaded model's file path</b>. Most agents require it in the <code>model</code> field. No API key needed — put any placeholder like <code>none</code> if the client insists on one.</p>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-num">4</div>
+      <div>
+        <b>Example: OpenAI Python SDK</b>
+        <pre class="doc-code" id="doc-example">from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="none",
+)
+resp = client.chat.completions.create(
+    model="&lt;paste the Model ID from step 3&gt;",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(resp.choices[0].message.content)</pre>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-num">5</div>
+      <div>
+        <b>Verify it's working</b>
+        <p>Open <b>📡 Monitor</b> in this UI — you'll see your agent's calls appear in real time (endpoint, tokens, prompt/gen speed). All traffic is also recorded in 📊 Report.</p>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-num">6</div>
+      <div>
+        <b>Extend the agent with capabilities</b>
+        <p class="doc-note">All capabilities are managed in <b>Settings → 🧩 Capabilities</b> (toggles persist to <code>config/app.json</code>). The agent gets the tools automatically after a restart.</p>
+
+        <p><b>🌐 Web browsing</b> — built in. The agent can <code>web_search</code> (DuckDuckGo, keyless) and <code>web_fetch</code> any URL. Optional: set <code>capabilities.web_search_api_key</code> in config/app.json if you hit search rate limits.</p>
+
+        <p><b>🎯 Skills</b> — create a folder with a SKILL.md:</p>
+        <pre class="doc-code">skills/my-skill/SKILL.md
+---
+name: my-skill
+description: One line shown to the agent.
+triggers: keyword1, keyword2
+---
+Full instructions the agent reads via read_skill.</pre>
+
+        <p><b>🔌 MCP servers</b> — add to <code>config/app.json</code>, restart:</p>
+        <pre class="doc-code">"capabilities": { "mcp_servers": {
+  "filesystem": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "E:\\AI\\workspace"]
+  },
+  "remote": { "transport": "http", "url": "http://127.0.0.1:9000/mcp" }
+}}</pre>
+        <p class="doc-note">Tools appear as <code>mcp__&lt;server&gt;__&lt;tool&gt;</code>. A working <code>echo</code> test server is preconfigured.</p>
+
+        <p><b>🧩 Plugins</b> — Python modules in <code>plugins/&lt;name&gt;/plugin.py</code>:</p>
+        <pre class="doc-code">def register(api):
+    api.add_system_prompt("Always do X.")
+    api.add_tool("my_tool", my_fn, "Description shown to the agent.",
+                 {"type": "object", "properties": {}})
+    api.on_event("after_tool", lambda name, args, result: None)</pre>
+
+        <p class="doc-note"><b>See everything registered:</b> Settings → 🧩 Capabilities shows every tool from every source with status and toggles — or open <code>http://localhost:8000/control/capabilities</code> in a browser for the full JSON listing (web tools, skills, MCP servers + their tools, plugins, total count).</p>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-num">7</div>
+      <div>
+        <b>Fast CPU Router: Switch between Needle-2 and Laya (0 VRAM)</b>
+        <p>The agent uses a CPU router for instant sub-step tool routing without touching GPU VRAM. You can switch engines anytime in <code>config/app.json</code>:</p>
+        <pre class="doc-code">"router": {
+  "enabled": true,
+  "confidence_threshold": 0.75,
+  "engine": "cactus_needle",  // change to "laya" to switch
+  "executor_grammar": true,
+  "laya": {
+    "checkpoint": "convaiinnovations/laya",
+    "subfolder": null,
+    "device": "cpu",
+    "preload": false
+  }
+}</pre>
+        <p><b>🌵 Cactus Needle-2</b> (<code>"engine": "cactus_needle"</code>): 45M compact model (~14MB binary). Grammar-constrained tool and argument extraction. Requires <code>pip install needle</code>.</p>
+        <p><b>⚡ Convai Laya</b> (<code>"engine": "laya"</code>): 421M ModernBERT System 1 decision engine on CPU (<code>device="cpu"</code>). High-accuracy semantic routing and calibrated probabilities. Requires <code>pip install laya</code>.</p>
+        <p class="doc-note">Both engines operate completely on CPU (0 MB VRAM), preserving 100% of Arc A770 GPU memory for your primary models.</p>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="perm-modal" hidden>
+  <div id="perm-box">
+    <h2>🔑 Shell Execution Permission <button class="rep-close" id="perm-close-x">✕</button></h2>
+    <p class="dim" style="margin:8px 0 4px; font-size:11px;">The agent wants to run a shell command:</p>
+    <pre id="perm-cmd" class="mono" style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:12px; white-space:pre-wrap; word-break:break-all; margin:0 0 6px;"></pre>
+    <p class="dim" id="perm-note" style="font-size:10.5px; margin:0 0 12px;"></p>
+    <div style="display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; align-items:center;">
+      <button class="btn ghost" id="perm-deny" style="width:auto; margin:0; padding:7px 14px;">✕ Deny</button>
+      <button class="btn accent" id="perm-allow" style="width:auto; margin:0; padding:7px 15px; font-weight:600;">▶ Just once</button>
+      <button class="btn ghost" id="perm-project" style="width:auto; margin:0; padding:7px 14px; color:var(--amber); border-color:var(--amber);">📁 For this project</button>
+      <button class="btn ghost" id="perm-user" style="width:auto; margin:0; padding:7px 14px; color:var(--blue); border-color:var(--blue);">👤 Always allow for me</button>
+      <button class="btn ghost" id="perm-always" style="width:auto; margin:0; padding:7px 14px; color:var(--green); border-color:var(--green);">✓ Always (globally)</button>
+    </div>
+  </div>
+</div>
+<div id="modal-bg" hidden>
+  <div id="modal">
+    <h2>Clear everything?</h2>
+    <p>This will <b>unload the model</b> (frees VRAM on both Arc A770s) and <b>clear this chat</b>.<br><br>
+    Tip: re-loading the model restores full speed — a fresh process runs at maximum t/s even after hours of idle.</p>
+    <div class="row">
+      <button class="btn ghost" id="m-cancel">Cancel</button>
+      <button class="btn red" id="m-ok">Yes, clear it all</button>
+    </div>
+  </div>
+</div>
+
+<div id="img-modal" hidden style="display:none;">
+  <div id="img-box">
+    <div id="img-header">
+      <span id="img-title" class="mono">📎 Image Preview</span>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <a id="img-dl" class="btn ghost icon-btn" style="text-decoration:none;" download title="Download this image">⬇ Download</a>
+        <button id="img-close" class="btn ghost icon-btn" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <div id="img-body">
+      <img id="img-full" src="" alt="Full preview">
+    </div>
+  </div>
+</div>
+
+<!-- Rich File Preview Modal -->
+<div id="preview-modal" hidden style="display:none;">
+  <div id="preview-box">
+    <div id="preview-header">
+      <div class="preview-title-group">
+        <span id="preview-icon">👁️</span>
+        <span id="preview-title" class="mono">file.ext</span>
+        <span id="preview-badge" class="badge-main">Preview</span>
+      </div>
+      <div class="preview-actions">
+        <div id="preview-controls" style="display:flex; gap:6px; align-items:center;"></div>
+        <a id="preview-dl" class="btn ghost icon-btn" download title="Download file">⬇ Download</a>
+        <a id="preview-raw-link" class="btn ghost icon-btn" target="_blank" rel="noopener" title="Open raw in new tab">↗ New Tab</a>
+        <button id="preview-close" class="btn ghost icon-btn" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <div id="preview-body">
+      <div id="preview-content"></div>
+    </div>
+  </div>
+</div>
+
+<div id="custom-agent-modal" class="ca-modal-overlay" style="display:none;">
+  <div class="ca-modal-box">
+    <div class="ca-modal-head">
+      <div class="ca-modal-title-wrap">
+        <div id="ca-modal-device-badge" class="ca-modal-device-badge">
+          <span>💻</span>
+          <span id="ca-modal-device-name">Bound Device: Windows PC-ABC12DEF3456</span>
+        </div>
+        <span id="ca-modal-title">Create Custom Agent</span>
+      </div>
+      <button id="ca-modal-close" class="rep-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="ca-modal-body">
+      <div class="ca-form-row">
+        <div class="ca-field" style="flex:1;">
+          <label for="ca-name">Agent Name *</label>
+          <input type="text" id="ca-name" placeholder="e.g. Email Analyzer &amp; Drafter">
+        </div>
+        <div class="ca-field" style="width:130px;">
+          <label for="ca-slug">Slug / Tag</label>
+          <input type="text" id="ca-slug" placeholder="e.g. email-analyzer">
+        </div>
+        <div class="ca-field" style="width:80px;">
+          <label for="ca-icon">Icon</label>
+          <input type="text" id="ca-icon" value="🤖" style="text-align:center; font-size:16px;">
+        </div>
+      </div>
+
+      <div class="ca-icon-presets-row">
+        <span class="dim" style="font-size:11px;">Quick Icon:</span>
+        <button type="button" class="ca-icon-preset">📧</button>
+        <button type="button" class="ca-icon-preset">📊</button>
+        <button type="button" class="ca-icon-preset">🧪</button>
+        <button type="button" class="ca-icon-preset">📈</button>
+        <button type="button" class="ca-icon-preset">📝</button>
+        <button type="button" class="ca-icon-preset">🔍</button>
+        <button type="button" class="ca-icon-preset">🛡️</button>
+        <button type="button" class="ca-icon-preset">⚙️</button>
+        <button type="button" class="ca-icon-preset">💻</button>
+        <button type="button" class="ca-icon-preset">🧠</button>
+      </div>
+
+      <div class="ca-field">
+        <label for="ca-desc">Short Description *</label>
+        <input type="text" id="ca-desc" placeholder="e.g. Summarizes email threads and prepares draft replies">
+      </div>
+
+      <div class="ca-field">
+        <label for="ca-prompt">System Persona &amp; Directives (Instructions) *</label>
+        <textarea id="ca-prompt" rows="7" placeholder="Define this agent's domain expertise, procedure, instructions, and output format..."></textarea>
+      </div>
+
+      <div class="ca-field">
+        <label for="ca-template">Prompt Input Wrapper Template (Optional)</label>
+        <textarea id="ca-template" rows="3" placeholder="Wraps your first message; {input} = what you type. e.g.&#10;Analyze the following request:&#10;{input}"></textarea>
+        <span class="ca-field-hint">If provided, user's input will replace {input} before execution.</span>
+      </div>
+
+      <div class="ca-form-row">
+        <div class="ca-field" style="flex:1;">
+          <label for="ca-lane">Preferred Model Lane</label>
+          <select id="ca-lane">
+            <option value="auto">Auto (Runtime Default)</option>
+            <option value="main">Main LLM (Arc A770)</option>
+            <option value="executor">Fast Executor (Local 3B)</option>
+            <option value="cloud">Cloud Provider</option>
+          </select>
+        </div>
+        <div class="ca-field" style="flex:1;">
+          <label for="ca-effort">Reasoning Effort</label>
+          <select id="ca-effort">
+            <option value="none">None</option>
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+            <option value="extra">Extra (Deep)</option>
+          </select>
+        </div>
+        <div class="ca-field" style="flex:1;">
+          <label for="ca-temp">Temperature: <span id="ca-temp-val">0.4</span></label>
+          <input type="range" id="ca-temp" min="0.0" max="1.0" step="0.05" value="0.4">
+        </div>
+      </div>
+
+      <div class="ca-field">
+        <label for="ca-workdir">Work folder on your computer (Optional)</label>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="ca-workdir" placeholder="D:/reports/weekly" autocomplete="off" spellcheck="false" style="flex:1;">
+          <button type="button" class="ca-browse" id="ca-workdir-browse"><span aria-hidden="true">📁</span> Browse…</button>
+        </div>
+        <span class="ca-field-hint">With a folder set, this agent can read, write and analyse files there when you chat with it in the desktop app, and repeat the same task from the same place every time. It cannot leave the folder. Without one it only chats. The folder is private to you and is never shared or copied to forks.</span>
+      </div>
+
+      <div class="ca-field">
+        <label>Tool Permissions &amp; Capabilities</label>
+        <div id="ca-tools-container"></div>
+      </div>
+
+      <div class="ca-field-check">
+        <label><input type="checkbox" id="ca-public"> Ask to share with all users on this server</label>
+        <span class="ca-field-hint" id="ca-share-hint">Someone with approval rights reviews it first. Once approved it appears in Customize → Agents, without your folder, and others fork it and choose their own. Editing it later sends it for review again.</span>
+      </div>
+    </div>
+    <div class="ca-modal-foot">
+      <button type="button" class="btn red" id="ca-btn-delete" style="display:none; margin-right:auto;">Delete Agent</button>
+      <button type="button" class="btn ghost" id="ca-btn-cancel">Cancel</button>
+      <button type="button" class="btn blue" id="ca-btn-save">Save Agent</button>
+    </div>
+  </div>
+</div>
+
+<!-- Fork Agent for Device Modal -->
+<div id="ca-fork-modal" class="ca-modal-overlay" style="display:none;">
+  <div class="ca-modal-box" style="max-width:520px;">
+    <div class="ca-modal-head">
+      <div class="ca-modal-title-wrap">
+        <div id="ca-fork-device-badge" class="ca-modal-device-badge">
+          <span>💻</span>
+          <span id="ca-fork-target-device">Target Device: Windows PC-ABC12DEF3456</span>
+        </div>
+        <span id="ca-fork-modal-title">Fork Agent for This Device</span>
+      </div>
+      <button id="ca-fork-modal-close" class="rep-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="ca-modal-body" style="padding:16px 20px;">
+      <div id="ca-fork-source-banner" style="background:var(--panel2, rgba(255,255,255,0.04)); border:1px solid var(--border-subtle, rgba(255,255,255,0.08)); border-radius:6px; padding:10px 12px; margin-bottom:14px; font-size:12px; line-height:1.5;">
+        <div id="ca-fork-source-text" style="color:var(--text); font-weight:600;">System &amp; Metric Reporter</div>
+        <div id="ca-fork-source-reason" style="color:var(--dim); font-size:11px; margin-top:2px;">This agent is bound to another device. Fork it to bind a copy to this machine with its own local workspace directory.</div>
+      </div>
+
+      <div class="ca-field" style="margin-bottom:12px;">
+        <label for="ca-fork-name" style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:5px;">Agent Name *</label>
+        <input type="text" id="ca-fork-name" placeholder="Agent Name" style="width:100%; box-sizing:border-box;">
+      </div>
+
+      <div class="ca-field" style="margin-bottom:8px;">
+        <label for="ca-fork-workdir" style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:5px;">Workspace Path on This Device *</label>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="ca-fork-workdir" placeholder="e.g. D:\Projects\MyWorkspace or C:\Users\..." style="flex:1; box-sizing:border-box;">
+          <button type="button" class="btn secondary" id="ca-fork-browse-btn" style="width:auto; padding:6px 12px; white-space:nowrap;">Browse…</button>
+        </div>
+        <div style="font-size:10.5px; color:var(--dim); margin-top:4px;">Select the directory where this agent will read, write, and execute tasks on this machine.</div>
+      </div>
+    </div>
+    <div class="ca-modal-foot" style="display:flex; justify-content:flex-end; gap:8px; padding:12px 20px; border-top:1px solid var(--border-subtle, rgba(255,255,255,0.08));">
+      <button type="button" class="btn ghost" id="ca-fork-cancel-btn">Cancel</button>
+      <button type="button" class="btn blue" id="ca-fork-submit-btn">Fork &amp; Bind to Device</button>
+    </div>
+  </div>
+</div>
+
+<!-- Global Model Picker Dropdown (Anchored to bottom bar) -->
+<div id="model-picker-dropdown" class="model-picker-dropdown"></div>
+
+<div id="settings-modal" hidden style="display:none;">
+  <div id="settings-modal-box">
+    <div id="settings-modal-head">
+      <span style="font-weight:700; font-size:13px; letter-spacing:0.5px; display:flex; align-items:center; gap:6px;">⚙️ Settings &amp; Configuration</span>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button id="settings-modal-max" class="rep-close" title="Toggle Fullscreen" style="font-size:12px; line-height:1; padding:3px 7px;">⛶</button>
+        <button id="settings-modal-close" class="rep-close" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <div id="settings-modal-body">
+      <iframe id="settings-frame" src="about:blank" title="Settings" style="width:100%; height:100%; border:none; border-radius:0 0 10px 10px; background:var(--bg);"></iframe>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/session.js?v=1.5"></script>
+<script src="/static/js/highlight.js"></script>
+<!-- Vendored copies of the CDN-pinned versions so the app works fully offline
+     (this is a local-first product; diagrams and spreadsheets must not need the
+     internet). Same exact bytes as the CDN builds - the SRI below is unchanged:
+     mermaid@10.9.3, SheetJS 0.20.3 (0.18.5 has CVE-2023-30533 / CVE-2024-22363). -->
+<script src="/static/vendor/mermaid.min.js" integrity="sha384-R63zfMfSwJF4xCR11wXii+QUsbiBIdiDzDbtxia72oGWfkT7WHJfmD/I/eeHPJyT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="/static/vendor/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="/static/js/theme.js?v=3.0"></script>
+<script src="/static/vendor/marked.umd.js" integrity="sha384-IvVdUXkhyoD0shbjhiiOnuiTbervTaB0VJcnEcg3shUAMVOOF6lKj4ozJrCwvz6s" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="/static/vendor/purify.min.js" integrity="sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="/static/js/utils.js?v=3.5"></script>
+<script src="/static/js/markdown.js?v=1.2"></script>
+<script src="/static/js/sse-stream.js?v=1.7"></script>
+<script src="/static/js/answer-check.js?v=1.1"></script>
+<script src="/static/js/audio-wav.js?v=1.0"></script>
+<script src="/static/js/video-frames.js?v=1.1"></script>
+<script src="/static/js/sampling.js?v=1.3"></script>
+<script src="/static/js/preview.js?v=3.1"></script>
+<script src="/static/js/gpu-status.js?v=3.7"></script>
+<script src="/static/js/chat.js?v=3.30"></script>
+<script src="/static/js/prompt-dots.js?v=1.0"></script>
+<script src="/static/js/controls.js?v=3.1"></script>
+<script src="/static/js/monitor.js?v=3.1"></script>
+<script src="/static/js/agent-memory-ui.js?v=1.3"></script>
+<script src="/static/js/capabilities.js?v=3.4"></script>
+<script src="/static/js/git.js?v=1.0"></script>
+<script src="/static/js/usage-report.js?v=2.13"></script>
+<script src="/static/js/audit-log.js?v=1.0"></script>
+<script src="/static/js/db-explorer.js?v=1.1"></script>
+<script src="/static/js/customize.js?v=1.3"></script>
+<script src="/static/js/effort.js?v=1.1"></script>
+<script src="/static/js/config.js?v=3.2"></script>
+<script src="/static/js/cloud.js?v=3.1"></script>
+<script src="/static/js/attachments.js?v=3.0"></script>
+<script src="/static/js/projects.js?v=4.9"></script>
+<script src="/static/js/workspace.js?v=2.13"></script>
+<script src="/static/js/dnd.js?v=1.0"></script>
+<script src="/static/js/agent-cmd.js?v=4.4"></script>
+<script src="/static/js/media.js?v=1.9"></script>
+<script src="/static/js/voice-core.js?v=1.1"></script>
+<script src="/static/js/voice.js?v=1.1"></script>
+<script src="/static/js/agent-acts.js?v=3.9"></script>
+<script src="/static/js/history-clip.js?v=1.0"></script>
+<script src="/static/js/agent-run.js?v=3.19"></script>
+<script src="/static/js/compact.js?v=2.9"></script>
+<script src="/static/js/export.js?v=1.0"></script>
+<script src="/static/js/custom-agents.js?v=2.2"></script>
+<script src="/static/js/main.js?v=4.6"></script>
+<script src="/static/js/claude-dock.js?v=1.5"></script>
+
+<script src="/static/js/password-toggle.js?v=1.2"></script>
+<script src="/static/js/kb-mode.js?v=1.0"></script>
+<script src="/static/js/splash.js?v=1.0"></script>
+</body>
+</html>

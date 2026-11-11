@@ -29,6 +29,7 @@ RESTART_RESET_AFTER_S = 300
 
 # File Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
+UI_FILE = BASE_DIR / "ui.html"
 STATIC_DIR = BASE_DIR / "static"
 USAGE_DB_FILE = BASE_DIR / "usage.db"
 PROJECTS_DB_FILE = BASE_DIR / "projects.db"
@@ -43,30 +44,6 @@ ROLES_FILE = CONFIG_DIR / "roles.json"         # multiagent role definitions (pl
 MODEL_CONFIGS_FILE = Path(os.environ.get("A770_MODEL_CONFIGS_FILE") or CONFIG_DIR / "model_configs.json")
 PROVIDERS_FILE = CONFIG_DIR / "providers.json"   # legacy shared file -- migrated into PROVIDERS_DIR on first boot
 PROVIDERS_DIR = CONFIG_DIR / "providers"         # per-user cloud providers + lane bindings: providers/user_<id>.json
-
-# Local settings live in config/<name>.json and are git-ignored, so editing them never dirties the working tree or blocks a
-# pull. The tracked defaults are config/<name>.example.json: a missing local file is created from its example on startup.
-LOCAL_CONFIG_NAMES = ("app", "roles", "model_configs", "sampling_config", "fx_rates", "web_blocked")
-
-
-def seed_local_configs(config_dir: Path = CONFIG_DIR) -> list:
-    """Copy each config/<name>.example.json to config/<name>.json when the local file is missing. Returns the names created."""
-    import shutil
-    created = []
-    for name in LOCAL_CONFIG_NAMES:
-        local, example = config_dir / f"{name}.json", config_dir / f"{name}.example.json"
-        if not local.exists() and example.exists():
-            try:
-                shutil.copyfile(example, local)
-                created.append(name)
-            except OSError as e:
-                print(f"[server_manager] could not create {local.name} from its example: {e}", file=sys.stderr)
-    if created:
-        print(f"[server_manager] created local config from examples: {', '.join(created)}", file=sys.stderr)
-    return created
-
-
-seed_local_configs()
 
 # Cloud (OpenAI-compatible) lanes
 CLOUD_LANES = ("main", "executor", "vision")
@@ -226,42 +203,34 @@ def default_small_gpu() -> int:
     return devs[-1] if devs else 0
 
 
-def _set_auto_devices(idx: list) -> None:
-    """Store the GPU list that "auto" resolved to (empty = no usable GPU), for the runtime and the defaults."""
-    ACTIVE_RUNTIME["gpu_devices"] = list(idx)
-    CONFIG_DEFAULTS["gpu_devices"] = list(idx)
-
-
 def resolve_gpu_devices(force: bool = False) -> dict:
     """Compare the GPUs the machine has with the runtime's gpu_devices, and fill the list in when it is "auto".
 
     "auto" = every discrete GPU llama.cpp lists (iGPUs and anything under 2 GB are left out: core/gpu.py), so 1, 2, 3 or 4
     cards work without editing app.json. A fixed list is kept as written; indices the machine does not have, and discrete GPUs
-    the list leaves out, are reported (GPU_STATUS) and printed once. Never raises. With "auto", no GPU found (or the list cannot
-    be read) means an empty list, not the default: the machine's own answer is "none". A fixed list is never changed."""
+    the list leaves out, are reported (GPU_STATUS) and printed once. Never raises: when the device list cannot be read the
+    configured list stays."""
     try:
         from .vram import devices as _dev
         from . import gpu as _gpu
         found = _gpu._discrete_devices(_dev.query_devices(ACTIVE_RUNTIME.get("llama_bin_dir"), force=force, strict=True))
     except Exception as e:
-        # Not silent: the Settings screens show scan_error. The usual causes are a Windows llama_bin_dir in app.json or a user
-        # without access to the GPU device nodes (Linux render/video groups).
+        # Not silent: the Settings screens show scan_error, and "auto" then runs on the fallback list below. That list is
+        # the Windows default [1, 2], so on Linux it can hide GPUs; the usual cause is a Windows llama_bin_dir in app.json.
         GPU_STATUS.update({"checked": False, "scan_error": str(e)})
         print(f"[server_manager] GPU scan FAILED: {e}", file=sys.stderr)
         if ACTIVE_RUNTIME.get("gpu_auto"):
-            # "auto" means "the GPUs this machine has": when none can be listed, the machine has none we can use, so no GPU
-            # is shown (never the Windows default). Launches are refused by the VRAM check until the scan works.
-            _set_auto_devices([])
-            GPU_STATUS.update({"configured": [], "detected": [], "missing": [], "unused": []})
-            print(f"[server_manager] ERROR: gpu_devices is 'auto' but no GPU could be listed; running with no GPU. "
-                  f"Check runtimes.{ACTIVE_RUNTIME.get('name')}.llama_bin_dir in config/app.json (the folder with llama-bench "
-                  f"for this OS) and the user's access to the GPU (render/video groups on Linux).", file=sys.stderr)
+            print(f"[server_manager] ERROR: gpu_devices is 'auto' but the GPUs could not be listed, so the fallback list "
+                  f"{ACTIVE_RUNTIME.get('gpu_devices')} is used. Check runtimes.{ACTIVE_RUNTIME.get('name')}.llama_bin_dir "
+                  f"in config/app.json: it must be the folder that holds llama-bench for this OS.", file=sys.stderr)
         return dict(GPU_STATUS)
     idx = sorted(int(d["index"]) for d in found)
     if ACTIVE_RUNTIME.get("gpu_auto"):
-        _set_auto_devices(idx)
-        if not idx:
-            print("[server_manager] gpu_devices is 'auto' but no discrete GPU was found; running with no GPU", file=sys.stderr)
+        if idx:
+            ACTIVE_RUNTIME["gpu_devices"] = idx
+            CONFIG_DEFAULTS["gpu_devices"] = list(idx)
+        else:
+            print("[server_manager] gpu_devices is 'auto' but no discrete GPU was found; keeping the default list", file=sys.stderr)
     configured = [int(x) for x in (ACTIVE_RUNTIME.get("gpu_devices") or [])]
     missing = [i for i in configured if i not in idx]
     unused = [i for i in idx if i not in configured]

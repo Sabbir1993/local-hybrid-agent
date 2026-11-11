@@ -45,7 +45,7 @@ class LogicTests(unittest.TestCase):
     def test_every_hostile_program_is_valid_python(self):
         for name in ("LOOP", "MEMORY", "BIG_FILE", "MANY_FILES", "SLEEP", "ENV_CANARY", "SYMLINK", "READ_ONLY", "FORK_BOMB"):
             compile(getattr(V, name), name, "exec")
-        compile(V.HOST_FILES % "/var/lib/local-agent-runner", "HOST_FILES", "exec")
+        compile(V.HOST_FILES % "/var/lib/a770-runner", "HOST_FILES", "exec")
 
     def test_it_refuses_politely_off_linux_and_without_bubblewrap(self):
         with mock.patch.object(V.sys, "platform", "win32"):

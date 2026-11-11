@@ -86,8 +86,7 @@ function applyStatusPayload(s) {
       sel.value = opt.value;
       if (typeof ClaudeChatBar !== 'undefined' && ClaudeChatBar.syncModel) ClaudeChatBar.syncModel();
     }
-  } else if (sel && s.profile && sel.value && !sel._user
-             && !(typeof isCloudValue === 'function' && isCloudValue(sel.value))) {
+  } else if (!cloudSel && s.profile && sel.value && !sel._user) {
     const opt = [...sel.options].find(o => o.value === s.profile || o.textContent.includes(s.profile));
     if (opt && sel.value !== opt.value) sel.value = opt.value;
   }
@@ -145,11 +144,9 @@ function connectStatusWebSocket() {
   }
 }
 
-// While the status socket is down, poll over HTTP so the page still sees loads and unloads.
-// (This used to wait for 3 failed HTTP polls, which never ran while the socket kept reconnecting.)
 function ensureHttpFallback() {
-  if (!_statusHttpFallbackInterval) {
-    _statusHttpFallbackInterval = setInterval(pollStatus, 4000);
+  if (pollFailures >= 3 && !_statusHttpFallbackInterval) {
+    _statusHttpFallbackInterval = setInterval(pollStatus, 8000);
   }
 }
 
@@ -161,23 +158,26 @@ try {
 } catch (_) {}
 
 async function pollStatus() {
-  if (_statusWs && _statusWs.readyState === WebSocket.OPEN) {
-    try {
-      _statusWs.send('refresh');
-      return;
-    } catch (_) {}
+  if (_statusWs && (_statusWs.readyState === WebSocket.OPEN || _statusWs.readyState === WebSocket.CONNECTING)) {
+    if (_statusWs.readyState === WebSocket.OPEN) {
+      try {
+        _statusWs.send('refresh');
+      } catch (_) {}
+    }
+    return;
   }
-  // Socket not open (still connecting, or down): ask over HTTP now, so a load/unload shows up without waiting for it.
   connectStatusWebSocket();
-  try {
-    const res = await fetch('/control/status', { background: true });
-    if (!res.ok) throw new Error('status not ok');
-    const s = await res.json();
-    applyStatusPayload(s);
-  } catch (e) {
-    pollFailures++;
-    if (pollFailures >= 2) {
-      setPill('offline');
+  if (!_statusWs || (_statusWs.readyState !== WebSocket.OPEN && _statusWs.readyState !== WebSocket.CONNECTING)) {
+    try {
+      const res = await fetch('/control/status', { background: true });
+      if (!res.ok) throw new Error('status not ok');
+      const s = await res.json();
+      applyStatusPayload(s);
+    } catch (e) {
+      pollFailures++;
+      if (pollFailures >= 2) {
+        setPill('offline');
+      }
     }
   }
 }

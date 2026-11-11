@@ -2,39 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { apiFetch } from '../../services/api';
 
-function sensorReason(sensed: number | undefined): string {
-  return sensed === 0
-    ? 'No temperature or power sensor found on this machine'
-    : 'Sensor reading unavailable';
-}
-
-const HwCard: React.FC<{ label: string; value: string; detail: string; history?: any[] }> = ({ label, value, detail, history }) => (
-  <div className="p-2 rounded bg-panel2 border border-border-subtle flex flex-col gap-1 min-w-0">
-    <div className="text-[10px] text-text-muted uppercase tracking-wider">{label}</div>
-    <div className="font-mono text-sm font-semibold text-text">{value}</div>
-    <div className="text-[10px] text-text-muted truncate" title={detail}>{detail}</div>
-    {history && history.length > 1 && <Sparkline values={history} />}
-  </div>
-);
-
-const Sparkline: React.FC<{ values: any[] }> = ({ values }) => {
-  const nums = values.map((v) => (v == null ? null : Number(v)));
-  const real = nums.filter((v): v is number => v != null);
-  if (real.length < 2) return null;
-  const max = Math.max(...real, 1);
-  const min = Math.min(...real, 0);
-  const span = max - min || 1;
-  const pts = nums
-    .map((v, i) => (v == null ? null : `${(i / (nums.length - 1)) * 100},${100 - ((v - min) / span) * 100}`))
-    .filter(Boolean)
-    .join(' ');
-  return (
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-6">
-      <polyline points={pts} fill="none" stroke="var(--accent, #38bdf8)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
-};
-
 export const MonitorDrawer: React.FC = () => {
   const { activeModal, setActiveModal, openSettingsModal } = useAppStore();
   const isOpen = activeModal === 'monitor';
@@ -42,7 +9,6 @@ export const MonitorDrawer: React.FC = () => {
   const [activeReqs, setActiveReqs] = useState<any[]>([]);
   const [agentRuns, setAgentRuns] = useState<any[]>([]);
   const [recentReqs, setRecentReqs] = useState<any[]>([]);
-  const [hw, setHw] = useState<any>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -50,17 +16,12 @@ export const MonitorDrawer: React.FC = () => {
     let mounted = true;
     const fetchMonitor = async () => {
       try {
-        const [monRes, runsRes, telRes] = await Promise.allSettled([
+        const [monRes, runsRes] = await Promise.allSettled([
           apiFetch('/control/monitor').then((r) => r.json()),
           apiFetch('/agent/runs').then((r) => r.json()),
-          apiFetch('/control/telemetry/live').then((r) => r.json()),
         ]);
 
         if (!mounted) return;
-
-        if (telRes.status === 'fulfilled' && telRes.value) {
-          setHw(telRes.value.cards || null);
-        }
 
         if (monRes.status === 'fulfilled' && monRes.value) {
           setActiveReqs(monRes.value.active || []);
@@ -128,39 +89,6 @@ export const MonitorDrawer: React.FC = () => {
       </div>
 
       <div className="drawer-body flex-1 overflow-y-auto p-4 flex flex-col gap-4 text-xs">
-        {/* Hardware: real sensor readings only; a value the machine does not report shows why it is missing */}
-        <div className="mon-section">
-          <h4 className="font-semibold text-text uppercase tracking-wider text-[10px] text-text-muted mb-2">
-            GPU hardware
-          </h4>
-          <div className="grid grid-cols-2 gap-2" id="mon-hw-cards">
-            <HwCard
-              label="GPU load"
-              value={hw?.gpu_load?.pct != null ? `${Math.round(hw.gpu_load.pct)} %` : '—'}
-              detail={hw?.gpu_load?.name || 'Discrete GPUs'}
-              history={hw?.gpu_load?.history}
-            />
-            <HwCard
-              label="GPU temp"
-              value={hw?.gpu_temp?.temp_c != null ? `${Math.round(hw.gpu_temp.temp_c)} °C` : '—'}
-              detail={hw?.gpu_temp?.temp_c != null ? 'Hottest GPU' : sensorReason(hw?.gpu_temp?.sensed_gpus)}
-              history={hw?.gpu_temp?.history}
-            />
-            <HwCard
-              label="Power"
-              value={hw?.power?.watts != null ? `${Math.round(hw.power.watts)} W` : '—'}
-              detail={hw?.power?.watts != null ? 'All GPUs' : sensorReason(hw?.power?.sensed_gpus)}
-              history={hw?.power?.history}
-            />
-            <HwCard
-              label="PCIe link"
-              value={hw?.pcie?.spec || '—'}
-              detail={hw?.pcie?.rate_mb_s != null ? `${hw.pcie.rate_mb_s} MB/s to GPU` : 'Throughput not measured'}
-              history={hw?.pcie?.history}
-            />
-          </div>
-        </div>
-
         {/* Active generations */}
         <div className="mon-section">
           <h4 className="font-semibold text-text uppercase tracking-wider text-[10px] text-text-muted mb-2">

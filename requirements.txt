@@ -8,7 +8,6 @@
 fastapi>=0.110
 starlette>=0.47.2          # CVE-2024-47874, CVE-2025-54121
 uvicorn>=0.29
-websockets>=12.0           # uvicorn needs a WebSocket library for /ws/status (without one it answers 404)
 httpx>=0.27
 pydantic>=2.6
 python-multipart>=0.0.18   # CVE-2024-53981

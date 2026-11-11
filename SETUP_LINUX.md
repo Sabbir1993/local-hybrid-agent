@@ -71,7 +71,7 @@ mkdir -p ~/llama-vulkan && tar -xzf ~/Downloads/[LLAMA_ARCHIVE_NAME].tar.gz -C ~
 
 Or build it from source instead (NVIDIA: `-DGGML_CUDA=ON`):
 ```bash
-sudo apt install -y build-essential cmake libvulkan-dev glslc spirv-headers glslang-tools
+sudo apt install -y build-essential cmake libvulkan-dev glslc
 ```
 ```bash
 git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp
@@ -122,7 +122,7 @@ unpack the archive into the folder named above and `chmod +x` the `*-server` and
 **Voice (speech to text).** whisper.cpp publishes no Vulkan build (its Linux release is CPU only), so build `whisper-server` once.
 The build tools are the same as for building llama.cpp:
 ```bash
-sudo apt install -y build-essential cmake libvulkan-dev glslc spirv-headers glslang-tools
+sudo apt install -y build-essential cmake libvulkan-dev glslc
 ```
 ```bash
 git clone https://github.com/ggml-org/whisper.cpp ~/whisper.cpp
@@ -131,15 +131,6 @@ A static build keeps `whisper-server` self-contained, so copying it into another
 ```bash
 cmake -S ~/whisper.cpp -B ~/whisper.cpp/build -DGGML_VULKAN=1 -DBUILD_SHARED_LIBS=OFF && cmake --build ~/whisper.cpp/build -j --config Release
 ```
-If CMake says `Could not find a package configuration file provided by "SPIRV-Headers"`, the `spirv-headers` package
-is missing or does not ship its CMake file. Find the file and point CMake at it (adjust the path to what `find` prints):
-```bash
-find /usr -name "SPIRV-HeadersConfig.cmake" -o -name "spirv-headers-config.cmake" 2>/dev/null
-```
-```bash
-cmake -S ~/whisper.cpp -B ~/whisper.cpp/build -DGGML_VULKAN=1 -DBUILD_SHARED_LIBS=OFF -DSPIRV-Headers_DIR=[DIR_WITH_THE_CONFIG_FILE] && cmake --build ~/whisper.cpp/build -j --config Release
-```
-If no such file exists, install the SPIRV-Headers project from source (https://github.com/KhronosGroup/SPIRV-Headers) with CMake and retry.
 ```bash
 mkdir -p ~/whisper-vulkan && cp -r ~/whisper.cpp/build/bin/* ~/whisper-vulkan/ && ~/whisper-vulkan/whisper-server --help | head -3
 ```
@@ -160,13 +151,10 @@ nano config/app.json
 - `gpu_devices`: use `"auto"` (every discrete GPU is used, whatever their number: 1, 2, 3 or 4). A fixed list such as
   `[0, 1]` also works; the numbers are the ones step 9 printed, and they differ from Windows (an Intel iGPU often takes index 0
   there but not on Linux). At startup the log warns when a listed index does not exist or a GPU is left unused.
-- If the server shows fewer GPUs than the machine has, or none, look for `GPU scan FAILED` or `GPU scan skipped` in the start log.
-  It means `llama_bin_dir` is wrong for Linux (a Windows `E:/...` path, or a folder without `llama-bench`), or the user cannot open
-  the GPU devices (add the user to the `render` and `video` groups). With `"auto"`, no listed GPU means no GPU is shown. Fix the
-  cause, check `[LLAMA_BIN_DIR]/llama-bench --list-devices` lists every GPU, then restart.
-- The monitor's GPU temperature and power need an Intel sensor source. If they show "not available", the machine has no readable
-  sensor; the Level Zero loader (`libze1`, and the Intel driver `libze-intel-gpu1` where your Ubuntu offers it) is what the app reads
-  them through. PCIe shows the link spec only; the app does not measure PCIe throughput.
+- If the server shows fewer GPUs than the machine has, look for `GPU scan FAILED` or `GPU scan skipped` in the start log. It means
+  `llama_bin_dir` is wrong for Linux (a Windows `E:/...` path, or a folder without `llama-bench`), so `"auto"` could not list the
+  GPUs and fell back to the Windows default `[1, 2]`. Fix the path, check `[LLAMA_BIN_DIR]/llama-bench --list-devices` lists every
+  GPU, then restart. The same error is shown in Settings under the GPU status (`scan_error`).
 - After the first start, open Settings -> Models and re-check the GPU of each helper model: the shipped file names Windows
   indices (1 and 2), and a GPU that does not exist here is moved to the default one automatically.
 - `runtime`: the preset to use (`vulkan`, or `cuda` for NVIDIA).

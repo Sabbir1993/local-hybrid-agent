@@ -111,23 +111,16 @@ class GpuListTests(unittest.TestCase):
         self.assertEqual(active, [1, 4])               # a fixed list is never rewritten
         self.assertEqual((status["missing"], status["unused"]), ([4], [2, 3]))
 
-    def test_unreadable_device_list_shows_no_gpu_in_auto(self):
+    def test_unreadable_device_list_keeps_the_configured_list(self):
         from core.vram.devices import DeviceQueryError
         rt = {**config.ACTIVE_RUNTIME, "gpu_auto": True, "gpu_devices": [1, 2]}
         with mock.patch.dict(config.ACTIVE_RUNTIME, rt, clear=True), \
-                mock.patch.dict(config.CONFIG_DEFAULTS, {"gpu_devices": [1, 2]}), \
                 mock.patch.dict(config.GPU_STATUS, {}), \
                 mock.patch("core.vram.devices.query_devices", side_effect=DeviceQueryError("no llama-bench")):
             status = config.resolve_gpu_devices(force=True)
             self.assertFalse(status["checked"])
-            self.assertEqual(config.ACTIVE_RUNTIME["gpu_devices"], [])   # auto + nothing listed = no GPU, not the default
-            self.assertEqual(status["configured"], [])
+            self.assertEqual(config.ACTIVE_RUNTIME["gpu_devices"], [1, 2])
             self.assertIn("no llama-bench", status["scan_error"])     # reported, not silent
-
-    def test_auto_with_no_discrete_gpu_shows_no_gpu(self):
-        status, active, _ = self.scan([dev(0, "Intel(R) UHD Graphics 770", total=32)], True, [1, 2])
-        self.assertEqual(active, [])
-        self.assertEqual(status["detected"], [])
 
     @unittest.skipIf(os.name == "nt", "uses a POSIX shell script as a stand-in llama-bench")
     def test_linux_llama_bench_with_three_gpus_is_fully_used(self):
