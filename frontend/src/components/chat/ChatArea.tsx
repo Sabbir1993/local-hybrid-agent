@@ -876,7 +876,8 @@ export const ChatArea: React.FC = () => {
                         <div className="meta" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--dim)' }}>
                           <span>{cleanModelName(m.model)}</span>
                           {m.ntok ? <span>· {m.ntok} tok</span> : null}
-                          {m.tps ? <span>· {m.tps.toFixed(1)} t/s</span> : null}
+                          {m.tps ? <span title={`Generation speed${m.promptTps ? ` · prompt read at ${m.promptTps.toFixed(0)} t/s` : ''}. The total time also counts reading the prompt, lookups and tool calls.`}>· {m.tps.toFixed(1)} t/s</span> : null}
+                          {typeof m.draftAccept === 'number' ? <span title="Share of the MTP draft tokens the model accepted">· MTP {Math.round(m.draftAccept * 100)}%</span> : null}
                           {m.secs ? <span>· {m.secs.toFixed(1)}s</span> : null}
                         </div>
                       )}
@@ -976,7 +977,8 @@ export const ChatArea: React.FC = () => {
                         >
                           <span>{cleanModelName(m.model)}</span>
                           {m.ntok ? <span>· {m.ntok} tok</span> : null}
-                          {m.tps ? <span>· {m.tps.toFixed(1)} t/s</span> : null}
+                          {m.tps ? <span title={`Generation speed${m.promptTps ? ` · prompt read at ${m.promptTps.toFixed(0)} t/s` : ''}. The total time also counts reading the prompt, lookups and tool calls.`}>· {m.tps.toFixed(1)} t/s</span> : null}
+                          {typeof m.draftAccept === 'number' ? <span title="Share of the MTP draft tokens the model accepted">· MTP {Math.round(m.draftAccept * 100)}%</span> : null}
                           {m.secs ? <span>· {m.secs.toFixed(1)}s</span> : null}
                         </div>
                       )}

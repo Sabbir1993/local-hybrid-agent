@@ -64,7 +64,9 @@ export interface ChatMessage {
   secs?: number;
   ntok?: number;
   promptTokens?: number;   // the server's real prompt size at the end of this reply: anchors the context ring
-  tps?: number;
+  tps?: number;            // generation speed: llama-server's own figure when it reported one, else tokens / total time
+  promptTps?: number;      // prompt reading speed (llama-server)
+  draftAccept?: number;    // share of MTP / draft tokens accepted (0..1), when a draft model was used
   errorAlert?: string;
   canContinue?: boolean;   // the run stopped because it used its steps: the answer offers a Continue button
   images?: string[];
@@ -1006,6 +1008,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           ntok: meta.ntok || m.ntok || 0,
           promptTokens: meta.promptTokens || 0,
           tps: meta.tps || m.tps || 0,
+          promptTps: meta.promptTps || undefined,
+          draftAccept: typeof meta.draftAccept === 'number' ? meta.draftAccept : undefined,
           errorAlert: meta.errorAlert || m.errorAlert || '',
           images: meta.images || m.images || [],
           files: meta.files || m.files || '',
@@ -1392,6 +1396,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     let tpsVal = 0;
     let ntokVal = 0;
     let promptTokVal = 0;
+    let genTpsVal = 0;         // llama-server's generation speed (done event), not tokens / total time
+    let promptTpsVal = 0;
+    let draftVal: number | null = null;
     let secsVal = 0;
     let modelDisplay = '';
     const runStart = performance.now();
@@ -1464,7 +1471,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           const ntok = ntokVal || Math.max(1, Math.round(((L.content || '').length + agentState.reasoning.length) / 3.5));
           L.secs = secs;
           L.ntok = ntok;
-          L.tps = ntok / secs;
+          L.tps = genTpsVal || ntok / secs;   // the server's measured generation speed when it sent one
+          if (promptTpsVal) L.promptTps = promptTpsVal;
+          if (draftVal !== null) L.draftAccept = draftVal;
         }
         if (promptTokVal) L.promptTokens = promptTokVal;
         holder.msg = { ...L };
@@ -1477,6 +1486,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           reasoning: agentState.reasoning || undefined,
           acts: (L.acts || []).length ? L.acts : undefined,
           tps: L.tps || tpsVal || undefined,
+          promptTps: L.promptTps || undefined,
+          draftAccept: L.draftAccept ?? undefined,
           ntok: L.ntok || ntokVal || undefined,
           promptTokens: L.promptTokens || undefined,
           secs: L.secs || secsVal || undefined,
@@ -1608,6 +1619,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           if (data.prompt_tokens) promptTokVal = data.prompt_tokens;
           if (data.tps) tpsVal = data.tps;
           if (data.ntok || data.completion_tokens) ntokVal = data.ntok || data.completion_tokens;
+          if (data.gen_tps) genTpsVal = data.gen_tps;
+          if (data.prompt_tps) promptTpsVal = data.prompt_tps;
+          if (typeof data.draft_accept === 'number') draftVal = data.draft_accept;
           if (data.secs) secsVal = data.secs;
           if (data.modelDisplay || data.model) modelDisplay = data.modelDisplay || data.model;
 

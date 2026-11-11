@@ -55,6 +55,7 @@ from ..common import _llm_chat_stream
 from ..common.sampling_extra import sampler_extra
 
 from .base import router
+from .speed import SpeedTally
 from .wrapup import LOW_ROUNDS_NOTE, WRAPUP_NOTE, ToolTextFilter, finish_text
 from .delivery import (
     _NO_TOOL_ANSWER,
@@ -870,6 +871,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         recent_tool_signatures = []
         runs.begin(run_id, "chat", user.id, stage="stream")
         t0 = time.time()
+        speed = SpeedTally()        # llama-server's own generation / prompt speed for the badge (routes/chat/speed.py)
         turn_limit = max_turns       # grows by one if a continuation nudge needs it
         web_calls = 0
         web_seen = set()
@@ -1125,6 +1127,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         yield sse("tool_preparing", val)
                     elif ev == "result":
                         res_dict = val
+                        speed.add(val)
 
                 _tt = think_redactor.flush()
                 if _tt:
@@ -1386,7 +1389,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         gen_toks = max(1, round(len(content) / 3.5))
                         prompt_toks = final_prompt_toks = _prompt_tokens_of(None, msgs, current_tools)
                         _record_chat_usage(None, sent_tokens, msgs, current_tools)
-                        yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
+                        yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks, **speed.as_event()})}\n\n"
                         return
 
                 # A website build that stops with a text-only reply ("Now let me recreate charts.js:") before project_finish is not
@@ -1528,7 +1531,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     async for _vc in verifier.sse_events(user, "chat", last_query, content, msgs,
                                                          main_client, req.verify, model_source == "cloud"):
                         yield _vc
-                    yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
+                    yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks, **speed.as_event()})}\n\n"
                     return
 
                 # Reset any pre-tool preamble streamed to the user
@@ -1785,6 +1788,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             yield _n
                     elif ev == "result":
                         res_dict = val
+                        speed.add(val)
 
                 _tt = think_redactor.flush()
                 if _tt:
@@ -1869,7 +1873,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             async for _vc in verifier.sse_events(user, "chat", last_query, content, msgs,
                                                  main_client, req.verify, model_source == "cloud"):
                 yield _vc
-            yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks, **speed.as_event()})}\n\n"
         except asyncio.CancelledError:
             run_end_state = "cancelled"
         except Exception as e:
@@ -1886,10 +1890,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             dt = time.time() - t0
             req_mon = _monitor_state["active"].get(chat_rid)
             toks = req_mon.get("gen_tokens") if req_mon else None
-            tps = (toks / dt) if (toks and dt and dt > 0) else None
+            tps = speed.gen_tps() or ((toks / dt) if (toks and dt and dt > 0) else None)   # real speed when llama-server reported it
             ptoks = final_prompt_toks or estimate_prompt_tokens(msgs)
             pcached = (sum(len(m.get("content", "")) for m in msgs[:-1]) // 4) if len(msgs) > 1 else 0
-            monitor_end(chat_rid, 200, prompt_tokens=ptoks, completion_tokens=toks, tps=tps, duration=dt,
+            monitor_end(chat_rid, 200, prompt_tokens=ptoks, completion_tokens=toks, tps=tps, duration=dt, prompt_tps=speed.prompt_tps(),
                         model=clean_model_name, prompt_cached=pcached, completion_cached=0,
                         source=model_source, provider=model_provider)
             db_record_request("chat/run", clean_model_name, ptoks, toks, tps, dt, None, True, 200,
