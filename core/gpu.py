@@ -366,9 +366,16 @@ def _query_intel_sensors_sync() -> list:
 
 def query_gpu_sensors_sync() -> Optional[dict]:
     """Real GPU temperature/power readings, or None when this machine offers
-    no source. Order: Intel Level Zero Sysman (Intel Arc) -> nvidia-smi (CUDA rig) -> LibreHardwareMonitor WMI (if
+    no source. Order: Linux sysfs hwmon -> Intel Level Zero Sysman (Intel Arc) -> nvidia-smi (CUDA rig) -> LibreHardwareMonitor WMI (if
     the operator runs it). Nothing is modeled; an unknown stack gets None and
     the UI shows N/A instead of a thermometer drawn from the load percent."""
+    if not IS_WINDOWS:
+        # Linux: the kernel's hwmon sensors (Intel xe/i915 and AMD discrete GPUs), no extra library needed
+        from .gpu_sysfs import read_gpus
+        rows = [{"gpu": i, "name": g["card"], "temp_c": g["temp_c"], "watts": g["watts"]}
+                for i, g in enumerate(read_gpus()) if g["temp_c"] is not None or g["watts"] is not None]
+        if rows:
+            return {"source": "sysfs", "gpus": rows}
     intel_rows = _query_intel_sensors_sync()
     if intel_rows:
         return {"source": "intel-sysman", "gpus": intel_rows}

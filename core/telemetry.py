@@ -86,6 +86,16 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
             max_compute = pct
     gpu_load_pct = round(min(100.0, max_compute), 1)
 
+    # Linux has no per-process GPU counter (compute stays empty): load, PCIe link and power limit come from sysfs.
+    sysfs_gpus = []
+    if not compute_list and sys.platform.startswith("linux"):
+        from .gpu_sysfs import read_gpus
+        sysfs_gpus = read_gpus()
+        loads = [g["load_pct"] for g in sysfs_gpus if g["load_pct"] is not None]
+        gpu_load_pct = round(sum(loads) / len(loads), 1) if loads else None
+    pcie_specs = sorted({g["pcie"] for g in sysfs_gpus if g.get("pcie")})
+    limits = [g["limit_w"] for g in sysfs_gpus if g.get("limit_w")]
+
     devices = gpu_data.get("devices", [])
     if devices:
         gpu_name = f"{len(devices)}x {devices[0].get('name', 'Intel Arc A770')}"
@@ -283,12 +293,12 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
             },
             "power": {
                 "watts": power_watts,
-                "limit_watts": None,
+                "limit_watts": round(sum(limits), 1) if limits else None,
                 "sensed_gpus": gpu_count_sensed,
                 "history": list(_telemetry_history["power"]),
             },
             "pcie": {
-                "spec": "Gen4 x16 / Gen3 x16",
+                "spec": " / ".join(pcie_specs) if pcie_specs else None,
                 "rate_mb_s": None,
                 "history": list(_telemetry_history["pcie"]),
             },

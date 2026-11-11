@@ -103,9 +103,13 @@ function updateTelemetryUi(data) {
     const lVal = document.getElementById('tm-gpu-load');
     const nVal = document.getElementById('tm-gpu-name');
     const spWrap = document.getElementById('tm-spark-gpu');
-    if (lVal) lVal.textContent = Math.round(cards.gpu_load.pct || 0);
+    const loadNull = (cards.gpu_load.pct === null || cards.gpu_load.pct === undefined);
+    if (lVal) {
+      lVal.textContent = loadNull ? '—' : Math.round(cards.gpu_load.pct);
+      lVal.title = loadNull ? 'GPU load is not reported on this machine' : '';
+    }
     if (nVal) nVal.textContent = cards.gpu_load.name || 'Discrete GPUs';
-    if (spWrap) spWrap.innerHTML = generateSparklineSvg(cards.gpu_load.history, 240, 36, '#38bdf8');
+    if (spWrap) spWrap.innerHTML = generateSparklineSvg(tmCleanHistory(cards.gpu_load.history), 240, 36, '#38bdf8');
   }
 
   // VRAM Card (null total = device list not available yet)
@@ -130,7 +134,7 @@ function updateTelemetryUi(data) {
       tVal.textContent = (cards.gpu_temp.temp_c === null || cards.gpu_temp.temp_c === undefined)
         ? '—' : Math.round(cards.gpu_temp.temp_c);
       tVal.title = (cards.gpu_temp.temp_c === null || cards.gpu_temp.temp_c === undefined)
-        ? 'No temperature sensor on this graphics stack - shown only when a real source (nvidia-smi / LibreHardwareMonitor) is present'
+        ? 'No temperature sensor found (Linux hwmon, Intel Level Zero, nvidia-smi or LibreHardwareMonitor)'
         : '';
     }
     if (spWrap) spWrap.innerHTML = generateSparklineSvg(tmCleanHistory(cards.gpu_temp.history), 240, 36, '#fb923c');
@@ -146,7 +150,8 @@ function updateTelemetryUi(data) {
       pVal.textContent = powerNull ? '—' : Math.round(cards.power.watts);
       pVal.title = powerNull ? 'No power sensor on this graphics stack' : '';
     }
-    if (lVal) lVal.textContent = powerNull ? 'sensor not available' : `of ${Math.round(cards.power.limit_watts || 450)} W limit`;
+    if (lVal) lVal.textContent = powerNull ? 'sensor not available'
+      : (cards.power.limit_watts ? `of ${Math.round(cards.power.limit_watts)} W limit` : 'all GPUs');
     if (spWrap) spWrap.innerHTML = generateSparklineSvg(tmCleanHistory(cards.power.history), 240, 36, '#38bdf8');
   }
 
@@ -155,7 +160,10 @@ function updateTelemetryUi(data) {
     const sVal = document.getElementById('tm-pcie-spec');
     const rVal = document.getElementById('tm-pcie-rate');
     const spWrap = document.getElementById('tm-spark-pcie');
-    if (sVal) sVal.textContent = cards.pcie.spec || 'Gen4 x16';
+    if (sVal) {
+      sVal.textContent = cards.pcie.spec || '—';
+      sVal.title = cards.pcie.spec ? 'Link between the slot and each GPU' : 'PCIe link not reported on this machine';
+    }
     if (rVal) {
       rVal.textContent = (cards.pcie.rate_mb_s === null || cards.pcie.rate_mb_s === undefined)
         ? 'to GPU —' : `to GPU ${cards.pcie.rate_mb_s} MB/s`;
