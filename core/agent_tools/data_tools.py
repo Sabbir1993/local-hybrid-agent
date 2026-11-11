@@ -44,7 +44,7 @@ DATA_QUERY_SCHEMA = {
 
 
 def tool_data_query(args: dict) -> str:
-    from ..doc_tools.location import _file_arg, resolve_common
+    from ..doc_tools.location import _file_arg, data_file_choices, resolve_common
     from ..file_tools.data_query import QueryError, run_data_query
     try:
         name = _file_arg(args)
@@ -52,7 +52,7 @@ def tool_data_query(args: dict) -> str:
         return "error: file required (the attached file's name)"
     p = resolve_common(name)
     if p is None or not p.is_file():
-        return f"error: no attached data file named '{name}' - use the name from the attachment note"
+        return data_file_choices(name)
     if p.suffix.lower() not in (".xlsx", ".xls", ".csv"):
         return f"error: data_query reads .xlsx / .xls / .csv files, not {p.suffix or 'this file'}"
     try:
@@ -89,7 +89,7 @@ DATA_SQL_SCHEMA = {
 
 
 def tool_data_sql(args: dict) -> str:
-    from ..doc_tools.location import resolve_common
+    from ..doc_tools.location import data_file_choices, resolve_common
     from ..sheet_engine import sql as sheet_sql
     names = list(args.get("files") or [])
     if args.get("file"):
@@ -101,7 +101,7 @@ def tool_data_sql(args: dict) -> str:
     for n in names[:6]:
         p = resolve_common(n)
         if p is None or not p.is_file():
-            return f"error: no attached data file named '{n}' - use the name from the attachment note"
+            return data_file_choices(n)
         if p.suffix.lower() not in (".xlsx", ".xls", ".csv"):
             return f"error: data_sql reads .xlsx / .xls / .csv files, not {p.suffix or 'this file'}"
         paths.append(p)
@@ -142,7 +142,7 @@ DATA_CLEAN_SCHEMA = {
 def tool_data_clean(args: dict) -> str:
     import uuid
     from pathlib import Path
-    from ..doc_tools.location import _file_arg, resolve_common
+    from ..doc_tools.location import _file_arg, data_file_choices, resolve_common
     from ..sheet_engine import clean
     from .workspace import _common_resolve
     try:
@@ -151,7 +151,7 @@ def tool_data_clean(args: dict) -> str:
         return "error: file required (the attached file's name)"
     p = resolve_common(name)
     if p is None or not p.is_file():
-        return f"error: no attached data file named '{name}' - use the name from the attachment note"
+        return data_file_choices(name)
     if p.suffix.lower() not in (".xlsx", ".xls", ".csv"):
         return f"error: data_clean reads .xlsx / .xls / .csv files, not {p.suffix or 'this file'}"
     try:

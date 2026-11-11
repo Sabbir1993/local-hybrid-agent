@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useLayoutEffect, useState } from 'react';
+import { drawCached, renderMermaidIn } from '../../utils/mermaid';
 import { useAppStore } from '../../stores/useAppStore';
 import { renderCompleteChatMessage } from '../../utils/chatRender';
 import { PromptDots } from './PromptDots';
@@ -148,6 +149,12 @@ const BotContent: React.FC<{ id: string; html: string; follow?: boolean }> = ({ 
     root.addEventListener('scroll', onScroll, true);
     return () => { root.removeEventListener('toggle', onToggle, true); root.removeEventListener('scroll', onScroll, true); };
   }, [id]);
+  // ```mermaid blocks: put already drawn diagrams back at once, draw new ones when the text stops changing
+  useLayoutEffect(() => { drawCached(ref.current); }, [html]);
+  useEffect(() => {
+    const t = setTimeout(() => { void renderMermaidIn(ref.current); }, 300);
+    return () => clearTimeout(t);
+  }, [html]);
   return <div ref={ref} className="bot-content" dangerouslySetInnerHTML={{ __html: html }} />;
 };
 

@@ -66,6 +66,20 @@ def _query_arg(args) -> str:
     return str(args or "").strip()
 
 
+def _placeholder_host(host: str) -> bool:
+    """A host that cannot be a real public site: empty once the dots are gone ("..."), or no dot at all ("example",
+    "localhost"). IP addresses pass here; net_guard still refuses private ones."""
+    import ipaddress
+    h = host.strip().strip(".")
+    if not h:
+        return True
+    try:
+        ipaddress.ip_address(h)
+        return False
+    except ValueError:
+        return "." not in h
+
+
 async def tool_web_fetch(args: dict) -> str:
     url = (args.get("url") or "").strip()
     focus = str(args.get("query") or "").strip()
@@ -78,6 +92,9 @@ async def tool_web_fetch(args: dict) -> str:
     parsed = urlparse(url)
     if not parsed.netloc:
         return f"error: invalid url: {args.get('url')}"
+    if _placeholder_host(parsed.hostname or ""):
+        return (f"error: '{args.get('url')}' is not a real address (a placeholder?) - use a URL from the search "
+                "results or one the user gave")
     page = ws.cache_get(("fetch", url))
     if page is None:
         if blocklist.is_blocked(url):

@@ -88,7 +88,6 @@ def resolve_common(name: str) -> Optional[Path]:
     norm_name = re.sub(r'([0-9])\s+([0-9])', r'\1\2', norm_name)
     norm_name = re.sub(r'([a-zA-Z])\s+([a-zA-Z])', r'\1\2', norm_name)
     norm_name = re.sub(r'2[oO]26', '2026', norm_name)
-    norm_name = re.sub(r'([a-zA-Z0-9]){2,}', r'\1', norm_name)
     sk_query = re.sub(r'[^a-zA-Z0-9]', '', doc_store.base_stem(norm_name)).lower()
 
     suf_files = [f for f in folder.glob(f"*{suf}") if f.is_file()]
@@ -103,8 +102,10 @@ def resolve_common(name: str) -> Optional[Path]:
                 return f
         clean_stem = doc_store.base_stem(Path(clean_name).name).lower()
         matching = [f for f in suf_files if (doc_store.base_stem(f.name).lower() in clean_stem or clean_stem in doc_store.base_stem(f.name).lower())]
-        if matching:
-            return max(matching, key=lambda f: f.stat().st_mtime)
+        # Only an unambiguous match: files that differ by one name or ID (one employee's record vs another's) must never
+        # be swapped silently. Several matches -> None, and the caller lists the real names (data_file_choices).
+        if len(matching) == 1:
+            return matching[0]
 
     return None
 
@@ -175,3 +176,32 @@ def _err(e: Exception) -> str:
     if isinstance(e, (DocOpError, FileNotFoundError, PermissionError, ValueError)):
         return f"doc error: {e}"
     raise e
+
+
+DATA_SUFFIXES = (".xlsx", ".xls", ".csv")
+
+
+def data_file_choices(name: str, limit: int = 12) -> str:
+    """Error text for a data file name that matched nothing: the closest real names and the user's data files.
+
+    Suggests only. Attachments such as per-employee records differ by one name or ID, so picking the "closest" file
+    automatically could answer from the wrong person's data; the model has to copy a real name and call again."""
+    import difflib
+    try:
+        folder = common_workspace()
+        files = sorted((f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in DATA_SUFFIXES),
+                       key=lambda f: f.stat().st_mtime, reverse=True)
+    except (OSError, PermissionError):
+        files = []
+    names = [f.name for f in files]
+    msg = f"error: no attached data file named '{name}'."
+    if not names:
+        return msg + " No data files are attached in this workspace."
+    close = difflib.get_close_matches(Path(str(name or "")).name, names, n=3, cutoff=0.6)
+    if close:
+        msg += " Did you mean: " + ", ".join(f"'{c}'" for c in close) + "?"
+    shown = names[:limit]
+    msg += " Attached data files: " + ", ".join(f"'{n}'" for n in shown)
+    if len(names) > limit:
+        msg += f" (+{len(names) - limit} more)"
+    return msg + ". Copy one name exactly and call again."

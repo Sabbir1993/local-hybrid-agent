@@ -4142,6 +4142,11 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 .vis-legend .vis-sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; background: rgb(var(--vt)); }
 
 /* Inline Mermaid Render Box in Chat */
+.mermaid-box:not(.drawn) .mermaid-viewport { display: none; }
+.mermaid-box.drawn .mermaid-code-raw { display: none; }
+.mermaid-box.drawn .mermaid-viewport { display: block; height: auto; max-height: 600px; overflow: auto; text-align: center; }
+.mermaid-code-raw { margin: 0; padding: 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; }
+.mermaid-error { padding: 6px 12px; font-size: 11.5px; color: var(--dim); border-top: 1px solid var(--border-subtle); }
 .mermaid-box {
   margin: 10px 0; background: var(--panel2); border: 1px solid var(--border);
   border-radius: 8px; overflow: hidden;
@@ -4161,11 +4166,11 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
   height: 380px;
   max-height: 480px;
 }
+.mermaid-box.drawn .mermaid-viewport svg { display: block; margin: 0 auto; }
 .mermaid-viewport svg {
-  max-width: 100% !important;
-  max-height: 100% !important;
-  height: auto !important;
-  width: auto !important;
+  /* Mermaid sets width:100% plus max-width at the diagram's natural size: keep both, so a small diagram stays its size and a
+     wide one shrinks to fit (an !important max-width here would stretch every diagram to the full width) */
+  height: auto;
 }
 
 

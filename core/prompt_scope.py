@@ -229,6 +229,9 @@ VISUAL_STYLE = (
     "icon is one of globe, shield, server, database, lock, user, cloud, cpu, file, key, gear, check, alert, code, "
     'network, mobile, mail, money (or omit); tone is one of blue, purple, green, amber, red, gray (or omit). For '
     'a set of parallel items use {"type":"cards","items":[{"title","text","icon","tone"}]}.\n'
+    "When the picture has branches, decisions, loops, parallel paths or several actors talking (a sequence or state diagram), "
+    "use ONE fenced `mermaid` block instead (flowchart TD, sequenceDiagram or stateDiagram-v2): short labels, quote any "
+    'label with brackets, slashes or colons (A["Load balancer (L7)"]), no styling or click directives.\n'
     "For numbers (trends, shares, comparisons) NEVER draw ASCII or text-block charts; use a chart block instead:\n"
     "```visual\n"
     '{"type":"chart","kind":"line","title":"Attacks per year","unit":"%","labels":["2024","2025","2026"],'
@@ -238,13 +241,17 @@ VISUAL_STYLE = (
     "Chart only numbers you actually know (never invent data) and name the source in the text. Do not put card "
     "numbers, secrets or personal data in a block. Use a block only when it helps; skip it for simple answers.")
 
+# Always on when the full VISUAL_STYLE is not added: without any diagram guidance the model draws ASCII art.
+NO_ASCII_DIAGRAMS = ("DIAGRAMS: never draw diagrams, flows or charts with ASCII or box-drawing characters (┌─┐ │ └─┘ ─▶). "
+                     "If a picture helps, use one fenced `mermaid` block (flowchart TD / sequenceDiagram) with short labels.")
+
 _VISUAL_RE = re.compile(
     r"\b(diagram|flow\s*chart|flowchart|architecture|work\s*flow|workflow|pipeline|life\s*cycle|lifecycle|sequence"
     r"|visuali[sz]\w*|step[- ]by[- ]step|overview|request\s+flow|charts?|graphs?|plot|trends?|statistics|stats"
     r"|layers?|tiers?|components?|stack|structure|breakdown)\b"
     r"|\bhow\b.{0,60}\b(works?|flows?|happens?|communicates?|connects?)\b",
     re.IGNORECASE)
-_VISUAL_SKIP_RE = re.compile(r"```|\bmermaid\b|\b(pptx|docx|xlsx|pdf|slides?|deck)\b", re.IGNORECASE)
+_VISUAL_SKIP_RE = re.compile(r"```|\b(pptx|docx|xlsx|pdf|slides?|deck)\b", re.IGNORECASE)
 
 
 def visual_wanted(query: str, voice: bool = False, enabled: bool = True, prior_msgs=None) -> bool:
@@ -686,6 +693,31 @@ ATTACHED_DATA = (
     "for company information or outside facts.\n"
     "- Answer with a short summary of the key findings and figures (a small table when it helps); mention anything you could not "
     "verify.")
+
+_DATA_NOTE_RX = re.compile(r'data_query\(file="([^"\n]+)"\)')
+_DATA_HEADER_RX = re.compile(r"--- FILE:\s*([^\n]*?\.(?:xlsx?|csv))\s*---", re.IGNORECASE)
+
+
+def attached_data_files(msgs) -> list:
+    """Exact names of the spreadsheets attached in this conversation, in order. The note the client writes under each
+    profile (data_query(file="...")) carries the name the server stored; the FILE header is the fallback when no note."""
+    noted, headed = [], []
+    for m in msgs or []:
+        if m.get("role") != "user":
+            continue
+        text = str(m.get("content") or "")
+        noted += _DATA_NOTE_RX.findall(text)
+        headed += [h.strip() for h in _DATA_HEADER_RX.findall(text)]
+    return list(dict.fromkeys(noted or headed))
+
+
+def attached_data_block(names) -> str:
+    """The list the model copies file names from, so it does not mix the parts of similar names."""
+    if not names:
+        return ""
+    lines = "\n".join(f"{i}. {n}" for i, n in enumerate(names, 1))
+    return ("ATTACHED DATA FILES (pass one of these to data_query / data_sql / data_clean, copied exactly; never combine parts "
+            "of two names):\n" + lines)
 
 
 # Image tool gating: the chat offers generate_image only when the user is asking for a picture. Offered always, a

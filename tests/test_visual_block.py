@@ -11,12 +11,13 @@ class VisualGate(unittest.TestCase):
                   "explain the architecture of a payment gateway",
                   "draw a diagram of the OAuth login flow",
                   "how does DNS resolution happen?",
-                  "show the cyber threat trend for 2025 as a chart"):
+                  "show the cyber threat trend for 2025 as a chart",
+                  "draw the architecture as a mermaid diagram"):      # mermaid is drawn by the client now
             self.assertTrue(ps.visual_wanted(q), q)
 
-    def test_code_documents_voice_mermaid_and_small_talk_do_not(self):
+    def test_code_documents_voice_and_small_talk_do_not(self):
         for q in ("hi", "write a python function to sort lists", "make a pptx deck about our architecture",
-                  "draw the architecture as a mermaid diagram", "```js\nx()\n``` how does this work"):
+                  "```js\nx()\n``` how does this work"):
             self.assertFalse(ps.visual_wanted(q), q)
         self.assertFalse(ps.visual_wanted("how does caddy work", voice=True))
         self.assertFalse(ps.visual_wanted("how does caddy work", enabled=False))

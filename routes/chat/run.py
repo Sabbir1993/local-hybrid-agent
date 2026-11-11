@@ -608,6 +608,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if has_data_attachment:
         sys_parts.append(prompt_scope.ATTACHED_DATA)
         sys_labels.append("attached-data")
+        data_list = prompt_scope.attached_data_block(prompt_scope.attached_data_files(msgs))
+        if data_list:
+            sys_parts.append(data_list)
+            sys_labels.append("attached-data-files")
 
     if prior_files:
         latest = pick_target(own_q, prior_files)           # the file the user means: named, or the newest
@@ -680,6 +684,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                   prior_msgs=msgs[:-1]):
         sys_parts.append(prompt_scope.VISUAL_STYLE)
         sys_labels.append("visual")
+    elif not req.voice and (APP_CONFIG.get("chat") or {}).get("visuals", True):
+        sys_parts.append(prompt_scope.NO_ASCII_DIAGRAMS)
+        sys_labels.append("no-ascii")
 
     # PowerPoint requests: ask slide count / audience / palette first, then build a real .pptx
     if prompt_scope.deck_brief_wanted(last_query, msgs[:-1]):
