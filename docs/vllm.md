@@ -99,7 +99,7 @@ Shown when *Runtime engine = vLLM*. llama.cpp-only fields (GPU layers, tensor sp
 | Field | vLLM flag | Notes |
 |---|---|---|
 | Context size | `--max-model-len` | |
-| Parallel slots | `--max-num-seqs` | How many requests run at once |
+| Parallel slots | `--max-num-seqs` | How many requests run at once. 0 or 1 = the `engines.vllm.max_num_seqs` default (8), because vLLM batches requests |
 | Tensor parallel | `--tensor-parallel-size` | Must divide the attention heads: 1, 2 or 4, **not 3**. 0 = auto (2 on 3 GPUs) |
 | Pipeline parallel | `--pipeline-parallel-size` | GPUs used = tensor × pipeline. Use pipeline 3 with tensor 1 to use all three GPUs |
 | GPU memory share % | `--gpu-memory-utilization` | 0 = `engines.vllm` default |
@@ -108,12 +108,23 @@ Shown when *Runtime engine = vLLM*. llama.cpp-only fields (GPU layers, tensor sp
 | Reasoning parser | `--reasoning-parser` | `qwen3`, `deepseek_r1`, ... Empty = none |
 | Eager mode | `--enforce-eager` | Try it when start-up fails while compiling |
 | Tokenizer | `--tokenizer` | GGUF only: the original repo, e.g. `Qwen/Qwen3-8B` |
+| Extra arguments | (appended) | For this model only, e.g. `--kv-cache-dtype fp8`. `--trust-remote-code` is refused here |
 
 ### GPUs and helper models
 
 vLLM reserves its memory share on every GPU it uses, so a helper model on the same GPU may not fit. On 3 GPUs the
 default (tensor parallel 2) uses GPUs 0 and 1, which leaves GPU 2 for the helpers. Set `small_model_gpu` / each helper's
 `gpu` to 2. The pre-load check warns when they overlap.
+
+## Tuning for speed
+
+- **One GPU is fastest when the model fits.** Use tensor parallel 1 and pipeline parallel 1 with an INT4 or FP8 model.
+- **Two GPUs:** tensor parallel 2 gives the best speed for one large model.
+- **Three GPUs:** tensor parallel 1 with pipeline parallel 3 uses all three for a model too large for two. It adds
+  capacity, not speed.
+- **Many users at once:** raise Parallel slots. vLLM runs them as one batch, so total tokens per second rise with load.
+- **Less memory per context:** add `--kv-cache-dtype fp8` under Extra arguments if your vLLM build supports it on Intel.
+- **Start-up fails while compiling:** turn on Eager mode.
 
 ## Notes
 

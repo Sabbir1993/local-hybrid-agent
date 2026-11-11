@@ -234,7 +234,10 @@ class ProxyState:
             await loop.run_in_executor(None, vram.check_or_raise, self.profile)
             cmd = build_launch_command(self.profile)
         self.launch_info = {"engine": engine_of(self.profile), "context_size": self.profile.get("context_size"),
-                            "model_path": self.profile.get("model_path")}
+                            "model_path": self.profile.get("model_path"),
+                            # what the admission gate counts: vLLM runs more requests at once than the saved slot count
+                            "n_slots": (vllm_engine.max_num_seqs(self.profile) if vllm_mode
+                                        else int(self.profile.get("n_slots") or 1))}
         print(f"[server_manager] launching ({self.engine_label}): {' '.join(cmd)}")
         self.loading = True
         self.healthy = False
@@ -562,13 +565,24 @@ class ProxyState:
 
 
 def _keepalive_default() -> bool:
-    """On unless config runtime.keepalive is false: Windows demotes idle GPU allocations to
-    system memory, and a model that has sat idle comes back slow."""
+    """config/app.json "keepalive": true, false or "auto" (the default). Auto = on for Windows only: Windows demotes idle
+    GPU allocations to system memory, so an idle model comes back slow there. Linux keeps VRAM resident, where the ping
+    would only cost GPU time and, on a one-slot server, replace the user's cached conversation every 25 s."""
     try:
         from .small_model import APP_CONFIG
-        return bool((APP_CONFIG.get("runtime") or {}).get("keepalive", True))
+        v = APP_CONFIG.get("keepalive", "auto")
+        rt = APP_CONFIG.get("runtime")
+        if isinstance(rt, dict) and "keepalive" in rt:      # older configs kept it under a "runtime" object
+            v = rt["keepalive"]
     except Exception:
+        v = "auto"
+    if isinstance(v, bool):
+        return v
+    if str(v).strip().lower() in ("true", "on", "1", "yes"):
         return True
+    if str(v).strip().lower() in ("false", "off", "0", "no"):
+        return False
+    return os.name == "nt"
 
 
 # A one-token "ping" only touches what that token needs. A mixture-of-experts model routes each

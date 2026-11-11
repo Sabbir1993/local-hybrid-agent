@@ -147,11 +147,30 @@ class LaunchTests(unittest.TestCase):
         self.assertIn("--gpu-memory-utilization 0.7", args)
         self.assertNotIn("--tool-call-parser", args)
 
+    def test_one_slot_uses_the_vllm_default_and_extra_args_are_added(self):
+        cmd = vllm.build_command(self.prof(n_slots=1, vllm_extra_args="--kv-cache-dtype fp8"))
+        args = " ".join(cmd)
+        self.assertIn("--max-num-seqs 8", args)
+        self.assertEqual(cmd[-2:], ["--kv-cache-dtype", "fp8"])
+
     def test_preflight_warns_about_shared_gpus(self):
         with mock.patch.object(vllm, "helper_gpus", return_value={1}):
             plan = vllm.preflight(self.prof())
         self.assertEqual(plan["status"], "tight")
         self.assertIn("GPU 1", plan["warnings"][0])
+
+
+class LayerInfoTests(unittest.TestCase):
+    def test_gguf_and_folder_layer_counts(self):
+        from routes.control import config_helpers as ch
+        with mock.patch("core.vram.gguf_parser.parse_gguf_info",
+                        return_value={"n_layer": 48, "file_bytes": 49 * 400 * 1048576, "stat_ok": True, "complete": True}):
+            self.assertEqual(ch._layer_info("/m/x.gguf"), {"total_layers": 49, "layer_mb": 400})
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "config.json").write_text(json.dumps({"num_hidden_layers": 64}))
+            (Path(d) / "model.safetensors").write_bytes(b"x" * 64 * 1048576)
+            self.assertEqual(ch._layer_info(d), {"total_layers": 64, "layer_mb": 1})
+        self.assertEqual(ch._layer_info("/nope/missing.gguf"), {"total_layers": None, "layer_mb": None})
 
 
 class AdapterTests(unittest.TestCase):

@@ -345,7 +345,7 @@ CONFIG_INT_FIELDS = {
     "mtp_draft_n_max": (1, 16),
     "kv_unified_per_slot": (0, 1048576),
     "cache_reuse": (0, 4096),
-    "cache_ram": (0, 49152),
+    "cache_ram": (-1, 49152),               # -1 = no limit
     # vLLM engine (core/engines/vllm.py); gpu_memory_utilization_pct 0 = engines.vllm default
     "tensor_parallel_size": (0, 16),         # 0 = automatic
     "pipeline_parallel_size": (1, 16),
@@ -397,5 +397,5 @@ MODEL_CONFIG_KEYS = (
     # vLLM engine (main model only); see core/engines/vllm.py
     "engine", "tensor_parallel_size", "pipeline_parallel_size", "gpu_memory_utilization_pct",
     "vllm_dtype", "vllm_quantization", "vllm_tokenizer", "vllm_tool_parser", "vllm_reasoning_parser",
-    "vllm_enforce_eager",
+    "vllm_enforce_eager", "vllm_extra_args",
 )

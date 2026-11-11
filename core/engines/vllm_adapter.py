@@ -22,8 +22,18 @@ DROP_FIELDS = ("id_slot", "slot_id", "cache_prompt", "n_keep", "n_discard", "t_m
                "timings_per_token", "thinking_budget_tokens", "return_progress")
 GEN_PATHS = ("/v1/chat/completions", "/v1/completions")
 
-# last request's token counts and how many are running: what /slots reports while vLLM is loaded
-_last = {"prompt": 0, "completion": 0, "inflight": 0}
+# what /slots reports while vLLM is loaded: each user's last request size (their own context ring), and how many run now
+_last = {"inflight": 0}
+_last_by_user: dict = {}        # user id (None = no user) -> (prompt tokens, completion tokens)
+_MAX_USERS = 500
+
+
+def _uid():
+    try:
+        from ..request_context import get_current_user_id
+        return get_current_user_id()
+    except Exception:
+        return None
 
 
 def adapt_request(payload: dict, profile: Optional[dict]) -> dict:
@@ -86,15 +96,17 @@ def _has_output(obj: dict) -> bool:
     return False
 
 
-def _note_usage(usage: dict) -> None:
-    _last["prompt"] = int(usage.get("prompt_tokens") or 0)
-    _last["completion"] = int(usage.get("completion_tokens") or 0)
+def _note_usage(usage: dict, uid=None) -> None:
+    if len(_last_by_user) >= _MAX_USERS and uid not in _last_by_user:
+        _last_by_user.pop(next(iter(_last_by_user)))
+    _last_by_user[uid] = (int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0))
 
 
 class _SseRewrite(httpx.AsyncByteStream):
     """Rewrites a vLLM SSE stream line by line (see the module doc)."""
 
-    def __init__(self, inner, t_start: float):
+    def __init__(self, inner, t_start: float, uid=None):
+        self._uid = uid
         self._inner = inner
         self._t0 = t_start
         self._t_first = None
@@ -117,7 +129,7 @@ class _SseRewrite(httpx.AsyncByteStream):
         _rename_reasoning(obj)
         if isinstance(obj.get("usage"), dict) and not obj.get("timings"):
             obj["timings"] = timings_from_usage(obj["usage"], self._t0, self._t_first, time.monotonic())
-            _note_usage(obj["usage"])
+            _note_usage(obj["usage"], self._uid)
         return b"data: " + json.dumps(obj, ensure_ascii=False).encode("utf-8")
 
     async def __aiter__(self):
@@ -170,13 +182,14 @@ class EngineTransport(httpx.AsyncBaseTransport):
                             content=json.dumps(adapt_request(payload, profile)).encode("utf-8"),
                             extensions=request.extensions)
         t0 = time.monotonic()
+        uid = _uid()
         resp = await self._inner.handle_async_request(req)
         if resp.status_code != 200:
             return resp
         out_headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in ("content-length", "content-encoding")]
         if "text/event-stream" in resp.headers.get("content-type", ""):
             _last["inflight"] += 1
-            return httpx.Response(200, headers=out_headers, stream=_SseRewrite(resp.stream, t0),
+            return httpx.Response(200, headers=out_headers, stream=_SseRewrite(resp.stream, t0, uid),
                                   extensions=resp.extensions)
         body = b""
         try:
@@ -190,7 +203,7 @@ class EngineTransport(httpx.AsyncBaseTransport):
                 _rename_reasoning(obj)
                 if isinstance(obj.get("usage"), dict):
                     obj["timings"] = timings_from_usage(obj["usage"], t0, None, time.monotonic())
-                    _note_usage(obj["usage"])
+                    _note_usage(obj["usage"], uid)
                 body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         except ValueError:
             pass
@@ -200,8 +213,10 @@ class EngineTransport(httpx.AsyncBaseTransport):
     def _slots(profile: dict) -> httpx.Response:
         from ..config import CONFIG_DEFAULTS
         n_ctx = int((profile or {}).get("context_size") or CONFIG_DEFAULTS["context_size"])
-        slot = {"id": 0, "n_ctx": n_ctx, "n_prompt_tokens": _last["prompt"],
-                "next_token": [{"n_decoded": _last["completion"]}], "is_processing": _last["inflight"] > 0}
+        # one entry, so "the caller's slot" is always this one, filled with the caller's own last request
+        prompt, completion = _last_by_user.get(_uid(), (0, 0))
+        slot = {"id": 0, "n_ctx": n_ctx, "n_prompt_tokens": prompt,
+                "next_token": [{"n_decoded": completion}], "is_processing": _last["inflight"] > 0}
         return httpx.Response(200, json=[slot])
 
     async def aclose(self) -> None:

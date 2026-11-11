@@ -103,6 +103,13 @@ async def restart_server(user: Principal = Depends(require_permission("model.loc
 async def set_keepalive(req: KeepaliveRequest, user: Principal = Depends(require_permission("settings.runtime.view"))):
     state.keepalive_enabled = req.enabled
     state.last_activity = time.time()
+    try:        # remembered across restarts (config/app.json "keepalive")
+        from core.config import update_app_config
+        from core.small_model import APP_CONFIG
+        update_app_config(lambda cfg: cfg.__setitem__("keepalive", bool(req.enabled)))
+        APP_CONFIG["keepalive"] = bool(req.enabled)
+    except Exception as e:
+        print(f"[server_manager] keepalive setting not saved: {e}")
     print(f"[server_manager] keepalive {'enabled' if req.enabled else 'disabled'}")
     return {"ok": True, "keepalive": state.keepalive_enabled}
 

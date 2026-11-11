@@ -26,6 +26,7 @@
       "gpu_devices": "auto",
       "gpu_memory_utilization": 0.9,
       "health_timeout_s": 900,
+      "max_num_seqs": 8,
       "tool_call_parser": "hermes",
       "reasoning_parser": "",
       "grammar_param": "structured_outputs",

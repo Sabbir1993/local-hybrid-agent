@@ -570,7 +570,9 @@ function fillEngineFields(c) {
   if ($('cfg-vtool')) $('cfg-vtool').value = c.vllm_tool_parser ?? '';
   if ($('cfg-vreason')) $('cfg-vreason').value = c.vllm_reasoning_parser ?? '';
   if ($('cfg-vtok')) $('cfg-vtok').value = c.vllm_tokenizer || '';
+  if ($('cfg-vextra')) $('cfg-vextra').value = c.vllm_extra_args || '';
   applyEngineUI();
+  layersInfo();
 }
 
 function applyEngineUI() {
@@ -593,6 +595,7 @@ function applyEngineUI() {
   if (vllm && Array.isArray(c.vllm_parallel_effective)) {
     const [tp, pp] = c.vllm_parallel_effective;
     notes.push(`Saved setting uses ${tp * pp} GPU(s): tensor ${tp} × pipeline ${pp}.`);
+    if (c.vllm_max_num_seqs) notes.push(`Runs up to ${c.vllm_max_num_seqs} requests at once (Parallel slots 0 or 1 = the vLLM default).`);
   }
   if ($('cfg-engine-note')) $('cfg-engine-note').textContent = notes.join(' ');
   const np = $('cfg-np') && $('cfg-np').closest('.cfg-item');
@@ -685,13 +688,42 @@ function tsCheck() {
   const shares = parseTensorSplit($('cfg-ts').value);
   let msg = '';
   if (cfgGpuIdx.length > 1 && shares.length !== cfgGpuIdx.length) {
-    msg = `⚠ ${shares.length} share(s) for ${cfgGpuIdx.length} GPUs — an equal split will be used.`;
+    msg = `⚠ ${shares.length} share(s) saved, but this machine has ${cfgGpuIdx.length} GPUs — the model will be split equally over all of them until you set one share per GPU (0 skips a GPU) and save.`;
   } else if (shares.length && !shares.some(s => parseInt(s) > 0)) {
     msg = '⚠ At least one GPU needs a share above 0.';
   }
   w.textContent = msg;
   w.style.display = msg ? 'block' : 'none';
+  layersInfo();
 }
+
+/* View only: the model's total layers and how the current shares divide them, so an admin can work out what fits on a GPU. */
+function layersInfo() {
+  const c = (typeof cfgEngineInfo !== 'undefined' && cfgEngineInfo) || {};
+  const total = c.total_layers, mb = c.layer_mb;
+  const info = $('cfg-layers-info'), line = $('cfg-ts-layers');
+  if (info) {
+    info.textContent = total
+      ? `Model has ${total} layers` + (mb ? ` · about ${mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb + ' MB'} each` : '') + ' · 999 = all on GPU'
+      : '';
+  }
+  if (!line) return;
+  const shares = parseTensorSplit($('cfg-ts') ? $('cfg-ts').value : '').map(s => parseInt(s) || 0);
+  const ngl = parseInt($('cfg-ngl') && $('cfg-ngl').value);
+  const onGpu = total ? Math.min(total, isNaN(ngl) ? total : ngl) : 0;
+  const sum = shares.reduce((a, b) => a + b, 0);
+  if (!total || !cfgGpuIdx.length || shares.length !== cfgGpuIdx.length || !sum) { line.textContent = ''; return; }
+  const parts = [];
+  shares.forEach((sh, i) => {
+    if (sh <= 0) return;
+    const n = Math.round(onGpu * sh / sum), d = tsGpuInfo(cfgGpuIdx[i]);
+    const gb = mb ? ` ≈ ${(n * mb / 1024).toFixed(1)} GB` : '';
+    parts.push(`GPU ${cfgGpuIdx[i]}: ~${n} layers${gb}${d ? ' of ' + d.total_gb + ' GB' : ''}`);
+  });
+  line.textContent = parts.join(' · ') + (parts.length ? ' (weights only; context memory is extra)' : '');
+}
+
+if ($('cfg-ngl')) $('cfg-ngl').addEventListener('input', layersInfo);
 
 if ($('cfg-ts')) $('cfg-ts').addEventListener('input', () => { updateGpuDependentFields(); tsRowsFromText(); });
 if ($('ts-equal')) $('ts-equal').onclick = () => tsSetShares(cfgGpuIdx.map(() => 1));
@@ -735,6 +767,7 @@ if ($('btn-apply')) $('btn-apply').onclick = async () => {
       vllm_tool_parser: $('cfg-vtool').value.trim(),
       vllm_reasoning_parser: $('cfg-vreason').value.trim(),
       vllm_tokenizer: $('cfg-vtok').value.trim(),
+      vllm_extra_args: $('cfg-vextra') ? $('cfg-vextra').value.trim() : '',
     });
   }
   const wasLoaded = !!(curStatus && curStatus.pid);

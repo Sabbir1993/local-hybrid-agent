@@ -21,6 +21,7 @@ from core.engines import vllm as vllm_engine
 
 # free-text vLLM settings ("" = not set); they become command-line arguments, so only plain names and paths are accepted
 VLLM_TEXT_KEYS = ("vllm_tokenizer", "vllm_tool_parser", "vllm_reasoning_parser")
+_EXTRA_ARGS_RX = re.compile(r"^[A-Za-z0-9_./:=,\- ]{1,300}$")
 _SAFE_ARG_RX = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./:\-]{0,199}$")
 
 
@@ -39,6 +40,15 @@ def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
         v = str(value or "").strip()
         if v and not _SAFE_ARG_RX.match(v):
             return f"{key}: use a Hugging Face repo id, a folder path or a parser name (letters, digits, . _ - / :)"
+        profile[key] = v
+        return None
+    if key == "vllm_extra_args":
+        v = " ".join(str(value or "").split())
+        if v and not _EXTRA_ARGS_RX.match(v):
+            return "vllm_extra_args: only flags and plain values (letters, digits, . _ - / : = ,), e.g. --kv-cache-dtype fp8"
+        if "--trust-remote-code" in v:
+            return ("vllm_extra_args: --trust-remote-code runs code shipped inside the model folder; add it in "
+                    "config/app.json engines.vllm.extra_args if you trust the model")
         profile[key] = v
         return None
     if key == "vllm_enforce_eager":
@@ -190,6 +200,7 @@ def _config_for_profile(p: dict) -> dict:
         "mmproj_note": p.get("mmproj_note", ""),
         "tools_available": check_tool_calling(str(p.get("name") or p.get("model_path") or "")),
         # engine: llama.cpp or vLLM (core/engines); the vLLM fields are used only when engine == "vllm"
+        **_layer_info(p.get("model_path") or ""),
         "engine": engine_of(p),
         "engines": vllm_engine.engines_for(p.get("model_path") or "") or ["llama"],
         "format": vllm_engine.model_format(p.get("model_path") or ""),
@@ -207,6 +218,8 @@ def _config_for_profile(p: dict) -> dict:
         "vllm_reasoning_parser": p.get("vllm_reasoning_parser") if p.get("vllm_reasoning_parser") is not None
                                  else vllm_engine.settings().get("reasoning_parser", ""),
         "vllm_enforce_eager": bool(p.get("vllm_enforce_eager", False)),
+        "vllm_extra_args": p.get("vllm_extra_args") or "",
+        "vllm_max_num_seqs": vllm_engine.max_num_seqs(p),
         **_reasoning_caps(reasoning.local_mode(p.get("model_path"))),
     }
 
@@ -266,3 +279,34 @@ def _vllm_installed() -> bool:
         return True
     except Exception:
         return False
+
+
+def _layer_info(model_path: str) -> dict:
+    """{"total_layers", "layer_mb"} for the Model Config card, so an admin can work out how many layers fit on a GPU.
+    GGUF: block_count + 1 (the output layer), which is the number "-ngl" counts up to. Model folder: num_hidden_layers.
+    Both None when the file cannot be read."""
+    out = {"total_layers": None, "layer_mb": None}
+    if not model_path:
+        return out
+    try:
+        mp = Path(model_path)
+        if mp.is_dir():
+            import json
+            n = int(json.loads((mp / "config.json").read_text(encoding="utf-8")).get("num_hidden_layers") or 0)
+            size_b = vllm_engine.folder_size_bytes(mp)
+        else:
+            from core.vram.gguf_parser import parse_gguf_info
+            info = parse_gguf_info(mp) or {}
+            if not info.get("stat_ok", True) or not info.get("complete", True):
+                return out
+            if not info.get("n_layer"):
+                return out
+            n = int(info["n_layer"]) + 1
+            size_b = int(info.get("file_bytes") or 0)
+        if n > 0:
+            out["total_layers"] = n
+            if size_b > 0:
+                out["layer_mb"] = round(size_b / n / 1048576)
+    except Exception:
+        pass
+    return out

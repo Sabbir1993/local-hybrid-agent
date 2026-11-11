@@ -21,5 +21,22 @@ class KeepalivePrompt(unittest.TestCase):
         self.assertEqual(st.keepalive_prompt(None), "ping")
 
 
+class KeepaliveDefault(unittest.TestCase):
+    """The idle ping exists for Windows (idle VRAM is moved to system memory there); elsewhere it is off unless asked for."""
+    def default(self, cfg, os_name):
+        from core import small_model
+        with mock.patch.object(small_model, "APP_CONFIG", cfg), mock.patch.object(st.os, "name", os_name):
+            return st._keepalive_default()
+
+    def test_auto_follows_the_operating_system(self):
+        self.assertTrue(self.default({"runtime": "vulkan"}, "nt"))
+        self.assertFalse(self.default({"runtime": "vulkan"}, "posix"))
+
+    def test_the_config_switch_wins(self):
+        self.assertFalse(self.default({"runtime": "vulkan", "keepalive": False}, "nt"))
+        self.assertTrue(self.default({"keepalive": True}, "posix"))
+        self.assertFalse(self.default({"runtime": {"keepalive": False}}, "nt"))      # older config shape
+
+
 if __name__ == "__main__":
     unittest.main()

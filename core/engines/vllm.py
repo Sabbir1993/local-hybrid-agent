@@ -19,6 +19,7 @@ DEFAULTS = {
     "gpu_devices": "auto",           # "auto" = the llama.cpp runtime's GPUs, or a list such as [0, 1]
     "gpu_memory_utilization": 0.90,  # share of each GPU vLLM reserves for weights + KV cache
     "health_timeout_s": 900,         # vLLM loads weights and compiles graphs: minutes, not seconds
+    "max_num_seqs": 8,               # requests run at once when the model's "Parallel slots" is 0 or 1 (vLLM batches them)
     "tool_call_parser": "hermes",    # default when a model sets none ("" = no automatic tool calls)
     "reasoning_parser": "",          # e.g. "qwen3", "deepseek_r1"; "" = none
     "grammar_param": "structured_outputs",   # how a GBNF grammar is sent: "structured_outputs" (new) or "guided_grammar" (old)
@@ -182,6 +183,27 @@ def served_name(profile: dict) -> str:
     return model_display_name(Path(str(profile.get("model_path") or "model")).name) or "local"
 
 
+def max_num_seqs(profile: dict) -> int:
+    """Requests vLLM runs at once. llama.cpp's default of one slot would waste vLLM's batching, so 0 or 1 means the
+    engines.vllm default; 2 or more is used as set."""
+    n = int((profile or {}).get("n_slots") or 0)
+    if n >= 2:
+        return n
+    try:
+        return max(1, int(settings().get("max_num_seqs") or 8))
+    except (TypeError, ValueError):
+        return 8
+
+
+def model_extra_args(profile: dict) -> list:
+    """The model's own extra vLLM arguments ("vllm_extra_args": "--kv-cache-dtype fp8"), split on spaces."""
+    import shlex
+    try:
+        return shlex.split(str((profile or {}).get("vllm_extra_args") or ""))
+    except ValueError:
+        return []
+
+
 def build_command(profile: dict) -> list:
     problem = target_problem(profile)
     if problem:
@@ -192,7 +214,7 @@ def build_command(profile: dict) -> list:
            "--host", "127.0.0.1", "--port", str(LLAMA_SERVER_PORT),
            "--served-model-name", served_name(profile),
            "--max-model-len", str(int(profile.get("context_size") or CONFIG_DEFAULTS["context_size"])),
-           "--max-num-seqs", str(max(1, int(profile.get("n_slots") or 1))),
+           "--max-num-seqs", str(max_num_seqs(profile)),
            "--tensor-parallel-size", str(tp), "--pipeline-parallel-size", str(pp),
            "--gpu-memory-utilization", str(memory_utilization(profile)),
            "--enable-prefix-caching", "--enable-prompt-tokens-details"]
@@ -215,6 +237,7 @@ def build_command(profile: dict) -> list:
     # never --trust-remote-code by default: it runs Python code shipped inside the model folder. An admin who trusts a
     # model can add it to engines.vllm.extra_args.
     cmd += [str(a) for a in (s.get("extra_args") or [])]
+    cmd += model_extra_args(profile)
     return cmd
 
 

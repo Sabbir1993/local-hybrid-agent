@@ -197,6 +197,10 @@ class SmallModelInstance:
         cmd += ["-cram", str(self.cache_ram), "-ctxcp", str(self.ctx_checkpoints)]   # 0 = none, not llama's default 32
         if self.mmproj_path and self.mmproj_path.exists():
             cmd += ["--mmproj", str(self.mmproj_path)]
+        ub = int(self.cfg.get("ubatch_size") or 0)
+        if ub > 0:
+            # the VRAM check above already counts this value; an embedder needs it at least as large as its longest input
+            cmd += ["-b", str(max(ub, int(self.cfg.get("batch_size") or 0))), "-ub", str(ub)]
         if self.kind == "embed":
             cmd += ["--embedding"]
         # Speculative draft decoding support (MTP or smaller draft model)
@@ -239,7 +243,8 @@ class SmallModelInstance:
     async def unload_if_idle(self) -> bool:
         if not self.is_up():
             return False
-        idle_limit = int(self.cfg.get("idle_unload_s") or APP_CONFIG["agent"].get("idle_unload_s", 120))
+        own = self.cfg.get("idle_unload_s")       # a lane's own 0 means "never unload", not "use the general value"
+        idle_limit = int(own if own is not None else APP_CONFIG["agent"].get("idle_unload_s", 120))
         if idle_limit <= 0:
             return False
         if time.time() - self.last_used > idle_limit:

@@ -839,6 +839,10 @@
             <label for="cfg-vtok">Tokenizer <span class="info" title="Only for GGUF files on vLLM; model folders bring their own">ⓘ</span></label>
             <input type="text" id="cfg-vtok" placeholder="e.g. Qwen/Qwen3-8B (GGUF only)" title="Hugging Face repo id or local tokenizer folder">
           </div>
+          <div class="cfg-item cfg-full" title="Extra vLLM arguments for this model only, added at the end of the command line">
+            <label for="cfg-vextra">Extra arguments <span class="info" title="e.g. --kv-cache-dtype fp8 --max-num-batched-tokens 8192">ⓘ</span></label>
+            <input type="text" id="cfg-vextra" placeholder="e.g. --kv-cache-dtype fp8" title="Extra vLLM command-line arguments">
+          </div>
         </div>
         <div class="cfg-grid">
           <div class="cfg-item" title="Context size in tokens (n_ctx). Maximum prompt + completion memory allocated in VRAM">
@@ -848,6 +852,7 @@
           <div class="cfg-item" title="Number of model layers offloaded to GPUs (n_gpu_layers). 999 offloads all layers to VRAM">
             <label for="cfg-ngl">GPU layers <span class="info" title="999 = offload all layers to GPU VRAM">ⓘ</span></label>
             <input type="number" id="cfg-ngl" min="0" max="999" value="999" title="Number of GPU layers (n_gpu_layers)">
+            <small id="cfg-layers-info" style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;"></small>
           </div>
           <div class="cfg-item" title="Number of CPU threads for prompt computation (threads). 0 = auto-detect">
             <label for="cfg-threads">CPU threads <span class="info" title="0 = auto-detect optimal CPU thread count">ⓘ</span></label>
@@ -882,7 +887,8 @@
             </div>
             <small style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;">One share per GPU, in order · 0 skips that GPU · e.g. 1,1,1 splits evenly over three</small>
             <div id="cfg-ts-rows" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:4px 12px; margin-top:6px;"></div>
-            <small id="cfg-ts-warn" style="color:var(--warn, #d9a441); font-size:9.5px; margin-top:3px; display:none;"></small>
+            <small id="cfg-ts-layers" style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;"></small>
+            <small id="cfg-ts-warn" style="color:var(--warn, #d9a441); font-size:10.5px; font-weight:600; margin-top:3px; display:none;"></small>
           </div>
           <div class="cfg-item" title="GPU split strategy: 'layer' splits transformer layers; 'row' splits tensor matrices">
             <label for="cfg-sm">Split mode <span class="info" title="'layer' (pipeline split) is recommended for Arc GPUs">ⓘ</span></label>
@@ -940,8 +946,8 @@
             <input type="number" id="cfg-cru" min="0" max="4096" value="256" title="Cache reuse chunk size (0 = off)">
           </div>
           <div class="cfg-item" title="Host-RAM prompt cache in MiB (-cram). 0 = llama default (8192)">
-            <label for="cfg-cram">Prompt RAM (MiB) <span class="info" title="Host-RAM prompt cache. 0 = llama default 8192 MiB">ⓘ</span></label>
-            <input type="number" id="cfg-cram" min="0" max="49152" step="1024" value="0" title="Host-RAM prompt cache in MiB (0 = default)">
+            <label for="cfg-cram">Prompt RAM (MiB) <span class="info" title="Host-RAM prompt cache. 0 = 2048 MiB, -1 = no limit">ⓘ</span></label>
+            <input type="number" id="cfg-cram" min="-1" max="49152" step="1024" value="0" title="Host-RAM prompt cache in MiB (0 = 2048, -1 = no limit)">
           </div>
         </div>
         </div>

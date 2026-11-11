@@ -84,7 +84,8 @@ class _Admission:
                 self._users_seen.pop(uid, None)
 
     def _sems(self, uid):
-        n = max(1, int((state.profile or {}).get("n_slots") or 1))
+        n = max(1, int((getattr(state, "launch_info", None) or {}).get("n_slots")
+                       or (state.profile or {}).get("n_slots") or 1))
         if self._global is None or n != self._global_n:
             # resized on model (re)load; holders of the old one release it harmlessly
             self._global, self._global_n = asyncio.Semaphore(n), n
