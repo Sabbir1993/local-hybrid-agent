@@ -390,7 +390,7 @@ list, see [SETUP_WINDOWS.md](SETUP_WINDOWS.md) or [SETUP_LINUX.md](SETUP_LINUX.m
    servers configured as `"command": "python"` run on the same interpreter.
    On Linux see [Running on Linux](#running-on-linux).
 4. **Tell it which backend and binary to use**: add one preset per llama.cpp
-   build under `runtimes` in [`config/app.json`](config/app.json), then pick
+   build under `runtimes` in `config/app.json` (from [`config/app.example.json`](config/app.example.json)), then pick
    one with `runtime`:
    ```json
    "runtime": "vulkan",
@@ -407,7 +407,9 @@ list, see [SETUP_WINDOWS.md](SETUP_WINDOWS.md) or [SETUP_LINUX.md](SETUP_LINUX.m
    Single-GPU machine: use `"gpu_devices": [0]` — the app automatically
    omits `--tensor-split` and multi-device `-dev` wiring when there's only
    one device.
-5. **Configure [`config/app.json`](config/app.json)** (copy/edit the checked-in one):
+5. **Configure `config/app.json`.** It is created from [`config/app.example.json`](config/app.example.json) on the first
+   start (or `cp config/app.example.json config/app.json`). The live `config/*.json` files are git-ignored, so local edits
+   never conflict with a pull; only the `*.example.json` defaults are tracked:
    - `models_dir` — folder containing your GGUFs.
    - `media_dirs` — optional folders for `image_models`, `video_models` and
      `voice_models` (whisper `.bin` model files; the `whisper-server.exe`
@@ -458,7 +460,7 @@ kill, orphan cleanup, GPU panel, folder picker) branch on `os.name`
    `.venv/bin/python -m pip install --require-hashes -r requirements.lock`, falling back to
    `requirements.txt` if a hash was pinned to a Windows-only wheel. Full beginner
    walkthrough with the model list: [docs/INSTALL_LINUX.html](docs/INSTALL_LINUX.html).
-4. **Config:** `config/app.json` ships with Windows paths. Change
+4. **Config:** `config/app.json` (created from `config/app.example.json`) starts with Windows paths. Change
    `models_dir`, `common_dir`, `runtimes.<preset>.llama_bin_dir` and
    `media_dirs.*` to Linux paths, e.g.
    `"llama_bin_dir": "/home/<user>/llama-vulkan"`.

@@ -140,8 +140,11 @@ The server finds `whisper-server` in a `whisper-vulkan` folder next to your llam
 **10. Edit the config.** `--write-config` already set `models_dir`, `media_dirs` and the
 `llama_bin_dir` / `sd_bin_dir` paths. Still yours: `common_dir` and `gpu_devices`.
 
-The `config/app.json` in the repo comes from a Windows PC. Before the first start, replace every Windows path with a Linux
-one; this lists what is left:
+Your settings live in `config/app.json`, which is created from `config/app.example.json` on the first start (or copy it
+yourself: `cp config/app.example.json config/app.json`). The same goes for `model_configs.json`, `roles.json`,
+`sampling_config.json`, `fx_rates.json` and `web_blocked.json`. These local files are git-ignored, so your edits (and the
+model settings the app saves) never block a `git pull`. The example comes from a Windows PC: replace every Windows path with
+a Linux one; this lists what is left:
 ```bash
 grep -n 'E:' config/app.json
 ```
