@@ -332,7 +332,7 @@ export const ChatArea: React.FC = () => {
     return () => window.clearInterval(t);
   }, []);
   const sessionLoading = useAppStore((st) => st.sessionLoading);
-  const { sendPrompt, isStreaming, messages, selectedModel, serverStatus, isModelLoading, loadSelectedModel, unloadModel, openPreviewModal, appMode } = useAppStore();
+  const { sendPrompt, isStreaming, messages, selectedModel, serverStatus, isModelLoading, loadSelectedModel, openPreviewModal, appMode } = useAppStore();
   const [expandedPrompts, setExpandedPrompts] = useState<Record<string, boolean>>({});
   const [overflowPrompts, setOverflowPrompts] = useState<Record<string, boolean>>({});
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -584,15 +584,6 @@ export const ChatArea: React.FC = () => {
                     <p className="dim" style={{ marginTop: '6px' }}>
                       GPU(s) loaded{serverStatus?.vision_capable ? ' with vision support' : ''}. Type your message below and press Enter to chat.
                     </p>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={unloadModel}
-                      disabled={isModelLoading}
-                      style={{ marginTop: '10px' }}
-                    >
-                      ⏏ Unload model
-                    </button>
                   </>
                 )
               ) : (

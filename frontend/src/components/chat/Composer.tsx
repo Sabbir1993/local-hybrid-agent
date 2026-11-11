@@ -59,6 +59,8 @@ export const Composer: React.FC = () => {
     setSelectedModel,
     availableModels,
     serverStatus,
+    unloadModel,
+    hasPerm,
     isStreaming,
     sendPrompt,
     abortGeneration,
@@ -1525,6 +1527,31 @@ export const Composer: React.FC = () => {
                     <path d="m6 9 6 6 6-6" />
                   </svg>
                 </button>
+
+                {(serverStatus?.pid || serverStatus?.healthy) && !serverStatus?.cloud_main && hasPerm('model.local.load') && (
+                  <button
+                    id="btn-unload-model"
+                    type="button"
+                    className="claude-tool-text-btn"
+                    title="Unload the model from GPU VRAM"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      unloadModel();
+                    }}
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid var(--border-subtle, rgba(148,163,184,0.25))',
+                      borderRadius: '6px',
+                      color: 'var(--dim)',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      padding: '2px 8px',
+                      marginLeft: '6px',
+                    }}
+                  >
+                    ⏏ Unload
+                  </button>
+                )}
 
                 {showModelDropdown && (
                   <div
