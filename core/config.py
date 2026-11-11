@@ -45,6 +45,30 @@ MODEL_CONFIGS_FILE = Path(os.environ.get("A770_MODEL_CONFIGS_FILE") or CONFIG_DI
 PROVIDERS_FILE = CONFIG_DIR / "providers.json"   # legacy shared file -- migrated into PROVIDERS_DIR on first boot
 PROVIDERS_DIR = CONFIG_DIR / "providers"         # per-user cloud providers + lane bindings: providers/user_<id>.json
 
+# Local settings live in config/<name>.json and are git-ignored, so editing them never dirties the working tree or blocks a
+# pull. The tracked defaults are config/<name>.example.json: a missing local file is created from its example on startup.
+LOCAL_CONFIG_NAMES = ("app", "roles", "model_configs", "sampling_config", "fx_rates", "web_blocked")
+
+
+def seed_local_configs(config_dir: Path = CONFIG_DIR) -> list:
+    """Copy each config/<name>.example.json to config/<name>.json when the local file is missing. Returns the names created."""
+    import shutil
+    created = []
+    for name in LOCAL_CONFIG_NAMES:
+        local, example = config_dir / f"{name}.json", config_dir / f"{name}.example.json"
+        if not local.exists() and example.exists():
+            try:
+                shutil.copyfile(example, local)
+                created.append(name)
+            except OSError as e:
+                print(f"[server_manager] could not create {local.name} from its example: {e}", file=sys.stderr)
+    if created:
+        print(f"[server_manager] created local config from examples: {', '.join(created)}", file=sys.stderr)
+    return created
+
+
+seed_local_configs()
+
 # Cloud (OpenAI-compatible) lanes
 CLOUD_LANES = ("main", "executor", "vision")
 CLOUD_TIMEOUT_S = 300.0    # streaming completions can be long
