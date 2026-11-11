@@ -95,9 +95,11 @@ export async function renderMermaidIn(root: HTMLElement | null): Promise<void> {
     } catch (e: any) {
       if (box.isConnected) fail(box, `Diagram could not be drawn: ${String(e?.message || e).split('\n')[0].slice(0, 140)}`);
     } finally {
-      // mermaid leaves a temporary element (and an error graphic on a syntax error) in <body>
-      document.getElementById(id)?.remove();
-      document.getElementById(`d${id}`)?.remove();
+      // mermaid can leave its temporary element (and an error graphic on a syntax error) in <body>. The drawn SVG we just
+      // put into the message has the same id, so only remove elements outside a diagram box - never the diagram itself.
+      for (const el of [document.getElementById(id), document.getElementById(`d${id}`)]) {
+        if (el && !el.closest('.mermaid-viewport')) el.remove();
+      }
     }
   }
 }
