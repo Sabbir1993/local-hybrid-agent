@@ -8,7 +8,10 @@ from fastapi.responses import JSONResponse
 from core.audit import audit_log
 from core.auth import Principal, user_has_permission
 from core.deps import get_current_user, require_permission
+from core.engines import ENGINES, engine_of
+from core.engines import vllm as vllm_engine
 from core.profiles import build_dynamic_profile, in_models_dir
+from core.profiles.config_store import set_model_engine
 from core.state import state
 from core import cloud
 from core import vram
@@ -27,10 +30,11 @@ async def stop_server(user: Principal = Depends(require_permission("model.local.
 
 
 @router.get("/control/preflight")
-async def preflight(target: Optional[str] = None,
+async def preflight(target: Optional[str] = None, engine: Optional[str] = None,
                     user: Principal = Depends(require_permission("model.local.load"))):
     """VRAM fit projection for a model/profile without loading it.
-    ?target=<gguf or profile json path> - defaults to the currently selected profile."""
+    ?target=<gguf, model folder or profile json path> - defaults to the currently selected profile.
+    ?engine=llama|vllm checks the model on that engine instead of its saved one."""
     try:
         if target:
             p = Path(target)
@@ -47,6 +51,10 @@ async def preflight(target: Optional[str] = None,
             profile = state.profile
         else:
             return JSONResponse({"error": "no model/profile selected"}, status_code=400)
+        if engine in ENGINES:
+            profile = {**profile, "engine": engine}
+        if engine_of(profile) == "vllm":
+            return vllm_engine.preflight(profile)
         loop = asyncio.get_event_loop()
         plan = await loop.run_in_executor(None, vram.plan_launch, profile)
         return plan
@@ -126,11 +134,26 @@ async def switch(req: SwitchRequest, user: Principal = Depends(get_current_user)
         return JSONResponse({"error": "missing permission: model.local.load"}, status_code=403)
 
     path = Path(target)
-    # only GGUFs under the models directory: this path is handed to llama-server
-    if not in_models_dir(path) or path.suffix.lower() != ".gguf":
-        return JSONResponse({"error": "target must be a .gguf inside the models directory"}, status_code=400)
+    # only model files under the models directory: this path is handed to llama-server / vLLM
+    if not in_models_dir(path) or not (path.suffix.lower() == ".gguf" or path.is_dir()):
+        return JSONResponse({"error": "target must be a .gguf or a model folder inside the models directory"},
+                            status_code=400)
     if not path.exists():
         return JSONResponse({"error": f"Target file not found: {target}"}, status_code=404)
+    engines = vllm_engine.engines_for(path)
+    if not engines:
+        return JSONResponse({"error": f"{path.name} is not a .gguf or a Hugging Face model folder "
+                                      f"(config.json + .safetensors)"}, status_code=400)
+    if req.engine is not None:
+        if req.engine not in engines:
+            why = ("A model folder (safetensors) runs on vLLM only." if req.engine == "llama"
+                   else f"Engine must be one of: {', '.join(engines)}.")
+            return JSONResponse({"error": f"{path.name} cannot run on {req.engine}. {why}"}, status_code=400)
+        set_model_engine(str(path), req.engine)       # remembered: restarts and the next load use it too
+    if engine_of(build_dynamic_profile(path)) == "vllm":
+        problem = vllm_engine.target_problem(build_dynamic_profile(path))
+        if problem:
+            return JSONResponse({"error": problem}, status_code=400)
 
     # Selecting a local model releases the main lane from the cloud (if bound)
     if cloud.cloud_bindings(user.id).get("main"):
@@ -142,5 +165,6 @@ async def switch(req: SwitchRequest, user: Principal = Depends(get_current_user)
         audit_log(user, action="model.load", resource=str(path), result="error", detail={"error": str(e)})
         return JSONResponse({"error": str(e)}, status_code=500)
     common.set_model_hint(user.id, state.profile.get("model_path") if state.profile else None)
-    audit_log(user, action="model.load", resource=state.profile.get("name", path.stem), result="allow")
-    return {"ok": True, "profile": state.profile.get("name", path.stem)}
+    audit_log(user, action="model.load", resource=state.profile.get("name", path.stem), result="allow",
+              detail={"engine": state.engine})
+    return {"ok": True, "profile": state.profile.get("name", path.stem), "engine": state.engine}

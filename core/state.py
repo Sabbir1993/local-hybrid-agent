@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import json
+import os
 import re
 import subprocess
 import sys
@@ -29,7 +30,10 @@ from .supervision import (
     restart_reset_after_s,
     watchdog_interval_s,
 )
-from .process import build_launch_command, kill_process_tree
+from .process import build_launch_command, kill_process_tree, forget_engine_pid, remember_engine_pid
+from .engines import engine_of
+from .engines import vllm as vllm_engine
+from .engines.vllm_adapter import EngineTransport
 from .profiles import build_dynamic_profile
 from .events import log_event
 from . import vram
@@ -123,6 +127,9 @@ class ProxyState:
         self.degraded = False
         self.loading = False
         self.healthy = False
+        # what the running process was started with ({"engine", "context_size", "model_path"}; {} = nothing running).
+        # Kept apart from `profile`: saving a model's settings edits the profile, not the server that is already up.
+        self.launch_info: dict = {}
         # why the last load failed, for /control/status. Without it an operator sees only
         # "didn't become healthy" with nothing in the status endpoint to act on.
         self.last_load_error: Optional[str] = None
@@ -138,12 +145,26 @@ class ProxyState:
         self._log_tail = collections.deque(maxlen=LOG_TAIL_LINES)
         self.client = httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{LLAMA_SERVER_PORT}",
+            # passes everything through on llama.cpp; makes a vLLM server answer the same way (core/engines/vllm_adapter.py)
+            transport=EngineTransport(lambda: self.launch_info),
             # was timeout=None: a wedged generation could never be ended, because the agent's
             # wall-clock budget is only checked between steps
             timeout=httpx.Timeout(LOCAL_HTTP_CONNECT_TIMEOUT_S,
                                   read=LOCAL_HTTP_READ_TIMEOUT_S,
                                   write=LOCAL_HTTP_WRITE_TIMEOUT_S,
                                   pool=LOCAL_HTTP_POOL_TIMEOUT_S))
+
+    @property
+    def engine(self) -> str:
+        """"llama" or "vllm": the engine of the running main model, else of the selected one."""
+        info = getattr(self, "launch_info", None)      # tests build a bare ProxyState without __init__
+        if info and self.is_running():
+            return info.get("engine") or "llama"
+        return engine_of(getattr(self, "profile", None))
+
+    @property
+    def engine_label(self) -> str:
+        return "vLLM" if self.engine == "vllm" else "llama-server"
 
     def is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
@@ -199,13 +220,22 @@ class ProxyState:
         else:
             raise ValueError("Invalid profile target")
 
-        # Preflight: refuse to spawn llama-server if the VRAM math says it
-        # won't fit (a WDDM OOM spill hangs the whole desktop on Arc). It runs first
-        # because a MoE model's expert offload is chosen from the free VRAM it measures.
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, vram.check_or_raise, self.profile)
-        cmd = build_launch_command(self.profile)
-        print(f"[server_manager] launching: {' '.join(cmd)}")
+        vllm_mode = engine_of(self.profile) == "vllm"
+        env = None
+        if vllm_mode:
+            # vLLM reserves its own share of each GPU (--gpu-memory-utilization); the llama.cpp VRAM math does not apply
+            cmd = vllm_engine.build_command(self.profile)
+            env = vllm_engine.build_env(self.profile)
+        else:
+            # Preflight: refuse to spawn llama-server if the VRAM math says it
+            # won't fit (a WDDM OOM spill hangs the whole desktop on Arc). It runs first
+            # because a MoE model's expert offload is chosen from the free VRAM it measures.
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, vram.check_or_raise, self.profile)
+            cmd = build_launch_command(self.profile)
+        self.launch_info = {"engine": engine_of(self.profile), "context_size": self.profile.get("context_size"),
+                            "model_path": self.profile.get("model_path")}
+        print(f"[server_manager] launching ({self.engine_label}): {' '.join(cmd)}")
         self.loading = True
         self.healthy = False
         self.process = subprocess.Popen(
@@ -214,12 +244,17 @@ class ProxyState:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=env,
+            # vLLM starts one worker process per GPU: its own process group lets a stop end all of them
+            start_new_session=vllm_mode and os.name != "nt",
         )
+        if vllm_mode:
+            remember_engine_pid(self.process)
         self.started_at = time.time()
         # keep the handle: the pump read from the process pipe forever and nothing held a
         # reference, so every load added an untracked task that only died with the process
         self._log_task = self._spawn_log_pump(self.process)
-        log_event("server.load_started", pid=self.process.pid,
+        log_event("server.load_started", pid=self.process.pid, engine=self.engine,
                   model=Path(str(self.profile.get("model_path") or "")).name)
         await self._wait_healthy()
         notify_swap()
@@ -259,7 +294,7 @@ class ProxyState:
         """
         self._log_tail.append(line)
         _write_log_file(line)
-        print(f"[llama-server] {line}")
+        print(f"[{'vllm' if self.engine == 'vllm' else 'llama-server'}] {line}")
 
     def log_tail(self, n: int = 60) -> list:
         """The most recent lines, oldest first. Served by /control/status and /control/log."""
@@ -290,17 +325,19 @@ class ProxyState:
         return None
 
     async def _wait_healthy(self):
-        deadline = time.time() + health_timeout_s()
+        vllm_mode = self.engine == "vllm"
+        timeout_s = vllm_engine.health_timeout_s() if vllm_mode else health_timeout_s()
+        deadline = time.time() + timeout_s
         # VRAM wall watch: if free VRAM on a target card collapses while the
         # model is still loading, kill the process *before* WDDM starts
         # spilling into shared RAM and hanging the desktop.
         target_idx: set = set()
         try:
-            if self.profile:
+            if self.profile and not vllm_mode:
                 target_idx = set(vram.effective_params(self.profile)["gpu_devices"])
         except Exception:
             pass
-        monitor_on = bool(target_idx) and vram.preflight_mode() != "off"
+        monitor_on = bool(target_idx) and vram.preflight_mode() != "off" and not vllm_mode
         wall_hits = 0
         last_vram_poll = 0.0
         while time.time() < deadline:
@@ -310,6 +347,11 @@ class ProxyState:
                 code = self.process.returncode
                 self._kill_loading_process()
                 arch = self._unknown_architecture()
+                if vllm_mode:
+                    raise self._load_failed(
+                        f"vLLM exited during start-up (code {code}) - see the log lines above. Common causes: the model "
+                        f"type or quantization is not supported on this GPU, it does not fit (lower the context size or "
+                        f"raise tensor parallel), or tensor parallel does not divide the model's attention heads.")
                 if arch:
                     raise self._load_failed(
                         f"This model uses the '{arch}' architecture, which the installed llama.cpp does not know yet "
@@ -322,7 +364,7 @@ class ProxyState:
             try:
                 r = await self.client.get("/health", timeout=2.0)
                 if r.status_code == 200:
-                    print(f"[server_manager] llama-server healthy after "
+                    print(f"[server_manager] {self.engine_label} healthy after "
                           f"{time.time() - self.started_at:.1f}s")
                     self._mark_healthy()
                     return
@@ -351,7 +393,7 @@ class ProxyState:
         # restart - and nothing but the console explained why.
         self._kill_loading_process()
         raise self._load_failed(
-            f"llama-server didn't become healthy within {health_timeout_s()}s - it has been "
+            f"{self.engine_label} didn't become healthy within {timeout_s}s - it has been "
             f"stopped so it does not hold VRAM. Load a smaller model, or raise the health "
             f"timeout, then try again.")
 
@@ -381,7 +423,7 @@ class ProxyState:
         self.loading = False
         self.healthy = False
         reason = self._exit_reason()
-        full = f"{message} | llama-server: {reason}" if reason else message
+        full = f"{message} | {self.engine_label}: {reason}" if reason else message
         self.last_load_error = full
         proc = getattr(self, "process", None)
         log_event("server.load_failed",
@@ -407,10 +449,12 @@ class ProxyState:
         self.healthy = False
         self._cancel_log_pump()
         if self.process and self.process.poll() is None:
-            print("[server_manager] stopping current llama-server...")
+            print(f"[server_manager] stopping current {self.engine_label}...")
             kill_process_tree(self.process, timeout=15)
         if self.process is not None:
             log_event("server.stopped", pid=self.process.pid)
+        forget_engine_pid()
+        self.launch_info = {}
         self.process = None
 
     def _spawn_log_pump(self, proc) -> Optional[asyncio.Task]:
@@ -593,6 +637,8 @@ async def keepalive_loop():
             continue
         if state.process is None or state.process.poll() is not None:
             continue
+        if state.engine == "vllm":
+            continue        # the ping uses llama-server's /completion; vLLM keeps its weights and cache resident itself
         n_slots = int((state.profile or {}).get("n_slots") or 1)
         if time.time() - state.last_activity < keepalive_idle_s(n_slots, state.keepalive_interval_s, state.profile):
             continue

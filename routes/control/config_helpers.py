@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Optional
 from core.config import (
@@ -15,6 +16,12 @@ from core.supervision import SUPERVISION_LIMITS
 from core import reasoning
 from core.profiles import companions, in_models_dir, load_model_configs, _model_key
 from core.state import state
+from core.engines import engine_of
+from core.engines import vllm as vllm_engine
+
+# free-text vLLM settings ("" = not set); they become command-line arguments, so only plain names and paths are accepted
+VLLM_TEXT_KEYS = ("vllm_tokenizer", "vllm_tool_parser", "vllm_reasoning_parser")
+_SAFE_ARG_RX = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./:\-]{0,199}$")
 
 
 def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
@@ -28,6 +35,21 @@ def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
         except (TypeError, ValueError):
             return "keepalive_interval_s must be an integer"
         return None
+    if key in VLLM_TEXT_KEYS:
+        v = str(value or "").strip()
+        if v and not _SAFE_ARG_RX.match(v):
+            return f"{key}: use a Hugging Face repo id, a folder path or a parser name (letters, digits, . _ - / :)"
+        profile[key] = v
+        return None
+    if key == "vllm_enforce_eager":
+        if isinstance(value, str):
+            value = value.strip().lower() in ("true", "1", "on", "yes")
+        profile[key] = bool(value)
+        return None
+    if key == "engine":
+        allowed = vllm_engine.engines_for(profile.get("model_path") or "")
+        if allowed and str(value).strip() not in allowed:
+            return f"this model can only run on: {', '.join(allowed)}"
     if isinstance(value, str) and not value.strip():
         value = CONFIG_DEFAULTS.get(key)
         if value is None:
@@ -167,6 +189,24 @@ def _config_for_profile(p: dict) -> dict:
         "mtp_note": p.get("mtp_note", ""),
         "mmproj_note": p.get("mmproj_note", ""),
         "tools_available": check_tool_calling(str(p.get("name") or p.get("model_path") or "")),
+        # engine: llama.cpp or vLLM (core/engines); the vLLM fields are used only when engine == "vllm"
+        "engine": engine_of(p),
+        "engines": vllm_engine.engines_for(p.get("model_path") or "") or ["llama"],
+        "format": vllm_engine.model_format(p.get("model_path") or ""),
+        "vllm_available": _vllm_installed(),
+        "tensor_parallel_size": int(p.get("tensor_parallel_size") or 0),
+        "pipeline_parallel_size": int(p.get("pipeline_parallel_size") or 1),
+        "vllm_parallel_effective": list(vllm_engine.parallel_sizes(p)),
+        "gpu_memory_utilization_pct": int(p.get("gpu_memory_utilization_pct") or 0),
+        "gpu_memory_utilization_default": vllm_engine.settings().get("gpu_memory_utilization"),
+        "vllm_dtype": p.get("vllm_dtype") or "auto",
+        "vllm_quantization": p.get("vllm_quantization") or "auto",
+        "vllm_tokenizer": p.get("vllm_tokenizer") or "",
+        "vllm_tool_parser": p.get("vllm_tool_parser") if p.get("vllm_tool_parser") is not None
+                            else vllm_engine.settings().get("tool_call_parser", ""),
+        "vllm_reasoning_parser": p.get("vllm_reasoning_parser") if p.get("vllm_reasoning_parser") is not None
+                                 else vllm_engine.settings().get("reasoning_parser", ""),
+        "vllm_enforce_eager": bool(p.get("vllm_enforce_eager", False)),
         **_reasoning_caps(reasoning.local_mode(p.get("model_path"))),
     }
 
@@ -189,6 +229,11 @@ def _standalone_profile(target: str) -> Optional[dict]:
                 break
         else:
             return None
+    if p.is_dir():
+        from core.profiles import build_dynamic_profile
+        prof = build_dynamic_profile(p)          # Hugging Face model folder (vLLM)
+        prof.setdefault("tuned", {})
+        return prof
     saved = load_model_configs().get(_model_key(p)) or {}
     prof = {"name": p.stem, "model_path": str(p)}
     for k, v in CONFIG_DEFAULTS.items():
@@ -213,3 +258,11 @@ def _standalone_profile(target: str) -> Optional[dict]:
     if prof.get("mmproj_path"):
         prof.setdefault("vision_capable", True)
     return apply_runtime(prof)
+
+
+def _vllm_installed() -> bool:
+    try:
+        vllm_engine.find_vllm()
+        return True
+    except Exception:
+        return False

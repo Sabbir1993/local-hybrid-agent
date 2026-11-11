@@ -1,4 +1,5 @@
 from pathlib import Path
+from ..engines.vllm import is_hf_folder
 from .constants import HELPER_DIRS, MEDIA_DIR_NAMES
 from .paths import (
     _entry,
@@ -74,7 +75,8 @@ def discover_helper_files(limit: int = 300) -> dict:
 
 
 def discover_models() -> list:
-    """Main-model GGUFs: Models/<folder>/*.gguf plus legacy flat files.
+    """Main models: Models/<folder>/*.gguf plus legacy flat files, and Hugging Face model folders (config.json +
+    safetensors, for vLLM) at Models/<model>/ or Models/<folder>/<model>/.
     Returns [(path, folder_name_or_None), ...] without companions, later
     split shards or the helper-model folder."""
     out, seen = [], set()
@@ -85,7 +87,13 @@ def discover_models() -> list:
         for d in sorted(x for x in root.iterdir() if x.is_dir()):
             if d.name.lower() in HELPER_DIRS or d.name.startswith("."):
                 continue
+            # a Hugging Face model folder (vLLM), directly in the root or one level down
+            if is_hf_folder(d):
+                entries.append((d, None))
+                continue
             entries += [(f, d.name) for f in sorted(d.glob("*.gguf"))]
+            entries += [(sub, d.name) for sub in sorted(x for x in d.iterdir() if x.is_dir() and not x.name.startswith("."))
+                        if is_hf_folder(sub)]
         for f, folder in entries:
             if is_companion_file(f) or _is_later_shard(f):
                 continue

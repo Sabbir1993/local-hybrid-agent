@@ -769,7 +769,7 @@
       <div class="card settings-panel" id="sec-cfg" data-perm="model.local.configure">
         <div class="settings-panel-head">
           <h2>⚙️ Model Config · Restart to Apply</h2>
-          <p class="dim">Adjust llama-server launch parameters and persist them to profile JSON</p>
+          <p class="dim">Choose the engine (llama.cpp or vLLM) and its launch parameters; saved per model</p>
         </div>
         <div class="model-group" style="margin-bottom:6px; position:relative;" title="Pick which local/cloud model this config panel edits">
           <select id="profile" title="Select a GGUF model (grouped by family)" style="display:none;"></select>
@@ -785,6 +785,60 @@
         <div id="model-caps-row" class="model-caps-row">
           <span class="caps-label">CAPABILITIES</span>
           <div id="caps-pills" class="caps-pills"></div>
+        </div>
+        <!-- Engine: llama.cpp (llama-server) or vLLM. Chosen before loading; saved per model. -->
+        <div class="cfg-grid" id="engine-grid" style="margin-bottom:8px;">
+          <div class="cfg-item cfg-full" title="Program that runs this model. llama.cpp runs GGUF files; vLLM runs Hugging Face model folders (and single-file GGUF, experimental)">
+            <label for="cfg-engine">Runtime engine <span class="info" title="Saved per model. Unload, then Load again to switch engine">ⓘ</span></label>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <select id="cfg-engine" style="flex:0 0 auto; width:auto; min-width:160px;" title="Engine used when this model is loaded">
+                <option value="llama">llama.cpp (llama-server)</option>
+                <option value="vllm">vLLM</option>
+              </select>
+              <small id="cfg-engine-note" style="color:var(--dim); font-size:9.5px; flex:1 1 200px; min-width:0;"></small>
+            </div>
+          </div>
+        </div>
+        <!-- vLLM settings: shown only when the engine is vLLM (static/js/config.js applyEngineUI) -->
+        <div class="cfg-grid" id="vllm-fields" style="display:none; margin-bottom:8px;">
+          <div class="cfg-item" title="Split each layer across this many GPUs (--tensor-parallel-size). Must divide the model's attention heads: use 1, 2 or 4 (not 3). 0 = automatic">
+            <label for="cfg-vtp">Tensor parallel <span class="info" title="0 = auto: the largest power of two that fits the GPUs (2 on a 3-GPU machine)">ⓘ</span></label>
+            <input type="number" id="cfg-vtp" min="0" max="16" value="0" title="Tensor parallel size (0 = auto)">
+          </div>
+          <div class="cfg-item" title="Split the layers into this many stages, one per GPU group (--pipeline-parallel-size). 3 uses all three GPUs when tensor parallel is 1">
+            <label for="cfg-vpp">Pipeline parallel <span class="info" title="GPUs used = tensor parallel × pipeline parallel">ⓘ</span></label>
+            <input type="number" id="cfg-vpp" min="1" max="16" value="1" title="Pipeline parallel size">
+          </div>
+          <div class="cfg-item" title="Share of each GPU's memory vLLM reserves for weights and KV cache (--gpu-memory-utilization). 0 = the engines.vllm default">
+            <label for="cfg-vmem">GPU memory share % <span class="info" title="Lower it when helper models share a GPU with vLLM. 0 = default">ⓘ</span></label>
+            <input type="number" id="cfg-vmem" min="0" max="98" value="0" title="GPU memory share in percent (0 = default)">
+          </div>
+          <div class="cfg-item" title="Weight data type (--dtype). auto = what the model folder says">
+            <label for="cfg-vdtype">Data type</label>
+            <select id="cfg-vdtype"><option value="auto">auto</option><option value="bfloat16">bfloat16</option><option value="float16">float16</option></select>
+          </div>
+          <div class="cfg-item" title="Quantization (--quantization). auto = detected from the model (AWQ / GPTQ / FP8 folders). fp8 on a 16-bit folder quantizes it while loading, halving its memory">
+            <label for="cfg-vquant">Quantization <span class="info" title="fp8 = quantize a BF16/FP16 folder on load (half the memory)">ⓘ</span></label>
+            <select id="cfg-vquant"><option value="auto">auto</option><option value="fp8">fp8 (on load)</option><option value="awq">awq</option><option value="gptq">gptq</option><option value="gguf">gguf</option></select>
+          </div>
+          <div class="cfg-item" title="Disable graph capture (--enforce-eager): slower, but uses less memory and starts faster. Try it if vLLM fails while compiling">
+            <label for="cfg-veager">Eager mode</label>
+            <div class="keep-row" style="margin-top:2px; padding-top:0; border-top:none;">
+              <label class="switch"><input type="checkbox" id="cfg-veager"><span class="slider"></span></label>
+            </div>
+          </div>
+          <div class="cfg-item" title="Tool-call format of this model (--tool-call-parser), e.g. hermes (Qwen), llama3_json, mistral. Empty = no tool calls">
+            <label for="cfg-vtool">Tool parser</label>
+            <input type="text" id="cfg-vtool" placeholder="hermes" title="vLLM tool-call parser name">
+          </div>
+          <div class="cfg-item" title="Thinking format of this model (--reasoning-parser), e.g. qwen3, deepseek_r1. Empty = none">
+            <label for="cfg-vreason">Reasoning parser</label>
+            <input type="text" id="cfg-vreason" placeholder="none" title="vLLM reasoning parser name">
+          </div>
+          <div class="cfg-item cfg-full" title="Needed for GGUF on vLLM: the original model's Hugging Face repo (e.g. Qwen/Qwen3-8B) or a local folder with its tokenizer files">
+            <label for="cfg-vtok">Tokenizer <span class="info" title="Only for GGUF files on vLLM; model folders bring their own">ⓘ</span></label>
+            <input type="text" id="cfg-vtok" placeholder="e.g. Qwen/Qwen3-8B (GGUF only)" title="Hugging Face repo id or local tokenizer folder">
+          </div>
         </div>
         <div class="cfg-grid">
           <div class="cfg-item" title="Context size in tokens (n_ctx). Maximum prompt + completion memory allocated in VRAM">

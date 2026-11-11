@@ -116,6 +116,9 @@ async def get_system_status(user: Optional[Principal] = None) -> dict:
         "gpu_devices": _runtime_gpus(),
         "gpu_scan_error": _gpu_scan_error(),
         "engine": hw_info.get("engine"),
+        # which program serves the main model: "llama" (llama-server) or "vllm"
+        "runtime_engine": state.engine if state.profile else None,
+        "runtime_engine_label": state.engine_label if state.profile else None,
         "profile": state.profile.get("name") if state.profile else None,
         "model": state.profile.get("model_path") if state.profile else None,
         "tensor_split": (state.profile.get("tuned", {}).get("tensor_split")

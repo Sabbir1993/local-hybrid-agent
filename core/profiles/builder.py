@@ -10,8 +10,26 @@ from ..vram.gguf_parser import first_part
 from .config_store import load_model_configs
 
 
+def _folder_profile(p: Path) -> dict:
+    """Profile for a Hugging Face model folder: vLLM only (llama.cpp cannot read safetensors)."""
+    prof = {"name": p.name, "description": f"Hugging Face model folder ({p.name})", "model_type": "dense",
+            "model_path": str(p), "mtp_draft_path": None, "mmproj_path": None, "mtp_note": "", "mmproj_note": ""}
+    for k, v in CONFIG_DEFAULTS.items():
+        prof.setdefault(k, v)
+    saved = load_model_configs().get(p.name.lower()) or {}
+    for k in MODEL_CONFIG_KEYS:
+        if k in saved:
+            prof[k] = saved[k]
+    prof["engine"] = "vllm"
+    return apply_runtime(prof)
+
+
 def build_dynamic_profile(p: Path) -> dict:
-    """Profile dict for a raw GGUF picked from the models directory. A split model is always launched from part 1."""
+    """Profile dict for a raw GGUF picked from the models directory (a split model is always launched from part 1), or
+    for a Hugging Face model folder (vLLM)."""
+    p = Path(p)
+    if p.is_dir():
+        return _folder_profile(p)
     p = first_part(p)
     comp = companions(p)
     mtp, mmproj = comp["mtp"], comp["mmproj"]
@@ -40,4 +58,5 @@ def build_dynamic_profile(p: Path) -> dict:
         prof.setdefault("mtp_enabled", True)
     if prof.get("mmproj_path"):
         prof.setdefault("vision_capable", True)
+    prof.setdefault("engine", "llama")
     return apply_runtime(prof)

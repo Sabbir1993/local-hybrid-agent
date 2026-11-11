@@ -68,6 +68,7 @@ async function loadProfiles() {
       if (m.tools_available) tags.push('🔨 Tools');
       if (m.mtp_available) tags.push('⚡ MTP');
       if (m.reasoning_available) tags.push('◵ Reasoning');
+      if (m.format === 'hf') tags.push('vLLM folder');
       const tagStr = tags.length ? (' · ' + tags.join(' ')) : '';
       o.textContent = `${shortName}${size}${tagStr}`;
       const notes = [m.mtp_note, m.mmproj_note].filter(Boolean);
@@ -82,6 +83,7 @@ async function loadProfiles() {
       o.dataset.reasoningMode = m.reasoning_mode || 'none';
       o.dataset.kind = 'local';
       o.dataset.provider = 'Local';
+      o.dataset.engine = m.engine || 'llama';
       sel.appendChild(o);
     });
 
@@ -544,7 +546,60 @@ function fillConfigForm(c) {
       showCompanionNote('vision-note', visAvail ? '' : c.mmproj_note);
     }
     if ($('cfg-vision')) { $('cfg-vision').checked = visAvail && !!c.vision_capable; $('cfg-vision').disabled = !visAvail; }
+    fillEngineFields(c);
 }
+
+/* ---- engine: llama.cpp or vLLM (core/engines). The choice and the vLLM fields are saved per model. ---- */
+let cfgEngineInfo = {};
+const LLAMA_ONLY_INPUTS = ['cfg-ngl', 'cfg-threads', 'cfg-tb', 'cfg-batch', 'cfg-ubatch', 'cfg-kai', 'cfg-ts', 'cfg-sm',
+  'cfg-fa', 'cfg-ct'];
+
+function fillEngineFields(c) {
+  cfgEngineInfo = c || {};
+  const sel = $('cfg-engine');
+  if (!sel) return;
+  const allowed = Array.isArray(c.engines) && c.engines.length ? c.engines : ['llama'];
+  [...sel.options].forEach(o => { o.disabled = !allowed.includes(o.value); });
+  sel.value = allowed.includes(c.engine) ? c.engine : allowed[0];
+  if ($('cfg-vtp')) $('cfg-vtp').value = c.tensor_parallel_size ?? 0;
+  if ($('cfg-vpp')) $('cfg-vpp').value = c.pipeline_parallel_size ?? 1;
+  if ($('cfg-vmem')) $('cfg-vmem').value = c.gpu_memory_utilization_pct ?? 0;
+  if ($('cfg-vdtype')) $('cfg-vdtype').value = c.vllm_dtype || 'auto';
+  if ($('cfg-vquant')) $('cfg-vquant').value = c.vllm_quantization || 'auto';
+  if ($('cfg-veager')) $('cfg-veager').checked = !!c.vllm_enforce_eager;
+  if ($('cfg-vtool')) $('cfg-vtool').value = c.vllm_tool_parser ?? '';
+  if ($('cfg-vreason')) $('cfg-vreason').value = c.vllm_reasoning_parser ?? '';
+  if ($('cfg-vtok')) $('cfg-vtok').value = c.vllm_tokenizer || '';
+  applyEngineUI();
+}
+
+function applyEngineUI() {
+  const sel = $('cfg-engine');
+  if (!sel) return;
+  const vllm = sel.value === 'vllm';
+  const c = cfgEngineInfo || {};
+  if ($('vllm-fields')) $('vllm-fields').style.display = vllm ? '' : 'none';
+  LLAMA_ONLY_INPUTS.forEach(id => {
+    const item = $(id) && $(id).closest('.cfg-item');
+    if (item) item.style.display = vllm ? 'none' : '';
+  });
+  document.querySelectorAll('#sec-cfg .cfg-switches-row, #sec-cfg .cfg-row3').forEach(el => {
+    el.style.display = vllm ? 'none' : '';
+  });
+  const notes = [];
+  if (c.format === 'hf') notes.push('Hugging Face model folder: runs on vLLM only.');
+  else if (vllm) notes.push('Experimental: GGUF on vLLM is slower than llama.cpp and needs the Tokenizer below; split GGUFs must be merged first.');
+  if (vllm && c.vllm_available === false) notes.push('⚠ vLLM was not found — install it and set engines.vllm.bin in config/app.json (docs/vllm.md).');
+  if (vllm && Array.isArray(c.vllm_parallel_effective)) {
+    const [tp, pp] = c.vllm_parallel_effective;
+    notes.push(`Saved setting uses ${tp * pp} GPU(s): tensor ${tp} × pipeline ${pp}.`);
+  }
+  if ($('cfg-engine-note')) $('cfg-engine-note').textContent = notes.join(' ');
+  const np = $('cfg-np') && $('cfg-np').closest('.cfg-item');
+  if (np) np.title = vllm ? 'Requests vLLM runs at once (--max-num-seqs)' : 'Number of parallel sequence processing slots (n_slots / n_parallel)';
+}
+
+if ($('cfg-engine')) $('cfg-engine').addEventListener('change', applyEngineUI);
 
 /* Companion file found in the model folder but rejected by the header check */
 function showCompanionNote(id, note) {
@@ -668,6 +723,20 @@ if ($('btn-apply')) $('btn-apply').onclick = async () => {
     mtp_draft_n_max: parseInt($('mtp-nmax') && $('mtp-nmax').value) || 3,
     vision_capable: $('cfg-vision') && $('cfg-vision').checked,
   };
+  if ($('cfg-engine')) {
+    Object.assign(updates, {
+      engine: $('cfg-engine').value,
+      tensor_parallel_size: parseInt($('cfg-vtp').value) || 0,
+      pipeline_parallel_size: parseInt($('cfg-vpp').value) || 1,
+      gpu_memory_utilization_pct: parseInt($('cfg-vmem').value) || 0,
+      vllm_dtype: $('cfg-vdtype').value,
+      vllm_quantization: $('cfg-vquant').value,
+      vllm_enforce_eager: $('cfg-veager').checked,
+      vllm_tool_parser: $('cfg-vtool').value.trim(),
+      vllm_reasoning_parser: $('cfg-vreason').value.trim(),
+      vllm_tokenizer: $('cfg-vtok').value.trim(),
+    });
+  }
   const wasLoaded = !!(curStatus && curStatus.pid);
   toast('Saving config…');
   try {

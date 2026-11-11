@@ -16,7 +16,7 @@ from core import auth_db
 from core.auth_provider import hash_password
 from core.mcp import connect_all_mcp, stop_all_mcp
 from core.plugins import load_plugins
-from core.process import kill_orphan_llama_servers
+from core.process import kill_orphan_engine, kill_orphan_llama_servers
 from core.registry import bootstrap_builtin_tools
 from core.shell_tools import register_shell_tools
 from core.skills import register_skill_tools
@@ -160,6 +160,7 @@ async def lifespan(app: FastAPI):
     if (kr_warn := keyring_backend_warning()):
         print(f"[server_manager] WARNING: {kr_warn}", file=sys.stderr)
     await asyncio.get_event_loop().run_in_executor(None, kill_orphan_llama_servers)
+    await asyncio.get_event_loop().run_in_executor(None, kill_orphan_engine)
     # keep the handle: this spawns npx/uvx children for stdio MCP servers, so on shutdown it
     # has to be cancelled and awaited rather than left to fire while the loop is closing
     mcp_task = asyncio.create_task(connect_all_mcp())

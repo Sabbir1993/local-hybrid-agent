@@ -43,28 +43,33 @@ async function loadSelectedModel() {
     try { await fetch('/control/stop', { method: 'POST' }); } catch (e) {}
     pollStatus();
     if (typeof loadProfiles === 'function') loadProfiles();
-    toast('Model unloaded — VRAM freed on both A770s');
+    toast('Model unloaded — GPU memory freed');
     return;
   }
+  // engine picked in the Model Config card (llama.cpp or vLLM); the server remembers it per model
+  const engine = ($('cfg-engine') && $('cfg-engine').value) || 'llama';
+  const isVllm = engine === 'vllm';
   window.__isModelLoading = true;
   setPill('loading');
   setLoadBtn('loading');
-  toast('Loading model into GPU VRAM (~10–60s)…');
+  toast(isVllm ? 'Starting vLLM — loading weights and compiling can take several minutes…'
+               : 'Loading model into GPU VRAM (~10–60s)…');
   try {
     // Preflight VRAM check: show suggestions before the manager refuses to load
     try {
-      const pr = await fetch('/control/preflight?target=' + encodeURIComponent(target));
+      const pr = await fetch('/control/preflight?target=' + encodeURIComponent(target) + '&engine=' + encodeURIComponent(engine));
       if (pr.ok) {
         const plan = await pr.json();
         if (plan.status === 'nofit') {
           const sugs = (plan.suggestions || []).slice(0, 3).map(s => s.desc).join(' | ');
           window.__isModelLoading = false;
           setPill('off');
-          toast('VRAM check: it won\u2019t fit. ' + (sugs || plan.message || 'Reduce GPU offload.'), true);
+          toast(plan.error ? plan.error : ('VRAM check: it won\u2019t fit. ' + (sugs || plan.message || 'Reduce GPU offload.')), true);
           return;
         }
         if (plan.status === 'tight') {
-          toast('VRAM check: tight fit — loading anyway (watch the GPU panel).');
+          toast(plan.warnings && plan.warnings.length ? plan.warnings.join(' ')
+                : 'VRAM check: tight fit — loading anyway (watch the GPU panel).');
         }
       }
     } catch (e) { /* preflight is advisory only */ }
@@ -72,7 +77,7 @@ async function loadSelectedModel() {
       const r = await fetch('/control/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target: target })
+        body: JSON.stringify({ target: target, engine: engine })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));

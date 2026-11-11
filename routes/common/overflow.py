@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 from typing import Optional
 from core.agent_loop import compact_messages
@@ -19,7 +20,13 @@ def _is_context_overflow(status_code, err_text) -> bool:
     except (TypeError, ValueError):
         return False
     body = bytes(err_text or b"").decode("utf-8", "replace")
-    return "exceed_context_size_error" in body or "exceeds the available context size" in body
+    return ("exceed_context_size_error" in body or "exceeds the available context size" in body
+            or bool(_VLLM_CTX_RX.search(body)))
+
+
+# vLLM's refusal: "This model's maximum context length is 32768 tokens. However, you requested ..." (or "... is longer
+# than the maximum model length of 32768")
+_VLLM_CTX_RX = re.compile(r"maximum context length is (\d+)|longer than the maximum model length of (\d+)", re.I)
 
 
 async def _recover_context(client_or_state, payload: dict, msgs: list, tools,
@@ -58,8 +65,12 @@ def _ctx_from_error(err_bytes) -> int:
     """The window llama-server enforces, read out of its overflow body
     (`{"error": {..., "n_ctx": 32768}}`). Authoritative at exactly the moment we
     need it, so it beats any local estimate; 0 when the body is not that shape."""
+    text = bytes(err_bytes or b"").decode("utf-8", "replace")
+    m = _VLLM_CTX_RX.search(text)
+    if m:
+        return int(m.group(1) or m.group(2))
     try:
-        j = json.loads(bytes(err_bytes or b"").decode("utf-8", "replace"))
+        j = json.loads(text)
     except Exception:
         return 0
     if not isinstance(j, dict):

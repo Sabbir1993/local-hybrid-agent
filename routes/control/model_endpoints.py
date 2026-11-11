@@ -3,7 +3,8 @@ from fastapi import Depends
 from core.auth import Principal
 from core.deps import get_current_user
 from core import reasoning
-from core.profiles import companions, discover_models
+from core.profiles import companions, discover_models, load_model_configs
+from core.engines import vllm as vllm_engine
 from core.profiles.paths import model_display_name
 from core.vram.gguf_parser import model_files, model_size_bytes
 from core.state import state
@@ -19,19 +20,31 @@ async def profiles(user: Principal = Depends(get_current_user)):
     # companions are header-checked (core/profiles.py companions())
     def _scan():
         out = []
+        saved = load_model_configs()
         for gfile, folder in discover_models():
-            comp = companions(gfile)
+            fmt = vllm_engine.model_format(gfile)
+            if fmt == "hf":                       # a Hugging Face model folder: vLLM only, no companion files
+                comp = {"mtp": None, "mmproj": None, "mtp_note": "", "mmproj_note": ""}
+                size_gb = round(vllm_engine.folder_size_bytes(gfile) / (1024**3), 1)
+                parts = 1
+            else:
+                comp = companions(gfile)
+                try:
+                    size_gb = round(model_size_bytes(gfile) / (1024**3), 1)      # all parts of a split model
+                except OSError:
+                    size_gb = None
+                parts = len(model_files(gfile)) or 1
             mtp, mmproj = comp["mtp"], comp["mmproj"]
-            try:
-                size_gb = round(model_size_bytes(gfile) / (1024**3), 1)      # all parts of a split model
-            except OSError:
-                size_gb = None
-            parts = len(model_files(gfile)) or 1
+            saved_engine = (saved.get(gfile.name.lower()) or {}).get("engine")
+            engines = vllm_engine.engines_for(gfile)
             out.append({
+                "format": fmt,
+                "engines": engines,
+                "engine": saved_engine if saved_engine in engines else (engines[0] if engines else "llama"),
                 "type": "model",
                 "name": gfile.name,
                 "folder": folder,
-                "display": folder or gfile.stem,
+                "display": (folder or gfile.stem) if fmt != "hf" else gfile.name,
                 "parts": parts,
                 "path": str(gfile),
                 "model_path": str(gfile),
@@ -91,6 +104,7 @@ async def available_models(user: Principal = Depends(get_current_user)):
             "kind": "local",
             "provider": "local",
             "provider_name": "Local",
+            "engine": state.engine,
             **_reasoning_caps(local_mode),
         })
 

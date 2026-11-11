@@ -56,3 +56,14 @@ def save_model_config(model_identifier: str, cfg: dict) -> None:
         print(f"[server_manager] saved model config for [{key}] in model_configs.json")
     except Exception as e:
         print(f"[server_manager] model_configs.json write failed: {e}", file=sys.stderr)
+
+
+def set_model_engine(model_identifier: str, engine: str) -> None:
+    """Remember which engine (llama / vllm) a model runs on, leaving its other saved settings alone."""
+    store = load_model_configs()
+    key = _model_key(model_identifier)
+    store[key] = {**(store.get(key) or {}), "engine": engine}
+    try:
+        atomic_write_json(MODEL_CONFIGS_FILE, store)
+    except Exception as e:
+        print(f"[server_manager] model_configs.json write failed: {e}", file=sys.stderr)

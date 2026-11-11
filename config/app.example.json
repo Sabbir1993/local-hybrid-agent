@@ -18,6 +18,21 @@
       "small_model_gpu": 0
     }
   },
+  "engines": {
+    "vllm": {
+      "_comment": "Optional second engine for the main model (Settings > Model Config > Runtime engine). See docs/vllm.md.",
+      "bin": "/opt/vllm/.venv/bin/vllm",
+      "device": "xpu",
+      "gpu_devices": "auto",
+      "gpu_memory_utilization": 0.9,
+      "health_timeout_s": 900,
+      "tool_call_parser": "hermes",
+      "reasoning_parser": "",
+      "grammar_param": "structured_outputs",
+      "env": {},
+      "extra_args": []
+    }
+  },
   "small_models": {
     "executor": {
       "model": "orchestrator/Ornith-1.5-9B-Q4_K_M.gguf",

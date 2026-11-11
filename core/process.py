@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -18,6 +19,7 @@ def kill_process_tree(proc: Optional[subprocess.Popen], timeout: float = 15) -> 
     elsewhere terminate -> wait -> kill (llama/whisper/sd servers spawn no children)."""
     if proc is None or proc.poll() is not None:
         return
+    group = not IS_WINDOWS and _own_group(proc)       # read now: once the leader is reaped its group cannot be looked up
     if IS_WINDOWS:
         try:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
@@ -26,17 +28,81 @@ def kill_process_tree(proc: Optional[subprocess.Popen], timeout: float = 15) -> 
             pass
     else:
         try:
-            proc.terminate()
+            if group:
+                os.killpg(proc.pid, signal.SIGTERM)     # vLLM: the server and its per-GPU workers
+            else:
+                proc.terminate()
         except Exception:
             pass
     try:
         proc.wait(timeout=timeout)
     except Exception:
         try:
-            proc.kill()
+            if group:
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
             proc.wait(timeout=5)
         except Exception:
             pass
+    if group:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)         # workers that outlived the server would keep their VRAM
+        except Exception:
+            pass
+
+
+def _own_group(proc) -> bool:
+    """True when proc leads its own process group (started with start_new_session=True)."""
+    try:
+        return os.getpgid(proc.pid) == proc.pid
+    except Exception:
+        return False
+
+
+# The vLLM server is a Python program with worker processes, so it cannot be found by name like llama-server. Its process
+# group id is kept in this file while it runs, and a restart of the app stops a group left behind by a crash.
+ENGINE_PID_FILE = Path(__file__).resolve().parent.parent / "logs" / "main-engine.pid"
+
+
+def remember_engine_pid(proc) -> None:
+    try:
+        ENGINE_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ENGINE_PID_FILE.write_text(str(proc.pid))
+    except OSError:
+        pass
+
+
+def forget_engine_pid() -> None:
+    try:
+        ENGINE_PID_FILE.unlink()
+    except OSError:
+        pass
+
+
+def kill_orphan_engine() -> bool:
+    """Stop a vLLM process group recorded by a previous run of the app, if it is still a vLLM process."""
+    try:
+        pid = int(ENGINE_PID_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return False
+    killed = False
+    if not IS_WINDOWS:
+        try:
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+            if "vllm" in cmdline and os.getpgid(pid) == pid:
+                os.killpg(pid, signal.SIGTERM)
+                time.sleep(5.0)
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                killed = True
+                print("[server_manager] stopped a vLLM server left over from a previous run")
+        except (OSError, ValueError):
+            pass
+    forget_engine_pid()
+    return killed
 
 
 def kill_orphan_llama_servers() -> int:

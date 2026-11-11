@@ -13,6 +13,7 @@ template, overridable with `reasoning` in config/model_configs.json (local) or
 in the model entry of config/providers/user_<id>.json (cloud).
 """
 
+import json
 import re
 import threading
 from pathlib import Path
@@ -69,6 +70,29 @@ def mode_from_template(tpl: str) -> str:
     return "none"
 
 
+def chat_template(p: Path) -> str:
+    """The chat template of a local model: a GGUF's header, or a Hugging Face folder's chat_template.jinja /
+    tokenizer_config.json (vLLM). "" when there is none."""
+    try:
+        if p.is_dir():
+            jinja = p / "chat_template.jinja"
+            if jinja.is_file():
+                return jinja.read_text(encoding="utf-8", errors="replace")
+            cfg = p / "tokenizer_config.json"
+            if cfg.is_file():
+                tpl = json.loads(cfg.read_text(encoding="utf-8", errors="replace")).get("chat_template") or ""
+                if isinstance(tpl, list):          # named templates: [{"name": "default", "template": "..."}]
+                    tpl = next((t.get("template", "") for t in tpl if isinstance(t, dict) and t.get("name") == "default"),
+                               "")
+                return tpl if isinstance(tpl, str) else ""
+            return ""
+        from .vram import read_gguf_scalars
+        tpl = read_gguf_scalars(p, ["tokenizer.chat_template"]).get("tokenizer.chat_template", "")
+        return tpl if isinstance(tpl, str) else ""
+    except Exception:
+        return ""
+
+
 def local_mode(model_path) -> str:
     """Capability of a local GGUF: manual override first, then its template."""
     if not model_path:
@@ -90,9 +114,7 @@ def local_mode(model_path) -> str:
         hit = _mode_cache.get(str(p))
         if hit and hit[0] == sig:
             return hit[1]
-    from .vram import read_gguf_scalars
-    tpl = read_gguf_scalars(p, ["tokenizer.chat_template"]).get("tokenizer.chat_template", "")
-    mode = mode_from_template(tpl if isinstance(tpl, str) else "")
+    mode = mode_from_template(chat_template(p))
     with _mode_lock:
         _mode_cache[str(p)] = (sig, mode)
     return mode
@@ -163,9 +185,7 @@ def local_efforts(model_path) -> Optional[tuple]:
     if hit and hit[0] == sig:
         return hit[1]
     try:
-        from .vram import read_gguf_scalars
-        tpl = read_gguf_scalars(Path(model_path), ["tokenizer.chat_template"]).get("tokenizer.chat_template", "")
-        efforts = parse_efforts(tpl if isinstance(tpl, str) else "")
+        efforts = parse_efforts(chat_template(Path(model_path)))
     except Exception:
         efforts = None
     with _mode_lock:

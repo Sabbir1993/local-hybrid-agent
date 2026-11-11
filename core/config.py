@@ -346,12 +346,19 @@ CONFIG_INT_FIELDS = {
     "kv_unified_per_slot": (0, 1048576),
     "cache_reuse": (0, 4096),
     "cache_ram": (0, 49152),
+    # vLLM engine (core/engines/vllm.py); gpu_memory_utilization_pct 0 = engines.vllm default
+    "tensor_parallel_size": (0, 16),         # 0 = automatic
+    "pipeline_parallel_size": (1, 16),
+    "gpu_memory_utilization_pct": (0, 98),
 }
 
 CONFIG_CHOICE_FIELDS = {
     "flash_attn": ("on", "off", "auto"),
     "kv_cache_type": ("f16", "bf16", "q8_0", "q5_0", "q4_0", "f32"),
     "split_mode": ("layer", "row", "tensor", "none"),
+    "engine": ("llama", "vllm"),
+    "vllm_dtype": ("auto", "bfloat16", "float16"),
+    "vllm_quantization": ("auto", "fp8", "awq", "gptq", "gguf"),
 }
 
 # Where each key lives inside the profile JSON
@@ -371,6 +378,12 @@ CONFIG_TARGETS = {
     "kv_unified_per_slot": (None, "kv_unified_per_slot"),
     "cache_reuse": (None, "cache_reuse"),
     "cache_ram": (None, "cache_ram"),
+    "engine": (None, "engine"),
+    "tensor_parallel_size": (None, "tensor_parallel_size"),
+    "pipeline_parallel_size": (None, "pipeline_parallel_size"),
+    "gpu_memory_utilization_pct": (None, "gpu_memory_utilization_pct"),
+    "vllm_dtype": (None, "vllm_dtype"),
+    "vllm_quantization": (None, "vllm_quantization"),
 }
 
 # Persisted per-model overrides
@@ -381,4 +394,8 @@ MODEL_CONFIG_KEYS = (
     "keepalive_interval_s", "gpu_devices", "vision_capable",
     "kv_unified", "kv_unified_per_slot", "cache_reuse", "cache_ram",
     "use_mmap", "op_offload",
+    # vLLM engine (main model only); see core/engines/vllm.py
+    "engine", "tensor_parallel_size", "pipeline_parallel_size", "gpu_memory_utilization_pct",
+    "vllm_dtype", "vllm_quantization", "vllm_tokenizer", "vllm_tool_parser", "vllm_reasoning_parser",
+    "vllm_enforce_eager",
 )
