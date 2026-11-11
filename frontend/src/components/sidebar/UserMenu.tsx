@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { type UserProfile, api } from '../../services/api';
+import { PasswordInput, PasswordChecklist, passwordChecks, allPasswordChecksPass } from '../common/PasswordField';
 
 interface UserMenuProps {
   user: UserProfile | null;
@@ -9,7 +10,7 @@ interface UserMenuProps {
 
 const THEMES = ['slate', 'claude', 'tokyonight', 'light'];
 
-export const UserMenu: React.FC<UserMenuProps> = ({ onClose }) => {
+export const UserMenu: React.FC<UserMenuProps> = ({ user, onClose }) => {
   const { theme, setTheme, openSettingsModal, setActiveModal, logout } = useAppStore();
   const [showPwdForm, setShowPwdForm] = useState(false);
   const [currentPwd, setCurrentPwd] = useState('');
@@ -17,6 +18,8 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onClose }) => {
   const [confirmPwd, setConfirmPwd] = useState('');
   const [pwdMsg, setPwdMsg] = useState<{ text: string; isError?: boolean } | null>(null);
   const [isSavingPwd, setIsSavingPwd] = useState(false);
+  const pwdChecks = passwordChecks(newPwd, confirmPwd, user?.username || '');
+  const pwdRulesMet = allPasswordChecksPass(pwdChecks);
 
   const cycleNextTheme = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -37,8 +40,8 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onClose }) => {
       setPwdMsg({ text: 'All password fields are required.', isError: true });
       return;
     }
-    if (newPwd !== confirmPwd) {
-      setPwdMsg({ text: 'New passwords do not match.', isError: true });
+    if (!pwdRulesMet) {
+      setPwdMsg({ text: 'The new password does not meet every requirement.', isError: true });
       return;
     }
 
@@ -148,27 +151,28 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onClose }) => {
 
       {showPwdForm && (
         <div className="user-menu-pwd-form p-2.5 flex flex-col gap-2 bg-panel border-b border-border-subtle text-xs">
-          <input
-            type="password"
+          <PasswordInput
+            autoComplete="current-password"
             placeholder="Current password"
             value={currentPwd}
             onChange={(e) => setCurrentPwd(e.target.value)}
             className="w-full bg-bg border border-border-subtle rounded px-2 py-1 text-text outline-none text-xs"
           />
-          <input
-            type="password"
+          <PasswordInput
+            autoComplete="new-password"
             placeholder="New password"
             value={newPwd}
             onChange={(e) => setNewPwd(e.target.value)}
             className="w-full bg-bg border border-border-subtle rounded px-2 py-1 text-text outline-none text-xs"
           />
-          <input
-            type="password"
+          <PasswordInput
+            autoComplete="new-password"
             placeholder="Confirm new password"
             value={confirmPwd}
             onChange={(e) => setConfirmPwd(e.target.value)}
             className="w-full bg-bg border border-border-subtle rounded px-2 py-1 text-text outline-none text-xs"
           />
+          <PasswordChecklist checks={pwdChecks} show={newPwd.length > 0} fontSize={11} />
           {pwdMsg && (
             <div className={`text-[11px] ${pwdMsg.isError ? 'text-red' : 'text-green'}`} style={{ color: pwdMsg.isError ? '#f85149' : '#3fb950' }}>
               {pwdMsg.text}
@@ -190,7 +194,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onClose }) => {
               type="button"
               className="btn accent text-xs px-2 py-1"
               style={{ width: 'auto', margin: 0, padding: '3px 12px', fontSize: '11px' }}
-              disabled={isSavingPwd}
+              disabled={isSavingPwd || !pwdRulesMet}
               onClick={handleSavePassword}
             >
               {isSavingPwd ? 'Saving…' : 'Save'}

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { api } from '../../services/api';
 import { markActive } from '../../services/session';
+import { PasswordInput, PasswordChecklist, passwordChecks, allPasswordChecksPass } from './PasswordField';
 
 /** "You will be signed out in 1 minute": shown by the idle watch. */
 export const IdleWarning: React.FC = () => {
@@ -30,10 +31,13 @@ export const ForcePasswordModal: React.FC = () => {
   useEffect(() => { setError(''); }, [currentUser?.id]);
   if (!currentUser?.must_change_password) return null;
 
+  const checks = passwordChecks(next, confirm, currentUser.username);
+  const rulesMet = allPasswordChecksPass(checks);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!current || !next) return setError('Fill in every field.');
-    if (next !== confirm) return setError('New passwords do not match.');
+    if (!rulesMet) return setError('The new password does not meet every requirement below.');
     setBusy(true);
     setError('');
     const res = await api.auth.changePassword(current, next);
@@ -56,11 +60,12 @@ export const ForcePasswordModal: React.FC = () => {
         <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--dim)' }}>
           Your account requires a new password before you continue. Use 12 or more characters with letters and digits.
         </p>
-        <input type="password" autoComplete="current-password" placeholder="Current password" value={current} onChange={(e) => setCurrent(e.target.value)} style={field} autoFocus />
-        <input type="password" autoComplete="new-password" placeholder="New password" value={next} onChange={(e) => setNext(e.target.value)} style={field} />
-        <input type="password" autoComplete="new-password" placeholder="Confirm new password" value={confirm} onChange={(e) => setConfirm(e.target.value)} style={field} />
+        <PasswordInput autoComplete="current-password" placeholder="Current password" value={current} onChange={(e) => setCurrent(e.target.value)} style={field} autoFocus />
+        <PasswordInput autoComplete="new-password" placeholder="New password" value={next} onChange={(e) => setNext(e.target.value)} style={field} />
+        <PasswordInput autoComplete="new-password" placeholder="Confirm new password" value={confirm} onChange={(e) => setConfirm(e.target.value)} style={field} />
+        <PasswordChecklist checks={checks} show={next.length > 0} />
         {error && <div role="alert" style={{ marginTop: 12, fontSize: 12.5, color: '#fca5a5' }}>{error}</div>}
-        <button type="submit" className="btn accent" disabled={busy} style={{ width: '100%', marginTop: 16, padding: 11 }}>{busy ? 'Saving…' : 'Change password'}</button>
+        <button type="submit" className="btn accent" disabled={busy || !rulesMet} style={{ width: '100%', marginTop: 16, padding: 11 }}>{busy ? 'Saving…' : 'Change password'}</button>
         <button type="button" onClick={() => logout()} style={{ width: '100%', marginTop: 8, background: 'transparent', border: 'none', color: 'var(--dim)', cursor: 'pointer', fontSize: 12.5 }}>Sign out</button>
       </form>
     </div>
