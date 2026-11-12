@@ -227,7 +227,7 @@ class PlanChecklist(Planning):
 class PerChat(ProjectBuilder):
     def test_the_same_project_name_in_another_chat_starts_from_scratch(self):
         pf.set_scope(11)
-        self.addCleanup(pf.set_scope, None)
+        self.addCleanup(pf.reset_scope)
         pf.tool_project_plan({"project": "Site", "files": [{"path": "index.html", "purpose": "page", "min_lines": 1}]})
         pf.tool_project_write({"project": "Site", "path": "index.html", "content": "<p>chat 11</p>"})
         self.assertIn("1 of 1", pf.tool_project_write({"project": "Site", "path": "index.html", "content": "<p>x</p>", "replace": True}) + " 1 of 1")

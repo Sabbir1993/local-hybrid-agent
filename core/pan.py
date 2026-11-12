@@ -180,13 +180,17 @@ def _strict_ok(d: str, ctx: bool) -> bool:
     return _prefix_ok(d) and _luhn_ok(d)
 
 
-def _standalone(full: str, pos: int) -> bool:
+def _standalone(full: str, pos: int, grouped: bool = False) -> bool:
     """False when the digits at `pos` are the tail of an identifier / hex literal (abc4111...) or a decimal fraction (3.1415...):
-    those are code constants, not a card number someone wrote down."""
+    those are code constants, not a card number someone wrote down. Not so when the run is written out in groups
+    (`x4111 1111 1111 1111`: grouped=True), or when the identifier itself says card (`card4111111111111111`, `visaNumber4111...`)."""
     before = full[max(0, pos - 2):pos]
     if before[-1:].isalnum() and not before[-1:].isdigit() or before[-1:] == "_":
-        return False
-    return not re.fullmatch(r"\d\.", before)
+        if grouped:
+            return True
+        ident = re.search(r"[A-Za-z_][A-Za-z0-9_]{0,40}$", full[max(0, pos - 48):pos])
+        return bool(ident and _CTX_RX.search(ident.group(0)))
+    return grouped or not re.fullmatch(r"\d\.", before)
 
 
 def _spans(cand: str, full: str, base: int, contextual: bool = True) -> list:
@@ -201,9 +205,7 @@ def _spans(cand: str, full: str, base: int, contextual: bool = True) -> list:
         found = None
         loose = None
         total = 0
-        if not contextual and not _standalone(full, base + toks[i][0]):
-            i += 1
-            continue
+        solo_ok = contextual or _standalone(full, base + toks[i][0])      # a single glued token only; groups are judged below
         for j in range(i, nt):
             total += len(toks[j][2])
             if total > 19:
@@ -213,7 +215,7 @@ def _spans(cand: str, full: str, base: int, contextual: bool = True) -> list:
                 continue
             d = "".join(t[2] for t in toks[i:j + 1])
             if len(d) >= 12:
-                if _strict_ok(d, ctx):
+                if (j > i or solo_ok) and _strict_ok(d, ctx):
                     found = j
                     break
                 if ctx and len(d) <= 19 and len(set(d)) > 1:
@@ -339,3 +341,26 @@ def mask_messages(messages) -> int:
                 fn["arguments"], k = mask_pans(fn["arguments"])
                 n += k
     return n
+
+
+# --- one table cell (kb_sql / kb_query) ----------------------------------------------------------------------
+def is_card_header(header) -> bool:
+    """A column named like a card column ("Card No", "PAN", "Visa", "কার্ড"): its cells get the card-context rule."""
+    h = str(header or "")
+    return bool(_CTX_RX.search(h)) and not _NOT_CARD_RX.search(h)
+
+
+def mask_cell(text, card_column: bool = False):
+    """The cell with any card number in it masked like everywhere else ("[card ****1111]"). Only masks, never reveals more.
+
+    The data layer of the knowledge-base SQL tools calls this for every text cell, so a query never sees a card number:
+    substr / hex / LIKE / concatenation work on the masked text and cannot rebuild it. A card number has at least 13
+    characters, so shorter cells are returned as they are. `card_column`: the column is named like a card column, so a
+    12-19 digit run that fails the checksum (a mistyped card number) is masked too.
+    """
+    if not isinstance(text, str) or len(text) < 13:
+        return text
+    if card_column:
+        out = mask_pans("card " + text)[0]
+        return out[5:] if out.startswith("card ") else out
+    return mask_pans(text)[0]

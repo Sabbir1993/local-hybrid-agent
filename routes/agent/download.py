@@ -17,8 +17,12 @@ def _recovery_on() -> bool:
         return False
 
 
-def _resolve_requested_file(path: str, space: Optional[str] = None, recover: bool = True) -> Optional[Path]:
-    """The saved file a Preview / Download request names. recover=False only looks (no history recovery, which writes)."""
+def _resolve_requested_file(path: str, space: Optional[str] = None, recover: bool = True, strict: bool = False) -> Optional[Path]:
+    """The saved file a Preview / Download request names. recover=False only looks (no history recovery, which writes).
+    strict=True (the chat's "does this link open a file" check): only the exact name, or - for a name without a version - the newest
+    `<stem>-<8 hex><suffix>` of that same stem. No prefix / wildcard / other-extension guessing, so `index.html` never finds another
+    chat's `index-aaaaaaaa.html` by luck and `*.pdf` never serves the newest pdf."""
+    import glob as _glob
     import re as _re
     p = None
     clean_name = Path(path).name
@@ -50,19 +54,28 @@ def _resolve_requested_file(path: str, space: Optional[str] = None, recover: boo
 
     # 2. Candidate match: if unversioned or not found, find all candidate revisions
     # and sort newest-first by modification time (so freshly generated files always take precedence over stale ones)
+    # The stem is always glob-escaped: a name like `*` or `a[1]` is a name, not a pattern.
     if p is None or not p.is_file():
         try:
             cand_matches = []
+            g_stem, g_suf = _glob.escape(clean_stem), _glob.escape(suffix)
             for ws_dir in (common_workspace(),):
                 if ws_dir and ws_dir.is_dir():
-                    if suffix:
-                        cand_matches.extend([f for f in ws_dir.glob(f"{clean_stem}-*{suffix}") if f.is_file()])
-                        cand_matches.extend([f for f in ws_dir.glob(f"{clean_stem}_*{suffix}") if f.is_file()])
+                    if strict:
+                        exact_cand = ws_dir / clean_name
+                        if clean_name and exact_cand.is_file():
+                            cand_matches.append(exact_cand)
+                        elif not has_uuid:
+                            cand_matches.extend([f for f in ws_dir.glob(f"{g_stem}-" + "[0-9a-f]" * 8 + g_suf) if f.is_file()])
+                    elif suffix:
+                        cand_matches.extend([f for f in ws_dir.glob(f"{g_stem}-*{g_suf}") if f.is_file()])
+                        cand_matches.extend([f for f in ws_dir.glob(f"{g_stem}_*{g_suf}") if f.is_file()])
                         exact_cand = ws_dir / f"{clean_stem}{suffix}"
                         if exact_cand.is_file():
                             cand_matches.append(exact_cand)
-                        cand_matches.extend([f for f in ws_dir.glob(f"{clean_stem}*{suffix}") if f.is_file()])
-                    cand_matches.extend([f for f in ws_dir.glob(f"{clean_stem}.*") if f.is_file()])
+                        cand_matches.extend([f for f in ws_dir.glob(f"{g_stem}*{g_suf}") if f.is_file()])
+                    if not strict:
+                        cand_matches.extend([f for f in ws_dir.glob(f"{g_stem}.*") if f.is_file()])
             if cand_matches:
                 seen_paths = set()
                 unique_cands = []
@@ -81,7 +94,7 @@ def _resolve_requested_file(path: str, space: Optional[str] = None, recover: boo
     # Off by default (chat.download_recovery): it writes a NEW file from text found in the user's chat history, so the file the
     # user gets is not the one that was generated. A missing file is a 404 unless the admin opts in.
     uid = get_current_user_id()
-    if recover and (p is None or not p.is_file()) and uid is not None and _recovery_on():
+    if recover and not strict and (p is None or not p.is_file()) and uid is not None and _recovery_on():
         try:
             from core.db import _projects_db
             rows = _projects_db.execute(

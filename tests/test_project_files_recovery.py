@@ -30,7 +30,7 @@ class Base(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         pf.set_scope(3)
-        self.addCleanup(pf.set_scope, None)
+        self.addCleanup(pf.reset_scope)
         self.root = Path(self.td.name) / "user_7"
         pf.tool_project_plan({"project": P, "files": [{"path": "index.html", "purpose": "page"}]})
 
