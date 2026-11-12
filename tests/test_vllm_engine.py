@@ -204,6 +204,32 @@ class LayerInfoTests(unittest.TestCase):
         self.assertEqual(ch._layer_info("/nope/missing.gguf"), {"total_layers": None, "layer_mb": None})
 
 
+class ExitReasonTests(unittest.TestCase):
+    """The load error shows vLLM's own last error line, including Python exceptions the old word filter missed."""
+    def reason(self, lines):
+        import collections
+        from core.state import ProxyState
+        st = ProxyState.__new__(ProxyState)
+        st._log_tail = collections.deque(lines, maxlen=200)
+        return st._exit_reason()
+
+    def test_python_exception_line_is_the_reason(self):
+        out = self.reason(["INFO starting", "Traceback (most recent call last):", '  File "x.py", line 1, in <module>',
+                           "ValueError: GPTQ quantization is not supported on this platform (xpu)"])
+        self.assertIn("GPTQ quantization is not supported", out)
+
+    def test_dotted_exception_name(self):
+        out = self.reason(["torch.OutOfMemoryError: XPU out of memory. Tried to allocate 2.00 GiB"])
+        self.assertIn("XPU out of memory", out)
+
+    def test_later_plain_error_line_still_wins(self):
+        out = self.reason(["ValueError: early", "ERROR something failed later"])
+        self.assertIn("failed later", out)
+
+    def test_nothing_error_like_gives_none(self):
+        self.assertIsNone(self.reason(["INFO loading weights", "INFO done"]))
+
+
 class AdapterTests(unittest.TestCase):
     INFO = {"engine": "vllm", "context_size": 16384, "model_path": "/m/Qwen3-8B"}
 

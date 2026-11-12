@@ -312,6 +312,11 @@ class ProxyState:
         errs = [l for l in self._log_tail
                 if re.search(r"\berror\b|failed|not found|cannot allocate|out of memory|"
                              r"cannot allocate memory|assert", l, re.I)]
+        # a Python server (vLLM) ends its traceback with "ValueError: ..." / "ImportError: ..." / "torch.OutOfMemoryError: ...",
+        # which the words above miss (no word boundary inside "ValueError"); that last line is the cause
+        py = [l for l in self._log_tail if re.match(r"^\s*(?:[\w.]+\.)?[A-Z]\w*(?:Error|Exception|Exit)\b\s*:", l)]
+        if py:
+            errs = errs + py if not errs or self._log_tail.index(py[-1]) > self._log_tail.index(errs[-1]) else errs
         if not errs:
             return None
         from .pan import mask_pans
