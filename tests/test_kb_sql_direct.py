@@ -175,13 +175,12 @@ class HintTests(DirectBase):
         out = self.run_sql({"sql": "SELECT Salry FROM Staff_list_Staff"})
         self.assertTrue(out.startswith("error:"))
         self.assertIn("no such column", out)
-        self.assertIn('Staff_list_Staff: "Name", "Role", "Dept", "Salary"', out)
-        self.assertIn("double quotes", out)
+        self.assertIn('Columns of Staff_list_Staff: "Name", "Role", "Dept", "Salary"', out)
         self.assertNotIn("Alice", out)
         self.assertNotIn("Vendors_V", out)                          # only the table the statement named
 
     def test_wrong_table_lists_all_tables(self):
-        out = self.run_sql({"sql": "SELECT * FROM staff"})
+        out = self.run_sql({"sql": "SELECT * FROM zzz_unknown_table"})
         self.assertIn("no such table", out)
         for name in ("Staff_list_Staff", "Vendors_V", "Orders_book_Orders"):
             self.assertIn(name, out)
@@ -189,7 +188,8 @@ class HintTests(DirectBase):
     def test_unquoted_name_with_a_space(self):
         kb_tables.replace_source(4, kb_structure.rows_to_text([["Employee ID", "Name"], ["E1", "Zed"]], "Big"))
         out = self.run_sql({"sql": "SELECT Employee ID FROM Big_x"}, titles={4: "Big"})
-        self.assertIn("double quotes", out)
+        self.assertTrue(out.startswith("error:"))
+        self.assertIn("Big_Big", out)                                # the real table name is offered
 
     def test_other_errors_get_no_reminder(self):
         out = self.run_sql({"sql": "DELETE FROM kb_rows"})
@@ -254,3 +254,16 @@ class ConcurrencyTests(DirectBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DayFirstDateTests(DirectBase):
+    """d/m/yyyy text becomes ISO in the view, like the copy path, so month filters and strftime work on it."""
+    def test_day_first_dates_match_the_copy_path(self):
+        kb_tables.replace_source(5, kb_structure.rows_to_text(
+            [["Date", "Amount"], ["05/11/2026", "10"], ["7-11-26", "20"], ["01/12/2026", "30"], ["2026-11-09", "40"]], "Plan"))
+        t = {5: "Plan"}
+        out = self.run_sql({"sql": "SELECT Date FROM Plan_Plan ORDER BY Amount"}, titles=t)
+        self.assertIn("2026-11-05", out)
+        self.assertIn("2026-11-07", out)
+        self.assertEqual(out.count("2026-"), 4)
+        self.assertIn("70", self.run_sql({"sql": "SELECT SUM(Amount) FROM Plan_Plan", "month": "2026-11"}, titles=t))
