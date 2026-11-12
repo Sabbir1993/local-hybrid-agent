@@ -96,6 +96,13 @@ async def begin(name: str, owner: Optional[int], cfg: dict, redirect_uri: Option
             client_id, client_secret = shared["client_id"], shared["secret"] or client_secret
     if not client_id:
         reg = _dcr_client(name, owner)
+        if reg and meta.get("registration_endpoint"):
+            # A client registered earlier is only good for the redirect address it was registered with: after a switch between
+            # the loopback / manual sign-in and the public https address the provider answers "redirect_uri is not registered
+            # for client". Register again whenever the wanted address differs from the saved one.
+            have = str(reg.get("redirect_uri") or "")
+            if (redirect_uri and have != redirect_uri) or (not redirect_uri and not have.startswith("http://127.0.0.1:")):
+                reg = None
         if not reg and meta.get("registration_endpoint"):
             port = port or DEFAULT_DCR_PORT
             reg_client_fn = getattr(_pkg(), "_register_client", _register_client)

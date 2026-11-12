@@ -133,6 +133,45 @@ class OAuthFlowTests(unittest.TestCase):
         self.assertEqual(start["loopback_port"], mcp_oauth.DEFAULT_DCR_PORT)
         self.assertEqual(q["resource"], ["https://mcp.example.com/mcp"])   # RFC 8707 for non-Google
 
+    def test_a_saved_client_is_registered_again_when_the_redirect_address_changes(self):
+        """loopback / manual sign-in first, public https address later (and back): the provider only accepts the address a
+        client was registered with, so a client saved for another address must not be reused."""
+        meta = {**GOOGLE_META, "resource": "https://mcp.example.com/mcp",
+                "authorization_endpoint": "https://as.example.com/authorize",
+                "token_endpoint": "https://as.example.com/token",
+                "registration_endpoint": "https://as.example.com/register"}
+        cfg = {"transport": "http", "url": "https://mcp.example.com/mcp", "auth": {"type": "oauth"}}
+        https = "https://chat.example.com/mcp/oauth/callback"
+        loop = f"http://127.0.0.1:{mcp_oauth.DEFAULT_DCR_PORT}/callback"
+        calls = []
+
+        async def reg(meta_, name_, owner_, redirect_):
+            calls.append(redirect_)
+            info = {"client_id": f"cid-{len(calls)}", "redirect_uri": redirect_}
+            return info
+
+        saved = {}
+
+        def fake_dcr(name_, owner_):
+            return saved.get("v")
+
+        with mock.patch.object(mcp_oauth, "discover", mock.AsyncMock(return_value=meta)), \
+                mock.patch.object(mcp_oauth, "_register_client", reg), \
+                mock.patch("core.mcp_oauth.flow._dcr_client", fake_dcr):
+            saved["v"] = {"client_id": "old", "redirect_uri": loop}
+            start = run(mcp_oauth.begin("ex", 1, cfg, redirect_uri=https))      # saved for loopback, https wanted -> new client
+            self.assertEqual(calls, [https])
+            self.assertEqual(parse_qs(urlparse(start["auth_url"]).query)["client_id"], ["cid-1"])
+            saved["v"] = {"client_id": "cid-1", "redirect_uri": https}
+            run(mcp_oauth.begin("ex", 1, cfg, redirect_uri=https))              # same address -> reused, no new registration
+            self.assertEqual(calls, [https])
+            run(mcp_oauth.begin("ex", 1, cfg))                                  # loopback wanted, saved for https -> new client
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(calls[1].startswith("http://127.0.0.1:"))
+            saved["v"] = {"client_id": "cid-2", "redirect_uri": loop}
+            run(mcp_oauth.begin("ex", 1, cfg))                                  # loopback again -> reused
+            self.assertEqual(len(calls), 2)
+
     def test_begin_uses_the_admins_shared_client_for_the_real_connector(self):
         self.kc.d["oauthapp:gmail:secret"] = "shared-secret"
         cfg = {"transport": "http", "url": GMAIL_URL, "auth": {"type": "oauth"}}     # no client id of its own
