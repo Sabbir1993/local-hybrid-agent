@@ -1509,6 +1509,26 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         + " Do not describe it: call a tool now.")})
                     continue
 
+                # The nudges are used up and the model still stopped before project_finish: build what is saved and hand over the
+                # download link ourselves. A page pasted into the reply is dropped (it only costs tokens; the file is the result).
+                if project_build and not tool_calls and not project_done and project_nudges >= 3:
+                    try:
+                        from core.agent_tools.project_files import finish_if_possible
+                        _fin = finish_if_possible()
+                    except Exception as _fe:
+                        _fin = None
+                        print(f"[chat] project auto-finish failed: {type(_fe).__name__}", file=sys.stderr)
+                    if _fin:
+                        project_done = True
+                        if len(content or "") > 1500 and ("<html" in content.lower() or "```" in content):
+                            content = ""
+                            if streamed_content:
+                                redactor.reset()
+                                yield "event: delta_reset\ndata: {}\n\n"
+                        content = ((content or "").rstrip() + "\n\n" if (content or "").strip() else "") + \
+                                  "The build did not finish by itself, so I packaged the files that were saved.\n\n" + _fin
+                        yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+
                 # Announced-but-not-delivered: "Let me compile the HTML now:" and
                 # stop. Nudge once to actually produce it (granting one extra turn
                 # if the budget is spent) instead of accepting the preamble.
