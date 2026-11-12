@@ -11,7 +11,14 @@ class SpeedTallyTests(unittest.TestCase):
         s.add({"timings": {"predicted_n": 50, "predicted_ms": 2000, "prompt_n": 500, "prompt_ms": 250}})
         self.assertEqual(s.gen_tps(), 25.0)          # 150 tokens in 6 s, not tokens / whole request time
         self.assertEqual(s.prompt_tps(), 2000.0)     # 3500 in 1.75 s
-        self.assertEqual(s.as_event(), {"gen_tps": 25.0, "prompt_tps": 2000.0})
+        # cache_tokens / read_tokens: the first call of the reply (how much of the prompt the server had cached)
+        self.assertEqual(s.as_event(), {"gen_tps": 25.0, "prompt_tps": 2000.0, "cache_tokens": 0, "read_tokens": 3000})
+
+    def test_cache_reuse_is_taken_from_the_first_call(self):
+        s = SpeedTally()
+        s.add({"timings": {"predicted_n": 10, "predicted_ms": 500, "prompt_n": 120, "prompt_ms": 60, "cache_n": 4200}})
+        s.add({"timings": {"predicted_n": 10, "predicted_ms": 500, "prompt_n": 900, "prompt_ms": 400, "cache_n": 4330}})
+        self.assertEqual((s.first_cached, s.first_read), (4200, 120))
 
     def test_draft_acceptance(self):
         s = SpeedTally()

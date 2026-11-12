@@ -83,6 +83,7 @@ class ChatAttachmentRouteTests(unittest.TestCase):
         self.assertNotIn("KB TEXT", sent[0])
         self.assertIn("data_query", tools[0])
         self.assertIn("search_knowledge_base", tools[0], "the model can still look in the KB on demand")
+        self.assertIn("write_file", tools[0], "an attached sheet must not take the file tools away")
 
     def test_a_company_question_about_the_sheet_still_searches(self):
         events, fck, sent, tools = self._run("compare this with our leave policy")

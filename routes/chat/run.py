@@ -509,7 +509,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 audit_log(user, action="knowledge.local_only", resource="chat/run",
                           detail={"reason": "kb hits on a cloud-bound main lane", "hits": len(kb_hits)})
             else:
-                sys_parts.remove(kb_prompt_block)
+                _kb_i = sys_parts.index(kb_prompt_block)       # the part and its label go together
+                del sys_parts[_kb_i], sys_labels[_kb_i]
                 kb_hits, kb_used = [], False
                 kb_blocked_reason = ("Company knowledge base is local-only and this chat uses a cloud model. "
                                      f"The local model could not start ({local_err or 'unknown error'}). "
@@ -574,11 +575,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         web_budget_n = max(int(web_budget_n or 0), 25)
     if brief_phase == "ask":
         has_web = False          # nothing researched before the card is kept (only the final text is), so don't search
+        # the card comes first: with a file tool in reach the model built the PDF / deck and the card was added after it
+        chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") not in ASK_BLOCKED_TOOLS]
     if not prompt_scope.web_allowed_with_data(has_data_attachment, web_explicit, deep and effort == "extra"):
         has_web = False          # attached data: answer from the files; the web only when the user asked for outside facts
         web_budget_n = 0
-        # the card comes first: with a file tool in reach the model built the PDF / deck and the card was added after it
-        chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") not in ASK_BLOCKED_TOOLS]
     if has_web:
         register_web_tools()
         for t_name in ("web_search", "web_fetch", "web_search_images"):
@@ -712,11 +713,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         sys_labels.append("brief-" + brief_phase)
     if project_build:
         sys_parts.append(PROJECT_MANUAL)
+        sys_labels.append("project-build")
         if single_page and not project_resume:
             sys_parts.append(SINGLE_PAGE_MANUAL)
+            sys_labels.append("project-single-page")
         if project_resume:
             sys_parts.append(project_resume)
-        sys_labels.append("project-build")
+            sys_labels.append("project-resume")
     if has_file and (html_build or project_build or prompt_scope.html_wanted(last_query, prior_files, msgs)):
         # chat has no read_skill tool: HTML / website work gets the design skill's guidance, without announcing it
         if design_skill := skills.silent_skill_prompt("frontend-design", compact=not cloud_main):
@@ -807,6 +810,18 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if (project_build or pdf_build or doc_write_turn) and not cloud_main and req.temperature is not None:
         # writing a file wants steady output: a high panel temperature turns repeated markup into near-miss spellings
         req.temperature = min(float(req.temperature), float((APP_CONFIG.get("chat") or {}).get("build_temperature", 0.3)))
+    # Keep the start of the prompt the same from turn to turn so the server reuses what it already read
+    # (core/prompt_sticky.py): per-turn text goes to the end of the user's message, manuals and document tools stay once
+    # used, tools keep a stable order. Off (chat.stable_prefix false) = everything in the system message, as before.
+    from core import prompt_sticky
+    _sys_pairs, _turn_pairs, _arranged_tools = prompt_sticky.arrange(
+        list(zip(sys_labels, sys_parts)), chat_tools, user.id, getattr(req, "session_id", None),
+        allow_tools=brief_phase != "ask" and not project_build)
+    if allowed_names is not None:
+        _arranged_tools = [t for t in _arranged_tools if t.get("function", {}).get("name") in allowed_names]
+    chat_tools[:] = _arranged_tools
+    sys_labels, sys_parts = [l for l, _ in _sys_pairs], [t for _, t in _sys_pairs]
+    prompt_sticky.attach(msgs, prompt_sticky.turn_block(_turn_pairs))
     combined_sys = "\n\n".join(sys_parts).strip()
     if combined_sys:
         has_sys = False
@@ -820,8 +835,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     # P0 ruler (S5): per-section sizes, only with PROMPT_BREAKDOWN=1 or
     # app.json debug.prompt_breakdown. Never logs user text.
-    prompt_scope.maybe_log("chat/run", list(zip(sys_labels, sys_parts)), chat_tools,
-                           extra=f"hist={len(msgs)}")
+    prompt_scope.maybe_log("chat/run", list(zip(sys_labels, sys_parts)) + [("turn:" + l, t) for l, t in _turn_pairs],
+                           chat_tools, extra=f"hist={len(msgs)}")
 
     # A 3D / WebGL page goes to the dedicated "html3d" lane when the admin set one up and it loads; else the main model answers.
     lane3d = None
@@ -1892,7 +1907,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             toks = req_mon.get("gen_tokens") if req_mon else None
             tps = speed.gen_tps() or ((toks / dt) if (toks and dt and dt > 0) else None)   # real speed when llama-server reported it
             ptoks = final_prompt_toks or estimate_prompt_tokens(msgs)
-            pcached = (sum(len(m.get("content", "")) for m in msgs[:-1]) // 4) if len(msgs) > 1 else 0
+            pcached = (sum(len(m.get("content", "")) for m in msgs[:-1] if isinstance(m.get("content"), str)) // 4) if len(msgs) > 1 else 0
+            if speed.first_cached is not None:
+                pcached = speed.first_cached            # what the server really reused from the previous turn
+                if prompt_scope.scope_logging_enabled():
+                    print(f"[prompt] chat/run cache: reused {speed.first_cached} tok, read {speed.first_read} tok "
+                          f"at the start of this reply", file=sys.stderr)
             monitor_end(chat_rid, 200, prompt_tokens=ptoks, completion_tokens=toks, tps=tps, duration=dt, prompt_tps=speed.prompt_tps(),
                         model=clean_model_name, prompt_cached=pcached, completion_cached=0,
                         source=model_source, provider=model_provider)
