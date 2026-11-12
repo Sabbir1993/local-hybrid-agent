@@ -70,9 +70,10 @@ DATA_SQL_SCHEMA = {
         "description": "Exact analysis over attached Excel / CSV data with read-only SQL (SQLite): joins across sheets or files, "
                        "pivots with SUM(CASE WHEN ...), GROUP BY several columns, window functions, medians / percentiles "
                        "(MEDIAN, PERCENTILE(col, 0.9), STDEV, MODE), month / quarter buckets with strftime, top-N, ratios. "
-                       "Call with describe=true first to see the table and column names. Each sheet is a table; dates are ISO text, "
-                       "numbers are REAL. SELECT only; never changes the file. Prefer this over data_query for anything beyond a "
-                       "single filter / one group-by.",
+                       "Call with describe=true first to see the table and column names. Each sheet is a table; the file name "
+                       "names a table as well, so a name that is not spelled exactly still finds the right sheet; dates are ISO "
+                       "text, numbers are REAL. SELECT only; never changes the file. Prefer this over data_query for anything "
+                       "beyond a single filter / one group-by.",
         "parameters": {
             "type": "object",
             "properties": {

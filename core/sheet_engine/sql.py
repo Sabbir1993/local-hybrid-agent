@@ -202,11 +202,13 @@ def _build(paths: list) -> Workbook:
     multi = len(paths) > 1
     for path in paths:
         stem = _ident(Path(path).stem, set())
+        fname = Path(path).name
         for t in read_tables(path):
             tname = _ident(f"{stem}_{t.name}" if multi else t.name, used)
             cols = _add_table(conn, tname, t.headers, t.rows)
-            tables.append({"name": tname, "sheet": t.name, "file": Path(path).name, "cols": cols, "rows": t.total_rows,
-                           "truncated": t.truncated, "formulas": dict(t.formulas), "preamble": list(t.preamble)})
+            tables.append({"name": tname, "sheet": t.name, "file": fname, "cols": cols, "rows": t.total_rows,
+                           "truncated": t.truncated, "formulas": dict(t.formulas), "preamble": list(t.preamble),
+                           "aliases": [tname, t.name, fname, stem, f"{stem}_{t.name}", f"{fname}_{t.name}"]})
             if t.truncated:
                 notes.append(f"{tname}: only the first {len(t.rows):,} of {t.total_rows:,} rows are loaded")
     _lock(conn)
@@ -218,7 +220,8 @@ def from_tables(items: list) -> Workbook:
     (the knowledge base's sheets). Not cached: the rows behind it can change and are access-controlled by the caller.
 
     `name` becomes the SQL table name (made a safe identifier), `label` the document it came from and `sheet` the tab inside
-    it - the model needs the sheet name to tell two tabs of the same document apart.
+    it - the model needs the sheet name to tell two tabs of the same document apart. `aliases` are the other names the
+    table answers to (the document title, the file name, the sheet name); see _resolve_ref.
     """
     conn = _connect()
     used, tables = set(), []
@@ -227,8 +230,11 @@ def from_tables(items: list) -> Workbook:
         sheet = item[4] if len(item) > 4 else name
         tname = _ident(name, used)
         cols = _add_table(conn, tname, headers, rows)
+        aliases = [tname, name, sheet, label]
+        if label and sheet and label != sheet:
+            aliases.append(f"{label}_{sheet}")
         tables.append({"name": tname, "sheet": sheet, "file": label, "cols": cols, "rows": len(rows), "truncated": False,
-                       "formulas": {}, "preamble": []})
+                       "formulas": {}, "preamble": [], "aliases": aliases})
     _lock(conn)
     return Workbook(conn, tables, [])
 
@@ -298,6 +304,127 @@ def _fmt(v) -> str:
 
 
 # ---- explaining a failed query --------------------------------------------------------------------------------------
+def _norm(s: str) -> str:
+    """A name reduced to its letters and digits: 'BFSI activity nov 20,2026' and 'bfsi_activity_nov_202026' are the same name."""
+    return re.sub(r"[^a-z0-9]+", "", str(s).lower())
+
+
+def _resolve_ref(wb: Workbook, ident: str) -> str:
+    """The loaded table a FROM/JOIN reference names, or "" when nothing (or more than one thing) fits.
+
+    A model writes the name it knows - the file name, with the space still a space or turned into a comma - and the exact
+    identifier it must use is a mangled version of it. Rather than fail, the reference is matched against the names a
+    table answers to (its identifier, its document title, its file name, its tab). The strongest match wins, and it only
+    counts when exactly one table fits, so an ambiguous guess is still an error instead of a wrong answer.
+    """
+    ident = str(ident or "").strip().strip("\"`[]")
+    if not ident:
+        return ""
+    low = ident.lower()
+    exact = [t for t in wb.tables if t["name"].lower() == low]
+    if len(exact) == 1:
+        return exact[0]["name"]
+    nr = _norm(ident)
+    if len(nr) < 4:
+        return ""
+    best = {}
+    for t in wb.tables:
+        top = 0
+        for a in t.get("aliases", ()):
+            na = _norm(a)
+            if not na:
+                continue
+            if nr == na:
+                top = max(top, 3)                 # the very name
+            elif len(nr) >= 6 and na.startswith(nr):
+                top = max(top, 2)                 # the reference is the shorter form ("sales.xlsx" for "sales.xlsx_Sales")
+            elif len(nr) >= 6 and nr.startswith(na):
+                top = max(top, 1)                 # the reference carries more ("BFSI..._xlsx" for "BFSI...")
+        if top:
+            best[t["name"]] = top
+    if not best:
+        return ""
+    top = max(best.values())
+    hits = [n for n, s in best.items() if s == top]
+    return hits[0] if len(hits) == 1 else ""
+
+
+_ITEM_RX = re.compile(r'(?s)^\s*(?P<name>"(?:[^"]|"")+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*(?:\.[\w$]+)*)'
+                      r'\s*(?:AS\s+)?(?P<alias>[A-Za-z_]\w*)?\s*$', re.I)
+_FROM_CLAUSE_RX = re.compile(
+    r'(?is)\b(?P<kw>from|join)(?P<sep>\s+)(?P<list>.*?\S)(?P<tail>\s*)'
+    r'(?=\bwhere\b|\bgroup\b|\border\b|\bhaving\b|\blimit\b|\bjoin\b|\bon\b'
+    r'|\bunion\b|\bintersect\b|\bexcept\b|\boffset\b|$)')
+
+
+def _split_items(text: str) -> list:
+    """The comma separated references of a FROM clause, quotes and parentheses respected."""
+    items, buf, depth, quote = [], "", 0, ""
+    for ch in text:
+        if quote:
+            buf += ch
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "\"'`":
+            quote = ch
+            buf += ch
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            items.append(buf)
+            buf = ""
+            continue
+        buf += ch
+    if buf.strip():
+        items.append(buf)
+    return items
+
+
+def _rewrite_tables(wb: Workbook, sql: str) -> str:
+    """Point the FROM/JOIN references at the tables that are really loaded.
+
+    Only a reference that names exactly one loaded table is rewritten, so this can never turn a query into a read of a
+    different document. Everything else is left as written and sqlite reports it.
+    """
+    def clause(m):
+        kw, sep, lst, tail = m.group("kw"), m.group("sep"), m.group("list"), m.group("tail")
+        parts = _split_items(lst)
+        if not parts or any("(" in p or ")" in p for p in parts):
+            return m.group(0)                       # a subquery or an expression: leave it alone
+        parsed = []
+        for p in parts:
+            im = _ITEM_RX.match(p)
+            if im:
+                parsed.append((im.group("name").strip().strip("\"`[]"), (im.group("alias") or "").strip()))
+        if len(parsed) == len(parts):
+            resolved = []
+            for n, _a in parsed:
+                if _norm(n) in ctes:                 # a name the statement defines itself: never a table
+                    resolved.append("")
+                else:
+                    resolved.append(_resolve_ref(wb, n))
+            if all(resolved):
+                out = []
+                for (n, alias), r in zip(parsed, resolved):
+                    out.append(f'"{r}"' + (f" {alias}" if alias else ""))
+                return f"{kw}{sep}" + ", ".join(out) + tail
+        if len(parts) > 1:
+            # one name split by a stray comma ("BFSI_nov_20,2026_Sheet1") or a name sqlite cannot even read
+            joined = [p.strip().strip("\"`[]") for p in parts]
+            for joiner in ("_", ",", ""):
+                cand = _resolve_ref(wb, joiner.join(joined))
+                if cand:
+                    return f'{kw}{sep}"{cand}"{tail}'
+        return m.group(0)
+
+    ctes = {_norm(c) for c in _CTE_RX.findall(sql)}   # the names the statement defines itself
+    return _FROM_CLAUSE_RX.sub(clause, sql)
+
+
 def _known_names(wb: Workbook) -> set:
     names = set()
     for t in wb.tables:
@@ -367,6 +494,15 @@ def _explain(wb: Workbook, sql: str, msg: str) -> str:
             out.append(f"Available tables: {listed or '(none)'}.")
         out.append("Use those exact names (describe=true lists them).")
         return " ".join(out)
+    if re.search(r"unrecognized token|incomplete input|near \"|syntax error", msg, re.I):
+        out = [f"{msg}.", "The statement does not parse; a table name that is not quoted and holds a space, a comma or a "
+                           "digit is the usual cause.",
+               f"Available tables: {listed or '(none)'}."]
+        named = [n for n in names if n.lower() in sql.lower()]
+        if named:
+            out.append("The statement mentions: " + ", ".join(named) + ".")
+        out.append("Write the table name exactly and in double quotes (describe=true lists them with their columns).")
+        return " ".join(out)
     return msg
 
 
@@ -376,6 +512,7 @@ def query(wb: Workbook, sql: str, limit: int = DEFAULT_ROWS) -> str:
         raise SqlError("sql required")
     if not re.match(r"(?is)^(select|with)\b", sql):
         raise SqlError("only SELECT queries are allowed (read-only)")
+    sql = _rewrite_tables(wb, sql)                 # a table name the model knows but spelled differently
     limit = max(1, min(int(limit or DEFAULT_ROWS), MAX_ROWS))
     deadline = time.monotonic() + QUERY_TIMEOUT_S
     with wb.lock:

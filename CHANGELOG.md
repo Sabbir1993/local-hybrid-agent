@@ -9,6 +9,9 @@ has a tag or release; until then, dates + headline changes.
 - A knowledge-base sheet is one SQL table named after the document and the tab; the file extension is no longer part of the
   name (`BFSI activity nov 2026.xlsx` + `Sheet1` -> `BFSI_activity_nov_2026_Sheet1_Sheet1`), so the name is the one a person
   would write. `describe=true` lists the tables with their tab and their columns.
+- A table answers to the file name, the document title and the tab as well, so a name the model spells its own way
+  (`BFSI_activity_nov_20,2026_Sheet1`, with the comma still in it) finds the sheet instead of failing. Two names that fit two
+  different tables are refused, never guessed, and a name the statement defines itself (a CTE) is left alone.
 - A wrong table or column name now answers with the tables and columns that do exist and the closest match, instead of
   sqlite's bare "no such table". A double-quoted name that matches no column (sqlite reads it as a text constant and returns a
   plausible but wrong answer) is reported as a warning on the result.

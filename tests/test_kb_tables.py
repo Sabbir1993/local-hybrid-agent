@@ -152,10 +152,24 @@ class KbSqlTests(TableTestBase):
         self.assertIn("| Rahim | 1 |", q)
 
     def test_a_wrong_table_name_says_which_tables_exist(self):
-        out = self.run_sql({"sql": "SELECT * FROM Staff_list"})
+        out = self.run_sql({"sql": "SELECT * FROM payroll_totals_2026"})
         self.assertIn("no such table", out)
-        self.assertIn("Staff_list_Staff", out)                  # the name that does exist
-        self.assertIn("Did you mean", out)
+        self.assertIn("Staff_list_Staff", out)                  # the tables that do exist
+        self.assertIn("describe=true", out)
+
+    def test_a_table_name_the_model_guesses_still_works(self):
+        """The file name, the document title and the identifier all name the same table: a model that writes the name it
+        knows gets the rows, instead of 'no such table'."""
+        titles = {**TITLES, 3: "BFSI activity nov 20,2026_Sheet1.xlsx"}
+        kb_tables.replace_source(3, kb_structure.rows_to_text([["Kam Name", "Proposal Value"],
+                                                              ["Rahim", "100"]], "Sheet1"))
+        scope = (True, object(), False, titles)
+        for name in ('BFSI_activity_nov_20_2026_Sheet1_Sheet1',      # the identifier
+                     '"BFSI activity nov 20,2026_Sheet1"',           # the document title
+                     '"BFSI_activity_nov_20,2026_Sheet1"',           # the file name, comma and all
+                     'BFSI_activity_nov_20,2026_Sheet1'):            # the file name, unquoted: sqlite cannot read it
+            out = self.run_sql({"sql": f'SELECT "Kam Name" FROM {name}'}, scope=scope)
+            self.assertIn("| Rahim |", out, f"failed for {name}")
 
     def test_sum_avg_median_group_by(self):
         out = self.run_sql({"sql": 'SELECT Dept, COUNT(*) n, SUM(Salary) total, MEDIAN(Salary) med FROM Staff_list_Staff GROUP BY Dept ORDER BY Dept'})

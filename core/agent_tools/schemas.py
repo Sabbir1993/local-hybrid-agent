@@ -279,6 +279,8 @@ AGENT_TOOLS = [
             "description": "Read-only SQL (SQLite) over the Excel/CSV files in the company knowledge base: joins between sheets, "
                            "pivots with SUM(CASE WHEN ...), sums / averages / medians / percentiles, several group-bys, month "
                            "buckets with strftime, top-N. Call with describe=true first to see the table and column names. "
+                           "A table is named after its document and its tab; the file name of the document names the table as "
+                           "well, so a table name that is not spelled exactly still finds the right sheet. "
                            "Use kb_query for a simple count or list; use this for anything that needs totals, ratios or joins. "
                            "Not available while a cloud model answers.",
             "parameters": {

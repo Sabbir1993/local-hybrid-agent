@@ -11,7 +11,7 @@ from core.file_tools import profile
 from core.sheet_engine import sql
 
 
-def build(d: Path) -> Path:
+def build(d: Path, name: str = "sales.xlsx") -> Path:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Sales"
@@ -31,7 +31,7 @@ def build(d: Path) -> Path:
     t.append(["Region", "Target"])
     t.append(["Dhaka", 500])
     t.append(["Khulna", 300])
-    p = d / "sales.xlsx"
+    p = d / name
     wb.save(p)
     return p
 
@@ -151,6 +151,68 @@ class BadNames(unittest.TestCase):
 
     def test_a_real_column_is_not_reported(self):
         self.assertNotIn("warning", self.q("SELECT Region, COUNT(*) FROM Sales GROUP BY Region"))
+
+
+class TableNames(unittest.TestCase):
+    """A model writes the name it knows - the file name, with the space still a space - not the identifier the table
+    really has. The reference is resolved to the table it names, but only when exactly one table fits."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = build(Path(self.tmp.name))
+        sql.clear_cache()
+        self.wb = sql.load(self.path)
+
+    def q(self, text, **kw):
+        return sql.query(self.wb, text, **kw)
+
+    def test_the_file_name_names_the_table(self):
+        out = self.q('SELECT Region, SUM(Revenue) FROM "sales.xlsx_Sales" GROUP BY Region')
+        self.assertIn("| Dhaka | 600 |", out)
+
+    def test_an_unquoted_file_name_names_the_table(self):
+        out = self.q('SELECT Region, SUM(Revenue) FROM sales.xlsx_Sales GROUP BY Region')
+        self.assertIn("| Dhaka | 600 |", out)
+
+    def test_a_name_with_a_comma_in_it_names_the_table(self):
+        p = build(Path(self.tmp.name), "sales,2026.xlsx")
+        sql.clear_cache()
+        wb = sql.load(p)
+        out = sql.query(wb, 'SELECT Region, SUM(Revenue) FROM "sales,2026.xlsx_Sales" GROUP BY Region')
+        self.assertIn("| Dhaka | 600 |", out)
+
+    def test_a_stray_comma_does_not_break_the_name(self):
+        p = build(Path(self.tmp.name), "sales,2026.xlsx")
+        sql.clear_cache()
+        wb = sql.load(p)
+        out = sql.query(wb, 'SELECT Region, SUM(Revenue) FROM sales,2026_sales GROUP BY Region')
+        self.assertIn("| Dhaka | 600 |", out)
+
+    def test_an_alias_is_kept(self):
+        out = self.q('SELECT s.Region FROM Sales s JOIN Targets t ON s.Region = t.Region')
+        self.assertIn("| Dhaka |", out)
+
+    def test_a_join_of_two_tables_still_is_one(self):
+        out = self.q('SELECT s.Region, t.Target FROM Sales s JOIN Targets t ON s.Region = t.Region')
+        self.assertIn("| Dhaka | 500 |", out)
+
+    def test_an_ambiguous_name_is_not_guessed(self):
+        """Two tables with the same tab: the short name fits both, so nothing is rewritten and sqlite reports it."""
+        wb = sql.from_tables([("Sales_Sheet1", "Sales", ["Region"], [["Dhaka"]]),
+                               ("Targets_Sheet1", "Targets", ["Region"], [["Dhaka"]])])
+        with self.assertRaises(sql.SqlError) as cm:
+            sql.query(wb, "SELECT * FROM Sheet1")
+        self.assertIn("no such table", str(cm.exception))
+
+    def test_a_name_the_statement_defines_itself_is_left_alone(self):
+        """A common table expression named like a table keeps its own rows: the reference is not pointed at the table."""
+        out = self.q('WITH Targets AS (SELECT "Region" FROM Sales) SELECT COUNT(*) FROM Targets')
+        self.assertIn("| 5 |", out)                     # the CTE, not the Targets sheet (2 rows)
+
+    def test_the_query_itself_is_never_changed_beyond_the_table_name(self):
+        out = self.q('SELECT Region, COUNT(*) n FROM Sales GROUP BY Region ORDER BY Region')
+        self.assertIn("| Dhaka | 3 |", out)
 
 
 class Sandbox(unittest.TestCase):
