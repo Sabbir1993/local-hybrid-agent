@@ -20,6 +20,17 @@ Outline (what the model writes):
     validate: Region in [Dhaka, Khulna]
     chart: bar | title=Revenue by region | x=Region | y=Revenue
 
+A dashboard sheet has no table: KPI tiles (big numbers that point at the data with formulas) and charts over other sheets:
+
+    ## Dashboard: Overview
+    title: Q3 Sales Overview
+    kpi: Total revenue = =SUM(Sales!C2:C200) | format=currency:BDT
+    kpi: Orders = =COUNTA(Sales!A2:A200)
+    kpi: Tax rate = =TaxRate | format=percent
+    chart: bar | source=Sales | x=Region | y=Revenue | title=Revenue by region
+    chart: line | source=Sales | x=Date | y=Revenue | title=Revenue over time
+    note: Figures update when the Sales sheet changes.
+
 Everything after the first table of a sheet that looks like `key: value` is a directive (see DIRECTIVES). Formulas are checked by
 core.sheet_engine.formulas before they are written; anything refused raises BuildError with the cell and the reason.
 """
@@ -35,9 +46,11 @@ MAX_COLS = 100
 MAX_ROWS_TOTAL = 50_000
 
 DIRECTIVES = ("format", "total", "freeze", "filter", "highlight", "scale", "databar", "validate", "table", "name", "chart",
-              "widths", "note", "print", "tab", "wrap", "hide", "merge", "color", "align", "border")
+              "widths", "note", "print", "tab", "wrap", "hide", "merge", "color", "align", "border", "kpi", "title")
+MAX_KPIS = 8
 _DIRECTIVE_RX = re.compile(r"^\s*(" + "|".join(DIRECTIVES) + r")\s*:\s*(.*?)\s*$", re.I)
 _SHEET_RX = re.compile(r"^\s*##\s*sheet\s*:\s*(.+?)\s*$", re.I)
+_DASH_RX = re.compile(r"^\s*##\s*dashboard\s*:\s*(.+?)\s*$", re.I)
 _TITLE_RX = re.compile(r"^\s*#\s+(.+?)\s*$")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _PCT = re.compile(r"^[-+]?\d+(?:\.\d+)?\s*%$")
@@ -123,9 +136,9 @@ def parse(text: str) -> dict:
     wb = {"title": "", "theme": DEFAULT_THEME, "sheets": [], "names": []}
     cur: Optional[dict] = None
 
-    def start(name):
+    def start(name, dashboard=False):
         nonlocal cur
-        cur = {"name": name, "header": None, "rows": [], "directives": []}
+        cur = {"name": name, "header": None, "rows": [], "directives": [], "dashboard": dashboard}
         wb["sheets"].append(cur)
     for raw in str(text or "").splitlines():
         line = raw.rstrip()
@@ -134,6 +147,10 @@ def parse(text: str) -> dict:
         m = _SHEET_RX.match(line)
         if m:
             start(m.group(1))
+            continue
+        m = _DASH_RX.match(line)
+        if m:
+            start(m.group(1), dashboard=True)
             continue
         if cur is None:
             t = _TITLE_RX.match(line)
@@ -164,7 +181,8 @@ def parse(text: str) -> dict:
                 if cur is None:
                     start("Sheet1")
                 cur["directives"].append((key, val))
-    wb["sheets"] = [s for s in wb["sheets"] if s["header"]]
+    wb["sheets"] = [s for s in wb["sheets"]
+                    if s["header"] or (s["dashboard"] and any(k in ("kpi", "chart") for k, _ in s["directives"]))]
     return wb
 
 
@@ -281,7 +299,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     _warnings.set([])
     spec = parse(text)
-    if not spec["sheets"]:
+    if not any(s["header"] for s in spec["sheets"]):
         raise BuildError("no sheet with a table found - write `## Sheet: Name` followed by a markdown table")
     if len(spec["sheets"]) > MAX_SHEETS:
         raise BuildError(f"at most {MAX_SHEETS} sheets per workbook")
@@ -302,6 +320,9 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
 
     for s in spec["sheets"]:
         ws = wb.create_sheet(s["xname"])
+        if not s["header"]:                      # a dashboard: KPI tiles and charts, no table
+            charts += _dashboard(ws, s, spec, accent, band, names, formulas)
+            continue
         header = [h or f"Column{i + 1}" for i, h in enumerate(s["header"][:MAX_COLS])]
         ncols = len(header)
         rows = [(r + [""] * ncols)[:ncols] for r in s["rows"]]
@@ -663,6 +684,10 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
         if not re.match(r"^[A-Za-z]{1,3}\d{1,7}(:[A-Za-z]{1,3}\d{1,7})?$", cells):
             _warn(f"name '{m.group(1)}': must be a cell or range such as Sheet!B2 or Sheet!A2:A50 (got '{ref}')")
             continue
+        # absolute cells: a name written as Sheet!B2 is RELATIVE in Excel and LibreOffice (it points somewhere else from every
+        # cell that uses it, usually at an empty cell, so =C2*TaxRate quietly gives 0)
+        absolute = re.sub(r"([A-Za-z]{1,3})(\d{1,7})", lambda mm: f"${mm.group(1).upper()}${mm.group(2)}", cells)
+        ref = ref[:sh.end()] + absolute
         ref = ref.replace(sh.group(1), by_name[sh.group(1).lower()]["xname"], 1)
         if not ref.startswith("'") and re.search(r"[^A-Za-z0-9_.]", by_name[sh.group(1).lower()]["xname"]):
             ref = "'" + ref.replace("!", "'!", 1)
@@ -676,6 +701,94 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
+
+
+_DASH_COLS = 16                 # B..Q: four KPI tiles of 3 columns with a gap, or two charts side by side
+_TILE_STARTS = (2, 6, 10, 14)   # first column of each tile (B, F, J, N)
+
+
+def _dashboard(ws, s: dict, spec: dict, accent: str, band: str, names: list, formulas: bool) -> list:
+    """Draw a dashboard sheet: title banner, KPI tiles (label over a big number), then charts in a two-column grid.
+    -> the sheet's chart entries for _add_charts, each with its `at=` cell set."""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    ws.sheet_view.showGridLines = False
+    ws.column_dimensions["A"].width = 2.5
+    for ci in range(2, 2 + _DASH_COLS):
+        ws.column_dimensions[col_letter(ci)].width = 11.5
+    dirs = {}
+    for k, v in s["directives"]:
+        dirs.setdefault(k, []).append(v)
+    title = (dirs.get("title") or [spec["title"] or s["name"]])[0]
+    ws.merge_cells(start_row=2, start_column=2, end_row=2, end_column=1 + _DASH_COLS)
+    c = ws.cell(row=2, column=2, value=title)
+    c.data_type = "s"
+    c.font = Font(bold=True, size=18, color="FFFFFF")
+    c.fill = PatternFill("solid", fgColor=accent)
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[2].height = 34
+    edge = Side(style="thin", color="D0D5DD")
+    row = 4
+    kpis = dirs.get("kpi", [])
+    if len(kpis) > MAX_KPIS:
+        _warn(f"dashboard '{s['name']}': only the first {MAX_KPIS} of {len(kpis)} kpi lines are shown")
+    for i, v in enumerate(kpis[:MAX_KPIS]):
+        parts = [p.strip() for p in v.split("|")]
+        m = re.match(r"^(.+?)\s*=\s*(.+)$", parts[0])
+        if not m:
+            _warn(f"dashboard '{s['name']}': kpi '{v}': expects `kpi: Label = =SUM(Sheet!C2:C9) | format=currency:BDT`")
+            continue
+        label, raw = m.group(1).strip(), m.group(2).strip()
+        fmt = next((p.split("=", 1)[1].strip() for p in parts[1:] if p.lower().startswith("format=")), "")
+        r0 = row + (i // 4) * 5
+        c0 = _TILE_STARTS[i % 4]
+        val, is_formula = _cell_value(raw, fmt.lower() or None, names, f"dashboard '{s['name']}' kpi '{label}'", formulas)
+        for r in range(r0, r0 + 4):
+            for cc in range(c0, c0 + 3):
+                cell = ws.cell(row=r, column=cc)
+                cell.fill = PatternFill("solid", fgColor=band)
+                cell.border = Border(top=edge if r == r0 else None, bottom=edge if r == r0 + 3 else None,
+                                     left=edge if cc == c0 else None, right=edge if cc == c0 + 2 else None)
+        ws.merge_cells(start_row=r0, start_column=c0, end_row=r0, end_column=c0 + 2)
+        lab = ws.cell(row=r0, column=c0, value=label)
+        lab.data_type = "s"
+        lab.font = Font(size=10, color="5F6B7A", bold=True)
+        lab.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        ws.merge_cells(start_row=r0 + 1, start_column=c0, end_row=r0 + 3, end_column=c0 + 2)
+        big = ws.cell(row=r0 + 1, column=c0)
+        big.value = val
+        if isinstance(val, str) and not is_formula:
+            big.data_type = "s"
+        nf = _named_format(fmt) if fmt else None
+        if nf:
+            big.number_format = nf
+        elif is_formula or isinstance(val, (int, float)):
+            big.number_format = "#,##0.##"
+        big.font = Font(size=22, bold=True, color=accent)
+        big.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    shown = min(len(kpis), MAX_KPIS)
+    row += 5 * (-(-shown // 4)) if shown else 0
+    out = []
+    for i, v in enumerate(dirs.get("chart", [])):
+        if "source=" not in v.lower():
+            _warn(f"dashboard '{s['name']}': chart '{v}' needs `source=<sheet with the data>`")
+            continue
+        at = f"{col_letter(2 if i % 2 == 0 else 10)}{row + (i // 2) * 17}"
+        out.append((s, 0, 0, v + (f" | at={at}" if "at=" not in v.lower() else "") + " | w=18.5 | h=8"))
+    row += 17 * (-(-len(out) // 2)) + (1 if out else 0)
+    for v in dirs.get("note", []):
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=1 + _DASH_COLS)
+        n = ws.cell(row=row, column=2, value=v)
+        n.data_type = "s"
+        n.font = Font(italic=True, color="666666")
+        row += 1
+    ws.sheet_properties.tabColor = accent
+    # prints (and previews) as one landscape page wide, so tiles and charts are never cut at a page edge
+    from openpyxl.worksheet.properties import PageSetupProperties
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    ws.print_area = f"A1:{col_letter(2 + _DASH_COLS)}{max(row, 6)}"
+    return out
 
 
 def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
@@ -695,8 +808,8 @@ def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
             elif p:
                 flags.add(p.lower())
         src = by_name.get(opts.get("source", s["name"]).lower())
-        if src is None:
-            _warn(f"chart: source sheet '{opts.get('source')}' does not exist")
+        if src is None or not src.get("header"):
+            _warn(f"chart: source sheet '{opts.get('source')}' does not exist or has no table")
             continue
         sws = wb[src["xname"]]
         header = [h or f"Column{i + 1}" for i, h in enumerate(src["header"][:MAX_COLS])]
@@ -755,6 +868,13 @@ def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
             ch.legend = None
         if kind in ("bar", "column", "col") and len(ycols) == 1 and ch.series:
             ch.series[0].graphicalProperties.solidFill = accent
+        if "labels" in flags or (kind in ("bar", "column", "col", "pie") and len(src["rows"]) <= 12 and len(ycols) == 1):
+            from openpyxl.chart.label import DataLabelList
+            ch.dataLabels = DataLabelList()
+            ch.dataLabels.showVal = kind != "pie"
+            ch.dataLabels.showPercent = kind == "pie"
+            for flag in ("showSerName", "showCatName", "showLegendKey"):
+                setattr(ch.dataLabels, flag, False)
         target = wb[s["xname"]]
         at = opts.get("at")
         if not at:

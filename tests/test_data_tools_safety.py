@@ -143,5 +143,37 @@ class FormulaInjectionTests(Base):
         self.assertEqual(build._quoted('a"&WEBSERVICE("x")&"b'), '"a""&WEBSERVICE(""x"")&""b"')
 
 
+class DashboardTests(Base):
+    OUTLINE = ("# Q3 Sales\ntheme: ocean\n## Dashboard: Overview\ntitle: Q3 Sales Overview\n"
+               "kpi: Total revenue = =SUM(Sales!C2:C4) | format=currency:BDT\nkpi: Tax rate = =TaxRate | format=percent\n"
+               "chart: bar | source=Sales | x=Region | y=Revenue | title=Revenue by region\n"
+               "chart: pie | x=Region | y=Revenue\n"
+               "## Sheet: Sales\n| Region | Qty | Revenue | Tax |\n|---|---|---|---|\n| Dhaka | 5 | 1000 | =C2*TaxRate |\n"
+               "| Khulna | 2 | 400 | =C3*TaxRate |\n| Sylhet | 1 | 200 | =C4*TaxRate |\n"
+               "## Sheet: Assumptions\n| Item | Value |\n|---|---|\n| Tax rate | 15% |\nname: TaxRate = Assumptions!B2\n")
+
+    def test_dashboard_has_tiles_and_one_valid_chart(self):
+        build.start_warnings()
+        data = build.build(self.OUTLINE)
+        warnings = build.take_warnings()
+        self.assertTrue(any("source=" in w for w in warnings), warnings)       # the chart without a source is reported
+        wb = openpyxl.load_workbook(io.BytesIO(data))
+        self.assertEqual(wb.sheetnames, ["Overview", "Sales", "Assumptions"])
+        ws = wb["Overview"]
+        self.assertEqual(ws["B2"].value, "Q3 Sales Overview")
+        self.assertEqual(ws["B4"].value, "Total revenue")
+        self.assertEqual(ws["B5"].value, "=SUM(Sales!C2:C4)")
+        self.assertEqual(len(ws._charts), 1)
+        self.assertFalse(ws.sheet_view.showGridLines)
+
+    def test_named_cells_are_absolute(self):
+        wb = openpyxl.load_workbook(io.BytesIO(build.build(self.OUTLINE)))
+        self.assertEqual(wb.defined_names["TaxRate"].attr_text, "Assumptions!$B$2")
+
+    def test_a_dashboard_alone_is_not_a_workbook(self):
+        with self.assertRaises(build.BuildError):
+            build.build("## Dashboard: Only\nkpi: A = 5\n")
+
+
 if __name__ == "__main__":
     unittest.main()
