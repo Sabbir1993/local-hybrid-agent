@@ -350,6 +350,13 @@ class ProxyState:
                 code = self.process.returncode
                 self._kill_loading_process()
                 arch = self._unknown_architecture()
+                if vllm_mode and any("Failed to infer device type" in l for l in self._log_tail):
+                    # vLLM found no GPU backend at all: the installed vLLM / PyTorch has no Intel (XPU) or CUDA support
+                    raise self._load_failed(
+                        "vLLM could not find a GPU it supports. This is the vLLM installation, not the model: the "
+                        "PyTorch inside it has no Intel GPU (XPU) or CUDA support, or the Intel GPU runtime (Level Zero) "
+                        "is missing. Install vLLM's Intel XPU build or Intel's vLLM container and point engines.vllm.bin "
+                        "at it (docs/vllm.md, 'vLLM could not find a GPU').")
                 if vllm_mode:
                     raise self._load_failed(
                         f"vLLM exited during start-up (code {code}) - see the log lines above. Common causes: the model "

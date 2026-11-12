@@ -126,6 +126,35 @@ default (tensor parallel 2) uses GPUs 0 and 1, which leaves GPU 2 for the helper
 - **Less memory per context:** add `--kv-cache-dtype fp8` under Extra arguments if your vLLM build supports it on Intel.
 - **Start-up fails while compiling:** turn on Eager mode.
 
+## Troubleshooting
+
+### "vLLM could not find a GPU" / `RuntimeError: Failed to infer device type`
+
+vLLM started but found no GPU backend. A plain `pip install vllm` gives the NVIDIA (CUDA) build, which cannot use
+Intel Arc cards. Check the vLLM environment (the one `engines.vllm.bin` points at), as the same user that runs the app:
+
+```bash
+/opt/vllm/.venv/bin/python -c "import torch; print(torch.__version__, 'xpu:', torch.xpu.is_available(), torch.xpu.device_count())"
+```
+
+- `xpu: True 3` — PyTorch sees the three cards. If vLLM still fails, the vLLM package itself is the CUDA build:
+  reinstall vLLM from source with its XPU requirements, or use Intel's vLLM container.
+- `xpu: False 0` or an error — the PyTorch in that environment has no Intel GPU support, or the Intel GPU runtime is
+  missing. Install PyTorch's XPU build and the Intel compute runtime (Level Zero), then check again:
+
+```bash
+ls /dev/dri
+```
+
+```bash
+clinfo -l
+```
+
+  `clinfo -l` (or `sycl-ls`) should list the three Arc cards for this user; if it only works with `sudo`, add the
+  user to the `render` and `video` groups, log in again and restart the backend.
+- Running inside pm2: the vLLM process gets the backend's environment. If the Intel runtime needs variables (for
+  example from `setvars.sh`), put them in `engines.vllm.env` in `config/app.json`.
+
 ## Notes
 
 - Start-up takes minutes (loading weights and compiling graphs). The load waits up to `health_timeout_s`.
