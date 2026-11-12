@@ -140,9 +140,11 @@ def tool_write_file_common(args: dict) -> str:
         if not _save_text_or_markdown_as_pdf(p, content, images=images or None):
             if p.is_file():
                 p.unlink()
-            return ("error: the PDF could not be compiled (Chrome/Edge missing or the render "
-                    "failed), so nothing was saved. Send the document as markdown instead of "
-                    "HTML, or try again.")
+            from .pdf_render import LAST_ERROR
+            why = LAST_ERROR.get("why") or "the render failed"
+            return (f"error: the PDF could not be compiled ({why}), so nothing was saved. This is a server problem, not "
+                    "the document: do not send the same HTML again. Save the content as an .html file or as markdown "
+                    "(write_file with a .md name) instead and tell the user the PDF could not be made.")
         spec = content
         msg = f"Wrote compiled PDF document as {unique_path_arg} (users get it only through the download link at the end of this message: never write a folder path or a file link yourself). [DOWNLOAD: {unique_path_arg}]"
         msg += _after_build(".pdf", p.read_bytes(), content, extra)

@@ -159,7 +159,7 @@ class SecurityTests(DirectBase):
             conn.close()
         base = [r for r in seen if r[0] == sqlite3.SQLITE_READ and r[1] == "kb_rows"]
         self.assertTrue(base)
-        self.assertTrue(all(r[2] == "main" and r[3] == "Staff_list_Staff" for r in base), base)      # view name, base in main
+        self.assertTrue(all(r[2] == "main" and str(r[3]).startswith("__kb_") for r in base), base)   # the hidden inner view, base in main
         top = [r for r in seen if r[0] == sqlite3.SQLITE_READ and r[3] is None]
         self.assertEqual({(r[1], r[2]) for r in top}, {("Staff_list_Staff", "temp")})               # the view itself: temp, no source
 
@@ -267,3 +267,30 @@ class DayFirstDateTests(DirectBase):
         self.assertIn("2026-11-07", out)
         self.assertEqual(out.count("2026-"), 4)
         self.assertIn("70", self.run_sql({"sql": "SELECT SUM(Amount) FROM Plan_Plan", "month": "2026-11"}, titles=t))
+
+
+class CteTests(DirectBase):
+    """A CTE can carry the name of an allowed view: it must neither open the stored rows nor break ordinary CTE use."""
+    def test_cte_named_like_a_view_cannot_read_the_stored_rows(self):
+        for sql in ["WITH Staff_list_Staff AS (SELECT table_id, cells FROM kb_rows) SELECT * FROM Staff_list_Staff",
+                    'WITH "Staff_list_Staff" AS (SELECT cells FROM kb_rows WHERE table_id = 2) SELECT cells FROM "Staff_list_Staff"',
+                    "WITH Staff_list_Staff AS (SELECT * FROM kb_tables) SELECT * FROM Staff_list_Staff",
+                    "WITH Staff_list_Staff(x) AS (SELECT group_concat(text) FROM chunks) SELECT x FROM Staff_list_Staff"]:
+            out = self.run_sql({"sql": sql})
+            self.assertTrue(out.startswith("error:"), f"{sql!r} -> {out}")
+            self.assertNotIn("Acme", out)
+            self.assertNotIn("table_id", out)
+
+    def test_ordinary_ctes_over_a_view_work(self):
+        out = self.run_sql({"sql": "WITH x AS (SELECT Name, Salary FROM Staff_list_Staff) SELECT COUNT(*) AS n FROM x"})
+        self.assertFalse(out.startswith("error:"), out)
+        self.assertIn("4", out)
+        out = self.run_sql({"sql": "WITH a AS (SELECT Name FROM Staff_list_Staff), b AS (SELECT Name FROM a) SELECT * FROM b"})
+        self.assertFalse(out.startswith("error:"), out)
+        self.assertIn("Alice", out)
+
+    def test_the_hidden_inner_views_are_not_readable_by_name(self):
+        wb_names = self.run_sql({"describe": True})
+        self.assertNotIn("__kb_", wb_names)
+        out = self.run_sql({"sql": "SELECT name FROM temp.sqlite_master"})
+        self.assertTrue(out.startswith("error:"), out)

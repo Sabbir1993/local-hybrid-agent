@@ -37,6 +37,22 @@ def _find_chromium_binary() -> Optional[str]:
     return None
 
 
+LAST_ERROR = {"why": ""}   # why the last render failed, one line (read by the tool message and the server log)
+
+
+def _sandbox_flags() -> list:
+    """Chrome refuses to start as root on Linux ("Running as root without --no-sandbox is not supported") and exits with
+    code 1 at once. The sandbox is NOT turned off automatically: an admin who accepts that for this server sets
+    `"pdf": {"no_sandbox": true}` in config/app.json (the page is our own locked-down HTML: no scripts, no network).
+    The better fix is to run the app as a normal user."""
+    try:
+        from ..small_model import APP_CONFIG
+        on = (APP_CONFIG.get("pdf") or {}).get("no_sandbox") is True
+    except Exception:
+        on = False
+    return ["--no-sandbox", "--disable-dev-shm-usage"] if on else []
+
+
 def _lock_down_html(html_content: str) -> str:
     body = _DOCTYPE_RX.sub("", html_content, count=1)
     return (f'<!doctype html><html lang="{_doc_lang(body)}"><head><meta charset="utf-8">'
@@ -87,7 +103,9 @@ def finalize_pdf(path, html_content: str) -> None:
 def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
     browser_bin = _find_chromium_binary()
     if not browser_bin:
+        LAST_ERROR["why"] = "no Chrome, Chromium or Edge is installed on the server (install one, e.g. google-chrome-stable)"
         return False
+    LAST_ERROR["why"] = ""
 
     import shutil
     import tempfile
@@ -105,6 +123,7 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
             browser_bin,
             "--headless=new",
             "--disable-gpu",
+            *_sandbox_flags(),
             "--no-pdf-header-footer",
             "--export-tagged-pdf",                 # structure tags for accessibility / reflow (Chrome and Edge 118+)
             "--generate-pdf-document-outline",     # bookmarks from the headings
@@ -124,8 +143,12 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
             pass
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
         if res.returncode != 0:
-            print(f"[_render_html_to_pdf] browser exited {res.returncode}: "
-                  f"{(res.stderr or '').strip()[:300]}", file=sys.stderr)
+            err = (res.stderr or "").strip()
+            line = next((l for l in reversed(err.splitlines()) if "rror" in l), err.splitlines()[-1] if err else "")
+            LAST_ERROR["why"] = f"the browser exited with code {res.returncode}: {line[-200:]}"
+            if "as root" in err:
+                LAST_ERROR["why"] += " - run the app as a normal user, or set pdf.no_sandbox=true in config/app.json"
+            print(f"[_render_html_to_pdf] browser exited {res.returncode}: {err[:300]}", file=sys.stderr)
             return False
         # Current Edge builds hand the print job to a detached child and exit at once, so the PDF shows up a
         # moment AFTER this process returned. Wait for it, and for it to stop growing, instead of giving up
@@ -142,7 +165,12 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
             if time.monotonic() >= deadline:
                 return _pdf_looks_valid(Path(abs_pdf))
             time.sleep(0.25)
+    except subprocess.TimeoutExpired:
+        LAST_ERROR["why"] = "the browser did not finish within 25 s (it hung: check its sandbox / shared-memory settings)"
+        print("[_render_html_to_pdf] browser timed out", file=sys.stderr)
+        return False
     except Exception as e:
+        LAST_ERROR["why"] = type(e).__name__
         print(f"[_render_html_to_pdf browser error: {e}]", file=sys.stderr)
         return False
     finally:

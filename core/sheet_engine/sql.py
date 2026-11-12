@@ -11,6 +11,7 @@ import difflib
 import json
 import math
 import re
+import secrets
 import sqlite3
 import threading
 import time
@@ -296,7 +297,7 @@ def from_kb_views(conn, metas: list) -> Workbook:
     title, sheet, columns, nrows). Access was decided by the caller: a table that is not in `metas` has no view."""
     reserved = {"sqlite_master", "sqlite_temp_master", "sqlite_schema", "sqlite_sequence"}
     reserved |= {str(r[0]).lower() for r in conn.execute("SELECT name FROM main.sqlite_master")}   # no view may shadow a real table
-    used, tables, names = set(reserved), [], set()
+    used, tables, names, inners = set(reserved), [], set(), set()
     for m in metas:
         tid = int(m["id"])                                  # an integer from our own database, never text from the model
         base = m.get("name") or (f"{m['title']}_{m['sheet']}" if m["sheet"] else m["title"])
@@ -318,7 +319,13 @@ def from_kb_views(conn, metas: list) -> Workbook:
         if "row" not in seen:
             sel.append('rownum AS "Row"')
             cols.append(("Row", "REAL"))
-        conn.execute(f'CREATE TEMP VIEW "{tname}" AS SELECT ' + ", ".join(sel) + f" FROM main.kb_rows WHERE table_id = {tid}")
+        # two layers: a hidden inner view (random name, never shown to the model) is the only thing allowed to read the stored
+        # rows; the public view just selects from it. The authorizer cannot tell a view from a CTE of the same name by name
+        # alone, so the public name must not be what opens the base table.
+        inner = f"__kb_{secrets.token_hex(12)}"
+        conn.execute(f'CREATE TEMP VIEW "{inner}" AS SELECT ' + ", ".join(sel) + f" FROM main.kb_rows WHERE table_id = {tid}")
+        conn.execute(f'CREATE TEMP VIEW "{tname}" AS SELECT * FROM "{inner}"')
+        inners.add(inner)
         names.add(tname.lower())
         aliases = [tname, base, m["sheet"] or base, m["title"]]
         if m["sheet"] and m["title"] != m["sheet"]:
@@ -326,12 +333,13 @@ def from_kb_views(conn, metas: list) -> Workbook:
         tables.append({"name": tname, "sheet": m["sheet"] or base, "file": m["title"], "cols": cols,
                        "rows": int(m["nrows"]), "truncated": False, "formulas": {}, "preamble": [],
                        "handle": m.get("handle") or f"T{len(tables) + 1}", "aliases": aliases})
-    _lock_kb(conn, names)
+    _lock_kb(conn, names, inners)
     return Workbook(conn, tables, [])
 
 
-def _lock_kb(conn, view_names: set) -> None:
-    """Same limits as _lock, but the authorizer lets a statement read the base table only through one of OUR views."""
+def _lock_kb(conn, view_names: set, inner_names: set) -> None:
+    """Same limits as _lock, but the stored rows can be read only by our hidden inner views, and those only through our public
+    views. A public view may be read from anywhere (a CTE over it is fine); a CTE named like a view opens nothing."""
     try:
         conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)
     except (AttributeError, sqlite3.Error):
@@ -345,12 +353,14 @@ def _lock_kb(conn, view_names: set) -> None:
             return sqlite3.SQLITE_DENY if str(arg2 or arg1 or "").lower() in _DENIED_FUNCTIONS else sqlite3.SQLITE_OK
         if action == sqlite3.SQLITE_READ:
             name = str(arg1 or "").lower()
+            reader = str(source or "").lower()
             if name.startswith("sqlite_"):
                 return sqlite3.SQLITE_DENY
-            if source is not None:                    # a view is reading: fine only when it is one of ours
-                return sqlite3.SQLITE_OK if str(source).lower() in view_names else sqlite3.SQLITE_DENY
-            # the statement itself reads: only our views, which live in the temp schema (a real table of the same name is main)
-            return sqlite3.SQLITE_OK if name in view_names and str(db).lower() == "temp" else sqlite3.SQLITE_DENY
+            if str(db).lower() == "main":             # a real table (kb_rows, kb_tables, chunks ...): only an inner view reads it
+                return sqlite3.SQLITE_OK if reader in inner_names else sqlite3.SQLITE_DENY
+            if name in inner_names:                   # an inner view: only a public view of ours reads it
+                return sqlite3.SQLITE_OK if reader in view_names else sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK if name in view_names else sqlite3.SQLITE_DENY   # a public view, read from anywhere
         return sqlite3.SQLITE_OK
     conn.set_authorizer(auth)
 
@@ -738,7 +748,8 @@ def query(wb: Workbook, sql: str, limit: int = DEFAULT_ROWS) -> str:
                 raise SqlError("that statement is not allowed (read-only SELECT over the loaded tables)")
             raise SqlError(_explain(wb, sql, msg))
         except (sqlite3.Warning, sqlite3.ProgrammingError, sqlite3.DatabaseError) as e:
-            raise SqlError("that statement is not allowed (read-only SELECT)" if "authoriz" in str(e) else str(e))
+            raise SqlError("that statement is not allowed (read-only SELECT over the loaded tables)"
+                           if ("authoriz" in str(e) or "prohibited" in str(e)) else str(e))
         finally:
             wb.conn.set_progress_handler(None, 0)
     more = len(rows) > limit
