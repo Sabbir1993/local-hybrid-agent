@@ -39,6 +39,71 @@ class KpiLayoutsTests(unittest.TestCase):
         self.assertEqual(design._tone(light, "nonsense"), design._tone(light, "blue"))
 
 
+NEW_LAYOUTS = (
+    "# Onboarding Programme\nsubtitle: review\ntheme: {theme}\n---\n"
+    "## How a merchant goes live\nlayout: process\n- Apply | Merchant submits the form and trade licence\n"
+    "- Verify | Risk team checks documents within two days\n- Integrate | Sandbox keys issued and test payments run\n"
+    "- Go live | Production keys and first settlement\n---\n"
+    "## Where to focus\nlayout: matrix\n- Quick wins | High value, low effort\n- Big bets | High value, high effort\n"
+    "- Fill-ins | Low value, low effort\n- Avoid | Low value, high effort\n---\n"
+    "## Conversion funnel\nlayout: funnel\n- Applied | 1,200 merchants\n- Verified | 860 merchants (72%)\n"
+    "- Integrated | 540 merchants (45%)\n- Live | 410 merchants (34%)\n---\n"
+    "## Share by channel\nchart: doughnut | highlight=MFS\n- Cards: 38\n- MFS: 45\n- Net banking: 17\n---\n"
+    "## Monthly volume\nchart: bar | highlight=Jun | xlabel=Month | ylabel=Transactions\n- Apr: 310\n- May: 342\n- Jun: 398\n---\n"
+    "## Trend\nchart: area\n- Q1: 10\n- Q2: 14\n- Q3: 19\n---\n"
+    "## What we shipped\nlayout: cards\n- icon=speed | Faster checkout | Payment time fell to 2.6 s\n"
+    "- icon=security | Fraud screening | New rules blocked 1,240 attempts\n- icon=people | Portal | 310 merchants self-serve\n---\n"
+    "## In numbers\nlayout: stats\n- icon=growth | 4.2M | transactions\n- icon=target | 97.4% | success rate\n---\n## Thank you\n")
+
+
+class NewLayoutsTests(unittest.TestCase):
+    def test_lint_clean_on_every_theme(self):
+        for name in theme.THEMES:
+            with self.subTest(theme=name):
+                data = pptx_ops.create(NEW_LAYOUTS.format(theme=name))
+                self.assertEqual(lint.lint_deck(data), [], name)
+                self.assertEqual(notes.summary(data), "", name)
+
+    def test_kinds_and_shapes(self):
+        from core.doc_ops.pptx_ops import outline
+        from pptx import Presentation
+        import io
+        deck = outline.parse_outline(NEW_LAYOUTS.format(theme="corporate"))
+        self.assertEqual([s["kind"] for s in deck["slides"]][1:9],
+                         ["process", "matrix", "funnel", "chart", "chart", "chart", "cards", "stats"])
+        prs = Presentation(io.BytesIO(pptx_ops.create(NEW_LAYOUTS.format(theme="corporate"))))
+        names = [sh.name for sl in prs.slides for sh in sl.shapes]
+        for want in ("Step 1", "Quadrant 4", "Stage 4", "Icon speed", "Icon risk", "Icon growth"):
+            self.assertIn(want, names)
+
+    def test_wrong_item_count_is_reported(self):
+        said = notes.summary(pptx_ops.create("# D\nsubtitle: s\n---\n## M\nlayout: matrix\n- A | x\n- B | y\n- C | z\n---\n## End\n"))
+        self.assertIn("exactly 4 items", said)
+
+    def test_unknown_icon_is_reported_and_aliases_resolve(self):
+        from core.doc_ops.pptx_ops import icons
+        self.assertEqual(icons.resolve("rocket")[0], "growth")
+        self.assertEqual(icons.take("icon=growth | Revenue | up 18%"), ("Revenue | up 18%", "growth"))
+        self.assertEqual(icons.take("Revenue | up 18%"), ("Revenue | up 18%", ""))
+        said = notes.summary(pptx_ops.create("# D\nsubtitle: s\n---\n## C\nlayout: cards\n- icon=unicorn | Alpha plan | the first option in detail\n"
+                                             "- Beta plan | the second option in detail\n- Gamma plan | the third option in detail\n---\n## Next\n- one\n- two\n---\n## Thank you\n"))
+        self.assertIn("icon 'unicorn' is not available", said)
+
+    def test_overfull_cards_are_split_and_reported(self):
+        long = "A long explanation of this topic that keeps going with details, figures and names. " * 4
+        md = "# D\nsubtitle: s\n---\n## Six\nlayout: cards\n" + "".join(f"- Topic {i}\n\t- {long}\n" for i in range(6)) + "---\n## End\n"
+        data = pptx_ops.create(md)
+        self.assertIn("split over two", notes.summary(data))
+        self.assertEqual(lint.lint_deck(data), [])
+
+    def test_bengali_text_names_a_complex_script_font(self):
+        from pptx import Presentation
+        import io
+        prs = Presentation(io.BytesIO(pptx_ops.create("# D\nsubtitle: s\n---\n## বাংলা\n- ঢাকা বাংলাদেশের রাজধানী\n- দ্বিতীয় লাইন\n---\n## End\n")))
+        xml = "".join(sh._element.xml for sl in prs.slides for sh in sl.shapes)
+        self.assertIn('<a:cs typeface="Nirmala UI"/>', xml)
+
+
 class BuildNotesTests(unittest.TestCase):
     def test_changes_are_reported(self):
         md = ("# Deck\nsubtitle: s\n---\n## Growth\nchart: bar\n- strong year\n- good team\n---\n## Wide\n"

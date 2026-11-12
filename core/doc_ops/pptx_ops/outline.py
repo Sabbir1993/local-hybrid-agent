@@ -16,7 +16,7 @@ MAX_TABLE_COLS = 6
 
 LAYOUTS = {"bullets", "cards", "stats", "two-column", "timeline", "quote", "section", "table", "cover", "closing", "full",
            "chart", "comparison", "agenda", "gallery", "textside",
-           "kpi-grid", "chart-kpis", "leaderboard", "roadmap", "dimension-table"}
+           "kpi-grid", "chart-kpis", "leaderboard", "roadmap", "dimension-table", "process", "matrix", "funnel"}
 IMAGE_KINDS = ("cover", "bullets", "section", "full", "gallery")   # slide kinds the renderer can put a picture on
 MAX_IMAGE_QUERY = 120
 _LAYOUT_ALIAS = {"columns": "two-column", "two-columns": "two-column", "twocolumn": "two-column", "2-column": "two-column",
@@ -30,6 +30,9 @@ _LAYOUT_ALIAS = {"columns": "two-column", "two-columns": "two-column", "twocolum
                  "kpi-grid": "kpi-grid", "kpigrid": "kpi-grid", "kpi": "kpi-grid", "kpis": "kpi-grid", "dashboard": "kpi-grid",
                  "chart-kpis": "chart-kpis", "chartkpis": "chart-kpis", "chart-cards": "chart-kpis", "chart-delta": "chart-kpis",
                  "leaderboard": "leaderboard", "profiles": "leaderboard", "team": "leaderboard", "champions": "leaderboard",
+                 "process": "process", "flow": "process", "chevrons": "process", "pipeline": "process", "workflow": "process",
+                 "matrix": "matrix", "2x2": "matrix", "quadrant": "matrix", "quadrants": "matrix", "swot": "matrix",
+                 "funnel": "funnel", "conversion": "funnel",
                  "roadmap": "roadmap", "stepper": "roadmap", "timeline-stepper": "roadmap", "milestones": "roadmap",
                  "dimension-table": "dimension-table", "dimension": "dimension-table", "table-callout": "dimension-table", "alert-table": "dimension-table"}
 
@@ -104,7 +107,7 @@ def _new() -> dict:
             "image_extra": [], "chart": None, "eyebrow": "", "source": "", "art": "", "callout": "", "alert": "", "_cite": []}
 
 
-CHART_KINDS = ("bar", "hbar", "line", "pie", "share")
+CHART_KINDS = ("bar", "hbar", "line", "area", "pie", "doughnut", "share")
 ART_KINDS = ("arches", "waves", "skyline", "geometric", "network", "none")
 _NUM = re.compile(r"^[~<>≈≥≤]?\s*[$€£৳¥]?\s*(-?\d[\d,]*(?:\.\d+)?)\s*(%|thousand|million|billion|trillion|bn|mn|[KkMmBbTt](?![A-Za-z]))?\s*[A-Za-z%/]{0,6}$")
 _MULT = {"k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12, "bn": 1e9, "mn": 1e6, "thousand": 1e3, "million": 1e6,
@@ -129,9 +132,10 @@ def parse_chart_spec(val: str):
     parts = [p.strip() for p in str(val or "").split("|")]
     head = re.sub(r"[^a-z]", "", parts[0].lower())
     kind = {"column": "bar", "columns": "bar", "bars": "bar", "horizontal": "hbar", "horizontalbar": "hbar",
-            "lines": "line", "trend": "line", "donut": "pie", "doughnut": "pie", "stacked": "share",
+            "lines": "line", "trend": "line", "donut": "doughnut", "ring": "doughnut", "areas": "area", "stacked": "share",
             "stackedbar": "share", "composition": "share"}.get(head, head)
-    spec = {"kind": kind if kind in CHART_KINDS else "bar", "unit": "", "title": ""}
+    spec = {"kind": kind if kind in CHART_KINDS else "bar", "unit": "", "title": "", "xlabel": "", "ylabel": "",
+            "highlight": ""}
     for p in parts[1:]:
         k, _, v = p.partition("=")
         k, v = k.strip().lower(), v.strip().strip("\"'")
@@ -139,6 +143,8 @@ def parse_chart_spec(val: str):
             spec["unit"] = v[:10]
         elif k == "title":
             spec["title"] = clean(v)[:80]
+        elif k in ("xlabel", "ylabel", "highlight"):        # axis titles; the one bar / slice to accent
+            spec[k] = clean(v)[:60]
     return spec
 
 
@@ -175,9 +181,11 @@ def chart_data(s: dict):
     if len(labels) < 2 or not series:
         return None
     kind = spec.get("kind", "bar")
-    if kind in ("pie", "share") and (len(series) != 1 or len(labels) > 8 or any(v < 0 for v in series[0]["values"])):
+    if kind in ("pie", "doughnut", "share") and (len(series) != 1 or len(labels) > 8 or any(v < 0 for v in series[0]["values"])):
         kind = "bar"
-    return {"kind": kind, "unit": spec.get("unit", ""), "labels": labels[:24], "series": series[:4]}
+    return {"kind": kind, "unit": spec.get("unit", ""), "labels": labels[:24], "series": series[:4],
+            "title": spec.get("title", "") if (s.get("table") or len(series) > 1) else "",
+            "xlabel": spec.get("xlabel", ""), "ylabel": spec.get("ylabel", ""), "highlight": spec.get("highlight", "")}
 
 
 def parse_image_spec(val: str):
@@ -505,9 +513,15 @@ def stat_split(text: str):
     return (m.group(1).strip(), m.group(2).strip()) if m else None
 
 
+def _no_icon(text: str) -> str:
+    from . import icons
+    return icons.take(text)[0]
+
+
 def _classify(s: dict, idx: int, n: int) -> None:
     lay = s["layout"]
-    top = groups(s["bullets"])
+    # an `icon=name` field on an item is decoration: the layout is chosen from the item without it
+    top = [(_no_icon(h), c) for h, c in groups(s["bullets"])]
     flat = [h for h, c in top if h and not c]
     if lay == "full" and s["image"] and idx > 0:        # full-bleed picture with the title over it
         s["kind"] = "full"
@@ -521,6 +535,18 @@ def _classify(s: dict, idx: int, n: int) -> None:
             s["chart_data"] = data
             s["kind"] = "chart-kpis"
             return
+    if lay == "process" and idx > 0 and 3 <= len(top) <= 6:
+        s["kind"] = "process"
+        return
+    if lay == "matrix" and idx > 0 and len(top) == 4:
+        s["kind"] = "matrix"
+        return
+    if lay == "funnel" and idx > 0 and 3 <= len(top) <= 6:
+        s["kind"] = "funnel"
+        return
+    if lay in ("process", "matrix", "funnel") and idx > 0:
+        _notes.note(f"slide {idx + 1} '{s['title'][:40]}': layout {lay} needs "
+                    + ("exactly 4 items" if lay == "matrix" else "3 to 6 items") + f" (it has {len(top)}), so another layout was used")
     if lay == "kpi-grid" and idx > 0:
         s["kind"] = "kpi-grid"
         return

@@ -119,9 +119,27 @@ def _bg(slide, hex_):
     slide.background.fill.fore_color.rgb = _rgb(hex_)
 
 
+BENGALI_FACE = "Nirmala UI"     # ships with Windows 8+ / Office; other viewers substitute their own Bengali font
+
+
+def _complex_font(run, font: str) -> None:
+    """Also name the font for complex scripts (Bangla, Arabic ...) and East Asian text: PowerPoint picks the font per
+    script, and with only the Latin one set, Bengali text falls back to whatever the viewer's machine has."""
+    rpr = run._r.get_or_add_rPr()
+    for tag in ("a:ea", "a:cs"):
+        el = rpr.find(qn(tag))
+        if el is None:
+            el = rpr.makeelement(qn(tag), {})
+            latin = rpr.find(qn("a:latin"))
+            (latin.addnext(el) if latin is not None else rpr.append(el))
+        el.set("typeface", font)
+
+
 def _style_runs(p, font, size, color, bold=False, italic=False):
     for r in p.runs:
         r.font.name = font
+        if M.has_bengali(r.text):
+            _complex_font(r, BENGALI_FACE)
         r.font.size = Pt(size)
         r.font.bold = bold
         r.font.italic = italic
@@ -606,8 +624,37 @@ def _columns(slide, s, t):
     _deco(slide, MSO_SHAPE.RECTANGLE, W / 2 - 0.01, 2.0, 0.02, 4.4, t["line"])
 
 
+def _icon(slide, name: str, x: float, y: float, size: float, color: str, where: str = "") -> bool:
+    """Draw the named icon (icons.py) as a native shape; False (and a build note) when the name is not known."""
+    from . import icons, notes
+    key, shape_kind = icons.resolve(name)
+    if not key:
+        notes.note(f"{where}: icon '{name}' is not available (use one of: {', '.join(icons.NAMES)})")
+        return False
+    sh = slide.shapes.add_shape(shape_kind, Inches(x), Inches(y), Inches(size), Inches(size))
+    sh.name = f"Icon {key}"
+    sh.fill.solid()
+    sh.fill.fore_color.rgb = _rgb(color)
+    sh.line.fill.background()
+    sh.shadow.inherit = False
+    return True
+
+
+def _iconed(groups: list) -> list:
+    """[(heading, kids, icon name)] with an `icon=name` field taken off each item's heading."""
+    from . import icons
+    out = []
+    for g in groups:
+        head, kids = g
+        head, icon = icons.take(head)
+        out.append(((head, kids), icon))
+    return out
+
+
 def _cards(slide, s, t):
-    items = [_heading_body(g) for g in O.groups(s["bullets"])]
+    marked = _iconed(O.groups(s["bullets"]))
+    items = [_heading_body(g) for g, _ in marked]
+    card_icons = [ic for _, ic in marked]
     n = len(items)
     cols = n if n <= 4 else 3
     rows = math.ceil(n / cols)
@@ -628,12 +675,14 @@ def _cards(slide, s, t):
         card.shadow.inherit = False
         accent = t["accent"] if i % 2 == 0 else t["accent2"]
         _deco(slide, MSO_SHAPE.RECTANGLE, x, y, cw, 0.08, accent, back=False)
-        badge = _deco(slide, MSO_SHAPE.OVAL, x + 0.28, y + 0.32, 0.5, 0.5, accent, back=False)
-        bt = badge.text_frame
-        bt.text = str(i + 1)
-        _frame(bt, MSO_ANCHOR.MIDDLE)
-        bt.paragraphs[0].alignment = PP_ALIGN.CENTER
-        _style_runs(bt.paragraphs[0], t["head"], 15, _on(accent), True)
+        if not (card_icons[i] and _icon(slide, card_icons[i], x + 0.28, y + 0.3, 0.55, _ink(accent, t["surface"], 3.0),
+                                        f"'{s['title'][:30]}' card {i + 1}")):
+            badge = _deco(slide, MSO_SHAPE.OVAL, x + 0.28, y + 0.32, 0.5, 0.5, accent, back=False)
+            bt = badge.text_frame
+            bt.text = str(i + 1)
+            _frame(bt, MSO_ANCHOR.MIDDLE)
+            bt.paragraphs[0].alignment = PP_ALIGN.CENTER
+            _style_runs(bt.paragraphs[0], t["head"], 15, _on(accent), True)
         tf = card.text_frame
         _frame(tf, MSO_ANCHOR.TOP, (0.28, 1.0, 0.28, 0.2))
         inner_w, inner_h = cw - 0.56, ch - 1.2
@@ -652,7 +701,8 @@ def _cards(slide, s, t):
 
 
 def _stats(slide, s, t):
-    items = [(O.stat_split(g[0]) or (g[0], "")) for g in O.groups(s["bullets"])]
+    marked = _iconed(O.groups(s["bullets"]))
+    items = [(O.stat_split(g[0]) or (g[0], "")) for g, _ in marked]
     n = len(items)
     gap = 0.35
     area_w = W - 2 * MX
@@ -670,6 +720,8 @@ def _stats(slide, s, t):
         tile.shadow.inherit = False
         accent = t["accent"] if i % 2 == 0 else t["accent2"]
         _deco(slide, MSO_SHAPE.RECTANGLE, x, y, 0.1, ch, accent, back=False)
+        if marked[i][1]:
+            _icon(slide, marked[i][1], x + 0.45, y + 0.4, 0.6, _ink(accent, t["surface"], 3.0), f"'{s['title'][:30]}' stat {i + 1}")
         tf = tile.text_frame
         _frame(tf, MSO_ANCHOR.MIDDLE, (0.45, 0.2, 0.3, 0.2))
         ns = common_ns
@@ -729,7 +781,8 @@ def _chart(slide, s, t, box=None):
     from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
     d = s["chart_data"]
     kinds = {"bar": XL_CHART_TYPE.COLUMN_CLUSTERED, "hbar": XL_CHART_TYPE.BAR_CLUSTERED,
-             "line": XL_CHART_TYPE.LINE_MARKERS, "pie": XL_CHART_TYPE.PIE, "share": XL_CHART_TYPE.BAR_STACKED_100}
+             "line": XL_CHART_TYPE.LINE_MARKERS, "pie": XL_CHART_TYPE.PIE, "share": XL_CHART_TYPE.BAR_STACKED_100,
+             "area": XL_CHART_TYPE.AREA, "doughnut": XL_CHART_TYPE.DOUGHNUT}
     cd = CategoryChartData()
     if d["kind"] == "share":                              # one stacked bar: a series per share
         cd.categories = [d.get("unit") or "Share"]
@@ -743,7 +796,11 @@ def _chart(slide, s, t, box=None):
     gf = slide.shapes.add_chart(kinds[d["kind"]], Inches(bx), Inches(by), Inches(bw), Inches(bh), cd)
     gf.name = "Chart"
     ch = gf.chart
-    ch.has_title = False
+    ch.has_title = bool(d.get("title"))               # the slide title names the chart; `chart: .. | title=` adds its own
+    if ch.has_title:
+        ch.chart_title.text_frame.text = d["title"]
+        _style_runs(ch.chart_title.text_frame.paragraphs[0], t["head"], 16, t["text"], True)
+        ch.chart_title.include_in_layout = False
     ch.font.name = t["body"]
     ch.font.size = Pt(14)
     ch.font.color.rgb = _rgb(t["text"])
@@ -775,13 +832,21 @@ def _chart(slide, s, t, box=None):
         ch.category_axis.visible = False
         ch.value_axis.has_major_gridlines = False
         ch.has_legend = True
-    elif d["kind"] == "pie":
+    elif d["kind"] in ("pie", "doughnut"):
         plot.vary_by_categories = True
-        for i, _ in enumerate(d["labels"]):
+        hi = str(d.get("highlight") or "").lower()
+        for i, lab in enumerate(d["labels"]):
             pt = plot.series[0].points[i]
             pt.format.fill.solid()
-            pt.format.fill.fore_color.rgb = _rgb(colors[i % len(colors)])
-        dl.position = XL_LABEL_POSITION.OUTSIDE_END
+            col = colors[i % len(colors)]
+            if hi:                                         # one slice in the accent, the rest toned down
+                col = t["accent"] if lab.lower() == hi else _tint(t["muted"], 0.35 + 0.12 * (i % 4))
+            pt.format.fill.fore_color.rgb = _rgb(col)
+            pt.format.line.color.rgb = _rgb(t["bg"])
+        if d["kind"] == "pie":
+            dl.position = XL_LABEL_POSITION.OUTSIDE_END
+        else:
+            dl.font.color.rgb = _rgb(t["text"])
         ch.has_legend = True
     else:
         for i, ser in enumerate(plot.series):
@@ -795,8 +860,19 @@ def _chart(slide, s, t, box=None):
             else:
                 ser.format.fill.solid()
                 ser.format.fill.fore_color.rgb = col
-        dl.position = XL_LABEL_POSITION.ABOVE if d["kind"] == "line" else XL_LABEL_POSITION.OUTSIDE_END
-        if len(d["labels"]) > 8 or multi:
+        hi = str(d.get("highlight") or "").lower()
+        if hi and not multi and d["kind"] in ("bar", "hbar") and hi in [x.lower() for x in d["labels"]]:
+            # one bar in the accent colour, the others toned down, so the eye goes to the point being made
+            quiet = _rgb(t["line"] if _lum(t["bg"]) < 0.4 else _tint(t["muted"], 0.45))
+            for i, lab in enumerate(d["labels"]):
+                pt = plot.series[0].points[i]
+                pt.format.fill.solid()
+                pt.format.fill.fore_color.rgb = _rgb(t["accent"]) if lab.lower() == hi else quiet
+        if d["kind"] == "area":
+            plot.has_data_labels = False
+        else:
+            dl.position = XL_LABEL_POSITION.ABOVE if d["kind"] == "line" else XL_LABEL_POSITION.OUTSIDE_END
+        if d["kind"] != "area" and (len(d["labels"]) > 8 or multi):
             plot.has_data_labels = len(d["labels"]) <= 8
         ch.has_legend = multi
         for ax in (ch.category_axis, ch.value_axis):
@@ -808,11 +884,121 @@ def _chart(slide, s, t, box=None):
         ch.value_axis.format.line.fill.background()
         ch.value_axis.tick_labels.number_format = '#,##0.##'
         ch.value_axis.tick_labels.number_format_is_linked = False
+        for ax, key in ((ch.category_axis, "xlabel"), (ch.value_axis, "ylabel")):
+            if d.get(key):
+                ax.has_title = True
+                ax.axis_title.text_frame.text = d[key]
+                _style_runs(ax.axis_title.text_frame.paragraphs[0], t["body"], 13, _ink(t["muted"], t["bg"], 4.5), True)
     if ch.has_legend:
         ch.legend.position = XL_LEGEND_POSITION.BOTTOM
         ch.legend.include_in_layout = False
         ch.legend.font.size = Pt(13)
         ch.legend.font.color.rgb = _rgb(t["text"])
+
+
+def _split_item(g) -> tuple:
+    """(heading, detail) of one top-level item: `Heading | detail`, `Heading: detail`, or a heading with sub-bullets."""
+    head, kids = _heading_body(g)
+    if not kids and "|" in head:
+        head, _, rest = head.partition("|")
+        kids = [rest.strip()] if rest.strip() else []
+    return head.strip(), " ".join(kids).strip()
+
+
+def _process(slide, s, t):
+    """3-6 steps as a row of chevrons with a short text under each (`layout: process`)."""
+    items = [_split_item(g) for g in O.groups(s["bullets"])][:6]
+    n = len(items)
+    area_w = W - 2 * MX
+    overlap = 0.18
+    cw = (area_w + overlap * (n - 1)) / n
+    y, ch = 2.15, 1.25
+    head_size = min(M.fit_one_line(h, t["head"], cw - 1.35, 20, 11, True) for h, _ in items)   # one line inside the arrow
+    body_size = min([_fit([d], cw - 0.45, 2.6, 16, 11, gap_pt=0, font=t["body"]) for _, d in items if d] or [14])
+    for i, (head, detail) in enumerate(items):
+        x = MX + i * (cw - overlap)
+        col = t["accent"] if i % 2 == 0 else t["accent2"]
+        shape = slide.shapes.add_shape(MSO_SHAPE.CHEVRON if i else MSO_SHAPE.PENTAGON, Inches(x), Inches(y), Inches(cw), Inches(ch))
+        shape.name = f"Step {i + 1}"
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = _rgb(col)
+        shape.line.fill.background()
+        shape.shadow.inherit = False
+        tf = shape.text_frame
+        _frame(tf, MSO_ANCHOR.MIDDLE, (0.42 if i else 0.2, 0.05, 0.42, 0.05))
+        tf.text = head
+        tf.paragraphs[0].alignment = PP_ALIGN.CENTER
+        _style_runs(tf.paragraphs[0], t["head"], head_size, _on(col), True)
+        _textbox(slide, x + 0.2, y + ch + 0.25, cw - 0.45, 2.7,
+                 [(f"{i + 1}", t["head"], 22, _ink(col, t["bg"], 3.0), True, False, 4)]
+                 + ([(detail, t["body"], body_size, _ink(t["text"], t["bg"], 4.5), False, False, 0)] if detail else []),
+                 name=f"Step Text {i + 1}")
+
+
+def _matrix(slide, s, t):
+    """A 2x2 matrix: four labelled quadrants (`layout: matrix`, four items; optional `x:` / `y:` axis names in
+    `eyebrow:`-style lines are not needed - the quadrant headings carry the meaning)."""
+    items = [_split_item(g) for g in O.groups(s["bullets"])][:4]
+    gap = 0.22
+    area_w, y0, area_h = W - 2 * MX, 1.95, 4.75
+    cw, ch = (area_w - gap) / 2, (area_h - gap) / 2
+    # the two coloured quadrants: accent, and accent2 when text reads on it comfortably (else the accent again)
+    second = t["accent2"] if _contrast(_on(t["accent2"]), t["accent2"]) >= 5.0 else t["accent"]
+    fills = [t["accent"], t["surface"], t["surface"], second]
+    body_size = min([_fit([d], cw - 0.7, ch - 1.0, 17, 11, gap_pt=0, font=t["body"]) for _, d in items if d] or [15])
+    for i, (head, detail) in enumerate(items):
+        r, c = divmod(i, 2)
+        x, y = MX + c * (cw + gap), y0 + r * (ch + gap)
+        fill = fills[i]
+        box = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(cw), Inches(ch))
+        box.name = f"Quadrant {i + 1}"
+        box.fill.solid()
+        box.fill.fore_color.rgb = _rgb(fill)
+        box.line.color.rgb = _rgb(t["line"])
+        box.line.width = Pt(1)
+        box.shadow.inherit = False
+        tf = box.text_frame
+        _frame(tf, MSO_ANCHOR.TOP, (0.35, 0.28, 0.35, 0.2))
+        tf.text = head
+        tf.paragraphs[0].space_after = Pt(8)
+        _style_runs(tf.paragraphs[0], t["head"], _fit([head], cw - 0.7, 0.7, 22, 14, gap_pt=0, font=t["head"], bold=True),
+                    _on(fill) if fill != t["surface"] else t["text"], True)
+        if detail:
+            p = tf.add_paragraph()
+            p.text = detail
+            _style_runs(p, t["body"], body_size, _on(fill) if fill != t["surface"] else _ink(t["muted"], t["surface"], 4.5))
+
+
+def _funnel(slide, s, t):
+    """3-6 stages narrowing from top to bottom, each `Stage | value` or `Stage: value` (`layout: funnel`)."""
+    items = [_split_item(g) for g in O.groups(s["bullets"])][:6]
+    n = len(items)
+    y0, area_h, gap = 1.95, 4.75, 0.1
+    bh = (area_h - gap * (n - 1)) / n
+    max_w, min_w = 7.4, 3.0
+    cx = MX + max_w / 2
+    colors = _series_colors(t)
+    for i, (head, detail) in enumerate(items):
+        w = max_w - (max_w - min_w) * (i / max(1, n - 1))
+        y = y0 + i * (bh + gap)
+        col = colors[i % 2] if i < 2 else _ink(colors[i % 2], t["bg"], 1.0)
+        bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(cx - w / 2), Inches(y), Inches(w), Inches(bh))
+        bar.name = f"Stage {i + 1}"
+        bar.fill.solid()
+        bar.fill.fore_color.rgb = _rgb(col)
+        bar.line.fill.background()
+        bar.shadow.inherit = False
+        tf = bar.text_frame
+        _frame(tf, MSO_ANCHOR.MIDDLE, (0.15, 0.03, 0.15, 0.03))
+        tf.text = head
+        tf.paragraphs[0].alignment = PP_ALIGN.CENTER
+        _style_runs(tf.paragraphs[0], t["head"], _fit([head], w - 0.4, bh - 0.1, 20, 11, gap_pt=0, font=t["head"], bold=True),
+                    _on(col), True)
+        if detail:
+            _textbox(slide, MX + max_w + 0.4, y, W - 2 * MX - max_w - 0.4, bh,
+                     [(detail, t["body"], _fit([detail], W - 2 * MX - max_w - 0.5, bh, 18, 11, gap_pt=0, font=t["body"]),
+                       _ink(t["text"], t["bg"], 4.5), False, False, 0)],
+                     name=f"Stage Text {i + 1}", anchor=MSO_ANCHOR.MIDDLE)
 
 
 def _comparison(slide, s, t):
@@ -1420,12 +1606,55 @@ def _split_bullets(s: dict, t: dict) -> list:
     return _split_bullets(first, t) + _split_bullets(second, t)
 
 
+def _group_overflows(s: dict, t: dict) -> bool:
+    """True when a card / timeline slide has an item whose text cannot fit its box even at the smallest size.
+    Uses the same box sizes as _cards and _timeline."""
+    items = [_heading_body(g) for g in O.groups(s["bullets"])]
+    n = len(items)
+    if not n:
+        return False
+    if s["kind"] == "cards":
+        cols = n if n <= 4 else 3
+        rows = math.ceil(n / cols)
+        cw = min((W - 2 * MX - 0.3 * (cols - 1)) / cols, 4.2 if cols == 2 else 9)
+        ch = min((4.75 - 0.3 * (rows - 1)) / rows, 3.7)
+        w, h = cw - 0.56, max(ch - 1.2 - 0.8, 0.8)
+    else:                                     # timeline
+        w, h = (W - 2 * MX) / n - 0.3, 2.6
+    return any(kids and not M.fits(kids, t["body"], 11, w, h, gap_pt=6) for _, kids in items)
+
+
+def _split_groups(s: dict, t: dict) -> list:
+    """A cards / timeline slide whose text does not fit is split into two slides ('(cont.)') with fewer, larger boxes,
+    instead of running out of them. Needs at least four items (two per slide); the change is reported (notes.py)."""
+    top = O.groups(s["bullets"])
+    if len(top) < 4 or not _group_overflows(s, t):
+        return [s]
+    half = (len(top) + 1) // 2
+
+    def lines(part):
+        out = []
+        for head, kids in part:
+            if head:
+                out.append(head)
+            out += ["\t" + k for k in kids]
+        return out
+    from . import notes
+    notes.note(f"'{s['title'][:40]}': {len(top)} {s['kind']} had too much text for one slide, so they were split over two")
+    rest_title = s["title"] if s["title"].endswith("(cont.)") else s["title"] + " (cont.)"
+    first = {**s, "bullets": lines(top[:half])}
+    second = {**s, "bullets": lines(top[half:]), "title": rest_title, "notes": "", "subtitle": ""}
+    return _split_groups(first, t) + _split_groups(second, t)
+
+
 def _prepare(slides: list, t: dict) -> list:
-    """Slides after fitting: long bullet lists and long tables are split across slides."""
+    """Slides after fitting: long bullet lists, long tables and over-full card / timeline slides are split across slides."""
     out = []
     for s in slides:
         if s["kind"] == "bullets" and s["bullets"]:
             out += _split_bullets(s, t)
+        elif s["kind"] in ("cards", "timeline") and s["bullets"]:
+            out += _split_groups(s, t)
         elif s["kind"] == "table" and s["table"]:
             plan = _plan_table(s["table"], t["body"])
             for i, (rows, _size, _w, _h) in enumerate(plan):
@@ -1510,7 +1739,8 @@ def _render_slide(prs, lays, s: dict, t: dict, deck_title: str, i: int, sec_no: 
          "timeline": _timeline, "quote": _quote, "table": _table, "chart": _chart,
          "comparison": _comparison, "agenda": _agenda, "gallery": _gallery, "textside": _textside,
          "kpi-grid": _kpi_grid, "chart-kpis": _chart_kpis, "leaderboard": _leaderboard,
-         "roadmap": _roadmap, "dimension-table": _dimension_table}[kind](slide, s, ts)
+         "roadmap": _roadmap, "dimension-table": _dimension_table,
+         "process": _process, "matrix": _matrix, "funnel": _funnel}[kind](slide, s, ts)
     _drop_empty_placeholders(slide)
     if kind not in ("cover", "closing", "section", "full"):
         src = s.get("source") or ""
