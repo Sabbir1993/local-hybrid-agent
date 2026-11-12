@@ -343,6 +343,12 @@ exist; every change saves a NEW file and keeps the original.
 - **Knowledge-base spreadsheets** (`kb_sql`): the same read-only SQL over the Excel / CSV files in the company knowledge base
   (sums, medians, joins between documents), with the same per-user access rules as `kb_query`. Not offered while a cloud model
   answers (rows cannot be screened one by one in SQL); `kb_query` stays for that case.
+  Every sheet of every readable document is one SQL table, named after the document and the tab:
+  `BFSI activity nov 2026.xlsx` + tab `Sheet1` -> `BFSI_activity_nov_2026_Sheet1_Sheet1` (the file extension is dropped,
+  spaces and dashes become underscores). There is no length limit and no character limit, but the name must be written
+  exactly, so `kb_sql` with `describe=true` first is the way to get it - a guessed name now comes back with the list of
+  the tables that do exist. Column names are the header row of the sheet and are matched case-insensitively; a name that
+  matches no column is silently read by SQLite as a text constant, so the result of such a query carries a warning.
 - **Formula engines, in order:** Excel on the user's own PC (through the companion app, `excel.recalc`, v0.2.106+: hidden, macros
   disabled, temporary copy, asks once on that PC), then LibreOffice, then the built-in calculator. The tool result says which one
   checked ("Checked (Excel): ..."); an engine that is missing, slow or denied is skipped silently. `GET /control/sheet_engines`

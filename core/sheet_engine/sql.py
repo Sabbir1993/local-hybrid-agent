@@ -7,6 +7,7 @@ connection is locked: `PRAGMA query_only`, and an authorizer that only lets SELE
 Output is capped (rows and characters) and card numbers are masked before it is returned.
 """
 import datetime as _dt
+import difflib
 import math
 import re
 import sqlite3
@@ -29,7 +30,15 @@ _ALLOWED_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_F
 _DENIED_FUNCTIONS = {"load_extension", "readfile", "writefile", "edit", "fts3_tokenizer",
                      "randomblob", "zeroblob"}       # one call can allocate gigabytes; nothing here needs them
 MAX_VALUE_BYTES = 1_000_000                          # longest text / blob a query may build (SQLITE_LIMIT_LENGTH)
+_MAX_HINT_NAMES = 20                                 # table names listed in an error message
 _DMY = re.compile(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$")
+_QUOTED_RX = re.compile(r'"([^"]+)"')
+_ALIAS_RX = re.compile(r'\bAS\s+"([^"]+)"', re.I)
+_ALIAS_PLAIN_RX = re.compile(r"\bAS\s+([A-Za-z_]\w*)", re.I)   # AS activities, AS total_proposal
+_CTE_RX = re.compile(r'(?:\bWITH\b|,)\s*"?([A-Za-z_]\w*)"?\s+AS\s*\(', re.I)
+_CMP_LIT_RX = re.compile(r'(?:<=|>=|<>|!=|=|<|>|\bLIKE\b|\bGLOB\b)\s*"[^"]*"', re.I)
+_IN_LIST_RX = re.compile(r"\bIN\s*\([^)]*\)", re.I | re.S)
+_PATHY_RX = re.compile(r"[$[\]{}\\]")                       # a path or an expression, not a column name
 
 
 class SqlError(Exception):
@@ -205,14 +214,20 @@ def _build(paths: list) -> Workbook:
 
 
 def from_tables(items: list) -> Workbook:
-    """A Workbook from in-memory tables: [(name, source label, headers, rows)] (the knowledge base's sheets). Not cached:
-    the rows behind it can change and are access-controlled by the caller."""
+    """A Workbook from in-memory tables: [(name, source label, headers, rows)] or [(name, label, headers, rows, sheet)]
+    (the knowledge base's sheets). Not cached: the rows behind it can change and are access-controlled by the caller.
+
+    `name` becomes the SQL table name (made a safe identifier), `label` the document it came from and `sheet` the tab inside
+    it - the model needs the sheet name to tell two tabs of the same document apart.
+    """
     conn = _connect()
     used, tables = set(), []
-    for name, label, headers, rows in items:
+    for item in items:
+        name, label, headers, rows = item[0], item[1], item[2], item[3]
+        sheet = item[4] if len(item) > 4 else name
         tname = _ident(name, used)
         cols = _add_table(conn, tname, headers, rows)
-        tables.append({"name": tname, "sheet": name, "file": label, "cols": cols, "rows": len(rows), "truncated": False,
+        tables.append({"name": tname, "sheet": sheet, "file": label, "cols": cols, "rows": len(rows), "truncated": False,
                        "formulas": {}, "preamble": []})
     _lock(conn)
     return Workbook(conn, tables, [])
@@ -282,6 +297,79 @@ def _fmt(v) -> str:
     return s if len(s) <= CELL_WIDTH else s[: CELL_WIDTH - 1] + "…"
 
 
+# ---- explaining a failed query --------------------------------------------------------------------------------------
+def _known_names(wb: Workbook) -> set:
+    names = set()
+    for t in wb.tables:
+        names.add(t["name"].lower())
+        for c, _ in t["cols"]:
+            names.add(c.lower())
+    return names
+
+
+def _unknown_quoted(wb: Workbook, sql: str) -> list:
+    """Double-quoted names in the statement that are no table, no column, no alias and no CTE name.
+
+    SQLite reads such a name as a text constant instead of failing, so a mistyped column ("Kam Name" for "KAM NAME")
+    gives a plausible but wrong answer instead of an error. Names that stand where a value belongs (= "Dhaka") are
+    text on purpose and are not reported.
+    """
+    aliases = {a.lower() for a in _ALIAS_RX.findall(sql)} | {a.lower() for a in _ALIAS_PLAIN_RX.findall(sql)}
+    ctes = {c.lower() for c in _CTE_RX.findall(sql)}
+    known = _known_names(wb) | aliases | ctes
+    text = _ALIAS_RX.sub(" ", sql)
+    text = _IN_LIST_RX.sub(" ", text)
+    text = _CMP_LIT_RX.sub(" ", text)
+    out = []
+    for m in _QUOTED_RX.finditer(text):
+        name = m.group(1)
+        if _PATHY_RX.search(name):            # a json path or an expression, not a column that was typed wrong
+            continue
+        if text[:m.start()].rstrip().endswith("("):   # an argument of a function: a value, not a column
+            continue
+        if name.lower() not in known and name not in out:
+            out.append(name)
+    return out
+
+
+def _explain(wb: Workbook, sql: str, msg: str) -> str:
+    """sqlite's 'no such table/column' says nothing about what does exist. Name the tables and columns that are loaded,
+    so a model that guessed a name corrects itself instead of guessing again."""
+    names = [t["name"] for t in wb.tables]
+    listed = ", ".join(names[:_MAX_HINT_NAMES])
+    if len(names) > _MAX_HINT_NAMES:
+        listed += f" (+{len(names) - _MAX_HINT_NAMES} more)"
+    m = re.search(r"no such table:\s*(.+)", msg, re.I)
+    if m:
+        wanted = m.group(1).strip().strip("\"`[]")
+        close = difflib.get_close_matches(wanted, names, n=3, cutoff=0.4)
+        out = [f"{msg}."]
+        if close:
+            out.append("Did you mean: " + ", ".join(close) + "?")
+        out.append(f"Available tables: {listed or '(none)'}.")
+        out.append("Use those exact names (describe=true lists them with their columns).")
+        return " ".join(out)
+    m = re.search(r"no such column:\s*(.+)", msg, re.I)
+    if m:
+        wanted = m.group(1).strip().strip("\"`[]")
+        low = sql.lower()
+        owner, cols = "", []
+        for t in wb.tables:                       # the table the statement reads (the longest name that fits)
+            if len(t["name"]) > 2 and t["name"].lower() in low and len(t["name"]) > len(owner):
+                owner, cols = t["name"], [c for c, _ in t["cols"]]
+        out = [f"{msg}."]
+        if cols:
+            close = difflib.get_close_matches(wanted, cols, n=3, cutoff=0.4)
+            if close:
+                out.append("Did you mean: " + ", ".join(close) + "?")
+            out.append(f"Columns of {owner}: " + ", ".join(f'"{c}"' for c in cols[:40]) + ".")
+        else:
+            out.append(f"Available tables: {listed or '(none)'}.")
+        out.append("Use those exact names (describe=true lists them).")
+        return " ".join(out)
+    return msg
+
+
 def query(wb: Workbook, sql: str, limit: int = DEFAULT_ROWS) -> str:
     sql = str(sql or "").strip().rstrip(";").strip()
     if not sql:
@@ -302,7 +390,7 @@ def query(wb: Workbook, sql: str, limit: int = DEFAULT_ROWS) -> str:
                 raise SqlError(f"the query ran longer than {QUERY_TIMEOUT_S:.0f}s: filter earlier or select fewer rows")
             if "not authorized" in msg:
                 raise SqlError("that statement is not allowed (read-only SELECT over the loaded tables)")
-            raise SqlError(msg)
+            raise SqlError(_explain(wb, sql, msg))
         except (sqlite3.Warning, sqlite3.ProgrammingError, sqlite3.DatabaseError) as e:
             raise SqlError("that statement is not allowed (read-only SELECT)" if "authoriz" in str(e) else str(e))
         finally:
@@ -315,5 +403,10 @@ def query(wb: Workbook, sql: str, limit: int = DEFAULT_ROWS) -> str:
     text += f"\n({len(rows)} row{'s' if len(rows) != 1 else ''}{', more rows exist - add LIMIT/filters or aggregate' if more else ''})"
     if len(text) > MAX_OUT_CHARS:
         text = text[:MAX_OUT_CHARS].rsplit("\n", 1)[0] + "\n... (output cut)"
+    unknown = _unknown_quoted(wb, sql)            # after the cap: the warning must survive a cut table
+    if unknown:
+        text += ("\nwarning: " + ", ".join(f'"{u}"' for u in unknown[:5]) + " is not a table or column of the loaded data. "
+                 f"SQLite reads an unknown double-quoted name as the text '{unknown[0]}', so that part of the query counts a "
+                 "constant instead of a column. Use the exact names from describe=true.")
     from ..pan import mask_pans
     return mask_pans(text)[0]

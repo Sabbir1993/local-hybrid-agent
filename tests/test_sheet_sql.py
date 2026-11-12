@@ -102,6 +102,57 @@ class Queries(unittest.TestCase):
         self.assertIn("more rows exist", out)
 
 
+class BadNames(unittest.TestCase):
+    """A model that guesses a table or column name gets told what does exist, and a mistyped column is reported:
+    SQLite reads an unknown double-quoted name as a text constant, so it would otherwise answer with a plausible lie."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = build(Path(self.tmp.name))
+        sql.clear_cache()
+        self.wb = sql.load(self.path)
+
+    def q(self, text, **kw):
+        return sql.query(self.wb, text, **kw)
+
+    def test_a_wrong_table_name_lists_the_tables_that_exist(self):
+        with self.assertRaises(sql.SqlError) as cm:
+            self.q("SELECT * FROM Sale")
+        msg = str(cm.exception)
+        self.assertIn("no such table", msg)
+        self.assertIn("Sales", msg)                 # what does exist
+        self.assertIn("Did you mean", msg)           # the name that was probably meant
+        self.assertIn("describe=true", msg)
+
+    def test_a_wrong_column_name_lists_the_columns_that_exist(self):
+        with self.assertRaises(sql.SqlError) as cm:
+            self.q("SELECT Regoin FROM Sales")          # unquoted: sqlite reports it
+        msg = str(cm.exception)
+        self.assertIn("no such column", msg)
+        self.assertIn('"Region"', msg)
+
+    def test_a_mistyped_column_is_reported_in_the_result(self):
+        out = self.q('SELECT "Regoin", COUNT(*) FROM Sales')
+        self.assertIn("warning", out)
+        self.assertIn("Regoin", out)
+
+    def test_a_text_value_is_not_a_mistyped_column(self):
+        out = self.q('SELECT COUNT(*) FROM Sales WHERE Region = "Dhaka"')
+        self.assertNotIn("warning", out)
+
+    def test_a_quoted_alias_is_not_a_mistyped_column(self):
+        out = self.q('SELECT Region AS "the region", COUNT(*) FROM Sales GROUP BY 1')
+        self.assertNotIn("warning", out)
+
+    def test_a_quoted_alias_of_an_unquoted_one_is_not_a_mistyped_column(self):
+        out = self.q('SELECT Region, COUNT(*) AS n FROM Sales GROUP BY Region ORDER BY "n"')
+        self.assertNotIn("warning", out)
+
+    def test_a_real_column_is_not_reported(self):
+        self.assertNotIn("warning", self.q("SELECT Region, COUNT(*) FROM Sales GROUP BY Region"))
+
+
 class Sandbox(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

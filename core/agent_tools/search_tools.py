@@ -207,6 +207,24 @@ def _kb_scope():
     return True, user, cloud, titles
 
 
+_DOC_EXTS = {".xlsx", ".xlsm", ".xls", ".csv", ".tsv", ".pdf", ".docx", ".doc", ".pptx", ".txt", ".md",
+             ".json", ".html", ".htm"}
+
+
+def _kb_table_name(title: str, sheet: str) -> str:
+    """The SQL table name of a knowledge-base sheet: the document title plus the sheet name.
+
+    The title is the file name the document was uploaded under, so the extension is dropped - the file name identifies the
+    document, ".xlsx" says nothing about its content and only makes the name harder to guess. Everything else is left
+    alone; core/sheet_engine/sql.py turns the rest into a safe identifier (spaces and dashes become underscores).
+    """
+    from pathlib import Path
+    t = str(title or "")
+    p = Path(t)
+    stem = p.stem if p.suffix.lower() in _DOC_EXTS else t
+    return f"{stem}_{sheet}" if sheet else stem
+
+
 @kb_guarded
 async def tool_kb_sql(args: dict) -> str:
     """Read-only SQL (joins, pivots, medians, month buckets) over the Excel/CSV sources the user may read."""
@@ -228,7 +246,8 @@ async def tool_kb_sql(args: dict) -> str:
     for t in tables[:60]:
         rows = [json_row for (json_row,) in db.execute("SELECT cells FROM kb_rows WHERE table_id = ? ORDER BY rownum LIMIT 200000", (t["id"],))]
         cols = t["columns"] or [f"col{i + 1}" for i in range(max((len(_json.loads(r)) for r in rows[:50]), default=1))]
-        items.append((f"{t['title']}_{t['sheet']}" if t["sheet"] else t["title"], t["title"], list(cols), [_json.loads(r) for r in rows]))
+        items.append((_kb_table_name(t["title"], t["sheet"]), t["title"], list(cols), [_json.loads(r) for r in rows],
+                      t["sheet"]))
     try:
         wb = sheet_sql.from_tables(items)
         if args.get("describe") or not args.get("sql"):

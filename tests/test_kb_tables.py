@@ -139,6 +139,24 @@ class KbSqlTests(TableTestBase):
         self.assertIn("Staff_list_Staff", out)
         self.assertIn('"Salary"', out)
 
+    def test_the_table_name_is_the_title_without_the_file_extension(self):
+        titles = {**TITLES, 3: "BFSI activity nov 2026.xlsx"}
+        kb_tables.replace_source(3, kb_structure.rows_to_text([["Kam Name", "Proposal Value", "Client Name"],
+                                                              ["Rahim", "100", "Acme"]], "Sheet1"))
+        out = self.run_sql({"describe": True}, scope=(True, object(), False, titles))
+        self.assertIn("BFSI_activity_nov_2026_Sheet1", out)     # what the model has to write in FROM
+        self.assertNotIn("_xlsx", out)                           # the extension is not part of the name
+        self.assertIn('sheet "Sheet1"', out)                     # the tab, not the table name
+        q = self.run_sql({"sql": 'SELECT "Kam Name", COUNT(*) FROM BFSI_activity_nov_2026_Sheet1 GROUP BY 1'},
+                         scope=(True, object(), False, titles))
+        self.assertIn("| Rahim | 1 |", q)
+
+    def test_a_wrong_table_name_says_which_tables_exist(self):
+        out = self.run_sql({"sql": "SELECT * FROM Staff_list"})
+        self.assertIn("no such table", out)
+        self.assertIn("Staff_list_Staff", out)                  # the name that does exist
+        self.assertIn("Did you mean", out)
+
     def test_sum_avg_median_group_by(self):
         out = self.run_sql({"sql": 'SELECT Dept, COUNT(*) n, SUM(Salary) total, MEDIAN(Salary) med FROM Staff_list_Staff GROUP BY Dept ORDER BY Dept'})
         self.assertIn("| Dhaka | 2 | 150,000 | 75,000 |", out)         # "90,000" and 60000 are both numbers

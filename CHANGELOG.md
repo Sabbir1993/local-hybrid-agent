@@ -4,6 +4,15 @@ Entries are kept short on purpose: this is a local single-dev project and long
 per-commit prose rots faster than it helps. Versioning starts where the repo
 has a tag or release; until then, dates + headline changes.
 
+## 2026-11-12 — KB spreadsheet SQL: names that can be found, and errors that say what exists
+
+- A knowledge-base sheet is one SQL table named after the document and the tab; the file extension is no longer part of the
+  name (`BFSI activity nov 2026.xlsx` + `Sheet1` -> `BFSI_activity_nov_2026_Sheet1_Sheet1`), so the name is the one a person
+  would write. `describe=true` lists the tables with their tab and their columns.
+- A wrong table or column name now answers with the tables and columns that do exist and the closest match, instead of
+  sqlite's bare "no such table". A double-quoted name that matches no column (sqlite reads it as a text constant and returns a
+  plausible but wrong answer) is reported as a warning on the result.
+
 ## 2026-11-03 — BDT conversion, SearXNG search, 3D lane, GPU auto-detect
 
 - Foreign amounts in answers are converted to Taka at a live rate (`core/currency.py`, `fx.*` in app.json); never a symbol swap.
