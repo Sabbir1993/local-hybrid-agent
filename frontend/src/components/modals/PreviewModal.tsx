@@ -49,6 +49,8 @@ export const PreviewModal: React.FC = () => {
 
   // PPTX presentation state
   const [slidesDeck, setSlidesDeck] = useState<{ slides: any[]; width?: number; height?: number } | null>(null);
+  // real page pictures of the deck (drawn by the server through LibreOffice); 0 = not available, the shape preview is used
+  const [pagePics, setPagePics] = useState<number>(0);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -59,6 +61,7 @@ export const PreviewModal: React.FC = () => {
     setSheets({});
     setActiveSheet('');
     setSlidesDeck(null);
+    setPagePics(0);
     setImgSrc(rawUrl);
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -159,6 +162,10 @@ export const PreviewModal: React.FC = () => {
     // 4. PPTX Presentation Parsing
     if (isPptx) {
       setLoading(true);
+      fetch(`/agent/doc-pages?path=${enc}`)
+        .then((r) => (r.ok ? r.json() : { pages: 0 }))
+        .then((d) => setPagePics(Number(d && d.pages) || 0))
+        .catch(() => setPagePics(0));
       fetch(`/agent/slides?path=${enc}`)
         .then(async (r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -529,7 +536,25 @@ export const PreviewModal: React.FC = () => {
 
           {!loading && !error && isPptx && (
             <div className="flex-1 overflow-auto p-6 bg-bg flex flex-col items-center" style={{ background: 'var(--bg, #0b0f19)' }}>
-              {slidesDeck && slidesDeck.slides && slidesDeck.slides.length > 0 ? (
+              {pagePics > 0 ? (
+                <div className="pptx-deck w-full flex flex-col items-center gap-6" style={{ width: '100%', maxWidth: '960px' }}>
+                  {Array.from({ length: pagePics }, (_, i) => (
+                    <div key={i} className="pptx-slide-wrap relative w-full mb-4">
+                      <div className="pptx-slide-num text-xs text-dim mb-1 font-semibold" style={{ color: 'var(--dim, #8b949e)', fontSize: '11px', marginBottom: '4px' }}>Slide {i + 1}</div>
+                      <img
+                        src={`/agent/doc-page?path=${enc}&n=${i + 1}`}
+                        alt={`Slide ${i + 1}`}
+                        loading="lazy"
+                        className="w-full rounded-lg shadow-xl"
+                        style={{ width: '100%', aspectRatio: '16 / 9', objectFit: 'contain', background: '#fff', borderRadius: '8px' }}
+                      />
+                      {slidesDeck?.slides?.[i]?.notes && (
+                        <div className="pptx-notes text-xs text-dim mt-2 italic" style={{ fontSize: '11px', color: 'var(--dim)', marginTop: '4px' }}>📝 {slidesDeck.slides[i].notes}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : slidesDeck && slidesDeck.slides && slidesDeck.slides.length > 0 ? (
                 <div className="pptx-deck w-full flex flex-col items-center gap-6" style={{ width: '100%', maxWidth: '960px' }}>
                   {slidesDeck.slides.map((sl: any, sIdx: number) => {
                     const W = slidesDeck.width || 12192000;

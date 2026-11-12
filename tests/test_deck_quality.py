@@ -104,6 +104,30 @@ class NewLayoutsTests(unittest.TestCase):
         self.assertIn('<a:cs typeface="Nirmala UI"/>', xml)
 
 
+class PagePicturesTests(unittest.TestCase):
+    """/agent/doc-pages and /agent/doc-page: the rendered file is kept per file version; no renderer means 0 pages."""
+    def test_rendered_once_and_counted(self):
+        import io
+        from unittest import mock
+        from reportlab.pdfgen import canvas
+        from routes.agent import preview
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf)
+        for _ in range(3):
+            c.drawString(72, 720, "page")
+            c.showPage()
+        c.save()
+        preview._page_pdfs.clear()
+        with mock.patch("core.doc_tools.render.to_pdf", return_value=buf.getvalue()) as conv:
+            pdf, key = preview._rendered_pdf(b"deck bytes")
+            self.assertIsNone(pdf)
+            self.assertEqual(preview._render_now(b"deck bytes", ".pptx", key)[1], 3)
+            self.assertEqual(preview._rendered_pdf(b"deck bytes")[1], 3)          # second look: from the cache
+            self.assertEqual(conv.call_count, 1)
+        with mock.patch("core.doc_tools.render.to_pdf", return_value=None):
+            self.assertEqual(preview._render_now(b"other", ".pptx", "k"), (None, 0))
+
+
 class BuildNotesTests(unittest.TestCase):
     def test_changes_are_reported(self):
         md = ("# Deck\nsubtitle: s\n---\n## Growth\nchart: bar\n- strong year\n- good team\n---\n## Wide\n"
