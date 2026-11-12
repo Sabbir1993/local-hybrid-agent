@@ -71,7 +71,8 @@ DATA_SQL_SCHEMA = {
                        "pivots with SUM(CASE WHEN ...), GROUP BY several columns, window functions, medians / percentiles "
                        "(MEDIAN, PERCENTILE(col, 0.9), STDEV, MODE), month / quarter buckets with strftime, top-N, ratios. "
                        "Call with describe=true first to see the table and column names. Each sheet is a table; the file name "
-                       "names a table as well, so a name that is not spelled exactly still finds the right sheet; dates are ISO "
+                       "names a table as well, so a name that is not spelled exactly still finds the right sheet; every table "
+                       "also has a short handle (T1) that can be used in FROM - the safest way to name it; dates are ISO "
                        "text, numbers are REAL. SELECT only; never changes the file. Prefer this over data_query for anything "
                        "beyond a single filter / one group-by.",
         "parameters": {
@@ -87,6 +88,37 @@ DATA_SQL_SCHEMA = {
         },
     },
 }
+
+
+def _month_filter(wb, args: dict) -> tuple:
+    """The query with a month filter in it, and a note that says what was filtered.
+
+    A plan for one month ("the November plan") has to be read from that month only; the filter goes into the statement
+    before the grouping. Which date column carries the month: the one the user named, or every date column of the file.
+    """
+    from .. import month_arg
+    from ..sheet_engine import sql as sheet_sql
+    sql = str(args.get("sql") or "")
+    month = str(args.get("month") or "").strip()
+    if not sql or not month:
+        return sql, ""
+    ym = month_arg.parse(month, allow_number=True)
+    if not ym:
+        return sql, f"warning: '{month}' is not a month, so no month filter was applied."
+    cols = sheet_sql.date_columns(wb)
+    want = str(args.get("date_column") or "").strip()
+    if want:
+        pick = [c for c in cols if c.lower() == want.lower()] or [c for c in cols if want.lower() in c.lower()]
+        if not pick:
+            names = [c for t in wb.tables for c, _ in t["cols"]]
+            raise ValueError(f"there is no date column named '{want}' in this file. "
+                             f"Date columns: {', '.join(cols) or '(none)'}. Columns: {', '.join(names[:30])}")
+        cols = pick[:1]
+    if not cols:
+        return sql, (f"warning: this file has no date column, so the {ym} filter could not be applied - "
+                     f"these are all the rows, not only {ym}. Say so in the answer.")
+    cond = " OR ".join(f"strftime('%Y-%m', \"{c}\") = '{ym}'" for c in cols)
+    return sheet_sql.add_where(sql, cond), f"(filtered to {ym} on {', '.join(cols)})"
 
 
 def tool_data_sql(args: dict) -> str:
@@ -110,8 +142,12 @@ def tool_data_sql(args: dict) -> str:
         wb = sheet_sql.load(paths)
         if args.get("describe") or not args.get("sql"):
             return sheet_sql.describe(wb)
-        return sheet_sql.query(wb, args["sql"], args.get("limit") or sheet_sql.DEFAULT_ROWS)
+        sql, month_note = _month_filter(wb, args)
+        out = sheet_sql.query(wb, sql, args.get("limit") or sheet_sql.DEFAULT_ROWS)
+        return out + (f"\n{month_note}" if month_note else "")
     except sheet_sql.SqlError as e:
+        return f"error: {e}"
+    except ValueError as e:
         return f"error: {e}"
     except Exception as e:
         return f"error: could not read the data file ({type(e).__name__})"

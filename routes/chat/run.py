@@ -36,6 +36,7 @@ from core.agent_loop import (
 )
 from core.agent_loop.repair import INVALID_JSON_KEY
 from core.agent_loop.degeneration import RUNAWAY_MSG, sanitize_user_facing_content
+from core.agent_loop.loop_guard import call_signature
 
 # the start of a tool call a model writes as text ("<tool_call>", "<function=write_file>"): never streamed to the reader
 _TOOL_TEXT_RX = re.compile(r"<tool_call>|<function[=:\s]", re.I)
@@ -1636,11 +1637,23 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if not isinstance(args, dict):
                         args = {"query": str(args)}
 
+                    if t_name in ("kb_sql", "data_sql") and not args.get("month"):
+                        # "the November plan" is a month of data, not the whole sheet. The model leaves the month out of
+                        # the query, so the month the user asked for is handed to the tool: it filters the rows before the
+                        # grouping. The model still chooses the date column; date_column wins over this.
+                        from core import month_arg as _month_arg
+                        ym = _month_arg.from_request(last_query)
+                        if ym:
+                            args["month"] = ym
+
                     yield sse("tool_call", {'id': tc_id, 'name': t_name, 'args': args})
 
                     target_cand = (args.get("path") or args.get("file") or args.get("filename")
                                    or args.get("query") or args.get("q") or args.get("url") or "")
-                    call_sig = f"{t_name}:{target_cand}" if target_cand else t_name
+                    # The signature must tell two different calls apart: a tool whose arguments carry no target (kb_sql
+                    # with its SQL, kb_query with its spec) would otherwise look like the same call every time and the
+                    # third one would be refused - three different questions about one spreadsheet is normal work.
+                    call_sig = call_signature(t_name, args)
                     repeat_count = recent_tool_signatures.count(call_sig)
                     recent_tool_signatures.append(call_sig)
                     if len(recent_tool_signatures) > 20:
@@ -1649,7 +1662,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     try:
                         if repeat_count >= 2:
                             turn_limit = min(turn_limit, turn + 1)
-                            res_str = (f"error: `{t_name}` has been called repeatedly for `{target_cand or 'this target'}`. "
+                            what = f"`{target_cand}`" if target_cand else "the same arguments"
+                            res_str = (f"error: `{t_name}` has been called repeatedly with {what}. "
                                        "Stop repeating identical tool calls. Conclude now and provide your final response with any completed files.")
                         elif args.get("_runaway"):
                             # the stream guard cut this call while it was looping: never run it, ask once more, then stop

@@ -346,11 +346,20 @@ exist; every change saves a NEW file and keeps the original.
   Every sheet of every readable document is one SQL table, named after the document and the tab:
   `BFSI activity nov 2026.xlsx` + tab `Sheet1` -> `BFSI_activity_nov_2026_Sheet1_Sheet1` (the file extension is dropped,
   spaces and dashes become underscores). A table answers to more than one name: the file name, the document title and the tab
-  all find the same sheet, so a table name that is not spelled exactly still works. Two names that fit two different tables
-  are refused instead of guessed. There is no length limit and no character limit on the name itself, but `kb_sql` with
-  `describe=true` first is the way to see the exact names - a guessed name comes back with the list of the tables that do
-  exist. Column names are the header row of the sheet and are matched case-insensitively; a name that matches no column is
-  silently read by SQLite as a text constant, so the result of such a query carries a warning.
+  all find the same sheet, so a table name that is not spelled exactly still works - a digit typed wrong ("2_6" for "2026")
+  finds the table as well. Two names that fit two different tables are refused instead of guessed, and a wrong year is
+  refused too: the numbers of the wrong document are worse than an error message. Every table also has a short handle
+  (`K12`) that can be used in `FROM` - that is the safest way to name it, and a handle that no longer exists is an error,
+  never another table. There is no length limit and no character limit on the name itself, but `kb_sql` with `describe=true`
+  first is the way to see the exact names - a guessed name comes back with the list of the tables that do exist. Column names
+  are the header row of the sheet and are matched case-insensitively; a name that matches no column is silently read by
+  SQLite as a text constant, so the result of such a query carries a warning.
+- **A plan for one month is filtered by that month.** "The November plan" is one month of rows, not the whole sheet, and
+  the model does not write that filter by itself: the month in the request is handed to the query (`month=2026-11`) and the
+  filter goes into the statement before the grouping, on every date column of the sheet unless `date_column` names one.
+  The result says what was filtered (`filtered to 2026-11 on Planned Date, Date`). Two months in one request
+  ("November and December") are left to the model, and a sheet without a date column gets a warning rather than a
+  November plan for the whole year.
 - **Formula engines, in order:** Excel on the user's own PC (through the companion app, `excel.recalc`, v0.2.106+: hidden, macros
   disabled, temporary copy, asks once on that PC), then LibreOffice, then the built-in calculator. The tool result says which one
   checked ("Checked (Excel): ..."); an engine that is missing, slow or denied is skipped silently. `GET /control/sheet_engines`

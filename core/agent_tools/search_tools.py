@@ -225,6 +225,40 @@ def _kb_table_name(title: str, sheet: str) -> str:
     return f"{stem}_{sheet}" if sheet else stem
 
 
+def _month_filter(wb, args: dict) -> tuple:
+    """The query with a month filter in it, and a note that says what was filtered.
+
+    A plan for one month ("the November plan") has to be read from that month only. The model does not write the filter
+    by itself, so the month is a parameter of the tool and the filter is put into the statement before the grouping.
+    Which date column carries the month: the one the user named, or every date column of the sheet.
+    """
+    from .. import month_arg
+    from ..sheet_engine import sql as sheet_sql
+    sql = str(args.get("sql") or "")
+    month = str(args.get("month") or "").strip()
+    if not sql or not month:
+        return sql, ""
+    ym = month_arg.parse(month, allow_number=True)
+    if not ym:
+        return sql, f"warning: '{month}' is not a month, so no month filter was applied."
+    cols = sheet_sql.date_columns(wb)
+    want = str(args.get("date_column") or "").strip()
+    if want:
+        pick = [c for c in cols if c.lower() == want.lower()]
+        if not pick:
+            pick = [c for c in cols if want.lower() in c.lower()]
+        if not pick:
+            names = [c for t in wb.tables for c, _ in t["cols"]]
+            raise ValueError(f"there is no date column named '{want}' in this data. "
+                             f"Date columns: {', '.join(cols) or '(none)'}. Columns: {', '.join(names[:30])}")
+        cols = pick[:1]
+    if not cols:
+        return sql, (f"warning: this data has no date column, so the {ym} filter could not be applied - "
+                     f"these are all the rows, not only {ym}. Say so in the answer.")
+    cond = " OR ".join(f"strftime('%Y-%m', \"{c}\") = '{ym}'" for c in cols)
+    return sheet_sql.add_where(sql, cond), f"(filtered to {ym} on {', '.join(cols)})"
+
+
 @kb_guarded
 async def tool_kb_sql(args: dict) -> str:
     """Read-only SQL (joins, pivots, medians, month buckets) over the Excel/CSV sources the user may read."""
@@ -247,13 +281,16 @@ async def tool_kb_sql(args: dict) -> str:
         rows = [json_row for (json_row,) in db.execute("SELECT cells FROM kb_rows WHERE table_id = ? ORDER BY rownum LIMIT 200000", (t["id"],))]
         cols = t["columns"] or [f"col{i + 1}" for i in range(max((len(_json.loads(r)) for r in rows[:50]), default=1))]
         items.append((_kb_table_name(t["title"], t["sheet"]), t["title"], list(cols), [_json.loads(r) for r in rows],
-                      t["sheet"]))
+                      t["sheet"], f"K{t['id']}"))
     try:
         wb = sheet_sql.from_tables(items)
         if args.get("describe") or not args.get("sql"):
             return sheet_sql.describe(wb)
-        out = sheet_sql.query(wb, args["sql"], args.get("limit") or sheet_sql.DEFAULT_ROWS)
+        sql, month_note = _month_filter(wb, args)
+        out = sheet_sql.query(wb, sql, args.get("limit") or sheet_sql.DEFAULT_ROWS)
     except sheet_sql.SqlError as e:
+        return f"error: {e}"
+    except ValueError as e:
         return f"error: {e}"
     try:                                                   # queries can contain names: audit that one ran, store only a hash
         from ..audit import audit_log
@@ -263,7 +300,7 @@ async def tool_kb_sql(args: dict) -> str:
         pass
     from ..knowledge_access import partial_notice
     note = partial_notice(set(titles))
-    return out + (f"\n\n{note}" if note else "")
+    return out + (f"\n{month_note}" if month_note else "") + (f"\n\n{note}" if note else "")
 
 
 @kb_guarded

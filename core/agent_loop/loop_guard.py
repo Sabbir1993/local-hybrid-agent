@@ -71,6 +71,23 @@ def _sig(args) -> str:
         return str(args)[:600]
 
 
+def call_signature(name: str, args) -> str:
+    """What makes two tool calls the same one.
+
+    A tool whose arguments carry no target (kb_sql with its SQL, kb_query with its spec) must not look identical on
+    every call: three different questions about one spreadsheet is normal work, not a loop. A tool that does name a
+    target (write_file with a path, web_search with a query) keeps that target as its signature, so saving the same
+    file again is still caught.
+    """
+    target = ""
+    if isinstance(args, dict):
+        target = (args.get("path") or args.get("file") or args.get("filename")
+                  or args.get("query") or args.get("q") or args.get("url") or "")
+    if target:
+        return f"{name}:{target}"
+    return f"{name}:{_sig(args)}"
+
+
 def _write_key(sig: str) -> str:
     """The logical file a write_file call targets: folder-less name without the unique id the writer appends."""
     try:

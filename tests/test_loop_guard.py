@@ -163,5 +163,29 @@ class RecordedRun(unittest.TestCase):
         self.assertTrue(all(v.level == lg.OK for v in vs))
 
 
+class CallSignature(unittest.TestCase):
+    """What the chat counts as "the same call". Two different questions about one spreadsheet are not the same call."""
+
+    def test_two_different_kb_sql_queries_are_not_the_same_call(self):
+        a = lg.call_signature("kb_sql", {"sql": 'SELECT "Stage" FROM t', "limit": 30})
+        b = lg.call_signature("kb_sql", {"sql": 'SELECT "Communication Type" FROM t', "limit": 30})
+        self.assertNotEqual(a, b)
+
+    def test_the_same_kb_sql_query_is_the_same_call(self):
+        a = lg.call_signature("kb_sql", {"sql": "SELECT 1 FROM t", "limit": 30})
+        b = lg.call_signature("kb_sql", {"sql": "SELECT 1 FROM t", "limit": 30})
+        self.assertEqual(a, b)
+
+    def test_a_call_with_a_target_is_identified_by_it(self):
+        a = lg.call_signature("write_file", {"path": "report.md", "content": "x"})
+        b = lg.call_signature("write_file", {"path": "report.md", "content": "y"})
+        self.assertEqual(a, b)                     # the same document, however its content differs
+
+    def test_different_documents_are_different_calls(self):
+        a = lg.call_signature("write_file", {"path": "one.md", "content": "x"})
+        b = lg.call_signature("write_file", {"path": "two.md", "content": "x"})
+        self.assertNotEqual(a, b)
+
+
 if __name__ == "__main__":
     unittest.main()

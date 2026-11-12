@@ -210,6 +210,36 @@ class TableNames(unittest.TestCase):
         out = self.q('WITH Targets AS (SELECT "Region" FROM Sales) SELECT COUNT(*) FROM Targets')
         self.assertIn("| 5 |", out)                     # the CTE, not the Targets sheet (2 rows)
 
+    def test_a_digit_typed_wrong_finds_the_table(self):
+        """'2026' typed as '2_6' is the same name with a wrong digit: the letters are the same and the digits fit."""
+        wb = sql.from_tables([("BFSI_activity_nov_2026_Sheet1", "BFSI activity nov 2026.xlsx",
+                               ["Kam Name", "Proposal Value"], [["Rahim", 100]], "Sheet1", "K7")])
+        out = sql.query(wb, 'SELECT "Kam Name", SUM("Proposal Value") FROM BFSI_activity_nov_2_6_Sheet1 GROUP BY 1')
+        self.assertIn("| Rahim | 100 |", out)
+
+    def test_the_table_that_was_read_is_reported(self):
+        wb = sql.from_tables([("BFSI_activity_nov_2026_Sheet1", "BFSI activity nov 2026.xlsx",
+                               ["Kam Name", "Proposal Value"], [["Rahim", 100]], "Sheet1", "K7")])
+        out = sql.query(wb, 'SELECT COUNT(*) FROM "BFSI_activity_nov_2_6_Sheet1"')
+        self.assertIn("note: the table name was read as", out)
+
+    def test_a_wrong_year_is_not_read_as_another_year(self):
+        """The digits of a wrong year do not fit the year of the table, so nothing is read."""
+        wb = sql.from_tables([("BFSI_activity_nov_2026_Sheet1", "BFSI activity nov 2026.xlsx",
+                               ["Kam Name"], [["Rahim"]], "Sheet1", "K7")])
+        with self.assertRaises(sql.SqlError) as cm:
+            sql.query(wb, 'SELECT * FROM "BFSI_activity_nov_2027_Sheet1"')
+        self.assertIn("no such table", str(cm.exception))
+
+    def test_a_handle_names_the_table(self):
+        out = self.q("SELECT COUNT(*) FROM T1")
+        self.assertIn("| 5 |", out)
+
+    def test_a_handle_that_does_not_exist_is_an_error(self):
+        with self.assertRaises(sql.SqlError) as cm:
+            self.q("SELECT * FROM T9")
+        self.assertIn("no such table", str(cm.exception))
+
     def test_the_query_itself_is_never_changed_beyond_the_table_name(self):
         out = self.q('SELECT Region, COUNT(*) n FROM Sales GROUP BY Region ORDER BY Region')
         self.assertIn("| Dhaka | 3 |", out)

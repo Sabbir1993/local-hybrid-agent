@@ -280,7 +280,10 @@ AGENT_TOOLS = [
                            "pivots with SUM(CASE WHEN ...), sums / averages / medians / percentiles, several group-bys, month "
                            "buckets with strftime, top-N. Call with describe=true first to see the table and column names. "
                            "A table is named after its document and its tab; the file name of the document names the table as "
-                           "well, so a table name that is not spelled exactly still finds the right sheet. "
+                           "well, so a table name that is not spelled exactly still finds the right sheet. Every table also has "
+                           "a short handle (K12) that can be used in FROM - that is the safest way to name it. "
+                           "For a plan of one month ('the November plan') pass month=2026-11: the month filter is applied "
+                           "to the rows before the grouping, on every date column of the sheet unless date_column names one. "
                            "Use kb_query for a simple count or list; use this for anything that needs totals, ratios or joins. "
                            "Not available while a cloud model answers.",
             "parameters": {
@@ -290,6 +293,11 @@ AGENT_TOOLS = [
                     "source": {"type": "string", "description": "Only tables whose document title or sheet name contains this text"},
                     "sql": {"type": "string", "description": "one SELECT (or WITH ... SELECT) statement"},
                     "limit": {"type": "integer", "description": "max rows returned (default 50, max 200)"},
+                    "month": {"type": "string", "description": "only this month of data, e.g. '2026-11' or 'November 2026'. "
+                                  "Use it whenever the question is about one month ('the November plan'): the filter is "
+                                  "applied to the rows before the grouping, so the totals are that month's"},
+                    "date_column": {"type": "string", "description": "the date column the month filter reads; without it every "
+                                         "date column of the sheet is used"},
                 },
             },
         },

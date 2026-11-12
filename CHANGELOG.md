@@ -12,6 +12,13 @@ has a tag or release; until then, dates + headline changes.
 - A table answers to the file name, the document title and the tab as well, so a name the model spells its own way
   (`BFSI_activity_nov_20,2026_Sheet1`, with the comma still in it) finds the sheet instead of failing. Two names that fit two
   different tables are refused, never guessed, and a name the statement defines itself (a CTE) is left alone.
+- Every table gets a short handle (`K12`, the row id of the sheet) that can be used in FROM: the model does not have to
+  retype a long name, and a handle that no longer exists is an error, never another table. A digit typed wrong ("2_6" for
+  "2026") still finds the sheet, but a wrong year ("2027") is refused.
+- The chat refused a third call of a tool whose arguments carry no target (kb_sql): every query looked like the same call,
+  so three different questions about one spreadsheet ended the run. The call signature now carries the arguments.
+- A plan for one month is filtered by that month: "the November plan" hands the month to the query, which filters the rows
+  before the grouping on every date column of the sheet (or the one the user names) and says what it filtered.
 - A wrong table or column name now answers with the tables and columns that do exist and the closest match, instead of
   sqlite's bare "no such table". A double-quoted name that matches no column (sqlite reads it as a text constant and returns a
   plausible but wrong answer) is reported as a warning on the result.
