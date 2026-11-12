@@ -85,6 +85,37 @@ class ModelFolderTests(unittest.TestCase):
         self.assertEqual(engine_of(prof), "vllm")
         self.assertEqual(prof["model_path"], str(d))
 
+    def test_display_name(self):
+        self.assertEqual(vllm.display_name(self.folder("Qwen3-8B-AWQ")), "Qwen3-8B-AWQ")
+        d = self.folder("hf")
+        d.joinpath("config.json").write_text(json.dumps({"_name_or_path": "Qwen/Qwen3-14B"}))
+        self.assertEqual(vllm.display_name(d), "Qwen3-14B")
+        d.joinpath("config.json").write_text(json.dumps({"architectures": ["X"]}))
+        self.assertEqual(vllm.display_name(d), "hf")
+        d.joinpath("config.json").write_text("{not json")
+        self.assertEqual(vllm.display_name(d), "hf")
+        d.joinpath("config.json").write_text(json.dumps({"_name_or_path": "."}))
+        self.assertEqual(vllm.display_name(d), "hf")
+
+    def test_nested_folder_display_and_served_name(self):
+        from core import profiles
+        saved = (profiles.MODELS_DIR, list(profiles._extra_roots))
+        profiles.MODELS_DIR = self.root
+        profiles._extra_roots.clear()
+        try:
+            (self.root / "hf").mkdir()
+            sub = self.root / "hf" / "Qwen3-32B-AWQ"
+            sub.mkdir()
+            (sub / "config.json").write_text("{}")
+            (sub / "model.safetensors").write_bytes(b"x")
+            found = profiles.discover_models()
+            self.assertEqual([(f.name, folder) for f, folder in found], [("Qwen3-32B-AWQ", "hf")])
+            self.assertEqual(vllm.display_name(found[0][0]), "Qwen3-32B-AWQ")
+            self.assertEqual(vllm.served_name({"model_path": str(sub)}), "Qwen3-32B-AWQ")
+        finally:
+            profiles.MODELS_DIR = saved[0]
+            profiles._extra_roots[:] = saved[1]
+
     def test_chat_template_from_folder(self):
         from core import reasoning
         d = self.folder()

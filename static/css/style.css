@@ -890,6 +890,30 @@ header .icon-btn[data-tip]:focus-visible::after {
   color: #0f766e;
 }
 
+/* Engine pills: which runtime the model file runs on */
+.cap-pill.engine-vllm {
+  background: rgba(236, 72, 153, 0.12);
+  border: 1px solid rgba(236, 72, 153, 0.28);
+  color: #f472b6;
+}
+[data-theme="light"] .cap-pill.engine-vllm,
+[data-theme="ssl-light"] .cap-pill.engine-vllm {
+  background: #fce7f3;
+  border-color: #fbcfe8;
+  color: #be185d;
+}
+.cap-pill.engine-gguf {
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: #94a3b8;
+}
+[data-theme="light"] .cap-pill.engine-gguf,
+[data-theme="ssl-light"] .cap-pill.engine-gguf {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #475569;
+}
+
 /* Inline capability icon in cfg-item labels */
 .cfg-cap-icon {
   display: inline-flex;

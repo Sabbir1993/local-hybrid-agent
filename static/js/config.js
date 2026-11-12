@@ -5,6 +5,24 @@ const CFG_DEFAULTS = {
   kvps: 0, cru: 256, cram: 0, mmap: true,
 };
 
+// One-line plain-words explanations, used on the capability pills and in the model tooltips
+const CAP_TIPS = {
+  vision: 'Vision: can read images you attach',
+  tools: 'Tool Use: can call tools (search, files, data)',
+  mtp: 'MTP: has a draft model for faster output (llama.cpp)',
+  reasoning: 'Reasoning: can think before answering; level is set in chat',
+  vllm: 'Format: Hugging Face model folder — runs on vLLM only',
+  gguf: 'Format: GGUF file — runs on llama.cpp (vLLM experimental)',
+};
+
+// Engine pill (first in the list) for a local model option: "vLLM" for a Hugging Face folder, "GGUF" for a .gguf file
+function _engineBadge(o) {
+  const f = o && o.dataset && o.dataset.format;
+  if (f === 'hf') return `<span class="cap-pill engine-vllm" title="${CAP_TIPS.vllm}">vLLM</span>`;
+  if (f === 'gguf') return `<span class="cap-pill engine-gguf" title="${CAP_TIPS.gguf}">GGUF</span>`;
+  return '';
+}
+
 async function loadProfiles() {
   const sel = $('profile');
   if (!sel) return;
@@ -58,8 +76,9 @@ async function loadProfiles() {
     locals.forEach(m => {
       const o = document.createElement('option');
       o.value = m.path;
-      const base = (m.folder || m.name || '').trim();
-      const name = m.folder && perFolder[m.folder] > 1 ? `${base} · ${m.name}` : base;
+      const isHf = m.format === 'hf';
+      const base = (isHf ? (m.display || m.name || '') : (m.folder || m.name || '')).trim();
+      const name = !isHf && m.folder && perFolder[m.folder] > 1 ? `${base} · ${m.name}` : base;
       const shortName = name.length > 28 ? (name.slice(0, 28) + '...') : name;
       // a split GGUF is one model in several files (llama.cpp loads them all from part 1): show its full size and parts
       const size = (m.size_gb != null ? ` · ${m.size_gb}GB` : '') + (m.parts > 1 ? ` · ${m.parts} parts` : '');
@@ -68,12 +87,23 @@ async function loadProfiles() {
       if (m.tools_available) tags.push('🔨 Tools');
       if (m.mtp_available) tags.push('⚡ MTP');
       if (m.reasoning_available) tags.push('◵ Reasoning');
-      if (m.format === 'hf') tags.push('vLLM folder');
       const tagStr = tags.length ? (' · ' + tags.join(' ')) : '';
       o.textContent = `${shortName}${size}${tagStr}`;
       const notes = [m.mtp_note, m.mmproj_note].filter(Boolean);
-      o.title = `${m.folder ? m.folder + '/' : ''}${m.name}${size}${tagStr}` +
-        (notes.length ? `\n⚠ Not attached: ${notes.join('; ')}` : '');
+      const tipLines = [
+        base,
+        `${isHf ? 'Folder' : 'File'}: ${m.folder ? m.folder + '/' : ''}${m.name}`,
+        `Size: ${m.size_gb != null ? m.size_gb + ' GB' : 'unknown'}${m.parts > 1 ? ` in ${m.parts} parts` : ''}`,
+        isHf ? CAP_TIPS.vllm : CAP_TIPS.gguf,
+      ];
+      if (m.mmproj_available) tipLines.push(CAP_TIPS.vision);
+      if (m.tools_available) tipLines.push(CAP_TIPS.tools);
+      if (m.mtp_available) tipLines.push(CAP_TIPS.mtp);
+      if (m.reasoning_available) tipLines.push(CAP_TIPS.reasoning);
+      if (notes.length) tipLines.push(`⚠ Not attached: ${notes.join('; ')}`);
+      o.title = tipLines.join('\n');
+      o.dataset.format = m.format || 'gguf';
+      o.dataset.engines = (m.engines || []).join(',');
       o.dataset.mtp = m.mtp_available ? '1' : '';
       o.dataset.mtpPath = m.mtp_draft_path || '';
       o.dataset.vision = m.mmproj_available ? '1' : '';
@@ -138,21 +168,22 @@ function updateModelCapabilitiesBar(caps) {
 
   let html = '';
   if (hasVision) {
-    html += `<span class="cap-pill vision" title="Vision Capable (Multimodal Projector)">${visionSvg} Vision</span>`;
+    html += `<span class="cap-pill vision" title="${CAP_TIPS.vision}">${visionSvg} Vision</span>`;
   }
   if (hasTools) {
-    html += `<span class="cap-pill tools" title="Tool Calling / Function Calling Supported">${toolsSvg} Tool Use</span>`;
+    html += `<span class="cap-pill tools" title="${CAP_TIPS.tools}">${toolsSvg} Tool Use</span>`;
   }
   if (hasMtp) {
-    html += `<span class="cap-pill mtp" title="MTP Speculative Decoding Draft Detected">${mtpSvg} MTP</span>`;
+    html += `<span class="cap-pill mtp" title="${CAP_TIPS.mtp}">${mtpSvg} MTP</span>`;
   }
   if (hasReasoning) {
-    html += `<span class="cap-pill reasoning" title="Reasoning / Chain-of-Thought Model">${reasoningSvg} Reasoning</span>`;
+    html += `<span class="cap-pill reasoning" title="${CAP_TIPS.reasoning}">${reasoningSvg} Reasoning</span>`;
   }
 
   if (!html) {
     html = `<span style="font-size:11px; color:var(--dim); font-style:italic;">None detected</span>`;
   }
+  html = _engineBadge(opt) + html;
 
   container.innerHTML = html;
   row.style.display = 'flex';
@@ -222,18 +253,18 @@ function _createPickerItem(o, sel, dd) {
   const item = document.createElement('button');
   item.type = 'button';
   item.className = 'model-picker-item' + (o.value === sel.value ? ' active' : '');
-  item.title = raw + (o.dataset.provider ? ` (${o.dataset.provider})` : '');
+  item.title = o.title || (raw + (o.dataset.provider ? ` (${o.dataset.provider})` : ''));
 
   const visionSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>`;
   const toolsSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M19.7 4.3a2.5 2.5 0 0 0-3.5 0l-2.1 2.1 3.5 3.5 2.1-2.1a2.5 2.5 0 0 0 0-3.5zM13 7.4 4.7 15.7a1 1 0 0 0 0 1.4l2.2 2.2a1 1 0 0 0 1.4 0L16.6 11 13 7.4z"/></svg>`;
   const mtpSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5h6L9.5 22l9-12h-6.5L13 2z"/></svg>`;
   const reasoningSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="3" x2="12" y2="21"/></svg>`;
 
-  let caps = '';
-  if (o.dataset.vision === '1') caps += `<span class="cap-pill vision" title="Vision">${visionSvg} Vision</span>`;
-  if (o.dataset.tools === '1') caps += `<span class="cap-pill tools" title="Tool Use">${toolsSvg} Tool Use</span>`;
-  if (o.dataset.mtp === '1') caps += `<span class="cap-pill mtp" title="MTP">${mtpSvg} MTP</span>`;
-  if (o.dataset.reasoning === '1') caps += `<span class="cap-pill reasoning" title="Reasoning">${reasoningSvg} Reasoning</span>`;
+  let caps = _engineBadge(o);
+  if (o.dataset.vision === '1') caps += `<span class="cap-pill vision" title="${CAP_TIPS.vision}">${visionSvg} Vision</span>`;
+  if (o.dataset.tools === '1') caps += `<span class="cap-pill tools" title="${CAP_TIPS.tools}">${toolsSvg} Tool Use</span>`;
+  if (o.dataset.mtp === '1') caps += `<span class="cap-pill mtp" title="${CAP_TIPS.mtp}">${mtpSvg} MTP</span>`;
+  if (o.dataset.reasoning === '1') caps += `<span class="cap-pill reasoning" title="${CAP_TIPS.reasoning}">${reasoningSvg} Reasoning</span>`;
   const capsWrap = caps ? `<div class="mpi-caps">${caps}</div>` : '';
 
   item.innerHTML = `<span class="mpi-icon">${isCloud ? '☁️' : '🖥'}</span>` +
@@ -332,6 +363,8 @@ function renderModelPicker() {
       label.textContent = _mpShorten(raw, 26);
       label.title = raw + (cur.dataset.provider ? ` (${cur.dataset.provider})` : '');
     }
+    const pickBtn = $('model-picker-btn');
+    if (pickBtn) pickBtn.title = cur.title || '';
     const claudeTxt = $('claude-model-text');
     if (claudeTxt) {
       claudeTxt.textContent = _mpShorten(raw, 26);
@@ -345,7 +378,7 @@ function renderModelPicker() {
       const mtpSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5h6L9.5 22l9-12h-6.5L13 2z"/></svg>`;
       const reasoningSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="3" x2="12" y2="21"/></svg>`;
 
-      let b = '';
+      let b = _engineBadge(cur);
       if (cur.dataset.vision === '1') b += `<span class="cap-pill vision">${visionSvg} Vision</span>`;
       if (cur.dataset.tools === '1') b += `<span class="cap-pill tools">${toolsSvg} Tool Use</span>`;
       if (cur.dataset.mtp === '1') b += `<span class="cap-pill mtp">${mtpSvg} MTP</span>`;
@@ -363,6 +396,8 @@ function renderModelPicker() {
       claudeTxt.textContent = 'Select model';
       claudeTxt.title = 'Select a model';
     }
+    const pickBtn = $('model-picker-btn');
+    if (pickBtn) pickBtn.title = '';
     const capsEl = $('model-picker-caps');
     if (capsEl) capsEl.innerHTML = '';
   }
@@ -475,7 +510,7 @@ function applyCloudConfigUI(c) {
     <b>${esc(c.provider || '')}</b> (cloud) — llama-server launch options don't apply.
     Use the <b>Cloud Models</b> card below to bind lanes; endpoints are deleted from
     <code>providers.json</code>, never added to git.`;
-  card.querySelectorAll('.cfg-grid input, .cfg-grid select, .cfg-grid button').forEach(el => {
+  card.querySelectorAll('.cfg-grid input, .cfg-grid select, .cfg-grid button, #cfg-engine').forEach(el => {
     el.disabled = true; el.style.opacity = '0.45';
   });
   const ctxVal = c.context_size || c.ctx;
@@ -489,7 +524,7 @@ function clearCloudConfigUI() {
   if (!card) return;
   const note = $('cfg-cloud-note');
   if (note) note.remove();
-  card.querySelectorAll('.cfg-grid input, .cfg-grid select, .cfg-grid button').forEach(el => {
+  card.querySelectorAll('.cfg-grid input, .cfg-grid select, .cfg-grid button, #cfg-engine').forEach(el => {
     el.disabled = false; el.style.opacity = '';
   });
   if (typeof updateGpuDependentFields === 'function') updateGpuDependentFields();

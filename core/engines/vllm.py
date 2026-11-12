@@ -7,7 +7,9 @@ and response fields are translated in core/engines/vllm_adapter.py.
 Settings: config/app.json "engines": {"vllm": {...}} (defaults in DEFAULTS). Per model (config/model_configs.json): engine,
 tensor_parallel_size, pipeline_parallel_size, gpu_memory_utilization_pct, vllm_dtype, vllm_quantization, vllm_tokenizer,
 vllm_tool_parser, vllm_reasoning_parser, vllm_enforce_eager."""
+import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -72,6 +74,28 @@ def model_format(p) -> str:
     if p.suffix.lower() == ".gguf":
         return "gguf"
     return "hf" if is_hf_folder(p) else ""
+
+
+GENERIC_FOLDER_NAMES = {"hf", "huggingface", "vllm", "model", "models", "safetensors", "snapshot", "snapshots", "main"}
+
+
+def display_name(path) -> str:
+    """The model's real name for a Hugging Face folder: the folder name, unless that is generic (hf, models, a snapshot
+    hash...). Then the last part of `_name_or_path` in config.json ("Qwen/Qwen3-14B" -> "Qwen3-14B"). Never raises."""
+    p = Path(str(path))
+    folder = p.name
+    if folder.lower() not in GENERIC_FOLDER_NAMES and not re.fullmatch(r"[0-9a-fA-F]{40}", folder):
+        return folder
+    try:
+        with open(p / "config.json", "r", encoding="utf-8") as fh:
+            ref = json.load(fh).get("_name_or_path")
+        if isinstance(ref, str):
+            last = ref.strip().replace("\\", "/").rstrip("/").split("/")[-1].strip()
+            if last and last != ".":
+                return last
+    except Exception:
+        pass
+    return folder
 
 
 def engines_for(p) -> list:
@@ -180,7 +204,10 @@ def find_vllm() -> str:
 
 def served_name(profile: dict) -> str:
     from ..profiles.paths import model_display_name
-    return model_display_name(Path(str(profile.get("model_path") or "model")).name) or "local"
+    mp = Path(str(profile.get("model_path") or "model"))
+    if model_format(mp) == "hf":
+        return display_name(mp) or "local"
+    return model_display_name(mp.name) or "local"
 
 
 def max_num_seqs(profile: dict) -> int:

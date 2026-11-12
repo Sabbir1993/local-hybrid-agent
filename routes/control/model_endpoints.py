@@ -44,7 +44,7 @@ async def profiles(user: Principal = Depends(get_current_user)):
                 "type": "model",
                 "name": gfile.name,
                 "folder": folder,
-                "display": (folder or gfile.stem) if fmt != "hf" else gfile.name,
+                "display": (folder or gfile.stem) if fmt != "hf" else vllm_engine.display_name(gfile),
                 "parts": parts,
                 "path": str(gfile),
                 "model_path": str(gfile),

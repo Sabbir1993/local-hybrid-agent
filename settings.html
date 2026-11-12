@@ -195,6 +195,19 @@
   #sec-cfg .model-group { width: 100%; position: relative; overflow: visible; }
   #sec-cfg .model-group select { max-width: none; }
   #sec-cfg .model-picker-btn { max-width: none; flex: 1; }
+  /* engine select (3/12) + model picker (9/12) on one row; stacked under 700px */
+  #sec-cfg .engine-model-row { display: flex; flex-wrap: wrap; gap: 0 12px; align-items: flex-start; margin-bottom: 4px; }
+  #sec-cfg .emr-engine { flex: 3 1 170px; min-width: 0; }
+  #sec-cfg .emr-model { flex: 9 1 360px; min-width: 0; }
+  #sec-cfg .engine-model-row .cfg-item label { display: block; margin: 6px 0 3px; font-size: 10.5px; color: var(--dim); font-weight: 600; }
+  /* the select takes its look and 38px height from the shared input rules; the picker is sized to match */
+  #sec-cfg .emr-select { display: block; width: 100%; max-width: none; margin: 0; text-overflow: ellipsis; }
+  #sec-cfg .emr-model .model-group { height: 38px; box-sizing: border-box; }
+  #sec-cfg .emr-note { display: block; color: var(--dim); font-size: 9.5px; line-height: 1.4; margin: 0 0 6px; }
+  #sec-cfg .emr-note:empty { display: none; }
+  @media (max-width: 700px) {
+    #sec-cfg .emr-engine, #sec-cfg .emr-model { flex: 1 1 100%; }
+  }
 
   /* Capabilities & MCP collapsible styling */
   details.cap-group { border: 1px solid var(--border); border-radius: 8px; margin-top: 8px; overflow: hidden; }
@@ -771,33 +784,35 @@
           <h2>⚙️ Model Config · Restart to Apply</h2>
           <p class="dim">Choose the engine (llama.cpp or vLLM) and its launch parameters; saved per model</p>
         </div>
-        <div class="model-group" style="margin-bottom:6px; position:relative;" title="Pick which local/cloud model this config panel edits">
-          <select id="profile" title="Select a GGUF model (grouped by family)" style="display:none;"></select>
-          <button type="button" id="model-picker-btn" class="model-picker-btn" style="flex:1; max-width:none;">
-            <span id="model-picker-icon" class="model-picker-icon">🖥</span>
-            <span id="model-picker-label" class="model-picker-label">Select a model…</span>
-            <span id="model-picker-caps" class="mpi-caps"></span>
-            <span class="model-picker-caret">▾</span>
-          </button>
-          <button id="btn-load-header" title="Load the selected model into GPU VRAM"><span>▶</span></button>
-          <div id="model-picker-dropdown" class="model-picker-dropdown"></div>
+        <!-- Engine (3/12) and model picker (9/12) on one row; wraps to two full-width lines on narrow screens.
+             Engine: llama.cpp (llama-server) or vLLM. Chosen before loading; saved per model. -->
+        <div class="engine-model-row">
+          <div class="emr-engine cfg-item">
+            <label for="cfg-engine">Runtime engine</label>
+            <select id="cfg-engine" class="emr-select" title="Program that runs this model. llama.cpp: runs GGUF files, works on one or several GPUs, supports MTP drafts (faster output) and a share per GPU. vLLM: runs Hugging Face model folders, serves many users at once by batching, starts slower (minutes), and uses the GPUs set by tensor/pipeline parallel. The choice is saved per model; click Unload, then Load to switch.">
+              <option value="llama" title="llama.cpp (llama-server): runs GGUF files, works on one or several GPUs, supports MTP drafts (faster output) and a share per GPU. Saved per model; Unload, then Load to switch.">llama.cpp (llama-server)</option>
+              <option value="vllm" title="vLLM: runs Hugging Face model folders, serves many users at once by batching, starts slower (minutes), and uses the GPUs set by tensor/pipeline parallel. Saved per model; Unload, then Load to switch.">vLLM</option>
+            </select>
+          </div>
+          <div class="emr-model cfg-item">
+            <label>Model</label>
+            <div class="model-group" style="position:relative;" title="Pick which local/cloud model this config panel edits">
+              <select id="profile" title="Select a GGUF model (grouped by family)" style="display:none;"></select>
+              <button type="button" id="model-picker-btn" class="model-picker-btn" style="flex:1; max-width:none;">
+                <span id="model-picker-icon" class="model-picker-icon">🖥</span>
+                <span id="model-picker-label" class="model-picker-label">Select a model…</span>
+                <span id="model-picker-caps" class="mpi-caps"></span>
+                <span class="model-picker-caret">▾</span>
+              </button>
+              <button id="btn-load-header" title="Load the selected model into GPU VRAM"><span>▶</span></button>
+              <div id="model-picker-dropdown" class="model-picker-dropdown"></div>
+            </div>
+          </div>
         </div>
+        <small id="cfg-engine-note" class="emr-note"></small>
         <div id="model-caps-row" class="model-caps-row">
           <span class="caps-label">CAPABILITIES</span>
           <div id="caps-pills" class="caps-pills"></div>
-        </div>
-        <!-- Engine: llama.cpp (llama-server) or vLLM. Chosen before loading; saved per model. -->
-        <div class="cfg-grid" id="engine-grid" style="margin-bottom:8px;">
-          <div class="cfg-item cfg-full" title="Program that runs this model. llama.cpp runs GGUF files; vLLM runs Hugging Face model folders (and single-file GGUF, experimental)">
-            <label for="cfg-engine">Runtime engine <span class="info" title="Saved per model. Unload, then Load again to switch engine">ⓘ</span></label>
-            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-              <select id="cfg-engine" style="flex:0 0 auto; width:auto; min-width:160px;" title="Engine used when this model is loaded">
-                <option value="llama">llama.cpp (llama-server)</option>
-                <option value="vllm">vLLM</option>
-              </select>
-              <small id="cfg-engine-note" style="color:var(--dim); font-size:9.5px; flex:1 1 200px; min-width:0;"></small>
-            </div>
-          </div>
         </div>
         <!-- vLLM settings: shown only when the engine is vLLM (static/js/config.js applyEngineUI) -->
         <div class="cfg-grid" id="vllm-fields" style="display:none; margin-bottom:8px;">
