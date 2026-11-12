@@ -910,8 +910,8 @@ def _explain(wb: Workbook, sql: str, msg: str) -> str:
         wanted = m.group(1).strip().strip("\"`[]")
         close = difflib.get_close_matches(wanted, names, n=3, cutoff=0.4)
         out = [f"{msg}."]
-        if close:
-            out.append("Did you mean: " + ", ".join(close) + "?")
+        if close:   # with the handle, so the model can copy a name that exists instead of retyping it
+            out.append("Did you mean: " + ", ".join(f"{c} (handle {_handle_of(wb, c)})" for c in close) + "?")
         out.append(f"Available tables: {listed or '(none)'}.")
         out.append(f"Or use the short handle of a table in FROM: {handles}.")
         out += [n + "." for n in wb.notes if "not loaded" in n]      # more tables exist than are loaded: the one wanted may be one

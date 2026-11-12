@@ -39,6 +39,8 @@ DEFAULTS = {
     "repeat_write": 3,          # new files written under one name (the writer adds a unique id to each): the model is
                                 # re-saving the same document instead of finishing. Ignored again after a nudge:
                                 # the next trigger ends the run
+    "repeat_error": 3,          # the same failure (same error text) this many times, whatever the query: a wrong name
+                                # retried with new SQL. A second error trigger (repeat_error or error_streak) ends the run
     "grace_calls": 3,          # calls to wait after a trigger before judging again
     "escalate_steps": 3,        # steps forced onto main after the second trigger
     "graduated": True,          # False: stop at the first trigger (only when "stop" is on)
@@ -122,7 +124,8 @@ class LoopGuard:
         self.calls = []            # (name, args_sig, result_hash, ok)
         self.triggers = 0
         self.write_triggers = 0
-        self._start = 0            # calls before this index were already judged (see check)
+        self.error_triggers = 0
+        self._start = 0           # calls before this index were already judged (see check)
 
     # ------------------------------------------------------------------ input
     def record(self, name: str, args, result, ok: bool) -> None:
@@ -151,6 +154,14 @@ class LoopGuard:
                 top, cnt = names.most_common(1)[0]
                 if cnt >= n_w:
                     return "repeat_write", "write_file", cnt
+        # the same failure again and again, even when each call differs (a wrong table name with new SQL every time)
+        n_re = int(cfg["repeat_error"])
+        if n_re > 0:
+            fails = Counter(c[2] for c in calls if not c[3])
+            if fails:
+                h, cnt = fails.most_common(1)[0]
+                if cnt >= n_re:
+                    return "repeat_error", next(c[0] for c in calls if not c[3] and c[2] == h), cnt
         # a run of failures
         n_err = int(cfg["error_streak"])
         if n_err > 0 and len(calls) >= n_err and not any(c[3] for c in calls[-n_err:]):
@@ -184,7 +195,10 @@ class LoopGuard:
         self._start = len(self.calls)
         if rule == "repeat_write":
             self.write_triggers += 1
-        if (self.cfg["stop"] and (not self.cfg["graduated"] or self.triggers >= 3)) or self.write_triggers >= 2:
+        if rule in ("repeat_error", "error_streak"):
+            self.error_triggers += 1
+        if (self.cfg["stop"] and (not self.cfg["graduated"] or self.triggers >= 3)) \
+                or self.write_triggers >= 2 or self.error_triggers >= 2:
             level = STOP
         else:
             level = NUDGE if self.triggers == 1 else ESCALATE
@@ -199,6 +213,8 @@ def describe(rule: str, tool: str, count: int) -> str:
         return f"the same file was saved {count} times under one name (each save created another copy)"
     if rule == "error_streak":
         return f"the last {count} tool calls all failed"
+    if rule == "repeat_error":
+        return f"`{tool}` failed {count} times with the same error, even though the queries differed"
     if rule == "cycle":
         return f"the run kept going back and forth between the same calls (starting with `{tool}`), {count} times over"
     if rule == "no_action":

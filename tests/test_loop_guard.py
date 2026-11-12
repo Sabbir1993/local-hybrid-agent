@@ -118,6 +118,30 @@ class Messages(unittest.TestCase):
         self.assertIn("back and forth", lg.describe("cycle", "run_shell", 3))
 
 
+class RepeatedError(unittest.TestCase):
+    """A wrong table name retried with new SQL each time: the SQL differs, the error does not."""
+    MSG = "error: no such table: BFSI_activity_gav. Did you mean: BFSI_activity_nov_2026_Sheet1?"
+
+    def _try(self, i):
+        return ("kb_sql", {"sql": f'SELECT {i} FROM "BFSI_activity_gav"'}, self.MSG, False)
+
+    def test_same_error_from_different_queries_is_caught(self):
+        g = lg.LoopGuard()
+        vs = feed(g, [self._try(i) for i in range(3)])
+        self.assertEqual((vs[-1].level, vs[-1].rule), (lg.NUDGE, "repeat_error"))
+
+    def test_error_that_repeats_after_the_nudge_stops_the_run_with_stop_off(self):
+        g = lg.LoopGuard()
+        levels = [v.level for v in feed(g, [self._try(i) for i in range(6)])]
+        self.assertEqual(levels[2], lg.NUDGE)
+        self.assertEqual(levels[5], lg.STOP)
+
+    def test_different_errors_are_not_a_repeat(self):
+        g = lg.LoopGuard()
+        vs = feed(g, [("kb_sql", {"sql": f"q{i}"}, f"error: no such table: T{i}", False) for i in range(3)])
+        self.assertTrue(all(v.level == lg.OK for v in vs))
+
+
 class RepeatWrite(unittest.TestCase):
     """The writer gives every save a new unique id, so re-saving one report never repeats a result."""
 

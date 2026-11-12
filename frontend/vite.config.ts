@@ -1,12 +1,20 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
 const BACKEND_URL = 'http://127.0.0.1:8000';
 const BACKEND_WS = 'ws://127.0.0.1:8000';
 
+let mode = 'production';
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), {
+    // the tab title before the JS runs: VITE_PROJECT_NAME from frontend/.env, or the same fallback env.ts uses
+    name: 'app-title',
+    configResolved: (c) => { mode = c.mode; },
+    transformIndexHtml: (html) =>
+      html.replaceAll('%VITE_PROJECT_NAME%', loadEnv(mode, import.meta.dirname, 'VITE_').VITE_PROJECT_NAME || 'Local Agent'),
+  }],
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),

@@ -4,6 +4,7 @@ import { DeviceRename } from './DeviceRename';
 import { UserMenu } from './UserMenu';
 import { api, apiFetch } from '../../services/api';
 import { useMediaQuery, NARROW_QUERY } from '../../hooks/useMediaQuery';
+import { env } from '../../config/env';
 
 export const Sidebar: React.FC = () => {
   const {
@@ -227,12 +228,12 @@ export const Sidebar: React.FC = () => {
       <div
         className="sidebar-brand-header"
         id="sidebar-brand-header"
-        title="Local Agent — Control Center (Click for New Chat)"
+        title={`${env.projectName} — Control Center (Click for New Chat)`}
         style={{ cursor: 'pointer' }}
         onClick={() => { createSession(); closeIfNarrow(); }}
       >
         <img src="/static/logo/logo.jpg" alt="Logo" className="sidebar-brand-logo" />
-        <span className="sidebar-brand-title">Local Agent</span>
+        <span className="sidebar-brand-title">{env.projectName}</span>
       </div>
 
       {/* Mode Switcher: ONLY in Desktop Companion App (Agent & Code only - NO Chat button) */}

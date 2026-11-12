@@ -37,7 +37,7 @@ const parseLogLevel = (value: string | undefined): AppEnvConfig['logLevel'] => {
 };
 
 export const env: AppEnvConfig = {
-  projectName: import.meta.env.VITE_PROJECT_NAME || 'Vulkan Arc',
+  projectName: import.meta.env.VITE_PROJECT_NAME || 'Local Agent',   // the one place the app name comes from (frontend/.env)
   appDescription: import.meta.env.VITE_APP_DESCRIPTION || 'A770 Dual-Runtime Workstation & Multi-Agent Environment',
   version: import.meta.env.VITE_APP_VERSION || '1.0.0',
   apiBaseUrl: import.meta.env.VITE_API_BASE_URL || '',

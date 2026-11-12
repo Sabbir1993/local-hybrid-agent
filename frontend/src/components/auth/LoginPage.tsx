@@ -12,53 +12,67 @@ const TRACE = [
   { mark: '●', verb: 'done', text: 'Report saved to /reports/march.docx' },
 ];
 
+// Corporate ledger: ink-dark brand panel, paper-toned sign-in side, one teal accent. Newsreader for headings, IBM Plex for text.
 const CSS = `
-.lg-root { --ink:#0b1020; --ink2:#111833; --bone:#eceff6; --mute:#8d97b3; --line:rgba(236,239,246,.12); --signal:#7c9cff; --warm:#ffb454;
-  display:grid; grid-template-columns: minmax(0,1.15fr) minmax(380px,.85fr); width:100%; height:100vh; height:100dvh; background:var(--ink); color:var(--bone);
-  font-family:'Inter',system-ui,sans-serif; overflow:hidden; }
-.lg-stage { position:relative; display:flex; flex-direction:column; justify-content:space-between; padding:44px clamp(32px,5vw,80px);
+.lg-root { --ink:#0e1d1c; --ink2:#132826; --bone:#e9f0ee; --dmute:#8fa19e; --dline:rgba(233,240,238,.11);
+  --paper:#f3f1ea; --card:#ffffff; --text:#17201f; --mute:#5d6967; --line:#d9d4c6; --field:#ffffff; --soft:#f6f5f0;
+  --accent:#0f766e; --accent-hi:#14968b; --accent-dk:#0b5c56; --amber:#d4942c; --danger:#a4271c; --dangerbg:#fdf1ef; --dangerline:#f0c3bc;
+  display:grid; grid-template-columns:minmax(0,1.1fr) minmax(400px,.9fr); width:100%; height:100vh; height:100dvh; background:var(--paper); color:var(--text);
+  font-family:'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif; overflow:hidden; }
+.lg-stage { position:relative; display:flex; flex-direction:column; justify-content:space-between; padding:48px clamp(36px,5vw,84px); min-width:0; overflow:hidden; color:var(--bone);
   background:
-   linear-gradient(var(--line) 1px, transparent 1px) 0 0/100% 56px,
-   radial-gradient(1000px 520px at 15% 105%, rgba(124,156,255,.22), transparent 62%),
-   var(--ink2);
-  border-right:1px solid var(--line); min-width:0; }
-.lg-brand { display:flex; align-items:center; gap:12px; font-weight:600; font-size:14px; letter-spacing:.2px; }
-.lg-brand img, .lg-brand .lg-glyph { width:32px; height:32px; border-radius:8px; object-fit:cover; }
-.lg-glyph { display:grid; place-items:center; background:var(--signal); color:var(--ink); font-weight:800; }
-.lg-h { font-family:'Instrument Serif', Georgia, serif; font-weight:400; font-size:clamp(40px,4.6vw,68px); line-height:1.02; letter-spacing:-.02em; margin:0; max-width:11em; }
-.lg-h i { color:var(--signal); }
-.lg-sub { color:var(--mute); font-size:15px; line-height:1.6; max-width:34em; margin:18px 0 0; }
-.lg-trace { margin-top:34px; max-width:520px; border:1px solid var(--line); border-radius:6px; background:rgba(8,12,26,.72); backdrop-filter:blur(6px);
-  font-family:'JetBrains Mono', ui-monospace, Consolas, monospace; font-size:12.5px; }
-.lg-trace-bar { display:flex; align-items:center; gap:8px; padding:9px 14px; border-bottom:1px solid var(--line); color:var(--mute); font-size:11.5px; }
-.lg-live { width:7px; height:7px; border-radius:50%; background:var(--warm); box-shadow:0 0 0 0 rgba(255,180,84,.6); animation:lg-pulse 2s infinite; }
-.lg-row { display:grid; grid-template-columns:18px 52px 1fr; gap:6px; padding:8px 14px; opacity:0; transform:translateY(4px); animation:lg-in .45s ease forwards; }
-.lg-row .m { color:var(--signal); } .lg-row .v { color:var(--mute); } .lg-row:last-child .m { color:var(--warm); }
-.lg-foot { color:var(--mute); font-size:12px; max-width:34em; line-height:1.5; }
-.lg-form { display:flex; align-items:flex-start; justify-content:center; padding:32px; min-width:0; overflow-y:auto; }
-.lg-form > .lg-formbox { margin:auto 0; }
-.lg-formbox { width:100%; max-width:360px; }
-.lg-title { font-family:'Instrument Serif', Georgia, serif; font-size:36px; font-weight:400; letter-spacing:-.01em; margin:0 0 6px; }
-.lg-lede { color:var(--mute); font-size:14px; margin:0 0 26px; line-height:1.5; }
-.lg-label { display:block; font-size:13px; color:var(--bone); margin:0 0 7px; font-weight:500; }
-.lg-field { display:flex; align-items:stretch; border:1px solid var(--line); border-radius:8px; background:rgba(255,255,255,.03); transition:border-color .15s, box-shadow .15s; }
-.lg-field:focus-within { border-color:var(--signal); box-shadow:0 0 0 3px rgba(124,156,255,.2); }
-.lg-field input { flex:1; min-width:0; background:transparent; border:none; outline:none; color:var(--bone); font-size:15px; padding:12px 13px; font-family:inherit; }
-.lg-field input::placeholder { color:rgba(141,151,179,.55); }
-.lg-suffix { display:flex; align-items:center; padding:0 12px; font-family:'JetBrains Mono', ui-monospace, monospace; font-size:12.5px; color:var(--mute); border-left:1px solid var(--line); white-space:nowrap; }
-.lg-reveal { background:transparent; border:none; color:var(--mute); font-size:12.5px; cursor:pointer; padding:0 13px; }
-.lg-reveal:hover { color:var(--bone); }
+    radial-gradient(900px 480px at 0% 110%, rgba(20,150,139,.2), transparent 62%),
+    linear-gradient(var(--dline) 1px, transparent 1px) 0 0/100% 64px,
+    linear-gradient(90deg, var(--dline) 1px, transparent 1px) 0 0/64px 100%,
+    var(--ink); }
+.lg-brand { display:flex; align-items:center; gap:12px; font-weight:600; font-size:15px; letter-spacing:.01em; }
+.lg-brand img, .lg-brand .lg-glyph { width:34px; height:34px; border-radius:8px; object-fit:cover; }
+.lg-glyph { display:grid; place-items:center; background:var(--accent-hi); color:var(--ink); font-weight:700; }
+.lg-tag { margin-left:auto; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--dmute);
+  border:1px solid var(--dline); padding:5px 10px; border-radius:999px; white-space:nowrap; }
+.lg-eyebrow { margin:0 0 18px; font-size:12px; letter-spacing:.16em; text-transform:uppercase; font-weight:600; color:#7fd6cc; }
+.lg-h { font-family:'Newsreader', Georgia, 'Times New Roman', serif; font-weight:400; font-size:clamp(40px,4.4vw,64px); line-height:1.04; letter-spacing:-.015em; margin:0; max-width:11.5em; }
+.lg-h i { color:#7fd6cc; }
+.lg-sub { color:var(--dmute); font-size:15px; line-height:1.65; max-width:34em; margin:20px 0 0; }
+.lg-trace { margin-top:38px; max-width:540px; border:1px solid var(--dline); border-radius:10px; background:rgba(6,16,15,.6); backdrop-filter:blur(6px);
+  font-family:'IBM Plex Mono', ui-monospace, Consolas, monospace; font-size:12.5px; }
+.lg-trace-bar { display:flex; align-items:center; gap:9px; padding:10px 15px; border-bottom:1px solid var(--dline); color:var(--dmute); font-size:11.5px; letter-spacing:.02em; }
+.lg-live { width:7px; height:7px; border-radius:50%; background:var(--amber); box-shadow:0 0 0 0 rgba(212,148,44,.6); animation:lg-pulse 2s infinite; }
+.lg-row { display:grid; grid-template-columns:18px 56px 1fr; gap:6px; padding:9px 15px; opacity:0; transform:translateY(4px); animation:lg-in .45s ease forwards; }
+.lg-row .m { color:#7fd6cc; } .lg-row .v { color:var(--dmute); } .lg-row:last-child .m { color:var(--amber); }
+.lg-foot { display:flex; flex-wrap:wrap; gap:10px 22px; color:var(--dmute); font-size:12px; line-height:1.5; }
+.lg-foot span { display:inline-flex; align-items:center; gap:7px; }
+.lg-foot span::before { content:''; width:5px; height:5px; border-radius:50%; background:#7fd6cc; }
+.lg-form { position:relative; display:flex; align-items:center; justify-content:center; padding:40px 32px; min-width:0; overflow-y:auto; color:var(--text); }
+.lg-root .lg-form { background:var(--paper) !important; }   /* style.css paints every main with var(--bg) !important */
+.lg-formbox { width:100%; max-width:396px; margin:auto 0; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:40px 36px 34px;
+  box-shadow:0 1px 2px rgba(14,29,28,.05), 0 24px 48px -28px rgba(14,29,28,.35); }
+.lg-kick { display:flex; align-items:center; gap:8px; margin:0 0 16px; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; font-weight:600; color:var(--accent); }
+.lg-kick svg { width:14px; height:14px; }
+.lg-title { font-family:'Newsreader', Georgia, serif; font-size:34px; font-weight:400; letter-spacing:-.01em; line-height:1.1; margin:0 0 8px; color:var(--text); }
+.lg-lede { color:var(--mute); font-size:14px; margin:0 0 26px; line-height:1.55; }
+.lg-label { display:block; font-size:13px; color:var(--text); margin:0 0 7px; font-weight:600; }
+.lg-field { display:flex; align-items:stretch; border:1px solid #cdc7b8; border-radius:8px; background:var(--field); transition:border-color .15s, box-shadow .15s; }
+.lg-field:hover { border-color:#b5ae9d; }
+.lg-field:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px rgba(15,118,110,.18); }
+.lg-field input { flex:1; min-width:0; background:transparent; border:none; outline:none; color:var(--text); font-size:15px; padding:12px 13px; font-family:inherit; }
+.lg-field input::placeholder { color:#9aa5a2; }
+.lg-suffix { display:flex; align-items:center; padding:0 12px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:var(--mute); background:var(--soft); border-left:1px solid #cdc7b8; border-radius:0 7px 7px 0; white-space:nowrap; }
+.lg-reveal { background:transparent; border:none; color:var(--accent); font-size:12.5px; font-weight:600; cursor:pointer; padding:0 13px; }
+.lg-reveal:hover { color:var(--accent-dk); }
 .lg-hint { font-size:12px; color:var(--mute); margin:7px 0 18px; min-height:16px; }
-.lg-hint b { color:var(--bone); font-weight:500; }
-.lg-btn { width:100%; margin-top:24px; padding:13px; border:none; border-radius:8px; background:var(--bone); color:var(--ink); font-weight:600; font-size:14.5px; cursor:pointer; transition:background .15s, transform .1s; }
-.lg-btn:hover:not(:disabled) { background:#fff; } .lg-btn:active:not(:disabled) { transform:scale(.99); } .lg-btn:disabled { opacity:.4; cursor:not-allowed; }
-.lg-btn:focus-visible, .lg-reveal:focus-visible, .lg-link:focus-visible { outline:2px solid var(--signal); outline-offset:2px; }
-.lg-link { width:100%; margin-top:12px; background:transparent; border:none; color:var(--mute); font-size:13px; cursor:pointer; }
-.lg-code { display:block; word-break:break-all; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:rgba(255,255,255,.03); font-family:'JetBrains Mono', ui-monospace, monospace; font-size:12px; user-select:text; }
-.lg-err { margin-top:18px; padding:10px 12px; border-radius:8px; font-size:13px; color:#ffb3ad; background:rgba(255,99,90,.09); border:1px solid rgba(255,99,90,.3); }
+.lg-hint b { color:var(--text); font-weight:600; }
+.lg-btn { width:100%; margin-top:24px; padding:13px; border:none; border-radius:8px; background:var(--accent); color:#fff; font-weight:600; font-size:14.5px; letter-spacing:.01em; cursor:pointer; transition:background .15s, transform .1s; }
+.lg-btn:hover:not(:disabled) { background:var(--accent-dk); } .lg-btn:active:not(:disabled) { transform:scale(.99); } .lg-btn:disabled { opacity:.45; cursor:not-allowed; }
+.lg-btn:focus-visible, .lg-reveal:focus-visible, .lg-link:focus-visible { outline:2px solid var(--accent-hi); outline-offset:2px; }
+.lg-link { width:100%; margin-top:12px; background:transparent; border:none; color:var(--accent); font-size:13px; font-weight:600; cursor:pointer; }
+.lg-code { display:block; word-break:break-all; padding:9px 11px; border:1px solid var(--line); border-radius:6px; background:var(--soft); color:var(--text); font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; user-select:text; }
+.lg-err { margin-top:18px; padding:11px 13px; border-radius:8px; font-size:13px; color:var(--danger); background:var(--dangerbg); border:1px solid var(--dangerline); }
+.lg-secure { margin:22px 0 0; padding-top:18px; border-top:1px solid var(--line); display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--mute); }
+.lg-secure svg { width:13px; height:13px; color:var(--accent); flex-shrink:0; }
 @keyframes lg-in { to { opacity:1; transform:none; } }
-@keyframes lg-pulse { 70% { box-shadow:0 0 0 8px rgba(255,180,84,0); } 100% { box-shadow:0 0 0 0 rgba(255,180,84,0); } }
-@media (max-width: 900px) { .lg-root { grid-template-columns:1fr; } .lg-stage { display:none; } }
+@keyframes lg-pulse { 70% { box-shadow:0 0 0 8px rgba(212,148,44,0); } 100% { box-shadow:0 0 0 0 rgba(212,148,44,0); } }
+@media (max-width: 900px) { .lg-root { grid-template-columns:1fr; } .lg-stage { display:none; } .lg-form { padding:24px 16px; } .lg-formbox { padding:30px 24px 26px; } }
 @media (prefers-reduced-motion: reduce) { .lg-row { animation:none; opacity:1; transform:none; } .lg-live { animation:none; } }
 `;
 
@@ -163,9 +177,11 @@ export const LoginPage: React.FC = () => {
             <span className="lg-glyph">{(env.projectName || 'L').charAt(0)}</span>
           )}
           {env.projectName}
+          <span className="lg-tag">Internal platform</span>
         </div>
 
         <div>
+          <p className="lg-eyebrow">Agents you can audit</p>
           <h1 className="lg-h">Give it the task. <i>Come back to the result.</i></h1>
           <p className="lg-sub">Agents that read your files, run your tools and check their own work, on hardware your team controls.</p>
           <div className="lg-trace" aria-hidden="true">
@@ -178,11 +194,21 @@ export const LoginPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="lg-foot">Authorized users only. Every action on this system is logged.</div>
+        <div className="lg-foot">
+          <span>Authorized users only</span>
+          <span>Every action is logged</span>
+          <span>Data stays on your infrastructure</span>
+        </div>
       </div>
 
       <main className="lg-form">
         <div className="lg-formbox" id="login-box">
+          <p className="lg-kick">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
+            </svg>
+            Secure sign-in
+          </p>
           <h2 className="lg-title">{ticket ? 'Verify it is you' : 'Sign in'}</h2>
           <p className="lg-lede">
             {ticket ? 'Enter the 6-digit code from your authenticator app. A backup code works too.' : 'Use your work account to pick up where you left off.'}
@@ -237,7 +263,7 @@ export const LoginPage: React.FC = () => {
                 <input
                   id="mfa-code" type="text" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="123456"
                   value={code} onChange={(e) => setCode(e.target.value)}
-                  style={{ letterSpacing: 6, fontSize: 20, textAlign: 'center', fontFamily: "'JetBrains Mono', monospace" }}
+                  style={{ letterSpacing: 6, fontSize: 20, textAlign: 'center', fontFamily: "'IBM Plex Mono', monospace" }}
                 />
               </div>
               <button type="submit" className="lg-btn" disabled={loading || !code.trim()}>{loading ? 'Verifying…' : enroll ? 'Turn on and sign in' : 'Verify'}</button>
@@ -246,6 +272,13 @@ export const LoginPage: React.FC = () => {
           )}
 
           {error && <div id="login-err" role="alert" className="lg-err">{error}</div>}
+
+          <div className="lg-secure">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z" /><path d="M9 12l2 2 4-4" />
+            </svg>
+            Authorized users only. Activity on this system is recorded.
+          </div>
         </div>
       </main>
     </div>

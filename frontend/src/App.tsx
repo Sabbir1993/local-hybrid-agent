@@ -64,6 +64,11 @@ export function App() {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
+  // browser tab name: from VITE_PROJECT_NAME (index.html's %VITE_PROJECT_NAME% covers the first paint)
+  useEffect(() => {
+    document.title = env.projectName;
+  }, []);
+
   useEffect(() => {
     document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
   }, [sidebarCollapsed]);

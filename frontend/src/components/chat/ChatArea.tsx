@@ -7,6 +7,7 @@ import { QuestionCard } from './QuestionCard';
 import { MediaCard } from './MediaCard';
 import { parseProseQuestions, parseQuestionnaire } from '../../utils/questions';
 import { apiFetch } from '../../services/api';
+import { env } from '../../config/env';
 import { cleanModelName } from '../../utils/models';
 
 interface ParsedUserMessage {
@@ -550,7 +551,7 @@ export const ChatArea: React.FC = () => {
         {(!messages || messages.length === 0) ? (sessionLoading ? <div id="empty" aria-busy="true" /> : (
           <div id="empty">
             <div className="big">⚡</div>
-            <h2>Local Agent</h2>
+            <h2>{env.projectName}</h2>
             <p id="empty-model" className="mono">
               {isModelLoaded ? (
                 isCloudActive ? (
