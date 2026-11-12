@@ -62,6 +62,15 @@ async def preflight(target: Optional[str] = None, engine: Optional[str] = None,
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.get("/control/log")
+async def server_log(n: int = 80, user: Principal = Depends(require_permission("model.local.load"))):
+    """The last lines the main model server (llama-server or vLLM) printed, for the admin who is loading a model: when a load
+    fails, this is where the real cause is. Card numbers are masked like everywhere else a log line can travel."""
+    from core.pan import mask_pans
+    lines = [mask_pans(str(l))[0] for l in state.log_tail(max(1, min(int(n), 300)))]
+    return {"engine": state.engine, "running": state.is_running(), "error": state.last_load_error, "lines": lines}
+
+
 @router.get("/control/vram")
 async def vram_devices(user: Principal = Depends(require_permission("settings.runtime.view"))):
     """Raw per-Vulkan-device free/total VRAM (VK_EXT memory budget)."""

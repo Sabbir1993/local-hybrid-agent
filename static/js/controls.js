@@ -9,6 +9,22 @@ async function warmup() {
   } catch (e) { /* non-fatal */ }
 }
 
+/* After a failed load: show the server's own last lines under the model picker, so the real cause is on screen */
+async function showLoadLog() {
+  const box = $('load-log'), pre = $('load-log-text');
+  if (!box || !pre) return;
+  try {
+    const r = await fetch('/control/log?n=80');
+    if (!r.ok) return;
+    const j = await r.json();
+    const lines = (j.lines || []).filter(Boolean);
+    pre.textContent = (j.error ? j.error + '\n\n' : '') + (lines.length ? lines.join('\n') : '(the server printed nothing)');
+    box.style.display = '';
+    box.open = true;
+    pre.scrollTop = pre.scrollHeight;
+  } catch (e) { /* the toast already told the user it failed */ }
+}
+
 async function loadSelectedModel() {
   const sel = $('profile');
   const target = sel.value;
@@ -49,6 +65,8 @@ async function loadSelectedModel() {
   // engine picked in the Model Config card (llama.cpp or vLLM); the server remembers it per model
   const engine = ($('cfg-engine') && $('cfg-engine').value) || 'llama';
   const isVllm = engine === 'vllm';
+  const oldLog = $('load-log');
+  if (oldLog) oldLog.style.display = 'none';          // a new attempt: hide the last failure's log
   window.__isModelLoading = true;
   setPill('loading');
   setLoadBtn('loading');
@@ -83,6 +101,7 @@ async function loadSelectedModel() {
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     } catch (e) {
       toast('Load failed: ' + e.message, true);
+      showLoadLog();
       return;
     }
     await warmup();
