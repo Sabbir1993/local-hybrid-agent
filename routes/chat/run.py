@@ -860,6 +860,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     # A 3D / WebGL page goes to the dedicated "html3d" lane when the admin set one up and it loads; else the main model answers.
     lane3d = None
+    turn_max_tokens_main = turn_max_tokens      # what the main model gets if the 3D lane fails and the turn is redone on it
     if (not cloud_main and (html_build or project_build or has_file or wants_file or builds.is_continue(own_q))
             and prompt_scope.three_d_wanted(own_q, prior_files, msgs[:-1])):
         lane3d = await creative.pick("html3d", user.id)
@@ -888,7 +889,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         model_provider = None
 
     async def event_stream():
-        nonlocal clean_model_name, model_display, model_source, model_provider
+        nonlocal clean_model_name, model_display, model_source, model_provider, lane3d, main_client, turn_max_tokens
         lane_info = {"lane": lane3d.lane if lane3d else "main", "model": clean_model_name, "display": model_display,
                      "source": model_source, "provider": model_provider}
         yield f"event: lane\ndata: {json.dumps(lane_info)}\n\n"
@@ -917,6 +918,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         research_nudged = False
         wrapup_warned = False     # the "few rounds left" note is given once
         continued = False
+        lane_fallback_tried = False     # a failed 3D lane round is redone once on the main model, never twice
         project_done = False      # project_finish has produced the ZIP
         project_nudges = 0
         size_retried = False      # a write_file refused as too big gets one more round, even on the last one
@@ -1435,6 +1437,44 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         research_answered = True
                         yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks, **speed.as_event()})}\n\n"
                         return
+
+
+                # The small 3D model delivered nothing (no tool call, no code): a dedicated lane is an upgrade, never a requirement,
+                # so the same turn is redone once on the main model instead of spending the nudge on the weak one.
+                if (lane3d and not tool_calls and chat_tools and not project_done
+                        and (missing_dl or not (content or "").strip()
+                             or looks_undelivered(content, wants_file, bool(written_files)))):
+                    print(f"[chat] 3D lane '{lane3d.lane}' ({lane3d.name}) delivered nothing: finish={finish_reason} "
+                          f"completion_tokens={((res_dict or {}).get('usage') or {}).get('completion_tokens', '?')} "
+                          f"reasoning_chars={len(reasoning or '')} text_markup={bool(tool_text_open)}", file=sys.stderr)
+                    if not lane_fallback_tried:
+                        lane_fallback_tried = True
+                        fb_target = state.profile_path or state.profile or common.initial_profile_path
+                        try:
+                            if not fb_target:
+                                raise RuntimeError("no main model profile is configured")
+                            await state.ensure_running(fb_target)
+                            if state.client is None:
+                                raise RuntimeError("the main model has no client")
+                        except Exception as e:
+                            print(f"[chat] main model for the 3D fallback unavailable: {e}", file=sys.stderr)
+                        else:
+                            print("[chat] 3D lane failed - retrying on the main model", file=sys.stderr)
+                            lane3d = None
+                            main_client = state.client
+                            turn_max_tokens = turn_max_tokens_main
+                            fb_name = state.profile.get("model_path", "") if state.profile else ""
+                            clean_model_name = Path(fb_name).name.replace(".gguf", "") if fb_name else "Main LLM"
+                            model_display = f"\U0001F9E0 {clean_model_name}"
+                            model_source, model_provider = "local", None
+                            yield "event: lane\ndata: " + json.dumps({"lane": "main", "model": clean_model_name, "display": model_display,
+                                                                      "source": model_source, "provider": model_provider}) + "\n\n"
+                            if streamed_content:
+                                redactor.reset()
+                                yield "event: delta_reset\ndata: {}\n\n"
+                            if turn >= turn_limit - 1:
+                                turn_limit += 1
+                            continue
 
                 # A website build that stops with a text-only reply ("Now let me recreate charts.js:") before project_finish is not
                 # done, however many files are saved: say so and let the model carry on, a few times.
