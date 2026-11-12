@@ -56,8 +56,19 @@ _ATTACHED_DOC_RE = re.compile(r"--- FILE:\s*([^\n]+?\.(?:pptx|xlsx|docx|csv|pdf)
 _DOC_EDIT_EXTS = {".pptx", ".xlsx", ".docx", ".csv", ".pdf"}
 
 
+# a picture or clip made by generate_image / generate_video (core/media): kept apart from the documents of a chat
+_MEDIA_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".mp4", ".webm", ".mov", ".mkv")
+
+
+def is_media_name(name: str) -> bool:
+    n = str(name or "").strip().replace("\\", "/").lstrip("/").lower()
+    return n.startswith("generated/") or n.endswith(_MEDIA_EXTS)
+
+
 def session_files(msgs: list) -> list:
-    """Filenames the server delivered (or the user attached) in this conversation, oldest first."""
+    """Filenames the server delivered (or the user attached) in this conversation, oldest first. Pictures and clips are not
+    listed: they are not documents to edit (an edit of one is a new generation, see session_media), and their bare name
+    (the folder generated/ cut off) was a dead link."""
     seen = []
     for m in msgs:
         role = m.get("role")
@@ -69,11 +80,68 @@ def session_files(msgs: list) -> list:
         else:
             continue
         for name in names:
+            if is_media_name(name):
+                continue
             n = Path(name.strip()).name
             if n in seen:
                 seen.remove(n)
             seen.append(n)
     return seen
+
+
+def session_media(msgs: list) -> list:
+    """Paths (with their generated/ folder, as the download tag needs them) of the pictures and clips this chat made, oldest first."""
+    seen = []
+    for m in msgs:
+        if m.get("role") != "assistant":
+            continue
+        for name in _DL_TAG_RE.findall(str(m.get("content") or "")):
+            n = name.strip().replace("\\", "/")
+            if is_media_name(n):
+                if n in seen:
+                    seen.remove(n)
+                seen.append(n)
+    return seen
+
+
+_MEDIA_REF_RE = r"(image|picture|photo|pic|video|clip|logo|illustration|artwork|drawing|png|jpe?g|gif)"
+_MEDIA_WHERE_RE = re.compile(
+    r"\b(where(?:'s| is| are)?|link|download|re-?share|resend)\b.{0,30}\b" + _MEDIA_REF_RE + r"s?\b"
+    r"|\b" + _MEDIA_REF_RE + r"s?\b.{0,15}\b(where|link|missing|not (?:shared|found|there))\b",
+    re.IGNORECASE)
+# "where is the file" / "the link again" without naming a picture: said in a chat whose only deliverables are pictures
+_ANY_WHERE_RE = re.compile(
+    r"\bwhere(?:'s| is| are)?\b.{0,20}\b(file|link|download|it|that|they)\b"
+    r"|\b(link|download)\b.{0,12}\b(again|please|pls)\b|\b(re-?share|resend|share again|send again)\b|\bagain\b.{0,12}\blink\b",
+    re.IGNORECASE)
+_MAKE_RE = re.compile(r"\b(draw|paint|create|generate|make|design|render|produce|sketch|illustrate|write|build)\b", re.I)
+_DOC_WORD_RE = re.compile(r"\b(deck|slides?|presentation|pptx?|pdf|docx?|word|sheet|spreadsheet|excel|xlsx|csv|html|web ?page|dashboard"
+                          r"|report|document|file|site|website)\b", re.I)
+
+
+def media_where_intent(query: str, media: list, has_docs: bool) -> bool:
+    """True when the message asks where a picture / clip of this chat is, or for its link again: "where is the image?",
+    "give me the link again", "where is the file?" in a chat that holds pictures and no document. A request to make
+    something ("draw a logo with a link ...") is never this."""
+    q = (query or "").strip()
+    if not media or not q or _FILE_EDIT_RE.search(q) or _MAKE_RE.search(q):
+        return False
+    if _MEDIA_WHERE_RE.search(q):
+        return True
+    return not has_docs and bool(_ANY_WHERE_RE.search(q))
+
+
+def last_reply_was_media(msgs: list) -> bool:
+    """True when the newest assistant message of the chat delivered a picture / clip and no document."""
+    for m in reversed(msgs or []):
+        if m.get("role") == "assistant":
+            names = [n.strip() for n in _DL_TAG_RE.findall(str(m.get("content") or ""))]
+            return bool(names) and all(is_media_name(n) for n in names)
+    return False
+
+
+def names_a_document(query: str) -> bool:
+    return bool(_DOC_WORD_RE.search(query or ""))
 
 
 def _norm_name(text: str) -> str:

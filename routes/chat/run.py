@@ -86,6 +86,10 @@ from .file_intent import (
     looks_undelivered,
     pick_target,
     session_files,
+    session_media,
+    media_where_intent,
+    last_reply_was_media,
+    names_a_document,
     shrink_old_tool_results,
     wants_file_output,
     serves_brief_card,
@@ -93,12 +97,12 @@ from .file_intent import (
     CHAT_CUT_CALL_ERROR,
     KB_TOOL_NAMES,
 )
-from core.agent_tools.project_files import (open_project_note, plan_items, set_scope as set_project_scope, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, SINGLE_PAGE_MANUAL, project_wanted, single_page_wanted,
+from core.agent_tools.project_files import (open_project_note, plan_items, set_scope as set_project_scope, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, SINGLE_PAGE_MANUAL, project_wanted, single_page_wanted, finish_result_ok,
                                             tool_project_append, tool_project_finish, tool_project_plan, tool_project_write)
 from .models import ChatRunRequest
 
 
-def _record_chat_usage(res_dict, sent_tokens, msgs, tools) -> None:
+def _record_chat_usage(res_dict, sent_tokens, msgs, tools, lane="main") -> None:
     """Feed one real usage count back into the shared budget accounting.
 
     Only server-reported counts may anchor the learner: a fallback guess would teach
@@ -107,7 +111,74 @@ def _record_chat_usage(res_dict, sent_tokens, msgs, tools) -> None:
     """
     u = (res_dict or {}).get("usage") or {}
     if u.get("prompt_tokens"):
-        context_budget.record_usage("main", sent_tokens, u["prompt_tokens"], msgs, tools)
+        context_budget.record_usage(lane, sent_tokens, u["prompt_tokens"], msgs, tools)
+
+
+# What the page shows when a turn ends with nothing to say. Never the model's hidden reasoning and never a tool's raw output:
+# neither went through the reply checks (redactor, semantic rules), and either can carry text the person must not see.
+_NOTHING_TO_SAY = "I could not produce an answer this time. Press Continue to try again."
+_BUILD_UNFINISHED = "The build did not finish; press Continue."
+_PROJECT_PACKED = "The build did not finish by itself, so I packaged the files that were saved."
+_NO_REPLY = "(no reply)"        # an assistant message with no text and no tool call: some providers refuse an empty one (HTTP 400)
+_ARCHIVE_OR_RASTER = (".zip", ".tar", ".gz", ".tgz", ".7z", ".rar", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico",
+                      ".exe", ".bin")      # a [DOWNLOAD: x.zip] tag with a code block is a made-up name, not a file to save as text
+
+
+async def _local_fallback_client():
+    """The local model's client for a cloud turn that failed, started now if it is not running. None when it cannot be had.
+    Called only after the cloud call failed (routes/common/fallback.py): a cloud-only chat never waits for llama-server."""
+    target = state.profile_path or state.profile or common.initial_profile_path
+    if not target:
+        return None
+    try:
+        if state.process is None or state.process.poll() is not None:
+            await state.ensure_running(target)
+        return state.client
+    except Exception as e:
+        print(f"[chat] local fallback unavailable: {e}", file=sys.stderr)
+        return None
+
+
+async def _auto_finish_project():
+    """Pack the website files that are saved and return the names in the [DOWNLOAD: ...] tags of the result, or None when
+    there was nothing to pack. Run in a worker thread (it zips and writes files); the model's own text for it is never shown."""
+    try:
+        from core.agent_tools.project_files import finish_if_possible
+        fin = await run_in_executor_ctx(finish_if_possible)
+    except Exception as e:
+        print(f"[chat] project auto-finish failed: {type(e).__name__}", file=sys.stderr)
+        return None
+    names = [n.strip() for n in _DL_TAG_RE.findall(fin or "")] if fin else []
+    return names or None
+
+
+def _history_text(text: str, cap: int = 1500) -> str:
+    """The reply text kept in the history when a turn is discarded and redone. Never empty (some providers refuse an empty
+    assistant message), and a whole pasted page is cut: it is dropped from the screen anyway and would only cost tokens."""
+    t = (text or "").strip()
+    if not t:
+        return _NO_REPLY
+    return t if len(t) <= cap else t[:cap] + f"\n[{len(t) - cap} more characters left out]"
+
+
+async def _salvaged_links(written, query, known) -> str:
+    """The [DOWNLOAD: ...] links of files saved before a run failed or was stopped, checked against the disk. '' when none."""
+    if not written:
+        return ""
+    try:
+        text, _ = await run_in_executor_ctx(finalize_reply_files, "", list(written), query, known, False)
+        return text.strip()
+    except Exception as e:
+        print(f"[chat] could not list the saved files: {type(e).__name__}", file=sys.stderr)
+        return "\n".join(f"[DOWNLOAD: {n}]" for n in written)
+
+
+def _packed_message(names) -> str:
+    return _PROJECT_PACKED + "\n\n" + "\n".join(f"[DOWNLOAD: {n}]" for n in names)
+
+
+def _is_pasted_page(text: str) -> bool:
+    return len(text or "") > 1500 and ("<html" in text.lower() or "```" in text)
 
 
 WEB_AFTER_KB_BLOCK = (" The user has web search turned on, so you may search the public web for general or public "
@@ -201,6 +272,25 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     absent_type = missing_type(own_q, prior_files)
     if absent_type:
         file_followup = None            # user wants a new type that has NOT been made in this chat: build it, do not edit existing file
+    media_files = session_media(msgs)
+    if media_files and media_where_intent(own_q, media_files, bool(prior_files)):
+        # "where is the image?" / "give me the link again" after a picture: its own link (the generated/ folder kept), not a
+        # model call that would make a new picture or invent a link
+        from core.media.storage import markdown_for as _media_md
+        import mimetypes as _mimetypes
+
+        def _media_item(p):
+            return {"path": p, "mime": _mimetypes.guess_type(p)[0] or "image/png"}
+        reply = "Here it is again:\n\n" + _media_md([_media_item(media_files[-1])], "your picture")
+        for older in reversed(media_files[:-1][-3:]):
+            reply += f"\n\n[DOWNLOAD: {older}]"
+
+        async def _media_where_sse():
+            yield f"event: delta\ndata: {json.dumps({'text': reply})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0})}\n\n"
+        return StreamingResponse(_media_where_sse(), media_type="text/event-stream")
+    if file_followup == "edit" and last_reply_was_media(msgs) and not names_a_document(own_q):
+        file_followup = None            # "make it blue" after a picture changes the picture (a new generation), not an older document
     if file_followup == "where":
         # "where is the file?" - answer with the existing link instead of
         # asking a slow local model to regenerate (and usually invent) it.
@@ -899,71 +989,95 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             yield f"event: custom_agent\ndata: {json.dumps({'id': custom_agent['id'], 'name': custom_agent['name'], 'icon': custom_agent.get('icon', '🤖')})}\n\n"
         if kb_blocked_reason:
             yield f"event: kb_blocked\ndata: {json.dumps({'message': kb_blocked_reason})}\n\n"
-        chat_rid = monitor_begin("chat/run", True, n_msgs=len(msgs),
-                                 model=clean_model_name, source=model_source, provider=model_provider)
+        # What the cleanup in `finally` reads exists before anything can raise: a failure while the run is being registered
+        # (monitor, runs table, output redactor) must still end its rows instead of leaving them "running".
+        chat_rid, redactor, research, final_prompt_toks = None, None, None, None
+        written_files = []
         run_id = uuid.uuid4().hex
         run_end_state, run_end_reason, turn = "completed", None, -1
-        runaway_hits = 0
-        consecutive_tool_failures = 0
-        circuit_breaker_tripped = False
-        recent_tool_signatures = []
-        runs.begin(run_id, "chat", user.id, stage="stream")
-        t0 = time.time()
+        research_from, research_answered = len(msgs), False
         speed = SpeedTally()        # llama-server's own generation / prompt speed for the badge (routes/chat/speed.py)
-        turn_limit = max_turns       # grows by one if a continuation nudge needs it
-        web_calls = 0
-        web_seen = set(research_in["keys"]) if research_in else set()     # a carried search is not run again
-        research = chat_research.Collector(research_in) if research_carry else None   # this turn's web results (see finally)
-        research_from = len(msgs)
-        research_answered = False       # set just before "done": the turn ended with a real answer
-        research_empty = False          # the reply was our "I searched for information..." stand-in, not the model's answer
-        research_nudged = False
-        wrapup_warned = False     # the "few rounds left" note is given once
-        continued = False
-        lane_fallback_tried = False     # a failed 3D lane round is redone once on the main model, never twice
-        project_done = False      # project_finish has produced the ZIP
-        project_nudges = 0
-        size_retried = False      # a write_file refused as too big gets one more round, even on the last one
-        finish_reason = None
-        written_files = []
-        write_redirected = set()     # core.agent_loop.doc_redirect: the "use doc_create for a PDF / Word / deck" refusal is said once
-        made_media = []              # markdown of pictures/videos generate_image made this turn
-        made_prompts = []            # the prompts of those pictures: the same picture is not made twice in one turn
-        media_repeat_seen = False
-        media_kind = "image"         # what was made last (the fixed reply sentence)
-        media_allowed = 1            # how many pictures the user asked for (core/media_tools.copies_wanted)
-        if chat_media_tools:
-            from core import media_tools as _mt0
-            media_allowed = _mt0.copies_wanted(own_q or last_query)
-        final_prompt_toks = None     # same figure goes to the done event and the monitor
-        # Budget from the shared accounting, not a hardcoded fraction: the probed window
-        # when the server reports one (falling back to config), tightened by the learned
-        # estimator error. The old `* 0.7` ignored the margin config, the safety factor,
-        # and cloud cost caps - the three things context_budget exists to enforce.
-        ctx_window = await context_budget.probe_window("main", main_client)
-        if not ctx_window:
-            ctx_window = int(common.main_ctx_tokens(cloud_main))
-        ctx_budget = context_budget.budget_for("main", ctx_window, cloud=bool(cloud_main))
-        # --- Output sanitizer: redact model deltas before they reach the
-        # client (cloud_only rules only fire while the lane is cloud; the
-        # fallback event recreates the redactor for the local lane).
-        redactor = output_guard.OutputRedactor(user, model_source == "cloud",
-                                               sentence_release=voice_policy.sentence_release(req), fx=True)
-        think_redactor = output_guard.OutputRedactor(user, model_source == "cloud")
-        guard_event_sent = False
-
-        def _guard_notice():
-            nonlocal guard_event_sent
-            if redactor.matched and not guard_event_sent:
-                guard_event_sent = True
-                return (f"event: guard\ndata: "
-                        + json.dumps({"rule": redactor.matched.get("name"),
-                                      "message": redactor.matched.get("message")}) + "\n\n")
-            return ""
-
+        t0 = time.time()
         try:
+            chat_rid = monitor_begin("chat/run", True, n_msgs=len(msgs),
+                                     model=clean_model_name, source=model_source, provider=model_provider)
+            runaway_hits = 0
+            consecutive_tool_failures = 0
+            circuit_breaker_tripped = False
+            recent_tool_signatures = []
+            runs.begin(run_id, "chat", user.id, stage="stream")
+            turn_limit = max_turns       # grows by one if a continuation nudge needs it
+            web_calls = 0
+            web_seen = set(research_in["keys"]) if research_in else set()     # a carried search is not run again
+            research = chat_research.Collector(research_in) if research_carry else None   # this turn's web results (see finally)
+            research_from = len(msgs)
+            research_answered = False       # set just before "done": the turn ended with a real answer
+            research_empty = False          # the reply was our fixed "could not produce an answer" sentence, not the model's
+            research_nudged = False
+            wrapup_warned = False     # the "few rounds left" note is given once
+            continued = False
+            lane_fallback_tried = False     # a failed 3D lane round is redone once on the main model, never twice
+            project_done = False      # project_finish has produced the ZIP
+            project_nudges = 0
+            fixed_reply = False              # the reply is one of our fixed sentences: no further notes are added to it
+            project_nudges_spent = False     # the last of the 3 nudges was used: the next text-only reply is packed by the server
+            size_retried = False      # a write_file refused as too big gets one more round, even on the last one
+            finish_reason = None
+            # read after the loop even when it ended before its first round (turn_limit 0): they must exist
+            content, reasoning, res_dict, current_tools, sent_tokens, streamed_content = "", "", None, None, 0, []
+            written_files = []
+            write_redirected = set()     # core.agent_loop.doc_redirect: the "use doc_create for a PDF / Word / deck" refusal is said once
+            made_media = []              # markdown of pictures/videos generate_image made this turn
+            made_prompts = []            # the prompts of those pictures: the same picture is not made twice in one turn
+            media_repeat_seen = False
+            media_kind = "image"         # what was made last (the fixed reply sentence)
+            media_allowed = 1            # how many pictures the user asked for (core/media_tools.copies_wanted)
+            if chat_media_tools:
+                from core import media_tools as _mt0
+                media_allowed = _mt0.copies_wanted(own_q or last_query)
+            # the picture is the whole request only when nothing else was asked for in the same message ("write a report and
+            # include an image", "search the web and make a banner" need their tools after the picture): only then are the
+            # tools taken away and the turn cut short once the pictures are made
+            media_only = not (wants_file or has_file or has_web or kb_used or bool(explicit_ext) or project_build or doc_build
+                              or bool(brief_phase) or (chat_media_tools and _mt0.has_other_intent(own_q or last_query)))
+            final_prompt_toks = None     # same figure goes to the done event and the monitor
+            # Budget from the shared accounting, not a hardcoded fraction: the probed window
+            # when the server reports one (falling back to config), tightened by the learned
+            # estimator error. The old `* 0.7` ignored the margin config, the safety factor,
+            # and cloud cost caps - the three things context_budget exists to enforce.
+            # keyed by what answers (a cloud model, the 3D lane, the local main model): the window and the learned ratio of one
+            # are not those of another, and a cloud request after a local one must not get the local window
+            def _bl():
+                return context_budget.lane_key("main", cloud_key=(getattr(cloud_main, "key", None) or cloud_main.model_id)
+                                               if cloud_main and model_source == "cloud" else None, lane3d=bool(lane3d))
+
+            async def _window_and_budget():
+                win = 0 if (cloud_main and model_source == "cloud") else await context_budget.probe_window(_bl(), main_client)
+                if not win:
+                    win = int(common.main_ctx_tokens(cloud_main if model_source == "cloud" else None))
+                return win, context_budget.budget_for(_bl(), win, cloud=bool(cloud_main and model_source == "cloud"))
+
+            ctx_window, ctx_budget = await _window_and_budget()
+            # --- Output sanitizer: redact model deltas before they reach the
+            # client (cloud_only rules only fire while the lane is cloud; the
+            # fallback event recreates the redactor for the local lane).
+            redactor = output_guard.OutputRedactor(user, model_source == "cloud",
+                                                   sentence_release=voice_policy.sentence_release(req), fx=True)
+            think_redactor = output_guard.OutputRedactor(user, model_source == "cloud")
+            guard_event_sent = False
+
+            def _guard_notice():
+                nonlocal guard_event_sent
+                if redactor.matched and not guard_event_sent:
+                    guard_event_sent = True
+                    return (f"event: guard\ndata: "
+                            + json.dumps({"rule": redactor.matched.get("name"),
+                                          "message": redactor.matched.get("message")}) + "\n\n")
+                return ""
+
             turn = -1
             budget_hit = False      # the run stopped because it used its rounds or its time, not because the model was done
+            planned_end = False     # a tool result itself ended the rounds on purpose (file saved, repeated call): not an unfinished run
             if project_resume:
                 # last in the conversation, where the model reads it: after a stop the whole original request is still above, and
                 # without this the model starts the site again from index.html
@@ -1041,7 +1155,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     web_calls >= max_web_calls or turn >= turn_limit - 2))
                 if brief_phase == "build" and written_files:
                     research_over = True
-                if made_media and len(made_media) >= media_allowed and not wants_file:
+                if made_media and len(made_media) >= media_allowed and media_only:
                     # every picture asked for is made: no tools for the reply (the model cannot make it again, and the prompt
                     # loses the tool schemas); the server appends the picture and its link
                     current_tools = None
@@ -1111,15 +1225,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                          else {})
 
                 if cloud_main and cloud.cloud_bindings(user.id).get("fallback_local", True):
-                    fb_local = None
-                    target = state.profile_path or state.profile or common.initial_profile_path
-                    if target:
-                        try:
-                            if state.process is None or state.process.poll() is not None:
-                                await state.ensure_running(target)
-                            fb_local = state.client
-                        except Exception as e:
-                            print(f"[chat] local fallback unavailable: {e}", file=sys.stderr)
+                    # the local model is started only if the cloud call fails (a cloud-only chat never waits for llama-server)
+                    fb_local = _local_fallback_client
                     chat_rep = deck_lim["repeat_penalty"] or (1.0 if current_tools else (req.repeat_penalty if req.repeat_penalty is not None else 1.15))
                     chat_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, msgs, current_tools, req.temperature,
@@ -1136,7 +1243,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 # taken post-shrink with the exact tools of this turn - an estimate from
                 # before compaction, or without the schemas, would teach the budget learner
                 # the wrong ratio.
-                sent_tokens = context_budget.prompt_tokens_for("main", msgs, current_tools)
+                sent_tokens = context_budget.prompt_tokens_for(_bl(), msgs, current_tools)
                 async for ev, val in chat_stream:
                     if ev == "queued":
                         yield f"event: queued\ndata: {json.dumps(val)}\n\n"
@@ -1158,6 +1265,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         redactor = output_guard.OutputRedactor(user, False,
                                                                sentence_release=voice_policy.sentence_release(req), fx=True)
                         think_redactor = output_guard.OutputRedactor(user, False)
+                        ctx_window, ctx_budget = await _window_and_budget()      # the local model's window, not the cloud one's
                         continue
                     if ev == "thought_delta":
                         _t = think_redactor.feed(val)
@@ -1222,8 +1330,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     return
 
                 content = res_dict.get("content", "") if res_dict else "".join(streamed_content)
-                if cont_prefix:
-                    content = cont_prefix + content          # the answer is the earlier part plus what this turn added
+                turn_prefix, cont_prefix = cont_prefix, ""      # used once: a later turn must not start with this text again
+                if turn_prefix:
+                    content = turn_prefix + content          # the answer is the earlier part plus what this turn added
+
+                def _new(c):             # what the model wrote this turn: the earlier part is already in msgs
+                    return c[len(turn_prefix):] if turn_prefix and c.startswith(turn_prefix) else c
                 reasoning = res_dict.get("reasoning", "") if res_dict else ""
                 tool_calls = res_dict.get("tool_calls", []) if res_dict else []
                 finish_reason = res_dict.get("finish_reason") if res_dict else None
@@ -1236,7 +1348,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 # and only a preamble ("Let me compile...") reached the content
                 if not tool_calls:
                     parsed_tc = _extract_text_tool_calls(content) if content else []
-                    if not parsed_tc and reasoning:
+                    # the reasoning only when the reply is empty or a short "Let me ... :" lead-in: a call that is merely
+                    # mentioned while thinking ("I could save it with <tool_call>...") must not run beside a finished answer
+                    if (not parsed_tc and reasoning and (not content.strip()
+                                                         or (len(content.strip()) < 400 and looks_undelivered(content, False, False)))):
                         parsed_tc = _extract_text_tool_calls(reasoning)
                     if parsed_tc:
                         tool_calls = parsed_tc
@@ -1247,7 +1362,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         and auto_continues < int(chat_cfg.get("auto_continue", 3))):
                     auto_continues += 1
                     cont_prefix = content
-                    msgs.append({"role": "assistant", "content": content})
+                    msgs.append({"role": "assistant", "content": _new(content) or _NO_REPLY})
                     msgs.append({"role": "user", "content": prompt_scope.CONTINUE_CUT_NOTE.format(tail=content[-240:])})
                     if turn >= turn_limit - 1:
                         turn_limit += 1
@@ -1318,13 +1433,22 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     try:
                         already_saved = _common_resolve(
                             dl_f.strip() if dl_f.strip().startswith("generated/") else clean_fname).is_file()
-                    except PermissionError:
+                    except (PermissionError, ValueError):
                         already_saved = False
                     # a tag for a file that already exists is a link to it, never a
                     # cue to regenerate it from the reply text
                     if _wraps_media(made_media, clean_fname, last_query) and not already_saved:
                         content = _re.sub(rf'[ \t]*\[DOWNLOAD:\s*{_re.escape(dl_f)}\][ \t]*', '', content)
                         yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+                        continue
+                    if clean_fname not in written_files and not already_saved and clean_fname.lower().endswith(_ARCHIVE_OR_RASTER):
+                        # an archive / picture cannot be made from the reply text: the code block would be saved as a text file
+                        # with a .zip name. Treat it like any tag without content (nudge once, then drop the dead link).
+                        missing_dl.append(clean_fname)
+                        continue
+                    if project_build and clean_fname not in written_files and not already_saved:
+                        # a website turn saves through the project tools only: a fenced snippet is not a file to recover
+                        # (a ```bash block was saved as a "download"); the dead tag is dropped by the link check
                         continue
                     if clean_fname not in written_files and not already_saved:
                         # Extract matching code fence or full content to save to common storage
@@ -1361,7 +1485,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             missing_dl.append(clean_fname)
 
                         if cand_code:
-                            res_str = (chat_write_file({"path": clean_fname, "content": cand_code})
+                            # off the event loop: a deck / page saved here may fetch pictures from this same loop (deadlock otherwise)
+                            res_str = (await run_in_executor_ctx(chat_write_file, {"path": clean_fname, "content": cand_code})
                                        if tool_allowed("write_file") else "error: tool 'write_file' is not enabled for the active custom agent")
                             if res_str.startswith("error:"):
                                 # the write failed: keep the tag as a dead link so the
@@ -1418,7 +1543,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         redactor.reset()
                         yield "event: delta_reset\ndata: {}\n\n"
                         yield sse("tool_call", {'id': tc_id, 'name': 'write_file', 'args': {'path': target_filename, 'content': data_to_save}})
-                        res_str = (chat_write_file({"path": target_filename, "content": data_to_save})
+                        res_str = (await run_in_executor_ctx(chat_write_file, {"path": target_filename, "content": data_to_save})
                                    if tool_allowed("write_file") else "error: tool 'write_file' is not enabled for the active custom agent")
                         ok = not res_str.startswith("error:")
                         target_filename = _saved_filename(res_str, target_filename)
@@ -1447,7 +1572,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                         gen_toks = max(1, round(len(content) / 3.5))
                         prompt_toks = final_prompt_toks = _prompt_tokens_of(None, msgs, current_tools)
-                        _record_chat_usage(None, sent_tokens, msgs, current_tools)
+                        _record_chat_usage(None, sent_tokens, msgs, current_tools, _bl())
                         research_answered = True
                         yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks, **speed.as_event()})}\n\n"
                         return
@@ -1477,6 +1602,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             lane3d = None
                             main_client = state.client
                             turn_max_tokens = turn_max_tokens_main
+                            ctx_window, ctx_budget = await _window_and_budget()
                             fb_name = state.profile.get("model_path", "") if state.profile else ""
                             clean_model_name = Path(fb_name).name.replace(".gguf", "") if fb_name else "Main LLM"
                             model_display = f"\U0001F9E0 {clean_model_name}"
@@ -1495,12 +1621,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 if (project_build and not tool_calls and not project_done and project_nudges < 3 and tool_allowed("project_write")
                         and not _re.search(r"\[DOWNLOAD:[^\]]*\.zip\]", content or "")):
                     project_nudges += 1
+                    project_nudges_spent = project_nudges >= 3
                     if turn >= turn_limit - 1:
                         turn_limit += 1
                     if streamed_content:
                         redactor.reset()
                         yield "event: delta_reset\ndata: {}\n\n"
-                    msgs.append({"role": "assistant", "content": content or ""})
+                    msgs.append({"role": "assistant", "content": _history_text(_new(content))})
                     msgs.append({"role": "user", "content": (
                         (open_project_note() or
                          "[system note] The website is not finished: do not describe it, call a tool now. Call project_plan if there is no "
@@ -1509,24 +1636,20 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         + " Do not describe it: call a tool now.")})
                     continue
 
-                # The nudges are used up and the model still stopped before project_finish: build what is saved and hand over the
-                # download link ourselves. A page pasted into the reply is dropped (it only costs tokens; the file is the result).
-                if project_build and not tool_calls and not project_done and project_nudges >= 3:
-                    try:
-                        from core.agent_tools.project_files import finish_if_possible
-                        _fin = finish_if_possible()
-                    except Exception as _fe:
-                        _fin = None
-                        print(f"[chat] project auto-finish failed: {type(_fe).__name__}", file=sys.stderr)
-                    if _fin:
+                # The nudges are used up and the model still stopped before project_finish (a text-only reply again): build what is
+                # saved and hand over the download link ourselves. The reader sees one fixed sentence and the links only: what the
+                # model pasted (a page costs tokens, the file is the result) and the tool's own wording are not shown.
+                if project_build and not tool_calls and not project_done and project_nudges_spent:
+                    _packed = await _auto_finish_project()
+                    if _packed:
                         project_done = True
-                        if len(content or "") > 1500 and ("<html" in content.lower() or "```" in content):
-                            content = ""
-                            if streamed_content:
-                                redactor.reset()
-                                yield "event: delta_reset\ndata: {}\n\n"
-                        content = ((content or "").rstrip() + "\n\n" if (content or "").strip() else "") + \
-                                  "The build did not finish by itself, so I packaged the files that were saved.\n\n" + _fin
+                        written_files.extend(n for n in _packed if n not in written_files)
+                        continued = True            # delivered: the "you announced it but did not produce it" nudge must not run
+                        content = _packed_message(_packed)
+                        yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
+                    elif _is_pasted_page(content):
+                        content = _BUILD_UNFINISHED     # nothing could be packed: do not leave the pasted page as the result
+                        fixed_reply = continued = True      # a status sentence: no "announced but not produced" nudge, no "not generated" note
                         yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
                 # Announced-but-not-delivered: "Let me compile the HTML now:" and
@@ -1545,7 +1668,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if streamed_content:
                         redactor.reset()
                         yield "event: delta_reset\ndata: {}\n\n"
-                    msgs.append({"role": "assistant", "content": content or ""})
+                    msgs.append({"role": "assistant", "content": _new(content).strip() and _new(content) or _NO_REPLY})
                     if doc_flow and build_undelivered:
                         nudge = ("[system note] The user's answers are already in the conversation: do not ask anything and do not "
                                  "write the document as text. Call doc_create now with the first part of the document as markdown "
@@ -1569,7 +1692,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                           f'*(file `{mf}` was not generated - please ask again)*', content)
                     yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
 
-                if (not tool_calls and continued and wants_file and not written_files
+                if (not tool_calls and continued and wants_file and not written_files and not fixed_reply
                         and looks_undelivered(content, True, False)):
                     # the one nudge was spent and the model still only promised
                     # the file - say so instead of leaving a fake "here it comes"
@@ -1588,26 +1711,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             # and its link follow
                             content = _MEDIA_DONE.get(media_kind, _MEDIA_DONE["image"])
                             yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
-                        elif reasoning and len(reasoning.strip()) > 15:
-                            content = reasoning.strip()
-                            yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
                         else:
+                            # nothing to say: one fixed sentence. Not the hidden reasoning and not a tool's raw output, which
+                            # never passed the redactor / semantic rules and may hold text the reader must not see
                             research_empty = True
-                            last_tool_results = [m.get("content", "") for m in msgs if m.get("role") == "tool"]
-                            if last_tool_results:
-                                summary_lines = []
-                                for tr in last_tool_results[-3:]:
-                                    cleaned_tr = str(tr).strip()
-                                    if not cleaned_tr.startswith("error:"):
-                                        summary_lines.append(cleaned_tr[:500])
-                                if summary_parts := summary_lines:
-                                    content = "I searched for information on your query:\n\n" + "\n\n---\n\n".join(summary_parts)
-                                else:
-                                    content = "Search completed, but no relevant details were returned."
-                                yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
-                            else:
-                                content = "I have processed your request."
-                                yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+                            content = _NOTHING_TO_SAY
+                            yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
 
                     content, _qz_fixed = questionnaire.repair(content)      # a card the client cannot parse shows as raw JSON
                     if _qz_fixed:
@@ -1619,7 +1728,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if _clean != content:
                         content = _clean
                         yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
-                    content, _chg = finalize_reply_files(content, written_files, last_query, prior_files, tool_allowed("write_file"))
+                    content, _chg = await run_in_executor_ctx(finalize_reply_files, content, written_files, last_query, prior_files,
+                                                              tool_allowed("write_file"))     # may save a page: not on the loop
                     if _chg:
                         yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
                     if made_media:
@@ -1651,7 +1761,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if not gen_toks and content:
                         gen_toks = max(1, round(len(content) / 3.5))
                     prompt_toks = final_prompt_toks = _prompt_tokens_of(res_dict, msgs, current_tools)
-                    _record_chat_usage(res_dict, sent_tokens, msgs, current_tools)
+                    _record_chat_usage(res_dict, sent_tokens, msgs, current_tools, _bl())
                     async for _vc in verifier.sse_events(user, "chat", last_query, content, msgs,
                                                          main_client, req.verify, model_source == "cloud"):
                         yield _vc
@@ -1666,6 +1776,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                 clean_tool_calls = []
                 tool_results_list = []
+                _limit_before = turn_limit
                 for idx, tc in enumerate(tool_calls):
                     fn = tc.get("function", {})
                     t_name = fn.get("name", "web_search")
@@ -1751,7 +1862,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             res_str = "error: failed"
                             if _mt.repeat_blocked(len(made_media), media_allowed, args.get("prompt"), made_prompts):
                                 # weak local models call the tool again after it worked (each run takes minutes)
-                                res_str = _mt.CHAT_ALREADY_MADE
+                                # all made: say so; some still wanted but this prompt repeats one: ask for a different picture
+                                res_str = _mt.CHAT_ALREADY_MADE if len(made_media) >= media_allowed else _mt.CHAT_SAME_AGAIN
                                 print(f"[chat] image tool called again - skipped (already made {len(made_media)})", file=sys.stderr)
                                 if len(made_media) >= media_allowed and not media_repeat_seen:
                                     # a call written as text in the tool-free round: give the reply one more round instead of
@@ -1770,7 +1882,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                             made_prompts.append(str(args.get("prompt") or ""))
                                             media_kind = "image" if t_name == "generate_image" else "video"
                                             res_str = _mt.chat_result_text(media_kind, done)
-                                            if len(made_media) >= media_allowed and not wants_file:
+                                            if len(made_media) >= media_allowed and media_only:
                                                 turn_limit = min(turn_limit, turn + 2)     # one more round: it only words the reply
                         elif t_name == "write_file" and (_redirect := _doc_redirect.write_note(
                                 t_name, args, {t.get("function", {}).get("name") for t in (current_tools or [])}, write_redirected)):
@@ -1801,7 +1913,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                                     "project_finish": tool_project_finish}[t_name]
                             res_str = await run_in_executor_ctx(impl, args)
                             written_files.extend(f for f in _DL_TAG_RE.findall(res_str) if f not in written_files)
-                            if t_name == "project_finish" and not res_str.startswith("error:"):
+                            if t_name == "project_finish" and finish_result_ok(res_str):
                                 project_done = True
                                 turn_limit = min(turn_limit, turn + 1)
                             items = await run_in_executor_ctx(plan_items, args.get("project"))
@@ -1875,6 +1987,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             f_path = hist_args.get("path") or hist_args.get("file") or "file"
                             c_len = len(str(hist_args["content"]))
                             hist_args["content"] = f"<{c_len} chars written to {f_path}>"
+                    elif t_name in ("doc_create", "doc_append", "doc_edit", "run_sandbox_python"):
+                        # the same saving for the document and sandbox tools: the text is in the file, and the whole body
+                        # would be sent again to the model on every later round of this reply and on the next turns
+                        for _k in ("content", "code", "ops"):
+                            _v = hist_args.get(_k)
+                            _txt = _v if isinstance(_v, str) else (json.dumps(_v, ensure_ascii=False) if _k == "ops" and _v else "")
+                            if len(_txt) > 1200 if _k == "ops" else len(_txt) > 400:
+                                hist_args[_k] = _txt[:300] + f" ... [{len(_txt)} chars saved to the file]"
 
                     clean_tool_calls.append({
                         "id": tc_id,
@@ -1883,29 +2003,30 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     })
                     tool_results_list.append((tc_id, res_str))
 
-                msgs.append({"role": "assistant", "content": content or "", "tool_calls": clean_tool_calls})
+                if turn_limit < _limit_before:
+                    planned_end = True
+                msgs.append({"role": "assistant", "content": _new(content) or "", "tool_calls": clean_tool_calls})
                 for tid, r_out in tool_results_list:
                     msgs.append({"role": "tool", "tool_call_id": tid, "content": r_out})
 
             # Guaranteed synthesis pass: if the turn loop finished and the last message in msgs is a tool response,
             # the model executed tools but hasn't yet synthesized the final text answer for the user.
             # Call the model with tools=None to force it to formulate a comprehensive final answer!
-            budget_cut = bool(msgs and msgs[-1].get("role") == "tool")
+            # the loop above only ends through `break` (rounds used up, run time over, repeated failures) or a `return` that never
+            # gets here, so budget_hit says it: the last message is not a reliable sign (a nudge or a tool result can end it)
+            budget_cut = budget_hit
             if budget_cut:
                 streamed_content = []
                 res_dict = None
                 wrap_filter = ToolTextFilter()
-                wrap_msgs = list(msgs) + ([{"role": "user", "content": WRAPUP_NOTE}] if budget_hit else [])
+                wrap_msgs = list(msgs)
+                if budget_hit:
+                    if wrap_msgs and wrap_msgs[-1].get("role") == "user":      # no two user messages in a row (strict templates refuse)
+                        wrap_msgs[-1] = {**wrap_msgs[-1], "content": str(wrap_msgs[-1].get("content") or "") + "\n\n" + WRAPUP_NOTE}
+                    else:
+                        wrap_msgs.append({"role": "user", "content": WRAPUP_NOTE})
                 if cloud_main and cloud.cloud_bindings(user.id).get("fallback_local", True):
-                    fb_local = None
-                    target = state.profile_path or state.profile or common.initial_profile_path
-                    if target:
-                        try:
-                            if state.process is None or state.process.poll() is not None:
-                                await state.ensure_running(target)
-                            fb_local = state.client
-                        except Exception:
-                            pass
+                    fb_local = _local_fallback_client
                     final_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)
                     final_stream = common._llm_chat_stream_with_fallback(
                         main_client, fb_local, wrap_msgs, None, req.temperature,
@@ -1961,34 +2082,34 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 # the run was cut off with work open: show a real status instead of markup / the provider's placeholder, and let
                 # the person press Continue
                 if budget_hit or circuit_breaker_tripped:
-                    reason = "circuit_breaker" if circuit_breaker_tripped else "budget"
+                    # the true reason: failing steps, the wall-clock limit, or the rounds
+                    reason = "circuit_breaker" if circuit_breaker_tripped else ("timeout" if run_end_reason == "timeout" else "budget")
                     content, _replaced = finish_text(content, turn_limit, written_files, reason=reason)
+                    if project_build and not project_done:
+                        # a website that was cut off half way is still handed over: pack what is saved, as at the end of the nudges
+                        _packed = await _auto_finish_project()
+                        if _packed:
+                            project_done = True
+                            written_files.extend(n for n in _packed if n not in written_files)
+                            content = content.rstrip() + "\n\n" + _packed_message(_packed)
+                            _replaced = True
                     if _replaced:
                         yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
                     yield f"event: budget_stop\ndata: {json.dumps({'turns': turn_limit, 'reason': reason})}\n\n"
+                    # a run that stopped with work open can be resumed: it is not a "completed" run (routes/agent/run_manager.py
+                    # keeps the done event's state)
+                    if reason != "budget" or not planned_end:
+                        run_end_state, run_end_reason = "stopped", reason
 
             # Robust fallback: if content is still empty, never terminate silently without output
             if not (content and content.strip()):
                 if made_media:
                     content = _MEDIA_DONE.get(media_kind, _MEDIA_DONE["image"])
                     yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
-                elif reasoning and len(reasoning.strip()) > 15:
-                    content = reasoning.strip()
-                    yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
                 else:
                     research_empty = True
-                    last_tool_results = [m.get("content", "") for m in msgs if m.get("role") == "tool"]
-                    if last_tool_results:
-                        summary_lines = ["I searched for information on your query:\n"]
-                        for tr in last_tool_results[-3:]:
-                            cleaned_tr = str(tr).strip()[:500]
-                            if not cleaned_tr.startswith("error:"):
-                                summary_lines.append(cleaned_tr)
-                        content = "\n\n---\n\n".join(summary_lines)
-                        yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
-                    else:
-                        content = "I have processed your request."
-                        yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+                    content = _NOTHING_TO_SAY
+                    yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
 
             if "<tool_call>" in content or "<function=" in content or "<function " in content:
                 # the tool-free wrap-up turn tried to call a tool as text: never show that markup as the answer
@@ -2005,7 +2126,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             if _clean != content:
                 content = _clean
                 yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
-            content, _chg = finalize_reply_files(content, written_files, last_query, prior_files, tool_allowed("write_file"))
+            content, _chg = await run_in_executor_ctx(finalize_reply_files, content, written_files, last_query, prior_files,
+                                                      tool_allowed("write_file"))     # may save a page: not on the loop
             if _chg:
                 yield f"event: delta_replace\ndata: {json.dumps({'text': content})}\n\n"
             if made_media:
@@ -2025,22 +2147,29 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             if not gen_toks and content:
                 gen_toks = max(1, round(len(content) / 3.5))
             prompt_toks = final_prompt_toks = _prompt_tokens_of(res_dict, msgs, current_tools)
-            _record_chat_usage(res_dict, sent_tokens, msgs, current_tools)
+            _record_chat_usage(res_dict, sent_tokens, msgs, current_tools, _bl())
 
             async for _vc in verifier.sse_events(user, "chat", last_query, content, msgs,
                                                  main_client, req.verify, model_source == "cloud"):
                 yield _vc
             research_answered = not (budget_hit or circuit_breaker_tripped or research_empty)
-            yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks, **speed.as_event()})}\n\n"
+            # a stopped run says so (state "stopped": it can be continued); the page shows no extra marker for a bare note
+            _end = {"state": "stopped", "note": run_end_reason} if run_end_state == "stopped" else {}
+            yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks, **speed.as_event(), **_end})}\n\n"
         except asyncio.CancelledError:
             run_end_state = "cancelled"
+            # files already saved stay reachable: their links are sent before the stream ends
+            _links = await _salvaged_links(written_files, last_query, prior_files)
+            if _links:
+                yield f"event: delta\ndata: {json.dumps({'text': _links})}\n\n"
         except Exception as e:
             run_end_state, run_end_reason = "failed", type(e).__name__
             print(f"[chat] request failed: {type(e).__name__}: {e}", file=sys.stderr)
-            yield f"event: delta\ndata: {json.dumps({'text': friendly_chat_error(e)})}\n\n"
-            yield f"event: done\ndata: {{}}\n\n"
+            _links = await _salvaged_links(written_files, last_query, prior_files)
+            yield f"event: delta\ndata: {json.dumps({'text': friendly_chat_error(e) + (chr(10) * 2 + _links if _links else '')})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'state': 'failed', 'note': type(e).__name__})}\n\n"
         finally:
-            runs.end(run_id, run_end_state, run_end_reason, step=turn)
+            runs.end(run_id, run_end_state, run_end_reason, step=turn, resumable=True if run_end_state == "stopped" else None)
             if research is not None:
                 # real answer: the carried research has served its purpose; anything else (error, Stop, budget / timeout /
                 # circuit breaker, empty reply) keeps what the model found for the next "continue". Never raises, never logs text.
@@ -2053,7 +2182,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             chat_research.save(req.session_id, user.id, research_query, research)
                 except Exception as e:
                     print(f"[chat] research carry not stored: {type(e).__name__}", file=sys.stderr)
-            if redactor.matched:
+            if redactor is not None and redactor.matched:
                 audit_log(user, action="output_guard.redact", resource=redactor.matched.get("name"),
                           detail={"endpoint": "chat/run", "scope": redactor.matched.get("scope"),
                                   "hits": redactor.hits}, result="deny")
@@ -2068,9 +2197,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 if prompt_scope.scope_logging_enabled():
                     print(f"[prompt] chat/run cache: reused {speed.first_cached} tok, read {speed.first_read} tok "
                           f"at the start of this reply", file=sys.stderr)
-            monitor_end(chat_rid, 200, prompt_tokens=ptoks, completion_tokens=toks, tps=tps, duration=dt, prompt_tps=speed.prompt_tps(),
-                        model=clean_model_name, prompt_cached=pcached, completion_cached=0,
-                        source=model_source, provider=model_provider)
+            if chat_rid is not None:         # the run was never registered when monitor_begin itself failed
+                monitor_end(chat_rid, 200, prompt_tokens=ptoks, completion_tokens=toks, tps=tps, duration=dt, prompt_tps=speed.prompt_tps(),
+                            model=clean_model_name, prompt_cached=pcached, completion_cached=0,
+                            source=model_source, provider=model_provider)
             db_record_request("chat/run", clean_model_name, ptoks, toks, tps, dt, None, True, 200,
                               prompt_cached_tokens=pcached, completion_cached_tokens=0, is_orchestrator=False,
                               source=model_source, provider=model_provider, user_id=user.id, run_id=run_id)

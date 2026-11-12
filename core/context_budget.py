@@ -41,6 +41,17 @@ MIN_WINDOW = 512
 _STATE: dict = {}
 
 
+def lane_key(base: str = "main", cloud_key: Optional[str] = None, lane3d: bool = False) -> str:
+    """Accounting key for one lane of ONE model. A lane name alone ("main") is shared by everyone, so the window, the learned
+    chars-per-token ratio and the usage anchor of a local model leaked into a cloud request after it (and into the 3D lane).
+    "main" stays the local main model; a cloud model is "main:cloud:<key>"; the dedicated 3D lane is "main:lane3d"."""
+    if cloud_key:
+        return f"{base}:cloud:{cloud_key}"
+    if lane3d:
+        return f"{base}:lane3d"
+    return base
+
+
 def _state(lane: str) -> dict:
     st = _STATE.get(lane)
     if st is None:

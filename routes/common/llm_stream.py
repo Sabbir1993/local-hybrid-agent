@@ -5,11 +5,16 @@ import sys
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
+
+import httpx
+
 from core import reasoning
 from core.agent_loop import safe_parse_and_repair_args
 from core.limits import cloud_gate
 from core.llm_messages import normalize_system_messages
 from core.request_context import get_current_user_id
+from core.config import (LOCAL_HTTP_CONNECT_TIMEOUT_S, LOCAL_HTTP_POOL_TIMEOUT_S, LOCAL_HTTP_READ_TIMEOUT_S,
+                         LOCAL_HTTP_WRITE_TIMEOUT_S)
 from core.small_model import APP_CONFIG
 from core.state import state
 
@@ -194,6 +199,21 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
         mine.release()
 
 
+def _stream_timeout(client) -> dict:
+    """The `timeout=` for client.stream(). It used to be timeout=None, which switches every limit off and overrode the
+    client's own read timeout (core/state.py): a model server that accepted the request and then went silent held the turn
+    and its run slot for ever. Now the client's own limits apply (the cloud client: its provider's 300 s). The read limit is
+    per chunk, not per answer, so a long prefill (minutes before the first token) and a long generation still work. A
+    client built without a read limit gets the local one."""
+    if getattr(client, "is_cloud", False):
+        return {}
+    t = getattr(client, "timeout", None)
+    if isinstance(t, httpx.Timeout) and t.read is not None:
+        return {}
+    return {"timeout": httpx.Timeout(connect=LOCAL_HTTP_CONNECT_TIMEOUT_S, read=LOCAL_HTTP_READ_TIMEOUT_S,
+                                     write=LOCAL_HTTP_WRITE_TIMEOUT_S, pool=LOCAL_HTTP_POOL_TIMEOUT_S)}
+
+
 # clients (by base URL / cloud model key) that rejected a tool_choice field
 _TOOL_CHOICE_UNSUPPORTED: set = set()
 
@@ -277,7 +297,7 @@ async def _llm_chat_stream_raw_inner(client_or_state, msgs: list, tools=None, te
     if grammar:
         payload["grammar"] = grammar
 
-    async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=None) as response:
+    async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, **_stream_timeout(client_or_state)) as response:
         if response.status_code != 200:
             err_text = await response.aread()
             err_msg = err_text.decode("utf-8", "replace")[:300]
@@ -333,7 +353,7 @@ async def _llm_chat_stream_raw_inner(client_or_state, msgs: list, tools=None, te
                 # or invalid GBNF). Retry once unconstrained so the lane survives.
                 print(f"[common] grammar-constrained request rejected ({response.status_code}: {err_msg[:120]}) - retrying without grammar", file=sys.stderr)
                 payload.pop("grammar", None)
-                async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=None) as rg:
+                async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, **_stream_timeout(client_or_state)) as rg:
                     if rg.status_code != 200:
                         rg_err = await rg.aread()
                         # The unconstrained retry can be the attempt that crosses the
@@ -371,7 +391,7 @@ async def _llm_chat_stream_raw_inner(client_or_state, msgs: list, tools=None, te
                         m_copy["tool_calls"] = new_tcs
                     sanitized_msgs.append(m_copy)
                 payload["messages"] = sanitized_msgs
-                async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, timeout=None) as retry_resp:
+                async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, **_stream_timeout(client_or_state)) as retry_resp:
                     if retry_resp.status_code != 200:
                         re_err = await retry_resp.aread()
                         # Same hole as the grammar retry: this sanitized attempt can be
@@ -385,7 +405,7 @@ async def _llm_chat_stream_raw_inner(client_or_state, msgs: list, tools=None, te
                         payload_notools = dict(payload)
                         payload_notools.pop("tools", None)
                         try:
-                            async with client_or_state.stream("POST", "/v1/chat/completions", json=payload_notools, timeout=None) as fb_resp:
+                            async with client_or_state.stream("POST", "/v1/chat/completions", json=payload_notools, **_stream_timeout(client_or_state)) as fb_resp:
                                 if fb_resp.status_code == 200:
                                     async for item in _process_sse_stream(fb_resp, rid=rid):
                                         yield item

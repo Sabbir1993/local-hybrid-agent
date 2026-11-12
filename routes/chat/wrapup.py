@@ -67,7 +67,10 @@ def status_text(turns: int, files, reason: str = "budget") -> str:
     if names:
         done = " Already saved: " + ", ".join(dict.fromkeys(names[-4:])) + "."
     if reason == "circuit_breaker":
-        return (f"I stopped after repeated tool errors to prevent an infinite loop.{done} "
+        return (f"I stopped because the same step failed several times in a row.{done} "
+                "Press **Continue** and I will carry on from where it stopped.")
+    if reason == "timeout":
+        return (f"This reply ran out of time before the work was finished.{done} "
                 "Press **Continue** and I will carry on from where it stopped.")
     return (f"I used all {turns} steps for this reply before the work was finished.{done} "
             "Press **Continue** and I will carry on from where it stopped.")

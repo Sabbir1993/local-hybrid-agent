@@ -147,7 +147,7 @@ class ChatMediaTests(unittest.TestCase):
         r = self.turn("make 2 images of a cat", [tool_call("a grey cat on a sofa"), tool_call("a grey cat on a sofa!", 2),
                                                  text("ok")])
         self.assertEqual(len(r.prompts), 1)
-        self.assertEqual(r.tool_results[1]["result"], media_tools.CHAT_ALREADY_MADE)
+        self.assertEqual(r.tool_results[1]["result"], media_tools.CHAT_SAME_AGAIN)      # one more is wanted: "make a different one"
         self.assertIn("generate_image", r.tools[1])                     # still one allowed: the model may try another
 
     def test_copies_wanted(self):

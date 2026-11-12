@@ -66,7 +66,12 @@ def _pick_deliverables(written: list[str], query: str) -> list[str]:
         latest[Path(f).suffix.lower()] = f
     picked = [f for f in cands if f in latest.values()]
     # a project's ZIP (project_finish) is always a deliverable next to its preview page, whatever type the request names
-    return picked + [f for f in uniq if f.lower().endswith(".zip") and f not in picked]
+    zips = [f for f in uniq if f.lower().endswith(".zip") and f not in picked]
+    # a second project_finish in one turn made a second ZIP of the same site: only the newest per site (<slug>-<8 hex>.zip) stays
+    newest = {}
+    for f in zips:
+        newest[re.sub(r"-[0-9a-f]{8}\.zip$", "", f.lower())] = f
+    return picked + [f for f in zips if f in newest.values()]
 
 
 def _misspelled_tags(content: str, written: list[str], known: list[str]) -> list[str]:
@@ -107,16 +112,37 @@ def _finalize_download_tags(content: str, written: list[str], query: str, known:
     return out, out != (content or "")
 
 
+_MEDIA_IMG_RX = re.compile(r"!\[[^\]]*\]\(\s*/agent/raw\?path=([^)\s]+)\s*\)")
+_MEDIA_TAG_RX = re.compile(r"\[(DOWNLOAD|VIDEO):\s*([^\]\n]+?)\s*\]")
+
+
+def _media_keys(text: str) -> set:
+    """What a reply already shows of the pictures: ("img", path) for each inline picture, ("DOWNLOAD" | "VIDEO", path) for each
+    tag, the path unquoted and trimmed so "[DOWNLOAD:  generated/x.png ]" and %2F spellings count as the same."""
+    from urllib.parse import unquote
+    keys = {("img", unquote(m.group(1)).strip()) for m in _MEDIA_IMG_RX.finditer(text)}
+    keys |= {(m.group(1), m.group(2).strip()) for m in _MEDIA_TAG_RX.finditer(text)}
+    return keys
+
+
 def _finalize_media(content: str, made: list[str]) -> tuple[str, bool]:
     """Pictures/videos made this turn are always shown: append each result's
     markdown line (image / [VIDEO:] / [DOWNLOAD:]) the reply doesn't carry yet.
-    The model may drop or garble it, and it only saw a copy of the path."""
+    The model may drop or garble it, and it only saw a copy of the path. Each kind of line is checked on its own: a reply
+    with only the download tag still gets the inline picture, and a tag with extra spaces is not added a second time."""
     out = (content or "").rstrip()
+    have = _media_keys(out)
     for md in made:
         for line in (ln.strip() for ln in md.split("\n")):
-            m = re.search(r"path=([^)\s]+)\)", line)          # an image: its path; a tag: the tag
-            if line and (m.group(1) if m else line) not in out:
-                out += "\n\n" + line
+            if not line:
+                continue
+            keys = _media_keys(line)
+            if keys and keys <= have:
+                continue
+            if not keys and line in out:
+                continue
+            out += "\n\n" + line
+            have |= keys
     return out, out != (content or "")
 
 
@@ -301,7 +327,7 @@ def _file_exists(name: str) -> bool:
     # a picture / clip lives in generated/ and its tag keeps that folder (core/media): the bare name would never be found there
     target = name if name.replace("\\", "/").lstrip("/").startswith("generated/") else Path(name).name
     try:
-        p = _resolve_requested_file(target, space="common", recover=False)
+        p = _resolve_requested_file(target, space="common", recover=False, strict=True)   # the exact name only: a guess served a stale file
         return bool(p and p.is_file())
     except Exception:
         return False

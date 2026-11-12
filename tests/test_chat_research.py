@@ -315,7 +315,7 @@ class RouteTests(unittest.TestCase):
     def test_empty_reply_after_a_search_counts_as_unfinished(self):
         self.turn([{"role": "user", "content": self.Q}], [("search", SEARCH_Q), "empty"])
         self.assertIsNotNone(self.row())
-        self.assertIn("I searched for information", "".join(self.events))     # the user still sees the stand-in text
+        self.assertIn("I could not produce an answer this time", "".join(self.events))     # the user sees the fixed sentence, not the tool text
 
     def test_nothing_found_nothing_saved(self):
         self.turn([{"role": "user", "content": self.Q}], ["error"])

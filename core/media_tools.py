@@ -12,6 +12,7 @@ run_python) because they can cost money. Sub-agents never get these tools.
 
 import asyncio
 import re
+import unicodedata
 
 from .registry import registry
 from .request_context import get_current_user_id
@@ -120,27 +121,106 @@ def chat_result_text(kind: str, res: dict) -> str:
 
 
 # How many pictures one chat turn may make: what the user asked for, never more than 4 (each takes minutes on this PC).
-_NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "a couple": 2, "couple": 2, "a few": 3, "few": 3}
-_COPIES_RE = re.compile(
-    r"\b([1-9]|one|two|three|four|five|six|a couple(?: of)?|couple of|a few|few)\s+(?:[\w-]+\s+){0,2}?"
-    r"(?:image|picture|photo|logo|illustration|variation|version|design|poster)s?\b", re.I)
+# The request is read as a list: the parts joined by "and", commas, "then" are each one picture (or the number in front of
+# its noun): "a logo, a poster and a banner" = 3, "2 logos and a poster" = 3. A count that belongs to something else
+# ("3 page poster", "3D", "a cat with 2 eyes", "an image of 4 frames") is not a number of pictures.
 MAX_COPIES = 4
+_NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+                 "a couple of": 2, "a couple": 2, "couple of": 2, "a few": 3, "few": 3,
+                 "এক": 1, "দুই": 2, "দুটি": 2, "দুটো": 2, "তিন": 3, "চার": 4, "পাঁচ": 5, "ছয়": 6, "সাত": 7, "আট": 8, "নয়": 9, "দশ": 10}
+_NOUNS = (r"(?:images?|pictures?|photos?|logos?|illustrations?|variations?|versions?|designs?|posters?|banners?|icons?|drawings?"
+          r"|paintings?|sketch(?:es)?|wallpapers?|avatars?|thumbnails?|stickers?|flyers?|mockups?|renders?"
+          r"|ছবি|চিত্র|লোগো|পোস্টার|ব্যানার|আইকন)")
+_NUM = (r"(?:\d{1,2}|" + "|".join(re.escape(w) for w in sorted(_NUMBER_WORDS, key=len, reverse=True)) + r")(?:টি|টা|খানা)?")
+# a number, up to two words, a picture noun - the number is not "of"/"with"/"in" something else
+_COUNTED_RE = re.compile(r"(?<![\w])(?P<n>" + _NUM + r")(?![\w])\s+(?P<mid>(?:[^\W\d_]+[ \t]+){0,2}?)(?P<noun>" + _NOUNS + r")(?![\w])(?P<after>\s+\w+)?",
+                         re.I)
+_BN_COUNT_AFTER_RE = re.compile(r"(?<![\w])(\d+)(?:টি|টা|খানা)(?![\w])")
+_NOUN_RE = re.compile(r"(?<![\w])" + _NOUNS + r"(?![\w])", re.I)
+_PLURAL_RE = re.compile(r"(?<![\w])(?:images|pictures|photos|logos|illustrations|variations|versions|designs|posters|banners|icons|drawings"
+                        r"|paintings|sketches|wallpapers|avatars|thumbnails|stickers|flyers|mockups|renders)(?![\w])", re.I)
+_DRAW_RE = re.compile(r"\b(?:draw|paint|sketch|illustrate|render)\b|আঁক|বানাও|তৈরি", re.I)
+_DETERMINER_RE = re.compile(r"\b(?:a|an|another|one|the|this|that|my|our)\b", re.I)
+_LEAD_ITEM_RE = re.compile(r"^\s*(?:(?:a|an|another|one)\b|" + _NUM + r"(?![\w]))", re.I)
+_SPLIT_RE = re.compile(r"\s*(?:[,;]|\.\s|\n|\s(?:and then|and also|after that|and|then|also|plus)\s|\s(?:এবং|আর|তারপর)\s)\s*", re.I)
+# what a number in front of a picture noun may really count (so it is not a number of pictures)
+_NOT_PICTURES = {"page", "pages", "slide", "slides", "step", "steps", "d", "px", "pixel", "pixels", "inch", "inches", "colour", "colours",
+                 "color", "colors", "column", "columns", "row", "rows", "section", "sections", "word", "words", "line", "lines"}
+_OF_BEFORE = {"of", "with", "having", "has", "in", "per", "each", "every", "for", "from", "by"}
 
 CHAT_ALREADY_MADE = ("note: the picture is already made and shown to the user, with a download link. "
                      "Do not make it again: reply with one short sentence.")
+CHAT_SAME_AGAIN = ("note: that is the same picture as one just made. The user asked for more than one, so make a different one "
+                   "(another subject or style), or reply with one short sentence if they are all made.")
+
+
+def _number(tok: str) -> int:
+    t = re.sub(r"(?:টি|টা|খানা)$", "", tok.strip().lower())
+    if t in _NUMBER_WORDS:
+        return _NUMBER_WORDS[t]
+    try:
+        return int("".join(str(unicodedata.digit(c)) for c in t))     # digits of any script (Bangla, Arabic-Indic, ...)
+    except (TypeError, ValueError):
+        return 1
+
+
+def _segment_count(seg: str) -> tuple:
+    """(pictures this part of the request asks for, whether it names a picture or a drawing action)."""
+    for m in _COUNTED_RE.finditer(seg):
+        before = re.findall(r"[\w]+", seg[:m.start()].lower())[-1:]
+        mid = set(re.findall(r"\w+", m.group("mid").lower()))
+        after = (m.group("after") or "").strip().lower()
+        if (before and before[0] in _OF_BEFORE) or (mid & _NOT_PICTURES) or after in _NOT_PICTURES:
+            continue
+        n = _number(m.group("n"))
+        if 1 <= n <= 20:
+            return n, True
+    m = _BN_COUNT_AFTER_RE.search(seg)
+    if m and (_NOUN_RE.search(seg) or _DRAW_RE.search(seg)):
+        return max(1, min(20, _number(m.group(0)))), True
+    if _NOUN_RE.search(seg):
+        return 1, True
+    if _DRAW_RE.search(seg):
+        n = re.search(r"\b(?:draw|paint|sketch|illustrate|render)\s+(?:me\s+)?(" + _NUM + r")(?![\w])", seg, re.I)
+        return (_number(n.group(1)) if n else 1), True
+    return 0, False
 
 
 def copies_wanted(query: str, kind: str = "image") -> int:
-    """Pictures the user's own message asks for: a digit or number word before image/picture/..., "a couple" = 2, "few" = 3,
-    otherwise 1; at most MAX_COPIES. A video is always one."""
+    """Pictures the user's own message asks for, at most MAX_COPIES: the parts of the request joined by "and" / commas / "then"
+    (one each, or the number in front of the noun), numbers 1-20 as digits of any script or as words, "a couple" = 2, "a few" = 3.
+    A video is always one."""
     if kind == "video":
         return 1
-    m = _COPIES_RE.search(str(query or ""))
-    if not m:
-        return 1
-    w = re.sub(r"\s+of$", "", m.group(1).lower())
-    n = int(w) if w.isdigit() else _NUMBER_WORDS.get(w, 1)
-    return max(1, min(MAX_COPIES, n))
+    total, listed_by_verb, first = 0, False, True
+    for seg in _SPLIT_RE.split(str(query or "")):
+        if not seg or not seg.strip():
+            continue
+        n, hit = _segment_count(seg)
+        if hit:
+            bare_plural = bool(_PLURAL_RE.search(seg)) and not _DETERMINER_RE.search(seg) and not _COUNTED_RE.search(seg)
+            if bare_plural and total:
+                n = 0                       # "2 logos and posters": the plural noun joins the list, it is not one more picture
+            listed_by_verb = listed_by_verb or (first and not _NOUN_RE.search(seg))
+            first = False
+            total += n
+        elif (listed_by_verb and _LEAD_ITEM_RE.match(seg)) or (total and re.match(r"\s*(?:\d{1,2})(?![\w])\s+of\b", seg)):
+            lead = re.match(r"\s*(" + _NUM + r")(?![\w])", seg, re.I)
+            total += _number(lead.group(1)) if lead and lead.group(1)[0].isdigit() else 1      # "draw a cat and a dog", "... then 1 of dogs"
+    return max(1, min(MAX_COPIES, total or 1))
+
+
+# Words that mean the message asks for something besides the picture ("write a report and include an image", "search the web and
+# make a banner", "draw a cat and tell me the weather"). Then the chat keeps its tools after the picture is made.
+_OTHER_INTENT_RE = re.compile(
+    r"\b(write|report|summar\w*|search|look\s*up|research|find|weather|news|forecast|price|tell\s+me|explain\w*|describ\w*|document"
+    r"|blog|article|essay|email|letter|poem|story|analy\w*|compare|translate|calculat\w*|code|script|spreadsheet|table|presentation"
+    r"|slides?|deck|pdf|plan|list|what|how|why|who|when|where)\b", re.I)
+
+
+def has_other_intent(query: str) -> bool:
+    """True when the message asks for more than pictures: the tools stay on after the picture is made."""
+    return bool(_OTHER_INTENT_RE.search(str(query or "")))
 
 
 def _prompt_words(prompt: str) -> set:
@@ -149,13 +229,14 @@ def _prompt_words(prompt: str) -> set:
 
 def repeat_blocked(made: int, allowed: int, prompt: str, made_prompts: list) -> bool:
     """True when another picture must not be made this turn: as many as were asked for exist already, or this prompt is
-    (nearly) one already used - at least 80% of the words are the same (overlap / the longer prompt)."""
+    (nearly) one already used. While more are still wanted only an almost identical prompt counts (95% of the words the
+    same): two pictures of one subject in two styles are what "make 2 logos" asks for."""
     if made >= allowed:
         return True
     words = _prompt_words(prompt)
     if not words:
         return False
-    return any(len(words & old) / max(len(words), len(old)) >= 0.8 for old in map(_prompt_words, made_prompts) if old)
+    return any(len(words & old) / max(len(words), len(old)) >= 0.95 for old in map(_prompt_words, made_prompts) if old)
 
 
 async def _generate(kind: str, args: dict) -> str:
