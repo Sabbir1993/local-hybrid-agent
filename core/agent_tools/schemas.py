@@ -278,7 +278,7 @@ AGENT_TOOLS = [
             "name": "kb_sql",
             "description": "Read-only SQL (SQLite) over the Excel/CSV files in the company knowledge base: joins between sheets, "
                            "pivots with SUM(CASE WHEN ...), sums / averages / medians / percentiles, several group-bys, month "
-                           "buckets with strftime, top-N. Call with describe=true first to see the table and column names. "
+                           "buckets with strftime, top-N. It runs directly on the stored rows, so large files are fine (no file is loaded): filter with WHERE instead of asking for everything. Call with describe=true first to see the table and column names, and put double quotes around column names that contain spaces. "
                            "A table is named after its document and its tab; the file name of the document names the table as "
                            "well, so a table name that is not spelled exactly still finds the right sheet. Every table also has "
                            "a short handle (K12) that can be used in FROM - that is the safest way to name it. "
@@ -307,8 +307,10 @@ AGENT_TOOLS = [
         "function": {
             "name": "kb_query",
             "description": "Exact counts, lists and group-bys over the Excel/CSV files in the company knowledge base (staff lists, rosters, "
-                           "registers). Use it for 'how many X', 'list all Y where ...', 'count by department'. Call it first with "
-                           "describe=true to see the available tables and their columns. Answers come from the real rows, not from guessing.",
+                           "registers). Use it for a lookup, a count or a list with one or two conditions: 'how many X', 'list all Y "
+                           "where ...', 'count by department'. Column names are matched loosely; if a name is wrong the answer lists "
+                           "the real columns, so retry with one of them. Call it with describe=true to see the tables and their "
+                           "columns. Answers come from the real rows, not from guessing.",
             "parameters": {
                 "type": "object",
                 "properties": {

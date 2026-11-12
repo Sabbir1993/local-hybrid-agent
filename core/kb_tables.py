@@ -9,6 +9,7 @@ Queries are a small structured spec, never raw SQL: column names are mapped to p
 parameters, so a model (or an injected instruction) cannot reach anything but the rows it is allowed to read.
 """
 
+import difflib
 import json
 import re
 from typing import Optional
@@ -131,8 +132,41 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(s).lower())
 
 
+def _tokens(s: str) -> list:
+    return re.findall(r"[a-z0-9]+", str(s).lower())
+
+
+def _abbrev(t: str, w: str) -> bool:
+    """`t` is a short form of the word `w`: same first letter and its letters appear in order ("dept" -> "department")."""
+    if len(t) < 3 or t[0] != w[0]:
+        return False
+    it = iter(w)
+    return all(ch in it for ch in t)
+
+
+def _token_score(q: list, c: list) -> Optional[tuple]:
+    """Every query token must be the start (or a short form) of a different word of the column name ("emp id" ->
+    "Employee ID"). Score: more whole words first, then more word starts, then fewer unused words. None when it does not fit."""
+    free, exact, starts = list(c), 0, 0
+    for t in q:
+        hit = next((w for w in free if w == t), None)
+        if hit is not None:
+            exact += 1
+        else:
+            hit = next((w for w in free if w.startswith(t)), None)
+            if hit is not None:
+                starts += 1
+            else:
+                hit = next((w for w in free if _abbrev(t, w)), None)
+                if hit is None:
+                    return None
+        free.remove(hit)
+    return exact, starts, -len(free)
+
+
 def resolve_column(name: str, columns: list) -> Optional[int]:
-    """Column position by exact (case-insensitive) name, else by a unique partial match."""
+    """Column position by exact (case-insensitive) name, else by a unique partial match, else by a unique best match on
+    word beginnings. Never a guess between several."""
     n = _norm(name)
     if not n:
         return None
@@ -140,7 +174,31 @@ def resolve_column(name: str, columns: list) -> Optional[int]:
     if len(exact) == 1:
         return exact[0]
     part = [i for i, c in enumerate(columns) if n in _norm(c)]
-    return part[0] if len(part) == 1 else None
+    if len(part) == 1:
+        return part[0]
+    q = _tokens(name)
+    if exact or part or not q:
+        return None
+    scored = [(sc, i) for i, c in enumerate(columns) if (sc := _token_score(q, _tokens(c))) is not None]
+    if not scored:
+        return None
+    best = max(sc for sc, _ in scored)
+    top = [i for sc, i in scored if sc == best]
+    return top[0] if len(top) == 1 else None
+
+
+def closest_columns(name: str, columns: list, n: int = 3) -> list:
+    """Up to n real column names that look like `name` (for the 'no such column' message)."""
+    q = _norm(name)
+    by_norm = {}
+    for c in columns:
+        by_norm.setdefault(_norm(c), c)
+    found = [by_norm[m] for m in difflib.get_close_matches(q, list(by_norm), n=n, cutoff=0.5)]
+    qt = _tokens(name)
+    for c in columns:
+        if c not in found and qt and _token_score(qt, _tokens(c)) is not None:
+            found.append(c)
+    return found[:n]
 
 
 def _like(v: str) -> str:
@@ -188,24 +246,33 @@ def run_query(spec: dict, allowed_ids: set, titles: dict) -> dict:
     if spec.get("sheet"):
         tables = [t for t in tables if str(spec["sheet"]).lower() in str(t["sheet"]).lower()]
     db = _db()
-    result = {"tables": [], "groups": {} if group_by else None, "total": 0, "skipped": []}
+    result = {"tables": [], "groups": {} if group_by else None, "total": 0, "skipped": [], "missing": [], "available": [],
+              "hint": ""}
+    if not tables:                                         # tell the model what does exist instead of just "nothing"
+        result["available"] = [_label(t) for t in list_tables(allowed_ids, titles, "")]
+    searched = []
     for t in tables:
         cols = t["columns"]
-        where, params, ok = ["table_id = ?"], [t["id"]], True
+        where, params, bad = ["table_id = ?"], [t["id"]], []
         for f in filters:
             idx = resolve_column(f["column"], cols)
             if idx is None:
-                ok = False
-                break
+                bad.append(str(f["column"]))
+                continue
             sql, p = _cond(str(f.get("op") or "="), idx, f.get("value"))
             where.append(sql)
             params += p
         sel = [resolve_column(c, cols) for c in select]
+        bad += [c for c, i in zip(select, sel) if i is None]
         gidx = resolve_column(group_by, cols) if group_by else None
-        if not ok or any(i is None for i in sel) or (group_by and gidx is None):
-            result["skipped"].append(f"{t['title']} / {t['sheet']}" if t["sheet"] else t["title"])
+        if group_by and gidx is None:
+            bad.append(str(group_by))
+        if bad:
+            result["skipped"].append(_label(t))
+            result["missing"].append({"table": _label(t), "names": list(dict.fromkeys(bad)), "columns": cols})
             continue
         w = " AND ".join(where)
+        searched.append((t, filters))
         n = db.execute(f"SELECT COUNT(*) FROM kb_rows WHERE {w}", params).fetchone()[0]
         entry = {"title": t["title"], "sheet": t["sheet"], "count": n, "columns": [cols[i] for i in sel] if sel else cols,
                  "rows": []}
@@ -224,13 +291,60 @@ def run_query(spec: dict, allowed_ids: set, titles: dict) -> dict:
                     vals += [""] * (len(cols) - len(vals))
                     entry["rows"].append((rownum, [vals[i] for i in sel] if sel else vals))
         result["tables"].append(entry)
+    eq = [f for f in filters if str(f.get("op") or "=") == "="]
+    if result["total"] == 0 and eq:
+        result["hint"] = _equals_hint(db, searched, eq)
     return result
+
+
+def _label(t: dict) -> str:
+    return f"{t['title']} / {t['sheet']}" if t["sheet"] else t["title"]
+
+
+def _equals_hint(db, searched: list, eq: list) -> str:
+    """Nothing equals the value: count (one cheap COUNT per searched table) how many rows contain it instead."""
+    found = 0
+    for t, filters in searched:
+        where, params = ["table_id = ?"], [t["id"]]
+        for f in filters:
+            op = "contains" if f in eq else str(f.get("op") or "=")
+            sql, p = _cond(op, resolve_column(f["column"], t["columns"]), f.get("value"))
+            where.append(sql)
+            params += p
+        found += db.execute(f"SELECT COUNT(*) FROM kb_rows WHERE {' AND '.join(where)}", params).fetchone()[0]
+    if not found:
+        return ""
+    vals = ", ".join(f"'{f.get('value')}'" for f in eq)
+    return f'0 rows equal {vals}, but {found} rows contain it: use op "contains" (or "starts_with").'
+
+
+def _missing_text(missing: list) -> str:
+    """Which column name failed in which table, with that table's real columns and the closest names."""
+    out = []
+    for m in missing[:6]:
+        cols = m["columns"]
+        shown = " | ".join(cols[:40]) + (f" | ... {len(cols) - 40} more" if len(cols) > 40 else "")
+        near = list(dict.fromkeys(c for name in m["names"] for c in closest_columns(name, cols)))[:3]
+        names = ", ".join(f"'{n}'" for n in m["names"])
+        line = f'No column {names} in "{m["table"]}". Its columns: {shown}.'
+        line += (" Closest: " + ", ".join(f"'{c}'" for c in near) + ". Retry with one of these names."
+                 if near else " Retry with one of its column names.")
+        out.append(line)
+    if len(missing) > 6:
+        out.append(f"... {len(missing) - 6} more table(s) lack the named columns")
+    return "\n".join(out)
 
 
 def render(spec: dict, res: dict) -> str:
     if not res["tables"]:
-        extra = f" ({len(res['skipped'])} table(s) lack the named columns)" if res["skipped"] else ""
-        return "(no spreadsheet in the knowledge base matches that request" + extra + ")"
+        if res["missing"]:
+            return _missing_text(res["missing"])
+        if res.get("available"):
+            what = " / ".join(f"'{spec[k]}'" for k in ("source", "sheet") if spec.get(k))
+            av = res["available"]
+            return (f"No spreadsheet matches {what or 'that request'}. Available: " + "; ".join(av[:20])
+                    + (f"; ... {len(av) - 20} more" if len(av) > 20 else "") + ". Retry with part of one of these titles or sheets.")
+        return "(no spreadsheet in the knowledge base matches that request)"
     out = []
     if res["groups"] is not None:
         out.append(f"Count by {spec.get('group_by')} ({res['total']} matching rows):")
@@ -253,8 +367,10 @@ def render(spec: dict, res: dict) -> str:
                 out.append(f"| R{rownum} | " + " | ".join(str(v).replace("|", "/") for v in vals) + " |")
         if res["total"] > sum(len(t["rows"]) for t in res["tables"]):
             out.append("\n(more rows match; narrow the filters or raise limit)")
-    if res["skipped"]:
-        out.append(f"\nNot searched (no such column): {', '.join(res['skipped'][:5])}")
+    if res.get("hint"):
+        out.append("\n" + res["hint"])
+    if res.get("missing"):
+        out.append("\nNot searched (no such column):\n" + _missing_text(res["missing"]))
     return "\n".join(out)
 
 

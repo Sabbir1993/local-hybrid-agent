@@ -197,3 +197,89 @@ class KbSqlTests(TableTestBase):
         from core.agent_tools import AGENT_TOOLS, TOOL_IMPLS
         self.assertIn("kb_sql", TOOL_IMPLS)
         self.assertTrue(any(t["function"]["name"] == "kb_sql" for t in AGENT_TOOLS))
+
+
+class FuzzyColumnTests(unittest.TestCase):
+    COLS = ["Employee ID", "Name", "Department", "Dept Code", "Home Phone", "Mobile Phone", "Salary (BDT)"]
+
+    def test_exact_and_unique_partial_still_win(self):
+        self.assertEqual(kb_tables.resolve_column("name", self.COLS), 1)
+        self.assertEqual(kb_tables.resolve_column("salary", self.COLS), 6)
+
+    def test_word_beginnings_resolve_to_the_one_column(self):
+        self.assertEqual(kb_tables.resolve_column("emp id", self.COLS), 0)
+        self.assertEqual(kb_tables.resolve_column("Emp. ID", self.COLS), 0)
+        self.assertEqual(kb_tables.resolve_column("mob phone", self.COLS), 5)
+
+    def test_whole_word_beats_a_longer_word(self):
+        self.assertEqual(kb_tables.resolve_column("dept", self.COLS), 3)         # the word "Dept" in "Dept Code"
+        self.assertEqual(kb_tables.resolve_column("dept", ["Department", "Name"]), 0)
+
+    def test_ambiguous_is_refused(self):
+        self.assertIsNone(kb_tables.resolve_column("phone", self.COLS))          # two phone columns
+        self.assertIsNone(kb_tables.resolve_column("ph no", self.COLS))
+        self.assertIsNone(kb_tables.resolve_column("zzz", self.COLS))
+        self.assertIsNone(kb_tables.resolve_column("emp dept id x", self.COLS))
+
+    def test_closest_columns(self):
+        self.assertIn("Employee ID", kb_tables.closest_columns("emp id", self.COLS))
+        self.assertIn("Salary (BDT)", kb_tables.closest_columns("salry", self.COLS))
+
+
+class HelpfulFailureTests(TableTestBase):
+    def test_all_tables_skipped_lists_columns_and_closest(self):
+        kb_tables.replace_source(3, kb_structure.rows_to_text([["Employee ID", "Name"], ["E1", "Zed"]], "Big"))
+        titles = {3: "Payroll register"}
+        spec = {"filters": [{"column": "emp number", "op": "=", "value": "E1"}]}
+        out = kb_tables.render(spec, kb_tables.run_query(spec, {3}, titles))
+        self.assertIn("No column 'emp number' in \"Payroll register / Big\". Its columns: Employee ID | Name.", out)
+        self.assertIn("Retry with", out)
+        self.assertNotIn("(no spreadsheet", out)
+        spec = {"filters": [{"column": "empid", "op": "=", "value": "E1"}]}
+        out = kb_tables.render(spec, kb_tables.run_query(spec, {3}, titles))
+        self.assertIn("Closest: 'Employee ID'", out)
+
+    def test_column_list_is_capped(self):
+        cols = [f"C{i}" for i in range(55)]
+        kb_tables.replace_source(3, kb_structure.rows_to_text([cols, ["x"] * 55], "Wide"))
+        spec = {"filters": [{"column": "nothing", "op": "=", "value": "1"}]}
+        out = kb_tables.render(spec, kb_tables.run_query(spec, {3}, {3: "W"}))
+        self.assertIn("... 15 more", out)
+        self.assertNotIn("C54", out)
+
+    def test_partly_skipped_keeps_results_and_adds_the_tail(self):
+        spec = {"filters": [{"column": "Salary", "op": ">", "value": 1}], "count": True}
+        out = kb_tables.render(spec, self.q(**spec))
+        self.assertIn("4 matching row(s).", out)
+        self.assertIn("Not searched (no such column):", out)
+        self.assertIn('No column \'Salary\' in "Vendors / V". Its columns: Vendor | Role.', out)
+
+    def test_source_not_found_lists_what_exists(self):
+        spec = {"source": "nope", "count": True}
+        out = kb_tables.render(spec, self.q(**spec))
+        self.assertIn("No spreadsheet matches 'nope'.", out)
+        self.assertIn("Staff list / Staff", out)
+        self.assertIn("Vendors / V", out)
+
+    def test_equals_hint_only_when_nothing_matched_and_contains_would(self):
+        spec = {"filters": [{"column": "Dept", "op": "=", "value": "Dha"}], "source": "staff", "count": True}
+        out = kb_tables.render(spec, self.q(**spec))
+        self.assertIn("0 rows equal 'Dha', but 2 rows contain it", out)
+        self.assertIn('"contains"', out)
+        spec["filters"][0]["value"] = "Dhaka"                       # rows found: no hint, no extra query
+        res = self.q(**spec)
+        self.assertEqual(res["hint"], "")
+        self.assertNotIn("contain it", kb_tables.render(spec, res))
+        spec["filters"][0]["value"] = "Mars"                        # contains finds nothing either: no hint
+        self.assertEqual(self.q(**spec)["hint"], "")
+
+    def test_no_extra_query_when_rows_were_found(self):
+        calls = []
+        orig = kb_tables._equals_hint
+        with mock.patch.object(kb_tables, "_equals_hint", side_effect=lambda *a: calls.append(1) or orig(*a)):
+            self.q(source="staff", filters=[{"column": "Dept", "op": "=", "value": "Dhaka"}], count=True)
+        self.assertEqual(calls, [])
+
+    def test_fuzzy_name_now_finds_rows(self):
+        r = self.q(source="staff", filters=[{"column": "dept", "op": "=", "value": "Khulna"}], count=True)
+        self.assertEqual(r["total"], 2)

@@ -8,6 +8,7 @@ Output is capped (rows and characters) and card numbers are masked before it is 
 """
 import datetime as _dt
 import difflib
+import json
 import math
 import re
 import sqlite3
@@ -158,13 +159,16 @@ class Workbook:
         self.lock = threading.Lock()
 
 
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
+def _register(conn) -> sqlite3.Connection:
     conn.create_aggregate("MEDIAN", 1, _Median)
     conn.create_aggregate("STDEV", 1, _Stdev)
     conn.create_aggregate("PERCENTILE", 2, _Percentile)
     conn.create_aggregate("MODE", 1, _Mode)
     return conn
+
+
+def _connect() -> sqlite3.Connection:
+    return _register(sqlite3.connect(":memory:", check_same_thread=False))
 
 
 def _add_table(conn, tname: str, headers: list, rows: list) -> list:
@@ -240,6 +244,115 @@ def from_tables(items: list) -> Workbook:
                        "formulas": {}, "preamble": [], "handle": handle, "aliases": aliases})
     _lock(conn)
     return Workbook(conn, tables, [])
+
+
+# ---- the knowledge base's stored rows, queried in place -------------------------------------------------------------
+# kb_sql used to copy every row of every table into a fresh in-memory database before running one query (seconds and
+# hundreds of MB for a big file). Here the rows stay where they are: a second, read-only connection to the same file gets one
+# TEMP VIEW per readable table, and the model's SQL runs against those views. The connection is locked so that the views are
+# the ONLY thing it can read (the real tables hold every source's rows, keyed by table id).
+KB_SAMPLE_ROWS = 1000          # rows looked at to decide which columns are numbers
+
+
+def open_readonly(path: str) -> sqlite3.Connection:
+    """A second, read-only connection to the database file (never the app's own connection)."""
+    uri = Path(path).resolve().as_uri() + "?mode=ro"
+    return _register(sqlite3.connect(uri, uri=True, check_same_thread=False, timeout=10))
+
+
+def _kb_cell(i: int) -> str:
+    return f"json_extract(cells, '$[{int(i)}]')"
+
+
+def _kb_num(i: int) -> str:
+    """SQL for one numeric column: REAL, or NULL for blanks and text (never 0). Thousands separators, % and currency signs
+    are dropped first, like parse_number does for the copy path."""
+    v = _kb_cell(i)
+    for ch in ("৳", "$", "€", "£", "₹", "%", ","):
+        v = f"replace({v}, '{ch}', '')"
+    v = f"trim({v})"
+    return f"CASE WHEN {v} GLOB '*[0-9]*' AND {v} NOT GLOB '*[^0-9.+-]*' THEN CAST({v} AS REAL) END"
+
+
+def _kb_date(i: int) -> str:
+    """SQL for a date column as ISO text, like _iso for the copy path: day-first d/m/y (or d-m-y) becomes YYYY-MM-DD, an ISO
+    value keeps its first 19 characters, anything else stays as stored."""
+    c = _kb_cell(i)
+    v = f"trim({c})"
+    sl = f"replace({v}, '-', '/')"
+    rest = f"substr({sl}, instr({sl}, '/') + 1)"
+    d, mo, y = (f"substr({sl}, 1, instr({sl}, '/') - 1)", f"substr({rest}, 1, instr({rest}, '/') - 1)",
+                f"substr({rest}, instr({rest}, '/') + 1)")
+    ok = (f"({v} NOT GLOB '[0-9][0-9][0-9][0-9]-*' AND {sl} GLOB '*/*/*' AND {sl} NOT GLOB '*[^0-9/]*' "
+          f"AND length({d}) BETWEEN 1 AND 2 AND length({mo}) BETWEEN 1 AND 2 AND length({y}) IN (2, 4) "
+          f"AND CAST({mo} AS INTEGER) BETWEEN 1 AND 12 AND CAST({d} AS INTEGER) BETWEEN 1 AND 31)")
+    yy = f"CASE WHEN length({y}) = 2 THEN '20' || {y} ELSE {y} END"
+    return (f"CASE WHEN {v} = '' THEN NULL WHEN {ok} THEN printf('%s-%02d-%02d', {yy}, CAST({mo} AS INTEGER), CAST({d} AS INTEGER)) "
+            f"WHEN {v} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*' THEN replace(substr({v}, 1, 19), 'T', ' ') ELSE {c} END")
+
+
+def from_kb_views(conn, metas: list) -> Workbook:
+    """A Workbook over TEMP VIEWs on `conn` (see open_readonly), one per entry of `metas` (kb_tables.list_tables rows: id,
+    title, sheet, columns, nrows). Access was decided by the caller: a table that is not in `metas` has no view."""
+    reserved = {"sqlite_master", "sqlite_temp_master", "sqlite_schema", "sqlite_sequence"}
+    reserved |= {str(r[0]).lower() for r in conn.execute("SELECT name FROM main.sqlite_master")}   # no view may shadow a real table
+    used, tables, names = set(reserved), [], set()
+    for m in metas:
+        tid = int(m["id"])                                  # an integer from our own database, never text from the model
+        base = m.get("name") or (f"{m['title']}_{m['sheet']}" if m["sheet"] else m["title"])
+        tname = _ident("t_" + base if base.lower().startswith("sqlite_") else base, used)   # sqlite_* names are reserved
+        headers = list(m["columns"] or [])
+        sample = [json.loads(c) for (c,) in conn.execute(
+            "SELECT cells FROM main.kb_rows WHERE table_id = ? ORDER BY rownum LIMIT ?", (tid, KB_SAMPLE_ROWS))]
+        if not headers:
+            headers = [f"col{i + 1}" for i in range(max((len(r) for r in sample), default=1))]
+        sel, cols, seen = [], [], set()
+        for i, h in enumerate(headers):
+            kind = column_stats([r[i] if i < len(r) else None for r in sample], str(h))["kind"]
+            h = str(h).replace('"', "'").strip() or f"col{i + 1}"
+            cname = h if h.lower() not in seen else f"{h}_{len(seen)}"
+            seen.add(cname.lower())
+            cols.append((cname, "REAL" if kind == "number" else "TEXT"))
+            expr = _kb_num(i) if kind == "number" else _kb_date(i) if kind == "date" else f"CASE WHEN trim({_kb_cell(i)}) = '' THEN NULL ELSE {_kb_cell(i)} END"
+            sel.append(f'{expr} AS "{cname}"')
+        if "row" not in seen:
+            sel.append('rownum AS "Row"')
+            cols.append(("Row", "REAL"))
+        conn.execute(f'CREATE TEMP VIEW "{tname}" AS SELECT ' + ", ".join(sel) + f" FROM main.kb_rows WHERE table_id = {tid}")
+        names.add(tname.lower())
+        aliases = [tname, base, m["sheet"] or base, m["title"]]
+        if m["sheet"] and m["title"] != m["sheet"]:
+            aliases.append(f"{m['title']}_{m['sheet']}")
+        tables.append({"name": tname, "sheet": m["sheet"] or base, "file": m["title"], "cols": cols,
+                       "rows": int(m["nrows"]), "truncated": False, "formulas": {}, "preamble": [],
+                       "handle": m.get("handle") or f"T{len(tables) + 1}", "aliases": aliases})
+    _lock_kb(conn, names)
+    return Workbook(conn, tables, [])
+
+
+def _lock_kb(conn, view_names: set) -> None:
+    """Same limits as _lock, but the authorizer lets a statement read the base table only through one of OUR views."""
+    try:
+        conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)
+    except (AttributeError, sqlite3.Error):
+        pass
+    conn.execute("PRAGMA query_only = ON")
+
+    def auth(action, arg1, arg2, db, source):
+        if action not in _ALLOWED_ACTIONS:
+            return sqlite3.SQLITE_DENY
+        if action == sqlite3.SQLITE_FUNCTION:
+            return sqlite3.SQLITE_DENY if str(arg2 or arg1 or "").lower() in _DENIED_FUNCTIONS else sqlite3.SQLITE_OK
+        if action == sqlite3.SQLITE_READ:
+            name = str(arg1 or "").lower()
+            if name.startswith("sqlite_"):
+                return sqlite3.SQLITE_DENY
+            if source is not None:                    # a view is reading: fine only when it is one of ours
+                return sqlite3.SQLITE_OK if str(source).lower() in view_names else sqlite3.SQLITE_DENY
+            # the statement itself reads: only our views, which live in the temp schema (a real table of the same name is main)
+            return sqlite3.SQLITE_OK if name in view_names and str(db).lower() == "temp" else sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+    conn.set_authorizer(auth)
 
 
 def _authorizer(action, arg1, arg2, db, source):
@@ -621,7 +734,7 @@ def query(wb: Workbook, sql: str, limit: int = DEFAULT_ROWS) -> str:
             msg = str(e)
             if "interrupted" in msg:
                 raise SqlError(f"the query ran longer than {QUERY_TIMEOUT_S:.0f}s: filter earlier or select fewer rows")
-            if "not authorized" in msg:
+            if "not authorized" in msg or "prohibited" in msg:
                 raise SqlError("that statement is not allowed (read-only SELECT over the loaded tables)")
             raise SqlError(_explain(wb, sql, msg))
         except (sqlite3.Warning, sqlite3.ProgrammingError, sqlite3.DatabaseError) as e:

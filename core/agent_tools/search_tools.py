@@ -259,11 +259,24 @@ def _month_filter(wb, args: dict) -> tuple:
     return sheet_sql.add_where(sql, cond), f"(filtered to {ym} on {', '.join(cols)})"
 
 
+def _kb_copy_workbook(db, tables: list):
+    """Fallback for kb_sql: copy the rows into a private in-memory database (slow and large for big files)."""
+    import json as _json
+    from ..sheet_engine import sql as sheet_sql
+    items = []
+    for t in tables:
+        rows = [json_row for (json_row,) in db.execute("SELECT cells FROM kb_rows WHERE table_id = ? ORDER BY rownum LIMIT 200000", (t["id"],))]
+        cols = t["columns"] or [f"col{i + 1}" for i in range(max((len(_json.loads(r)) for r in rows[:50]), default=1))]
+        items.append((_kb_table_name(t["title"], t["sheet"]), t["title"], list(cols), [_json.loads(r) for r in rows],
+                      t["sheet"], f"K{t['id']}"))
+    return sheet_sql.from_tables(items)
+
+
 @kb_guarded
 async def tool_kb_sql(args: dict) -> str:
     """Read-only SQL (joins, pivots, medians, month buckets) over the Excel/CSV sources the user may read."""
     import hashlib
-    import json as _json
+    import sys
     ok, user, cloud, titles = _kb_scope()
     if not ok:
         return titles                                      # the message: nothing readable
@@ -275,23 +288,38 @@ async def tool_kb_sql(args: dict) -> str:
     tables = kb_tables.list_tables(set(titles), titles, str(args.get("source") or ""))
     if not tables:
         return "(no spreadsheet tables in the knowledge base sources you can read)"
-    db = kb_tables._db()
-    items = []
-    for t in tables[:60]:
-        rows = [json_row for (json_row,) in db.execute("SELECT cells FROM kb_rows WHERE table_id = ? ORDER BY rownum LIMIT 200000", (t["id"],))]
-        cols = t["columns"] or [f"col{i + 1}" for i in range(max((len(_json.loads(r)) for r in rows[:50]), default=1))]
-        items.append((_kb_table_name(t["title"], t["sheet"]), t["title"], list(cols), [_json.loads(r) for r in rows],
-                      t["sheet"], f"K{t['id']}"))
+    shown = tables[:60]
+    wb = ro = None
     try:
-        wb = sheet_sql.from_tables(items)
+        # Query the stored rows where they are (a read-only second connection with one view per readable table): nothing is
+        # copied, so a big file costs the same as a small one. If that cannot be set up, fall back to copying the rows.
+        try:
+            path = getattr(kb_tables._db(), "path", None)
+            if not path:
+                raise RuntimeError("database file unknown")
+            ro = sheet_sql.open_readonly(path)
+            wb = sheet_sql.from_kb_views(ro, [{**t, "name": _kb_table_name(t["title"], t["sheet"]), "handle": f"K{t['id']}"}
+                                              for t in shown])
+        except Exception as e:
+            print(f"[kb_sql] in-place query unavailable ({type(e).__name__}: {e}); copying the rows instead", file=sys.stderr)
+            if ro is not None:
+                ro.close()
+                ro = None
+            wb = _kb_copy_workbook(kb_tables._db(), shown)
+        if len(tables) > len(shown):
+            wb.notes.append(f"{len(tables) - len(shown)} more table(s) exist but are not loaded: use source= to narrow the list")
         if args.get("describe") or not args.get("sql"):
             return sheet_sql.describe(wb)
-        sql, month_note = _month_filter(wb, args)
-        out = sheet_sql.query(wb, sql, args.get("limit") or sheet_sql.DEFAULT_ROWS)
-    except sheet_sql.SqlError as e:
-        return f"error: {e}"
-    except ValueError as e:
-        return f"error: {e}"
+        try:
+            sql, month_note = _month_filter(wb, args)
+            out = sheet_sql.query(wb, sql, args.get("limit") or sheet_sql.DEFAULT_ROWS)
+        except sheet_sql.SqlError as e:
+            return f"error: {e}"
+        except ValueError as e:
+            return f"error: {e}"
+    finally:
+        if ro is not None:
+            ro.close()
     try:                                                   # queries can contain names: audit that one ran, store only a hash
         from ..audit import audit_log
         audit_log(user, "kb.query", resource="knowledge",
