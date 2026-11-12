@@ -29,6 +29,8 @@ export interface OAuthItem {
   client?: string; // 'none' | 'auto' | 'preregistered'
   needs_client?: boolean;
   has_client?: boolean;
+  status?: string;
+  error?: string;
 }
 
 const POLL_MS = 2000;
@@ -40,6 +42,9 @@ export function useConnectorOAuth(onChanged: () => void | Promise<void>) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [links, setLinks] = useState<Record<string, string>>({});
+  // manual mode (server is remote, no companion, no public https address): the sign-in page to open, and the state to finish with
+  const [manual, setManual] = useState<Record<string, { url: string; state: string }>>({});
+  const [finishing, setFinishing] = useState<Record<string, boolean>>({});
   const alive = useRef(true);
   // in-flight guard (a second click or the auto sign-in must not start a second flow) and a fresh onChanged
   const connectingRef = useRef<Record<string, boolean>>({});
@@ -63,10 +68,17 @@ export function useConnectorOAuth(onChanged: () => void | Promise<void>) {
       setErr(id, '');
       setNote(id, '');
       setLinks((p) => ({ ...p, [id]: '' }));
+      setManual((p) => ({ ...p, [id]: undefined as any }));
       try {
         const sr = await apiFetch(`/mcp/servers/${encodeURIComponent(id)}/oauth/start`, jsonInit('POST', { scope }));
         if (!sr.ok) throw new Error(await errMsg(sr, 'Could not start sign-in'));
         const start = await sr.json();
+        if (start.mode === 'manual' && /^https:\/\//.test(start.auth_url || '')) {
+          // no polling here: the person finishes by pasting the address their browser ended on (see finishManual)
+          setManual((p) => ({ ...p, [id]: { url: start.auth_url, state: start.state || '' } }));
+          setNote(id, 'One more step: open the connector and follow the 3 steps under Account to finish signing in.');
+          return;
+        }
         if (start.mode === 'redirect' && /^https:\/\//.test(start.auth_url || '')) {
           // this runs after awaits, so a popup blocker may refuse it: always offer the link as well
           const w = window.open(start.auth_url, '_blank', 'noopener');
@@ -120,6 +132,41 @@ export function useConnectorOAuth(onChanged: () => void | Promise<void>) {
     [],
   );
 
+  const finishManual = useCallback(
+    async (id: string, scope: string, pasted: string): Promise<boolean> => {
+      setErr(id, '');
+      setFinishing((p) => ({ ...p, [id]: true }));
+      try {
+        const r = await apiFetch(
+          `/mcp/servers/${encodeURIComponent(id)}/oauth/paste`,
+          jsonInit('POST', { scope, pasted, state: manual[id]?.state || undefined }),
+        );
+        if (!r.ok) throw new Error(await errMsg(r, 'Could not finish sign-in'));
+        const j = await r.json().catch(() => ({} as any));
+        setManual((p) => ({ ...p, [id]: undefined as any }));
+        setNote(id, j.status === 'error' ? 'Signed in, but the connector did not start: ' + (j.error || 'unknown error') : 'Connected.');
+        try {
+          await onChangedRef.current();
+        } catch {
+          /* ignore refresh errors */
+        }
+        return true;
+      } catch (err: any) {
+        setErr(id, 'Sign-in failed: ' + (err?.message || 'unknown error'));
+        return false;
+      } finally {
+        if (alive.current) setFinishing((p) => ({ ...p, [id]: false }));
+      }
+    },
+    [manual],
+  );
+
+  const cancelManual = useCallback((id: string) => {
+    setManual((p) => ({ ...p, [id]: undefined as any }));
+    setErrors((p) => ({ ...p, [id]: '' }));
+    setNotes((p) => ({ ...p, [id]: '' }));
+  }, []);
+
   const disconnect = useCallback(
     async (id: string, scope: string) => {
       setErr(id, '');
@@ -136,7 +183,7 @@ export function useConnectorOAuth(onChanged: () => void | Promise<void>) {
     [],
   );
 
-  return { connecting, errors, notes, links, connect, disconnect };
+  return { connecting, errors, notes, links, manual, finishing, connect, finishManual, cancelManual, disconnect };
 }
 
 interface PanelProps {
@@ -154,6 +201,7 @@ export const ConnectorOAuthPanel: React.FC<PanelProps> = ({ item, isAdmin, oauth
   const [clientErr, setClientErr] = useState('');
   const [clientNote, setClientNote] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
+  const [pasted, setPasted] = useState('');
 
   if (!item.oauth || !item.installed) return null;
 
@@ -242,9 +290,67 @@ export const ConnectorOAuthPanel: React.FC<PanelProps> = ({ item, isAdmin, oauth
           )}
         </div>
       )}
+      {oauth.manual[item.id] && (
+        <div className="cz-client" style={{ marginTop: '12px' }}>
+          <div className="cz-note">
+            <b>Finish signing in</b>
+            <ol style={{ margin: '6px 0 0 18px', padding: 0 }}>
+              <li>
+                Open the sign-in page:{' '}
+                <a href={oauth.manual[item.id].url} target="_blank" rel="noopener noreferrer">
+                  Open sign-in page ↗
+                </a>
+              </li>
+              <li>Approve access.</li>
+              <li>
+                Your browser will then show a page that cannot be reached — that is expected. Copy the full address from the address
+                bar and paste it here.
+              </li>
+            </ol>
+          </div>
+          <div className="cz-fork-row">
+            <input
+              type="text"
+              className="cz-search"
+              value={pasted}
+              onChange={(e) => setPasted(e.target.value)}
+              placeholder="http://127.0.0.1:…/callback?code=…&state=…"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={!!oauth.finishing[item.id]}
+            />
+          </div>
+          <div className="cz-actions">
+            <button
+              className="btn accent cz-act"
+              disabled={!!oauth.finishing[item.id] || !pasted.trim()}
+              onClick={async () => {
+                if (await oauth.finishManual(item.id, scope, pasted.trim())) setPasted('');
+              }}
+            >
+              {oauth.finishing[item.id] ? 'Finishing…' : 'Finish sign-in'}
+            </button>
+            <button
+              className="btn ghost cz-act"
+              disabled={!!oauth.finishing[item.id]}
+              onClick={() => {
+                setPasted('');
+                oauth.cancelManual(item.id);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {oauth.errors[item.id] && (
         <div className="cz-banner warn" role="alert">
           {oauth.errors[item.id]}
+        </div>
+      )}
+      {item.status === 'error' && item.error && !oauth.errors[item.id] && (
+        <div className="cz-banner warn" role="alert">
+          Connector problem: {item.error}
         </div>
       )}
 

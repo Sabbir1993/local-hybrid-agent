@@ -1,5 +1,8 @@
 import asyncio
-from urllib.parse import urlsplit
+import hmac
+import time
+from typing import Optional
+from urllib.parse import parse_qs, quote, urlsplit
 
 from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -10,7 +13,7 @@ from core.audit import audit_log
 from core.auth import Principal
 
 from .base import MANAGE_PERM, _use, router
-from .models import OAuthStartReq
+from .models import OAuthPasteReq, OAuthStartReq
 from .store import _bg_tasks, _can_manage_global, _connect_in_background, _owner_for, _servers_for
 
 
@@ -60,6 +63,54 @@ async def _loopback_flow(user_id: int, name: str, owner, scfg: dict) -> None:
         mcp_oauth.set_status(name, owner, "error", msg[:300])
 
 
+# --- manual mode: RFC 8252 loopback redirect + the person hands the code back by hand --------------------------------
+# For a remote server with no companion and no public https address (the same idea as `gcloud auth login
+# --no-launch-browser`): the provider redirects the browser to http://127.0.0.1:<port>/callback on the PERSON's own
+# machine, where nothing listens, so the browser shows "cannot be reached" - and the address bar still holds the code.
+# They paste that address back here. mcp_oauth._flows holds the PKCE verifier and the 10 minute expiry; this table adds
+# who started the flow and which redirect address the provider was told, so a paste can only finish its own flow.
+_manual: dict = {}          # state -> {"user": id, "owner": id|None, "name": str, "redirect": str}
+MAX_PASTE = 4096
+
+
+def _manual_prune() -> None:
+    """Forget pending hand-back flows whose mcp_oauth flow expired or was used (mcp_oauth prunes its own table)."""
+    for s in [s for s in _manual if s not in mcp_oauth._flows or mcp_oauth._flows[s]["expires"] < time.time()]:
+        _manual.pop(s, None)
+
+
+def _parse_pasted(text: str) -> dict:
+    """Pull code / state / error out of what the person pasted: the full redirect address (query or fragment), or the
+    bare code. Everything else in it is ignored. Never logs or returns the code except to the caller."""
+    text = text.strip()
+    out = {"code": "", "state": "", "error": "", "error_description": ""}
+    if "=" in text or "://" in text or "?" in text:
+        try:
+            parts = urlsplit(text)
+        except ValueError:
+            return out
+        q = parse_qs(parts.query)
+        q.update({k: v for k, v in parse_qs(parts.fragment).items() if k not in q})
+        for k in out:
+            out[k] = (q.get(k) or [""])[0]
+    else:
+        out["code"] = text
+    return out
+
+
+def _manual_flow_for(user_id: int, owner, name: str, state: str) -> Optional[str]:
+    """The pending state of THIS user's flow for this server that matches `state` (constant-time compare), or - when the
+    person pasted only a code and no state is known - the one pending flow they have for it. None otherwise."""
+    mine = [s for s, f in _manual.items() if f["user"] == user_id and f["owner"] == owner and f["name"] == name]
+    if not state:
+        return mine[0] if len(mine) == 1 else None
+    hit = None
+    for s in mine:
+        if hmac.compare_digest(s.encode(), state.encode()):
+            hit = s
+    return hit
+
+
 @router.post("/servers/{name}/oauth/start")
 async def oauth_start(name: str, req: OAuthStartReq, request: Request, user: Principal = Depends(_use)):
     owner, resp = _owner_for(req.scope, user)
@@ -82,14 +133,72 @@ async def oauth_start(name: str, req: OAuthStartReq, request: Request, user: Pri
                 "message": "Finish signing in in the browser window the companion opened."}
     base = _redirect_base() or _same_machine_base(request)
     if not base:
-        return JSONResponse({"error": "Open the companion app on this device to sign in "
-                                      "(it receives the sign-in redirect on 127.0.0.1)."}, status_code=409)
+        return await _manual_start(user, name, owner, scfg)
     try:
         start = await mcp_oauth.begin(name, owner, scfg, redirect_uri=f"{base}/mcp/oauth/callback")
     except Exception as e:
         return JSONResponse({"error": str(e)[:300]}, status_code=502)
     mcp_oauth.set_status(name, owner, "pending")
     return {"mode": "redirect", "status": "pending", "auth_url": start["auth_url"]}
+
+
+async def _manual_start(user: Principal, name: str, owner, scfg: dict):
+    """No companion, no public https base, browser not on the server: loopback redirect, person pastes the result back."""
+    try:
+        start = await mcp_oauth.begin(name, owner, scfg)       # same placeholder machinery the companion flow uses
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:300]}, status_code=502)
+    port = start.get("loopback_port") or mcp_oauth.DEFAULT_DCR_PORT
+    redirect = f"http://127.0.0.1:{port}/callback"
+    ph = quote(mcp_oauth.REDIRECT_PLACEHOLDER, safe="")
+    auth_url = start["auth_url"].replace(ph, quote(redirect, safe=""))
+    _manual_prune()
+    for s in [s for s, f in _manual.items() if f["user"] == user.id and f["owner"] == owner and f["name"] == name]:
+        _manual.pop(s, None)                    # a new attempt replaces the old one
+        mcp_oauth._flows.pop(s, None)
+    _manual[start["state"]] = {"user": user.id, "owner": owner, "name": name, "redirect": redirect}
+    mcp_oauth.set_status(name, owner, "pending")
+    return {"mode": "manual", "status": "pending", "auth_url": auth_url, "state": start["state"]}
+
+
+@router.post("/servers/{name}/oauth/paste")
+async def oauth_paste(name: str, req: OAuthPasteReq, user: Principal = Depends(_use)):
+    """Finish a manual sign-in from the address the browser ended on (or the bare code). The audit trail and every
+    error message carry no code, state or pasted text."""
+    owner, resp = _owner_for(req.scope, user)
+    if resp:
+        return resp
+    audit_log(user, action="mcp.oauth.paste", resource=f"mcp:{name}",
+              permission_key=MANAGE_PERM if owner is None else "chat.use", detail={"scope": req.scope})
+    if len(req.pasted) > MAX_PASTE or len(req.state or "") > 256:
+        return JSONResponse({"error": "that is too long to be a sign-in address - copy only the address bar"}, status_code=413)
+    scfg = _servers_for(owner).get(name)
+    if scfg is None:
+        return JSONResponse({"error": f"unknown server '{name}'"}, status_code=404)
+    got = _parse_pasted(req.pasted)
+    if got["error"]:
+        desc = " ".join(got["error_description"].split())[:160]
+        return JSONResponse({"error": f"the provider refused the sign-in: {got['error'][:60]}"
+                                      + (f" ({desc})" if desc else "")}, status_code=400)
+    if not got["code"]:
+        return JSONResponse({"error": "no sign-in code found - paste the full address from the address bar"}, status_code=400)
+    if got["state"] and req.state and not hmac.compare_digest(got["state"].encode(), req.state.encode()):
+        return JSONResponse({"error": "that address belongs to a different sign-in attempt - start again"}, status_code=400)
+    _manual_prune()
+    state = _manual_flow_for(user.id, owner, name, got["state"] or req.state or "")
+    if state is None:
+        return JSONResponse({"error": "this sign-in expired, was already used, or is not yours - press Connect account again"},
+                            status_code=400)
+    flow = _manual.pop(state)                   # single use, even if the provider then refuses the code
+    try:
+        await mcp_oauth.complete(state, got["code"], flow["redirect"], expect_owner=owner, check_owner=True)
+    except Exception as e:
+        msg = str(e)[:300]
+        mcp_oauth.set_status(name, owner, "error", msg)
+        return JSONResponse({"error": msg}, status_code=400)
+    mcp_oauth.set_status(name, owner, "done")
+    info = await mcp_core.connect_one(name, scfg, owner)
+    return {"ok": True, "status": info.get("status"), "error": info.get("error")}
 
 
 @router.get("/servers/{name}/oauth/status")

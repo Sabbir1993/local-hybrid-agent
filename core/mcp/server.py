@@ -117,6 +117,9 @@ class McpServer:
         except Exception as e:
             self.status = "error"
             self.error = str(e) or type(e).__name__
+            if self.transport == "http":
+                from .diagnose import explain_connect_error
+                self.error = explain_connect_error(e, self.cfg) or self.error
             tail = self._stderr_summary()
             if tail:
                 self.error += f" - stderr: {tail}"

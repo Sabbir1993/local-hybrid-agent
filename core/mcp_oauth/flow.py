@@ -54,7 +54,15 @@ async def _register_client(meta: dict, name: str, owner: Optional[int], redirect
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as client:
         r = await client.post(meta["registration_endpoint"], json=body)
     if r.status_code >= 400:
-        raise RuntimeError(f"client registration failed (HTTP {r.status_code})")
+        # the provider's own reason (e.g. it refuses an http loopback redirect address) is what the person needs to see
+        try:
+            err = r.json()
+        except ValueError:
+            err = {}
+        why = " ".join(str(err.get("error_description") or err.get("error") or "").split())[:160] if isinstance(err, dict) else ""
+        raise RuntimeError(f"client registration failed (HTTP {r.status_code})"
+                           + (f": {why}" if why else "")
+                           + f" - the redirect address was {redirect_uri}")
     info = r.json()
     if not info.get("client_id"):
         raise RuntimeError("client registration returned no client_id")

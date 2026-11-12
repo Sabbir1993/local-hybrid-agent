@@ -28,3 +28,9 @@ class UserPackagesReq(BaseModel):
 
 class OAuthStartReq(BaseModel):
     scope: str = "user"
+
+
+class OAuthPasteReq(BaseModel):
+    scope: str = "user"
+    pasted: str = ""                  # the full address the browser ended on, or just the code
+    state: Optional[str] = None       # only needed when `pasted` is a bare code
