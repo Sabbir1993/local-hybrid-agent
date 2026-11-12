@@ -240,7 +240,7 @@ class ServerLogEndpointTests(unittest.TestCase):
         from routes.control import server_endpoints as se
         tail = collections.deque(["ok line", "card 4111111111111111 seen", "ValueError: boom"], maxlen=200)
         with mock.patch.object(se.state, "_log_tail", tail), mock.patch.object(se.state, "is_running", return_value=False):
-            out = asyncio.run(se.server_log(n=2, user=None))
+            out = asyncio.run(se.server_log(n=2, user=mock.Mock(is_super_admin=True, id=1)))      # the route is super-admin only
         self.assertEqual(len(out["lines"]), 2)
         self.assertNotIn("4111111111111111", " ".join(out["lines"]))
         self.assertEqual(out["lines"][-1], "ValueError: boom")

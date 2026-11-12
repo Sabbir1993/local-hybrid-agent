@@ -3,7 +3,7 @@ import json
 import time
 from pathlib import Path
 from typing import Optional
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from fastapi.responses import JSONResponse
 from core.audit import audit_log
 from core.auth import Principal, user_has_permission
@@ -63,11 +63,15 @@ async def preflight(target: Optional[str] = None, engine: Optional[str] = None,
 
 
 @router.get("/control/log")
-async def server_log(n: int = 80, user: Principal = Depends(require_permission("model.local.load"))):
+async def server_log(n: int = 80, user: Principal = Depends(get_current_user)):
     """The last lines the main model server (llama-server or vLLM) printed, for the admin who is loading a model: when a load
-    fails, this is where the real cause is. Card numbers are masked like everywhere else a log line can travel, and server
-    paths, tokens and keys are hidden (core/pan.py + routes/control/log_scrub.py). The permission is delegable, so the text
-    must not hold more than that person should see."""
+    fails, this is where the real cause is. Super admin only: "model.local.load" can be delegated, and raw server output can hold
+    more than a delegate needs (least privilege); a delegate still sees the scrubbed last_load_error in /control/status. Card
+    numbers are masked like everywhere else a log line can travel, and server paths, tokens and keys are hidden on top
+    (core/pan.py + routes/control/log_scrub.py). API tokens are never super admin, so they cannot read it either."""
+    if not user.is_super_admin:
+        audit_log(user, action="model.log.view", resource="control/log", result="deny")
+        raise HTTPException(status_code=403, detail="super admin only")
     from .log_scrub import scrub_log_lines, scrub_log_text
     lines = scrub_log_lines(state.log_tail(max(1, min(int(n), 300))))
     err = scrub_log_text(state.last_load_error) if state.last_load_error else state.last_load_error

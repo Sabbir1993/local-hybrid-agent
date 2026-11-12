@@ -521,6 +521,18 @@ class CardNumbersInProjectWrites(Base):
         self.assertIn("line 3", r)
         self.assertNotIn("4111", r)
 
+    def test_code_refusal_says_where_and_what_to_do_without_the_digits(self):
+        r = pf._pan_check("var a = 1;\nvar b = 2;\nconst seed = 4111111111111111;\n", "js/game.js")
+        self.assertTrue(r.startswith("error: write refused"), r)
+        self.assertIn("line 3", r)
+        self.assertIn("js/game.js", r)
+        self.assertIn("payment card number", r)
+        self.assertIn("shorter constant (under 13 digits)", r)
+        self.assertIn("Math.random() / Date.now()", r)
+        self.assertIn("If it is a real card number, remove it", r)
+        self.assertNotIn("split", r.lower())                        # no recipe that would hide a real number
+        self.assertNotRegex(r, r"\d{6,}")                            # never the digits (or any long run of them)
+
     def test_a_refused_write_leaves_no_file(self):
         self.plan("c", "index.html")
         r = self.write("c", "index.html", f"<p>pay with {VISA} now</p>")

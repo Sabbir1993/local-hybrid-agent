@@ -14,11 +14,21 @@ async function showLoadLog() {
   const box = $('load-log'), pre = $('load-log-text');
   if (!box || !pre) return;
   try {
-    const r = await fetch('/control/log?n=80');
-    if (!r.ok) return;
-    const j = await r.json();
-    const lines = (j.lines || []).filter(Boolean);
-    pre.textContent = (j.error ? j.error + '\n\n' : '') + (lines.length ? lines.join('\n') : '(the server printed nothing)');
+    let r = await fetch('/control/log?n=80');
+    let j, lines;
+    if (r.ok) {
+      j = await r.json();
+      lines = (j.lines || []).filter(Boolean);
+    } else if (r.status === 403) {
+      // the raw server lines are for the super admin only; a delegate who may load models still gets the (scrubbed) reason
+      r = await fetch('/control/status');
+      if (!r.ok) return;
+      j = { error: (await r.json()).last_load_error };
+      if (!j.error) return;
+      lines = null;
+    } else return;
+    pre.textContent = (j.error ? j.error + (lines === null ? '' : '\n\n') : '') +
+      (lines === null ? '' : (lines.length ? lines.join('\n') : '(the server printed nothing)'));
     box.style.display = '';
     box.open = true;
     pre.scrollTop = pre.scrollHeight;

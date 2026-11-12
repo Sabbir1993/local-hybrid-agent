@@ -24,12 +24,18 @@ from collections import OrderedDict
 TURN_LABELS = {"kb", "kb-note", "kb-web-note", "prior-files", "attached-data-files", "web-lean", "deep", "brief-ask",
                "brief-build", "deck-brief", "pdf-brief", "docx-brief", "explicit-format", "missing-type", "build-resume",
                "cut-off-resume", "research-carry", "project-resume", "mcp"}
+# "kb" is the fenced KB excerpts and "mcp" the server list: data, in the user turn. Their constant operator rules are the
+# sticky system parts "kb-rules" / "mcp-rules" below, so the rules keep system authority and the system prefix does not move.
 # constant manuals that stay once used -> the tool (name or prefix*) that must be offered for the manual to make sense.
 # Every manual has a real need: one without it stayed for 8 hours in turns that offer no file tools at all.
 STICKY_LABELS = {"file-manual": "write_file", "pptx-manual": "doc_create", "xlsx-manual": "doc_create",
                  "html-manual": "write_file", "pdf-tools": "pdf_*", "attached-data": "data_query", "style": "write_file",
                  "visual": "write_file", "sandbox": "run_sandbox_python", "design-skill": "write_file",
-                 "pptx-skill": "doc_create", "pdf-skill": "pdf_*", "spreadsheet-skill": "doc_create"}
+                 "pptx-skill": "doc_create", "pdf-skill": "pdf_*", "spreadsheet-skill": "doc_create",
+                 "kb-rules": "search_knowledge_base", "mcp-rules": "mcp__*"}
+# operator rules that govern turn data: when THIS turn emits one it is always kept (the data it governs is in this turn's
+# message, even if the turn's tool list is empty or cut down); a remembered one still needs its tool like any manual
+RULES_LABELS = {"kb-rules", "mcp-rules"}
 # a kept manual replaces its short stand-in
 REPLACES = {"file-manual": "file-lean", "visual": "no-ascii"}
 # tools that stay offered for the rest of the chat once a turn offered them. run_sandbox_python is NOT one of them: the
@@ -171,6 +177,10 @@ def arrange(parts: list, tools: list, uid=None, session_id=None, allow_tools: bo
             st["parts"].popitem(last=False)               # too much kept: let the oldest manual go
         kept = [(l, t) for l, t in st["parts"].items() if _offered(STICKY_LABELS[l], names)]
         kept_labels = {l for l, _ in kept}
+        for l, t in system:
+            if l in RULES_LABELS and l not in kept_labels:
+                kept.append((l, t))
+                kept_labels.add(l)
         dropped = {REPLACES[l] for l in kept_labels if l in REPLACES}
         base = [(l, t) for l, t in system if l not in STICKY_LABELS and l not in dropped]
         # the kept manuals go FIRST and only ever grow at their end; everything that comes and goes with the turn follows

@@ -288,23 +288,25 @@ class StatusAndLogRouteTests(unittest.TestCase):
         u.id = 5
         return u, perms
 
-    def test_status_gates_and_scrubs_the_log_tail(self):
+    def test_status_log_tail_is_super_admin_only_and_scrubbed(self):
         from routes.control import status_endpoints as se
         with mock.patch.object(se.state, "log_tail", return_value=list(self.LINES)), \
-                mock.patch.object(se.state, "last_load_error", "failed: /opt/vllm/lib/x.py hf_zzzzzzzzzz"), \
-                mock.patch.object(se, "user_has_permission", side_effect=lambda u, k: k == "model.local.load" and u.can):
-            allowed, denied = mock.Mock(can=True, id=1), mock.Mock(can=False, id=2)
-            self.assertTrue(se._may_read_log(allowed))
-            self.assertFalse(se._may_read_log(denied))
+                mock.patch.object(se.state, "last_load_error", "failed: /opt/vllm/lib/x.py hf_zzzzzzzzzz"):
+            admin = mock.Mock(is_super_admin=True, id=1)
+            delegate = mock.Mock(is_super_admin=False, id=2)       # holds model.local.load, which is delegable
+            self.assertTrue(se._may_read_log(admin))
+            self.assertFalse(se._may_read_log(delegate))
             self.assertFalse(se._may_read_log(None))
-            out = asyncio.run(self._status(se, allowed))
+            out = asyncio.run(self._status(se, admin))
             self.assertEqual(len(out["log_tail"]), 3)
             blob = json.dumps(out["log_tail"]) + out["last_load_error"]
             for leak in ("/srv/models", "hf_abcdefghijklmnop", "4111111111111111", "/opt/vllm", "hf_zzzzzzzzzz"):
                 self.assertNotIn(leak, blob)
-            out = asyncio.run(self._status(se, denied))
-            self.assertEqual(out["log_tail"], [])
+            out = asyncio.run(self._status(se, delegate))
+            self.assertEqual(out["log_tail"], [])                   # no raw lines for the delegate ...
+            self.assertIn("failed:", out["last_load_error"])        # ... but the scrubbed reason is still there
             self.assertNotIn("/opt/vllm", out["last_load_error"])
+            self.assertNotIn("hf_zzzzzzzzzz", out["last_load_error"])
 
     @staticmethod
     async def _status(se, user):
@@ -318,11 +320,29 @@ class StatusAndLogRouteTests(unittest.TestCase):
         from routes.control import server_endpoints as sv
         with mock.patch.object(sv.state, "log_tail", return_value=list(self.LINES)), \
                 mock.patch.object(sv.state, "last_load_error", "boom /home/x/y/z"):
-            out = asyncio.run(sv.server_log(n=10, user=mock.Mock()))
+            out = asyncio.run(sv.server_log(n=10, user=mock.Mock(is_super_admin=True)))
         blob = json.dumps(out)
         for leak in ("/srv/models", "hf_abcdefghijklmnop", "4111111111111111", "/home/x"):
             self.assertNotIn(leak, blob)
         self.assertEqual(len(out["lines"]), 3)
+
+    def test_control_log_refuses_a_model_load_delegate(self):
+        from fastapi import HTTPException
+        from routes.control import server_endpoints as sv
+        delegate = mock.Mock(is_super_admin=False, id=2)           # may hold model.local.load, still not allowed here
+        with mock.patch.object(sv.state, "log_tail", return_value=list(self.LINES)) as lt, \
+                mock.patch.object(sv, "audit_log") as audit:
+            with self.assertRaises(HTTPException) as cm:
+                asyncio.run(sv.server_log(n=10, user=delegate))
+        self.assertEqual(cm.exception.status_code, 403)
+        lt.assert_not_called()                                      # nothing was read for the refused caller
+        self.assertEqual(audit.call_args.kwargs.get("result"), "deny")
+
+    def test_control_log_dependency_is_the_session_not_the_delegable_permission(self):
+        import inspect
+        from routes.control import server_endpoints as sv
+        dep = inspect.signature(sv.server_log).parameters["user"].default.dependency
+        self.assertIsNone(getattr(dep, "_require_permission_key", None))
 
 
 # ------------------------------------------------------------------ 3. orphan workers

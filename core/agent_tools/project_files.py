@@ -363,15 +363,19 @@ def _pan_check(content: str, rel: str = "", before: str = ""):
     skew = scanned.count("\n", 0, len(scanned) - len(content)) if before else 0
     if low.endswith(_CODE_EXTS):
         if on:
+            name = rel or "this file"
             if pan.contains_pan(scanned, contextual=False):
-                where = f"on line {max(1, (_first_pan_line(scanned, False) or 1 + skew) - skew)} of this piece"
+                where = f"line {max(1, (_first_pan_line(scanned, False) or 1 + skew) - skew)} of {name}, counted in this piece"
             elif any(pan.contains_pan(v) for v in _text_variants(scanned, rel)):
-                where = "in the text the page shows (check numbers between tags or written with entities)"
+                where = f"in the text the page shows in {name}: check numbers between tags or written with entities"
             else:
                 return None
-            return (f"error: write refused: {where} looks like a payment card number (PCI DSS): card numbers must not be written into "
-                    "documents. If it is only a constant, id or seed, change that number (or build it with a calculation), "
-                    "otherwise use a masked value such as ****1234; then write the file again.")
+            # Strict on purpose: a Luhn-valid 13-19 digit constant is refused even when it is only a seed or id (a missed card number
+            # is a PCI breach, a false alarm costs one retry). The advice names the two ways out and no way to hide a real number.
+            return (f"error: write refused: this looks like a payment card number ({where}). If it is not one, do not use a 13-19 "
+                    "digit literal: use a shorter constant (under 13 digits) or generate the value in code (for example from "
+                    "Math.random() / Date.now()), then write the file again. If it is a real card number, remove it "
+                    "(PCI DSS: card numbers must not be written into documents).")
         return None
     if on and pan.contains_pan(scanned):       # the text itself (doc_ops' check runs on a JSON copy, where a newline hides a split number)
         line = max(1, (_first_pan_line(scanned, True) or 1 + skew) - skew)

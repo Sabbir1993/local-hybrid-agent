@@ -417,7 +417,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             chat_media_tools.add("generate_image")
     except Exception as e:
         print(f"[chat] image tool unavailable: {type(e).__name__}", file=sys.stderr)
-    mcp_prompt = ""
+    mcp_listing = mcp_rules = ""      # server list (named by this turn, wording from the servers) / constant operator rules
     mcp_servers = set()
     if APP_CONFIG.get("capabilities", {}).get("mcp", False):
         from core.mcp.constants import configured_servers
@@ -428,7 +428,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         if mcp_servers:
             chat_tools.extend(prompt_scope.mcp_schemas_for(
                 mcp_core.ready_tool_schemas(), mcp_servers))
-            mcp_prompt = mcp_core.chat_prompt(only_servers=mcp_servers)
+            mcp_listing, mcp_rules = mcp_core.chat_prompt_parts(only_servers=mcp_servers)
 
     custom_agent = None
     allowed_names = None
@@ -461,7 +461,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             # explicit admin config wins over mention-gating (S1)
             allowed_srv = {n.split("__")[1] for n in allowed_names if n.startswith("mcp__") and n.count("__") >= 2}
             mcp_servers = set(allowed_srv)
-            mcp_prompt = mcp_core.chat_prompt(only_servers=mcp_servers) if mcp_servers else ""
+            mcp_listing, mcp_rules = mcp_core.chat_prompt_parts(only_servers=mcp_servers) if mcp_servers else ("", "")
         from routes.custom_agents import apply_input_template
         apply_input_template(msgs, custom_agent)
     if req.temperature is None:
@@ -481,9 +481,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if req.system_prompt and req.system_prompt.strip():
         sys_parts.append(req.system_prompt.strip())
         sys_labels.append("request-system")
-    if mcp_prompt:
-        sys_parts.append(mcp_prompt)
+    if mcp_listing:
+        # the list changes with the servers the turn names and its wording comes from the servers: data, in the user's turn.
+        # The rules are constant operator text: system message, kept for the chat while MCP tools are offered (prompt_sticky).
+        sys_parts.append(mcp_listing)
         sys_labels.append("mcp")
+        sys_parts.append(mcp_rules)
+        sys_labels.append("mcp-rules")
     # What the user keeps in "My agent memory" (profile and preferences): chat answers with it too, so "who am I" is
     # answered from it instead of a knowledge-base search. Same gate as the agent: never to a cloud model unless allowed.
     _mem_cfg = APP_CONFIG.get("memory") or {}
@@ -564,7 +568,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         chat_tools[:] = [t for t in chat_tools if t.get("function", {}).get("name") not in KB_TOOL_NAMES]
     if kb_ids and kb_query.strip() and not file_followup and not skip_kb:
         try:
-            from core.knowledge_router import fetch_company_knowledge, is_company_or_kb_query
+            from core.knowledge_router import fetch_company_knowledge, is_company_or_kb_query, split_kb_block
             kb_hits, kb_prompt_block = await fetch_company_knowledge(kb_query, kb_ids, k=6)
             if kb_hits:
                 auto_cos = float((APP_CONFIG.get("knowledge") or {}).get("auto_inject_cos", 0.55))
@@ -574,8 +578,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             cov_hits = list(kb_hits)         # scores only feed the web decision below (also when withheld)
             if kb_hits:
                 kb_used = True
+                # excerpts are untrusted data: user turn (fenced). The operator's rules are system text, same bytes every
+                # turn, kept for the chat once company data was used (prompt_sticky "kb-rules").
+                kb_prompt_block, kb_rules = split_kb_block(kb_prompt_block)
                 sys_parts.append(kb_prompt_block)
                 sys_labels.append("kb")
+                sys_parts.append(kb_rules)
+                sys_labels.append("kb-rules")
         except Exception as e:
             print(f"[chat] knowledge retrieval failed: {e}", file=sys.stderr)
     if kb_ids:
@@ -602,8 +611,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 audit_log(user, action="knowledge.local_only", resource="chat/run",
                           detail={"reason": "kb hits on a cloud-bound main lane", "hits": len(kb_hits)})
             else:
-                _kb_i = sys_parts.index(kb_prompt_block)       # the part and its label go together
-                del sys_parts[_kb_i], sys_labels[_kb_i]
+                _kb_i = sys_labels.index("kb")                 # the excerpts, their rules and the labels go together
+                del sys_parts[_kb_i:_kb_i + 2], sys_labels[_kb_i:_kb_i + 2]
                 kb_hits, kb_used = [], False
                 kb_blocked_reason = ("Company knowledge base is local-only and this chat uses a cloud model. "
                                      f"The local model could not start ({local_err or 'unknown error'}). "

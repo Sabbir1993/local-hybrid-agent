@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 from typing import Optional
 from fastapi import Depends
-from core.auth import Principal, user_has_permission
+from core.auth import Principal
 from core.deps import get_current_user, require_permission
 from core.db import db_report, db_report_runs, db_report_users
 from core.gpu import get_gpu_stats, get_hardware_engine_summary, refresh_hw_async
@@ -78,8 +78,9 @@ def _gpu_scan_error():
 
 
 def _may_read_log(user) -> bool:
+    """Raw server lines: super admin only, like /control/log. A "model.local.load" delegate gets last_load_error (scrubbed)."""
     try:
-        return user is not None and user_has_permission(user, "model.local.load")
+        return user is not None and bool(user.is_super_admin)
     except Exception:
         return False
 

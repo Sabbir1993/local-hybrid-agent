@@ -213,10 +213,10 @@ If a load fails, Settings > Model Config shows what the server printed under the
   its GPU workers were left. If the app itself crashes, the next start stops that process group (`logs/main-engine.pid`
   holds the group id, the process start time and the boot id; a group is only stopped when those still match, so a
   recycled process id of something else is never killed). On Windows this part is unchanged.
-- The log lines the Model Config card shows (`/control/log`, and the log tail of `/control/status`, which only users with
-  `model.local.load` receive) have card numbers masked and server paths, Hugging Face tokens, `Bearer ...` values and
-  keys replaced. `model.local.load` can be delegated; if only super-admins should read the server log, restrict that
-  permission.
+- The log lines the Model Config card shows (`/control/log`, and the log tail of `/control/status`) are for super-admins
+  only; API tokens never get them. A user who only holds the delegable `model.local.load` permission still sees why a
+  load failed: `/control/status` carries `last_load_error`, and the card shows it when `/control/log` answers 403. All of
+  it has card numbers masked and server paths, Hugging Face tokens, `Bearer ...` values and keys replaced.
 - The speed badge, cached-token counts and context ring work on vLLM too. They are built from vLLM's token usage.
   MTP/draft acceptance is llama.cpp only.
 - The raw API proxy still blocks the server's admin endpoints (`/metrics` and similar), so users cannot read or clear
