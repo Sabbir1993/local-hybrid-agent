@@ -22,7 +22,7 @@ from collections import OrderedDict
 # parts whose text changes with the turn -> appended to the last user message
 TURN_LABELS = {"kb", "kb-note", "kb-web-note", "prior-files", "attached-data-files", "web-lean", "deep", "brief-ask",
                "brief-build", "deck-brief", "pdf-brief", "docx-brief", "explicit-format", "missing-type", "build-resume",
-               "cut-off-resume", "project-resume", "mcp"}
+               "cut-off-resume", "research-carry", "project-resume", "mcp"}
 # constant manuals that stay once used -> the tool (name or prefix*) that must be offered for the manual to make sense
 STICKY_LABELS = {"file-manual": None, "pptx-manual": "doc_create", "xlsx-manual": "doc_create", "html-manual": None,
                  "pdf-tools": "pdf_*", "attached-data": "data_query", "style": None, "visual": None, "sandbox":

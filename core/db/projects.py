@@ -213,6 +213,7 @@ def db_delete_project(pid: int, owner_user_id: int) -> None:
                   (pid,))
         c.execute("DELETE FROM session_working_memory WHERE session_id IN "
                   "(SELECT id FROM sessions WHERE project_id = ?)", (pid,))
+        c.execute("DELETE FROM session_research WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)", (pid,))
         c.execute("DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
                   (pid,))
         c.execute("DELETE FROM sessions WHERE project_id = ?", (pid,))

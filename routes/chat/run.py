@@ -749,6 +749,25 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         # "continue" after a reply that stopped inside a code block: resume at the last character, never from the top
         sys_parts.append(prompt_scope.CONTINUE_CUT_NOTE.format(tail=_cut))
         sys_labels.append("cut-off-resume")
+    # A turn that died after the model had searched the web (error, timeout, Stop, empty reply): on "continue" or the same
+    # question again the model gets that research back instead of starting the searches over (core/chat_research.py).
+    from core import chat_research
+    research_carry = chat_research.enabled() and bool(getattr(req, "session_id", None))
+    research_in = chat_research.load(req.session_id, user.id) if research_carry else None
+    if research_in and (builds.is_continue(own_q) or chat_research.is_retry(research_in, own_q)):
+        _rb, _ = output_guard.redact_full(chat_research.prompt_block(research_in), user, cloud_main is not None)
+        sys_parts.append(_rb)
+        sys_labels.append("research-carry")
+        from core.web_search import citations as _carry_cit
+        _carry_cit.remember(user.id, research_in["urls"])       # links in the carried pages are real, not "unverified"
+    else:
+        research_in = None
+    research_query = own_q          # the question the research is for: a "continue" keeps the one it continues
+    if research_in and builds.is_continue(own_q):
+        research_query = research_in["turn_query"] or own_q
+    elif builds.is_continue(own_q):
+        research_query = next((own_words(str(m.get("content") or ""), 500) for m in reversed(msgs[:-1])
+                               if m.get("role") == "user" and not builds.is_continue(own_words(str(m.get("content") or ""), 500))), own_q)
 
     # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat" / thinking_budgets
     chat_cfg = APP_CONFIG.get("chat") or {}
@@ -890,7 +909,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         speed = SpeedTally()        # llama-server's own generation / prompt speed for the badge (routes/chat/speed.py)
         turn_limit = max_turns       # grows by one if a continuation nudge needs it
         web_calls = 0
-        web_seen = set()
+        web_seen = set(research_in["keys"]) if research_in else set()     # a carried search is not run again
+        research = chat_research.Collector(research_in) if research_carry else None   # this turn's web results (see finally)
+        research_from = len(msgs)
+        research_answered = False       # set just before "done": the turn ended with a real answer
+        research_empty = False          # the reply was our "I searched for information..." stand-in, not the model's answer
         research_nudged = False
         wrapup_warned = False     # the "few rounds left" note is given once
         continued = False
@@ -1057,7 +1080,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     wrapup_warned = True
                     msgs.append({"role": "user", "content": LOW_ROUNDS_NOTE.format(n=turn_limit - turn)})
 
+                if research is not None:
+                    research_from = research.add_from_messages(msgs, research_from)   # before shrinking / compaction trims them
                 shrink_old_tool_results(msgs, ctx_budget, tools=current_tools)
+                research_from = len(msgs)           # the list may have been compacted: only newer messages are new
 
                 # chat.force_doc_tool (off by default): the first build turn of a PDF / Word document must be a tool call. The API
                 # enforces it, the prompt only asks. Not while web tools are on offer (research may come first), not after tool
@@ -1176,6 +1202,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     audit_log(user, action="output_guard.redact", resource=_sem.get("name"),
                               detail={"endpoint": "chat/run", "scope": _sem.get("scope"),
                                       "semantic": True}, result="deny")
+                    research_answered = True        # the turn is over and the reply was filtered: nothing to carry on from
                     yield f"event: done\ndata: {{}}\n\n"
                     return
 
@@ -1405,6 +1432,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         gen_toks = max(1, round(len(content) / 3.5))
                         prompt_toks = final_prompt_toks = _prompt_tokens_of(None, msgs, current_tools)
                         _record_chat_usage(None, sent_tokens, msgs, current_tools)
+                        research_answered = True
                         yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks, **speed.as_event()})}\n\n"
                         return
 
@@ -1485,6 +1513,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             content = reasoning.strip()
                             yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
                         else:
+                            research_empty = True
                             last_tool_results = [m.get("content", "") for m in msgs if m.get("role") == "tool"]
                             if last_tool_results:
                                 summary_lines = []
@@ -1547,6 +1576,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     async for _vc in verifier.sse_events(user, "chat", last_query, content, msgs,
                                                          main_client, req.verify, model_source == "cloud"):
                         yield _vc
+                    research_answered = not research_empty
                     yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks, **speed.as_event()})}\n\n"
                     return
 
@@ -1836,6 +1866,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     content = reasoning.strip()
                     yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
                 else:
+                    research_empty = True
                     last_tool_results = [m.get("content", "") for m in msgs if m.get("role") == "tool"]
                     if last_tool_results:
                         summary_lines = ["I searched for information on your query:\n"]
@@ -1889,6 +1920,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             async for _vc in verifier.sse_events(user, "chat", last_query, content, msgs,
                                                  main_client, req.verify, model_source == "cloud"):
                 yield _vc
+            research_answered = not (budget_hit or circuit_breaker_tripped or research_empty)
             yield f"event: done\ndata: {json.dumps({'prompt_tokens': prompt_toks, 'completion_tokens': gen_toks, 'total_tokens': prompt_toks + gen_toks, **speed.as_event()})}\n\n"
         except asyncio.CancelledError:
             run_end_state = "cancelled"
@@ -1899,6 +1931,18 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             yield f"event: done\ndata: {{}}\n\n"
         finally:
             runs.end(run_id, run_end_state, run_end_reason, step=turn)
+            if research is not None:
+                # real answer: the carried research has served its purpose; anything else (error, Stop, budget / timeout /
+                # circuit breaker, empty reply) keeps what the model found for the next "continue". Never raises, never logs text.
+                try:
+                    if research_answered:
+                        chat_research.clear(req.session_id, user.id)
+                    else:
+                        research.add_from_messages(msgs, research_from)
+                        if research.added:
+                            chat_research.save(req.session_id, user.id, research_query, research)
+                except Exception as e:
+                    print(f"[chat] research carry not stored: {type(e).__name__}", file=sys.stderr)
             if redactor.matched:
                 audit_log(user, action="output_guard.redact", resource=redactor.matched.get("name"),
                           detail={"endpoint": "chat/run", "scope": redactor.matched.get("scope"),

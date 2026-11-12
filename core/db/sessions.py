@@ -128,6 +128,7 @@ def db_delete_session(sid: int, owner_user_id: int, is_super_admin: bool = False
     with transaction(pdb) as c:
         c.execute("DELETE FROM plan_items WHERE session_id = ?", (sid,))
         c.execute("DELETE FROM session_working_memory WHERE session_id = ?", (sid,))
+        c.execute("DELETE FROM session_research WHERE session_id = ?", (sid,))
         c.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
         c.execute("DELETE FROM sessions WHERE id = ?", (sid,))
     _forget_session_memory([sid])

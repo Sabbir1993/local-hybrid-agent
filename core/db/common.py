@@ -57,6 +57,13 @@ def _init_projects_db() -> ThreadLocalDB:
         content TEXT NOT NULL,
         updated_at REAL NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS session_research (
+        session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL,
+        turn_query TEXT,
+        content TEXT NOT NULL,
+        updated_at REAL
+    );
     CREATE TABLE IF NOT EXISTS doc_files (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -195,10 +202,10 @@ def _get_projects_db() -> ThreadLocalDB:
 def db_clear_all_projects_data() -> dict:
     """Danger-zone: wipe every project/session/message/plan-item for every user."""
     counts = {}
-    for table in ("session_working_memory", "plan_items", "messages", "sessions", "projects"):
+    for table in ("session_research", "session_working_memory", "plan_items", "messages", "sessions", "projects"):
         counts[table] = _projects_db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
     with transaction(_projects_db) as c:
-        for table in ("session_working_memory", "plan_items", "messages", "sessions", "projects"):
+        for table in ("session_research", "session_working_memory", "plan_items", "messages", "sessions", "projects"):
             c.execute(f"DELETE FROM {table}")
     return counts
 
