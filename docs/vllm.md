@@ -155,6 +155,26 @@ clinfo -l
 - Running inside pm2: the vLLM process gets the backend's environment. If the Intel runtime needs variables (for
   example from `setvars.sh`), put them in `engines.vllm.env` in `config/app.json`.
 
+### Intel GPUs: the checks that found the problems on a real install (vLLM 0.33.0, torch 2.14.0+xpu, Arc Pro)
+
+Work through these in order, inside the vLLM environment. Each one fixed a failure that looked like "vLLM cannot start".
+
+1. **PyTorch sees the cards** (needs the system Level Zero runtime, see above): `torch.xpu.device_count()` must be 3, not 0.
+2. **One `triton` only.** `uv pip list | grep -i triton` must show a single package (`triton-xpu`, at the version PyTorch
+   requires: `python -c "from importlib.metadata import requires; print([r for r in requires('torch') if 'triton' in r])"`).
+   A second build (for example `tokenspeed-triton`) installs into the same `triton/` folder and breaks it with
+   `ImportError: cannot import name '_load_shared_fp4_repacked'`. Fix: `uv pip uninstall tokenspeed-triton triton-xpu`, then
+   `uv pip install --no-deps "triton-xpu==<version PyTorch asked for>" --index-url https://download.pytorch.org/whl/xpu`.
+3. **vLLM's Intel kernels.** vLLM's Intel module imports `vllm_xpu_kernels`. Without it vLLM silently reports no GPU
+   (`UnspecifiedPlatform`, "Failed to infer device type"). Install the version in vLLM's own `requirements/xpu.txt` for your
+   vLLM release (0.33.0 asks for `0.1.15.4`): `uv pip install --no-deps "vllm-xpu-kernels==0.1.15.4"`.
+4. **Check:** `python -c "from vllm.platforms import current_platform; print(repr(current_platform))"` must print
+   `XPUPlatform`, and `vllm --version` must print the version. The `FlashInfer kernels are disabled` and
+   `No module named 'vllm._C'` lines are expected on Intel.
+5. Later `uv pip install` of other packages can bring the second triton back. Re-run step 2's list after any install.
+
+If a load fails, Settings > Model Config shows what the server printed under the model picker.
+
 ## Notes
 
 - Start-up takes minutes (loading weights and compiling graphs). The load waits up to `health_timeout_s`.
