@@ -136,6 +136,11 @@ async def chat_compact(req: CompactRequest, user: Principal = Depends(get_curren
 
     keep_n = max(0, min(int(req.keep_last or 0), len(convo) - 1))
     kept = convo[-keep_n:] if keep_n else []
+    try:                                     # the chat's start changes now: forget the manuals / tools it kept for its old prefix
+        from core import prompt_sticky
+        prompt_sticky.on_compact(user.id, req.session_id)
+    except Exception:
+        pass
 
     compact_message = {
         "role": "system",
