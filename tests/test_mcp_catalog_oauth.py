@@ -422,3 +422,27 @@ class ExplainConnectErrorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RedirectBaseAndClientName(unittest.TestCase):
+    def test_a_redirect_base_that_already_ends_in_the_callback_path_is_cleaned(self):
+        from routes.mcp_manager import oauth_endpoints as oe
+        for given, want in (("https://chat.example.com", "https://chat.example.com"),
+                            ("https://chat.example.com/", "https://chat.example.com"),
+                            ("https://chat.example.com/mcp/oauth/callback", "https://chat.example.com"),
+                            ("https://chat.example.com/mcp/oauth/callback/", "https://chat.example.com"),
+                            ("https://chat.example.com/mcp", "https://chat.example.com"),
+                            ("", "")):
+            with mock.patch.dict(oe.APP_CONFIG, {"capabilities": {"mcp_oauth_redirect_base": given}}):
+                self.assertEqual(oe._redirect_base(), want, given)
+
+    def test_the_consent_page_name_comes_from_config_and_defaults_to_ssl_ai(self):
+        from core.mcp_oauth import flow
+        with mock.patch.dict(flow.__dict__.get("APP_CONFIG", {}) or {}, {}):
+            pass
+        from core.small_model import APP_CONFIG
+        with mock.patch.dict(APP_CONFIG, {"capabilities": {}}):
+            self.assertEqual(flow.client_name(), "SSL AI")
+        with mock.patch.dict(APP_CONFIG, {"capabilities": {"mcp_oauth_client_name": "Acme Assistant"}}):
+            self.assertEqual(flow.client_name(), "Acme Assistant")
+        self.assertNotIn("A770", flow.client_name())

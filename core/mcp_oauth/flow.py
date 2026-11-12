@@ -44,9 +44,23 @@ def _pkce() -> tuple:
     return verifier, challenge
 
 
+DEFAULT_CLIENT_NAME = "SSL AI"
+
+
+def client_name() -> str:
+    """The name the provider's consent page shows ("<name> is requesting access to your account"): capabilities.mcp_oauth_client_name
+    in config/app.json, else SSL AI."""
+    try:
+        from ..small_model import APP_CONFIG
+        v = str((APP_CONFIG.get("capabilities") or {}).get("mcp_oauth_client_name") or "").strip()
+    except Exception:
+        v = ""
+    return v[:80] or DEFAULT_CLIENT_NAME
+
+
 async def _register_client(meta: dict, name: str, owner: Optional[int], redirect_uri: str) -> dict:
     from .. import credentials
-    body = {"client_name": "A770 Runtime", "redirect_uris": [redirect_uri],
+    body = {"client_name": client_name(), "redirect_uris": [redirect_uri],
             "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
             "token_endpoint_auth_method": "none"}
     guard_fn = getattr(_pkg(), "_guard", _guard)
@@ -67,8 +81,9 @@ async def _register_client(meta: dict, name: str, owner: Optional[int], redirect
     if not info.get("client_id"):
         raise RuntimeError("client registration returned no client_id")
     info["redirect_uri"] = redirect_uri
+    info["client_name"] = body["client_name"]
     credentials.set_token(_ref(name, owner, DCR_KEY), json.dumps(
-        {k: info.get(k) for k in ("client_id", "client_secret", "redirect_uri") if info.get(k)}))
+        {k: info.get(k) for k in ("client_id", "client_secret", "redirect_uri", "client_name") if info.get(k)}))
     return info
 
 
@@ -103,6 +118,8 @@ async def begin(name: str, owner: Optional[int], cfg: dict, redirect_uri: Option
             have = str(reg.get("redirect_uri") or "")
             if (redirect_uri and have != redirect_uri) or (not redirect_uri and not have.startswith("http://127.0.0.1:")):
                 reg = None
+            elif reg.get("client_name") != client_name():
+                reg = None          # registered under another name (the consent page shows it): register again under this one
         if not reg and meta.get("registration_endpoint"):
             port = port or DEFAULT_DCR_PORT
             reg_client_fn = getattr(_pkg(), "_register_client", _register_client)

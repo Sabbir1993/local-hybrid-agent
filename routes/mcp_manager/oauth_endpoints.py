@@ -19,7 +19,13 @@ from .store import _bg_tasks, _can_manage_global, _connect_in_background, _owner
 
 def _redirect_base() -> str:
     """Public https URL of this app, if the admin set one: enables the server-side callback."""
-    return str(APP_CONFIG.get("capabilities", {}).get("mcp_oauth_redirect_base") or "").rstrip("/")
+    base = str(APP_CONFIG.get("capabilities", {}).get("mcp_oauth_redirect_base") or "").strip().rstrip("/")
+    # only the address of the app belongs here: the callback path is added below. A value that already ends in it (copied from
+    # the provider's error text) gave /mcp/oauth/callback/mcp/oauth/callback, which the provider cannot match.
+    for tail in ("/mcp/oauth/callback", "/oauth/callback", "/mcp"):
+        if base.lower().endswith(tail):
+            base = base[: -len(tail)].rstrip("/")
+    return base
 
 
 _LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
