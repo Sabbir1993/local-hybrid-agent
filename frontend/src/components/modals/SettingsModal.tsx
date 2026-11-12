@@ -19,7 +19,9 @@ export const SettingsModal: React.FC = () => {
   useEffect(() => {
     if (!isOpen) return;
     const onMsg = (e: MessageEvent) => {
-      if (e.origin === window.location.origin && e.data && e.data.type === 'open-agent-memory') openAgentMemory();
+      // the store's hasPerm already lets a super admin through
+      if (e.origin === window.location.origin && e.data && e.data.type === 'open-agent-memory'
+          && useAppStore.getState().hasPerm('memory.use')) openAgentMemory();
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);

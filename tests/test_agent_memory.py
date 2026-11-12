@@ -43,6 +43,10 @@ class TempAuth(unittest.TestCase):
             auth_db._auth_db.execute(
                 "INSERT INTO users (id, username, is_super_admin, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
                 (uid, name, now, now))
+            # the memory tools check memory.use, which the built-in user role holds
+            auth_db._auth_db.execute(
+                "INSERT INTO user_roles (user_id, role_id, assigned_at) "
+                "SELECT ?, id, ? FROM roles WHERE name = 'user'", (uid, now))
         auth_db._auth_db.commit()
         set_current_user(1)
         agent_memory.set_user_request("")

@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from fastapi import Depends, Request
 from fastapi.responses import StreamingResponse, JSONResponse
-from core.auth import Principal
+from core.auth import Principal, user_has_permission
 from core.deps import get_current_user
 from core.audit import audit_log
 from core import input_guard, runs
@@ -395,7 +395,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # What the user keeps in "My agent memory" (profile and preferences): chat answers with it too, so "who am I" is
     # answered from it instead of a knowledge-base search. Same gate as the agent: never to a cloud model unless allowed.
     _mem_cfg = APP_CONFIG.get("memory") or {}
-    if bool(_mem_cfg.get("enabled", True)) and (cloud_main is None or bool(_mem_cfg.get("allow_cloud", False))):
+    if (bool(_mem_cfg.get("enabled", True)) and (cloud_main is None or bool(_mem_cfg.get("allow_cloud", False)))
+            and user_has_permission(user, "memory.use")):
         try:
             from core import agent_memory
             _blk = agent_memory.session_block(user.id, listing=False)

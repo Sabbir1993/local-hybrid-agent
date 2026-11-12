@@ -31,7 +31,7 @@ from core.agent_tools import (
 )
 from core.agent_tools.memory_tools import MEMORY_TOOL_NAMES
 from core.agent_loop import AGENT_SYSTEM_PROMPT, all_tools, compact_messages
-from core.auth import Principal
+from core.auth import Principal, user_has_permission
 from core.audit import audit_log
 from core.db import db_get_plan_items, db_session_owner
 from core.grammar import envelope_examples
@@ -469,17 +469,21 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     # memory. Both are data for the model, not instructions. Cloud lanes get neither unless the admin
     # allowed it (memory.allow_cloud): the text is personal and would leave the building.
     _mem_cfg = APP_CONFIG.get("memory") or {}
-    _mem_on = bool(_mem_cfg.get("enabled", True)) and (not ctx.any_cloud or bool(_mem_cfg.get("allow_cloud", False)))
+    _mem_cfg_on = bool(_mem_cfg.get("enabled", True)) and (not ctx.any_cloud or bool(_mem_cfg.get("allow_cloud", False)))
+    # personal notes ("My memory") also need the memory.use permission; a resumed task's working memory does not: it
+    # is this session's own progress, not the person's long-term notes
+    _mem_on = _mem_cfg_on and user_has_permission(user, "memory.use")
     if not _mem_on:
         ctx.hidden_tools = frozenset(ctx.hidden_tools) | MEMORY_TOOL_NAMES
-    else:
-        agent_memory.set_user_request(_kb_query)
+    if _mem_cfg_on:
         try:
-            _blk = agent_memory.session_block(user.id)
-            if _blk:
-                _blk, _ = output_guard.redact_full(_blk, user, ctx.any_cloud)
-                ctx.sys_prompt += "\n\n" + _blk
-                sys_labels.append("memory")
+            if _mem_on:
+                agent_memory.set_user_request(_kb_query)
+                _blk = agent_memory.session_block(user.id)
+                if _blk:
+                    _blk, _ = output_guard.redact_full(_blk, user, ctx.any_cloud)
+                    ctx.sys_prompt += "\n\n" + _blk
+                    sys_labels.append("memory")
             if req.session_id:
                 _wm = working_memory.load(req.session_id, user.id)
                 if _wm:

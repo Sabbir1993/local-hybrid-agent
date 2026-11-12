@@ -19,6 +19,7 @@ PERMISSIONS = {
     "roles.manage": "Create roles and edit role permission grants",
     "audit.view": "Read the audit log",
     "chat.use": "Use chat / agent features",
+    "memory.use": "Use personal memory (Settings -> Capabilities -> My memory); chat and the agent read and save it",
     "settings.input_guard": "Configure the input sanitizer (cloud-block patterns, prohibited prompt types, role restrictions)",
     "database.manage": "Inspect system & workspace SQLite databases and execute SQL queries",
     "settings.shell.configure": "Edit the global shell command allowlist (capabilities.shell)",
@@ -46,6 +47,10 @@ PERMISSION_MODULES = (
 PERMISSION_META = {
     "chat.use": ("chat", "action", "Use chat and the agent",
                  "Lets the person talk to the assistant and run agent tasks. Without this they can sign in but cannot use it."),
+    "memory.use": ("chat", "action", "Use personal memory",
+                   "Lets the person see and edit their own long-term notes (Settings > Capabilities > My memory) and lets "
+                   "chat and the agent read and save them. Without it no memory is loaded and the memory tools are off; "
+                   "the notes already stored are kept."),
     "model.local.load": ("models", "action", "Start and stop the local model",
                          "Loads or unloads the AI model that runs on this computer. Takes GPU memory while loaded."),
     "model.local.configure": ("models", "write", "Change local model settings",
@@ -91,6 +96,10 @@ _RETIRED_PERMISSIONS = ("settings.integrations.configure",)
 # never handed to the built-in admin role automatically: a Super Admin has it, anyone else is granted it by name
 _NOT_AUTO_GRANTED = ("terminal.admin",)
 _DEFAULT_USER_PERMISSIONS = ("chat.use",)
+# Keys that did not exist before, given once (the first start that adds the key) to every role that holds chat.use, so
+# nobody loses a feature on upgrade. Not part of _DEFAULT_USER_PERMISSIONS: that list is re-granted at every start,
+# which would undo an admin taking the key away from a role.
+_GRANT_WITH_CHAT_USE = ("memory.use",)
 
 MAX_FAILED_LOGINS = 10
 LOCKOUT_S = 30 * 60

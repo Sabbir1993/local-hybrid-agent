@@ -71,6 +71,11 @@ PERMISSION_PINS = {
     ("POST", "/chat/run"): "chat.use",
     ("GET", "/{path:path}"): "chat.use",
     ("POST", "/{path:path}"): "chat.use",
+    ("GET", "/agent/memory"): "memory.use",
+    ("GET", "/agent/memory/{path:path}"): "memory.use",
+    ("PUT", "/agent/memory/{path:path}"): "memory.use",
+    ("DELETE", "/agent/memory/{path:path}"): "memory.use",
+    ("DELETE", "/agent/memory"): "memory.use",
 }
 
 

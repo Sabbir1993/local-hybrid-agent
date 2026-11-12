@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from core import agent_memory
 from core.auth import Principal
-from core.deps import get_current_user
+from core.deps import require_permission
 
 from .base import router
 
@@ -32,7 +32,7 @@ def _public(f: dict, with_text: bool = False) -> dict:
 
 
 @router.get("/agent/memory")
-async def memory_list(user: Principal = Depends(get_current_user)):
+async def memory_list(user: Principal = Depends(require_permission("memory.use"))):
     files = agent_memory.list_files(user.id)
     return {"files": [_public(f) for f in files],
             "limits": {"file_max_bytes": agent_memory.memory_limit("file_max_bytes"),
@@ -40,7 +40,7 @@ async def memory_list(user: Principal = Depends(get_current_user)):
 
 
 @router.get("/agent/memory/{path:path}")
-async def memory_get(path: str, user: Principal = Depends(get_current_user)):
+async def memory_get(path: str, user: Principal = Depends(require_permission("memory.use"))):
     try:
         f = agent_memory.read(user.id, path)
     except agent_memory.MemoryError_ as e:
@@ -51,7 +51,7 @@ async def memory_get(path: str, user: Principal = Depends(get_current_user)):
 
 
 @router.put("/agent/memory/{path:path}")
-async def memory_put(path: str, req: MemoryWriteReq, user: Principal = Depends(get_current_user)):
+async def memory_put(path: str, req: MemoryWriteReq, user: Principal = Depends(require_permission("memory.use"))):
     try:
         f = agent_memory.write(user.id, path, req.content, req.if_version, req.description)
     except agent_memory.MemoryError_ as e:
@@ -61,7 +61,7 @@ async def memory_put(path: str, req: MemoryWriteReq, user: Principal = Depends(g
 
 
 @router.delete("/agent/memory/{path:path}")
-async def memory_remove(path: str, user: Principal = Depends(get_current_user)):
+async def memory_remove(path: str, user: Principal = Depends(require_permission("memory.use"))):
     try:
         gone = agent_memory.delete(user.id, path)
     except agent_memory.MemoryError_ as e:
@@ -72,5 +72,5 @@ async def memory_remove(path: str, user: Principal = Depends(get_current_user)):
 
 
 @router.delete("/agent/memory")
-async def memory_remove_all(user: Principal = Depends(get_current_user)):
+async def memory_remove_all(user: Principal = Depends(require_permission("memory.use"))):
     return {"ok": True, "deleted": agent_memory.delete_all(user.id)}

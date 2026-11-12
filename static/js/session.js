@@ -266,6 +266,11 @@
       const need = el.getAttribute('data-perm');
       if (!isSuper && !perms.has(need)) el.remove();
     });
+    // data-perm-any="a b": kept when the user holds ANY of the keys
+    document.querySelectorAll('[data-perm-any]').forEach(el => {
+      const keys = (el.getAttribute('data-perm-any') || '').split(/\s+/).filter(Boolean);
+      if (!isSuper && !keys.some(k => perms.has(k))) el.remove();
+    });
   }
 
   function idleLogout() {

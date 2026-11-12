@@ -13,10 +13,24 @@ def _uid() -> int:
     return uid
 
 
+def _allowed(uid: int) -> bool:
+    """The permission is read fresh from the auth DB on each call (nothing cached). A model can write a memory tool call
+    as plain text even when the tool was not offered, so the tools check it themselves."""
+    try:
+        from ..auth import _to_principal, user_has_permission
+        p = _to_principal(uid)
+        return bool(p and user_has_permission(p, "memory.use"))
+    except Exception:
+        return False
+
+
 def _guarded(fn):
     def run(args: dict) -> str:
         try:
-            return fn(_uid(), args or {})
+            uid = _uid()
+            if not _allowed(uid):
+                return "error: personal memory is not enabled for your account"
+            return fn(uid, args or {})
         except agent_memory.MemoryError_ as e:
             return f"error: {e}"
     run.__name__ = fn.__name__

@@ -5,6 +5,7 @@ import time
 from .common import (
     _BUILTIN_ROLES,
     _DEFAULT_USER_PERMISSIONS,
+    _GRANT_WITH_CHAT_USE,
     _NOT_AUTO_GRANTED,
     _RETIRED_PERMISSIONS,
     PERMISSIONS,
@@ -224,6 +225,7 @@ CREATE INDEX IF NOT EXISTS idx_user_custom_agents_public ON user_custom_agents(i
 
 def _seed_defaults(conn: sqlite3.Connection) -> None:
     now = time.time()
+    known_keys = {r["key"] for r in conn.execute("SELECT key FROM permissions")}
     for key, desc in PERMISSIONS.items():
         conn.execute(
             "INSERT INTO permissions (key, description) VALUES (?, ?) "
@@ -260,6 +262,17 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
                     "INSERT OR IGNORE INTO role_permissions (role_id, permission_id, granted_at) VALUES (?, ?, ?)",
                     (user_role["id"], perm["id"], now),
                 )
+    # A key that is new on this install goes once to every role that holds chat.use (built-in and custom). Later starts
+    # find the key already known and leave the grants alone, so a revoke by an admin sticks.
+    for key in _GRANT_WITH_CHAT_USE:
+        if key in known_keys:
+            continue
+        conn.execute(
+            "INSERT OR IGNORE INTO role_permissions (role_id, permission_id, granted_at) "
+            "SELECT rp.role_id, (SELECT id FROM permissions WHERE key = ?), ? FROM role_permissions rp "
+            "JOIN permissions p ON p.id = rp.permission_id WHERE p.key = 'chat.use'",
+            (key, now),
+        )
     conn.commit()
 
 

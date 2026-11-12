@@ -2,10 +2,25 @@
 async function loadCapabilities() {
   const box = $('caps-content');
   if (!box) return;
+  // "My memory" is for anyone who holds memory.use; every other pane was behind settings.orchestration.configure
+  // (the whole tab was). window.hasPerm has no super-admin bypass, so it is added here.
+  const isSuper = !!(window.__user && window.__user.is_super_admin);
+  const canMemory = isSuper || !!(window.hasPerm && window.hasPerm('memory.use'));
+  const canAdmin = isSuper || !!(window.hasPerm && window.hasPerm('settings.orchestration.configure'));
+  if (!canAdmin) {
+    // memory only: none of the admin data below is fetched for this person
+    box.innerHTML = !canMemory ? '<div class="mon-empty">Nothing available for your account.</div>'
+      : `<div class="cap-layout"><nav role="tablist" class="cap-rail" aria-label="Agent capabilities"><div class="cap-rail-group">
+        <div class="cap-rail-title">About you</div><div class="cap-rail-sub">Notes that follow you between chats</div>
+        <button type="button" role="tab" class="cap-tab on" data-tab="memory" aria-selected="true"><span>🧠 My memory</span></button>
+        </div></nav><div class="cap-panes"><div class="ru-pane cap-pane" data-pane="memory">${agentMemoryHtml()}</div></div></div>`;
+    if (canMemory) wireAgentMemory(box);
+    return;
+  }
   try {
     const d = await (await fetch('/control/capabilities')).json();
     if (d.error) { box.innerHTML = '<div class="mon-empty">' + esc(d.error) + '</div>'; return; }
-    let _capActiveTab = window._capTab || 'memory';
+    let _capActiveTab = window._capTab || (canMemory ? 'memory' : 'web');
     const tabBtn = (id, label, enabled) => {
       let badge = '';
       if (enabled === true) badge = `<span class="cap-pill-badge on">ON</span>`;
@@ -17,7 +32,7 @@ async function loadCapabilities() {
     
     // Navigation: grouped by what the person is doing, not one long row of tabs
     const navGroups = [
-      ['About you', 'Notes that follow you between chats', [['memory', '🧠 My memory', null]]],
+      ...(canMemory ? [['About you', 'Notes that follow you between chats', [['memory', '🧠 My memory', null]]]] : []),
       ['What the agent can use', 'Switch abilities on or off', [
         ['web', '🌐 Web', d.web.enabled], ['shell', '⌨️ Shell', (d.shell || {}).enabled],
         ['skills', '🎯 Skills', d.skills.enabled], ['mcp', '🔌 MCP servers', d.mcp.enabled], ['plugins', '🧩 Plugins', d.plugins.enabled]]],
@@ -256,7 +271,7 @@ async function loadCapabilities() {
     h += capSection('task', '🤖 Agent Task', true, taskInner, 'Execution step caps, timeouts, and resource guardrails', false);
 
     // 7. Memory Pane
-    h += `<div class="ru-pane cap-pane" data-pane="memory" style="display:none;">
+    if (canMemory) h += `<div class="ru-pane cap-pane" data-pane="memory" style="display:none;">
       ${agentMemoryHtml()}
     </div>`;
 
@@ -297,6 +312,11 @@ async function loadCapabilities() {
     box.querySelectorAll('.cap-tab').forEach(b => {
       b.onclick = () => _capShowTab(b.dataset.tab);
     });
+    // a remembered tab the person cannot see (for example memory, after the permission was taken away) falls back to the first
+    if (!box.querySelector(`.cap-tab[data-tab="${_capActiveTab}"]`)) {
+      const first = box.querySelector('.cap-tab');
+      _capActiveTab = first ? first.dataset.tab : '';
+    }
     _capShowTab(_capActiveTab);
 
     capHelpAttach(box);
