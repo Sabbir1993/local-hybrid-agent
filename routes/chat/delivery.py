@@ -131,6 +131,20 @@ def _finalize_media(content: str, made: list[str]) -> tuple[str, bool]:
     The model may drop or garble it, and it only saw a copy of the path. Each kind of line is checked on its own: a reply
     with only the download tag still gets the inline picture, and a tag with extra spaces is not added a second time."""
     out = (content or "").rstrip()
+    if made:
+        # The model saw no path for the picture, so when it writes an image line itself the address is invented and shows as a
+        # broken image next to the real one. In a turn that made pictures, only the real picture lines stay.
+        real = set()
+        for md in made:
+            real |= {k for k in _media_keys(md) if k[0] == "img"}
+
+        def _keep_real(m):
+            from urllib.parse import unquote
+            hit = _MEDIA_IMG_RX.match(m.group(0))
+            return m.group(0) if hit and ("img", unquote(hit.group(1)).strip()) in real else ""
+        cleaned = re.sub(r"[ \t]*!\[[^\]]*\]\([^)\n]*\)[ \t]*", _keep_real, out)
+        if cleaned != out:
+            out = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     have = _media_keys(out)
     for md in made:
         for line in (ln.strip() for ln in md.split("\n")):

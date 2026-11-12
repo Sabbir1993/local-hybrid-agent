@@ -221,3 +221,28 @@ class ChatMediaTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InventedImageLines(unittest.TestCase):
+    """The model writes its own image line with an address it made up: it must not stay next to the real picture."""
+    def test_a_made_up_image_line_is_removed_and_the_real_one_kept(self):
+        from routes.chat.delivery import _finalize_media
+        from core.media.storage import markdown_for
+        real = markdown_for([{"path": "generated/x.png", "mime": "image/png"}], "a cat")
+        reply = "Here is your image:\n\n![SSL fintech illustration](generated/made-up.png)\n\nNote: illustrative only."
+        out, changed = _finalize_media(reply, [real])
+        self.assertTrue(changed)
+        self.assertNotIn("made-up.png", out)
+        self.assertEqual(out.count("![") , 1)
+        self.assertIn("generated/x.png", out)
+        self.assertIn("Note: illustrative only.", out)
+
+    def test_the_real_line_written_by_the_model_is_not_doubled_and_other_turns_are_untouched(self):
+        from routes.chat.delivery import _finalize_media
+        from core.media.storage import markdown_for
+        real = markdown_for([{"path": "generated/x.png", "mime": "image/png"}], "a cat")
+        first = real.split("\n")[0]
+        out, _ = _finalize_media("Done.\n\n" + first, [real])
+        self.assertEqual(out.count("![") , 1)
+        plain = "A chart: ![c](https://example.com/c.png)"
+        self.assertEqual(_finalize_media(plain, [])[0], plain)       # no picture made this turn: nothing is removed
