@@ -500,13 +500,14 @@ class FailedRuns(Harness):
 # 9. endings by rounds / time / repeated failures
 # --------------------------------------------------------------------------------------------------------------------------
 class Endings(Harness):
-    def test_no_rounds_at_all_does_not_crash(self):
-        r = self.turn("tell me a story about a fox", [res("Nothing was done yet, so there is not much to report here.")], cloud=False,
-                      cfg=rounds_cfg(0), extra=(mock.patch.object(media_tools, "chat_image_tool_schema", return_value=IMG_SCHEMA),))
+    def test_a_level_with_zero_rounds_still_answers_once(self):
+        # max_rounds 0 with tools offered used to mean a turn that never ran; it is one normal round now
+        r = self.turn("tell me a story about a fox", [res("Once upon a time a fox crossed the river and found a quiet field.")],
+                      cloud=False, cfg=rounds_cfg(0),
+                      extra=(mock.patch.object(media_tools, "chat_image_tool_schema", return_value=IMG_SCHEMA),))
         self.assertNotIn("request failed", r.err)
-        self.assertIn("Nothing was done yet", r.final)
-        self.assertIn("budget_stop", [ev for ev, _ in r.events])
-        self.assertEqual([d for ev, d in r.events if ev == "done"][-1].get("state"), "stopped")
+        self.assertIn("Once upon a time", r.final)
+        self.assertNotIn("budget_stop", [ev for ev, _ in r.events])
 
     def test_the_time_limit_says_time_and_ends_stopped(self):
         async def run_tool(name, args):
@@ -765,3 +766,11 @@ class PictureDelivery(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RoundsNeverZero(unittest.TestCase):
+    def test_a_level_with_zero_max_rounds_still_gets_one_round_when_tools_are_offered(self):
+        import re
+        src = open("routes/chat/run.py", encoding="utf-8").read()
+        self.assertIn("max(1, int(level_max_rounds))", src)
+        self.assertIsNone(re.search(r"max_turns = int\(level_max_rounds\) if", src))

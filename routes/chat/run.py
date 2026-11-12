@@ -872,7 +872,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
     # Tool-loop budget: normal vs deep ("think") mode, from app.json "chat" / thinking_budgets
     chat_cfg = APP_CONFIG.get("chat") or {}
-    max_turns = int(level_max_rounds) if (chat_tools and level_max_rounds is not None) else (
+    # at least one round whenever tools are offered: a level with max_rounds 0 (a config written for a no-tools level) gave
+    # a turn that never ran. A level with no tool calls at all clears the tools below and keeps its single round.
+    max_turns = max(1, int(level_max_rounds)) if (chat_tools and level_max_rounds is not None) else (
         int(chat_cfg.get("deep_max_tool_rounds" if deep else "max_tool_rounds", 30 if deep else 15)) if chat_tools else 1
     )
     max_web_calls = int(level_tool_calls) if level_tool_calls is not None else int(chat_cfg.get("deep_max_web_calls" if deep else "max_web_calls", 25 if deep else 8))
