@@ -62,7 +62,8 @@ Add this block to `config/app.json`. A full example is in `config/app.example.js
     "reasoning_parser": "",
     "grammar_param": "structured_outputs",
     "env": {},
-    "extra_args": []
+    "extra_args": [],
+    "allow_pickle_weights": false
   }
 }
 ```
@@ -70,10 +71,21 @@ Add this block to `config/app.json`. A full example is in `config/app.example.js
 - `device`: `xpu` selects GPUs with `ZE_AFFINITY_MASK`; `cuda` uses `CUDA_VISIBLE_DEVICES`.
 - `gpu_devices`: `"auto"` uses the llama.cpp runtime's GPU list. vLLM uses the first *tensor × pipeline* GPUs of it.
 - `grammar_param`: older vLLM versions (before `structured_outputs`) need `"guided_grammar"`.
-- `extra_args`: added at the end of the command line. `--trust-remote-code` is never added for you, because it runs Python
-  code shipped inside the model folder. Only add it for a model you trust.
-- Usage statistics: the app always starts vLLM with `VLLM_NO_USAGE_STATS=1` and `DO_NOT_TRACK=1`, so vLLM does not
-  report usage data to its developers.
+- `extra_args`: admin-only extra flags (a list, or one string that is split like a shell would). The app drops these names
+  and logs it: `--host`, `--port`, `--api-key`, `--ssl-*`, `--middleware`, `--chat-template`, `--allowed-*`, `--lora*`,
+  `--trust*` (so `--trust-remote-code` cannot be turned on at all: it runs Python shipped inside the model folder),
+  `--served-model-name`, `--tokenizer*`, `--model`, `--uds`, `--root-path`, `--config`, `--enable-lora` (and shortened forms
+  of them such as `--ho`). The app's own `--host 127.0.0.1 --port ... --served-model-name ...` are always put last, so no
+  earlier flag can override them. vLLM listens on the loopback address only, and the app's login and card-number masking
+  sit in front of it; never expose its port.
+- `allow_pickle_weights` (default `false`): a model folder that has `.safetensors` files is always loaded with
+  `--load-format safetensors`. A folder with only `.bin` / `.pt` (pickle) weights is refused, because pickle can run code
+  when it loads. Set `true` only for a model you trust and cannot convert.
+- Privacy: the app always starts vLLM with `VLLM_NO_USAGE_STATS=1`, `DO_NOT_TRACK=1` and `HF_HUB_DISABLE_TELEMETRY=1`, so
+  nothing is reported to its developers. For a local model folder (and no Hugging Face tokenizer) it also sets
+  `HF_HUB_OFFLINE=1`. It adds the request-logging-off switch your vLLM has (`--disable-log-requests` or
+  `--no-enable-log-requests`, found once from `vllm serve --help`), so prompts are not written to the log; if the help
+  cannot be read, no switch is added and the log can contain prompts. `engines.vllm.env` can override these variables.
 
 Restart the backend after editing (pm2: activate `.venv` first, then `pm2 restart <name> --update-env`).
 
@@ -107,8 +119,27 @@ Shown when *Runtime engine = vLLM*. llama.cpp-only fields (GPU layers, tensor sp
 | Tool parser | `--tool-call-parser` | `hermes` (Qwen), `llama3_json`, `mistral`, ... Empty = no tool calls |
 | Reasoning parser | `--reasoning-parser` | `qwen3`, `deepseek_r1`, ... Empty = none |
 | Eager mode | `--enforce-eager` | Try it when start-up fails while compiling |
-| Tokenizer | `--tokenizer` | GGUF only: the original repo, e.g. `Qwen/Qwen3-8B` |
-| Extra arguments | (appended) | For this model only, e.g. `--kv-cache-dtype fp8`. `--trust-remote-code` is refused here |
+| Tokenizer | `--tokenizer` | GGUF only: the original repo (`org/name`, e.g. `Qwen/Qwen3-8B`), or a folder inside the models folder (relative to it, no `..`) |
+| Extra arguments | (appended) | For this model only, from the list below, e.g. `--kv-cache-dtype fp8`. Anything else is refused |
+
+### Extra arguments allowed per model
+
+Whoever may edit model settings (`model.local.configure`, which can be delegated) can type these, so only this list is
+accepted, and the check runs again when the model loads (a hand-edited `model_configs.json` cannot get around it). Names
+are written in full (`--kv_cache_dtype` is read as `--kv-cache-dtype`; abbreviations are refused). A value is plain
+letters, digits and `. _ - : ,`; it never starts with `-` and is never a path.
+
+| Kind | Flags |
+|---|---|
+| on/off (no value) | `--enable-chunked-prefill` `--no-enable-chunked-prefill` `--enable-prefix-caching` `--no-enable-prefix-caching` `--disable-custom-all-reduce` `--enforce-eager` `--disable-log-stats` |
+| whole number | `--max-num-batched-tokens` `--block-size` `--max-seq-len-to-capture` `--seed` `--num-scheduler-steps` `--max-num-partial-prefills` `--long-prefill-token-threshold` `--max-logprobs` |
+| number | `--swap-space` `--cpu-offload-gb` |
+| plain name | `--kv-cache-dtype` `--scheduling-policy` `--dtype` `--quantization` |
+| `auto` or `vllm` | `--generation-config` |
+| one JSON object (checked and rewritten compactly; text values are plain names, no paths or `..`) | `--speculative-config` `--compilation-config` `--rope-scaling` |
+
+For example `--speculative-config '{"method":"ngram","num_speculative_tokens":3}'`. A flag you need that is not here
+can be added by an admin in `config/app.json` (`engines.vllm.extra_args`), except the names listed above.
 
 ### GPUs and helper models
 
@@ -178,8 +209,14 @@ If a load fails, Settings > Model Config shows what the server printed under the
 ## Notes
 
 - Start-up takes minutes (loading weights and compiling graphs). The load waits up to `health_timeout_s`.
-- Stopping the model stops vLLM and all its worker processes. If the app crashes, the next start stops a vLLM server that
-  is still running (`logs/main-engine.pid`).
+- Stopping the model stops vLLM and all its worker processes, also when the server process had already crashed and only
+  its GPU workers were left. If the app itself crashes, the next start stops that process group (`logs/main-engine.pid`
+  holds the group id, the process start time and the boot id; a group is only stopped when those still match, so a
+  recycled process id of something else is never killed). On Windows this part is unchanged.
+- The log lines the Model Config card shows (`/control/log`, and the log tail of `/control/status`, which only users with
+  `model.local.load` receive) have card numbers masked and server paths, Hugging Face tokens, `Bearer ...` values and
+  keys replaced. `model.local.load` can be delegated; if only super-admins should read the server log, restrict that
+  permission.
 - The speed badge, cached-token counts and context ring work on vLLM too. They are built from vLLM's token usage.
   MTP/draft acceptance is llama.cpp only.
 - The raw API proxy still blocks the server's admin endpoints (`/metrics` and similar), so users cannot read or clear

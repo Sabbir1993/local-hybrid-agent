@@ -80,8 +80,14 @@ def timings_from_usage(usage: dict, t_start: float, t_first: Optional[float], t_
             "engine": "vllm"}
 
 
+def _choices(obj: dict) -> list:
+    """The dict entries of obj["choices"]: a server error or a odd reply may send a string, null entries or numbers there."""
+    ch = obj.get("choices")
+    return [c for c in ch if isinstance(c, dict)] if isinstance(ch, list) else []
+
+
 def _rename_reasoning(obj: dict) -> None:
-    for ch in obj.get("choices") or []:
+    for ch in _choices(obj):
         for key in ("delta", "message"):
             d = ch.get(key)
             if isinstance(d, dict) and d.get("reasoning") and not d.get("reasoning_content"):
@@ -89,8 +95,9 @@ def _rename_reasoning(obj: dict) -> None:
 
 
 def _has_output(obj: dict) -> bool:
-    for ch in obj.get("choices") or []:
-        d = ch.get("delta") or {}
+    for ch in _choices(obj):
+        d = ch.get("delta")
+        d = d if isinstance(d, dict) else {}
         if d.get("content") or d.get("reasoning") or d.get("reasoning_content") or d.get("tool_calls") or ch.get("text"):
             return True
     return False
@@ -149,9 +156,15 @@ class _SseRewrite(httpx.AsyncByteStream):
 
     async def aclose(self) -> None:
         if not self._closed:
-            self._closed = True
+            self._closed = True                   # first: a second close (or the finaliser) must not count again
             _last["inflight"] = max(0, _last["inflight"] - 1)
             await self._inner.aclose()
+
+    def __del__(self):
+        # the response was dropped without being read or closed: the request is over, so it must stop counting as running
+        if not getattr(self, "_closed", True):
+            self._closed = True
+            _last["inflight"] = max(0, _last["inflight"] - 1)
 
 
 class EngineTransport(httpx.AsyncBaseTransport):

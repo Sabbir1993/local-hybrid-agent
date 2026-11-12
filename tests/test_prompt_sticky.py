@@ -47,8 +47,12 @@ class ArrangeTests(unittest.TestCase):
         # turn 4 adds a workbook: only an addition at the end
         s4, _, _ = self.run_turn(base + [("file-manual", "FM"), ("xlsx-manual", "XM"), ("no-ascii", "N")],
                                  [tool("write_file"), tool("doc_create"), tool("search_knowledge_base")])
-        self.assertEqual(s4[:len(s3)], s3)
-        self.assertEqual(s4[-1], ("xlsx-manual", "XM"))
+        # kept manuals come first (core/prompt_sticky.py): the new one is added at the END of that group
+        kept3 = [x for x in s3 if x[0] in ps.STICKY_LABELS]
+        kept4 = [x for x in s4 if x[0] in ps.STICKY_LABELS]
+        self.assertEqual(kept4[:len(kept3)], kept3)
+        self.assertEqual(kept4[-1], ("xlsx-manual", "XM"))
+        self.assertEqual(s4[:len(kept4)], kept4)
 
     def test_web_tools_are_never_kept_on(self):
         self.run_turn([("date", "D"), ("web-manual", "W")], [tool("write_file"), tool("web_search")])

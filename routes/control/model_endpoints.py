@@ -3,7 +3,7 @@ from fastapi import Depends
 from core.auth import Principal
 from core.deps import get_current_user
 from core import reasoning
-from core.profiles import companions, discover_models, load_model_configs
+from core.profiles import _model_key, companions, discover_models, load_model_configs
 from core.engines import vllm as vllm_engine
 from core.profiles.paths import model_display_name
 from core.vram.gguf_parser import model_files, model_size_bytes
@@ -35,7 +35,7 @@ async def profiles(user: Principal = Depends(get_current_user)):
                     size_gb = None
                 parts = len(model_files(gfile)) or 1
             mtp, mmproj = comp["mtp"], comp["mmproj"]
-            saved_engine = (saved.get(gfile.name.lower()) or {}).get("engine")
+            saved_engine = (saved.get(_model_key(gfile)) or saved.get(gfile.name.lower()) or {}).get("engine")
             engines = vllm_engine.engines_for(gfile)
             out.append({
                 "format": fmt,

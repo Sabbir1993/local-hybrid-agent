@@ -65,10 +65,13 @@ async def preflight(target: Optional[str] = None, engine: Optional[str] = None,
 @router.get("/control/log")
 async def server_log(n: int = 80, user: Principal = Depends(require_permission("model.local.load"))):
     """The last lines the main model server (llama-server or vLLM) printed, for the admin who is loading a model: when a load
-    fails, this is where the real cause is. Card numbers are masked like everywhere else a log line can travel."""
-    from core.pan import mask_pans
-    lines = [mask_pans(str(l))[0] for l in state.log_tail(max(1, min(int(n), 300)))]
-    return {"engine": state.engine, "running": state.is_running(), "error": state.last_load_error, "lines": lines}
+    fails, this is where the real cause is. Card numbers are masked like everywhere else a log line can travel, and server
+    paths, tokens and keys are hidden (core/pan.py + routes/control/log_scrub.py). The permission is delegable, so the text
+    must not hold more than that person should see."""
+    from .log_scrub import scrub_log_lines, scrub_log_text
+    lines = scrub_log_lines(state.log_tail(max(1, min(int(n), 300))))
+    err = scrub_log_text(state.last_load_error) if state.last_load_error else state.last_load_error
+    return {"engine": state.engine, "running": state.is_running(), "error": err, "lines": lines}
 
 
 @router.get("/control/vram")

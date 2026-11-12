@@ -8,6 +8,7 @@ from ..config import (
 from .companions import companions
 from ..vram.gguf_parser import first_part
 from .config_store import load_model_configs
+from .constants import _model_key
 
 
 def _folder_profile(p: Path) -> dict:
@@ -16,7 +17,10 @@ def _folder_profile(p: Path) -> dict:
             "model_path": str(p), "mtp_draft_path": None, "mmproj_path": None, "mtp_note": "", "mmproj_note": ""}
     for k, v in CONFIG_DEFAULTS.items():
         prof.setdefault(k, v)
-    saved = load_model_configs().get(p.name.lower()) or {}
+    configs = load_model_configs()
+    # two folders with one name in different roots have separate keys (see _model_key); settings saved before that live
+    # under the plain name
+    saved = configs.get(_model_key(p)) or configs.get(p.name.lower()) or {}
     for k in MODEL_CONFIG_KEYS:
         if k in saved:
             prof[k] = saved[k]

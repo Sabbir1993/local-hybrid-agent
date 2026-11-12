@@ -182,7 +182,9 @@ class LaunchTests(unittest.TestCase):
         cmd = vllm.build_command(self.prof(n_slots=1, vllm_extra_args="--kv-cache-dtype fp8"))
         args = " ".join(cmd)
         self.assertIn("--max-num-seqs 8", args)
-        self.assertEqual(cmd[-2:], ["--kv-cache-dtype", "fp8"])
+        self.assertEqual(cmd[cmd.index("--kv-cache-dtype"):][:2], ["--kv-cache-dtype", "fp8"])
+        # the app's own flags come after the extra ones so nothing can override them (tests/test_vllm_hardening.py)
+        self.assertEqual(cmd[-6:-2], ["--host", "127.0.0.1", "--port", str(vllm.LLAMA_SERVER_PORT)])
 
     def test_preflight_warns_about_shared_gpus(self):
         with mock.patch.object(vllm, "helper_gpus", return_value={1}):

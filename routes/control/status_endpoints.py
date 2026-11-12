@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 from typing import Optional
 from fastapi import Depends
-from core.auth import Principal
+from core.auth import Principal, user_has_permission
 from core.deps import get_current_user, require_permission
 from core.db import db_report, db_report_runs, db_report_users
 from core.gpu import get_gpu_stats, get_hardware_engine_summary, refresh_hw_async
@@ -17,6 +17,7 @@ from core.state import state
 from core import cloud
 
 from .base import router
+from .log_scrub import scrub_log_lines, scrub_log_text
 
 
 @router.get("/control/vram/lanes")
@@ -74,6 +75,13 @@ def _runtime_gpus() -> list:
 def _gpu_scan_error():
     from core.config import GPU_STATUS
     return GPU_STATUS.get("scan_error")
+
+
+def _may_read_log(user) -> bool:
+    try:
+        return user is not None and user_has_permission(user, "model.local.load")
+    except Exception:
+        return False
 
 
 async def get_system_status(user: Optional[Principal] = None) -> dict:
@@ -135,8 +143,10 @@ async def get_system_status(user: Optional[Principal] = None) -> dict:
         "degraded": state.degraded,
         "loading": getattr(state, "loading", False),
         "healthy": getattr(state, "healthy", False),
-        "last_load_error": state.last_load_error,
-        "log_tail": state.log_tail(20),
+        # the server's own log text holds server paths and sometimes keys: scrubbed, and the lines only for the people who
+        # may read /control/log (model.local.load); the error text alone is shown to everyone, scrubbed
+        "last_load_error": scrub_log_text(state.last_load_error) if state.last_load_error else state.last_load_error,
+        "log_tail": scrub_log_lines(state.log_tail(20)) if _may_read_log(user) else [],
         "log_tail_lines": len(state._log_tail),
         "pid": state.process.pid if state.process and state.process.poll() is None else None,
         "keepalive": state.keepalive_enabled,

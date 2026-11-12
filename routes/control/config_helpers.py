@@ -1,4 +1,5 @@
 import re
+import shlex
 from pathlib import Path
 from typing import Optional
 from core.config import (
@@ -21,7 +22,7 @@ from core.engines import vllm as vllm_engine
 
 # free-text vLLM settings ("" = not set); they become command-line arguments, so only plain names and paths are accepted
 VLLM_TEXT_KEYS = ("vllm_tokenizer", "vllm_tool_parser", "vllm_reasoning_parser")
-_EXTRA_ARGS_RX = re.compile(r"^[A-Za-z0-9_./:=,\- ]{1,300}$")
+_EXTRA_ARGS_RX = re.compile(r"^[A-Za-z0-9_./:=,{}\[\]\"'\- ]{1,400}$")
 _SAFE_ARG_RX = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./:\-]{0,199}$")
 
 # machine-level concurrency limits kept in config/app.json: key -> (section path, field, default, min, max)
@@ -44,6 +45,15 @@ def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
         except (TypeError, ValueError):
             return "keepalive_interval_s must be an integer"
         return None
+    if key == "vllm_tokenizer":
+        v = str(value or "").strip()
+        if v:
+            try:
+                vllm_engine.resolve_tokenizer(v)       # repo id, or a folder inside the models folder (no '..')
+            except ValueError as e:
+                return f"vllm_tokenizer: {str(e).removeprefix('Tokenizer: ')}"
+        profile[key] = v
+        return None
     if key in VLLM_TEXT_KEYS:
         v = str(value or "").strip()
         if v and not _SAFE_ARG_RX.match(v):
@@ -51,13 +61,16 @@ def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
         profile[key] = v
         return None
     if key == "vllm_extra_args":
+        # these become command-line arguments of a server that runs behind the app's login and card masking: only names on
+        # the allowlist (core/engines/vllm.py EXTRA_FLAGS) are accepted, each with a value of its own type
         v = " ".join(str(value or "").split())
         if v and not _EXTRA_ARGS_RX.match(v):
-            return "vllm_extra_args: only flags and plain values (letters, digits, . _ - / : = ,), e.g. --kv-cache-dtype fp8"
-        if "--trust-remote-code" in v:
-            return ("vllm_extra_args: --trust-remote-code runs code shipped inside the model folder; add it in "
-                    "config/app.json engines.vllm.extra_args if you trust the model")
-        profile[key] = v
+            return "vllm_extra_args: only flags and plain values (letters, digits, . _ - : = ,), e.g. --kv-cache-dtype fp8"
+        try:
+            clean = vllm_engine.parse_extra_args(str(value or ""))
+        except ValueError as e:
+            return f"vllm_extra_args: {e}"
+        profile[key] = shlex.join(clean)
         return None
     if key == "vllm_enforce_eager":
         if isinstance(value, str):

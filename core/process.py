@@ -1,3 +1,4 @@
+import json
 import os
 import signal
 import subprocess
@@ -16,8 +17,18 @@ MAIN_CACHE_RAM_MB = 2048     # -cram when a profile sets none (llama's own defau
 
 def kill_process_tree(proc: Optional[subprocess.Popen], timeout: float = 15) -> None:
     """Force-stop a child server; never raises. Windows: taskkill /T (tree),
-    elsewhere terminate -> wait -> kill (llama/whisper/sd servers spawn no children)."""
-    if proc is None or proc.poll() is not None:
+    elsewhere terminate -> wait -> kill (llama/whisper/sd servers spawn no children).
+    A vLLM leader that already exited (crashed) can leave GPU workers behind: its group is still stopped (remember_engine_pid
+    marked it)."""
+    if proc is None:
+        return
+    if proc.poll() is not None:
+        rec = getattr(proc, "_engine_group", None)
+        if isinstance(rec, dict) and not IS_WINDOWS:
+            try:
+                _kill_group(rec["pgid"], rec.get("start"), grace=min(timeout, 5.0))
+            except Exception:
+                pass
         return
     group = not IS_WINDOWS and _own_group(proc)       # read now: once the leader is reaped its group cannot be looked up
     if IS_WINDOWS:
@@ -61,14 +72,110 @@ def _own_group(proc) -> bool:
 
 
 # The vLLM server is a Python program with worker processes, so it cannot be found by name like llama-server. Its process
-# group id is kept in this file while it runs, and a restart of the app stops a group left behind by a crash.
+# group id and its start time are kept in this file while it runs, and a restart of the app stops a group left behind by a
+# crash. The start time (plus the boot id) guards against a recycled process id: a group is only stopped when it is the one
+# that was recorded.
 ENGINE_PID_FILE = Path(__file__).resolve().parent.parent / "logs" / "main-engine.pid"
 
 
+def _stat_fields(pid: int):
+    """/proc/<pid>/stat fields after the command name (state, ppid, pgrp, session, ... starttime at [19]), or None."""
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(errors="replace")
+        return raw.rsplit(")", 1)[1].split()
+    except (OSError, IndexError):
+        return None
+
+
+def _proc_start(pid: int):
+    f = _stat_fields(pid)
+    try:
+        return int(f[19]) if f else None
+    except (ValueError, IndexError):
+        return None
+
+
+def _group_members(pgid: int) -> list:
+    """[(pid, start_time)] of the live (not zombie) processes in process group pgid. Linux /proc only; [] elsewhere."""
+    out = []
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return out
+    for n in names:
+        if not n.isdigit():
+            continue
+        f = _stat_fields(int(n))
+        try:
+            if f and f[0] != "Z" and int(f[2]) == pgid:
+                out.append((int(n), int(f[19])))
+        except (ValueError, IndexError):
+            continue
+    return out
+
+
+def _boot_id() -> str:
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return ""
+
+
+def _cmdline(pid: int) -> str:
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def _kill_group(pgid: int, start, grace: float = 5.0) -> bool:
+    """SIGTERM, then SIGKILL after `grace` seconds, the process group pgid - but only when it is the recorded vLLM group.
+    start = the leader's start time as recorded (None = unknown, an old pid file; then a live leader must say "vllm").
+    While any process is in a group its id cannot be given to a new process, so a live /proc/<pgid> whose start time differs
+    is a recycled id of an unrelated process, and workers (started after the leader) can only be ours."""
+    if pgid <= 1 or pgid == os.getpgrp():
+        return False
+    members = _group_members(pgid)
+    if not members:
+        return False
+    leader_start = _proc_start(pgid)
+    if leader_start is not None:                              # the leader is alive (or its id was recycled)
+        if start is not None:
+            if leader_start != start:
+                return False
+        elif "vllm" not in _cmdline(pgid).lower():
+            return False
+    elif start is None:                                       # leader gone and nothing recorded to prove whose workers
+        if not any("vllm" in _cmdline(pid).lower() for pid, _ in members):
+            return False
+    else:
+        members = [m for m in members if m[1] >= start]       # a worker was started after its leader
+        if not members:
+            return False
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return False
+    deadline = time.monotonic() + max(0.0, grace)
+    while time.monotonic() < deadline and _group_members(pgid):
+        time.sleep(0.1)
+    try:
+        os.killpg(pgid, signal.SIGKILL)                       # workers that ignore SIGTERM would keep their VRAM
+    except (ProcessLookupError, PermissionError):
+        pass
+    return True
+
+
 def remember_engine_pid(proc) -> None:
+    pgid = proc.pid
+    rec = {"pgid": pgid, "start": None if IS_WINDOWS else _proc_start(pgid), "boot": "" if IS_WINDOWS else _boot_id()}
+    try:
+        proc._engine_group = rec            # kill_process_tree needs it after the leader has exited and cannot be looked up
+    except AttributeError:
+        pass
     try:
         ENGINE_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-        ENGINE_PID_FILE.write_text(str(proc.pid))
+        ENGINE_PID_FILE.write_text(json.dumps(rec))
     except OSError:
         pass
 
@@ -80,23 +187,33 @@ def forget_engine_pid() -> None:
         pass
 
 
-def kill_orphan_engine() -> bool:
-    """Stop a vLLM process group recorded by a previous run of the app, if it is still a vLLM process."""
+def _read_engine_pid():
+    """The pid file as {"pgid", "start", "boot"}; an old file holds just the pid (start unknown). None if unreadable."""
     try:
-        pid = int(ENGINE_PID_FILE.read_text().strip())
-    except (OSError, ValueError):
+        txt = ENGINE_PID_FILE.read_text().strip()
+    except OSError:
+        return None
+    try:
+        rec = json.loads(txt)
+        if isinstance(rec, int):
+            rec = {"pgid": rec}
+        return {"pgid": int(rec["pgid"]), "start": rec.get("start"), "boot": rec.get("boot") or ""}
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def kill_orphan_engine() -> bool:
+    """Stop a vLLM process group recorded by a previous run of the app, if it is still that group: also when the server
+    process itself died and only its GPU workers are left (they keep their VRAM)."""
+    rec = _read_engine_pid()
+    if rec is None:
+        forget_engine_pid()
         return False
     killed = False
     if not IS_WINDOWS:
         try:
-            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
-            if "vllm" in cmdline and os.getpgid(pid) == pid:
-                os.killpg(pid, signal.SIGTERM)
-                time.sleep(5.0)
-                try:
-                    os.killpg(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+            same_boot = not rec["boot"] or rec["boot"] == _boot_id()      # after a reboot an id means something else
+            if same_boot and _kill_group(rec["pgid"], rec["start"], grace=5.0):
                 killed = True
                 print("[server_manager] stopped a vLLM server left over from a previous run")
         except (OSError, ValueError):

@@ -224,7 +224,8 @@ class ProxyState:
         env = None
         if vllm_mode:
             # vLLM reserves its own share of each GPU (--gpu-memory-utilization); the llama.cpp VRAM math does not apply
-            cmd = vllm_engine.build_command(self.profile)
+            # build_command may run `vllm serve --help` once (a few seconds): not on the event loop
+            cmd = await asyncio.get_event_loop().run_in_executor(None, vllm_engine.build_command, self.profile)
             env = vllm_engine.build_env(self.profile)
         else:
             # Preflight: refuse to spawn llama-server if the VRAM math says it
@@ -457,6 +458,8 @@ class ProxyState:
                 print("[server_manager] llama-server failed to start - "
                       "killing it so it does not hold VRAM")
             kill_process_tree(self.process, timeout=15)
+        elif self.process is not None:
+            kill_process_tree(self.process, timeout=15)     # vLLM leader gone: its GPU workers may still hold VRAM
         self.process = None
 
     def _stop_process_locked(self):
@@ -466,6 +469,8 @@ class ProxyState:
         if self.process and self.process.poll() is None:
             print(f"[server_manager] stopping current {self.engine_label}...")
             kill_process_tree(self.process, timeout=15)
+        elif self.process is not None:
+            kill_process_tree(self.process, timeout=15)     # vLLM leader crashed: stop the workers it left behind
         if self.process is not None:
             log_event("server.stopped", pid=self.process.pid)
         forget_engine_pid()
