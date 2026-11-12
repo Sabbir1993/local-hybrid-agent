@@ -11,6 +11,7 @@ run_python) because they can cost money. Sub-agents never get these tools.
 """
 
 import asyncio
+import re
 
 from .registry import registry
 from .request_context import get_current_user_id
@@ -108,6 +109,53 @@ def result_text(kind: str, res: dict) -> str:
             f"user. Include this markdown exactly in your reply:\n\n{res['markdown']}\n\n"
             f"Do not write an HTML page or any other file for it - reply with the markdown and a short "
             f"sentence.")
+
+
+def chat_result_text(kind: str, res: dict) -> str:
+    """What plain chat tells the model after a picture/clip is made. One short sentence: the server adds the picture and its
+    download link to the reply itself (routes/chat/delivery.py _finalize_media), so the model no longer copies a path
+    (it garbled it or said nothing) and the tool result stays small. Agent mode keeps result_text()."""
+    return (f"Made the {kind} with {res['model']} ({res['where']}); it is saved and already shown to the user with a "
+            f"download link. Reply with one short sentence; do not repeat the picture or the link.")
+
+
+# How many pictures one chat turn may make: what the user asked for, never more than 4 (each takes minutes on this PC).
+_NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "a couple": 2, "couple": 2, "a few": 3, "few": 3}
+_COPIES_RE = re.compile(
+    r"\b([1-9]|one|two|three|four|five|six|a couple(?: of)?|couple of|a few|few)\s+(?:[\w-]+\s+){0,2}?"
+    r"(?:image|picture|photo|logo|illustration|variation|version|design|poster)s?\b", re.I)
+MAX_COPIES = 4
+
+CHAT_ALREADY_MADE = ("note: the picture is already made and shown to the user, with a download link. "
+                     "Do not make it again: reply with one short sentence.")
+
+
+def copies_wanted(query: str, kind: str = "image") -> int:
+    """Pictures the user's own message asks for: a digit or number word before image/picture/..., "a couple" = 2, "few" = 3,
+    otherwise 1; at most MAX_COPIES. A video is always one."""
+    if kind == "video":
+        return 1
+    m = _COPIES_RE.search(str(query or ""))
+    if not m:
+        return 1
+    w = re.sub(r"\s+of$", "", m.group(1).lower())
+    n = int(w) if w.isdigit() else _NUMBER_WORDS.get(w, 1)
+    return max(1, min(MAX_COPIES, n))
+
+
+def _prompt_words(prompt: str) -> set:
+    return set(re.findall(r"\w+", str(prompt or "").lower()))
+
+
+def repeat_blocked(made: int, allowed: int, prompt: str, made_prompts: list) -> bool:
+    """True when another picture must not be made this turn: as many as were asked for exist already, or this prompt is
+    (nearly) one already used - at least 80% of the words are the same (overlap / the longer prompt)."""
+    if made >= allowed:
+        return True
+    words = _prompt_words(prompt)
+    if not words:
+        return False
+    return any(len(words & old) / max(len(words), len(old)) >= 0.8 for old in map(_prompt_words, made_prompts) if old)
 
 
 async def _generate(kind: str, args: dict) -> str:

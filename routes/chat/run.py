@@ -70,6 +70,7 @@ from .delivery import (
     finalize_reply_files,
     scrub_server_paths,
     _finalize_media,
+    _MEDIA_DONE,
     _prompt_tokens_of,
     _saved_filename,
     _wraps_media,
@@ -927,6 +928,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         written_files = []
         write_redirected = set()     # core.agent_loop.doc_redirect: the "use doc_create for a PDF / Word / deck" refusal is said once
         made_media = []              # markdown of pictures/videos generate_image made this turn
+        made_prompts = []            # the prompts of those pictures: the same picture is not made twice in one turn
+        media_repeat_seen = False
+        media_kind = "image"         # what was made last (the fixed reply sentence)
+        media_allowed = 1            # how many pictures the user asked for (core/media_tools.copies_wanted)
+        if chat_media_tools:
+            from core import media_tools as _mt0
+            media_allowed = _mt0.copies_wanted(own_q or last_query)
         final_prompt_toks = None     # same figure goes to the done event and the monitor
         # Budget from the shared accounting, not a hardcoded fraction: the probed window
         # when the server reports one (falling back to config), tightened by the learned
@@ -1033,7 +1041,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     web_calls >= max_web_calls or turn >= turn_limit - 2))
                 if brief_phase == "build" and written_files:
                     research_over = True
-                if turn == turn_limit - 1 and msgs and msgs[-1].get("role") == "tool":
+                if made_media and len(made_media) >= media_allowed and not wants_file:
+                    # every picture asked for is made: no tools for the reply (the model cannot make it again, and the prompt
+                    # loses the tool schemas); the server appends the picture and its link
+                    current_tools = None
+                elif turn == turn_limit - 1 and msgs and msgs[-1].get("role") == "tool":
                     # final turn: must answer now; a requested file can still be written. A deck / PDF being built in pieces keeps its
                     # document tools: with write_file only, the model said "there is no doc_append tool" and left the deck half built.
                     doc_names = ("doc_create", "doc_append", "doc_inspect", "doc_edit")
@@ -1304,7 +1316,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 for dl_f in dl_tags:
                     clean_fname = Path(dl_f.strip()).name
                     try:
-                        already_saved = _common_resolve(clean_fname).is_file()
+                        already_saved = _common_resolve(
+                            dl_f.strip() if dl_f.strip().startswith("generated/") else clean_fname).is_file()
                     except PermissionError:
                         already_saved = False
                     # a tag for a file that already exists is a link to it, never a
@@ -1504,7 +1517,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 # when the reply holds a fence.
                 build_undelivered = brief_phase == "build" and not written_files
                 doc_flow = DOC_CREATE_SCHEMA in chat_tools
-                if (not tool_calls and chat_tools and not continued
+                if (not tool_calls and chat_tools and not continued and not made_media
                         and (missing_dl or build_undelivered or looks_undelivered(content, wants_file, bool(written_files)))):
                     continued = True
                     if turn >= turn_limit - 1:
@@ -1550,7 +1563,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 if not tool_calls or not chat_tools:
                     # Guard against empty/blank assistant response:
                     if not (content and content.strip()):
-                        if reasoning and len(reasoning.strip()) > 15:
+                        if made_media:
+                            # a picture was made and the model said nothing (or only thought): one fixed sentence, the picture
+                            # and its link follow
+                            content = _MEDIA_DONE.get(media_kind, _MEDIA_DONE["image"])
+                            yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+                        elif reasoning and len(reasoning.strip()) > 15:
                             content = reasoning.strip()
                             yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
                         else:
@@ -1711,14 +1729,29 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             # stream the job's steps into the tool card while it works
                             from core import media_tools as _mt
                             res_str = "error: failed"
-                            async for ev, *rest in _mt.generate_events(
-                                    "image" if t_name == "generate_image" else "video", args):
-                                if ev == "progress":
-                                    yield sse("tool_progress", {"id": tc_id, "name": t_name, **rest[0]})
-                                else:
-                                    res_str, done = rest
-                                    if done and done.get("markdown"):
-                                        made_media.append(done["markdown"])
+                            if _mt.repeat_blocked(len(made_media), media_allowed, args.get("prompt"), made_prompts):
+                                # weak local models call the tool again after it worked (each run takes minutes)
+                                res_str = _mt.CHAT_ALREADY_MADE
+                                print(f"[chat] image tool called again - skipped (already made {len(made_media)})", file=sys.stderr)
+                                if len(made_media) >= media_allowed and not media_repeat_seen:
+                                    # a call written as text in the tool-free round: give the reply one more round instead of
+                                    # ending on the "used all steps" notice (once, so it cannot loop)
+                                    media_repeat_seen = True
+                                    turn_limit = max(turn_limit, turn + 2)
+                            else:
+                                async for ev, *rest in _mt.generate_events(
+                                        "image" if t_name == "generate_image" else "video", args):
+                                    if ev == "progress":
+                                        yield sse("tool_progress", {"id": tc_id, "name": t_name, **rest[0]})
+                                    else:
+                                        res_str, done = rest
+                                        if done and done.get("markdown"):
+                                            made_media.append(done["markdown"])
+                                            made_prompts.append(str(args.get("prompt") or ""))
+                                            media_kind = "image" if t_name == "generate_image" else "video"
+                                            res_str = _mt.chat_result_text(media_kind, done)
+                                            if len(made_media) >= media_allowed and not wants_file:
+                                                turn_limit = min(turn_limit, turn + 2)     # one more round: it only words the reply
                         elif t_name == "write_file" and (_redirect := _doc_redirect.write_note(
                                 t_name, args, {t.get("function", {}).get("name") for t in (current_tools or [])}, write_redirected)):
                             res_str = _redirect
@@ -1916,7 +1949,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
             # Robust fallback: if content is still empty, never terminate silently without output
             if not (content and content.strip()):
-                if reasoning and len(reasoning.strip()) > 15:
+                if made_media:
+                    content = _MEDIA_DONE.get(media_kind, _MEDIA_DONE["image"])
+                    yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+                elif reasoning and len(reasoning.strip()) > 15:
                     content = reasoning.strip()
                     yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
                 else:

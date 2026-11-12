@@ -120,6 +120,10 @@ def _finalize_media(content: str, made: list[str]) -> tuple[str, bool]:
     return out, out != (content or "")
 
 
+# the reply when a picture was made and the model said nothing: the picture and its download link are appended after it
+_MEDIA_DONE = {"image": "Here is your image.", "video": "Here is your video."}
+
+
 def _wraps_media(made: list[str], fname: str, query: str) -> bool:
     """An HTML page written after an image this turn is the model wrapping the
     picture (with a link it may have garbled) instead of showing it - unless the
@@ -129,7 +133,7 @@ def _wraps_media(made: list[str], fname: str, query: str) -> bool:
 
 
 _WRAP_REFUSAL = ("error: the picture is already saved and shown to the user - don't put it in an HTML page "
-                 "or any other file. Reply with the markdown generate_image returned and one short sentence.")
+                 "or any other file. Reply with one short sentence.")
 
 
 # Chat saves documents, not programs: nothing here can run them, and a saved script is one a user may later run by hand.
@@ -293,8 +297,11 @@ def _file_exists(name: str) -> bool:
     """True when the Preview / Download buttons for this name would open a file: the same lookup /agent/raw and
     /agent/download use (the exact name, or its newest saved version such as name-1a2b3c4d.html)."""
     from routes.agent.download import _resolve_requested_file
+    name = name.strip()
+    # a picture / clip lives in generated/ and its tag keeps that folder (core/media): the bare name would never be found there
+    target = name if name.replace("\\", "/").lstrip("/").startswith("generated/") else Path(name).name
     try:
-        p = _resolve_requested_file(Path(name.strip()).name, space="common", recover=False)
+        p = _resolve_requested_file(target, space="common", recover=False)
         return bool(p and p.is_file())
     except Exception:
         return False

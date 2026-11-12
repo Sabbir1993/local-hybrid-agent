@@ -47,13 +47,14 @@ def save_file(user_id: int, data: bytes, prompt: str, want: str) -> dict:
 
 
 def markdown_for(files: list, prompt: str) -> str:
-    """Chat/agent markdown for saved results: inline image, or a video player marker."""
+    """Chat/agent markdown for saved results: inline image plus a download link, or a video player marker plus its link."""
     from urllib.parse import quote
     alt = re.sub(r"[\[\]\r\n]+", " ", str(prompt or ""))[:80].strip() or "generated image"
     out = []
     for f in files:
         if f["mime"].startswith("image/"):
             out.append(f"![{alt}](/agent/raw?path={quote(f['path'])})")
+            out.append(f"[DOWNLOAD: {f['path']}]")        # the picture itself is a preview only: this is the file to save
         else:
             out.append(f"[VIDEO: {f['path']}]")
             out.append(f"[DOWNLOAD: {f['path']}]")

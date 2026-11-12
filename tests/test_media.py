@@ -201,7 +201,7 @@ class LocalImageTests(MediaBase):
         with self.sd_installed():
             res = run(media.generate("image", self.user, 'a "quoted" cat', {"aspect": "wide"}))
         self.assertIn("![a \"quoted\" cat](/agent/raw?path=generated", res["markdown"])
-        self.assertNotIn("[DOWNLOAD:", res["markdown"])     # one preview; the viewer downloads
+        self.assertEqual(res["markdown"].count("[DOWNLOAD: generated/"), 1)     # the preview plus one link to save the file
         self.assertFalse(res["cloud"])
         self.assertEqual(self.saved, [PNG])
 
