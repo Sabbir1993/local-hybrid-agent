@@ -166,14 +166,34 @@ def _file(project, path) -> tuple:
     return root, target, rel
 
 
+_BACKUP_SUFFIX = ".prev"
+
+
+def _project_files(root: Path) -> list:
+    """The files of a project, without the one-step `.prev` backups a replacement leaves next to a file."""
+    return [f for f in root.rglob("*") if f.is_file() and f.suffix != _BACKUP_SUFFIX] if root.is_dir() else []
+
+
 def _size(root: Path) -> tuple:
-    files = [f for f in root.rglob("*") if f.is_file()] if root.is_dir() else []
+    files = _project_files(root)
     return len(files), sum(f.stat().st_size for f in files)
 
 
-def _pan_check(content: str):
+_CODE_EXTS = (".html", ".htm", ".css", ".js", ".mjs", ".ts", ".json", ".svg", ".xml", ".webmanifest", ".py")
+
+
+def _pan_check(content: str, rel: str = ""):
+    """A card number is refused on every write. Code files (the project builder writes little else) get the strict check only: a
+    number that is a card number by itself (Luhn, issuer prefix, standalone). The "card / cvv / expiry within a few words" loosening
+    flags harmless WebGL / seed / hex constants next to words like cardinal, so it is not used for code."""
     from .. import doc_ops
     from ..doc_ops.base import DocOpError
+    if rel.lower().endswith(_CODE_EXTS):
+        from .. import pan
+        if pan.enabled("pan_input") and pan.contains_pan(content, contextual=False):
+            return ("error: write refused: the edit contains a payment card number; card numbers must not be written into "
+                    "documents (PCI DSS). Remove it or use a masked value such as ****1234, then write the file again.")
+        return None
     try:
         doc_ops._check_ops_for_pan([{"op": "write", "content": content}])
     except DocOpError as e:
@@ -403,6 +423,24 @@ def _balance_html_document(html_str: str) -> str:
     return before + trailing_script + after
 
 
+def _close_document(html_str: str) -> str:
+    """A page cut off mid-way (no </body> / </html>, an open <script>) still downloads as a working page: close what is open."""
+    if not re.search(r"<html\b|<body\b|<!doctype", html_str, re.I):
+        return html_str                       # a fragment, not a page: leave it as written
+    out = html_str
+    for tag in ("script", "style"):
+        opens = [m.start() for m in re.finditer(rf"<{tag}\b", out, re.I)]
+        closes = [m.start() for m in re.finditer(rf"</{tag}\s*>", out, re.I)]
+        if opens and (not closes or opens[-1] > closes[-1]):
+            out = out.rstrip() + f"\n</{tag}>\n"
+    if not re.search(r"</body\b", out, re.I):
+        dangling = [t for t in _get_open_tags(out) if t not in ("html", "body")]
+        out = out.rstrip() + "".join(f"\n</{t}>" for t in reversed(dangling)) + "\n</body>\n"
+    if not re.search(r"</html\b", out, re.I):
+        out = out.rstrip() + "\n</html>\n"
+    return _balance_html_document(out)
+
+
 def _smart_html_append(old: str, new_content: str) -> str:
     """Intelligently stitch an HTML fragment into an existing HTML document.
 
@@ -465,6 +503,51 @@ def _smart_html_append(old: str, new_content: str) -> str:
     return before_body.rstrip() + ("\n\n" if not before_body.endswith("\n\n") else "") + cleaned + "\n"
 
 
+_FENCE_RX = re.compile(r"^\s*```[\w+-]*[ \t]*\n([\s\S]*?)\n?```\s*$")
+_DOC_START_RX = re.compile(r"<!doctype\s+html|<html\b", re.I)
+
+
+def _is_html(rel: str) -> bool:
+    return rel.lower().endswith((".html", ".htm"))
+
+
+def _clean_content(text: str, rel: str) -> str:
+    """Models wrap a file in ``` fences or put a sentence in front of it. Neither belongs in the file: strip a fence around the
+    whole text and, for a page, everything before <!doctype / <html and after the last </html>. Plain text comes back untouched."""
+    out = text
+    if not rel.lower().endswith((".md", ".txt")):
+        m = _FENCE_RX.match(out)
+        if m:
+            out = m.group(1)
+    if _is_html(rel):
+        m = _DOC_START_RX.search(out)
+        if m and m.start() > 0 and "</html>" in out.lower():
+            out = out[m.start():]
+        end = out.lower().rfind("</html>")
+        if end != -1 and _DOC_START_RX.search(out[:end]):
+            out = out[:end + len("</html>")]
+    return text if out == text or not out.strip() else out.strip("\n") + "\n"
+
+
+def _is_full_html(text: str) -> bool:
+    low = text.lower()
+    return bool(_DOC_START_RX.search(low)) and "</html>" in low
+
+
+def _is_complete_replacement(rel: str, new: str, old: str) -> bool:
+    """Is `new` a whole new version of the file (so it may replace `old`) rather than a fragment or a cut-off rewrite?
+    A page: it has <html ...> and </html>. Anything else has no cheap check: it must be about as long as the old file (60%), or the
+    old file is still short (under 10 lines), i.e. a skeleton."""
+    if _is_html(rel):
+        return _is_full_html(new)
+    return len(new) >= 0.6 * len(old) or len(old.splitlines()) < 10
+
+
+def _hash(text: str) -> str:
+    import hashlib
+    return hashlib.sha1(text.strip().encode("utf-8", "replace")).hexdigest()
+
+
 def _store(args: dict, append: bool) -> str:
     a = args or {}
     content = a.get("content")
@@ -478,45 +561,55 @@ def _store(args: dict, append: bool) -> str:
         root, target, rel = _file(a.get("project"), a.get("path") or a.get("file") or a.get("filename"))
     except ValueError as e:
         return str(e)
-    refused = _pan_check(str(content))
+    text = _clean_content(str(content), rel)
+    refused = _pan_check(text, rel)
     if refused:
         return refused
     if not _load_plan(a.get("project")) and not (root.is_dir() and any(root.rglob("*"))):
         return ("error: plan the site first: call project_plan with the complete list of files (at most 14, each with a one-line "
                 "purpose), then write them one at a time.")
     existed = target.is_file()
-    if existed and not append:
-        try:
-            curr_text = target.read_text(encoding="utf-8", errors="replace")
-            if curr_text.strip() == str(content).strip():
-                nxt = _progress(a.get("project")).strip() or "Call project_finish when all planned files are written."
-                return (f"note: {rel} already has this exact content ({_lines(target)} lines). Do not rewrite identical files. "
-                        f"Use project_append to add new sections, or call project_finish if complete. {nxt}")
-        except Exception:
-            pass
-        if not a.get("replace"):
-            done = {f["path"] for f in plan_status(a.get("project"))["done"]}
-            plan = _load_plan(a.get("project"))
-            if rel in done or not plan or _lines(target) >= 10:
-                nxt = _progress(a.get("project")).strip() or "Call project_finish if every file is written."
-                return (f"error: {rel} is already written ({_lines(target)} lines): do not overwrite it again. "
-                        f"Use project_append to extend it, or call project_finish if complete. "
-                        f"(Pass replace=true only if redoing from scratch). {nxt}")
+    old = target.read_text(encoding="utf-8", errors="replace") if existed else ""
+    nxt = _progress(a.get("project")).strip() or "Call project_finish when all planned files are written."
+    # An append of a whole page is a rewrite, and an append to a file that is not there yet is a write.
     if append and not existed:
-        return f"error: {rel} does not exist yet. Create it with project_write first (a short skeleton), then project_append."
+        append = False
+    elif append and _is_html(rel) and (_is_full_html(text) or _DOC_START_RX.match(text.lstrip())):
+        append, a = False, {**a, "replace": True}
+    replaced = False
+    if existed and not append:
+        if old.strip() == text.strip():
+            return (f"note: {rel} already has this exact content ({_lines(target)} lines): nothing to redo. "
+                    f"Call project_finish if every file is written, or project_append to add a new section. {nxt}")
+        if not a.get("replace"):
+            if _is_complete_replacement(rel, text, old):
+                replaced = True               # a whole new version after a partial / failed first try: that is a redo, not a repeat
+            else:
+                done = {f["path"] for f in plan_status(a.get("project"))["done"]}
+                plan = _load_plan(a.get("project"))
+                if rel in done or not plan or _lines(target) >= 10:
+                    return (f"error: {rel} is already written ({_lines(target)} lines) and this text is not a complete version of it. "
+                            f"Use project_append to add a section, send the whole file to replace it, or pass replace=true to redo "
+                            f"it from scratch; call project_finish if it is complete. {nxt}")
+        else:
+            replaced = True
     count, total = _size(root)
     if not existed and count >= MAX_FILES:
         return f"error: a project holds at most {MAX_FILES} files."
-    if total + len(str(content).encode("utf-8")) > MAX_PROJECT_BYTES:
+    if total - len(old.encode("utf-8")) + len(text.encode("utf-8")) > MAX_PROJECT_BYTES:
         return "error: the project is at its size limit; shorten the content."
     target.parent.mkdir(parents=True, exist_ok=True)
-    text = str(content)
     if append:
-        old = target.read_text(encoding="utf-8", errors="replace")
-        if rel.lower().endswith((".html", ".htm")):
+        if _is_html(rel):
             text = _smart_html_append(old, text)
         else:
             text = old + ("" if old.endswith("\n") else "\n") + text
+    elif existed:
+        try:                                   # one undo step next to the file; never listed or zipped (see _project_files)
+            with target.with_name(target.name + _BACKUP_SUFFIX).open("w", encoding="utf-8", newline="\n") as fh:
+                fh.write(old)
+        except OSError:
+            pass
     with target.open("w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
     verb = "Appended to" if append else ("Replaced" if existed else "Created")
@@ -524,7 +617,8 @@ def _store(args: dict, append: bool) -> str:
     plan = _load_plan(a.get("project"))
     if plan and rel not in {f["path"] for f in plan}:
         unplanned = " (this file is not in the plan: fine, or add it with project_plan)"
-    return (f"{verb} {rel} in project {_slug(a.get('project'))} ({len(text.splitlines())} lines, {len(text)} chars){unplanned}."
+    again = " - replaced the earlier version (one backup step kept)" if replaced else ""
+    return (f"{verb} {rel} in project {_slug(a.get('project'))} ({len(text.splitlines())} lines, {len(text)} chars){again}{unplanned}."
             + (_progress(a.get("project")) or " Continue with the next piece, or call project_finish when every file is written."))
 
 
@@ -576,58 +670,103 @@ def _missing_links(root: Path, entry: str) -> list:
 
 
 def tool_project_finish(args: dict) -> str:
+    return _finish(args or {}, force=False)
+
+
+def _finish(a: dict, force: bool) -> str:
+    """force=True (finish_if_possible): package whatever is written, even with planned files missing or no page at all."""
     import uuid
-    a = args or {}
     root = _root(a.get("project"))
-    if not root.is_dir() or not any(f.is_file() for f in root.rglob("*")):
+    files = sorted(_project_files(root))
+    if not files:
         return "error: this project has no files yet. Create them with project_write first."
     st = plan_status(a.get("project"))
+    unfinished = ""
     if st["todo"]:
-        return ("error: the plan is not finished: " + "; ".join(f"{f['path']} ({f.get('purpose', '')})" for f in st["todo"][:10])
-                + ". Write these with project_write (project_append to lengthen a short file), or drop one with project_plan, then call "
-                "project_finish again.")
+        listing = "; ".join(f"{f['path']} ({f.get('purpose', '')})" for f in st["todo"][:10])
+        if not force:
+            return ("error: the plan is not finished: " + listing + ". Write these with project_write (project_append to lengthen a "
+                    "short file), or drop one with project_plan, then call project_finish again.")
+        unfinished = " NOTE: planned files still missing: " + listing + "."
     entry = str(a.get("entry") or "index.html").replace("\\", "/").lstrip("/")
+    htmls = sorted(p.relative_to(root).as_posix() for p in files if p.suffix.lower() in (".html", ".htm"))
     if not (root / entry).is_file():
-        htmls = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.html"))
-        if not htmls:
+        if not htmls and not force:
             return "error: the project has no HTML page. Create index.html with project_write."
-        entry = "index.html" if "index.html" in htmls else htmls[0]
+        entry = ("index.html" if "index.html" in htmls else htmls[0]) if htmls else ""
     slug = _slug(a.get("project"))
     uid8 = uuid.uuid4().hex[:8]
     zip_name, page_name = f"{slug}-{uid8}.zip", f"{slug}-{uid8}.html"
     common = common_workspace()
-    files = sorted(f for f in root.rglob("*") if f.is_file())
     # Ensure all HTML files are properly closed and balanced before packaging
     for f in files:
         if f.suffix.lower() in (".html", ".htm"):
             try:
                 raw_h = f.read_text(encoding="utf-8", errors="replace")
-                bal_h = _balance_html_document(raw_h)
+                bal_h = _close_document(raw_h)
                 if bal_h != raw_h:
                     f.write_text(bal_h, encoding="utf-8", newline="\n")
             except Exception:
                 pass
-    single = len(files) == 1      # one html page: a ZIP of one file is noise, hand over just the page
+    single = len(files) == 1 and bool(entry)      # one html page: a ZIP of one file is noise, hand over just the page
     if not single:
         with zipfile.ZipFile(common / zip_name, "w", zipfile.ZIP_DEFLATED) as z:
             for f in files:
                 z.write(f, f"{slug}/{f.relative_to(root).as_posix()}")
-    from ..html_quality import repair as _repair_html
-    page_html, typos = _repair_html(inline_entry(root, entry))      # near-miss class names and stray tags a small model leaves behind
-    with (common / page_name).open("w", encoding="utf-8", newline="\n") as fh:
-        fh.write(page_html)
-    note = f" (fixed {typos} typo(s) in the page's class names and tags automatically)" if typos else ""
-    missing = _missing_links(root, entry)
-    if missing:
-        note = (" WARNING: the page links to files that do not exist yet: " + ", ".join(missing[:8])
-                + ". Create them with project_write and call project_finish again.")
+    note = ""
+    if entry:
+        from ..html_quality import repair as _repair_html
+        page_html, typos = _repair_html(inline_entry(root, entry))      # near-miss class names and stray tags a small model leaves behind
+        with (common / page_name).open("w", encoding="utf-8", newline="\n") as fh:
+            fh.write(page_html)
+        note = f" (fixed {typos} typo(s) in the page's class names and tags automatically)" if typos else ""
+        missing = _missing_links(root, entry)
+        if missing:
+            note = (" WARNING: the page links to files that do not exist yet: " + ", ".join(missing[:8])
+                    + ". Create them with project_write and call project_finish again.")
     empty = [f.relative_to(root).as_posix() for f in files if f.stat().st_size == 0]
     if empty:
         note += " WARNING: empty files: " + ", ".join(empty[:8]) + "."
+    note += unfinished
     if single:
         return f"Page {slug}: 1 file. Download it as {page_name} [DOWNLOAD: {page_name}]. Reply now with a short summary and this link." + note
+    if not entry:
+        return (f"Project {slug}: {len(files)} files. Download them as {zip_name} [DOWNLOAD: {zip_name}]. Reply now with a short "
+                f"summary and this link." + note)
     return (f"Project {slug}: {len(files)} files. Download the whole site as {zip_name} [DOWNLOAD: {zip_name}] and preview "
             f"{entry} as {page_name} [DOWNLOAD: {page_name}]. Reply now with a short summary and these two links." + note)
+
+
+def finish_if_possible(project=None):
+    """Safety net for the chat route: when a build ended without project_finish (model gave up, errored, pasted the page into chat),
+    package what is on disk. Uses the current chat scope and user like the tools do (call it inside the same request).
+    `project`: a project name, or None for the newest project of this chat. Returns the project_finish text (with its
+    [DOWNLOAD: ...] tag) when that project has files and no ZIP / page made by a finish is newer than them, else None. Never raises."""
+    import time
+    try:
+        base = common_workspace() / PROJECTS_DIR / _scope()
+        if not base.is_dir():
+            return None
+        best = None
+        for d in base.iterdir():
+            if project is not None and d.name != _slug(project):
+                continue
+            files = _project_files(d) if d.is_dir() else []
+            if not files:
+                continue
+            newest = max(f.stat().st_mtime for f in files)
+            if best is None or newest > best[0]:
+                best = (newest, d)
+        if not best:
+            return None
+        newest, d = best
+        made = re.compile(rf"^{re.escape(d.name)}-[0-9a-f]{{8}}\.(?:zip|html)$")
+        if any(made.match(f.name) and f.stat().st_mtime >= newest for f in common_workspace().iterdir() if f.is_file()):
+            return None
+        out = _finish({"project": d.name}, force=True)
+        return None if out.startswith("error") else out
+    except Exception:
+        return None
 
 
 def open_project_note(max_age_s: int = 3 * 24 * 3600) -> str:
@@ -640,7 +779,7 @@ def open_project_note(max_age_s: int = 3 * 24 * 3600) -> str:
             return ""
         best = None
         for d in base.iterdir():
-            files = [f for f in d.rglob("*") if f.is_file()] if d.is_dir() else []
+            files = _project_files(d) if d.is_dir() else []
             if not files:
                 continue
             newest = max(f.stat().st_mtime for f in files)

@@ -180,16 +180,30 @@ def _strict_ok(d: str, ctx: bool) -> bool:
     return _prefix_ok(d) and _luhn_ok(d)
 
 
-def _spans(cand: str, full: str, base: int) -> list:
-    """(start, end, digits) of each PAN found inside candidate `cand` (offsets relative to cand)."""
+def _standalone(full: str, pos: int) -> bool:
+    """False when the digits at `pos` are the tail of an identifier / hex literal (abc4111...) or a decimal fraction (3.1415...):
+    those are code constants, not a card number someone wrote down."""
+    before = full[max(0, pos - 2):pos]
+    if before[-1:].isalnum() and not before[-1:].isdigit() or before[-1:] == "_":
+        return False
+    return not re.fullmatch(r"\d\.", before)
+
+
+def _spans(cand: str, full: str, base: int, contextual: bool = True) -> list:
+    """(start, end, digits) of each PAN found inside candidate `cand` (offsets relative to cand).
+    contextual=False is for code files: no "card" word loosening, and a digit run inside an identifier, hex literal or
+    decimal fraction is not a PAN. A card number written as plain numbers (Luhn + known prefix) is still found."""
     toks = [(m.start(), m.end(), _digits(m.group(0))) for m in _TOKEN_RX.finditer(cand)]
-    ctx = _has_context(full, base, base + len(cand))
+    ctx = _has_context(full, base, base + len(cand)) if contextual else False
     out = []
     i, nt = 0, len(toks)
     while i < nt:
         found = None
         loose = None
         total = 0
+        if not contextual and not _standalone(full, base + toks[i][0]):
+            i += 1
+            continue
         for j in range(i, nt):
             total += len(toks[j][2])
             if total > 19:
@@ -262,16 +276,20 @@ def blank_attachment_names(text: str) -> str:
     return _ATTACH_NAME_RX.sub(r"\1[name]\2\3", text) if isinstance(text, str) and "--- " in text else text
 
 
-def contains_pan(text) -> bool:
+def contains_pan(text, contextual: bool = True) -> bool:
+    """contextual=False is for code (the project builder's html / js / css): see _spans; and only an explicit cvv / cvc keyword
+    counts as a CVV there, because csc / cid are ordinary variable names."""
     if not text:
         return False
     text = str(text)
     if _v1():
         return any(_is_pan_v1(m.group(0)) for m in _V1_RX.finditer(text))
     for m in PAN_RX.finditer(text):
-        if _spans(m.group(0), text, m.start()):
+        if _spans(m.group(0), text, m.start(), contextual):
             return True
-    return contains_cvv(text)
+    if contextual:
+        return contains_cvv(text)
+    return any(re.match(r"\w+", m.group(0)).group(0).lower() not in ("csc", "cid") for m in CVV_RX.finditer(text))
 
 
 def mask_match(m: "re.Match") -> str:
