@@ -42,9 +42,9 @@ async def _finish_ingest(source_id: int, text: str, user: Principal, progress=No
     if not text.strip():
         auth_db.update_knowledge_source_status(source_id, "error", "no extractable text")
         return {"ok": False, "error": "no extractable text found"}
-    # No guardrail at upload (decision 2026-10-18): the document is stored and indexed exactly as
-    # provided -- nothing is masked, blocked or rewritten here. The guard runs when the data is
-    # ACCESSED: every KB read path masks card numbers on the way out (core/kb_guard.py).
+    # Nothing is blocked or rewritten at upload except card numbers: with knowledge.mask_pan_at_ingest (default on) kb_tables.replace_source
+    # and index_knowledge_source mask them before anything is stored, chunked or embedded (PCI DSS 3.5). Every KB read path masks
+    # card numbers on the way out as well (core/kb_guard.py), whichever way the switch is set.
     report = await _run(kb_chunk_report, text)
     limit, others = kb_total_chunk_limit(), kb_chunk_count(exclude_source=source_id)
     if others + report["indexed"] > limit:          # refuse before the in-memory search index outgrows the server

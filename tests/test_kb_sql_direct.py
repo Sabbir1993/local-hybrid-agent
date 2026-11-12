@@ -665,3 +665,106 @@ class WorkerThreadTests(DirectBase):
         with mock.patch.object(sheet_sql, "QUERY_TIMEOUT_S", 0.3):
             out = self.run_sql({"sql": "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT COUNT(*) FROM r"})
         self.assertIn("longer than", out)
+
+
+SPLIT_ROWS = [["Merchant", "P1", "P2", "P3", "P4", "Qty", "Amt"],
+              ["two", "4111 1111", "1111 1111", "", "", "2", "10"],
+              ["three", "5500 0055", "5555", "5559", "", "3", "20"],
+              ["four", "3782", "8224", "6310", "005", "4", "30"],            # Amex 4-4-4-3
+              ["ten-six", "4111111111", "111111", "", "", "5", "40"],
+              ["plain", "1200", "3400", "5600", "7800", "6", "50"],           # adjacent numbers, not a card: must stay readable
+              ["luhn", "4012", "8888", "8888", "1882", "7", "60"]]            # right prefix, wrong checksum: stays
+
+
+class SplitCardNumberTests(DirectBase):
+    """A card number split over neighbouring cells cannot be rebuilt with `a || b`, substr or a join, on either kb_sql path."""
+    ATTACKS = [
+        'SELECT Merchant, P1 || P2 || P3 || P4 AS n FROM Book_Split',
+        'SELECT Merchant, P1 || P2 AS n FROM Book_Split',
+        'SELECT Merchant, replace(P1 || P2 || P3 || P4, \' \', \'\') AS n FROM Book_Split',
+        'SELECT Merchant, substr(P1, 1, 4) || substr(P2, 1, 4) AS n FROM Book_Split',
+        'SELECT P1, P2, P3, P4 FROM Book_Split',
+        'SELECT * FROM Book_Split',
+        'SELECT group_concat(P1 || P2, \'/\') FROM Book_Split',
+        'SELECT P1 || P2 FROM Book_Split WHERE P1 LIKE \'4111%\'',
+    ]
+    # the last four digits of a card are public (a masked cell shows them), so only the other pieces count as a leak. The final
+    # text of a query is masked once more, and a row next to "[card ...]" text counts as card context there: the two rows that are not
+    # cards are therefore only read on their own (below)
+    SECRET = ("4111", "5500", "0055", "5555", "3782", "8224", "6310", "1111 1111", "5600", "1200")
+
+    def setUp(self):
+        super().setUp()
+        kb_tables.replace_source(5, kb_structure.rows_to_text(SPLIT_ROWS, "Split"))
+        self.titles5 = {5: "Book"}
+
+    def go(self, q, copy):
+        return self.run_sql({"sql": q}, titles=self.titles5, copy=copy)
+
+    def check(self, copy):
+        for q in self.ATTACKS:
+            out = self.go(q, copy)
+            for piece in self.SECRET:
+                if piece not in ("5600", "1200"):
+                    self.assertNotIn(piece, out, f"{q!r} leaked {piece}: {out}")
+
+    def test_no_query_can_rebuild_a_split_card_number_in_place(self):
+        self.check(copy=False)
+
+    def test_no_query_can_rebuild_a_split_card_number_on_the_copy_path(self):
+        self.check(copy=True)
+
+    def test_both_paths_give_the_same_answer(self):
+        for q in ('SELECT * FROM Book_Split ORDER BY Merchant', 'SELECT Merchant, P1 || P2 AS n FROM Book_Split ORDER BY Merchant'):
+            self.assertEqual(self.go(q, False), self.go(q, True), q)
+
+    def test_the_masked_pieces_keep_the_last_four(self):
+        for copy in (False, True):
+            out = self.go('SELECT Merchant, P1, P2, P3, P4 FROM Book_Split ORDER BY Merchant', copy)
+            self.assertIn("| two | [card part] | [card ****1111] |", out)
+            self.assertIn("| three | [card part] | [card part] | [card ****5559] |", out)
+            self.assertIn("| four | [card part] | [card part] | [card part] | [card ****0005] |", out)
+
+    def test_numbers_that_are_not_a_card_are_still_queryable(self):
+        for copy in (False, True):
+            out = self.go("SELECT P1 || P2 || P3 || P4 AS n FROM Book_Split WHERE Merchant = 'plain'", copy)
+            self.assertIn("1200340056007800", out)
+            out = self.go("SELECT P1, P4, Qty, Amt FROM Book_Split WHERE Merchant = 'luhn'", copy)
+            self.assertIn("| 4012 | 1882 |", out)
+            out = self.go("SELECT SUM(Qty), SUM(Amt) FROM Book_Split", copy)
+            self.assertIn("| 27 | 210 |", out)
+
+    def test_kb_query_masks_the_pieces_too(self):
+        spec = {"source": "split", "select": ["Merchant", "P1", "P2", "P3", "P4"]}
+        out = kb_tables.render(spec, kb_tables.run_query(spec, {5}, {5: "Book"}))
+        for piece in self.SECRET:
+            if piece not in ("5600", "1200"):
+                self.assertNotIn(piece, out, piece)
+        self.assertIn("[card ****1111]", out)
+        self.assertIn("1200 | 3400 | 5600 | 7800", out)
+        cnt = {"source": "split", "filters": [{"column": "P1", "op": "starts_with", "value": "4012"}], "count": True,
+               "select": None}
+        self.assertIn("1 matching row(s)", kb_tables.render(cnt, kb_tables.run_query(cnt, {5}, {5: "Book"})))   # the row that is not a card
+
+
+class SplitCardOldDataTests(DirectBase):
+    """Rows stored by an older version (raw pieces): the copy path and kb_query still hide them (the in-place views need
+    kb_tables.remask_all() or a re-index, see docs/knowledge-pan.md)."""
+
+    def setUp(self):
+        super().setUp()
+        import json
+        kb_tables.replace_source(6, kb_structure.rows_to_text([["Merchant", "P1", "P2"], ["a", "x", "y"]], "Old"))
+        self.db.execute("UPDATE kb_rows SET cells = ? WHERE table_id = (SELECT id FROM kb_tables WHERE source_id = 6)",
+                        (json.dumps(["a", "4111 1111", "1111 1111"]),))
+        self.db.commit()
+
+    def test_copy_path_hides_old_pieces(self):
+        out = self.run_sql({"sql": "SELECT P1 || P2 FROM Book_Old"}, titles={6: "Book"}, copy=True)
+        self.assertNotIn("4111", out)
+        self.assertIn("[card ****1111]", out)
+
+    def test_remask_all_fixes_the_in_place_path(self):
+        kb_tables.remask_all()
+        out = self.run_sql({"sql": "SELECT P1 || P2 FROM Book_Old"}, titles={6: "Book"})
+        self.assertNotIn("4111", out)

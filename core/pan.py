@@ -6,8 +6,9 @@ Applied to chat / agent traffic, independent of the admin-defined guard rules:
   - output:       PANs in model responses are masked (output_guard)
   - cloud egress: PANs in anything sent to a cloud provider (history, tool
                   results, KB context) are masked (cloud.CloudClient._prepare)
-  - KB reads:     the knowledge base stores uploads verbatim (no guard at upload,
-                  by decision); what leaves it is masked at access time.
+  - KB reads:     what leaves the knowledge base is masked at access time.
+  - KB ingest:    card numbers are also masked before a source is stored (knowledge.mask_pan_at_ingest, default on;
+                  docs/knowledge-pan.md), and a number split over neighbouring cells of a row is masked at storing.
 
 Config: config/app.json "pci" block, e.g.
   {"pan_input": "block", "pan_output": "mask", "pan_cloud_egress": "mask", "detector": "v2"}
@@ -364,3 +365,104 @@ def mask_cell(text, card_column: bool = False):
         out = mask_pans("card " + text)[0]
         return out[5:] if out.startswith("card ") else out
     return mask_pans(text)[0]
+
+
+# --- a card number split across the cells of one table row ------------------------------------------------------
+# mask_cell sees one cell at a time, so "4111 1111" | "1111 1111" passes it, and a SQL `a || b` rebuilds the number. The
+# row-level check below runs ONCE when a row is stored (kb_tables.replace_source) and again where stored rows are read
+# (kb_query output, the kb_sql copy path), so the cells that together form a card number are never handed out.
+#   - a piece is a short cell made only of digits, spaces and dashes (3..12 digits); a cell that is a whole card number
+#     alone is mask_cell's job, and "1,200" / "12.50" (amounts) are not pieces at all
+#   - 2..4 pieces that are neighbours (empty cells between them do not break the run, any other cell does: an id, a name and an
+#     account number on one row are not one number) whose digits together pass the card check (Luhn + a known prefix, 13..19
+#     digits) form a number; the first and middle pieces need 4+ digits, the last 3+, the same rule the text detector uses,
+#     so a quantity next to an amount is left alone
+#   - stored as: "[card part]" in every cell but the last, "[card ****1111]" (the card's last four) in the last one
+SPLIT_PART = "[card part]"
+_STRIP = {32: None, 45: None}
+_PIECE_RX = re.compile(f"[{_DIG} \\-\u00a0]{{3,24}}")
+# pre-check on the JSON text of a row (json.dumps escapes non-ASCII as \uXXXX): at least two short digit-ish cells
+_MAYBE_PIECE_RX = re.compile(r'"(?:[\d \-]|\\u[0-9a-f]{4}){3,24}"')
+
+
+def row_may_split_pan(row_json: str) -> bool:
+    """Cheap test on a stored row (its JSON text): False for nearly every row, so the real check costs nothing for them."""
+    m = _MAYBE_PIECE_RX.search(row_json)
+    return m is not None and _MAYBE_PIECE_RX.search(row_json, m.end()) is not None
+
+
+def _windows(pieces: list, out: list) -> None:
+    """Find card numbers in one run of neighbouring pieces [(cell index, digits)], first match from the left, no overlaps."""
+    n, a = len(pieces), 0
+    if n < 2 or sum(len(p[1]) for p in pieces) < 13:
+        return
+    while a < n - 1:
+        first = pieces[a][1]
+        if len(first) < 4 or first[0] not in "2345689":          # a number starts with a piece of 4+ digits and a known first digit
+            a += 1
+            continue
+        size, hit = len(first), None
+        for b in range(a + 1, min(a + 4, n)):
+            last = pieces[b][1]
+            size += len(last)
+            if size > 19:
+                break
+            if len(last) >= 3 and size >= 13:
+                d = "".join(p[1] for p in pieces[a:b + 1])
+                if _strict_ok(d, False):
+                    hit = (b, d)
+                    break
+            if len(last) < 4:                                   # a short piece can end a number, not sit in the middle of one
+                break
+        if hit is None:
+            a += 1
+        else:
+            out.append(([p[0] for p in pieces[a:hit[0] + 1]], hit[1]))
+            a = hit[0] + 1
+
+
+def _split_runs(cells) -> list:
+    """[([cell indexes], digits)] for each card number found across the cells of one row."""
+    out, run = [], []
+    for i, c in enumerate(cells):
+        if type(c) is str:
+            if 3 <= len(c) <= 24 and _PIECE_RX.fullmatch(c):
+                d = c.translate(_STRIP) if c.isascii() else _digits(c)        # an ASCII piece holds only digits, spaces, dashes
+                if 3 <= len(d) <= 12:
+                    run.append((i, d))
+                    continue
+            if not c.strip():
+                continue
+        elif c is None:
+            continue
+        _windows(run, out)
+        run = []
+    _windows(run, out)
+    return out
+
+
+def split_pan_cells(cells) -> set:
+    """Indexes of the cells of one row that together form a card number (empty set for an ordinary row)."""
+    return {i for idx, _ in _split_runs(cells) for i in idx}
+
+
+def mask_split_pan_cells(cells):
+    """The row with those cells masked (SPLIT_PART, then "[card ****LAST4]" in the last cell). The same list when nothing matched."""
+    runs = _split_runs(cells)
+    if not runs:
+        return cells
+    out = list(cells)
+    for idx, d in runs:
+        for i in idx[:-1]:
+            out[i] = SPLIT_PART
+        out[idx[-1]] = f"[card ****{d[-4:]}]"
+    return out
+
+
+# --- masking at ingest (PCI DSS 3.5: unreadable wherever stored) -------------------------------------------------
+def ingest_mask_enabled() -> bool:
+    """config knowledge.mask_pan_at_ingest, on unless set to off/false/0."""
+    from .small_model import APP_CONFIG
+    k = APP_CONFIG.get("knowledge")
+    v = k.get("mask_pan_at_ingest", True) if isinstance(k, dict) else True
+    return str(v).strip().lower() not in ("off", "false", "0", "no")

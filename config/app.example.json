@@ -513,6 +513,7 @@
   },
   "knowledge": {
     "cloud_policy": "local_only",
+    "mask_pan_at_ingest": true,
     "min_cos": 0.45,
     "auto_inject_cos": 0.55,
     "full_cos": 0.75,

@@ -536,3 +536,203 @@ class CloudQueryTests(TableTestBase):
                 mock.patch.object(knowledge_rules, "_rules", return_value=[]):
             search_tools._kb_query_cloud_screen(res)
         self.assertEqual(res["groups"], {"ok": 2})                                      # source 9 was not cleared: "bad" is dropped
+
+
+# a card number split over the cells of one row is masked when the row is stored (and again when stored rows are read)
+VISA = "4111111111111111"
+SPLITS = {
+    "two cells with spaces": [["Ann", "4111 1111", "1111 1111", "x"]],
+    "two cells, 10 + 6 digits": [["Ann", "4111111111", "111111", "x"]],
+    "three cells": [["Ann", "4111 1111", "1111", "1111", "x"]],
+    "four cells of four": [["Ann", "4111", "1111", "1111", "1111", "x"]],
+    "dashes": [["Ann", "4111-1111", "1111-1111", "x"]],
+    "an empty cell between the pieces": [["Ann", "4111 1111", "", "1111 1111", "x"]],
+}
+
+
+class SplitCardTests(unittest.TestCase):
+    def test_the_helper_finds_the_cells_of_a_split_card(self):
+        from core import pan
+        for name, rows in SPLITS.items():
+            cells = rows[0]
+            idx = pan.split_pan_cells(cells)
+            self.assertTrue(idx and 0 not in idx and (len(cells) - 1) not in idx, (name, idx))
+            masked = pan.mask_split_pan_cells(cells)
+            self.assertEqual(masked[-1], "x", name)
+            self.assertEqual(masked[max(idx)], "[card ****1111]", name)
+            self.assertTrue(all(masked[i] == pan.SPLIT_PART for i in idx if i != max(idx)), name)
+            self.assertNotIn("4111", " ".join(masked), name)
+            self.assertEqual(pan.mask_split_pan_cells(masked), masked, name)               # masking twice changes nothing
+
+    def test_an_amex_split_4_6_5_is_found(self):
+        from core import pan
+        self.assertEqual(pan.split_pan_cells(["3782", "822463", "10005"]), {0, 1, 2})
+
+    def test_numbers_that_are_not_cards_stay(self):
+        from core import pan
+        for cells in (["1200", "3400", "5600", "7800"],                                    # quantities / amounts: 16 digits, but no card prefix
+                      ["4111", "1111", "1111", "1112"],                                    # prefix fine, checksum fails
+                      ["1234", "5678", "9012", "3456"],
+                      ["100", "200", "300", "400"], ["4111 1111", "oops", "1111 1111"],   # a name between the pieces: not neighbours
+                      ["1,200", "3,400", "5,600"], ["12.50", "13.75"], ["4111111111111111", "123"], [None, "4111", ""], []):
+            self.assertEqual(pan.split_pan_cells(cells), set(), cells)
+            self.assertIs(pan.mask_split_pan_cells(cells), cells)
+
+    def test_the_pre_check_skips_ordinary_rows(self):
+        import json
+        from core import pan
+        self.assertFalse(pan.row_may_split_pan(json.dumps(["E1", "Person", "Dhaka", "12,345", "2026-03-04"])))
+        self.assertFalse(pan.row_may_split_pan(json.dumps(["E1", "123456", "Dhaka"])))      # one digit-only cell is not enough
+        for rows in SPLITS.values():
+            self.assertTrue(pan.row_may_split_pan(json.dumps(rows[0])))
+        self.assertTrue(pan.row_may_split_pan(json.dumps(["২২২২", "২২২"])))   # non-ASCII digits are escaped in the JSON
+
+    def test_bengali_digit_pieces_are_found(self):
+        from core import pan
+        bn = lambda s: "".join(chr(0x09e6 + int(c)) if c.isdigit() else c for c in s)
+        self.assertEqual(pan.split_pan_cells([bn("4111 1111"), bn("1111 1111")]), {0, 1})
+
+
+class SplitCardStorageTests(TableTestBase):
+    def rows(self, source):
+        return [r[0] for r in self.db.execute(
+            "SELECT cells FROM kb_rows WHERE table_id IN (SELECT id FROM kb_tables WHERE source_id = ?) ORDER BY rownum", (source,))]
+
+    def store(self, rows, source=7, flag=True):
+        head = [["Name", "P1", "P2", "P3", "P4", "Note"]]
+        with mock.patch("core.small_model.APP_CONFIG", {"knowledge": {"mask_pan_at_ingest": flag}}):
+            kb_tables.replace_source(source, kb_structure.rows_to_text(head + rows, "Txn"))
+        return self.rows(source)
+
+    def test_every_split_layout_is_stored_masked_with_or_without_the_ingest_switch(self):
+        for flag in (True, False):
+            for name, rows in SPLITS.items():
+                stored = " ".join(self.store(rows, flag=flag))
+                self.assertNotIn("4111", stored, (name, flag))
+                self.assertIn("[card ****1111]", stored, (name, flag))
+                self.assertIn("[card part]", stored, (name, flag))
+
+    def test_the_columns_stay_where_they_were(self):
+        import json
+        stored = json.loads(self.store(SPLITS["three cells"])[0])
+        self.assertEqual(stored, ["Ann", "[card part]", "[card part]", "[card ****1111]", "x"])
+
+    def test_ordinary_rows_are_stored_exactly_as_they_came(self):
+        import json
+        rows = [["Ann", "1200", "3400", "5600", "7800", "ok"], ["Bob", "4111", "1111", "1111", "1112", "r"],
+                ["Cy", "12,345", "2026-03-04", "01711223344", "1234567890123", "z"]]
+        self.assertEqual([json.loads(r) for r in self.store(rows)], rows)
+
+    def test_kb_query_masks_a_row_an_older_version_stored_split(self):
+        import json
+        self.store([["Ann", "x"]])
+        self.db.execute("UPDATE kb_rows SET cells = ? WHERE table_id = (SELECT id FROM kb_tables WHERE source_id = 7)",
+                        (json.dumps(["Ann", "4111 1111", "1111 1111"]),))
+        self.db.commit()
+        spec = {"source": "txn", "select": ["Name", "P1", "P2"]}
+        out = kb_tables.render(spec, kb_tables.run_query(spec, {7}, {7: "Cards"}))
+        self.assertNotIn("4111", out)
+        self.assertIn("| Ann | [card part] | [card ****1111] |", out)
+
+    def test_a_filter_on_a_piece_finds_nothing(self):
+        self.store(SPLITS["two cells with spaces"])
+        for v in ("4111", "1111 1111"):
+            spec = {"source": "txn", "filters": [{"column": "P1", "op": "contains", "value": v}], "count": True}
+            self.assertIn("0 matching row(s)", kb_tables.render(spec, kb_tables.run_query(spec, {7}, {7: "Cards"})))
+
+
+# kb_query in a cloud answer: a source that is not cleared is not queried at all, so no count, filter, group key, hint or
+# "no rows" answer can depend on its data
+class CloudClearanceTests(TableTestBase):
+    def setUp(self):
+        super().setUp()
+        kb_tables.replace_source(3, kb_structure.rows_to_text([["Name", "Dept"], ["a", "Ops"], ["b", "Ops"], ["c", "IT"]], "S"))
+
+    def put_secret(self, rows):
+        kb_tables.replace_source(9, kb_structure.rows_to_text([["Name", "Dept"]] + rows, "S"))
+
+    def ask(self, spec, cloud=True, cleared=frozenset({3}), readable=frozenset({3, 9})):
+        import asyncio
+        from core import knowledge_access as ka, knowledge_rules
+        from core.agent_tools import search_tools
+        rows = [{"id": i, "title": {3: "Book", 9: "Secret payroll", 10: "Other secret"}[i], "status": "ready", "chunks_total": None,
+                 "chunks_indexed": None} for i in sorted(readable)]
+        with mock.patch.object(ka, "kb_cloud_blocked", return_value=cloud), mock.patch.object(ka, "kb_local_only", return_value=True), \
+                mock.patch.object(ka, "allowed_source_ids_for", return_value=set(readable)), \
+                mock.patch("core.auth_db.list_knowledge_sources", return_value=rows), \
+                mock.patch("core.auth_db.cloud_ok_source_ids", return_value=set(cleared)), \
+                mock.patch.object(knowledge_rules, "_rules", return_value=[]), mock.patch("core.audit.audit_log"), \
+                mock.patch("core.agent_tools.search_tools.get_current_user_id", return_value=None):
+            return asyncio.run(search_tools.tool_kb_query(spec))
+
+    SPECS = [
+        {"count": True, "filters": [{"column": "Name", "op": "contains", "value": "needle"}]},
+        {"count": True, "filters": [{"column": "Dept", "op": "=", "value": "Payroll"}]},
+        {"count": True},
+        {"group_by": "Dept"},
+        {"group_by": "Dept", "filters": [{"column": "Name", "op": "contains", "value": "needle"}]},
+        {"select": ["Name", "Dept"], "filters": [{"column": "Name", "op": "starts_with", "value": "needle"}]},
+        {"source": "Secret", "count": True},
+        {"source": "Secret", "select": ["Name"]},
+        {"count": True, "filters": [{"column": "Name", "op": "=", "value": "needle"}]},       # also sets off the "contains" hint
+    ]
+
+    def test_an_uncleared_source_changes_nothing_in_the_answer(self):
+        for spec in self.SPECS:
+            self.put_secret([["zz", "Ops"], ["yy", "IT"]])
+            without = self.ask(spec)
+            self.put_secret([["needle one", "Payroll"], ["needle two", "Payroll"], ["needle", "Ops"], ["q", "Ops"]])
+            with_match = self.ask(spec)
+            self.assertEqual(without.encode(), with_match.encode(), spec)                  # byte for byte
+            self.assertNotIn("Secret payroll", with_match, spec)                          # a source is never named
+
+    def test_count_and_contains_on_an_uncleared_source_return_nothing(self):
+        self.put_secret([["needle one", "Payroll"], ["needle two", "Payroll"]])
+        out = self.ask({"count": True, "filters": [{"column": "Name", "op": "contains", "value": "needle"}]})
+        self.assertIn("0 matching row(s)", out)
+        self.assertNotIn("Secret payroll", out)
+        out = self.ask({"source": "Secret", "count": True})                              # asking for it by name finds nothing, as if absent
+        self.assertIn("No spreadsheet matches 'Secret'. Available: Book / S.", out)
+        self.assertNotIn("Secret payroll", out)
+
+    def test_the_number_of_left_out_sources_is_told_and_nothing_else(self):
+        self.put_secret([["needle", "Payroll"]])
+        line = "1 source(s) are not available to a cloud model and were not searched."
+        self.assertIn(line, self.ask({"count": True}))
+        self.assertIn(line, self.ask({"describe": True}))
+        two = self.ask({"count": True}, readable=frozenset({3, 9, 10}))
+        self.assertIn("2 source(s) are not available", two)
+        self.assertNotIn("secret", two.lower())
+        none = self.ask({"count": True}, readable=frozenset({3}))
+        self.assertNotIn("not available to a cloud model", none)                          # nothing was left out: no line
+
+    def test_a_cleared_source_still_answers(self):
+        self.put_secret([["needle", "Ops"]])
+        out = self.ask({"count": True, "filters": [{"column": "Dept", "op": "=", "value": "Ops"}]})
+        self.assertIn("2 matching row(s).", out)
+        self.assertIn("- Book / S: 2", out)
+        out = self.ask({"group_by": "Dept"})
+        self.assertIn("| Ops | 2 |", out)
+        self.assertIn("| IT | 1 |", out)
+        out = self.ask({"select": ["Name"], "filters": [{"column": "Name", "op": "=", "value": "a"}]})
+        self.assertIn("| R2 | a |", out)
+
+    def test_nothing_cleared_is_the_blocked_message(self):
+        from core.knowledge_access import KB_CLOUD_BLOCKED_MSG
+        self.put_secret([["needle", "Ops"]])
+        self.assertEqual(self.ask({"count": True}, cleared=frozenset()), KB_CLOUD_BLOCKED_MSG)
+
+    def test_local_mode_is_unchanged(self):
+        self.put_secret([["needle one", "Payroll"], ["needle two", "Payroll"]])
+        out = self.ask({"count": True, "filters": [{"column": "Name", "op": "contains", "value": "needle"}]}, cloud=False,
+                       cleared=frozenset(), readable=frozenset({3, 9}))
+        self.assertIn("2 matching row(s).", out)                                           # local lane: every readable source is queried
+        self.assertIn("Secret payroll", out)
+        self.assertNotIn("not available to a cloud model", out)
+
+    def test_kb_sql_still_refuses_a_cloud_answer(self):
+        import asyncio
+        from core.agent_tools import search_tools
+        with mock.patch.object(search_tools, "_kb_scope", return_value=(True, object(), True, {3: "Book"})):
+            out = asyncio.run(search_tools.tool_kb_sql({"sql": "SELECT 1"}))
+        self.assertTrue(out.startswith("error: kb_sql is not available"))

@@ -171,6 +171,12 @@ async def index_knowledge_source(source_id: int, text: str, version: Optional[fl
     """Chunk, embed and store one source. `progress(done, total)` is called after each group of chunks is embedded."""
     path = f"kb:{source_id}"
     version = version if version is not None else time.time()
+    # PCI DSS 3.5: card numbers are masked BEFORE chunking, so neither the stored chunk, the full-text index, the embedder
+    # input nor the entity index ever holds one (a chunk boundary could otherwise cut a number in two). knowledge.mask_pan_at_ingest.
+    from .. import pan
+    if pan.ingest_mask_enabled():
+        from ..kb_structure import mask_text
+        text = await asyncio.to_thread(mask_text, text) if progress else mask_text(text)
     # The old chunks stay searchable (and survive a crash) until the new ones are fully built; the swap
     # (delete old + insert new) is one transaction, in _swap_in below.
     rows = await asyncio.to_thread(_kb_rows, path, text, version) if progress else _kb_rows(path, text, version)

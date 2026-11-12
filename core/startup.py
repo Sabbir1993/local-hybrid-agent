@@ -185,6 +185,14 @@ async def lifespan(app: FastAPI):
             print(f"[server_manager] re-queued {resumed} interrupted knowledge ingest(s)")
     except Exception as e:
         print(f"[server_manager] could not resume knowledge ingests: {e}", file=sys.stderr)
+    try:                                       # PCI DSS 3.5: say once how many spreadsheets still hold their card numbers unmasked
+        from core import kb_tables, pan
+        pending = kb_tables.unmasked_sources() if pan.ingest_mask_enabled() else 0
+        if pending:
+            print(f"[server_manager] {pending} knowledge source(s) were stored before card numbers were masked at ingest; "
+                  "see docs/knowledge-pan.md (kb_tables.remask_all / re-index) to apply it")
+    except Exception as e:
+        print(f"[server_manager] could not count unmasked knowledge sources: {e}", file=sys.stderr)
     memory_task = asyncio.create_task(memory_background_task())
     tuner_task = asyncio.create_task(tuner_background_task())
     yield

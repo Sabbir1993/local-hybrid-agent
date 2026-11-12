@@ -14,7 +14,7 @@ import json
 import re
 from typing import Optional
 
-from .pan import is_card_header, mask_cell
+from .pan import ingest_mask_enabled, is_card_header, mask_cell, mask_split_pan_cells, row_may_split_pan
 
 MAX_LIMIT = 200
 DEFAULT_LIMIT = 50
@@ -53,6 +53,10 @@ def _ensure() -> None:
     db.execute("""CREATE TABLE IF NOT EXISTS kb_rows (
         table_id INTEGER NOT NULL, rownum INTEGER NOT NULL, cells TEXT NOT NULL)""")
     db.execute("CREATE INDEX IF NOT EXISTS kb_rows_table ON kb_rows(table_id)")
+    # masked: 1 = the rows were stored with card numbers masked (knowledge.mask_pan_at_ingest); 0 = stored as they came, which is
+    # every table of a version before this column. Added to an existing database by ALTER, guarded by a column check.
+    if "masked" not in [r[1] for r in db.execute("PRAGMA table_info(kb_tables)")]:
+        db.execute("ALTER TABLE kb_tables ADD COLUMN masked INTEGER NOT NULL DEFAULT 0")
     db.commit()
     _ready = True
 
@@ -96,21 +100,86 @@ def parse_tables(text: str) -> list:
     return out
 
 
+def _remasked_row(js: str, card_cols: list) -> str:
+    """One stored row with its card numbers masked (remask_all): inside a cell, then split over neighbouring cells."""
+    cells = [mask_cell(c, card_cols[i] if i < len(card_cols) else False) if len(c) >= 13 else c
+             for i, c in enumerate(json.loads(js))]
+    cells = mask_split_pan_cells(cells)
+    return json.dumps(cells)
+
+
+def load_row(js: str) -> list:
+    """The cells of a stored row for reading (kb_query output, the kb_sql copy path), with a card number that an older version
+    stored split over neighbouring cells hidden too: the same check as at storing, so every path agrees."""
+    cells = json.loads(js)
+    return mask_split_pan_cells(cells) if row_may_split_pan(js) else cells
+
+
 def replace_source(source_id: int, text: str) -> int:
-    """Store the spreadsheet rows of a source (replacing earlier ones). Returns the number of rows stored."""
+    """Store the spreadsheet rows of a source (replacing earlier ones). Returns the number of rows stored.
+
+    Card numbers are masked here, once, so no query has to find them later (PCI DSS 3.5): a number split over neighbouring
+    cells always, one inside a cell when knowledge.mask_pan_at_ingest is on (the default). kb_structure.mask_text does it on
+    the marker text before parsing; it only touches the few rows that can hold a card number, so a big sheet costs no more."""
+    from .kb_structure import mask_text
     _ensure()
     delete_source(source_id)
     db = _db()
+    ingest = ingest_mask_enabled()
+    text = mask_text(text, single=ingest)
     total = 0
     for t in parse_tables(text)[:MAX_TABLES]:
-        cur = db.execute("INSERT INTO kb_tables (source_id, sheet, columns, nrows) VALUES (?, ?, ?, ?)",
-                         (source_id, t["sheet"], json.dumps(t["columns"]), len(t["rows"])))
+        cur = db.execute("INSERT INTO kb_tables (source_id, sheet, columns, nrows, masked) VALUES (?, ?, ?, ?, ?)",
+                         (source_id, t["sheet"], json.dumps(t["columns"]), len(t["rows"]), int(ingest)))
         tid = cur.lastrowid
         db.executemany("INSERT INTO kb_rows (table_id, rownum, cells) VALUES (?, ?, ?)",
                        ((tid, n, json.dumps(cells)) for n, cells in t["rows"]))
         total += len(t["rows"])
     db.commit()
     return total
+
+
+def unmasked_sources() -> int:
+    """How many sources have a table that was stored before card numbers were masked at ingest (see remask_all)."""
+    _ensure()
+    return _db().execute("SELECT COUNT(DISTINCT source_id) FROM kb_tables WHERE masked = 0").fetchone()[0]
+
+
+def remask_all() -> dict:
+    """Apply the ingest masking to what is already stored, in place, without the original files: every row of a table that is
+    not marked masked yet, and the text of the knowledge chunks (and so the full-text index, through its triggers).
+    Safe to run again (masked text stays as it is). Returns {"tables", "rows", "chunks"} changed.
+
+    The stored chunk vectors were computed from the old text and are not touched, and a number cut in two by a chunk boundary
+    is not seen here: re-index the source (POST /knowledge/{id}/reindex, permission knowledge.manage) to rebuild its chunks
+    and vectors from the masked text."""
+    from .kb_structure import mask_text
+    _ensure()
+    db = _db()
+    done = {"tables": 0, "rows": 0, "chunks": 0}
+    for tid, cols in db.execute("SELECT id, columns FROM kb_tables WHERE masked = 0").fetchall():
+        card_cols = [is_card_header(c) for c in json.loads(cols)]
+        changed = []
+        for rid, cells in db.execute("SELECT rowid, cells FROM kb_rows WHERE table_id = ?", (tid,)):
+            js = _remasked_row(cells, card_cols)
+            if js != cells:
+                changed.append((js, rid))
+        if changed:
+            db.executemany("UPDATE kb_rows SET cells = ? WHERE rowid = ?", changed)
+        db.execute("UPDATE kb_tables SET masked = 1 WHERE id = ?", (tid,))
+        done["tables"] += 1
+        done["rows"] += len(changed)
+    swaps = []
+    has_chunks = db.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks'").fetchone()
+    for cid, text in (db.execute("SELECT id, text FROM chunks WHERE source = 'knowledge'").fetchall() if has_chunks else []):
+        masked = mask_text(text)
+        if masked != text:
+            swaps.append((masked, cid))
+    if swaps:
+        db.executemany("UPDATE chunks SET text = ? WHERE id = ?", swaps)   # the chunks_fts_au trigger keeps the full-text index in step
+    done["chunks"] = len(swaps)
+    db.commit()
+    return done
 
 
 def delete_source(source_id: int) -> None:
@@ -336,7 +405,7 @@ def run_query(spec: dict, allowed_ids: set, titles: dict) -> dict:
             if left > 0:
                 for rownum, cells in db.execute(f"SELECT rownum, cells FROM kb_rows WHERE {w} ORDER BY rownum LIMIT ?",
                                                 params + [left]):
-                    vals = json.loads(cells)
+                    vals = load_row(cells)
                     vals += [""] * (len(cols) - len(vals))
                     pick = sel if sel else list(range(len(cols)))
                     entry["rows"].append((rownum, [mask_cell(vals[i], is_card_header(cols[i])) for i in pick]))

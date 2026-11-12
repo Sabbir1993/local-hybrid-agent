@@ -263,12 +263,14 @@ def _month_filter(wb, args: dict) -> tuple:
 def _kb_copy_workbook(db, tables: list):
     """Fallback for kb_sql: copy the rows into a private in-memory database (slow and large for big files)."""
     import json as _json
+    from .. import kb_tables
     from ..sheet_engine import sql as sheet_sql
     items = []
     for t in tables:
         rows = [json_row for (json_row,) in db.execute("SELECT cells FROM kb_rows WHERE table_id = ? ORDER BY rownum LIMIT 200000", (t["id"],))]
         cols = t["columns"] or [f"col{i + 1}" for i in range(max((len(_json.loads(r)) for r in rows[:50]), default=1))]
-        items.append((_kb_table_name(t["title"], t["sheet"]), t["title"], list(cols), [_json.loads(r) for r in rows],
+        # load_row also hides a card number that an older version stored split over neighbouring cells
+        items.append((_kb_table_name(t["title"], t["sheet"]), t["title"], list(cols), [kb_tables.load_row(r) for r in rows],
                       t["sheet"], f"K{t['id']}"))
     return sheet_sql.from_tables(items)
 
@@ -383,6 +385,23 @@ def _kb_query_cloud_screen(res: dict) -> None:
     res["withheld"] = withheld
 
 
+def _kb_cloud_sources(user, titles: dict) -> tuple:
+    """For a cloud answer: ({id: title} of the sources cleared for a cloud model, how many readable sources are left out).
+
+    The ONE rule for a cloud lane: a source that is not cleared is not queried at all - not counted, not filtered, not grouped,
+    not used for a hint or a "no rows" answer - so nothing in the reply can depend on its data. Only the number of left-out
+    sources is told (never a name or a size). The per-row screen below stays for what the content rules hold back inside a
+    cleared source."""
+    from ..knowledge_access import allowed_source_ids_for, cloud_ok_ids
+    cleared = cloud_ok_ids(set(titles))
+    kept = {sid: t for sid, t in titles.items() if sid in cleared}
+    try:                                   # readable = what the user may read before the cloud rule (the scope already applied it)
+        readable = len(allowed_source_ids_for(user))
+    except Exception:
+        readable = len(titles)
+    return kept, max(readable - len(kept), len(titles) - len(kept), 0)
+
+
 @kb_guarded
 async def tool_kb_query(args: dict) -> str:
     """Exact counts, lists and group-bys over the Excel/CSV sources the user may read."""
@@ -391,14 +410,21 @@ async def tool_kb_query(args: dict) -> str:
     if not ok:
         return titles
     from .. import kb_tables
+    left_out = 0
+    if cloud:                              # before any query runs: only cleared sources are looked at
+        titles, left_out = _kb_cloud_sources(user, titles)
+        if not titles:
+            from ..knowledge_access import KB_CLOUD_BLOCKED_MSG
+            return KB_CLOUD_BLOCKED_MSG
+    skipped = (f"\n\n({left_out} source(s) are not available to a cloud model and were not searched.)" if left_out else "")
     spec = {k: args.get(k) for k in ("source", "sheet", "filters", "select", "group_by", "count", "limit")}
     if args.get("describe") or not any(spec.get(k) for k in ("filters", "select", "group_by", "count")):
-        return kb_tables.describe(set(titles), titles, str(spec.get("source") or ""))
+        return kb_tables.describe(set(titles), titles, str(spec.get("source") or "")) + skipped
     try:
         res = kb_tables.run_query(spec, set(titles), titles)
     except ValueError as e:
         return f"error: {e}"
-    if cloud:                              # everything the answer would show is screened, not only the rows
+    if cloud:                              # what the content rules hold back inside a cleared source: rows, group values, hint
         _kb_query_cloud_screen(res)
     try:                                   # filter values can be names: audit that a query ran, store only a hash
         import hashlib
@@ -412,4 +438,4 @@ async def tool_kb_query(args: dict) -> str:
     note = partial_notice(set(titles))
     held = (f"\n\n({res['withheld']} row(s) or value(s) are not shown: they do not meet the rules for data sent to a cloud model.)"
             if res.get("withheld") else "")
-    return kb_tables.render(spec, res) + held + (f"\n\n{note}" if note else "")
+    return kb_tables.render(spec, res) + held + skipped + (f"\n\n{note}" if note else "")

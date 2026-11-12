@@ -111,6 +111,9 @@ def _load_app_config() -> dict:
             "shell": {"enabled": True, "ask_first": True, "timeout_s": 60,
                       "allow_patterns": ["git *", "npx *", "npm *", "pip *", "python *"]},
         },
+        # knowledge base: mask_pan_at_ingest masks card numbers (Luhn + known prefix) in table rows and text chunks before they are
+        # stored, chunked or embedded (PCI DSS 3.5); false stores sources as they come (reads are masked either way)
+        "knowledge": {"mask_pan_at_ingest": True},
         "input_guard": {"enabled": False, "rules": []},
         "output_guard": {"enabled": False, "rules": []},
         # images / videos / speech (core/media). Audio can't be scanned for card numbers,
