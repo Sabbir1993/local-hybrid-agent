@@ -283,3 +283,256 @@ class HelpfulFailureTests(TableTestBase):
     def test_fuzzy_name_now_finds_rows(self):
         r = self.q(source="staff", filters=[{"column": "dept", "op": "=", "value": "Khulna"}], count=True)
         self.assertEqual(r["total"], 2)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# audit 3: the column that answers must be the column that was asked for
+class ColumnMatchingTests(unittest.TestCase):
+    R = staticmethod(kb_tables.resolve_column)
+
+    def name(self, q, cols):
+        i = self.R(q, cols)
+        return None if i is None else cols[i]
+
+    def test_a_part_of_a_word_is_never_a_match(self):
+        self.assertIsNone(self.R("id", ["Name", "Paid Amount"]))                       # not "Paid"
+        self.assertIsNone(self.R("dt", ["Amount BDT", "Name"]))
+        self.assertIsNone(self.R("total", ["Subtotal", "Tax"]))
+        self.assertEqual(self.name("date", ["Due Date", "Name"]), "Due Date")           # a whole word: fine, and echoed by the tool
+        self.assertIsNone(self.R("am", ["Amount"]))
+        self.assertIsNone(self.R("amt", ["Amount"]))                                   # a 3-letter short form is too loose
+        self.assertIsNone(self.R("mount", ["Amount"]))
+
+    def test_the_exact_name_always_wins(self):
+        cols = ["ID", "Customer ID", "Cust Name", "Amount", "Amount USD", "Amount BDT", "Date", "Due Date"]
+        for q in ("id", "ID", "Amount", "amount", "Date", "Amount USD", "amount (usd)", "AmountUSD", "date"):
+            self.assertEqual(self.name(q, cols), next(c for c in cols if kb_tables._norm(c) == kb_tables._norm(q)))
+        self.assertEqual(self.name("Amount", ["Amount", "Amount USD"]), "Amount")
+        self.assertIsNone(self.R("name", ["Name", "name"]))                            # two columns of the same name: ambiguous
+
+    def test_whole_words_resolve_when_exactly_one_column_has_them(self):
+        cols = ["Customer ID", "Cust Name", "Amount USD", "Amount BDT", "Due Date", "Invoice Date"]
+        self.assertEqual(self.name("usd", cols), "Amount USD")
+        self.assertEqual(self.name("bdt", cols), "Amount BDT")
+        self.assertEqual(self.name("id", cols), "Customer ID")
+        self.assertEqual(self.name("due", cols), "Due Date")
+        self.assertEqual(self.name("Cust ID", cols), "Customer ID")
+        self.assertIsNone(self.R("amount", cols))                                      # two amounts
+        self.assertIsNone(self.R("date", cols))                                        # two dates
+
+    def test_a_longer_form_of_another_columns_word_is_not_answered(self):
+        self.assertIsNone(self.R("customer", ["Customer ID", "Cust Name"]))            # could mean "Cust Name"
+        self.assertEqual(self.name("customer", ["Customer Name", "Amount"]), "Customer Name")
+
+    def test_ids_do_not_land_on_paid_or_total_on_subtotal(self):
+        self.assertIsNone(self.R("id", ["Name", "Amount", "Paid Amount"]))
+        self.assertEqual(self.name("total", ["Name", "Total Amount", "Subtotal"]), "Total Amount")
+        self.assertEqual(self.name("paid", ["Name", "Paid Amount"]), "Paid Amount")
+        self.assertIsNone(self.R("total", ["Subtotal", "Tax", "Grand Amount"]))
+
+    def test_short_forms_need_four_letters_the_same_first_letter_and_one_candidate(self):
+        self.assertEqual(self.name("dept", ["Department", "Name"]), "Department")
+        self.assertIsNone(self.R("dept", ["Department", "Departure"]))                 # two candidates
+        self.assertIsNone(self.R("tmnt", ["Department"]))                              # first letter differs
+        self.assertIsNone(self.R("dpt", ["Department"]))                               # under 4 letters
+
+    def test_word_starts_still_work(self):
+        cols = ["Employee ID", "Name", "Department", "Dept Code", "Home Phone", "Mobile Phone", "Salary (BDT)"]
+        self.assertEqual(self.name("emp id", cols), "Employee ID")
+        self.assertEqual(self.name("mob phone", cols), "Mobile Phone")
+        self.assertEqual(self.name("dept", cols), "Dept Code")
+
+
+class ColumnEchoTests(TableTestBase):
+    def test_the_matched_column_is_named_when_the_name_was_not_exact(self):
+        kb_tables.replace_source(3, kb_structure.rows_to_text([["Customer ID", "Amount"], ["C1", "5"], ["C2", "6"]], "T"))
+        spec = {"source": "pay", "filters": [{"column": "id", "op": "=", "value": "C1"}], "select": ["cust id", "Amount"]}
+        out = kb_tables.render(spec, kb_tables.run_query(spec, {3}, {3: "Payments"}))
+        self.assertIn("(matched 'id' -> 'Customer ID'; matched 'cust id' -> 'Customer ID')", out)
+        spec = {"source": "pay", "filters": [{"column": "Customer ID", "op": "=", "value": "C1"}], "select": ["amount"]}
+        out = kb_tables.render(spec, kb_tables.run_query(spec, {3}, {3: "Payments"}))
+        self.assertNotIn("matched", out)                                              # exact up to case: nothing to say
+
+    def test_a_wrong_column_is_an_error_with_the_listing_not_the_nearest_substring(self):
+        kb_tables.replace_source(3, kb_structure.rows_to_text([["Name", "Paid Amount"], ["a", "1"]], "T"))
+        spec = {"source": "pay", "filters": [{"column": "id", "op": "=", "value": "1"}], "count": True}
+        out = kb_tables.render(spec, kb_tables.run_query(spec, {3}, {3: "Payments"}))
+        self.assertIn("No column 'id'", out)
+        self.assertIn("Name | Paid Amount", out)
+        self.assertNotIn("matching row", out)
+
+
+# numbers in filters: one grammar, a cell that is not a number is never 0
+AMOUNTS = [["Name", "Amount", "Paid Amount"], ["a", "50", "1"], ["b", "1,200", "2"], ["c", "", "3"], ["d", "N/A", "4"],
+           ["e", "$1,500", "5"], ["f", "(300)", "6"], ["g", "Tk 90", "7"], ["h", "৳2,000", "8"]]
+
+
+class NumberFilterTests(TableTestBase):
+    def setUp(self):
+        super().setUp()
+        kb_tables.replace_source(3, kb_structure.rows_to_text(AMOUNTS, "S"))
+
+    def names(self, op, value):
+        r = kb_tables.run_query({"source": "book", "filters": [{"column": "Amount", "op": op, "value": value}], "select": ["Name"]},
+                                {3}, {3: "Book"})
+        return sorted(row[1][0] for t in r["tables"] for row in t["rows"])
+
+    def test_less_than(self):
+        self.assertEqual(self.names("<", 100), ["a", "f", "g"])                         # 50, (300) = -300, Tk 90; not "", N/A
+        self.assertEqual(self.names("<=", 50), ["a", "f"])
+
+    def test_greater_than(self):
+        self.assertEqual(self.names(">", 1000), ["b", "e", "h"])                       # 1,200  $1,500  ৳2,000
+        self.assertEqual(self.names(">=", 1500), ["e", "h"])
+        self.assertEqual(self.names(">", "1,000"), ["b", "e", "h"])                    # the filter value may be written like a cell
+
+    def test_blank_and_text_cells_are_never_in_a_range(self):
+        for op, v in (("<", 1), ("<", 1e9), (">", -1e9), (">=", 0), ("<=", 0)):
+            self.assertNotIn("c", self.names(op, v))
+            self.assertNotIn("d", self.names(op, v))
+
+    def test_equals_a_number_finds_the_formatted_cell(self):
+        self.assertEqual(self.names("=", 1200), ["b"])
+        self.assertEqual(self.names("=", "1200"), ["b"])
+        self.assertEqual(self.names("=", 1500), ["e"])
+        self.assertEqual(self.names("=", -300), ["f"])
+        self.assertEqual(self.names("=", 90), ["g"])
+        self.assertEqual(self.names("=", 0), [])                                       # nothing is 0: blanks are not zeros
+
+    def test_not_equals_a_number(self):
+        got = self.names("!=", 1200)
+        self.assertNotIn("b", got)
+        self.assertIn("c", got)                                                         # a blank is not 1,200
+        self.assertIn("d", got)                                                         # neither is "N/A"
+        self.assertEqual(len(got), 7)
+
+    def test_a_filter_value_that_is_not_a_number_is_refused_for_ranges(self):
+        with self.assertRaises(ValueError):
+            self.names(">", "lots")
+        with self.assertRaises(ValueError):
+            self.names("<", "12-34")
+
+    def test_text_equality_is_unchanged(self):
+        r = kb_tables.run_query({"source": "book", "filters": [{"column": "Amount", "op": "=", "value": "n/a"}], "count": True},
+                                {3}, {3: "Book"})
+        self.assertEqual(r["total"], 1)
+
+    def test_an_identifier_with_leading_zeros_is_not_the_number(self):
+        kb_tables.replace_source(4, kb_structure.rows_to_text([["Code", "N"], ["007", "a"], ["7", "b"]], "C"))
+        r = kb_tables.run_query({"source": "codes", "filters": [{"column": "Code", "op": "=", "value": "007"}], "select": ["N"]},
+                                {4}, {4: "Codes"})
+        self.assertEqual([row[1][0] for row in r["tables"][0]["rows"]], ["a"])
+
+
+# card numbers in kb_query: not in the output, not through a filter, not through a group-by
+class CardNumberQueryTests(TableTestBase):
+    def setUp(self):
+        super().setUp()
+        kb_tables.replace_source(3, kb_structure.rows_to_text(
+            [["Merchant", "Card No", "Ref"], ["Acme", "4111 1111 1111 1111", "r1"], ["Bob", "5500005555555559", "r2"],
+             ["Cy", "4111111111111112", "r3"]], "Txn"))
+
+    def ask(self, **spec):
+        spec.setdefault("source", "txn")
+        return kb_tables.render(spec, kb_tables.run_query(spec, {3}, {3: "Cards"}))
+
+    def test_the_rows_come_back_masked(self):
+        out = self.ask(select=["Merchant", "Card No"])
+        self.assertIn("[card ****1111]", out)
+        self.assertIn("[card ****5559]", out)
+        self.assertIn("[card ****1112]", out)                                           # fails the checksum, but the column is a card column
+        for digits in ("4111 1111", "5500005555", "41111111"):
+            self.assertNotIn(digits, out)
+
+    def test_a_filter_on_the_digits_finds_nothing(self):
+        for op, v in (("starts_with", "4111"), ("starts_with", "5"), ("contains", "1111 1111"), ("contains", "5500"),
+                      ("=", "5500005555555559"), ("in", ["5500005555555559"]), ("starts_with", "41111")):
+            out = self.ask(filters=[{"column": "Card No", "op": op, "value": v}], count=True)
+            self.assertIn("0 matching row(s)", out, (op, v))
+
+    def test_the_masked_text_is_what_a_filter_sees(self):
+        out = self.ask(filters=[{"column": "Card No", "op": "contains", "value": "****1111"}], count=True)
+        self.assertIn("1 matching row(s)", out)                                         # the last four are public anyway
+
+    def test_numeric_operators_cannot_probe_a_card_number(self):
+        for op in ("<", ">", ">=", "<="):
+            with self.assertRaises(ValueError):                                         # 13+ digits are an identifier, not an amount
+                self.ask(filters=[{"column": "Card No", "op": op, "value": 4111111111111110}], count=True)
+        out = self.ask(filters=[{"column": "Card No", "op": "=", "value": 4111111111111111}], count=True)
+        self.assertIn("0 matching row(s)", out)
+        for op in ("<", ">", ">=", "<="):                                               # and a short number matches no card cell
+            out = self.ask(filters=[{"column": "Card No", "op": op, "value": 5}], count=True)
+            self.assertIn("0 matching row(s)", out, op)
+
+    def test_group_by_a_card_column_shows_masked_values(self):
+        out = self.ask(group_by="Card No")
+        self.assertNotIn("4111 1111", out)
+        self.assertNotIn("5500005555", out)
+        self.assertIn("[card ****1111]", out)
+
+    def test_ordinary_filters_are_unchanged(self):
+        out = self.ask(filters=[{"column": "Merchant", "op": "starts_with", "value": "ac"}], select=["Merchant"])
+        self.assertIn("| R2 | Acme |", out)
+
+
+# a cloud model gets cleared sources only, and every value the answer shows is screened, not only the rows
+class CloudQueryTests(TableTestBase):
+    NOTES = [["Name", "Salary", "Note"], ["a", "50", "password: hunter2"], ["b", "60", "ok"], ["c", "70", "ok"]]
+
+    def setUp(self):
+        super().setUp()
+        kb_tables.replace_source(3, kb_structure.rows_to_text(self.NOTES, "S"))
+
+    def run_cloud(self, spec, cleared=frozenset({3}), rules=None):
+        import asyncio
+        from core import knowledge_access as ka, knowledge_rules
+        from core.agent_tools import search_tools
+        rules = rules if rules is not None else [{"kind": "keywords", "pattern": "hunter2", "name": "password"}]
+        scope = (True, object(), True, {3: "Book"})
+        with mock.patch.object(search_tools, "_kb_scope", return_value=scope), mock.patch("core.audit.audit_log"), \
+                mock.patch.object(ka, "kb_local_only", return_value=True), \
+                mock.patch("core.auth_db.cloud_ok_source_ids", return_value=set(cleared)), \
+                mock.patch.object(knowledge_rules, "_rules", return_value=rules):
+            return asyncio.run(search_tools.tool_kb_query(spec))
+
+    def test_a_row_the_rules_hold_back_is_not_listed(self):
+        out = self.run_cloud({"source": "Book", "select": ["Name", "Note"]})
+        self.assertNotIn("hunter2", out)
+        self.assertIn("| b | ok |", out)
+        self.assertIn("not shown", out)
+
+    def test_a_group_by_does_not_print_the_cell_values_of_a_held_back_row(self):
+        out = self.run_cloud({"source": "Book", "group_by": "Note"})
+        self.assertNotIn("hunter2", out)
+        self.assertNotIn("password", out)
+        self.assertIn("| ok | 2 |", out)                                                # the clear group stays, with its count
+        self.assertIn("not shown", out)
+
+    def test_rows_are_checked_against_their_own_source_not_source_zero(self):
+        out = self.run_cloud({"source": "Book", "select": ["Name", "Note"]}, rules=[])
+        self.assertIn("| b | ok |", out)                                                # with no rule, cleared rows are shown
+        self.assertIn("| c | ok |", out)
+
+    def test_a_source_that_is_not_cleared_shows_nothing(self):
+        out = self.run_cloud({"source": "Book", "select": ["Name"]}, cleared=frozenset())
+        self.assertNotIn("| b |", out)
+
+    def test_the_hint_is_screened_too(self):
+        from core.agent_tools import search_tools
+        res = {"tables": [{"title": "Book", "sheet": "S", "source_id": 3, "count": 0, "columns": [], "rows": []}],
+               "groups": None, "total": 0, "hint": "0 rows equal 'hunter2', but 1 rows contain it: use op \"contains\".",
+               "group_sources": {}}
+        from core import knowledge_access as ka, knowledge_rules
+        with mock.patch.object(ka, "kb_local_only", return_value=True), mock.patch("core.auth_db.cloud_ok_source_ids", return_value={3}), \
+                mock.patch.object(knowledge_rules, "_rules", return_value=[{"kind": "keywords", "pattern": "hunter2", "name": "pw"}]):
+            search_tools._kb_query_cloud_screen(res)
+        self.assertEqual(res["hint"], "")
+
+    def test_group_keys_are_checked_against_every_source_they_came_from(self):
+        from core.agent_tools import search_tools
+        res = {"tables": [], "groups": {"ok": 2, "bad": 1}, "total": 3, "hint": "", "group_sources": {"ok": {3}, "bad": {3, 9}}}
+        from core import knowledge_access as ka, knowledge_rules
+        with mock.patch.object(ka, "kb_local_only", return_value=True), mock.patch("core.auth_db.cloud_ok_source_ids", return_value={3}), \
+                mock.patch.object(knowledge_rules, "_rules", return_value=[]):
+            search_tools._kb_query_cloud_screen(res)
+        self.assertEqual(res["groups"], {"ok": 2})                                      # source 9 was not cleared: "bad" is dropped

@@ -50,10 +50,11 @@ class EquivalenceTests(DirectBase):
         self.assertFalse(new.startswith("error:"), new)
         return new
 
-    def test_select_star_only_adds_the_row_column(self):
+    def test_select_star_is_the_same_on_both_paths(self):
+        """No extra row-number column any more (it made NATURAL JOIN join on it): SELECT * is exactly the copy path's."""
         new, old = self.both({"sql": "SELECT * FROM Staff_list_Staff"})
-        self.assertEqual([ln.rsplit("|", 2)[0] + "|" for ln in new.splitlines()[:-1]], [ln for ln in old.splitlines()[:-1]])
-        self.assertIn("| Alice | Manager | Dhaka | 90,000 | 2 |", new)
+        self.assertEqual(new, old)
+        self.assertIn("| Alice | Manager | Dhaka | 90,000 |", new)
 
     def test_aggregates_group_by_limit_and_dates(self):
         self.same("SELECT SUM(Salary), AVG(Salary), MEDIAN(Salary) FROM Staff_list_Staff")
@@ -74,7 +75,7 @@ class EquivalenceTests(DirectBase):
 
     def test_describe(self):
         new, old = self.both({"describe": True})
-        self.assertEqual(new.replace(', "Row" REAL', ""), old)
+        self.assertEqual(new, old)
 
     def test_the_view_path_is_really_used(self):
         with mock.patch.object(search_tools, "_kb_copy_workbook", side_effect=AssertionError("copied")):
@@ -294,3 +295,373 @@ class CteTests(DirectBase):
         self.assertNotIn("__kb_", wb_names)
         out = self.run_sql({"sql": "SELECT name FROM temp.sqlite_master"})
         self.assertTrue(out.startswith("error:"), out)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# card numbers never reach the model's SQL (audit 3, item 1)
+CARDS = [["Merchant", "Card No", "Amt"],
+         ["Acme", "4111 1111 1111 1111", "10"],
+         ["Bob", "5500005555555559", "20"],
+         ["Cy", "378282246310005", "5"],
+         ["Dee", "4111-1111-1111-1111", "7"]]
+PAN_PIECES = ("4111", "5500", "0000", "5555", "3782", "8224", "6310")
+
+
+class CardNumberTests(DirectBase):
+    ATTACKS = [
+        'SELECT Merchant, "Card No" FROM Book_Txn',
+        'SELECT * FROM Book_Txn',
+        'SELECT substr("Card No",1,8) a, substr("Card No",9) b FROM Book_Txn',
+        'SELECT substr("Card No",1,4)||\'x\'||substr("Card No",5,4)||\'x\'||substr("Card No",9,4)||\'x\'||substr("Card No",13) FROM Book_Txn',
+        'SELECT replace("Card No",\' \',\'\') FROM Book_Txn',
+        'SELECT "Card No"+0, CAST("Card No" AS INTEGER), CAST("Card No" AS REAL) FROM Book_Txn',
+        'SELECT group_concat(substr("Card No",1,4),\'/\') g1, group_concat(substr("Card No",5,4),\'/\') g2 FROM Book_Txn',
+        'SELECT "Card No" AS "x" FROM Book_Txn ORDER BY "Card No"',
+        'SELECT printf(\'%s\', "Card No"), lower("Card No"), upper("Card No"), trim("Card No", \'[card*]\') FROM Book_Txn',
+        'SELECT json_array("Card No"), json_object(\'c\', "Card No") FROM Book_Txn',
+        'WITH c AS (SELECT "Card No" AS n FROM Book_Txn) SELECT substr(n, 1, 6), substr(n, 7, 6) FROM c',
+        'SELECT MIN("Card No"), MAX("Card No"), MODE("Card No") FROM Book_Txn',
+    ]
+
+    def check(self, copy):
+        for q in self.ATTACKS:
+            out = self.run_sql({"sql": q}, titles={4: "Book"}, copy=copy)
+            for piece in PAN_PIECES:
+                self.assertNotIn(piece, out, f"{q!r} leaked {piece}: {out}")
+            self.assertIsNone(re.search(r"\d{5}", out.replace("(4 rows)", "")), f"{q!r} -> {out}")
+
+    def setUp(self):
+        super().setUp()
+        kb_tables.replace_source(4, kb_structure.rows_to_text(CARDS, "Txn"))
+
+    def test_no_query_can_rebuild_a_card_number_in_place(self):
+        self.check(copy=False)
+
+    def test_no_query_can_rebuild_a_card_number_on_the_copy_path(self):
+        self.check(copy=True)
+
+    def test_the_masked_value_keeps_the_last_four_like_everywhere_else(self):
+        for copy in (False, True):
+            out = self.run_sql({"sql": 'SELECT "Card No" FROM Book_Txn ORDER BY Merchant'}, titles={4: "Book"}, copy=copy)
+            self.assertEqual(out.count("[card ****1111]"), 2, out)
+            self.assertIn("[card ****5559]", out)
+            self.assertIn("[card ****0005]", out)
+
+    def test_the_functions_that_read_a_value_character_by_character_are_refused(self):
+        for q in ['SELECT hex("Card No") FROM Book_Txn', 'SELECT unicode(substr("Card No",1,1)) FROM Book_Txn',
+                  "SELECT char(52)", "SELECT quote(\"Card No\") FROM Book_Txn", "SELECT HEX(Amt) FROM Book_Txn",
+                  "SELECT zeroblob(10)", "SELECT randomblob(10)"]:
+            for copy in (False, True):
+                out = self.run_sql({"sql": q}, titles={4: "Book"}, copy=copy)
+                self.assertTrue(out.startswith("error:"), f"{q!r} -> {out}")
+
+    def test_a_filter_on_the_digits_finds_nothing(self):
+        for q in ['SELECT * FROM Book_Txn WHERE "Card No" LIKE \'4111%\'',
+                  "SELECT Merchant FROM Book_Txn WHERE substr(\"Card No\",1,1)='4' AND substr(\"Card No\",2,1)='1'",
+                  'SELECT Merchant FROM Book_Txn WHERE "Card No" GLOB \'5500*\'',
+                  'SELECT Merchant FROM Book_Txn WHERE instr("Card No", \'1111\') = 1',
+                  'SELECT Merchant FROM Book_Txn WHERE "Card No" = \'5500005555555559\'']:
+            for copy in (False, True):
+                out = self.run_sql({"sql": q}, titles={4: "Book"}, copy=copy)
+                self.assertIn("(0 rows)", out, f"{q!r} -> {out}")
+
+    def test_a_table_read_that_needs_no_column_does_not_count_the_stored_rows(self):
+        for q in ("SELECT COUNT(*) FROM kb_rows", "SELECT COUNT(*) FROM kb_tables", "SELECT 1 FROM kb_rows LIMIT 1",
+                  "SELECT COUNT(*) FROM Staff_list_Staff a, kb_rows b", "SELECT (SELECT COUNT(*) FROM chunks)"):
+            out = self.run_sql({"sql": q})
+            self.assertTrue(out.startswith("error:"), f"{q} -> {out}")
+
+    def test_a_recursive_cte_still_works_and_cannot_reach_the_stored_rows(self):
+        out = self.run_sql({"sql": "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r WHERE n < 5) SELECT SUM(n) FROM r"})
+        self.assertIn("| 15 |", out)
+        out = self.run_sql({"sql": "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r WHERE n < (SELECT COUNT(*) FROM kb_rows)) "
+                                   "SELECT COUNT(*) FROM r"})
+        self.assertTrue(out.startswith("error:"), out)
+
+    def test_the_function_can_only_hide(self):
+        out = self.run_sql({"sql": "SELECT kb_mask('4111 1111 1111 1111'), kb_mask('plain text, nothing to hide')"}, titles={4: "Book"})
+        self.assertIn("[card ****1111]", out)
+        self.assertIn("plain text, nothing to hide", out)
+        self.assertNotIn("4111", out)
+
+    def test_a_card_number_stored_as_a_spreadsheet_number_is_masked_too(self):
+        wb = sheet_sql.from_tables([("T", "T", ["Card", "Amt"], [[4111111111111111, 5], [4012888888881881, 6]])])
+        for q in ("SELECT Card FROM T", "SELECT CAST(Card AS TEXT), Card + 0, Card * 1 FROM T", "SELECT substr(Card, 1, 6) FROM T"):
+            out = sheet_sql.query(wb, q)
+            self.assertNotIn("4111", out)
+            self.assertNotIn("401288", out)
+            self.assertIsNone(re.search(r"\d{5}", out.replace("(2 rows)", "")), out)
+
+    def test_a_mistyped_card_number_in_a_card_column_is_masked_but_an_id_elsewhere_is_not(self):
+        kb_tables.replace_source(6, kb_structure.rows_to_text([["Card No", "Who"], ["4111111111111112", "x"]], "Odd"))     # fails the checksum
+        kb_tables.replace_source(5, kb_structure.rows_to_text([["Account No", "Who"], ["1234567890123456", "x"]], "Acc"))
+        out = self.run_sql({"sql": "SELECT * FROM Book_Odd"}, titles={6: "Book"})
+        self.assertNotIn("4111111111111112", out)
+        self.assertIn("[card ****1112]", out)
+        out = self.run_sql({"sql": "SELECT * FROM Book_Acc WHERE \"Account No\" = '1234567890123456'"}, titles={5: "Book"})
+        self.assertIn("(1 row)", out)                               # an account number is not a card number: it can be looked up
+
+    def test_ordinary_long_text_and_short_cells_are_untouched(self):
+        kb_tables.replace_source(6, kb_structure.rows_to_text(
+            [["Note", "Qty"], ["delivered on 2026-01-15 at the office", "12"]], "N"))
+        out = self.run_sql({"sql": "SELECT Note, Qty FROM Book_N"}, titles={6: "Book"})
+        self.assertIn("delivered on 2026-01-15 at the office", out)
+
+    def test_the_mask_is_only_applied_to_long_cells_with_a_digit(self):
+        self.assertIn("kb_mask(", sheet_sql.masked_text("x"))
+        self.assertIn("length(x) >= 13", sheet_sql.masked_text("x"))
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# one number grammar for both paths (items 3 and 4)
+CELLS = ["50", "1,200", "", "N/A", "$1,500", "(300)", "Tk 90", "৳2,000", "Tk 500", "500 BDT", "USD 20", "12%", ".5", "5.", "+5", "-5",
+         "12,34,567", "1,200.50", "12-34", "5-", "--5", "1.5.2", "2026-01-15", "1,5", "1 000", "1e5", "007", "0042", "0", "0.5",
+         "4111111111111111", "1234567890123", "(5)%", "(-5)", "-(5)", "Tk", "$", "tk. 7", "TAKA 3", "8/-", "٣٠٠", "∞"]
+
+
+class NumberGrammarTests(DirectBase):
+    def test_in_place_and_copy_path_agree_on_every_cell(self):
+        from core.sheet_engine.sql import parse_cell_number
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE t (x)")
+        conn.executemany("INSERT INTO t VALUES (?)", [(c,) for c in CELLS])
+        for x, got in conn.execute(f"SELECT x, {sheet_sql.num_expr('x')} FROM t"):
+            want = parse_cell_number(x)
+            self.assertEqual(got is None, want is None, f"{x!r}: sql {got} python {want}")
+            if want is not None:
+                self.assertAlmostEqual(got, want, msg=repr(x))
+
+    def test_the_audit_cells(self):
+        want = {"50": 50, "1,200": 1200, "": None, "N/A": None, "$1,500": 1500, "(300)": -300, "Tk 90": 90, "৳2,000": 2000,
+                "Tk 500": 500, "500 BDT": 500, "USD 20": 20, ".5": 0.5, "5.": 5, "12-34": None, "5-": None, "--5": None,
+                "1.5.2": None, "2026-01-15": None, "007": None, "4111111111111111": None, "12,34,567": 1234567, "1,5": None,
+                "12%": 12, "(5)%": -5, "(-5)": None, "8/-": 8, "tk. 7": 7}
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE t (x)")
+        conn.executemany("INSERT INTO t VALUES (?)", [(c,) for c in want])
+        for x, got in conn.execute(f"SELECT x, {sheet_sql.num_expr('x')} FROM t"):
+            if want[x] is None:
+                self.assertIsNone(got, repr(x))
+            else:
+                self.assertAlmostEqual(got, want[x], msg=repr(x))
+
+    def test_python_and_sql_agree_on_generated_cells(self):
+        import itertools
+        import random
+        random.seed(11)
+        nums = ["5", "05", "1200", "1,200", "1,2,3", "12,34,567", "1,234,567.8", "0.5", ".5", "5.", "12345678901", "1234567890123",
+                "1.2.3", "1,2", "-", "", "+"]
+        pre = ["", "$", "৳", "Tk ", "tk.", "BDT ", "usd ", "-", "+", "(", "- ", "~", "x"]
+        post = ["", "%", " BDT", "Tk", "/-", ")", " USD", "x", "%%", " %", "~"]
+        cells = ["".join(p) for p in itertools.product(pre, nums, post)]
+        cells += ["".join(random.choice("0123456789,.+-()% $tkBDTUSDx৳") for _ in range(random.randint(1, 8))) for _ in range(3000)]
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE t (x)")
+        conn.executemany("INSERT INTO t VALUES (?)", [(c,) for c in cells])
+        from core.sheet_engine.sql import parse_cell_number
+        bad = []
+        for x, got in conn.execute(f"SELECT x, {sheet_sql.num_expr('x')} FROM t"):
+            want = parse_cell_number(x)
+            if (got is None) != (want is None) or (want is not None and abs(got - want) > 1e-9):
+                bad.append((x, got, want))
+        self.assertEqual(bad[:10], [])
+
+    def test_a_numeric_column_reads_the_same_on_both_paths(self):
+        rows = [["Name", "V"]] + [["n", v] for v in ["100", "1,200", "(300)", "Tk 500", "500 BDT", "USD 20", ".5", "N/A", "", "12-34",
+                                                      "5-", "--5", "1.5.2", "2026-01-15", "$1,500", "৳2,000"]] + [["n", "1"]] * 30
+        kb_tables.replace_source(7, kb_structure.rows_to_text(rows, "S"))
+        t = {7: "Book"}
+        q = {"sql": "SELECT V, typeof(V) FROM Book_S", "limit": 200}
+        a, b = self.run_sql(q, titles=t), self.run_sql(q, titles=t, copy=True)
+        self.assertEqual(a, b)
+        self.assertIn("| -300 | real |", a)
+        self.assertIn("| 500 | real |", a)
+        self.assertIn("| 0.50 | real |", a)
+        self.assertGreaterEqual(a.count("| null |"), 7)             # blanks and text are NULL, not 0
+        self.assertNotIn("| 0 | real |", a)
+        for q2 in ("SELECT SUM(V), COUNT(V), MIN(V), MAX(V) FROM Book_S",):
+            self.assertEqual(self.run_sql({"sql": q2}, titles=t), self.run_sql({"sql": q2}, titles=t, copy=True))
+
+    def test_identifiers_stay_text_in_a_column_of_numbers(self):
+        rows = [["Name", "Ref"]] + [["n", str(i)] for i in range(1, 60)] + [["n", "007"], ["n", "4111111111111112"], ["n", "123456789012345"]]
+        kb_tables.replace_source(7, kb_structure.rows_to_text(rows, "S"))
+        t = {7: "Book"}
+        for copy in (False, True):
+            self.assertIn('"Ref" TEXT', self.run_sql({"describe": True}, titles=t, copy=copy))
+            out = self.run_sql({"sql": "SELECT Ref FROM Book_S WHERE Ref LIKE '0%' OR Ref LIKE '%456789012345'"}, titles=t, copy=copy)
+            self.assertIn("| 007 |", out)                       # the leading zeros are kept
+            self.assertIn("123456789012345", out)               # 15 digits are not rounded through a float
+
+    def test_a_column_that_is_numeric_only_after_the_first_rows_is_still_numbers(self):
+        rows = [["Name", "Amt"]] + [["n", ""] for _ in range(1200)] + [["n", "1,000"] for _ in range(5)]
+        kb_tables.replace_source(7, kb_structure.rows_to_text(rows, "S"))
+        t = {7: "Book"}
+        q = {"sql": "SELECT SUM(Amt), COUNT(Amt), typeof(MAX(Amt)) FROM Book_S"}
+        a = self.run_sql(q, titles=t)
+        self.assertIn("| 5,000 | 5 | real |", a)
+        self.assertIn("| 5,000 | 5 |", self.run_sql({"sql": "SELECT SUM(Amt), COUNT(Amt) FROM Book_S"}, titles=t, copy=True))
+
+    def test_numbers_that_start_late_in_a_long_table_are_found_by_the_spread_sample(self):
+        rows = [["Name", "Amt"]] + [["n", "text"] for _ in range(2500)] + [["n", str(i)] for i in range(1, 3001)]
+        kb_tables.replace_source(7, kb_structure.rows_to_text(rows, "S"))
+        out = self.run_sql({"sql": "SELECT SUM(Amt) FROM Book_S"}, titles={7: "Book"})
+        self.assertIn("4,501,500", out)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# NATURAL JOIN, joins that silently lose a table, dates, the race, the cap, the worker thread (items 6-8)
+JOIN_A = [["Cust", "Name"], ["c1", "Acme"], ["c2", "Bob"], ["c3", "Cy"]]
+JOIN_B = [["Cust", "Amt"], ["c3", "10"], ["c1", "20"], ["c2", "30"]]
+
+
+class JoinTests(DirectBase):
+    def setUp(self):
+        super().setUp()
+        kb_tables.replace_source(8, kb_structure.rows_to_text(JOIN_A, "A"))
+        kb_tables.replace_source(9, kb_structure.rows_to_text(JOIN_B, "B"))
+        self.t = {8: "Alpha", 9: "Beta"}
+
+    def test_natural_join_gives_the_same_rows_on_both_paths(self):
+        q = {"sql": "SELECT * FROM Alpha_A NATURAL JOIN Beta_B ORDER BY Cust"}
+        a, b = self.run_sql(q, titles=self.t), self.run_sql(q, titles=self.t, copy=True)
+        self.assertEqual(a, b)
+        self.assertIn("(3 rows)", a)
+        self.assertEqual(a.splitlines()[0], "| Cust | Name | Amt |")
+
+    def test_no_extra_column_in_select_star_or_describe(self):
+        for q in ({"sql": "SELECT * FROM Alpha_A"}, {"describe": True}):
+            self.assertEqual(self.run_sql(q, titles=self.t), self.run_sql(q, titles=self.t, copy=True))
+        self.assertNotIn("Row", self.run_sql({"describe": True}, titles=self.t))
+
+    def test_a_table_typo_in_a_join_is_an_error_not_a_silent_swap(self):
+        for copy in (False, True):
+            out = self.run_sql({"sql": "SELECT COUNT(*) FROM Alpha_A a, Beta_Typo b"}, titles=self.t, copy=copy)
+            self.assertTrue(out.startswith("error:"), out)
+            self.assertIn("Beta_Typo", out)
+            self.assertIn("Beta_B", out)                         # the candidate is listed
+            self.assertNotIn("| 3 |", out)
+            out = self.run_sql({"sql": "SELECT * FROM Alpha_A a JOIN Beta_Typo b ON a.Cust = b.Cust"}, titles=self.t, copy=copy)
+            self.assertTrue(out.startswith("error:"), out)
+
+    def test_two_names_are_never_collapsed_into_one_table(self):
+        kb_tables.replace_source(10, kb_structure.rows_to_text([["X"], ["1"]], "Pub"))
+        t = {**self.t, 10: "Public_book"}
+        for q in ("SELECT COUNT(*) FROM Public_book_Pub a, kb_rows b", "SELECT COUNT(*) FROM Alpha_A a, Nope b"):
+            out = self.run_sql({"sql": q}, titles=t)
+            self.assertTrue(out.startswith("error:"), f"{q} -> {out}")
+        out = self.run_sql({"sql": "SELECT COUNT(*) FROM Alpha_A a, Beta_B b WHERE a.Cust = b.Cust"}, titles=t)
+        self.assertIn("| 3 |", out)                                 # a real comma join still works
+
+    def test_handles_and_exact_names_still_work(self):
+        h = {t["source_id"]: f"K{t['id']}" for t in kb_tables.list_tables({8, 9}, self.t)}
+        out = self.run_sql({"sql": f"SELECT COUNT(*) FROM {h[8]} a, {h[9]} b WHERE a.Cust = b.Cust"}, titles=self.t)
+        self.assertIn("| 3 |", out)
+        out = self.run_sql({"sql": 'SELECT COUNT(*) FROM "Alpha_A" a JOIN Beta_B b USING (Cust)'}, titles=self.t)
+        self.assertIn("| 3 |", out)
+
+
+class DateAndLimitTests(DirectBase):
+    def test_a_day_the_month_does_not_have_stays_text(self):
+        kb_tables.replace_source(5, kb_structure.rows_to_text(
+            [["Date", "Amount"], ["31/02/2026", "1"], ["29/02/2026", "2"], ["29/02/2024", "3"], ["31/04/2026", "4"], ["30/04/2026", "5"],
+             ["29/02/2100", "6"], ["29/02/2000", "7"], ["05/11/2026", "8"]], "Plan"))
+        for copy in (False, True):
+            out = self.run_sql({"sql": "SELECT Date FROM Plan_Plan ORDER BY Amount"}, titles={5: "Plan"}, copy=copy)
+            rows = [ln.strip("| ") for ln in out.splitlines()[2:-1]]
+            self.assertEqual(rows, ["31/02/2026", "29/02/2026", "2024-02-29", "31/04/2026", "2026-04-30", "29/02/2100",
+                                    "2000-02-29", "2026-11-05"], (copy, out))
+
+    def test_describe_says_dates_are_day_first(self):
+        kb_tables.replace_source(5, kb_structure.rows_to_text([["Date", "Amount"], ["05/11/2026", "10"], ["07/11/2026", "20"]], "Plan"))
+        for copy in (False, True):
+            out = self.run_sql({"describe": True}, titles={5: "Plan"}, copy=copy)
+            self.assertIn('date columns: "Date"', out)
+            self.assertIn("day-first", out)
+
+    def test_a_table_replaced_while_the_views_were_built_is_refused(self):
+        tables = kb_tables.list_tables({1}, TITLES)
+        tables[0]["nrows"] += 1                                       # what list_tables said no longer matches the stored table
+        conn = sheet_sql.open_readonly(self.db.path)
+        try:
+            with self.assertRaises(RuntimeError):
+                sheet_sql.from_kb_views(conn, tables)
+        finally:
+            conn.close()
+
+    def test_the_tool_copies_the_current_rows_when_that_happens(self):
+        real = sheet_sql.from_kb_views
+
+        def stale(conn, metas):
+            metas = [{**m, "nrows": m["nrows"] + 1} for m in metas]
+            return real(conn, metas)
+        with mock.patch.object(sheet_sql, "from_kb_views", stale), mock.patch("sys.stderr"):
+            out = self.run_sql({"sql": "SELECT COUNT(*) FROM Staff_list_Staff"})
+        self.assertIn("| 4 |", out)
+
+    def test_more_tables_than_the_cap_are_mentioned_in_a_no_such_table_error(self):
+        titles = dict(self.titles)
+        for i in range(10, 72):
+            kb_tables.replace_source(i, kb_structure.rows_to_text([["A"], ["1"]], "S"))
+            titles[i] = f"Doc {i:02d}"
+        out = self.run_sql({"sql": "SELECT * FROM zzz_unknown_table"}, titles=titles)
+        self.assertIn("no such table", out)
+        self.assertIn("more table(s) exist but are not loaded", out)
+        self.assertIn("source=", out)
+
+
+class WorkerThreadTests(DirectBase):
+    def test_the_sql_runs_off_the_event_loop_with_the_callers_context(self):
+        import contextvars
+        import threading
+        var = contextvars.ContextVar("kb_test_user", default=None)
+        seen = {}
+        real = search_tools._kb_sql_blocking
+
+        def spy(args, titles):
+            seen["thread"] = threading.current_thread()
+            seen["ctx"] = var.get()
+            return real(args, titles)
+
+        async def main():
+            var.set("user-7")
+            return await search_tools.tool_kb_sql({"sql": "SELECT COUNT(*) FROM Staff_list_Staff"})
+
+        scope = (True, object(), False, self.titles)
+        with mock.patch.object(search_tools, "_kb_scope", return_value=scope), mock.patch("core.audit.audit_log"), \
+                mock.patch.object(search_tools, "_kb_sql_blocking", spy):
+            out = asyncio.run(main())
+        self.assertIn("| 4 |", out)
+        self.assertIsNot(seen["thread"], threading.main_thread())
+        self.assertEqual(seen["ctx"], "user-7")
+
+    def test_a_slow_query_does_not_stop_the_event_loop(self):
+        import time as _t
+        ticks = []
+
+        def slow(args, titles):
+            _t.sleep(0.4)
+            return None, "| x |\n|---|\n| 1 |\n(1 row)", "", 1
+
+        async def main():
+            async def ticker():
+                for _ in range(8):
+                    ticks.append(1)
+                    await asyncio.sleep(0.04)
+            t = asyncio.create_task(ticker())
+            out = await search_tools.tool_kb_sql({"sql": "SELECT 1"})
+            await t
+            return out
+
+        scope = (True, object(), False, self.titles)
+        with mock.patch.object(search_tools, "_kb_scope", return_value=scope), mock.patch("core.audit.audit_log"), \
+                mock.patch.object(search_tools, "_kb_sql_blocking", slow):
+            t0 = _t.time()
+            out = asyncio.run(main())
+        self.assertIn("| 1 |", out)
+        self.assertGreaterEqual(len(ticks), 8)
+
+    def test_the_eight_second_cap_is_still_there(self):
+        self.assertEqual(sheet_sql.QUERY_TIMEOUT_S, 8.0)
+        with mock.patch.object(sheet_sql, "QUERY_TIMEOUT_S", 0.3):
+            out = self.run_sql({"sql": "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT COUNT(*) FROM r"})
+        self.assertIn("longer than", out)

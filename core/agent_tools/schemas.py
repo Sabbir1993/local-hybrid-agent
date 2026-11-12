@@ -285,6 +285,9 @@ AGENT_TOOLS = [
                            "For a plan of one month ('the November plan') pass month=2026-11: the month filter is applied "
                            "to the rows before the grouping, on every date column of the sheet unless date_column names one. "
                            "Use kb_query for a simple count or list; use this for anything that needs totals, ratios or joins. "
+                           "Numbers are read from text like '1,200', '$1,500', 'Tk 90' and '(300)' (= -300); a cell that is not "
+                           "clearly one number is NULL, not 0. Card numbers in the data come back masked, so hex(), unicode(), "
+                           "char() and quote() are not available. SELECT * returns exactly the sheet's columns. "
                            "Not available while a cloud model answers.",
             "parameters": {
                 "type": "object",
@@ -308,8 +311,10 @@ AGENT_TOOLS = [
             "name": "kb_query",
             "description": "Exact counts, lists and group-bys over the Excel/CSV files in the company knowledge base (staff lists, rosters, "
                            "registers). Use it for a lookup, a count or a list with one or two conditions: 'how many X', 'list all Y "
-                           "where ...', 'count by department'. Column names are matched loosely; if a name is wrong the answer lists "
-                           "the real columns, so retry with one of them. Call it with describe=true to see the tables and their "
+                           "where ...', 'count by department'. Column names are matched by whole words ('emp id' finds 'Employee ID', never the middle of a "
+                           "word); the answer says which column was used, and if a name is wrong or fits several the answer lists "
+                           "the real columns, so retry with one of them. Number comparisons read '1,200', '$1,500' and '(300)'; "
+                           "blank or text cells never match them. Call it with describe=true to see the tables and their "
                            "columns. Answers come from the real rows, not from guessing.",
             "parameters": {
                 "type": "object",

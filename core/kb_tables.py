@@ -14,6 +14,8 @@ import json
 import re
 from typing import Optional
 
+from .pan import is_card_header, mask_cell
+
 MAX_LIMIT = 200
 DEFAULT_LIMIT = 50
 MAX_FILTERS = 8
@@ -28,6 +30,15 @@ _ready = False
 def _db():
     from .memory.store import _db as memory_db
     return memory_db()
+
+
+def _with_mask(db):
+    """The connection of this thread with the masking function the filters use (see _text). It can only hide a card number."""
+    from .sheet_engine.sql import _sql_mask, _sql_mask_card
+    c = db.conn() if hasattr(db, "conn") else db
+    c.create_function("kb_mask", 1, _sql_mask, deterministic=True)
+    c.create_function("kb_mask_card", 1, _sql_mask_card, deterministic=True)
+    return db
 
 
 def _ensure() -> None:
@@ -137,27 +148,29 @@ def _tokens(s: str) -> list:
 
 
 def _abbrev(t: str, w: str) -> bool:
-    """`t` is a short form of the word `w`: same first letter and its letters appear in order ("dept" -> "department")."""
-    if len(t) < 3 or t[0] != w[0]:
+    """`t` is a short form of the word `w`: at least 4 letters, the same first letter and its letters appear in order
+    ("dept" -> "department"). Shorter ones ("amt", "id", "dt") fit far too many words."""
+    if len(t) < 4 or t[0] != w[0]:
         return False
     it = iter(w)
     return all(ch in it for ch in t)
 
 
-def _token_score(q: list, c: list) -> Optional[tuple]:
-    """Every query token must be the start (or a short form) of a different word of the column name ("emp id" ->
-    "Employee ID"). Score: more whole words first, then more word starts, then fewer unused words. None when it does not fit."""
+def _token_score(q: list, c: list, short_forms: bool = True) -> Optional[tuple]:
+    """Every query token must be a whole word of the column name, or the start (3+ letters) of one, or a short form of one
+    ("emp id" -> "Employee ID"); each word of the column is used once. Score: more whole words first, then more word starts,
+    then fewer unused words. None when it does not fit. Never a match in the middle of a word ("id" is not in "Paid")."""
     free, exact, starts = list(c), 0, 0
     for t in q:
         hit = next((w for w in free if w == t), None)
         if hit is not None:
             exact += 1
         else:
-            hit = next((w for w in free if w.startswith(t)), None)
+            hit = next((w for w in free if len(t) >= 3 and w.startswith(t)), None)
             if hit is not None:
                 starts += 1
             else:
-                hit = next((w for w in free if _abbrev(t, w)), None)
+                hit = next((w for w in free if short_forms and _abbrev(t, w)), None) if short_forms else None
                 if hit is None:
                     return None
         free.remove(hit)
@@ -165,26 +178,35 @@ def _token_score(q: list, c: list) -> Optional[tuple]:
 
 
 def resolve_column(name: str, columns: list) -> Optional[int]:
-    """Column position by exact (case-insensitive) name, else by a unique partial match, else by a unique best match on
-    word beginnings. Never a guess between several."""
+    """Column position: the exact name (case and punctuation ignored); else the one column that has every word of `name` as a
+    whole word; else the one column whose words start with them ("emp id" -> "Employee ID"); else a short form that fits one
+    ("dept" -> "Department"). Never a part of a word ("id" is not "Paid Amount", "total" is not "Subtotal") and never a guess
+    between several: None, and the caller lists the real columns. A name that is the longer form of another column's word
+    ("customer" next to "Cust Name") is not answered either - it could mean that column."""
     n = _norm(name)
     if not n:
         return None
     exact = [i for i, c in enumerate(columns) if _norm(c) == n]
-    if len(exact) == 1:
-        return exact[0]
-    part = [i for i, c in enumerate(columns) if n in _norm(c)]
-    if len(part) == 1:
-        return part[0]
+    if exact:
+        return exact[0] if len(exact) == 1 else None
     q = _tokens(name)
-    if exact or part or not q:
+    if not q:
         return None
-    scored = [(sc, i) for i, c in enumerate(columns) if (sc := _token_score(q, _tokens(c))) is not None]
-    if not scored:
+    toks = [_tokens(c) for c in columns]
+    whole = [i for i, c in enumerate(toks) if all(t in c for t in q) and len(set(q)) == len(q)]
+    if whole:
+        found = whole[0] if len(whole) == 1 else None
+    else:
+        scored = [(sc, i) for i, c in enumerate(toks) if (sc := _token_score(q, c)) is not None]
+        found = None
+        if scored:
+            best = max(sc for sc, _ in scored)
+            top = [i for sc, i in scored if sc == best]
+            found = top[0] if len(top) == 1 else None
+    if found is not None and len(q) == 1 and len(q[0]) >= 4 and any(
+            j != found and any(len(w) >= 3 and w != q[0] and q[0].startswith(w) for w in toks[j]) for j in range(len(columns))):
         return None
-    best = max(sc for sc, _ in scored)
-    top = [i for sc, i in scored if sc == best]
-    return top[0] if len(top) == 1 else None
+    return found
 
 
 def closest_columns(name: str, columns: list, n: int = 3) -> list:
@@ -205,30 +227,49 @@ def _like(v: str) -> str:
     return v.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _cond(op: str, idx: int, value):
-    """(sql, params) for one filter on json position `idx`."""
+def _num_value(value) -> Optional[float]:
+    from .sheet_engine.sql import parse_cell_number
+    return parse_cell_number(value if isinstance(value, (int, float)) and not isinstance(value, bool) else str(value))
+
+
+def _text(x: str, card: bool = False) -> str:
+    """The cell as a filter sees it: a card number masked, exactly as the SQL tool and the output show it. A filter on the raw
+    digits ("starts_with 4111", "contains 8888") would otherwise tell a model which digits a card number has, one question at a time."""
+    from .sheet_engine.sql import masked_text
+    return masked_text(x, card_column=card)
+
+
+def _cond(op: str, idx: int, value, card: bool = False):
+    """(sql, params) for one filter on json position `idx`; `card`: the column is named like a card column."""
+    from .sheet_engine.sql import num_expr
     x = f"json_extract(cells, '$[{int(idx)}]')"
+    t = _text(x, card)
     if op == "is_empty":
         return f"({x} IS NULL OR trim({x}) = '')", []
     if op == "not_empty":
         return f"({x} IS NOT NULL AND trim({x}) <> '')", []
     if op == "in":
         vals = [str(v).lower() for v in (value if isinstance(value, list) else [value])][:MAX_IN_VALUES]
-        return f"lower(trim({x})) IN ({','.join('?' * len(vals))})", vals
+        return f"lower(trim({t})) IN ({','.join('?' * len(vals))})", vals
     v = str(value)
-    if op == "=":
-        return f"lower(trim({x})) = ?", [v.strip().lower()]
-    if op == "!=":
-        return f"(lower(trim({x})) <> ? OR {x} IS NULL)", [v.strip().lower()]
+    if op in ("=", "!="):
+        eq, want = f"lower(trim({t})) = ?", [v.strip().lower()]
+        num = _num_value(value)
+        if num is not None:                                # 1200 also finds "1,200", "$1,200" and "1200.0"
+            eq, want = f"({eq} OR COALESCE({num_expr(x)} = ?, 0))", want + [num]
+        if op == "=":
+            return eq, want
+        return f"({x} IS NULL OR NOT {eq})", want
     if op == "contains":
-        return f"lower({x}) LIKE ? ESCAPE '\\'", [f"%{_like(v.lower())}%"]
+        return f"lower({t}) LIKE ? ESCAPE '\\'", [f"%{_like(v.lower())}%"]
     if op == "starts_with":
-        return f"lower(trim({x})) LIKE ? ESCAPE '\\'", [f"{_like(v.strip().lower())}%"]
-    try:
-        num = float(str(value).replace(",", ""))
-    except ValueError:
+        return f"lower(trim({t})) LIKE ? ESCAPE '\\'", [f"{_like(v.strip().lower())}%"]
+    num = _num_value(value)
+    if num is None:
+        if len(re.sub(r"\D", "", v)) >= 13:
+            raise ValueError(f"'{op}' cannot compare a value of 13+ digits (a card or account number is an identifier, not an amount)")
         raise ValueError(f"'{op}' needs a number, got '{value}'")
-    return f"CAST(replace({x}, ',', '') AS REAL) {op} ?", [num]
+    return f"{num_expr(x)} {op} ?", [num]                  # a blank, "N/A" or text cell is NULL here, so it is never in range
 
 
 def run_query(spec: dict, allowed_ids: set, titles: dict) -> dict:
@@ -245,9 +286,9 @@ def run_query(spec: dict, allowed_ids: set, titles: dict) -> dict:
     tables = list_tables(allowed_ids, titles, str(spec.get("source") or ""))
     if spec.get("sheet"):
         tables = [t for t in tables if str(spec["sheet"]).lower() in str(t["sheet"]).lower()]
-    db = _db()
+    db = _with_mask(_db())
     result = {"tables": [], "groups": {} if group_by else None, "total": 0, "skipped": [], "missing": [], "available": [],
-              "hint": ""}
+              "hint": "", "matched": [], "group_sources": {}}
     if not tables:                                         # tell the model what does exist instead of just "nothing"
         result["available"] = [_label(t) for t in list_tables(allowed_ids, titles, "")]
     searched = []
@@ -259,7 +300,7 @@ def run_query(spec: dict, allowed_ids: set, titles: dict) -> dict:
             if idx is None:
                 bad.append(str(f["column"]))
                 continue
-            sql, p = _cond(str(f.get("op") or "="), idx, f.get("value"))
+            sql, p = _cond(str(f.get("op") or "="), idx, f.get("value"), is_card_header(cols[idx]))
             where.append(sql)
             params += p
         sel = [resolve_column(c, cols) for c in select]
@@ -267,6 +308,13 @@ def run_query(spec: dict, allowed_ids: set, titles: dict) -> dict:
         gidx = resolve_column(group_by, cols) if group_by else None
         if group_by and gidx is None:
             bad.append(str(group_by))
+        if not bad:                                        # name the column that answered, when it was not the name asked for
+            asked = [(str(f["column"]), resolve_column(f["column"], cols)) for f in filters] + list(zip(select, sel))
+            asked += [(str(group_by), gidx)] if group_by else []
+            for q, i in asked:
+                pair = (q, cols[i])
+                if _norm(q) != _norm(cols[i]) and pair not in result["matched"]:
+                    result["matched"].append(pair)
         if bad:
             result["skipped"].append(_label(t))
             result["missing"].append({"table": _label(t), "names": list(dict.fromkeys(bad)), "columns": cols})
@@ -274,14 +322,15 @@ def run_query(spec: dict, allowed_ids: set, titles: dict) -> dict:
         w = " AND ".join(where)
         searched.append((t, filters))
         n = db.execute(f"SELECT COUNT(*) FROM kb_rows WHERE {w}", params).fetchone()[0]
-        entry = {"title": t["title"], "sheet": t["sheet"], "count": n, "columns": [cols[i] for i in sel] if sel else cols,
+        entry = {"title": t["title"], "sheet": t["sheet"], "source_id": t["source_id"], "count": n, "columns": [cols[i] for i in sel] if sel else cols,
                  "rows": []}
         result["total"] += n
         if group_by:
-            for val, c in db.execute(f"SELECT trim(json_extract(cells, '$[{gidx}]')) AS v, COUNT(*) FROM kb_rows "
-                                     f"WHERE {w} GROUP BY lower(v)", params):
+            gx = _text(f"json_extract(cells, '$[{gidx}]')", is_card_header(cols[gidx]))
+            for val, c in db.execute(f"SELECT trim({gx}) AS v, COUNT(*) FROM kb_rows WHERE {w} GROUP BY lower(v)", params):
                 key = (val or "(empty)")
                 result["groups"][key] = result["groups"].get(key, 0) + c
+                result["group_sources"].setdefault(key, set()).add(t["source_id"])
         elif not spec.get("count") and n:
             left = limit - sum(len(e["rows"]) for e in result["tables"])
             if left > 0:
@@ -289,7 +338,8 @@ def run_query(spec: dict, allowed_ids: set, titles: dict) -> dict:
                                                 params + [left]):
                     vals = json.loads(cells)
                     vals += [""] * (len(cols) - len(vals))
-                    entry["rows"].append((rownum, [vals[i] for i in sel] if sel else vals))
+                    pick = sel if sel else list(range(len(cols)))
+                    entry["rows"].append((rownum, [mask_cell(vals[i], is_card_header(cols[i])) for i in pick]))
         result["tables"].append(entry)
     eq = [f for f in filters if str(f.get("op") or "=") == "="]
     if result["total"] == 0 and eq:
@@ -308,7 +358,8 @@ def _equals_hint(db, searched: list, eq: list) -> str:
         where, params = ["table_id = ?"], [t["id"]]
         for f in filters:
             op = "contains" if f in eq else str(f.get("op") or "=")
-            sql, p = _cond(op, resolve_column(f["column"], t["columns"]), f.get("value"))
+            ci = resolve_column(f["column"], t["columns"])
+            sql, p = _cond(op, ci, f.get("value"), is_card_header(t["columns"][ci]))
             where.append(sql)
             params += p
         found += db.execute(f"SELECT COUNT(*) FROM kb_rows WHERE {' AND '.join(where)}", params).fetchone()[0]
@@ -367,6 +418,8 @@ def render(spec: dict, res: dict) -> str:
                 out.append(f"| R{rownum} | " + " | ".join(str(v).replace("|", "/") for v in vals) + " |")
         if res["total"] > sum(len(t["rows"]) for t in res["tables"]):
             out.append("\n(more rows match; narrow the filters or raise limit)")
+    if res.get("matched"):                                 # the name was not exact: say which column was really used
+        out.append("\n(" + "; ".join(f"matched '{q}' -> '{c}'" for q, c in res["matched"][:6]) + ")")
     if res.get("hint"):
         out.append("\n" + res["hint"])
     if res.get("missing"):

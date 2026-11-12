@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import io
+import threading
 from typing import Any, Dict, Optional, Tuple
 
 from .. import companion_bridge
@@ -272,27 +273,24 @@ def _kb_copy_workbook(db, tables: list):
     return sheet_sql.from_tables(items)
 
 
-@kb_guarded
-async def tool_kb_sql(args: dict) -> str:
-    """Read-only SQL (joins, pivots, medians, month buckets) over the Excel/CSV sources the user may read."""
-    import hashlib
+_KB_SQL_SLOTS = threading.BoundedSemaphore(4)         # at most this many kb_sql queries run at once; the rest wait their turn
+
+
+def _kb_sql_blocking(args: dict, titles: dict) -> tuple:
+    """The blocking part of kb_sql (SQLite work, up to the 8 s cap), run in a worker thread so the event loop keeps serving the
+    other requests. -> (final text or None, query output, month note, number of tables)."""
     import sys
-    ok, user, cloud, titles = _kb_scope()
-    if not ok:
-        return titles                                      # the message: nothing readable
-    if cloud:
-        return ("error: kb_sql is not available while the answer is produced by a cloud model (rows cannot be screened one by "
-                "one in SQL); use kb_query, or switch to a local model")
     from .. import kb_tables
     from ..sheet_engine import sql as sheet_sql
     tables = kb_tables.list_tables(set(titles), titles, str(args.get("source") or ""))
     if not tables:
-        return "(no spreadsheet tables in the knowledge base sources you can read)"
+        return "(no spreadsheet tables in the knowledge base sources you can read)", "", "", 0
     shown = tables[:60]
     wb = ro = None
     try:
         # Query the stored rows where they are (a read-only second connection with one view per readable table): nothing is
-        # copied, so a big file costs the same as a small one. If that cannot be set up, fall back to copying the rows.
+        # copied, so a big file costs the same as a small one. If that cannot be set up (or a table changed while the views
+        # were built), fall back to copying the rows.
         try:
             path = getattr(kb_tables._db(), "path", None)
             if not path:
@@ -309,26 +307,80 @@ async def tool_kb_sql(args: dict) -> str:
         if len(tables) > len(shown):
             wb.notes.append(f"{len(tables) - len(shown)} more table(s) exist but are not loaded: use source= to narrow the list")
         if args.get("describe") or not args.get("sql"):
-            return sheet_sql.describe(wb)
+            return sheet_sql.describe(wb), "", "", len(tables)
         try:
             sql, month_note = _month_filter(wb, args)
             out = sheet_sql.query(wb, sql, args.get("limit") or sheet_sql.DEFAULT_ROWS)
         except sheet_sql.SqlError as e:
-            return f"error: {e}"
+            return f"error: {e}", "", "", len(tables)
         except ValueError as e:
-            return f"error: {e}"
+            return f"error: {e}", "", "", len(tables)
+        return None, out, month_note, len(tables)
     finally:
         if ro is not None:
             ro.close()
+
+
+def _kb_sql_slot(args: dict, titles: dict) -> tuple:
+    with _KB_SQL_SLOTS:
+        return _kb_sql_blocking(args, titles)
+
+
+@kb_guarded
+async def tool_kb_sql(args: dict) -> str:
+    """Read-only SQL (joins, pivots, medians, month buckets) over the Excel/CSV sources the user may read."""
+    import asyncio
+    import hashlib
+    ok, user, cloud, titles = _kb_scope()
+    if not ok:
+        return titles                                      # the message: nothing readable
+    if cloud:
+        return ("error: kb_sql is not available while the answer is produced by a cloud model (rows cannot be screened one by "
+                "one in SQL); use kb_query, or switch to a local model")
+    # asyncio.to_thread runs the call in a copy of this task's context, so the signed-in user (row access) is the same there
+    final, out, month_note, ntables = await asyncio.to_thread(_kb_sql_slot, args, titles)
+    if final is not None:
+        return final
     try:                                                   # queries can contain names: audit that one ran, store only a hash
         from ..audit import audit_log
         audit_log(user, "kb.query", resource="knowledge",
-                  detail={"sql_sha256": hashlib.sha256(str(args.get("sql")).encode()).hexdigest()[:16], "tables": len(tables)})
+                  detail={"sql_sha256": hashlib.sha256(str(args.get("sql")).encode()).hexdigest()[:16], "tables": ntables})
     except Exception:
         pass
     from ..knowledge_access import partial_notice
     note = partial_notice(set(titles))
     return out + (f"\n{month_note}" if month_note else "") + (f"\n\n{note}" if note else "")
+
+
+def _kb_query_cloud_screen(res: dict) -> None:
+    """For a cloud answer: drop what a sensitive-content rule holds back, as the search tool does, from the rows, the group
+    values (a group-by prints the cell values themselves), and the hint. Each item is checked against the source it came from."""
+    from ..knowledge_access import cloud_safe_hits
+
+    def cleared(items):                    # [(source id, text)] -> the pairs that may go to a cloud model
+        kept = cloud_safe_hits([{"source_id": sid, "text": tx} for sid, tx in items])
+        return {(h["source_id"], h["text"]) for h in kept}
+
+    withheld = 0
+    for t in res["tables"]:
+        texts = [" | ".join(map(str, v)) for _, v in t["rows"]]
+        ok = cleared([(t.get("source_id"), tx) for tx in texts])
+        keep = [(r, (t.get("source_id"), tx) in ok) for r, tx in zip(t["rows"], texts)]
+        withheld += sum(1 for _, k in keep if not k)
+        t["rows"] = [r for r, k in keep if k]
+    if res.get("groups"):
+        srcs = res.get("group_sources") or {}
+        ok = cleared([(sid, key) for key in res["groups"] for sid in (srcs.get(key) or {None})])
+        for key in list(res["groups"]):
+            if not all((sid, key) in ok for sid in (srcs.get(key) or {None})):
+                del res["groups"][key]     # a value that cannot be cleared is not shown, and neither is its count
+                withheld += 1
+    if res.get("hint"):
+        sids = {t.get("source_id") for t in res["tables"]} or {None}
+        ok = cleared([(sid, res["hint"]) for sid in sids])
+        if not all((sid, res["hint"]) in ok for sid in sids):
+            res["hint"] = ""
+    res["withheld"] = withheld
 
 
 @kb_guarded
@@ -346,12 +398,8 @@ async def tool_kb_query(args: dict) -> str:
         res = kb_tables.run_query(spec, set(titles), titles)
     except ValueError as e:
         return f"error: {e}"
-    if cloud:                              # drop rows a sensitive-content rule holds back, as the search tool does
-        from ..knowledge_access import cloud_safe_hits
-        for t in res["tables"]:
-            kept = cloud_safe_hits([{"source_id": 0, "text": " | ".join(map(str, v))} for _, v in t["rows"]])
-            keep = {h["text"] for h in kept}
-            t["rows"] = [(n, v) for n, v in t["rows"] if " | ".join(map(str, v)) in keep]
+    if cloud:                              # everything the answer would show is screened, not only the rows
+        _kb_query_cloud_screen(res)
     try:                                   # filter values can be names: audit that a query ran, store only a hash
         import hashlib
         from ..audit import audit_log
@@ -362,4 +410,6 @@ async def tool_kb_query(args: dict) -> str:
         pass
     from ..knowledge_access import partial_notice
     note = partial_notice(set(titles))
-    return kb_tables.render(spec, res) + (f"\n\n{note}" if note else "")
+    held = (f"\n\n({res['withheld']} row(s) or value(s) are not shown: they do not meet the rules for data sent to a cloud model.)"
+            if res.get("withheld") else "")
+    return kb_tables.render(spec, res) + held + (f"\n\n{note}" if note else "")
