@@ -808,6 +808,7 @@ def _chart(slide, s, t, box=None):
     plot = ch.plots[0]
     plot.has_data_labels = True
     dl = plot.data_labels
+    dl.show_value = True                                # a doughnut / pie is created with showVal=0: no numbers at all
     dl.font.size = Pt(13)
     dl.font.bold = True
     dl.font.color.rgb = _rgb(t["text"])
@@ -1183,32 +1184,14 @@ def _kpi_grid(slide, s, t):
     area_w = W - 2 * MX
     cw = (area_w - gap * (n - 1)) / n
     y0 = 1.95
-    ch = 2.15
+    big = not callout_text
+    ch = 3.4 if big else 2.15                           # no narrative below: let the tiles use the slide
 
     for i in range(n):
         x = MX + i * (cw + gap)
         item = metric_bullets[i] if i < len(metric_bullets) else ""
-        parts = [p.strip() for p in item.split("|")] if "|" in item else [item, ""]
-        val = parts[0] if len(parts) > 0 else ""
-        delta = ""
-        caption = ""
-        tone = "blue"
-        for p in parts[1:]:
-            p_clean = p.strip()
-            if p_clean.startswith("tone="):
-                tone = p_clean.split("=")[1].strip().lower()
-            elif p_clean.startswith(("^", "↑", "+", "-")) or re.match(r"(?i)^(up|down|doubled|tripled|\d+%)", p_clean):
-                delta = p_clean.replace("^", "↑ ")
-            elif not caption:
-                caption = p_clean
-            elif not delta:
-                delta = p_clean
-
-        if not delta and len(parts) >= 3 and not parts[1].startswith("tone="):
-            delta = parts[1].replace("^", "↑ ")
-            caption = parts[2]
-        elif not caption and len(parts) >= 2 and not parts[1].startswith("tone="):
-            caption = parts[1]
+        val, delta, caption, tone = O.kpi_parts(item)
+        tone = tone or "blue"
 
         fg_col = _ink(_tone(t, tone)[0] if tone in _TONES_LIGHT else (t["accent"] if i % 2 == 0 else t["accent2"]),
                       t["surface"], 4.5)
@@ -1226,7 +1209,7 @@ def _kpi_grid(slide, s, t):
         p0.text = val
         p0.alignment = PP_ALIGN.CENTER
         p0.space_after = Pt(4)
-        val_size = min(M.fit_one_line(val, t["head"], cw - 0.5, 38, 20, True), 36)
+        val_size = min(M.fit_one_line(val, t["head"], cw - 0.5, 44 if big else 38, 20, True), 44 if big else 36)
         _style_runs(p0, t["head"], val_size, fg_col, True)
 
         if delta:
@@ -1234,15 +1217,15 @@ def _kpi_grid(slide, s, t):
             p1.text = delta
             p1.alignment = PP_ALIGN.CENTER
             p1.space_after = Pt(4)
-            d_tone = "green" if delta.startswith(("+", "↑", "^")) or "up" in delta.lower() else ("red" if delta.startswith(("-", "v", "↓")) else "blue")
+            d_tone = "red" if delta.startswith(("-", "↓", "▼")) else ("green" if delta.startswith(("+", "↑", "▲")) or "up" in delta.lower() else "blue")
             d_col = _ink(_tone(t, d_tone)[0], t["surface"], 4.5)
-            _style_runs(p1, t["body"], 12, d_col, True)
+            _style_runs(p1, t["body"], 16 if big else 12, d_col, True)
 
         if caption:
             p2 = tf.add_paragraph()
             p2.text = caption
             p2.alignment = PP_ALIGN.CENTER
-            _style_runs(p2, t["body"], 11, _ink(t["text"], t["surface"], 4.5), False)
+            _style_runs(p2, t["body"], 15 if big else 11, _ink(t["text"], t["surface"], 4.5), False)
 
     if callout_text:
         box_y = 4.35
@@ -1289,13 +1272,9 @@ def _chart_kpis(slide, s, t):
 
     for i, item in enumerate(raw_cards):
         cy = y0 + i * (ch + gap)
-        parts = [p.strip() for p in item.split("|")] if "|" in item else [item, ""]
-        num = parts[0] if len(parts) > 0 else ""
-        label = parts[1] if len(parts) > 1 else ""
-        tone = default_tones[i % len(default_tones)]
-        for p in parts[2:]:
-            if p.startswith("tone="):
-                tone = p.split("=")[1].strip().lower()
+        num, delta, label, tone = O.kpi_parts(item)
+        label = f"{label} · {delta}" if (label and delta) else (label or delta)
+        tone = tone or default_tones[i % len(default_tones)]
 
         fg_col, bg_col = _tone(t, tone)
         fg_col = _ink(_ink(fg_col, bg_col, 4.5), t["bg"], 4.5)        # readable on the card and on the slide behind it
@@ -1422,6 +1401,21 @@ def _leaderboard(slide, s, t):
             _style_runs(ntp, t["body"], 8, _ink(t["muted"], t["surface"], 4.5), False)
 
 
+_STATUS = {"done": "done", "complete": "done", "completed": "done", "finished": "done", "past": "done",
+           "now": "now", "current": "now", "active": "now", "progress": "now", "inprogress": "now", "ongoing": "now"}
+
+
+def _roadmap_item(item: str, i: int) -> tuple:
+    """(step, title, date, detail, status) of one milestone line, build fields (status=) taken off first."""
+    text, fields = O.split_fields(item)
+    parts = [p.strip() for p in text.split("|") if p.strip()]
+    if not parts or not re.fullmatch(r"#?\d{1,2}|[A-Za-z]\d{1,2}|[A-Za-z]", parts[0]):
+        parts.insert(0, f"{i + 1}")                        # no step number written: count
+    parts += [""] * (4 - len(parts)) if len(parts) < 4 else []
+    status = _STATUS.get(re.sub(r"[^a-z]", "", fields.get("status", "").lower()), "planned")
+    return parts[0], parts[1] or f"Phase {i + 1}", parts[2], " · ".join(p for p in parts[3:] if p), status
+
+
 def _roadmap(slide, s, t):
     """Horizontal 4-8 station milestone track with status circles (Done / Now / Planned), station dates & detail cards."""
     items = [b.strip() for b in s["bullets"] if b.strip()][:8]
@@ -1432,32 +1426,18 @@ def _roadmap(slide, s, t):
 
     _deco(slide, MSO_SHAPE.RECTANGLE, MX + sw / 2, track_y - 0.02, area_w - sw, 0.04, t["line"])
 
-    now_idx = -1
-    for i, item in enumerate(items):
-        if "status=now" in item.lower().replace(" ", ""):       # only the status field: "know" / "snow" are not "now"
-            now_idx = i
-            break
+    steps = [_roadmap_item(it, i) for i, it in enumerate(items)]
+    now_idx = next((i for i, st in enumerate(steps) if st[4] == "now"), -1)
     if now_idx == -1:
         now_idx = max(0, n // 2 - 1)
     # detail cards as tall as their longest text needs (2.3" at most): short notes no longer sit in large empty boxes
-    longest = max([len(([p.strip() for p in it.split("|")] + [""] * 4)[3]) for it in items] or [0])
+    longest = max([len(st[3]) for st in steps] or [0])
     per_line = max(12, int((sw - 0.3) * 11))
     roadmap_card_h = min(2.3, max(0.95, 0.4 + 0.27 * -(-longest // per_line)))
 
     for i in range(n):
         cx = MX + sw * i + sw / 2
-        item = items[i] if i < len(items) else ""
-        parts = [p.strip() for p in item.split("|")]
-
-        step_num = parts[0] if len(parts) > 0 else f"{i + 1}"
-        title = parts[1] if len(parts) > 1 else f"Phase {i + 1}"
-        date_str = parts[2] if len(parts) > 2 else ""
-        detail = parts[3] if len(parts) > 3 else ""
-        status = "planned"
-
-        for p in parts[1:]:
-            if p.startswith("status="):
-                status = p.split("=")[1].strip().lower()
+        step_num, title, date_str, detail, status = steps[i] if i < len(steps) else (f"{i + 1}", f"Phase {i + 1}", "", "", "planned")
 
         if status == "planned":
             if i < now_idx:
@@ -1647,6 +1627,23 @@ def _split_groups(s: dict, t: dict) -> list:
     return _split_groups(first, t) + _split_groups(second, t)
 
 
+def _kpi_items(s: dict) -> list:
+    return [b.strip() for b in s["bullets"] if "|" in b]
+
+
+def _split_kpis(s: dict) -> list:
+    """A KPI grid draws four tiles; more are spread over two slides (the narrative callout stays with the first)."""
+    from . import notes
+    items = _kpi_items(s)
+    half = (len(items) + 1) // 2
+    notes.note(f"'{s['title'][:40]}': {len(items)} KPI tiles do not fit one slide (four at most), so they were split over two")
+    rest = [b for b in s["bullets"] if "|" not in b]
+    title = s["title"] if s["title"].endswith("(cont.)") else s["title"] + " (cont.)"
+    first = {**s, "bullets": rest + items[:half]}
+    second = {**s, "bullets": items[half:], "title": title, "notes": "", "subtitle": "", "callout": ""}
+    return [first, second]
+
+
 def _prepare(slides: list, t: dict) -> list:
     """Slides after fitting: long bullet lists, long tables and over-full card / timeline slides are split across slides."""
     out = []
@@ -1655,6 +1652,8 @@ def _prepare(slides: list, t: dict) -> list:
             out += _split_bullets(s, t)
         elif s["kind"] in ("cards", "timeline") and s["bullets"]:
             out += _split_groups(s, t)
+        elif s["kind"] == "kpi-grid" and len(_kpi_items(s)) > 4:
+            out += _split_kpis(s)
         elif s["kind"] == "table" and s["table"]:
             plan = _plan_table(s["table"], t["body"])
             for i, (rows, _size, _w, _h) in enumerate(plan):
