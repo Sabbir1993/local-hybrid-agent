@@ -50,6 +50,8 @@ DIRECTIVES = ("format", "total", "freeze", "filter", "highlight", "scale", "data
 MAX_KPIS = 8
 _DIRECTIVE_RX = re.compile(r"^\s*(" + "|".join(DIRECTIVES) + r")\s*:\s*(.*?)\s*$", re.I)
 _SHEET_RX = re.compile(r"^\s*##\s*sheet\s*:\s*(.+?)\s*$", re.I)
+_BLOCK_RX = re.compile(r"^\s*###\s*block\s*:\s*(.+?)\s*$", re.I)
+MAX_BLOCKS = 8
 _DASH_RX = re.compile(r"^\s*##\s*dashboard\s*:\s*(.+?)\s*$", re.I)
 _TITLE_RX = re.compile(r"^\s*#\s+(.+?)\s*$")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -135,11 +137,13 @@ def _is_sep(cells: list) -> bool:
 def parse(text: str) -> dict:
     wb = {"title": "", "theme": DEFAULT_THEME, "sheets": [], "names": []}
     cur: Optional[dict] = None
+    block: Optional[dict] = None        # the `### Block:` being read (a further table on the current sheet)
 
     def start(name, dashboard=False):
-        nonlocal cur
-        cur = {"name": name, "header": None, "rows": [], "directives": [], "dashboard": dashboard}
+        nonlocal cur, block
+        cur = {"name": name, "header": None, "rows": [], "directives": [], "dashboard": dashboard, "blocks": []}
         wb["sheets"].append(cur)
+        block = None
     for raw in str(text or "").splitlines():
         line = raw.rstrip()
         if not line.strip():
@@ -151,6 +155,14 @@ def parse(text: str) -> dict:
         m = _DASH_RX.match(line)
         if m:
             start(m.group(1), dashboard=True)
+            continue
+        m = _BLOCK_RX.match(line)
+        if m and cur is not None and not cur["dashboard"]:
+            parts = [x.strip() for x in m.group(1).split("|")]
+            at = next((x.split("=", 1)[1].strip().upper() for x in parts[1:] if x.lower().startswith("at=")), "")
+            block = {"title": parts[0], "at": at if re.fullmatch(r"[A-Z]{1,3}\d{1,7}", at) else "",
+                     "header": None, "rows": [], "directives": []}
+            cur["blocks"].append(block)
             continue
         if cur is None:
             t = _TITLE_RX.match(line)
@@ -167,10 +179,11 @@ def parse(text: str) -> dict:
             cells = _split_row(line)
             if _is_sep(cells):
                 continue
-            if cur["header"] is None:
-                cur["header"] = cells
+            target = block if block is not None else cur
+            if target["header"] is None:
+                target["header"] = cells
             else:
-                cur["rows"].append(cells)
+                target["rows"].append(cells)
             continue
         d = _DIRECTIVE_RX.match(line)
         if d:
@@ -180,7 +193,7 @@ def parse(text: str) -> dict:
             else:
                 if cur is None:
                     start("Sheet1")
-                cur["directives"].append((key, val))
+                (block if block is not None and key in ("format", "total") else cur)["directives"].append((key, val))
     wb["sheets"] = [s for s in wb["sheets"]
                     if s["header"] or (s["dashboard"] and any(k in ("kpi", "chart") for k, _ in s["directives"]))]
     return wb
@@ -406,6 +419,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
         # widths
         for ci, h in enumerate(header, 1):
             longest = max([len(str(h))] + [min(len(str(r[ci - 1])), 40) if not str(r[ci - 1]).startswith("=") else 12 for r in rows] or [8])
+            longest += _format_room(col_fmt[ci - 1][1], longest)
             ws.column_dimensions[col_letter(ci)].width = min(max(longest + 3, 9), 60)
         for v in dirs.get("widths", []):
             for k, w in _kv_pairs(v).items():
@@ -434,6 +448,46 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
         ws.page_setup.fitToHeight = 0
         ws.sheet_properties.pageSetUpPr = openpyxl.worksheet.properties.PageSetupProperties(fitToPage=True)
         ws.print_title_rows = "1:1"
+        for v in dirs.get("print", []):            # print: landscape | portrait | fit=width | fit=page | no-repeat-header
+            for word in re.split(r"[\s,|]+", v.strip().lower()):
+                if word in ("landscape", "portrait"):
+                    ws.page_setup.orientation = word
+                elif word == "fit=page":
+                    ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 1
+                elif word == "fit=width":
+                    ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
+                elif word == "no-repeat-header":
+                    ws.print_title_rows = None
+                elif word:
+                    _warn(f"sheet '{s['name']}': print: '{word}' is not known (landscape, portrait, fit=width, fit=page, no-repeat-header)")
+
+        def _col_of(name: str):
+            name = name.strip().lower()
+            return next((i for i, h in enumerate(header, 1) if h.lower() == name), None)
+        for v in dirs.get("wrap", []):             # wrap: Notes, Description
+            for name in [x for x in v.split(",") if x.strip()]:
+                ci = _col_of(name)
+                if ci is None:
+                    _warn(f"sheet '{s['name']}': wrap: column '{name.strip()}' not found" + _cols_hint(header))
+                    continue
+                for ri in range(2, last + 1):
+                    cell = ws.cell(row=ri, column=ci)
+                    cell.alignment = Alignment(wrap_text=True, vertical="top", horizontal=cell.alignment.horizontal)
+                ws.column_dimensions[col_letter(ci)].width = min(max(ws.column_dimensions[col_letter(ci)].width or 30, 30), 60)
+        for v in dirs.get("hide", []):             # hide: Internal id, Cost   |   hide: sheet
+            for name in [x for x in v.split(",") if x.strip()]:
+                if name.strip().lower() == "sheet":
+                    if sum(1 for x in spec["sheets"] if not x.get("hidden")) > 1:
+                        s["hidden"] = True
+                        ws.sheet_state = "hidden"
+                    else:
+                        _warn(f"sheet '{s['name']}': hide: a workbook needs at least one visible sheet")
+                    continue
+                ci = _col_of(name)
+                if ci is None:
+                    _warn(f"sheet '{s['name']}': hide: column '{name.strip()}' not found" + _cols_hint(header))
+                else:
+                    ws.column_dimensions[col_letter(ci)].hidden = True
         for v in dirs.get("tab", []):
             if re.fullmatch(r"[0-9A-Fa-f]{6}", v.strip()):
                 ws.sheet_properties.tabColor = v.strip().upper()
@@ -667,6 +721,15 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
             nrow += 1
         for v in dirs.get("chart", []):
             charts.append((s, ncols, last, v))
+        # further tables on the same sheet (`### Block: Title | at=H2`)
+        if len(s["blocks"]) > MAX_BLOCKS:
+            _warn(f"sheet '{s['name']}': only the first {MAX_BLOCKS} blocks are placed")
+        below = max(nrow, (total_row or last) + 2)
+        for b in s["blocks"][:MAX_BLOCKS]:
+            if not b["header"]:
+                _warn(f"sheet '{s['name']}': block '{b['title']}' has no table")
+                continue
+            below = _block(ws, b, s["name"], below, accent, band, names, formulas)
 
     # defined names
     from openpyxl.workbook.defined_name import DefinedName
@@ -701,6 +764,92 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
+
+
+def _format_room(number_format, digits: int) -> int:
+    """Extra characters a number format adds to a value (thousands separators, decimals, currency sign), so a money
+    column is wide enough and never shows ####."""
+    nf = str(number_format or "")
+    if "#,##0" not in nf and "0.00" not in nf:
+        return 0
+    return digits // 3 + (3 if ".00" in nf else 0) + (2 if '"' in nf else 0) + 1
+
+
+def _block(ws, b: dict, sheet: str, below: int, accent: str, band: str, names: list, formulas: bool) -> int:
+    """Write one extra table on a sheet: a title row, a header row, the rows, an optional total. Placed at its `at=` cell,
+    else under what is already on the sheet. Formulas in it use real cell addresses. -> the next free row below it."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils.cell import coordinate_from_string, column_index_from_string
+    if b["at"]:
+        col_s, r0 = coordinate_from_string(b["at"])
+        c0 = column_index_from_string(col_s)
+    else:
+        r0, c0 = below, 1
+    header = [h or f"Column{i + 1}" for i, h in enumerate(b["header"][:MAX_COLS])]
+    ncols = len(header)
+    rows = [(r + [""] * ncols)[:ncols] for r in b["rows"]]
+    dirs = {}
+    for k, v in b["directives"]:
+        dirs.setdefault(k, []).append(v)
+    fmts = {}
+    for v in dirs.get("format", []):
+        for part in re.split(r"\s*,\s*(?=[^,=]+=)", v):
+            if "=" in part:
+                k, f = part.split("=", 1)
+                fmts[k.strip().lower()] = f.strip().lower()
+    t = ws.cell(row=r0, column=c0, value=b["title"])
+    t.data_type = "s"
+    t.font = Font(bold=True, size=12, color=accent)
+    hr = r0 + 1
+    for i, h in enumerate(header):
+        c = ws.cell(row=hr, column=c0 + i, value=h)
+        c.data_type = "s"
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor=accent)
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for ri, row in enumerate(rows, hr + 1):
+        for i, raw in enumerate(row):
+            kind = fmts.get(header[i].lower()) or _infer([r[i] for r in rows])
+            where = f"sheet '{sheet}' block '{b['title']}' cell {col_letter(c0 + i)}{ri}"
+            val, is_formula = _cell_value(raw, kind, names, where, formulas)
+            c = ws.cell(row=ri, column=c0 + i)
+            if val is not None:
+                c.value = val
+                if isinstance(val, str) and not is_formula:
+                    c.data_type = "s"
+            nf = _named_format(kind) if kind else None
+            if nf and (is_formula or isinstance(val, (int, float)) or hasattr(val, "isoformat")):
+                c.number_format = nf
+            if (ri - hr) % 2 == 0:
+                c.fill = PatternFill("solid", fgColor=band)
+    last = hr + len(rows)
+    end = last
+    codes = {"sum": 109, "avg": 101, "average": 101, "min": 105, "max": 104, "count": 103}
+    totals = {}
+    for v in dirs.get("total", []):
+        for k, fn in _kv_pairs(v).items():
+            totals[k.strip().lower()] = fn.strip().lower()
+    if totals and rows:
+        end = last + 1
+        ws.cell(row=end, column=c0, value="Total").font = Font(bold=True)
+        for i, h in enumerate(header):
+            fn = totals.get(h.lower())
+            if fn in codes and i > 0:
+                L = col_letter(c0 + i)
+                c = ws.cell(row=end, column=c0 + i, value=f"=SUBTOTAL({codes[fn]},{L}{hr + 1}:{L}{last})")
+                c.font = Font(bold=True)
+                nf = _named_format(fmts.get(h.lower()) or "") if fmts.get(h.lower()) else None
+                if nf:
+                    c.number_format = nf
+            elif fn and fn not in codes:
+                _warn(f"sheet '{sheet}' block '{b['title']}': total '{fn}' is not known (sum, avg, min, max, count)")
+    for i, h in enumerate(header):
+        L = col_letter(c0 + i)
+        longest = max([len(str(h))] + [min(len(str(r[i])), 40) if not str(r[i]).startswith("=") else 12 for r in rows] or [8])
+        kind = fmts.get(h.lower()) or _infer([r[i] for r in rows])
+        longest += _format_room(_named_format(kind) if kind else None, longest)
+        ws.column_dimensions[L].width = max(ws.column_dimensions[L].width or 0, min(max(longest + 3, 9), 60))
+    return max(below, end + 2)
 
 
 _DASH_COLS = 16                 # B..Q: four KPI tiles of 3 columns with a gap, or two charts side by side

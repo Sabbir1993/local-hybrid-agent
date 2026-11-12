@@ -175,5 +175,45 @@ class DashboardTests(Base):
             build.build("## Dashboard: Only\nkpi: A = 5\n")
 
 
+class BlocksAndSheetOptionsTests(Base):
+    OUTLINE = ("# Branch report\n## Sheet: Summary\n| Branch | Sales | Cost | Internal id | Notes |\n|---|---|---|---|---|\n"
+               "| Dhaka | 480000 | 300000 | D-01 | Largest branch with the head office counter |\n| Sylhet | 120000 | 90000 | S-02 | Seasonal |\n"
+               "format: Sales=currency:BDT, Cost=currency:BDT\ntotal: Sales=sum\nwrap: Notes\nhide: Internal id\nprint: landscape fit=page\n"
+               "### Block: Margin | at=H1\n| Branch | Margin |\n|---|---|\n| Dhaka | =B2-C2 |\n| Sylhet | =B3-C3 |\n"
+               "format: Margin=currency:BDT\ntotal: Margin=sum\n"
+               "### Block: Targets\n| Quarter | Target |\n|---|---|\n| Q1 | 700000 |\n"
+               "## Sheet: Working\n| k | v |\n|---|---|\n| a | 1 |\nhide: sheet\n")
+
+    def test_blocks_are_placed_and_calculate(self):
+        from core.sheet_engine import calc
+        build.start_warnings()
+        data = build.build(self.OUTLINE)
+        self.assertEqual(build.take_warnings(), [])
+        ws = openpyxl.load_workbook(io.BytesIO(data))["Summary"]
+        self.assertEqual((ws["H1"].value, ws["H2"].value, ws["I3"].value), ("Margin", "Branch", "=B2-C2"))
+        self.assertEqual(ws["I5"].value, "=SUBTOTAL(109,I3:I4)")
+        self.assertEqual(ws["A7"].value, "Targets")                       # under everything already on the sheet
+        self.assertEqual(ws["B2"].value, 480000)                          # the main table is untouched
+        res = calc.calculate(data)
+        self.assertEqual(res["errors"], [])
+        self.assertEqual(res["values"][("Summary", "I3")], 180000)
+
+    def test_wrap_hide_and_print(self):
+        wb = openpyxl.load_workbook(io.BytesIO(build.build(self.OUTLINE)))
+        ws = wb["Summary"]
+        self.assertTrue(ws["E2"].alignment.wrap_text)
+        self.assertTrue(ws.column_dimensions["D"].hidden)
+        self.assertEqual((ws.page_setup.orientation, ws.page_setup.fitToHeight), ("landscape", 1))
+        self.assertEqual(wb["Working"].sheet_state, "hidden")
+        self.assertGreaterEqual(ws.column_dimensions["B"].width, 14)     # room for "৳480,000.00", no ####
+
+    def test_unknown_values_are_reported_and_the_last_sheet_stays_visible(self):
+        build.start_warnings()
+        build.build("## Sheet: Only\n| a | b |\n|---|---|\n| 1 | 2 |\nhide: sheet\nhide: Nope\nprint: sideways\n")
+        said = " ".join(build.take_warnings())
+        for part in ("at least one visible sheet", "column 'Nope' not found", "'sideways' is not known"):
+            self.assertIn(part, said)
+
+
 if __name__ == "__main__":
     unittest.main()
