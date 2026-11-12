@@ -248,5 +248,48 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(_ctx_from_error(body), 32768)
 
 
+class ServingLimitTests(unittest.TestCase):
+    """Admin-editable concurrency limits: persisted into nested app.json sections, clamped, applied in memory."""
+
+    def setUp(self):
+        from core import small_model
+        self.cfg = small_model.APP_CONFIG
+        self.saved = dict(self.cfg)
+        self.cfg.pop("serving", None)
+        self.cfg["engines"] = {"vllm": {"bin": "/x/vllm"}}
+        self.addCleanup(lambda: (self.cfg.clear(), self.cfg.update(self.saved)))
+
+    def apply(self, key, value):
+        from routes.control.config_helpers import _apply_config_update
+        disk = {}
+        with mock.patch("core.config.update_app_config", side_effect=lambda m: m(disk)) as upd:
+            err = _apply_config_update({"name": "m"}, key, value)
+        return err, disk, upd
+
+    def test_per_user_valid_and_clamped(self):
+        for given, want in ((3, 3), (99, 16), (0, 1), ("4", 4)):
+            err, disk, _ = self.apply("max_inflight_per_user", given)
+            self.assertIsNone(err)
+            self.assertEqual(disk, {"serving": {"max_inflight_per_user": want}})
+            self.assertEqual(self.cfg["serving"]["max_inflight_per_user"], want)
+
+    def test_vllm_seqs_valid_and_clamped_keeps_other_keys(self):
+        for given, want in ((12, 12), (99, 64), (0, 1)):
+            err, disk, _ = self.apply("vllm_max_num_seqs_default", given)
+            self.assertIsNone(err)
+            self.assertEqual(disk, {"engines": {"vllm": {"max_num_seqs": want}}})
+            self.assertEqual(self.cfg["engines"]["vllm"], {"bin": "/x/vllm", "max_num_seqs": want})
+            self.assertEqual(vllm.settings()["max_num_seqs"], want)
+
+    def test_non_integer_is_an_error_and_writes_nothing(self):
+        for key in ("max_inflight_per_user", "vllm_max_num_seqs_default"):
+            err, disk, upd = self.apply(key, "lots")
+            self.assertIn("must be an integer", err)
+            self.assertEqual(disk, {})
+            upd.assert_not_called()
+        self.assertNotIn("serving", self.cfg)
+        self.assertNotIn("max_num_seqs", self.cfg["engines"]["vllm"])
+
+
 if __name__ == "__main__":
     unittest.main()

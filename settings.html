@@ -813,6 +813,10 @@
             <label for="cfg-vmem">GPU memory share % <span class="info" title="Lower it when helper models share a GPU with vLLM. 0 = default">ⓘ</span></label>
             <input type="number" id="cfg-vmem" min="0" max="98" value="0" title="GPU memory share in percent (0 = default)">
           </div>
+          <div class="cfg-item" title="Requests vLLM runs at once when a model's Parallel slots is 0 or 1 (vLLM batches requests). Applies to all vLLM models, at the next load">
+            <label for="cfg-vseqs">Default parallel requests <span class="info" title="Used when Parallel slots is 0 or 1 (vLLM batches requests); for all vLLM models; applies at the next load">ⓘ</span></label>
+            <input type="number" id="cfg-vseqs" min="1" max="64" value="8" title="Default parallel requests (1-64)">
+          </div>
           <div class="cfg-item" title="Weight data type (--dtype). auto = what the model folder says">
             <label for="cfg-vdtype">Data type</label>
             <select id="cfg-vdtype"><option value="auto">auto</option><option value="bfloat16">bfloat16</option><option value="float16">float16</option></select>
@@ -873,6 +877,10 @@
           <div class="cfg-item" title="Number of parallel sequence processing slots (n_slots / n_parallel)">
             <label for="cfg-np">Parallel slots <span class="info" title="Number of simultaneous sequence processing slots (default 1)">ⓘ</span></label>
             <input type="number" id="cfg-np" min="0" max="64" value="0" title="Parallel slots (0 = default 1)">
+          </div>
+          <div class="cfg-item" title="How many requests one user may run at the same time on the local model. A second browser tab or an agent run counts. The rest wait in the queue. Applies immediately">
+            <label for="cfg-peruser">Requests per user <span class="info" title="How many requests one user may run at the same time on the local model (a second tab or an agent run counts); the rest wait in the queue. Applies immediately">ⓘ</span></label>
+            <input type="number" id="cfg-peruser" min="1" max="16" value="1" title="Requests per user (1-16)">
           </div>
           <div class="cfg-item" title="Seconds between background ping queries when idle (default 25s)">
             <label for="cfg-kai">Keepalive (s) <span class="info" title="Idle interval (seconds) before sending 1-token keepalive ping">ⓘ</span></label>

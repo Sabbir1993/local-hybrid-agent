@@ -508,6 +508,7 @@ function fillConfigForm(c) {
     $('cfg-batch').value = c.batch_size ?? CFG_DEFAULTS.batch;
     $('cfg-ubatch').value = c.ubatch_size ?? CFG_DEFAULTS.ubatch;
     $('cfg-np').value = c.n_slots ?? CFG_DEFAULTS.np;
+    if ($('cfg-peruser')) $('cfg-peruser').value = c.max_inflight_per_user ?? 1;
     $('cfg-kai').value = c.keepalive_interval_s ?? CFG_DEFAULTS.kai;
     $('cfg-ts').value = c.tensor_split ?? CFG_DEFAULTS.ts;
     // The GPUs come from the machine's runtime (status: gpu_devices), not from this model's saved list, which can name
@@ -564,6 +565,7 @@ function fillEngineFields(c) {
   if ($('cfg-vtp')) $('cfg-vtp').value = c.tensor_parallel_size ?? 0;
   if ($('cfg-vpp')) $('cfg-vpp').value = c.pipeline_parallel_size ?? 1;
   if ($('cfg-vmem')) $('cfg-vmem').value = c.gpu_memory_utilization_pct ?? 0;
+  if ($('cfg-vseqs')) $('cfg-vseqs').value = c.vllm_max_num_seqs_default ?? 8;
   if ($('cfg-vdtype')) $('cfg-vdtype').value = c.vllm_dtype || 'auto';
   if ($('cfg-vquant')) $('cfg-vquant').value = c.vllm_quantization || 'auto';
   if ($('cfg-veager')) $('cfg-veager').checked = !!c.vllm_enforce_eager;
@@ -755,7 +757,9 @@ if ($('btn-apply')) $('btn-apply').onclick = async () => {
     mtp_draft_n_max: parseInt($('mtp-nmax') && $('mtp-nmax').value) || 3,
     vision_capable: $('cfg-vision') && $('cfg-vision').checked,
   };
+  if ($('cfg-peruser')) updates.max_inflight_per_user = parseInt($('cfg-peruser').value) || 1;
   if ($('cfg-engine')) {
+    if ($('cfg-vseqs')) updates.vllm_max_num_seqs_default = parseInt($('cfg-vseqs').value) || 8;
     Object.assign(updates, {
       engine: $('cfg-engine').value,
       tensor_parallel_size: parseInt($('cfg-vtp').value) || 0,

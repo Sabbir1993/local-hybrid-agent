@@ -24,12 +24,20 @@ VLLM_TEXT_KEYS = ("vllm_tokenizer", "vllm_tool_parser", "vllm_reasoning_parser")
 _EXTRA_ARGS_RX = re.compile(r"^[A-Za-z0-9_./:=,\- ]{1,300}$")
 _SAFE_ARG_RX = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./:\-]{0,199}$")
 
+# machine-level concurrency limits kept in config/app.json: key -> (section path, field, default, min, max)
+SERVING_LIMITS = {
+    "max_inflight_per_user": ("serving", "max_inflight_per_user", 1, 1, 16),
+    "vllm_max_num_seqs_default": ("engines.vllm", "max_num_seqs", 8, 1, 64),
+}
+
 
 def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
     if profile is None:
         return "No profile loaded to update"
     if key in SUPERVISION_LIMITS:
         return _apply_supervision_update(key, value)
+    if key in SERVING_LIMITS:
+        return _apply_serving_update(key, value)
     if key == "keepalive_interval_s":
         try:
             state.keepalive_interval_s = max(5, min(600, int(value)))
@@ -148,6 +156,33 @@ def _apply_supervision_update(key: str, value) -> Optional[str]:
     return None
 
 
+def _apply_serving_update(key: str, value) -> Optional[str]:
+    """Persist one concurrency limit (SERVING_LIMITS) into its nested section of config/app.json.
+
+    Machine-level like the supervision limits, so it skips the profile path. Clamped to the same range the readers
+    assume (llm_stream._Admission for per-user, core/engines/vllm.py for max_num_seqs).
+    """
+    from core.config import update_app_config
+    from core.small_model import APP_CONFIG
+
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return f"{key} must be an integer"
+    section, field, _default, lo, hi = SERVING_LIMITS[key]
+    v = max(lo, min(hi, v))
+
+    def _walk(cfg):
+        for part in section.split("."):
+            cfg = cfg.setdefault(part, {})
+        return cfg
+
+    update_app_config(lambda cfg: _walk(cfg).__setitem__(field, v))
+    # keep the in-memory copy in step so the next read sees it without a restart (other keys of the section stay)
+    _walk(APP_CONFIG)[field] = v
+    return None
+
+
 def check_tool_calling(filename: str) -> bool:
     nl = str(filename or "").lower()
     tool_keywords = [
@@ -156,6 +191,12 @@ def check_tool_calling(filename: str) -> bool:
         "deepseek", "phi-3", "phi-4", "gemma-2", "heretic"
     ]
     return any(k in nl for k in tool_keywords)
+
+
+def _serving_value(key: str):
+    from core.small_model import APP_CONFIG
+    section, field, default, _lo, _hi = SERVING_LIMITS[key]
+    return (APP_CONFIG.get(section) or {}).get(field, default)
 
 
 def _reasoning_caps(mode: str) -> dict:
@@ -220,6 +261,8 @@ def _config_for_profile(p: dict) -> dict:
         "vllm_enforce_eager": bool(p.get("vllm_enforce_eager", False)),
         "vllm_extra_args": p.get("vllm_extra_args") or "",
         "vllm_max_num_seqs": vllm_engine.max_num_seqs(p),
+        "max_inflight_per_user": _serving_value("max_inflight_per_user"),
+        "vllm_max_num_seqs_default": vllm_engine.settings().get("max_num_seqs", 8),
         **_reasoning_caps(reasoning.local_mode(p.get("model_path"))),
     }
 
