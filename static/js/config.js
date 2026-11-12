@@ -79,7 +79,7 @@ async function loadProfiles() {
       const isHf = m.format === 'hf';
       const base = (isHf ? (m.display || m.name || '') : (m.folder || m.name || '')).trim();
       const name = !isHf && m.folder && perFolder[m.folder] > 1 ? `${base} · ${m.name}` : base;
-      const shortName = name.length > 28 ? (name.slice(0, 28) + '...') : name;
+      const shortName = name.length > 80 ? (name.slice(0, 80) + '...') : name;     // the list clips with CSS; keep the name whole
       // a split GGUF is one model in several files (llama.cpp loads them all from part 1): show its full size and parts
       const size = (m.size_gb != null ? ` · ${m.size_gb}GB` : '') + (m.parts > 1 ? ` · ${m.parts} parts` : '');
       const tags = [];
@@ -268,7 +268,7 @@ function _createPickerItem(o, sel, dd) {
   const capsWrap = caps ? `<div class="mpi-caps">${caps}</div>` : '';
 
   item.innerHTML = `<span class="mpi-icon">${isCloud ? '☁️' : '🖥'}</span>` +
-    `<span class="mpi-label">${_mpShorten(raw, 32)}</span>` +
+    `<span class="mpi-label">${_mpShorten(raw, 90)}</span>` +
     capsWrap +
     (isLoaded ? '<span class="mpi-badge">loaded</span>' : '');
   item.onclick = () => {
@@ -426,10 +426,15 @@ function initModelPickerToggle() {
       if (left + targetW > window.innerWidth - 16) left = window.innerWidth - targetW - 16;
       dd.style.left = left + 'px';
     } else {
+      // settings page: the list is as wide as the whole model field (button + load button), under it
+      const group = anchorBtn.closest('.model-group');
+      const g = group ? group.getBoundingClientRect() : r;
+      const w = Math.max(280, Math.min(g.width, window.innerWidth - 16));
+      dd.style.width = w + 'px';
+      dd.style.maxWidth = 'none';
       dd.style.bottom = 'auto';
-      dd.style.top = (r.bottom + 6) + 'px';
-      const left = Math.min(r.left, window.innerWidth - targetW - 16);
-      dd.style.left = Math.max(8, left) + 'px';
+      dd.style.top = (g.bottom + 6) + 'px';
+      dd.style.left = Math.max(8, Math.min(g.left, window.innerWidth - w - 8)) + 'px';
     }
   };
 
