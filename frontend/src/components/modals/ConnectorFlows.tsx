@@ -76,7 +76,14 @@ export function useConnectorOAuth(onChanged: () => void | Promise<void>) {
         if (start.mode === 'manual' && /^https:\/\//.test(start.auth_url || '')) {
           // no polling here: the person finishes by pasting the address their browser ended on (see finishManual)
           setManual((p) => ({ ...p, [id]: { url: start.auth_url, state: start.state || '' } }));
-          setNote(id, 'One more step: open the connector and follow the 3 steps under Account to finish signing in.');
+          // this runs after awaits, so a popup blocker may refuse it: the panel always has the link as well
+          const w = window.open(start.auth_url, '_blank', 'noopener');
+          setNote(
+            id,
+            w
+              ? 'The sign-in page opened in a new tab. Approve access there, then come back and follow step 3.'
+              : 'Your browser blocked the sign-in tab. Use the "Open sign-in page" button in step 1.',
+          );
           return;
         }
         if (start.mode === 'redirect' && /^https:\/\//.test(start.auth_url || '')) {
@@ -294,17 +301,17 @@ export const ConnectorOAuthPanel: React.FC<PanelProps> = ({ item, isAdmin, oauth
         <div className="cz-client" style={{ marginTop: '12px' }}>
           <div className="cz-note">
             <b>Finish signing in</b>
-            <ol style={{ margin: '6px 0 0 18px', padding: 0 }}>
-              <li>
-                Open the sign-in page:{' '}
-                <a href={oauth.manual[item.id].url} target="_blank" rel="noopener noreferrer">
+            <ol style={{ margin: '8px 0 0 20px', padding: 0, listStyle: 'decimal', display: 'grid', gap: '6px' }}>
+              <li style={{ display: 'list-item', listStyle: 'decimal' }}>
+                Open the sign-in page (it may already have opened in a new tab):{' '}
+                <a className="btn ghost cz-act" href={oauth.manual[item.id].url} target="_blank" rel="noopener noreferrer">
                   Open sign-in page ↗
                 </a>
               </li>
-              <li>Approve access.</li>
-              <li>
-                Your browser will then show a page that cannot be reached — that is expected. Copy the full address from the address
-                bar and paste it here.
+              <li style={{ display: 'list-item', listStyle: 'decimal' }}>Sign in and approve access.</li>
+              <li style={{ display: 'list-item', listStyle: 'decimal' }}>
+                Your browser then shows a page that cannot be reached (127.0.0.1) — that is expected. Copy the full address from the
+                address bar, paste it below and press Finish sign-in.
               </li>
             </ol>
           </div>
@@ -348,7 +355,7 @@ export const ConnectorOAuthPanel: React.FC<PanelProps> = ({ item, isAdmin, oauth
           {oauth.errors[item.id]}
         </div>
       )}
-      {item.status === 'error' && item.error && !oauth.errors[item.id] && (
+      {item.status === 'error' && item.error && !oauth.errors[item.id] && !oauth.manual[item.id] && (
         <div className="cz-banner warn" role="alert">
           Connector problem: {item.error}
         </div>
