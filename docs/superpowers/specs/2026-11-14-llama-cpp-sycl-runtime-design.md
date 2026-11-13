@@ -20,8 +20,8 @@ multiple llama.cpp backends in one process.
 - Running Vulkan and SYCL concurrently in one application process.
 - Building a single llama.cpp binary containing every GPU backend.
 - Hot runtime switching from the administration UI.
-- Claiming SYCL multi-GPU, flash-attention, or tensor-split support without
-  validation against the pinned llama.cpp revision and target Intel hardware.
+- Assuming that SYCL multi-GPU, flash attention, tensor splitting, or partial
+  CPU offload has Vulkan-equivalent performance without target-server tests.
 - Replacing the existing Python virtual environment. llama.cpp remains an
   external native runtime launched by Python.
 
@@ -83,12 +83,12 @@ Example configuration:
   "runtimes": {
     "vulkan": {
       "backend": "vulkan",
-      "llama_bin_dir": "/opt/local-agent/runtimes/llama-vulkan/bin",
+      "llama_bin_dir": "/var/web/html_new/local_ai/llama-vulkan",
       "gpu_devices": "auto"
     },
     "sycl": {
       "backend": "sycl",
-      "llama_bin_dir": "/opt/local-agent/runtimes/llama-sycl/bin",
+      "llama_bin_dir": "/var/web/html_new/local_ai/llama-sycl",
       "gpu_devices": "auto",
       "env": {
         "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu"
@@ -96,7 +96,7 @@ Example configuration:
     },
     "cuda": {
       "backend": "cuda",
-      "llama_bin_dir": "/opt/local-agent/runtimes/llama-cuda/bin",
+      "llama_bin_dir": "/var/web/html_new/local_ai/llama-cuda",
       "gpu_devices": "auto"
     }
   }
@@ -161,21 +161,69 @@ No component may choose a backend independently of `ACTIVE_RUNTIME`.
 
 ## SYCL Capabilities
 
-The first production release enables:
+The production implementation supports the same application-level model
+placement controls for SYCL that are already available for Vulkan:
 
 - Level Zero GPU discovery;
-- single-GPU main-model launch;
-- single-GPU helper-model launch;
-- backend-aware status and errors;
+- single- and multi-GPU main-model launch;
+- single-GPU helper-model launch, with multi-GPU helpers only when explicitly
+  configured;
+- `layer` and `row` split modes accepted by the pinned llama.cpp build;
+- explicit `--tensor-split` values and proportional auto-generated splits;
+- partial dense-model offload with `-ngl`;
+- partial MoE expert offload with `-ncmoe`;
+- backend-aware status, preflight, autotuning, and errors;
 - startup selection and clean rollback to Vulkan or CUDA.
 
-SYCL multi-GPU and tensor split are capability-gated. They remain disabled
-until the target Intel hardware and pinned llama.cpp revision pass correctness,
-memory-accounting, and soak tests. Unsupported settings fail before process
-launch with a clear message.
+The adapter must not disable multi-GPU merely because the backend is SYCL. It
+must validate that the active inventory contains every requested device and
+that the selected build accepts the requested split mode. If the runtime or
+hardware rejects a capability, launch fails before serving requests and reports
+the exact unsupported setting.
+
+Multi-GPU device order must be stable across discovery, tensor-split values,
+launch arguments, status output, and autotune results. A split such as `9,11`
+must always map to the same two exact llama.cpp device IDs. Zero-share handling
+continues to remove the corresponding GPU before constructing `-dev`.
+
+The default multi-GPU mode is `layer`. `row` is available only after a direct
+benchmark proves it is valid and beneficial on the target Intel GPUs. Consumer
+Intel GPUs may transfer between devices through host memory rather than fast
+peer-to-peer links, so multi-GPU correctness does not imply better throughput.
+Autotune compares candidate splits and records the winner for the SYCL runtime;
+Vulkan tuning results are never reused for SYCL.
 
 Flash attention and other backend-sensitive flags follow the same rule: retain
-them only when the active build advertises or integration tests prove support.
+them only when the active build accepts them in an integration test.
+
+## Partial Offload to System DRAM
+
+Partial offload is a required SYCL path, not a fallback added later.
+
+For dense models, `n_gpu_layers`/`-ngl` controls how many layers reside on the
+selected GPUs. Remaining model weights stay in system DRAM and execute on the
+CPU. For MoE models, `n_cpu_moe`/`-ncmoe` keeps the selected expert layers in
+DRAM while the remainder follows the GPU placement. The existing
+`--no-op-offload` safety behavior remains active when CPU-resident experts or
+layers would otherwise be temporarily copied back to a GPU during prompt
+processing.
+
+Tensor split applies only to the GPU-resident portion of the model. The
+CPU-resident portion is held once in host memory; it is not multiplied by the
+number of GPUs.
+
+Preflight is extended with a host-memory verdict. It estimates CPU-resident
+weights, MoE experts, configured prompt cache, mmap/page-cache pressure, and a
+service reserve, then compares them with currently available RAM. A partial
+offload that fits VRAM but cannot fit DRAM must fail closed. Swap is not counted
+as usable model memory; detected swap pressure produces a warning because it
+causes severe latency and can make health checks fail.
+
+The suggestion engine may reduce `-ngl` or increase `-ncmoe` only when both the
+resulting VRAM and DRAM plans fit. For MoE models it prefers expert offload over
+arbitrarily lowering dense layers because that usually preserves better GPU
+utilization. Autotune records SYCL-specific `tensor_split`, `n_gpu_layers`, and
+`n_cpu_moe` results separately from other runtimes.
 
 ## Monitoring and Preflight
 
@@ -197,31 +245,188 @@ SYCL install hints mention `sycl-ls`, `clinfo -l`, `/dev/dri/renderD*`, and
 membership in the Linux `render`/`video` groups. Vulkan and CUDA retain their
 own hints.
 
-## Linux Packaging and Installation
+## Runtime Placement
 
-Vulkan and SYCL use separate pinned llama.cpp installations, for example:
+The server runtime root is `/var/web/html_new/local_ai/`. SYCL is installed as
+a sibling of the existing Vulkan runtime:
 
 ```text
-/opt/local-agent/runtimes/llama-vulkan/
-/opt/local-agent/runtimes/llama-sycl/
-/opt/local-agent/runtimes/llama-cuda/
+/var/web/html_new/local_ai/
+├── .venv/                       # existing Python environment; unchanged
+├── llama-vulkan/                # existing Vulkan runtime; unchanged
+├── llama-sycl -> llama-sycl-b10840/
+└── llama-sycl-b10840/
+    ├── llama-server
+    ├── llama-bench
+    ├── libggml*.so
+    └── BUILD_INFO.txt
 ```
 
-The SYCL production path builds a pinned llama.cpp revision from source using
-the installed Intel oneAPI DPC++ compiler and `GGML_SYCL=ON`. The build produces
-at least `llama-server` and `llama-bench`. Build provenance records the git
-revision, compiler version, CMake options, and build date.
+`/var/web/html_new/local_ai/llama-sycl` is a stable symlink used by
+`config/app.json`. The versioned target makes upgrades and rollback atomic. If
+the deployed llama.cpp revision differs from `b10840`, the directory name uses
+that pinned revision instead. The entire contents of llama.cpp's `build/bin`
+directory are deployed together so required GGML shared libraries are not
+omitted.
 
-The existing Python `.venv` is retained. The service environment initializes
-oneAPI/Level Zero before starting Python, and Python launches binaries from the
-selected runtime directory.
+Vulkan, SYCL, and CUDA remain separate native builds. Only the selected runtime
+directory is used during a given application start.
 
-The existing Vulkan runtime remains installed and configured throughout the
-SYCL rollout. Rollback consists of selecting `vulkan` and restarting the
-application.
+## Linux Installation Process
 
-Exact Intel driver and oneAPI package commands are documented per supported
-Linux distribution because package repositories and kernel requirements differ.
+The production runbook targets an Intel-GPU Linux server with systemd. Package
+repository setup is performed from Intel's instructions for the server's exact
+distribution release; repository URLs are not hardcoded into the application.
+
+### 1. Preserve the working Vulkan deployment
+
+Back up `config/app.json`, record the current llama.cpp/Vulkan version, and
+confirm that the application starts with `LLAMA_RUNTIME=vulkan`. Do not rename,
+overwrite, or rebuild `/var/web/html_new/local_ai/llama-vulkan` during SYCL
+installation.
+
+### 2. Install native prerequisites
+
+Install the distribution's build tools (`git`, CMake, Ninja, a C/C++ toolchain,
+and `pkg-config`), Intel Level Zero GPU userspace runtime, Intel OpenCL runtime,
+`clinfo`, and the oneAPI DPC++/C++ compiler. The service user must belong to the
+`render` and `video` groups and have read/write access to `/dev/dri/renderD*`.
+A logout or service restart is required after changing group membership.
+
+Before building, the following must succeed as the same Unix user that runs the
+application:
+
+```bash
+ls -l /dev/dri/renderD*
+sycl-ls
+clinfo -l
+```
+
+Every intended Intel GPU must appear through the Level Zero backend. Resolve
+driver, permission, and device-enumeration problems before compiling llama.cpp.
+
+### 3. Build a pinned llama.cpp SYCL runtime
+
+Build the same pinned llama.cpp revision used for qualification. `b10840` is the
+initial parity target because the current Vulkan deployment documentation uses
+that revision; if it does not pass SYCL qualification, choose and record one
+newer revision for all SYCL servers rather than following upstream `master`.
+
+```bash
+cd /opt/build
+git clone https://github.com/ggml-org/llama.cpp.git llama.cpp-sycl
+cd llama.cpp-sycl
+git checkout b10840
+
+source /opt/intel/oneapi/setvars.sh --force
+
+cmake -S . -B build-sycl -G Ninja \
+  -DGGML_SYCL=ON \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=icx \
+  -DCMAKE_CXX_COMPILER=icpx
+
+cmake --build build-sycl --target llama-server llama-bench --parallel
+```
+
+Record `git rev-parse HEAD`, `icpx --version`, `cmake --version`, and the CMake
+options in `BUILD_INFO.txt`.
+
+### 4. Deploy without touching Vulkan
+
+Create the versioned deployment directory under the existing application root,
+copy the complete `build-sycl/bin/` contents into it, set ownership to the
+application service account, and verify dependencies before changing the stable
+symlink:
+
+```bash
+sudo install -d /var/web/html_new/local_ai/llama-sycl-b10840
+sudo cp -a build-sycl/bin/. /var/web/html_new/local_ai/llama-sycl-b10840/
+sudo cp BUILD_INFO.txt /var/web/html_new/local_ai/llama-sycl-b10840/
+sudo chown -R --reference=/var/web/html_new/local_ai/llama-vulkan \
+  /var/web/html_new/local_ai/llama-sycl-b10840
+
+ldd /var/web/html_new/local_ai/llama-sycl-b10840/llama-server
+ldd /var/web/html_new/local_ai/llama-sycl-b10840/llama-bench
+
+sudo ln -sfn llama-sycl-b10840 /var/web/html_new/local_ai/llama-sycl
+```
+
+The operator must confirm that neither `ldd` command reports `not found`.
+
+### 5. Provide the oneAPI service environment
+
+Use a service wrapper that initializes oneAPI and then executes the existing
+Python `.venv`; do not create another virtual environment:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+source /opt/intel/oneapi/setvars.sh --force
+export ONEAPI_DEVICE_SELECTOR=level_zero:gpu
+export SYCL_CACHE_PERSISTENT=1
+export SYCL_CACHE_DIR=/var/cache/local-ai/sycl
+exec /var/web/html_new/local_ai/.venv/bin/python \
+  /var/web/html_new/local_ai/server_manager.py
+```
+
+The cache directory is created for and owned by the service account. Do not set
+`ZE_AFFINITY_MASK` to one GPU when multi-GPU operation is required. Device
+selection is controlled by the application's exact `-dev` list; affinity masks
+are used only when an administrator intentionally hides devices from the whole
+service.
+
+```bash
+sudo install -d /var/cache/local-ai/sycl
+sudo chown --reference=/var/web/html_new/local_ai/llama-vulkan \
+  /var/cache/local-ai/sycl
+```
+
+### 6. Register the SYCL runtime
+
+Add `runtimes.sycl` to `config/app.json` with:
+
+```json
+{
+  "llama_bin_dir": "/var/web/html_new/local_ai/llama-sycl",
+  "backend": "sycl",
+  "gpu_devices": "auto",
+  "small_model_gpu": 0,
+  "env": {
+    "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu",
+    "SYCL_CACHE_PERSISTENT": "1",
+    "SYCL_CACHE_DIR": "/var/cache/local-ai/sycl"
+  }
+}
+```
+
+Keep `runtime` set to `vulkan` until the SYCL smoke tests pass. Operators can
+test one start with `LLAMA_RUNTIME=sycl` without changing the saved default.
+
+### 7. Qualify single GPU, multi-GPU, and partial offload
+
+Run `llama-bench --list-devices` as the service account and save its exact
+output as the deployment inventory. Then test, in order:
+
+1. one GPU with a model that fits entirely in VRAM;
+2. each GPU individually to confirm stable device IDs;
+3. all selected GPUs with `split_mode=layer` and a proportional tensor split;
+4. an asymmetric split to confirm split-to-device ordering;
+5. a dense model with reduced `n_gpu_layers` and measurable DRAM residency;
+6. an MoE model with `n_cpu_moe` and `--no-op-offload` behavior;
+7. main and helper lanes together;
+8. concurrent requests, restart recovery, and a 24-48 hour soak.
+
+Monitor process RSS, available RAM, swap activity, per-GPU memory, tokens per
+second, prompt-processing latency, and health-check stability. Reject a tuning
+candidate that swaps or repeatedly reloads model pages even if it technically
+completes inference.
+
+### 8. Promote or roll back
+
+Promote by setting `runtime` to `sycl` and restarting the application. Roll back
+by setting it to `vulkan` or starting once with `LLAMA_RUNTIME=vulkan`, then
+restart. No Python package reinstall or model conversion is required.
 
 ## Security and Operational Rules
 
@@ -240,9 +445,9 @@ Linux distribution because package repositories and kernel requirements differ.
 4. Add runtime-scoped child environments and SYCL prerequisite errors.
 5. Make Linux monitoring and preflight backend-neutral.
 6. Add the SYCL runtime example and Linux installation/runbook documentation.
-7. Validate single-GPU SYCL on the target server.
-8. Evaluate multi-GPU and tensor split separately; enable only after passing its
-   own acceptance gate.
+7. Add host-DRAM preflight for dense and MoE partial offload.
+8. Validate single-GPU, multi-GPU tensor split, and partial offload on the target
+   server before making SYCL the saved default.
 
 ## Test Strategy
 
@@ -257,20 +462,26 @@ Unit tests cover:
 - rejection of unsupported SYCL capabilities;
 - backend-correct status and diagnostics;
 - cache isolation by runtime binary directory.
+- host-RAM fit/no-fit verdicts for dense and MoE partial offload;
+- tensor-split ordering across exact SYCL device IDs;
+- runtime-specific autotune results that cannot leak between Vulkan and SYCL.
 
 Integration tests on Linux cover:
 
 - `llama-bench --list-devices` under the service account;
-- one main-model request on SYCL;
+- one main-model request on each SYCL device;
+- multi-GPU layer split with symmetric and asymmetric tensor splits;
+- dense `-ngl` and MoE `-ncmoe` partial-offload cases;
 - executor/helper request on SYCL;
 - restart from SYCL to Vulkan and back;
 - missing oneAPI library and permission-error diagnostics;
 - process crash and supervised restart;
 - concurrent requests and VRAM cleanup.
 
-Production promotion requires a 24-48 hour soak with representative models and
-concurrency. Multi-GPU, tensor split, and flash attention require separate
-acceptance results and are not implied by single-GPU success.
+Production promotion requires a 24-48 hour soak with representative models,
+multi-GPU tensor splitting, partial DRAM offload, and expected concurrency.
+Flash attention and `row` split require separate acceptance results and are not
+implied by layer-split success.
 
 ## Acceptance Criteria
 
@@ -280,6 +491,10 @@ acceptance results and are not implied by single-GPU success.
 - Invalid runtime/backend selection stops startup with an actionable error.
 - Device discovery and status identify the correct backend and hardware.
 - Main and helper models pass single-GPU SYCL inference tests.
+- Multi-GPU layer splitting preserves configured device order and passes
+  symmetric and asymmetric tensor-split tests.
+- Dense and MoE partial offload pass both VRAM and host-DRAM preflight without
+  sustained swap activity.
 - Switching back to Vulkan needs no Python environment rebuild or model changes.
 - Existing backend-focused unit tests remain green, excluding documented
   platform-incompatible baseline tests.
