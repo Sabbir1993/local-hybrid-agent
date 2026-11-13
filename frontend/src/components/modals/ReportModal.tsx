@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { cleanModelName } from '../../utils/models';
 import { useAppStore } from '../../stores/useAppStore';
 import { apiFetch } from '../../services/api';
 
@@ -829,7 +830,7 @@ export const ReportModal: React.FC = () => {
                             <div key={m.model} className="flex flex-col gap-1">
                               <div className="flex items-center justify-between text-xs">
                                 <span className="font-medium truncate max-w-[180px]" title={m.model}>
-                                  {m.model}
+                                  {cleanModelName(m.model)}
                                 </span>
                                 <div className="flex items-center gap-2">
                                   <span className="text-accent font-mono font-semibold">
@@ -916,7 +917,7 @@ export const ReportModal: React.FC = () => {
                             filteredModels.slice(modelFilter.page * modelFilter.size, (modelFilter.page + 1) * modelFilter.size).map((m) => (
                               <tr key={m.model} className="border-b border-border/40 hover:bg-panel transition-colors">
                                 <td className="py-2.5 px-3 font-semibold text-text">
-                                  {m.model}
+                                  {cleanModelName(m.model)}
                                   {m.is_orchestrator && (
                                     <span className="ml-1.5 text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/30 px-1 py-0.5 rounded uppercase">
                                       Orch
@@ -1399,7 +1400,7 @@ export const ReportModal: React.FC = () => {
                                                   const share = u.total_tokens ? Math.round(((m.total_tokens || 0) / u.total_tokens) * 100) : 0;
                                                   return (
                                                     <tr key={i} className="border-b border-border/30 last:border-0">
-                                                      <td className="py-1.5 px-2 text-text font-mono truncate max-w-[260px]" title={m.model}>{m.model}</td>
+                                                      <td className="py-1.5 px-2 text-text font-mono truncate max-w-[260px]" title={m.model}>{cleanModelName(m.model)}</td>
                                                       <td className="py-1.5 px-2 text-text-muted">{m.source === 'cloud' ? `Cloud${m.provider ? ` · ${m.provider}` : ''}` : 'Local'}</td>
                                                       <td className="py-1.5 px-2 text-right tabular-nums">{repFmt(m.requests)}</td>
                                                       <td className="py-1.5 px-2 text-right font-mono font-bold text-accent tabular-nums" title={repFmt(m.total_tokens)}>{repTok(m.total_tokens)}</td>
