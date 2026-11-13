@@ -878,7 +878,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchSessions: async () => {
     const { appMode, activeProjectId, activeCustomAgent } = get();
     const pid = appMode === 'code' && activeProjectId ? activeProjectId : 0;
-    const { sessions: rawSessions, hasMore } = await api.sessions.list(pid, 50);
+    // Code mode lists the tasks of the selected project. Project 0 is the plain chats: with no project selected there is
+    // nothing to list, and asking for project 0 put the chat history under "PROJECT TASKS".
+    const { sessions: rawSessions, hasMore } = appMode === 'code' && !activeProjectId
+      ? { sessions: [], hasMore: false }
+      : await api.sessions.list(pid, 50);
+    // the mode or the project changed while the list was loading: that answer belongs to the other view
+    if (get().appMode !== appMode || get().activeProjectId !== activeProjectId) return;
 
     oldestSessionIdTracker = rawSessions.length > 0 ? rawSessions[rawSessions.length - 1].id : null;
 

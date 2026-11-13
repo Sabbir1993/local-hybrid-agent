@@ -563,7 +563,8 @@ export const Sidebar: React.FC = () => {
         >
           {filteredSessions.length === 0 ? (
             <div className="dim" style={{ fontSize: '12px', padding: '12px 6px', textAlign: 'center' }}>
-              no tasks yet
+              {appMode === 'code' && !activeProjectId ? 'Select or add a project to see its tasks'
+                : appMode === 'chat' ? 'no chats yet' : 'no tasks yet'}
             </div>
           ) : (
             filteredSessions.map((s) => (
