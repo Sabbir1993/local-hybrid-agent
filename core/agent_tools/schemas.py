@@ -131,13 +131,13 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "run_python",
-            "description": "Run a Python script on the user's machine; it needs the user's approval every time. Use it to run or test code you wrote. NEVER use it to read, search or list files - use grep, read_file and list_files (no approval needed).",
+            "description": "Run a Python script on the user's machine; it needs the user's approval every time. Pass exactly one of path (preferred for project scripts, so failures can be edited and rerun) or code (for short throwaway snippets). NEVER use it to read, search or list files - use grep, read_file and list_files (no approval needed).",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "path": {"type": "string", "description": "Workspace-relative path to an existing .py file"},
                     "code": {"type": "string", "description": "Python source to execute"},
                 },
-                "required": ["code"],
             },
         },
     },

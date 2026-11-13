@@ -3,6 +3,7 @@ from typing import Optional
 from .constants import JOBS, SD_FILE_KEYS
 from .registry import allow_cloud_audio, default_lane, registry, role_map
 from .target import Target
+from .presets import stored_agent_mode
 
 
 def _status_text(row: dict) -> dict:
@@ -121,5 +122,6 @@ def public_view(user_id: Optional[int] = None, is_admin: bool = False) -> dict:
         "explicit_jobs": sorted((cloud.role_map(user_id) or {}).keys()),
         "defaults": {j: default_lane(j, user_id, reg) for j in JOBS},
         "can_edit_local": is_admin,
+        "agent_mode": stored_agent_mode(user_id),
         "media": _media_view(),
     }

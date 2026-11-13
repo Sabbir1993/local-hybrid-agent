@@ -25,6 +25,7 @@ from .helpers import (
 from .models import (
     LaneReq,
     RolesReq,
+    PresetReq,
     MediaSettingsReq,
     VerifyReq,
 )
@@ -34,6 +35,7 @@ from .endpoints import (
     lanes_save,
     lanes_delete,
     lanes_roles,
+    lanes_preset,
 )
 from .probe import (
     _plain_error,
@@ -61,6 +63,7 @@ __all__ = [
     "_err",
     "LaneReq",
     "RolesReq",
+    "PresetReq",
     "MediaSettingsReq",
     "VerifyReq",
     "lanes_get",
@@ -68,6 +71,7 @@ __all__ = [
     "lanes_save",
     "lanes_delete",
     "lanes_roles",
+    "lanes_preset",
     "_plain_error",
     "_silent_wav",
     "_test_media",

@@ -10,6 +10,7 @@ from .constants import (
     kind_ok,
 )
 from .target import _inst
+from .presets import agent_mode
 
 
 def _fallback_for(cfg: dict, name: str, kind: str = "chat") -> Optional[str]:
@@ -175,6 +176,10 @@ def role_map(user_id: Optional[int] = None) -> dict:
             reg = reg if reg is not None else registry(user_id)
             v = default_lane(job, user_id, reg)
         out[job] = str(v) if v else None
+    if agent_mode(user_id) == "no-orchestration":
+        for job, spec in JOBS.items():
+            if spec["kind"] == "chat":
+                out[job] = "main"
     return out
 
 

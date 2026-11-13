@@ -40,6 +40,14 @@ from .target import (
     Target,
     _inst,
 )
+from .presets import (
+    AGENT_MODES,
+    agent_mode,
+    normalize_agent_mode,
+    set_agent_mode,
+    set_request_agent_mode,
+    stored_agent_mode,
+)
 from .user_storage import (
     _apply_fallback,
     _check_fallback,
@@ -91,4 +99,10 @@ __all__ = [
     "_own_role_map",
     "set_role_map",
     "suggest_port",
+    "AGENT_MODES",
+    "agent_mode",
+    "stored_agent_mode",
+    "normalize_agent_mode",
+    "set_agent_mode",
+    "set_request_agent_mode",
 ]

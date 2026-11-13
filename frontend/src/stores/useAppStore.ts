@@ -1532,8 +1532,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         let runMode = cloudBound ? 'main-cloud-rest-local' : 'all-local';
         try {
           const savedEngine = localStorage.getItem('agent_engine');
-          if (savedEngine === 'no-orchestration' || savedEngine === 'direct') {
-            runMode = 'no-orchestration';
+          const canonical = savedEngine === 'direct' ? 'no-orchestration' : savedEngine;
+          if (canonical && ['no-orchestration', 'all-local', 'main-local-rest-cloud', 'main-cloud-rest-local'].includes(canonical)) {
+            runMode = canonical;
           }
         } catch (_) {}
         res = await apiFetch('/agent/run', {

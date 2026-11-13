@@ -125,13 +125,23 @@ def validate_and_repair_tool_args(tool_name: str, args: dict, query_hint: str = 
                 return repaired, "error: new_string required for edit_file"
 
     if tool_name == "run_python":
-        if not repaired.get("code"):
+        path = repaired.get("path") or repaired.get("file") or repaired.get("filename")
+        if path:
+            p_str = str(path).replace("\\", "/").strip().lstrip("/")
+            if p_str.startswith("workspace/"):
+                p_str = p_str[10:]
+            if ".." in p_str.split("/"):
+                return repaired, "error: sandbox violation: path cannot traverse outside workspace root (..)"
+            repaired["path"] = p_str
+        if not repaired.get("code") and not path:
             for alt in ("command", "content", "script"):
                 if alt in repaired:
                     repaired["code"] = repaired[alt]
                     break
-        if not repaired.get("code"):
-            return repaired, "error: code required for run_python"
+        has_code = isinstance(repaired.get("code"), str) and bool(repaired["code"].strip())
+        has_path = bool(repaired.get("path"))
+        if has_code == has_path:
+            return repaired, "error: run_python requires exactly one of path or code"
 
     return repaired, None
 

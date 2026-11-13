@@ -15,6 +15,14 @@ Module._load = function (request, ...rest) {
 
 const policy = require(path.join(__dirname, '..', '..', 'companion', 'policy.js'));
 
+// Dedicated python.run accepts only .py files inside the approved workspace.
+const root = path.resolve('C:/work/demo');
+assert.strictEqual(policy.pythonScriptPath(root, 'scripts/check.py'), path.join(root, 'scripts', 'check.py'));
+assert.strictEqual(policy.pythonScriptPath(root, path.join(root, 'check.py')), path.join(root, 'check.py'));
+for (const badPath of ['../evil.py', 'notes.txt', '', null, undefined]) {
+  assert.throws(() => policy.pythonScriptPath(root, badPath), /Python script|workspace|\.py/);
+}
+
 // both server generations are recognised...
 assert.strictEqual(policy.runPythonScript('python "_agent_run.py"'), '_agent_run.py');
 assert.strictEqual(policy.runPythonScript('python "_agent_run_1a2b3c4d.py"'), '_agent_run_1a2b3c4d.py');

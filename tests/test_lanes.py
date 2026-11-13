@@ -120,6 +120,24 @@ class RoutingTests(LaneTestBase):
         self.assertEqual(route, ["executor", "main"])
         self.assertFalse(any(t.is_cloud for t in lanes.targets("summarize", 1)))
 
+    def test_main_only_overlays_chat_jobs_without_destroying_custom_map(self):
+        lanes.set_role_map(1, {"summarize": "executor", "verify": "executor"})
+        lanes.set_agent_mode(1, "no-orchestration")
+
+        self.assertEqual(lanes.role_map(1)["summarize"], "main")
+        self.assertEqual(lanes.role_map(1)["verify"], "main")
+        self.assertEqual([t.lane for t in lanes.targets("summarize", 1)], ["main"])
+        self.assertEqual(cloud.role_map(1)["summarize"], "executor")
+
+        lanes.set_agent_mode(1, "all-local")
+        self.assertEqual(lanes.role_map(1)["summarize"], "executor")
+
+    def test_agent_mode_is_canonical_and_persisted(self):
+        self.assertEqual(lanes.set_agent_mode(1, "direct"), "no-orchestration")
+        self.assertEqual(lanes.agent_mode(1), "no-orchestration")
+        with self.assertRaises(ValueError):
+            lanes.set_agent_mode(1, "bogus")
+
     def test_custom_cloud_lane_used_when_mapped(self):
         key = self.add_cloud()
         lanes.save_user_lane(1, "reviewer-cloud", {"kind": "chat", "cloud": key, "label": "Reviewer"})
@@ -453,6 +471,16 @@ class LaneRouteTests(LaneTestBase):
     def test_only_admin_sets_default_for_everyone(self):
         r = self.client.post("/control/lanes/roles", json={"map": {"summarize": "main"}, "as_default": True})
         self.assertEqual(r.status_code, 403)
+
+    def test_agent_preset_is_saved_server_side(self):
+        r = self.client.post("/control/lanes/preset", json={"mode": "no-orchestration"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["agent_mode"], "no-orchestration")
+        self.assertEqual(r.json()["role_map"]["agent.tool_step"], "main")
+
+        r = self.client.post("/control/lanes/preset", json={"mode": "all-local"})
+        self.assertEqual(r.json()["agent_mode"], "all-local")
+        self.assertEqual(r.json()["role_map"]["agent.tool_step"], "executor")
 
     def test_local_port_conflict_and_bad_gpu(self):
         self.admin = True

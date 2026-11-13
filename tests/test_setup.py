@@ -146,6 +146,7 @@ class AgentModeStaysLocal(unittest.TestCase):
              mock.patch("routes.agent.setup.cloud.get_cloud", return_value=cm), \
              mock.patch("routes.agent.setup.cloud.cloud_models", return_value=[cm]), \
              mock.patch("routes.agent.setup.cloud.role_map", return_value={}), \
+             mock.patch("core.lanes.role_map", return_value={}), \
              mock.patch("routes.agent.setup.cloud.set_lanes") as set_lanes, \
              mock.patch("core.lanes.registry", return_value={}), \
              redirect_stdout(buf):
@@ -164,6 +165,11 @@ class AgentModeStaysLocal(unittest.TestCase):
     def test_the_rule_can_be_lifted_in_config(self):
         out, _ = self._lanes({"user_id": 7, "preferred_lane": "auto"}, local_only_cfg=False)
         self.assertIn("main=cloud:gpt", out)
+
+    def test_local_only_preserves_main_only_mode(self):
+        out, _ = self._lanes({"user_id": 7, "preferred_lane": "executor"},
+                             req_kw={"mode": "no-orchestration"})
+        self.assertIn("mode=no-orchestration", out)
 
 
 if __name__ == "__main__":

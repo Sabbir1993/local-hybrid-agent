@@ -7,7 +7,7 @@ from core.auth import Principal, user_has_permission
 from core.deps import get_current_user
 
 from .helpers import _FILES_CACHE, _LOCAL_PERM, _err, _helper_files, _view, router
-from .models import LaneReq, RolesReq
+from .models import LaneReq, PresetReq, RolesReq
 
 
 @router.get("/control/lanes")
@@ -82,4 +82,14 @@ async def lanes_roles(req: RolesReq, user: Principal = Depends(get_current_user)
         return _err(str(e))
     audit_log(user, action="lanes.roles", detail={"map": req.map, "as_default": req.as_default},
               result="allow")
+    return {"ok": True, **_view(user)}
+
+
+@router.post("/control/lanes/preset")
+async def lanes_preset(req: PresetReq, user: Principal = Depends(get_current_user)):
+    try:
+        mode = lanes.set_agent_mode(user.id, req.mode)
+    except ValueError as e:
+        return _err(str(e))
+    audit_log(user, action="lanes.preset", detail={"mode": mode}, result="allow")
     return {"ok": True, **_view(user)}

@@ -128,6 +128,16 @@ class CustomAgentsDBTests(_TempAuthDb):
         self.assertEqual(upd["system_prompt"], "keep me")
         self.assertNotEqual(upd["description"], "None")
 
+    def test_preferred_lane_is_normalized_on_create_and_update(self):
+        legacy = db_create_custom_agent(1, {"name": "legacy", "preferred_lane": "cloud"})
+        self.assertEqual(legacy["preferred_lane"], "auto")
+
+        updated = db_update_custom_agent(legacy["id"], 1, {"preferred_lane": " EXECUTOR "})
+        self.assertEqual(updated["preferred_lane"], "executor")
+
+        updated = db_update_custom_agent(legacy["id"], 1, {"preferred_lane": "unexpected"})
+        self.assertEqual(updated["preferred_lane"], "auto")
+
     def test_super_admin_edit_returns_row(self):
         a = db_create_custom_agent(1, {"name": "private", "system_prompt": "p"})
         upd = db_update_custom_agent(a["id"], 3, {"name": "renamed by admin"})

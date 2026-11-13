@@ -11,6 +11,14 @@ class CustomAgentSlugTaken(ValueError):
     pass
 
 
+_PREFERRED_LANES = frozenset({"auto", "main", "executor"})
+
+
+def normalize_preferred_lane(value) -> str:
+    lane = str(value or "auto").strip().lower()
+    return lane if lane in _PREFERRED_LANES else "auto"
+
+
 # folders a Personal Agent may never be pointed at: a whole drive, the OS, installed programs
 _BAD_DIR_PARTS = tuple("\\" + n for n in ("windows", "program files", "programdata", "system32", "appdata"))
 
@@ -46,6 +54,7 @@ def _custom_agent_row(r) -> dict:
             d["tool_allowlist"] = []
     except Exception:
         d["tool_allowlist"] = []
+    d["preferred_lane"] = normalize_preferred_lane(d.get("preferred_lane"))
     d["is_public"] = bool(d.get("is_public", 0))
     return d
 
@@ -133,7 +142,7 @@ def db_create_custom_agent(user_id: Optional[int], data: dict) -> dict:
     system_prompt = (data.get("system_prompt") or "").strip()
     tool_json = _tools_json(data.get("tool_allowlist") or [])
     input_template = (data.get("input_template") or "").strip()
-    preferred_lane = (data.get("preferred_lane") or "auto").strip()
+    preferred_lane = normalize_preferred_lane(data.get("preferred_lane"))
     reasoning_effort = (data.get("reasoning_effort") or "medium").strip()
     temp = data.get("temperature")
     temperature = float(temp) if temp is not None else 0.4
@@ -181,6 +190,8 @@ def db_update_custom_agent(agent_id: int, user_id: int, data: dict) -> Optional[
     data = {k: v for k, v in data.items() if v is not None and k not in ("share", "can_approve", "is_public")}
     if "work_dir" in data:
         data["work_dir"] = clean_work_dir(data["work_dir"])
+    if "preferred_lane" in data:
+        data["preferred_lane"] = normalize_preferred_lane(data["preferred_lane"])
     now = time.time()
     fields = []
     args = []

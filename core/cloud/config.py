@@ -26,7 +26,8 @@ def _resolve_user(user_id: Optional[int]) -> Optional[int]:
 
 
 def _merge_sections(base_cfg: dict, override_cfg: dict) -> dict:
-    out = {"provider": {}, "cloud": {}, "lanes": {}, "role_map": {}, "verification": {}}
+    out = {"provider": {}, "cloud": {}, "lanes": {}, "role_map": {}, "verification": {},
+           "agent_mode": None}
     for src in (base_cfg, override_cfg):
         prov = src.get("provider")
         if isinstance(prov, dict):
@@ -51,6 +52,9 @@ def _merge_sections(base_cfg: dict, override_cfg: dict) -> dict:
         rm = src.get("role_map")
         if isinstance(rm, dict):
             out["role_map"].update({str(k): str(v) for k, v in rm.items() if v})
+        mode = src.get("agent_mode", src.get("agent_engine"))
+        if isinstance(mode, str) and mode.strip():
+            out["agent_mode"] = mode.strip()
     ln = override_cfg.get("lanes")
     if isinstance(ln, dict):
         out["lanes"] = {str(k): deepcopy(v) for k, v in ln.items() if isinstance(v, dict)}

@@ -332,36 +332,57 @@ async def tool_insert_at_line(args: dict) -> str:
 
 
 async def tool_run_python(args: dict) -> str:
-    code = args.get("code", "")
-    if not code.strip():
-        raise ValueError("code required")
+    code = args.get("code")
+    path_arg = args.get("path") or args.get("file") or args.get("filename")
+    has_code = isinstance(code, str) and bool(code.strip())
+    has_path = bool(path_arg)
+    if has_code == has_path:
+        raise ValueError("run_python requires exactly one of path or code")
     req_fn = getattr(_pkg(), "require_device_workspace", require_device_workspace)
     uid, ws = req_fn()
     cb = getattr(_pkg(), "companion_bridge", companion_bridge)
-    # one script per call: concurrent runs sharing a workspace must never share
-    # a filename. The old fixed `_agent_run.py` let a second run overwrite the
-    # first run's code between write and execute -- and raced the companion's
-    # on-disk approval check (script bytes == approved code) the same way.
-    script_name = f"_agent_run_{uuid.uuid4().hex[:8]}.py"
-    script = ws / script_name
-    await cb.call(uid, "fs.write", {"path": str(script), "content": code, "append": False})
+    inline = has_code
+    if inline:
+        # one script per call: concurrent runs sharing a workspace must never share
+        # a filename. Failed scripts remain at this path so edit_file can repair them.
+        script_name = f"_agent_run_{uuid.uuid4().hex[:8]}.py"
+        script = ws / script_name
+        source = code
+        await cb.call(uid, "fs.write", {"path": str(script), "content": source, "append": False})
+    else:
+        uid, script = _resolve(str(path_arg))
+        if script.suffix.lower() != ".py":
+            return "error: run_python path must name a .py file"
+        source = await _read_existing(uid, script)
+        if source is None:
+            return f"error: File not found: '{path_arg}'. Write it first, then rerun run_python with that path."
+        script_name = str(path_arg).replace("\\", "/")
+        file_state.mark_read(str(script))
     raw_t = APP_CONFIG.get("agent", {}).get("exec_timeout_s", 0)
-    from ..shell_tools import DEFAULT_EXEC_TIMEOUT_S, take_code_approval
+    from ..shell_tools import DEFAULT_EXEC_TIMEOUT_S, python_approval_key, take_code_approval
     timeout = int(raw_t) if raw_t and int(raw_t) > 0 else DEFAULT_EXEC_TIMEOUT_S
     try:
         data = await cb.call(
-            uid, "shell.run", {"command": f'python "{script_name}"', "cwd": str(ws), "timeout": timeout,
-                               "display": code, "approved_in_app": take_code_approval(code)},
+            uid, "python.run", {"path": str(script), "cwd": str(ws), "timeout": timeout,
+                                "source": source, "approved_in_app": take_code_approval(python_approval_key(args))},
             timeout=(timeout or 60) + 10)
     except TimeoutError:
         data = None
-    finally:
+    succeeded = data is not None and data.get("exit_code") == 0
+    retained = inline and not succeeded
+    if inline and succeeded:
         try:
             await cb.call(uid, "fs.remove", {"path": str(script)})
         except Exception:
-            pass
+            retained = True
+    if retained:
+        file_state.mark_read(str(script))
+        file_state.push_undo(str(script), None)
+        _record_diff(script, None, source)
+    retained_note = (f"\nscript retained at {script_name}; edit it with edit_file(path=\"{script_name}\"), "
+                     f"then rerun with run_python(path=\"{script_name}\").") if retained else ""
     if data is None:
-        return f"error: timed out after {timeout}s (config agent.exec_timeout_s)"
+        return f"error: timed out after {timeout}s (config agent.exec_timeout_s){retained_note}"
     out = (data.get("stdout") or "")[-MAX_TOOL_OUTPUT:]
     err = (data.get("stderr") or "")[-4000:]
     result = f"exit code {data.get('exit_code')}"
@@ -369,4 +390,4 @@ async def tool_run_python(args: dict) -> str:
         result += f"\n--- stdout ---\n{out}"
     if err:
         result += f"\n--- stderr ---\n{err}"
-    return result
+    return result + retained_note
