@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from ..backend import device_prefix
 from ..config import CONFIG_DEFAULTS, normalize_tensor_split
 from .constants import GB, _KV_BYTES_PER_ELEM, _preflight_cfg
 from .gguf_parser import parse_gguf_info
@@ -119,6 +120,17 @@ def effective_params(profile: dict, overrides: dict | None = None) -> dict:
     split_mode = str(pick("split_mode", CONFIG_DEFAULTS["split_mode"]))
     model_path = profile.get("model_path")
     llama_bin_dir = profile.get("llama_bin_dir") or CONFIG_DEFAULTS["llama_bin_dir"]
+    backend = str(profile.get("backend") or CONFIG_DEFAULTS["backend"])
+    runtime_env = dict(profile.get("runtime_env") or {})
+    raw_cache_ram = profile.get("cache_ram")
+    if raw_cache_ram is None:
+        cache_ram_mb = 2048
+    else:
+        cache_ram_mb = int(raw_cache_ram)
+        # Main launcher semantics: 0 selects this application's bounded 2 GiB
+        # default. Small-model profiles mark themselves and use a literal 0.
+        if cache_ram_mb == 0 and not profile.get("_small_model"):
+            cache_ram_mb = 2048
 
     gpu_devices, tensor_split = normalize_tensor_split(tensor_split, gpu_devices)
 
@@ -146,6 +158,9 @@ def effective_params(profile: dict, overrides: dict | None = None) -> dict:
             "flash_attn": flash_attn, "ubatch_size": ubatch,
             "gpu_devices": gpu_devices, "split_mode": split_mode,
             "model_path": model_path, "llama_bin_dir": llama_bin_dir,
+            "backend": backend, "runtime_env": runtime_env,
+            "cache_ram_mb": max(0, cache_ram_mb),
+            "cache_ram_unbounded": cache_ram_mb < 0,
             "draft_b": draft_b, "n_cpu_moe": n_cpu_moe,
             "n_cpu_moe_set": n_cpu_moe_set}
 
@@ -312,10 +327,13 @@ def _build_suggestions(target_devs, eff, info, fp, s_norm, units):
         _, sim_margins = _eval_fit(sim, s_norm, weights_b, units,
                                    min(eff["n_gpu_layers"], units),
                                    kv_b, comp, hr)
+        device_id = next((d.get("id") for d in target_devs
+                          if d.get("index") == dev_idx and d.get("id")), None)
+        device_id = device_id or f"{device_prefix(eff['backend'])}{dev_idx}"
         sug.append({"type": "unload_small_model", "value": role,
                     "frees_gb": round(freed / GB, 2),
                     "fits_after": all(m >= 0 for m in sim_margins),
-                    "desc": f"unload the '{role}' small model on Vulkan{dev_idx} "
+                    "desc": f"unload the '{role}' small model on {device_id} "
                             f"(frees ~{freed / GB:.1f} GB)"})
 
     # 2) KV cache quantization

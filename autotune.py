@@ -248,8 +248,8 @@ def main():
     bench_path = find_llama_bench(profile["llama_bin_dir"])
 
     if profile.get("gpu_devices"):
-        print(f"Restricting Vulkan devices to {profile['gpu_devices']} via "
-              f"GGML_VK_VISIBLE_DEVICES (indices from `llama-bench --list-devices`).")
+        print(f"Using {profile.get('backend')} devices {profile['gpu_devices']} "
+              f"with exact IDs from `llama-bench --list-devices`.")
 
     if not Path(profile["model_path"]).exists():
         print(f"WARNING: model_path '{profile['model_path']}' doesn't exist on this "
@@ -282,7 +282,9 @@ def main():
         if ncmoe_result.get("pp_ts") is not None:
             tuned["measured_pp_tokens_per_sec"] = ncmoe_result["pp_ts"]
 
-    profile.setdefault("tuned", {}).update(tuned)
+    runtime_name = str(profile.get("runtime_name") or profile.get("backend") or "vulkan")
+    profile.setdefault("runtime_tuned", {})[runtime_name] = dict(tuned)
+    profile["tuned"] = dict(tuned)
     atomic_write_json(profile_path, profile)
     print(f"\nWrote tuned config back into {profile_path}:")
     print(json.dumps(tuned, indent=2))
@@ -290,7 +292,7 @@ def main():
         "\nReminder: watch Task Manager's per-GPU memory the first time you run this "
         "live (server_manager.py) - there's a known upstream bug where --n-cpu-moe can "
         "load one GPU's VRAM before touching the second (ggml-org/llama.cpp#15136, "
-        "reported on CUDA, unconfirmed on Vulkan). If you see that, tell me and I'll "
+        "reported on CUDA and requiring separate validation on each backend). If you see that, tell me and I'll "
         "script --override-tensor per-tensor placement instead."
     )
 

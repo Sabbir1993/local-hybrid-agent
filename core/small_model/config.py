@@ -3,7 +3,6 @@ from pathlib import Path
 import sys
 from typing import Optional
 
-from ..backend import device_prefix
 from ..config import ACTIVE_RUNTIME, BASE_DIR, CONFIG_FILE, ROLES_FILE
 from ..process import IS_WINDOWS
 

@@ -160,14 +160,19 @@ nano config/app.json
   GPU, then restart. The same error is shown in Settings under the GPU status (`scan_error`).
 - After the first start, open Settings -> Models and re-check the GPU of each helper model: the shipped file names Windows
   indices (1 and 2), and a GPU that does not exist here is moved to the default one automatically.
-- `runtime`: the preset to use (`vulkan`, or `cuda` for NVIDIA).
+- `runtime`: the single preset selected before startup (`vulkan`, `cuda` for
+  NVIDIA, or `sycl` for an Intel oneAPI/Level Zero llama.cpp build). Changing
+  it requires a restart. See [SYCL Linux installation](docs/SYCL_LINUX_INSTALL.md)
+  for the `/var/web/html_new/local_ai/llama-sycl` deployment.
 
 For example:
 ```json
 "models_dir": "/home/[USER]/Models",
 "common_dir": "/home/[USER]/common",
 "runtimes": {
-  "vulkan": { "llama_bin_dir": "[LLAMA_BIN_DIR]", "backend": "vulkan", "gpu_devices": "auto", "small_model_gpu": 0 }
+  "vulkan": { "llama_bin_dir": "[LLAMA_BIN_DIR]", "backend": "vulkan", "gpu_devices": "auto", "small_model_gpu": 0 },
+  "sycl": { "llama_bin_dir": "/var/web/html_new/local_ai/llama-sycl", "backend": "sycl", "gpu_devices": "auto", "small_model_gpu": 0,
+            "env": { "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu", "SYCL_CACHE_PERSISTENT": "1", "SYCL_CACHE_DIR": "/var/cache/local-ai/sycl" } }
 }
 ```
 

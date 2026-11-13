@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..config import CONFIG_DEFAULTS
+from ..backend import device_prefix
+from ..config import ACTIVE_RUNTIME, CONFIG_DEFAULTS
 from .constants import GB, PreflightError, _preflight_cfg
 from .devices import DeviceQueryError, query_devices
 from .estimator import (
@@ -13,6 +14,7 @@ from .estimator import (
     load_options,
 )
 from .gguf_parser import parse_gguf_info
+from .host import HostMemoryQueryError, host_memory_snapshot
 from .moe import expert_bytes_offloaded, is_moe, resolve_offload, smallest_fitting
 
 
@@ -23,6 +25,12 @@ def _moe_note(plan: dict) -> str:
     how = "chosen to fit" if moe.get("auto") else "set"
     return (f" --n-cpu-moe {moe['n_cpu_moe']} ({how}: ~{moe['experts_in_ram_gb']} GB of experts "
             "kept in RAM)")
+
+
+def _device_label(device: dict, backend: str | None = None) -> str:
+    return str(device.get("id") or
+               f"{device_prefix(backend or device.get('backend') or CONFIG_DEFAULTS['backend'])}"
+               f"{device.get('index')}")
 
 
 def _human_msg(plan: dict) -> str:
@@ -39,12 +47,30 @@ def _human_msg(plan: dict) -> str:
              f"split \"{eff.get('tensor_split')}\", headroom {est.get('headroom_gb')} GB"]
     for d in plan.get("devices", []):
         if d.get("target"):
-            if status == "nofit":
-                lines.append(f"  Vulkan{d['index']}: need {d['need_gb']} GB, "
+            if d.get("short_gb", 0) > 0:
+                lines.append(f"  {_device_label(d, eff.get('backend'))}: need {d['need_gb']} GB, "
                              f"free {d['free_gb']} GB -> short {d['short_gb']} GB")
             else:
-                lines.append(f"  Vulkan{d['index']}: need {d['need_gb']} GB, "
+                lines.append(f"  {_device_label(d, eff.get('backend'))}: need {d['need_gb']} GB, "
                              f"free {d['free_gb']} GB (margin {d['margin_gb']} GB)")
+    host = plan.get("host") or {}
+    if host and host.get("partial_offload"):
+        if host.get("unbounded_cache"):
+            lines.append("  system RAM: prompt cache is unbounded (-cram -1); set a finite cache_ram before launch")
+        else:
+            verdict = (f"margin {host['margin_gb']} GB" if host.get("fit")
+                       else f"short {host['short_gb']} GB")
+            lines.append(
+                f"  system RAM: need {host['required_gb']} GB "
+                f"(CPU weights {host['weights_gb']} + cache {host['cache_gb']} + "
+                f"reserve {host['reserve_gb']}), available {host['available_gb']} GB "
+                f"({verdict})"
+            )
+        if host.get("swap_warning"):
+            lines.append(
+                f"  warning: {host['swap_used_gb']} GB swap is already in use; "
+                "swap is not counted as model capacity"
+            )
     if status == "nofit" and plan.get("suggestions"):
         lines.append("Suggestions (apply in the Model Config panel, then load again):")
         for i, s in enumerate(plan["suggestions"][:5], 1):
@@ -62,13 +88,48 @@ def _devices_or_fail(eff: dict, plan: dict) -> list:
     (with a loud message), because a driver hiccup should not brick the box.
     """
     try:
-        return query_devices(eff["llama_bin_dir"], strict=True)
+        return query_devices(
+            eff["llama_bin_dir"], strict=True,
+            backend=eff.get("backend"), runtime_env=eff.get("runtime_env"))
     except DeviceQueryError as e:
         plan["status"] = "unknown"
         plan["allow"] = False
         plan["message"] = (f"[vram] {plan.get('model') or 'model'}: cannot verify VRAM - {e} - "
                            "not launching, because a fit that cannot be checked is not a fit.")
         return []
+
+
+def _host_plan(eff: dict, *, total_weights_b: int, gpu_candidate_weights_b: int,
+               units: int, cfg: dict, snapshot: dict | None = None) -> dict:
+    snapshot = snapshot or host_memory_snapshot()
+    gpu_fraction = min(max(int(eff["n_gpu_layers"]), 0), units) / max(1, units)
+    gpu_weights_b = int(max(0, gpu_candidate_weights_b) * gpu_fraction)
+    host_weights_b = max(0, int(total_weights_b) - gpu_weights_b)
+    partial_offload = host_weights_b > 0
+    cache_b = int(eff.get("cache_ram_mb", 0)) * 1024 * 1024
+    reserve_b = int(float(cfg.get("host_headroom_gb", 4.0)) * GB)
+    unbounded = bool(eff.get("cache_ram_unbounded")) and partial_offload
+    required_b = host_weights_b + cache_b + reserve_b
+    available_b = int(snapshot["available_b"])
+    margin_b = available_b - required_b
+    swap_used_b = int(snapshot.get("swap_used_b") or 0)
+    fit = (not partial_offload) or (not unbounded and margin_b >= 0)
+    return {
+        "fit": fit,
+        "partial_offload": partial_offload,
+        "unbounded_cache": unbounded,
+        "weights_gb": round(host_weights_b / GB, 2),
+        "cache_gb": round(cache_b / GB, 2),
+        "reserve_gb": round(reserve_b / GB, 2),
+        "required_gb": round(required_b / GB, 2),
+        "available_gb": round(available_b / GB, 2),
+        "total_gb": round(int(snapshot["total_b"]) / GB, 2),
+        "margin_gb": round(max(0, margin_b) / GB, 2),
+        "short_gb": round(max(0, -margin_b) / GB, 2),
+        "swap_total_gb": round(int(snapshot.get("swap_total_b") or 0) / GB, 2),
+        "swap_used_gb": round(swap_used_b / GB, 2),
+        "swap_warning": partial_offload and swap_used_b >= 512 * 1024 * 1024,
+    }
 
 
 def plan_launch(profile: dict, overrides: dict | None = None,
@@ -92,7 +153,8 @@ def plan_launch(profile: dict, overrides: dict | None = None,
         return plan
     plan["effective"] = {k: eff[k] for k in (
         "n_gpu_layers", "tensor_split", "context_size", "kv_cache_type",
-        "flash_attn", "gpu_devices", "ubatch_size")}
+        "flash_attn", "gpu_devices", "ubatch_size", "backend",
+        "cache_ram_mb", "cache_ram_unbounded")}
     mp = eff["model_path"]
     if not mp or not Path(str(mp)).exists():
         plan["allow"] = False
@@ -123,7 +185,8 @@ def plan_launch(profile: dict, overrides: dict | None = None,
                             eff["ubatch_size"], eff["flash_attn"],
                             n_cpu_moe=eff["n_cpu_moe"],
                             n_expert_used=info.get("n_expert") or 0)
-    weights_b = fp["weights_b"] + eff["draft_b"]
+    total_weights_b = fp["weights_b"] + eff["draft_b"]
+    weights_b = total_weights_b
     moe_ram_b = 0
     if moe and eff["n_cpu_moe"] > 0:
         moe_ram_b = expert_bytes_offloaded(mp, info, fp["weights_b"], eff["n_cpu_moe"])
@@ -142,7 +205,9 @@ def plan_launch(profile: dict, overrides: dict | None = None,
     devs = devices if devices is not None else _devices_or_fail(eff, plan)
     if not devs:
         return plan
-    plan["devices"] = [{"index": d["index"], "name": d["name"],
+    plan["devices"] = [{"index": d["index"],
+                        "id": d.get("id") or f"{device_prefix(eff['backend'])}{d['index']}",
+                        "backend": d.get("backend", eff["backend"]), "name": d["name"],
                         "total_gb": round(d["total_b"] / GB, 2),
                         "free_gb": round(d["free_b"] / GB, 2),
                         "used_gb": round(d["used_b"] / GB, 2),
@@ -152,7 +217,7 @@ def plan_launch(profile: dict, overrides: dict | None = None,
     if any(t is None for t in targets):
         plan["allow"] = False
         plan["message"] = (f"[vram] {plan['model']}: target device(s) {eff['gpu_devices']} not "
-                           f"present in Vulkan device list {[d['index'] for d in devs]} - "
+                           f"present in {eff['backend']} device list {[d['index'] for d in devs]} - "
                            "not launching; fix the device index or the iGPU skip list.")
         return plan
     units = info["n_layer"] + 1
@@ -192,13 +257,61 @@ def plan_launch(profile: dict, overrides: dict | None = None,
                            "free_gb": round(t["free_b"] / GB, 2),
                            "margin_gb": round(margin / GB, 2),
                            "short_gb": round(max(0.0, -margin) / GB, 2)})
-    if all(m >= 0 for m in margins):
+    host_snapshot = None
+    try:
+        host_snapshot = host_memory_snapshot()
+        plan["host"] = _host_plan(
+            eff,
+            total_weights_b=total_weights_b,
+            gpu_candidate_weights_b=weights_b,
+            units=units,
+            cfg=cfg,
+            snapshot=host_snapshot,
+        )
+    except HostMemoryQueryError as exc:
+        plan["status"] = "unknown"
+        plan["allow"] = False
+        plan["message"] = f"[vram] {plan['model']}: cannot verify system RAM - {exc} - not launching."
+        return plan
+
+    vram_fits = all(m >= 0 for m in margins)
+    if vram_fits and plan["host"]["fit"]:
         tight = min(margins) < 0.08 * max(t["total_b"] for t in targets)
         plan["status"] = "tight" if (tight or fp["confidence"] == "low") else "fit"
     else:
         plan["status"] = "nofit"
         plan["allow"] = cfg["mode"] != "block"
-        plan["suggestions"] = _build_suggestions(targets, eff, info, fp, s_norm, units)
+        if not vram_fits:
+            plan["suggestions"] = _build_suggestions(targets, eff, info, fp, s_norm, units)
+            # Lowering -ngl can solve VRAM pressure by moving more weights into
+            # system memory. Do not present it as a solution if that candidate
+            # would fail the same host-RAM admission gate.
+            safe_suggestions = []
+            for suggestion in plan["suggestions"]:
+                if suggestion.get("type") == "n_gpu_layers":
+                    candidate_eff = dict(eff, n_gpu_layers=int(suggestion["value"]))
+                    candidate_host = _host_plan(
+                        candidate_eff,
+                        total_weights_b=total_weights_b,
+                        gpu_candidate_weights_b=weights_b,
+                        units=units,
+                        cfg=cfg,
+                        snapshot=host_snapshot,
+                    )
+                    if not candidate_host["fit"]:
+                        continue
+                safe_suggestions.append(suggestion)
+            plan["suggestions"] = safe_suggestions
+        if not plan["host"]["fit"]:
+            if plan["host"]["unbounded_cache"]:
+                plan["suggestions"].append({
+                    "type": "cache_ram", "value": 2048, "fits_after": None,
+                    "desc": "set a finite cache_ram value (for example 2048 MiB)",
+                })
+            plan["suggestions"].append({
+                "type": "host_ram", "value": None, "fits_after": False,
+                "desc": "reduce CPU offload/cache, use a smaller model, or add system RAM",
+            })
     plan["message"] = _human_msg(plan)
     return plan
 
@@ -245,18 +358,20 @@ def _main_model_suggestion(plan: dict, target_idx: int) -> dict | None:
                     if d.get("target"))
         return {"type": "unload_main_model",
                 "desc": f"unload the main model ({sub.get('model', '?')}, "
-                        f"~{freed:.1f} GB across Vulkan{sub.get('effective', {}).get('gpu_devices')})",
+                        f"~{freed:.1f} GB across {sub.get('effective', {}).get('backend', 'GPU')} "
+                        f"devices {sub.get('effective', {}).get('gpu_devices')})",
                 "fits_after": True}
     except Exception:
         return None
 
 
 def check_small_model_or_raise(role: str, model_path, ctx: int,
-                               vulkan_index: int, mmproj_path=None,
+                               gpu_index: int, mmproj_path=None,
                                kv_cache_type: str = "f16",
                                n_slots: int = 1,
-                               ubatch_size: int = 512) -> dict:
-    """Preflight for a small-model launch on a single Vulkan device.
+                               ubatch_size: int = 512,
+                               cache_ram: int = 0) -> dict:
+    """Preflight for a small-model launch on one active-runtime GPU.
 
     kv_cache_type / n_slots / ubatch_size used to be guessed here rather than read from the
     lane config, which made every estimate disagree with the launcher: the configured executor
@@ -272,11 +387,14 @@ def check_small_model_or_raise(role: str, model_path, ctx: int,
     which is the exact failure this function exists to prevent.
     """
     profile = {"model_path": str(model_path), "context_size": int(ctx),
-               "n_gpu_layers": 999, "gpu_devices": [int(vulkan_index)],
+               "n_gpu_layers": 999, "gpu_devices": [int(gpu_index)],
                "tensor_split": "1", "kv_cache_type": str(kv_cache_type or "f16"),
                "flash_attn": "on", "ubatch_size": int(ubatch_size),
                "n_slots": int(n_slots),
-               "llama_bin_dir": CONFIG_DEFAULTS["llama_bin_dir"]}
+               "cache_ram": int(cache_ram), "_small_model": True,
+               "llama_bin_dir": ACTIVE_RUNTIME["llama_bin_dir"],
+               "backend": ACTIVE_RUNTIME["backend"],
+               "runtime_env": dict(ACTIVE_RUNTIME.get("env") or {})}
     if mmproj_path and Path(str(mmproj_path)).exists():
         profile["mmproj_path"] = str(mmproj_path)
         profile["vision_capable"] = True
@@ -286,7 +404,7 @@ def check_small_model_or_raise(role: str, model_path, ctx: int,
         return plan
 
     eff = plan.get("effective") or {}
-    idx = (eff.get("gpu_devices") or [vulkan_index])[0]
+    idx = (eff.get("gpu_devices") or [gpu_index])[0]
     fp = plan.get("estimate") or {}
     extra = []
 
@@ -303,7 +421,7 @@ def check_small_model_or_raise(role: str, model_path, ctx: int,
         extra.append({"type": "config_small_model_gpu", "value": best["index"],
                       "fits_after": best["free_gb"] >= need,
                       "desc": f"set app.json small_models.{role}.gpu = "
-                              f"{best['index']} (Vulkan{best['index']} has "
+                              f"{best['index']} ({_device_label(best, eff.get('backend'))} has "
                               f"{best['free_gb']} GB free)"})
 
     plan["suggestions"] = extra + plan.get("suggestions", [])

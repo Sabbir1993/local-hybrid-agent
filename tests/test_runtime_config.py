@@ -1,8 +1,11 @@
 """Strict selection of one llama.cpp runtime before application startup."""
 
 import unittest
+from unittest import mock
 
+from core import config as config_module
 from core.config import RuntimeConfigError, select_runtime
+from core.vram.devices import DeviceQueryError
 
 
 DEFAULTS = {
@@ -38,6 +41,7 @@ class RuntimeSelection(unittest.TestCase):
         self.assertTrue(got["gpu_auto"])
         self.assertEqual(got["small_model_gpu"], 1)
         self.assertEqual(got["env"]["ONEAPI_DEVICE_SELECTOR"], "level_zero:gpu")
+
 
     def test_environment_override_wins_before_startup(self):
         app = {
@@ -87,6 +91,21 @@ class RuntimeSelection(unittest.TestCase):
         self.assertEqual(got["name"], "vulkan")
         self.assertEqual(got["backend"], "vulkan")
         self.assertEqual(got["gpu_devices"], [0])
+
+
+class StartupValidation(unittest.TestCase):
+    def test_selected_runtime_device_discovery_fails_closed_at_startup(self):
+        runtime = {
+            "name": "sycl", "backend": "sycl", "llama_bin_dir": "/missing",
+            "gpu_devices": [0], "gpu_auto": True, "env": {},
+            "small_model_gpu": 0,
+        }
+        with mock.patch.dict(config_module.ACTIVE_RUNTIME, runtime, clear=True), \
+             mock.patch.dict(config_module.GPU_STATUS, {}, clear=True), \
+             mock.patch("core.vram.devices.query_devices",
+                        side_effect=DeviceQueryError("llama-bench not found")):
+            with self.assertRaisesRegex(RuntimeConfigError, "device discovery failed"):
+                config_module.resolve_gpu_devices(strict=True)
 
 
 if __name__ == "__main__":

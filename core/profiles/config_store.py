@@ -1,8 +1,10 @@
 import json
 import sys
 from ..config import (
+    ACTIVE_RUNTIME,
     MODEL_CONFIG_KEYS,
     MODEL_CONFIGS_FILE,
+    RUNTIME_TUNED_KEYS,
     atomic_write_json,
 )
 from .constants import _model_key
@@ -44,12 +46,23 @@ def save_model_config(model_identifier: str, cfg: dict) -> None:
     store = load_model_configs()
     key = _model_key(model_identifier)
     tuned = cfg.get("tuned", {}) or {}
+    previous = store.get(key) or {}
+    runtime_tuned = dict(previous.get("runtime_tuned") or {})
+    for runtime_name, values in (cfg.get("runtime_tuned") or {}).items():
+        if isinstance(values, dict):
+            runtime_tuned[str(runtime_name)] = dict(values)
+    active_name = str(cfg.get("runtime_name") or ACTIVE_RUNTIME["name"])
+    active_tuned = {k: tuned[k] for k in RUNTIME_TUNED_KEYS if k in tuned}
+    if active_tuned:
+        runtime_tuned[active_name] = active_tuned
     out = {}
     for k in MODEL_CONFIG_KEYS:
         if k in tuned:
             out[k] = tuned[k]
         elif k in cfg:
             out[k] = cfg[k]
+    if runtime_tuned:
+        out["runtime_tuned"] = runtime_tuned
     store[key] = out
     try:
         atomic_write_json(MODEL_CONFIGS_FILE, store)

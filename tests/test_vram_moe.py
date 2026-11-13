@@ -124,6 +124,9 @@ class Preflight(unittest.TestCase):
         dev = {"index": 0, "name": "GPU", "total_b": 16 * GB, "free_b": int(free_gb * GB), "used_b": 0}
         with mock.patch.object(pf, "parse_gguf_info", return_value=dict(self.info)), \
              mock.patch.object(pf, "query_devices", return_value=[dev]), \
+             mock.patch.object(pf, "host_memory_snapshot", return_value={
+                 "total_b": 128 * GB, "available_b": 96 * GB,
+                 "swap_total_b": 0, "swap_used_b": 0}), \
              mock.patch.object(moe, "expert_layer_bytes", return_value=self.per_layer):
             return prof, pf.plan_launch(prof)
 
@@ -153,6 +156,9 @@ class Preflight(unittest.TestCase):
         with mock.patch.object(pf, "parse_gguf_info", return_value=dict(self.info)), \
              mock.patch.object(pf, "query_devices", return_value=[
                  {"index": 0, "name": "GPU", "total_b": 16 * GB, "free_b": 14 * GB, "used_b": 0}]), \
+             mock.patch.object(pf, "host_memory_snapshot", return_value={
+                 "total_b": 128 * GB, "available_b": 96 * GB,
+                 "swap_total_b": 0, "swap_used_b": 0}), \
              mock.patch.object(moe, "expert_layer_bytes", return_value=self.per_layer):
             plan = pf.check_or_raise(prof)
         self.assertEqual(prof["_auto_n_cpu_moe"], plan["auto_n_cpu_moe"])

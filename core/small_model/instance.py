@@ -166,7 +166,8 @@ class SmallModelInstance:
                 mmproj_path=self.mmproj_path,
                 kv_cache_type=self.kv_cache_type or "f16",
                 n_slots=self.n_slots,
-                ubatch_size=int(self.cfg.get("ubatch_size", 512) or 512)),
+                ubatch_size=int(self.cfg.get("ubatch_size", 512) or 512),
+                cache_ram=self.cache_ram),
         )
 
     def _launch_cmd(self) -> tuple:

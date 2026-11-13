@@ -310,6 +310,8 @@ def _standalone_profile(target: str) -> Optional[dict]:
     for k in MODEL_CONFIG_KEYS:
         if k in saved:
             prof[k] = saved[k]
+    if isinstance(saved.get("runtime_tuned"), dict):
+        prof["runtime_tuned"] = dict(saved["runtime_tuned"])
     # n_gpu_layers / tensor_split live in the "tuned" section while loaded;
     # put saved values there so _config_for_profile/save round-trip correctly
     prof.setdefault("tuned", {})

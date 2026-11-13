@@ -413,14 +413,19 @@ list, see [SETUP_WINDOWS.md](SETUP_WINDOWS.md) or [SETUP_LINUX.md](SETUP_LINUX.m
    "runtime": "vulkan",
    "runtimes": {
      "vulkan": { "llama_bin_dir": "C:/llama-vulkan", "backend": "vulkan", "gpu_devices": [0, 1], "small_model_gpu": 0 },
-     "cuda":   { "llama_bin_dir": "C:/llama-cuda",   "backend": "cuda",   "gpu_devices": [0],    "small_model_gpu": 0 }
+     "cuda":   { "llama_bin_dir": "C:/llama-cuda",   "backend": "cuda",   "gpu_devices": [0],    "small_model_gpu": 0 },
+     "sycl":   { "llama_bin_dir": "/var/web/html_new/local_ai/llama-sycl", "backend": "sycl", "gpu_devices": "auto", "small_model_gpu": 0,
+                 "env": { "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu" } }
    }
    ```
    `gpu_devices` are that build's `llama-bench --list-devices` indices.
    `small_model_gpu` is used when a small model's `gpu` isn't in that list.
-   To switch builds without editing the file, set `LLAMA_RUNTIME=cuda`
+   To switch builds without editing the file, set `LLAMA_RUNTIME=cuda` or
+   `LLAMA_RUNTIME=sycl`
    before starting `server_manager.py`. The startup log prints the active
    runtime. After switching GPUs, re-run autotune (`tuned` splits are hardware-specific).
+   Linux Intel GPU setup and the required `/var/web/html_new/local_ai/llama-sycl`
+   layout are documented in [SYCL Linux installation](docs/SYCL_LINUX_INSTALL.md).
    Single-GPU machine: use `"gpu_devices": [0]` — the app automatically
    omits `--tensor-split` and multi-device `-dev` wiring when there's only
    one device.

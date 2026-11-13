@@ -16,6 +16,17 @@
         0
       ],
       "small_model_gpu": 0
+    },
+    "sycl": {
+      "llama_bin_dir": "/var/web/html_new/local_ai/llama-sycl",
+      "backend": "sycl",
+      "gpu_devices": "auto",
+      "small_model_gpu": 0,
+      "env": {
+        "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu",
+        "SYCL_CACHE_PERSISTENT": "1",
+        "SYCL_CACHE_DIR": "/var/cache/local-ai/sycl"
+      }
     }
   },
   "engines": {
@@ -343,7 +354,8 @@
   },
   "preflight": {
     "mode": "block",
-    "headroom_gb": 1.0
+    "headroom_gb": 1.0,
+    "host_headroom_gb": 4.0
   },
   "supervision": {
     "health_timeout_s": 120,

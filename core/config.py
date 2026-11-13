@@ -146,6 +146,10 @@ CONFIG_DEFAULTS = {
 # preset replaces the llama_bin_dir/backend/gpu_devices defaults and wins over
 # per-model values, since device numbering is a property of the machine.
 RUNTIME_KEYS = ("llama_bin_dir", "backend", "gpu_devices")
+RUNTIME_TUNED_KEYS = (
+    "tensor_split", "n_gpu_layers", "n_cpu_moe",
+    "measured_tg_tokens_per_sec", "measured_pp_tokens_per_sec", "tuned_at",
+)
 
 
 class RuntimeConfigError(ValueError):
@@ -306,13 +310,13 @@ def default_small_gpu() -> int:
     return devs[-1] if devs else 0
 
 
-def resolve_gpu_devices(force: bool = False) -> dict:
+def resolve_gpu_devices(force: bool = False, strict: bool = False) -> dict:
     """Compare the GPUs the machine has with the runtime's gpu_devices, and fill the list in when it is "auto".
 
     "auto" = every discrete GPU llama.cpp lists (iGPUs and anything under 2 GB are left out: core/gpu.py), so 1, 2, 3 or 4
     cards work without editing app.json. A fixed list is kept as written; indices the machine does not have, and discrete GPUs
-    the list leaves out, are reported (GPU_STATUS) and printed once. Never raises: when the device list cannot be read the
-    configured list stays."""
+    the list leaves out, are reported (GPU_STATUS) and printed once. Soft callers keep the configured list when discovery
+    fails; strict startup validation raises RuntimeConfigError instead of serving with an unusable selected runtime."""
     try:
         from .vram import devices as _dev
         from . import gpu as _gpu
@@ -329,6 +333,10 @@ def resolve_gpu_devices(force: bool = False) -> dict:
             print(f"[server_manager] ERROR: gpu_devices is 'auto' but the GPUs could not be listed, so the fallback list "
                   f"{ACTIVE_RUNTIME.get('gpu_devices')} is used. Check runtimes.{ACTIVE_RUNTIME.get('name')}.llama_bin_dir "
                   f"in config/app.json: it must be the folder that holds llama-bench for this OS.", file=sys.stderr)
+        if strict:
+            raise RuntimeConfigError(
+                f"runtime '{ACTIVE_RUNTIME.get('name')}' device discovery failed: {e}"
+            ) from e
         return dict(GPU_STATUS)
     idx = sorted(int(d["index"]) for d in found)
     if ACTIVE_RUNTIME.get("gpu_auto"):
@@ -337,6 +345,10 @@ def resolve_gpu_devices(force: bool = False) -> dict:
             CONFIG_DEFAULTS["gpu_devices"] = list(idx)
         else:
             print("[server_manager] gpu_devices is 'auto' but no discrete GPU was found; keeping the default list", file=sys.stderr)
+            if strict:
+                raise RuntimeConfigError(
+                    f"runtime '{ACTIVE_RUNTIME.get('name')}' reported no supported discrete GPU"
+                )
     configured = [int(x) for x in (ACTIVE_RUNTIME.get("gpu_devices") or [])]
     missing = [i for i in configured if i not in idx]
     unused = [i for i in idx if i not in configured]
@@ -349,6 +361,11 @@ def resolve_gpu_devices(force: bool = False) -> dict:
     if missing:
         print(f"[server_manager] WARNING: gpu_devices {configured} lists GPU(s) {missing} that this machine does not report "
               f"(found {idx}). Set \"gpu_devices\": \"auto\" in the runtime preset of config/app.json.", file=sys.stderr)
+        if strict:
+            raise RuntimeConfigError(
+                f"runtime '{ACTIVE_RUNTIME.get('name')}' configured missing GPU indices "
+                f"{missing}; detected {idx}"
+            )
     if unused and not ACTIVE_RUNTIME.get("gpu_auto"):
         print(f"[server_manager] note: discrete GPU(s) {unused} are not used (gpu_devices is {configured}). "
               f"Set \"gpu_devices\": \"auto\" to use every GPU.", file=sys.stderr)
@@ -417,6 +434,15 @@ def apply_runtime(profile: dict) -> dict:
         profile[k] = ACTIVE_RUNTIME[k]
     profile["runtime_name"] = ACTIVE_RUNTIME["name"]
     profile["runtime_env"] = dict(ACTIVE_RUNTIME.get("env") or {})
+    runtime_tuned = profile.get("runtime_tuned")
+    if isinstance(runtime_tuned, dict) and runtime_tuned:
+        # Legacy model-config rows stored these two runtime-sensitive values at
+        # the profile top level. Once runtime-scoped tuning exists, do not let
+        # those compatibility fields become a fallback for another backend.
+        profile.pop("n_gpu_layers", None)
+        profile.pop("tensor_split", None)
+        selected = runtime_tuned.get(ACTIVE_RUNTIME["name"])
+        profile["tuned"] = dict(selected) if isinstance(selected, dict) else {}
     return profile
 
 

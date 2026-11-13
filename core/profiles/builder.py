@@ -24,6 +24,8 @@ def _folder_profile(p: Path) -> dict:
     for k in MODEL_CONFIG_KEYS:
         if k in saved:
             prof[k] = saved[k]
+    if isinstance(saved.get("runtime_tuned"), dict):
+        prof["runtime_tuned"] = dict(saved["runtime_tuned"])
     prof["engine"] = "vllm"
     return apply_runtime(prof)
 
@@ -57,6 +59,8 @@ def build_dynamic_profile(p: Path) -> dict:
     for k in MODEL_CONFIG_KEYS:
         if k in saved:
             prof[k] = saved[k]
+    if isinstance(saved.get("runtime_tuned"), dict):
+        prof["runtime_tuned"] = dict(saved["runtime_tuned"])
 
     if prof.get("mtp_draft_path"):
         prof.setdefault("mtp_enabled", True)

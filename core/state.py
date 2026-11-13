@@ -371,10 +371,12 @@ class ProxyState:
                         f"type or quantization is not supported on this GPU, it does not fit (lower the context size or "
                         f"raise tensor parallel), or tensor parallel does not divide the model's attention heads.")
                 if arch:
+                    runtime_name = ((self.profile or {}).get("runtime_name") or
+                                    (self.profile or {}).get("backend") or "selected")
                     raise self._load_failed(
                         f"This model uses the '{arch}' architecture, which the installed llama.cpp does not know yet "
                         f"(the model is newer than the server program). It is not a path or VRAM problem. Update the "
-                        f"llama.cpp build in the Vulkan runtime to one that supports '{arch}', or pick a model it already supports.")
+                        f"llama.cpp build in the {runtime_name} runtime to one that supports '{arch}', or pick a model it already supports.")
                 raise self._load_failed(
                     f"llama-server exited immediately (code {code}) - "
                     f"check the log lines above, this is almost always a bad model path "
@@ -392,13 +394,19 @@ class ProxyState:
                 last_vram_poll = time.time()
                 loop = asyncio.get_event_loop()
                 devs = await loop.run_in_executor(
-                    None, lambda: vram.query_devices(force=True))
+                    None, lambda: vram.query_devices(
+                        (self.profile or {}).get("llama_bin_dir"), force=True,
+                        backend=(self.profile or {}).get("backend"),
+                        runtime_env=(self.profile or {}).get("runtime_env")))
                 hit = vram.wall_check(target_idx, devs)
                 wall_hits = wall_hits + 1 if hit else 0
                 if wall_hits >= 2:
-                    self._kill_loading_process()
+                    hit_dev = next((d for d in devs if d.get("index") == hit), {})
+                    hit_label = str(hit_dev.get("id") or
+                                    f"{str((self.profile or {}).get('backend') or 'GPU').upper()}{hit}")
+                    self._kill_loading_process(hit_label)
                     raise self._load_failed(
-                        f"VRAM exhausted on Vulkan{hit} while the model was loading - "
+                        f"VRAM exhausted on {hit_label} while the model was loading - "
                         f"aborted llama-server to prevent a system hang. Reduce GPU "
                         f"layers (-ngl) / tensor-split / context size, or unload "
                         f"other models first, then load again.")
@@ -449,12 +457,12 @@ class ProxyState:
                   code=proc.returncode if proc else None)
         return RuntimeError(full)
 
-    def _kill_loading_process(self, vram_idx=None) -> None:
+    def _kill_loading_process(self, vram_device=None) -> None:
         self.loading = False
         self.healthy = False
         if self.process and self.process.poll() is None:
-            if vram_idx is not None:
-                print(f"[server_manager] VRAM wall hit on Vulkan{vram_idx} "
+            if vram_device is not None:
+                print(f"[server_manager] VRAM wall hit on {vram_device} "
                       f"- killing the loading llama-server")
             else:
                 print("[server_manager] llama-server failed to start - "

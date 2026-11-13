@@ -6,7 +6,9 @@ import sys
 import time
 from typing import Optional
 
-from .config import GPU_QUERY_INTERVAL_S, IGNORED_IGPU_LUIDS, CONFIG_FILE, CONFIG_DEFAULTS
+from .backend import device_prefix
+from .config import (ACTIVE_RUNTIME, GPU_QUERY_INTERVAL_S, IGNORED_IGPU_LUIDS,
+                     CONFIG_FILE, CONFIG_DEFAULTS)
 from . import vram
 from .process import IS_WINDOWS
 
@@ -61,7 +63,8 @@ def _query_gpu_linux() -> dict:
         for d in vram.query_devices():
             if d.get("total_b", 0) < vram.GB:  # iGPU / software device
                 continue
-            adapters.append({"luid": f"vulkan{d['index']}",
+            device_id = d.get("id") or f"{device_prefix(ACTIVE_RUNTIME['backend'])}{d['index']}"
+            adapters.append({"luid": str(device_id).lower(),
                              "gb": round(d.get("used_b", 0) / vram.GB, 2)})
     except Exception as e:
         print(f"[server_manager] gpu query failed: {e}", file=sys.stderr)
@@ -156,14 +159,8 @@ def _compute_hardware_engine_summary() -> dict:
     except Exception:
         discrete, count = [], 0
 
-    app_cfg = {}
-    if CONFIG_FILE.exists():
-        try:
-            app_cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-
-    backend = str(app_cfg.get("backend") or CONFIG_DEFAULTS.get("backend", "vulkan")).upper()
+    backend = str(ACTIVE_RUNTIME.get("backend") or
+                  CONFIG_DEFAULTS.get("backend", "vulkan")).upper()
 
     if count == 2:
         gpu_label = "DUAL GPU"
@@ -180,7 +177,9 @@ def _compute_hardware_engine_summary() -> dict:
     return {
         "discrete_gpus": count,
         # index = the id used in gpu_devices / -dev; lets the UI label one tensor-split row per GPU
-        "devices": [{"index": d["index"], "name": d.get("name", ""),
+        "devices": [{"index": d["index"], "id": d.get("id"),
+                     "backend": d.get("backend", backend.lower()),
+                     "name": d.get("name", ""),
                      "total_gb": round(d["total_b"] / vram.GB, 1)} for d in discrete],
         "engine": backend,
         "hardware_tag": tag,

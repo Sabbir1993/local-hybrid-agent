@@ -3,6 +3,7 @@ from .constants import (
     MIB,
     _KV_BYTES_PER_ELEM,
     _DEFAULT_HEADROOM_GB,
+    _DEFAULT_HOST_HEADROOM_GB,
     _PREFLIGHT_MODES,
     VRAM_WALL_FREE_B,
     PreflightError,
@@ -10,6 +11,7 @@ from .constants import (
     _fmt_gb,
     preflight_mode,
 )
+from .host import HostMemoryQueryError, host_memory_snapshot
 from .devices import (
     _DEV_PREFIXES,
     _LIST_DEV_RE,
@@ -18,7 +20,9 @@ from .devices import (
     _dev_lock,
     _run_list_devices,
     DeviceQueryError,
+    parse_device_list,
     query_devices,
+    resolve_device_ids,
     wall_check,
 )
 from .gguf_parser import (
@@ -56,12 +60,15 @@ __all__ = [
     "MIB",
     "_KV_BYTES_PER_ELEM",
     "_DEFAULT_HEADROOM_GB",
+    "_DEFAULT_HOST_HEADROOM_GB",
     "_PREFLIGHT_MODES",
     "VRAM_WALL_FREE_B",
     "PreflightError",
     "_preflight_cfg",
     "_fmt_gb",
     "preflight_mode",
+    "HostMemoryQueryError",
+    "host_memory_snapshot",
     "_DEV_PREFIXES",
     "_LIST_DEV_RE",
     "_DEV_TTL_S",
@@ -69,7 +76,9 @@ __all__ = [
     "_dev_lock",
     "_run_list_devices",
     "DeviceQueryError",
+    "parse_device_list",
     "query_devices",
+    "resolve_device_ids",
     "wall_check",
     "_GGUF_FMT",
     "_SHARD_RE",
