@@ -78,9 +78,51 @@ class BackendNaming(unittest.TestCase):
         self.assertEqual(_flag(cmd, "-dev"), "CUDA0,CUDA1")
         self.assertEqual(_flag(cmd, "--tensor-split"), "10,10")
 
-    def test_unknown_backend_falls_back_to_vulkan_names(self):
+    def test_sycl_dev_names(self):
         cmd = _cmd(backend="sycl", gpu_devices=[0])
-        self.assertEqual(_flag(cmd, "-dev"), "Vulkan0")
+        self.assertEqual(_flag(cmd, "-dev"), "SYCL0")
+
+    def test_sycl_multi_gpu_preserves_tensor_split_order(self):
+        cmd = _cmd(backend="sycl", gpu_devices=[2, 0], tensor_split="9,11")
+        self.assertEqual(_flag(cmd, "-dev"), "SYCL2,SYCL0")
+        self.assertEqual(_flag(cmd, "--tensor-split"), "9,11")
+
+    def test_unknown_backend_is_rejected(self):
+        with self.assertRaises(ValueError):
+            _cmd(backend="bogus", gpu_devices=[0])
+
+    def test_exact_inventory_ids_win_over_synthesized_names(self):
+        with mock.patch("core.process.resolve_device_ids",
+                        return_value=["SYCL-card-b", "SYCL-card-a"]):
+            cmd = _cmd(backend="sycl", gpu_devices=[2, 0], tensor_split="9,11")
+        self.assertEqual(_flag(cmd, "-dev"), "SYCL-card-b,SYCL-card-a")
+
+
+class LaunchEnvironment(unittest.TestCase):
+    def test_sycl_runtime_environment_is_applied_without_vulkan_leakage(self):
+        profile = {
+            "backend": "sycl",
+            "runtime_env": {"ONEAPI_DEVICE_SELECTOR": "level_zero:gpu",
+                            "SYCL_CACHE_PERSISTENT": "1"},
+            "gpu_devices": [0, 1],
+            "_launch_gpu_devices": [0, 1],
+        }
+        env = process.build_launch_environment(
+            profile,
+            base_env={"PATH": "x", "GGML_VK_VISIBLE_DEVICES": "9"},
+        )
+        self.assertEqual(env["ONEAPI_DEVICE_SELECTOR"], "level_zero:gpu")
+        self.assertEqual(env["SYCL_CACHE_PERSISTENT"], "1")
+        self.assertNotIn("GGML_VK_VISIBLE_DEVICES", env)
+
+    def test_exact_dev_selection_avoids_visibility_renumbering(self):
+        profile = {"backend": "vulkan", "gpu_devices": [0, 1],
+                   "_launch_gpu_devices": [1]}
+        env = process.build_launch_environment(
+            profile,
+            base_env={"PATH": "x", "GGML_VK_VISIBLE_DEVICES": "9"},
+        )
+        self.assertNotIn("GGML_VK_VISIBLE_DEVICES", env)
 
 
 class SingleGpu(unittest.TestCase):

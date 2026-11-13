@@ -11,7 +11,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from core.backend import visible_devices_env
+from core.backend import build_child_env
+from core.vram.devices import resolve_device_ids
 
 
 # Known-good as of the llama.cpp docs/issues consulted when this was written
@@ -19,6 +20,7 @@ from core.backend import visible_devices_env
 # `llama-bench --help` differs, edit these - they're the only place CLI
 # flag names live.
 FLAG_MODEL = "-m"
+FLAG_DEVICE = "-dev"
 FLAG_NGL = "-ngl"
 FLAG_SPLIT_MODE = "-sm"
 FLAG_TENSOR_SPLIT = "--tensor-split"
@@ -41,20 +43,31 @@ OOM_MARKERS = (
     "cudamalloc failed",
     "insufficient memory",
     "ggml_vulkan: device memory allocation",
+    "ze_result_error_out_of_device_memory",
+    "ur_result_error_out_of_resources",
+    "pi_error_out_of_resources",
 )
 
 
 def build_gpu_env(profile: dict) -> dict:
-    # Restrict the backend to the devices in profile["gpu_devices"] (physical
-    # device indices as printed by `llama-bench --list-devices`), so an iGPU
-    # (e.g. UHD 770) doesn't get folded into the tensor split. The env var
-    # name depends on the backend (Vulkan vs CUDA build of llama.cpp).
-    env = dict(os.environ)
-    devs = profile.get("gpu_devices")
-    if devs:
-        env_var = visible_devices_env(profile.get("backend", "vulkan"))
-        env[env_var] = ",".join(str(d) for d in devs)
-    return env
+    # The command also receives exact -dev IDs. Do not set visibility filters:
+    # CUDA-style filters can renumber devices and break tensor-split ordering.
+    return build_child_env(
+        profile.get("backend", "vulkan"),
+        runtime_env=profile.get("runtime_env"),
+        device_indices=profile.get("gpu_devices"),
+        set_visibility=False,
+    )
+
+
+def bench_device_ids(profile: dict) -> list[str]:
+    return resolve_device_ids(
+        profile.get("gpu_devices") or [],
+        backend=profile.get("backend", "vulkan"),
+        llama_bin_dir=profile.get("llama_bin_dir"),
+        runtime_env=profile.get("runtime_env"),
+        strict=False,
+    )
 
 
 def find_llama_bench(bin_dir: str) -> Path:
@@ -166,7 +179,7 @@ def parse_bench_json(stdout: str) -> dict:
 def run_bench(bench_path: Path, model_path: str, *, ngl: int, split_mode: str,
               tensor_split: str, n_cpu_moe: int | None, flash_attn: str,
               n_prompt: int, n_gen: int, repetitions: int, timeout: int = 180,
-              env: dict | None = None):
+              env: dict | None = None, device_ids: list[str] | None = None):
     cmd = [
         str(bench_path),
         FLAG_MODEL, model_path,
@@ -179,6 +192,8 @@ def run_bench(bench_path: Path, model_path: str, *, ngl: int, split_mode: str,
         FLAG_REPETITIONS, str(repetitions),
         FLAG_OUTPUT, "json",
     ]
+    if device_ids:
+        cmd[3:3] = [FLAG_DEVICE, ",".join(device_ids)]
     if n_cpu_moe is not None:
         cmd += [FLAG_N_CPU_MOE, str(n_cpu_moe)]
 

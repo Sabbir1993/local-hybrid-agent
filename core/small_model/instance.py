@@ -8,7 +8,7 @@ from typing import Optional
 
 import httpx
 
-from ..backend import device_prefix
+from ..backend import build_child_env
 from ..config import (
     ACTIVE_RUNTIME,
     LOCAL_HTTP_CONNECT_TIMEOUT_S,
@@ -18,6 +18,7 @@ from ..config import (
 )
 from ..process import find_llama_server, kill_process_tree
 from .. import vram
+from ..vram.devices import resolve_device_ids
 from .config import APP_CONFIG, lane_kind_of
 
 
@@ -103,12 +104,12 @@ class SmallModelInstance:
                 return
             if not self.available:
                 raise RuntimeError(f"{self.role} model not configured or files missing: {self.model_path}")
-            prefix = device_prefix(ACTIVE_RUNTIME["backend"])
             loop = asyncio.get_event_loop()
             await self._preflight(loop)
             cmd, env = self._launch_cmd()
+            device_id = cmd[cmd.index("-dev") + 1]
 
-            print(f"[{self.role}] auto-loading on {prefix}{self.gpu} (port {self.port})...")
+            print(f"[{self.role}] auto-loading on {device_id} (port {self.port})...")
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -169,14 +170,20 @@ class SmallModelInstance:
         )
 
     def _launch_cmd(self) -> tuple:
-        prefix = device_prefix(ACTIVE_RUNTIME["backend"])
         server_bin = find_llama_server(ACTIVE_RUNTIME["llama_bin_dir"])
+        device_id = resolve_device_ids(
+            [self.gpu],
+            backend=ACTIVE_RUNTIME["backend"],
+            llama_bin_dir=ACTIVE_RUNTIME["llama_bin_dir"],
+            runtime_env=ACTIVE_RUNTIME.get("env"),
+            strict=False,
+        )[0]
         cmd = [
             str(server_bin),
             "-m", str(self.model_path),
             "-c", str(self.ctx),
             "-ngl", "999",
-            "-dev", f"{prefix}{self.gpu}",
+            "-dev", device_id,
             "--port", str(self.port),
             "--host", "127.0.0.1",
             "-np", str(self.n_slots),
@@ -217,7 +224,13 @@ class SmallModelInstance:
                     "--spec-draft-n-max", draft_n,
                     "-ngld", str(self.cfg.get("draft_ngl", "auto")),
                 ]
-        return cmd, None
+        env = build_child_env(
+            ACTIVE_RUNTIME["backend"],
+            runtime_env=ACTIVE_RUNTIME.get("env"),
+            device_indices=[self.gpu],
+            set_visibility=False,
+        )
+        return cmd, env
 
     def _stop(self) -> None:
         self._cancel_log_pump()

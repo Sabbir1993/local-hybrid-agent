@@ -7,9 +7,10 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .backend import device_prefix
+from .backend import build_child_env
 from .config import (ACTIVE_RUNTIME, CONFIG_DEFAULTS, LLAMA_SERVER_PORT, apply_runtime,
                     normalize_tensor_split)
+from .vram.devices import resolve_device_ids
 
 IS_WINDOWS = os.name == "nt"
 MAIN_CACHE_RAM_MB = 2048     # -cram when a profile sets none (llama's own default is 8192 MiB of host RAM)
@@ -266,6 +267,20 @@ def per_slot_cap(profile: dict) -> int:
     return cap
 
 
+def build_launch_environment(profile: dict, *, base_env=None) -> dict:
+    """Child environment matching the effective devices chosen for launch."""
+    devices = profile.get("_launch_gpu_devices")
+    if devices is None:
+        devices = profile.get("gpu_devices") or CONFIG_DEFAULTS["gpu_devices"]
+    return build_child_env(
+        profile.get("backend", CONFIG_DEFAULTS["backend"]),
+        runtime_env=profile.get("runtime_env"),
+        device_indices=list(devices),
+        base_env=base_env,
+        set_visibility=False,
+    )
+
+
 def build_launch_command(profile: dict) -> list[str]:
     apply_runtime(profile)
     bin_dir = profile.get("llama_bin_dir", CONFIG_DEFAULTS["llama_bin_dir"])
@@ -284,7 +299,6 @@ def build_launch_command(profile: dict) -> list[str]:
     split_mode = profile.get("split_mode", CONFIG_DEFAULTS["split_mode"])
     gpu_devices = profile.get("gpu_devices", CONFIG_DEFAULTS["gpu_devices"])
     backend = profile.get("backend", CONFIG_DEFAULTS["backend"])
-    prefix = device_prefix(backend)
 
     # Zero-share segments disable that GPU: "0,1" -> only GPU #2 runs, "1,0" -> only GPU #1.
     # Non-numeric segments are dropped like the zero-shares are (same guard as the line
@@ -294,13 +308,24 @@ def build_launch_command(profile: dict) -> list[str]:
     # gets CHECKED is the config that gets LAUNCHED - they used to filter segments in a
     # different order and disagreed on exactly the malformed inputs this guards against.
     gpu_devices, tensor_split = normalize_tensor_split(tensor_split, gpu_devices)
+    device_ids = resolve_device_ids(
+        gpu_devices,
+        backend=backend,
+        llama_bin_dir=bin_dir,
+        runtime_env=profile.get("runtime_env"),
+        strict=False,
+    )
+    # state.py builds the child environment after this function returns. Keep
+    # the post-zero-share list so visibility and -dev can never disagree.
+    profile["_launch_gpu_devices"] = list(gpu_devices)
+    profile["_launch_device_ids"] = list(device_ids)
 
     cmd = [
         str(server_bin),
         "-m", profile["model_path"],
         "-c", str(profile.get("context_size", CONFIG_DEFAULTS["context_size"])),
         "-ngl", str(n_gpu_layers),
-        "-dev", ",".join(f"{prefix}{d}" for d in gpu_devices),
+        "-dev", ",".join(device_ids),
         "-fa", profile.get("flash_attn", CONFIG_DEFAULTS["flash_attn"]),
         "--port", str(LLAMA_SERVER_PORT),
         "--host", "127.0.0.1",

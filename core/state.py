@@ -30,7 +30,8 @@ from .supervision import (
     restart_reset_after_s,
     watchdog_interval_s,
 )
-from .process import build_launch_command, kill_process_tree, forget_engine_pid, remember_engine_pid
+from .process import (build_launch_command, build_launch_environment,
+                      kill_process_tree, forget_engine_pid, remember_engine_pid)
 from .engines import engine_of
 from .engines import vllm as vllm_engine
 from .engines.vllm_adapter import EngineTransport
@@ -234,6 +235,7 @@ class ProxyState:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, vram.check_or_raise, self.profile)
             cmd = build_launch_command(self.profile)
+            env = build_launch_environment(self.profile)
         self.launch_info = {"engine": engine_of(self.profile), "context_size": self.profile.get("context_size"),
                             "model_path": self.profile.get("model_path"),
                             # what the admission gate counts: vLLM runs more requests at once than the saved slot count

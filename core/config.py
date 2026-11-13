@@ -5,6 +5,8 @@ import threading
 import time
 from pathlib import Path
 
+from .backend import BackendConfigError, get_backend, validate_runtime_env
+
 # Port & Network Settings
 # Loopback by default. This platform holds cloud API keys, org knowledge and an agent that can
 # run shell commands, and it was binding every interface: over plain HTTP the session cookie
@@ -133,7 +135,7 @@ CONFIG_DEFAULTS = {
     "keepalive_interval_s": 25,
     "gpu_devices": [1, 2],
     "llama_bin_dir": "E:\\AI\\vulkan-arc\\llama-vulkan",
-    "backend": "vulkan",  # "vulkan" or "cuda" - selects -dev prefix + visible-devices env var
+    "backend": "vulkan",  # "vulkan", "cuda", or "sycl"
 }
 
 # Machine-level llama.cpp runtime. config/app.json holds named presets:
@@ -144,6 +146,10 @@ CONFIG_DEFAULTS = {
 # preset replaces the llama_bin_dir/backend/gpu_devices defaults and wins over
 # per-model values, since device numbering is a property of the machine.
 RUNTIME_KEYS = ("llama_bin_dir", "backend", "gpu_devices")
+
+
+class RuntimeConfigError(ValueError):
+    """The startup-selected native llama.cpp runtime is invalid."""
 
 
 def normalize_tensor_split(tensor_split, gpu_devices) -> tuple:
@@ -181,32 +187,106 @@ def normalize_tensor_split(tensor_split, gpu_devices) -> tuple:
     return devs, str(tensor_split)
 
 
+def select_runtime(app: dict, *, environ: dict | None = None,
+                   defaults: dict | None = None) -> dict:
+    """Resolve and validate exactly one runtime without reading global state.
+
+    An explicit missing runtime or unknown backend is a startup error. The old
+    behavior printed a warning and silently launched the Vulkan defaults, which
+    is unsafe once Vulkan, CUDA, and SYCL installations coexist.
+    """
+    env = os.environ if environ is None else environ
+    base = CONFIG_DEFAULTS if defaults is None else defaults
+    if not isinstance(app, dict):
+        raise RuntimeConfigError("config/app.json must contain a JSON object")
+    runtimes = app.get("runtimes") if isinstance(app.get("runtimes"), dict) else {}
+    configured_name = app.get("runtime")
+    override_name = env.get("LLAMA_RUNTIME")
+    name = str(override_name or configured_name or base["backend"]).strip().lower()
+    explicit = override_name not in (None, "") or configured_name not in (None, "")
+
+    if runtimes:
+        preset = runtimes.get(name)
+        if not isinstance(preset, dict):
+            choices = ", ".join(sorted(str(k) for k in runtimes))
+            raise RuntimeConfigError(
+                f"runtime '{name}' is not configured in app.json runtimes "
+                f"(available: {choices})"
+            )
+    else:
+        if explicit and name != str(base["backend"]).strip().lower():
+            raise RuntimeConfigError(
+                f"runtime '{name}' is not configured in app.json runtimes"
+            )
+        preset = {}
+
+    backend_name = str(preset.get("backend") or name or base["backend"]).strip().lower()
+    try:
+        get_backend(backend_name)
+    except BackendConfigError as exc:
+        raise RuntimeConfigError(str(exc)) from exc
+
+    bin_dir = preset.get("llama_bin_dir") or base.get("llama_bin_dir")
+    if not isinstance(bin_dir, str) or not bin_dir.strip():
+        raise RuntimeConfigError(
+            f"runtimes.{name}.llama_bin_dir must be a non-empty path string"
+        )
+
+    raw_devices = preset.get("gpu_devices", base.get("gpu_devices"))
+    gpu_auto = isinstance(raw_devices, str) and raw_devices.strip().lower() == "auto"
+    if gpu_auto:
+        devices = list(base.get("gpu_devices") or [])
+    elif isinstance(raw_devices, list) and raw_devices:
+        if any(isinstance(v, bool) or not isinstance(v, int) or v < 0
+               for v in raw_devices):
+            raise RuntimeConfigError(
+                f"runtimes.{name}.gpu_devices must contain non-negative integers"
+            )
+        if len(set(raw_devices)) != len(raw_devices):
+            raise RuntimeConfigError(
+                f"runtimes.{name}.gpu_devices must not contain duplicates"
+            )
+        devices = list(raw_devices)
+    else:
+        raise RuntimeConfigError(
+            f"runtimes.{name}.gpu_devices must be 'auto' or a non-empty integer list"
+        )
+
+    small_gpu = preset.get("small_model_gpu")
+    if small_gpu is not None and (
+            isinstance(small_gpu, bool) or not isinstance(small_gpu, int) or small_gpu < 0):
+        raise RuntimeConfigError(
+            f"runtimes.{name}.small_model_gpu must be a non-negative integer"
+        )
+    try:
+        runtime_env = validate_runtime_env(backend_name, preset.get("env"))
+    except BackendConfigError as exc:
+        raise RuntimeConfigError(str(exc)) from exc
+
+    return {
+        "name": name,
+        "llama_bin_dir": bin_dir.strip(),
+        "backend": backend_name,
+        "gpu_devices": devices,
+        "gpu_auto": gpu_auto,
+        "small_model_gpu": small_gpu,
+        "env": runtime_env,
+        "whisper_bin_dir": preset.get("whisper_bin_dir"),
+        "sd_bin_dir": preset.get("sd_bin_dir"),
+    }
+
+
 def _load_runtime() -> dict:
-    name, preset = CONFIG_DEFAULTS["backend"], {}
     try:
         app = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
     except Exception as e:
         print(f"[server_manager] app.json unreadable for runtime: {e}", file=sys.stderr)
         app = {}
-    runtimes = app.get("runtimes") if isinstance(app.get("runtimes"), dict) else {}
-    name = os.environ.get("LLAMA_RUNTIME") or app.get("runtime") or name
-    if name in runtimes and isinstance(runtimes[name], dict):
-        preset = runtimes[name]
-    elif runtimes:
-        print(f"[server_manager] runtime '{name}' not in app.json runtimes "
-              f"({', '.join(runtimes)}); using built-in defaults", file=sys.stderr)
-    for k in RUNTIME_KEYS:
-        if isinstance(preset.get(k), str) and preset[k].strip().lower() == "auto":
-            continue                      # gpu_devices: "auto" is resolved from the machine at startup (resolve_gpu_devices)
-        if preset.get(k) not in (None, "", []):
-            CONFIG_DEFAULTS[k] = preset[k]
-    return {"name": name, **{k: CONFIG_DEFAULTS[k] for k in RUNTIME_KEYS},
-            "gpu_auto": str(preset.get("gpu_devices") or "").strip().lower() == "auto",
-            "small_model_gpu": preset.get("small_model_gpu"),
-            # optional folder holding whisper-server(.exe) for speech to text
-            "whisper_bin_dir": preset.get("whisper_bin_dir"),
-            # optional folder holding sd-server(.exe) (stable-diffusion.cpp) for local images
-            "sd_bin_dir": preset.get("sd_bin_dir")}
+    runtime = select_runtime(app)
+    for key in RUNTIME_KEYS:
+        CONFIG_DEFAULTS[key] = (list(runtime[key]) if key == "gpu_devices"
+                                else runtime[key])
+    return runtime
 
 
 ACTIVE_RUNTIME = _load_runtime()
@@ -236,7 +316,10 @@ def resolve_gpu_devices(force: bool = False) -> dict:
     try:
         from .vram import devices as _dev
         from . import gpu as _gpu
-        found = _gpu._discrete_devices(_dev.query_devices(ACTIVE_RUNTIME.get("llama_bin_dir"), force=force, strict=True))
+        found = _gpu._discrete_devices(_dev.query_devices(
+            ACTIVE_RUNTIME.get("llama_bin_dir"), force=force, strict=True,
+            backend=ACTIVE_RUNTIME.get("backend"),
+            runtime_env=ACTIVE_RUNTIME.get("env")))
     except Exception as e:
         # Not silent: the Settings screens show scan_error, and "auto" then runs on the fallback list below. That list is
         # the Windows default [1, 2], so on Linux it can hide GPUs; the usual cause is a Windows llama_bin_dir in app.json.
@@ -258,7 +341,9 @@ def resolve_gpu_devices(force: bool = False) -> dict:
     missing = [i for i in configured if i not in idx]
     unused = [i for i in idx if i not in configured]
     GPU_STATUS.update({"configured": configured, "auto": bool(ACTIVE_RUNTIME.get("gpu_auto")), "checked": True, "scan_error": None,
-                       "detected": [{"index": int(d["index"]), "name": d["name"], "total_gb": round(d["total_b"] / 2 ** 30, 1)}
+                       "detected": [{"index": int(d["index"]), "id": d.get("id"),
+                                     "backend": d.get("backend", ACTIVE_RUNTIME.get("backend")),
+                                     "name": d["name"], "total_gb": round(d["total_b"] / 2 ** 30, 1)}
                                     for d in found],
                        "missing": missing, "unused": unused})
     if missing:
@@ -330,6 +415,8 @@ def apply_runtime(profile: dict) -> dict:
     """Force the active runtime's bin dir / backend / device list onto a profile."""
     for k in RUNTIME_KEYS:
         profile[k] = ACTIVE_RUNTIME[k]
+    profile["runtime_name"] = ACTIVE_RUNTIME["name"]
+    profile["runtime_env"] = dict(ACTIVE_RUNTIME.get("env") or {})
     return profile
 
 

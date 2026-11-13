@@ -32,7 +32,7 @@ from pathlib import Path
 from core.config import apply_runtime, atomic_write_json
 from core import vram
 from core.events import log_event
-from core.llama_bench import build_gpu_env, find_llama_bench, run_bench
+from core.llama_bench import bench_device_ids, build_gpu_env, find_llama_bench, run_bench
 
 # A bench pass pays a full cold model load inside its own timeout. 180 s used
 # to be hardcoded, so a 20-35B Q4 on a slow disk could hit it before
@@ -115,6 +115,7 @@ def _bench_candidate(bench_path, profile: dict, auto: dict, tensor_split: str,
         flash_attn=profile.get("flash_attn", "auto"),
         n_prompt=auto["bench_prompt_tokens"], n_gen=auto["bench_gen_tokens"],
         repetitions=auto["repetitions"], env=env, timeout=timeout_s,
+        device_ids=bench_device_ids(profile),
     )
     results = []
     last_failure = None
@@ -150,7 +151,11 @@ def default_tensor_split_candidates(profile) -> list[str]:
     gpu_devices = profile.get("gpu_devices") or []
     if len(gpu_devices) <= 1:
         return ["1"]
-    devs = vram.query_devices(profile.get("llama_bin_dir"))
+    devs = vram.query_devices(
+        profile.get("llama_bin_dir"),
+        backend=profile.get("backend"),
+        runtime_env=profile.get("runtime_env"),
+    )
     by_idx = {d["index"]: d for d in devs}
     target_devs = [by_idx[i] for i in gpu_devices if i in by_idx]
     if len(target_devs) != len(gpu_devices):

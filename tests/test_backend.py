@@ -1,12 +1,4 @@
-"""tests/test_backend.py - Vulkan/CUDA device naming for the llama-server launch.
-
-Run: python -m unittest tests.test_backend -v
-
-core/backend.py is 17 lines and selects the whole vendor story: the `-dev <prefix><N>`
-device string passed to llama-server and the visible-devices env var name. It was never
-imported by any test (the only hits for "backend" were the JSON *value* "local"), so a
-typo here would have surface only as a failed launch on real hardware.
-"""
+"""Backend registry, device naming, and isolated child environments."""
 
 import sys
 import unittest
@@ -15,7 +7,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import backend
-from core.backend import device_prefix, visible_devices_env
+from core.backend import (
+    BackendConfigError,
+    build_child_env,
+    device_prefix,
+    get_backend,
+    validate_runtime_env,
+    visible_devices_env,
+)
 
 
 class DevicePrefix(unittest.TestCase):
@@ -25,15 +24,18 @@ class DevicePrefix(unittest.TestCase):
     def test_cuda(self):
         self.assertEqual(device_prefix("cuda"), "CUDA")
 
+    def test_sycl(self):
+        self.assertEqual(device_prefix("sycl"), "SYCL")
+
     def test_case_insensitive(self):
         self.assertEqual(device_prefix("Vulkan"), "Vulkan")
         self.assertEqual(device_prefix("CUDA"), "CUDA")
+        self.assertEqual(device_prefix("SYCL"), "SYCL")
 
-    def test_unknown_backend_falls_back_to_vulkan(self):
-        # deliberate: Vulkan is the default on the box this was built for, and a launch
-        # that names a device ten times out of ten beats one that emits garbage
-        for bad in ("sycl", "", None, 0):
-            self.assertEqual(device_prefix(bad), "Vulkan", repr(bad))
+    def test_unknown_backend_fails_closed(self):
+        for bad in ("bogus", "", None, 0):
+            with self.assertRaises(BackendConfigError, msg=repr(bad)):
+                device_prefix(bad)
 
 
 class VisibleDevicesEnv(unittest.TestCase):
@@ -43,26 +45,66 @@ class VisibleDevicesEnv(unittest.TestCase):
     def test_cuda(self):
         self.assertEqual(visible_devices_env("cuda"), "CUDA_VISIBLE_DEVICES")
 
-    def test_unknown_backend_falls_back_to_vulkan(self):
-        for bad in ("sycl", "", None):
-            self.assertEqual(visible_devices_env(bad), "GGML_VK_VISIBLE_DEVICES", repr(bad))
+    def test_sycl_uses_explicit_device_ids_not_an_unverified_visibility_var(self):
+        self.assertIsNone(visible_devices_env("sycl"))
 
-    def test_the_two_backends_disagree(self):
-        # the whole point of the module: the two dicts must never collapse to one value
+    def test_unknown_backend_fails_closed(self):
+        for bad in ("bogus", "", None):
+            with self.assertRaises(BackendConfigError, msg=repr(bad)):
+                visible_devices_env(bad)
+
+    def test_backend_mappings_remain_distinct(self):
         self.assertNotEqual(backend.DEVICE_PREFIX["vulkan"], backend.DEVICE_PREFIX["cuda"])
         self.assertNotEqual(backend.VISIBLE_DEVICES_ENV["vulkan"],
                             backend.VISIBLE_DEVICES_ENV["cuda"])
 
 
-class LaunchWiring(unittest.TestCase):
-    def test_process_uses_the_prefix_for_dev(self):
-        import re
-        from pathlib import Path as P
-        src = (P(__file__).resolve().parent.parent / "core" / "process.py").read_text(encoding="utf-8")
-        self.assertIn("device_prefix(backend)", src)
-        # -dev joins prefix+index per device: "Vulkan1,Vulkan2" / "CUDA0"
-        self.assertTrue(re.search(r'f"\{prefix\}\{d\}"', src),
-                        "expected the '-dev prefix+index' join to live in core/process.py")
+class Registry(unittest.TestCase):
+    def test_all_supported_backends_exist(self):
+        self.assertEqual(set(backend.BACKENDS), {"vulkan", "cuda", "sycl"})
+        self.assertEqual(get_backend("SYCL").name, "sycl")
+
+    def test_sycl_declares_multi_gpu_and_partial_offload(self):
+        spec = get_backend("sycl")
+        self.assertTrue(spec.multi_gpu)
+        self.assertTrue(spec.tensor_split)
+        self.assertTrue(spec.partial_offload)
+
+
+class RuntimeEnvironment(unittest.TestCase):
+    def test_vulkan_and_cuda_pin_visible_devices(self):
+        base = {"PATH": "x", "CUDA_VISIBLE_DEVICES": "9",
+                "GGML_VK_VISIBLE_DEVICES": "9", "ONEAPI_DEVICE_SELECTOR": "bad"}
+        vk = build_child_env("vulkan", device_indices=[1, 2], base_env=base)
+        self.assertEqual(vk["GGML_VK_VISIBLE_DEVICES"], "1,2")
+        self.assertNotIn("CUDA_VISIBLE_DEVICES", vk)
+        self.assertNotIn("ONEAPI_DEVICE_SELECTOR", vk)
+        cu = build_child_env("cuda", device_indices=[0], base_env=base)
+        self.assertEqual(cu["CUDA_VISIBLE_DEVICES"], "0")
+        self.assertNotIn("GGML_VK_VISIBLE_DEVICES", cu)
+
+    def test_sycl_keeps_only_sycl_runtime_controls(self):
+        base = {"PATH": "x", "CUDA_VISIBLE_DEVICES": "9",
+                "GGML_VK_VISIBLE_DEVICES": "9",
+                "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu"}
+        env = build_child_env(
+            "sycl",
+            runtime_env={"SYCL_CACHE_PERSISTENT": "1", "SYCL_CACHE_DIR": "/cache"},
+            device_indices=[0, 1],
+            base_env=base,
+        )
+        self.assertEqual(env["ONEAPI_DEVICE_SELECTOR"], "level_zero:gpu")
+        self.assertEqual(env["SYCL_CACHE_PERSISTENT"], "1")
+        self.assertEqual(env["SYCL_CACHE_DIR"], "/cache")
+        self.assertNotIn("CUDA_VISIBLE_DEVICES", env)
+        self.assertNotIn("GGML_VK_VISIBLE_DEVICES", env)
+        self.assertNotIn("ZE_AFFINITY_MASK", env)
+
+    def test_unknown_or_non_string_runtime_env_is_rejected(self):
+        with self.assertRaises(BackendConfigError):
+            validate_runtime_env("sycl", {"LD_PRELOAD": "/tmp/unsafe.so"})
+        with self.assertRaises(BackendConfigError):
+            validate_runtime_env("sycl", {"SYCL_CACHE_PERSISTENT": 1})
 
 
 if __name__ == "__main__":
