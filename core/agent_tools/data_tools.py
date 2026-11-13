@@ -146,6 +146,8 @@ def tool_data_sql(args: dict) -> str:
             return sheet_sql.describe(wb)
         sql, month_note = _month_filter(wb, args)
         out = sheet_sql.query(wb, sql, args.get("limit") or sheet_sql.DEFAULT_ROWS)
+        if not month_note:                    # no period asked: give the real date range, so the answer names the right year
+            month_note = sheet_sql.date_span_note(wb, sql)
         return out + (f"\n{month_note}" if month_note else "")
     except sheet_sql.SqlError as e:
         return f"error: {e}"

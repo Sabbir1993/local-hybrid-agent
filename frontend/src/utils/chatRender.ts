@@ -450,9 +450,10 @@ function transformTokens(raw: string): string {
       </div>`;
     }
 
-    return `<div style="display:inline-flex; align-items:center; gap:6px; margin:4px 0;">
-      <button type="button" class="file-action-badge primary" data-preview-path="${cleanName}" data-preview-title="${cleanName}" style="padding:4px 10px; font-size:11.5px; background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.3); border-radius:6px; color:#38bdf8; cursor:pointer; display:inline-flex; align-items:center; gap:6px;">👁️ Preview ${cleanName}</button>
-      <a href="${downloadUrl}" download="${cleanName}" class="file-action-badge" style="padding:4px 10px; font-size:11.5px; background:rgba(255,255,255,0.05); border:1px solid var(--border, #334155); border-radius:6px; color:var(--text, #f3f4f6); text-decoration:none; display:inline-flex; align-items:center; gap:6px;">⬇ Download</a>
+    // one line at any width: the file name gives way (ellipsis, full name in the tooltip), the two buttons never wrap
+    return `<div style="display:flex; align-items:center; gap:6px; margin:4px 0; max-width:100%; min-width:0;">
+      <button type="button" class="file-action-badge primary" data-preview-path="${cleanName}" data-preview-title="${cleanName}" title="${cleanName}" style="padding:4px 10px; font-size:11.5px; background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.3); border-radius:6px; color:#38bdf8; cursor:pointer; display:inline-flex; align-items:center; gap:6px; min-width:0; flex:0 1 auto; white-space:nowrap;"><span style="flex:0 0 auto;">👁️ Preview</span><span style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${cleanName}</span></button>
+      <a href="${downloadUrl}" download="${cleanName}" class="file-action-badge" style="padding:4px 10px; font-size:11.5px; background:rgba(255,255,255,0.05); border:1px solid var(--border, #334155); border-radius:6px; color:var(--text, #f3f4f6); text-decoration:none; display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; white-space:nowrap;">⬇ Download</a>
     </div>`;
   });
 
@@ -570,7 +571,9 @@ export function renderCompleteChatMessage(content: string, acts?: any[], secs?: 
 
   // a "|" inside a link address would cut a table cell in two (cells are split before inline parsing)
   const transformed = transformMarkdownSpecialTokens(rawContent).replace(/\]\((https?:\/\/[^)\s]*\|[^)\s]*)\)/g, (_m, u: string) => '](' + u.replace(/\|/g, '%7C') + ')');
-  const parsedMarkdown = marked.parse(transformed, { async: false }) as string;
+  // a wide table scrolls inside its own frame (.md-table-wrap): the page must not pan sideways and cut the text around it
+  const parsedMarkdown = (marked.parse(transformed, { async: false }) as string)
+    .replace(/<table>/g, '<div class="md-table-wrap"><table>').replace(/<\/table>/g, '</table></div>');
   const sanitized = sanitizeHtml(parsedMarkdown);
 
   return actsHtml + sanitized;

@@ -167,7 +167,7 @@ class MonthFilterFunctionTests(unittest.TestCase):
         self.assertIn("| Dhaka | 100 |", out)
         self.assertIn("| Khulna | 70 |", out)
         self.assertNotIn("| Dhaka | 150 |", out)
-        self.assertEqual(note, "(filtered to 2026-11 on Date)")
+        self.assertTrue(note.startswith("(filtered to 2026-11 on Date)"), note)
 
     def test_a_file_without_a_date_column_says_so(self):
         from core.sheet_engine import sql as sheet_sql
@@ -400,7 +400,7 @@ class PeriodFilteredTests(unittest.TestCase):
         from core.sheet_engine import sql as sheet_sql
         wb = sheet_sql.from_tables([("sales", "sales.xlsx", ["Date", "Region"], [["2026-11-04", "Dhaka"]])])
         stmt, note = sheet_sql.period_filtered(wb, 'SELECT "Region" FROM "sales" ORDER BY 1', "2026-11-04")
-        self.assertEqual(note, "(filtered to 2026-11-04 on Date)")
+        self.assertTrue(note.startswith("(filtered to 2026-11-04 on Date)"), note)
         self.assertIn("strftime('%Y-%m-%d', \"Date\") = '2026-11-04'", stmt)
 
 

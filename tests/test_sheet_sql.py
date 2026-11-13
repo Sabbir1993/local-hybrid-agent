@@ -297,6 +297,42 @@ class Sandbox(unittest.TestCase):
         self.assertNotIn("4111 1111 1111 1111", out)
 
 
+class AnswerGroundingNotes(unittest.TestCase):
+    """Notes that keep a small model from listing one person twice in a "top 5" and from inventing the year."""
+
+    def setUp(self):
+        from core.sheet_engine import sql as s
+        self.s = s
+        self.wb = s.from_tables([("T", "doc", ["Kam Name", "Dept", "Value", "Date"],
+                                  [["Sayed", "BFSI", 3000000, "04/11/2026"], ["Ranada", "BFSI", 500000, "08/11/2026"],
+                                   ["Jhantu", "BFSI", 300000, "09/11/2026"], ["Jhantu", "BFSI", 300000, "10/11/2026"]])])
+
+    def test_a_top_n_over_single_rows_says_the_name_repeats(self):
+        out = self.s.query(self.wb, 'SELECT "Kam Name", "Value" FROM T ORDER BY "Value" DESC LIMIT 5')
+        self.assertIn('"Kam Name" repeats (Jhantu is on 2 rows)', out)
+        self.assertIn("GROUP BY", out)
+
+    def test_a_column_with_one_value_on_every_row_is_not_the_name(self):
+        out = self.s.query(self.wb, 'SELECT "Dept", "Kam Name", "Value" FROM T ORDER BY "Value" DESC LIMIT 5')
+        self.assertIn('"Kam Name" repeats', out)
+
+    def test_a_grouped_ranking_and_a_plain_listing_get_no_note(self):
+        grouped = self.s.query(self.wb, 'SELECT "Kam Name", SUM("Value") v FROM T GROUP BY 1 ORDER BY v DESC LIMIT 5')
+        listing = self.s.query(self.wb, 'SELECT "Kam Name", "Value" FROM T')
+        distinct = self.s.query(self.wb, "SELECT \"Kam Name\", \"Value\" FROM T WHERE \"Kam Name\" <> 'Jhantu' ORDER BY \"Value\" DESC")
+        for out in (grouped, listing, distinct):
+            self.assertNotIn("repeats", out)
+
+    def test_the_date_range_of_an_unfiltered_query(self):
+        note = self.s.date_span_note(self.wb, "SELECT * FROM T")
+        self.assertIn('"Date" 2026-11-04 to 2026-11-10', note)
+        self.assertEqual(self.s.date_span_note(self.wb, "SELECT 1"), "")
+
+    def test_a_filtered_query_names_its_period_in_words(self):
+        self.assertIn("These rows are November 2026", self.s.period_filtered(self.wb, "SELECT * FROM T", "2026-11")[1])
+        self.assertIn("These rows are 4 November 2026", self.s.period_filtered(self.wb, "SELECT * FROM T", "2026-11-04")[1])
+
+
 class ParserDepthTests(unittest.TestCase):
     def test_the_number_expression_leaves_room_on_a_fixed_parser_stack(self):
         """SQLite up to 3.45 has a parser stack of 100: the expression must compile with room for what wraps it (a view

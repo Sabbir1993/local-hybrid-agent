@@ -308,6 +308,8 @@ def _kb_sql_blocking(args: dict, titles: dict) -> tuple:
         try:
             sql, month_note = _month_filter(wb, args)
             out = sheet_sql.query(wb, sql, args.get("limit") or sheet_sql.DEFAULT_ROWS)
+            if not month_note:                    # no period asked: give the real date range, so the answer names the right year
+                month_note = sheet_sql.date_span_note(wb, sql)
         except sheet_sql.SqlError as e:
             return f"error: {e}", "", "", len(tables)
         except ValueError as e:

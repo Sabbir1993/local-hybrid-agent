@@ -286,6 +286,8 @@ AGENT_TOOLS = [
                            "to the rows before the grouping, on every date column of the sheet unless date_column names one. "
                            "For one day ('the report of 4th November') pass day=2026-11-04. "
                            "Use kb_query for a simple count or list; use this for anything that needs totals, ratios or joins. "
+                           "A ranking of people, clients or products ('top 5 performers') is one row per name: GROUP BY the name "
+                           "column with SUM / COUNT and ORDER BY that total - never ORDER BY ... LIMIT over the single rows. "
                            "Numbers are read from text like '1,200', '$1,500', 'Tk 90' and '(300)' (= -300); a cell that is not "
                            "clearly one number is NULL, not 0. Card numbers in the data come back masked, so hex(), unicode(), "
                            "char() and quote() are not available. SELECT * returns exactly the sheet's columns. "

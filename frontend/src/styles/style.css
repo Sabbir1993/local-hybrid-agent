@@ -3720,8 +3720,12 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 .bubble hr { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
 .bubble em { font-style: italic; }
 .bubble del { opacity: 0.65; }
-.md-table-wrap { overflow-x: auto; margin: 0.7em 0; max-width: 100%; }
-.md-table-wrap table { margin: 0; }
+/* A wide table scrolls inside this frame; the chat column itself never pans sideways (that cut the text around the table). */
+.md-table-wrap { overflow-x: auto; margin: 0.7em 0; max-width: 100%; border: 1px solid var(--border); border-radius: 8px;
+  -webkit-overflow-scrolling: touch; scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; }
+.md-table-wrap table { margin: 0; border: none; border-radius: 0; width: max-content; min-width: 100%; }
+.md-table-wrap th, .md-table-wrap td { white-space: normal; max-width: 260px; }
+#chat { overflow-x: hidden !important; }
 .bubble th, .bubble td { vertical-align: top; }
 .bubble tbody tr:nth-child(even) td { background: rgba(127, 127, 127, 0.05); }
 /* "- [ ] item" lines: a muted, unselectable box instead of bullet + box (the box is decoration, not a control) */

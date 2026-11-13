@@ -266,7 +266,7 @@ class DayFirstDateTests(DirectBase):
         out = self.run_sql({"sql": "SELECT Date FROM Plan_Plan ORDER BY Amount"}, titles=t)
         self.assertIn("2026-11-05", out)
         self.assertIn("2026-11-07", out)
-        self.assertEqual(out.count("2026-"), 4)
+        self.assertEqual(out.split("(4 rows)")[0].count("2026-"), 4)      # the table itself, not the date-range note under it
         self.assertIn("70", self.run_sql({"sql": "SELECT SUM(Amount) FROM Plan_Plan", "month": "2026-11"}, titles=t))
 
 
@@ -567,7 +567,7 @@ class DateAndLimitTests(DirectBase):
              ["29/02/2100", "6"], ["29/02/2000", "7"], ["05/11/2026", "8"]], "Plan"))
         for copy in (False, True):
             out = self.run_sql({"sql": "SELECT Date FROM Plan_Plan ORDER BY Amount"}, titles={5: "Plan"}, copy=copy)
-            rows = [ln.strip("| ") for ln in out.splitlines()[2:-1]]
+            rows = [ln.strip("| ") for ln in out.splitlines()[2:] if ln.startswith("|")]
             self.assertEqual(rows, ["31/02/2026", "29/02/2026", "2024-02-29", "31/04/2026", "2026-04-30", "29/02/2100",
                                     "2000-02-29", "2026-11-05"], (copy, out))
 

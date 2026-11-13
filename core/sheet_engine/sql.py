@@ -927,9 +927,77 @@ def period_filtered(wb: Workbook, sql: str, period: str, date_column: str = "", 
     else:
         stmt = "WITH " + head + " " + stmt
     note = f"(filtered to {ym} on {', '.join(used)})"
-    if guessed:                                              # keep the note query() would have given for a guessed table name
+    # the model tends to write a year of its own ("November 2021") above the table: hand it the period in words
+    note += f" These rows are {_period_words(ym)}: name that period, with that year, in the answer."
+    if guessed:                                             # keep the note query() would have given for a guessed table name
         note += " (note: the table name was read as " + ", ".join(f"{w} -> {r}" for w, r in guessed[:3]) + ")"
     return stmt, note
+
+
+_MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+                "November", "December")
+
+
+def _period_words(period: str) -> str:
+    """'2026-11' -> 'November 2026', '2026-11-04' -> '4 November 2026'."""
+    y, mo = period[:4], int(period[5:7])
+    return (f"{int(period[8:10])} " if len(period) == 10 else "") + f"{_MONTH_NAMES[mo - 1]} {y}"
+
+
+def date_span_note(wb: Workbook, sql: str, max_rows: int = 200_000) -> str:
+    """For a query that was not filtered to a period: the first and last date of the tables it reads, so the answer names
+    the real year instead of one the model made up. "" when the statement reads no table with a date column, or a table
+    too large to scan for a note."""
+    try:
+        stmt, _guessed = _rewrite_tables(wb, str(sql or ""))
+    except SqlError:
+        return ""
+    refs = [t for t in wb.tables if re.search(r"(?<![\w$])" + re.escape(t["name"]) + r"(?![\w$])", stmt, re.I)]
+    parts = []
+    deadline = time.monotonic() + 2.0
+    with wb.lock:
+        wb.conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 50000)
+        try:
+            for t in refs[:2]:
+                if int(t.get("rows") or 0) > max_rows:
+                    continue
+                for c in table_date_columns(wb, t)[:3]:
+                    lo, hi = wb.conn.execute(
+                        f"SELECT MIN({_qid(c)}), MAX({_qid(c)}) FROM {wb.schema}.{_qid(t['name'])} "
+                        f"WHERE {_qid(c)} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'").fetchone()
+                    if lo and hi:
+                        parts.append(f'"{c}" {str(lo)[:10]} to {str(hi)[:10]}')
+        except sqlite3.Error:
+            return ""
+        finally:
+            wb.conn.set_progress_handler(None, 0)
+    if not parts:
+        return ""
+    return "(dates in this data: " + "; ".join(parts) + ". Use these years when the answer names a period.)"
+
+
+_RANK_SHAPE_RX = re.compile(r"(?is)\border\s+by\b.*\bdesc\b")
+
+
+def _repeat_note(sql: str, headers: list, rows: list) -> str:
+    """A "top 5" asked as ORDER BY ... DESC LIMIT 5 over single rows lists one person twice and calls it a ranking. When
+    the first text column of such a result repeats, say that these are rows, not totals, and how to rank per name."""
+    if not 2 <= len(rows) <= 25 or not _RANK_SHAPE_RX.search(sql) or re.search(r"(?i)\bgroup\s+by\b|\bdistinct\b", sql):
+        return ""
+    for i, h in enumerate(headers):
+        vals = [r[i] for r in rows]
+        if not all(isinstance(v, str) and v.strip() for v in vals) or any(_ISO_DAY_RX.match(v) for v in vals):
+            continue                                  # numbers, blanks, dates: not a name column
+        seen = Counter(vals)
+        if len(seen) == 1:
+            continue                                  # one value on every row (a department): look at the next column
+        top, n = seen.most_common(1)[0]
+        if n < 2:
+            return ""
+        return (f'\nnote: these are single rows, not totals: "{h}" repeats ({top} is on {n} rows). For a ranking per '
+                f'"{h}" (top performers, best clients) use GROUP BY "{h}" with SUM(...) or COUNT(*), so each one is '
+                "listed once with its total.")
+    return ""
 
 
 def month_filtered(wb: Workbook, sql: str, ym: str, date_column: str = "", noun: str = "file") -> tuple:
@@ -1047,6 +1115,7 @@ def query(wb: Workbook, sql: str, limit: int = DEFAULT_ROWS) -> str:
     text += f"\n({len(rows)} row{'s' if len(rows) != 1 else ''}{', more rows exist - add LIMIT/filters or aggregate' if more else ''})"
     if len(text) > MAX_OUT_CHARS:
         text = text[:MAX_OUT_CHARS].rsplit("\n", 1)[0] + "\n... (output cut)"
+    text += _repeat_note(sql, headers, rows)
     unknown = _unknown_quoted(wb, sql)            # after the cap: the warning must survive a cut table
     if unknown:
         text += ("\nwarning: " + ", ".join(f'"{u}"' for u in unknown[:5]) + " is not a table or column of the loaded data. "
