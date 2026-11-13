@@ -744,18 +744,15 @@ function layersInfo() {
   const c = (typeof cfgEngineInfo !== 'undefined' && cfgEngineInfo) || {};
   const total = c.total_layers, mb = c.layer_mb;
   const info = $('cfg-layers-info'), line = $('cfg-ts-layers');
-  if (info) {
-    info.textContent = total
-      ? `Model has ${total} layers` + (mb ? ` · about ${mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb + ' MB'} each` : '') + ' · 999 = all on GPU'
-      : '';
-  }
+  // the layer count sits beside the field; the explanation is on hover, so the line under the field is no longer shown
+  const badge = $('cfg-layers-badge');
+  if (badge) { badge.hidden = !total; badge.textContent = total ? `${total} layers` : ''; }
+  if (info) { info.textContent = ''; info.hidden = true; }
   // the same facts on hover: the badge, the hint, and the whole GPU layers field
-  const tip = total ? `GPU layers: this model has ${total} layers` + (mb ? `, about ${mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb + ' MB'} each` : '')
-    + `. 999 = all ${total} on the GPU, 0 = none (CPU only).` : '';
-  const badgeEl = $('cfg-layers-badge');
-  if (badgeEl) badgeEl.title = tip;
-  if (info) info.title = tip;
-  const field = info && info.closest('.cfg-item');
+  const tip = total ? `Model has ${total} layers` + (mb ? ` · about ${mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb + ' MB'} each` : '')
+    + ' · 999 = all on GPU. 0 = none (CPU only).' : '';
+  if (badge) badge.title = tip;
+  const field = $('cfg-ngl') && $('cfg-ngl').closest('.cfg-item');
   if (field && tip) field.title = tip;
   tsOptionsSoon();
   if (!line) return;
