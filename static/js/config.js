@@ -749,6 +749,8 @@ function layersInfo() {
       ? `Model has ${total} layers` + (mb ? ` · about ${mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb + ' MB'} each` : '') + ' · 999 = all on GPU'
       : '';
   }
+  nglQuick(total);
+  tsOptionsSoon();
   if (!line) return;
   const shares = parseTensorSplit($('cfg-ts') ? $('cfg-ts').value : '').map(s => parseInt(s) || 0);
   const ngl = parseInt($('cfg-ngl') && $('cfg-ngl').value);
@@ -765,7 +767,81 @@ function layersInfo() {
   line.textContent = parts.join(' · ') + (parts.length ? ' (weights only; context memory is extra)' : '');
 }
 
+/* The layer count beside the field, and one-click picks: all, three quarters, half, none. */
+function nglQuick(total) {
+  const badge = $('cfg-layers-badge'), box = $('cfg-ngl-quick'), inp = $('cfg-ngl');
+  if (badge) { badge.hidden = !total; badge.textContent = total ? `${total} layers` : ''; }
+  if (!box || !inp) return;
+  if (!total) { box.hidden = true; box.innerHTML = ''; return; }
+  const cur = parseInt(inp.value);
+  const picks = [[`All ${total}`, 999], [`¾ · ${Math.round(total * 0.75)}`, Math.round(total * 0.75)],
+    [`½ · ${Math.round(total / 2)}`, Math.round(total / 2)], ['CPU only · 0', 0]];
+  box.hidden = false;
+  box.innerHTML = picks.map(([label, v]) => {
+    const on = v === cur || (v === 999 && cur >= total);
+    return `<button type="button" data-ngl="${v}" class="${on ? 'on' : ''}" title="Set GPU layers to ${v === 999 ? 'all (' + total + ')' : v}">${tsEsc(label)}</button>`;
+  }).join('');
+  box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    inp.value = b.dataset.ngl;
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+  }));
+}
+
+/* Two ways to place the model on the GPUs, sized by the server with the values typed here (context, layers, KV type). */
+let tsOptTimer = null, tsOptSeq = 0;
+function tsOptionsSoon() {
+  clearTimeout(tsOptTimer);
+  tsOptTimer = setTimeout(tsOptions, 450);
+}
+
+async function tsOptions() {
+  const box = $('cfg-ts-options');
+  if (!box) return;
+  const hide = () => { box.hidden = true; box.innerHTML = ''; };
+  const engine = ($('cfg-engine') && $('cfg-engine').value) || 'llama';
+  if (cfgGpuIdx.length < 2 || engine !== 'llama') return hide();
+  const q = new URLSearchParams();
+  const ctx = parseInt($('cfg-ctx') && $('cfg-ctx').value), ngl = parseInt($('cfg-ngl') && $('cfg-ngl').value);
+  if (ctx >= 512) q.set('ctx', ctx);
+  if (ngl >= 0) q.set('ngl', ngl);
+  if ($('cfg-ct') && $('cfg-ct').value) q.set('kv', $('cfg-ct').value);
+  const seq = ++tsOptSeq;
+  let plan;
+  try {
+    const r = await fetch('/control/preflight?' + q.toString());
+    if (!r.ok) return hide();
+    plan = await r.json();
+  } catch (e) { return hide(); }
+  if (seq !== tsOptSeq) return;                    // a newer value was typed while this one was on its way
+  const opts = Array.isArray(plan.load_options) ? plan.load_options.slice(0, 2) : [];
+  if (!opts.length) return hide();
+  const est = plan.estimate || {};
+  const cur = ($('cfg-ts').value || '').replace(/\s+/g, '');
+  box.hidden = false;
+  box.innerHTML = `<div class="ts-opt-head">Suggested GPU load</div>` + opts.map((o, i) => {
+    const tag = !o.fits ? '<span class="ts-opt-tag bad">does not fit</span>'
+      : o.tight ? '<span class="ts-opt-tag warn">tight fit</span>' : '<span class="ts-opt-tag ok">fits</span>';
+    const gpus = (o.per_gpu || []).map(g => g.used
+      ? `GPU ${tsEsc(g.index)}: <b>${tsEsc(g.need_gb)} GB</b> of ${tsEsc(g.total_gb)} GB`
+      : `GPU ${tsEsc(g.index)}: not used`).join(' · ');
+    const same = cur === o.tensor_split;
+    return `<div class="ts-opt${i === 0 ? ' best' : ''}">
+      <div class="ts-opt-top"><span class="ts-opt-title">${i + 1}. ${tsEsc(o.title)}</span>${i === 0 ? '<span class="ts-opt-tag rec">suggested</span>' : ''}${tag}</div>
+      <div class="ts-opt-gpus">Tensor split <b>${tsEsc(o.tensor_split)}</b> · ${gpus}</div>
+      <div class="ts-opt-why">${tsEsc(o.why)}</div>
+      <button type="button" class="btn" data-split="${tsEsc(o.tensor_split)}" ${same ? 'disabled' : ''}>${same ? 'In use' : 'Use this split'}</button>
+    </div>`;
+  }).join('') + `<div class="ts-opt-note">Estimated for context ${tsEsc(plan.effective ? plan.effective.context_size : '')}`
+    + (est.weights_gb != null ? ` · weights ${tsEsc(est.weights_gb)} GB + context memory ${tsEsc(est.kv_gb)} GB` : '')
+    + ` · sized against each card's total memory, so other loaded models are not counted. Press Apply to save the split.</div>`;
+  box.querySelectorAll('button[data-split]').forEach(b => b.addEventListener('click', () => {
+    tsSetShares(b.dataset.split.split(','));
+    tsOptionsSoon();
+  }));
+}
+
 if ($('cfg-ngl')) $('cfg-ngl').addEventListener('input', layersInfo);
+['cfg-ctx', 'cfg-ct'].forEach(id => { if ($(id)) { $(id).addEventListener('input', tsOptionsSoon); $(id).addEventListener('change', tsOptionsSoon); } });
 
 if ($('cfg-ts')) $('cfg-ts').addEventListener('input', () => { updateGpuDependentFields(); tsRowsFromText(); });
 if ($('ts-equal')) $('ts-equal').onclick = () => tsSetShares(cfgGpuIdx.map(() => 1));

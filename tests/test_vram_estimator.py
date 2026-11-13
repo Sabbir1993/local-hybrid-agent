@@ -183,5 +183,51 @@ class ParserMarksStatFailure(unittest.TestCase):
         self.assertIsNone(parse_gguf_info(Path("no-such-model-9f3a.gguf")))
 
 
+class LoadOptionsTests(unittest.TestCase):
+    """The two GPU placements offered in the Model Config card."""
+    G = 1024 ** 3
+
+    def _devs(self, *totals):
+        return [{"index": i, "name": f"G{i}", "total_b": int(t * self.G), "free_b": int(0.5 * self.G), "used_b": 0}
+                for i, t in enumerate(totals)]
+
+    def _opts(self, devs, weights, kv):
+        from core.vram.estimator import load_options
+        return load_options(devs, int(weights * self.G), 31, 999, int(kv * self.G), int(0.6 * self.G), int(0.5 * self.G))
+
+    def test_a_model_that_fits_one_card_with_room_gets_one_gpu_first(self):
+        opts = self._opts(self._devs(16, 16), 8, 1)
+        self.assertEqual([o["key"] for o in opts], ["single", "balanced"])
+        self.assertEqual(opts[0]["tensor_split"], "1,0")
+        self.assertTrue(all(o["fits"] for o in opts))
+
+    def test_a_card_filled_to_the_brim_is_not_offered_first(self):
+        opts = self._opts(self._devs(16, 16), 13.4, 1.5)
+        self.assertEqual([o["key"] for o in opts], ["balanced", "single"])
+        self.assertTrue(opts[1]["tight"])
+
+    def test_too_big_for_one_card_gets_balanced_then_front_loaded(self):
+        opts = self._opts(self._devs(16, 16), 13.4, 9)
+        self.assertEqual([o["key"] for o in opts], ["balanced", "front"])
+        self.assertEqual(opts[0]["tensor_split"], "10,10")
+        first, second = (int(v) for v in opts[1]["tensor_split"].split(","))
+        self.assertGreater(first, second)
+        self.assertTrue(all(o["fits"] for o in opts))
+
+    def test_sized_against_total_memory_not_what_is_free_now(self):
+        self.assertTrue(self._opts(self._devs(16, 16), 13.4, 9)[0]["fits"])     # free_b is 0.5 GB in _devs
+
+    def test_what_fits_nowhere_says_so(self):
+        opts = self._opts(self._devs(16, 16), 13.4, 30)
+        self.assertEqual([o["key"] for o in opts], ["balanced"])
+        self.assertFalse(opts[0]["fits"])
+
+    def test_one_gpu_has_no_options_and_unequal_cards_get_unequal_shares(self):
+        self.assertEqual(self._opts(self._devs(16), 8, 1), [])
+        bal = [o for o in self._opts(self._devs(24, 8), 20, 4) if o["key"] == "balanced"][0]
+        a, b = (int(v) for v in bal["tensor_split"].split(","))
+        self.assertGreater(a, b)
+
+
 if __name__ == "__main__":
     unittest.main()

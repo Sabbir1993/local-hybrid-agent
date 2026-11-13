@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Settings — Local Agent</title>
 <script src="/static/js/theme-boot.js?v=1.2"></script>
-<link rel="stylesheet" href="/static/css/style.css?v=5.17">
+<link rel="stylesheet" href="/static/css/style.css?v=5.18">
 <link rel="stylesheet" href="/static/css/lanes.css?v=1.3">
 <link rel="stylesheet" href="/static/css/knowledge.css?v=1.0">
 <link rel="stylesheet" href="/static/css/telemetry.css?v=1.0">
@@ -873,9 +873,10 @@
             <input type="number" id="cfg-ctx" step="8" min="512" max="1048576" value="32768" title="Context size (n_ctx) in tokens (512–1048576)">
           </div>
           <div class="cfg-item" title="Number of model layers offloaded to GPUs (n_gpu_layers). 999 offloads all layers to VRAM">
-            <label for="cfg-ngl">GPU layers <span class="info" title="999 = offload all layers to GPU VRAM">ⓘ</span></label>
+            <label for="cfg-ngl">GPU layers <span id="cfg-layers-badge" class="layers-badge" hidden></span> <span class="info" title="999 = offload all layers to GPU VRAM">ⓘ</span></label>
             <input type="number" id="cfg-ngl" min="0" max="999" value="999" title="Number of GPU layers (n_gpu_layers)">
-            <small id="cfg-layers-info" style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;"></small>
+            <div id="cfg-ngl-quick" class="ngl-quick" hidden></div>
+            <small id="cfg-layers-info" style="color:var(--dim); font-size:10.5px; margin-top:3px; display:block;"></small>
           </div>
           <div class="cfg-item" title="Number of CPU threads for prompt computation (threads). 0 = auto-detect">
             <label for="cfg-threads">CPU threads <span class="info" title="0 = auto-detect optimal CPU thread count">ⓘ</span></label>
@@ -907,14 +908,15 @@
           </div>
           <div class="cfg-item cfg-full" title="One share per GPU in use, in order. Equal numbers = even split · 0 skips that GPU (e.g. 0,1 = only the second GPU)">
             <label for="cfg-ts">Tensor split <span class="info" title="Comma-separated shares, one per GPU in use. 0 skips a GPU, so 0,1 uses only the second one; equal numbers split evenly">ⓘ</span></label>
-            <div id="cfg-ts-tools" style="display:flex; gap:6px; align-items:center;">
-              <input type="text" id="cfg-ts" value="9,11" style="flex:1 1 auto; width:auto; min-width:0;" title="One share per GPU in use; 0 skips a GPU">
-              <button type="button" class="btn" id="ts-auto" style="flex:0 0 auto; width:auto; white-space:nowrap;" title="Shares proportional to each GPU's VRAM">Auto by VRAM</button>
-              <button type="button" class="btn" id="ts-equal" style="flex:0 0 auto; width:auto; white-space:nowrap;" title="Same share on every GPU">Equal</button>
+            <div id="cfg-ts-tools" style="display:flex; gap:6px; align-items:stretch;">
+              <input type="text" id="cfg-ts" value="9,11" style="flex:1 1 auto; width:auto; min-width:0; margin:0;" title="One share per GPU in use; 0 skips a GPU">
+              <button type="button" class="btn" id="ts-auto" style="flex:0 0 auto; width:auto; white-space:nowrap; margin:0;" title="Shares proportional to each GPU's VRAM">Auto by VRAM</button>
+              <button type="button" class="btn" id="ts-equal" style="flex:0 0 auto; width:auto; white-space:nowrap; margin:0;" title="Same share on every GPU">Equal</button>
             </div>
             <small style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;">One share per GPU, in order · 0 skips that GPU · e.g. 1,1,1 splits evenly over three</small>
             <div id="cfg-ts-rows" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:4px 12px; margin-top:6px;"></div>
-            <small id="cfg-ts-layers" style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;"></small>
+            <small id="cfg-ts-layers" style="color:var(--dim); font-size:10.5px; margin-top:3px; display:block;"></small>
+            <div id="cfg-ts-options" class="ts-options" hidden></div>
             <small id="cfg-ts-warn" style="color:var(--warn, #d9a441); font-size:10.5px; font-weight:600; margin-top:3px; display:none;"></small>
           </div>
           <div class="cfg-item" title="GPU split strategy: 'layer' splits transformer layers; 'row' splits tensor matrices">
@@ -1278,7 +1280,7 @@
 <script src="/static/js/markdown.js?v=1.1"></script>
 <script src="/static/js/sampling.js?v=1.3"></script>
 <script src="/static/js/gpu-status.js?v=3.4"></script>
-<script src="/static/js/config.js?v=3.2"></script>
+<script src="/static/js/config.js?v=3.3"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
 <script src="/static/js/agent-memory-ui.js?v=1.5"></script>
 <script src="/static/js/cap-help.js?v=1.3"></script>

@@ -31,10 +31,12 @@ async def stop_server(user: Principal = Depends(require_permission("model.local.
 
 @router.get("/control/preflight")
 async def preflight(target: Optional[str] = None, engine: Optional[str] = None,
+                    ctx: Optional[int] = None, ngl: Optional[int] = None, kv: Optional[str] = None,
                     user: Principal = Depends(require_permission("model.local.load"))):
     """VRAM fit projection for a model/profile without loading it.
     ?target=<gguf, model folder or profile json path> - defaults to the currently selected profile.
-    ?engine=llama|vllm checks the model on that engine instead of its saved one."""
+    ?engine=llama|vllm checks the model on that engine instead of its saved one.
+    ?ctx= ?ngl= ?kv= size it with values that are typed in the Model Config card but not saved yet."""
     try:
         if target:
             p = Path(target)
@@ -56,7 +58,14 @@ async def preflight(target: Optional[str] = None, engine: Optional[str] = None,
         if engine_of(profile) == "vllm":
             return vllm_engine.preflight(profile)
         loop = asyncio.get_event_loop()
-        plan = await loop.run_in_executor(None, vram.plan_launch, profile)
+        overrides = {}
+        if ctx is not None and 512 <= ctx <= 1048576:
+            overrides["context_size"] = int(ctx)
+        if ngl is not None and 0 <= ngl <= 999:
+            overrides["n_gpu_layers"] = int(ngl)
+        if kv in ("f16", "q8_0", "q5_0", "q4_0", "bf16", "f32"):
+            overrides["kv_cache_type"] = kv
+        plan = await loop.run_in_executor(None, vram.plan_launch, profile, overrides or None)
         return plan
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)

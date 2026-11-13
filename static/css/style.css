@@ -3243,6 +3243,26 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 .ts-slot span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .ts-slot input { width: 52px; flex: 0 0 auto; padding: 3px 6px; margin: 0; }
 .ts-slot.off { opacity: 0.4; }
+/* Model Config: layer count next to the field, quick picks, and the suggested GPU placements */
+.layers-badge { display: inline-block; margin-left: 4px; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 700;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+.ngl-quick { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.ngl-quick button { flex: 0 0 auto; width: auto; margin: 0; padding: 2px 8px; border-radius: 6px; font-size: 10.5px; font-weight: 600; cursor: pointer;
+  color: var(--text); background: var(--btn-bg); border: 1px solid var(--btn-border); font-family: inherit; }
+.ngl-quick button:hover, .ngl-quick button.on { border-color: var(--accent); color: var(--accent); }
+.ts-options { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+.ts-options > .ts-opt-head { grid-column: 1 / -1; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+.ts-opt { border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; background: var(--panel2); display: flex; flex-direction: column; gap: 5px; }
+.ts-opt.best { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.ts-opt-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ts-opt-title { font-size: 12px; font-weight: 700; color: var(--text); }
+.ts-opt-tag { font-size: 9.5px; font-weight: 700; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--dim); }
+.ts-opt-tag.ok { color: #3fb950; border-color: rgba(63,185,80,.45); } .ts-opt-tag.warn { color: var(--warn, #d9a441); border-color: rgba(217,164,65,.5); }
+.ts-opt-tag.bad { color: #fb7185; border-color: rgba(244,63,94,.5); } .ts-opt-tag.rec { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.ts-opt-why, .ts-opt-gpus { font-size: 10.5px; line-height: 1.45; color: var(--dim); }
+.ts-opt-gpus b { color: var(--text); font-weight: 600; }
+.ts-opt .btn { width: auto; align-self: flex-start; margin: 2px 0 0; padding: 4px 12px; font-size: 11px; }
+.ts-options > .ts-opt-note { grid-column: 1 / -1; font-size: 10px; color: var(--dim); }
 .cfg-row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 10px; }
 .cfg-row3 .cfg-item label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cfg-row3 input { width: 100%; min-width: 0; }

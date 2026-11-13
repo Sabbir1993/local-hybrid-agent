@@ -10,6 +10,7 @@ from .estimator import (
     _shares_for,
     effective_params,
     estimate_footprint,
+    load_options,
 )
 from .gguf_parser import parse_gguf_info
 from .moe import expert_bytes_offloaded, is_moe, resolve_offload, smallest_fitting
@@ -182,6 +183,8 @@ def plan_launch(profile: dict, overrides: dict | None = None,
                                     total_gb=round(fp["total_b"] / GB, 2))
         plan["moe"] = {"n_cpu_moe": eff["n_cpu_moe"], "experts_in_ram_gb": round(moe_ram_b / GB, 2),
                        "auto": "auto_n_cpu_moe" in plan}
+    plan["load_options"] = load_options(targets, weights_b, units, eff["n_gpu_layers"], fp["kv_total_b"],
+                                        fp["compute_b"], fp["headroom_b"])
     for t, need, margin in zip(targets, needs, margins):
         for pd in plan["devices"]:
             if pd["index"] == t["index"]:

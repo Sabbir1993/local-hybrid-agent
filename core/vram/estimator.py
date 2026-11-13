@@ -202,6 +202,66 @@ def compute_tensor_split(devices: list) -> "str | None":
     return _shares_str(s_norm)
 
 
+def _split_str(shares: list, scale: int = 20) -> str:
+    """Shares as the integers of a tensor split; a share of 0 stays 0 (that GPU is skipped)."""
+    ints = [0 if sh <= 0 else max(1, int(round(sh * scale))) for sh in shares]
+    if sum(1 for v in ints if v) == 1:
+        return ",".join("1" if v else "0" for v in ints)
+    return ",".join(map(str, ints))
+
+
+def load_options(target_devs: list, weights_b: int, units: int, ngl: int, kv_total_b: int,
+                 compute_b: int, headroom_b: int) -> list:
+    """Up to two ways to place the model on two or more GPUs, best first, for the Model Config card.
+
+    Sized against each card's TOTAL memory, not what is free right now: the model being configured is often the one that is
+    loaded, and its own memory must not count against it. Other models on a card (image, embedding) are therefore not in
+    these numbers.
+
+    - one GPU, when everything fits on the largest card: no data crosses between cards for any token;
+    - balanced: shares proportional to what each card can hold, the most room left for a long context;
+    - front-loaded (when one card is not enough): the largest card is filled, the rest goes to the others, which keeps
+      the other cards as free as possible for the small models.
+    """
+    n = len(target_devs)
+    if n < 2 or units <= 0:
+        return []
+    caps = [dict(d, free_b=d["total_b"]) for d in target_devs]
+    avail = [max(1.0, float(d["total_b"] - compute_b - headroom_b)) for d in caps]
+    off_frac = min(max(0, int(ngl)), units) / max(1, units)
+    load_b = (weights_b + kv_total_b) * off_frac
+    big = max(range(n), key=lambda i: avail[i])
+
+    def option(key, title, shares, why):
+        needs, margins = _eval_fit(caps, shares, weights_b, units, ngl, kv_total_b, compute_b, headroom_b)
+        return {"key": key, "title": title, "tensor_split": _split_str(shares), "why": why,
+                "fits": all(m >= 0 for m in margins),
+                "tight": all(m >= 0 for m in margins) and min(margins) < 0.08 * max(d["total_b"] for d in caps),
+                "per_gpu": [{"index": d["index"], "need_gb": round(need / GB, 2), "total_gb": round(d["total_b"] / GB, 2),
+                             "used": sh > 0}
+                            for d, need, sh in zip(caps, needs, shares)]}
+
+    tot = sum(avail)
+    balanced = option("balanced", "Balanced over the GPUs", [a / tot for a in avail],
+                      "Each card holds a share that matches its memory: the most room left for a long context and "
+                      "several parallel slots.")
+    single = option("single", f"One GPU (GPU {caps[big]['index']})", [1.0 if i == big else 0.0 for i in range(n)],
+                    "Everything on one card: no data crosses between cards, usually the fastest per token, and the "
+                    "other card stays free for the small models.")
+    if single["fits"]:
+        # a card filled to the brim is not the faster choice: one long prompt and it spills over
+        return [balanced, single] if single["tight"] else [single, balanced]
+    s_big = min(1.0, avail[big] * 0.92 / load_b) if load_b else 1.0
+    rest = sum(a for i, a in enumerate(avail) if i != big) or 1.0
+    front = option("front", f"GPU {caps[big]['index']} first", [s_big if i == big else (1.0 - s_big) * avail[i] / rest
+                                                               for i in range(n)],
+                   "The largest card is filled first and the rest goes to the other card(s): fewer layers behind the "
+                   "hand-over between cards, and more memory left on the other card for the small models.")
+    if front["fits"] and front["tensor_split"] != balanced["tensor_split"]:
+        return [balanced, front]
+    return [balanced]
+
+
 def _small_models_loaded():
     """[(role, instance)] of currently-running small models (lazy import)."""
     out = []
