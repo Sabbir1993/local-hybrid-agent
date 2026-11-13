@@ -19,13 +19,15 @@ def clean_work_dir(value) -> str:
     """The agent's work folder on the user's machine: '' (none) or a normalised absolute path.
     A drive root, a system folder or a relative path is refused (ValueError)."""
     import ntpath
+    from ..workspace_path import normalise_device_path
     raw = str(value or "").strip().strip('"')
     if not raw:
         return ""
-    if not (ntpath.isabs(raw) or raw.startswith("/")) or ".." in raw.replace("/", "\\").split("\\"):
-        raise ValueError("work folder must be a full path, for example D:\\reports\\weekly")
-    path = ntpath.normpath(raw) if ntpath.splitdrive(raw)[0] else raw.rstrip("/") or "/"
-    if path in ("/", "") or ntpath.splitdrive(path)[1] in ("\\", ""):
+    try:
+        path = normalise_device_path(raw)     # "/D:/x" and "\D:\x" become "D:\x": a stray leading separator is never stored
+    except ValueError:
+        raise ValueError("work folder must be a full path, for example D:\\reports\\weekly") from None
+    if path == "/" or ntpath.splitdrive(path)[1] in ("\\", ""):
         raise ValueError("pick a folder, not a whole drive")
     low = path.lower()
     if any(part in low for part in _BAD_DIR_PARTS):

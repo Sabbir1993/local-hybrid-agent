@@ -7,6 +7,7 @@ from .. import companion_bridge
 from ..db import _projects_db
 from ..request_context import get_current_device_id, get_current_user_id, personal_workspace
 from ..small_model import COMMON_ROOT
+from ..workspace_path import normalise_device_path
 
 MAX_TOOL_OUTPUT = 20000
 MAX_EDIT_BYTES = 512 * 1024
@@ -44,6 +45,16 @@ def _pkg():
     return sys.modules.get("core.agent_tools")
 
 
+def _device_folder(text, what: str) -> Path:
+    """A stored folder on the user's machine as an absolute path. A folder saved without a drive letter (or with a stray
+    leading slash) would otherwise resolve against the server's own working folder, so it is refused, not guessed at."""
+    try:
+        return Path(normalise_device_path(text))
+    except ValueError as e:
+        raise WorkspaceAccessDenied(
+            f"{what} is not a full path on your machine ({e}). Edit it and pick the folder again.") from None
+
+
 def require_device_workspace() -> tuple[int, Path]:
     """(user_id, project folder on the user's machine) for the calling request."""
     uid = get_current_user_id()
@@ -57,7 +68,7 @@ def require_device_workspace() -> tuple[int, Path]:
         if not cb.is_available(uid):
             raise WorkspaceAccessDenied(
                 "the SSL Local Agent app is not connected - open it on your machine and try again")
-        return uid, Path(own)
+        return uid, _device_folder(own, "this agent's work folder")
     proj = _active_project.get(_user_device_key(uid, did))
     if not proj:
         raise WorkspaceAccessDenied(
@@ -77,7 +88,7 @@ def require_device_workspace() -> tuple[int, Path]:
     if comp_dev and comp_dev != did:
         raise WorkspaceAccessDenied(
             "the connected SSL Local Agent is on a different machine than this project")
-    return uid, Path(row["workspace_dir"])
+    return uid, _device_folder(row["workspace_dir"], f"the folder of project '{proj}'")
 
 
 def active_workspace() -> Path:
