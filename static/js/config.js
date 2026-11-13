@@ -749,6 +749,14 @@ function layersInfo() {
       ? `Model has ${total} layers` + (mb ? ` · about ${mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb + ' MB'} each` : '') + ' · 999 = all on GPU'
       : '';
   }
+  // the same facts on hover: the badge, the hint, and the whole GPU layers field
+  const tip = total ? `GPU layers: this model has ${total} layers` + (mb ? `, about ${mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb + ' MB'} each` : '')
+    + `. 999 = all ${total} on the GPU, 0 = none (CPU only).` : '';
+  const badgeEl = $('cfg-layers-badge');
+  if (badgeEl) badgeEl.title = tip;
+  if (info) info.title = tip;
+  const field = info && info.closest('.cfg-item');
+  if (field && tip) field.title = tip;
   nglQuick(total);
   tsOptionsSoon();
   if (!line) return;
@@ -776,10 +784,17 @@ function nglQuick(total) {
   const cur = parseInt(inp.value);
   const picks = [[`All ${total}`, 999], [`¾ · ${Math.round(total * 0.75)}`, Math.round(total * 0.75)],
     [`½ · ${Math.round(total / 2)}`, Math.round(total / 2)], ['CPU only · 0', 0]];
+  const mb = cfgEngineInfo && cfgEngineInfo.layer_mb;
+  const hover = (v) => {
+    const n = v === 999 ? total : v;
+    if (n === 0) return 'Set GPU layers to 0: every layer runs on the CPU, nothing is loaded onto the GPU';
+    const gb = mb ? `, about ${(n * mb / 1024).toFixed(1)} GB of weights on the GPU` : '';
+    return `Set GPU layers to ${n} of ${total}: ${n} layers on the GPU, ${total - n} on the CPU${gb}`;
+  };
   box.hidden = false;
   box.innerHTML = picks.map(([label, v]) => {
     const on = v === cur || (v === 999 && cur >= total);
-    return `<button type="button" data-ngl="${v}" class="${on ? 'on' : ''}" title="Set GPU layers to ${v === 999 ? 'all (' + total + ')' : v}">${tsEsc(label)}</button>`;
+    return `<button type="button" data-ngl="${v}" class="${on ? 'on' : ''}" title="${tsEsc(hover(v))}">${tsEsc(label)}</button>`;
   }).join('');
   box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     inp.value = b.dataset.ngl;
