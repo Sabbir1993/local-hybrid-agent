@@ -757,7 +757,6 @@ function layersInfo() {
   if (info) info.title = tip;
   const field = info && info.closest('.cfg-item');
   if (field && tip) field.title = tip;
-  nglQuick(total);
   tsOptionsSoon();
   if (!line) return;
   const shares = parseTensorSplit($('cfg-ts') ? $('cfg-ts').value : '').map(s => parseInt(s) || 0);
@@ -773,33 +772,6 @@ function layersInfo() {
     parts.push(`GPU ${cfgGpuIdx[i]}: ~${n} layers${gb}${d ? ' of ' + d.total_gb + ' GB' : ''}`);
   });
   line.textContent = parts.join(' · ') + (parts.length ? ' (weights only; context memory is extra)' : '');
-}
-
-/* The layer count beside the field, and one-click picks: all, three quarters, half, none. */
-function nglQuick(total) {
-  const badge = $('cfg-layers-badge'), box = $('cfg-ngl-quick'), inp = $('cfg-ngl');
-  if (badge) { badge.hidden = !total; badge.textContent = total ? `${total} layers` : ''; }
-  if (!box || !inp) return;
-  if (!total) { box.hidden = true; box.innerHTML = ''; return; }
-  const cur = parseInt(inp.value);
-  const picks = [[`All ${total}`, 999], [`¾ · ${Math.round(total * 0.75)}`, Math.round(total * 0.75)],
-    [`½ · ${Math.round(total / 2)}`, Math.round(total / 2)], ['CPU only · 0', 0]];
-  const mb = cfgEngineInfo && cfgEngineInfo.layer_mb;
-  const hover = (v) => {
-    const n = v === 999 ? total : v;
-    if (n === 0) return 'Set GPU layers to 0: every layer runs on the CPU, nothing is loaded onto the GPU';
-    const gb = mb ? `, about ${(n * mb / 1024).toFixed(1)} GB of weights on the GPU` : '';
-    return `Set GPU layers to ${n} of ${total}: ${n} layers on the GPU, ${total - n} on the CPU${gb}`;
-  };
-  box.hidden = false;
-  box.innerHTML = picks.map(([label, v]) => {
-    const on = v === cur || (v === 999 && cur >= total);
-    return `<button type="button" data-ngl="${v}" class="${on ? 'on' : ''}" title="${tsEsc(hover(v))}">${tsEsc(label)}</button>`;
-  }).join('');
-  box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-    inp.value = b.dataset.ngl;
-    inp.dispatchEvent(new Event('input', { bubbles: true }));
-  }));
 }
 
 /* Two ways to place the model on the GPUs, sized by the server with the values typed here (context, layers, KV type). */
