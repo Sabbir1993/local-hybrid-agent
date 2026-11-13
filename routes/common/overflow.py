@@ -19,7 +19,9 @@ def _is_context_overflow(status_code, err_text) -> bool:
             return False
     except (TypeError, ValueError):
         return False
-    body = bytes(err_text or b"").decode("utf-8", "replace")
+    # a body that is already text (or anything else unexpected) must not raise here: bytes("...") is a TypeError
+    body = (bytes(err_text).decode("utf-8", "replace") if isinstance(err_text, (bytes, bytearray))
+            else str(err_text or ""))
     return ("exceed_context_size_error" in body or "exceeds the available context size" in body
             or bool(_VLLM_CTX_RX.search(body)))
 

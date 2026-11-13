@@ -513,6 +513,7 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             if not _consult:
                 raise _SkipKb()      # small talk / attachment analysis / user blocked: no embedding lookup
             kb_hits, kb_prompt = await fetch_company_knowledge(_kb_route_q, ctx.kb_ids, k=6)
+            cov_hits = list(kb_hits)         # scores only feed the web decision + kb_log (also when withheld)
             if kb_hits:
                 # same gate as chat: a task like "test this app in my browser" must not pull in (or
                 # be blocked by) company documents just because one chunk is vaguely similar
@@ -520,7 +521,6 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
                 _top_cos = max(float(h.get("cos") or 0.0) for h in kb_hits)
                 if not (is_company_or_kb_query(_kb_route_q, ctx.kb_ids) or _top_cos >= _auto_cos):
                     kb_hits, kb_prompt = [], ""
-            cov_hits = list(kb_hits)         # scores only feed the web decision (also when the text is withheld)
         except _SkipKb:
             pass
         except Exception as e:

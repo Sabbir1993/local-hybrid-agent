@@ -214,6 +214,18 @@ def _stream_timeout(client) -> dict:
                                      write=LOCAL_HTTP_WRITE_TIMEOUT_S, pool=LOCAL_HTTP_POOL_TIMEOUT_S)}
 
 
+def _body_text(b) -> str:
+    """Provider error body as text. bytes/bytearray decode; str passes; None is empty; anything else (a mock, a coroutine
+    left unawaited) is str()-ed so the error stays readable instead of a TypeError on .decode."""
+    if isinstance(b, (bytes, bytearray)):
+        return bytes(b).decode("utf-8", "replace")
+    if isinstance(b, str):
+        return b
+    if b is None:
+        return ""
+    return str(b)
+
+
 # clients (by base URL / cloud model key) that rejected a tool_choice field
 _TOOL_CHOICE_UNSUPPORTED: set = set()
 
@@ -300,7 +312,7 @@ async def _llm_chat_stream_raw_inner(client_or_state, msgs: list, tools=None, te
     async with client_or_state.stream("POST", "/v1/chat/completions", json=payload, **_stream_timeout(client_or_state)) as response:
         if response.status_code != 200:
             err_text = await response.aread()
-            err_msg = err_text.decode("utf-8", "replace")[:300]
+            err_msg = _body_text(err_text)[:300]
             effort_keys = [k for k in reasoning.CLOUD_KEYS if k in payload]
             # Context overflow is handled FIRST, ahead of the reasoning / grammar /
             # JSON-repair retries below: each of those raises on its own non-200 and
@@ -317,7 +329,7 @@ async def _llm_chat_stream_raw_inner(client_or_state, msgs: list, tools=None, te
                 # this model's chat template accepts only some effort words (e.g. low / medium / xhigh): learn them from its own
                 # error and send the nearest one - once; if it still fails the error surfaces as before
                 _mp = (state.profile or {}).get("model_path") if state.profile else None
-                learned = reasoning.learn_efforts(_mp, err_text.decode("utf-8", "replace"))
+                learned = reasoning.learn_efforts(_mp, _body_text(err_text))
                 if learned and payload["reasoning_effort"] not in learned:
                     print(f"[common] reasoning effort '{payload['reasoning_effort']}' not accepted by this template "
                           f"({', '.join(learned)}) - retrying with the nearest", file=sys.stderr)
@@ -361,11 +373,11 @@ async def _llm_chat_stream_raw_inner(client_or_state, msgs: list, tools=None, te
                         # grammar alone) - recover instead of surfacing the 400.
                         if _is_context_overflow(rg.status_code, rg_err):
                             print(f"[common] context size exceeded on the grammar retry "
-                                  f"({rg_err.decode('utf-8', 'replace')[:120]}) - compacting", file=sys.stderr)
+                                  f"({_body_text(rg_err)[:120]}) - compacting", file=sys.stderr)
                             async for item in _recover_context(client_or_state, payload, msgs, tools, rid, rg_err):
                                 yield item
                             return
-                        raise RuntimeError(f"upstream {rg.status_code}: {rg_err.decode('utf-8', 'replace')[:200]}")
+                        raise RuntimeError(f"upstream {rg.status_code}: {_body_text(rg_err)[:200]}")
                     async for item in _process_sse_stream(rg, rid=rid):
                         yield item
                 return
@@ -398,7 +410,7 @@ async def _llm_chat_stream_raw_inner(client_or_state, msgs: list, tools=None, te
                         # the one that crosses the context limit.
                         if _is_context_overflow(retry_resp.status_code, re_err):
                             print(f"[common] context size exceeded on the tool-call repair retry "
-                                  f"({re_err.decode('utf-8', 'replace')[:120]}) - compacting", file=sys.stderr)
+                                  f"({_body_text(re_err)[:120]}) - compacting", file=sys.stderr)
                             async for item in _recover_context(client_or_state, payload, msgs, tools, rid, re_err):
                                 yield item
                             return
@@ -412,7 +424,7 @@ async def _llm_chat_stream_raw_inner(client_or_state, msgs: list, tools=None, te
                                     return
                         except Exception:
                             pass
-                        raise RuntimeError(f"upstream {retry_resp.status_code}: {re_err.decode('utf-8', 'replace')[:200]}")
+                        raise RuntimeError(f"upstream {retry_resp.status_code}: {_body_text(re_err)[:200]}")
                     async for item in _process_sse_stream(retry_resp, rid=rid):
                         yield item
                 return

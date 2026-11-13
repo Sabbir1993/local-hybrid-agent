@@ -297,6 +297,49 @@ class Sandbox(unittest.TestCase):
         self.assertNotIn("4111 1111 1111 1111", out)
 
 
+class ParserDepthTests(unittest.TestCase):
+    def test_the_number_expression_leaves_room_on_a_fixed_parser_stack(self):
+        """SQLite up to 3.45 has a parser stack of 100: the expression must compile with room for what wraps it (a view
+        column, COALESCE(... = ?, 0) in a filter), or kb_sql silently falls back to copying every row."""
+        import sqlite3
+        from core.sheet_engine import sql as s
+        c = sqlite3.connect(":memory:")
+        c.execute("CREATE TABLE r(cells)")
+        c.execute("SELECT " + "(" * 10 + s.num_expr("json_extract(cells, '$[0]')") + ")" * 10 + " FROM r")
+
+
+class MonthFilterSchemaTests(unittest.TestCase):
+    def test_a_schema_qualified_table_is_filtered_too(self):
+        from core.sheet_engine import sql as s
+        wb = s.from_tables([("T", "doc", ["N", "Date"], [[1, "04/11/2026"], [2, "05/10/2026"], [3, "09/11/2026"]])])
+        for q in ('SELECT COUNT(*) FROM main."T"', "SELECT COUNT(*) FROM main.T", 'SELECT COUNT(*) FROM MAIN . "T" x'):
+            stmt, _note = s.month_filtered(wb, q, "2026-11")
+            self.assertIn("| 2 |", s.query(wb, stmt), q)
+
+
+class MonthFilteredTests(unittest.TestCase):
+    def test_a_temp_view_workbook_reads_its_view_through_the_schema(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.execute('CREATE TABLE "base" ("Kam Name" TEXT, "Date" TEXT)')
+        conn.executemany('INSERT INTO "base" VALUES (?, ?)',
+                         [("Rahim", "2026-11-05"), ("Karim", "2026-12-01"), ("Sadia", "2026-11-11")])
+        conn.execute('CREATE TEMP VIEW "T" AS SELECT "Kam Name", "Date" FROM main."base"')
+        tables = [{"name": "T", "sheet": "Sheet1", "file": "x", "cols": [("Kam Name", "TEXT"), ("Date", "TEXT")], "dates": ["Date"],
+                   "rows": 3, "truncated": False, "formulas": {}, "preamble": [], "handle": "K1", "aliases": ["T"]}]
+        wb = sql.Workbook(conn, tables, [], schema="temp")
+        stmt, _note = sql.month_filtered(wb, 'SELECT COUNT(*) FROM "T"', "2026-11")
+        self.assertIn('temp."T"', stmt)
+        self.assertIn("| 2 |", sql.query(wb, stmt))       # the two November rows of the view, not the base table's 3 rows or 1
+
+    def test_a_statement_that_does_not_parse_gives_no_guessed_cause(self):
+        wb = sql.from_tables([("Sales", "sales.xlsx", ["Region"], [["Dhaka"]])])
+        with self.assertRaises(sql.SqlError) as cm:
+            sql.query(wb, 'SELECT "Region" FROM Sales sheet WHERE')
+        self.assertIn("does not parse", str(cm.exception))
+        self.assertNotIn("usual cause", str(cm.exception))
+
+
 class Tool(unittest.TestCase):
     def test_the_tool_is_registered_and_rejects_other_files(self):
         from core.agent_tools import TOOL_IMPLS, AGENT_TOOLS

@@ -70,7 +70,7 @@ ok(!h.includes('prod-card'), 'products: invalid JSON stays a code block');
 h = md('1. first\n2. second\n   - nested a\n   - nested b\n3. third\n\n- [x] done\n- [ ] todo');
 ok(/<ol>[\s\S]*<li>first/.test(h) && /<ul>[\s\S]*nested a/.test(h), 'ordered list with a nested bullet list');
 ok(h.includes('md-task') && h.includes('✓') && !h.includes('☐') && !h.includes('☑') && !/<input/.test(h), 'task list: empty boxes are dropped, a done item keeps a muted tick, never an <input>');
-ok(/<li>\s*todo/.test(h) || h.includes('todo'), 'an unchecked item is still listed');
+ok(/<li>\s*todo\b/.test(h) || h.includes('todo'), 'an unchecked item is still listed');
 
 // emphasis edge cases
 h = md('use snake_case_name and my_var_2 here, a lone * star and 3 * 4 = 12');

@@ -197,15 +197,19 @@ def num_expr(x: str) -> str:
     plain = f"v NOT GLOB '*[^0-9,.+()% {_WS}-]*'"
     q = f"SELECT {x} AS v LIMIT 1"
     q = f"SELECT v, CASE WHEN {plain} THEN NULL ELSE trim({chain}, {_sq(_WS)}) END AS m FROM ({q}) LIMIT 1"
-    q = (f"SELECT v, CASE WHEN m IS NULL THEN NULL WHEN m GLOB '~*' THEN trim(substr(m, 2), {_sq(_WS)}) ELSE m END AS m "
-         f"FROM ({q}) LIMIT 1")
-    q = (f"SELECT CASE WHEN m IS NULL THEN trim(v, {_sq(_WS)}) WHEN m GLOB '*~' THEN trim(substr(m, 1, length(m) - 1), {_sq(_WS)}) "
-         f"ELSE m END AS c FROM ({q}) LIMIT 1")
+    # The steps below are written as expressions inside as few nested sub-selects as possible: every "FROM (SELECT ...)" level
+    # costs parser stack, and SQLite builds with a fixed stack of 100 (3.45 and older, the one Python 3.11 ships) answered the
+    # seven-level version with "parser stack overflow", which silently turned every kb_sql query into a full copy of the rows.
+    ws = _sq(_WS)
+    lead = f"CASE WHEN m GLOB '~*' THEN trim(substr(m, 2), {ws}) ELSE m END"          # one currency mark in front
+    c = (f"CASE WHEN m IS NULL THEN trim(v, {ws}) WHEN {lead} GLOB '*~' THEN trim(substr({lead}, 1, length({lead}) - 1), {ws}) "
+         f"ELSE {lead} END")                                                            # ... and one behind
     # layer 2: the percent sign, then accounting brackets or one sign
-    q = f"SELECT CASE WHEN c GLOB '*%' THEN substr(c, 1, length(c) - 1) ELSE c END AS p FROM ({q}) LIMIT 1"
-    q = (f"SELECT p GLOB '(*)' OR p GLOB '-*' AS neg, CASE WHEN p GLOB '(*)' AND length(p) > 2 THEN substr(p, 2, length(p) - 2) "
-         f"WHEN p GLOB '[+-]*' THEN substr(p, 2) ELSE p END AS b FROM ({q}) LIMIT 1")
-    q = f"SELECT neg, b, substr(b, 1, instr(b || '.', '.') - 1) AS ip FROM ({q}) LIMIT 1"
+    q = f"SELECT CASE WHEN {c} GLOB '*%' THEN substr({c}, 1, length({c}) - 1) ELSE {c} END AS p FROM ({q}) LIMIT 1"
+    b = (f"CASE WHEN p GLOB '(*)' AND length(p) > 2 THEN substr(p, 2, length(p) - 2) "
+         f"WHEN p GLOB '[+-]*' THEN substr(p, 2) ELSE p END")
+    q = (f"SELECT p GLOB '(*)' OR p GLOB '-*' AS neg, {b} AS b, substr({b}, 1, instr({b} || '.', '.') - 1) AS ip "
+         f"FROM ({q}) LIMIT 1")
     # layer 3: only digits, commas and at most one point; commas in the grouping shapes; no leading zero; under 13 digits
     ok = (f"b <> '' AND b NOT GLOB '*[^0-9,.]*' AND b GLOB '*[0-9]*' AND length(b) - length(replace(b, '.', '')) <= 1 "
           f"AND b NOT GLOB '*.*,*' AND (instr(ip, ',') = 0 OR {_comma_patterns()}) AND ip NOT GLOB '0[0-9,]*' "
@@ -291,8 +295,9 @@ def _convert(kind: str, v, card_column: bool = False):
 class Workbook:
     """A loaded file: the sqlite connection plus what the model needs to know to write queries."""
 
-    def __init__(self, conn, tables: list, notes: list):
+    def __init__(self, conn, tables: list, notes: list, schema: str = "main"):
         self.conn, self.tables, self.notes = conn, tables, notes     # tables: [{name, sheet, file, cols, rows, ...}]
+        self.schema = schema                                         # where the real tables live: "main", or "temp" for views
         self.lock = threading.Lock()
 
 
@@ -535,7 +540,7 @@ def from_kb_views(conn, metas: list) -> Workbook:
         if row is None or int(row[0]) != int(m["nrows"]):
             raise RuntimeError(f"table {m['id']} changed while the views were built")
     _lock_kb(conn, names, inners)
-    return Workbook(conn, tables, [])
+    return Workbook(conn, tables, [], schema="temp")     # the public names are TEMP VIEWs
 
 
 def _lock_kb(conn, view_names: set, inner_names: set) -> None:
@@ -818,58 +823,118 @@ def _known_names(wb: Workbook) -> set:
 
 
 # ---- filtering by a month -------------------------------------------------------------------------------------------
-_KW_RX = re.compile(r"\b(where|group\s+by|order\s+by|limit|having|offset|union|except|intersect)\b", re.I)
 _ISO_DAY_RX = re.compile(r"^\d{4}-\d{2}-\d{2}")
+_PERIOD_RX = re.compile(r"[0-9]{4}-[0-9]{2}(-[0-9]{2})?")   # ASCII only: \d would also take Bengali digits
+_WITH_RX = re.compile(r"(?is)^\s*with(\s+recursive)?\b")
 
 
-def _keyword_positions(sql: str) -> list:
-    """The keywords of the statement that are not inside parentheses: (start, end, keyword)."""
-    out, depth, prev = [], 0, 0
-    for m in _KW_RX.finditer(sql):
-        depth += sql.count("(", prev, m.start()) - sql.count(")", prev, m.start())
-        if depth == 0:
-            out.append((m.start(), m.end(), re.sub(r"\s+", " ", m.group(1)).lower()))
-        prev = m.end()
-    return out
-
-
-def add_where(sql: str, condition: str) -> str:
-    """Put a condition into the statement's WHERE clause, before the grouping.
-
-    The filter has to reach the rows, not the result of the aggregation: `SELECT Stage, SUM(value) FROM t GROUP BY Stage`
-    filtered after the grouping would answer with one row, not with the November rows.
-    """
-    kws = _keyword_positions(sql)
-    for start, end, kw in kws:
-        if kw == "where":
-            return sql[:end] + f" AND ({condition})" + sql[end:]
-    for start, end, kw in kws:
-        if kw in ("group by", "order by", "having", "limit", "offset"):
-            return sql[:start] + f" WHERE ({condition}) " + sql[start:]
-    return sql.rstrip() + f" WHERE ({condition})"
-
-
-def date_columns(wb: Workbook) -> list:
-    """The columns that hold dates: a column named like a date, or one whose values are dates.
+def table_date_columns(wb: Workbook, t: dict) -> list:
+    """The date columns of one table: a column named like a date, or one whose values are dates.
 
     The sheet engine keeps a date column as ISO text ("2026-11-05"), so strftime() can read it.
     """
     out = []
-    for t in wb.tables:
-        for c, _ty in t["cols"]:
-            if c in out:
-                continue
-            if "date" in c.lower():
-                out.append(c)
-                continue
-            try:
-                vals = [r[0] for r in wb.conn.execute(f'SELECT "{c}" FROM "{t["name"]}" LIMIT 20')]
-            except sqlite3.Error:
-                continue
-            seen = [v for v in vals if v not in (None, "")]
-            if seen and all(isinstance(v, str) and _ISO_DAY_RX.match(v.strip()) for v in seen):
-                out.append(c)
+    for c, _ty in t["cols"]:
+        if "date" in c.lower():
+            out.append(c)
+            continue
+        try:
+            vals = [r[0] for r in wb.conn.execute(f'SELECT "{c}" FROM "{t["name"]}" LIMIT 20')]
+        except sqlite3.Error:
+            continue
+        seen = [v for v in vals if v not in (None, "")]
+        if seen and all(isinstance(v, str) and _ISO_DAY_RX.match(v.strip()) for v in seen):
+            out.append(c)
     return out
+
+
+def date_columns(wb: Workbook) -> list:
+    """The date columns of every loaded table, each name once."""
+    out = []
+    for t in wb.tables:
+        out += [c for c in table_date_columns(wb, t) if c not in out]
+    return out
+
+
+def _qid(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _pick_column(cols: list, want: str) -> str:
+    """The column the user named: exact (ignoring case) first, then the first whose name contains it."""
+    low = want.lower()
+    return next((c for c in cols if c.lower() == low), None) or next((c for c in cols if low in c.lower()), None)
+
+
+def period_filtered(wb: Workbook, sql: str, period: str, date_column: str = "", noun: str = "file") -> tuple:
+    """(statement, note): the statement reading only the rows of `period` from every table it references.
+
+    `period` is a month ("yyyy-mm") or one day ("yyyy-mm-dd"). Each referenced table is shadowed by a CTE of the same name
+    that keeps only those rows of the real table (`main."T"` / `temp."T"` is never a CTE, so the shadow reads the real one).
+    The model's own statement is left as it is, so WHERE, OR, GROUP BY, UNION, subqueries and joins all see the filtered
+    rows. The filter is applied to the rows, before any grouping. A table without a date column is read whole.
+
+    `noun` only words the error and the warnings ("in this file" / "in this data").
+    """
+    if not isinstance(period, str) or not _PERIOD_RX.fullmatch(period):
+        raise ValueError(f"'{period}' is not a yyyy-mm or yyyy-mm-dd period")
+    try:
+        if len(period) == 10:
+            _dt.date.fromisoformat(period)
+        elif not 1 <= int(period[5:]) <= 12:
+            raise ValueError
+    except ValueError:
+        raise ValueError(f"'{period}' is not a real month or day") from None
+    fmt = "%Y-%m-%d" if len(period) == 10 else "%Y-%m"
+    ym = period
+    if not re.fullmatch(r"[A-Za-z_]\w*", wb.schema):           # set by this module, never by the model; emitted unquoted
+        raise ValueError("bad schema name")
+    sql = str(sql or "").strip().rstrip(";").strip()
+    if not re.match(r"(?is)^(select|with)\b", sql):          # checked here too: a WITH prefix would hide a DROP from query()
+        raise SqlError("only SELECT queries are allowed (read-only)")
+    stmt, guessed = _rewrite_tables(wb, sql)                 # the names query() would resolve, before the shadows exist
+    ctes = {_norm(c) for c in _CTE_RX.findall(stmt)}          # names the statement defines itself: never shadowed
+    want = str(date_column or "").strip()
+    everything = date_columns(wb)
+    if want and not _pick_column(everything, want):
+        names = [c for t in wb.tables for c, _ in t["cols"]]
+        raise ValueError(f"there is no date column named '{want}' in this {noun}. "
+                         f"Date columns: {', '.join(everything) or '(none)'}. Columns: {', '.join(names[:30])}")
+    refs = [t for t in wb.tables if re.search(r"(?<![\w$])" + re.escape(t["name"]) + r"(?![\w$])", stmt, re.I)] or list(wb.tables)
+    shadows, used = [], []
+    for t in refs:
+        if _norm(t["name"]) in ctes:
+            continue
+        # main."T" / temp."T" written by the model would read the real table past the shadow: drop the schema
+        stmt = re.sub(r'(?i)(?<![\w$.])(?:main|temp)\s*\.\s*(?=["`\[]?' + re.escape(t["name"]) + r'(?![\w$]))', "", stmt)
+        cols = table_date_columns(wb, t)
+        if want:
+            p = _pick_column(cols, want)
+            cols = [p] if p else []
+        if not cols:
+            continue
+        cond = " OR ".join(f"strftime('{fmt}', {_qid(c)}) = '{ym}'" for c in cols)
+        shadows.append(f"{_qid(t['name'])} AS (SELECT * FROM {wb.schema}.{_qid(t['name'])} WHERE {cond})")
+        used += [c for c in cols if c not in used]
+    if not shadows:
+        warn = (f"warning: this {noun} has no date column, so the {ym} filter could not be applied - "
+                f"these are all the rows, not only {ym}. Say so in the answer.")
+        return sql, warn
+    m = _WITH_RX.match(stmt)
+    head = ", ".join(shadows)
+    if m:
+        stmt = stmt[:m.end()] + " " + head + "," + stmt[m.end():]
+    else:
+        stmt = "WITH " + head + " " + stmt
+    note = f"(filtered to {ym} on {', '.join(used)})"
+    if guessed:                                              # keep the note query() would have given for a guessed table name
+        note += " (note: the table name was read as " + ", ".join(f"{w} -> {r}" for w, r in guessed[:3]) + ")"
+    return stmt, note
+
+
+def month_filtered(wb: Workbook, sql: str, ym: str, date_column: str = "", noun: str = "file") -> tuple:
+    """period_filtered for one month (yyyy-mm)."""
+    return period_filtered(wb, sql, ym, date_column, noun)
 
 
 def _unknown_quoted(wb: Workbook, sql: str) -> list:
@@ -936,8 +1001,7 @@ def _explain(wb: Workbook, sql: str, msg: str) -> str:
         out.append("Use those exact names (describe=true lists them).")
         return " ".join(out)
     if re.search(r"unrecognized token|incomplete input|near \"|syntax error", msg, re.I):
-        out = [f"{msg}.", "The statement does not parse; a table name that is not quoted and holds a space, a comma or a "
-                           "digit is the usual cause.",
+        out = [f"The statement does not parse. sqlite says: {msg}.",
                f"Available tables: {listed or '(none)'}.",
                f"Or use the short handle of a table in FROM: {handles}."]
         named = [n for n in names if n.lower() in sql.lower()]

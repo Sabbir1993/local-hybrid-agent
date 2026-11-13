@@ -316,6 +316,43 @@ def split_kb_block(block: str) -> Tuple[str, str]:
     return block, KB_OPERATING_RULES
 
 
+def min_evidence_score() -> float:
+    """knowledge.min_evidence: rerank score floor for a chunk to count as evidence (default 0.30, clamped 0-1)."""
+    from .small_model import APP_CONFIG
+    try:
+        v = float((APP_CONFIG.get("knowledge") or {}).get("min_evidence", 0.30))
+    except (TypeError, ValueError):
+        return 0.30
+    return min(1.0, max(0.0, v))
+
+
+def max_chunks_per_source() -> int:
+    """knowledge.max_chunks_per_source: most chunks one document may give a prompt (default 3, 0 = no cap)."""
+    from .small_model import APP_CONFIG
+    try:
+        return max(0, int((APP_CONFIG.get("knowledge") or {}).get("max_chunks_per_source", 3)))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _cap_per_source(ranked: List[Dict], k: int, cap: int) -> List[Dict]:
+    """Keep score order, at most cap chunks per source; backfill from the skipped ones (score order) up to k."""
+    counts: Dict = {}
+    picked, skipped = [], []
+    for h in ranked:
+        sid = h.get("source_id")
+        if counts.get(sid, 0) < cap:
+            counts[sid] = counts.get(sid, 0) + 1
+            picked.append(h)
+        else:
+            skipped.append(h)
+    picked = picked[:k]
+    if len(picked) < k:
+        picked += skipped[:k - len(picked)]
+    order = {id(h): i for i, h in enumerate(ranked)}
+    return sorted(picked, key=lambda h: order[id(h)])
+
+
 async def fetch_company_knowledge(query: str, allowed_source_ids: Set[int], k: int = 6) -> Tuple[List[Dict], str]:
     """Fetch relevant knowledge chunks and generate the authoritative reference prompt block.
 
@@ -335,8 +372,12 @@ async def fetch_company_knowledge(query: str, allowed_source_ids: Set[int], k: i
                                              min_cos=min_cos)
     okf_facts = search_okf(query, allowed_source_ids=allowed_source_ids, k=4)
 
-    # Re-rank, deduplicate and evidence filter
-    hits = rerank_and_filter(query, raw_hits, top_k=k, okf_facts=okf_facts)
+    # Re-rank, deduplicate and evidence filter (a wider pool when the per-document cap needs spares)
+    cap = max_chunks_per_source()
+    hits = rerank_and_filter(query, raw_hits, top_k=(k * 2 if cap else k), min_evidence_score=min_evidence_score(),
+                             okf_facts=okf_facts)
+    if cap:
+        hits = _cap_per_source(hits, k, cap)
     if not hits and not okf_facts:
         return [], ""
 

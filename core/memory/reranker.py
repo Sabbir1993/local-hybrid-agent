@@ -10,6 +10,8 @@ Implements the second-stage ranking layer:
 import re
 from typing import List, Dict, Optional
 
+from .constants import _normalize_query_words
+
 
 def _tokenize(text: str) -> List[str]:
     """Tokenize into alphanumeric words with symbols preserved."""
@@ -63,14 +65,17 @@ def calculate_cross_features(query: str, text: str, base_score: float = 0.5) -> 
     # Exact phrase presence
     phrase_bonus = 0.25 if len(q_lower) > 5 and q_lower in t_lower else 0.0
 
-    # Token overlap
-    q_tokens = _tokenize(query)
-    if not q_tokens:
-        return base_score
-
-    t_tokens_set = set(_tokenize(text))
-    matched_tokens = sum(1 for tok in q_tokens if tok in t_tokens_set)
-    coverage = matched_tokens / max(1, len(q_tokens))
+    # Token overlap: same stopword/stem normalisation as the lexical search (filler words like "the", "of" count nothing)
+    q_terms = set(_normalize_query_words(query, limit=10**6))
+    if q_terms:
+        t_terms = set(_normalize_query_words(text, limit=10**6))
+        coverage = sum(1 for tok in q_terms if tok in t_terms) / len(q_terms)
+    else:
+        q_tokens = _tokenize(query)     # no meaningful words (all stopwords): raw tokens, as before
+        if not q_tokens:
+            return base_score
+        t_tokens_set = set(_tokenize(text))
+        coverage = sum(1 for tok in q_tokens if tok in t_tokens_set) / max(1, len(q_tokens))
 
     # Exact symbol bonus (CamelCase, snake_case, or numbers)
     symbols = [w for w in re.findall(r"\b[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+\b|[A-Z][a-z]+[A-Z]\w*|\b[A-Z]{2,}\b|\b\d{3,}\b", query)]

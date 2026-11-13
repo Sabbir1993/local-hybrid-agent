@@ -1373,14 +1373,11 @@ async def run_agent_stream(req, user, ctx):
                     if isinstance(args, dict) and args.get("_runaway"):
                         arg_errors[tc_id] = RUNAWAY_MSG       # cut by the stream guard while looping: nothing runs
 
-                    if isinstance(args, dict) and name in ("kb_sql", "data_sql") and not args.get("month"):
-                        # "the November plan" is a month of data, not the whole sheet: the model leaves the month out of
-                        # the query, so the month the user asked for is handed to the tool and it filters the rows
-                        # before the grouping.
+                    if isinstance(args, dict) and name in ("kb_sql", "data_sql"):
+                        # "the November plan" / "the report of 4th November": the day or month the user asked for is handed
+                        # to the tool, which filters the rows before the grouping.
                         from core import month_arg as _month_arg
-                        ym = _month_arg.from_request(last_query)
-                        if ym:
-                            args["month"] = ym
+                        _month_arg.apply_request_period(args, last_query)
 
                     # For history retention in msgs, prune large payloads to lightweight stubs
                     # so future turns do not re-ingest tens of thousands of raw code characters

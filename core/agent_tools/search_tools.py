@@ -227,37 +227,32 @@ def _kb_table_name(title: str, sheet: str) -> str:
 
 
 def _month_filter(wb, args: dict) -> tuple:
-    """The query with a month filter in it, and a note that says what was filtered.
+    """The query with a month (or one day) filter in it, and a note that says what was filtered.
 
-    A plan for one month ("the November plan") has to be read from that month only. The model does not write the filter
-    by itself, so the month is a parameter of the tool and the filter is put into the statement before the grouping.
-    Which date column carries the month: the one the user named, or every date column of the sheet.
+    A plan for one month ("the November plan") has to be read from that month only; a single date ("the report of 4th
+    November") from that day only. The model does not write the filter by itself, so month / day are parameters of the
+    tool and the filter goes into the statement before the grouping. A day wins over a month.
+    Which date column carries it: the one the user named, or every date column of the sheet.
     """
     from .. import month_arg
     from ..sheet_engine import sql as sheet_sql
     sql = str(args.get("sql") or "")
     month = str(args.get("month") or "").strip()
-    if not sql or not month:
+    day = str(args.get("day") or "").strip()
+    if not sql or not (month or day):
         return sql, ""
-    ym = month_arg.parse(month, allow_number=True)
-    if not ym:
-        return sql, f"warning: '{month}' is not a month, so no month filter was applied."
-    cols = sheet_sql.date_columns(wb)
-    want = str(args.get("date_column") or "").strip()
-    if want:
-        pick = [c for c in cols if c.lower() == want.lower()]
-        if not pick:
-            pick = [c for c in cols if want.lower() in c.lower()]
-        if not pick:
-            names = [c for t in wb.tables for c, _ in t["cols"]]
-            raise ValueError(f"there is no date column named '{want}' in this data. "
-                             f"Date columns: {', '.join(cols) or '(none)'}. Columns: {', '.join(names[:30])}")
-        cols = pick[:1]
-    if not cols:
-        return sql, (f"warning: this data has no date column, so the {ym} filter could not be applied - "
-                     f"these are all the rows, not only {ym}. Say so in the answer.")
-    cond = " OR ".join(f"strftime('%Y-%m', \"{c}\") = '{ym}'" for c in cols)
-    return sheet_sql.add_where(sql, cond), f"(filtered to {ym} on {', '.join(cols)})"
+    if day:
+        period = month_arg.parse_day(day)
+        if not period:
+            return sql, f"warning: '{day}' is not a date, so no day filter was applied."
+    else:
+        period = month_arg.parse(month, allow_number=True)
+        if not period:
+            return sql, f"warning: '{month}' is not a month, so no month filter was applied."
+    stmt, note = sheet_sql.period_filtered(wb, sql, period, str(args.get("date_column") or "").strip(), noun="data")
+    if day and note.startswith("(filtered"):                  # a way out if the request meant the whole month
+        note += f' To read the whole month instead, call again with day="" and month={period[:7]}.'
+    return stmt, note
 
 
 def _kb_copy_workbook(db, tables: list):

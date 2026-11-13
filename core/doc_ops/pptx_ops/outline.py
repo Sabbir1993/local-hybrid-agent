@@ -40,7 +40,7 @@ _META = re.compile(
     r"^(markdown source|source for conversion|here(?:'s| is| are)\b|below is|sure[,!. ]|certainly|of course|"
     r"presentation (?:outline|content|structure)|\d+\s*slides?\b.*(?:structure|outline|total|\+|:)\s*$)", re.I)
 _FOOTER_META = re.compile(
-    r"^(end of (?:the )?(?:presentation|deck|slides?)|total slides?.*|estimated (?:presentation )?time.*|"
+    r"^(end of (?:the )?(?:presentation|deck|slides?)|total slides?\b.*|estimated (?:presentation )?time\b.*|"
     r"format\s*:.*(?:markdown|pptx|powerpoint|convert).*|\(?end\)?)$", re.I)
 # What models paste into a deck that is not deck content: ASCII-art boxes (draw as garbage in a text box) and raw XML
 # (they sometimes dump the package parts they just inspected). Those lines are dropped before anything is parsed.

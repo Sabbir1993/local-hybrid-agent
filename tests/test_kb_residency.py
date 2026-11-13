@@ -138,11 +138,16 @@ class ChatRunBlockedTests(unittest.TestCase):
         sent = []
         tools_seen = []
 
-        async def fake_stream(client, msgs, **kw):
+        async def fake_stream(client, msgs, tools=None, **kw):
             sent.append(json.dumps(msgs))
-            tools_seen.append([t.get("function", {}).get("name") for t in (kw.get("tools") or [])])
+            tools_seen.append([t.get("function", {}).get("name") for t in (tools or [])])
             raise RuntimeError("stop after capturing the cloud payload")
             yield  # pragma: no cover - makes this an async generator
+
+        async def fake_fallback(client, fb, msgs, tools=None, *a, **kw):
+            # run.py streams the cloud lane through common._llm_chat_stream_with_fallback (fallback_local defaults on)
+            async for x in fake_stream(client, msgs, tools=tools):
+                yield x
 
         async def boom(*a, **kw):
             raise RuntimeError("llama-server failed to bind port")
@@ -168,7 +173,8 @@ class ChatRunBlockedTests(unittest.TestCase):
                   mock.patch.object(chat_route.run, "monitor_begin", return_value=1),
                   mock.patch.object(chat_route.run, "monitor_end", create=True),
                   mock.patch.object(chat_route.run, "db_record_request"),     # never write test traffic into the real usage.db
-                  mock.patch.object(chat_route.run, "_llm_chat_stream", fake_stream)):
+                  mock.patch.object(chat_route.run, "_llm_chat_stream", fake_stream),
+                  mock.patch.object(chat_route.run.common, "_llm_chat_stream_with_fallback", fake_fallback)):
                 resp = await chat_route.chat_run(req, user)
                 events = []
                 try:

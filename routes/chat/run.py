@@ -570,12 +570,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         try:
             from core.knowledge_router import fetch_company_knowledge, is_company_or_kb_query, split_kb_block
             kb_hits, kb_prompt_block = await fetch_company_knowledge(kb_query, kb_ids, k=6)
+            cov_hits = list(kb_hits)         # scores only feed the web decision + kb_log (also when withheld)
             if kb_hits:
                 auto_cos = float((APP_CONFIG.get("knowledge") or {}).get("auto_inject_cos", 0.55))
                 top_cos = max(float(h.get("cos") or 0.0) for h in kb_hits)
                 if not (is_company_or_kb_query(kb_query, kb_ids) or top_cos >= auto_cos):
                     kb_hits, kb_prompt_block = [], ""
-            cov_hits = list(kb_hits)         # scores only feed the web decision below (also when withheld)
             if kb_hits:
                 kb_used = True
                 # excerpts are untrusted data: user turn (fenced). The operator's rules are system text, same bytes every
@@ -1797,14 +1797,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     if not isinstance(args, dict):
                         args = {"query": str(args)}
 
-                    if t_name in ("kb_sql", "data_sql") and not args.get("month"):
-                        # "the November plan" is a month of data, not the whole sheet. The model leaves the month out of
-                        # the query, so the month the user asked for is handed to the tool: it filters the rows before the
-                        # grouping. The model still chooses the date column; date_column wins over this.
+                    if t_name in ("kb_sql", "data_sql"):
+                        # "the November plan" / "the report of 4th November": the day or month the user asked for is handed
+                        # to the tool, which filters the rows before the grouping. date_column still wins over the column.
                         from core import month_arg as _month_arg
-                        ym = _month_arg.from_request(last_query)
-                        if ym:
-                            args["month"] = ym
+                        _month_arg.apply_request_period(args, last_query)
 
                     yield sse("tool_call", {'id': tc_id, 'name': t_name, 'args': args})
 

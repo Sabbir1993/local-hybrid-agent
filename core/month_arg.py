@@ -84,3 +84,96 @@ def from_request(text) -> str:
         y2 = re.search(r"(19|20)\d{2}", only.group(0))
         return f"{int(y2.group(0)) if y2 else date.today().year:04d}-{mo:02d}"
     return ""
+
+
+# ---- days -------------------------------------------------------------------------------------------------------
+_DAY_NAME = "|".join(sorted(MONTHS, key=len, reverse=True))
+_ISO_DAY_RX = re.compile(r"(?<!\d)(20\d{2})-(\d{1,2})-(\d{1,2})(?!\d)")
+_NUM_DAY_RX = re.compile(r"(?<![\d/-])(\d{1,2})[/-](\d{1,2})[/-](20\d{2})(?!\d)")          # day first, year required
+_DAY_FIRST_RX = re.compile(r"(?<!\d)(\d{1,2})(st|nd|rd|th)?\s+(?:of\s+)?(" + _DAY_NAME + r")\b(?:,?\s*(20\d{2})(?!\d))?", re.I)
+_MONTH_FIRST_RX = re.compile(r"\b(" + _DAY_NAME + r")\s+(\d{1,2})(?:st|nd|rd|th)?(?!\d)(?:,?\s*(20\d{2})(?!\d))?", re.I)
+_RANGE_RX = re.compile(r"\b(between|from|since|until|till|before|after|through|week)\b", re.I)
+_RANK_RX = re.compile(r"\b(top|first|last|best|worst|next|previous|past)\s+$", re.I)
+
+
+def _this_year() -> int:
+    return date.today().year
+
+
+def _day_candidates(t: str, default_year=None) -> list:
+    """Every date-looking span in the text: (start, end, iso or "" when not a real date, bare number?)."""
+    found = []
+    for m in _ISO_DAY_RX.finditer(t):
+        found.append((m.start(), m.end(), m.group(1), m.group(2), m.group(3), False))
+    for m in _NUM_DAY_RX.finditer(t):
+        found.append((m.start(), m.end(), m.group(3), m.group(2), m.group(1), False))
+    for m in _DAY_FIRST_RX.finditer(t):
+        mo = MONTHS[m.group(3).lower()]
+        y = m.group(4) or default_year or _this_year()
+        found.append((m.start(), m.end(), y, mo, m.group(1), m.group(2) is None))
+    for m in _MONTH_FIRST_RX.finditer(t):
+        mo = MONTHS[m.group(1).lower()]
+        y = m.group(3) or default_year or _this_year()
+        found.append((m.start(), m.end(), y, mo, m.group(2), False))
+    found.sort()
+    out = []
+    for c in found:                                     # a span already taken by an earlier match is the same date
+        if not out or c[0] >= out[-1][1]:
+            out.append(c)
+    return out
+
+
+def _iso_day(y, mo, d) -> str:
+    try:
+        return date(int(y), int(mo), int(d)).isoformat()
+    except (ValueError, TypeError):
+        return ""
+
+
+def parse_day(text, default_year=None) -> str:
+    """A day a tool argument names: "2026-11-04", "4 November 2026", "04/11/2026". "" when it is not one day."""
+    t = str(text or "")
+    cands = _day_candidates(t, default_year)
+    if len(cands) != 1:
+        return ""
+    s, e, y, mo, d, _ = cands[0]
+    return _iso_day(y, mo, d)
+
+
+def day_from_request(text) -> str:
+    """The one day a request asks data for, or "" (a range, several dates, a rank like "top 5", or no date)."""
+    t = str(text or "")
+    if len(_all_months(t)) > 1:
+        return ""
+    cands = _day_candidates(t)
+    if len(cands) != 1:
+        return ""
+    s, e, y, mo, d, bare = cands[0]
+    if _RANGE_RX.search(t[max(0, s - 15): s]):          # "from 4th november", "between ..." name a range
+        return ""
+    if bare and _RANK_RX.search(t[:s]):                  # "top 5 november deals": 5 is a rank
+        return ""
+    if re.match(r"\s*(?:to|until|till|through|[-–])\s*\d", t[e:], re.I):     # "4th november to 6th": a range
+        return ""
+    if (s and (t[s - 1] in "-/" or t[s - 1].isdigit())) or re.match(r"[-/]?\d", t[e:]):   # part of a longer number: "12-11-2026-7"
+        return ""
+    span = t[s:e]
+    word = _NAME_RX.search(span)
+    if word and word.group(1).lower() in ("may", "mar", "march"):           # English words too: "you may 5 times", "march 3 teams"
+        sure = _YEAR_RX.search(span) or re.search(r"\d(?:st|nd|rd|th)\b", span, re.I)
+        if not sure and not _ABOUT_RX.search(t[max(0, s - 25): e + 25]):
+            return ""
+    return _iso_day(y, mo, d)
+
+
+def apply_request_period(args: dict, request_text) -> None:
+    """Hand the day (or else the month) the user asked for to a kb_sql / data_sql call that did not name one."""
+    if "day" not in args:                               # "" from the model means: no day, on purpose
+        d = day_from_request(request_text)
+        if d:
+            args["day"] = d
+            return
+    if not args.get("month") and not args.get("day"):
+        ym = from_request(request_text)
+        if ym:
+            args["month"] = ym

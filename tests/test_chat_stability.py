@@ -513,7 +513,8 @@ class Endings(Harness):
         async def run_tool(name, args):
             return "fine"
         r = self.turn("tell me a story about a fox", [tool_round("lookup_thing", {"q": "x"}), res("")], cloud=False,
-                      cfg={"run_timeout_s": 1e-9}, extra=(mock.patch("routes.chat.run.run_tool", run_tool),))
+                      cfg={"run_timeout_s": -1},  # already expired: a fast run can read the same time.time() twice (coarse clock)
+                      extra=(mock.patch("routes.chat.run.run_tool", run_tool),))
         stop = [d for ev, d in r.events if ev == "budget_stop"][-1]
         self.assertEqual(stop["reason"], "timeout")
         self.assertIn("ran out of time", r.final)
@@ -774,3 +775,41 @@ class RoundsNeverZero(unittest.TestCase):
         src = open("routes/chat/run.py", encoding="utf-8").read()
         self.assertIn("max(1, int(level_max_rounds))", src)
         self.assertIsNone(re.search(r"max_turns = int\(level_max_rounds\) if", src))
+
+
+# --------------------------------------------------------------------------------------------------------------------------
+# 13. a provider error body of any type reads as text, never a TypeError
+# --------------------------------------------------------------------------------------------------------------------------
+class ErrorBodyText(unittest.TestCase):
+    def test_body_text_shapes(self):
+        from routes.common.llm_stream import _body_text
+        self.assertEqual(_body_text(b"caf\xc3\xa9 \xff"), "caf\u00e9 \ufffd")
+        self.assertEqual(_body_text(bytearray(b"x")), "x")
+        self.assertEqual(_body_text("plain"), "plain")
+        self.assertEqual(_body_text(None), "")
+        self.assertEqual(_body_text(SimpleNamespace(a=1)), str(SimpleNamespace(a=1)))
+
+    def test_a_non_200_with_a_bytes_body_is_an_upstream_error(self):
+        from routes.common import llm_stream
+
+        class Resp:
+            status_code = 500
+            async def aread(self):
+                return b'{"error": "model crashed"}'
+
+        class CM:
+            async def __aenter__(self):
+                return Resp()
+            async def __aexit__(self, *a):
+                return False
+
+        client = SimpleNamespace(is_cloud=False, timeout=None, stream=lambda *a, **k: CM())
+
+        async def go():
+            async for _ in llm_stream._llm_chat_stream_raw_inner(client, [{"role": "user", "content": "hi"}]):
+                pass
+
+        with self.assertRaises(RuntimeError) as cm:
+            asyncio.run(go())
+        self.assertTrue(str(cm.exception).startswith("upstream 500: "), str(cm.exception))
+        self.assertIn("model crashed", str(cm.exception))

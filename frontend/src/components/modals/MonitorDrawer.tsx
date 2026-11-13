@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { apiFetch } from '../../services/api';
+import { cleanModelName } from '../../utils/models';
 
 export const MonitorDrawer: React.FC = () => {
   const { activeModal, setActiveModal, openSettingsModal } = useAppStore();
@@ -125,8 +126,8 @@ export const MonitorDrawer: React.FC = () => {
             ) : (
               agentRuns.map((run, i) => (
                 <div key={i} className="p-2 mb-1.5 rounded bg-panel2 border border-border-subtle">
-                  <div className="font-semibold">{run.title || run.id}</div>
-                  <div className="text-[11px] text-text-muted mt-0.5">{run.status}</div>
+                  <div className="font-semibold">{run.title || (run.session_id != null ? `Session ${run.session_id}` : run.id)}</div>
+                  <div className="text-[11px] text-text-muted mt-0.5">{run.running ? 'running' : (run.state || run.status || 'done')}</div>
                 </div>
               ))
             )}
@@ -156,11 +157,16 @@ export const MonitorDrawer: React.FC = () => {
                   <div key={i} className="p-2 rounded bg-panel2 border border-border-subtle flex flex-col gap-1">
                     <div className="flex items-center justify-between">
                       <span className="font-mono text-text">{r.endpoint}</span>
-                      <span className="text-[10px] text-accent font-semibold">{r.gen_tps ? `${Number(r.gen_tps).toFixed(1)} t/s` : ''}</span>
+                      {/* a finished request carries tps / duration_s / completion_tokens (core/monitor.py monitor_end);
+                          gen_tps / elapsed_s / gen_tokens exist only while it is running */}
+                      <span className="text-[10px] text-accent font-semibold">{(r.tps || r.gen_tps) ? `${Number(r.tps || r.gen_tps).toFixed(1)} t/s` : ''}</span>
                     </div>
-                    <div className="text-[10px] text-text-muted flex justify-between">
-                      <span>{r.elapsed_s}s · {r.gen_tokens || 0} tok</span>
-                      <span>{r.model?.split('\\').pop()?.split('/').pop() || ''}</span>
+                    <div className="text-[10px] text-text-muted flex justify-between gap-2">
+                      <span className="whitespace-nowrap">
+                        {r.duration_s != null ? `${Number(r.duration_s).toFixed(1)}s` : '—'} · {r.prompt_tokens ?? '–'}→{r.completion_tokens ?? r.gen_tokens ?? '–'} tok
+                      </span>
+                      {/* a split model is launched from its part-1 file: show the model's name, not "-00001-of-00003" */}
+                      <span className="truncate" title={r.model || ''}>{r.source === 'cloud' ? '☁ ' : ''}{cleanModelName(r.model)}</span>
                     </div>
                   </div>
                 ))

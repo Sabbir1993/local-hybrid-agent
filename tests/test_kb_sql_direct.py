@@ -655,7 +655,6 @@ class WorkerThreadTests(DirectBase):
         scope = (True, object(), False, self.titles)
         with mock.patch.object(search_tools, "_kb_scope", return_value=scope), mock.patch("core.audit.audit_log"), \
                 mock.patch.object(search_tools, "_kb_sql_blocking", slow):
-            t0 = _t.time()
             out = asyncio.run(main())
         self.assertIn("| 1 |", out)
         self.assertGreaterEqual(len(ticks), 8)

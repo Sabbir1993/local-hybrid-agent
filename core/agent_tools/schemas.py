@@ -284,6 +284,7 @@ AGENT_TOOLS = [
                            "a short handle (K12) that can be used in FROM - that is the safest way to name it. "
                            "For a plan of one month ('the November plan') pass month=2026-11: the month filter is applied "
                            "to the rows before the grouping, on every date column of the sheet unless date_column names one. "
+                           "For one day ('the report of 4th November') pass day=2026-11-04. "
                            "Use kb_query for a simple count or list; use this for anything that needs totals, ratios or joins. "
                            "Numbers are read from text like '1,200', '$1,500', 'Tk 90' and '(300)' (= -300); a cell that is not "
                            "clearly one number is NULL, not 0. Card numbers in the data come back masked, so hex(), unicode(), "
@@ -296,6 +297,9 @@ AGENT_TOOLS = [
                     "source": {"type": "string", "description": "Only tables whose document title or sheet name contains this text"},
                     "sql": {"type": "string", "description": "one SELECT (or WITH ... SELECT) statement"},
                     "limit": {"type": "integer", "description": "max rows returned (default 50, max 200)"},
+                    "day": {"type": "string", "description": "only this one day, e.g. '2026-11-04' or '4 November 2026'; use it "
+                                "when the question is about a single date. It wins over month. Pass an empty string to turn off "
+                                "a day that would otherwise be taken from the request."},
                     "month": {"type": "string", "description": "only this month of data, e.g. '2026-11' or 'November 2026'. "
                                   "Use it whenever the question is about one month ('the November plan'): the filter is "
                                   "applied to the rows before the grouping, so the totals are that month's"},
