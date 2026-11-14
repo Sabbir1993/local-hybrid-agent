@@ -37,6 +37,7 @@ from .engines import vllm as vllm_engine
 from .engines.vllm_adapter import EngineTransport
 from .profiles import build_dynamic_profile
 from .events import log_event
+from .sycl_gate import launch_gate
 from . import vram
 
 # ---------------- llama-server log file ----------------
@@ -244,25 +245,28 @@ class ProxyState:
         print(f"[server_manager] launching ({self.engine_label}): {' '.join(cmd)}")
         self.loading = True
         self.healthy = False
-        self.process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            env=env,
-            # vLLM starts one worker process per GPU: its own process group lets a stop end all of them
-            start_new_session=vllm_mode and os.name != "nt",
-        )
-        if vllm_mode:
-            remember_engine_pid(self.process)
-        self.started_at = time.time()
-        # keep the handle: the pump read from the process pipe forever and nothing held a
-        # reference, so every load added an untracked task that only died with the process
-        self._log_task = self._spawn_log_pump(self.process)
-        log_event("server.load_started", pid=self.process.pid, engine=self.engine,
-                  model=Path(str(self.profile.get("model_path") or "")).name)
-        await self._wait_healthy()
+        async with launch_gate(self.profile.get("backend")):
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                # not the server's own stdin: under pm2 that is a socket, which every child would inherit
+                stdin=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+                env=env,
+                # vLLM starts one worker process per GPU: its own process group lets a stop end all of them
+                start_new_session=vllm_mode and os.name != "nt",
+            )
+            if vllm_mode:
+                remember_engine_pid(self.process)
+            self.started_at = time.time()
+            # keep the handle: the pump read from the process pipe forever and nothing held a
+            # reference, so every load added an untracked task that only died with the process
+            self._log_task = self._spawn_log_pump(self.process)
+            log_event("server.load_started", pid=self.process.pid, engine=self.engine,
+                      model=Path(str(self.profile.get("model_path") or "")).name)
+            await self._wait_healthy()
         notify_swap()
 
     async def stop(self, clear_profile: bool = False):

@@ -17,6 +17,7 @@ from ..config import (
     LOCAL_HTTP_WRITE_TIMEOUT_S,
 )
 from ..process import find_llama_server, kill_process_tree
+from ..sycl_gate import launch_gate
 from .. import vram
 from ..vram.devices import resolve_device_ids
 from .config import APP_CONFIG, lane_kind_of
@@ -119,44 +120,46 @@ class SmallModelInstance:
             device_id = self._device_label(cmd)
 
             print(f"[{self.role}] auto-loading on {device_id} (port {self.port})...")
-            self.process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                env=env,
-            )
-            self.load_error = None
-            self._log_tail.clear()
-            # keep the handle: the pump read the process pipe forever and nothing held a
-            # reference, so every load cycle added an untracked task
-            task = asyncio.create_task(self._pump_logs())
-            self._log_tasks.add(task)
-            task.add_done_callback(self._log_tasks.discard)
+            async with launch_gate(ACTIVE_RUNTIME.get("backend")):
+                self.process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    bufsize=1,
+                    env=env,
+                )
+                self.load_error = None
+                self._log_tail.clear()
+                # keep the handle: the pump read the process pipe forever and nothing held a
+                # reference, so every load cycle added an untracked task
+                task = asyncio.create_task(self._pump_logs())
+                self._log_tasks.add(task)
+                task.add_done_callback(self._log_tasks.discard)
 
-            deadline = time.time() + self._start_timeout
-            while time.time() < deadline:
-                if self.process.poll() is not None:
-                    await asyncio.sleep(0.3)
-                    self.load_error = f"exited code {self.process.returncode}"
-                    why = self._exit_reason()
-                    if why:
-                        self.load_error += f" - {why}"
-                    self.process = None
-                    raise RuntimeError(f"[{self.role}] failed to start ({self.load_error})")
-                try:
-                    r = await self.client.get(self._health_path, timeout=2.0)
-                    if self._healthy(r):
-                        print(f"[{self.role}] ready on port {self.port}")
-                        self.last_used = time.time()
-                        return
-                except Exception:
-                    pass
-                await asyncio.sleep(0.5)
-            self._stop()
-            self.load_error = f"timed out after {self._start_timeout}s"
-            raise RuntimeError(f"[{self.role}] health check timed out")
+                deadline = time.time() + self._start_timeout
+                while time.time() < deadline:
+                    if self.process.poll() is not None:
+                        await asyncio.sleep(0.3)
+                        self.load_error = f"exited code {self.process.returncode}"
+                        why = self._exit_reason()
+                        if why:
+                            self.load_error += f" - {why}"
+                        self.process = None
+                        raise RuntimeError(f"[{self.role}] failed to start ({self.load_error})")
+                    try:
+                        r = await self.client.get(self._health_path, timeout=2.0)
+                        if self._healthy(r):
+                            print(f"[{self.role}] ready on port {self.port}")
+                            self.last_used = time.time()
+                            return
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.5)
+                self._stop()
+                self.load_error = f"timed out after {self._start_timeout}s"
+                raise RuntimeError(f"[{self.role}] health check timed out")
 
     _health_path = "/health"
     _start_timeout = 90
