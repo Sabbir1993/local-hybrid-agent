@@ -94,6 +94,15 @@ class SmallModelInstance:
     def is_up(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
+    def _device_label(self, cmd) -> str:
+        """The device a helper starts on, for the log line. llama-server helpers name it with `-dev`; whisper.cpp and
+        sd.cpp pick the GPU through the environment and have no `-dev`, so the label comes from the configured GPU."""
+        if "-dev" in cmd:
+            i = cmd.index("-dev")
+            if i + 1 < len(cmd):
+                return str(cmd[i + 1])
+        return f"GPU {self.gpu}" if self.gpu >= 0 else "CPU"
+
     async def ensure_loaded(self) -> None:
         if self.is_up():
             self.last_used = time.time()
@@ -107,7 +116,7 @@ class SmallModelInstance:
             loop = asyncio.get_event_loop()
             await self._preflight(loop)
             cmd, env = self._launch_cmd()
-            device_id = cmd[cmd.index("-dev") + 1]
+            device_id = self._device_label(cmd)
 
             print(f"[{self.role}] auto-loading on {device_id} (port {self.port})...")
             self.process = subprocess.Popen(
