@@ -18,9 +18,9 @@ keep the runtime layout and application configuration shown here.
 ## 1. Record the working Vulkan baseline
 
 ```bash
-cd /var/web/html_new/local_ai
+cd /var/web/html_new/local_ai/application
 cp config/app.json config/app.json.before-sycl
-./llama-vulkan/llama-bench --list-devices
+../llama-vulkan/llama-bench --list-devices
 ```
 
 Keep `/var/web/html_new/local_ai/llama-vulkan` unchanged. Confirm the current
@@ -28,183 +28,159 @@ application can still start with `LLAMA_RUNTIME=vulkan` before proceeding.
 
 ## 2. Install Intel GPU and oneAPI prerequisites
 
-Configure Intel's package repositories for the exact Ubuntu release by following
-Intel's current Linux GPU and oneAPI installation instructions. Then install the
-equivalent of:
+Add Intel's apt repositories for your Ubuntu release (the Intel GPU repository and the oneAPI repository, following
+Intel's current instructions), then refresh the package lists and check that every package has a candidate:
 
 ```bash
 sudo apt update
-sudo apt install -y \
-  git cmake ninja-build build-essential pkg-config clinfo \
-  intel-level-zero-gpu level-zero intel-opencl-icd \
-  intel-oneapi-compiler-dpcpp-cpp
+apt-cache policy libze-intel-gpu1 libze-dev intel-oneapi-compiler-dpcpp-cpp \
+  intel-oneapi-dnnl-devel intel-oneapi-mkl-devel | grep -E "^[a-z]|Candidate"
 ```
 
-Package names can change between Intel repository generations. Do not substitute
-Mesa's OpenCL implementation for the Intel Level Zero runtime used by SYCL.
-
-Set the existing systemd unit name, read its service account, and grant that
-account GPU-device access. Replace `local-ai.service` with the real unit name:
+Install the build tools, the Level Zero driver and headers, the compiler, and the oneDNN and MKL development packages
+that llama.cpp's SYCL build requires:
 
 ```bash
-SYSTEMD_UNIT=local-ai.service
-APP_USER="$(systemctl show --property=User --value "$SYSTEMD_UNIT")"
-test -n "$APP_USER" || {
-  echo "ERROR: $SYSTEMD_UNIT has no non-root User=; configure a service account first" >&2
-  exit 1
-}
-APP_GROUP="$(systemctl show --property=Group --value "$SYSTEMD_UNIT")"
-APP_GROUP="${APP_GROUP:-$(id -gn "$APP_USER")}"
-sudo usermod -aG render,video "$APP_USER"
+sudo apt install -y git cmake ninja-build build-essential pkg-config \
+  intel-level-zero-gpu libze-dev \
+  intel-oneapi-compiler-dpcpp-cpp intel-oneapi-dnnl-devel intel-oneapi-mkl-devel
 ```
 
-Restart the service login session or reboot after changing group membership.
+Notes from the first installation (Ubuntu 26.04, oneAPI 2026.x):
 
-Verify the devices as the service account:
+- `intel-level-zero-gpu` is an alias for `libze-intel-gpu1`. There is no package called `level-zero`; the loader comes
+  with the driver and `libze-dev` adds the headers.
+- The oneDNN development package is `intel-oneapi-dnnl-devel` (not `...-dnn-devel`).
+- `clinfo` and `intel-opencl-icd` are not needed: SYCL uses Level Zero, not OpenCL. Do not install Mesa's OpenCL as a
+  substitute.
+
+Give the account that runs the application access to the GPU devices (the `render` group is enough), then log that
+account out and in again, or restart its processes:
+
+```bash
+sudo usermod -aG render <app-user>
+```
+
+Verify the devices as that account:
 
 ```bash
 ls -l /dev/dri/renderD*
-sudo -u "$APP_USER" bash -lc '
-  source /opt/intel/oneapi/setvars.sh --force
-  sycl-ls
-  clinfo -l
-'
+sudo -u <app-user> bash -lc 'source /opt/intel/oneapi/setvars.sh --force && sycl-ls'
 ```
 
-Every GPU intended for tensor splitting must appear through Level Zero. Stop and
-fix driver, permissions, or enumeration problems before compiling llama.cpp.
+Every GPU intended for tensor splitting must appear under `level_zero`. Stop and fix driver, permissions, or
+enumeration problems before compiling llama.cpp.
 
 ## 3. Build a pinned llama.cpp revision
 
-The initial parity target is `b10840`, matching the documented Vulkan deployment.
-Do not build production servers from a moving `master` branch.
+Build as an administrator account, not as the account that runs the application. The initial parity target is `b10840`,
+matching the documented Vulkan deployment. Do not build production servers from a moving `master` branch.
 
 ```bash
-sudo install -d -m 0755 /opt/build
-sudo chown "$APP_USER":"$APP_GROUP" /opt/build
+mkdir -p ~/build && cd ~/build
+git clone --branch b10840 --depth 1 https://github.com/ggml-org/llama.cpp.git
+cd llama.cpp
+source /opt/intel/oneapi/setvars.sh --force
 
-sudo -u "$APP_USER" git clone \
-  --branch b10840 --depth 1 \
-  https://github.com/ggml-org/llama.cpp.git \
-  /opt/build/llama.cpp-sycl
+# where the oneDNN and MKL CMake files and libraries are
+DNNL_DIR="$(dirname "$(find /opt/intel/oneapi/dnnl -name dnnl-config.cmake | head -n 1)")"
+MKL_DIR="$(dirname "$(find /opt/intel/oneapi/mkl -name MKLConfig.cmake | head -n 1)")"
+RPATH="$(echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep /opt/intel/oneapi | paste -sd';' -)"
+RPATH="$RPATH;$(dirname "$(dirname "$DNNL_DIR")");$(dirname "$(dirname "$MKL_DIR")")"
+echo "DNNL_DIR=$DNNL_DIR"; echo "MKL_DIR=$MKL_DIR"; echo "RPATH=$RPATH"
 
-sudo -u "$APP_USER" bash -lc '
-  set -euo pipefail
-  source /opt/intel/oneapi/setvars.sh --force
-  cd /opt/build/llama.cpp-sycl
-  cmake -S . -B build-sycl -G Ninja \
-    -DGGML_SYCL=ON \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_COMPILER=icx \
-    -DCMAKE_CXX_COMPILER=icpx
-  cmake --build build-sycl \
-    --target llama-server llama-bench \
-    --parallel
-'
+cmake -S . -B build-sycl -G Ninja \
+  -DGGML_SYCL=ON -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+  -DDNNL_DIR="$DNNL_DIR" -DMKL_DIR="$MKL_DIR" \
+  -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+  -DCMAKE_BUILD_RPATH='$ORIGIN;'"$RPATH" \
+  -DCMAKE_INSTALL_RPATH='$ORIGIN;'"$RPATH"
+cmake --build build-sycl --target llama-server llama-bench -j
 ```
 
-If `b10840` does not compile with the installed oneAPI version, qualify one newer
-llama.cpp revision and pin its exact commit on every SYCL server. Do not silently
-use different revisions across machines.
+The run path (`$ORIGIN` plus the oneAPI library folders) lets the binaries find their own libraries and oneAPI's
+without changing the environment of any other process. The configure output must show no `Warning` or `Error` about
+Level Zero, DNNL or MKL.
+
+Harmless messages during the build: many `'barrier' is deprecated` warnings, and `UI: download dist.tar.gz ... failed`
+(the optional web page bundled with `llama-server`; the application uses the API only).
+
+Check the result from the build folder:
+
+```bash
+cd build-sycl/bin
+ldd ./llama-server | grep -c "not found"          # must print 0
+ONEAPI_DEVICE_SELECTOR=level_zero:gpu \
+  LD_LIBRARY_PATH=/opt/intel/oneapi/umf/<ver>/lib:/opt/intel/oneapi/tcm/<ver>/lib ./llama-bench --list-devices
+```
+
+`<ver>` is the version folder under `/opt/intel/oneapi/umf` and `/opt/intel/oneapi/tcm` (`1.2` and `1.6` on the first
+install). The device list must show every GPU as `SYCL0`, `SYCL1`, and so on.
+
+If `b10840` does not compile with the installed oneAPI version, qualify one newer llama.cpp revision and pin its exact
+commit on every SYCL server. Do not silently use different revisions across machines.
 
 ## 4. Deploy beside Vulkan
 
-Deploy the complete `build-sycl/bin` directory because `llama-server` and
-`llama-bench` may depend on GGML shared libraries stored beside them.
+Deploy the complete `build-sycl/bin` directory because `llama-server` and `llama-bench` depend on GGML shared
+libraries stored beside them. Keep the Vulkan folder untouched.
 
 ```bash
 APP_ROOT=/var/web/html_new/local_ai
-SYCL_RELEASE="$APP_ROOT/llama-sycl-b10840"
-
-sudo install -d "$SYCL_RELEASE"
-sudo cp -a /opt/build/llama.cpp-sycl/build-sycl/bin/. "$SYCL_RELEASE/"
-sudo chown -R "$APP_USER":"$APP_GROUP" "$SYCL_RELEASE"
-
-sudo -u "$APP_USER" bash -lc '
-  source /opt/intel/oneapi/setvars.sh --force
-  cd /opt/build/llama.cpp-sycl
-  {
-    printf "llama.cpp commit: "
-    git rev-parse HEAD
-    icpx --version | head -n 1
-    cmake --version | head -n 1
-    printf "%s\n" "GGML_SYCL=ON" "CMAKE_BUILD_TYPE=Release"
-  } > /var/web/html_new/local_ai/llama-sycl-b10840/BUILD_INFO.txt
-'
-
-ldd "$SYCL_RELEASE/llama-server"
-ldd "$SYCL_RELEASE/llama-bench"
+sudo install -d "$APP_ROOT/llama-sycl"
+sudo cp -a ~/build/llama.cpp/build-sycl/bin/. "$APP_ROOT/llama-sycl/"
+sudo chown -R <app-user>:<app-group> "$APP_ROOT/llama-sycl"
+ldd "$APP_ROOT/llama-sycl/llama-server" | grep -c "not found"       # must print 0
+ldd "$APP_ROOT/llama-sycl/llama-bench"  | grep -c "not found"       # must print 0
 ```
 
-Neither `ldd` command may contain `not found`.
-
-Create the stable path only after dependency verification:
+Record what was built next to it:
 
 ```bash
-sudo ln -sfn llama-sycl-b10840 /var/web/html_new/local_ai/llama-sycl
+cd ~/build/llama.cpp && git rev-parse HEAD > "$APP_ROOT/llama-sycl/BUILD_INFO.txt"
 ```
 
-## 5. Create the SYCL cache and service environment
+## 5. Environment of the process that starts the application
+
+The SYCL runtime needs two things in the environment of the process that starts the application (a terminal, PM2 or
+a service definition). Do not create a wrapper script and do not source oneAPI's environment script for the whole application:
+its variables would also reach the Vulkan model servers.
+
+1. `LD_LIBRARY_PATH` with oneAPI's memory libraries. Without it, device discovery reports `no SYCL device available`
+   even though `sycl-ls` works:
+
+   ```bash
+   LD_LIBRARY_PATH=/opt/intel/oneapi/umf/<ver>/lib:/opt/intel/oneapi/tcm/<ver>/lib
+   ```
+
+   This cannot go into `config/app.json`: library paths are deliberately not allowed there.
+
+2. Select the runtime for the start: `LLAMA_RUNTIME=sycl`.
+
+Foreground start (shows startup errors directly):
 
 ```bash
-sudo install -d /var/cache/local-ai/sycl
-sudo chown "$APP_USER":"$APP_GROUP" /var/cache/local-ai/sycl
+cd /var/web/html_new/local_ai/application
+LLAMA_RUNTIME=sycl LD_LIBRARY_PATH=/opt/intel/oneapi/umf/<ver>/lib:/opt/intel/oneapi/tcm/<ver>/lib \
+  .venv/bin/python server_manager.py
 ```
 
-The process that starts the existing `.venv` must initialize oneAPI only when
-SYCL is selected. A wrapper such as
-`/var/web/html_new/local_ai/start-local-ai.sh` can be used:
+With PM2, export both variables in the shell and run `pm2 restart Backend --update-env`. On the first install PM2
+restarted the backend in a loop while a foreground start ran correctly; the cause was not established, so run in the
+foreground to read the error if PM2 does the same. With systemd, put the two values in `Environment=` lines.
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
+Two settings that look useful but must not be used with this build (oneAPI 2026.2, llama.cpp `b10840`, Arc Pro B70):
 
-APP_ROOT=/var/web/html_new/local_ai
-PYTHON="$APP_ROOT/.venv/bin/python"
-RUNTIME="${LLAMA_RUNTIME:-}"
-
-if [[ -z "$RUNTIME" ]]; then
-  RUNTIME="$("$PYTHON" -c 'import json; print(json.load(open("/var/web/html_new/local_ai/config/app.json", encoding="utf-8")).get("runtime", "vulkan"))')"
-fi
-
-case "$RUNTIME" in
-  sycl)
-    source /opt/intel/oneapi/setvars.sh --force
-    export ONEAPI_DEVICE_SELECTOR=level_zero:gpu
-    export SYCL_CACHE_PERSISTENT=1
-    export SYCL_CACHE_DIR=/var/cache/local-ai/sycl
-    ;;
-  vulkan|cuda)
-    ;;
-  *)
-    echo "Unknown LLAMA_RUNTIME: $RUNTIME" >&2
-    exit 2
-    ;;
-esac
-
-export LLAMA_RUNTIME="$RUNTIME"
-cd "$APP_ROOT"
-exec "$PYTHON" server_manager.py
-```
-
-```bash
-sudo chmod 0755 /var/web/html_new/local_ai/start-local-ai.sh
-```
-
-Point the existing systemd unit's `ExecStart` at this wrapper, preserve its
-existing `User=`, `Group=`, working directory, restart policy, and limits, then
-run:
-
-```bash
-sudo systemctl daemon-reload
-```
-
-Do not set `ZE_AFFINITY_MASK` to one GPU when multi-GPU inference is required.
-The application passes exact llama.cpp device IDs using `-dev`.
+- `SYCL_CACHE_PERSISTENT=1` with `SYCL_CACHE_DIR`: `llama-server` segfaulted (exit code -11) right after
+  `llama threadpool init` while loading a model. Removing the two variables fixed it.
+- `ZE_AFFINITY_MASK` set to one GPU when multi-GPU inference is needed. The application passes exact device IDs with
+  `-dev`.
 
 ## 6. Register the runtime
 
-Add this sibling entry under `runtimes` in `config/app.json`:
+The application reads `config/app.json` inside the application folder (`.../application/config/app.json`). Add this
+sibling entry under `runtimes`:
 
 ```json
 "sycl": {
@@ -214,11 +190,15 @@ Add this sibling entry under `runtimes` in `config/app.json`:
   "small_model_gpu": 0,
   "env": {
     "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu",
-    "SYCL_CACHE_PERSISTENT": "1",
-    "SYCL_CACHE_DIR": "/var/cache/local-ai/sycl"
+    "GGML_SYCL_ENABLE_VMM": "0"
   }
 }
 ```
+
+`GGML_SYCL_ENABLE_VMM=0` selects llama.cpp's legacy GPU memory pool. With the default pool, a long prompt on a MoE model
+aborted `llama-server` with `GGML_ASSERT(ptr == reinterpret_cast<void *>(pool_addr + pool_used)) failed` in
+`ggml_sycl_pool_vmm::free` (that pool requires buffers to be freed in reverse order of allocation). With `0` the same
+prompt completes. The effect on speed and memory has not been measured.
 
 Keep the saved top-level runtime as Vulkan during qualification:
 
@@ -236,30 +216,29 @@ The preflight section should reserve both device and host memory:
 }
 ```
 
+Helper models (embedder, vision, image and speech models) are placed on GPUs by their own `gpu` setting in
+`small_models`. Do not put them on a GPU the main model also uses unless the memory budget has been checked: a main
+model split over all GPUs shares memory with them.
+
 ## 7. Verify the installed runtime
 
-Run device discovery through the same environment used by the service:
+Run device discovery with the same environment the application will use:
 
 ```bash
-sudo -u "$APP_USER" bash -lc '
-  source /opt/intel/oneapi/setvars.sh --force
-  export ONEAPI_DEVICE_SELECTOR=level_zero:gpu
+ONEAPI_DEVICE_SELECTOR=level_zero:gpu \
+  LD_LIBRARY_PATH=/opt/intel/oneapi/umf/<ver>/lib:/opt/intel/oneapi/tcm/<ver>/lib \
   /var/web/html_new/local_ai/llama-sycl/llama-bench --list-devices
-'
 ```
 
-Save the output. The IDs shown there, such as `SYCL0` and `SYCL1`, are the IDs
-the application must preserve in `-dev` ordering.
+Save the output. The IDs shown there, such as `SYCL0` and `SYCL1`, are the IDs the application must preserve in `-dev`
+ordering.
 
-Start one qualification run without changing the saved default:
+Start one qualification run without changing the saved default (see section 5). The startup log must contain
+`runtime=sycl backend=sycl` and the list of devices. Startup must fail rather than fall back to Vulkan if the SYCL
+binary, libraries, or configured devices are unavailable.
 
-```bash
-cd /var/web/html_new/local_ai
-LLAMA_RUNTIME=sycl ./start-local-ai.sh
-```
-
-Startup must fail rather than fall back to Vulkan if the SYCL binary, libraries,
-or configured devices are unavailable.
+Before loading models through the application, run one by hand with the application's flags and send it a long prompt;
+a short "hi" does not exercise the code path that crashed with the default memory pool.
 
 ## 8. Qualify multi-GPU tensor splitting
 
@@ -336,24 +315,24 @@ After qualification, set:
 "runtime": "sycl"
 ```
 
-and restart the service.
+and restart the application. The `LD_LIBRARY_PATH` setting from section 5 must be present every time it starts.
 
-Rollback requires no rebuild or Python-package changes:
-
-```bash
-LLAMA_RUNTIME=vulkan /var/web/html_new/local_ai/start-local-ai.sh
-```
-
-Then restore the saved top-level runtime to `vulkan` and restart the systemd
-service. The Vulkan and SYCL directories remain independent.
+Rollback requires no rebuild or Python-package changes: set the saved top-level runtime back to `vulkan`, remove
+`LLAMA_RUNTIME=sycl` and the oneAPI `LD_LIBRARY_PATH` from the environment that starts the application, and restart it.
+The Vulkan and SYCL directories remain independent.
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| `llama-bench` reports no SYCL devices | Run `sycl-ls`, `clinfo -l`, and check `/dev/dri/renderD*` permissions as the service user. |
-| Shared library is missing | Run `ldd llama-server`; ensure the service initializes `/opt/intel/oneapi/setvars.sh`. |
+| `llama-bench` reports no SYCL devices | Run `sycl-ls` and check `/dev/dri/renderD*` permissions as the application user; see also the `LD_LIBRARY_PATH` row below. |
+| Shared library is missing | Run `ldd llama-server`; rebuild with the run path from section 3 (the build embeds the oneAPI library folders). |
 | Only one GPU appears | Remove an accidental single-device `ZE_AFFINITY_MASK`; check Level Zero enumeration. |
 | Wrong tensor-split device order | Compare application status IDs with the saved `llama-bench --list-devices` output. |
 | VRAM fits but launch is blocked | Review the host-DRAM preflight; lower CPU offload/cache or add RAM. |
 | Inference works but is very slow | Check swap activity and benchmark single GPU versus multi-GPU layer split. |
+| `ggml_sycl_init: no SYCL device available` although `sycl-ls` lists the GPUs | The process lacks `LD_LIBRARY_PATH` for oneAPI's UMF and TCM libraries (section 5). |
+| `llama-server` exits with code -11 right after `llama threadpool init` | Remove `SYCL_CACHE_PERSISTENT` and `SYCL_CACHE_DIR`; also check for a leftover `llama-server` holding the same GPU (`ps -eo pid,etime,args`, filter for `llama-server`). |
+| `GGML_ASSERT(ptr == ... pool_addr + pool_used)` on a long prompt | Set `GGML_SYCL_ENABLE_VMM` to `0` in the runtime `env` (section 6). |
+| `tensor_split '1' has 1 entries but 3 GPUs are in use` | Save one share per GPU in Model Config (`1,0,0` uses only the first GPU). The split is stored per runtime. |
+| `libdnnl.so.3` or another library `not found` | Rebuild with the run path from section 3, or check that the oneDNN and MKL folders exist. |

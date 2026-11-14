@@ -37,6 +37,10 @@ _SYCL_ENV_KEYS = frozenset({
     "SYCL_CACHE_PERSISTENT",
     "SYCL_CACHE_DIR",
     "UR_L0_USE_IMMEDIATE_COMMANDLISTS",
+    # llama.cpp's SYCL memory pool (VMM) asserts that buffers are freed in reverse order of allocation. A long prompt on
+    # a MoE model breaks that (GGML_ASSERT(ptr == pool_addr + pool_used), then a segfault-style abort), so a deployment can
+    # set "0" to use the legacy pool. Only SYCL children see it: Vulkan and CUDA launches have it removed.
+    "GGML_SYCL_ENABLE_VMM",
     # Older oneAPI releases use the PI spelling.
     "SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS",
 })

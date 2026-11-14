@@ -100,6 +100,18 @@ class RuntimeEnvironment(unittest.TestCase):
         self.assertNotIn("GGML_VK_VISIBLE_DEVICES", env)
         self.assertNotIn("ZE_AFFINITY_MASK", env)
 
+    def test_sycl_memory_pool_switch_reaches_sycl_only(self):
+        base = {"PATH": "x", "GGML_SYCL_ENABLE_VMM": "1"}
+        self.assertEqual(
+            validate_runtime_env("sycl", {"GGML_SYCL_ENABLE_VMM": "0"}), {"GGML_SYCL_ENABLE_VMM": "0"})
+        sy = build_child_env("sycl", runtime_env={"GGML_SYCL_ENABLE_VMM": "0"}, base_env=base)
+        self.assertEqual(sy["GGML_SYCL_ENABLE_VMM"], "0")          # the config value wins over the inherited one
+        self.assertEqual(build_child_env("sycl", base_env=base)["GGML_SYCL_ENABLE_VMM"], "1")   # inherited when not configured
+        for backend in ("vulkan", "cuda"):
+            self.assertNotIn("GGML_SYCL_ENABLE_VMM", build_child_env(backend, device_indices=[0], base_env=base))
+        with self.assertRaises(BackendConfigError):
+            validate_runtime_env("vulkan", {"GGML_SYCL_ENABLE_VMM": "0"})
+
     def test_unknown_or_non_string_runtime_env_is_rejected(self):
         with self.assertRaises(BackendConfigError):
             validate_runtime_env("sycl", {"LD_PRELOAD": "/tmp/unsafe.so"})

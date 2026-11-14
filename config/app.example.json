@@ -24,8 +24,7 @@
       "small_model_gpu": 0,
       "env": {
         "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu",
-        "SYCL_CACHE_PERSISTENT": "1",
-        "SYCL_CACHE_DIR": "/var/cache/local-ai/sycl"
+        "GGML_SYCL_ENABLE_VMM": "0"
       }
     }
   },
