@@ -281,6 +281,43 @@ def build_launch_environment(profile: dict, *, base_env=None) -> dict:
     )
 
 
+_SHOW_ENV = ("SYCL", "ONEAPI", "ZE_", "UR_", "GGML", "LD_", "OMP_", "MKL_", "TBB", "NEO", "IGC", "HOME", "XDG_RUNTIME")
+
+
+def describe_launch_env(env: dict, cwd: Optional[str] = None) -> str:
+    """One log line saying what a llama-server child is given, for crashes that only happen under the app.
+
+    Values are shown only for the GPU-runtime variables (no secrets live there); every other variable is counted by
+    name only. Also lists the other llama-server processes alive at that moment (pid:port), because the SYCL runtime
+    is sensitive to several starting on the same cards.
+    """
+    shown = {k: v for k, v in sorted(env.items()) if k.startswith(_SHOW_ENV)}
+    others = []
+    try:
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            try:
+                c = Path(f"/proc/{d}/cmdline").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            if c and Path(c[0].decode(errors="replace")).name.startswith("llama-server"):
+                port = c[c.index(b"--port") + 1].decode(errors="replace") if b"--port" in c and c.index(b"--port") + 1 < len(c) else "?"
+                others.append(f"{d}:{port}")
+    except OSError:
+        pass
+    return (f"cwd={cwd or os.getcwd()} env_vars={len(env)} gpu_env={shown} "
+            f"other_llama_servers={others or 'none'}")
+
+
+def exit_signal_note(code) -> str:
+    """' = SIGSEGV' for a negative exit code, so a crash reads as one."""
+    try:
+        return f" = {signal.Signals(-int(code)).name}" if int(code) < 0 else ""
+    except (ValueError, TypeError):
+        return ""
+
+
 def build_launch_command(profile: dict) -> list[str]:
     apply_runtime(profile)
     bin_dir = profile.get("llama_bin_dir", CONFIG_DEFAULTS["llama_bin_dir"])

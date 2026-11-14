@@ -30,7 +30,7 @@ from .supervision import (
     restart_reset_after_s,
     watchdog_interval_s,
 )
-from .process import (build_launch_command, build_launch_environment,
+from .process import (build_launch_command, build_launch_environment, describe_launch_env, exit_signal_note,
                       kill_process_tree, forget_engine_pid, remember_engine_pid)
 from .engines import engine_of
 from .engines import vllm as vllm_engine
@@ -243,6 +243,8 @@ class ProxyState:
                             "n_slots": (vllm_engine.max_num_seqs(self.profile) if vllm_mode
                                         else int(self.profile.get("n_slots") or 1))}
         print(f"[server_manager] launching ({self.engine_label}): {' '.join(cmd)}")
+        if not vllm_mode:
+            print(f"[server_manager] launch context: {describe_launch_env(env)}")
         self.loading = True
         self.healthy = False
         async with launch_gate(self.profile.get("backend")):
@@ -386,7 +388,7 @@ class ProxyState:
                         f"(the model is newer than the server program). It is not a path or VRAM problem. Update the "
                         f"llama.cpp build in the {runtime_name} runtime to one that supports '{arch}', or pick a model it already supports.")
                 raise self._load_failed(
-                    f"llama-server exited immediately (code {code}) - "
+                    f"llama-server exited immediately (code {code}{exit_signal_note(code)}) - "
                     f"check the log lines above, this is almost always a bad model path "
                     f"or a VRAM allocation failure.")
             try:
