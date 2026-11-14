@@ -365,7 +365,9 @@ def build_launch_command(profile: dict) -> list[str]:
         gguf and 0 < n_gpu_layers < int(gguf.get("n_layer") or 0) + 1))
     if op_offload is False or (op_offload is None and experts_in_ram):
         cmd += ["--no-op-offload"]
-    if profile.get("use_mmap") is False:
+    # --load-mode none (no mmap) crashes the SYCL build with a general protection fault in libc while the weights are
+    # copied (llama-server exit -11); the same model loads fine without it, so SYCL always keeps the default
+    if profile.get("use_mmap") is False and str(backend) != "sycl":
         cmd += ["--load-mode", "none"]
     cmd += ["--jinja"]
     if profile.get("mtp_enabled") and profile.get("mtp_draft_path"):
