@@ -13,7 +13,7 @@ from .cloud import router as cloud_router
 from .lanes import router as lanes_router
 from .media import router as media_router
 from .git import router as git_router
-from .mcp_manager import router as mcp_manager_router
+from .mcp_manager import router as mcp_manager_router, public_router as mcp_public_router
 from .plugins import router as plugins_router
 from .customize import router as customize_router
 from .knowledge import router as knowledge_router
@@ -37,6 +37,7 @@ __all__ = [
     "media_router",
     "git_router",
     "mcp_manager_router",
+    "mcp_public_router",
     "plugins_router",
     "customize_router",
     "knowledge_router",

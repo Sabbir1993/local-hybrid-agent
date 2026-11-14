@@ -12,7 +12,7 @@ from core import mcp as mcp_core
 from core.audit import audit_log
 from core.auth import Principal
 
-from .base import MANAGE_PERM, _use, router
+from .base import MANAGE_PERM, _use, public_router, router
 from .models import OAuthPasteReq, OAuthStartReq
 from .store import _bg_tasks, _can_manage_global, _connect_in_background, _owner_for, _servers_for
 
@@ -231,7 +231,7 @@ _DONE_PAGE = """<!doctype html><meta charset=utf-8><title>Signed in</title>
 <body style="font:15px system-ui;padding:40px">{msg}<br><br>You can close this window.</body>"""
 
 
-@router.get("/oauth/callback", response_class=HTMLResponse)
+@public_router.get("/oauth/callback", response_class=HTMLResponse)
 async def oauth_callback(request: Request):
     """Where the provider sends the browser back to. The session cookie is SameSite=Strict, so a navigation that
     starts on the provider's site arrives WITHOUT it and /oauth/finish would answer 'not authenticated'. This landing

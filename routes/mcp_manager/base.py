@@ -18,6 +18,11 @@ _use = require_permission("chat.use")
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
 
+# the OAuth landing page only: the provider redirects the browser here without our SameSite=Strict session cookie, so it
+# cannot sit behind the login. It holds no data; the sign-in is completed by /mcp/oauth/finish, which needs the session.
+public_router = APIRouter(prefix="/mcp", tags=["mcp"])
+
+
 def _server_status(server_id: str) -> Optional[dict]:
     for s in mcp_core.mcp_status():
         if s["name"] == server_id:

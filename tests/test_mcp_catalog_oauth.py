@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 from core import deps, mcp_oauth
 from core.auth import Principal
 from routes.mcp_manager import catalog_endpoints, oauth_endpoints
-from routes.mcp_manager.base import MANAGE_PERM, router
+from routes.mcp_manager.base import MANAGE_PERM, public_router, router
 
 
 def _principal(uid=7, perms=None):
@@ -47,6 +47,7 @@ class _McpApp(unittest.TestCase):
     def setUp(self):
         app = FastAPI()
         app.include_router(router)
+        app.include_router(public_router)
         app.dependency_overrides[deps.get_current_user] = lambda: _principal(7, self.perms)
         self.patches = [
             mock.patch.object(catalog_endpoints, "audit_log", lambda *a, **k: None),

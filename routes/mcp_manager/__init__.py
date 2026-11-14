@@ -12,6 +12,7 @@ from .base import (
     MANAGE_PERM,
     _manage,
     _use,
+    public_router,
     router,
     _server_status,
 )
@@ -89,6 +90,7 @@ __all__ = [
     "MANAGE_PERM",
     "_manage",
     "_use",
+    "public_router",
     "router",
     "_server_status",
     "McpServerReq",

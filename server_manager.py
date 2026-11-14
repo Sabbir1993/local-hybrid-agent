@@ -53,6 +53,7 @@ from routes import (
     input_guard_router,
     knowledge_router,
     mcp_manager_router,
+    mcp_public_router,
     plugins_router,
     customize_router,
     projects_router,
@@ -117,6 +118,7 @@ app.include_router(media_router, dependencies=_chat_users)
 app.include_router(chat_router, dependencies=_chat_users)
 app.include_router(agent_router, dependencies=_chat_users)
 app.include_router(git_router, dependencies=_chat_users)
+app.include_router(mcp_public_router)       # OAuth landing page only (no data; /finish needs the session)
 app.include_router(mcp_manager_router, dependencies=_authed)
 app.include_router(plugins_router, dependencies=_authed)
 app.include_router(customize_router, dependencies=_authed)
