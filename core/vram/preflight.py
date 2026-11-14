@@ -3,7 +3,7 @@ from pathlib import Path
 
 from ..backend import device_prefix
 from ..config import ACTIVE_RUNTIME, CONFIG_DEFAULTS
-from .constants import GB, PreflightError, _preflight_cfg
+from .constants import GB, PreflightError, _SYCL_HEADROOM_GB, _preflight_cfg
 from .devices import DeviceQueryError, query_devices
 from .estimator import (
     _build_suggestions,
@@ -184,7 +184,10 @@ def plan_launch(profile: dict, overrides: dict | None = None,
     fp = estimate_footprint(info, eff["context_size"], eff["kv_cache_type"],
                             eff["ubatch_size"], eff["flash_attn"],
                             n_cpu_moe=eff["n_cpu_moe"],
-                            n_expert_used=info.get("n_expert") or 0)
+                            n_expert_used=info.get("n_expert") or 0,
+                            # an explicit preflight.headroom_gb in app.json always wins
+                            headroom_gb=(_SYCL_HEADROOM_GB if str(eff.get("backend")) == "sycl"
+                                         and not cfg.get("headroom_set") else None))
     total_weights_b = fp["weights_b"] + eff["draft_b"]
     weights_b = total_weights_b
     moe_ram_b = 0

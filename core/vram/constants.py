@@ -11,6 +11,9 @@ _KV_BYTES_PER_ELEM = {
 }
 
 _DEFAULT_HEADROOM_GB = 1.0
+# Intel SYCL needs scratch memory beyond the weights/KV/compute estimate; a 1 GB margin there ends in a segfault
+# (llama-server exit -11) instead of a clean out-of-memory error
+_SYCL_HEADROOM_GB = 3.0
 _DEFAULT_HOST_HEADROOM_GB = 4.0
 _PREFLIGHT_MODES = ("block", "warn", "off")
 
@@ -29,7 +32,7 @@ class PreflightError(RuntimeError):
 
 
 def _preflight_cfg() -> dict:
-    cfg = {"mode": "block", "headroom_gb": _DEFAULT_HEADROOM_GB,
+    cfg = {"mode": "block", "headroom_gb": _DEFAULT_HEADROOM_GB, "headroom_set": False,
            "host_headroom_gb": _DEFAULT_HOST_HEADROOM_GB}
     try:
         d = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
@@ -40,6 +43,7 @@ def _preflight_cfg() -> dict:
             try:
                 cfg["headroom_gb"] = max(0.0, min(4.0, float(
                     p.get("headroom_gb", cfg["headroom_gb"]))))
+                cfg["headroom_set"] = "headroom_gb" in p
             except (TypeError, ValueError):
                 pass
             try:
