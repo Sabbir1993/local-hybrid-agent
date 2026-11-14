@@ -4148,7 +4148,8 @@ details.mcp-server-fold .mcp-tools-list { padding: 4px 8px 8px 18px; display: fl
 /* Inline Mermaid Render Box in Chat */
 .mermaid-box:not(.drawn) .mermaid-viewport { display: none; }
 .mermaid-box.drawn .mermaid-code-raw { display: none; }
-.mermaid-box.drawn .mermaid-viewport { display: block; height: auto; max-height: 600px; overflow: auto; text-align: center; }
+.mermaid-box.drawn .mermaid-viewport { display: block; height: auto; max-height: 600px; overflow: auto; text-align: center; cursor: zoom-in; }
+.mermaid-box:not(.drawn) [data-click="mermaid-enlarge"] { display: none; }
 .mermaid-code-raw { margin: 0; padding: 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; }
 .mermaid-error { padding: 6px 12px; font-size: 11.5px; color: var(--dim); border-top: 1px solid var(--border-subtle); }
 .mermaid-box {

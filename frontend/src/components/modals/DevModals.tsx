@@ -4,6 +4,7 @@ import { CustomizeModal } from './CustomizeModal';
 import { MonitorDrawer } from './MonitorDrawer';
 import { DocsModal } from './DocsModal';
 import { PreviewModal } from './PreviewModal';
+import { DiagramModal } from './DiagramModal';
 
 export const DevModals: React.FC = () => {
   const { activeModal } = useAppStore();
@@ -14,6 +15,7 @@ export const DevModals: React.FC = () => {
       {activeModal === 'monitor' && <MonitorDrawer />}
       {activeModal === 'docs' && <DocsModal />}
       <PreviewModal />
+      <DiagramModal />
     </>
   );
 };

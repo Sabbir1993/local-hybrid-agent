@@ -162,11 +162,11 @@ export const PreviewModal: React.FC = () => {
     // 4. PPTX Presentation Parsing
     if (isPptx) {
       setLoading(true);
-      fetch(`/agent/doc-pages?path=${enc}`)
+      fetch(isWs ? `/agent/ws/doc-pages?path=${enc}${agentWsParam()}` : `/agent/doc-pages?path=${enc}`)
         .then((r) => (r.ok ? r.json() : { pages: 0 }))
         .then((d) => setPagePics(Number(d && d.pages) || 0))
         .catch(() => setPagePics(0));
-      fetch(`/agent/slides?path=${enc}`)
+      fetch(isWs ? `/agent/ws/slides?path=${enc}${agentWsParam()}` : `/agent/slides?path=${enc}`)
         .then(async (r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json();
@@ -210,7 +210,7 @@ export const PreviewModal: React.FC = () => {
     }
 
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, filePath, directContent, isImage, isHtml, isZip, isPdf, isExcel, isCsv, isPptx, rawUrl, enc, closePreviewModal]);
+  }, [isOpen, filePath, directContent, isImage, isHtml, isZip, isPdf, isExcel, isCsv, isPptx, isWs, rawUrl, enc, closePreviewModal]);
 
   if (!isOpen) return null;
 
@@ -542,7 +542,7 @@ export const PreviewModal: React.FC = () => {
                     <div key={i} className="pptx-slide-wrap relative w-full mb-4">
                       <div className="pptx-slide-num text-xs text-dim mb-1 font-semibold" style={{ color: 'var(--dim, #8b949e)', fontSize: '11px', marginBottom: '4px' }}>Slide {i + 1}</div>
                       <img
-                        src={`/agent/doc-page?path=${enc}&n=${i + 1}`}
+                        src={isWs ? `/agent/ws/doc-page?path=${enc}&n=${i + 1}${agentWsParam()}` : `/agent/doc-page?path=${enc}&n=${i + 1}`}
                         alt={`Slide ${i + 1}`}
                         loading="lazy"
                         className="w-full rounded-lg shadow-xl"

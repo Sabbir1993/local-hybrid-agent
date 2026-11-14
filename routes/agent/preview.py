@@ -117,16 +117,20 @@ def _render_now(data: bytes, ext: str, key: str):
     return pdf, count
 
 
+async def _pages_of_bytes(data: bytes, ext: str):
+    """(pdf bytes, page count) of a deck / workbook / document given as bytes: rendered once per file version."""
+    pdf, key_or_count = _rendered_pdf(data)
+    if pdf is not None:
+        return pdf, key_or_count
+    return await asyncio.get_running_loop().run_in_executor(None, _render_now, data, ext, key_or_count)
+
+
 async def _pages_of(path: str, space: Optional[str]):
     from core.doc_tools import render
     p = _resolve_requested_file(path, space)
     if p is None or not p.is_file() or p.suffix.lower() not in render.RENDERABLE:
         return None, 0
-    data = p.read_bytes()
-    pdf, key_or_count = _rendered_pdf(data)
-    if pdf is not None:
-        return pdf, key_or_count
-    return await asyncio.get_running_loop().run_in_executor(None, _render_now, data, p.suffix.lower(), key_or_count)
+    return await _pages_of_bytes(p.read_bytes(), p.suffix.lower())
 
 
 @router.get("/agent/doc-pages")
@@ -140,12 +144,10 @@ async def doc_pages(path: str, space: Optional[str] = None, user: Principal = De
     return JSONResponse({"pages": min(int(count or 0), _MAX_PAGES_SHOWN)}, headers={"Cache-Control": "no-store"})
 
 
-@router.get("/agent/doc-page")
-async def doc_page(path: str, n: int = 1, space: Optional[str] = None, user: Principal = Depends(get_current_user)):
-    """One page of the rendered file as a JPEG (n is 1-based)."""
+async def page_jpeg(pdf, count, n):
+    """One page of a rendered PDF as a JPEG response (n is 1-based); shared by /agent/doc-page and /agent/ws/doc-page."""
     from fastapi.responses import Response
     try:
-        pdf, count = await _pages_of(path, space)
         if not pdf or not (1 <= int(n) <= min(count, _MAX_PAGES_SHOWN)):
             return JSONResponse({"error": "page not available"}, status_code=404)
 
@@ -158,6 +160,16 @@ async def doc_page(path: str, n: int = 1, space: Optional[str] = None, user: Pri
         return JSONResponse({"error": f"could not draw the page ({type(e).__name__})"}, status_code=422)
     return Response(img, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300",
                                                            "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/agent/doc-page")
+async def doc_page(path: str, n: int = 1, space: Optional[str] = None, user: Principal = Depends(get_current_user)):
+    """One page of the rendered file as a JPEG (n is 1-based)."""
+    try:
+        pdf, count = await _pages_of(path, space)
+    except Exception as e:
+        return JSONResponse({"error": f"could not draw the page ({type(e).__name__})"}, status_code=422)
+    return await page_jpeg(pdf, count, n)
 
 
 @router.get("/agent/doc-draft")

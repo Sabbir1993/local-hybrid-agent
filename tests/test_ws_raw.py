@@ -67,7 +67,7 @@ class WsRawTests(unittest.TestCase):
             return {"data": base64.b64encode(b).decode() if b is not None else None}
         raise AssertionError(f"unexpected companion op {op}")
 
-    def _get(self, path, proj="p", call=None):
+    def _get(self, path, proj="p", call=None, fn=None, **kw):
         patches = [
             mock.patch.object(agent_tools, "_projects_db", self._db),
             mock.patch.object(companion_bridge, "is_connected", lambda uid: uid == USER),
@@ -81,7 +81,7 @@ class WsRawTests(unittest.TestCase):
         with _enter(patches):
             set_current_user(USER)
             set_current_device("dev")
-            return asyncio.run(agent_routes.agent_ws_raw(path, _Principal()))
+            return asyncio.run((fn or agent_routes.agent_ws_raw)(path, user=_Principal(), **kw))
 
     def _body(self, r):
         return r.body.decode("utf-8", "replace")
@@ -123,6 +123,82 @@ class WsRawTests(unittest.TestCase):
         r = self._get("logo.png")
         self.assertEqual(r.headers.get("x-content-type-options"), "nosniff")
         self.assertIn("sandbox", r.headers.get("content-security-policy", ""))
+
+    def test_a_pdf_is_not_sandboxed_so_the_browsers_viewer_can_open_it(self):
+        self.files[str(WS / "report.pdf")] = b"%PDF-1.4\n%fake\n"
+        r = self._get("report.pdf")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.media_type, "application/pdf")
+        self.assertNotIn("content-security-policy", {k.lower() for k in r.headers.keys()})
+        self.assertEqual(r.headers.get("x-content-type-options"), "nosniff")
+
+    def test_everything_else_stays_sandboxed(self):
+        self.files[str(WS / "page.html")] = b"<script>1</script>"
+        self.files[str(WS / "deck.pptx")] = b"PK\x03\x04"
+        for name in ("page.html", "logo.png", "src/shop.js", "deck.pptx"):
+            r = self._get(name)
+            self.assertIn("sandbox", r.headers.get("content-security-policy", ""), name)
+
+    # --- slides and page pictures of a file on the user's machine ----------------------------------------
+    def _deck(self):
+        import io
+        from pptx import Presentation
+        prs = Presentation()
+        prs.slides.add_slide(prs.slide_layouts[5]).shapes.title.text = "Quarterly review"
+        buf = io.BytesIO()
+        prs.save(buf)
+        return buf.getvalue()
+
+    def test_slides_of_a_deck_in_the_workspace(self):
+        import json
+        self.files[str(WS / "deck.pptx")] = self._deck()
+        r = self._get("deck.pptx", fn=agent_routes.agent_ws_slides)
+        self.assertEqual(r.status_code, 200)
+        model = json.loads(r.body)
+        self.assertEqual(len(model["slides"]), 1)
+        self.assertIn("fs.read_b64", [c[0] for c in self.calls])
+
+    def test_slides_refuses_other_files_without_reading_them(self):
+        r = self._get("src/shop.js", fn=agent_routes.agent_ws_slides)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.calls, [])
+
+    def test_slides_of_a_missing_deck_and_of_a_path_escape(self):
+        self.assertEqual(self._get("nope.pptx", fn=agent_routes.agent_ws_slides).status_code, 404)
+        self.calls.clear()
+        r = self._get("../../secret.pptx", fn=agent_routes.agent_ws_slides)
+        self.assertIn(r.status_code, (400, 403, 404))
+        self.assertEqual(self.calls, [])
+
+    def test_a_deck_too_big_to_read_whole_is_not_previewed_from_a_cut_file(self):
+        self.files[str(WS / "huge.pptx")] = b"PK" + b"a" * (agent_routes._WS_RAW_MAX + 10)
+        r = self._get("huge.pptx", fn=agent_routes.agent_ws_slides)
+        self.assertEqual(r.status_code, 413)
+
+    def test_page_count_is_zero_without_a_renderer_and_for_other_files(self):
+        import json
+        self.files[str(WS / "deck.pptx")] = self._deck()
+        with mock.patch("core.doc_tools.render.to_pdf", lambda data, ext: None):
+            r = self._get("deck.pptx", fn=agent_routes.agent_ws_doc_pages)
+        self.assertEqual(json.loads(r.body), {"pages": 0})
+        self.calls.clear()
+        r = self._get("src/shop.js", fn=agent_routes.agent_ws_doc_pages)
+        self.assertEqual(json.loads(r.body), {"pages": 0})
+        self.assertEqual(self.calls, [], "a file LibreOffice cannot draw is not even read")
+
+    def test_page_count_comes_from_the_rendered_deck(self):
+        import json
+        self.files[str(WS / "deck.pptx")] = self._deck()
+
+        async def fake_pages(data, ext):
+            self.assertEqual(ext, ".pptx")
+            self.assertTrue(data.startswith(b"PK"))
+            return b"%PDF", 3
+        with mock.patch("routes.agent.preview._pages_of_bytes", fake_pages):
+            r = self._get("deck.pptx", fn=agent_routes.agent_ws_doc_pages)
+            bad = self._get("deck.pptx", fn=agent_routes.agent_ws_doc_page, n=9)
+        self.assertEqual(json.loads(r.body), {"pages": 3})
+        self.assertEqual(bad.status_code, 404)               # page 9 of 3
 
     # --- errors -----------------------------------------------------------
     def test_missing_file_is_404(self):

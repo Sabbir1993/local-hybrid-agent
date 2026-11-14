@@ -167,16 +167,10 @@ _WS_RAW_TEXT_EXT = {
 _WS_RAW_MAX = 12 * 1024 * 1024
 
 
-@router.get("/agent/ws/raw")
-async def agent_ws_raw(path: str, user: Principal = Depends(get_current_user), agent: Optional[int] = None):
-    """Stream one workspace file verbatim, for the preview modal.
-
-    /agent/raw only serves the server-side common space, so a project file
-    (src/shop.js and friends) previewed from a tool card 404'd. This reads the
-    user's own machine through the companion, with the same workspace guards
-    agent_ws_file uses: the path can never escape the active workspace, and the
-    bytes never come from this server's disk.
-    """
+async def _ws_load(path: str, agent: Optional[int], user: Principal):
+    """One workspace file, read through the companion with the workspace guards: (media type, bytes, truncated) or an error
+    response. The path can never escape the active workspace and the bytes never come from this server's disk. Shared by
+    /agent/ws/raw and the slide / page-picture endpoints below."""
     folder, bad = _personal_folder(agent, user)
     if bad:
         return bad
@@ -215,8 +209,6 @@ async def agent_ws_raw(path: str, user: Principal = Depends(get_current_user), a
             if content is None:
                 return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
             body = content.encode("utf-8", errors="replace")
-            if len(body) > _WS_RAW_MAX:
-                body = body[:_WS_RAW_MAX]
         else:
             data = await companion_bridge.call(uid, "fs.read_b64", {"path": str(p)})
             b64 = data.get("data")
@@ -224,17 +216,112 @@ async def agent_ws_raw(path: str, user: Principal = Depends(get_current_user), a
                 return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
             import base64 as _b64
             body = _b64.b64decode(b64)
-            if len(body) > _WS_RAW_MAX:
-                body = body[:_WS_RAW_MAX]
     except (ConnectionError, TimeoutError, RuntimeError) as e:
         return JSONResponse({"error": f"SSL Local Agent: {e}"}, status_code=502)
     except ValueError as e:
         return JSONResponse({"error": f"could not decode {path}: {e}"}, status_code=422)
+    truncated = len(body) > _WS_RAW_MAX
+    if truncated:
+        body = body[:_WS_RAW_MAX]
+    return media, body, truncated
 
+
+@router.get("/agent/ws/raw")
+async def agent_ws_raw(path: str, user: Principal = Depends(get_current_user), agent: Optional[int] = None):
+    """Stream one workspace file verbatim, for the preview modal.
+
+    /agent/raw only serves the server-side common space, so a project file
+    (src/shop.js and friends) previewed from a tool card 404'd. This reads the
+    user's own machine through the companion, with the same workspace guards
+    agent_ws_file uses: the path can never escape the active workspace, and the
+    bytes never come from this server's disk.
+    """
+    loaded = await _ws_load(path, agent, user)
+    if isinstance(loaded, Response):
+        return loaded
+    media, body, _truncated = loaded
     # Never let the browser sniff or execute a workspace file in this origin.
-    return Response(content=body, media_type=media, headers={
+    headers = {
         "Content-Disposition": "inline",
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "no-store",
-        "Content-Security-Policy": "sandbox",
-    })
+    }
+    # A sandboxed document cannot open the browser's PDF viewer (the preview showed a blank frame), and a PDF does not run
+    # script in this origin: /agent/raw serves the server's own PDFs the same way. Every other type stays sandboxed.
+    if media.split(";")[0].strip().lower() != "application/pdf":
+        headers["Content-Security-Policy"] = "sandbox"
+    return Response(content=body, media_type=media, headers=headers)
+
+
+# ---- slide and page pictures of a deck / workbook / document that lives on the user's own machine ------------------------
+# /agent/slides and /agent/doc-page read the server's own common space only; a file the agent wrote into its work folder is
+# on the user's machine, so these twins read the bytes through the companion and use the same renderers.
+def _too_big(truncated: bool):
+    return JSONResponse({"error": "file too large to preview here - open it on your computer"}, status_code=413) if truncated else None
+
+
+@router.get("/agent/ws/slides")
+async def agent_ws_slides(path: str, user: Principal = Depends(get_current_user), agent: Optional[int] = None):
+    """Render model of a .pptx in the workspace (positions, text, images) for the preview modal."""
+    if not path.lower().endswith(".pptx"):
+        return JSONResponse({"error": "only .pptx files can be previewed as slides"}, status_code=400)
+    loaded = await _ws_load(path, agent, user)
+    if isinstance(loaded, Response):
+        return loaded
+    _media, body, truncated = loaded
+    big = _too_big(truncated)
+    if big:
+        return big
+    import asyncio
+    from core.doc_ops import pptx_ops
+    from core.doc_ops.base import DocOpError
+    try:
+        model = await asyncio.get_running_loop().run_in_executor(None, pptx_ops.preview, body)
+    except DocOpError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except Exception as e:
+        return JSONResponse({"error": f"could not read presentation: {type(e).__name__}"}, status_code=422)
+    return JSONResponse(model, headers={"Cache-Control": "no-cache"})
+
+
+async def _ws_pages(path: str, agent: Optional[int], user: Principal):
+    """(pdf bytes, page count) of a workspace .pptx / .xlsx / .docx drawn by LibreOffice, or (None, 0)."""
+    from core.doc_tools import render
+    from .preview import _pages_of_bytes
+    ext = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    if ext not in render.RENDERABLE:
+        return None, 0
+    loaded = await _ws_load(path, agent, user)
+    if isinstance(loaded, Response):
+        return None, 0
+    _media, body, truncated = loaded
+    if truncated:
+        return None, 0
+    return await _pages_of_bytes(body, ext)
+
+
+@router.get("/agent/ws/doc-pages")
+async def agent_ws_doc_pages(path: str, user: Principal = Depends(get_current_user), agent: Optional[int] = None):
+    """{"pages": N}: how many page pictures /agent/ws/doc-page can serve (0 when the server has no LibreOffice or the file is
+    not on this user's machine, so the client keeps its own preview)."""
+    from .preview import _MAX_PAGES_SHOWN
+    try:
+        _pdf, count = await _ws_pages(path, agent, user)
+    except WorkspaceAccessDenied:
+        raise
+    except Exception:
+        count = 0
+    return JSONResponse({"pages": min(int(count or 0), _MAX_PAGES_SHOWN)}, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/agent/ws/doc-page")
+async def agent_ws_doc_page(path: str, n: int = 1, user: Principal = Depends(get_current_user), agent: Optional[int] = None):
+    """One page of the rendered workspace file as a JPEG (n is 1-based)."""
+    from .preview import page_jpeg
+    try:
+        pdf, count = await _ws_pages(path, agent, user)
+    except WorkspaceAccessDenied:
+        raise
+    except Exception:
+        pdf, count = None, 0
+    return await page_jpeg(pdf, count, n)

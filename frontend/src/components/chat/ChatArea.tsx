@@ -340,7 +340,7 @@ export const ChatArea: React.FC = () => {
     return () => window.clearInterval(t);
   }, []);
   const sessionLoading = useAppStore((st) => st.sessionLoading);
-  const { sendPrompt, isStreaming, messages, selectedModel, serverStatus, isModelLoading, loadSelectedModel, openPreviewModal, appMode } = useAppStore();
+  const { sendPrompt, isStreaming, messages, selectedModel, serverStatus, isModelLoading, loadSelectedModel, openPreviewModal, openDiagramModal, appMode } = useAppStore();
   const [expandedPrompts, setExpandedPrompts] = useState<Record<string, boolean>>({});
   const [overflowPrompts, setOverflowPrompts] = useState<Record<string, boolean>>({});
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -477,6 +477,21 @@ export const ChatArea: React.FC = () => {
         openPreviewModal(path, title, null, source);
       }
       return;
+    }
+
+    // 4b. A drawn diagram: its Enlarge button, or a click on the diagram itself, opens the large view with zoom
+    const enlargeBtn = target.closest('button[data-click="mermaid-enlarge"]');
+    const onDiagram = enlargeBtn ? null : target.closest('.mermaid-box.drawn .mermaid-viewport');
+    const diagramHit = enlargeBtn || onDiagram;
+    if (diagramHit) {
+      const svg = diagramHit.closest('.mermaid-box')?.querySelector('.mermaid-viewport svg');
+      const picked = window.getSelection();
+      if (svg && !(onDiagram && picked && !picked.isCollapsed)) {   // not while the user is selecting text
+        e.preventDefault();
+        e.stopPropagation();
+        openDiagramModal(svg, 'Diagram');
+        return;
+      }
     }
 
     // 5. Handle image click inside chat bubble or media card for full-resolution preview

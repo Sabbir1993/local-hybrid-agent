@@ -40,6 +40,13 @@ export interface DialogState {
   onCancel?: () => void;
 }
 
+export interface DiagramModalState {
+  isOpen: boolean;
+  /** the drawn <svg> in the chat; the large view copies it */
+  node: Element | null;
+  title: string;
+}
+
 export interface PreviewModalState {
   isOpen: boolean;
   filePath: string;
@@ -186,6 +193,9 @@ interface AppState {
   previewModal: PreviewModalState;
   openPreviewModal: (filePath: string, title?: string, directContent?: string | null, source?: 'common' | 'ws' | 'modal', forceModal?: boolean) => void;
   closePreviewModal: () => void;
+  diagramModal: DiagramModalState;
+  openDiagramModal: (node: Element, title?: string) => void;
+  closeDiagramModal: () => void;
 
   // Actions
   checkAuth: () => Promise<void>;
@@ -630,7 +640,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       (typeof title === 'string' && title.toLowerCase().includes('attachment'));
 
     const isDockPreview = !isAttachment && (
-      ['html', 'htm', 'ppt', 'pptx', 'pdf', 'md', 'markdown', 'svg', 'mermaid'].includes(ext) ||
+      ['html', 'htm', 'md', 'markdown', 'svg', 'mermaid'].includes(ext) ||
       cleanPath.includes('diagram')
     );
 
@@ -669,6 +679,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     }));
   },
+  diagramModal: { isOpen: false, node: null, title: '' },
+  openDiagramModal: (node, title = 'Diagram') => set({ diagramModal: { isOpen: true, node, title } }),
+  closeDiagramModal: () => set({ diagramModal: { isOpen: false, node: null, title: '' } }),
 
   hasPerm: (permission: string) => {
     const user = get().currentUser;

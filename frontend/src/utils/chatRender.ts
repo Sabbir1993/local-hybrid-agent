@@ -349,8 +349,8 @@ marked.use({
         // drawn after render by utils/mermaid.ts; the source stays visible until then and if it is not valid Mermaid.
         // The Copy button (code-copy) copies the source, like any code block.
         return `<div class="code-block mermaid-box"><div class="code-block-head"><span class="code-block-lang">Diagram</span>`
-          + `<span class="code-block-actions"><button type="button" class="code-block-btn" data-click="code-copy" title="Copy the Mermaid source">📋 Copy</button></span></div>`
-          + `<div class="mermaid-viewport"></div><pre class="mermaid-code-raw"><code>${escText(text)}</code></pre></div>`;
+          + `<span class="code-block-actions"><button type="button" class="code-block-btn" data-click="mermaid-enlarge" title="Open the diagram in a large view with zoom">⤢ Enlarge</button><button type="button" class="code-block-btn" data-click="code-copy" title="Copy the Mermaid source">📋 Copy</button></span></div>`
+          + `<div class="mermaid-viewport" title="Click to enlarge"></div><pre class="mermaid-code-raw"><code>${escText(text)}</code></pre></div>`;
       }
       const label = rawLang || 'code';
       const escaped = hlCode(text, hlLangFor(rawLang));   // escapes, then wraps tokens

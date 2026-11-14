@@ -94,6 +94,9 @@ from .ws_browse import (
     _WS_RAW_TEXT_EXT,
     _WS_RAW_MAX,
     agent_ws_raw,
+    agent_ws_slides,
+    agent_ws_doc_pages,
+    agent_ws_doc_page,
 )
 from .vision import (
     agent_vision,
@@ -161,6 +164,9 @@ __all__ = [
     "_WS_RAW_TEXT_EXT",
     "_WS_RAW_MAX",
     "agent_ws_raw",
+    "agent_ws_slides",
+    "agent_ws_doc_pages",
+    "agent_ws_doc_page",
     "agent_vision",
     "unload_small_models_endpoint",
 ]
