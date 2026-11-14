@@ -46,6 +46,10 @@ class RolesReq(BaseModel):
     as_default: bool = False
 
 
+class PresetReq(BaseModel):
+    mode: str = Field(max_length=40)
+
+
 class MediaSettingsReq(BaseModel):
     allow_cloud_audio: Optional[bool] = None
     image_per_day: Optional[int] = Field(default=None, ge=0, le=10000)

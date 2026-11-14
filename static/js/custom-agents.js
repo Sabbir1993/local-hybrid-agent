@@ -718,7 +718,9 @@
     $('ca-desc').value = agent ? agent.description : '';
     $('ca-prompt').value = agent ? agent.system_prompt : '';
     $('ca-template').value = agent ? (agent.input_template || '') : '';
-    $('ca-lane').value = agent ? (agent.preferred_lane || 'auto') : 'auto';
+    const preferred = agent && (agent.preferred_lane === 'main' || agent.preferred_lane === 'executor')
+      ? agent.preferred_lane : 'auto';
+    $('ca-lane').value = preferred;
     $('ca-effort').value = agent ? (agent.reasoning_effort || 'medium') : 'medium';
     $('ca-temp').value = agent ? String(agent.temperature != null ? agent.temperature : 0.4) : '0.4';
     $('ca-temp-val').textContent = $('ca-temp').value;

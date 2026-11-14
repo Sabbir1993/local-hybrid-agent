@@ -292,5 +292,25 @@ function runPythonScript(command) {
   return m ? m[1] : null;
 }
 
+// Resolve a dedicated python.run target without invoking a shell. Only a .py
+// file inside the approved workspace is accepted; absolute and relative paths
+// are normalized before the containment check.
+function pythonScriptPath(cwd, scriptPath) {
+  if (typeof cwd !== "string" || !cwd.trim() || typeof scriptPath !== "string" || !scriptPath.trim()) {
+    throw new Error("Python script path and workspace are required");
+  }
+  const root = path.resolve(cwd);
+  const script = path.resolve(root, scriptPath);
+  const rel = path.relative(root, script);
+  if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel) || !isInside(script, root)) {
+    throw new Error("Python script must stay inside the approved workspace");
+  }
+  if (path.extname(script).toLowerCase() !== ".py") {
+    throw new Error("Python script path must end in .py");
+  }
+  return script;
+}
+
 module.exports = { ensurePath, confirmShell, approveRoot, isApproved, confirmOrigin, confirmAction, confirmScript,
-                   alwaysAllowedCount, forgetAlwaysAllowed, localConfirmEnabled, setLocalConfirm, runPythonScript };
+                   alwaysAllowedCount, forgetAlwaysAllowed, localConfirmEnabled, setLocalConfirm, runPythonScript,
+                   pythonScriptPath };

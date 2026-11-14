@@ -183,4 +183,42 @@ function run({ command, cwd, timeout, background, wait_for_port, wait, shell }) 
   });
 }
 
-module.exports = { run, buildChildEnv, resolveShell, killTree };
+// Run one verified Python file without a shell. The companion policy resolves
+// and byte-checks the path first, so no quoting or command chaining is involved.
+function runPython({ path: scriptPath, cwd, timeout }) {
+  return new Promise((resolve) => {
+    let out = "";
+    let err = "";
+    let timedOut = false;
+    let settled = false;
+    const child = spawn("python", [scriptPath], {
+      cwd: cwd || undefined,
+      shell: false,
+      detached: process.platform !== "win32",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: buildChildEnv(process.env, activeEnvPolicy()),
+    });
+    const finish = (code, extraErr) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        exit_code: timedOut ? 124 : (typeof code === "number" ? code : 1),
+        stdout: out.slice(-MAX_OUTPUT_CHARS),
+        stderr: err.slice(-4000) + (timedOut ? "\n(killed: timeout)" : "") + (extraErr || ""),
+      });
+    };
+    child.stdout.on("data", (d) => { out = (out + d).slice(-MAX_OUTPUT_CHARS * 2); });
+    child.stderr.on("data", (d) => { err = (err + d).slice(-8000); });
+    child.on("error", (e) => finish(1, "\n" + e.message));
+    child.on("close", (code) => finish(code));
+    const timer = timeout ? setTimeout(() => {
+      timedOut = true;
+      killTree(child);
+      setTimeout(() => finish(null), 2000);
+    }, timeout * 1000) : null;
+  });
+}
+
+module.exports = { run, runPython, buildChildEnv, resolveShell, killTree };

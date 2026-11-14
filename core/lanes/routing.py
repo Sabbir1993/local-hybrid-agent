@@ -13,6 +13,7 @@ from .registry import (
     validate_mapping,
 )
 from .target import Target
+from .presets import agent_mode
 
 
 def targets(job: str, user_id: Optional[int] = None, force_local: bool = False) -> list:
@@ -20,6 +21,7 @@ def targets(job: str, user_id: Optional[int] = None, force_local: bool = False) 
     from .. import cloud
     spec = JOBS[job]
     reg = registry(user_id)
+    main_only = spec["kind"] == "chat" and agent_mode(user_id) == "no-orchestration"
     mapped = role_map(user_id).get(job) or spec["default"]
     if mapped and validate_mapping(job, mapped, user_id):
         mapped = default_lane(job, user_id, reg)
@@ -40,7 +42,7 @@ def targets(job: str, user_id: Optional[int] = None, force_local: bool = False) 
     # image reading: any lane that can see is a valid backup (main, then the helper), so a
     # sleeping/failed reader falls back to a model that already has eyes
     seers = tuple(n for n in ("main", "executor") if job == "vision" and reg.get(n, {}).get("vision"))
-    extras = () if hard_stop else (*seers, spec["default"], *_shared_media_lanes(job, reg), "main")
+    extras = () if hard_stop or main_only else (*seers, spec["default"], *_shared_media_lanes(job, reg), "main")
     for extra in extras:
         if extra and extra not in seen and extra in reg:
             seen.add(extra)

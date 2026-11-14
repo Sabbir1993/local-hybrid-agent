@@ -218,13 +218,9 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     # A lane is served by the cloud when its binding resolves in core.cloud;
     # otherwise it stays local (llama-server), and the mode decides whether the
     # client is forced local even when a cloud binding exists.
-    ctx.mode = (req.mode or "all-local").strip().lower()
-    if ctx.mode in ("main", ""):
-        ctx.mode = "all-local"
-    elif ctx.mode == "tiered":
-        ctx.mode = "main-cloud-rest-local"
-    elif ctx.mode == "agent":
-        ctx.mode = "all-local"
+    from core import lanes
+    ctx.mode = lanes.agent_mode(user.id, req.mode or "all-local")
+    lanes.set_request_agent_mode(ctx.mode)
     # Agent mode (a custom agent) reads and writes the user's own files, so it never leaves the machine: every
     # lane stays on the local models whatever the picker, the job mapping or the agent's preferred lane say.
     # agent.agent_local_only = false in config/app.json lifts it.
@@ -245,8 +241,7 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     # Jobs mapped in Settings -> Models (core/lanes.py): "Thinking & planning" may
     # point at a cloud model, "Routine tool calls" at any text model. Unmapped
     # jobs keep main / executor. The mode below still forces local when asked.
-    from core import lanes
-    _rm = cloud.role_map(user.id)
+    _rm = lanes.role_map(user.id)
     _reg = lanes.registry(user.id)
     _reason = _rm.get("agent.reason")
     if _reason and _reason != "main" and not lanes.validate_mapping("agent.reason", _reason, user.id):
@@ -270,7 +265,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     if local_only:
         ctx.cloud_main = None
         ctx.cloud_exec = None
-        ctx.mode = "all-local"
+        if ctx.mode not in ("no-orchestration", "all-cloud", "direct"):
+            ctx.mode = "all-local"
         if ctx.ca_lane == "cloud":
             ctx.ca_lane = "auto"
     if ctx.mode in ("no-orchestration", "all-cloud", "direct"):
@@ -287,6 +283,7 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             ctx.cloud_exec = None
     elif ctx.mode == "main-cloud-rest-local":
         ctx.cloud_exec = None       # executor stays local in this mode
+    lanes.set_request_agent_mode(ctx.mode)
     # When user picked an explicit cloud model for executor/vision lanes, use it
     # (applies to main-local-rest-cloud and similar modes that need a cloud executor)
     if req.cloud_model_override and ctx.mode not in ("all-local", "main-cloud-rest-local", "no-orchestration", "all-cloud", "direct"):

@@ -119,6 +119,15 @@ def take_code_approval(code: str) -> bool:
     return approved == (code or "") or not shell_cfg().get("ask_first", True)
 
 
+def python_approval_key(args: dict) -> str:
+    """Stable value shared by the permission card and run_python implementation."""
+    code = args.get("code") if isinstance(args, dict) else None
+    if isinstance(code, str) and code.strip():
+        return code
+    path = (args or {}).get("path") or (args or {}).get("file") or (args or {}).get("filename") or ""
+    return "path:" + str(path).strip().replace("\\", "/")
+
+
 # Personal Agent shell commands: anything that redirects output, changes files, installs software or starts a
 # shell/script host is refused before it is even offered for approval. python / py / node are NOT refused:
 # they run only after the user approves that exact command (the card shows it), because a one-liner is how an

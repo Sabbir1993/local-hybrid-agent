@@ -49,7 +49,11 @@ const AgentBuilder: React.FC<{ agent: any | null }> = ({ agent }) => {
   const [desc, setDesc] = useState(agent?.description || '');
   const [prompt, setPrompt] = useState(agent?.system_prompt || '');
   const [template, setTemplate] = useState(agent?.input_template || '');
-  const [lane, setLane] = useState(agent?.preferred_lane || 'auto');
+  const [lane, setLane] = useState(
+    agent?.preferred_lane === 'main' ? 'main'
+      : agent?.preferred_lane === 'executor' ? 'executor'
+        : 'auto',
+  );
   const [effort, setEffort] = useState(agent?.reasoning_effort || 'medium');
   const [temp, setTemp] = useState<number>(agent?.temperature != null ? Number(agent.temperature) : 0.4);
   const [workDir, setWorkDir] = useState(agent?.work_dir || '');
@@ -189,10 +193,9 @@ const AgentBuilder: React.FC<{ agent: any | null }> = ({ agent }) => {
           <div className="ca-field" style={{ flex: 1 }}>
             <label htmlFor="ca-lane">Preferred Model Lane</label>
             <select id="ca-lane" value={lane} onChange={(e) => setLane(e.target.value)}>
-              <option value="auto">Auto (Runtime Default)</option>
-              <option value="main">Main LLM (Arc A770)</option>
-              <option value="executor">Fast Executor (Local 3B)</option>
-              <option value="cloud">Cloud Provider</option>
+              <option value="auto">Auto</option>
+              <option value="main">Main model</option>
+              <option value="executor">Executor</option>
             </select>
           </div>
           <div className="ca-field" style={{ flex: 1 }}>

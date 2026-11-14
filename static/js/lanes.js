@@ -96,9 +96,19 @@ async function lanesLoad() {
   if (!box) return;
   try {
     const r = await fetch('/control/lanes');
-    const d = await r.json();
+    let d = await r.json();
     if (!r.ok || d.error) throw new Error(d.error || ('HTTP ' + r.status));
+    if (!d.agent_mode) {
+      try {
+        const local = localStorage.getItem('agent_engine');
+        const canonical = local === 'direct' ? 'no-orchestration' : local;
+        if (PRESETS.some(p => p.mode === canonical)) {
+          d = await lanesApi('/control/lanes/preset', 'POST', { mode: canonical });
+        }
+      } catch (_) {}
+    }
     LN.d = d;
+    if (d.agent_mode) try { localStorage.setItem('agent_engine', d.agent_mode); } catch (_) {}
     try { LN.view = localStorage.getItem('lanes_view') || 'simple'; } catch (_) {}
     lanesRender();
     lnPollLoading();
@@ -220,6 +230,7 @@ function mapHtml() {
 
 /* ---------- simple view ---------- */
 function curPreset() {
+  if (LN.d && LN.d.agent_mode) return LN.d.agent_mode;
   try { return localStorage.getItem('agent_engine') || 'all-local'; } catch (_) { return 'all-local'; }
 }
 
@@ -1171,10 +1182,14 @@ document.addEventListener('click', async (e) => {
     else if (k === 'preset-cancel') { LN.presetPreview = null; lanesRender(); }
     else if (k === 'preset-apply') {
       const prev = curPreset();
+      await lanesApi('/control/lanes/preset', 'POST', { mode: b.dataset.mode });
       localStorage.setItem('agent_engine', b.dataset.mode);
       LN.presetPreview = null; lanesRender();
       const p = PRESETS.find(x => x.mode === b.dataset.mode);
-      undoToast(`Now using “${p.name}” for the agent`, async () => { localStorage.setItem('agent_engine', prev); });
+      undoToast(`Now using “${p.name}” for the agent`, async () => {
+        await lanesApi('/control/lanes/preset', 'POST', { mode: prev });
+        localStorage.setItem('agent_engine', prev);
+      });
     }
     else if (k === 'goto-cloud') { e.preventDefault(); switchSettingsTab('sec-cloud'); }
     else if (k === 'test') await testLane(b.dataset.name);

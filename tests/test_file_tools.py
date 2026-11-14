@@ -384,6 +384,25 @@ class SchemaContractTests(unittest.TestCase):
         self.assertIsNotNone(err)
         self.assertIn("old_string", err)
 
+    def test_run_python_accepts_exactly_one_source(self):
+        from core.agent_loop.repair import validate_and_repair_tool_args
+
+        args, err = validate_and_repair_tool_args("run_python", {"path": "scripts/check.py"})
+        self.assertIsNone(err)
+        self.assertEqual(args["path"], "scripts/check.py")
+
+        for bad in ({}, {"code": "print(1)", "path": "scripts/check.py"}):
+            _, err = validate_and_repair_tool_args("run_python", bad)
+            self.assertIsNotNone(err)
+            self.assertIn("exactly one", err)
+
+    def test_run_python_schema_advertises_path_and_code(self):
+        schema = next(t for t in agent_tools.AGENT_TOOLS
+                      if t["function"]["name"] == "run_python")
+        params = schema["function"]["parameters"]
+        self.assertEqual(set(params["properties"]), {"path", "code"})
+        self.assertNotIn("required", params)
+
 
 class ToolTests(Base):
     def test_write_refuses_existing_unless_overwrite(self):
@@ -704,19 +723,25 @@ class RunPythonIsolationTests(Base):
 
     def setUp(self):
         super().setUp()
-        self.shell_cmds = []
+        self.python_runs = []
+        self.python_result = {"stdout": "ok", "stderr": "", "exit_code": 0}
+        self.python_timeout = False
 
         async def fake_call(uid, op, params, timeout=None):
             self.fc.ops.append(op)
+            if op == "fs.read":
+                return {"content": self.fc.files.get(params["path"])}
             if op == "fs.write":
                 self.fc.files[params["path"]] = params["content"]
                 return {"existed": True}
             if op == "fs.remove":
                 self.fc.files.pop(params["path"], None)
                 return {"removed": True}
-            if op == "shell.run":
-                self.shell_cmds.append(params["command"])
-                return {"stdout": "ok", "stderr": "", "exit_code": 0}
+            if op == "python.run":
+                self.python_runs.append(dict(params))
+                if self.python_timeout:
+                    raise TimeoutError()
+                return dict(self.python_result)
             raise RuntimeError(f"unknown op {op}")
 
         self._bridge = mock.patch.object(companion_bridge, "call", fake_call)
@@ -742,11 +767,12 @@ class RunPythonIsolationTests(Base):
         self.assertIn("exit code 0", b)
         # the fixed shared name must never be written anymore
         self.assertNotIn(full("_agent_run.py"), self.fc.files)
-        # each shell.run names its own script, and the two differ
-        self.assertEqual(len(self.shell_cmds), 2)
-        self.assertNotEqual(self.shell_cmds[0], self.shell_cmds[1])
-        for cmd in self.shell_cmds:
-            self.assertRegex(cmd, r'^python "_agent_run_[0-9a-f]{8}\.py"$')
+        # each python.run names its own script, and the two differ
+        self.assertEqual(len(self.python_runs), 2)
+        paths = [Path(p["path"]).name for p in self.python_runs]
+        self.assertNotEqual(paths[0], paths[1])
+        for name in paths:
+            self.assertRegex(name, r'^_agent_run_[0-9a-f]{8}\.py$')
 
     def test_script_removed_after_run(self):
         from core.agent_tools.file_ops import tool_run_python
@@ -754,6 +780,45 @@ class RunPythonIsolationTests(Base):
         leftovers = [p for p in self.fc.files if Path(p).name.startswith("_agent_run_")]
         self.assertEqual(leftovers, [], f"script litter left behind: {leftovers}")
         self.assertIn("fs.remove", self.fc.ops)
+
+    def test_path_runs_existing_script_without_rewriting_it(self):
+        from core.agent_tools.file_ops import tool_run_python
+
+        script = full("scripts/check.py")
+        self.fc.files[script] = "print('from file')\n"
+        out = self.run_(tool_run_python({"path": "scripts/check.py"}))
+
+        self.assertIn("exit code 0", out)
+        self.assertEqual(self.python_runs[0]["path"], script)
+        self.assertEqual(self.python_runs[0]["source"], "print('from file')\n")
+        self.assertNotIn("fs.write", self.fc.ops)
+        self.assertNotIn("fs.remove", self.fc.ops)
+        self.assertTrue(file_state.was_read(script))
+
+    def test_failed_inline_script_is_retained_for_edit_and_rerun(self):
+        from core.agent_tools.file_ops import tool_run_python
+
+        self.python_result = {"stdout": "", "stderr": "boom", "exit_code": 1}
+        out = self.run_(tool_run_python({"code": "raise RuntimeError('boom')\n"}))
+
+        kept = [p for p in self.fc.files if Path(p).name.startswith("_agent_run_")]
+        self.assertEqual(len(kept), 1)
+        rel = Path(kept[0]).name
+        self.assertIn(f"retained at {rel}", out)
+        self.assertIn(f'run_python(path="{rel}")', out)
+        self.assertTrue(file_state.was_read(kept[0]))
+        self.assertNotIn("fs.remove", self.fc.ops)
+
+    def test_timed_out_inline_script_is_retained(self):
+        from core.agent_tools.file_ops import tool_run_python
+
+        self.python_timeout = True
+        out = self.run_(tool_run_python({"code": "while True: pass\n"}))
+
+        kept = [p for p in self.fc.files if Path(p).name.startswith("_agent_run_")]
+        self.assertEqual(len(kept), 1)
+        self.assertIn("timed out", out)
+        self.assertIn("retained at", out)
 
 
 class PreSaveSyntaxValidationTests(Base):

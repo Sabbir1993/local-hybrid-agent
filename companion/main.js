@@ -586,6 +586,16 @@ const OPS = {
     }
     return shellops.run(p);
   },
+  "python.run": async (p) => {
+    const script = policy.pythonScriptPath(p.cwd, p.path);
+    await policy.ensurePath(script, "run");
+    if (typeof p.source !== "string") throw new Error("approved Python source is required");
+    const onDisk = fs.existsSync(script) ? fs.readFileSync(script, "utf-8") : null;
+    if (onDisk !== p.source) throw new Error("script on disk does not match the approved code");
+    const shown = `python "${path.relative(p.cwd, script)}"`;
+    await policy.confirmShell(shown, p.cwd, p.source, p.approved_in_app === true);
+    return shellops.runPython({ path: script, cwd: p.cwd, timeout: p.timeout });
+  },
   // Administrator terminal (Windows): start always asks on this PC and then Windows asks again (UAC); never skippable from the web app
   "shell.admin_start": (p) => adminops.start(p),
   "shell.admin_run": (p) => adminops.run(p),

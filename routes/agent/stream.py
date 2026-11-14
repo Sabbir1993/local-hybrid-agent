@@ -56,7 +56,7 @@ from core.skills import skills_prompt_fragment
 from core.agent_library import agent_library_prompt_fragment
 from core import router_policy, route_log
 from core.plugins import plugins_prompt_fragment, fire_hook
-from core.shell_tools import command_allowed, mark_approved, mark_code_approved, shell_cfg
+from core.shell_tools import command_allowed, mark_approved, mark_code_approved, python_approval_key, shell_cfg
 from core import device_approval
 from core.request_context import get_current_device_id, set_device_approved
 from core.agent_loop import tool_audit as _tool_audit
@@ -1633,7 +1633,9 @@ async def run_agent_stream(req, user, ctx):
                     if name == "run_python" and not bypass and (pmode == "manual" or shell_cfg().get("ask_first", True) or personal) and "run_python" not in run_allow:
                         import uuid as _uuid
                         code = str((args or {}).get("code") or "")
-                        shown = "run_python:\n" + (code if len(code) <= 4000 else code[:4000] + "\n… (truncated)")
+                        path = str((args or {}).get("path") or "")
+                        detail = code if code else f"file: {path}"
+                        shown = "run_python:\n" + (detail if len(detail) <= 4000 else detail[:4000] + "\n… (truncated)")
                         preq_id = _uuid.uuid4().hex[:12]
                         ev = asyncio.Event()
                         _perm_pending[preq_id] = {"cmd": shown, "event": ev, "result": None,
@@ -1652,12 +1654,12 @@ async def run_agent_stream(req, user, ctx):
                             actions_taken.append({"name": name, "args": args, "ok": False, "result": result})
                             msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result})
                             continue
-                        mark_code_approved(code)
+                        mark_code_approved(python_approval_key(args or {}))
                         if _decision == "project":      # "For this run" button: later scripts in this run skip the prompt
                             run_allow.add("run_python")
                     elif name == "run_python":
                         # allowed for this run by the user: approve this script without asking again
-                        mark_code_approved(str((args or {}).get("code") or ""))
+                        mark_code_approved(python_approval_key(args or {}))
 
                     # cloud image/video generation can cost money: always ask first
                     if name in ("generate_image", "generate_video"):
