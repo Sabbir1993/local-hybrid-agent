@@ -170,8 +170,8 @@
 <div class="wrap">
   <aside class="rail" aria-label="Steps">
     <h2>Your progress</h2>
-    <div class="meter" role="progressbar" aria-label="Steps done" aria-valuemin="0" aria-valuemax="16" aria-valuenow="0"><i></i></div>
-    <small id="meter-text">0 of 16 steps marked done</small>
+    <div class="meter" role="progressbar" aria-label="Steps done" aria-valuemin="0" aria-valuemax="18" aria-valuenow="0"><i></i></div>
+    <small id="meter-text">0 of 18 steps marked done</small>
     <ol>
       <li><a href="#basics">Read this first</a></li>
       <li><a href="#connect">Open a terminal</a></li>
@@ -189,6 +189,8 @@
       <li><a href="#service">Keep it running</a></li>
       <li><a href="#firewall">Firewall and access</a></li>
       <li><a href="#optional">Web search, code runner</a></li>
+      <li><a href="#sycl">Intel SYCL engine (optional)</a></li>
+      <li><a href="#switch">Switch Vulkan / SYCL</a></li>
       <li><a href="#trouble">If something fails</a></li>
     </ol>
   </aside>
@@ -347,6 +349,7 @@
 <pre><code>.venv/bin/python scripts/download_models.py --binaries --backend vulkan --bin-dir ~</code></pre>
   <p>Check that the engine starts and sees your card(s). It should list one device, the B70, as device 0.</p>
 <pre><code>~/llama-vulkan/llama-bench --list-devices</code></pre>
+  <div class="note"><p>Want Intel's own <strong>SYCL</strong> engine as well? Finish this guide with Vulkan first. Step 16 installs SYCL next to Vulkan and step 17 shows how to switch between the two.</p></div>
   <details>
     <summary>The automatic download failed? Do it by hand</summary>
     <p>Open <a href="https://github.com/ggml-org/llama.cpp/releases" target="_blank" rel="noopener">github.com/ggml-org/llama.cpp/releases</a>, copy the link of <code>llama-&lt;build&gt;-bin-ubuntu-vulkan-x64.tar.gz</code>, then:</p>
@@ -502,7 +505,7 @@
   <ul>
     <li><code>"models_dir"</code>: <code>/home/[USER]/Models</code></li>
     <li><code>"common_dir"</code>: a folder for users' generated files and uploads, for example <code>/home/[USER]/common</code> (made in step 10)</li>
-    <li><code>"runtime"</code>: <code>"vulkan"</code>, or <code>"cuda"</code> for NVIDIA</li>
+    <li><code>"runtime"</code>: <code>"vulkan"</code>, <code>"cuda"</code> for NVIDIA, or <code>"sycl"</code> after step 16</li>
     <li>Under <code>"runtimes"</code> then <code>"vulkan"</code>: <code>"llama_bin_dir"</code> is the folder that holds <code>llama-server</code> (step 6). Set <code>"gpu_devices"</code> to <code>"auto"</code> to use every card found, or to <code>[0]</code>. With one card, every GPU number in the settings must be <code>0</code>.</li>
   </ul>
 <pre class="plain"><code>"models_dir": "/home/[USER]/Models",
@@ -674,8 +677,164 @@ search:
   <p>When the check ends without failures, set <code>"runner_backend": "local"</code> in <code>config/app.json</code>. For a separate, locked-down runner machine see <code>docs/RUNNER.md</code>.</p>
 </section>
 
+<section class="step" id="sycl" data-step>
+  <header><span class="no">16</span><h2>Use Intel's SYCL engine (optional)</h2><span class="time">45 min or more</span></header>
+  <p>Step 6 installed the <strong>Vulkan</strong> engine. <strong>SYCL</strong> is Intel's own compute engine for Arc cards. It is installed <em>next to</em> Vulkan, never over it: the Vulkan folder is not touched, and you choose one engine each time the application starts (step 17). Do this step only after the Vulkan setup works.</p>
+  <div class="warn">
+    <p>Tested with Ubuntu 26.04, Intel oneAPI 2026.x, llama.cpp <code>b10840</code> and three Intel Arc Pro B70 cards. Other combinations may need other package names or settings. SYCL needs the application branch <code>sycl_support_v3</code> (or newer): older versions do not know the <code>sycl</code> engine.</p>
+  </div>
+
+  <h3>1. Get the SYCL version of the application</h3>
+<pre><code>cd ~/a770-dual-runtime &amp;&amp; cp config/app.json config/app.json.before-sycl</code></pre>
+<pre><code>git fetch origin &amp;&amp; git switch sycl_support_v3 &amp;&amp; git pull origin sycl_support_v3</code></pre>
+  <p>The first command keeps a copy of your settings. It is also your way back (step 17).</p>
+
+  <h3>2. Add Intel's package sources</h3>
+  <p>Ubuntu does not carry the SYCL compiler or Intel's newest GPU driver. Add Intel's two package sources: one for the GPU driver, one for the oneAPI compiler.</p>
+<pre><code>sudo mkdir -p /etc/apt/keyrings</code></pre>
+<pre><code>curl -fsSL https://repositories.intel.com/gpu/intel-graphics.key | sudo gpg --dearmor -o /etc/apt/keyrings/intel-graphics.gpg</code></pre>
+<pre><code>echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu $(lsb_release -cs) unified" | sudo tee /etc/apt/sources.list.d/intel-gpu.list</code></pre>
+<pre><code>curl -fsSL https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | sudo gpg --dearmor -o /etc/apt/keyrings/oneapi.gpg</code></pre>
+<pre><code>echo "deb [signed-by=/etc/apt/keyrings/oneapi.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list</code></pre>
+<pre><code>sudo apt update</code></pre>
+  <p>Check that apt now knows every package we need. Each one must show a version after <code>Candidate:</code>:</p>
+<pre><code>apt-cache policy libze-intel-gpu1 libze-dev intel-oneapi-compiler-dpcpp-cpp intel-oneapi-dnnl-devel intel-oneapi-mkl-devel | grep -E "^[a-z]|Candidate"</code></pre>
+  <div class="warn"><p>If a package shows <code>Candidate: (none)</code>, stop. Intel may not publish it for your Ubuntu release, or the address changed: use Intel's current Linux GPU and oneAPI instructions. Do <strong>not</strong> add the repository of a different Ubuntu release: mixing releases can break apt and the GPU driver. The addresses above worked on the tested server.</p></div>
+
+  <h3>3. Install the packages</h3>
+<pre><code>sudo apt install -y git cmake ninja-build build-essential pkg-config intel-level-zero-gpu libze-dev intel-oneapi-compiler-dpcpp-cpp intel-oneapi-dnnl-devel intel-oneapi-mkl-devel</code></pre>
+  <p>The download is large. Some names you may see elsewhere do <em>not</em> work or are not needed here: <code>level-zero</code> does not exist (the loader comes with the driver), and <code>clinfo</code> and <code>intel-opencl-icd</code> are not needed because this engine uses Level Zero, not OpenCL. The oneDNN package is <code>...dnnl-devel</code>, with two <em>l</em>.</p>
+
+  <h3>4. Let your user use the cards, and check that they are visible</h3>
+<pre><code>sudo usermod -aG render,video [USER]</code></pre>
+  <p>Sign out and in again (or restart), then:</p>
+<pre><code>ls -l /dev/dri/renderD*</code></pre>
+<pre><code>source /opt/intel/oneapi/setvars.sh --force &amp;&amp; sycl-ls</code></pre>
+  <div class="ok"><p>Every Arc card must appear as a <code>[level_zero:gpu]</code> line. If one is missing, fix the driver or the permissions first: the build cannot fix that.</p></div>
+
+  <h3>5. Build the engine</h3>
+  <p>Do this as your normal administrator user, and in <strong>one terminal window from start to end</strong>: the oneAPI settings exist only in the window where you ran <code>source</code>. First part, ending with the configuration:</p>
+<pre><code>mkdir -p ~/build &amp;&amp; cd ~/build
+git clone --branch b10840 --depth 1 https://github.com/ggml-org/llama.cpp.git
+cd llama.cpp
+source /opt/intel/oneapi/setvars.sh --force
+DNNL_DIR="$(dirname "$(find /opt/intel/oneapi/dnnl -name dnnl-config.cmake | head -n 1)")"
+MKL_DIR="$(dirname "$(find /opt/intel/oneapi/mkl -name MKLConfig.cmake | head -n 1)")"
+RPATH="$(echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep /opt/intel/oneapi | paste -sd';' -)"
+RPATH="$RPATH;$(dirname "$(dirname "$DNNL_DIR")");$(dirname "$(dirname "$MKL_DIR")")"
+echo "DNNL_DIR=$DNNL_DIR"; echo "MKL_DIR=$MKL_DIR"; echo "RPATH=$RPATH"
+cmake -S . -B build-sycl -G Ninja \
+  -DGGML_SYCL=ON -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+  -DDNNL_DIR="$DNNL_DIR" -DMKL_DIR="$MKL_DIR" \
+  -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+  -DCMAKE_BUILD_RPATH='$ORIGIN;'"$RPATH" \
+  -DCMAKE_INSTALL_RPATH='$ORIGIN;'"$RPATH"</code></pre>
+  <div class="ok"><p>The three <code>echo</code> lines must show real folders, and the configuration must end without any <em>Error</em> or a warning about Level Zero, DNNL or MKL. If it does, see "If something fails" (step 18) before building.</p></div>
+  <p>The build itself is the long part:</p>
+<pre><code>cmake --build build-sycl --target llama-server llama-bench -j</code></pre>
+  <p>A screenful of <code>'barrier' is deprecated</code> warnings and the line <code>UI: download dist.tar.gz ... failed</code> are harmless. The "run path" in the configuration lets the programs find their own libraries and oneAPI's, without changing the settings of any other program.</p>
+
+  <h3>6. Test the build before installing it</h3>
+<pre><code>cd ~/build/llama.cpp/build-sycl/bin &amp;&amp; ldd ./llama-server | grep -c "not found"</code></pre>
+  <p>The number must be <code>0</code>. The engine also needs two oneAPI memory-library folders in the environment of whatever starts it. Find their version numbers:</p>
+<pre><code>ls /opt/intel/oneapi/umf /opt/intel/oneapi/tcm</code></pre>
+  <p>The tested server showed <code>1.2</code> and <code>1.6</code>. Use your numbers in place of [UMF_VERSION] and [TCM_VERSION] (stay in the same folder):</p>
+<pre><code>ONEAPI_DEVICE_SELECTOR=level_zero:gpu LD_LIBRARY_PATH=/opt/intel/oneapi/umf/[UMF_VERSION]/lib:/opt/intel/oneapi/tcm/[TCM_VERSION]/lib ./llama-bench --list-devices</code></pre>
+  <div class="ok"><p>Every card must be listed, as <code>SYCL0</code>, <code>SYCL1</code> and so on, each with its memory.</p></div>
+
+  <h3>7. Install it next to Vulkan</h3>
+<pre><code>mkdir -p ~/llama-sycl &amp;&amp; cp -a ~/build/llama.cpp/build-sycl/bin/. ~/llama-sycl/</code></pre>
+<pre><code>ldd ~/llama-sycl/llama-server | grep -c "not found"; ldd ~/llama-sycl/llama-bench | grep -c "not found"</code></pre>
+  <p>Both numbers must be <code>0</code>. Keep the whole folder together: the programs load the libraries stored beside them. Do not change <code>~/llama-vulkan</code>.</p>
+
+  <h3>8. Add the engine to the settings</h3>
+  <p>Open <code>config/app.json</code> (step 9 shows how). Inside <code>"runtimes"</code>, next to <code>"vulkan"</code> (put a comma after the Vulkan entry), add:</p>
+<pre class="plain"><code>"sycl": {
+  "llama_bin_dir": "/home/[USER]/llama-sycl",
+  "backend": "sycl",
+  "gpu_devices": "auto",
+  "small_model_gpu": 0,
+  "env": {
+    "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu",
+    "GGML_SYCL_ENABLE_VMM": "0"
+  }
+}</code></pre>
+  <p>Leave <code>"runtime": "vulkan"</code> as it is for now: you switch in step 17. Check that the file is still valid:</p>
+<pre><code>python3 -m json.tool config/app.json &gt; /dev/null &amp;&amp; echo "json ok"</code></pre>
+  <div class="warn">
+    <p><strong>Two settings on the tested build matter:</strong></p>
+    <ul>
+      <li><code>"GGML_SYCL_ENABLE_VMM": "0"</code> is needed. Without it, a long message to a large model made the model server stop with <code>GGML_ASSERT(ptr == ... pool_addr + pool_used)</code>. Short messages worked, so a quick "hi" test does not show the problem.</li>
+      <li>Do <strong>not</strong> add <code>SYCL_CACHE_PERSISTENT</code> or <code>SYCL_CACHE_DIR</code>. With this build they made the model server crash while loading (exit code <code>-11</code>). Also leave <code>ZE_AFFINITY_MASK</code> unset: it can hide cards from a split.</li>
+    </ul>
+  </div>
+
+  <h3>9. Start it on SYCL once, and test</h3>
+  <p>Stop the running application first (loaded models stop with it). Then start it with the engine chosen for this start only:</p>
+<pre><code>cd ~/a770-dual-runtime &amp;&amp; LLAMA_RUNTIME=sycl LD_LIBRARY_PATH=/opt/intel/oneapi/umf/[UMF_VERSION]/lib:/opt/intel/oneapi/tcm/[TCM_VERSION]/lib .venv/bin/python server_manager.py --port 8000</code></pre>
+  <div class="ok"><p>The start-up lines must contain <code>runtime=sycl backend=sycl</code> and list your cards as devices, for example <code>[0, 1, 2]</code>.</p></div>
+  <p>Open the web page, then in <em>Model Config</em> set the tensor split to <strong>one number per card</strong> (<code>1,1,1</code> for three cards, <code>1,0,0</code> for the first card only), press Apply and load a model. In the terminal the launch line must contain <code>-dev SYCL0</code> (not <code>Vulkan0</code>). Then send a <strong>short</strong> message and a <strong>long</strong> one (paste a few pages of text). Both must be answered.</p>
+  <div class="note"><p>Run a Vulkan test too before you rely on this machine: step 17 shows how to go back for one start.</p></div>
+</section>
+
+<section class="step" id="switch" data-step>
+  <header><span class="no">17</span><h2>Switch between Vulkan and SYCL</h2><span class="time">5 min</span></header>
+  <p>The application uses <strong>one</strong> engine per start. Switching is a change in the settings plus a restart: nothing is rebuilt or reinstalled, and both engine folders stay as they are. Stopping the application unloads every model, so switch when nobody is using it.</p>
+  <div class="tw"><table>
+    <thead><tr><th></th><th>Vulkan</th><th>SYCL</th></tr></thead>
+    <tbody>
+    <tr><td>Engine folder</td><td><code>~/llama-vulkan</code></td><td><code>~/llama-sycl</code></td></tr>
+    <tr><td><code>"runtime"</code> in <code>config/app.json</code></td><td><code>"vulkan"</code></td><td><code>"sycl"</code></td></tr>
+    <tr><td>Extra environment at start</td><td>none</td><td><code>LD_LIBRARY_PATH</code> with the two oneAPI folders (step 16.6)</td></tr>
+    <tr><td>Start-up line</td><td><code>runtime=vulkan backend=vulkan</code></td><td><code>runtime=sycl backend=sycl</code></td></tr>
+    <tr><td>Card names in a model's launch line</td><td><code>-dev Vulkan0</code>, <code>Vulkan1</code> ...</td><td><code>-dev SYCL0</code>, <code>SYCL1</code> ...</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Try the other engine for one start</h3>
+  <p>A <code>LLAMA_RUNTIME</code> in the environment wins over <code>"runtime"</code> in the file, and only for that start. Stop the application, then for SYCL:</p>
+<pre><code>cd ~/a770-dual-runtime &amp;&amp; LLAMA_RUNTIME=sycl LD_LIBRARY_PATH=/opt/intel/oneapi/umf/[UMF_VERSION]/lib:/opt/intel/oneapi/tcm/[TCM_VERSION]/lib .venv/bin/python server_manager.py --port 8000</code></pre>
+  <p>or for Vulkan (no oneAPI folders):</p>
+<pre><code>cd ~/a770-dual-runtime &amp;&amp; LLAMA_RUNTIME=vulkan .venv/bin/python server_manager.py --port 8000</code></pre>
+  <p>The next normal start uses the file's setting again.</p>
+
+  <h3>Make SYCL the default (Vulkan to SYCL)</h3>
+  <ol>
+    <li>Stop the application (in tmux: <kbd>Ctrl</kbd>+<kbd>C</kbd>; as a service: <code>sudo systemctl stop a770</code>).</li>
+    <li>In <code>config/app.json</code> set <code>"runtime": "sycl"</code>, then check the file: <code>python3 -m json.tool config/app.json &gt; /dev/null &amp;&amp; echo "json ok"</code></li>
+    <li>Give the starting process the oneAPI folders. In a terminal, use the command above without <code>LLAMA_RUNTIME</code>. For the service, add them in an override (it opens an editor):
+<pre><code>sudo systemctl edit a770</code></pre>
+      <p>and put these two lines in it:</p>
+<pre class="plain"><code>[Service]
+Environment=LD_LIBRARY_PATH=/opt/intel/oneapi/umf/[UMF_VERSION]/lib:/opt/intel/oneapi/tcm/[TCM_VERSION]/lib</code></pre>
+      <p>With PM2, export the same variable in your shell and run <code>pm2 restart [APP_NAME] --update-env</code>.</p></li>
+    <li>Start it again and check the start-up line (<code>runtime=sycl</code>). Then re-save each model's settings (see below).</li>
+  </ol>
+
+  <h3>Go back to Vulkan (SYCL to Vulkan)</h3>
+  <ol>
+    <li>Stop the application.</li>
+    <li>In <code>config/app.json</code> set <code>"runtime": "vulkan"</code> and check the file as above.</li>
+    <li>Start it the way you did before step 16: without the oneAPI <code>LD_LIBRARY_PATH</code>. For the service, remove the override:
+<pre><code>sudo systemctl revert a770</code></pre>
+      <p>With PM2, restart from a shell that no longer has the oneAPI folders in <code>LD_LIBRARY_PATH</code>, using <code>--update-env</code>.</p></li>
+    <li>Check the start-up line (<code>runtime=vulkan</code>) and that a model's launch line shows <code>-dev Vulkan...</code>.</li>
+  </ol>
+  <div class="note"><p><strong>Quick way back:</strong> <code>cp config/app.json.before-sycl config/app.json</code> restores the settings from before step 16 and puts <code>"runtime"</code> back to Vulkan. It also removes every other change made to that file since then.</p></div>
+
+  <h3>What is different between the engines (check after every switch)</h3>
+  <ul>
+    <li><strong>Model settings are saved per engine.</strong> GPU layers and tensor split saved while Vulkan ran are not used by SYCL: the model starts with defaults until you save its settings once while SYCL is active (Model Config, Apply). The same is true the other way round.</li>
+    <li><strong>The tensor split needs exactly one number per card.</strong> <code>1,1,1</code> for three cards, <code>1,0,0</code> for the first card only. With a different count the application writes <code>tensor_split '1' has 1 entries but 3 GPUs are in use</code> and uses an equal split over every card.</li>
+    <li><strong>Card numbers may not match.</strong> Compare <code>~/llama-vulkan/llama-bench --list-devices</code> with the SYCL list from step 16.6. The helper models' <code>"gpu"</code> numbers and <code>"small_model_gpu"</code> refer to these numbers.</li>
+    <li><strong>Helpers share the cards with the main model.</strong> A main model split over every card leaves less memory for the helpers on the same cards. If a helper or the main model stops with exit code <code>-11</code> while loading, look for a forgotten copy that holds a card: <code>pgrep -af llama-server</code>.</li>
+    <li><strong>Speech and image helpers</strong> are separate programs with their own GPU number. After a switch, press Load on each one you use and check that it starts.</li>
+  </ul>
+</section>
+
 <section class="step" id="trouble" data-step>
-  <header><span class="no">16</span><h2>If something fails</h2><span class="time"></span></header>
+  <header><span class="no">18</span><h2>If something fails</h2><span class="time"></span></header>
   <div class="tw"><table>
     <thead><tr><th>What you see</th><th>What to do</th></tr></thead>
     <tbody>
@@ -688,6 +847,18 @@ search:
     <tr><td>The log says "insecure keyring backend"</td><td>Start it inside <code>dbus-run-session</code> with the unlocked keyring, as in step 12.</td></tr>
     <tr><td>A model stops with "out of memory"</td><td>The B70's 32 GB is shared by the main model, its context and the helper models. Choose a smaller main model (16 to 20 GB), a smaller context size in the model's settings drawer, or switch off helpers you do not use.</td></tr>
     <tr><td>"Address already in use"</td><td>A copy is already running. Check <code>systemctl status a770</code> or <code>tmux ls</code>. Never start a second copy.</td></tr>
+    <tr class="grp"><td colspan="2">SYCL engine (steps 16 and 17)</td></tr>
+    <tr><td><code>Unable to locate package level-zero</code> or <code>intel-oneapi-...</code></td><td>Intel's package sources are missing or not refreshed: redo step 16.2 and run <code>sudo apt update</code>. A package called <code>level-zero</code> does not exist: use the list in step 16.3.</td></tr>
+    <tr><td>CMake stops with <code>Could not find ... MKL</code> or <code>DNNL</code>, or warns that Level Zero is not found</td><td>Install <code>libze-dev intel-oneapi-dnnl-devel intel-oneapi-mkl-devel</code> (step 16.3), delete the half-made build with <code>rm -rf build-sycl</code>, and run step 16.5 again from the <code>cmake -S . -B build-sycl</code> line.</td></tr>
+    <tr><td><code>error while loading shared libraries</code> (<code>libllama...</code>, <code>libdnnl.so.3</code>) when you start a SYCL program</td><td>The build has no run path. Run step 16.5 again in <strong>one</strong> terminal window, including the <code>RPATH</code> lines, then build again.</td></tr>
+    <tr><td>Hundreds of <code>'barrier' is deprecated</code> warnings, and <code>UI: download dist.tar.gz ... failed</code></td><td>Harmless. Let the build finish.</td></tr>
+    <tr><td>The application stops at start with <code>device discovery failed ... (none)</code>, or a SYCL program says <code>no SYCL device available</code> although <code>sycl-ls</code> lists the cards</td><td>The process that starts the application is missing the two oneAPI folders in <code>LD_LIBRARY_PATH</code> (step 16.6 and 16.9). Set them where the application is started; with PM2 use <code>--update-env</code>.</td></tr>
+    <tr><td>The model server stops at once with <code>exited immediately (code -11)</code> right after <code>llama threadpool init</code></td><td>Two causes were found. First, <code>SYCL_CACHE_PERSISTENT</code> or <code>SYCL_CACHE_DIR</code> is in the <code>sycl</code> entry: remove both (step 16.8). Second, a <code>llama-server</code> you started by hand for a test still holds the card: run <code>pgrep -af llama-server</code> and stop it with <code>kill [PID]</code>.</td></tr>
+    <tr><td>A short chat works, but a long message gives "The local model server stopped while answering"</td><td>In <code>logs/llama-server-[DATE].log</code> look for <code>GGML_ASSERT(ptr == ... pool_addr + pool_used)</code>. Add <code>"GGML_SYCL_ENABLE_VMM": "0"</code> to the <code>env</code> of the <code>sycl</code> entry (step 16.8) and restart.</td></tr>
+    <tr><td>The log says <code>tensor_split '1' has 1 entries but 3 GPUs are in use</code>, and the model starts on every card</td><td>Set one number per card in Model Config (for the first card only: <code>1,0,0</code>), press Apply, then load the model again.</td></tr>
+    <tr><td>A setting saved in Model Config seems ignored after switching engine</td><td>Settings are stored per engine. Save them once while the new engine is running, then load the model again.</td></tr>
+    <tr><td>Whisper or an image model says <code>Failed to start: list.index(x): x not in list</code></td><td>This was a bug in the first SYCL version. Update with <code>git pull origin sycl_support_v3</code> and restart.</td></tr>
+    <tr><td>The process manager shows the application restarting again and again, or the page does not load</td><td>Stop it and start the application in a terminal window (the command in step 16.9) to read the real error on screen. With PM2 export the variables first and use <code>--update-env</code>. The cause was not the same every time, so read the error before changing anything.</td></tr>
     </tbody>
   </table></div>
   <h3>Updating later</h3>
