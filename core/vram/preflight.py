@@ -79,7 +79,7 @@ def _human_msg(plan: dict) -> str:
     return "\n".join(lines)
 
 
-def _devices_or_fail(eff: dict, plan: dict) -> list:
+def _devices_or_fail(eff: dict, plan: dict, force: bool = False) -> list:
     """Device list for the verdict, or [] with the plan marked not-allowed.
 
     strict=True is the point of this function: an absent/failed/unparseable
@@ -89,7 +89,7 @@ def _devices_or_fail(eff: dict, plan: dict) -> list:
     """
     try:
         return query_devices(
-            eff["llama_bin_dir"], strict=True,
+            eff["llama_bin_dir"], strict=True, force=force,
             backend=eff.get("backend"), runtime_env=eff.get("runtime_env"))
     except DeviceQueryError as e:
         plan["status"] = "unknown"
@@ -133,7 +133,7 @@ def _host_plan(eff: dict, *, total_weights_b: int, gpu_candidate_weights_b: int,
 
 
 def plan_launch(profile: dict, overrides: dict | None = None,
-                devices: list | None = None) -> dict:
+                devices: list | None = None, fresh: bool = False) -> dict:
     """Full preflight plan: verdict, per-device numbers, suggestions, message.
 
     Fail-closed contract: every path that returns without a verdict sets allow=False, because
@@ -202,7 +202,7 @@ def plan_launch(profile: dict, overrides: dict | None = None,
                         "layers": info["n_layer"] + 1,
                         "n_expert": info.get("n_expert", 0)}
 
-    devs = devices if devices is not None else _devices_or_fail(eff, plan)
+    devs = devices if devices is not None else _devices_or_fail(eff, plan, force=fresh)
     if not devs:
         return plan
     plan["devices"] = [{"index": d["index"],
@@ -337,7 +337,9 @@ def enforce(plan: dict) -> dict:
 
 def check_or_raise(profile: dict) -> dict:
     """Preflight for the main llama-server launch."""
-    plan = enforce(plan_launch(profile))
+    # fresh: the previous model was only just stopped; a free-VRAM reading cached while it was still resident
+    # would size --n-cpu-moe for cards that are now empty
+    plan = enforce(plan_launch(profile, fresh=True))
     # the launch command is built after this gate and must use the value that was checked
     if plan.get("auto_n_cpu_moe") is not None:
         profile["_auto_n_cpu_moe"] = plan["auto_n_cpu_moe"]

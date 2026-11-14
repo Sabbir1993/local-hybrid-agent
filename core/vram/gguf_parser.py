@@ -324,20 +324,18 @@ def _skip_kv_value(cur, vtype: int) -> None:
         raise ValueError(f"unknown GGUF kv type {vtype}")
 
 
-def expert_layer_bytes(model_path) -> "dict[int, int]":
-    """Bytes of the routed-expert tensors (*_exps) of each transformer block, {} if unreadable.
+def _expert_bytes_file(model_path) -> "dict[int, int] | None":
+    """Bytes of the routed-expert tensors (*_exps) of each block in ONE gguf file; None if unreadable.
 
     A mixture-of-experts file is ~90% expert weights, and `--n-cpu-moe N` moves exactly those
     for the first N blocks into RAM, so the VRAM estimate needs the real figure. Tensor sizes
     come from the offset gaps in the tensor table, so no quantisation block table is needed.
-    Only the first shard is read; a split model returns {} and the caller falls back to a
-    proportional estimate.
     """
     p = Path(model_path)
     try:
         st = p.stat()
     except OSError:
-        return {}
+        return None
     key = str(p)
     with _gguf_lock:
         hit = _expert_cache.get(key)
@@ -345,8 +343,6 @@ def expert_layer_bytes(model_path) -> "dict[int, int]":
             return hit[1]
     out: dict = {}
     try:
-        if _SHARD_RE.search(p.name):
-            raise ValueError("split model")
         with open(p, "rb") as fh:
             cur = _Cursor(fh, chunk=1 * MIB)
             if cur.read(4) != b"GGUF":
@@ -387,7 +383,25 @@ def expert_layer_bytes(model_path) -> "dict[int, int]":
                 layer = int(m.group(1))
                 out[layer] = out.get(layer, 0) + (end - off)
     except Exception:
-        out = {}
+        out = None
     with _gguf_lock:
         _expert_cache[key] = ((st.st_mtime_ns, st.st_size), out)
+    return out
+
+
+def expert_layer_bytes(model_path) -> "dict[int, int]":
+    """Bytes of the routed-expert tensors (*_exps) of each transformer block, {} if unreadable.
+
+    A mixture-of-experts file is ~90% expert weights, and `--n-cpu-moe N` moves exactly those
+    for the first N blocks into RAM, so the VRAM estimate needs the real figure. A split model is
+    summed over every shard (each has its own tensor table); if any shard cannot be read the answer
+    is {} so the caller uses its proportional estimate, never a partial figure that under-counts.
+    """
+    out: dict = {}
+    for f in model_files(model_path):
+        part = _expert_bytes_file(f)
+        if part is None:
+            return {}
+        for k, v in part.items():
+            out[k] = out.get(k, 0) + v
     return out
