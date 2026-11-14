@@ -348,7 +348,11 @@ class ProxyState:
                 target_idx = set(vram.effective_params(self.profile)["gpu_devices"])
         except Exception:
             pass
-        monitor_on = bool(target_idx) and vram.preflight_mode() != "off" and not vllm_mode
+        # not on SYCL: every poll runs `llama-server --list-devices`, a second Level Zero process starting while the
+        # real server is still initialising the cards, and that overlap segfaults it (exit -11) at random points of
+        # the load. The watch guards against a Windows (WDDM) memory spill that does not exist on the Linux SYCL stack.
+        monitor_on = (bool(target_idx) and vram.preflight_mode() != "off" and not vllm_mode
+                      and str((self.profile or {}).get("backend")) != "sycl")
         wall_hits = 0
         last_vram_poll = 0.0
         while time.time() < deadline:
