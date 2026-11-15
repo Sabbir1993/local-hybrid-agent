@@ -949,6 +949,15 @@ async def run_agent_stream(req, user, ctx):
                                    + json.dumps({'lane': lane_name, 'before_tokens': pre_tokens,
                                                  'after_tokens': sent_tokens, 'hidden': hidden_fams}) + "\n\n")
 
+                # a file only counts as read while its text is in the prompt about to be sent: clearing, compaction and
+                # the executor's fresh view drop it, and edit_file must not let the model edit that file from memory
+                from core.request_context import set_current_lane
+                set_current_lane(lane_name)      # the tools this step runs size their advice to this lane's output cap
+                try:
+                    from core.agent_loop.context_files import sync_reads
+                    sync_reads(step_msgs)
+                except Exception:
+                    pass
                 # An action request must start with a tool call: ask the server/provider to
                 # require one (core/router_policy.force_tool_call) so a small model cannot end
                 # the run by describing the step. It replaces the executor grammar for this
@@ -2098,7 +2107,7 @@ async def run_agent_stream(req, user, ctx):
                                        and str(m.get("content") or "").startswith("[plan reminder]"))]
                             msgs.append({"role": "user", "content": (
                                 plan_guard.stuck_message(cur_item, item_steps) if act == "warn" and item_steps % limit == 0
-                                else plan_guard.focus_message(plan_items_now, effective_chunk_tokens()))})
+                                else plan_guard.focus_message(plan_items_now, effective_chunk_tokens(lane_name)))})
 
             # Stopped by a limit with tool work behind it: one tool-free pass so the user
             # gets what was found instead of only a "stopped" notice. Best effort - any

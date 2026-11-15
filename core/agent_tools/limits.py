@@ -71,11 +71,17 @@ def lane_output_cap(lane: str) -> int:
     return agent_limit(key) if key else 0
 
 
-def effective_chunk_tokens() -> int:
-    """The chunk size the model is told to send: the configured target, but never more than half of what the executor
-    lane can generate in one step (the other half is JSON escaping and reasoning). A target above that can never fit, so
-    every chunk would be cut off and thrown away."""
-    return max(500, min(agent_limit("chunk_target_tokens"), lane_output_cap("executor") // 2))
+def effective_chunk_tokens(lane: str = None) -> int:
+    """The chunk size the model is told to send: the configured target, but never more than half of what the lane that is
+    generating can produce in one step (the other half is JSON escaping and reasoning). A target above that can never
+    fit, so every chunk would be cut off and thrown away. `lane` defaults to the lane of the running step; outside a run
+    it is the executor, the smaller cap, so the advice is never too big."""
+    if lane is None:
+        from ..request_context import current_lane
+        lane = current_lane() or "executor"
+    cap = lane_output_cap(lane)
+    target = agent_limit("chunk_target_tokens")
+    return max(500, min(target, cap // 2) if cap > 0 else target)
 
 
 def effective_max_tokens(requested, lane: str, cloud: bool = False) -> int:

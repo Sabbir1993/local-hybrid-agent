@@ -146,6 +146,29 @@ class CutOffAndChunkSize(unittest.TestCase):
         self.assertEqual(self._chunk(executor_max_tokens=4096, chunk_target_tokens=1500), 1500)
         self.assertEqual(self._chunk(executor_max_tokens=12000, chunk_target_tokens=3000), 3000)
 
+    def test_the_main_lane_is_not_clamped_to_the_executor_cap(self):
+        from core.agent_tools import limits
+        cfg = {"executor_max_tokens": 4096, "main_max_tokens": 32000, "chunk_target_tokens": 8000}
+        with mock.patch.dict("core.small_model.APP_CONFIG", {"agent": cfg}):
+            self.assertEqual(limits.effective_chunk_tokens("main"), 8000)       # a 32000-token step easily carries it
+            self.assertEqual(limits.effective_chunk_tokens("executor"), 2048)   # the 9B lane cannot
+
+    def test_the_running_lane_decides_what_the_tools_quote(self):
+        cfg = {"executor_max_tokens": 4096, "main_max_tokens": 32000, "chunk_target_tokens": 8000,
+               "write_file_max_tokens": 500}
+        tok = rc.set_current_lane("main")
+        try:
+            with mock.patch.dict("core.small_model.APP_CONFIG", {"agent": cfg}):
+                main_msg = file_ops._too_big("x" * 20000, "append_file")
+            rc._current_lane.reset(tok)
+            tok = rc.set_current_lane("executor")
+            with mock.patch.dict("core.small_model.APP_CONFIG", {"agent": cfg}):
+                exec_msg = file_ops._too_big("x" * 20000, "append_file")
+        finally:
+            rc._current_lane.reset(tok)
+        self.assertIn("8000 tokens", main_msg)
+        self.assertIn("2048 tokens", exec_msg)
+
     def test_the_too_big_messages_quote_the_clamped_size(self):
         with mock.patch.dict("core.small_model.APP_CONFIG",
                              {"agent": {"executor_max_tokens": 4096, "chunk_target_tokens": 8000,

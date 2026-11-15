@@ -84,6 +84,22 @@ def was_read(path: str) -> bool:
     return path in _read_sets.get(_scope(), {})
 
 
+def restrict_reads(present: set) -> None:
+    """Keep only the read-set entries whose file text is still in the model's prompt (`present`: lower-cased absolute
+    paths). Clearing, compaction and the executor's fresh context all drop file text; a file whose text is gone is no
+    longer 'read', so edit_file asks for a real read_file instead of letting the model edit from memory."""
+    rs = _read_sets.get(_scope())
+    if not rs:
+        return
+    for p in [p for p in rs if p.lower() not in present]:
+        rs.pop(p, None)
+
+
+def unmark_read(path: str) -> None:
+    """Forget that the file was read: the next edit_file on it is refused until read_file runs again."""
+    _read_sets.get(_scope(), {}).pop(path, None)
+
+
 def failing_files() -> list:
     """Files written this session whose last syntax check failed (the plan's 'done' gate asks)."""
     return sorted(p for p, st in _verify.get(_scope(), {}).items() if st.get("fails", 0) > 0)

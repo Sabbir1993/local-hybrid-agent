@@ -120,6 +120,19 @@ def tool_allowed(name: str) -> bool:
     return allow is None or name in allow
 
 
+# The lane ("main" / "executor") whose model is generating the current agent step, set by routes/agent/stream.py before each
+# model call so the tools it runs can size their advice (chunk size) to what THAT lane can generate in one step.
+_current_lane: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("current_lane", default=None)
+
+
+def set_current_lane(lane: Optional[str]) -> contextvars.Token:
+    return _current_lane.set(lane or None)
+
+
+def current_lane() -> Optional[str]:
+    return _current_lane.get()
+
+
 # A Personal Agent run (started from Chat, not Agent Task): the agent works in ONE folder on the user's machine,
 # set on the agent itself. It can read, write and analyse there; code execution and sub-agents stay off and
 # shell commands must be read-only (core.shell_tools.personal_write_violation). Enforced in

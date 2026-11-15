@@ -387,6 +387,21 @@ async def _append_file(args: dict) -> str:
     return msg + await verify_after(uid, p, path_arg, after, before, can_autorevert=False)
 
 
+_STALE_EDIT = ("old_string not found", "drifted")
+
+
+def _edit_error(p: Path, path_arg: str, e: Exception) -> str:
+    """An edit whose old_string did not match was copied from memory, not from the file (writing a file counts as reading
+    it, so the model could otherwise retry the same invented text for ever). Make the read real: the next edit_file on this
+    file is refused until read_file has run again."""
+    msg = str(e)
+    if any(k in msg for k in _STALE_EDIT):
+        file_state.unmark_read(str(p))
+        msg += (f" The next edit_file on {path_arg} is refused until you call read_file on it (read the lines around the "
+                "ones listed above) - copy old_string from that result, not from memory.")
+    return f"error: {msg}"
+
+
 async def _edit_file(args: dict) -> str:
     path_arg = _path_arg(args)
     uid, p = _resolve(path_arg)
@@ -413,7 +428,7 @@ async def _edit_file(args: dict) -> str:
         try:
             res = edit_engine.apply_diff(before, diff)
         except edit_engine.EditError as e:
-            return f"error: {e}"
+            return _edit_error(p, path_arg, e)
         after = res["text"]
         if args.get("pre_save_check", True) and not args.get("skip_verify"):
             from .verify import validate_code_syntax
@@ -428,7 +443,7 @@ async def _edit_file(args: dict) -> str:
     try:
         res = edit_engine.apply_edit(before, old, new, replace_all)
     except edit_engine.EditError as e:
-        return f"error: {e}"
+        return _edit_error(p, path_arg, e)
     after = res["text"]
     if args.get("pre_save_check", True) and not args.get("skip_verify"):
         from .verify import validate_code_syntax
