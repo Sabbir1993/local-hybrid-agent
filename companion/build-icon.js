@@ -153,15 +153,16 @@ function buildIco(pngsBySize) {
 const buildDir = path.join(__dirname, "build");
 fs.mkdirSync(buildDir, { recursive: true });
 
-// Check if static/logo/logo.jpg exists (relative path)
-const staticLogoPath = path.join(__dirname, "..", "static", "logo", "logo.jpg");
-if (fs.existsSync(staticLogoPath)) {
-  const { execSync } = require("child_process");
+// The product logo in the repo: logo-mark.png has real transparency; logo.jpg (the older file) has a gray/white checkerboard
+// baked into its pixels, so it is only the fallback.
+const logoDir = path.join(__dirname, "..", "static", "logo");
+const staticLogoPath = ["logo-mark.png", "logo.jpg"].map((n) => path.join(logoDir, n)).find((p) => fs.existsSync(p));
+if (staticLogoPath) {
+  const { execFileSync } = require("child_process");
   try {
     const outPng = path.join(buildDir, "icon.png");
     const outIco = path.join(buildDir, "icon.ico");
-    const pyCmd = `from PIL import Image; img=Image.open(r'${staticLogoPath}').convert('RGBA'); img.resize((256,256), Image.Resampling.LANCZOS).save(r'${outPng}'); img.save(r'${outIco}', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])`;
-    execSync(`python -c "${pyCmd}"`, { stdio: "inherit" });
+    execFileSync("python", [path.join(__dirname, "icon_from_logo.py"), staticLogoPath, outPng, outIco], { stdio: "inherit" });
     console.log("Generated icon.png and icon.ico from static logo:", staticLogoPath);
     process.exit(0);
   } catch (err) {

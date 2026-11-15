@@ -3,54 +3,24 @@ import { useAppStore } from '../../stores/useAppStore';
 import { api, apiFetch } from '../../services/api';
 import { env, withOrgDomain } from '../../config/env';
 
-// A run, as the agent would report it. Plays once on load: the one moving thing on the page.
-const TRACE = [
-  { mark: '◇', verb: 'plan', text: 'Reconcile March settlements, 3 steps' },
-  { mark: '✓', verb: 'read', text: 'settlements_mar.xlsx  (4,212 rows)' },
-  { mark: '✓', verb: 'run', text: 'python reconcile.py --month 03' },
-  { mark: '✓', verb: 'check', text: 'Totals match the gateway ledger' },
-  { mark: '●', verb: 'done', text: 'Report saved to /reports/march.docx' },
-];
+const COMPANY = 'SSL Wireless';   // alt text for the logo, and the text shown if the image cannot load
 
-// Corporate ledger: ink-dark brand panel, paper-toned sign-in side, one teal accent. Newsreader for headings, IBM Plex for text.
+// One centred column: the company logo, the product name, then the sign-in card. Paper-toned page, one teal accent.
 const CSS = `
-.lg-root { --ink:#0e1d1c; --ink2:#132826; --bone:#e9f0ee; --dmute:#8fa19e; --dline:rgba(233,240,238,.11);
-  --paper:#f3f1ea; --card:#ffffff; --text:#17201f; --mute:#5d6967; --line:#d9d4c6; --field:#ffffff; --soft:#f6f5f0;
-  --accent:#0f766e; --accent-hi:#14968b; --accent-dk:#0b5c56; --amber:#d4942c; --danger:#a4271c; --dangerbg:#fdf1ef; --dangerline:#f0c3bc;
-  display:grid; grid-template-columns:minmax(0,1.1fr) minmax(400px,.9fr); width:100%; height:100vh; height:100dvh; background:var(--paper); color:var(--text);
-  font-family:'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif; overflow:hidden; }
-.lg-stage { position:relative; display:flex; flex-direction:column; justify-content:space-between; padding:48px clamp(36px,5vw,84px); min-width:0; overflow:hidden; color:var(--bone);
-  background:
-    radial-gradient(900px 480px at 0% 110%, rgba(20,150,139,.2), transparent 62%),
-    linear-gradient(var(--dline) 1px, transparent 1px) 0 0/100% 64px,
-    linear-gradient(90deg, var(--dline) 1px, transparent 1px) 0 0/64px 100%,
-    var(--ink); }
-.lg-brand { display:flex; align-items:center; gap:12px; font-weight:600; font-size:15px; letter-spacing:.01em; }
-.lg-brand img, .lg-brand .lg-glyph { width:34px; height:34px; border-radius:8px; object-fit:cover; }
-.lg-glyph { display:grid; place-items:center; background:var(--accent-hi); color:var(--ink); font-weight:700; }
-.lg-tag { margin-left:auto; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--dmute);
-  border:1px solid var(--dline); padding:5px 10px; border-radius:999px; white-space:nowrap; }
-.lg-eyebrow { margin:0 0 18px; font-size:12px; letter-spacing:.16em; text-transform:uppercase; font-weight:600; color:#7fd6cc; }
-.lg-h { font-family:'Newsreader', Georgia, 'Times New Roman', serif; font-weight:400; font-size:clamp(40px,4.4vw,64px); line-height:1.04; letter-spacing:-.015em; margin:0; max-width:11.5em; }
-.lg-h i { color:#7fd6cc; }
-.lg-sub { color:var(--dmute); font-size:15px; line-height:1.65; max-width:34em; margin:20px 0 0; }
-.lg-trace { margin-top:38px; max-width:540px; border:1px solid var(--dline); border-radius:10px; background:rgba(6,16,15,.6); backdrop-filter:blur(6px);
-  font-family:'IBM Plex Mono', ui-monospace, Consolas, monospace; font-size:12.5px; }
-.lg-trace-bar { display:flex; align-items:center; gap:9px; padding:10px 15px; border-bottom:1px solid var(--dline); color:var(--dmute); font-size:11.5px; letter-spacing:.02em; }
-.lg-live { width:7px; height:7px; border-radius:50%; background:var(--amber); box-shadow:0 0 0 0 rgba(212,148,44,.6); animation:lg-pulse 2s infinite; }
-.lg-row { display:grid; grid-template-columns:18px 56px 1fr; gap:6px; padding:9px 15px; opacity:0; transform:translateY(4px); animation:lg-in .45s ease forwards; }
-.lg-row .m { color:#7fd6cc; } .lg-row .v { color:var(--dmute); } .lg-row:last-child .m { color:var(--amber); }
-.lg-foot { display:flex; flex-wrap:wrap; gap:10px 22px; color:var(--dmute); font-size:12px; line-height:1.5; }
-.lg-foot span { display:inline-flex; align-items:center; gap:7px; }
-.lg-foot span::before { content:''; width:5px; height:5px; border-radius:50%; background:#7fd6cc; }
-.lg-form { position:relative; display:flex; align-items:center; justify-content:center; padding:40px 32px; min-width:0; overflow-y:auto; color:var(--text); }
-.lg-root .lg-form { background:var(--paper) !important; }   /* style.css paints every main with var(--bg) !important */
-.lg-formbox { width:100%; max-width:396px; margin:auto 0; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:40px 36px 34px;
+.lg-root { --ink:#0e1d1c; --paper:#f3f1ea; --card:#ffffff; --text:#17201f; --mute:#5d6967; --line:#d9d4c6; --field:#ffffff; --soft:#f6f5f0;
+  --accent:#0f766e; --accent-hi:#14968b; --accent-dk:#0b5c56; --danger:#a4271c; --dangerbg:#fdf1ef; --dangerline:#f0c3bc;
+  display:flex; width:100%; height:100vh; height:100dvh; padding:32px 16px; box-sizing:border-box; overflow-y:auto; color:var(--text);
+  background:radial-gradient(900px 520px at 50% -8%, rgba(20,150,139,.11), transparent 62%), var(--paper);
+  font-family:'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+.lg-wrap { width:100%; max-width:400px; margin:auto; display:flex; flex-direction:column; align-items:center; animation:lg-in .5s ease both; }
+.lg-logo { display:block; width:min(300px, 78vw); height:auto; }
+.lg-wordmark { font-family:'Newsreader', Georgia, 'Times New Roman', serif; font-size:34px; font-weight:700; letter-spacing:.02em; color:#2a4a9a; text-transform:uppercase; }
+.lg-name { margin:18px 0 26px; font-family:'Newsreader', Georgia, 'Times New Roman', serif; font-size:24px; font-weight:500; letter-spacing:-.005em;
+  line-height:1.15; color:var(--ink); text-align:center; }
+.lg-formbox { width:100%; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:30px 30px 28px;
   box-shadow:0 1px 2px rgba(14,29,28,.05), 0 24px 48px -28px rgba(14,29,28,.35); }
-.lg-kick { display:flex; align-items:center; gap:8px; margin:0 0 16px; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; font-weight:600; color:var(--accent); }
-.lg-kick svg { width:14px; height:14px; }
-.lg-title { font-family:'Newsreader', Georgia, serif; font-size:34px; font-weight:400; letter-spacing:-.01em; line-height:1.1; margin:0 0 8px; color:var(--text); }
-.lg-lede { color:var(--mute); font-size:14px; margin:0 0 26px; line-height:1.55; }
+.lg-title { font-family:'Newsreader', Georgia, serif; font-size:26px; font-weight:500; letter-spacing:-.01em; line-height:1.15; margin:0 0 6px; color:var(--text); }
+.lg-lede { color:var(--mute); font-size:13.5px; margin:0 0 22px; line-height:1.55; }
 .lg-label { display:block; font-size:13px; color:var(--text); margin:0 0 7px; font-weight:600; }
 .lg-field { display:flex; align-items:stretch; border:1px solid #cdc7b8; border-radius:8px; background:var(--field); transition:border-color .15s, box-shadow .15s; }
 .lg-field:hover { border-color:#b5ae9d; }
@@ -68,12 +38,11 @@ const CSS = `
 .lg-link { width:100%; margin-top:12px; background:transparent; border:none; color:var(--accent); font-size:13px; font-weight:600; cursor:pointer; }
 .lg-code { display:block; word-break:break-all; padding:9px 11px; border:1px solid var(--line); border-radius:6px; background:var(--soft); color:var(--text); font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; user-select:text; }
 .lg-err { margin-top:18px; padding:11px 13px; border-radius:8px; font-size:13px; color:var(--danger); background:var(--dangerbg); border:1px solid var(--dangerline); }
-.lg-secure { margin:22px 0 0; padding-top:18px; border-top:1px solid var(--line); display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--mute); }
+.lg-secure { margin:20px 0 0; display:flex; align-items:center; justify-content:center; gap:7px; font-size:11.5px; line-height:1.4; color:var(--mute); text-align:center; }
 .lg-secure svg { width:13px; height:13px; color:var(--accent); flex-shrink:0; }
-@keyframes lg-in { to { opacity:1; transform:none; } }
-@keyframes lg-pulse { 70% { box-shadow:0 0 0 8px rgba(212,148,44,0); } 100% { box-shadow:0 0 0 0 rgba(212,148,44,0); } }
-@media (max-width: 900px) { .lg-root { grid-template-columns:1fr; } .lg-stage { display:none; } .lg-form { padding:24px 16px; } .lg-formbox { padding:30px 24px 26px; } }
-@media (prefers-reduced-motion: reduce) { .lg-row { animation:none; opacity:1; transform:none; } .lg-live { animation:none; } }
+@keyframes lg-in { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+@media (max-width: 480px) { .lg-root { padding:24px 14px; } .lg-formbox { padding:24px 20px 22px; } .lg-name { font-size:23px; margin:12px 0 20px; } }
+@media (prefers-reduced-motion: reduce) { .lg-wrap { animation:none; } }
 `;
 
 export const LoginPage: React.FC = () => {
@@ -169,49 +138,19 @@ export const LoginPage: React.FC = () => {
     <div className="lg-root select-none">
       <style>{CSS}</style>
 
-      <div className="lg-stage">
-        <div className="lg-brand">
-          {logoOk ? (
-            <img src="/static/logo/logo.jpg" alt="" onError={() => setLogoOk(false)} />
-          ) : (
-            <span className="lg-glyph">{(env.projectName || 'L').charAt(0)}</span>
-          )}
-          {env.projectName}
-          <span className="lg-tag">Internal platform</span>
-        </div>
+      {/* a div, not <main>: style.css paints every <main> with the app background */}
+      <div className="lg-wrap" role="main">
+        {logoOk ? (
+          <img className="lg-logo" src="/static/logo/ssl-wireless-logo.png" alt={COMPANY} width={697} height={162} onError={() => setLogoOk(false)} />
+        ) : (
+          <span className="lg-wordmark">{COMPANY}</span>
+        )}
+        <h1 className="lg-name">{env.projectName}</h1>
 
-        <div>
-          <p className="lg-eyebrow">Agents you can audit</p>
-          <h1 className="lg-h">Give it the task. <i>Come back to the result.</i></h1>
-          <p className="lg-sub">Agents that read your files, run your tools and check their own work, on hardware your team controls.</p>
-          <div className="lg-trace" aria-hidden="true">
-            <div className="lg-trace-bar"><span className="lg-live" />agent run, no one at the keyboard</div>
-            {TRACE.map((r, i) => (
-              <div key={r.verb} className="lg-row" style={{ animationDelay: `${0.5 + i * 0.7}s` }}>
-                <span className="m">{r.mark}</span><span className="v">{r.verb}</span><span>{r.text}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="lg-foot">
-          <span>Authorized users only</span>
-          <span>Every action is logged</span>
-          <span>Data stays on your infrastructure</span>
-        </div>
-      </div>
-
-      <main className="lg-form">
         <div className="lg-formbox" id="login-box">
-          <p className="lg-kick">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
-            </svg>
-            Secure sign-in
-          </p>
           <h2 className="lg-title">{ticket ? 'Verify it is you' : 'Sign in'}</h2>
           <p className="lg-lede">
-            {ticket ? 'Enter the 6-digit code from your authenticator app. A backup code works too.' : 'Use your work account to pick up where you left off.'}
+            {ticket ? 'Enter the 6-digit code from your authenticator app. A backup code works too.' : 'Use your work account to continue.'}
           </p>
 
           {!ticket ? (
@@ -272,15 +211,15 @@ export const LoginPage: React.FC = () => {
           )}
 
           {error && <div id="login-err" role="alert" className="lg-err">{error}</div>}
-
-          <div className="lg-secure">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z" /><path d="M9 12l2 2 4-4" />
-            </svg>
-            Authorized users only. Activity on this system is recorded.
-          </div>
         </div>
-      </main>
+
+        <p className="lg-secure">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z" /><path d="M9 12l2 2 4-4" />
+          </svg>
+          Authorized users only. Activity on this system is recorded.
+        </p>
+      </div>
     </div>
   );
 };
