@@ -17,6 +17,7 @@ MAX_TRACKED = 400                      # read-set / verify entries per user
 _read_sets: dict = {}                  # scope -> OrderedDict[path, True]
 _undo: dict = {}                       # scope -> OrderedDict[path, list[Optional[str]]]
 _verify: dict = {}                     # scope -> dict[path, {"fails": int, "good": Optional[str]}]
+_written: dict = {}                    # scope -> OrderedDict[path, True]: files this agent created or changed
 
 
 def _scope() -> tuple:
@@ -25,8 +26,22 @@ def _scope() -> tuple:
 
 def reset_session(uid=None, session=None) -> None:
     s = (uid if uid is not None else get_current_user_id(), session if session is not None else (get_plan_context() or 0))
-    for d in (_read_sets, _undo, _verify):
+    for d in (_read_sets, _undo, _verify, _written):
         d.pop(s, None)
+
+
+# ---- written files (name recovery) ----
+def mark_written(path: str) -> None:
+    ws = _written.setdefault(_scope(), OrderedDict())
+    ws[path] = True
+    ws.move_to_end(path)
+    while len(ws) > MAX_TRACKED:
+        ws.popitem(last=False)
+
+
+def written_paths() -> list:
+    """Files this agent wrote this session, oldest first."""
+    return list(_written.get(_scope(), {}))
 
 
 # ---- read-set ----

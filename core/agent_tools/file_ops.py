@@ -11,6 +11,7 @@ from ..small_model import APP_CONFIG
 from . import file_state
 from .diffs import _record_diff
 from .limits import agent_limit, est_tokens
+from .name_recovery import match_written
 from .verify_loop import verify_after
 from .workspace import (
     DOCUMENT_EXTS,
@@ -60,6 +61,7 @@ async def _store(uid: int, p: Path, before: Optional[str], after: str) -> None:
     await _cb().call(uid, "fs.write", {"path": str(p), "content": after, "append": False})
     file_state.push_undo(str(p), before)
     file_state.mark_read(str(p))
+    file_state.mark_written(str(p))      # name recovery: a later call that mistypes this name can be pointed back here
     _record_diff(p, before, after)
 
 
@@ -116,12 +118,37 @@ async def _near_names(uid: int, p: Path) -> list[str]:
     return difflib.get_close_matches(p.name, [Path(f).name for f in files], n=3, cutoff=0.6)
 
 
+async def _suggest_names(uid: int, p: Path) -> list[str]:
+    """Real names the agent most likely meant: the file it wrote under a close name first, then close names on disk."""
+    names: list[str] = []
+    w = match_written(p, file_state.written_paths())
+    if w is not None:
+        names.append(w.name)
+    for n in await _near_names(uid, p):
+        if n not in names:
+            names.append(n)
+    return names[:3]
+
+
 async def _missing_msg(uid: int, p: Path, path_arg: str, tail: str) -> str:
-    near = await _near_names(uid, p)
+    near = await _suggest_names(uid, p)
     if near:   # the file most likely exists under a name the agent mistyped: point at real names, never create
         return (f"error: File not found: '{path_arg}'. Files with a close name in that folder: "
                 f"{', '.join(near)}. Copy one name exactly.")
     return f"error: File not found: '{path_arg}'. {tail}"
+
+
+async def _recover_written(uid: int, p: Path, path_arg: str):
+    """(path, text, arg) for the file this agent wrote under a close name, when the one asked for is missing.
+    Read-only callers only: anything that writes or runs code must use the exact name instead."""
+    cand = match_written(p, file_state.written_paths())
+    if cand is None:
+        return None
+    text = await _read_existing(uid, cand)
+    if text is None:
+        return None
+    rel = str(path_arg).replace("\\", "/")
+    return cand, text, (rel.rsplit("/", 1)[0] + "/" + cand.name if "/" in rel else cand.name)
 
 
 async def tool_read_file(args: dict) -> str:
@@ -131,11 +158,18 @@ async def tool_read_file(args: dict) -> str:
         return (f"error: {path_arg} is a binary document - use doc_inspect (outline) or "
                 f"read_file_chunk('{path_arg}') instead of read_file.")
     text = await _read_existing(uid, p)
+    note = ""
     if text is None:
-        return await _missing_msg(uid, p, path_arg, "It does not exist yet. Use 'write_file' to create it.")
+        rec = await _recover_written(uid, p, path_arg)   # read-only, so a unique close match to a file we wrote is safe
+        if rec is None:
+            return await _missing_msg(uid, p, path_arg, "It does not exist yet. Use 'write_file' to create it.")
+        p, text, new_arg = rec
+        note = (f"note: '{path_arg}' was not found; this is '{new_arg}', the file you wrote. "
+                "Use that exact name from now on.\n")
+        path_arg = new_arg
     file_state.mark_read(str(p))
     if not text:
-        return f"({path_arg} is empty)"
+        return note + f"({path_arg} is empty)"
     limit = args.get("limit")
     try:
         limit = int(limit) if limit not in (None, "") else agent_limit("read_file_default_limit")
@@ -147,13 +181,13 @@ async def tool_read_file(args: dict) -> str:
         offset = 1
     view = edit_engine.numbered(text, offset, limit, agent_limit("read_file_max_chars"))
     if view["first"] is None:
-        return (f"note: offset {offset} is past the end - {path_arg} has only {view['total']} lines, so there is nothing more "
-                f"to read. Use what you already read (lines 1-{view['total']} are all of it).")
+        return note + (f"note: offset {offset} is past the end - {path_arg} has only {view['total']} lines, so there is nothing more "
+                       f"to read. Use what you already read (lines 1-{view['total']} are all of it).")
     foot = f"[{path_arg}: lines {view['first']}-{view['last']} of {view['total']}"
     if view["next_offset"]:
         foot += f"; {view['total'] - view['last']} more - call read_file with offset={view['next_offset']}, or grep for a name"
     foot += "]"
-    return f"{view['text']}\n{foot}"
+    return f"{note}{view['text']}\n{foot}"
 
 
 async def tool_grep(args: dict) -> str:
@@ -278,6 +312,8 @@ async def tool_edit_file(args: dict) -> str:
         raise ValueError("old_string required")
     replace_all = bool(args.get("replace_all"))
     if not file_state.was_read(str(p)):
+        if await _read_existing(uid, p) is None:   # a mistyped name, not an unread file: say so and name the real one
+            return await _missing_msg(uid, p, path_arg, "Create it with write_file first.")
         return (f"error: read {path_arg} before editing it - call read_file (with offset/limit for the part "
                 "you will change) so old_string is copied from the real text.")
     before = await _read_existing(uid, p)
@@ -371,7 +407,11 @@ async def tool_run_python(args: dict) -> str:
     else:
         uid, script = _resolve(str(path_arg))
         if script.suffix.lower() != ".py":
-            return "error: run_python path must name a .py file"
+            # a truncated name (extension lost): point at the script we wrote, but never run it unasked - the user's
+            # approval covers the exact call, so the retry must carry the exact name
+            near = [n for n in await _suggest_names(uid, script) if n.lower().endswith(".py")]
+            hint = f" Did you mean: {', '.join(near)}? Call run_python again with that exact name." if near else ""
+            return f"error: run_python path must name a .py file ('{path_arg}').{hint}"
         source = await _read_existing(uid, script)
         if source is None:
             return await _missing_msg(uid, script, path_arg, "Write it first, then rerun run_python with that path.")
