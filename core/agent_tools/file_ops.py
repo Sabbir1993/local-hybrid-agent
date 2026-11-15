@@ -11,7 +11,7 @@ from . import edit_engine
 from ..small_model import APP_CONFIG
 from . import file_state
 from .diffs import _record_diff
-from .limits import agent_limit, est_tokens
+from .limits import agent_limit, effective_chunk_tokens, est_tokens
 from .name_recovery import match_written
 from .verify_loop import verify_after
 from .workspace import (
@@ -70,17 +70,27 @@ def _lines(text: str) -> int:
     return text.count("\n") + (0 if not text or text.endswith("\n") else 1)
 
 
-def _too_big(content: str, tool: str, args: Optional[dict] = None) -> Optional[str]:
+SHRINK_MIN_CHARS = 600     # a file this big, built by the agent, is not replaced by a much smaller one by accident
+SHRINK_RATIO = 0.5
+
+
+def _too_big(content: str, tool: str, args: Optional[dict] = None, existing: bool = False) -> Optional[str]:
     cap = agent_limit("write_file_max_tokens")
     # `_oversize_tokens`: the stream was cut once the call passed the cap (routes/common/sse_stream.py), so
     # `content` is empty and the size is the amount generated before the cut
     n = int((args or {}).get("_oversize_tokens") or 0) or est_tokens(content)
+    if n > cap and (existing or tool in ("append_file", "edit_file")):
+        # the file already holds the earlier sections: "write a skeleton first" here sends the model back to square one,
+        # where it rewrites the file and loses them
+        return (f"error: this {tool} content is about {n} tokens; one call may carry at most {cap}. The file already "
+                "holds everything written so far - do NOT rewrite or restart it. Send only the next section, about "
+                f"{effective_chunk_tokens()} tokens (roughly 80 lines), with append_file, then the section after it.")
     if n > cap:
         return (f"error: this {tool} content is about {n} tokens; one call may carry at most {cap}. "
                 "Write a short skeleton first (imports, class/function signatures, TODO markers) with "
                 "write_file, then add each section with append_file or replace a TODO with edit_file - "
                 "one section per call, about "
-                f"{agent_limit('chunk_target_tokens')} tokens each.")
+                f"{effective_chunk_tokens()} tokens each.")
     return None
 
 
@@ -256,7 +266,13 @@ async def tool_write_file(args: dict) -> str:
     if not path_arg:
         raise ValueError("path required")
     if args.get("_oversize_tokens"):
-        return _too_big("", "write_file", args)
+        existing = False
+        try:                               # a cut-off write over a file that already has content must not say "start over"
+            _uid, _p = _resolve(path_arg)
+            existing = await _read_existing(_uid, _p) is not None
+        except Exception:
+            pass
+        return _too_big("", "write_file", args, existing=existing)
     uid, p = _resolve(path_arg)
     content = args.get("content", "")
     if len(content) > MAX_EDIT_BYTES:
@@ -276,11 +292,6 @@ async def tool_write_file(args: dict) -> str:
             if prot:
                 return prot
         return await tool_append_file({"path": path_arg, "content": content, "_create": True})
-    if p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".svg"):
-        big = _too_big(content, "write_file")
-        if big:
-            return big
-
     before = await _read_existing(uid, p)
     prot = await _personal_protect(uid, p, path_arg, before)
     if prot:
@@ -289,6 +300,17 @@ async def tool_write_file(args: dict) -> str:
         return (f"error: {path_arg} already exists ({_lines(before)} lines). Change part of it with edit_file "
                 "(after read_file), add to the end with append_file, or pass overwrite=true to replace the "
                 "whole file.")
+    if p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".svg"):
+        big = _too_big(content, "write_file", existing=before is not None)
+        if big:
+            return big
+    if (before and not args.get("shrink_ok") and len(before) >= SHRINK_MIN_CHARS
+            and len(content) < len(before) * SHRINK_RATIO and str(p).lower() in {w.lower() for w in file_state.written_paths()}):
+        # restarting a half-built file with its skeleton throws the finished sections away: make that a deliberate step
+        return (f"error: overwrite=true would replace {_lines(before)} lines of {path_arg} with only {_lines(content)} - "
+                "that deletes the sections you already added. Do not restart the file: read_file it to see where you are, "
+                "then add the next section with append_file (or change part of it with edit_file). Only if you really want "
+                "the shorter file, repeat write_file with overwrite=true and shrink_ok=true.")
     if args.get("pre_save_check", True) and not args.get("skip_verify"):
         from .verify import validate_code_syntax
         is_ok, err = validate_code_syntax(path_arg, content)

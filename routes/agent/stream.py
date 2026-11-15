@@ -37,7 +37,7 @@ from core.state import state
 from core import cloud
 from core import output_guard
 from core.sse import sse
-from core.agent_tools.limits import agent_limit, effective_max_tokens, executor_effort_ceiling
+from core.agent_tools.limits import agent_limit, effective_chunk_tokens, effective_max_tokens, executor_effort_ceiling
 from core.agent_tools.memory_tools import MEMORY_TOOL_NAMES
 from core import agent_memory, working_memory
 from core.agent_tools import (
@@ -2098,7 +2098,7 @@ async def run_agent_stream(req, user, ctx):
                                        and str(m.get("content") or "").startswith("[plan reminder]"))]
                             msgs.append({"role": "user", "content": (
                                 plan_guard.stuck_message(cur_item, item_steps) if act == "warn" and item_steps % limit == 0
-                                else plan_guard.focus_message(plan_items_now, agent_limit("chunk_target_tokens")))})
+                                else plan_guard.focus_message(plan_items_now, effective_chunk_tokens()))})
 
             # Stopped by a limit with tool work behind it: one tool-free pass so the user
             # gets what was found instead of only a "stopped" notice. Best effort - any

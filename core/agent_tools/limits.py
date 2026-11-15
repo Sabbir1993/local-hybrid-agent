@@ -71,6 +71,13 @@ def lane_output_cap(lane: str) -> int:
     return agent_limit(key) if key else 0
 
 
+def effective_chunk_tokens() -> int:
+    """The chunk size the model is told to send: the configured target, but never more than half of what the executor
+    lane can generate in one step (the other half is JSON escaping and reasoning). A target above that can never fit, so
+    every chunk would be cut off and thrown away."""
+    return max(500, min(agent_limit("chunk_target_tokens"), lane_output_cap("executor") // 2))
+
+
 def effective_max_tokens(requested, lane: str, cloud: bool = False) -> int:
     """The user's Settings value (<=0 means unlimited) bounded by the lane's cap. Cloud models are left as the
     user set them: each provider has its own output limit and rejects a value above it."""
