@@ -99,11 +99,17 @@ function browse({ path: rawPath }) {
   return { current: target, parent, drives: getDrives(), subdirs };
 }
 
+// A drive letter after the first character means a Windows path was joined under another folder (e.g. "/var/app/D:\x").
+function assertNoEmbeddedDrive(p) {
+  if (/.[A-Za-z]:[\\/]/.test(String(p))) throw new Error(`Malformed path (drive letter inside path): ${p}`);
+}
+
 function mkdir({ path: base, name }) {
   const clean = (name || "").trim();
   if (!clean || /[<>:"/\\|?*]/.test(clean)) {
     throw new Error("Invalid folder name");
   }
+  assertNoEmbeddedDrive(base);
   const target = path.join(base, clean);
   fs.mkdirSync(target, { recursive: true });
   return { path: path.resolve(target) };
@@ -121,6 +127,7 @@ function read({ path: p }) {
 }
 
 function write({ path: p, content, append }) {
+  assertNoEmbeddedDrive(p);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   const existed = fs.existsSync(p);
   if (append && existed) {

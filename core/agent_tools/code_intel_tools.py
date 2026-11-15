@@ -51,14 +51,9 @@ async def _synced():
 
 def _rel(path_arg: str) -> str:
     """Workspace-relative posix path for an argument that may be absolute, prefixed, or already relative."""
-    p = _workspace._ws_resolve(path_arg)
-    ws = _ws().resolve()
-    try:
-        return p.relative_to(ws).as_posix()
-    except ValueError:
-        s = str(p).replace("\\", "/")
-        w = str(ws).replace("\\", "/").rstrip("/") + "/"
-        return s[len(w):] if s.lower().startswith(w.lower()) else s.lstrip("/")
+    s = str(_workspace._ws_resolve(path_arg)).replace("\\", "/")   # string-only: the device folder is not resolved here
+    w = str(_ws()).replace("\\", "/").rstrip("/") + "/"
+    return s[len(w):] if s.lower().startswith(w.lower()) else s.lstrip("/")
 
 
 def _footer(notes: list) -> str:

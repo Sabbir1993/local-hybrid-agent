@@ -1,6 +1,9 @@
+import ntpath
 import os
+import posixpath
+import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Optional
 
 from .. import companion_bridge
@@ -163,26 +166,32 @@ def _common_resolve(rel: str) -> Path:
     return p
 
 
-def _ws_resolve(rel: str) -> Path:
+_DEVICE_DRIVE_RX = re.compile(r"^[A-Za-z]:")
+
+
+def _ws_resolve(rel: str) -> PurePath:
+    """Path on the user's machine for a workspace-relative or full path. String-only: the folder may be a Windows path
+    on a Linux server, so it is never resolved against the server's own working folder."""
     ws_fn = getattr(_pkg(), "active_workspace", active_workspace)
-    ws = ws_fn().resolve()
-    clean = str(rel).strip().replace("\\", "/")
+    root = str(ws_fn())
+    fl = ntpath if _DEVICE_DRIVE_RX.match(root) else posixpath   # the device's own path rules
+    base = fl.normpath(root)
+    fwd = lambda s: s.replace("\\", "/")
+    base_f = fwd(base)
+    clean = fwd(str(rel).strip())
 
-    ws_str = str(ws).replace("\\", "/")
-    if clean.lower().startswith(ws_str.lower()):
-        clean = clean[len(ws_str):].lstrip("/")
-
-    prefixes = ["/workspace/", "workspace/", "/root/workspace/", "./workspace/"]
-    for prefix in prefixes:
+    if clean.lower().startswith(base_f.lower()):   # full folder path given: keep what follows
+        clean = clean[len(base_f):]
+    for prefix in ("/workspace/", "workspace/", "/root/workspace/", "./workspace/"):
         if clean.lower().startswith(prefix):
             clean = clean[len(prefix):]
             break
-
-    clean = clean.lstrip("/\\")
-    if not clean or clean == ".":
-        return ws
-
-    p = (ws / clean).resolve()
-    if not _within(p, ws):
+    clean = clean.lstrip("/")
+    if _DEVICE_DRIVE_RX.match(clean):   # another drive's path, not under this folder
         raise PermissionError(f"path escapes workspace: {rel}")
-    return p
+
+    full = fl.normpath(fl.join(base, clean.replace("/", fl.sep))) if clean and clean != "." else base
+    bl, fu = base.lower(), full.lower()
+    if fu != bl and not fu.startswith(bl.rstrip(fl.sep) + fl.sep):
+        raise PermissionError(f"path escapes workspace: {rel}")
+    return (PureWindowsPath if fl is ntpath else PurePosixPath)(full)

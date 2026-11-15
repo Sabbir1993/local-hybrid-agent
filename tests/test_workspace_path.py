@@ -35,6 +35,34 @@ class NormaliseDevicePath(unittest.TestCase):
         self.assertNotIn("local-hybrid-agent", str(p))
 
 
+class DeviceFolderResolution(unittest.TestCase):
+    """_ws_resolve is string-only, so a Windows folder never gets the server's cwd prepended (any host OS)."""
+
+    def _resolve(self, root, rel):
+        from core.agent_tools import workspace
+        folder = lambda: workspace._device_folder(root, "the work folder")
+        with mock.patch.object(workspace, "active_workspace", folder), \
+                mock.patch("core.agent_tools.active_workspace", folder, create=True):
+            return str(workspace._ws_resolve(rel))
+
+    def test_relative_name_lands_under_the_windows_folder(self):
+        self.assertEqual(self._resolve(r"D:\project_folder\agent-task\system-health", "a/b.txt"),
+                         r"D:\project_folder\agent-task\system-health\a\b.txt")
+
+    def test_full_windows_path_under_the_folder_is_not_doubled(self):
+        self.assertEqual(self._resolve(r"D:\project_folder\agent-task\system-health",
+                                       r"D:\project_folder\agent-task\system-health\a.txt"),
+                         r"D:\project_folder\agent-task\system-health\a.txt")
+
+    def test_drive_path_outside_the_folder_is_refused(self):
+        with self.assertRaises(PermissionError):
+            self._resolve(r"D:\project_folder\agent-task\system-health", r"D:\other\x.txt")
+
+    def test_parent_traversal_is_refused(self):
+        with self.assertRaises(PermissionError):
+            self._resolve(r"D:\project_folder\agent-task\system-health", "../../x.txt")
+
+
 class SavedAndUsedTheSameWay(unittest.TestCase):
     def test_the_save_rule_stores_the_normalised_folder(self):
         from core.auth_db.custom_agents import clean_work_dir
