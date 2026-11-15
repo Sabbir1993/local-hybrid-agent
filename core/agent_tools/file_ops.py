@@ -374,7 +374,7 @@ async def tool_run_python(args: dict) -> str:
             return "error: run_python path must name a .py file"
         source = await _read_existing(uid, script)
         if source is None:
-            return f"error: File not found: '{path_arg}'. Write it first, then rerun run_python with that path."
+            return await _missing_msg(uid, script, path_arg, "Write it first, then rerun run_python with that path.")
         script_name = str(path_arg).replace("\\", "/")
         file_state.mark_read(str(script))
     raw_t = APP_CONFIG.get("agent", {}).get("exec_timeout_s", 0)

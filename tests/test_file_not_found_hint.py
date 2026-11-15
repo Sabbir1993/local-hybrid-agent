@@ -44,5 +44,18 @@ class NotFoundHints(unittest.TestCase):
         self.assertNotIn("write_file", out)
 
 
+class RunPythonHint(unittest.TestCase):
+    def test_run_python_points_at_the_close_real_name(self):
+        fake = FakeCompanion(["collect_events_22b31c74.py"])
+        ws = Path(r"D:\project_folder\agent-task\system-health")
+        with mock.patch("core.agent_tools.require_device_workspace", lambda: (7, ws)), \
+                mock.patch.object(file_ops, "require_device_workspace", lambda: (7, ws)), \
+                mock.patch.object(file_ops, "_resolve", lambda a: (7, ws / a)), \
+                mock.patch.object(file_ops, "_cb", lambda: fake):
+            out = asyncio.run(file_ops.tool_run_python({"path": "collect_events_22b31c54.py"}))
+        self.assertIn("collect_events_22b31c74.py", out)
+        self.assertNotIn("Write it first", out.split("Files with a close name")[0])
+
+
 if __name__ == "__main__":
     unittest.main()
