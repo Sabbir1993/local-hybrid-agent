@@ -163,12 +163,45 @@ def _infer_op(o: dict) -> dict:
     return o
 
 
+_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$")
+_TRAILING_COMMA = re.compile(r",\s*([\]}])")
+# a valid JSON escape (kept as it is) or a lone backslash, which models leave in markdown ('\_', '\*', '\|', '\$')
+_ESCAPE = re.compile(r'\\(["\\/bfnrt]|u[0-9a-fA-F]{4})|\\')
+
+
+def _fix_escapes(s: str) -> str:
+    return _ESCAPE.sub(lambda m: m.group(0) if m.group(1) else "\\\\", s)
+
+
+def _loads_ops(text: str, depth: int = 0):
+    """Parse the `ops` string a model sent. Markdown pasted into a JSON string brings raw newlines, '\\_' / '\\*' escapes,
+    a trailing comma, a code fence or a line of prose around the list: each is repaired, and a clean parse is never
+    altered. A cut-off list is not salvaged (half an edit must not apply)."""
+    t = _FENCE.sub("", str(text).strip())
+    first = None
+    for fix in (lambda s: s, _fix_escapes, lambda s: _TRAILING_COMMA.sub(r"\1", _fix_escapes(s))):
+        try:
+            val = json.loads(fix(t), strict=False)       # strict=False: raw newlines / tabs inside strings
+        except json.JSONDecodeError as e:
+            first = first or e
+            continue
+        if isinstance(val, str) and depth == 0:          # the list was JSON-encoded twice
+            return _loads_ops(val, depth + 1)
+        return val
+    a, b = t.find("["), t.rfind("]")
+    if 0 <= a < b and (a, b) != (0, len(t) - 1) and depth < 2:
+        try:
+            return _loads_ops(t[a:b + 1], depth + 1)     # prose before or after the list
+        except DocOpError:
+            pass
+    where = f" ({first.msg} at line {first.lineno} col {first.colno})" if first else ""
+    raise DocOpError(f"ops is not valid JSON{where}. Send a JSON list of {{op, addr, ...}} objects, with quotes and "
+                     "newlines escaped inside strings. Do not recreate the document: resend the same ops, corrected.")
+
+
 def normalize_ops(ops) -> list[dict]:
     if isinstance(ops, str):
-        try:
-            ops = json.loads(ops)
-        except json.JSONDecodeError:
-            raise DocOpError("ops must be a JSON list of {op, addr, ...} objects")
+        ops = _loads_ops(ops)
     if isinstance(ops, dict):
         ops = [ops]
     if isinstance(ops, list):

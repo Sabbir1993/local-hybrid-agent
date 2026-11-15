@@ -594,13 +594,6 @@ export class VoiceEngine {
     if (!R.said) this.maybeFiller(R);
     if (r.pieces.length && this.state === 'thinking') this.setState('speaking');
     if (final && R.spoken >= raw.length && !this.queue.isSpeaking()) {
-      if (R.t) {
-        const t = R.t, ms = (a: number, b: number) => (a && b ? Math.round(a - b) : null);
-        console.debug('[voice] turn', {
-          transcribeMs: ms(t.transcript, t.endOfSpeech), firstTokenMs: ms(t.firstToken, t.endOfSpeech),
-          firstAudioMs: ms(t.firstAudio, t.endOfSpeech), totalMs: Math.round(performance.now() - t.endOfSpeech),
-        });
-      }
       this.reply = null;
       this.barge.reset();
       this.setState('listening');

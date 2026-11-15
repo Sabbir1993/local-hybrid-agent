@@ -128,7 +128,7 @@ from core.agent_loop import action_guard as action_guard_mod
 EXPLORE_TOOLS = ("read_file", "grep", "list_files", "project_overview", "find_symbol", "find_references", "file_outline",
                  "git_inspect")
 from ..common import _llm_chat_stream
-from ..common.sampling_extra import sampler_extra
+from ..common.sampling_extra import sampler_extra, tool_step_sampling
 from core.verifier import sse_events as answer_check_events
 
 from .base import _executor_device_label, _main_device_label, router
@@ -1002,6 +1002,9 @@ async def run_agent_stream(req, user, ctx):
                 streamed_content = []
                 try:
                     agent_rep = req.repeat_penalty if req.repeat_penalty is not None else (1.0 if tools_for_lane else 1.15)
+                    # a step that offers tools copies names and text out of its context: DRY and the repeat penalties are off
+                    # for it, whatever the saved sampler panel says (routes/common/sampling_extra.py)
+                    agent_rep, step_presence, step_extra = tool_step_sampling(req, tools_for_lane, agent_rep)
                     # one generation is capped per lane: a 4B executor that runs on for 8k tokens holds a GPU slot
                     # for minutes and fills its context; a cut-off call is retried smaller (see truncation.py)
                     step_max_tokens = effective_max_tokens(req.max_tokens, lane_name, cloud=bool(getattr(active_client, "is_cloud", False)))
@@ -1018,13 +1021,13 @@ async def run_agent_stream(req, user, ctx):
                             active_client, fb_client, step_msgs, tools_for_lane, req.temperature,
                             step_max_tokens, repeat_penalty=agent_rep, rid=step_rid, grammar=step_grammar, lane=lane_name,
                             effort=None if step_grammar else step_effort,
-                            top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
+                            top_p=req.top_p, min_p=req.min_p, presence_penalty=step_presence, top_k=req.top_k, extra=step_extra,
                             tool_choice=step_tool_choice)
                     else:
                         lane_stream = _llm_chat_stream(active_client, step_msgs, tools_for_lane, req.temperature, step_max_tokens,
                                                        repeat_penalty=agent_rep, rid=step_rid, grammar=step_grammar,
                                                        effort=None if step_grammar else step_effort,
-                                                       top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
+                                                       top_p=req.top_p, min_p=req.min_p, presence_penalty=step_presence, top_k=req.top_k, extra=step_extra,
                                                        tool_choice=step_tool_choice)
                     _cloud_out = bool(getattr(active_client, "is_cloud", False))
                     _drain = DrainResult()
@@ -1169,17 +1172,18 @@ async def run_agent_stream(req, user, ctx):
                     sent_tokens = context_budget.prompt_tokens_for("main", msgs, esc_tools)
                     try:
                         agent_rep = req.repeat_penalty if req.repeat_penalty is not None else 1.15
+                        agent_rep, esc_presence, esc_extra = tool_step_sampling(req, esc_tools, agent_rep)
                         if getattr(main_client, "is_cloud", False):
                             fb_main = await _local_fallback("main")
                             esc_stream = common._llm_chat_stream_with_fallback(
                                 main_client, fb_main, msgs, esc_tools, req.temperature,
                                 effective_max_tokens(req.max_tokens, "main", cloud=bool(getattr(main_client, "is_cloud", False))), repeat_penalty=agent_rep, rid=esc_rid, lane="main", effort=effort,
-                                top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
+                                top_p=req.top_p, min_p=req.min_p, presence_penalty=esc_presence, top_k=req.top_k, extra=esc_extra,
                                 tool_choice=esc_tool_choice)
                         else:
                             esc_stream = _llm_chat_stream(main_client, msgs, esc_tools, req.temperature, effective_max_tokens(req.max_tokens, "main", cloud=bool(getattr(main_client, "is_cloud", False))),
                                                           repeat_penalty=agent_rep, rid=esc_rid, effort=effort,
-                                                          top_p=req.top_p, min_p=req.min_p, presence_penalty=req.presence_penalty, top_k=req.top_k, extra=sampler_extra(req),
+                                                          top_p=req.top_p, min_p=req.min_p, presence_penalty=esc_presence, top_k=req.top_k, extra=esc_extra,
                                                           tool_choice=esc_tool_choice)
                         _cloud_out = bool(getattr(main_client, "is_cloud", False))
                         _drain = DrainResult()

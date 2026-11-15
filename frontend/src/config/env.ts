@@ -33,7 +33,9 @@ const parseLogLevel = (value: string | undefined): AppEnvConfig['logLevel'] => {
   if (normalized === 'debug' || normalized === 'info' || normalized === 'warn' || normalized === 'error' || normalized === 'none') {
     return normalized;
   }
-  return import.meta.env.DEV ? 'debug' : 'info';
+  // production prints only warnings and errors (the logger still keeps every entry in its buffer for diagnostics);
+  // set VITE_LOG_LEVEL=info or debug to see the rest
+  return import.meta.env.DEV ? 'debug' : 'warn';
 };
 
 export const env: AppEnvConfig = {

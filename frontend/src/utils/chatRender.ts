@@ -309,6 +309,15 @@ export function renderAgentActsHtml(acts: any[], secs?: number): string {
   return h;
 }
 
+// Hosts models write as placeholders in code samples and API examples: nobody owns a favicon for them
+const PLACEHOLDER_HOST = /(^|\.)(example\.(com|org|net)|myapp\.com|mysite\.com|yourapp\.com|yourdomain\.com|yoursite\.com|domain\.com|company\.com|localhost|test|invalid|local|internal|example)$/i;
+
+/** True when a site icon is worth requesting for this host: a real-looking dotted name, not a bare word ("stag"), an IP, or a
+ *  placeholder. Every request for one that does not exist is a 404 in the console. */
+export function faviconWorthFetching(host: string): boolean {
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(host) && !PLACEHOLDER_HOST.test(host);
+}
+
 // Marked Configuration
 marked.use({
   gfm: true,
@@ -329,8 +338,11 @@ marked.use({
       if (domain && isSource) {
         const d = escAttr(domain);
         const fav = escAttr(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`);
+        const icon = faviconWorthFetching(domain)
+          ? `<img src="${fav}" class="citation-favicon" alt="" loading="lazy" referrerpolicy="no-referrer" data-hide-on-error />`
+          : '';
         return `<a href="${escAttr(url)}" target="_blank" rel="noopener noreferrer" class="citation-pill" title="${d} - Click to open source">`
-          + `<img src="${fav}" class="citation-favicon" alt="" loading="lazy" referrerpolicy="no-referrer" data-hide-on-error /><span class="citation-host">${d}</span></a>`;
+          + `${icon}<span class="citation-host">${d}</span></a>`;
       }
       return `<a href="${escAttr(url)}"${t} target="_blank" rel="noopener noreferrer">${inner}</a>`;
     },

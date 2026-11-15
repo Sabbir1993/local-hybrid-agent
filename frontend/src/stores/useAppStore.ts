@@ -1440,6 +1440,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (agentState.gap && !(L.content || '').startsWith(GAP_NOTE)) L.content = GAP_NOTE + '\n\n' + (L.content || '');
         // a reattach replays the run: the time it took here is not the run's own
         if (!reattachId) L.secs = Math.max(0.001, (performance.now() - runStart) / 1000);
+        // the server's real prompt size at the run's last step (its `usage` events) anchors the context ring. Without it
+        // the ring estimates the whole on-screen transcript, which ignores clearing and compaction and reads as overflow.
+        if (promptTokVal) L.promptTokens = promptTokVal;
+        if (ntokVal) L.ntok = ntokVal;
         holder.msg = { ...L };
         return { messages: msgs };
       });
@@ -1459,6 +1463,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         api.sessions.persistMessage(currentSessionId, 'assistant', L.content || (cut ? '(run interrupted)' : ''), {
           reasoning: agentState.reasoning || undefined,
           secs: L.secs,
+          promptTokens: L.promptTokens || undefined,
+          ntok: L.ntok || undefined,
           acts: (L.acts || []).map((a) => (a && a.image ? { ...a, image: undefined } : a)),
           modelDisplay: L.model || undefined,
           modelSource: agentState.modelSource || undefined,

@@ -42,6 +42,8 @@ export const PreviewModal: React.FC = () => {
   const isExcel = ext === 'xlsx' || ext === 'xls';
   const isCsv = ext === 'csv';
   const isPptx = ext === 'pptx' || ext === 'ppt';
+  const isDocx = ext === 'docx' || ext === 'doc';
+  const isDocxFile = isDocx && directContent == null;   // text handed in directly is still shown as text
 
   // Excel multi-sheet state
   const [sheets, setSheets] = useState<Record<string, string[][]>>({});
@@ -186,8 +188,20 @@ export const PreviewModal: React.FC = () => {
       return () => window.removeEventListener('keydown', handleKeyDown);
     }
 
+    // 4b. Word documents are a zip of XML: never read them as text. The server draws the pages through LibreOffice
+    // (0 pages when it has none, then the body shows a download card instead of the raw bytes).
+    if (isDocx) {
+      setLoading(true);
+      fetch(isWs ? `/agent/ws/doc-pages?path=${enc}${agentWsParam()}` : `/agent/doc-pages?path=${enc}`)
+        .then((r) => (r.ok ? r.json() : { pages: 0 }))
+        .then((d) => setPagePics(Number(d && d.pages) || 0))
+        .catch(() => setPagePics(0))
+        .finally(() => setLoading(false));
+      return () => window.removeEventListener('keydown', handleKeyDown);
+    }
+
     // 5. Code & Plain Text Files (excluding binary files)
-    const isSpecial = isImage || isHtml || isZip || isPdf || isExcel || isCsv || isPptx;
+    const isSpecial = isImage || isHtml || isZip || isPdf || isExcel || isCsv || isPptx || isDocx;
     if (!isSpecial && filePath && !filePath.startsWith('http') && !filePath.startsWith('data:') && !filePath.startsWith('blob:')) {
       setLoading(true);
       fetch(rawUrl)
@@ -210,7 +224,7 @@ export const PreviewModal: React.FC = () => {
     }
 
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, filePath, directContent, isImage, isHtml, isZip, isPdf, isExcel, isCsv, isPptx, isWs, rawUrl, enc, closePreviewModal]);
+  }, [isOpen, filePath, directContent, isImage, isHtml, isZip, isPdf, isExcel, isCsv, isPptx, isDocx, isWs, rawUrl, enc, closePreviewModal]);
 
   if (!isOpen) return null;
 
@@ -229,6 +243,8 @@ export const PreviewModal: React.FC = () => {
     csv: '📋',
     pptx: '📽️',
     ppt: '📽️',
+    docx: '📘',
+    doc: '📘',
     md: '📝',
     py: '🐍',
     js: '⚡',
@@ -648,7 +664,41 @@ export const PreviewModal: React.FC = () => {
             </div>
           )}
 
-          {!loading && !error && !isImage && !isHtml && !isZip && !isPdf && !isExcel && !isCsv && !isPptx && (
+          {!loading && !error && isDocxFile && (
+            <div className="flex-1 overflow-auto p-4 bg-bg flex flex-col items-center gap-4">
+              {pagePics > 0 ? (
+                Array.from({ length: pagePics }, (_, i) => (
+                  <div key={i} className="docx-page-wrap w-full" style={{ width: '100%', maxWidth: '820px' }}>
+                    <div style={{ color: 'var(--dim, #8b949e)', fontSize: '11px', marginBottom: '4px', fontWeight: 600 }}>Page {i + 1}</div>
+                    <img
+                      src={isWs ? `/agent/ws/doc-page?path=${enc}&n=${i + 1}${agentWsParam()}` : `/agent/doc-page?path=${enc}&n=${i + 1}`}
+                      alt={`Page ${i + 1}`}
+                      loading="lazy"
+                      style={{ width: '100%', background: '#fff', borderRadius: '6px', boxShadow: '0 6px 24px rgba(0,0,0,0.45)' }}
+                    />
+                  </div>
+                ))
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-center p-8 gap-3 my-auto">
+                  <span style={{ fontSize: '42px' }}>📘</span>
+                  <div className="font-semibold text-sm text-text">{fname}</div>
+                  <p className="text-xs text-dim max-w-sm" style={{ color: 'var(--dim)' }}>
+                    Word documents open in Word or LibreOffice. A page preview is not available for this file, so download it to read it.
+                  </p>
+                  <a
+                    href={dlUrl}
+                    download={fname}
+                    className="btn primary text-xs px-4 py-2 rounded-lg font-bold"
+                    style={{ background: 'var(--accent, #38bdf8)', color: '#000', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    ⬇ Download Document ({ext.toUpperCase()})
+                  </a>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!loading && !error && !isImage && !isHtml && !isZip && !isPdf && !isExcel && !isCsv && !isPptx && !isDocxFile && (
             <div className="flex-1 overflow-auto p-4 bg-bg font-mono text-xs text-text leading-relaxed">
               <pre className="m-0 p-4 rounded-lg bg-panel2 border border-border overflow-x-auto">
                 <code>{textContent || '(Empty file)'}</code>

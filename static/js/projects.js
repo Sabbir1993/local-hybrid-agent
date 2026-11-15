@@ -1193,9 +1193,13 @@ async function refreshCompanionStatus() {
   } catch (e) { if (el) el.textContent = ''; }
 }
 
+// settings.html loads this script too, but has none of the chat page's project / folder-picker elements: wiring them
+// must not throw (it stopped the rest of the script). A missing element gets a throwaway object instead.
+const elOrStub = (id) => $(id) || {};
+
 const closeProjModal = () => { $('proj-modal').hidden = true; };
-$('btn-proj-cancel').onclick = closeProjModal;
-$('proj-modal-close').onclick = closeProjModal;
+elOrStub('btn-proj-cancel').onclick = closeProjModal;
+elOrStub('proj-modal-close').onclick = closeProjModal;
 if ($('btn-delproject')) $('btn-delproject').onclick = () => { if (curProject) deleteProject(curProject.id, curProject.name); };
 if ($('btn-delproject-icon')) $('btn-delproject-icon').onclick = () => { if (curProject) deleteProject(curProject.id, curProject.name); };
 
@@ -1233,12 +1237,12 @@ async function submitNewProject() {
   }
 }
 
-$('btn-proj-submit').onclick = submitNewProject;
-$('new-proj-name').onkeydown = e => { if (e.key === 'Enter') submitNewProject(); };
-$('new-proj-dir').onkeydown = e => { if (e.key === 'Enter') submitNewProject(); };
+elOrStub('btn-proj-submit').onclick = submitNewProject;
+elOrStub('new-proj-name').onkeydown = e => { if (e.key === 'Enter') submitNewProject(); };
+elOrStub('new-proj-dir').onkeydown = e => { if (e.key === 'Enter') submitNewProject(); };
 
 // Workspace directory browsing & picker handling
-$('btn-browse-dir').onclick = async () => {
+elOrStub('btn-browse-dir').onclick = async () => {
   const btn = $('btn-browse-dir');
   const txt = $('btn-browse-dir-text');
   const icon = $('btn-browse-dir-icon');
@@ -1341,8 +1345,8 @@ let pickerCurrentPath = '';
 let pickerSelectedPath = '';
 
 const closeDirPicker = () => { $('dir-picker-modal').hidden = true; };
-$('dir-picker-close').onclick = closeDirPicker;
-$('btn-dir-picker-cancel').onclick = closeDirPicker;
+elOrStub('dir-picker-close').onclick = closeDirPicker;
+elOrStub('btn-dir-picker-cancel').onclick = closeDirPicker;
 
 async function navigateDirPicker(path) {
   const listEl = $('dir-picker-list');
@@ -1416,13 +1420,13 @@ async function navigateDirPicker(path) {
   }
 }
 
-$('btn-open-dir-picker').onclick = () => {
+elOrStub('btn-open-dir-picker').onclick = () => {
   $('dir-picker-modal').hidden = false;
   const initial = $('new-proj-dir').value.trim();
   navigateDirPicker(initial);
 };
 
-$('btn-dir-picker-select').onclick = () => {
+elOrStub('btn-dir-picker-select').onclick = () => {
   if (pickerSelectedPath) {
     $('new-proj-dir').value = pickerSelectedPath;
     const nameInput = $('new-proj-name');
@@ -1434,7 +1438,7 @@ $('btn-dir-picker-select').onclick = () => {
   closeDirPicker();
 };
 
-$('btn-dir-picker-mkdir').onclick = async () => {
+elOrStub('btn-dir-picker-mkdir').onclick = async () => {
   const name = $('dir-picker-new-name').value.trim();
   if (!name) return;
   try {

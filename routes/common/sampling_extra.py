@@ -46,3 +46,26 @@ def sampler_extra(req) -> Optional[dict]:
         if req.dynatemp_exponent is not None:
             out["dynatemp_exponent"] = _clamp(float(req.dynatemp_exponent), 0.1, 5.0)
     return out or None
+
+
+# Samplers that make a model spell text it has already seen differently: DRY punishes repeating a sequence that is in the
+# context (the penalty grows exponentially with the length of the repeat), the repeat / presence / frequency penalties push
+# away from tokens already used, dynamic temperature adds noise. Fine for prose, wrong for a tool call, which copies file
+# names, paths and old_string text out of its context: one changed character and the call misses its file.
+_COPY_UNSAFE = ("dry_multiplier", "dry_base", "dry_allowed_length", "dry_penalty_last_n", "dynatemp_range",
+                "dynatemp_exponent", "frequency_penalty", "repeat_last_n")
+
+
+def tool_step_sampling(req, tools, repeat_penalty):
+    """(repeat_penalty, presence_penalty, extra) for one model call.
+
+    A step that offers tools runs with DRY, every repeat penalty and dynamic temperature OFF, whatever the saved sampler
+    panel says (the web UI even defaults DRY on). The zeros are sent explicitly, so a server started with its own DRY
+    default stays off too. A step with no tools (a plain answer) keeps the user's sampling. Temperature, top-p, top-k and
+    min-p are left to the panel."""
+    extra = sampler_extra(req)
+    if not tools:
+        return repeat_penalty, req.presence_penalty, extra
+    safe = {k: v for k, v in (extra or {}).items() if k not in _COPY_UNSAFE}
+    safe.update({"dry_multiplier": 0.0, "dynatemp_range": 0.0, "frequency_penalty": 0.0})
+    return 1.0, 0.0, safe

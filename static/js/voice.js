@@ -411,7 +411,6 @@
           firstAudioMs: t.firstAudio ? Math.round(t.firstAudio - t.endOfSpeech) : null,
           totalMs: Math.round(performance.now() - t.endOfSpeech),
         };
-        console.info('[voice] turn', V.lastTurn);
         paintLatency(V.lastTurn);
       }
       S.reply = null;
