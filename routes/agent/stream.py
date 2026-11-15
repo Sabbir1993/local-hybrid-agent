@@ -1504,7 +1504,7 @@ async def run_agent_stream(req, user, ctx):
                                     parallel_dur[tid] = _dur
 
                 for name, tc_id, args in parsed_actions:
-                    if personal and name in ("write_file", "doc_create"):
+                    if personal and name == "doc_create":      # write_file keeps the model's own name (file_ops._personal_protect)
                         from core.agent_loop.execution import unique_create_args
                         args = unique_create_args(args or {})     # the card, the preview and the file all use this name
                     pending_tool[tc_id] = name

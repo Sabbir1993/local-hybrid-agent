@@ -18,6 +18,8 @@ _read_sets: dict = {}                  # scope -> OrderedDict[path, True]
 _undo: dict = {}                       # scope -> OrderedDict[path, list[Optional[str]]]
 _verify: dict = {}                     # scope -> dict[path, {"fails": int, "good": Optional[str]}]
 _written: dict = {}                    # scope -> OrderedDict[path, True]: files this agent created or changed
+_aliases: dict = {}                    # scope -> OrderedDict[requested path, resolved path]
+_created: dict = {}                    # scope -> OrderedDict[path, True]: files this agent created (did not exist before)
 
 
 def _scope() -> tuple:
@@ -26,22 +28,47 @@ def _scope() -> tuple:
 
 def reset_session(uid=None, session=None) -> None:
     s = (uid if uid is not None else get_current_user_id(), session if session is not None else (get_plan_context() or 0))
-    for d in (_read_sets, _undo, _verify, _written):
+    for d in (_read_sets, _undo, _verify, _written, _aliases, _created):
         d.pop(s, None)
 
 
 # ---- written files (name recovery) ----
-def mark_written(path: str) -> None:
-    ws = _written.setdefault(_scope(), OrderedDict())
+def _remember(store: dict, path: str) -> None:
+    ws = store.setdefault(_scope(), OrderedDict())
     ws[path] = True
     ws.move_to_end(path)
     while len(ws) > MAX_TRACKED:
         ws.popitem(last=False)
 
 
+def mark_written(path: str, created: bool = False) -> None:
+    """The agent wrote this file; `created` when it did not exist before (only those may be overwritten later)."""
+    _remember(_written, path)
+    if created:
+        _remember(_created, path)
+
+
+def created_paths() -> set:
+    """Files this agent created this session, lower-cased (the file system is case-insensitive on Windows)."""
+    return {p.lower() for p in _created.get(_scope(), {})}
+
+
 def written_paths() -> list:
     """Files this agent wrote this session, oldest first."""
     return list(_written.get(_scope(), {}))
+
+
+# ---- aliases: a name the agent used -> the file it was resolved to (so the live diff finds the real file) ----
+def record_alias(requested: str, actual: str) -> None:
+    a = _aliases.setdefault(_scope(), OrderedDict())
+    a[requested] = actual
+    a.move_to_end(requested)
+    while len(a) > MAX_TRACKED:
+        a.popitem(last=False)
+
+
+def alias_target(requested: str) -> Optional[str]:
+    return _aliases.get(_scope(), {}).get(requested)
 
 
 # ---- read-set ----

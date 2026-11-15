@@ -283,22 +283,30 @@ class UniqueFileNameTests(unittest.TestCase):
     def test_windows_separators_are_understood(self):
         self.assertRegex(execution.unique_file_name("out" + chr(92) + "x.csv"), r"^out/x_[0-9a-f]{8}\.csv$")
 
-    def test_personal_write_file_is_always_a_new_file_never_an_append(self):
+    def _personal_run(self, name, args):
         tok = set_personal_scope(True)
         seen = {}
 
-        async def fake(name, args):
-            seen.update(args)
+        async def fake(n, a):
+            seen.update(a)
             return "ok"
         try:
             with mock.patch("core.registry.registry.get", return_value=object()), \
                  mock.patch("core.registry.registry.async_run", side_effect=fake):
-                run(execution.run_tool("write_file", {"path": "notes.md", "content": "x", "append": True}))
+                run(execution.run_tool(name, args))
         finally:
             from core import request_context as rc
             rc._personal_scope.reset(tok)
-        self.assertRegex(seen["path"], r"^notes_[0-9a-f]{8}\.md$")
-        self.assertNotIn("append", seen)
+        return seen
+
+    def test_personal_write_file_keeps_the_name_the_model_chose(self):
+        # no random id: a model cannot copy one back, so later append/edit/read calls used to miss the file
+        seen = self._personal_run("write_file", {"path": "notes.md", "content": "x"})
+        self.assertEqual(seen["path"], "notes.md")
+
+    def test_personal_documents_are_still_saved_under_a_fresh_name(self):
+        seen = self._personal_run("doc_create", {"file": "deck.pptx", "content": "x"})
+        self.assertRegex(seen["file"], r"^deck_[0-9a-f]{8}\.pptx$")
 
     def test_agent_task_mode_is_untouched(self):
         seen = {}

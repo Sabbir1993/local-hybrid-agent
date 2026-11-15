@@ -24,7 +24,10 @@ async def run_tool(name: str, args: dict, unique_done: bool = False) -> str:
         refusal = _personal_refusal(name, args or {})
         if refusal:
             return refusal
-        if name in ("write_file", "doc_create") and not unique_done:   # the agent route renames up front so the UI shows the real name
+        # documents are still saved under a fresh name (never over an old file). write_file is not renamed: a model cannot
+        # copy a random id back reliably, so it keeps the name it chose and tool_write_file refuses to touch a file this
+        # agent did not create (file_ops._personal_protect), the way an edit tool asks for a read first.
+        if name == "doc_create" and not unique_done:   # the agent route renames up front so the UI shows the real name
             args = _unique_create(args or {})
     # Argument validation runs BEFORE the registry dispatch, so it covers every tool on every
     # lane -- builtin, web, skill, mcp, plugin alike. The registry mirrors every builtin

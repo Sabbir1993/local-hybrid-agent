@@ -98,7 +98,14 @@ def pop_file_diff(args: dict) -> Optional[dict]:
         p = res_fn(path_arg)
     except Exception:
         return None
-    return _file_diffs.pop((get_current_user_id(), str(p)), None)
+    uid = get_current_user_id()
+    d = _file_diffs.pop((uid, str(p)), None)
+    if d is None:   # the call named a close name and name recovery pointed it at the real file: the diff is stored there
+        from . import file_state
+        actual = file_state.alias_target(str(p))
+        if actual:
+            d = _file_diffs.pop((uid, actual), None)
+    return d
 
 
 def tool_list_diff(args: dict) -> str:

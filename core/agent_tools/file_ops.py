@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from .. import companion_bridge
+from ..request_context import personal_scope
 from . import edit_engine
 from ..small_model import APP_CONFIG
 from . import file_state
@@ -61,7 +62,7 @@ async def _store(uid: int, p: Path, before: Optional[str], after: str) -> None:
     await _cb().call(uid, "fs.write", {"path": str(p), "content": after, "append": False})
     file_state.push_undo(str(p), before)
     file_state.mark_read(str(p))
-    file_state.mark_written(str(p))      # name recovery: a later call that mistypes this name can be pointed back here
+    file_state.mark_written(str(p), created=before is None)   # name recovery + which files write_file may later overwrite
     _record_diff(p, before, after)
 
 
@@ -136,6 +137,31 @@ async def _missing_msg(uid: int, p: Path, path_arg: str, tail: str) -> str:
         return (f"error: File not found: '{path_arg}'. Files with a close name in that folder: "
                 f"{', '.join(near)}. Copy one name exactly.")
     return f"error: File not found: '{path_arg}'. {tail}"
+
+
+async def _free_name(uid: int, p: Path) -> str:
+    """The first unused 'name_2.ext', 'name_3.ext' ... in p's folder: short enough for a model to copy exactly."""
+    try:
+        data = await _cb().call(uid, "fs.list", {"root": str(p.parent), "pattern": "*"})
+        taken = {Path(f).name.lower() for f in (data.get("files") or []) if isinstance(f, str)}
+    except Exception:
+        taken = set()
+    for n in range(2, 100):
+        cand = f"{p.stem}_{n}{p.suffix}"
+        if cand.lower() not in taken:
+            return cand
+    return f"{p.stem}_new{p.suffix}"
+
+
+async def _personal_protect(uid: int, p: Path, path_arg: str, before: Optional[str]) -> Optional[str]:
+    """A Personal Agent never changes a file it did not create this session with write_file: it saves under a new name.
+    (Its own files can be rewritten, edit_file changes any file after a read.) Replaces the old random-id rename, which
+    a model could not copy back reliably: the agent keeps the name it chose and is told a short free one on a clash."""
+    if before is None or not personal_scope() or str(p).lower() in file_state.created_paths():
+        return None
+    return (f"error: {path_arg} already exists in your folder and was not created in this session, so write_file will "
+            f"not change it. Save your work under another name, for example {await _free_name(uid, p)}. "
+            "To change that file instead, use edit_file.")
 
 
 async def _recover_written(uid: int, p: Path, path_arg: str):
@@ -245,6 +271,10 @@ async def tool_write_file(args: dict) -> str:
         from ..doc_tools import tool_doc_create
         return await tool_doc_create({"file": path_arg, "content": content})
     if append:
+        if personal_scope():
+            prot = await _personal_protect(uid, p, path_arg, await _read_existing(uid, p))
+            if prot:
+                return prot
         return await tool_append_file({"path": path_arg, "content": content, "_create": True})
     if p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".svg"):
         big = _too_big(content, "write_file")
@@ -252,6 +282,9 @@ async def tool_write_file(args: dict) -> str:
             return big
 
     before = await _read_existing(uid, p)
+    prot = await _personal_protect(uid, p, path_arg, before)
+    if prot:
+        return prot
     if before and not args.get("overwrite"):
         return (f"error: {path_arg} already exists ({_lines(before)} lines). Change part of it with edit_file "
                 "(after read_file), add to the end with append_file, or pass overwrite=true to replace the "
@@ -267,7 +300,39 @@ async def tool_write_file(args: dict) -> str:
     return msg + await verify_after(uid, p, path_arg, content, before, can_autorevert=False)
 
 
+async def _retry_on_written_name(impl, args: dict) -> str:
+    """Run a write tool; when its file is missing but is the one this agent wrote under a close name (the server renames
+    created files to '<name>_<8 hex>', which a model cannot copy reliably), run it again on the real file and say so.
+    Costs nothing when the file is found; never touches a file the agent did not write."""
+    out = await impl(args)
+    if args.get("_create") or not (isinstance(out, str) and out.startswith("error: File not found:")):
+        return out
+    path_arg = str(args.get("path") or args.get("file") or args.get("filename") or "")
+    if not path_arg:
+        return out
+    uid, p = _resolve(path_arg)
+    rec = await _recover_written(uid, p, path_arg)
+    if rec is None:
+        return out
+    cand, _text, new_arg = rec
+    file_state.record_alias(str(p), str(cand))      # so the live diff, keyed by the name in the call, finds the real file
+    fixed = dict(args)
+    for k in ("path", "file", "filename"):
+        if fixed.get(k):
+            fixed[k] = new_arg
+    note = f"note: '{path_arg}' was not found; used '{new_arg}', the file you wrote. Use that exact name from now on.\n"
+    return note + await impl(fixed)
+
+
 async def tool_append_file(args: dict) -> str:
+    return await _retry_on_written_name(_append_file, args)
+
+
+async def tool_edit_file(args: dict) -> str:
+    return await _retry_on_written_name(_edit_file, args)
+
+
+async def _append_file(args: dict) -> str:
     path_arg = _path_arg(args)
     if args.get("_oversize_tokens"):
         return _too_big("", "append_file", args)
@@ -300,7 +365,7 @@ async def tool_append_file(args: dict) -> str:
     return msg + await verify_after(uid, p, path_arg, after, before, can_autorevert=False)
 
 
-async def tool_edit_file(args: dict) -> str:
+async def _edit_file(args: dict) -> str:
     path_arg = _path_arg(args)
     uid, p = _resolve(path_arg)
     old, new = args.get("old_string", ""), args.get("new_string", "")
