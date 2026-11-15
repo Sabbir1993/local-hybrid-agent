@@ -1,3 +1,4 @@
+import difflib
 import fnmatch
 import sys
 import uuid
@@ -105,6 +106,24 @@ async def read_raw(path_arg: str) -> Optional[str]:
     return await _read_existing(uid, p)
 
 
+async def _near_names(uid: int, p: Path) -> list[str]:
+    """Names of files in the same folder that are close to p's name (exact names come back as-is)."""
+    try:
+        data = await _cb().call(uid, "fs.list", {"root": str(p.parent), "pattern": "*"})
+    except Exception:
+        return []
+    files = [f for f in (data.get("files") or []) if isinstance(f, str)]
+    return difflib.get_close_matches(p.name, [Path(f).name for f in files], n=3, cutoff=0.6)
+
+
+async def _missing_msg(uid: int, p: Path, path_arg: str, tail: str) -> str:
+    near = await _near_names(uid, p)
+    if near:   # the file most likely exists under a name the agent mistyped: point at real names, never create
+        return (f"error: File not found: '{path_arg}'. Files with a close name in that folder: "
+                f"{', '.join(near)}. Copy one name exactly.")
+    return f"error: File not found: '{path_arg}'. {tail}"
+
+
 async def tool_read_file(args: dict) -> str:
     path_arg = _path_arg(args)
     uid, p = _resolve(path_arg)
@@ -113,7 +132,7 @@ async def tool_read_file(args: dict) -> str:
                 f"read_file_chunk('{path_arg}') instead of read_file.")
     text = await _read_existing(uid, p)
     if text is None:
-        return f"error: File not found: '{path_arg}'. It does not exist yet. Use 'write_file' to create it."
+        return await _missing_msg(uid, p, path_arg, "It does not exist yet. Use 'write_file' to create it.")
     file_state.mark_read(str(p))
     if not text:
         return f"({path_arg} is empty)"
@@ -230,8 +249,8 @@ async def tool_append_file(args: dict) -> str:
     before = await _read_existing(uid, p)
     if before is None:
         if not args.get("_create"):
-            return (f"error: {path_arg} does not exist yet. Create it with write_file (a skeleton or the "
-                    "first section), then use append_file for the rest.")
+            return await _missing_msg(uid, p, path_arg, "Create it with write_file (a skeleton or the "
+                                      "first section), then use append_file for the rest.")
         before = None
     after = edit_engine.append_text(before, content)
     if len(after) > MAX_EDIT_BYTES * 4:
