@@ -154,7 +154,9 @@ def tool_data_sql(args: dict) -> str:
     except ValueError as e:
         return f"error: {e}"
     except Exception as e:
-        return f"error: could not read the data file ({type(e).__name__})"
+        import logging
+        logging.getLogger(__name__).exception("data_sql failed on %s", names)
+        return f"error: could not read the data file ({type(e).__name__}: {str(e)[:300]})"
 
 
 DATA_CLEAN_SCHEMA = {

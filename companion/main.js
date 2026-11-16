@@ -911,8 +911,10 @@ function setupApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// Windows shows this id as the sender of toasts: without it they read "electron.app..." instead of the app name
-try { app.setAppUserModelId("com.local-agent.companion"); } catch (_) {}
+// Windows shows this id as the sender of toasts: without it they read "electron.app..." instead of the app name. It must equal
+// build.appId in package.json: the installer's shortcuts carry that id, and Windows groups the taskbar button, the pinned icon
+// and notifications by it. A different one gives a second taskbar icon that is not tied to the pinned shortcut.
+try { app.setAppUserModelId(require("./package.json").build.appId); } catch (_) { try { app.setAppUserModelId("com.ssl-ai.companion"); } catch (_) {} }
 
 app.whenReady().then(() => {
   setupApplicationMenu();
