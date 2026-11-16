@@ -211,5 +211,17 @@ class CallSignature(unittest.TestCase):
         self.assertNotEqual(a, b)
 
 
+class DataSqlSameFileIsNotSameCall(unittest.TestCase):
+    def test_different_sql_on_one_workbook_is_a_different_call(self):
+        a = lg.call_signature("data_sql", {"file": "a.xlsx", "sql": "SELECT 1 FROM T1"})
+        b = lg.call_signature("data_sql", {"file": "a.xlsx", "sql": "SELECT 2 FROM T1"})
+        self.assertNotEqual(a, b)
+
+    def test_same_sql_on_one_workbook_is_the_same_call(self):
+        a = lg.call_signature("data_sql", {"file": "a.xlsx", "sql": "SELECT 1 FROM T1"})
+        b = lg.call_signature("data_sql", {"file": "a.xlsx", "sql": "SELECT 1 FROM T1"})
+        self.assertEqual(a, b)
+
+
 if __name__ == "__main__":
     unittest.main()

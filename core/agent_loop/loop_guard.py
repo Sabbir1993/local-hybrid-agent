@@ -73,6 +73,9 @@ def _sig(args) -> str:
         return str(args)[:600]
 
 
+_QUERY_TOOLS = {"data_sql", "data_query", "data_clean", "kb_sql", "kb_query"}
+
+
 def call_signature(name: str, args) -> str:
     """What makes two tool calls the same one.
 
@@ -85,6 +88,8 @@ def call_signature(name: str, args) -> str:
     if isinstance(args, dict):
         target = (args.get("path") or args.get("file") or args.get("filename")
                   or args.get("query") or args.get("q") or args.get("url") or "")
+    if target and name in _QUERY_TOOLS:                 # the file is only the target: a new SQL / spec is a new call
+        return f"{name}:{target}:{_sig(args)}"
     if target:
         return f"{name}:{target}"
     return f"{name}:{_sig(args)}"
