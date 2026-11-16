@@ -188,6 +188,14 @@ class ApiTokenTests(_TempAuthDb):
         self.assertEqual(r.status_code, 200)
         self.assertIn("bearerAuth", r.json()["components"]["securitySchemes"])
 
+    def test_docs_server_url_comes_from_config(self):
+        from unittest import mock
+        from core import small_model
+        tok = self._issue(["chat.use"]).json()["token"]
+        with mock.patch.dict(small_model.APP_CONFIG, {"security": {"api_docs_server_url": "https://chat-api.sslwireless.com"}}):
+            r = self.client.get("/openapi.json", headers={"Authorization": f"Bearer {tok}"})
+        self.assertEqual(r.json()["servers"], [{"url": "https://chat-api.sslwireless.com"}])
+
     def test_csrf_still_required_with_cookie_plus_token(self):
         from core.auth import CSRF_COOKIE, SESSION_COOKIE
         from core.csrf import CSRFMiddleware

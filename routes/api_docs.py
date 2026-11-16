@@ -36,6 +36,10 @@ async def openapi_schema(request: Request):
                                                "description": "API token (a770_pat_...) issued by an admin"}}
     schema["components"] = comps
     schema["security"] = [{"bearerAuth": []}]
+    # the address Swagger "Try it out" calls: security.api_docs_server_url in config/app.json (e.g. https://chat-api.sslwireless.com)
+    server_url = str((APP_CONFIG.get("security") or {}).get("api_docs_server_url") or "").strip()
+    if server_url:
+        schema["servers"] = [{"url": server_url}]
     return JSONResponse(schema)
 
 

@@ -51,8 +51,8 @@ export const DocsModal: React.FC = () => {
   const pythonExample = `from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:8000/v1",
-    api_key="none",
+    base_url="https://chat-api.sslwireless.com/v1",
+    api_key="[API_TOKEN]",
 )
 resp = client.chat.completions.create(
     model="${modelId || '<paste the Model ID from step 3>'}",
@@ -161,12 +161,12 @@ Full instructions the agent reads via read_skill.`;
                   id="doc-base-url"
                   className="bg-bg font-mono px-3 py-1.5 rounded-lg border border-border text-accent text-xs flex-1 truncate"
                 >
-                  http://localhost:8000/v1
+                  https://chat-api.sslwireless.com/v1
                 </code>
                 <button
                   type="button"
                   className="px-3 py-1.5 rounded-lg bg-panel2 border border-border hover:bg-panel text-text font-medium text-xs flex items-center gap-1 transition-colors flex-shrink-0"
-                  onClick={() => copyToClipboard('http://localhost:8000/v1', 'base-url')}
+                  onClick={() => copyToClipboard('https://chat-api.sslwireless.com/v1', 'base-url')}
                 >
                   {copiedField === 'base-url' ? '✓ Copied' : '📋 Copy'}
                 </button>
@@ -201,7 +201,7 @@ Full instructions the agent reads via read_skill.`;
                 </button>
               </div>
               <p className="text-text-muted leading-relaxed">
-                This is the <b>currently loaded model's file path</b>. Most agents require it in the <code>model</code> parameter. No authorization token required on localhost — use <code>api_key="none"</code> if the SDK demands a non-empty key.
+                This is the <b>currently loaded model's file path</b>. Most agents require it in the <code>model</code> parameter. Send your API token as the key: <code>api_key="[API_TOKEN]"</code> (the SDK sends it as <code>Authorization: Bearer</code>). Your token needs the <code>chat.use</code> permission.
               </p>
             </div>
           </div>
