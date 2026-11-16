@@ -472,6 +472,14 @@ class LaneRouteTests(LaneTestBase):
         r = self.client.post("/control/lanes/roles", json={"map": {"summarize": "main"}, "as_default": True})
         self.assertEqual(r.status_code, 403)
 
+    def test_job_pick_is_saved_and_returned(self):
+        r = self.client.post("/control/lanes/roles", json={"map": {"html3d": "executor"}})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["role_map"]["html3d"], "executor")
+        self.assertIn("html3d", r.json()["explicit_jobs"])
+        again = self.client.get("/control/lanes").json()
+        self.assertEqual(again["role_map"]["html3d"], "executor")
+
     def test_agent_preset_is_saved_server_side(self):
         r = self.client.post("/control/lanes/preset", json={"mode": "no-orchestration"})
         self.assertEqual(r.status_code, 200, r.text)

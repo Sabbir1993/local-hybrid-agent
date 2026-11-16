@@ -280,6 +280,8 @@ function stopRun(key: string) {
   runs.delete(key);
 }
 export const sessionKey = (id: string | number | null | undefined) => String(id ?? '0');
+// the status shown before the first event arrives; ChatArea swaps it for the rotating "working" line
+export const CONNECTING_STATUS = 'Connecting to model...';
 /** Chats with work in flight that is not a chat stream (image / video jobs): their messages are parked on a switch too. */
 export const externalBusy = new Set<string>();
 const isBusy = (key: string) => runs.has(key) || externalBusy.has(key);
@@ -1351,7 +1353,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       content: '',
       thinking: '',
       timestamp: timeNow,
-      statusText: reattachId ? 'Reconnecting to the run...' : 'Connecting to model...',
+      statusText: reattachId ? 'Reconnecting to the run...' : CONNECTING_STATUS,
       check: !reattachId && get().answerCheck === 'gate' ? { state: 'pending', mode: 'gate', t0: Date.now() } : undefined,
     };
 

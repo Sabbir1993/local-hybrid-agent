@@ -46,7 +46,8 @@ const CMD_HINTS = {
 /* Default composer placeholder for the current mode (mirrors setAppMode). */
 function defaultInputPlaceholder() {
   const sel = $('profile');
-  const mName = (sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'model';
+  const mName = ((sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'model')
+    .replace(/\.gguf$/i, '').replace(/[-_. ]+(?:I?Q\d\w*|F16|F32|BF16|FP16)$/i, '');   // no quant in the chat view
   return agentMode
     ? 'Describe a coding task (e.g. "Find and fix bug in main.py", "Refactor the database queries")...'
     : `Message ${mName}... (Enter to send, Shift+Enter for newline)`;

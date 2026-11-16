@@ -1423,6 +1423,7 @@
         if (opt.value) {
           txt = (opt.textContent || '').replace(/\s*\((?:loaded|not loaded)\)\s*$/, '');
           txt = txt.replace(/\s*·\s*(?:[👁🔨⚡◵].*)$/, '').trim();
+          txt = txt.replace(/\.gguf$/i, '').replace(/[-_. ]+(?:I?Q\d\w*|F16|F32|BF16|FP16)$/i, '');   // show "Qwen3.8-27B", not the quant
         }
       }
       if (!txt && label && label.textContent && label.textContent !== 'No model' && label.textContent !== 'Select a model…') {

@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useLayoutEffect, useState } from 'react';
 import { drawCached, renderMermaidIn } from '../../utils/mermaid';
-import { useAppStore } from '../../stores/useAppStore';
+import { useAppStore, CONNECTING_STATUS } from '../../stores/useAppStore';
 import { renderCompleteChatMessage } from '../../utils/chatRender';
 import { PromptDots } from './PromptDots';
 import { QuestionCard } from './QuestionCard';
@@ -332,6 +332,22 @@ function renderCached(key: string | null, render: () => string): string {
   renderCache.set(key, html);
   return html;
 }
+
+// Claude-style waiting line: a verb that rotates, animated dots and the seconds waited
+const WORKING_WORDS = ['Thinking', 'Reasoning', 'Working', 'Pondering', 'Preparing', 'Checking the context'];
+const WorkingStatus: React.FC = () => {
+  const [word, setWord] = useState(0);
+  const [dots, setDots] = useState(1);
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    const t0 = Date.now();
+    const w = setInterval(() => setWord(x => (x + 1) % WORKING_WORDS.length), 2600);
+    const d = setInterval(() => setDots(x => (x % 3) + 1), 450);
+    const s = setInterval(() => setSecs(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => { clearInterval(w); clearInterval(d); clearInterval(s); };
+  }, []);
+  return <>{WORKING_WORDS[word]}{'.'.repeat(dots)}{secs > 0 ? ` (${secs}s)` : ''}</>;
+};
 
 export const ChatArea: React.FC = () => {
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -963,7 +979,7 @@ export const ChatArea: React.FC = () => {
                       {/* what the run is doing right now ("Crunching tool results…"): at the bottom, just above the model line */}
                       {m.statusText && (
                         <div className="dim" role="status" style={{ fontSize: '12px', fontStyle: 'italic', marginTop: '10px' }}>
-                          {m.statusText}
+                          {m.statusText === CONNECTING_STATUS ? <WorkingStatus /> : m.statusText}
                         </div>
                       )}
 

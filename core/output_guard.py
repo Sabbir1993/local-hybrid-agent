@@ -70,8 +70,11 @@ def _active_rules(user, any_cloud_lane: bool) -> list:
         # Built-in PCI rule, independent of admin rules; last so an admin rule
         # with its own replacement wins. "builtin" marks it for the streaming
         # holdback (only a trailing run of digits needs holding).
+        pats = [(pan.PAN_RX, pan.mask_match), (pan.CVV_RX, pan.mask_cvv)]
+        if pan.enabled("phone_output"):          # BD mobile numbers, masked to the last 4 digits (pan.PHONE_RX)
+            pats.append((pan.PHONE_RX, pan.mask_phone))
         out.append({"name": pan.RULE_NAME, "scope": "block_all", "message": "",
-                    "builtin": "pan", "patterns": [(pan.PAN_RX, pan.mask_match), (pan.CVV_RX, pan.mask_cvv)]})
+                    "builtin": "pan", "patterns": pats})
     return out
 
 

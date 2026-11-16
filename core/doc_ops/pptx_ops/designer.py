@@ -398,6 +398,10 @@ def build(deck: dict) -> Optional[bytes]:
     if not pdf_render._find_chromium_binary():
         print("[designer] no Chrome / Edge to print with", file=sys.stderr)
         return None
+    # build fields (`| tone=green`, `status=`, `icon=`) steer colours only: strip them from every bullet before anything is drawn,
+    # or they show on the picture and in the speaker notes ("Slide text: ..." is built from these bullets too)
+    for s in deck.get("slides", []):
+        s["bullets"] = [b for b in (O.split_fields(x)[0] for x in s.get("bullets", [])) if b.strip()]
     t = O.resolve_theme(deck)
     slides = D._prepare(deck["slides"], t)
     with tempfile.TemporaryDirectory(prefix="designer_") as d:

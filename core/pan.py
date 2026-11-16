@@ -115,6 +115,15 @@ def contains_cvv(text) -> bool:
     return bool(text) and CVV_RX.search(str(text)) is not None
 
 
+# --- Bangladesh mobile numbers (output masking only: 01[3-9]xxxxxxxx, +8801..., 8801..., spaces/dashes allowed) ---
+PHONE_RX = re.compile(r"(?<!\d)(?:\+?880[\s\-.]?|0)1[3-9](?:[\s\-.]?\d){8}(?!\d)")
+
+
+def mask_phone(m: "re.Match") -> str:
+    d = re.sub(r"\D", "", m.group(0))
+    return f"[phone ****{d[-4:]}]"
+
+
 # --- config -------------------------------------------------------------------------------------
 def _cfg() -> dict:
     from .small_model import APP_CONFIG
