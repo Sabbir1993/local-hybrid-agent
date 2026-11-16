@@ -254,10 +254,18 @@ class PlanTools(unittest.TestCase):
         self.assertIn("step #1", str(cm.exception))
         self.assertEqual(self.status(), ["in_progress", "pending"])
 
-    def test_a_finished_plan_can_be_replaced(self):
+    def test_a_finished_plan_is_not_recreated_without_replace(self):
         plans.tool_create_plan({"items": ["a"]})
         plans.tool_update_plan_item({"item": 1, "status": "done"})
-        plans.tool_create_plan({"items": ["new task"]})
+        with self.assertRaises(ValueError) as cm:
+            plans.tool_create_plan({"items": ["a", "b"]})
+        self.assertIn("already finished", str(cm.exception))
+        self.assertEqual(self.status(), ["done"])
+
+    def test_a_finished_plan_can_be_replaced_for_new_work(self):
+        plans.tool_create_plan({"items": ["a"]})
+        plans.tool_update_plan_item({"item": 1, "status": "done"})
+        plans.tool_create_plan({"items": ["new task"], "replace": True})
         self.assertEqual(self.status(), ["in_progress"])
 
 

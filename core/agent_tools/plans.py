@@ -68,6 +68,10 @@ def tool_create_plan(args: dict) -> str:
     from ..agent_loop import plan_guard
     sid = get_plan_context()
     existing = db_get_plan_items(sid)
+    if existing and not plan_guard.open_items(existing) and not args.get("replace"):
+        # the last plan is finished: a new create_plan would reset it to 0/N and the run starts over
+        raise ValueError("the plan for this task is already finished (every step is done or failed). Do not create it "
+                         "again: write the final answer now. If this is a different task, call create_plan with replace=true.")
     if plan_guard.open_items(existing) and [i["text"] for i in existing] == texts:
         # the same plan again resets it and gives the model nothing new, so a weak model can re-plan forever
         cur = plan_guard.current_item(existing)
