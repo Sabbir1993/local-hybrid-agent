@@ -420,8 +420,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     mcp_listing = mcp_rules = ""      # server list (named by this turn, wording from the servers) / constant operator rules
     mcp_servers = set()
     if APP_CONFIG.get("capabilities", {}).get("mcp", False):
-        from core.mcp.constants import configured_servers
-        mcp_names = set(configured_servers(APP_CONFIG))
+        from core.mcp.constants import configured_servers, user_servers
+        # the global servers plus this user's own connectors (Settings → Connectors); personal ones were never offered to chat
+        mcp_names = set(configured_servers(APP_CONFIG)) | set(user_servers(user.id))
         # on-mention (S1): full schemas + prompt only for named servers.
         # A custom agent's explicit allowlist below merges in (admin config wins).
         mcp_servers = prompt_scope.mcp_mentions(last_query, mcp_names, msgs)
