@@ -631,11 +631,22 @@ def docx_brief_wanted(query: str, prior_msgs=None, prior_files=None) -> bool:
     return True
 
 
+_AGENT_BUILD_RE = re.compile(
+    r"(?i)\b(?:make|create|build|design|set\s*up|write)\s+(?:me\s+|us\s+)?(?:an?|the|my|new)\s+(?:custom\s+|new\s+)?(?:ai\s+)?agent\b"
+    r"|\bcustom\s+agent\b|\bagent\s+(?:that|which|to)\b"
+    # asking for a prompt (text to paste elsewhere), not for the document it would produce
+    r"|\b(?:write|make|create|build|give|design|draft|want|need)\s+(?:me\s+|us\s+)?(?:an?|the|my|new|system|good)?\s*(?:system\s+)?prompt\b"
+    r"|\bprompt\s+(?:that|which|to|for)\b")
+
+
 def brief_phase(query: str, prior_msgs=None, prior_files=None) -> str:
     """For a deck / PDF / Word request: "ask" (show the questionnaire card now) or "build" (the user just answered it), else "".
     The two need opposite tool sets: asking needs no research (it was thrown away and burned the turn / web budget),
     building must not ask again."""
-    if not (deck_brief_wanted(query, prior_msgs, prior_files) or 
+    # "make a custom agent that can generate ppt/pdf": the document is what the agent will produce later, not this turn's file
+    if _AGENT_BUILD_RE.search(query or ""):
+        return ""
+    if not (deck_brief_wanted(query, prior_msgs, prior_files) or
             pdf_brief_wanted(query, prior_msgs, prior_files) or 
             docx_brief_wanted(query, prior_msgs, prior_files)):
         return ""

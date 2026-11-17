@@ -45,7 +45,7 @@ class ShellRuleTests(unittest.TestCase):
 
     def test_anything_that_writes_or_starts_a_program_is_refused(self):
         for c in ("echo hi > out.txt", "dir | tee out.txt", "del x.txt", "rm -rf build", "move a b",
-                  "copy a b", "mkdir x", "npm install", "pip install x",
+                  "copy a b", "mkdir x", "npm install", "pip install -r requirements.txt",
                   "git commit -m x", "git checkout main", "cmd /c dir", "curl http://x",
                   "reg add HKCU\\x", "Set-Content a.txt hi", "sed -i s/a/b/ f"):
             self.assertIsNotNone(personal_write_violation(c), c)
@@ -257,7 +257,7 @@ class PythonWithApprovalTests(unittest.TestCase):
             self.assertIsNone(personal_write_violation(c), c)
 
     def test_shells_and_installers_are_still_refused(self):
-        for c in ("powershell -c Remove-Item x", "cmd /c dir", "pip install x", "npm i", "python -c \"print(1)\" > out.txt"):
+        for c in ("powershell -c Remove-Item x", "cmd /c dir", "pip install -r requirements.txt", "npm i", "python -c \"print(1)\" > out.txt"):
             self.assertIsNotNone(personal_write_violation(c), c)
 
     def test_run_python_always_asks_in_a_personal_run(self):

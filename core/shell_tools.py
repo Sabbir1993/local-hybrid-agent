@@ -139,7 +139,7 @@ _PERSONAL_WRITE_RE = re.compile(
     r"new-item|set-content|add-content|out-file|clear-content|remove-item|move-item|copy-item|rename-item|"
     r"set-itemproperty|new-itemproperty|remove-itemproperty|invoke-expression|iex|invoke-webrequest|iwr|"
     r"invoke-restmethod|irm|start-process|stop-process|stop-service|start-service|set-service|"
-    r"curl|wget|pip|pip3|npm|npx|yarn|pnpm|winget|choco|scoop|"
+    r"curl|wget|npm|npx|yarn|pnpm|winget|choco|scoop|"        # pip is judged in _pip_install_ok (plain package installs may ask)
     r"cmd|bash|sh|wsl|start|powershell|pwsh)(?![\w-])"      # not the front of Format-Table, Sort-Object ...
     r"|\bsed\s+-i\b|\bgit\s+(?:commit|checkout|switch|reset|clean|add|apply|am|merge|pull|push|rebase|stash|"
     r"init|clone|rm|mv|restore|cherry-pick|revert|tag|branch\s+-[dD])\b", re.I)
@@ -192,7 +192,25 @@ def _write_refusal(found: str) -> str:
             "Do not retry this command or run the same thing through run_python.")
 
 
+# `pip install pandas openpyxl --quiet`: a plain package install may be offered for approval (the card shows the exact
+# command). Only package names, == / ~= / != pins and a few safe flags; URLs, -r files, custom indexes, -e paths,
+# and any shell operator (&&, >, |) make it refused as before.
+_PIP_SPEC_RE = re.compile(r"[A-Za-z0-9][\w.\-]*(?:\[[\w,]+\])?(?:(?:==|~=|!=)[\w.*+!-]+)?")
+_PIP_SAFE_FLAGS = frozenset({"-q", "-u", "--quiet", "--upgrade", "--no-cache-dir"})
+
+
+def _pip_install_ok(cmd: str) -> bool:
+    toks = (cmd or "").strip().split()
+    if len(toks) < 3 or toks[0].lower() not in ("pip", "pip3") or toks[1].lower() != "install":
+        return False
+    return all((t.lower() in _PIP_SAFE_FLAGS) if t.startswith("-") else bool(_PIP_SPEC_RE.fullmatch(t)) for t in toks[2:])
+
+
 def _plain_violation(cmd: str) -> Optional[str]:
+    if _pip_install_ok(cmd):
+        return None
+    if re.match(r"\s*pip3?(?![\w-])", cmd, re.I):           # any other pip form (uninstall, -r, URLs, indexes, chains)
+        return _write_refusal("pip")
     m = _WMIC_WHERE_RE.match(cmd)
     if m:
         cmd = cmd[:m.start(1)] + " " + cmd[m.end(1):]
