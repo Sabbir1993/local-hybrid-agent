@@ -23,7 +23,7 @@ export default defineConfig({
   server: {
     port: 5173,
 	allowedHosts: [
-      'https://chat.sslwireless.com'
+      'chat.sslwireless.com'
     ],
     proxy: {
       '/auth': { target: BACKEND_URL, changeOrigin: true },
