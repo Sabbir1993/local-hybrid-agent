@@ -75,6 +75,12 @@ def db_session_owner(sid: int) -> Optional[int]:
     return row["user_id"] if row else None
 
 
+def db_session_project_id(sid: int) -> Optional[int]:
+    pdb = _get_projects_db()
+    row = pdb.execute("SELECT project_id FROM sessions WHERE id = ?", (sid,)).fetchone()
+    return row["project_id"] if row and row["project_id"] is not None else None
+
+
 def db_get_project_allow_patterns(name_or_id) -> list:
     """Return list of allowed command patterns for a specific project."""
     if not name_or_id:
@@ -209,6 +215,7 @@ def db_delete_project(pid: int, owner_user_id: int) -> None:
         raise PermissionError("not your project")
     sids = [r[0] for r in pdb.execute("SELECT id FROM sessions WHERE project_id = ?", (pid,))]
     with transaction(pdb) as c:
+        c.execute("DELETE FROM project_memory WHERE project_id = ?", (pid,))
         c.execute("DELETE FROM plan_items WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
                   (pid,))
         c.execute("DELETE FROM session_working_memory WHERE session_id IN "
@@ -221,20 +228,75 @@ def db_delete_project(pid: int, owner_user_id: int) -> None:
     _forget_session_memory(sids)
 
 
-def db_session_docs(limit: int = 60) -> list:
-    """Recent sessions as (path, text, version) docs for memory indexing."""
+def db_get_project_memory(pid: int, owner_user_id: int) -> dict:
+    """Return all key-content pairs for this project's durable memory."""
+    if db_project_owner(pid) != owner_user_id:
+        raise PermissionError("not your project")
+    rows = _projects_db.execute(
+        "SELECT key, content, updated_at FROM project_memory WHERE project_id = ? AND user_id = ? ORDER BY key",
+        (pid, owner_user_id)
+    ).fetchall()
+    return {r["key"]: {"content": r["content"], "updated_at": float(r["updated_at"])} for r in rows}
+
+
+def db_set_project_memory(pid: int, owner_user_id: int, key: str, content: str) -> None:
+    """Upsert a key-content entry in this project's persistent memory."""
+    if db_project_owner(pid) != owner_user_id:
+        raise PermissionError("not your project")
+    key = str(key or "").strip()[:100]
+    if not key:
+        raise ValueError("key cannot be empty")
+    content = str(content or "").strip()
+    now = time.time()
+    with transaction(_projects_db) as c:
+        c.execute("""
+            INSERT INTO project_memory (project_id, user_id, key, content, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(project_id, user_id, key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at
+        """, (pid, owner_user_id, key, content, now))
+
+
+def db_delete_project_memory(pid: int, owner_user_id: int, key: Optional[str] = None) -> bool:
+    """Delete a key or wipe all project memory for this project."""
+    if db_project_owner(pid) != owner_user_id:
+        raise PermissionError("not your project")
+    with transaction(_projects_db) as c:
+        if key:
+            cur = c.execute("DELETE FROM project_memory WHERE project_id = ? AND user_id = ? AND key = ?",
+                            (pid, owner_user_id, key.strip()))
+        else:
+            cur = c.execute("DELETE FROM project_memory WHERE project_id = ? AND user_id = ?",
+                            (pid, owner_user_id))
+    return bool(cur.rowcount > 0)
+
+
+def db_session_docs(limit: int = 150) -> list:
+    """Recent sessions as (path, text, version) docs for memory indexing.
+    Indexes title, structured working memory digest, and first/last turns for meaningful retrieval.
+    """
     out = []
     try:
         rows = _projects_db.execute(
-            "SELECT s.id, s.title, s.created_at, "
-            "(SELECT m.content FROM messages m WHERE m.session_id = s.id AND m.role = 'user' "
-            " ORDER BY m.id LIMIT 1) AS first_user "
-            "FROM sessions s ORDER BY s.created_at DESC LIMIT ?",
+            """SELECT s.id, s.title, s.created_at,
+                      wm.content AS working_mem,
+                      (SELECT m.content FROM messages m WHERE m.session_id = s.id AND m.role = 'user' ORDER BY m.id ASC LIMIT 1) AS first_user,
+                      (SELECT m.content FROM messages m WHERE m.session_id = s.id AND m.role = 'assistant' ORDER BY m.id DESC LIMIT 1) AS last_assistant
+               FROM sessions s
+               LEFT JOIN session_working_memory wm ON wm.session_id = s.id
+               ORDER BY s.created_at DESC LIMIT ?""",
             (limit,),
         ).fetchall()
         for r in rows:
-            first = str(r["first_user"] or "").strip()[:500]
-            out.append((f"session:{r['id']}", f"{r['title']}\n{first}", float(r["created_at"])))
+            sid = r["id"]
+            parts = [f"Session: {r['title']}"]
+            if r["working_mem"]:
+                parts.append(f"Summary: {str(r['working_mem']).strip()[:1000]}")
+            if r["first_user"]:
+                parts.append(f"User Goal: {str(r['first_user']).strip()[:400]}")
+            if r["last_assistant"]:
+                parts.append(f"Outcome: {str(r['last_assistant']).strip()[:400]}")
+            combined = "\n".join(parts)
+            out.append((f"session:{sid}", combined, float(r["created_at"])))
     except Exception as e:
         print(f"[db] session docs failed: {e}", file=sys.stderr)
     return out

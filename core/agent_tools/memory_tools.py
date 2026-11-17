@@ -3,7 +3,7 @@ from .. import agent_memory
 from ..request_context import get_current_user_id
 
 MEMORY_TOOL_NAMES = frozenset({"memory_list", "memory_read", "memory_write", "memory_str_replace",
-                               "memory_append", "memory_delete"})
+                               "memory_append", "memory_delete", "project_memory_get", "project_memory_set"})
 
 
 def _uid() -> int:
@@ -97,6 +97,44 @@ def tool_memory_delete(uid: int, args: dict) -> str:
             else f"{args.get('path')} does not exist")
 
 
+@_guarded
+def tool_project_memory_get(uid: int, args: dict) -> str:
+    from .workspace import get_active_project
+    from ..db import db_owned_project_id, db_get_project_memory
+    pname = get_active_project(uid)
+    if not pname:
+        return "error: no active project selected"
+    pid = db_owned_project_id(pname, uid)
+    if not pid:
+        return "error: project not found"
+    mem = db_get_project_memory(pid, uid)
+    key = args.get("key")
+    if key:
+        val = mem.get(key.strip())
+        return f"[{key}]\n{val['content']}" if val else f"key '{key}' not found in project memory"
+    if not mem:
+        return "(no project memory entries yet)"
+    return "\n\n".join(f"[{k}]\n{v['content']}" for k, v in mem.items())
+
+
+@_guarded
+def tool_project_memory_set(uid: int, args: dict) -> str:
+    from .workspace import get_active_project
+    from ..db import db_owned_project_id, db_set_project_memory
+    pname = get_active_project(uid)
+    if not pname:
+        return "error: no active project selected"
+    pid = db_owned_project_id(pname, uid)
+    if not pid:
+        return "error: project not found"
+    key = str(args.get("key") or "").strip()
+    content = str(args.get("content") or "").strip()
+    if not key or not content:
+        return "error: both key and content are required"
+    db_set_project_memory(pid, uid, key, content)
+    return f"saved project memory for key '{key}'"
+
+
 def _fn(name, desc, props, required):
     return {"type": "function", "function": {"name": name, "description": desc, "parameters": {
         "type": "object", "properties": props, "required": required}}}
@@ -123,6 +161,11 @@ MEMORY_SCHEMAS = [
          "if_version": _V}, ["path", "line"]),
     _fn("memory_delete", "Delete a whole memory file. Only when the user explicitly asks to forget or delete it.",
         {"path": _P, "if_version": _V}, ["path"]),
+    _fn("project_memory_get", "Get persistent decisions and architectural notes for this project (all or by key).",
+        {"key": {"type": "string", "description": "optional specific key, e.g. tech_stack, db_setup, conventions"}}, []),
+    _fn("project_memory_set", "Save or update a persistent decision, architecture choice, or rule for this project.",
+        {"key": {"type": "string", "description": "e.g. tech_stack, db_setup, conventions, api_contract"},
+         "content": {"type": "string", "description": "the durable decision or context"}}, ["key", "content"]),
 ]
 
 MEMORY_IMPLS = {
@@ -132,4 +175,6 @@ MEMORY_IMPLS = {
     "memory_str_replace": tool_memory_str_replace,
     "memory_append": tool_memory_append,
     "memory_delete": tool_memory_delete,
+    "project_memory_get": tool_project_memory_get,
+    "project_memory_set": tool_project_memory_set,
 }

@@ -51,6 +51,16 @@ def _init_projects_db() -> ThreadLocalDB:
         updated_at REAL NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_plan_items_session ON plan_items(session_id);
+    CREATE TABLE IF NOT EXISTS project_memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL,
+        key TEXT NOT NULL,
+        content TEXT NOT NULL,
+        updated_at REAL NOT NULL,
+        UNIQUE(project_id, user_id, key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_memory ON project_memory(project_id, user_id);
     CREATE TABLE IF NOT EXISTS session_working_memory (
         session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
         user_id INTEGER,
@@ -202,10 +212,10 @@ def _get_projects_db() -> ThreadLocalDB:
 def db_clear_all_projects_data() -> dict:
     """Danger-zone: wipe every project/session/message/plan-item for every user."""
     counts = {}
-    for table in ("session_research", "session_working_memory", "plan_items", "messages", "sessions", "projects"):
+    for table in ("session_research", "session_working_memory", "project_memory", "plan_items", "messages", "sessions", "projects"):
         counts[table] = _projects_db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
     with transaction(_projects_db) as c:
-        for table in ("session_research", "session_working_memory", "plan_items", "messages", "sessions", "projects"):
+        for table in ("session_research", "session_working_memory", "project_memory", "plan_items", "messages", "sessions", "projects"):
             c.execute(f"DELETE FROM {table}")
     return counts
 

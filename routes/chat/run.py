@@ -99,6 +99,7 @@ from .file_intent import (
 )
 from core.agent_tools.project_files import (open_project_note, plan_items, set_scope as set_project_scope, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, SINGLE_PAGE_MANUAL, project_wanted, single_page_wanted, finish_result_ok,
                                             tool_project_append, tool_project_finish, tool_project_plan, tool_project_write)
+from core.agent_tools.memory_tools import MEMORY_IMPLS, MEMORY_SCHEMAS
 from .models import ChatRunRequest
 
 
@@ -402,6 +403,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     if skb:
         chat_tools.append(skb)
         chat_tools.extend(t for t in AGENT_TOOLS if t.get("function", {}).get("name") in ("kb_find_mentions", "kb_query", "kb_sql"))
+    if bool((APP_CONFIG.get("memory") or {}).get("enabled", True)) and user_has_permission(user, "memory.use"):
+        chat_tools.extend(MEMORY_SCHEMAS)
     # images made on this PC (stable-diffusion.cpp): the model may draw when asked.
     # A cloud-first route isn't offered here (chat has no ask-first dialog for cost);
     # /image and agent mode handle those.
@@ -492,8 +495,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # What the user keeps in "My agent memory" (profile and preferences): chat answers with it too, so "who am I" is
     # answered from it instead of a knowledge-base search. Same gate as the agent: never to a cloud model unless allowed.
     _mem_cfg = APP_CONFIG.get("memory") or {}
-    if (bool(_mem_cfg.get("enabled", True)) and (cloud_main is None or bool(_mem_cfg.get("allow_cloud", False)))
-            and user_has_permission(user, "memory.use")):
+    _mem_allowed = bool(_mem_cfg.get("enabled", True)) and (cloud_main is None or bool(_mem_cfg.get("allow_cloud", False)))
+    if _mem_allowed and user_has_permission(user, "memory.use"):
         try:
             from core import agent_memory
             _blk = agent_memory.session_block(user.id, listing=False)
@@ -503,6 +506,26 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 sys_labels.append("memory")
         except Exception as e:
             print(f"[chat] memory load failed: {e}", file=sys.stderr)
+    if _mem_allowed and getattr(req, "session_id", None):
+        try:
+            from core import working_memory
+            from core.db import db_session_project_id, db_get_project_memory
+            _wm = working_memory.load(req.session_id, user.id)
+            if _wm:
+                _wm, _ = output_guard.redact_full(_wm, user, cloud_main is not None)
+                sys_parts.append(working_memory.prompt_block(_wm))
+                sys_labels.append("working-memory")
+            _pid = db_session_project_id(req.session_id)
+            if _pid:
+                _pm = db_get_project_memory(_pid, user.id)
+                if _pm:
+                    _pm_blk = working_memory.project_prompt_block(_pm)
+                    if _pm_blk:
+                        _pm_blk, _ = output_guard.redact_full(_pm_blk, user, cloud_main is not None)
+                        sys_parts.append(_pm_blk)
+                        sys_labels.append("project-memory")
+        except Exception as e:
+            print(f"[chat] session/project memory load failed: {e}", file=sys.stderr)
     if req.voice:
         from core.voice_prompt import VOICE_RULES
         sys_parts.append(VOICE_RULES)
@@ -1933,6 +1956,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             items = await run_in_executor_ctx(plan_items, args.get("project"))
                             if items:
                                 yield sse("plan", {'items': items})      # the chat's Task Plan checklist, ticked from the disk
+                        elif t_name in MEMORY_IMPLS:
+                            impl = MEMORY_IMPLS[t_name]
+                            res_str = await run_in_executor_ctx(impl, args)
                         elif t_name == "write_file" and _wraps_media(
                                 made_media, args.get("path") or args.get("file") or args.get("filename"), last_query):
                             res_str = _WRAP_REFUSAL
@@ -2184,6 +2210,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             yield f"event: done\ndata: {json.dumps({'state': 'failed', 'note': type(e).__name__})}\n\n"
         finally:
             runs.end(run_id, run_end_state, run_end_reason, step=turn, resumable=True if run_end_state == "stopped" else None)
+            if getattr(req, "session_id", None):
+                try:
+                    from core import working_memory
+                    _final_wm = working_memory.build_summary(msgs)
+                    if _final_wm:
+                        working_memory.save(req.session_id, user.id, _final_wm)
+                except Exception as e:
+                    print(f"[chat] working memory save failed: {e}", file=sys.stderr)
             if research is not None:
                 # real answer: the carried research has served its purpose; anything else (error, Stop, budget / timeout /
                 # circuit breaker, empty reply) keeps what the model found for the next "continue". Never raises, never logs text.

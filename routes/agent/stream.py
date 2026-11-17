@@ -2244,6 +2244,13 @@ async def run_agent_stream(req, user, ctx):
             yield f"event: delta\ndata: {json.dumps({'text': friendly})}\n\n"
             yield f"event: done\ndata: {json.dumps({'state': 'failed', 'reason': kind})}\n\n"
         finally:
+            if req.session_id:
+                try:
+                    _final_wm = working_memory.build_summary(msgs, db_get_plan_items(req.session_id))
+                    if _final_wm:
+                        working_memory.save(req.session_id, user.id, _final_wm)
+                except Exception as e:
+                    print(f"[agent] auto working memory save failed: {e}", file=sys.stderr)
             # Codes compose rather than shadow each other: a run can be both a
             # synthesis and an unfinished plan, and the degeneration signal must
             # not be hidden by either. `plan:` comes from plan_guard.run_summary,

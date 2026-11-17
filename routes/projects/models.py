@@ -48,6 +48,16 @@ class RenameDeviceReq(BaseModel):
     device_id: Optional[str] = None
 
 
+class ProjectMemoryReq(BaseModel):
+    key: str
+    content: str
+
+
+class SessionMemoryReq(BaseModel):
+    content: str
+
+
+
 class ShellExecReq(BaseModel):
     command: str
     cwd: Optional[str] = None

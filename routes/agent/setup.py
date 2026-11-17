@@ -33,7 +33,7 @@ from core.agent_tools.memory_tools import MEMORY_TOOL_NAMES
 from core.agent_loop import AGENT_SYSTEM_PROMPT, all_tools, compact_messages
 from core.auth import Principal, user_has_permission
 from core.audit import audit_log
-from core.db import db_get_plan_items, db_session_owner
+from core.db import db_get_plan_items, db_session_owner, db_session_project_id, db_get_project_memory
 from core.grammar import envelope_examples
 from core.knowledge_access import allowed_source_ids_for, hits_need_local, kb_local_only, set_kb_cloud_blocked
 from core.plugins import plugins_prompt_fragment
@@ -487,6 +487,15 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
                     _wm, _ = output_guard.redact_full(_wm, user, ctx.any_cloud)
                     ctx.sys_prompt += "\n\n" + working_memory.prompt_block(_wm)
                     sys_labels.append("working-memory")
+                _pid = db_session_project_id(req.session_id)
+                if _pid:
+                    _pm = db_get_project_memory(_pid, user.id)
+                    if _pm:
+                        _pm_blk = working_memory.project_prompt_block(_pm)
+                        if _pm_blk:
+                            _pm_blk, _ = output_guard.redact_full(_pm_blk, user, ctx.any_cloud)
+                            ctx.sys_prompt += "\n\n" + _pm_blk
+                            sys_labels.append("project-memory")
         except Exception as e:
             print(f"[agent] memory load failed: {e}", file=sys.stderr)
     ctx.kb_ids = allowed_source_ids_for(user)

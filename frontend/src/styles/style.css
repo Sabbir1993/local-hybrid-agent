@@ -2623,7 +2623,7 @@ body.ws-resizing #ws-grip::after { background: var(--accent); opacity: 1; }
 body.ws-resizing iframe { pointer-events: none !important; }
 
 /* syntax highlight token colors */
-.tk-kw   { color: #c792ea; }
+.tk-kw   { color: #c792ea; font-weight: 500; }
 .tk-str  { color: #a5e075; }
 .tk-num  { color: #f78c6c; }
 .tk-cmt  { color: #6b7a8d; font-style: italic; }
@@ -2632,6 +2632,19 @@ body.ws-resizing iframe { pointer-events: none !important; }
 .tk-tag  { color: #ff8383; }
 .tk-attr { color: #ffcb6b; }
 .tk-key  { color: #89ddff; }
+.tk-flag { color: #ffcb6b; }
+.tk-ph   { color: #38bdf8; font-style: italic; }
+.tk-prompt { color: #64748b; font-weight: bold; user-select: none; }
+
+.inline-cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.9em;
+  padding: 1.5px 5px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
+}
 #ws-root-path {
   font-size: 10px; color: var(--dim); padding: 8px 12px 4px; word-break: break-all;
   border-bottom: 1px solid var(--border-subtle);

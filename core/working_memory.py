@@ -133,6 +133,19 @@ def prompt_block(text: str) -> str:
             "are the truth) ---\n" + text.strip() + "\n--- END WORKING MEMORY ---")
 
 
+def project_prompt_block(mem_dict: dict) -> str:
+    """Format persistent project-level memory (architecture, stack, conventions) for prompt injection."""
+    if not mem_dict:
+        return ""
+    lines = ["--- PROJECT PERSISTENT MEMORY (durable decisions & architecture across all sessions in this project) ---"]
+    for k, v in sorted(mem_dict.items()):
+        content = v.get("content") if isinstance(v, dict) else str(v)
+        if content and content.strip():
+            lines.append(f"### {k}\n{content.strip()}")
+    lines.append("--- END PROJECT PERSISTENT MEMORY ---")
+    return "\n".join(lines)
+
+
 def plan_markdown(plan_items: list) -> str:
     """PLAN.md content: a checkbox list of the tracked plan."""
     if not plan_items:

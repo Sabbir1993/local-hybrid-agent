@@ -18,7 +18,7 @@ from core.db import (
     db_update_session_model,
 )
 from core.deps import get_current_user
-from .models import ForkReq, MessageReq, SessionReq
+from .models import ForkReq, MessageReq, SessionReq, SessionMemoryReq
 
 router = APIRouter()
 
@@ -111,3 +111,23 @@ async def fork_session(sid: int, req: ForkReq, user: Principal = Depends(get_cur
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True, "session": out}
+
+
+@router.get("/control/sessions/{sid}/memory")
+async def get_session_memory(sid: int, user: Principal = Depends(get_current_user)):
+    from core.db import db_session_owner
+    if db_session_owner(sid) != user.id:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    from core import working_memory
+    content = working_memory.load(sid, user.id)
+    return {"ok": True, "content": content}
+
+
+@router.put("/control/sessions/{sid}/memory")
+async def set_session_memory(sid: int, req: SessionMemoryReq, user: Principal = Depends(get_current_user)):
+    from core.db import db_session_owner
+    if db_session_owner(sid) != user.id:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    from core import working_memory
+    working_memory.save(sid, user.id, req.content)
+    return {"ok": True}

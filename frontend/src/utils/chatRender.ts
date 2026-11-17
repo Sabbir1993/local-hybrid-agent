@@ -368,6 +368,10 @@ marked.use({
       const escaped = hlCode(text, hlLangFor(rawLang));   // escapes, then wraps tokens
       return `<div class="code-block" style="margin:10px 0; border:1px solid var(--border, #334155); border-radius:8px; overflow:hidden; background:var(--bg-code, #0f172a);"><div class="code-block-head" style="display:flex; align-items:center; justify-content:space-between; padding:6px 12px; background:rgba(255,255,255,0.03); border-bottom:1px solid var(--border, #334155);"><span class="code-block-lang" style="font-size:11px; font-weight:600; color:var(--dim, #8b949e); text-transform:uppercase;">${label}</span><span class="code-block-actions"><button type="button" class="code-block-btn" data-click="code-copy" title="Copy code" style="padding:2px 8px; font-size:11px; background:transparent; border:none; color:var(--dim); cursor:pointer;">📋 Copy</button></span></div><pre style="margin:0; padding:12px; overflow-x:auto;"><code style="font-family:monospace; font-size:12.5px; line-height:1.5;">${escaped}</code></pre></div>`;
     },
+    codespan({ text }: Tokens.Codespan): string {
+      const escaped = hlCode(text, 'cmd');
+      return `<code class="inline-cmd">${escaped}</code>`;
+    },
   },
 });
 

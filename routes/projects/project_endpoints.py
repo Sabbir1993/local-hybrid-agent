@@ -12,10 +12,13 @@ from core.db import (
     db_delete_project,
     db_list_projects,
     db_update_project_workspace,
+    db_get_project_memory,
+    db_set_project_memory,
+    db_delete_project_memory,
 )
 from core.deps import get_current_user
 from core.request_context import normalize_device_id, set_current_device
-from .models import ProjectReq, UpdateWorkspaceReq
+from .models import ProjectReq, UpdateWorkspaceReq, ProjectMemoryReq
 
 router = APIRouter()
 
@@ -127,3 +130,36 @@ async def activate_project(pid: int, user: Principal = Depends(get_current_user)
             set_active_project(p["name"], user.id, dev_id)
             return {"ok": True, "active": p["name"], "project": p, "workspace": workspace_label()}
     return JSONResponse({"error": "project not found"}, status_code=404)
+
+
+@router.get("/control/projects/{pid}/memory")
+async def get_project_memory(pid: int, user: Principal = Depends(get_current_user)):
+    try:
+        mem = db_get_project_memory(pid, owner_user_id=user.id)
+        return {"ok": True, "memory": mem}
+    except PermissionError:
+        return JSONResponse({"error": "project not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@router.post("/control/projects/{pid}/memory")
+async def set_project_memory(pid: int, req: ProjectMemoryReq, user: Principal = Depends(get_current_user)):
+    try:
+        db_set_project_memory(pid, owner_user_id=user.id, key=req.key, content=req.content)
+        return {"ok": True, "key": req.key}
+    except PermissionError:
+        return JSONResponse({"error": "project not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@router.delete("/control/projects/{pid}/memory")
+async def delete_project_memory(pid: int, key: Optional[str] = None, user: Principal = Depends(get_current_user)):
+    try:
+        ok = db_delete_project_memory(pid, owner_user_id=user.id, key=key)
+        return {"ok": ok}
+    except PermissionError:
+        return JSONResponse({"error": "project not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
