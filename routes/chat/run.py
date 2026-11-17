@@ -1180,6 +1180,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         current_tools = doc_tools
                     elif project_build and not project_done:
                         current_tools = [t for t in chat_tools if t.get("function", {}).get("name") in PROJECT_TOOL_NAMES]
+                    elif file_followup == "edit" and prior_files and not written_files and tool_allowed("edit_file"):
+                        # a change to a file from this chat: read it and replace only the part that is wrong (or save_as a new
+                        # version), instead of rewriting the whole file with write_file
+                        from core.agent_tools import AGENT_TOOLS as _EDIT_ALL
+                        current_tools = [t for t in _EDIT_ALL if t.get("function", {}).get("name") in ("read_file", "edit_file")]
                     else:
                         current_tools = [CHAT_WRITE_FILE_SCHEMA] if (wants_file and brief_phase != "ask" and tool_allowed("write_file") and not written_files) else None
                 elif written_files and not project_build and not (brief_phase == "build" and longdoc_build):

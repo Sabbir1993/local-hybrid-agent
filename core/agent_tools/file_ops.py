@@ -402,6 +402,25 @@ def _edit_error(p: Path, path_arg: str, e: Exception) -> str:
     return f"error: {msg}"
 
 
+async def _save_copy(uid, src_arg: str, save_as: str, after: str) -> str:
+    """edit_file with save_as: the edited text goes to a NEW file beside the original, which is left as it was."""
+    dst_uid, dst = _resolve(save_as)
+    if dst_uid != uid:
+        return "error: save_as must stay in your own folder"
+    if await _read_existing(dst_uid, dst) is not None:
+        return f"error: {save_as} already exists - pick another name for the copy (e.g. a -v2 suffix)"
+    await _store(dst_uid, dst, None, after)
+    try:                                              # so the chat can offer it for download, like data_clean's output
+        from .. import doc_store
+        from ..doc_ops.base import sha256
+        from ..request_context import get_current_user_id
+        doc_store.register(get_current_user_id(), dst.name, dst.suffix.lstrip(".").lower(),
+                           sha256=sha256(after.encode("utf-8")))
+    except Exception:
+        pass
+    return f"saved the edited version as {save_as}; {src_arg} is unchanged. [DOWNLOAD: {save_as}]"
+
+
 async def _edit_file(args: dict) -> str:
     path_arg = _path_arg(args)
     uid, p = _resolve(path_arg)
@@ -435,6 +454,8 @@ async def _edit_file(args: dict) -> str:
             is_ok, err = validate_code_syntax(path_arg, after)
             if not is_ok:
                 return f"error: pre-save syntax validation failed for {path_arg}: {err} (file was not modified)"
+        if args.get("save_as"):
+            return await _save_copy(uid, path_arg, str(args["save_as"]).strip(), after)
         await _store(uid, p, before, after)
         where = f"line {res['first_line']}" if res["first_line"] == res["last_line"] else \
             f"lines {res['first_line']}-{res['last_line']}"
@@ -450,6 +471,8 @@ async def _edit_file(args: dict) -> str:
         is_ok, err = validate_code_syntax(path_arg, after)
         if not is_ok:
             return f"error: pre-save syntax validation failed for {path_arg}: {err} (file was not modified)"
+    if args.get("save_as"):
+        return await _save_copy(uid, path_arg, str(args["save_as"]).strip(), after)
     await _store(uid, p, before, after)
     where = f"line {res['first_line']}" if res["first_line"] == res["last_line"] else \
         f"lines {res['first_line']}-{res['last_line']}"

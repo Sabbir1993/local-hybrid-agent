@@ -105,6 +105,8 @@ AGENT_TOOLS = [
                     "diff": {"type": "string",
                              "description": "unified diff to apply (diff -u or git patch format). Use instead of old_string/new_string when changing several places at once."},
                     "replace_all": {"type": "boolean"},
+                    "save_as": {"type": "string",
+                                "description": "a NEW file name for the edited version (e.g. report-v2.html). The original is left unchanged, so the previous version is kept. Use it when the user asks for a change to a file they may still want."},
                 },
                 # only path is required: either old_string+new_string or diff
                 "required": ["path"],
