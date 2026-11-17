@@ -21,3 +21,20 @@ export function cleanModelName(name?: string | null): string {
   base = base.replace(/-\d{5}-of-\d{5}$/i, '').trim();
   return base;
 }
+
+/**
+ * Strips quantization tags (e.g., -Q4_K_M, _Q4_K_M, .Q8_0, -IQ4_XS) from model names
+ * specifically for clean display in the chat screen, composer input box, and model picker.
+ * E.g. "Qwen3.8-27B-Q4_K_M" -> "Qwen3.8-27B"
+ *      "qwen3.8-27B_Q4_K_M" -> "qwen3.8-27B"
+ */
+export function formatChatModelDisplay(name?: string | null): string {
+  const base = cleanModelName(name);
+  if (!base) return '';
+
+  return base
+    .replace(/[-_.]gguf$/i, '')
+    .replace(/[-_.](?:IQ\d+_[A-Za-z0-9_]+|Q\d+_[A-Za-z0-9_]+|Q\d+_\d+|Q\d+[A-Za-z_][A-Za-z0-9_]*|Q\d+|F(?:P)?(?:16|32)|BF16)(?:[-_.]gguf)?$/i, '')
+    .replace(/[-_.]gguf$/i, '')
+    .trim();
+}

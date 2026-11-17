@@ -8,7 +8,7 @@ import { MediaCard } from './MediaCard';
 import { parseProseQuestions, parseQuestionnaire } from '../../utils/questions';
 import { apiFetch } from '../../services/api';
 import { env } from '../../config/env';
-import { cleanModelName } from '../../utils/models';
+import { cleanModelName, formatChatModelDisplay } from '../../utils/models';
 
 interface ParsedUserMessage {
   cleanText: string;
@@ -530,7 +530,7 @@ export const ChatArea: React.FC = () => {
     serverStatus?.cloud_main?.display ||
     serverStatus?.model ||
     selectedModel;
-  const modelName = cleanModelName(rawModelName) || 'Please select a model';
+  const modelName = (isChatMode ? formatChatModelDisplay(rawModelName) : cleanModelName(rawModelName)) || 'Please select a model';
 
   const _copyFallback = (str: string) => {
     const ta = document.createElement('textarea');
@@ -595,7 +595,7 @@ export const ChatArea: React.FC = () => {
                   <>
                     {modelName}
                     {serverStatus?.vision_capable ? ' · 👁️ vision' : ''}
-                    {' · split '}{serverStatus?.tensor_split || 'auto'}
+                    {!isChatMode && (` · split ${serverStatus?.tensor_split || 'auto'}`)}
                     {serverStatus?.measured_tg_tokens_per_sec
                       ? ` · bench ${Number(serverStatus.measured_tg_tokens_per_sec).toFixed(1)} t/s`
                       : ''}
@@ -620,7 +620,9 @@ export const ChatArea: React.FC = () => {
                   <>
                     <p><b>{modelName} is ready!</b></p>
                     <p className="dim" style={{ marginTop: '6px' }}>
-                      GPU(s) loaded{serverStatus?.vision_capable ? ' with vision support' : ''}. Type your message below and press Enter to chat.
+                      {isChatMode
+                        ? 'Type your message below and press Enter to chat.'
+                        : `GPU(s) loaded${serverStatus?.vision_capable ? ' with vision support' : ''}. Type your message below and press Enter to chat.`}
                     </p>
                   </>
                 )
