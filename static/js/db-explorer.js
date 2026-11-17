@@ -15,7 +15,9 @@
 
   function initHistory() {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY_HISTORY);
+      // Purge legacy plain-text query history from persistent localStorage
+      localStorage.removeItem(STORAGE_KEY_HISTORY);
+      const saved = sessionStorage.getItem(STORAGE_KEY_HISTORY);
       if (saved) _queryHistory = JSON.parse(saved);
     } catch (e) {}
   }
@@ -25,7 +27,7 @@
     if (!sql) return;
     _queryHistory = [sql, ..._queryHistory.filter(q => q !== sql)].slice(0, 30);
     try {
-      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(_queryHistory));
+      sessionStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(_queryHistory));
     } catch (e) {}
     renderHistoryDropdown();
   }

@@ -571,6 +571,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!get().isAuthenticated) return;
     stopSessionWatch();
     Array.from(runs.keys()).forEach(stopRun);
+    try {
+      sessionStorage.clear();
+      localStorage.removeItem('a770_db_query_history');
+      localStorage.removeItem('active_chat_session_id');
+      localStorage.removeItem('active_agent_session_id');
+      localStorage.removeItem('active_project_id');
+      localStorage.removeItem('active_custom_agent_id');
+      localStorage.removeItem('custom_agent_sessions');
+    } catch (_) {}
     set({ isAuthenticated: false, currentUser: null, sessions: [], messages: [], activeSessionId: null, activeModal: 'none', idleWarning: false, isStreaming: false, bgMessages: {}, runningSessions: {}, permRequest: null });
   },
   startSession: async () => {
@@ -727,6 +736,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (_) {}
     stopSessionWatch();
     Array.from(runs.keys()).forEach(stopRun);
+    try {
+      sessionStorage.clear();
+      localStorage.removeItem('a770_db_query_history');
+      localStorage.removeItem('active_chat_session_id');
+      localStorage.removeItem('active_agent_session_id');
+      localStorage.removeItem('active_project_id');
+      localStorage.removeItem('active_custom_agent_id');
+      localStorage.removeItem('custom_agent_sessions');
+    } catch (_) {}
     set({
       isAuthenticated: false,
       currentUser: null,

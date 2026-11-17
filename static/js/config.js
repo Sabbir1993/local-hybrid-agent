@@ -54,7 +54,12 @@ async function loadProfiles() {
       }
       let restored = null;
       try { restored = localStorage.getItem('app_model'); } catch (e) {}
-      if (restored && [...sel.options].some(o => o.value === restored)) sel.value = restored;
+      if (restored && (restored.includes('/') || restored.includes('\\'))) {
+        restored = restored.split(/[/\\]/).pop();
+        try { localStorage.setItem('app_model', restored); } catch (_) {}
+      }
+      const match = [...sel.options].find(o => o.value === restored || (o.dataset.modelName && o.dataset.modelName === restored) || (o.value && (o.value.endsWith('/' + restored) || o.value.endsWith('\\' + restored))));
+      if (match) sel.value = match.value;
     } catch (e) {}
     renderModelPicker();
     if (typeof updateEffortUI === 'function') updateEffortUI();
@@ -76,6 +81,7 @@ async function loadProfiles() {
     locals.forEach(m => {
       const o = document.createElement('option');
       o.value = m.path;
+      o.dataset.modelName = m.name || (m.path ? m.path.split(/[/\\]/).pop() : '');
       const isHf = m.format === 'hf';
       const base = (isHf ? (m.display || m.name || '') : (m.folder || m.name || '')).trim();
       const name = !isHf && m.folder && perFolder[m.folder] > 1 ? `${base} · ${m.name}` : base;
@@ -126,8 +132,16 @@ async function loadProfiles() {
 
     let restored = null;
     try { restored = localStorage.getItem('app_model'); } catch (e) {}
-    const has = v => !!v && [...sel.options].some(o => o.value === v);
-    if (has(restored)) sel.value = restored;
+    if (restored && (restored.includes('/') || restored.includes('\\'))) {
+      restored = restored.split(/[/\\]/).pop();
+      try { localStorage.setItem('app_model', restored); } catch (_) {}
+    }
+    const match = [...sel.options].find(o => 
+      o.value === restored || 
+      (o.dataset.modelName && o.dataset.modelName === restored) ||
+      (o.value && (o.value.endsWith('/' + restored) || o.value.endsWith('\\' + restored)))
+    );
+    if (match) sel.value = match.value;
     else if (sel.options.length) sel.value = sel.options[0].value;
 
     loadConfig();   // dropdown is ready — fetch its saved config
@@ -191,8 +205,9 @@ function updateModelCapabilitiesBar(caps) {
 
 $('profile').onchange = e => {
   e.target._user = true;
-  try { localStorage.setItem('app_model', e.target.value); } catch (err) {}
   const selOpt = e.target.options ? e.target.options[e.target.selectedIndex] : null;
+  const safeModelVal = selOpt?.dataset?.modelName || (e.target.value ? e.target.value.split(/[/\\]/).pop() : '');
+  try { localStorage.setItem('app_model', safeModelVal); } catch (err) {}
   if (selOpt && selOpt.dataset.ctx) {
     const cVal = parseInt(selOpt.dataset.ctx, 10);
     if (cVal > 0) {

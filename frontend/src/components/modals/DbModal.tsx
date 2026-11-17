@@ -184,11 +184,13 @@ export const DbModal: React.FC = () => {
     return () => ro.disconnect();
   }, [isOpen]);
 
-  // Load history from localStorage on open
+  // Load history from sessionStorage on open (ephemeral, not persisted to disk in localStorage)
   useEffect(() => {
     if (!isOpen) return;
     try {
-      const saved = localStorage.getItem(STORAGE_KEY_HISTORY);
+      // Purge legacy plain-text query history from persistent localStorage if present
+      localStorage.removeItem(STORAGE_KEY_HISTORY);
+      const saved = sessionStorage.getItem(STORAGE_KEY_HISTORY);
       if (saved) {
         setQueryHistory(JSON.parse(saved));
       }
@@ -201,7 +203,7 @@ export const DbModal: React.FC = () => {
     const updated = [trimmed, ...queryHistory.filter((q) => q !== trimmed)].slice(0, 30);
     setQueryHistory(updated);
     try {
-      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(updated));
+      sessionStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(updated));
     } catch {}
   };
 

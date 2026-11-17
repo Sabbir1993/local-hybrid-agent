@@ -67,6 +67,20 @@ export function App() {
   // browser tab name: from VITE_PROJECT_NAME (index.html's %VITE_PROJECT_NAME% covers the first paint)
   useEffect(() => {
     document.title = env.projectName;
+    try {
+      // Security hygiene: purge legacy raw SQL query history from persistent localStorage
+      localStorage.removeItem('a770_db_query_history');
+      // Clean internal server filesystem paths if previously stored in app_model
+      const savedModel = localStorage.getItem('app_model');
+      if (savedModel && (savedModel.includes('/') || savedModel.includes('\\'))) {
+        const cleanName = savedModel.split(/[/\\]/).pop() || '';
+        if (cleanName) {
+          localStorage.setItem('app_model', cleanName);
+        } else {
+          localStorage.removeItem('app_model');
+        }
+      }
+    } catch (_) {}
   }, []);
 
   useEffect(() => {
