@@ -23,7 +23,7 @@ export default defineConfig({
   server: {
     port: 5173,
 	allowedHosts: [
-      'positive-charts-donations-subtle.trycloudflare.com'
+      'https://chat.sslwireless.com'
     ],
     proxy: {
       '/auth': { target: BACKEND_URL, changeOrigin: true },
@@ -81,6 +81,10 @@ export default defineConfig({
         },
       },
     },
+  },
+  preview: {
+    port: 3000,
+    host: '0.0.0.0',
   },
   build: {
     // the audio worklet must stay a real file: the page policy only allows scripts from the same origin (no data: URLs)
