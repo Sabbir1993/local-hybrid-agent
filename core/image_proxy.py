@@ -17,10 +17,36 @@ from . import net_guard
 
 ALLOW_TTL_S = 3600
 ALLOW_MAX_PER_USER = 500
-MAX_BYTES = 2 * 1024 * 1024
+MAX_BYTES = 2 * 1024 * 1024          # what is sent to the browser
+FETCH_BYTES = 8 * 1024 * 1024        # what may be downloaded: a big original is shrunk below
+SHRINK_ABOVE = 1_500_000
+SHRINK_TO_PX = 1200
 FETCH_TIMEOUT_S = 8
 CACHE_MAX_ITEMS = 32
 _UA = "Mozilla/5.0 (compatible; LocalAgentImageProxy/1.0)"
+# Wikimedia answers 403 to generic or browser-like agents; its policy asks API clients for a descriptive one
+_WIKI_UA = "LocalAgentImageProxy/1.0 (self-hosted chat image proxy; https://github.com/)"
+
+
+def _ua_for(url: str) -> str:
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    return _WIKI_UA if host.endswith((".wikimedia.org", ".wikipedia.org")) else _UA
+
+
+def _shrink(data: bytes, ctype: str) -> tuple:
+    """A picture too big to send (a Commons original is often 5+ MB) is scaled down to a JPEG that fits; on any problem
+    the bytes are returned as they are."""
+    try:
+        import io
+        from PIL import Image
+        img = Image.open(io.BytesIO(data))
+        img.thumbnail((SHRINK_TO_PX, SHRINK_TO_PX))
+        out = io.BytesIO()
+        img.convert("RGB").save(out, "JPEG", quality=82, optimize=True)
+        return "image/jpeg", out.getvalue()
+    except Exception:
+        return ctype, data
 
 _allowed: dict = {}                 # user id -> OrderedDict[url -> expiry]
 _cache: "OrderedDict[str, tuple]" = OrderedDict()   # url -> (content type, bytes)
@@ -76,8 +102,8 @@ def fetch(user_id: Optional[int], url: str, allow_trusted: bool = False) -> tupl
         _cache.move_to_end(url)
         return hit
     try:
-        r = net_guard.guarded_get(url, FETCH_TIMEOUT_S, headers={"User-Agent": _UA, "Accept": "image/*"},
-                                  max_bytes=MAX_BYTES)
+        r = net_guard.guarded_get(url, FETCH_TIMEOUT_S, headers={"User-Agent": _ua_for(url), "Accept": "image/*"},
+                                  max_bytes=FETCH_BYTES)
     except net_guard.BlockedURLError as e:
         raise ProxyRefused(str(e))
     except Exception:
@@ -87,7 +113,12 @@ def fetch(user_id: Optional[int], url: str, allow_trusted: bool = False) -> tupl
     ctype = sniff(r.content)
     if not ctype:
         raise ProxyRefused("not a supported image")
-    _cache[url] = (ctype, r.content)
+    data = r.content
+    if len(data) > SHRINK_ABOVE:
+        ctype, data = _shrink(data, ctype)
+    if len(data) > MAX_BYTES:
+        raise ProxyRefused("image is too large")
+    _cache[url] = (ctype, data)
     while len(_cache) > CACHE_MAX_ITEMS:
         _cache.popitem(last=False)
-    return ctype, r.content
+    return ctype, data

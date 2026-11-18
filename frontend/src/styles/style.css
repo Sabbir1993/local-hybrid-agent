@@ -5927,6 +5927,7 @@ a.citation-pill .citation-host { max-width: 120px; font-size: 11px; line-height:
 .img-gal-item { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .img-gal-item img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; background: var(--surface-2, #1b1b1b); display: block; cursor: zoom-in; border: 1px solid var(--border-subtle, rgba(128,128,128,.25)); }
 .img-gal-cap { font-size: 11.5px; color: var(--dim, #8b949e); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
+.img-gal-broken::before { content: "Preview unavailable"; display: flex; align-items: center; justify-content: center; aspect-ratio: 4 / 3; border-radius: 12px; border: 1px dashed var(--border-subtle, rgba(128,128,128,.4)); color: var(--dim, #8b949e); font-size: 11.5px; }
 a.img-gal-cap:hover { color: var(--accent, #58a6ff); text-decoration: underline; }
 @media (max-width: 520px) { .img-gal { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 

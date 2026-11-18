@@ -495,8 +495,11 @@ if (typeof document !== 'undefined') {
     if (el && el.tagName === 'IMG' && el.hasAttribute('data-hide-on-error')) {
       el.style.display = 'none';
     } else if (el && el.tagName === 'IMG' && el.hasAttribute('data-hide-tile-on-error')) {
-      const tile = el.closest('figure');            // a gallery picture that cannot load: its whole tile goes
-      if (tile) (tile as HTMLElement).style.display = 'none'; else el.style.display = 'none';
+      // a gallery picture that cannot load: the tile stays with a "Preview unavailable" box and its source link, so a
+      // failed search never leaves the answer looking empty (the tile used to vanish without a trace)
+      const tile = el.closest('figure');
+      el.style.display = 'none';
+      if (tile) tile.classList.add('img-gal-broken');
     }
   }, true);
 }
