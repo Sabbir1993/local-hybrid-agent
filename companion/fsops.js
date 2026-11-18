@@ -117,13 +117,22 @@ function mkdir({ path: base, name }) {
 
 const MAX_READ_BYTES = 20 * 1024 * 1024;
 
-function read({ path: p }) {
+function read({ path: p, offset, limit }) {
   if (!fs.existsSync(p) || !fs.statSync(p).isFile()) {
     return { content: null };
   }
   const size = fs.statSync(p).size;
   if (size > MAX_READ_BYTES) throw new Error(`File too large to read (${size} bytes, max ${MAX_READ_BYTES})`);
-  return { content: fs.readFileSync(p, "utf-8") };
+  const text = fs.readFileSync(p, "utf-8");
+  if (offset == null && limit == null) return { content: text };      // whole file (edits, older servers)
+  // A window of lines (1-based `offset`, `limit` lines): only those cross the socket. Lines are counted exactly like the
+  // server does (CRLF -> LF, the newline that ends the file is not a line), so `total_lines` matches what it computes.
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  const total = text ? lines.length : 0;
+  const first = Math.max(1, parseInt(offset, 10) || 1);
+  const n = Math.max(1, parseInt(limit, 10) || 200);
+  return { content: lines.slice(first - 1, first - 1 + n).join("\n"), ranged: true, total_lines: total, first_line: first, size };
 }
 
 function write({ path: p, content, append }) {

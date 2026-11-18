@@ -41,17 +41,34 @@ def info(data: bytes, password: Optional[str] = None) -> dict:
 def read(data: bytes, pages=None, password: Optional[str] = None, layout: bool = False, offset: int = 0) -> str:
     """Text of the chosen pages with page markers, capped per call (`offset` pages through a long selection)."""
     import pdfplumber
-    meta = info(data, password)
-    want = parse_pages(pages, meta["pages"])
-    head = [f"PDF: {meta['pages']} page{'s' if meta['pages'] != 1 else ''}"
-            + (f", title \"{meta['title']}\"" if meta["title"] else "") + (f", author {meta['author']}" if meta["author"] else "")]
-    if meta["outline"]:
-        head.append("Outline: " + "; ".join(f"{'  ' * lv}{t} (p{p})" for lv, t, p in meta["outline"][:25]))
-    if meta["scanned_pages"]:
-        sp = meta["scanned_pages"]
-        head.append(f"{len(sp)} page(s) have no text layer (scanned images: {', '.join(map(str, sp[:12]))}"
-                    f"{'...' if len(sp) > 12 else ''}): use pdf_ocr or pdf_see for them")
-    out, used, next_at = [], 0, None
+    # One parse: the file is opened once with pypdf (page count, title, outline: cheap) and once with pdfplumber, and
+    # only the pages this call returns are extracted. The scanned-page note comes from those same pages, so a call for
+    # pages 11-20 of a long file no longer extracts every page just to classify them (info() still does, for pdf_info).
+    reader = open_reader(data, password)
+    meta = reader.metadata or {}
+    total = len(reader.pages)
+    outline = []
+
+    def walk(items, level=0):
+        for it in items:
+            if isinstance(it, list):
+                walk(it, level + 1)
+                continue
+            try:
+                outline.append((level, str(it.title), reader.get_destination_page_number(it) + 1))
+            except Exception:
+                continue
+    try:
+        walk(reader.outline)
+    except Exception:
+        pass
+    want = parse_pages(pages, total)
+    title, author = str(meta.get("/Title") or ""), str(meta.get("/Author") or "")
+    head = [f"PDF: {total} page{'s' if total != 1 else ''}"
+            + (f", title \"{title}\"" if title else "") + (f", author {author}" if author else "")]
+    if outline:
+        head.append("Outline: " + "; ".join(f"{'  ' * lv}{t} (p{p})" for lv, t, p in outline[:25]))
+    out, used, next_at, scanned = [], 0, None, []
     with pdfplumber.open(io.BytesIO(data), password=password or None) as pdf:
         for idx, n in enumerate(want):
             if idx < offset:
@@ -62,12 +79,23 @@ def read(data: bytes, pages=None, password: Optional[str] = None, layout: bool =
             except Exception:
                 txt = ""
             txt = re.sub(r"[ \t]+\n", "\n", (txt or "").strip())
+            if len(txt) < 20 and (page.images or not txt):
+                scanned.append(n)
             block = f"--- page {n} ---\n{txt or '(no text on this page)'}"
             if used + len(block) > MAX_TEXT_CHARS and out:
                 next_at = idx
+                if scanned and scanned[-1] == n:
+                    scanned.pop()                 # this page is read by the next call
                 break
             out.append(block)
             used += len(block)
+            try:
+                page.flush_cache()                # a long read must not keep every page's layout in memory
+            except Exception:
+                pass
+    if scanned:
+        head.append(f"{len(scanned)} page(s) have no text layer (scanned images: {', '.join(map(str, scanned[:12]))}"
+                    f"{'...' if len(scanned) > 12 else ''}): use pdf_ocr or pdf_see for them")
     text = "\n".join(head) + "\n\n" + "\n\n".join(out)
     if next_at is not None:
         text += f"\n\n(more pages follow: call again with offset={next_at})"

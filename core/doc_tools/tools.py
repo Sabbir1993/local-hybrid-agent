@@ -6,7 +6,8 @@ from .operations import _append, _create, _edit, _inspect
 async def tool_doc_inspect(args: dict) -> str:
     try:
         loc, data = await _locate(_file_arg(args))
-        return _inspect(loc, data, args)
+        # parsing a big deck / workbook is CPU work: off the event loop so parallel doc_inspect calls really overlap
+        return await asyncio.to_thread(_inspect, loc, data, args)
     except Exception as e:
         return _err(e)
 

@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 from .. import companion_bridge
 from ..agent_tools import (
@@ -8,6 +9,7 @@ from ..agent_tools import (
     require_device_workspace,
 )
 from .constants import CHUNK_SIZE, MAX_CHUNK_CHARS, _BINARY_DOCS
+from .extract_cache import cached_text
 from .extractors import extract_file_content
 
 
@@ -60,7 +62,9 @@ async def tool_read_file_chunk(args: dict) -> str:
                 return status
             return f"error: File not found: '{path_arg}'"
         if up.suffix.lower() in _BINARY_DOCS or up.suffix.lower() == ".csv":
-            full_text, _ = extract_file_content(up, max_chars=999_999_999)  # extract all
+            # extract all, once per file version (the next chunks reuse it), off the event loop
+            full_text = await asyncio.to_thread(
+                cached_text, up, lambda f: extract_file_content(f, max_chars=999_999_999)[0])
         else:
             full_text = up.read_text(encoding="utf-8", errors="replace")
 

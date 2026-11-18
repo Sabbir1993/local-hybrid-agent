@@ -62,9 +62,11 @@ def _extract_csv(path: Path) -> str:
     return "\n".join(parts)
 
 
-def _extract_pdf(path: Path) -> str:
-    """Extract text and tables from a PDF via pdfplumber."""
+def _extract_pdf(path: Path, limit=None) -> str:
+    """Extract text and tables from a PDF via pdfplumber. With `limit` it stops once the text is longer than that
+    (a preview needs a few thousand characters, not all 100 pages)."""
     parts = []
+    used = 0
     try:
         import pdfplumber
         with pdfplumber.open(str(path)) as pdf:
@@ -83,7 +85,11 @@ def _extract_pdf(path: Path) -> str:
                     for row in tbl:
                         row_strs = [str(c) if c is not None else "" for c in row]
                         parts.append("\t".join(row_strs))
-            if page_count > 100:
+                used = sum(len(x) + 1 for x in parts)
+                if limit is not None and used > limit:
+                    parts.append("\n... (more pages - use read_file_chunk to access them)")
+                    break
+            if page_count > 100 and (limit is None or used <= limit):
                 parts.append(f"\n... ({page_count - 100} more pages - use read_file_chunk to access them)")
     except ImportError:
         parts.append("(pdfplumber not installed - install with: pip install pdfplumber)")
@@ -133,7 +139,7 @@ def extract_file_content(path, max_chars: int = DEFAULT_MAX_CHARS):
     elif suffix == ".csv":
         text = _extract_csv(p)
     elif suffix == ".pdf":
-        text = _extract_pdf(p)
+        text = _extract_pdf(p, max_chars if max_chars < 5_000_000 else None)
     elif suffix in (".pptx", ".ppt"):
         text = _extract_pptx(p)
     elif suffix in (".docx", ".doc"):

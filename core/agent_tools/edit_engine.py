@@ -82,6 +82,25 @@ def numbered(text: str, offset: int = 1, limit: int = 200, max_chars: int = 2000
             "last": offset + len(out) - 1 if out else None, "total": total, "next_offset": nxt}
 
 
+def numbered_window(window_lines: list, first_line: int, total: int, max_chars: int = 20000) -> dict:
+    """Same result shape as numbered(), for a window the device already cut out of the file: `window_lines` are the
+    lines starting at line `first_line` of a file with `total` lines (a ranged fs.read sends only these)."""
+    first_line = max(1, int(first_line or 1))
+    out, used, i = [], 0, 0
+    while i < len(window_lines):
+        row = f"{first_line + i:>6}\t{window_lines[i]}"
+        if used + len(row) + 1 > max_chars and out:
+            break
+        if len(row) > max_chars:
+            row = row[:max_chars] + " ...[line cut]"
+        out.append(row)
+        used += len(row) + 1
+        i += 1
+    nxt = first_line + i if first_line + i <= total else None
+    return {"text": "\n".join(out), "first": first_line if out else None,
+            "last": first_line + len(out) - 1 if out else None, "total": total, "next_offset": nxt}
+
+
 def _norm_ws(line: str) -> str:
     return re.sub(r"\s+", " ", line.strip())
 
