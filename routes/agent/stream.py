@@ -563,12 +563,15 @@ async def run_agent_stream(req, user, ctx):
         budget_stage_sent = budget_mod.STAGE_OK
         _last_lane = None
         _step_rewrote = False       # the start of the conversation changed this step (cleared / compacted): cold cache
+        _ex_prev_fp = None          # fingerprint of the executor's previous view (is this step's view a continuation of it?)
+        _ex_prefix_stable = False
 
         def _count_budget(ptoks, ctoks, acct, lane, client):
             nonlocal _last_lane
             cloud = bool(getattr(client, "is_cloud", False))
             added = run_budget.add(ptoks, ctoks, cached_tokens=(acct.pcached if cloud else 0),
-                                   prefix_rewritten=(_step_rewrote or lane != _last_lane or lane == "executor"))
+                                   prefix_rewritten=(_step_rewrote or lane != _last_lane
+                                                     or (lane == "executor" and not _ex_prefix_stable)))
             _last_lane = lane
             return added
 
@@ -901,6 +904,13 @@ async def run_agent_stream(req, user, ctx):
                         yield (f"event: ctx\ndata: "
                                + json.dumps({'lane': lane_name, 'before_tokens': pre_tokens,
                                              'after_tokens': sent_tokens, 'hidden': hidden_fams}) + "\n\n")
+                    # the executor's view is rebuilt every step, but inside a run it only grows at the end: when the
+                    # last step's messages are still the start of this one, the server's prefix cache holds them and
+                    # only the new part is spent (counting the whole view each step used up the run budget in a few steps)
+                    _fp = [(m.get("role"), hash(str(m.get("content"))), bool(m.get("tool_calls"))) for m in step_msgs]
+                    _ex_prefix_stable = (_ex_prev_fp is not None and len(_fp) >= len(_ex_prev_fp)
+                                         and _fp[:len(_ex_prev_fp)] == _ex_prev_fp)
+                    _ex_prev_fp = _fp
                     if not cloud_exec:
                         step_grammar = _executor_grammar(tools_for_lane)
                 else:

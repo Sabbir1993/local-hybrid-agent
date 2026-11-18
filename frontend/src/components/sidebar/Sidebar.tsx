@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { DeviceRename } from './DeviceRename';
 import { UserMenu } from './UserMenu';
-import { api, apiFetch } from '../../services/api';
+import { api, apiFetch, getClientDeviceId } from '../../services/api';
 import { useMediaQuery, NARROW_QUERY } from '../../hooks/useMediaQuery';
 import { env } from '../../config/env';
 
@@ -45,36 +45,11 @@ export const Sidebar: React.FC = () => {
     if (agent.scope === 'template') return false;
     if (!isNative) return false;
 
+    // Bound to a device = that device's own id, compared exactly. (A name check - "Windows PC" on a Windows
+    // browser - made every Windows machine look like the owner, so other PCs could open and edit the agent.)
     const agentDevId = agent.device_id ? String(agent.device_id).trim().toLowerCase() : '';
-    const agentDevName = agent.device_name ? String(agent.device_name).trim().toLowerCase() : '';
-    if (!agentDevId && !agentDevName) return true;
-
-    let myDevId = '';
-    try {
-      if (typeof window !== 'undefined') {
-        myDevId = (window as any).electronAPI?.deviceId || localStorage.getItem('antigravity_device_id') || '';
-      }
-    } catch (_) {}
-
-    if (agentDevId && myDevId && agentDevId === String(myDevId).trim().toLowerCase()) return true;
-
-    if (myDevId) {
-      const shortId = myDevId.replace(/^dev_/, '').replace(/_/g, '').slice(0, 12).toLowerCase();
-      if (shortId && agentDevName.includes(shortId)) return true;
-    }
-
-    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-    if (ua.includes('Windows') && (agentDevName.includes('windows') || agentDevName.startsWith('windows pc'))) {
-      return true;
-    }
-    if ((ua.includes('Macintosh') || ua.includes('Mac OS')) && agentDevName.includes('mac')) {
-      return true;
-    }
-    if (ua.includes('Linux') && agentDevName.includes('linux')) {
-      return true;
-    }
-
-    return false;
+    if (!agentDevId) return true;          // never bound to a device
+    return agentDevId === getClientDeviceId().trim().toLowerCase();
   };
 
   const [customAgents, setCustomAgents] = useState<any[]>([]);

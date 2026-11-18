@@ -197,8 +197,16 @@ async def get_custom_agent(agent_id: int, user: Principal = Depends(get_current_
 
 
 @router.put("/{agent_id}")
-async def update_custom_agent(agent_id: int, req: CustomAgentUpdateReq, user: Principal = Depends(get_current_user)):
-    """Update a custom agent owned by user."""
+async def update_custom_agent(agent_id: int, req: CustomAgentUpdateReq, request: Request, user: Principal = Depends(get_current_user)):
+    """Update a custom agent owned by user. An agent bound to a device is edited from that device only (others fork it)."""
+    existing = db_get_custom_agent(agent_id, user.id)
+    bound = str((existing or {}).get("device_id") or "").strip()
+    if bound and (existing or {}).get("user_id") == user.id:
+        from core.request_context import normalize_device_id
+        if normalize_device_id(bound) != normalize_device_id(request.headers.get("X-Device-Id", "").strip()):
+            return JSONResponse({"error": "custom_agent_other_device",
+                                 "message": f"This agent is bound to '{existing.get('device_name') or 'another device'}'. "
+                                            "Only that device can edit it; fork it to get your own copy."}, status_code=403)
     data = req.model_dump(exclude_unset=True)
     err = _check_slug(data["slug"]) if data.get("slug") else None
     if err:
