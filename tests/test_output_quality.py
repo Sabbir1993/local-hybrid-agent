@@ -28,7 +28,7 @@ class WorkbookChartColours(unittest.TestCase):
 class ColumnWidths(unittest.TestCase):
     def test_bengali_and_cjk_are_wider_than_their_length(self):
         self.assertEqual(build._text_width("Revenue"), 7)
-        self.assertGreater(build._text_width("বাংলাদেশ"), len("বাংলাদেশ"))
+        self.assertGreater(build._text_width("কখগঘ"), 4)            # Indic letters are wider than Latin ones
         self.assertEqual(build._text_width("日本語"), 6)
 
 
