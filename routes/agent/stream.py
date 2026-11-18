@@ -1754,8 +1754,16 @@ async def run_agent_stream(req, user, ctx):
                         cmd = _gate_cmd
                         cfg = shell_cfg()
                         if personal:
-                            from core.shell_tools import personal_write_violation
-                            _why = personal_write_violation(cmd)
+                            from core.shell_tools import personal_write_violation, personal_mode, personal_tier, always_refused_reason
+                            if personal_mode() == "ask_suspicious":
+                                # routine read-only commands run; anything else goes to the card; only the
+                                # always-forbidden list is refused (core.shell_tools.personal_tier)
+                                _personal_tier = personal_tier(cmd, cfg.get("allow_patterns") or [])
+                                _why = ("a Personal Agent cannot run this command: " + always_refused_reason(cmd)
+                                        if _personal_tier == "forbidden" else None)
+                            else:
+                                _personal_tier = None
+                                _why = personal_write_violation(cmd)
                             if _why:       # refused before it is offered for approval
                                 result = "error: " + _why
                                 yield _tool_result({'id': tc_id, 'name': name, 'ok': False, 'result': result})
@@ -1776,7 +1784,7 @@ async def run_agent_stream(req, user, ctx):
                             # a Personal Agent asks for every command, whatever was saved elsewhere - except
                             # read-only PowerShell the admin allow-listed (core.shell_tools.personal_command_allowed)
                             from core.shell_tools import personal_command_allowed
-                            _ps_saved = personal_command_allowed(cmd, cfg.get("allow_patterns") or [])
+                            _ps_saved = (_personal_tier == "auto") if _personal_tier else personal_command_allowed(cmd, cfg.get("allow_patterns") or [])
                             pats = []
                         _taint_force = _inj.shell_needs_approval_when_tainted(cmd, tainted)
                         if not bypass and not _ps_saved and (
@@ -1788,6 +1796,7 @@ async def run_agent_stream(req, user, ctx):
                             _perm_pending[preq_id] = {"cmd": cmd, "event": ev, "result": None,
                                                       "user_id": user.id}
                             yield sse("permission_request", {'req_id': preq_id, 'cmd': cmd, 'tainted': _taint_force,
+                                                             'suspicious': bool(personal and _personal_tier == "ask"),
                                                              'saveable': False if personal else can_save_pattern(cmd)})
                             async for _k, _v in _permission_stream(preq_id, ev):
                                 if _k == 'ping':

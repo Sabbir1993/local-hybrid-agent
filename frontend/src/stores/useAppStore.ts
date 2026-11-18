@@ -181,7 +181,7 @@ interface AppState {
   openAgentModal: (mode: 'create' | 'edit' | 'fork', agent?: any | null) => void;
   closeAgentModal: () => void;
   bumpAgents: () => void;
-  permRequest: { reqId: string; cmd: string; kind: string; saveable: boolean; tainted: boolean; sid?: string } | null;
+  permRequest: { reqId: string; cmd: string; kind: string; saveable: boolean; tainted: boolean; suspicious?: boolean; sid?: string } | null;
   answerPermission: (decision: 'allow' | 'project' | 'user' | 'always' | 'deny') => Promise<void>;
   showDialog: (dialog: DialogState) => void;
   closeDialog: () => void;

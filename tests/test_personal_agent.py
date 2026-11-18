@@ -83,8 +83,11 @@ class ShellRuleTests(unittest.TestCase):
                   'powershell -c "Get-Process; Remove-Item x"', 'powershell -c "Get-X" & del y',
                   'powershell -c "Get-Process | ForEach-Object { $_.Kill() }"', 'powershell -c "Format-Volume -DriveLetter D"',
                   'powershell -c "Invoke-Expression x"', 'powershell -c "powershell -c x"',
-                  "powershell -ExecutionPolicy Bypass -Command Get-Process", "powershell", "powershell -NoProfile"):
+                  "powershell -ExecutionPolicy Bypass -File x.ps1", "powershell -ExecutionPolicy Foo -Command Get-Process",
+                  'powershell -ExecutionPolicy Bypass -Command "Remove-Item x"', "powershell", "powershell -NoProfile"):
             self.assertIsNotNone(personal_write_violation(c), c)
+        # a policy override with a read-only command is offered for approval, never refused outright
+        self.assertIsNone(personal_write_violation("powershell -NoProfile -ExecutionPolicy Bypass -Command Get-Process"))
 
     def test_saved_powershell_pattern_preapproves_only_read_only_powershell(self):
         from core.shell_tools import personal_command_allowed as ok
@@ -93,6 +96,7 @@ class ShellRuleTests(unittest.TestCase):
         self.assertFalse(ok('powershell -NoProfile -Command "Set-Content a b"', pats))      # fails the read-only check
         self.assertFalse(ok('powershell -Command "Get-Process"', pats))                     # pattern does not match
         self.assertFalse(ok("git status", pats))                                            # not PowerShell: still asks
+        self.assertFalse(ok('powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process"', pats))   # always the user's call
         self.assertFalse(ok('powershell -NoProfile -Command "Get-Process"', ["*"]))         # "*" never counts here
 
     def test_discarding_output_is_fine_and_the_refusal_names_the_match(self):
@@ -370,3 +374,26 @@ class PersonalPreviewTests(unittest.TestCase):
             from core import request_context as rc
             rc._personal_scope.reset(tok)
         self.assertEqual(seen["path"], "a_1a2b3c4d.md")
+
+
+class PersonalAskSuspiciousTests(unittest.TestCase):
+    """capabilities.shell.personal_mode = ask_suspicious: routine read-only runs, the rest asks, the worst is refused."""
+
+    def tier(self, cmd):
+        from core.shell_tools import personal_tier
+        return personal_tier(cmd, [])
+
+    def test_routine_read_only_runs(self):
+        for c in ("dir", "whoami", "git status", "git diff", 'powershell -NoProfile -Command "Get-Process | Select-Object -First 3"'):
+            self.assertEqual(self.tier(c), "auto", c)
+
+    def test_suspicious_or_unknown_asks(self):
+        for c in ("del x.txt", "npm install left-pad", "dir > out.txt", "python -c \"print(1)\"", "some_tool.exe --go",
+                  "git push", r"type C:\Windows\win.ini", "dir & whoami",
+                  "powershell -NoProfile -ExecutionPolicy Bypass -Command Get-Process",
+                  'powershell -Command "Remove-Item x"', "powershell -File x.ps1", "curl https://example.com"):
+            self.assertEqual(self.tier(c), "ask", c)
+
+    def test_disk_wipes_stay_refused(self):
+        self.assertEqual(self.tier("format c: /q"), "forbidden")
+        self.assertEqual(self.tier("rd /s /q c:\\"), "forbidden")

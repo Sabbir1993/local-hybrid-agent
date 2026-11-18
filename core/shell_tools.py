@@ -158,6 +158,7 @@ _WMIC_WHERE_RE =re.compile(r"^\s*wmic\b.*?\bwhere\b(.*?)\bget\b", re.I)
 # call operators, encoded commands) are refused. The exact command is still shown on the approval card.
 _PS_WRAPPER_RE = re.compile(r"^\s*(?:&\s*)?(?:powershell|pwsh)(?:\.exe)?(?=\s|$)(.*)$", re.I | re.S)
 _PS_SAFE_FLAGS = frozenset({"noprofile", "nop", "noninteractive", "noni", "nologo", "nol"})
+_PS_POLICIES = ("bypass", "remotesigned", "allsigned", "unrestricted", "restricted", "default", "undefined")
 _PS_READ_VERBS = frozenset({"get", "select", "where", "sort", "measure", "group", "format", "foreach", "compare",
                             "test", "resolve", "split", "join", "convertto", "convertfrom"})
 _PS_READ_CMDLETS = frozenset({"out-string", "out-host", "write-output", "write-host"})
@@ -234,6 +235,15 @@ def _powershell_violation(rest: str) -> Optional[str]:
         if flag in ("command", "c"):
             body = body[m.end():]
             break
+        if flag in ("executionpolicy", "ep"):
+            # `-ExecutionPolicy Bypass -Command "Get-..."`: the policy only matters to script files, and the command
+            # after it still has to pass the read-only check below. It always goes to the approval card (an allow
+            # pattern never auto-approves it, see personal_command_allowed).
+            pm = re.match(r"\s*-\w+\s+(" + "|".join(_PS_POLICIES) + r")(?![\w-])\s*", body, re.I)
+            if not pm:
+                return _write_refusal(f"powershell -{m.group(1)} with an unknown policy")
+            body = body[pm.end():]
+            continue
         return _write_refusal(f"powershell -{m.group(1)}")
     body = body.strip()
     if not body:
@@ -257,6 +267,8 @@ def personal_command_allowed(cmd: str, patterns: list) -> bool:
     c = (cmd or "").strip().lower()
     if not _PS_WRAPPER_RE.match(c) or personal_write_violation(cmd):
         return False
+    if re.search(r"\s-(?:executionpolicy|ep)(?![\w-])", c):
+        return False             # a policy override is always the user's call, never a saved pattern's
     pats = [str(p).strip().lower() for p in patterns or []]
     return any(fnmatch.fnmatch(c, p) for p in pats if p.startswith(("powershell", "pwsh")))
 
@@ -268,6 +280,47 @@ def personal_write_violation(cmd: str) -> Optional[str]:
     if ps:
         return _powershell_violation(ps.group(1))
     return _plain_violation(cmd)
+
+
+# Personal Agent shell policy (capabilities.shell.personal_mode):
+#   "strict"          (default) anything that could change the machine is refused; the rest asks.
+#   "ask_suspicious"  routine read-only commands run without a card; everything else - writes, installs, deletes,
+#                     scripts, a policy override, network, unknown programs - is shown on the approval card instead of
+#                     being refused. The always-forbidden list (disk format, wiping C:\) is refused in both modes.
+_ROUTINE_PLAIN = frozenset({"dir", "type", "echo", "where", "whoami", "hostname", "tasklist", "systeminfo", "ipconfig",
+                            "ver", "tree", "findstr", "more", "date", "vol", "ls", "cat", "head", "tail", "wc", "uname",
+                            "which", "pwd", "df", "free", "uptime"})
+_ROUTINE_GIT = frozenset({"status", "diff", "log", "show", "rev-parse", "ls-files", "blame"})
+_PS_NEEDS_CARD_RE = re.compile(r"\s-(?:executionpolicy|ep)(?![\w-])|invoke-webrequest|(?<![\w-])(?:iwr|curl|wget)(?![\w-])", re.I)
+
+
+def personal_mode() -> str:
+    m = str(shell_cfg().get("personal_mode") or "strict").strip().lower()
+    return m if m in ("strict", "ask_suspicious") else "strict"
+
+
+def personal_tier(cmd: str, patterns: list = None) -> str:
+    """"forbidden" (never runs), "auto" (routine and read-only: runs without a card) or "ask" (the user decides).
+    Used in personal_mode "ask_suspicious"."""
+    c = (cmd or "").strip()
+    if _sanity(c):
+        return "forbidden"
+    if personal_command_allowed(c, patterns or []):
+        return "auto"                                   # read-only PowerShell the admin saved a pattern for
+    if personal_write_violation(c):
+        return "ask"                                    # would change the machine, or is a shell/script/installer
+    if _PS_WRAPPER_RE.match(c):
+        return "ask" if _PS_NEEDS_CARD_RE.search(c) else "auto"      # read-only PowerShell (checked above)
+    if is_compound(c):
+        return "ask"
+    first, _, rest = c.lower().partition(" ")
+    if rest and _RISKY_ARG_RE.search(" " + rest):
+        return "ask"                                    # absolute path, .., --output ... : reaches beyond the folder
+    if first in _ROUTINE_PLAIN:
+        return "auto"
+    if first == "git" and rest.split(None, 1)[:1] and rest.split(None, 1)[0] in _ROUTINE_GIT:
+        return "auto"
+    return "ask"
 
 
 def _sanity(cmd: str) -> Optional[str]:

@@ -410,6 +410,7 @@
     "shell": {
       "enabled": true,
       "ask_first": true,
+      "personal_mode": "ask_suspicious",
       "timeout_s": 120,
       "allow_patterns": [
         "git status*",

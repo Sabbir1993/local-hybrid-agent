@@ -93,8 +93,10 @@ def _personal_refusal(name: str, args: dict) -> str:
                 "a read-only command (systeminfo, tasklist, ipconfig, dir ...); read, search and write files in "
                 "your work folder with the file tools. Do not retry '{name}'.".replace("{name}", name))
     if name == "run_shell":
-        from ..shell_tools import personal_write_violation
+        from ..shell_tools import personal_mode, personal_write_violation
         from ..tool_args import shell_command
+        if personal_mode() == "ask_suspicious":
+            return ""            # the approval gate in the agent loop decides (core.shell_tools.personal_tier)
         why = personal_write_violation(shell_command(args))
         if why:
             return "error: " + why

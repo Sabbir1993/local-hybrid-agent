@@ -17,7 +17,7 @@ export const PermissionModal: React.FC = () => {
   const { permRequest, answerPermission, appMode, hasPerm } = useAppStore();
   if (!permRequest) return null;
 
-  const { cmd, kind, saveable, tainted } = permRequest;
+  const { cmd, kind, saveable, tainted, suspicious } = permRequest;
   const copy = KIND_COPY[kind] || { title: '🔑 Shell Execution Permission', lead: 'The agent wants to run a shell command:' };
   const deviceKind = ['browser_eval', 'browser_open', 'device', 'edit', 'rule'].includes(kind);
   const chained = kind !== 'python' && kind !== 'media' && kind !== 'mcp' && !deviceKind && saveable === false;
@@ -50,13 +50,18 @@ export const PermissionModal: React.FC = () => {
           {copy.title}{' '}
           <button className="rep-close" id="perm-close-x" onClick={() => answerPermission('deny')}>✕</button>
         </h2>
+        {suspicious && (
+          <p id="perm-suspicious" role="alert" style={{ margin: '6px 0 4px', padding: '6px 10px', fontSize: 11.5, fontWeight: 600, color: 'var(--amber, #f59e0b)', background: 'rgba(245,158,11,0.12)', border: '1px solid var(--amber, #f59e0b)', borderRadius: 8 }}>
+            ⚠ Suspicious command — it may change files, install software, run a script or reach outside the work folder. Check it before allowing.
+          </p>
+        )}
         {tainted && (
           <p className="dim" style={{ margin: '4px 0', fontSize: 11, color: 'var(--amber)' }}>
             ⚠ This action was shaped by content from the web or a file — review it carefully.
           </p>
         )}
         <p className="dim" style={{ margin: '8px 0 4px', fontSize: 11 }}>{copy.lead}</p>
-        <pre id="perm-cmd" className="mono" style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: '0 0 6px' }}>
+        <pre id="perm-cmd" className="mono" style={{ background: 'var(--bg)', border: `1px solid ${suspicious ? 'var(--amber, #f59e0b)' : 'var(--border)'}`, borderRadius: 8, padding: '10px 12px', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: '0 0 6px' }}>
           {cmd}
         </pre>
         <p className="dim" id="perm-note" style={{ fontSize: 10.5, margin: '0 0 12px' }}>{note}</p>

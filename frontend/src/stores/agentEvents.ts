@@ -6,7 +6,7 @@ export interface AgentRunCtx {
   toast: (message: string, type?: 'info' | 'error' | 'success' | 'warn') => void;
   /** true while a finished/old run is being replayed from the server: no toasts for what already happened */
   replay?: boolean;
-  onPermission: (req: { reqId: string; cmd: string; kind: string; saveable: boolean; tainted: boolean }) => void;
+  onPermission: (req: { reqId: string; cmd: string; kind: string; saveable: boolean; tainted: boolean; suspicious?: boolean }) => void;
   /** shell commands the agent runs are mirrored into the dock terminal */
   onShell?: {
     start: (id: string, cmd: string) => void;
@@ -215,7 +215,7 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       L.statusText = 'Verifying tool changes...';
       break;
     case 'permission_request':
-      ctx.onPermission({ reqId: d.req_id, cmd: d.cmd, kind: d.kind, saveable: d.saveable !== false, tainted: !!d.tainted });
+      ctx.onPermission({ reqId: d.req_id, cmd: d.cmd, kind: d.kind, saveable: d.saveable !== false, tainted: !!d.tainted, suspicious: !!d.suspicious });
       break;
     case 'delta':
       closeThought(S);
