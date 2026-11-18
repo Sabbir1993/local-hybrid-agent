@@ -418,7 +418,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
 
         # widths
         for ci, h in enumerate(header, 1):
-            longest = max([len(str(h))] + [min(len(str(r[ci - 1])), 40) if not str(r[ci - 1]).startswith("=") else 12 for r in rows] or [8])
+            longest = max([_text_width(h)] + [min(_text_width(r[ci - 1]), 40) if not str(r[ci - 1]).startswith("=") else 12 for r in rows] or [8])
             longest += _format_room(col_fmt[ci - 1][1], longest)
             ws.column_dimensions[col_letter(ci)].width = min(max(longest + 3, 9), 60)
         for v in dirs.get("widths", []):
@@ -766,6 +766,24 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
     return out.getvalue()
 
 
+def _text_width(text) -> int:
+    """Display width of a cell's text in column units. len() under-sizes Bengali / Hindi (letters are wider than Latin,
+    vowel signs add little) and CJK (double width), so those columns came out too narrow and the text was cut off."""
+    import unicodedata
+    w = 0.0
+    for ch in str(text):
+        o = ord(ch)
+        if unicodedata.category(ch).startswith("M"):
+            w += 0.35                                   # vowel signs / virama: a little extra, not a full cell
+        elif 0x0900 <= o <= 0x0DFF:
+            w += 1.35                                   # Indic scripts (Bengali 0980-09FF, Devanagari 0900-097F ...)
+        elif unicodedata.east_asian_width(ch) in ("W", "F"):
+            w += 2.0
+        else:
+            w += 1.0
+    return int(w + 0.999)
+
+
 def _format_room(number_format, digits: int) -> int:
     """Extra characters a number format adds to a value (thousands separators, decimals, currency sign), so a money
     column is wide enough and never shows ####."""
@@ -845,7 +863,7 @@ def _block(ws, b: dict, sheet: str, below: int, accent: str, band: str, names: l
                 _warn(f"sheet '{sheet}' block '{b['title']}': total '{fn}' is not known (sum, avg, min, max, count)")
     for i, h in enumerate(header):
         L = col_letter(c0 + i)
-        longest = max([len(str(h))] + [min(len(str(r[i])), 40) if not str(r[i]).startswith("=") else 12 for r in rows] or [8])
+        longest = max([_text_width(h)] + [min(_text_width(r[i]), 40) if not str(r[i]).startswith("=") else 12 for r in rows] or [8])
         kind = fmts.get(h.lower()) or _infer([r[i] for r in rows])
         longest += _format_room(_named_format(kind) if kind else None, longest)
         ws.column_dimensions[L].width = max(ws.column_dimensions[L].width or 0, min(max(longest + 3, 9), 60))
@@ -940,6 +958,24 @@ def _dashboard(ws, s: dict, spec: dict, accent: str, band: str, names: list, for
     return out
 
 
+def _chart_palette(accent: str, n: int = 8) -> list:
+    """Series colours from the workbook accent: the accent itself, then lighter / darker / hue-shifted relatives, so a
+    multi-series chart or a pie looks like part of the workbook instead of openpyxl's default rainbow."""
+    import colorsys
+    a = (accent or "1F4E79").lstrip("#").upper()
+    if len(a) != 6:
+        a = "1F4E79"
+    r, g, b = (int(a[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    h, l, sat = colorsys.rgb_to_hls(r, g, b)
+    out = [a]
+    for dh, dl in ((0.0, 0.2), (0.0, -0.16), (0.08, 0.0), (-0.08, 0.0), (0.5, 0.0), (0.0, 0.34), (0.16, -0.08), (-0.16, 0.08)):
+        rr, gg, bb = colorsys.hls_to_rgb((h + dh) % 1.0, min(0.82, max(0.2, l + dl)), min(1.0, max(0.3, sat)))
+        c = "%02X%02X%02X" % (round(rr * 255), round(gg * 255), round(bb * 255))
+        if c not in out:
+            out.append(c)
+    return out[:max(1, n)]
+
+
 def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
     if not charts:
         return
@@ -1015,8 +1051,32 @@ def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
             ch.y_axis.delete = False
         if len(ycols) == 1 and kind in ("bar", "column", "col", "line", "area"):
             ch.legend = None
-        if kind in ("bar", "column", "col") and len(ycols) == 1 and ch.series:
-            ch.series[0].graphicalProperties.solidFill = accent
+        pal = _chart_palette(accent, 8)
+        if kind == "pie" and ch.series:
+            from openpyxl.chart.series import DataPoint
+            for i in range(min(len(src["rows"]), 12)):
+                pt = DataPoint(idx=i)
+                pt.graphicalProperties.solidFill = pal[i % len(pal)]
+                ch.series[0].dPt.append(pt)
+        else:
+            for i, se in enumerate(ch.series):
+                c = pal[i % len(pal)]
+                if kind in ("line", "scatter"):
+                    se.graphicalProperties.line.solidFill = c
+                    se.graphicalProperties.line.width = 28575          # 2.25 pt
+                    se.smooth = False
+                    if kind == "scatter":
+                        se.marker.graphicalProperties = None
+                else:
+                    se.graphicalProperties.solidFill = c
+        if kind in ("bar", "column", "col"):
+            ch.gapWidth = 60
+        try:                                                           # no border around the chart area
+            from openpyxl.chart.shapes import GraphicalProperties
+            ch.graphical_properties = GraphicalProperties()
+            ch.graphical_properties.line.noFill = True
+        except Exception:
+            pass
         if "labels" in flags or (kind in ("bar", "column", "col", "pie") and len(src["rows"]) <= 12 and len(ycols) == 1):
             from openpyxl.chart.label import DataLabelList
             ch.dataLabels = DataLabelList()
