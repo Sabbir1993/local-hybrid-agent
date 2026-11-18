@@ -255,6 +255,18 @@ async def tool_grep(args: dict) -> str:
     return out
 
 
+_SYNTAX_FAILS: dict = {}                 # consecutive syntax failures per file; limit = agent.verify_max_retries (Settings)
+
+
+def _unwrap_fence(text: str) -> str:
+    """'```python\\n...\\n```' -> '...' when the fence wraps the whole content (nothing else around it)."""
+    s = text.strip()
+    if not (s.startswith("```") and s.endswith("```") and s.count("\n") >= 2):
+        return text
+    body = s.split("\n", 1)[1].rsplit("\n", 1)[0]
+    return body.rstrip("\n") + "\n"
+
+
 async def tool_write_file(args: dict) -> str:
     path_arg = args.get("path") or args.get("file") or args.get("filename")
     if not path_arg and args.get("content"):
@@ -311,11 +323,18 @@ async def tool_write_file(args: dict) -> str:
                 "that deletes the sections you already added. Do not restart the file: read_file it to see where you are, "
                 "then add the next section with append_file (or change part of it with edit_file). Only if you really want "
                 "the shorter file, repeat write_file with overwrite=true and shrink_ok=true.")
+    content = _unwrap_fence(content)                  # a model often wraps the whole file in a ```python ... ``` fence
     if args.get("pre_save_check", True) and not args.get("skip_verify"):
         from .verify import validate_code_syntax
         is_ok, err = validate_code_syntax(path_arg, content)
         if not is_ok:
+            key = (uid, str(p).lower())
+            _SYNTAX_FAILS[key] = _SYNTAX_FAILS.get(key, 0) + 1
+            if _SYNTAX_FAILS[key] >= agent_limit("verify_max_retries"):
+                return (f"error: {path_arg} failed the syntax check {_SYNTAX_FAILS[key]} times in a row ({err}). Stop writing it: "
+                        "do not call write_file for this file again. Tell the user the file could not be written and why.")
             return f"error: pre-save syntax validation failed for {path_arg}: {err} (file was not written)"
+    _SYNTAX_FAILS.pop((uid, str(p).lower()), None)
     await _store(uid, p, before, content)
     verb = "overwrote" if before is not None else "created"
     msg = f"wrote {len(content)} chars ({_lines(content)} lines) to {path_arg} ({verb})"

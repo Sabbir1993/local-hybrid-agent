@@ -46,7 +46,7 @@ class ShellRuleTests(unittest.TestCase):
     def test_anything_that_writes_or_starts_a_program_is_refused(self):
         for c in ("echo hi > out.txt", "dir | tee out.txt", "del x.txt", "rm -rf build", "move a b",
                   "copy a b", "mkdir x", "npm install", "pip install -r requirements.txt",
-                  "git commit -m x", "git checkout main", "cmd /c dir", "curl http://x",
+                  "git commit -m x", "git checkout main", "cmd /c dir", "wget http://x",
                   "reg add HKCU\\x", "Set-Content a.txt hi", "sed -i s/a/b/ f"):
             self.assertIsNotNone(personal_write_violation(c), c)
 

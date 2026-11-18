@@ -137,9 +137,9 @@ _PERSONAL_WRITE_RE = re.compile(
     r"|(?:^|[\s&|;(])(?:del|erase|rd|rmdir|rm|mv|move|ren|rename|copy|cp|xcopy|robocopy|mkdir|md|touch|ln|"
     r"chmod|chown|attrib|icacls|takeown|format|diskpart|shutdown|taskkill|kill|reg|sc|net|netsh|schtasks|"
     r"new-item|set-content|add-content|out-file|clear-content|remove-item|move-item|copy-item|rename-item|"
-    r"set-itemproperty|new-itemproperty|remove-itemproperty|invoke-expression|iex|invoke-webrequest|iwr|"
+    r"set-itemproperty|new-itemproperty|remove-itemproperty|invoke-expression|iex|"
     r"invoke-restmethod|irm|start-process|stop-process|stop-service|start-service|set-service|"
-    r"curl|wget|npm|npx|yarn|pnpm|winget|choco|scoop|"        # pip is judged in _pip_install_ok (plain package installs may ask)
+    r"wget|npm|npx|yarn|pnpm|winget|choco|scoop|"        # pip is judged in _pip_install_ok; curl and Invoke-WebRequest go to approval
     r"cmd|bash|sh|wsl|start|powershell|pwsh)(?![\w-])"      # not the front of Format-Table, Sort-Object ...
     r"|\bsed\s+-i\b|\bgit\s+(?:commit|checkout|switch|reset|clean|add|apply|am|merge|pull|push|rebase|stash|"
     r"init|clone|rm|mv|restore|cherry-pick|revert|tag|branch\s+-[dD])\b", re.I)
@@ -161,13 +161,14 @@ _PS_SAFE_FLAGS = frozenset({"noprofile", "nop", "noninteractive", "noni", "nolog
 _PS_READ_VERBS = frozenset({"get", "select", "where", "sort", "measure", "group", "format", "foreach", "compare",
                             "test", "resolve", "split", "join", "convertto", "convertfrom"})
 _PS_READ_CMDLETS = frozenset({"out-string", "out-host", "write-output", "write-host"})
+_PS_ASK_CMDLETS = frozenset({"invoke-webrequest"})        # network request: allowed to reach the approval card, never silently
 _PS_CMDLET_RE = re.compile(r"(?<![\w$.-])([A-Za-z]+)-([A-Za-z]\w*)")
 _PS_RISKY_RE = re.compile(
     r"::|`|&|\$\(|[\\/]\.\.[\\/]"
     r"|\.(?:delete|kill|start|write\w*|create\w*|move\w*|copy\w*|remove\w*|set\w*|invoke\w*|save|dispose|close)\s*\("
     r"|(?:^|[\s|;({])\.\s+\S"                                         # dot-sourcing
     r"|\.(?:ps1|bat|cmd|exe|vbs|js|msi|dll)(?![\w])"                  # running a script / program
-    r"|(?:^|[\s|;({])(?:ri|rni|sc|ac|si|ni|cpi|mi|del|erase|rd|rm|mv|cp|kill|spps|sasv|spsv|clc|iex|icm|iwr|irm|"
+    r"|(?:^|[\s|;({])(?:ri|rni|sc|ac|si|ni|cpi|mi|del|erase|rd|rm|mv|cp|kill|spps|sasv|spsv|clc|iex|icm|irm|"
     r"saps|sal|sv|rmdir|move|copy|ren|md|mkdir)(?![\w-])"             # write aliases
     r"|format-volume", re.I)
 
@@ -243,7 +244,7 @@ def _powershell_violation(rest: str) -> Optional[str]:
         return _write_refusal(hit.group(0).strip())
     for verb, noun in _PS_CMDLET_RE.findall(body):
         name = f"{verb}-{noun}".lower()
-        if verb.lower() not in _PS_READ_VERBS and name not in _PS_READ_CMDLETS:
+        if verb.lower() not in _PS_READ_VERBS and name not in _PS_READ_CMDLETS and name not in _PS_ASK_CMDLETS:
             return _write_refusal(f"{verb}-{noun}")
     # quotes off so a program name right behind one ("powershell ...", 'cmd /c') still starts a word
     return _plain_violation(body.replace('"', " ").replace("'", " "))

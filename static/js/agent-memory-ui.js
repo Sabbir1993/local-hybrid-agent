@@ -11,7 +11,7 @@ const AGENT_LIMIT_FIELDS = [
     ['chunk_target_tokens', 'Target size of one chunk (tokens)', 'Told to the model when it must split a file.'],
     ['read_file_default_limit', 'Lines per read_file', 'Default window when the model gives no limit.'],
     ['read_file_max_chars', 'Max characters per read_file', 'Hard cap on one read.'],
-    ['verify_max_retries', 'Fix attempts after a failed syntax check', 'Then the agent stops and reports (an edit is undone automatically).'],
+    ['verify_max_retries', 'Fix attempts after a failed syntax check', 'Then the agent stops and reports (an edit is undone automatically). Also the number of identical failed writes to one file before it stops.'],
   ]],
   ['Thinking', [
     ['@executor_max_effort', 'Highest thinking level for the executor', 'The executor thinks at most this much, whatever effort you picked for the main model.'],
