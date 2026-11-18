@@ -11,6 +11,13 @@ from typing import Optional
 BLANK_INK = 0.0015          # fraction of non-white pixels in the page body below which a page counts as blank
 SPARSE_INK = 0.012          # ... and below which a page in the middle of the document is "almost empty"
 _PAGE_NO = re.compile(r"Page\s+\d+\s+of\s+\d+")
+_BAD_GLYPHS = re.compile(r"�|\(cid:\d+\)")      # what extraction yields for a character the font could not draw
+
+
+def has_unreadable_glyphs(text: str) -> bool:
+    """True when the page text holds U+FFFD or (cid:N): a font without the needed glyphs (Bengali on a host without a
+    Bengali font prints boxes that look fine in a thumbnail and are unreadable)."""
+    return bool(_BAD_GLYPHS.search(text or ""))
 
 
 def headings_of(markdown: str) -> list:
@@ -56,6 +63,8 @@ def check_pdf(data: bytes, markdown: str = "") -> list:
             if ink < BLANK_INK and not lines:
                 findings.append(f"page {i} is blank")
                 continue
+            if has_unreadable_glyphs(text):
+                findings.append(f"page {i} has characters that did not print (the font lacks those glyphs)")
             if 1 < i < n and ink < SPARSE_INK and len(lines) <= 2:
                 findings.append(f"page {i} is almost empty")
             if lines and heads and lines[-1].strip().lower() in heads and i < n:

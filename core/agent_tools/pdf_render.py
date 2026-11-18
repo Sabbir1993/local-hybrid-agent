@@ -141,7 +141,9 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
             os.remove(abs_pdf)            # a leftover file must not be mistaken for this render
         except OSError:
             pass
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+        # a long document needs longer than a one-pager: 25 s plus 5 s per ~20k characters of HTML, at most 120 s
+        print_timeout = min(120, 25 + 5 * (len(html_content) // 20000))
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=print_timeout)
         if res.returncode != 0:
             err = (res.stderr or "").strip()
             line = next((l for l in reversed(err.splitlines()) if "rror" in l), err.splitlines()[-1] if err else "")
@@ -166,7 +168,7 @@ def _render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
                 return _pdf_looks_valid(Path(abs_pdf))
             time.sleep(0.25)
     except subprocess.TimeoutExpired:
-        LAST_ERROR["why"] = "the browser did not finish within 25 s (it hung: check its sandbox / shared-memory settings)"
+        LAST_ERROR["why"] = "the browser did not finish in time (it hung: check its sandbox / shared-memory settings)"
         print("[_render_html_to_pdf] browser timed out", file=sys.stderr)
         return False
     except Exception as e:

@@ -32,5 +32,13 @@ class ColumnWidths(unittest.TestCase):
         self.assertEqual(build._text_width("日本語"), 6)
 
 
+class PdfGlyphCheck(unittest.TestCase):
+    def test_unprintable_characters_are_found(self):
+        from core.agent_tools import pdf_check
+        self.assertFalse(pdf_check.has_unreadable_glyphs("Settlement report for March"))
+        self.assertTrue(pdf_check.has_unreadable_glyphs("Total ��"))
+        self.assertTrue(pdf_check.has_unreadable_glyphs("Total (cid:1234) due"))
+
+
 if __name__ == "__main__":
     unittest.main()
