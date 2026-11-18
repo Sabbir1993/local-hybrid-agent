@@ -129,9 +129,17 @@ class RunToolTests(unittest.TestCase):
             self.assertIn("Personal Agent", out)
 
     def test_shell_write_is_refused_before_it_reaches_the_companion(self):
-        with mock.patch("core.registry.registry.async_run", side_effect=AssertionError("must not run")):
+        # strict mode (the default): refused here, whatever this machine's config/app.json says
+        with mock.patch("core.shell_tools.personal_mode", return_value="strict"), \
+             mock.patch("core.registry.registry.async_run", side_effect=AssertionError("must not run")):
             out = run(execution.run_tool("run_shell", {"command": "echo x > a.txt"}))
         self.assertTrue(out.startswith("error:"))
+
+    def test_ask_suspicious_mode_leaves_the_decision_to_the_approval_gate(self):
+        # the loop's gate (routes/agent/stream.py) shows the command on the approval card; run_tool no longer pre-refuses
+        from core.agent_loop.execution import _personal_refusal
+        with mock.patch("core.shell_tools.personal_mode", return_value="ask_suspicious"):
+            self.assertEqual(_personal_refusal("run_shell", {"command": "echo x > a.txt"}), "")
 
     def test_file_tools_are_not_redirected(self):
         # writes happen in the agent's own folder through the normal, path-checked file tools
