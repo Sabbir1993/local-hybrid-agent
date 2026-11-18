@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.html_quality import repair
+from core.html_quality import ensure_basics, repair
 
 
 class RepairTests(unittest.TestCase):
@@ -42,6 +42,29 @@ class RepairTests(unittest.TestCase):
     def test_empty_input(self):
         self.assertEqual(repair(""), ("", 0))
         self.assertEqual(repair(None), ("", 0))
+
+
+
+class BasicsTests(unittest.TestCase):
+    def test_a_bare_page_gets_lang_charset_viewport_and_title(self):
+        out, notes = ensure_basics("<html><head></head><body><h1>Sales <b>report</b></h1><img src='a.png'></body></html>")
+        self.assertIn('<html lang="en">', out)
+        self.assertIn('<meta charset="utf-8">', out)
+        self.assertIn('name="viewport"', out)
+        self.assertIn("<title>Sales report</title>", out)
+        self.assertEqual(notes[:4], ["lang", "charset", "viewport", "title"])
+        self.assertIn("1 image(s) without alt text", notes)
+
+    def test_bengali_text_gets_lang_bn(self):
+        out, _ = ensure_basics("<html><head></head><body><p>বাংলাদেশ ব্যাংকের বার্ষিক প্রতিবেদন</p></body></html>")
+        self.assertIn('lang="bn"', out)
+
+    def test_a_complete_page_and_a_fragment_are_left_alone(self):
+        page = ('<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+                '<title>T</title></head><body></body></html>')
+        self.assertEqual(ensure_basics(page), (page, []))
+        frag = "<div><img src='x'></div>"
+        self.assertEqual(ensure_basics(frag), (frag, []))
 
 
 if __name__ == "__main__":

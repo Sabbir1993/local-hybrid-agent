@@ -65,3 +65,54 @@ def repair(html: str) -> Tuple[str, int]:
     out, k = _HIDDEN_TEXT_RX.subn("text-xs", out)         # a label shrunk to nothing is a bug, never a design
     n += k
     return out, n
+
+
+# What every page needs to work on a phone and be read aloud correctly: a language, a charset, a viewport, a title. A small
+# local model forgets them often; adding them changes nothing else. Images without alt text are only reported.
+_HTML_OPEN_RX = re.compile(r"<html\b([^>]*)>", re.I)
+_HEAD_OPEN_RX = re.compile(r"<head\b[^>]*>", re.I)
+_SCRIPT_STYLE_RX = re.compile(r"<(script|style)\b.*?</\1>", re.I | re.S)
+_TAG_RX = re.compile(r"<[^>]+>")
+_IMG_RX = re.compile(r"<img\b[^>]*>", re.I)
+
+
+def _lang_of(html: str) -> str:
+    """"bn" when the visible text is mostly Bengali, else "en"."""
+    text = _TAG_RX.sub(" ", _SCRIPT_STYLE_RX.sub(" ", html))
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return "en"
+    bengali = sum(1 for c in letters if "\u0980" <= c <= "\u09ff")
+    return "bn" if bengali / len(letters) > 0.3 else "en"
+
+
+def ensure_basics(html: str) -> Tuple[str, list]:
+    """-> (html, notes). Adds a missing lang / charset / viewport / title to a full page; a fragment is returned as written.
+    `notes` lists what was added and any image without alt text."""
+    if not html or not _HTML_OPEN_RX.search(html) or not _HEAD_OPEN_RX.search(html):
+        return html or "", []
+    out, notes = html, []
+    m = _HTML_OPEN_RX.search(out)
+    if m and not re.search(r"\blang\s*=", m.group(1), re.I):
+        out = f'{out[:m.start()]}<html lang="{_lang_of(out)}"{m.group(1)}>{out[m.end():]}'
+        notes.append("lang")
+    add = ""
+    if not re.search(r"<meta[^>]+charset", out, re.I):
+        add += '\n<meta charset="utf-8">'
+        notes.append("charset")
+    if not re.search(r"""<meta[^>]+name\s*=\s*["']viewport""", out, re.I):
+        add += '\n<meta name="viewport" content="width=device-width, initial-scale=1">'
+        notes.append("viewport")
+    if not re.search(r"<title\b", out, re.I):
+        h1 = re.search(r"<h1\b[^>]*>(.*?)</h1>", out, re.I | re.S)
+        title = re.sub(r"\s+", " ", _TAG_RX.sub("", h1.group(1))).strip() if h1 else ""
+        title = (title or "Page")[:80].replace("&", "&amp;").replace("<", "&lt;")
+        add += f"\n<title>{title}</title>"
+        notes.append("title")
+    if add:
+        head = _HEAD_OPEN_RX.search(out)
+        out = out[:head.end()] + add + out[head.end():]
+    no_alt = sum(1 for tag in _IMG_RX.findall(out) if not re.search(r"\balt\s*=", tag, re.I))
+    if no_alt:
+        notes.append(f"{no_alt} image(s) without alt text")
+    return out, notes

@@ -16,6 +16,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
+from ..html_quality import ensure_basics as _ensure_basics
 from .workspace import MAX_EDIT_BYTES, _common_resolve, common_workspace
 
 PROJECTS_DIR = "projects"
@@ -1152,9 +1153,13 @@ def _finish_locked(a: dict, force: bool) -> str:
             for f in files:
                 z.write(f, f"{slug}/{f.relative_to(root).as_posix()}")
     note = ""
+    basics_notes: list = []
     if entry:
         from ..html_quality import repair as _repair_html
         page_html, typos = _repair_html(inline_entry(root, entry))      # near-miss class names and stray tags a small model leaves behind
+        # the delivered page (not the project's own files, which a finish never rewrites) gets the lang / charset /
+        # viewport / title a small model left out, so it works on a phone and is read in the right language
+        page_html, basics_notes = _ensure_basics(page_html)
         _write_atomic(common / page_name, page_html)
         note = f" (fixed {typos} typo(s) in the page's class names and tags automatically)" if typos else ""
         missing = _missing_links(root, entry)
@@ -1162,6 +1167,8 @@ def _finish_locked(a: dict, force: bool) -> str:
             note = (" WARNING: the page links to files that do not exist yet: " + ", ".join(missing[:8])
                     + ". Create them with project_write and call project_finish again.")
             problems.append("the page links to files that do not exist: " + ", ".join(missing[:8]))
+    if basics_notes:
+        note += " Page basics: " + ", ".join(basics_notes) + (" - added automatically." if any(not n[0].isdigit() for n in basics_notes) else ".")
     empty = [f.relative_to(root).as_posix() for f in files if f.stat().st_size == 0]
     if empty:
         note += " WARNING: empty files: " + ", ".join(empty[:8]) + "."
