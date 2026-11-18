@@ -374,6 +374,19 @@ def _remember_images(results) -> None:
     image_proxy.remember(get_current_user_id(), urls)
 
 
+def _images_block(results) -> str:
+    """The gallery the chat draws (```images fence, frontend utils/visual.ts): the model copies it into its answer."""
+    items = []
+    for r in results[:6]:
+        pic = r.get("thumbnail_url") or r.get("image_url") or ""
+        if not str(pic).lower().startswith("https://"):
+            continue
+        items.append({"title": str(r.get("title") or "Image")[:90], "image": pic, "url": r.get("source_url") or ""})
+    if not items:
+        return ""
+    return "\n\nTo show these pictures, copy this block into your answer unchanged:\n```images\n" + json.dumps(items, ensure_ascii=False) + "\n```"
+
+
 async def tool_web_search_images(args) -> str:
     query = _query_arg(args)
     if not query:
@@ -394,7 +407,7 @@ async def tool_web_search_images(args) -> str:
     for i, r in enumerate(results, 1):
         pic = r['thumbnail_url'] or r['image_url']        # list-item pictures: the small thumbnail
         out.append(f"{i}. **{r['title']}**\n   - Image URL: {r['image_url']}\n   - Thumbnail: {r['thumbnail_url']}\n   - Source: {r['source_url']}\n   - Markdown: ![{r['title']}]({pic})")
-    return "\n".join(out)
+    return "\n".join(out) + _images_block(results)
 
 
 def register_web_tools() -> None:

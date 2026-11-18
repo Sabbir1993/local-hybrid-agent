@@ -364,6 +364,16 @@ export const ChatArea: React.FC = () => {
   const isUserScrolledUp = useRef<boolean>(false);
   const [showJump, setShowJump] = useState(false);
   const isChatMode = appMode === 'chat';
+  // typing in the composer: the jump button hides (it floated over the text box and the keyboard); it returns when focus leaves
+  const [inputFocused, setInputFocused] = useState(false);
+  useEffect(() => {
+    const isInput = (t: EventTarget | null) => (t as HTMLElement | null)?.id === 'input';
+    const on = (e: FocusEvent) => { if (isInput(e.target)) setInputFocused(true); };
+    const off = (e: FocusEvent) => { if (isInput(e.target)) setInputFocused(false); };
+    document.addEventListener('focusin', on);
+    document.addEventListener('focusout', off);
+    return () => { document.removeEventListener('focusin', on); document.removeEventListener('focusout', off); };
+  }, []);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
@@ -995,7 +1005,7 @@ export const ChatArea: React.FC = () => {
         <div ref={chatEndRef} />
       </div>
     </div>
-    {showJump && (
+    {showJump && !inputFocused && (
       <button
         id="btn-scroll-bottom"
         className="chat-scroll-btn"

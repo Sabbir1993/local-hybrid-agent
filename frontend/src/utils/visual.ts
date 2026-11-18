@@ -229,6 +229,38 @@ export function parseProducts(code) {
   return items.length ? { type: 'products', items } : null;
 }
 
+/* Picture gallery: ```images [{"title","image","url"}] - up to 6 pictures from web_search_images. Same safety rules as the
+ * product cards: strings escaped, https only, pictures load through /media/proxy (never from the third-party host), and
+ * the server only serves pictures a search tool returned this user. A picture that fails to load hides its tile. */
+export function parseImages(code) {
+  let data = _prodJson(code);
+  if (data && !Array.isArray(data) && Array.isArray(data.items)) data = data.items;
+  if (!Array.isArray(data)) return null;
+  const str = (v, n) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, n) : '');
+  const https = v => (typeof v === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(v.trim()) ? v.trim().slice(0, 600) : '');
+  const items = data.slice(0, PROD_MAX).map(o => {
+    if (!o || typeof o !== 'object') return null;
+    const image = https(o.image);
+    if (!image) return null;
+    const url = https(o.url);
+    let host = '';
+    if (url) { try { host = new URL(url).hostname.replace(/^www\./, ''); } catch (_) { /* no host */ } }
+    return { title: str(o.title, 90) || 'Image', image, url, host };
+  }).filter(Boolean);
+  return items.length ? { type: 'images', items } : null;
+}
+
+export function renderImagesHtml(spec) {
+  const tile = it => {
+    const src = esc('/media/proxy?u=' + encodeURIComponent(it.image));
+    const cap = it.url
+      ? `<a class="img-gal-cap" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer" title="${esc(it.title)}">${esc(it.host || it.title)}</a>`
+      : `<span class="img-gal-cap">${esc(it.title)}</span>`;
+    return `<figure class="img-gal-item"><img src="${src}" alt="${esc(it.title)}" loading="lazy" referrerpolicy="no-referrer" data-hide-tile-on-error />${cap}</figure>`;
+  };
+  return `<div class="img-gal">${spec.items.map(tile).join('')}</div>`;
+}
+
 export function renderProductsHtml(spec) {
   const SKELETON_NO_IMG = `
     <div class="prod-no-img" aria-hidden="true">

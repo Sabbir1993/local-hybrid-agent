@@ -351,9 +351,15 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         html_build = True
     wants_file = wants_file_output(own_q) or file_followup == "edit" or deck_answer or longdoc_build or bool(resume_note) or sheet_build or html_build or bool(absent_type)
     has_file = bool(file_followup or wants_file)
-    web_explicit = bool(use_web and prompt_scope.web_intent(own_q, url_matches, msgs,
+    # "I need an image of a cricket bat, can you share": an existing photo -> web image search (works without the globe
+    # switch while the web capability is on), not the image generator. "draw / generate ..." still goes to the generator.
+    image_find = bool(web_cap_enabled and prompt_scope.image_find_wanted(own_q)
+                      and not (project_wanted(own_q) or single_page_wanted(own_q)))
+    if image_find:
+        use_web = True
+    web_explicit = bool(use_web and (image_find or prompt_scope.web_intent(own_q, url_matches, msgs,
                                                             explicit_only=voice_policy.web_explicit_only(req),
-                                                            research=bool((APP_CONFIG.get("chat") or {}).get("research_web", False))))
+                                                            research=bool((APP_CONFIG.get("chat") or {}).get("research_web", False)))))
     has_web = False   # decided after the KB lookup (core/kb_coverage.py): the web fills what the KB cannot
 
     # Tools for Chat Mode: write_file always (core), the rest on intent.
@@ -413,7 +419,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         from core import media_tools
         # a page build links its pictures by https address (PROJECT_MANUAL): "html with visual image" must not start the image generator
         img_schema = (media_tools.chat_image_tool_schema()
-                      if prompt_scope.image_intent(last_query, msgs[:-1]) and not (project_wanted(own_q) or single_page_wanted(own_q) or single_page)
+                      if prompt_scope.image_intent(last_query, msgs[:-1]) and not image_find and not (project_wanted(own_q) or single_page_wanted(own_q) or single_page)
                       else None)
         if img_schema:
             chat_tools.append(img_schema)
@@ -552,6 +558,9 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     level_tool_calls = b_row.get("tool_calls", 8)
     level_token_budget = b_row.get("token_budget", 12000)
     level_max_rounds = b_row.get("max_rounds", 12)
+    if image_find and not level_tool_calls:
+        level_tool_calls = 2             # thinking "None" still fetches the pictures asked for: one search + the answer
+        level_max_rounds = max(int(level_max_rounds or 0), 3)
 
     # When thinking level specifies 0 tool calls (e.g. None), suppress tools for direct plain answer
     if level_tool_calls == 0:

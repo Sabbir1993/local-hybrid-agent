@@ -185,7 +185,8 @@ class AuthInvariant(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         pages = (root / "routes" / "pages.py").read_text(encoding="utf-8")
         docs = (root / "routes" / "api_docs.py").read_text(encoding="utf-8")
-        for name in ("settings_page", "ui_root"):
+        # react_app (/, /login, ...) is public on purpose: the React app shows its own login screen when signed out
+        for name in ("settings_page",):
             body = pages.split(f"async def {name}")[1].split("\nasync def ")[0]
             self.assertIn("get_current_user", body,
                           f"{name} no longer checks the session in-handler")

@@ -183,7 +183,7 @@ WEB_MANUAL = (
     "1. YOU HAVE ACTIVE REAL-TIME INTERNET ACCESS. NEVER say 'I cannot browse the live internet' or 'I don't have internet access'.\n"
     "2. When the user pastes a link or asks to inspect, read, browse, or summarize a website they name, call `web_fetch` with that exact address immediately.\n"
     "3. When the user asks about recent events, real-time facts, current versions, weather, or anything outside your certain knowledge, call `web_search(query=...)` immediately.\n"
-    "4. When the user asks for a photo, picture, image, or portrait (e.g. 'Can you give his photo?', 'show a picture of...'), call `web_search_images(query=...)` immediately, and in your final answer include the image links using markdown image syntax `![Description](URL)` (use the Thumbnail URL for list-item pictures).\n"
+    "4. When the user asks for a photo, picture, image, or portrait (e.g. 'Can you give his photo?', 'show a picture of...'), call `web_search_images(query=...)` immediately (one call is enough), then show the results by copying the fenced `images` block the tool returned, unchanged, followed by one short line saying what the pictures show. Never generate, draw or describe-instead. For a picture inside a list item, use `![Description](Thumbnail URL)`.\n"
     "5. If you are confident in your knowledge (e.g. general explanations, basic math, creative writing, common programming concepts), answer directly without calling tools.\n"
     "6. When answering based on web search or fetch results, synthesize a clear, helpful response and cite each fact inline with the source number and link from the results, e.g. [1](URL), or `![Title](URL)` for images. Prefer the page excerpts (lines starting with '>') over snippets, and say so when the sources disagree or don't answer the question.\n"
     "7. Never put personal data (names of customers, emails, phone or account numbers) into search queries.\n"
@@ -759,6 +759,35 @@ def attached_data_block(names) -> str:
 _IMAGE_RE = re.compile(
     r"\b(image|images|picture|pictures|photo|photos|illustration|illustrate|draw|drawing|paint|painting|sketch|logo|icon|"
     r"poster|banner|wallpaper|thumbnail|avatar|portrait|artwork|render|generate an? (?:image|picture)|/image)\b|ছবি|চিত্র", re.I)
+
+
+# Find or make? "I need an image of a cricket bat, can you share" wants an existing photo (web image search); "draw a
+# cricket bat" / "generate an image of ..." wants a new picture (the image generator). Without a making word, a request
+# that names a picture of something to share/show/find is a search. Anything that edits, describes or builds with a picture
+# (attached file, deck, page, prompt writing) is neither: it keeps the old routing.
+_IMG_NOUN_RE = re.compile(r"\b(images?|pictures?|photos?|photographs?|pics?|chh?obi)\b|ছবি", re.I)
+_IMG_MAKE_RE = re.compile(
+    r"\b(generat\w*|creat\w*|mak(?:e|ing)|draw\w*|paint\w*|sketch\w*|design\w*|illustrat\w*|render\w*|imagin\w*|dall-?e|"
+    r"midjourney|stable\s*diffusion|ai[- ](?:generated|image|art|made)|cartoon|anime|fantasy|futuristic|/image|"
+    r"bana(?:o|bo|ia)|aank\w*)\b|আঁক|বানাও|তৈরি|তৈরী", re.I)
+_IMG_FIND_VERB_RE = re.compile(
+    r"\b(share|show|send|give|find|get|need|want|looking\s+for|search|see|view|display|fetch|pull\s+up|where|dao|dekhao|"
+    r"pathao|lagbe|chai|dekhte|khuj\w*)\b|দাও|দেখাও|পাঠাও|লাগবে|চাই|খুঁজ", re.I)
+_IMG_NOT_FIND_RE = re.compile(
+    r"\b(edit|chang\w*|darker|lighter|brighter|remove|background|resize|crop|convert|upscal\w*|colou?ri[sz]e|enhanc\w*|restyle|"
+    r"attach\w*|upload\w*|above|previous|this\s+(?:image|picture|photo)|prompt|caption|alt\s*text|describe|analy[sz]e|"
+    r"explain|ocr|extract|code|html|css|react|website|web\s*page|slides?|deck|pptx?|pdf|docx?|report|document|"
+    r"readme|markdown|embed|insert|add)\b", re.I)
+
+
+def image_find_wanted(query: str) -> bool:
+    """True when the message asks for an EXISTING picture of something (search the web), not a new one (generate)."""
+    q = (query or "").strip()
+    if not q or len(q) > 400 or not _IMG_NOUN_RE.search(q):
+        return False
+    if _IMG_MAKE_RE.search(q) or _IMG_NOT_FIND_RE.search(q):
+        return False
+    return bool(_IMG_FIND_VERB_RE.search(q) or re.search(r"\b(?:images?|pictures?|photos?|pics?)\s+(?:of|for|about)\b", q, re.I))
 
 
 def image_intent(query: str, prior_msgs=None) -> bool:

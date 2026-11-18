@@ -1,5 +1,5 @@
 import { hlCode, hlLangFor } from './highlight';
-import { parseVisual, renderVisualHtml, parseProducts, renderProductsHtml } from './visual';
+import { parseVisual, renderVisualHtml, parseProducts, renderProductsHtml, parseImages, renderImagesHtml } from './visual';
 import { marked, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
 
@@ -357,6 +357,10 @@ marked.use({
         const spec = parseProducts(text);
         if (spec) return renderProductsHtml(spec);
       }
+      if (rawLang === 'images') {
+        const spec = parseImages(text);
+        if (spec) return renderImagesHtml(spec);
+      }
       if (rawLang.toLowerCase() === 'mermaid' && text.trim()) {
         // drawn after render by utils/mermaid.ts; the source stays visible until then and if it is not valid Mermaid.
         // The Copy button (code-copy) copies the source, like any code block.
@@ -490,6 +494,9 @@ if (typeof document !== 'undefined') {
     const el = e.target as HTMLElement | null;
     if (el && el.tagName === 'IMG' && el.hasAttribute('data-hide-on-error')) {
       el.style.display = 'none';
+    } else if (el && el.tagName === 'IMG' && el.hasAttribute('data-hide-tile-on-error')) {
+      const tile = el.closest('figure');            // a gallery picture that cannot load: its whole tile goes
+      if (tile) (tile as HTMLElement).style.display = 'none'; else el.style.display = 'none';
     }
   }, true);
 }
@@ -545,6 +552,7 @@ function sanitizeHtml(html: string): string {
         'rel',
         'referrerpolicy',
         'data-hide-on-error',
+        'data-hide-tile-on-error',
       ],
     };
     if (typeof DOMPurify.sanitize === 'function') {
