@@ -92,6 +92,7 @@ PARALLEL_READ_TOOLS = frozenset({
     "get_plan", "search_memory", "search_knowledge_base", "kb_find_mentions", "kb_query", "kb_sql",
     "memory_read", "list_skills", "read_skill",
     "web_search", "web_fetch", "analyze_image", "doc_inspect",
+    "pdf_read", "pdf_tables", "data_query",         # read-only; each already runs off the event loop
 })
 
 

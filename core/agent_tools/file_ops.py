@@ -193,19 +193,6 @@ async def tool_read_file(args: dict) -> str:
     if p.suffix.lower() in DOCUMENT_EXTS:
         return (f"error: {path_arg} is a binary document - use doc_inspect (outline) or "
                 f"read_file_chunk('{path_arg}') instead of read_file.")
-    text = await _read_existing(uid, p)
-    note = ""
-    if text is None:
-        rec = await _recover_written(uid, p, path_arg)   # read-only, so a unique close match to a file we wrote is safe
-        if rec is None:
-            return await _missing_msg(uid, p, path_arg, "It does not exist yet. Use 'write_file' to create it.")
-        p, text, new_arg = rec
-        note = (f"note: '{path_arg}' was not found; this is '{new_arg}', the file you wrote. "
-                "Use that exact name from now on.\n")
-        path_arg = new_arg
-    file_state.mark_read(str(p))
-    if not text:
-        return note + f"({path_arg} is empty)"
     limit = args.get("limit")
     try:
         limit = int(limit) if limit not in (None, "") else agent_limit("read_file_default_limit")
@@ -215,7 +202,34 @@ async def tool_read_file(args: dict) -> str:
         offset = int(args.get("offset") or args.get("start_line") or 1)
     except (TypeError, ValueError):
         offset = 1
-    view = edit_engine.numbered(text, offset, limit, agent_limit("read_file_max_chars"))
+    # Ask the device for just this window (companion >= ranged fs.read): paging through a 5,000-line file no longer
+    # sends the whole file every call. An older companion ignores offset/limit and returns the whole content, which
+    # the code below handles exactly as before.
+    data = await _cb().call(uid, "fs.read", {"path": str(p), "offset": max(1, offset), "limit": max(1, limit)})
+    c = data.get("content")
+    text = c if isinstance(c, str) else None
+    window = (data.get("total_lines"), data.get("first_line")) if (data.get("ranged") and text is not None) else None
+    note = ""
+    if text is None:
+        rec = await _recover_written(uid, p, path_arg)   # read-only, so a unique close match to a file we wrote is safe
+        if rec is None:
+            return await _missing_msg(uid, p, path_arg, "It does not exist yet. Use 'write_file' to create it.")
+        p, text, new_arg = rec
+        note = (f"note: '{path_arg}' was not found; this is '{new_arg}', the file you wrote. "
+                "Use that exact name from now on.\n")
+        path_arg = new_arg
+        window = None                                  # a recovered file arrives whole
+    file_state.mark_read(str(p))
+    if window is not None:
+        total_lines, first_line = int(window[0] or 0), int(window[1] or 1)
+        if total_lines == 0:
+            return note + f"({path_arg} is empty)"
+        view = edit_engine.numbered_window(text.split("\n") if text else [], first_line, total_lines,
+                                           agent_limit("read_file_max_chars"))
+    else:
+        if not text:
+            return note + f"({path_arg} is empty)"
+        view = edit_engine.numbered(text, offset, limit, agent_limit("read_file_max_chars"))
     if view["first"] is None:
         return note + (f"note: offset {offset} is past the end - {path_arg} has only {view['total']} lines, so there is nothing more "
                        f"to read. Use what you already read (lines 1-{view['total']} are all of it).")

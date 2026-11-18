@@ -15,10 +15,10 @@ import time
 from typing import Optional
 
 LOOKABLE = (".pdf", ".pptx", ".xlsx")
-MAX_PAGES = 3
+MAX_PAGES = 6                  # pages looked at per check (a deck of 12 was judged on 3 of its slides)
 MAX_ROUNDS = 2                 # the build, and the one fix after it
 PAGE_TIMEOUT_S = 75            # the first call after idle loads the vision model
-TOTAL_TIMEOUT_S = 150
+TOTAL_TIMEOUT_S = 210
 MAX_FINDING_CHARS = 220
 
 RUBRIC = ("You are checking one page of a freshly generated document for layout defects. Report only real problems: text cut off "
@@ -41,10 +41,12 @@ def enabled() -> bool:
 
 
 def pick_pages(n: int) -> list:
-    """First, middle and last page (1-based), without repeats."""
+    """Pages to look at (1-based): every page of a short document, else MAX_PAGES spread evenly from first to last."""
     if n <= 0:
         return []
-    return sorted({1, (n + 1) // 2, n})[:MAX_PAGES]
+    if n <= MAX_PAGES:
+        return list(range(1, n + 1))
+    return sorted({1 + round(i * (n - 1) / (MAX_PAGES - 1)) for i in range(MAX_PAGES)})
 
 
 def _pdf_pages(data: bytes) -> tuple:

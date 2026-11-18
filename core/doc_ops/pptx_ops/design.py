@@ -772,7 +772,27 @@ def _quote(slide, s, t):
 
 
 def _series_colors(t: dict) -> list:
-    return [t["accent"], t["accent2"], "F59E0B", "10B981", "EC4899", "8B5CF6", "06B6D4", "84CC16"]
+    """Chart series colours that belong to the theme: its two accents, then lighter / darker / hue-shifted relatives of
+    them (the old fixed amber / green / pink list clashed with most palettes). Every colour is nudged until it can be
+    told apart from the slide background (3:1, the contrast WCAG asks of graphics)."""
+    import colorsys
+    base = [t["accent"].upper(), t["accent2"].upper()]
+    out = list(base)
+
+    def variant(hex_: str, dh: float, dl: float, ds: float = 0.0) -> str:
+        r, g, b = (int(hex_[i:i + 2], 16) / 255 for i in (0, 2, 4))
+        h, l, s = colorsys.rgb_to_hls(r, g, b)
+        r, g, b = colorsys.hls_to_rgb((h + dh) % 1.0, min(0.85, max(0.18, l + dl)), min(1.0, max(0.25, s + ds)))
+        return "%02X%02X%02X" % (round(r * 255), round(g * 255), round(b * 255))
+    for dh, dl in ((0.0, 0.18), (0.0, -0.16), (0.09, 0.0), (-0.09, 0.0), (0.5, 0.0), (0.0, 0.32)):
+        for src in base:
+            c = variant(src, dh, dl)
+            if c not in out:
+                out.append(c)
+            if len(out) >= 12:
+                break
+    bg = t.get("bg") or "FFFFFF"
+    return [c if _contrast(c, bg) >= 3.0 else _ink(c, bg, 3.0) for c in out]
 
 
 def _chart(slide, s, t, box=None):

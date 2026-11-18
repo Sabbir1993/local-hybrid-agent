@@ -923,7 +923,10 @@ HTML_MANUAL = (
     "   - KPI Metric Cards: 3-4 cards showing bold large numbers (`text-2xl font-bold`), delta indicators (`+14.2%`), icons, and clear labels.\n"
     "   - Main Content Area: Responsive card grid or clean data table with hover row highlights, tab switchers, and filter pills.\n"
     "   - Interactive Detail View: Modal dialog or slide-over drawer for viewing item details.\n"
-    "5. WORKING INTERACTIVITY: Include clean vanilla JavaScript event handlers for all UI controls: real search filtering, real tab switching, modal toggles, and live computations. Ensure all clickable elements respond immediately."
+    "5. WORKING INTERACTIVITY: Include clean vanilla JavaScript event handlers for all UI controls: real search filtering, real tab switching, modal toggles, and live computations. Ensure all clickable elements respond immediately.\n"
+    "6. QUALITY CHECKLIST: `<html lang=...>` (bn for Bengali text), `<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">` and a <title>; mobile-first layout with tables inside `overflow-x-auto`; "
+    "text contrast at least 4.5:1, one <h1>, `alt` on every image, visible focus states; for Bengali add `'Noto Sans Bengali','Hind Siliguri'` to the font stack; "
+    "choose one accent colour and keep to it, and follow the look the user asked for (do not default to the dark glass style for every page); wrap localStorage use in try/catch (the preview is sandboxed)."
 )
 
 

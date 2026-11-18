@@ -68,31 +68,33 @@ class LookTests(Patched):
     def test_pages_are_first_middle_last(self):
         self.assertEqual(look.pick_pages(1), [1])
         self.assertEqual(look.pick_pages(2), [1, 2])
-        self.assertEqual(look.pick_pages(5), [1, 3, 5])
+        self.assertEqual(look.pick_pages(5), [1, 2, 3, 4, 5])
+        self.assertEqual(look.pick_pages(12), [1, 3, 5, 8, 10, 12])
+        self.assertEqual(len(look.pick_pages(200)), 6)
         self.assertEqual(look.pick_pages(0), [])
 
     def test_a_clean_document_says_so(self):
-        out = self.see(["OK", "OK.", "ok"])
-        self.assertIn("pages 1, 3, 5", out)
+        out = self.see(["OK", "OK.", "ok", "OK", "OK"])
+        self.assertIn("pages 1, 2, 3, 4, 5", out)
         self.assertIn("no layout problems", out)
 
     def test_problems_come_back_as_a_description_with_the_page(self):
-        out = self.see(["OK", "The table runs off the right edge.\nAnd the footer overlaps it.", "OK"])
-        self.assertIn("page 3: The table runs off the right edge. And the footer overlaps it.", out)
+        out = self.see(["OK", "The table runs off the right edge.\nAnd the footer overlaps it.", "OK", "OK", "OK"])
+        self.assertIn("page 2: The table runs off the right edge. And the footer overlaps it.", out)
         self.assertIn("not instructions", out)
         self.assertIn("doc_edit", out)
 
     def test_a_long_reply_is_cut(self):
-        out = self.see(["x " * 400, "OK", "OK"])
+        out = self.see(["x " * 400, "OK", "OK", "OK", "OK"])
         self.assertLess(len(out), 700)
 
     def test_a_failing_vision_model_is_silent(self):
         self.assertEqual(self.see(["error: no image model available"]), "")
 
     def test_it_looks_at_most_twice_per_document(self):
-        self.assertNotEqual(self.see(["OK", "OK", "OK"]), "")
-        self.assertNotEqual(self.see(["OK", "OK", "OK"]), "")
-        self.assertEqual(self.see(["OK", "OK", "OK"]), "")
+        self.assertNotEqual(self.see(["OK"] * 5), "")
+        self.assertNotEqual(self.see(["OK"] * 5), "")
+        self.assertEqual(self.see(["OK"] * 5), "")
 
     def test_designer_slides_are_looked_at_and_fixed_by_rebuilding(self):
         out = self.see(["Text is cut off on the right.", "OK", "OK"], ".pptx", designer_deck())
@@ -113,14 +115,14 @@ class LookTests(Patched):
 
     def test_an_editable_deck_is_looked_at_through_its_rendered_pdf(self):
         with mock.patch("core.doc_tools.render.to_pdf", return_value=pdf_bytes()) as conv:
-            out = self.see(["Title overlaps the chart.", "OK", "OK"], ".pptx", self.editable_deck())
+            out = self.see(["Title overlaps the chart.", "OK", "OK", "OK", "OK"], ".pptx", self.editable_deck())
         self.assertTrue(conv.called)
         self.assertIn("Title overlaps the chart", out)
         self.assertIn("doc_create", out)
 
     def test_a_workbook_is_looked_at_too(self):
         with mock.patch("core.doc_tools.render.to_pdf", return_value=pdf_bytes()):
-            self.assertIn("no layout problems", self.see(["OK", "OK", "OK"], ".xlsx", b"x"))
+            self.assertIn("no layout problems", self.see(["OK"] * 5, ".xlsx", b"x"))
 
     def test_other_formats_are_ignored(self):
         self.assertEqual(self.see(["OK"], ".docx", b"x"), "")

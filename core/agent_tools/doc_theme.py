@@ -226,6 +226,7 @@ PRINT_CSS = """
     .doc-table thead { display: table-header-group; }
     .doc-table tr, .doc-quote, .doc-callout, figure, img, li { break-inside: avoid; page-break-inside: avoid; }
     img { max-width: 100%; height: auto; }
+    .doc-table td, .doc-table th { overflow-wrap: anywhere; }      /* a long URL or Bengali word wraps instead of pushing the table off the page */
     .code-block { white-space: pre-wrap; overflow-wrap: anywhere; overflow: visible; }
     p { orphans: 3; widows: 3; }
   }
