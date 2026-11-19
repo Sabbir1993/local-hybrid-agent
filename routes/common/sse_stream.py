@@ -17,6 +17,21 @@ def _arg_path(args_str: str) -> str:
     return m.group(1) if m else ""
 
 
+def _partial_content(args_str: str) -> str:
+    """The text of the "content" argument generated before the stream was cut (the JSON string is unterminated)."""
+    m = re.search(r'"content"\s*:\s*"', args_str or "")
+    if not m:
+        return ""
+    raw = args_str[m.end():]
+    raw = re.sub(r'\\(u[0-9a-fA-F]{0,3})?$', "", raw)      # a half-written escape at the cut
+    if raw.endswith("\\"):
+        raw = raw[:-1]
+    try:
+        return json.loads('"' + raw + '"')
+    except ValueError:
+        return ""
+
+
 def _est_args_tokens(args_str: str) -> int:
     from core.agent_tools.limits import est_tokens
     return est_tokens(args_str)
@@ -24,11 +39,11 @@ def _est_args_tokens(args_str: str) -> int:
 
 def _oversize_write(name: str, path: str, args_str: str) -> bool:
     """True once a write call's content is clearly past the per-call token cap (file_ops._too_big rejects it anyway).
-    Documents are exempt (they take the whole file); the 1.3x slack covers JSON escaping of quotes and newlines."""
+    Documents are exempt (they take the whole file); the 1.1x slack covers JSON escaping of quotes and newlines."""
     if name not in _CAPPED_WRITE_TOOLS or path.lower().endswith(_DOC_SUFFIXES):
         return False
     from core.agent_tools.limits import agent_limit, CHARS_PER_TOKEN
-    return len(args_str) > agent_limit("write_file_max_tokens") * CHARS_PER_TOKEN * 1.3
+    return len(args_str) > agent_limit("write_file_max_tokens") * CHARS_PER_TOKEN * 1.1
 
 
 RUNAWAY_STEP = 2000     # re-check an accumulator each time it has grown by this many characters
@@ -171,9 +186,12 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
     if oversize_idx is not None:
         # the arguments are cut mid-string; replace them with valid JSON the write tools turn into the "too big" error
         tc = accumulated_tcs[oversize_idx]
-        tc["function"]["arguments"] = json.dumps({"path": _arg_path(tc["function"]["arguments"]),
-                                                  "content": "", "_oversize_tokens": _est_args_tokens(
-                                                      tc["function"]["arguments"])})
+        cut = {"path": _arg_path(tc["function"]["arguments"]),
+               "content": "", "_oversize_tokens": _est_args_tokens(tc["function"]["arguments"])}
+        if tc["function"].get("name") == "append_file":
+            # what was generated before the cut is kept: append_file saves it up to the last full line, so the work is not lost
+            cut["_partial"] = _partial_content(tc["function"]["arguments"])
+        tc["function"]["arguments"] = json.dumps(cut)
     if isinstance(runaway, tuple):
         # a looping tool call must not run: valid JSON the dispatchers turn into RUNAWAY_MSG
         tc = accumulated_tcs[runaway[1]]

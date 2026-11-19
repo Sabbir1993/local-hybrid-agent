@@ -194,14 +194,15 @@ async function pollGpu() {
     (d.compute || []).forEach(c => { comp[c.luid] = (comp[c.luid] || 0) + c.pct; });
     
     // Deduplicate & filter to show strictly the physical discrete GPUs
-    let rawAds = (d.adapters || []).filter(a => !IGNORED_LUIDS.has(a.luid) && a.gb >= 1.0);
+    // The server already drops iGPUs. A usage floor here hid an idle discrete GPU (under 1 GB used) from the list.
+    let rawAds = (d.adapters || []).filter(a => !IGNORED_LUIDS.has(a.luid));
     const unique = {};
     rawAds.forEach(a => {
       if (!unique[a.luid] || a.gb > unique[a.luid].gb) {
         unique[a.luid] = a;
       }
     });
-    const ads = Object.values(unique).sort((a, b) => b.gb - a.gb);
+    const ads = Object.values(unique).sort((a, b) => String(a.luid).localeCompare(String(b.luid)));  // stable order: an idle card must not jump around
     const totals = d.vram_totals_gb || [];  // sorted largest-first, positional match to `ads`
 
     if (d.hardware_tag) {

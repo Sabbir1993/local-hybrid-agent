@@ -80,7 +80,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "append_file",
-            "description": "Add text to the end of an existing file. Use it to build a large file section by section after write_file created the skeleton.",
+            "description": "Add text to the end of an existing file. Use it to build a large file section by section after write_file created the skeleton. HARD LIMIT: a call that runs past the per-call token limit is cut off mid-text, so send one section of at most ~2,500 tokens (about 60-80 lines) per call and stop; never plan a whole report in one call.",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -391,15 +391,21 @@ async def tool_edit_file(args: dict) -> str:
 
 async def _append_file(args: dict) -> str:
     path_arg = _path_arg(args)
+    salvaged = ""
     if args.get("_oversize_tokens"):
-        return _too_big("", "append_file", args)
+        part = args.get("_partial") or ""
+        # plain-text files only: a cut inside code would leave a half statement in the file
+        if part.count("\n") >= 5 and path_arg.lower().endswith((".md", ".txt", ".rst", ".log")):
+            salvaged = part[:part.rindex("\n") + 1]
+        if not salvaged:
+            return _too_big("", "append_file", args)
     uid, p = _resolve(path_arg)
-    content = args.get("content", args.get("text", ""))
+    content = salvaged or args.get("content", args.get("text", ""))
     if not isinstance(content, str) or not content:
         return "error: content required for append_file"
     if p.suffix.lower() in DOCUMENT_EXTS:
         return (f"error: cannot append to a {p.suffix.lower()} document - use doc_edit to change it.")
-    big = _too_big(content, "append_file")
+    big = None if salvaged else _too_big(content, "append_file")
     if big:
         return big
     before = await _read_existing(uid, p)
@@ -419,6 +425,12 @@ async def _append_file(args: dict) -> str:
     await _store(uid, p, before, after)
     msg = (f"appended {len(content)} chars to {path_arg} (now {_lines(after)} lines, "
            f"{len(after)} bytes)")
+    if salvaged:
+        last = content.rstrip().splitlines()[-1][:80]
+        msg = (f"partly saved: the call was cut at the {agent_limit('write_file_max_tokens')}-token limit, so only the first "
+               f"{content.count(chr(10))} lines were appended to {path_arg} (now {_lines(after)} lines). The last saved line is: "
+               f"\"{last}\". Continue with append_file from the line AFTER it, in sections of about "
+               f"{effective_chunk_tokens()} tokens. Do not resend what is saved.")
     return msg + await verify_after(uid, p, path_arg, after, before, can_autorevert=False)
 
 
