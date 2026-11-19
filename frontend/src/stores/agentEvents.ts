@@ -278,6 +278,8 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       // "Routine steps run on the main model" is a choice in Settings, not a failure: a plain info toast. The toast draws its own icon.
       toast(d.message || 'The executor model is not being used for this run.',
             d.reason === 'steps_on_main' ? 'info' : d.retrying ? 'warn' : 'error');
+      // /parallel that could not fan out: a toast is easy to miss on a long run, so the reason also stays in the trace
+      if (d.reason === 'parallel_off' && d.message) acts.push({ type: 'narration', text: `ℹ️ ${d.message}` });
       break;
     case 'guard':
       acts.push({ type: 'guard', rule: d.rule, message: d.message });

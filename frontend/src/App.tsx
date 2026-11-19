@@ -248,7 +248,9 @@ export function App() {
         <Sidebar />
       </ErrorBoundary>
       <main>
-        <Header />
+        <ErrorBoundary fallbackTitle="Header">
+          <Header />
+        </ErrorBoundary>
         <ErrorBoundary fallbackTitle="Chat Feed">
           <ChatArea />
         </ErrorBoundary>
@@ -259,15 +261,16 @@ export function App() {
       <ErrorBoundary fallbackTitle="Right Dock">
         <RightDock />
       </ErrorBoundary>
-      <DevModals />
-      <PermissionModal />
-      <IdleWarning />
-      <ForcePasswordModal />
-      <AgentModals />
-      <AgentMemoryModal />
-      <ProjectModal />
+      {/* each in its own boundary: a crash in one modal must show its error, not blank the whole app */}
+      <ErrorBoundary fallbackTitle="Dialogs"><DevModals /></ErrorBoundary>
+      <ErrorBoundary fallbackTitle="Permission dialog"><PermissionModal /></ErrorBoundary>
+      <ErrorBoundary fallbackTitle="Idle warning"><IdleWarning /></ErrorBoundary>
+      <ErrorBoundary fallbackTitle="Password dialog"><ForcePasswordModal /></ErrorBoundary>
+      <ErrorBoundary fallbackTitle="Agent dialog"><AgentModals /></ErrorBoundary>
+      <ErrorBoundary fallbackTitle="Agent memory"><AgentMemoryModal /></ErrorBoundary>
+      <ErrorBoundary fallbackTitle="Project dialog"><ProjectModal /></ErrorBoundary>
       <ThemedToast />
-      <ThemedDialog />
+      <ErrorBoundary fallbackTitle="Dialog"><ThemedDialog /></ErrorBoundary>
     </div>
   );
 }

@@ -2,11 +2,14 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { ErrorBoundary } from './components/common/ErrorBoundary'
 import { dismissBootLoader } from './components/common/AppLoader'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary fallbackTitle="The app crashed">
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 )
 

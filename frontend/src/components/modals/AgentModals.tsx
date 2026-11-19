@@ -287,6 +287,7 @@ const AgentFork: React.FC<{ agent: any }> = ({ agent }) => {
   const [name, setName] = useState(`${agent.name} (Fork)`);
   const [workDir, setWorkDir] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');     // stays in the dialog: a 4 s toast is easy to miss on a slow request
   const devLabel = getDeviceDisplayLabel();
   const myId = getClientDeviceId().toLowerCase();
   const onThisDevice = !agent.device_id || String(agent.device_id).toLowerCase() === myId;
@@ -295,6 +296,7 @@ const AgentFork: React.FC<{ agent: any }> = ({ agent }) => {
     const finalName = name.trim() || `${agent.name} (Fork)`;
     if (!workDir.trim()) { showToast('Please specify a workspace path on this device', 'error'); return; }
     setBusy(true);
+    setError('');
     try {
       const forked = await agentApi(`/custom-agents/${agent.id}/fork`, {
         method: 'POST',
@@ -307,7 +309,9 @@ const AgentFork: React.FC<{ agent: any }> = ({ agent }) => {
       setActiveCustomAgent(forked);
       createSession();
     } catch (e: any) {
-      showToast(`Fork failed: ${e.message}`, 'error');
+      const msg = e?.name === 'TypeError' ? 'could not reach the server (network error)' : (e?.message || 'unknown error');
+      setError(msg);
+      showToast(`Fork failed: ${msg}`, 'error');
     }
     setBusy(false);
   };
@@ -345,6 +349,12 @@ const AgentFork: React.FC<{ agent: any }> = ({ agent }) => {
           </div>
           <div style={{ fontSize: '10.5px', color: 'var(--dim)', marginTop: 4 }}>Select the directory where this agent will read, write, and execute tasks on this machine.</div>
         </div>
+        {error && (
+          <div role="alert" style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, fontSize: 12, lineHeight: 1.4,
+            color: 'var(--red, #f87171)', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)' }}>
+            ⚠️ Fork failed: {error}
+          </div>
+        )}
       </div>
       <div className="ca-modal-foot" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 20px', borderTop: '1px solid var(--border-subtle, rgba(255,255,255,0.08))' }}>
         <button type="button" className="btn ghost" onClick={closeAgentModal}>Cancel</button>
