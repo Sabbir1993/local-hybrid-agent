@@ -209,11 +209,30 @@ def _pip_install_ok(cmd: str) -> bool:
 
 
 def _mask_quoted_gt(cmd: str) -> str:
-    """A `>` inside a quoted argument is text, not a redirect (`mysql -e "SELECT ... WHERE n > 5"`). It is replaced so the
-    redirect rule only sees real redirects; words inside quotes are left alone and are still checked."""
+    """A `>` inside a quoted argument is text, not a redirect (`mysql -e "SELECT ... WHERE n > 5"`, or a pentest payload
+    `-Body "{\\"q\\":\\"<svg onload=x>\\"}"`). It is replaced so the redirect rule only sees real redirects; words inside
+    quotes are left alone and are still checked.
+
+    An escaped quote (`\\"` or a backtick before it) and a doubled quote (`""` in a double-quoted PowerShell string) are
+    literal text, not the end of the string: without this an escaped JSON/HTML payload reopened the "unquoted" state and
+    its `>` read as a redirect."""
     out, quote = [], ""
-    for ch in cmd:
+    i, n = 0, len(cmd)
+    while i < n:
+        ch = cmd[i]
         if quote:
+            # `\"` / `` `" `` inside the string: the quote is escaped, both characters stay as text
+            if ch in "\\`" and i + 1 < n and cmd[i + 1] == quote:
+                out.append(ch)
+                out.append(cmd[i + 1])
+                i += 2
+                continue
+            # `""` (or `''`) doubled inside the string: an escaped quote, not a close-then-reopen
+            if ch == quote and i + 1 < n and cmd[i + 1] == quote:
+                out.append(ch)
+                out.append(cmd[i + 1])
+                i += 2
+                continue
             if ch == quote:
                 quote = ""
             out.append("›" if ch == ">" else ch)
@@ -221,6 +240,7 @@ def _mask_quoted_gt(cmd: str) -> str:
             if ch in "\"'":
                 quote = ch
             out.append(ch)
+        i += 1
     return "".join(out)
 
 
