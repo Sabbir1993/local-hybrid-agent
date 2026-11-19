@@ -208,9 +208,26 @@ def _pip_install_ok(cmd: str) -> bool:
     return all((t.lower() in _PIP_SAFE_FLAGS) if t.startswith("-") else bool(_PIP_SPEC_RE.fullmatch(t)) for t in toks[2:])
 
 
+def _mask_quoted_gt(cmd: str) -> str:
+    """A `>` inside a quoted argument is text, not a redirect (`mysql -e "SELECT ... WHERE n > 5"`). It is replaced so the
+    redirect rule only sees real redirects; words inside quotes are left alone and are still checked."""
+    out, quote = [], ""
+    for ch in cmd:
+        if quote:
+            if ch == quote:
+                quote = ""
+            out.append("›" if ch == ">" else ch)
+        else:
+            if ch in "\"'":
+                quote = ch
+            out.append(ch)
+    return "".join(out)
+
+
 def _plain_violation(cmd: str) -> Optional[str]:
     if _pip_install_ok(cmd):
         return None
+    cmd = _mask_quoted_gt(cmd)
     if re.match(r"\s*pip3?(?![\w-])", cmd, re.I):           # any other pip form (uninstall, -r, URLs, indexes, chains)
         return _write_refusal("pip")
     m = _WMIC_WHERE_RE.match(cmd)

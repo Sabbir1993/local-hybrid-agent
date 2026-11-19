@@ -134,7 +134,8 @@ class LoopGuard:
 
     # ------------------------------------------------------------------ input
     def record(self, name: str, args, result, ok: bool) -> None:
-        self.calls.append((str(name), _sig(args), _rhash(result), bool(ok)))
+        refused = "cannot run this command" in str(result if result is not None else "")[:200]
+        self.calls.append((str(name), _sig(args), _rhash(result), bool(ok), refused))
 
     # ------------------------------------------------------------------ rules
     def _detect(self) -> Optional[tuple]:
@@ -143,6 +144,12 @@ class LoopGuard:
         calls, cfg = self.calls[self._start:], self.cfg
         if not calls:
             return None
+        # a command the policy already refused, sent again unchanged: asking twice is already one try too many
+        refused = Counter((c[0], c[1]) for c in calls if len(c) > 4 and c[4])
+        if refused:
+            top, cnt = refused.most_common(1)[0]
+            if cnt >= 2:
+                return "identical_result", top[0], cnt
         # the same call returning the same result again and again: nothing new is being learned
         n_ident = int(cfg["identical_result"])
         if n_ident > 0:
