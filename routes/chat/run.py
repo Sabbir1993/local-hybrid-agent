@@ -449,16 +449,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             return JSONResponse({"error": "custom_agent_not_found",
                                  "message": "The selected custom agent no longer exists or isn't shared with you."},
                                 status_code=404)
-        agent_dev_id = custom_agent.get("device_id")
-        cur_dev_id = request.headers.get("X-Device-Id") if request is not None else None
-        if agent_dev_id and cur_dev_id:
-            from core.request_context import normalize_device_id
-            if normalize_device_id(agent_dev_id) != normalize_device_id(cur_dev_id):
-                return JSONResponse(
-                    {"error": "custom_agent_other_device",
-                     "message": f"This agent is bound to '{custom_agent.get('device_name') or 'another device'}'. Please fork it to use on this machine."},
-                    status_code=403
-                )
+        from core.request_context import agent_device_refusal
+        _dev_err = agent_device_refusal(custom_agent, request.headers.get("X-Device-Id") if request is not None else None)
+        if _dev_err:
+            return JSONResponse(_dev_err, status_code=403)
         # the client sends null for values the user didn't change after picking the agent
         if req.temperature is None and custom_agent.get("temperature") is not None:
             req.temperature = float(custom_agent["temperature"])

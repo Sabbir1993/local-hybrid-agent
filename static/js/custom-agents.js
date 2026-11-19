@@ -159,35 +159,16 @@
     // If neither is set on the agent, it's a global agent usable anywhere
     if (!agentDevId && !agentDevName) return true;
 
-    // Match by device ID
-    if (agentDevId && myDevId) {
-      if (agentDevId === String(myDevId).trim().toLowerCase()) return true;
-    }
+    // Bound to a device = that device's own id, compared exactly (the same rule as the React sidebar). A name or
+    // OS check ("windows pc-..." on any Windows machine) let every Windows PC select and run another PC's agent.
+    if (agentDevId) return !!myDevId && agentDevId === String(myDevId).trim().toLowerCase();
 
-    // Match by device display label or name
-    if (agentDevName) {
-      if (myDevLabel && agentDevName === String(myDevLabel).trim().toLowerCase()) return true;
-      if (myDevName && agentDevName === String(myDevName).trim().toLowerCase()) return true;
-      if (myDevId) {
-        const shortId = myDevId.replace(/^dev_/, '').replace(/_/g, '').slice(0, 12).toLowerCase();
-        if (shortId && agentDevName.includes(shortId)) return true;
-      }
+    // Older agents stored only a device name: accept only this device's own label (it embeds this device's id)
+    if (myDevLabel && agentDevName === String(myDevLabel).trim().toLowerCase()) return true;
+    if (myDevId) {
+      const shortId = myDevId.replace(/^dev_/, '').replace(/_/g, '').slice(0, 12).toLowerCase();
+      if (shortId && agentDevName.endsWith('-' + shortId)) return true;
     }
-
-    // If running in desktop/companion app, and the agent's device name matches this OS
-    if (isNative && agentDevName) {
-      const ua = (typeof navigator !== 'undefined' ? navigator.userAgent : '') || '';
-      if (ua.includes('Windows') && (agentDevName.includes('windows') || agentDevName.startsWith('windows pc'))) {
-        return true;
-      }
-      if ((ua.includes('Macintosh') || ua.includes('Mac OS')) && agentDevName.includes('mac')) {
-        return true;
-      }
-      if (ua.includes('Linux') && agentDevName.includes('linux')) {
-        return true;
-      }
-    }
-
     return false;
   }
   window.isAgentOnCurrentDevice = isAgentOnCurrentDevice;

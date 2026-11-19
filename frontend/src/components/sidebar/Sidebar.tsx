@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { DeviceRename } from './DeviceRename';
 import { UserMenu } from './UserMenu';
+import { SessionTree, type TreeGroup } from './SessionTree';
 import { api, apiFetch, getClientDeviceId } from '../../services/api';
 import { useMediaQuery, NARROW_QUERY } from '../../hooks/useMediaQuery';
 import { env } from '../../config/env';
@@ -68,7 +69,7 @@ export const Sidebar: React.FC = () => {
     agentsVersion,
     bumpAgents,
     showToast,
-    showDialog,
+    openSettingsModal,
   } = useAppStore();
 
   useEffect(() => {
@@ -190,6 +191,57 @@ export const Sidebar: React.FC = () => {
   const isSuperAdmin = currentUser?.is_super_admin ?? true;
   const userRoleDisplay = isSuperAdmin ? 'SUPER ADMIN' : (currentUser?.roles?.join(', ') || 'USER');
 
+  const filterBar = (
+    <div className="session-filter-bar" id="session-filter-bar">
+      <input
+        type="text"
+        id="session-filter-input"
+        placeholder={appMode === 'chat' ? 'Filter chats…' : 'Filter by chat or name…'}
+        value={sessionFilter}
+        onChange={(e) => setSessionFilter(e.target.value)}
+        autoFocus
+      />
+      {sessionFilter && (
+        <button className="claude-icon-tool" id="session-filter-clear" title="Clear filter" onClick={() => setSessionFilter('')}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+
+  // Agent / Code mode show the tree; only agents bound to this device (or to none) and this device's projects
+  const treeMode = appMode === 'agent' || appMode === 'code';
+  const deviceAgents = customAgents.filter((a) => isAgentOnCurrentDevice(a));
+  const agentGroups: TreeGroup[] = deviceAgents.map((a) => ({
+    id: String(a.id), name: a.name, icon: a.icon || '🤖',
+    hint: `${a.name}${a.work_dir ? `
+Folder: ${a.work_dir}` : ''}${a.description ? `
+${a.description}` : ''}`,
+  }));
+  const projectGroups: TreeGroup[] = (projects || [])
+    .filter((p: any) => p.is_current_device !== false)
+    .map((p: any) => ({ id: String(p.id), name: p.name, hint: `${p.name}
+Folder: ${p.workspace_dir || p.path || '(none)'}` }));
+  const iconBtn = (title: string, onClick: () => void, path: React.ReactNode, extra: Record<string, any> = {}) => (
+    <button type="button" className="claude-icon-tool" title={title} aria-label={title} onClick={onClick} {...extra}>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{path}</svg>
+    </button>
+  );
+  const treeHeaderActions = (
+    <>
+      {iconBtn('Filter', () => setShowSearch(!showSearch),
+        <path d="M3 6h18M7 12h10M10 18h4" />, { 'aria-expanded': showSearch })}
+      {appMode === 'agent' && iconBtn('My Agents: all your agents, on every device', () => openSettingsModal('sec-custom-agents'),
+        <><rect x="3" y="7" width="18" height="13" rx="2" /><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>)}
+      {appMode === 'agent'
+        ? iconBtn('New agent', () => openAgentModal('create'), <path d="M12 5v14M5 12h14" />)
+        : iconBtn('Add project', () => openProjectModal('create'),
+          <><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><path d="M12 11v6M9 14h6" /></>)}
+    </>
+  );
+
   if (sidebarCollapsed) {
     return null;
   }
@@ -281,196 +333,66 @@ export const Sidebar: React.FC = () => {
         </div>
       )}
 
-      {/* Projects Section (Companion Code Mode) */}
+      {/* Agent / Code mode: this device's agents or projects as folders, each with its own chats (SessionTree) */}
       {appMode === 'code' && (
-        <div id="projects-card" className="sidebar-section px-3 py-2 border-b border-border/40">
-          <div className="sidebar-section-head flex items-center justify-between pb-1.5">
-            <span className="sidebar-section-title text-[11px] font-bold uppercase tracking-wider text-text-muted">
-              PROJECTS
-            </span>
-            <button
-              id="btn-newproject"
-              className="claude-icon-tool hover:text-accent transition-colors"
-              title="Create / Register New Project"
-              aria-label="New Project"
-              onClick={() => openProjectModal('create')}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-            </button>
-          </div>
-          <div style={{ padding: '0 2px 6px' }}>
-            <DeviceRename />
-          </div>
-          <div id="projects-list" className="claude-projects-scroll flex flex-col gap-0.5 max-h-48 overflow-y-auto pr-0.5">
-            {projects.length === 0 ? (
-              <div className="text-[11px] text-text-muted py-2 text-center italic">No projects registered</div>
-            ) : (
-              projects.map((p) => {
-                const isSelected = String(p.id) === String(activeProjectId);
-                const ws = p.workspace_dir || p.path || '(no folder set)';
-                const devLabel = p.device_name || 'Windows PC';
-                return (
-                  <div
-                    key={p.id}
-                    className={`project-row ${isSelected ? 'cur' : ''}`}
-                    title={`Project: ${p.name}\nDirectory: ${ws}\nDevice: ${devLabel}`}
-                    onClick={() => {
-                      setActiveProjectId(String(p.id));
-                    }}
-                  >
-                    <div className="proj-icon-wrapper">
-                      <svg className="proj-dir-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                      </svg>
-                    </div>
-                    <div className="proj-meta">
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
-                        <div className="proj-name">{p.name}</div>
-                        <span className="proj-dev-badge this-dev" title={`Device: ${devLabel}`}>
-                          {devLabel}
-                        </span>
-                      </div>
-                      <div className="proj-path" title={ws}>{ws}</div>
-                    </div>
-                    <span
-                      className="p-del"
-                      style={{ marginRight: 6 }}
-                      title="Change folder"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openProjectModal('folder', p);
-                      }}
-                    >
-                      ✏️
-                    </span>
-                    <span
-                      className="p-del"
-                      title="Remove project registration (files preserved)"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (window.confirm(`Unregister project "${p.name}"?`)) {
-                          api.projects.delete(p.id).then(() => fetchProjects());
-                        }
-                      }}
-                    >
-                      ✕
-                    </span>
-                  </div>
-                );
-              })
-            )}
-          </div>
+        <div style={{ padding: '6px 12px 0' }}>
+          <DeviceRename />
         </div>
       )}
-
-      {/* Custom Agents Section (Companion Agent Mode) */}
-      {appMode === 'agent' && (
-        <div id="custom-agents-card" className="sidebar-section px-3 py-1.5 border-b border-border/40">
-          <div className="sidebar-section-head flex items-center justify-between pb-1">
-            <span className="sidebar-section-title text-[11px] font-bold uppercase tracking-wider text-text-muted">
-              My Agents
-            </span>
-            <button
-              id="btn-new-custom-agent"
-              className="claude-icon-tool hover:text-accent transition-colors"
-              title="Create New Custom Agent (+)"
-              aria-label="New Custom Agent"
-              onClick={() => openAgentModal('create')}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-            </button>
-          </div>
-          <div id="custom-agents-sidebar-list" className="claude-projects-scroll flex flex-col gap-0.5 max-h-48 overflow-y-auto pr-0.5">
-            {customAgents.length === 0 ? (
-              <div className="text-[11px] text-text-muted py-2 text-center italic">No personal agents configured</div>
-            ) : (
-              customAgents.map((a) => {
-                const isSelected = String(activeCustomAgent?.id) === String(a.id);
-                const isCurDev = isAgentOnCurrentDevice(a);
-                const devLabel = a.device_name || (isCurDev ? 'Windows PC' : 'Other PC');
-                const folderName = a.work_dir ? a.work_dir.split(/[/\\]/).pop() || a.work_dir : '';
-                return (
-                  <div
-                    key={a.id}
-                    className={`sidebar-agent-row ${isSelected ? 'selected' : ''} ${!isCurDev ? 'opacity-80' : ''}`}
-                    title={`${a.name}: ${a.description || ''}${!isCurDev ? ' (Bound to ' + devLabel + '. Fork to use on this machine)' : ''}`}
-                    onClick={() => {
-                      if (!isNative) {
-                        showToast('Companion native desktop app is required to use this feature.', 'warn');
-                        return;
-                      }
-                      if (!isCurDev) {
-                        showDialog({
-                          title: 'Agent Machine Binding',
-                          message: `Agent "${a.name}" is bound to "${devLabel}". Please Fork it to bind a copy to this machine.`,
-                          confirmLabel: 'Fork Agent',
-                          cancelLabel: 'Cancel',
-                          onConfirm: () => {
-                            openAgentModal('fork', a);
-                          },
-                        });
-                        return;
-                      }
-                      setActiveCustomAgent(a);
-                      createSession();
-                    }}
-                  >
-                    <span className="sidebar-agent-icon" style={{ fontSize: '15px' }}>{a.icon || '🤖'}</span>
-                    <div className="sidebar-agent-info" style={{ flex: 1, minWidth: 0 }}>
-                      <div className="sidebar-agent-device-tag" style={{ fontSize: '9px', color: isCurDev ? 'var(--accent, #38bdf8)' : 'var(--amber, #f59e0b)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '1px', lineHeight: 1.2 }}>
-                        <span>{isCurDev ? '💻' : '🔒'}</span>
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{devLabel}</span>
-                        {!isCurDev && (
-                          <span style={{ fontSize: '7.5px', background: 'rgba(245,158,11,0.18)', color: 'var(--amber, #f59e0b)', padding: '1px 4px', borderRadius: '3px', marginLeft: 'auto', textTransform: 'uppercase', fontWeight: 700 }}>Fork only</span>
-                        )}
-                      </div>
-                      <div className="sidebar-agent-name" style={{ fontWeight: 600, fontSize: '11.5px', color: 'var(--text)' }}>{a.name}</div>
-                      <div className="sidebar-agent-desc" style={{ fontSize: '9.5px', color: 'var(--dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {folderName && <span style={{ background: 'var(--panel)', padding: '1px 4px', borderRadius: '3px', border: '1px solid var(--border)', marginRight: '4px' }}>📁 {folderName}</span>}
-                        {a.description || a.preferred_lane || ''}
-                      </div>
-                    </div>
-                    <div className="sidebar-agent-actions" style={{ display: 'flex', gap: '2px', alignItems: 'center' }}>
-                      <button
-                        type="button"
-                        className="btn ghost btn-icon-xs edit-agent-btn"
-                        title={isCurDev ? 'Edit Agent' : `Bound to ${devLabel}. Only that PC can edit it - fork it to get your own copy.`}
-                        disabled={!isCurDev}
-                        style={!isCurDev ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (!isCurDev) return;
-                          openAgentModal('edit', a);
-                        }}
-                      >
-                        ✏️
-                      </button>
-                      <button
-                        type="button"
-                        className="btn ghost btn-icon-xs fork-agent-btn"
-                        title={isCurDev ? 'Fork Agent' : 'Fork Agent to use on this PC'}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openAgentModal('fork', a);
-                        }}
-                      >
-                        🍴
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Sessions Section (Tasks for Code, Agent Tasks for Agent, Recent Chats for Web) */}
       <div className="sidebar-section" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        {treeMode && showSearch && filterBar}
+        {treeMode && (appMode === 'agent' ? (
+          <SessionTree
+            kind="agent"
+            title="My Agents"
+            groups={agentGroups}
+            activeGroupId={activeCustomAgent ? String(activeCustomAgent.id) : null}
+            emptyText={<>No agents on this device yet.<br />Create one with +, or fork one from <a href="#" onClick={(e) => { e.preventDefault(); openSettingsModal('sec-custom-agents'); }}>My Agents</a>.</>}
+            headerActions={treeHeaderActions}
+            onPickGroup={(g) => { const a = deviceAgents.find((x) => String(x.id) === g.id); if (a) setActiveCustomAgent(a); }}
+            onNewSession={(g) => { const a = deviceAgents.find((x) => String(x.id) === g.id); if (a) setActiveCustomAgent(a); createSession(); }}
+            groupMenu={(g) => {
+              const a = deviceAgents.find((x) => String(x.id) === g.id);
+              if (!a) return [];
+              return [
+                { label: 'Edit agent', onClick: () => openAgentModal('edit', a) },
+                { label: 'Fork agent', onClick: () => openAgentModal('fork', a) },
+                { label: 'Manage in My Agents', onClick: () => openSettingsModal('sec-custom-agents') },
+              ];
+            }}
+            onSessionMenu={handleMenuClick}
+            menuOpenFor={menuState?.sid ?? null}
+            onOpened={closeIfNarrow}
+          />
+        ) : (
+          <SessionTree
+            kind="project"
+            title="Projects"
+            groups={projectGroups}
+            activeGroupId={activeProjectId ? String(activeProjectId) : null}
+            emptyText="No projects on this device yet. Add one with +."
+            headerActions={treeHeaderActions}
+            onPickGroup={(g) => setActiveProjectId(g.id)}
+            onNewSession={(g) => { if (String(activeProjectId) !== g.id) setActiveProjectId(g.id); createSession(); }}
+            groupMenu={(g) => {
+              const p = projects.find((x) => String(x.id) === g.id);
+              if (!p) return [];
+              return [
+                { label: 'Change folder', onClick: () => openProjectModal('folder', p) },
+                { label: 'Unregister project', danger: true, onClick: () => {
+                  if (window.confirm(`Unregister project "${p.name}"? Its files stay on disk.`)) {
+                    api.projects.delete(p.id).then(() => fetchProjects());
+                  }
+                } },
+              ];
+            }}
+            onSessionMenu={handleMenuClick}
+            menuOpenFor={menuState?.sid ?? null}
+            onOpened={closeIfNarrow}
+          />
+        ))}
+        {!treeMode && (<>
         <div className="sidebar-section-head">
           <span className="sidebar-section-title" id="session-title">
             {appMode === 'code' ? 'PROJECT TASKS' : appMode === 'agent' ? 'AGENT TASKS' : 'RECENT CHATS'}
@@ -503,31 +425,7 @@ export const Sidebar: React.FC = () => {
           </div>
         </div>
 
-        {/* Filter search bar */}
-        {showSearch && (
-          <div className="session-filter-bar" id="session-filter-bar">
-            <input
-              type="text"
-              id="session-filter-input"
-              placeholder="Filter tasks…"
-              value={sessionFilter}
-              onChange={(e) => setSessionFilter(e.target.value)}
-              autoFocus
-            />
-            {sessionFilter && (
-              <button
-                className="claude-icon-tool"
-                id="session-filter-clear"
-                title="Clear filter"
-                onClick={() => setSessionFilter('')}
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <path d="M18 6 6 18M6 6l12 12" />
-                </svg>
-              </button>
-            )}
-          </div>
-        )}
+        {showSearch && filterBar}
 
         {/* Sessions list with native .session-row classes */}
         <div
@@ -637,6 +535,8 @@ export const Sidebar: React.FC = () => {
             </div>
           )}
         </div>
+
+        </>)}
 
         {/* Floating Session Options Context Menu (Matching Image 1) */}
         {menuState && (

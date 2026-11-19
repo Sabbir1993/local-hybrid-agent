@@ -939,8 +939,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
-    // If activeSessionId is set but not in items, clear it
-    if (get().activeSessionId && !items.some((x) => x.id === get().activeSessionId)) {
+    // If activeSessionId is set but not in items, clear it - unless it is the chat just opened from the sidebar tree
+    // (an older chat of the agent / project that was picked with it is past this 50-row page, and is still the right one)
+    if (get().activeSessionId && !items.some((x) => x.id === get().activeSessionId)
+        && !(savedSid && String(get().activeSessionId) === String(savedSid))) {
       const cur = get();
       // a run in that chat keeps going in the background; its messages are parked, not dropped
       set((st) => ({

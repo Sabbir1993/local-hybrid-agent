@@ -60,6 +60,27 @@ def normalize_device_id(device_id: Optional[str]) -> Optional[str]:
     return device_id
 
 
+def agent_device_refusal(agent: Optional[dict], header_device_id: Optional[str]) -> Optional[dict]:
+    """None when this request may run the custom agent, else the error body (HTTP 403).
+
+    An agent bound to a device (device_id set) runs only from that device. A request without X-Device-Id is refused
+    too: both web apps always send it, so a missing header means a client that skipped the check, not an old one.
+    An agent bound to no device runs anywhere."""
+    agent_dev_id = (agent or {}).get("device_id")
+    if not agent_dev_id:
+        return None
+    name = (agent or {}).get("device_name") or "another device"
+    cur = (header_device_id or "").strip()
+    if not cur:
+        return {"error": "custom_agent_device_unknown",
+                "message": f"This agent is bound to '{name}', and this request did not say which device it came from. "
+                           "Open it from that device, or fork it to use it here."}
+    if normalize_device_id(str(agent_dev_id).strip()) != normalize_device_id(cur):
+        return {"error": "custom_agent_other_device",
+                "message": f"This agent is bound to '{name}'. Please fork it to use on this machine."}
+    return None
+
+
 def set_current_device(device_id: Optional[str], device_name: Optional[str] = None) -> None:
     _current_device_id.set(normalize_device_id(device_id))
     if device_name is not None:

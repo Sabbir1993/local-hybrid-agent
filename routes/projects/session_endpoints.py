@@ -12,6 +12,7 @@ from core.db import (
     db_delete_session,
     db_fork_session,
     db_list_sessions_page,
+    db_session_groups,
     db_load_messages,
     db_update_session_title,
     db_update_session_agent_id,
@@ -21,6 +22,17 @@ from core.deps import get_current_user
 from .models import ForkReq, MessageReq, SessionReq, SessionMemoryReq
 
 router = APIRouter()
+
+
+@router.get("/control/session-groups")
+async def session_groups(kind: str = "agent", ids: str = "", per: int = 5,
+                         user: Principal = Depends(get_current_user)):
+    """The sidebar tree in one request: each agent's (kind=agent) or project's (kind=project) newest sessions and
+    their total. The client sends the ids it shows (this device's agents / projects); only the caller's rows count."""
+    if kind not in ("agent", "project"):
+        return JSONResponse({"error": "kind must be agent or project"}, status_code=400)
+    group_ids = [x for x in (ids or "").split(",") if x.strip()]
+    return {"groups": db_session_groups(user.id, kind, group_ids, per)}
 
 
 @router.get("/control/projects/{pid}/sessions")

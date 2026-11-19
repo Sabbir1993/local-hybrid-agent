@@ -286,3 +286,34 @@ def db_set_plan_item_status(sid: int, ord_no: int, status: str, note: Optional[s
     if "verification" in row.keys():
         d["verification"] = row["verification"]
     return d
+
+
+def db_session_groups(owner_user_id: int, kind: str, group_ids: list, per_group: int = 5) -> dict:
+    """The sidebar tree: {group_id: {"total": n, "sessions": [...newest activity first, at most per_group]}}.
+
+    kind 'agent' groups the user's agent chats (no project) by agent_id; kind 'project' groups the user's project
+    tasks by project_id. Only rows of owner_user_id are read, so a foreign id in group_ids just comes back empty.
+    A session's last activity is its newest message, or its creation time when it has none."""
+    ids = sorted({int(i) for i in group_ids or [] if str(i).strip().lstrip("-").isdigit()})[:200]
+    out = {str(i): {"total": 0, "sessions": []} for i in ids}
+    if not ids:
+        return out
+    col = "agent_id" if kind == "agent" else "project_id"
+    extra = " AND s.project_id IS NULL" if kind == "agent" else ""
+    marks = ",".join("?" for _ in ids)
+    rows = _projects_db.execute(
+        f"""SELECT s.id, s.title, s.created_at, s.agent_id, s.project_id, s.model,
+                   COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.session_id = s.id), s.created_at) AS last_at
+            FROM sessions s WHERE s.user_id = ? AND s.{col} IN ({marks}){extra}""",
+        (owner_user_id, *ids))
+    per = max(1, min(int(per_group or 5), 500))
+    buckets: dict = {}
+    for r in rows:
+        buckets.setdefault(str(r[col]), []).append(r)
+    for gid, rs in buckets.items():
+        rs.sort(key=lambda r: (r["last_at"] or 0, r["id"]), reverse=True)
+        out[gid] = {"total": len(rs), "sessions": [{
+            "id": r["id"], "title": r["title"], "created_at": r["created_at"], "last_at": r["last_at"],
+            "agent_id": r["agent_id"], "project_id": r["project_id"], "model": _clean_model_name(r["model"]),
+        } for r in rs[:per]]}
+    return out

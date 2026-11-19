@@ -2786,3 +2786,46 @@ body.is-native-app .tri-mode-switch {
 .ct-thought { white-space: pre-wrap; font-style: italic; font-size: 12.5px; color: var(--dim, #8b949e); line-height: 1.5;
   max-height: 320px; overflow: auto; }
 [data-theme="light"] .ct-row > summary:hover, [data-theme="ssl-light"] .ct-row > summary:hover { background: rgba(0,0,0,0.03); }
+
+/* ---- Sidebar tree (Agent / Code mode): agents or projects as folders, their chats under them ---- */
+.stree-title { font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--dim); }
+.stree-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.stree-scroll { padding-bottom: 8px; }
+.stree-empty { font-size: 12px; padding: 14px 8px; text-align: center; line-height: 1.6; }
+.stree-empty a { color: var(--accent, #38bdf8); }
+.stree-group { margin-top: 4px; }
+.stree-ghead {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px;
+  color: var(--dim); font-size: 13px; cursor: pointer; user-select: none;
+}
+.stree-ghead:hover { background: var(--panel2, rgba(255,255,255,0.04)); color: var(--text); }
+.stree-group.active > .stree-ghead { color: var(--text); }
+.stree-gicon { display: flex; align-items: center; justify-content: center; width: 16px; flex-shrink: 0; opacity: .85; }
+.stree-emoji { font-size: 13px; line-height: 1; }
+.stree-gname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stree-gbtns { display: flex; gap: 2px; opacity: 0; transition: opacity .12s; }
+.stree-ghead:hover .stree-gbtns, .stree-ghead:focus-within .stree-gbtns { opacity: 1; }
+.stree-ibtn {
+  all: unset; cursor: pointer; width: 20px; height: 20px; border-radius: 4px; display: flex; align-items: center;
+  justify-content: center; font-size: 14px; line-height: 1; color: var(--dim);
+}
+.stree-ibtn:hover { background: var(--panel, rgba(255,255,255,0.08)); color: var(--text); }
+.stree-items { display: flex; flex-direction: column; }
+.stree-row.session-row { padding-left: 32px; gap: 6px; }
+.stree-stitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.stree-age { font-size: 11px; font-weight: 600; color: var(--dim); flex-shrink: 0; }
+.stree-row:hover .stree-age { display: none; }
+.stree-running {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--warm, #ffb454); flex-shrink: 0;
+  animation: pulse-op 1.6s ease-in-out infinite;
+}
+.stree-none { padding: 4px 8px 4px 32px; font-size: 11.5px; color: var(--dim); font-style: italic; }
+.stree-more { padding: 5px 8px 5px 32px; font-size: 12px; color: var(--dim); cursor: pointer; border-radius: 6px; }
+.stree-more:hover { color: var(--text); background: var(--panel2, rgba(255,255,255,0.04)); }
+.stree-menu {
+  background: var(--panel, #1a1917); border: 1px solid var(--border-subtle, rgba(255,255,255,0.12)); border-radius: 8px;
+  padding: 4px; min-width: 160px; box-shadow: 0 8px 24px rgba(0,0,0,.45);
+}
+.stree-menu-item { padding: 7px 9px; border-radius: 6px; font-size: 12px; color: var(--text); cursor: pointer; }
+.stree-menu-item:hover { background: var(--panel2, rgba(255,255,255,0.06)); }
+.stree-menu-item.danger { color: var(--red, #f87171); }
