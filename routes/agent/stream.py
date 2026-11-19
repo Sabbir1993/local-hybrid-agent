@@ -68,7 +68,7 @@ from core import hooks as _hooks
 from core.agent_loop import doc_redirect as _doc_redirect
 from core.pan import mask_pans as _mask_pans
 from core.agent_tools.git_agent_tools import GIT_GATED_TOOLS, command_for as _git_command_for
-from core.agent_loop.degeneration import RUNAWAY_MSG
+from core.agent_loop.degeneration import runaway_message
 from core.agent_loop.history_args import slim_write_args
 from core.agent_loop.narration import _is_narration
 from core.agent_loop.executor_view import build_executor_view
@@ -1413,7 +1413,7 @@ async def run_agent_stream(req, user, ctx):
                         # instead of being asked to approve a call that was never valid.
                         arg_errors[tc_id] = val_err
                     if isinstance(args, dict) and args.get("_runaway"):
-                        arg_errors[tc_id] = RUNAWAY_MSG       # cut by the stream guard while looping: nothing runs
+                        arg_errors[tc_id] = runaway_message(name, args)       # cut by the stream guard while looping: nothing runs
 
                     if isinstance(args, dict) and name in ("kb_sql", "data_sql"):
                         # "the November plan" / "the report of 4th November": the day or month the user asked for is handed

@@ -117,7 +117,9 @@ class Stream(unittest.TestCase):
         args = json.loads(res["tool_calls"][0]["function"]["arguments"])
         self.assertEqual(args.get("_runaway"), True)
         self.assertEqual(args.get("path"), "a.pptx")
-        self.assertEqual(asyncio.run(run_tool("doc_append", args)), RUNAWAY_MSG)
+        msg = asyncio.run(run_tool("doc_append", args))
+        self.assertTrue(msg.startswith(RUNAWAY_MSG), msg)
+        self.assertIn("kept repeating", msg)          # the part that looped is named, so the model does not resend it
 
     def test_normal_stream_is_untouched(self):
         chunks = [content(f"Sentence number {i} says something different. ") for i in range(120)]

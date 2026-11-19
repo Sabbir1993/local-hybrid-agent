@@ -55,7 +55,8 @@ OK, NUDGE, ESCALATE, STOP = "ok", "nudge", "escalate", "stop"
 # a refusal that will come back unchanged if the model tries again: the shell policy, a write over a file that is already
 # there or would be shrunk, a write too big for one call, a history note sent as file text (history_args.py)
 _REFUSAL_MARKERS = ("cannot run this command", "would replace", "already exists", "one call may carry at most",
-                    "holds a history note", "only appears in the history")
+                    "holds a history note", "only appears in the history",
+                    "started repeating itself and was cut off")     # the runaway guard: the same script is cut the same way
 # writes judged by their file, not their body: a different oversized section for the same file is the same mistake
 _FILE_KEYED = frozenset({"write_file", "append_file", "edit_file", "insert_at_line"})
 

@@ -61,6 +61,29 @@ def sanitize_user_facing_content(text: str) -> str:
 
 
 _SEP_LINE = re.compile(r"^[\s\-=_*#|:+.~`>]*$")
+# tools whose arguments are a program: find_runaway(code=True)
+CODE_TOOLS = frozenset({"run_shell", "run_python", "run_sandbox_python", "run_tests"})
+_CODE_EXT = (".py", ".ps1", ".psm1", ".sh", ".bat", ".cmd", ".js", ".ts", ".tsx", ".jsx", ".php", ".java", ".cs", ".go",
+             ".rs", ".rb", ".sql", ".c", ".cpp", ".h", ".kt", ".dart", ".vue", ".css", ".scss")
+
+
+def is_code_call(name: str, path: str = "") -> bool:
+    return name in CODE_TOOLS or str(path or "").lower().endswith(_CODE_EXT)
+
+
+def runaway_message(name: str, args=None) -> str:
+    """What a tool call cut by the runaway guard returns: advice that fits the tool, and the part that repeated (the call
+    itself is gone, so without it the model sends the same thing again and is cut again)."""
+    rep = str((args or {}).get("_repeated") or "").strip() if isinstance(args, dict) else ""
+    seen = f' The part that kept repeating: "{rep[:120]}".' if rep else ""
+    if name in CODE_TOOLS:
+        return ("error: your command started repeating itself and was cut off before it ran." + seen + " Do not send the "
+                "same script again. Split the work into several short commands, one check per call (for example one "
+                "for the OS, one for disks, one for network), or loop over a list inside one short script instead of "
+                "writing the same lines out again.")
+    return RUNAWAY_MSG + "." + seen
+
+
 RUNAWAY_MSG = ("error: your output started repeating itself and was cut off. Write it again shorter, "
                "without repeating phrases, lines or URLs. For a long file write only the first section now and add the rest "
                "in later project_append calls")
@@ -79,7 +102,7 @@ def _table_like(lines: list) -> bool:
 _GLUED_REPEAT = re.compile(r"([A-Za-z]{3,24})\1{9,}")
 
 
-def find_runaway(text: str, window: int = 6000) -> int:
+def find_runaway(text: str, window: int = 6000, code: bool = False) -> int:
     """Index to cut `text` at when its tail has clearly started to loop, else -1.
 
     Stricter than is_degeneration_or_loop (which also fires on a phrase seen three times) so that real
@@ -119,7 +142,10 @@ def find_runaway(text: str, window: int = 6000) -> int:
             continue
         if _MARKUP_TAIL.search(phrase):
             continue        # a shared tail of image links / tag attributes (cards, gallery) is markup, not a loop: identical lines still count above
-        if tail.count(phrase) >= (8 if plen < 70 else 6):
+        # code (a shell or python script, a source file) repeats long fragments on purpose: "| Select-Object Name |
+        # Format-Table -AutoSize" after every query of a system audit. There only a far higher count is a loop.
+        need = (8 if plen < 70 else 6) * (3 if code else 1)
+        if tail.count(phrase) >= need:
             first = tail.find(phrase)
             return base + first + plen                   # keep the first copy
     return -1

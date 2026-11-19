@@ -59,7 +59,7 @@ def _gen_timeout() -> float:
 
 
 async def _process_sse_stream(response, rid: Optional[int] = None):
-    from core.agent_loop.degeneration import find_runaway
+    from core.agent_loop.degeneration import find_runaway, is_code_call
     guard_on = _runaway_on()
     gen_limit = _gen_timeout()
     started = time.time()
@@ -158,8 +158,10 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
                 break
             if guard_on and len(cur_args_str) - tc_meta.get("checked", 0) >= RUNAWAY_STEP:
                 tc_meta["checked"] = len(cur_args_str)
-                if find_runaway(cur_args_str.replace("\\n", "\n")) >= 0:
-                    runaway = ("tool", idx)
+                _txt = cur_args_str.replace("\\n", "\n")
+                _cut = find_runaway(_txt, code=is_code_call(cur_fn_name, tc_meta["path"]))
+                if _cut >= 0:
+                    runaway = ("tool", idx, _txt[max(0, _cut - 120):_cut])
                     break
         if oversize_idx is not None:
             break   # closing the stream stops the model generating text the write tool would only reject
@@ -193,12 +195,14 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
         cut["_partial"] = _partial_content(tc["function"]["arguments"])
         tc["function"]["arguments"] = json.dumps(cut)
     if isinstance(runaway, tuple):
-        # a looping tool call must not run: valid JSON the dispatchers turn into RUNAWAY_MSG
+        # a looping tool call must not run: valid JSON the dispatchers turn into runaway_message()
         tc = accumulated_tcs[runaway[1]]
         p = _arg_path(tc["function"]["arguments"])
         payload = {"_runaway": True}
         if p:
             payload["path"] = p
+        if len(runaway) > 2 and runaway[2]:
+            payload["_repeated"] = runaway[2].strip()[-120:]     # told back to the model (degeneration.runaway_message)
         tc["function"]["arguments"] = json.dumps(payload)
     tool_calls = [accumulated_tcs[k] for k in sorted(accumulated_tcs.keys())]
     full_content = "".join(content_acc)

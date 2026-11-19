@@ -35,7 +35,7 @@ from core.agent_loop import (
     estimate_prompt_tokens,
 )
 from core.agent_loop.repair import INVALID_JSON_KEY
-from core.agent_loop.degeneration import RUNAWAY_MSG, sanitize_user_facing_content
+from core.agent_loop.degeneration import runaway_message, sanitize_user_facing_content
 from core.agent_loop.loop_guard import call_signature
 
 # the start of a tool call a model writes as text ("<tool_call>", "<function=write_file>"): never streamed to the reader
@@ -1857,7 +1857,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         elif args.get("_runaway"):
                             # the stream guard cut this call while it was looping: never run it, ask once more, then stop
                             runaway_hits += 1
-                            res_str = RUNAWAY_MSG
+                            res_str = runaway_message(t_name, args)
                             if runaway_hits > int(chat_cfg.get("runaway_retries", 2)):
                                 turn_limit = turn + 1
                                 res_str += ". Stop retrying: summarise what is done so far in plain text"
