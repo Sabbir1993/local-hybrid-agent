@@ -283,10 +283,11 @@ export function renderAgentActsHtml(acts: any[], secs?: number): string {
     h += `<div class="antigravity-step-drawer" style="padding:8px 12px 10px; margin:4px 0 6px 14px; border-left:2px solid var(--accent, #38bdf8); background:rgba(255,255,255,0.02); border-radius:0 6px 6px 0;">`;
     const previewAttr = escAttr(previewPath);
     if (previewPath) {
+      // no Preview button in a step: the finished file has its own card in the answer. A zip keeps its Download link
       const isZip = previewPath.toLowerCase().endsWith('.zip');
       const actionBtn = isZip
         ? `<a href="/agent/download?path=${encodeURIComponent(previewPath)}" download="${previewAttr}" class="file-action-badge" style="padding:2px 8px; font-size:10.5px; background:rgba(255,255,255,0.06); border:1px solid var(--border); border-radius:4px; color:var(--text); text-decoration:none;">⬇ Download</a>`
-        : `<button type="button" class="file-action-badge primary" data-preview-path="${previewAttr}" data-preview-title="${previewAttr}" data-preview-source="ws" style="padding:2px 8px; font-size:10.5px; background:rgba(56,189,248,0.15); border:1px solid rgba(56,189,248,0.3); border-radius:4px; color:#38bdf8; cursor:pointer;">👁️ Preview</button>`;
+        : '';
 
       h += `<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
         <span style="font-family:monospace; font-size:11.5px; color:var(--text);">${previewAttr}</span>
@@ -470,10 +471,21 @@ function transformTokens(raw: string): string {
       </div>`;
     }
 
-    // one line at any width: the file name gives way (ellipsis, full name in the tooltip), the two buttons never wrap
-    return `<div style="display:flex; align-items:center; gap:6px; margin:4px 0; max-width:100%; min-width:0;">
-      <button type="button" class="file-action-badge primary" data-preview-path="${cleanName}" data-preview-title="${cleanName}" title="${cleanName}" style="padding:4px 10px; font-size:11.5px; background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.3); border-radius:6px; color:#38bdf8; cursor:pointer; display:inline-flex; align-items:center; gap:6px; min-width:0; flex:0 1 auto; white-space:nowrap;"><span style="flex:0 0 auto;">👁️ Preview</span><span style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${cleanName}</span></button>
-      <a href="${downloadUrl}" download="${cleanName}" class="file-action-badge" style="padding:4px 10px; font-size:11.5px; background:rgba(255,255,255,0.05); border:1px solid var(--border, #334155); border-radius:6px; color:var(--text, #f3f4f6); text-decoration:none; display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; white-space:nowrap;">⬇ Download</a>
+    // a file card: type badge, readable name (the unique id the writer adds is hidden; the tooltip has the real name) and two
+    // buttons. Layout and the phone breakpoint live in style.css (.file-card)
+    const ext = (cleanName.split('.').pop() || 'file').slice(0, 5).toUpperCase();
+    const shownName = cleanName.replace(/-[0-9a-f]{8}(\.[A-Za-z0-9]+)$/i, '$1');
+    const eyeIcon = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    const downIcon = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/></svg>`;
+    return `<div class="file-card">
+      <div class="file-card-main">
+        <span class="file-card-ext">${ext}</span>
+        <span class="file-card-name" title="${cleanName}">${shownName}</span>
+      </div>
+      <div class="file-card-actions">
+        <button type="button" class="fc-btn primary" data-preview-path="${cleanName}" data-preview-title="${cleanName}">${eyeIcon}<span>Preview</span></button>
+        <a class="fc-btn" href="${downloadUrl}" download="${cleanName}">${downIcon}<span>Download</span></a>
+      </div>
     </div>`;
   });
 
