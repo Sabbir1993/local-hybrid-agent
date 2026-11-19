@@ -170,10 +170,10 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
         const c = d.args && (d.args.command || d.args.cmd);
         if (c) ctx.onShell?.start(String(d.id), String(c));
       }
-      // text streamed before a tool call was a preamble: it becomes reasoning, not the answer
+      // text streamed before a tool call was a preamble ("Reading the config next."), not the answer: it stays in the
+      // trace as narration, between the groups of calls, where the agent said it
       if (L.content && L.content.trim()) {
-        S.reasoning = (S.reasoning ? S.reasoning + '\n\n' : '') + L.content.trim();
-        L.thinking = S.reasoning;
+        acts.splice(acts.length - 1, 0, { type: 'narration', text: L.content.trim() });
         L.content = '';
       }
       break;

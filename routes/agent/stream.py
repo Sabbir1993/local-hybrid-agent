@@ -69,11 +69,12 @@ from core.agent_loop import doc_redirect as _doc_redirect
 from core.pan import mask_pans as _mask_pans
 from core.agent_tools.git_agent_tools import GIT_GATED_TOOLS, command_for as _git_command_for
 from core.agent_loop.degeneration import RUNAWAY_MSG
+from core.agent_loop.history_args import slim_write_args
 from core.agent_loop.narration import _is_narration
 from core.agent_loop.executor_view import build_executor_view
 from core.agent_loop.finish import apply_finish, without_finish
 from core import voice_policy
-from core.agent_loop import plan_guard, script_nudge, auto_plan
+from core.agent_loop import plan_guard, script_nudge, auto_plan, parallel_cmd
 from core.agent_loop import loop_guard as _lg
 from core.tool_args import shell_command
 from core.agent_loop.tool_output import cap_tool_result, cap_from_config
@@ -485,6 +486,11 @@ async def run_agent_stream(req, user, ctx):
         # a resumed run stays on main; the guard can also force main for a few steps
         force_main_until = steps if (last_query or "").lstrip().startswith(AGENT_RESUME_PREFIX) else -1
         force_main_why = "resume"
+        # /parallel (core/agent_loop/parallel_cmd.py): the fan-out step runs on main, the only lane offered spawn tools
+        parallel_on = bool(ctx.parallel)
+        parallel_forced = 0
+        if parallel_on and force_main_until < parallel_cmd.MAX_FORCED_STEPS:
+            force_main_until, force_main_why = parallel_cmd.MAX_FORCED_STEPS, "parallel"
         plan_nudges = 0
         narration_nudges = 0
         passivity_nudges = 0
@@ -496,7 +502,7 @@ async def run_agent_stream(req, user, ctx):
             router_policy.plan_first_reason(q_category, rpol) and req.session_id and not req.plan
             and not _analysis_run
             and use_executor and (use_cloud_main or main_ready) and ca_lane != "executor"
-            and force_main_until < 0 and not db_get_plan_items(req.session_id))
+            and force_main_until < 0 and not parallel_on and not db_get_plan_items(req.session_id))
         plan_first_max = int(rpol.get("plan_first_max_steps") or 0)
         plan_first_told = False
         # plan discipline (core/agent_loop/plan_guard.py): plan first on any multi-step job, then one
@@ -837,7 +843,10 @@ async def run_agent_stream(req, user, ctx):
                 # A multi-step job starts with the todo list: until create_plan has run, only it and the
                 # read-only tools are offered (create_plan alone from the second try; it gives up after
                 # 3 tries so a model that cannot plan never stalls the run).
-                plan_gate = bool(plan_required and plan_required_steps < 3
+                # /parallel: this step fans out to sub-agents - only spawn_parallel_agents, a call required, no plan gate
+                par_step = (lane_name == "main" and not req.plan
+                            and parallel_cmd.wants_forced_step(parallel_on, actions_taken, parallel_forced))
+                plan_gate = bool(plan_required and plan_required_steps < 3 and not par_step
                                  and not plan_guard.open_items(db_get_plan_items(req.session_id)))
                 if plan_gate and plan_required_steps >= 2:
                     # two refusals and the model still will not plan: draft the steps for it (one short local
@@ -1000,6 +1009,14 @@ async def run_agent_stream(req, user, ctx):
                     step_tool_choice = "required"
                     step_grammar = None
                     tools_for_lane = without_finish(tools_for_lane)
+                if par_step:
+                    _par_ok = (parallel_cmd.TOOL not in (hidden_tools or ())
+                               and (not custom_agent_tools or parallel_cmd.TOOL in custom_agent_tools))
+                    _par_tools = [t for t in all_tools() if _par_ok and t.get("function", {}).get("name") == parallel_cmd.TOOL]
+                    if _par_tools:
+                        # llama-server cannot name the function in tool_choice: one tool offered + "required" does it
+                        parallel_forced += 1
+                        tools_for_lane, step_tool_choice, step_grammar = _par_tools, "required", None
                 if step_tool_choice:
                     step_grammar = None
                     # finish is not the tool call this step is waiting for
@@ -1402,20 +1419,9 @@ async def run_agent_stream(req, user, ctx):
                         from core import month_arg as _month_arg
                         _month_arg.apply_request_period(args, last_query)
 
-                    # For history retention in msgs, prune large payloads to lightweight stubs
-                    # so future turns do not re-ingest tens of thousands of raw code characters
-                    hist_args = dict(args)
-                    if name in FILE_WRITE_TOOLS:
-                        if "text" in hist_args and len(str(hist_args["text"])) > 400:
-                            hist_args["text"] = f"<{len(str(hist_args['text']))} chars inserted in {hist_args.get('path') or 'file'}>"
-                        if "content" in hist_args and len(str(hist_args["content"])) > 400:
-                            f_path = hist_args.get("path") or hist_args.get("file") or "file"
-                            c_len = len(str(hist_args["content"]))
-                            hist_args["content"] = f"<{c_len} chars written to {f_path}>"
-                        if "new_string" in hist_args and len(str(hist_args["new_string"])) > 400:
-                            f_path = hist_args.get("path") or hist_args.get("file") or "file"
-                            ns_len = len(str(hist_args["new_string"]))
-                            hist_args["new_string"] = f"<{ns_len} chars replaced in {f_path}>"
+                    # History copy: the big text of a write is in the file, so it is not re-sent every step. The argument
+                    # is removed and a note key says so - never a look-alike value the model would copy (history_args.py)
+                    hist_args = slim_write_args(args) if name in FILE_WRITE_TOOLS else dict(args)
 
                     clean_args_str = json.dumps(hist_args)
                     clean_tc = {

@@ -2031,11 +2031,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                     yield sse("tool_result", {'id': tc_id, 'name': t_name, 'ok': ok, 'result': res_str})
 
                     hist_args = dict(args)
-                    if t_name in ("write_file", "edit_file", "project_write", "project_append"):
-                        if "content" in hist_args and len(str(hist_args["content"])) > 400:
-                            f_path = hist_args.get("path") or hist_args.get("file") or "file"
-                            c_len = len(str(hist_args["content"]))
-                            hist_args["content"] = f"<{c_len} chars written to {f_path}>"
+                    if t_name in ("write_file", "edit_file", "append_file", "insert_at_line", "project_write", "project_append"):
+                        # the big text is removed and a note key says so - never a look-alike value the model would copy
+                        from core.agent_loop.history_args import slim_write_args
+                        hist_args = slim_write_args(hist_args)
                     elif t_name in ("doc_create", "doc_append", "doc_edit", "run_sandbox_python"):
                         # the same saving for the document and sandbox tools: the text is in the file, and the whole body
                         # would be sent again to the model on every later round of this reply and on the next turns

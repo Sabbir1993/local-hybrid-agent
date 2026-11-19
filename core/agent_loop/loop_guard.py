@@ -52,6 +52,13 @@ DEFAULTS = {
 
 OK, NUDGE, ESCALATE, STOP = "ok", "nudge", "escalate", "stop"
 
+# a refusal that will come back unchanged if the model tries again: the shell policy, a write over a file that is already
+# there or would be shrunk, a write too big for one call, a history note sent as file text (history_args.py)
+_REFUSAL_MARKERS = ("cannot run this command", "would replace", "already exists", "one call may carry at most",
+                    "holds a history note", "only appears in the history")
+# writes judged by their file, not their body: a different oversized section for the same file is the same mistake
+_FILE_KEYED = frozenset({"write_file", "append_file", "edit_file", "insert_at_line"})
+
 
 @dataclass
 class Verdict:
@@ -95,12 +102,16 @@ def call_signature(name: str, args) -> str:
     return f"{name}:{_sig(args)}"
 
 
-def _write_key(sig: str) -> str:
-    """The logical file a write_file call targets: folder-less name without the unique id the writer appends."""
-    try:
-        a = json.loads(sig) if sig.startswith("{") else {}
-    except ValueError:
-        a = {}
+def _write_key(args) -> str:
+    """The logical file a write call targets: folder-less name without the unique id the writer appends.
+    Taken from the arguments themselves: the 600-char signature loses the path of any long write (keys are sorted,
+    so "content" comes before "path")."""
+    if isinstance(args, str):
+        try:
+            args = json.loads(args) if args.startswith("{") else {}
+        except ValueError:
+            args = {}
+    a = args if isinstance(args, dict) else {}
     p = str(a.get("path") or a.get("file") or a.get("filename") or "")
     name = p.replace("\\", "/").rsplit("/", 1)[-1]
     stem, dot, ext = name.rpartition(".")
@@ -126,7 +137,7 @@ def config(raw: Optional[dict] = None) -> dict:
 class LoopGuard:
     def __init__(self, cfg: Optional[dict] = None):
         self.cfg = config(cfg)
-        self.calls = []            # (name, args_sig, result_hash, ok)
+        self.calls = []            # (name, args_sig, result_hash, ok, refused, file_key)
         self.triggers = 0
         self.write_triggers = 0
         self.error_triggers = 0
@@ -137,8 +148,9 @@ class LoopGuard:
         head = str(result if result is not None else "")[:200]
         # a refusal that says "do not do this again": the shell policy, a write over a file that is already there or
         # would be shrunk. Sent unchanged a second time, it is a loop already.
-        refused = (not ok) and any(m in head for m in ("cannot run this command", "would replace", "already exists"))
-        self.calls.append((str(name), _sig(args), _rhash(result), bool(ok), refused))
+        refused = (not ok) and any(m in head for m in _REFUSAL_MARKERS)
+        fkey = _write_key(args) if str(name) in _FILE_KEYED else ""
+        self.calls.append((str(name), _sig(args), _rhash(result), bool(ok), refused, fkey))
 
     # ------------------------------------------------------------------ rules
     def _detect(self) -> Optional[tuple]:
@@ -149,7 +161,7 @@ class LoopGuard:
             return None
         # a command the policy already refused, sent again unchanged: asking twice is already one try too many
         # (a write is judged by its file: a different body for the same refused file is the same attempt)
-        refused = Counter((c[0], _write_key(c[1]) if c[0] == "write_file" else c[1]) for c in calls if len(c) > 4 and c[4])
+        refused = Counter((c[0], (c[5] or c[1]) if c[0] in _FILE_KEYED else c[1]) for c in calls if c[4])
         if refused:
             top, cnt = refused.most_common(1)[0]
             if cnt >= 2:
@@ -164,6 +176,8 @@ class LoopGuard:
         # above never see it
         n_w = int(cfg["repeat_write"])
         if n_w > 0:
+            # keyed on the 600-char signature as before (long writes give ""): this rule targets the document writer,
+            # whose calls are short; a long script re-saved with overwrite must not read as "a new copy each time"
             names = Counter(_write_key(c[1]) for c in calls if c[0] == "write_file" and c[3])
             names.pop("", None)
             if names:

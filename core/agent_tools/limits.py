@@ -84,6 +84,13 @@ def effective_chunk_tokens(lane: str = None) -> int:
     return max(500, min(target, cap // 2) if cap > 0 else target)
 
 
+def write_cap_tokens(lane: str = None) -> int:
+    """Tokens one write_file/append_file call may carry: write_file_max_tokens, but never more than twice the chunk the
+    model is told to send. A model that ignores the chunk advice is cut (and its complete part saved) at ~6k tokens
+    instead of running on to 10k+ and brushing the lane's output limit, where the whole call is lost."""
+    return max(500, min(agent_limit("write_file_max_tokens"), 2 * effective_chunk_tokens(lane)))
+
+
 def effective_max_tokens(requested, lane: str, cloud: bool = False) -> int:
     """The user's Settings value (<=0 means unlimited) bounded by the lane's cap. Cloud models are left as the
     user set them: each provider has its own output limit and rejects a value above it."""

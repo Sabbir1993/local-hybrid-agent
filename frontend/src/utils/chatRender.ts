@@ -2,6 +2,7 @@ import { hlCode, hlLangFor } from './highlight';
 import { parseVisual, renderVisualHtml, parseProducts, renderProductsHtml, parseImages, renderImagesHtml } from './visual';
 import { marked, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
+import { renderAgentTraceHtml } from './agentTrace';
 
 export interface MediaItem {
   type: 'image' | 'video' | 'youtube';
@@ -99,215 +100,9 @@ export function buildAntigravityWorkedFor(acts: any[], secs?: number): string {
   return rem > 5 ? `Worked for ${mins}m ${rem}s` : `Worked for ${mins}m`;
 }
 
-export function buildAntigravitySubSummary(acts: any[]): string {
-  if (!acts || !acts.length) return 'Actions';
-  let searches = 0;
-  let fileOps = 0;
-  let cmdOps = 0;
-
-  acts.forEach((a) => {
-    const name = a.name || '';
-    if (name.includes('search') || name.includes('grep') || name.includes('fetch')) searches++;
-    else if (name.includes('file') || name.includes('project')) fileOps++;
-    else if (name.includes('command') || name.includes('python')) cmdOps++;
-  });
-
-  if (searches > 0 && fileOps === 0) return 'Searched code';
-  if (fileOps > 0 && searches === 0) return 'Explored files';
-  if (searches > 0 && fileOps > 0) return 'Searched code and created files';
-  return 'Searched code';
-}
-
-/** Text from a tool call (an argument, a label) shown on one line of the action list: escaped, flattened, shortened.
- *  Arguments can be whole files (a page the model is writing); they must never be put into the page as markup. */
-function rowText(v: unknown, max = 140): string {
-  const flat = (typeof v === 'string' ? v : v == null || typeof v === 'object' ? '' : String(v)).replace(/\s+/g, ' ').trim();
-  const cut = flat.length > max ? flat.slice(0, max) + '…' : flat;
-  return cut.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 /** Whole text (formatting kept) made safe for inside <pre><code>. */
 function escText(v: unknown): string {
   return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-// the argument that names what a tool works on, in order of how well it describes the call
-const ROW_KEYS = ['path', 'file', 'filename', 'query', 'url', 'command', 'cmd', 'name', 'project', 'pattern', 'text', 'prompt'];
-
-export function renderAgentActsHtml(acts: any[], secs?: number): string {
-  if (!acts || !acts.length) return '';
-
-  const workedText = buildAntigravityWorkedFor(acts, secs);
-  const subSummaryText = buildAntigravitySubSummary(acts);
-
-  // Group tool calls & results
-  const stream: Array<{
-    id: string;
-    name: string;
-    label: string;
-    detail: string;
-    badge?: string;
-    args?: any;
-    result?: any;
-    failed?: boolean;
-    isThought?: boolean;
-    duration_s?: number;
-  }> = [];
-
-  const toolMap = new Map<string, any>();
-  acts.forEach((a, idx) => {
-    if (a.type === 'thought' || a.type === 'reasoning') {
-      const dur = a.duration_s || a.secs || 1;
-      const thText = a.text || a.content || a.thought || a.reasoning || '';
-      stream.push({
-        id: a.id || `thought-${idx}`,
-        name: 'thought',
-        label: `Thought for ${dur}s`,
-        detail: thText,
-        badge: '',
-        duration_s: dur,
-        args: {},
-        result: null,
-        failed: false,
-        isThought: true,
-      });
-    } else if (a.type === 'tool_call') {
-      const args = a.args || {};
-      let label = a.name || 'tool';
-      let detail = '';
-      let badge = '';
-
-      if (a.name === 'web_search') {
-        badge = 'WEB';
-        label = 'Search:';
-        detail = args.query || '';
-      } else if (a.name === 'web_search_images') {
-        badge = 'IMAGES';
-        label = 'Search images:';
-        detail = args.query || '';
-      } else if (a.name === 'web_fetch') {
-        label = 'Fetched webpage';
-        detail = `"${args.title || args.url || 'webpage'}"`;
-      } else if (a.name === 'project_plan') {
-        label = 'project plan';
-        detail = `project: ${args.project || ''}`;
-      } else if (a.name === 'project_write') {
-        label = 'project write';
-        detail = args.path || '';
-      } else if (a.name === 'project_append') {
-        label = 'project append';
-        detail = args.path || '';
-      } else if (a.name === 'project_finish') {
-        label = 'project finish';
-        detail = `project: ${args.project || ''}`;
-      } else {
-        label = (a.name || '').replace(/_/g, ' ');
-        const key = ROW_KEYS.find((x) => typeof args[x] === 'string' && args[x]);
-        detail = key ? String(args[key]) : '';
-      }
-
-      const item = {
-        id: a.id,
-        name: a.name,
-        label,
-        detail,
-        badge,
-        args,
-        result: null as any,
-        failed: false,
-      };
-      stream.push(item);
-      toolMap.set(a.id, item);
-    } else if (a.type === 'tool_result') {
-      const match = toolMap.get(a.id);
-      if (match) {
-        match.result = a.result;
-        // the server's verdict decides; a result that merely contains the word "failed" (a cell in a data table) is not
-        // a failure. Only older stored steps without `ok` fall back to an "error..." result.
-        if (a.ok === false || (a.ok === undefined && typeof a.result === 'string' && /^\s*error\b/i.test(a.result))) {
-          match.failed = true;
-        }
-      }
-    }
-  });
-
-  if (!stream.length) return '';
-
-  let h = `<div class="agy-agent-container" style="margin: 8px 0 14px 0;">`;
-  h += `<details class="antigravity-trace-group" open data-card-id="trace-group">`;
-  h += `<summary class="antigravity-trace-summary" style="cursor:pointer; display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; color:var(--text, #f3f4f6); user-select:none;">`;
-  h += `<span class="antigravity-trace-worked">${workedText}</span>`;
-  h += `<span class="antigravity-trace-chev" style="font-size:10px; opacity:0.7;">▾</span>`;
-  h += `</summary>`;
-  h += `<div class="antigravity-trace-body" style="padding-top:4px; margin-left:4px;">`;
-  h += `<div class="antigravity-sub-summary" data-click="toggle-all-antigravity" title="Click to collapse / expand all steps" style="cursor:pointer; display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--dim, #8b949e); margin:4px 0 6px 0; user-select:none;">`;
-  h += `<span>${subSummaryText}</span>`;
-  h += `<span class="antigravity-sub-chev" style="font-size:9px;">▾</span>`;
-  h += `</div>`;
-  h += `<div class="antigravity-steps-list" style="display:flex; flex-direction:column; gap:2px; padding-left:8px; border-left:1px solid var(--border-subtle, rgba(255,255,255,0.08));">`;
-
-  stream.forEach((it) => {
-    if (it.isThought) {
-      const dur = it.duration_s || 1;
-      const thText = it.detail || '';
-      h += `<details class="antigravity-step-item" style="margin:2px 0; border:none; background:transparent;">`;
-      h += `<summary class="antigravity-step-row" style="cursor:pointer; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--dim, #8b949e); padding:4px 6px; border-radius:6px; user-select:none; transition:background 0.15s ease;">`;
-      h += `<span style="font-size:12px;">💭</span>`;
-      h += `<span style="color:var(--text-muted, #94a3b8); font-weight:500;">Thought for ${dur}s</span>`;
-      h += `<span class="antigravity-row-chev" style="margin-left:auto; font-size:13px; opacity:0.5;">›</span>`;
-      h += `</summary>`;
-      h += `<div class="antigravity-step-drawer" style="padding:8px 12px 10px; margin:4px 0 6px 14px; border-left:2px solid var(--accent, #38bdf8); background:rgba(255,255,255,0.02); border-radius:0 6px 6px 0;">`;
-      h += `<div class="antigravity-thought-box" style="white-space:pre-wrap; font-style:italic; font-size:12px; color:var(--dim, #8b949e); line-height:1.5;">${(thText || 'Thinking through strategy…').replace(/</g, '&lt;')}</div>`;
-      h += `</div></details>`;
-      return;
-    }
-
-    const rawResult = typeof it.result === 'string' ? it.result : JSON.stringify(it.result || '');
-    const previewPath = it.args?.path || it.args?.file || it.args?.filename || (it.name && it.name.includes('project_write') ? it.detail : '');
-
-    h += `<details class="antigravity-step-item" style="margin:2px 0; border:none; background:transparent;">`;
-    h += `<summary class="antigravity-step-row" style="cursor:pointer; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--dim, #8b949e); padding:4px 6px; border-radius:6px; user-select:none; transition:background 0.15s ease;">`;
-    if (it.badge) {
-      h += `<span style="background:rgba(56,189,248,0.15); color:#38bdf8; font-size:9.5px; font-weight:700; padding:1px 5px; border-radius:3px;">${rowText(it.badge, 12)}</span>`;
-    }
-    h += `<span style="color:var(--dim);">${rowText(it.label, 60)}</span>`;
-    if (it.detail) {
-      h += `<span style="color:var(--text); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:480px;">${rowText(it.detail)}</span>`;
-    }
-    if (it.failed) {
-      h += `<span style="margin-left:auto; background:rgba(239,68,68,0.15); color:#ef4444; font-size:9.5px; font-weight:600; padding:1px 6px; border-radius:4px;">Failed</span>`;
-    }
-    h += `<span class="antigravity-row-chev" style="margin-left:${it.failed ? '4px' : 'auto'}; font-size:13px; opacity:0.5;">›</span>`;
-    h += `</summary>`;
-
-    h += `<div class="antigravity-step-drawer" style="padding:8px 12px 10px; margin:4px 0 6px 14px; border-left:2px solid var(--accent, #38bdf8); background:rgba(255,255,255,0.02); border-radius:0 6px 6px 0;">`;
-    const previewAttr = escAttr(previewPath);
-    if (previewPath) {
-      // no Preview button in a step: the finished file has its own card in the answer. A zip keeps its Download link
-      const isZip = previewPath.toLowerCase().endsWith('.zip');
-      const actionBtn = isZip
-        ? `<a href="/agent/download?path=${encodeURIComponent(previewPath)}" download="${previewAttr}" class="file-action-badge" style="padding:2px 8px; font-size:10.5px; background:rgba(255,255,255,0.06); border:1px solid var(--border); border-radius:4px; color:var(--text); text-decoration:none;">⬇ Download</a>`
-        : '';
-
-      h += `<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-        <span style="font-family:monospace; font-size:11.5px; color:var(--text);">${previewAttr}</span>
-        ${actionBtn}
-      </div>`;
-    }
-    if (it.args && Object.keys(it.args).length > 0) {
-      h += `<div style="font-size:10px; font-weight:700; text-transform:uppercase; color:var(--dim); margin-bottom:4px;">ARGUMENTS</div>`;
-      h += `<pre style="margin:0 0 8px 0; padding:6px 8px; font-size:11px; font-family:monospace; background:var(--bg-code, #0f172a); border-radius:4px; border:1px solid var(--border-subtle); overflow-x:auto;"><code>${escText(JSON.stringify(it.args, null, 2))}</code></pre>`;
-    }
-    if (rawResult && rawResult !== '""' && rawResult !== 'null') {
-      h += `<div style="font-size:10px; font-weight:700; text-transform:uppercase; color:var(--dim); margin-bottom:4px;">RESULT</div>`;
-      h += `<pre style="margin:0; padding:6px 8px; font-size:11px; font-family:monospace; background:var(--bg-code, #0f172a); border-radius:4px; border:1px solid var(--border-subtle); overflow-x:auto; max-height:240px; color:${it.failed ? 'var(--red, #ef4444)' : 'inherit'};"><code>${escText(rawResult)}</code></pre>`;
-    }
-    h += `</div></details>`;
-  });
-
-  h += `</div></div></details>`;
-  h += `<div class="antigravity-divider" style="margin:10px 0;"></div></div>`;
-  return h;
 }
 
 // Hosts models write as placeholders in code samples and API examples: nobody owns a favicon for them
@@ -583,23 +378,21 @@ function sanitizeHtml(html: string): string {
   return html;
 }
 
-export function renderCompleteChatMessage(content: string, acts?: any[], secs?: number, isChatMode?: boolean, thinking?: string): string {
+export function renderCompleteChatMessage(content: string, acts?: any[], secs?: number, isChatMode?: boolean, thinking?: string, live = false): string {
   if (!content && (!acts || !acts.length) && !thinking) return '';
 
   let actsHtml = '';
-  // only these act types draw a card; lane / step / plan / stopped records must not produce an empty "Worked for" block
-  let finalActs = acts ? acts.filter((a) => ['thought', 'reasoning', 'tool_call', 'tool_result'].includes(a.type)) : [];
-
-  if (!isChatMode && thinking && thinking.trim() && !finalActs.some((a) => a.type === 'thought' || a.type === 'reasoning')) {
-    finalActs = [{ type: 'thought', text: thinking.trim(), duration_s: secs || 1 }, ...finalActs];
-  }
-
-  if (finalActs && finalActs.length) {
-    const filteredActs = isChatMode
-      ? finalActs.filter((a) => a.type !== 'thought' && a.type !== 'reasoning')
-      : finalActs;
-    if (filteredActs.length > 0) {
-      actsHtml = renderAgentActsHtml(filteredActs, secs);
+  // Chat mode shows the answer only: no tool calls, no thinking trace. Agent and Code modes show the work.
+  if (!isChatMode) {
+    // only these act types draw anything; lane / step / plan / stopped records must not produce an empty block
+    let finalActs = acts ? acts.filter((a) => ['thought', 'reasoning', 'tool_call', 'tool_result', 'narration'].includes(a.type)) : [];
+    if (thinking && thinking.trim() && !finalActs.some((a) => a.type === 'thought' || a.type === 'reasoning')) {
+      finalActs = [{ type: 'thought', text: thinking.trim(), duration_s: secs || 1 }, ...finalActs];
+    }
+    if (finalActs.length) {
+      const prose = (md: string) => sanitizeHtml(marked.parse(transformMarkdownSpecialTokens(md), { async: false }) as string);
+      actsHtml = renderAgentTraceHtml(finalActs, prose, live,
+        finalActs.some((a) => a.type === 'tool_call') ? buildAntigravityWorkedFor(finalActs, secs) : '');
     }
   }
 

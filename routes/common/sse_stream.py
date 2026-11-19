@@ -42,8 +42,8 @@ def _oversize_write(name: str, path: str, args_str: str) -> bool:
     Documents are exempt (they take the whole file); the 1.1x slack covers JSON escaping of quotes and newlines."""
     if name not in _CAPPED_WRITE_TOOLS or path.lower().endswith(_DOC_SUFFIXES):
         return False
-    from core.agent_tools.limits import agent_limit, CHARS_PER_TOKEN
-    return len(args_str) > agent_limit("write_file_max_tokens") * CHARS_PER_TOKEN * 1.1
+    from core.agent_tools.limits import write_cap_tokens, CHARS_PER_TOKEN
+    return len(args_str) > write_cap_tokens() * CHARS_PER_TOKEN * 1.1
 
 
 RUNAWAY_STEP = 2000     # re-check an accumulator each time it has grown by this many characters
@@ -188,9 +188,9 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
         tc = accumulated_tcs[oversize_idx]
         cut = {"path": _arg_path(tc["function"]["arguments"]),
                "content": "", "_oversize_tokens": _est_args_tokens(tc["function"]["arguments"])}
-        if tc["function"].get("name") == "append_file":
-            # what was generated before the cut is kept: append_file saves it up to the last full line, so the work is not lost
-            cut["_partial"] = _partial_content(tc["function"]["arguments"])
+        # what was generated before the cut is kept: the write tools save its complete part (core/agent_tools/salvage.py),
+        # so the work is not lost and the model is not sent back to generate the same section again
+        cut["_partial"] = _partial_content(tc["function"]["arguments"])
         tc["function"]["arguments"] = json.dumps(cut)
     if isinstance(runaway, tuple):
         # a looping tool call must not run: valid JSON the dispatchers turn into RUNAWAY_MSG

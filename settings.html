@@ -69,6 +69,8 @@
     flex-shrink: 0;
   }
   #settings-tab-search {
+    -webkit-appearance: none;
+    appearance: none;
     width: 100%;
     box-sizing: border-box;
     padding: 7px 10px;
@@ -369,7 +371,7 @@
         <span class="tab-icon">←</span><span class="tab-label">Back to chat</span>
       </a>
       <div class="settings-search-wrap">
-        <input type="text" id="settings-tab-search" placeholder="Search settings…" autocomplete="off">
+        <input type="search" id="settings-tab-search" name="settings-filter" placeholder="Search settings…" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other">
       </div>
       <nav id="settings-nav">
         <div class="settings-group-label">General</div>

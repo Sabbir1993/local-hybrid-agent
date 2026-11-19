@@ -8,7 +8,7 @@ import { MediaCard } from './MediaCard';
 import { parseProseQuestions, parseQuestionnaire } from '../../utils/questions';
 import { apiFetch } from '../../services/api';
 import { env } from '../../config/env';
-import { cleanModelName, formatChatModelDisplay } from '../../utils/models';
+import { formatChatModelDisplay } from '../../utils/models';
 
 interface ParsedUserMessage {
   cleanText: string;
@@ -540,7 +540,7 @@ export const ChatArea: React.FC = () => {
     serverStatus?.cloud_main?.display ||
     serverStatus?.model ||
     selectedModel;
-  const modelName = (isChatMode ? formatChatModelDisplay(rawModelName) : cleanModelName(rawModelName)) || 'Please select a model';
+  const modelName = formatChatModelDisplay(rawModelName) || 'Please select a model';   // no quant suffix in any mode
 
   const _copyFallback = (str: string) => {
     const ta = document.createElement('textarea');
@@ -605,7 +605,6 @@ export const ChatArea: React.FC = () => {
                   <>
                     {modelName}
                     {serverStatus?.vision_capable ? ' · 👁️ vision' : ''}
-                    {!isChatMode && (` · split ${serverStatus?.tensor_split || 'auto'}`)}
                     {serverStatus?.measured_tg_tokens_per_sec
                       ? ` · bench ${Number(serverStatus.measured_tg_tokens_per_sec).toFixed(1)} t/s`
                       : ''}
@@ -630,9 +629,7 @@ export const ChatArea: React.FC = () => {
                   <>
                     <p><b>{modelName} is ready!</b></p>
                     <p className="dim" style={{ marginTop: '6px' }}>
-                      {isChatMode
-                        ? 'Type your message below and press Enter to chat.'
-                        : `GPU(s) loaded${serverStatus?.vision_capable ? ' with vision support' : ''}. Type your message below and press Enter to chat.`}
+                      Type your message below and press Enter to chat.
                     </p>
                   </>
                 )
@@ -967,7 +964,7 @@ export const ChatArea: React.FC = () => {
                       <BotContent
                         id={String(m.id)}
                         follow={answering}
-                        html={renderCached(answering ? null : `${m.id}|${contentText.length}|${thinkingText.length}|${(m.acts || []).length}|${m.secs || 0}|${isChatMode}|${qz ? 'q' : ''}`, () => renderCompleteChatMessage(qz ? qz.prose : contentText, m.acts, m.secs, isChatMode, thinkingText))}
+                        html={renderCached(answering ? null : `${m.id}|${contentText.length}|${thinkingText.length}|${(m.acts || []).length}|${m.secs || 0}|${isChatMode}|${qz ? 'q' : ''}`, () => renderCompleteChatMessage(qz ? qz.prose : contentText, m.acts, m.secs, isChatMode, thinkingText, answering))}
                       />
                       )}
                       <AnswerBadge m={m} />

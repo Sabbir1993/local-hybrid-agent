@@ -3,12 +3,16 @@ import re
 from typing import Optional, Union
 
 from ..tool_args import SHELL_COMMAND_KEYS, shell_command
+from .history_args import stub_content_error
 from .truncation import INVALID_ARGS_ERROR
 
 # marks arguments of a file-writing call that could not be parsed; never executed
 INVALID_JSON_KEY = "__invalid_json__"
 # these calls must arrive whole: salvaging a cut-off one would write a partial file
 _WHOLE_CALL_ONLY = ("write_file", "edit_file", "append_file", "insert_at_line")
+
+
+_STUB_CHECKED = ("write_file", "append_file", "edit_file", "insert_at_line", "project_write", "project_append")
 
 
 _LEAKED_PARAM_RX = re.compile(r"</?\s*(?:parameter|param)+\s*[=:>\s]", re.IGNORECASE)
@@ -53,12 +57,17 @@ def validate_and_repair_tool_args(tool_name: str, args: dict, query_hint: str = 
     bad = _bad_path_error(repaired)
     if bad:
         return repaired, bad
+    if tool_name in _STUB_CHECKED:
+        # the model copied how an earlier call looks in the history instead of sending the text (history_args.py)
+        stub = stub_content_error(tool_name, repaired)
+        if stub:
+            return repaired, stub
 
     if repaired.get("_oversize_tokens") and tool_name in ("write_file", "append_file", "edit_file") and not (
             repaired.get("path") or repaired.get("file") or repaired.get("filename")):
         # cut at the size cap before the path was streamed: "path required" would hide the real cause
-        from core.agent_tools.limits import agent_limit
-        cap = agent_limit("write_file_max_tokens")
+        from core.agent_tools.limits import write_cap_tokens
+        cap = write_cap_tokens()
         return repaired, (f"error: nothing was saved: that call was about {repaired['_oversize_tokens']} tokens; one call may carry at most {cap}. "
                           f"Send the file name FIRST, then a much smaller part (under {int(cap * 0.6)} tokens). Do not repeat the same long content.")
 

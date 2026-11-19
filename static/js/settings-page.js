@@ -64,7 +64,22 @@ document.querySelectorAll('.settings-tab-btn').forEach(btn => {
 // Search filter in tabs
 const searchInput = document.getElementById('settings-tab-search');
 if (searchInput) {
+  // The page has password fields (MFA, new users), so Chrome treats the first text box above them as a login username
+  // and fills in the saved account name - ignoring autocomplete="off". A value the user did not type is cleared.
+  let searchTyped = false;
+  const markTyped = () => { searchTyped = true; };
+  searchInput.addEventListener('keydown', markTyped);
+  searchInput.addEventListener('paste', markTyped);
+  searchInput.addEventListener('drop', markTyped);
+  const dropAutofill = () => {
+    if (!searchTyped && searchInput.value) {
+      searchInput.value = '';
+      searchInput.dispatchEvent(new Event('input'));
+    }
+  };
+  [0, 300, 1000, 2500].forEach((ms) => setTimeout(dropAutofill, ms));
   searchInput.addEventListener('input', (e) => {
+    if (!searchTyped && e.isTrusted && searchInput.value) { dropAutofill(); return; }   // autofill, not the user
     const q = e.target.value.toLowerCase().trim();
     document.querySelectorAll('.settings-tab-btn').forEach(b => {
       const text = b.textContent.toLowerCase();

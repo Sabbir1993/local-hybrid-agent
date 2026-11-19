@@ -83,6 +83,7 @@ class RunContext:
     steps: int = 100
     msgs: list = field(default_factory=list)
     last_query: str = ""
+    parallel: bool = False           # /parallel: the first step fans out with spawn_parallel_agents (parallel_cmd.py)
     surface_q: str = ""
     rpol: dict = field(default_factory=dict)
     q_category: str = "other"
@@ -644,6 +645,17 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
         if m.get("role") == "user":
             ctx.last_query = str(m.get("content", ""))
             break
+    # /parallel <task> (core/agent_loop/parallel_cmd.py): the first step must fan the task out to sub-agents
+    from core.agent_loop import parallel_cmd
+    _par, _par_task = parallel_cmd.parse(ctx.last_query)
+    if _par:
+        ctx.parallel = not ctx.personal              # the Personal Agent may not spawn: the task just runs normally
+        _text = parallel_cmd.instruction(_par_task) if ctx.parallel else _par_task
+        for i in range(len(ctx.msgs) - 1, -1, -1):
+            if ctx.msgs[i].get("role") == "user":
+                ctx.msgs[i] = {**ctx.msgs[i], "content": _text}
+                break
+        ctx.last_query = _par_task
     # A 3D / WebGL page: the dedicated html3d lane when the admin set one up and it loads; else the main model, as before.
     if not ctx.use_cloud_main and prompt_scope.three_d_wanted(ctx.last_query, [], ctx.msgs[:-1]):
         from core.lanes import creative

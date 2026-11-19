@@ -797,7 +797,7 @@ export const Composer: React.FC = () => {
     Boolean(currentModelDisplay) &&
     currentModelDisplay !== 'Please select a model' &&
     currentModelDisplay !== 'No model available';
-  const chatCleanModel = appMode === 'chat' ? formatChatModelDisplay(currentModelDisplay) : currentModelDisplay;
+  const chatCleanModel = formatChatModelDisplay(currentModelDisplay);
   const placeholderModel = hasModel ? chatCleanModel : '';
 
   const isPhone = useMediaQuery(PHONE_QUERY);
@@ -1681,7 +1681,7 @@ export const Composer: React.FC = () => {
                                   >
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
                                       <span style={{ fontWeight: isCurrent ? 700 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={cleanModelName(m.display || m.id)}>
-                                        {appMode === 'chat' ? formatChatModelDisplay(m.display || m.id) : cleanModelName(m.display || m.id)}
+                                        {formatChatModelDisplay(m.display || m.id)}
                                       </span>
                                       {m.currently_loaded && (
                                         <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontWeight: 600 }}>

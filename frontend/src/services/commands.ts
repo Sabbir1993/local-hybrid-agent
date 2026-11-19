@@ -83,7 +83,7 @@ export async function slashItems(query: string, mode: SlashMode, customAgents: a
         { icon: '🧭', name: 'init', desc: 'scan the project and write AGENTS.md (loaded into agent tasks)', category: 'utility' },
         { icon: '🧹', name: 'compact', desc: 'compress conversation history', category: 'utility' },
         { icon: '🤖', name: 'subagent', desc: 'delegate a sub-task to a focused sub-agent', category: 'utility', template: true },
-        { icon: '👥', name: 'parallel', desc: 'dispatch several independent sub-agents at once', category: 'utility', template: true },
+        { icon: '👥', name: 'parallel', desc: 'split the task across parallel sub-agents (always fans out)', category: 'utility' },
         { icon: '🧩', name: 'multiagent', desc: 'delegate planner, coder and reviewer roles in one prompt', category: 'utility', template: true },
       ]
     : [

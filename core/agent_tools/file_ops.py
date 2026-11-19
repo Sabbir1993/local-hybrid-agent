@@ -7,11 +7,11 @@ from typing import Optional
 
 from .. import companion_bridge
 from ..request_context import personal_scope
-from . import edit_engine
+from . import edit_engine, salvage
 from ..small_model import APP_CONFIG
 from . import file_state
 from .diffs import _record_diff
-from .limits import agent_limit, effective_chunk_tokens, est_tokens
+from .limits import agent_limit, effective_chunk_tokens, est_tokens, write_cap_tokens
 from .name_recovery import match_written
 from .verify_loop import verify_after
 from .workspace import (
@@ -75,10 +75,12 @@ SHRINK_RATIO = 0.5
 
 
 def _too_big(content: str, tool: str, args: Optional[dict] = None, existing: bool = False) -> Optional[str]:
-    cap = agent_limit("write_file_max_tokens")
+    cap = write_cap_tokens()
     # `_oversize_tokens`: the stream was cut once the call passed the cap (routes/common/sse_stream.py), so
-    # `content` is empty and the size is the amount generated before the cut
-    n = int((args or {}).get("_oversize_tokens") or 0) or est_tokens(content)
+    # `content` is empty and the size is the amount generated before the cut. A cut call is always refused, even when
+    # its estimate lands a little under the cap (JSON escaping): nothing of it can be written as sent.
+    cut = int((args or {}).get("_oversize_tokens") or 0)
+    n = max(cut, cap + 1) if cut else est_tokens(content)
     if n > cap and (existing or tool in ("append_file", "edit_file")):
         # the file already holds the earlier sections: "write a skeleton first" here sends the model back to square one,
         # where it rewrites the file and loses them
@@ -272,6 +274,17 @@ async def tool_grep(args: dict) -> str:
 _SYNTAX_FAILS: dict = {}                 # consecutive syntax failures per file; limit = agent.verify_max_retries (Settings)
 
 
+def _syntax_fail(uid, p: Path, path_arg: str, err: str, tool: str) -> str:
+    """A write refused by the pre-save check. Counted per file across write_file and append_file: after
+    verify_max_retries in a row the model is told to stop, not to try a fourth variant."""
+    key = (uid, str(p).lower())
+    _SYNTAX_FAILS[key] = _SYNTAX_FAILS.get(key, 0) + 1
+    if _SYNTAX_FAILS[key] >= agent_limit("verify_max_retries"):
+        return (f"error: {path_arg} failed the syntax check {_SYNTAX_FAILS[key]} times in a row ({err}). Stop writing it: "
+                f"do not call {tool} for this file again. Tell the user the file could not be written and why.")
+    return f"error: pre-save syntax validation failed for {path_arg}: {err} (file was not written)"
+
+
 def _unwrap_fence(text: str) -> str:
     """'```python\\n...\\n```' -> '...' when the fence wraps the whole content (nothing else around it)."""
     s = text.strip()
@@ -297,7 +310,14 @@ async def tool_write_file(args: dict) -> str:
             _uid, _p = _resolve(path_arg)
             existing = await _read_existing(_uid, _p) is not None
         except Exception:
-            pass
+            _uid = _p = None
+        if not existing and _p is not None and _p.suffix.lower() not in DOCUMENT_EXTS:
+            # a NEW file: keep its complete first part as the file and go on with append_file (never over an existing one)
+            pre = salvage.salvage_prefix(None, args.get("_partial") or "", path_arg)
+            if pre:
+                await _store(_uid, _p, None, pre)
+                return (_partly_saved_msg(pre, path_arg, pre, "write_file")
+                        + await verify_after(_uid, _p, path_arg, pre, None, can_autorevert=False))
         return _too_big("", "write_file", args, existing=existing)
     uid, p = _resolve(path_arg)
     content = args.get("content", "")
@@ -344,12 +364,7 @@ async def tool_write_file(args: dict) -> str:
         from .verify import validate_code_syntax
         is_ok, err = validate_code_syntax(path_arg, content)
         if not is_ok:
-            key = (uid, str(p).lower())
-            _SYNTAX_FAILS[key] = _SYNTAX_FAILS.get(key, 0) + 1
-            if _SYNTAX_FAILS[key] >= agent_limit("verify_max_retries"):
-                return (f"error: {path_arg} failed the syntax check {_SYNTAX_FAILS[key]} times in a row ({err}). Stop writing it: "
-                        "do not call write_file for this file again. Tell the user the file could not be written and why.")
-            return f"error: pre-save syntax validation failed for {path_arg}: {err} (file was not written)"
+            return _syntax_fail(uid, p, path_arg, err, "write_file")
     _SYNTAX_FAILS.pop((uid, str(p).lower()), None)
     await _store(uid, p, before, content)
     verb = "overwrote" if before is not None else "created"
@@ -389,31 +404,37 @@ async def tool_edit_file(args: dict) -> str:
     return await _retry_on_written_name(_edit_file, args)
 
 
+def _partly_saved_msg(content: str, path_arg: str, after: str, tool: str) -> str:
+    """Result of a cut write whose complete part was kept: where the file now ends, and to send only what follows."""
+    return (f"partly saved: the {tool} call was cut at the {write_cap_tokens()}-token limit, so only "
+            f"its first {content.count(chr(10))} complete lines were saved to {path_arg} (now {_lines(after)} lines). "
+            f"The file now ends with: \"{salvage.last_line(content)}\". Continue with append_file from the line AFTER "
+            f"it, in sections of about {effective_chunk_tokens()} tokens (roughly 80 lines). Do not resend what is saved.")
+
+
 async def _append_file(args: dict) -> str:
     path_arg = _path_arg(args)
+    uid, p = _resolve(path_arg)
+    if p.suffix.lower() in DOCUMENT_EXTS:
+        return (f"error: cannot append to a {p.suffix.lower()} document - use doc_edit to change it.")
     salvaged = ""
+    before = await _read_existing(uid, p)
     if args.get("_oversize_tokens"):
-        part = args.get("_partial") or ""
-        # plain-text files only: a cut inside code would leave a half statement in the file
-        if part.count("\n") >= 5 and path_arg.lower().endswith((".md", ".txt", ".rst", ".log")):
-            salvaged = part[:part.rindex("\n") + 1]
+        # keep the complete part of what was generated before the cut: throwing it away made the model generate the
+        # same huge section again, ~10k tokens per try
+        salvaged = salvage.salvage_prefix(before, args.get("_partial") or "", path_arg)
         if not salvaged:
             return _too_big("", "append_file", args)
-    uid, p = _resolve(path_arg)
     content = salvaged or args.get("content", args.get("text", ""))
     if not isinstance(content, str) or not content:
         return "error: content required for append_file"
-    if p.suffix.lower() in DOCUMENT_EXTS:
-        return (f"error: cannot append to a {p.suffix.lower()} document - use doc_edit to change it.")
     big = None if salvaged else _too_big(content, "append_file")
     if big:
         return big
-    before = await _read_existing(uid, p)
     if before is None:
         if not args.get("_create"):
             return await _missing_msg(uid, p, path_arg, "Create it with write_file (a skeleton or the "
                                       "first section), then use append_file for the rest.")
-        before = None
     after = edit_engine.append_text(before, content)
     if len(after) > MAX_EDIT_BYTES * 4:
         return f"error: {path_arg} would grow past {MAX_EDIT_BYTES * 4 // 1024} KB - split it into several files."
@@ -421,16 +442,13 @@ async def _append_file(args: dict) -> str:
         from .verify import validate_code_syntax
         is_ok, err = validate_code_syntax(path_arg, after)
         if not is_ok:
-            return f"error: pre-save syntax validation failed for {path_arg}: {err} (file was not written)"
+            return _syntax_fail(uid, p, path_arg, err, "append_file")
+    _SYNTAX_FAILS.pop((uid, str(p).lower()), None)
     await _store(uid, p, before, after)
     msg = (f"appended {len(content)} chars to {path_arg} (now {_lines(after)} lines, "
            f"{len(after)} bytes)")
     if salvaged:
-        last = content.rstrip().splitlines()[-1][:80]
-        msg = (f"partly saved: the call was cut at the {agent_limit('write_file_max_tokens')}-token limit, so only the first "
-               f"{content.count(chr(10))} lines were appended to {path_arg} (now {_lines(after)} lines). The last saved line is: "
-               f"\"{last}\". Continue with append_file from the line AFTER it, in sections of about "
-               f"{effective_chunk_tokens()} tokens. Do not resend what is saved.")
+        msg = _partly_saved_msg(content, path_arg, after, "append_file")
     return msg + await verify_after(uid, p, path_arg, after, before, can_autorevert=False)
 
 
