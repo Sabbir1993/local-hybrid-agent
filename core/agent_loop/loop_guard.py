@@ -134,7 +134,10 @@ class LoopGuard:
 
     # ------------------------------------------------------------------ input
     def record(self, name: str, args, result, ok: bool) -> None:
-        refused = "cannot run this command" in str(result if result is not None else "")[:200]
+        head = str(result if result is not None else "")[:200]
+        # a refusal that says "do not do this again": the shell policy, a write over a file that is already there or
+        # would be shrunk. Sent unchanged a second time, it is a loop already.
+        refused = (not ok) and any(m in head for m in ("cannot run this command", "would replace", "already exists"))
         self.calls.append((str(name), _sig(args), _rhash(result), bool(ok), refused))
 
     # ------------------------------------------------------------------ rules
@@ -145,7 +148,8 @@ class LoopGuard:
         if not calls:
             return None
         # a command the policy already refused, sent again unchanged: asking twice is already one try too many
-        refused = Counter((c[0], c[1]) for c in calls if len(c) > 4 and c[4])
+        # (a write is judged by its file: a different body for the same refused file is the same attempt)
+        refused = Counter((c[0], _write_key(c[1]) if c[0] == "write_file" else c[1]) for c in calls if len(c) > 4 and c[4])
         if refused:
             top, cnt = refused.most_common(1)[0]
             if cnt >= 2:
