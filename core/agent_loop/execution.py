@@ -6,7 +6,7 @@ import uuid
 from pathlib import PurePosixPath
 from ..agent_tools import TOOL_IMPLS
 from ..registry import registry
-from ..request_context import PERSONAL_BLOCKED_TOOLS, personal_scope, run_in_executor_ctx, tool_allowed
+from ..request_context import personal_blocked_tools, personal_scope, run_in_executor_ctx, tool_allowed
 from .degeneration import RUNAWAY_MSG
 from .repair import validate_and_repair_tool_args
 from . import schema_check
@@ -88,7 +88,7 @@ async def _dispatch(name: str, args: dict) -> str:
 
 def _personal_refusal(name: str, args: dict) -> str:
     """Personal Agent runs never change the user's machine; the reason is written for the model."""
-    if name in PERSONAL_BLOCKED_TOOLS:
+    if name in personal_blocked_tools():
         return (f"error: '{name}' is not available to a Personal Agent. For system information use run_shell with "
                 "a read-only command (systeminfo, tasklist, ipconfig, dir ...); read, search and write files in "
                 "your work folder with the file tools. Do not retry '{name}'.".replace("{name}", name))

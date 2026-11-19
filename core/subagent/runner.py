@@ -27,6 +27,11 @@ def resolve_subagent_tools(all_names, role_tools=None, tool_allowlist=None, pare
     if parent_allowlist is not None:
         names_ok &= set(parent_allowlist)
     names_ok -= DENIED_TOOLS
+    from ..request_context import personal_blocked_tools, personal_scope
+    if personal_scope():
+        # an Agent-mode child: the Personal Agent's blocked tools, and no browser / phone tools (they need the user's
+        # OK on an approval card, which a sub-agent cannot show)
+        names_ok = {n for n in names_ok - personal_blocked_tools() if not n.startswith(PERSONAL_CHILD_DENIED_PREFIXES)}
     return names_ok
 
 
@@ -54,6 +59,9 @@ async def subagent_policy_refusal(name: str, args) -> Optional[str]:
             return permission_rules.refusal_text(verdict)
         return (f"error: policy rule '{verdict['id']}' needs the user's approval for '{name}', and a sub-agent cannot "
                 "ask. Report back to the parent agent that this step needs the user's approval.")
+    why = personal_child_refusal(name, args)
+    if why:
+        return why
     if hooks.matching("pre_tool", name):
         why = await hooks.run_pre(name, args)
         if why:
@@ -69,6 +77,41 @@ async def subagent_policy_refusal(name: str, args) -> Optional[str]:
 # same guess that produced this bug, and nothing measures it. Statuses are
 # structural facts (did the loop finish, did the model answer), not readings of
 # the answer's tone.
+PERSONAL_CHILD_DENIED_PREFIXES = ("browser_", "mobile_")
+PERSONAL_MAX_PARALLEL = 3          # sub-agents running at once in Agent mode (the shared GPU slots)
+_EDIT_TOOLS = ("write_file", "edit_file", "append_file", "insert_at_line", "write_file_common", "doc_create", "doc_edit",
+               "doc_append", "revert")
+
+
+def personal_child_refusal(name: str, args) -> Optional[str]:
+    """An Agent-mode (Personal Agent) sub-agent may not do what the parent run would have asked the user about: it has
+    no approval card. None when the call may run (outside Agent mode always None: Code mode behaves as before)."""
+    from ..request_context import permission_mode, personal_scope
+    if not personal_scope():
+        return None
+    mode = permission_mode()
+    if mode == "bypass":
+        return None
+    ask = ("error: '{n}' would need the user's approval, and a sub-agent in Agent mode cannot ask. Do not retry it: "
+           "report back to the parent agent what you wanted to do and why, and it will ask the user.").replace("{n}", name)
+    if mode == "manual" and name in _EDIT_TOOLS:
+        return ask
+    if name.startswith(PERSONAL_CHILD_DENIED_PREFIXES):
+        return ask
+    try:
+        from ..device_approval import request_for
+        if request_for(name, args if isinstance(args, dict) else {}):
+            return ask
+    except Exception:
+        pass
+    if name.startswith("mcp__"):
+        from ..registry import registry
+        t = registry.get(name)
+        if not (t and (t.meta or {}).get("read_only") is True):       # unknown counts as side-effecting
+            return ask
+    return None
+
+
 SUBAGENT_STATUSES = ("success", "step_exhausted", "no_response", "critic_rejected")
 SUBAGENT_TOOLS = ("spawn_agent", "spawn_parallel_agents", "spawn_reviewed_coder")
 
@@ -250,7 +293,12 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
             # executor is the only mapped step, so a run that escalated orchestration
             # to a cloud main left the sub-agent with nothing to call. Append the main
             # lane's *effective* target - cloud binding included - as the last resort.
-            if not any(t.is_cloud for t in route):
+            from ..request_context import personal_scope
+            if personal_scope():
+                # Agent mode: the user's folder never goes to a cloud model through a sub-agent
+                route = [t for t in route if not t.is_cloud] or [lanes_mod.Target(n) for n in ("executor", "main")
+                                                                if n in reg and reg[n]["local"]]
+            elif not any(t.is_cloud for t in route):
                 _cm = cloud.cloud_lane("main")
                 if _cm:
                     route.append(lanes_mod.Target("main", _cm))
@@ -412,6 +460,9 @@ async def tool_spawn_agent(args: dict) -> str:
 async def run_parallel_subagents(agent_specs: list, max_concurrency: int = 4) -> str:
     if not agent_specs or not isinstance(agent_specs, list):
         return "error: 'agents' must be a non-empty list of agent specifications"
+    from ..request_context import personal_scope
+    if personal_scope():
+        max_concurrency = min(max_concurrency, PERSONAL_MAX_PARALLEL)   # Agent mode shares the GPU with everyone
 
     sem = asyncio.Semaphore(max(1, max_concurrency))
 

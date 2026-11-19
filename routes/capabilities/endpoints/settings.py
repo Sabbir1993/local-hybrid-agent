@@ -152,6 +152,7 @@ def _limits_view() -> dict:
         "values": {
             **{k: agent_limit(k) for k in AGENT_LIMITS},
             "mirror_to_workspace": bool(agent_cfg.get("mirror_to_workspace", False)),
+            "personal_subagents": bool(agent_cfg.get("personal_subagents", False)),
             "executor_max_effort": executor_effort_ceiling(),
             "plan_required": plan_guard.plan_mode_setting(agent_cfg),
             "compaction_threshold": context_limit("compaction_threshold"),
@@ -218,7 +219,7 @@ async def agent_limits_set(req: AgentLimitsReq,
                 return JSONResponse({"error": "plan_required must be auto, always or off"}, status_code=400)
             agent_cfg[k] = str(v).lower()
             changes[k] = agent_cfg[k]
-        elif k == "mirror_to_workspace":
+        elif k in ("mirror_to_workspace", "personal_subagents"):
             agent_cfg[k] = bool(v)
             changes[k] = agent_cfg[k]
         elif k == "compaction_threshold":

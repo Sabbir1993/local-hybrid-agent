@@ -491,6 +491,8 @@ async def run_agent_stream(req, user, ctx):
         parallel_forced = 0
         if parallel_on and force_main_until < parallel_cmd.MAX_FORCED_STEPS:
             force_main_until, force_main_why = parallel_cmd.MAX_FORCED_STEPS, "parallel"
+        if ctx.parallel_note:   # /parallel was asked for but this agent may not spawn: say so, then run as one agent
+            yield sse("lane_warning", {"reason": "parallel_off", "message": ctx.parallel_note, "retrying": True})
         plan_nudges = 0
         narration_nudges = 0
         passivity_nudges = 0

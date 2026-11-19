@@ -66,6 +66,9 @@ function agentLimitsHtml(d) {
         </div>
         ${chk('mirror_to_workspace', 'Write PLAN.md and .agent/working_memory.md into the project folder', 'so you can read them next to your code')}
       </div>
+      <div style="margin-top:8px;"><b>Sub-agents</b>
+        ${chk('personal_subagents', 'Sub-agents in Agent mode', 'lets a Personal Agent use /parallel and spawn_agent: same folder and rules, local models only, max 3 at once, nothing that needs an approval')}
+      </div>
       <div style="margin-top:8px;"><b>Memory switches</b>
         ${chk('memory_enabled', 'Agents can use long-term memory', '')}
         ${chk('memory_allow_cloud', 'Also when a cloud model is on the run', 'off = memory is never sent to a cloud provider (recommended: it is personal data)')}

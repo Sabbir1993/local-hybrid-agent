@@ -91,6 +91,7 @@ export async function slashItems(query: string, mode: SlashMode, customAgents: a
         { icon: '🔨', name: 'build', desc: 'switch out of Plan mode', category: 'mode' },
         { icon: '🎯', name: 'goal', desc: 'autonomous goal execution, drive to completion', category: 'utility' },
         { icon: '🧹', name: 'compact', desc: 'compress conversation history', category: 'utility' },
+        { icon: '👥', name: 'parallel', desc: 'split the task across parallel sub-agents (if your admin turned it on)', category: 'utility' },
       ];
   // /image and /video are listed in both modes; the hint says when they still need setting up
   const ms = await cachedMediaStatus();

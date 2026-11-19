@@ -141,6 +141,32 @@ _personal_scope: contextvars.ContextVar[bool] = contextvars.ContextVar("personal
 _personal_workspace: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("personal_workspace", default=None)
 
 PERSONAL_BLOCKED_TOOLS = frozenset({"spawn_agent", "spawn_parallel_agents", "run_tests", "git_commit", "git_branch"})
+PERSONAL_SPAWN_TOOLS = frozenset({"spawn_agent", "spawn_parallel_agents"})
+
+
+def personal_subagents_enabled() -> bool:
+    """Admin switch agent.personal_subagents (default off): may a Personal Agent (Agent mode) delegate to sub-agents?
+    The children inherit the personal scope, so every rule above still applies to them; core/subagent/runner.py adds
+    the rest (no tool that would need an approval card, local models only, at most 3 at once)."""
+    from .small_model import APP_CONFIG
+    return bool((APP_CONFIG.get("agent") or {}).get("personal_subagents", False))
+
+
+def personal_blocked_tools() -> frozenset:
+    """PERSONAL_BLOCKED_TOOLS, minus the spawn tools when the admin allowed sub-agents for the Personal Agent."""
+    return PERSONAL_BLOCKED_TOOLS - PERSONAL_SPAWN_TOOLS if personal_subagents_enabled() else PERSONAL_BLOCKED_TOOLS
+
+
+# The run's permission mode (auto | manual | bypass), so a sub-agent knows what the parent would have asked about
+_permission_mode: contextvars.ContextVar[str] = contextvars.ContextVar("permission_mode", default="auto")
+
+
+def set_permission_mode(mode: Optional[str]) -> contextvars.Token:
+    return _permission_mode.set(str(mode or "auto"))
+
+
+def permission_mode() -> str:
+    return _permission_mode.get()
 
 
 def set_personal_scope(on: bool) -> contextvars.Token:

@@ -84,6 +84,7 @@ class RunContext:
     msgs: list = field(default_factory=list)
     last_query: str = ""
     parallel: bool = False           # /parallel: the first step fans out with spawn_parallel_agents (parallel_cmd.py)
+    parallel_note: str = ""          # why /parallel could not run for this agent, shown to the user
     surface_q: str = ""
     rpol: dict = field(default_factory=dict)
     q_category: str = "other"
@@ -168,6 +169,9 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
         if ctx.custom_agent.get("tool_allowlist"):
             # writing files is never withheld from an agent: a restricted set always keeps write_file / edit_file
             ctx.custom_agent_tools = set(ctx.custom_agent["tool_allowlist"]) | {"write_file", "edit_file", "append_file"}
+            if "spawn_agent" in ctx.custom_agent_tools:
+                # the agent editor offers one "Spawn Sub-Agent" switch: it covers the parallel form too
+                ctx.custom_agent_tools.add("spawn_parallel_agents")
         # the client sends null for values the user didn't change after picking the agent
         if req.reasoning_effort is None and ctx.custom_agent.get("reasoning_effort"):
             ctx.effort = reasoning_mod.resolve(ctx.custom_agent["reasoning_effort"])
@@ -177,8 +181,9 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
         req.temperature = 0.4
     # enforced in core.agent_loop.run_tool for every lane (router, executor, main, sub-agents);
     # set in the request context like set_current_user, so the stream task inherits it
-    from core.request_context import (PERSONAL_BLOCKED_TOOLS, set_personal_scope,
+    from core.request_context import (personal_blocked_tools, set_permission_mode, set_personal_scope,
                                        set_personal_workspace, set_tool_allowlist)
+    set_permission_mode(req.permission_mode or "auto")    # sub-agents refuse what the parent would have asked about
     set_tool_allowlist(ctx.custom_agent_tools)
     ctx.personal = bool(req.personal)
     if ctx.personal:
@@ -191,7 +196,7 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
                                          "to let it use tools on your machine."}, 400)
         set_personal_workspace(folder)
     set_personal_scope(ctx.personal)
-    ctx.hidden_tools = PERSONAL_BLOCKED_TOOLS if ctx.personal else frozenset()
+    ctx.hidden_tools = personal_blocked_tools() if ctx.personal else frozenset()
 
     if not companion_bridge.is_connected(user.id):
         raise SetupError(
@@ -649,7 +654,9 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     from core.agent_loop import parallel_cmd
     _par, _par_task = parallel_cmd.parse(ctx.last_query)
     if _par:
-        ctx.parallel = not ctx.personal              # the Personal Agent may not spawn: the task just runs normally
+        # the task runs normally (and the user is told why) when this agent may not spawn
+        ctx.parallel_note = parallel_cmd.unavailable_reason(ctx.personal, ctx.hidden_tools, ctx.custom_agent_tools)
+        ctx.parallel = not ctx.parallel_note
         _text = parallel_cmd.instruction(_par_task) if ctx.parallel else _par_task
         for i in range(len(ctx.msgs) - 1, -1, -1):
             if ctx.msgs[i].get("role") == "user":

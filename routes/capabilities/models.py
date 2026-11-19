@@ -73,6 +73,7 @@ class AgentLimitsReq(BaseModel):
     python_prompt_nudge: Optional[int] = None
     executor_max_effort: Optional[str] = None
     mirror_to_workspace: Optional[bool] = None
+    personal_subagents: Optional[bool] = None
     compaction_threshold: Optional[float] = None
     memory_enabled: Optional[bool] = None
     memory_allow_cloud: Optional[bool] = None
