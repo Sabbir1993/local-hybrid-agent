@@ -395,13 +395,13 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
         {!treeMode && (<>
         <div className="sidebar-section-head">
           <span className="sidebar-section-title" id="session-title">
-            {appMode === 'code' ? 'PROJECT TASKS' : appMode === 'agent' ? 'AGENT TASKS' : 'RECENT CHATS'}
+            RECENT CHATS
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: 'auto' }}>
             <button
               className="claude-icon-tool"
               id="btn-new-session"
-              title={appMode === 'code' ? 'New Project Task (+)' : appMode === 'agent' ? 'New Agent Task (+)' : 'New Chat (+)'}
+              title="New Chat (+)"
               aria-label="New Session"
               onClick={() => { createSession(); closeIfNarrow(); }}
             >
@@ -436,8 +436,7 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
         >
           {filteredSessions.length === 0 ? (
             <div className="dim" style={{ fontSize: '12px', padding: '12px 6px', textAlign: 'center' }}>
-              {appMode === 'code' && !activeProjectId ? 'Select or add a project to see its tasks'
-                : appMode === 'chat' ? 'no chats yet' : 'no tasks yet'}
+              no chats yet
             </div>
           ) : (
             filteredSessions.map((s) => (
@@ -459,44 +458,7 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
                   }}
                   title={s.title}
                 >
-                  {appMode === 'code' ? (
-                    <svg
-                      className="session-icon"
-                      width="13"
-                      height="13"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      style={{ flexShrink: 0, verticalAlign: '-1px', marginRight: '7px', opacity: 0.85 }}
-                    >
-                      <polyline points="16 18 22 12 16 6" />
-                      <polyline points="8 6 2 12 8 18" />
-                    </svg>
-                  ) : appMode === 'agent' ? (
-                    <svg
-                      className="session-icon"
-                      width="13"
-                      height="13"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      style={{ flexShrink: 0, verticalAlign: '-1px', marginRight: '7px', opacity: 0.85 }}
-                    >
-                      <rect width="16" height="12" x="4" y="8" rx="2" />
-                      <path d="M12 8V4H8" />
-                      <path d="M2 14h2" />
-                      <path d="M20 14h2" />
-                      <circle cx="9" cy="13" r="1" fill="currentColor" />
-                      <circle cx="15" cy="13" r="1" fill="currentColor" />
-                      <path d="M9 17h6" />
-                    </svg>
-                  ) : (
+                  {(
                     <svg
                       className="session-icon"
                       width="13"
@@ -513,7 +475,7 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
                     </svg>
                   )}
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {appMode === 'agent' ? (s.title || '').replace(/^[\p{Emoji}\u2000-\u3300]\s*/u, '') : s.title}
+                    {s.title}
                   </span>
                 </span>
 
