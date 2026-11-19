@@ -111,6 +111,7 @@ async def capabilities_status(user: Principal = Depends(get_current_user)):
             "ask_first": bool(sh.get("ask_first", True)),
             "timeout_s": sh.get("timeout_s", 60),
             "allow_patterns": sh.get("allow_patterns", []),
+            "personal_mode": "ask_suspicious" if str(sh.get("personal_mode") or "").lower() == "ask_suspicious" else "strict",
         },
         "agent": {
             "max_steps": APP_CONFIG.get("agent", {}).get("max_steps", 60),

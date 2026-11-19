@@ -42,6 +42,7 @@ class ShellSettingsReq(BaseModel):
     ask_first: Optional[bool] = None
     allow_patterns: Optional[list] = None
     timeout_s: Optional[int] = None
+    personal_mode: Optional[str] = None        # Agent mode shell: "strict" (refuse writes) | "ask_suspicious" (approval card)
 
 
 AGENT_STEPS_MIN, AGENT_STEPS_MAX = 5, 200

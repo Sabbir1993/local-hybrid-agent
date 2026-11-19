@@ -88,6 +88,13 @@ async def shell_settings(req: ShellSettingsReq,
         shell["allow_patterns"] = [str(p).strip() for p in req.allow_patterns if str(p).strip()]
     if req.timeout_s is not None:
         shell["timeout_s"] = max(5, min(600, int(req.timeout_s)))
+    if req.personal_mode is not None:
+        # Agent mode: "strict" refuses any command that changes the machine; "ask_suspicious" shows it on the
+        # approval card instead (the always-forbidden list - disk format, wiping a drive - is refused in both)
+        mode = str(req.personal_mode).strip().lower()
+        if mode not in ("strict", "ask_suspicious"):
+            return JSONResponse({"error": "personal_mode must be strict or ask_suspicious"}, status_code=400)
+        shell["personal_mode"] = mode
     try:
         write_app_config(cfg, CONFIG_FILE)
     except Exception as e:

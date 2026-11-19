@@ -203,6 +203,18 @@ async function loadCapabilities() {
       <div class="cap-item">
         <label style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
           <div>
+            <b>Agent mode: commands that change files</b>
+            <div class="dim" style="font-size:11px;">Set-Content, Out-File, mkdir, pip install ... from a Personal Agent. Disk format and wiping a drive are always refused.</div>
+          </div>
+          <select id="shell-personal-mode" ${canConfigureGlobal ? '' : 'disabled'} title="${canConfigureGlobal ? '' : 'admin-only setting'}" style="background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:4px 8px; font-size:11.5px; outline:none; cursor:pointer;">
+            <option value="ask_suspicious" ${sh.personal_mode === 'ask_suspicious' ? 'selected' : ''}>Ask me each time</option>
+            <option value="strict" ${sh.personal_mode === 'ask_suspicious' ? '' : 'selected'}>Always refuse</option>
+          </select>
+        </label>
+      </div>
+      <div class="cap-item">
+        <label style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+          <div>
             <b>Default Terminal Shell</b>
             <div class="dim" style="font-size:11px;">Preferred shell for companion and console terminal</div>
           </div>
@@ -438,6 +450,19 @@ async function loadCapabilities() {
         });
         if (!r.ok) throw new Error('save failed');
         toast(askEl.checked ? 'Shell: will ask before unmatched commands' : 'Shell: no permission prompts');
+      } catch (e) { toast('Save failed: ' + e.message, true); }
+    };
+    const pmodeEl = box.querySelector('#shell-personal-mode');
+    if (pmodeEl) pmodeEl.onchange = async () => {
+      try {
+        const r = await fetch('/control/shell_settings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ personal_mode: pmodeEl.value }),
+        });
+        if (!r.ok) throw new Error('save failed');
+        toast(pmodeEl.value === 'ask_suspicious'
+          ? 'Agent mode: commands that change files now ask for your approval'
+          : 'Agent mode: commands that change files are refused');
       } catch (e) { toast('Save failed: ' + e.message, true); }
     };
     const addBtn = box.querySelector('#shell-pat-add');
