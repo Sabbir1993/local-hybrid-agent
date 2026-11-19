@@ -54,6 +54,14 @@ def validate_and_repair_tool_args(tool_name: str, args: dict, query_hint: str = 
     if bad:
         return repaired, bad
 
+    if repaired.get("_oversize_tokens") and tool_name in ("write_file", "append_file", "edit_file") and not (
+            repaired.get("path") or repaired.get("file") or repaired.get("filename")):
+        # cut at the size cap before the path was streamed: "path required" would hide the real cause
+        from core.agent_tools.limits import agent_limit
+        cap = agent_limit("write_file_max_tokens")
+        return repaired, (f"error: nothing was saved: that call was about {repaired['_oversize_tokens']} tokens; one call may carry at most {cap}. "
+                          f"Send the file name FIRST, then a much smaller part (under {int(cap * 0.6)} tokens). Do not repeat the same long content.")
+
     if tool_name in ("write_file", "edit_file", "append_file", "insert_at_line", "read_file", "revert"):
         p = repaired.get("path") or repaired.get("file") or repaired.get("filename")
         if not p:
@@ -105,7 +113,8 @@ def validate_and_repair_tool_args(tool_name: str, args: dict, query_hint: str = 
                 if alt in repaired:
                     repaired["content"] = repaired[alt]
                     break
-        if not repaired.get("content"):
+        if not repaired.get("content") and not repaired.get("_oversize_tokens"):
+            # a call cut at the size cap has empty content on purpose: _append_file explains the size limit
             return repaired, "error: content required for append_file"
         repaired["content"] = str(repaired["content"])
 
