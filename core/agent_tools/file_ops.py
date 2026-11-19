@@ -322,7 +322,9 @@ async def tool_write_file(args: dict) -> str:
     prot = await _personal_protect(uid, p, path_arg, before)
     if prot:
         return prot
-    if before and not args.get("overwrite"):
+    if before and not args.get("overwrite") and str(p).lower() not in file_state.created_paths():
+        # a file this agent made itself this session (a scratch script it is iterating on) may be rewritten without the flag;
+        # the shrink guard below still stops a short rewrite from wiping a half-built file
         return (f"error: {path_arg} already exists ({_lines(before)} lines). Change part of it with edit_file "
                 "(after read_file), add to the end with append_file, or pass overwrite=true to replace the "
                 "whole file.")

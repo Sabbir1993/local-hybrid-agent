@@ -9,6 +9,7 @@ content beyond one short error line.
 """
 import ast
 import json
+import re
 import xml.etree.ElementTree as ET
 from pathlib import PurePath
 
@@ -68,7 +69,15 @@ def verify_text(path: str, text: str) -> tuple[str, str]:
                 return "skip", ""
     except SyntaxError as e:
         where = f"line {e.lineno}" if e.lineno else "unknown line"
-        return "fail", _short(f"{type(e).__name__} at {where}: {e.msg}")
+        shown = (e.text or "").strip()
+        msg = f"{type(e).__name__} at {where}: {e.msg}" + (f" near {shown[:70]!r}" if shown else "")
+        first = text.lstrip()[:200]
+        first_line = first.split("\n", 1)[0]
+        prose = bool(re.fullmatch(r"[A-Za-z][A-Za-z ,.'\-]*:?\s*", first_line)) and len(first_line.split()) >= 3
+        if e.lineno == 1 and (first.startswith("```") or not first[:1].isascii() or prose):
+            # a model often starts a file with a fence or a sentence of explanation: say what a file must start with
+            msg += ". The file must start with code: no ``` fence and no explanation line before it"
+        return "fail", " ".join(msg.split())[:320]
     except json.JSONDecodeError as e:
         return "fail", _short(f"JSON error at line {e.lineno} col {e.colno}: {e.msg}")
     except ET.ParseError as e:

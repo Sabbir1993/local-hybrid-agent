@@ -44,10 +44,33 @@ class WriteFenceAndRetry(unittest.TestCase):
 
     def test_repeated_syntax_failures_tell_the_model_to_stop(self):
         bad = "this is not python ((("
-        results = [self.write("auth_test.py", bad) for _ in range(3)]
+        from core.small_model import APP_CONFIG
+        with mock.patch.dict(APP_CONFIG, {"agent": {"verify_max_retries": 3}}):
+            results = [self.write("auth_test.py", bad) for _ in range(3)]
         self.assertIn("pre-save syntax validation failed", results[0])
         self.assertIn("Stop writing it", results[2])
         self.assertNotIn("auth_test.py", self.mem)
+
+    def test_a_file_the_agent_created_can_be_rewritten_without_the_flag(self):
+        self.mem["auth_test.py"] = "x = 1\n"
+        with mock.patch.object(file_ops.file_state, "created_paths", return_value={"auth_test.py"}):
+            out = self.write("auth_test.py", "x = 2\n")
+        self.assertTrue(out.startswith("wrote"), out)
+        self.assertEqual(self.mem["auth_test.py"], "x = 2\n")
+
+    def test_a_file_the_agent_did_not_create_still_needs_the_flag(self):
+        self.mem["auth_test.py"] = "x = 1\n"
+        with mock.patch.object(file_ops.file_state, "created_paths", return_value=set()):
+            out = self.write("auth_test.py", "x = 2\n")
+        self.assertIn("already exists", out)
+        self.assertEqual(self.mem["auth_test.py"], "x = 1\n")
+
+    def test_the_syntax_error_shows_the_offending_line_and_a_hint(self):
+        from core.agent_tools.verify import verify_text
+        status, msg = verify_text("a.py", "Here is the script:\nprint(1)\n")
+        self.assertEqual(status, "fail")
+        self.assertIn("Here is the script", msg)
+        self.assertIn("must start with code", msg)
 
     def test_a_good_write_clears_the_failure_count(self):
         self.write("auth_test.py", "((( bad")

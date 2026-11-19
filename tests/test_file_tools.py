@@ -406,12 +406,20 @@ class SchemaContractTests(unittest.TestCase):
 
 class ToolTests(Base):
     def test_write_refuses_existing_unless_overwrite(self):
+        from unittest import mock
         self.call("write_file", path="a.py", content="x = 1\n")
-        out = self.call("write_file", path="a.py", content="x = 2\n")
+        with mock.patch("core.agent_tools.file_ops.file_state.created_paths", return_value=set()):
+            # a file the agent did not create this session (it was there before) still needs overwrite=true
+            out = self.call("write_file", path="a.py", content="x = 2\n")
         self.assertTrue(out.startswith("error:"))
         self.assertIn("append_file", out)
         self.assertEqual(self.fc.files[full("a.py")], "x = 1\n")
         self.assertIn("overwrote", self.call("write_file", path="a.py", content="x = 2\n", overwrite=True))
+
+    def test_write_may_replace_a_file_the_agent_created_itself(self):
+        self.call("write_file", path="s.py", content="x = 1\n")
+        self.assertIn("overwrote", self.call("write_file", path="s.py", content="x = 2\n"))
+        self.assertEqual(self.fc.files[full("s.py")], "x = 2\n")
 
     def test_write_size_cap_points_to_skeleton(self):
         out = self.call("write_file", path="big.py", content="x = 1\n" * 4000)
