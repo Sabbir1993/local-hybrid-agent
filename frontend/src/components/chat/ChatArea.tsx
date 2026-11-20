@@ -356,20 +356,17 @@ function renderCached(key: string | null, render: () => string): string {
   return html;
 }
 
-// Claude-style waiting line: a verb that rotates, animated dots and the seconds waited
+// Claude-style waiting line: a verb that rotates and animated dots (the ⏱ run timer next to it shows the time)
 const WORKING_WORDS = ['Thinking', 'Reasoning', 'Working', 'Pondering', 'Preparing', 'Checking the context'];
 const WorkingStatus: React.FC = () => {
   const [word, setWord] = useState(0);
   const [dots, setDots] = useState(1);
-  const [secs, setSecs] = useState(0);
   useEffect(() => {
-    const t0 = Date.now();
     const w = setInterval(() => setWord(x => (x + 1) % WORKING_WORDS.length), 2600);
     const d = setInterval(() => setDots(x => (x % 3) + 1), 450);
-    const s = setInterval(() => setSecs(Math.floor((Date.now() - t0) / 1000)), 1000);
-    return () => { clearInterval(w); clearInterval(d); clearInterval(s); };
+    return () => { clearInterval(w); clearInterval(d); };
   }, []);
-  return <>{WORKING_WORDS[word]}{'.'.repeat(dots)}{secs > 0 ? ` (${secs}s)` : ''}</>;
+  return <>{WORKING_WORDS[word]}{'.'.repeat(dots)}</>;
 };
 
 export const ChatArea: React.FC = () => {
