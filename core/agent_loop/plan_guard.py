@@ -50,10 +50,36 @@ def is_single_file_task(query: str) -> bool:
     return len({m.lower() for m in _ACTION_RX.findall(q)}) <= 2
 
 
+SMALL_TASK_CHARS = 120
+# words that make even a short request a multi-part job: a whole app, a site, "the full ...", "end to end"
+_BIG_SCOPE_RX = re.compile(
+    r"\b(apps?|applications?|websites?|sites?|systems?|projects?|platforms?|apis?|services?|dashboards?|games?|bots?|"
+    r"backend|frontend|full[- ]?stack|crud|modules?|librar(?:y|ies)|packages?|full|complete|entire|whole|"
+    r"end[- ]to[- ]end|audit|report|migration)\b", re.I)
+# "do X, then Y", "also", or a list of points: several steps written out
+_SEQUENCE_RX = re.compile(r"\b(then|after that|afterwards|and also|as well as|followed by|steps?)\b"
+                          r"|(?:^|\n)\s*(?:\d+[.)]|[-*•])\s", re.I)
+
+
+def is_small_task(query: str) -> bool:
+    """A short, single-action request with nothing that makes it multi-part: "fix the typo in header.php",
+    "create a login page", "write a function that reverses a string". It runs without a todo list (a plan only adds
+    create_plan / update_plan_item round trips before the one real action)."""
+    q = (query or "").strip()
+    if not q or len(q) > SMALL_TASK_CHARS:
+        return False
+    if _BIG_SCOPE_RX.search(q) or _SEQUENCE_RX.search(q):
+        return False
+    if len({m.lower() for m in _FILE_RX.findall(q)}) > 1:
+        return False            # "create a.py and b.py": more than one file is more than one step
+    return len({m.lower() for m in _ACTION_RX.findall(q)}) <= 1
+
+
 def needs_plan(category: str, query: str, agent_cfg: dict = None, personal: bool = False) -> bool:
     """Should this request start with a todo list? auto: creation requests, several action verbs, or a long request.
     A Personal Agent (small model, read-only inspection and reports) needs a higher bar: three verbs or a request
-    twice as long, so "check my disk and tell me what is big" is not turned into a planning exercise."""
+    twice as long, so "check my disk and tell me what is big" is not turned into a planning exercise.
+    A small task (is_small_task) never needs one in auto mode; "always" still plans everything."""
     mode = plan_mode_setting(agent_cfg)
     if mode == "off" or category == "greeting":
         return False
@@ -62,6 +88,8 @@ def needs_plan(category: str, query: str, agent_cfg: dict = None, personal: bool
     if is_analysis_request(query):
         return False
     q = (query or "").strip()
+    if is_small_task(q):
+        return False
     if category == "creation":
         # one named file, a short request and at most two action verbs ("write notes.txt, then read it
         # back") has no steps to track: a plan only adds model round trips before the first write
@@ -74,6 +102,53 @@ def needs_plan(category: str, query: str, agent_cfg: dict = None, personal: bool
 
 def open_items(items: list) -> list:
     return [i for i in items if i.get("status") in OPEN]
+
+
+# The app's own "go on" message after a run was stopped (routes/agent/constants.AGENT_RESUME_PREFIX), and the ways a
+# user tells the agent to carry out the plan it already has: "build it", "implement the plan", "next step", "step 3".
+RESUME_PREFIX = "Continue the previous task"
+_PLAN_GO_RX = re.compile(
+    r"\b(?:build|implement|execute|do|run|start|finish|complete|continue|resume|follow)\s+"
+    r"(?:it|that|this|them|the plan|this plan|the steps|the rest|the remaining(?: steps)?)\b"
+    r"|\b(?:next step|the plan|remaining steps?|rest of (?:it|the plan|the steps)|step\s*#?\d+|keep going|carry on|"
+    r"go on|try again|retry)\b", re.I)
+
+
+def continues_plan(query: str) -> bool:
+    """Does this message carry on with the task the session's plan was made for (rather than start a new one)?"""
+    q = (query or "").strip()
+    if not q:
+        return True
+    if q.startswith(RESUME_PREFIX):
+        return True
+    from .. import router_policy
+    if router_policy.is_continuation(q):
+        return True
+    return len(q) <= 160 and bool(_PLAN_GO_RX.search(q))
+
+
+def plan_for_new_message(items: list, query: str, plan_mode: bool = False) -> str:
+    """At the start of a run, what to do with the plan the session already has: "keep" or "drop".
+
+    A plan belongs to one task. It is dropped when the new message is a different task and the plan was already
+    worked on: finished (every step done or failed), or part-way done. Keeping it would push the new task into the
+    old steps (finish is withheld while steps are open) or, once finished, have the plan gate demand a new plan that
+    create_plan then refuses to write over the finished one - the run looped on create_plan instead of answering.
+
+    Kept: Plan mode (the user is refining it), a message that continues it ("go ahead", "build it", the app's own
+    resume message), and a plan nobody has started yet (no step done or failed) - that is the Plan -> Build hand-off,
+    where the next message is usually "build it with postgres" rather than a recognisable continuation phrase."""
+    if not items or plan_mode or continues_plan(query):
+        return "keep"
+    if not any(i.get("status") in ("done", "failed") for i in items):
+        return "keep"
+    return "drop"
+
+
+def plan_made_this_run(actions: list) -> bool:
+    """Has this run already stored a plan (create_plan, or the auto-drafted one)? The plan gate asks for one plan per
+    task: once it exists, finishing it must never re-open the gate."""
+    return any((a or {}).get("name") == "create_plan" and (a or {}).get("ok") for a in actions or [])
 
 
 def current_item(items: list):

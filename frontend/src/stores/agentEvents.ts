@@ -264,7 +264,8 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       break;
     case 'plan': {
       // only the latest checklist snapshot is kept
-      const planAct = { type: 'plan', items: d.items || [] };
+      // cleared: this message is a new task, so the last task's plan no longer applies (the Plan tab empties)
+      const planAct = { type: 'plan', items: d.items || [], ...(d.cleared ? { cleared: true } : {}) };
       const pi = acts.findIndex((a) => a.type === 'plan');
       if (pi >= 0) acts[pi] = planAct;
       else acts.push(planAct);
@@ -310,7 +311,9 @@ export function latestPlanItems(messages: ChatMessage[]): any[] {
     const acts = messages[i].acts;
     if (!acts) continue;
     for (let j = acts.length - 1; j >= 0; j--) {
-      if (acts[j].type === 'plan' && Array.isArray(acts[j].items) && acts[j].items.length) return acts[j].items;
+      if (acts[j].type !== 'plan') continue;
+      if (Array.isArray(acts[j].items) && acts[j].items.length) return acts[j].items;
+      if (acts[j].cleared) return [];       // a new task started here without the old plan: older plans are not shown
     }
   }
   return [];

@@ -85,6 +85,7 @@ class RunContext:
     last_query: str = ""
     parallel: bool = False           # /parallel: the first step fans out with spawn_parallel_agents (parallel_cmd.py)
     parallel_note: str = ""          # why /parallel could not run for this agent, shown to the user
+    plan_dropped: int = 0            # steps of the last task's plan cleared because this message is a new task
     surface_q: str = ""
     rpol: dict = field(default_factory=dict)
     q_category: str = "other"
@@ -596,6 +597,17 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     # point the plan tools at this session; in Build mode, inject the tracked plan
     # so the agent continues it step by step and keeps statuses up to date
     set_plan_context(req.session_id)
+    if req.session_id:
+        # a plan belongs to one task: a new task in this chat starts without the last task's plan (finished or
+        # part-way), so it is neither pushed into the old steps nor asked for a plan create_plan would refuse to write
+        # (core/agent_loop/plan_guard.plan_for_new_message)
+        from core.agent_loop import plan_guard as _pg
+        from core.db import db_set_plan_items
+        _new_msg = next((str(m.get("content", "")) for m in reversed(ctx.msgs) if m.get("role") == "user"), "")
+        _old = db_get_plan_items(req.session_id)
+        if _pg.plan_for_new_message(_old, _new_msg, plan_mode=bool(req.plan)) == "drop":
+            db_set_plan_items(req.session_id, [])
+            ctx.plan_dropped = len(_old)
     if req.session_id and not req.plan:
         plan_items = db_get_plan_items(req.session_id)
         if plan_items:

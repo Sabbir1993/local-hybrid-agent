@@ -493,6 +493,8 @@ async def run_agent_stream(req, user, ctx):
             force_main_until, force_main_why = parallel_cmd.MAX_FORCED_STEPS, "parallel"
         if ctx.parallel_note:   # /parallel was asked for but this agent may not spawn: say so, then run as one agent
             yield sse("lane_warning", {"reason": "parallel_off", "message": ctx.parallel_note, "retrying": True})
+        if ctx.plan_dropped:    # a new task: the dock's Plan tab stops showing the last task's checklist
+            yield sse("plan", {"items": [], "cleared": True})
         plan_nudges = 0
         narration_nudges = 0
         passivity_nudges = 0
@@ -848,7 +850,11 @@ async def run_agent_stream(req, user, ctx):
                 # /parallel: this step fans out to sub-agents - only spawn_parallel_agents, a call required, no plan gate
                 par_step = (lane_name == "main" and not req.plan
                             and parallel_cmd.wants_forced_step(parallel_on, actions_taken, parallel_forced))
+                # one plan per task: once this run stored its plan, finishing every step must not re-open the gate
+                # (it used to: "no open steps" read as "no plan yet", and the model was told to create_plan again
+                # instead of answering, while create_plan refused to write over the finished plan)
                 plan_gate = bool(plan_required and plan_required_steps < 3 and not par_step
+                                 and not plan_guard.plan_made_this_run(actions_taken)
                                  and not plan_guard.open_items(db_get_plan_items(req.session_id)))
                 if plan_gate and plan_required_steps >= 2:
                     # two refusals and the model still will not plan: draft the steps for it (one short local
