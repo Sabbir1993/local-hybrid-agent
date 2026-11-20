@@ -433,6 +433,10 @@
           <span class="tab-icon">⏱️</span>
           <span class="tab-label">Session Security</span>
         </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-speech" data-perm="speech.manage">
+          <span class="tab-icon">🎙️</span>
+          <span class="tab-label">Voice Collection</span>
+        </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-runner" data-perm="users.manage">
           <span class="tab-icon">🧪</span>
           <span class="tab-label">Code Runner</span>
@@ -1083,6 +1087,15 @@
         <div id="session-policy-content"><div class="mon-empty">Loading…</div></div>
       </div>
 
+      <!-- Section 10b1: Voice collection (public /voice page for the speech corpus) -->
+      <div class="card settings-panel" id="sec-speech" data-perm="speech.manage">
+        <div class="settings-panel-head">
+          <h2>🎙️ Voice Collection</h2>
+          <p class="dim">A public page where colleagues read lines aloud for the Bangla speech corpus. Recordings are stored in their own folder outside the app.</p>
+        </div>
+        <div id="speech-corpus-content"><div class="mon-empty">Loading…</div></div>
+      </div>
+
       <!-- Section 10b2: Isolated code runner -->
       <div class="card settings-panel" id="sec-runner" data-perm="users.manage">
         <div class="settings-panel-head">
@@ -1309,6 +1322,7 @@
 <script src="/static/js/session-policy.js?v=1.0"></script>
 <script src="/static/js/runner.js?v=1.0"></script>
 <script src="/static/js/mfa-panel.js?v=1.0"></script>
+<script src="/static/js/speech-corpus.js?v=1.0"></script>
 <script src="/static/js/lanes.js?v=1.11"></script>
 <script src="/static/js/projects.js?v=1.0"></script>
 <script src="/static/js/custom-agents.js?v=2.0"></script>

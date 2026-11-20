@@ -74,8 +74,18 @@ def serving_cfg() -> dict:
     return APP_CONFIG.get("serving") or {}
 
 
+# Public endpoints whose cap must hold whatever serving.body_limit_paths says (an admin's own map replaces the
+# defaults above). The voice page is reachable without an account; one clip is under 1 MB.
+HARD_BODY_CAPS = {
+    "/voice/api/": 2 * 1024 * 1024,
+}
+
+
 def body_limit_for(path: str) -> int:
     """The limit in bytes for one request path."""
+    for prefix, cap in HARD_BODY_CAPS.items():
+        if path.startswith(prefix):
+            return cap
     cfg = serving_cfg()
     try:
         base = int(cfg.get("max_body_bytes", 8 * 1024 * 1024))

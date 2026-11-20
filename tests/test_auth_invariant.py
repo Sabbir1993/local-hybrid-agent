@@ -54,6 +54,14 @@ PUBLIC_HTTP = {
     ("POST", "/auth/mfa/verify"),
     ("POST", "/auth/mfa/ticket/enroll"),
     ("POST", "/auth/mfa/ticket/confirm"),
+    # voice collection for colleagues without an account (routes/speech_corpus.py): every one answers 404 while the
+    # admin switch is off; /start needs the shared link code and hands out a short-lived session token, the other
+    # two accept only that token. Uploads are checked as strict 16 kHz mono WAV, size- and rate-limited.
+    ("GET", "/voice"),
+    ("GET", "/voice/api/options"),
+    ("POST", "/voice/api/start"),
+    ("POST", "/voice/api/recording"),
+    ("POST", "/voice/api/finish"),
 }
 
 # WebSockets do their own auth inside the handler (Depends doesn't compose with the
@@ -72,6 +80,12 @@ PERMISSION_PINS = {
     ("GET", "/{path:path}"): "chat.use",
     ("POST", "/{path:path}"): "chat.use",
     ("GET", "/agent/memory"): "memory.use",
+    ("GET", "/control/speech/status"): "speech.manage",
+    ("POST", "/control/speech/enabled"): "speech.manage",
+    ("POST", "/control/speech/code"): "speech.manage",
+    ("GET", "/control/speech/stats"): "speech.manage",
+    ("POST", "/control/speech/prompts"): "speech.manage",
+    ("POST", "/control/speech/contributor/delete"): "speech.manage",
     ("GET", "/agent/memory/{path:path}"): "memory.use",
     ("PUT", "/agent/memory/{path:path}"): "memory.use",
     ("DELETE", "/agent/memory/{path:path}"): "memory.use",

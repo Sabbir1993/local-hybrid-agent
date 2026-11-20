@@ -29,6 +29,7 @@ PERMISSIONS = {
     "capabilities.install": "Install/remove skills, plugins and connectors from the Customize catalog (shared by every user)",
     "custom_agents.publish": "Approve custom agents that users want to share with everyone",
     "terminal.admin": "Switch the terminal to Windows administrator rights on their own PC (asks every time)",
+    "speech.manage": "Run the voice-collection page (/voice): switch it on/off, rotate its link code, import lines, delete a speaker",
 }
 
 # How the Users & Roles screen presents each permission: a module (the part of the product it
@@ -88,6 +89,9 @@ PERMISSION_META = {
     "terminal.admin": ("access", "action", "Use the terminal with administrator rights",
                        "Lets the person run commands as Windows administrator on their own PC for system analysis. "
                        "They must confirm on that PC each time, and it switches off by itself when idle. Very powerful - grant with care."),
+    "speech.manage": ("knowledge", "write", "Run the voice collection page",
+                      "Turns the public voice-recording page on or off, changes its shared link, imports the lines people read "
+                      "and deletes a speaker's recordings. The recordings are personal data."),
     "git.push": ("sharing", "action", "Push code and open pull requests",
                  "Sends code to remote repositories using this system's saved git credentials."),
 }

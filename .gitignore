@@ -83,3 +83,6 @@ bench_results/
 
 # web search persistent cache (runtime state)
 config/web_cache.sqlite*
+# Voice recordings are personal data: never in git (the corpus itself lives outside the app, speech_corpus.dir)
+/recordings/
+voice-corpus/

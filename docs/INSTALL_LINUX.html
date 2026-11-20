@@ -727,6 +727,20 @@ sudo systemctl daemon-reload &amp;&amp; sudo systemctl enable --now searxng</cod
     <p>To remove it completely:</p>
 <pre><code>sudo systemctl disable --now searxng &amp;&amp; sudo rm /etc/systemd/system/searxng.service &amp;&amp; sudo systemctl daemon-reload &amp;&amp; sudo userdel -r searxng</code></pre>
   </details>
+  <h3>Voice collection page</h3>
+  <p>A public page where colleagues read lines aloud for the Bangla speech corpus. Recordings go to their own folder outside the application.</p>
+  <details>
+    <summary>Set up voice collection</summary>
+    <p><strong>1.</strong> Create the folder, owned by the user the application runs as:</p>
+<pre><code>sudo mkdir -p /srv/ssl-voice-corpus &amp;&amp; sudo chown "$USER": /srv/ssl-voice-corpus &amp;&amp; sudo chmod 700 /srv/ssl-voice-corpus</code></pre>
+    <p><strong>2.</strong> Add this to <code>config/app.json</code>, then restart the application:</p>
+<pre class="plain"><code>"speech_corpus": { "enabled": false, "dir": "/srv/ssl-voice-corpus" }</code></pre>
+    <p><strong>3.</strong> In <strong>Settings → Voice Collection</strong>: click <em>Create link</em> and copy it (it is shown once), import <code>scripts/stt_corpus_prompts/starter.jsonl</code> or your own lines, then switch <em>Enable voice collection page</em> on. Switching it off closes the page at once.</p>
+    <p>Each person enters name, employee ID and how they speak at home, then records 15 random lines. Files are saved as <code>audio/&lt;name&gt;_&lt;employee_id&gt;/</code> next to <code>corpus.db</code>. <em>Delete a speaker</em> in the same panel removes a person's recordings.</p>
+    <p>To copy the corpus to the training PC (safe while the application runs):</p>
+<pre><code>sqlite3 /srv/ssl-voice-corpus/corpus.db ".backup /tmp/corpus-copy.db"</code></pre>
+    <p>Then copy <code>/tmp/corpus-copy.db</code> and <code>/srv/ssl-voice-corpus/audio/</code> over SSH. The recordings are personal data: never put them in git or a cloud service.</p>
+  </details>
   <h3>Code runner</h3>
   <p>An isolated Python sandbox for charts and calculations:</p>
 <pre><code>sudo apt install -y bubblewrap</code></pre>

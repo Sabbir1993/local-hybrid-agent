@@ -385,6 +385,36 @@ Update SearXNG: `sudo -u searxng -H bash -c 'cd /opt/searxng/src && git pull && 
 
 Remove it: `sudo systemctl disable --now searxng && sudo rm /etc/systemd/system/searxng.service && sudo systemctl daemon-reload && sudo userdel -r searxng`
 
+## Voice collection page (optional)
+
+A public page, `https://<your-domain>/voice?k=<code>`, where colleagues read lines aloud for the Bangla speech corpus.
+Recordings and their database go to a folder **outside** the app, so it can be copied to the training PC as a whole.
+
+1. Create the folder, owned by the user the app runs as, readable only by that user:
+```bash
+sudo mkdir -p /srv/ssl-voice-corpus && sudo chown "$USER": /srv/ssl-voice-corpus && sudo chmod 700 /srv/ssl-voice-corpus
+```
+2. In `config/app.json` add (or edit) the block below, then restart the app:
+```json
+"speech_corpus": { "enabled": false, "dir": "/srv/ssl-voice-corpus" }
+```
+3. In **Settings → Voice Collection** (needs the `speech.manage` permission; admins have it):
+   - **Create link**, then copy it. It is shown once; creating a new one stops the old link.
+   - Import the lines people read: `scripts/stt_corpus_prompts/starter.jsonl` to start, or your own `.jsonl`
+     (`{"text": "...", "category": "standard|domain|banglish|numbers"}` per line). Lines with card-like numbers are refused.
+   - Switch **Enable voice collection page** on. Switching it off makes the page and its API answer "not found" at once.
+
+Each person enters name, employee ID and how they speak at home, then records 15 random lines. Clips are stored as
+`<dir>/audio/<name>_<employee_id>/<id>.wav` (16 kHz mono 16-bit) and listed in `<dir>/corpus.db`. To delete a
+person's recordings, use **Delete a speaker** in the same panel. That needs a fresh two-factor check.
+
+To copy the corpus to the training PC (safe while the app runs):
+```bash
+sqlite3 /srv/ssl-voice-corpus/corpus.db ".backup /tmp/corpus-copy.db"
+```
+Then copy `/tmp/corpus-copy.db` and `/srv/ssl-voice-corpus/audio/` over SSH (`scp -r` or `rsync`). The recordings are
+personal data: never put them in git or a cloud service.
+
 ## Model Sizing & MoE VRAM Tuning
 
 - **Context Window vs VRAM**:

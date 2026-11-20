@@ -181,6 +181,7 @@ window.__sessionReady.then((data) => {
   if (document.getElementById('sec-session') && window.loadSessionPolicyPanel) loadSessionPolicyPanel();
   if (document.getElementById('sec-runner') && window.loadRunnerPanel) loadRunnerPanel();
   if (document.getElementById('sec-mfa') && window.loadMfaPanel) loadMfaPanel();
+  if (document.getElementById('sec-speech') && window.loadSpeechCorpusPanel) loadSpeechCorpusPanel();
   if (document.getElementById('sec-db')) {
     fetch('/db/list').then(r => r.json()).then(d => {
       const box = document.getElementById('settings-db-summary');

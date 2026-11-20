@@ -1,14 +1,21 @@
-import { StrictMode } from 'react'
+import { StrictMode, Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { ErrorBoundary } from './components/common/ErrorBoundary'
 import { dismissBootLoader } from './components/common/AppLoader'
 
+// /voice is the public voice-collection page: no sign-in, none of the app's start-up calls (routes/speech_corpus.py)
+const VoiceCollectPage = lazy(() => import('./components/voice-collect/VoiceCollectPage'))
+const isVoicePage = window.location.pathname.replace(/\/+$/, '') === '/voice'
+if (isVoicePage) dismissBootLoader()
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary fallbackTitle="The app crashed">
-      <App />
+      {isVoicePage
+        ? <Suspense fallback={null}><VoiceCollectPage /></Suspense>
+        : <App />}
     </ErrorBoundary>
   </StrictMode>,
 )

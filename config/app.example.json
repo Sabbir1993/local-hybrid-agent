@@ -696,5 +696,13 @@
     "enabled": true,
     "verified_at": 1793096223.238357,
     "allow_public_runner": false
+  },
+  "speech_corpus": {
+    "enabled": false,
+    "dir": "",
+    "access_code_sha256": "",
+    "lines_per_session": 15,
+    "max_clip_seconds": 20,
+    "sessions_per_day": 5
   }
 }
