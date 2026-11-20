@@ -8,9 +8,10 @@ Admin part: every route carries require_permission("speech.manage") itself (the 
 router-level auth because of the public part); deleting a speaker also needs the MFA step-up.
 """
 import hashlib
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File as FastAPIFile, Form, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from core.audit import audit_log
@@ -65,7 +66,7 @@ async def voice_page():
     return _react_index()
 
 
-@router.get("/voice/api/options")
+@router.get("/media/voice-collect/options")
 async def voice_options():
     """Choices for the form (labels only), so the page and the server never disagree."""
     if _store() is None:
@@ -87,7 +88,7 @@ class StartBody(BaseModel):
     consent: bool = False
 
 
-@router.post("/voice/api/start")
+@router.post("/media/voice-collect/start")
 async def voice_start(body: StartBody, request: Request):
     store = _store()
     if store is None:
@@ -116,7 +117,7 @@ async def voice_start(body: StartBody, request: Request):
             "max_clip_seconds": corpus_settings.max_clip_seconds()}
 
 
-@router.post("/voice/api/recording")
+@router.post("/media/voice-collect/recording")
 async def voice_recording(token: str = Form(default=""), prompt_id: int = Form(default=0),
                           file: UploadFile = FastAPIFile(...)):
     store = _store()
@@ -142,7 +143,7 @@ class FinishBody(BaseModel):
     token: str = Field(default="", max_length=100)
 
 
-@router.post("/voice/api/finish")
+@router.post("/media/voice-collect/finish")
 async def voice_finish(body: FinishBody):
     store = _store()
     if store is None:
@@ -163,7 +164,9 @@ def _status() -> dict:
         folder = str(corpus_settings.corpus_dir())
     except corpus_settings.CorpusConfigError as e:
         folder_error = str(e)
+    code = corpus_settings.current_code()      # only ever returned to speech.manage holders (every caller is admin)
     return {"enabled": corpus_settings.is_enabled(), "has_code": corpus_settings.has_code(), "path": "/voice",
+            "link_path": f"/voice?k={code}" if code else None,
             "dir": folder, "dir_error": folder_error, "lines_per_session": corpus_settings.lines_per_session(),
             "max_clip_seconds": corpus_settings.max_clip_seconds(), "sessions_per_day": corpus_settings.sessions_per_day()}
 
@@ -193,7 +196,9 @@ async def speech_enabled(body: EnabledBody, request: Request, user: Principal = 
 async def speech_code(request: Request, user: Principal = Depends(_manage)):
     code = corpus_settings.rotate_code()
     audit_log(user, action="speech.code_rotate", ip=_ip(request))          # never the code itself
-    return {**_status(), "code": code, "link_path": f"/voice?k={code}"}
+    st = _status()
+    # link_saved: whether the keychain kept it (the panel can show it again later) - the link works either way
+    return {**st, "code": code, "link_path": f"/voice?k={code}", "link_saved": st["link_path"] is not None}
 
 
 def _admin_store():
@@ -206,6 +211,18 @@ async def speech_stats(user: Principal = Depends(_manage)):
         return _admin_store().stats()
     except corpus_settings.CorpusConfigError as e:
         return _err(str(e), 409)
+
+
+SAMPLE_PROMPTS = Path(__file__).resolve().parents[1] / "scripts" / "stt_corpus_prompts" / "starter.jsonl"
+
+
+@router.get("/control/speech/prompts/sample")
+async def speech_prompts_sample(user: Principal = Depends(_manage)):
+    """The starter set as a download: a ready example of the import format (and a usable first batch)."""
+    if not SAMPLE_PROMPTS.is_file():
+        return _err("The sample file is missing from this installation.", 404)
+    return FileResponse(SAMPLE_PROMPTS, media_type="application/x-ndjson", filename="voice-lines-sample.jsonl",
+                        headers={"Cache-Control": "no-store"})
 
 
 class PromptsBody(BaseModel):

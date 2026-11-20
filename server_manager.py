@@ -132,7 +132,7 @@ app.include_router(db_explorer_router, dependencies=_authed)
 app.include_router(custom_agents_router, dependencies=_authed)
 app.include_router(sandbox_router, dependencies=_authed)
 app.include_router(taskboard_router, dependencies=_authed)
-# Voice collection: /voice + /voice/api/* are public behind the shared link code and the admin switch; every
+# Voice collection: /voice + /media/voice-collect/* are public behind the shared link code and the admin switch; every
 # /control/speech/* route carries require_permission("speech.manage") itself (routes/speech_corpus.py).
 app.include_router(speech_corpus_router)
 # Own auth handling (session cookie checked inside the socket handler) since

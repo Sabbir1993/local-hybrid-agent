@@ -389,6 +389,8 @@ Remove it: `sudo systemctl disable --now searxng && sudo rm /etc/systemd/system/
 
 A public page, `https://<your-domain>/voice?k=<code>`, where colleagues read lines aloud for the Bangla speech corpus.
 Recordings and their database go to a folder **outside** the app, so it can be copied to the training PC as a whole.
+It needs no web-server change: the page is the app's own page and its API is under `/media/voice-collect/`, which an nginx
+in front already forwards along with the rest of `/media`.
 
 1. Create the folder, owned by the user the app runs as, readable only by that user:
 ```bash

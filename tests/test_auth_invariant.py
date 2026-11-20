@@ -58,10 +58,10 @@ PUBLIC_HTTP = {
     # admin switch is off; /start needs the shared link code and hands out a short-lived session token, the other
     # two accept only that token. Uploads are checked as strict 16 kHz mono WAV, size- and rate-limited.
     ("GET", "/voice"),
-    ("GET", "/voice/api/options"),
-    ("POST", "/voice/api/start"),
-    ("POST", "/voice/api/recording"),
-    ("POST", "/voice/api/finish"),
+    ("GET", "/media/voice-collect/options"),
+    ("POST", "/media/voice-collect/start"),
+    ("POST", "/media/voice-collect/recording"),
+    ("POST", "/media/voice-collect/finish"),
 }
 
 # WebSockets do their own auth inside the handler (Depends doesn't compose with the
@@ -85,6 +85,7 @@ PERMISSION_PINS = {
     ("POST", "/control/speech/code"): "speech.manage",
     ("GET", "/control/speech/stats"): "speech.manage",
     ("POST", "/control/speech/prompts"): "speech.manage",
+    ("GET", "/control/speech/prompts/sample"): "speech.manage",
     ("POST", "/control/speech/contributor/delete"): "speech.manage",
     ("GET", "/agent/memory/{path:path}"): "memory.use",
     ("PUT", "/agent/memory/{path:path}"): "memory.use",

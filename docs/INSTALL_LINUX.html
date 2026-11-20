@@ -728,7 +728,7 @@ sudo systemctl daemon-reload &amp;&amp; sudo systemctl enable --now searxng</cod
 <pre><code>sudo systemctl disable --now searxng &amp;&amp; sudo rm /etc/systemd/system/searxng.service &amp;&amp; sudo systemctl daemon-reload &amp;&amp; sudo userdel -r searxng</code></pre>
   </details>
   <h3>Voice collection page</h3>
-  <p>A public page where colleagues read lines aloud for the Bangla speech corpus. Recordings go to their own folder outside the application.</p>
+  <p>A public page where colleagues read lines aloud for the Bangla speech corpus. Recordings go to their own folder outside the application. No nginx change is needed: the page's API is under <code>/media/voice-collect/</code>, which is forwarded with the rest of <code>/media</code>.</p>
   <details>
     <summary>Set up voice collection</summary>
     <p><strong>1.</strong> Create the folder, owned by the user the application runs as:</p>

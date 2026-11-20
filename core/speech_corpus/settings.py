@@ -111,11 +111,33 @@ def _save(patch: dict) -> dict:
     return cfg()
 
 
+_KEYCHAIN_ID = "speech-corpus-link-code"
+
+
 def rotate_code() -> str:
-    """New random code; only its hash is saved. The old link stops working at once."""
+    """New random code. app.json keeps only its hash (that is what the page is checked against); the code itself goes
+    to the OS keychain so admins can see the current link again later. The old link stops working at once."""
     code = secrets.token_urlsafe(9)
     _save({"access_code_sha256": _hash(code)})
+    try:
+        from .. import credentials
+        credentials.set_token(_KEYCHAIN_ID, code)
+    except Exception:
+        pass        # no usable keychain: the link still works, it just can't be shown again (current_code -> None)
     return code
+
+
+def current_code():
+    """The code of the current link from the keychain, or None (keychain unavailable, or the stored code is not the
+    one app.json was last set to - e.g. config copied from another server)."""
+    if not has_code():
+        return None
+    try:
+        from .. import credentials
+        code = credentials.get_token(_KEYCHAIN_ID)
+    except Exception:
+        return None
+    return code if code and code_ok(code) else None
 
 
 def set_enabled(on: bool) -> dict:

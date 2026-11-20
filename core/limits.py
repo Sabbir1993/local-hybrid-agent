@@ -77,7 +77,7 @@ def serving_cfg() -> dict:
 # Public endpoints whose cap must hold whatever serving.body_limit_paths says (an admin's own map replaces the
 # defaults above). The voice page is reachable without an account; one clip is under 1 MB.
 HARD_BODY_CAPS = {
-    "/voice/api/": 2 * 1024 * 1024,
+    "/media/voice-collect/": 2 * 1024 * 1024,
 }
 
 

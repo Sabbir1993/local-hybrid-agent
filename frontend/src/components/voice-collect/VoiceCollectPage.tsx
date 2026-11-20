@@ -16,7 +16,7 @@ type Options = {
   max_clip_seconds: number;
 };
 type Line = { id: number; text: string };
-type Step = 'loading' | 'closed' | 'badlink' | 'consent' | 'form' | 'record' | 'done';
+type Step = 'loading' | 'closed' | 'unreachable' | 'badlink' | 'consent' | 'form' | 'record' | 'done';
 
 const CODE_KEY = 'voice_collect_code';
 
@@ -28,13 +28,21 @@ const REGION_BN: Record<string, string> = {
   rangpur_mymensingh_dhaka: 'রংপুর / ময়মনসিংহ / ঢাকা',
 };
 
-async function api(path: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; data: any }> {
+// The API (/media/voice-collect/*) always answers JSON. Anything else (a web server in front serving the app's HTML for a
+// path it does not forward, or its own empty 404) means the request never reached the app: say so, never parse it.
+const NOT_REACHED = 'The voice service is not reachable right now. Please tell the admin (the app may be restarting or running an older version).';
+
+async function api(path: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; data: any; reached: boolean }> {
   try {
     const r = await fetch(path, { ...init, credentials: 'omit', cache: 'no-store' });
-    const data = await r.json().catch(() => ({}));
-    return { ok: r.ok, status: r.status, data };
+    if (!(r.headers.get('content-type') || '').includes('application/json')) {
+      return { ok: false, status: r.status, data: { error: NOT_REACHED }, reached: false };
+    }
+    const data = await r.json().catch(() => null);
+    if (!data || typeof data !== 'object') return { ok: false, status: r.status, data: { error: NOT_REACHED }, reached: false };
+    return { ok: r.ok, status: r.status, data, reached: true };
   } catch {
-    return { ok: false, status: 0, data: { error: 'Network problem. Check your connection and try again.' } };
+    return { ok: false, status: 0, data: { error: 'Network problem. Check your connection and try again.' }, reached: true };
   }
 }
 
@@ -147,8 +155,9 @@ export function VoiceCollectPage() {
     }
     document.title = 'ভয়েস সংগ্রহ · Voice collection';
     (async () => {
-      const r = await api('/voice/api/options');
-      if (!r.ok) { setStep('closed'); return; }
+      const r = await api('/media/voice-collect/options');
+      if (!r.reached) { setStep('unreachable'); return; }
+      if (!r.ok || !r.data.regions || typeof r.data.regions !== 'object') { setStep('closed'); return; }
       setOpts(r.data);
       setStep(code ? 'consent' : 'badlink');
     })();
@@ -196,14 +205,14 @@ export function VoiceCollectPage() {
       return;
     }
     setBusy(true);
-    const r = await api('/voice/api/start', {
+    const r = await api('/media/voice-collect/start', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...form, code, consent: agree }),
     });
     setBusy(false);
     if (!r.ok) {
       if (r.status === 403) { sessionStorage.removeItem(CODE_KEY); setStep('badlink'); return; }
-      if (r.status === 404) { setStep('closed'); return; }
+      if (r.reached && r.status === 404) { setStep('closed'); return; }
       setError(r.data.error || 'Could not start.');
       return;
     }
@@ -267,7 +276,7 @@ export function VoiceCollectPage() {
     fd.append('token', token);
     fd.append('prompt_id', String(lines[idx].id));
     fd.append('file', new Blob([take], { type: 'audio/wav' }), 'line.wav');
-    const r = await api('/voice/api/recording', { method: 'POST', body: fd });
+    const r = await api('/media/voice-collect/recording', { method: 'POST', body: fd });
     setBusy(false);
     if (!r.ok) {
       if (r.status === 401 || r.status === 404) { setError(r.data.error || 'Your session has ended.'); return; }
@@ -282,7 +291,7 @@ export function VoiceCollectPage() {
 
   const finish = async () => {
     window.clearInterval(tick.current);
-    await api('/voice/api/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+    await api('/media/voice-collect/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
     rec.current?.close();
     rec.current = null;
     setStep('done');
@@ -300,6 +309,13 @@ export function VoiceCollectPage() {
         </div>
 
         {step === 'loading' && <div style={S.box}>Loading…</div>}
+
+        {step === 'unreachable' && (
+          <div style={S.box}>
+            <div>ভয়েস সার্ভিসের সাথে সংযোগ হচ্ছে না। অ্যাডমিনকে জানান।</div>
+            <div style={S.en}>{NOT_REACHED}</div>
+          </div>
+        )}
 
         {step === 'closed' && (
           <div style={S.box}>
@@ -360,19 +376,19 @@ export function VoiceCollectPage() {
               <label style={{ ...S.label, flex: 1, minWidth: 140 }}>লিঙ্গ · Gender (optional)
                 <select style={S.input} value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}>
                   <option value="">—</option>
-                  {opts.genders.map((g) => <option key={g} value={g}>{g}</option>)}
+                  {(opts.genders || []).map((g) => <option key={g} value={g}>{g}</option>)}
                 </select>
               </label>
               <label style={{ ...S.label, flex: 1, minWidth: 140 }}>বয়স · Age (optional)
                 <select style={S.input} value={form.age_band} onChange={(e) => setForm({ ...form, age_band: e.target.value })}>
                   <option value="">—</option>
-                  {opts.age_bands.map((g) => <option key={g} value={g}>{g}</option>)}
+                  {(opts.age_bands || []).map((g) => <option key={g} value={g}>{g}</option>)}
                 </select>
               </label>
               <label style={{ ...S.label, flex: 1, minWidth: 140 }}>মাইক · Microphone
                 <select style={S.input} value={form.device} onChange={(e) => setForm({ ...form, device: e.target.value })}>
                   <option value="">—</option>
-                  {opts.devices.map((g) => <option key={g} value={g}>{g}</option>)}
+                  {(opts.devices || []).map((g) => <option key={g} value={g}>{g}</option>)}
                 </select>
               </label>
             </div>

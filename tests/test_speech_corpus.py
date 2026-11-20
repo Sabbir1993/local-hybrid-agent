@@ -63,8 +63,11 @@ class SpeechCorpusTests(unittest.TestCase):
             mutator(self.file_cfg)
             return self.file_cfg
 
+        self.keychain = {}          # stands in for the OS keychain: the real one is never touched
         self.patches = [
             mock.patch.dict("core.small_model.APP_CONFIG", self.cfg),
+            mock.patch("core.credentials.set_token", side_effect=lambda k, v: self.keychain.__setitem__(k, v)),
+            mock.patch("core.credentials.get_token", side_effect=lambda k: self.keychain.get(k)),
             mock.patch("core.config.update_app_config", side_effect=fake_update),
             mock.patch.object(speech_routes, "audit_log", lambda *a, **k: None),
         ]
@@ -102,18 +105,18 @@ class SpeechCorpusTests(unittest.TestCase):
 
     def start(self, code, emp="E1001", name="Sabbir Hosain", region="standard", **kw):
         body = {"code": code, "name": name, "employee_id": emp, "region": region, "consent": True, **kw}
-        return self.c.post("/voice/api/start", json=body)
+        return self.c.post("/media/voice-collect/start", json=body)
 
     def upload(self, token, prompt_id, data):
-        return self.c.post("/voice/api/recording", data={"token": token, "prompt_id": str(prompt_id)},
+        return self.c.post("/media/voice-collect/recording", data={"token": token, "prompt_id": str(prompt_id)},
                            files={"file": ("line.wav", io.BytesIO(data), "audio/wav")})
 
     # ---- switch and code ----
     def test_disabled_is_404_everywhere(self):
-        for path in ("/voice", "/voice/api/options"):
+        for path in ("/voice", "/media/voice-collect/options"):
             self.assertEqual(self.c.get(path).status_code, 404)
-        self.assertEqual(self.c.post("/voice/api/start", json={}).status_code, 404)
-        self.assertEqual(self.c.post("/voice/api/finish", json={}).status_code, 404)
+        self.assertEqual(self.c.post("/media/voice-collect/start", json={}).status_code, 404)
+        self.assertEqual(self.c.post("/media/voice-collect/finish", json={}).status_code, 404)
 
     def test_turning_on_needs_a_code(self):
         r = self.c.post("/control/speech/enabled", json={"enabled": True})
@@ -145,7 +148,28 @@ class SpeechCorpusTests(unittest.TestCase):
         self.assertEqual(self.c.get("/voice").status_code, 404)
         self.assertEqual(self.upload(tok, 1, wav()).status_code, 404)
         self.c.post("/control/speech/enabled", json={"enabled": True})
-        self.assertEqual(self.c.get("/voice/api/options").status_code, 200)
+        self.assertEqual(self.c.get("/media/voice-collect/options").status_code, 200)
+
+    def test_current_link_is_shown_again(self):
+        self.assertIsNone(self.c.get("/control/speech/status").json()["link_path"])
+        first = self.c.post("/control/speech/code").json()
+        self.assertTrue(first["link_saved"])
+        self.assertEqual(self.c.get("/control/speech/status").json()["link_path"], f"/voice?k={first['code']}")
+        second = self.c.post("/control/speech/code").json()
+        self.assertEqual(self.c.get("/control/speech/status").json()["link_path"], f"/voice?k={second['code']}")
+        self.assertNotIn(second["code"], json.dumps(self.file_cfg))       # app.json still holds only the hash
+
+    def test_no_keychain_still_works_but_cannot_show_the_link(self):
+        with mock.patch("core.credentials.set_token", side_effect=RuntimeError("no keyring")):
+            d = self.c.post("/control/speech/code").json()
+        self.assertFalse(d["link_saved"])
+        self.assertIsNone(self.c.get("/control/speech/status").json()["link_path"])
+        self.assertTrue(corpus_settings.code_ok(d["code"]))
+
+    def test_stale_keychain_code_is_not_shown(self):
+        self.c.post("/control/speech/code")
+        self.keychain["speech-corpus-link-code"] = "some-other-code"
+        self.assertIsNone(self.c.get("/control/speech/status").json()["link_path"])
 
     def test_wrong_and_rotated_code(self):
         code = self.turn_on()
@@ -155,7 +179,7 @@ class SpeechCorpusTests(unittest.TestCase):
 
     def test_consent_and_required_fields(self):
         code = self.turn_on()
-        self.assertEqual(self.c.post("/voice/api/start", json={"code": code, "name": "A B", "employee_id": "E1",
+        self.assertEqual(self.c.post("/media/voice-collect/start", json={"code": code, "name": "A B", "employee_id": "E1",
                                                                 "region": "standard"}).status_code, 400)
         self.assertEqual(self.start(code, emp="").status_code, 400)
         self.assertEqual(self.start(code, emp="../x").status_code, 400)
@@ -269,7 +293,7 @@ class SpeechCorpusTests(unittest.TestCase):
         other = max(l["id"] for l in d["lines"]) + 1000
         self.assertEqual(self.upload(d["token"], other, wav()).status_code, 400)
         self.assertEqual(self.upload("not-a-token", d["lines"][0]["id"], wav()).status_code, 401)
-        self.c.post("/voice/api/finish", json={"token": d["token"]})
+        self.c.post("/media/voice-collect/finish", json={"token": d["token"]})
         self.assertEqual(self.upload(d["token"], d["lines"][0]["id"], wav()).status_code, 401)
 
     def test_rerecord_replaces_and_attempts_are_capped(self):
@@ -318,6 +342,16 @@ class SpeechCorpusTests(unittest.TestCase):
         self.assertEqual(st.stats()["speakers"], 0)
         self.assertEqual(self.c.post("/control/speech/contributor/delete", json={"employee_id": "E5"}).status_code, 404)
 
+    def test_sample_file_downloads_and_imports(self):
+        r = self.c.get("/control/speech/prompts/sample")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("voice-lines-sample.jsonl", r.headers.get("content-disposition", ""))
+        first = json.loads(r.text.splitlines()[0])
+        self.assertIn(first["category"], corpus_prompts.CATEGORIES)
+        self.turn_on()
+        d = self.c.post("/control/speech/prompts", json={"jsonl": r.text}).json()
+        self.assertEqual(d["rejected_count"], 0)
+
     def test_speaker_codes_are_never_reused(self):
         code = self.turn_on()
         a = self.start(code, emp="E1").json()
@@ -331,7 +365,7 @@ class BodyCapTests(unittest.TestCase):
     def test_voice_cap_holds_even_with_an_admin_map(self):
         with mock.patch.dict("core.small_model.APP_CONFIG", {"serving": {"max_body_bytes": 99 * 1024 * 1024,
                                                                            "body_limit_paths": {}}}):
-            self.assertEqual(limits.body_limit_for("/voice/api/recording"), 2 * 1024 * 1024)
+            self.assertEqual(limits.body_limit_for("/media/voice-collect/recording"), 2 * 1024 * 1024)
 
 
 if __name__ == "__main__":

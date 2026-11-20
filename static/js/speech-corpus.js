@@ -36,21 +36,47 @@ async function loadSpeechCorpusPanel() {
         ${st.dir_error ? `<div style="color:var(--red,#f87171);margin-top:4px">${esc(st.dir_error)}</div>` : ''}
         <div class="dim" style="margin-top:4px">Set <code>speech_corpus.dir</code> in config/app.json (an absolute folder outside the app). ${st.lines_per_session} lines per session, clips up to ${st.max_clip_seconds} s, ${st.sessions_per_day} sessions per person per day.</div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:6px">
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <button type="button" class="btn" id="vc-rotate" style="width:auto;padding:6px 14px">${st.has_code ? 'Create new link (old link stops working)' : 'Create link'}</button>
-          <span class="dim" style="font-size:12px">${st.has_code ? 'A link exists. Only a new one can be shown.' : 'No link yet.'}</span>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="font-weight:600;font-size:13px">Link for colleagues</div>
+        <div id="vc-link" style="display:${st.link_path ? 'flex' : 'none'};gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="text" id="vc-link-text" readonly value="${esc(st.link_path ? window.location.origin + st.link_path : '')}" style="flex:1;min-width:280px;font-family:monospace;font-size:12px">
+          <button type="button" class="btn accent" id="vc-copy" style="width:auto;padding:6px 14px">Copy link</button>
         </div>
-        <div id="vc-link" style="display:none;gap:8px;align-items:center;flex-wrap:wrap">
-          <input type="text" id="vc-link-text" readonly style="flex:1;min-width:280px;font-family:monospace;font-size:12px">
-          <button type="button" class="btn" id="vc-copy" style="width:auto;padding:6px 14px">Copy link</button>
-          <span class="dim" style="font-size:11px;width:100%">Shown once. Share it only inside the company.</span>
+        <div id="vc-link-note" class="dim" style="font-size:12px">${
+          st.link_path ? 'Share it only inside the company.'
+            : st.has_code ? 'A link exists, but this server cannot show it (its keychain is unavailable). Create a new link to see one; the old link then stops working.'
+              : 'No link yet.'}</div>
+        <div>
+          <button type="button" class="btn" id="vc-rotate" style="width:auto;padding:6px 14px">${st.has_code ? 'Create new link (old link stops working)' : 'Create link'}</button>
         </div>
       </div>
       <div>
-        <div style="font-weight:600;font-size:13px;margin-bottom:6px">Lines people read</div>
-        <div class="dim" style="font-size:12px;margin-bottom:6px">A .jsonl file, one line each: <code>{"text": "...", "category": "standard|domain|banglish|numbers"}</code>. Lines with card-like numbers are refused.</div>
-        <input type="file" id="vc-prompts" accept=".jsonl,.json,.txt">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+          <div style="font-weight:600;font-size:13px">Lines people read</div>
+          <button type="button" class="btn" id="vc-sample" style="width:auto;padding:6px 14px">⬇ Download sample file</button>
+        </div>
+        <div class="dim" style="font-size:12px;line-height:1.6;margin-bottom:8px">
+          A <code>.jsonl</code> file with one line per row: <code>{"text": "...", "category": "standard"}</code>.<br>
+          Categories: <strong>standard</strong> everyday Bangla · <strong>domain</strong> payments and support ·
+          <strong>banglish</strong> Bangla and English mixed · <strong>numbers</strong> amounts, dates, times.
+          Lines already imported are skipped; lines with card-like numbers are refused.
+        </div>
+        <label id="vc-drop" for="vc-prompts" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:18px 12px;border:1.5px dashed var(--border,#3a4150);border-radius:10px;cursor:pointer;text-align:center;transition:border-color .15s,background .15s">
+          <input type="file" id="vc-prompts" accept=".jsonl,.json,.txt" style="display:none">
+          <span style="font-size:22px;line-height:1">📄</span>
+          <span style="font-size:13px">Drop a <code>.jsonl</code> file here, or <span style="text-decoration:underline">choose a file</span></span>
+        </label>
+        <div id="vc-file" style="display:none;margin-top:8px;padding:10px 12px;border:1px solid var(--border,#3a4150);border-radius:10px;font-size:12px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-weight:600" id="vc-file-name"></span>
+            <span class="dim" id="vc-file-info"></span>
+            <span style="margin-left:auto;display:flex;gap:8px">
+              <button type="button" class="btn" id="vc-file-clear" style="width:auto;padding:6px 12px">Remove</button>
+              <button type="button" class="btn accent" id="vc-import" style="width:auto;padding:6px 14px">Import lines</button>
+            </span>
+          </div>
+          <div class="dim" id="vc-file-preview" style="margin-top:6px;line-height:1.6"></div>
+        </div>
       </div>
       <div>
         <div style="font-weight:600;font-size:13px;margin-bottom:6px">Collected so far</div>
@@ -85,9 +111,12 @@ async function loadSpeechCorpusPanel() {
     const { r: rr, d } = await speechPost('/control/speech/code', {});
     if (!rr.ok) { say(d.error || d.detail || 'Could not create a link.', true); return; }
     st.has_code = true;
-    const wrap = box.querySelector('#vc-link');
-    wrap.style.display = 'flex';
+    box.querySelector('#vc-link').style.display = 'flex';
     box.querySelector('#vc-link-text').value = window.location.origin + d.link_path;
+    box.querySelector('#vc-rotate').textContent = 'Create new link (old link stops working)';
+    box.querySelector('#vc-link-note').textContent = d.link_saved === false
+      ? 'Copy it now: this server cannot store it (its keychain is unavailable), so it will not be shown again.'
+      : 'Share it only inside the company. The old link no longer works.';
     say('New link created.');
   });
 
@@ -96,16 +125,68 @@ async function loadSpeechCorpusPanel() {
     try { await navigator.clipboard.writeText(t.value); say('Link copied.'); } catch (_) { t.select(); say('Press Ctrl+C to copy.'); }
   });
 
-  box.querySelector('#vc-prompts').addEventListener('change', async (e) => {
-    const f = e.target.files && e.target.files[0];
+  box.querySelector('#vc-sample').addEventListener('click', async () => {
+    try {
+      const rr = await fetch('/control/speech/prompts/sample');
+      if (!rr.ok) { const d = await rr.json().catch(() => ({})); say(d.error || d.detail || 'Could not download the sample.', true); return; }
+      const url = URL.createObjectURL(await rr.blob());
+      const a = document.createElement('a');
+      a.href = url; a.download = 'voice-lines-sample.jsonl';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (_) {
+      say('Could not download the sample.', true);
+    }
+  });
+
+  // import: pick or drop a file, see what is in it, then import
+  const input = box.querySelector('#vc-prompts');
+  const drop = box.querySelector('#vc-drop');
+  const card = box.querySelector('#vc-file');
+  let picked = null;
+  const clearPick = () => { picked = null; input.value = ''; card.style.display = 'none'; drop.style.display = 'flex'; };
+  const showPick = async (f) => {
     if (!f) return;
-    say('Importing…');
+    if (f.size > 8 * 1024 * 1024) { say('That file is larger than 8 MB.', true); return; }
     const text = await f.text();
-    const { r: rr, d } = await speechPost('/control/speech/prompts', { jsonl: text });
-    e.target.value = '';
+    const rows = text.split(/\r?\n/).filter((l) => l.trim());
+    const cats = {};
+    let unreadable = 0;
+    const sample = [];
+    for (const row of rows) {
+      try {
+        const o = JSON.parse(row);
+        const c = String(o.category || '?');
+        cats[c] = (cats[c] || 0) + 1;
+        if (sample.length < 3 && o.text) sample.push(String(o.text));
+      } catch (_) { unreadable++; }
+    }
+    picked = { name: f.name, text };
+    box.querySelector('#vc-file-name').textContent = f.name;
+    box.querySelector('#vc-file-info').textContent = `${rows.length} lines · ` +
+      Object.entries(cats).map(([c, n]) => `${c} ${n}`).join(' · ') + (unreadable ? ` · ${unreadable} unreadable` : '');
+    box.querySelector('#vc-file-preview').innerHTML = sample.map((t) => '“' + esc(t) + '”').join('<br>');
+    drop.style.display = 'none';
+    card.style.display = 'block';
+    say('');
+  };
+  input.addEventListener('change', () => showPick(input.files && input.files[0]));
+  const hot = (on) => { drop.style.borderColor = on ? 'var(--accent,#4f8cff)' : ''; drop.style.background = on ? 'rgba(79,140,255,0.06)' : ''; };
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); hot(true); });
+  drop.addEventListener('dragleave', () => hot(false));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); hot(false); showPick(e.dataTransfer.files && e.dataTransfer.files[0]); });
+  box.querySelector('#vc-file-clear').addEventListener('click', clearPick);
+  box.querySelector('#vc-import').addEventListener('click', async () => {
+    if (!picked) return;
+    const btn = box.querySelector('#vc-import');
+    btn.disabled = true;
+    say('Importing…');
+    const { r: rr, d } = await speechPost('/control/speech/prompts', { jsonl: picked.text });
+    btn.disabled = false;
     if (!rr.ok) { say(d.error || d.detail || 'Import failed.', true); return; }
+    clearPick();
     const bad = (d.rejected || []).slice(0, 5).map((x) => `line ${x.line}: ${x.reason}`).join('; ');
-    say(`Added ${d.added}, already there ${d.duplicates}, refused ${d.rejected_count}${bad ? ' (' + bad + ')' : ''}.`, d.rejected_count > 0);
+    say(`Added ${d.added} new lines, ${d.duplicates} were already there, ${d.rejected_count} refused${bad ? ' (' + bad + ')' : ''}.`, d.rejected_count > 0);
     loadSpeechStats(box);
   });
 
