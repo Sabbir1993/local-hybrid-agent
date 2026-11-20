@@ -262,55 +262,128 @@ Web search asks a local SearXNG first (Google, Brave, Startpage, Mojeek, Wikiped
 scrapes DuckDuckGo and Bing when it is not running. The shipped `config/app.json` already points at
 `http://localhost:8888`; with nothing listening there, search simply uses the fallback. No Docker needed.
 
-The steps below work on a plain Linux server and inside WSL. The server stays in the foreground: run it in `tmux`, or as a
-systemd service for the server's user.
+SearXNG is installed in `/opt/searxng` and runs as its own `searxng` user with no login, as a systemd service. Keep
+it **outside** the app folder and **outside** the app's venv: it pins its own library versions, and a separate user
+means a flaw in SearXNG cannot read the app, `config/app.json` or the database.
 
+**1. System packages** (run in a normal shell, not inside any venv; run `deactivate` first if one is active):
 ```bash
 sudo apt install -y python3-venv python3-dev build-essential git libxslt-dev zlib1g-dev libffi-dev libssl-dev
 ```
+
+**2. Service user and source:**
 ```bash
-git clone https://github.com/searxng/searxng ~/searxng && cd ~/searxng && python3 -m venv .venv
+sudo useradd --system --create-home --home-dir /opt/searxng --shell /usr/sbin/nologin searxng
 ```
 ```bash
-.venv/bin/pip install -U pip setuptools wheel pyyaml msgspec typing_extensions && .venv/bin/pip install --use-pep517 --no-build-isolation -e .
+sudo -u searxng git clone https://github.com/searxng/searxng /opt/searxng/src
 ```
 
-Create `~/searxng/settings.yml` (use your own random secret, never commit it):
-```yaml
+**3. SearXNG's own venv.** `/opt/searxng` is private to `searxng`, so `cd /opt/searxng/src` as your own user
+fails with *Permission denied*. That is expected; run the whole step as `searxng` (do not `chmod` the folder, it
+holds the secret key):
+```bash
+sudo -u searxng -H bash -c 'cd /opt/searxng/src && python3 -m venv .venv && .venv/bin/pip install -U pip setuptools wheel pyyaml msgspec typing_extensions && .venv/bin/pip install --use-pep517 --no-build-isolation -e .'
+```
+
+**4. Settings** (a random secret is generated; never commit or share it):
+```bash
+sudo -u searxng tee /opt/searxng/settings.yml >/dev/null <<EOF
 use_default_settings: true
 server:
   bind_address: "127.0.0.1"
   port: 8888
-  secret_key: "[SEARXNG_SECRET]"
+  secret_key: "$(openssl rand -hex 32)"
   limiter: false
 search:
   formats: [html, json]
-engines:
-  - name: google
-    disabled: false
-  - name: bing
-    disabled: false
-  - name: duckduckgo
-    disabled: false
+EOF
+sudo chmod 600 /opt/searxng/settings.yml
+```
+
+**5. Check port 8888 is free** (no output = free). If it is taken, change `port` in `settings.yml` and
+`web.searxng_url` in `config/app.json` to a free port, e.g. 8890:
+```bash
+sudo ss -ltnp | grep ':8888'
+```
+
+**6. systemd service.** This only adds a new unit file; `daemon-reload` does not restart any running service.
+```bash
+sudo tee /etc/systemd/system/searxng.service >/dev/null <<'EOF'
+[Unit]
+Description=SearXNG
+After=network-online.target
+[Service]
+User=searxng
+WorkingDirectory=/opt/searxng/src
+Environment=SEARXNG_SETTINGS_PATH=/opt/searxng/settings.yml
+ExecStart=/opt/searxng/src/.venv/bin/python -m searx.webapp
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/searxng
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload && sudo systemctl enable --now searxng
 ```
 ```bash
-SEARXNG_SETTINGS_PATH=~/searxng/settings.yml ~/searxng/.venv/bin/python -m searx.webapp
+systemctl status searxng --no-pager
 ```
-Then add a `web` section to `config/app.json` and restart the app:
+It should say `active (running)`. If not: `sudo journalctl -u searxng -n 50 --no-pager`.
+
+**7. Test which engines answer from this server:**
+```bash
+for e in google startpage brave mojeek bing duckduckgo qwant; do printf '%-11s ' $e; curl -s "http://127.0.0.1:8888/search?q=bangladesh+bank&format=json&engines=$e" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d["results"]), "results", d["unresponsive_engines"] or "")'; done
+```
+`access denied` / `Suspended` means that engine blocks the server's IP. On the Arc server (2026-11) Google and Qwant
+were blocked; Startpage (serves Google's results), Brave, Mojeek, Bing and DuckDuckGo answered. Do not try to get
+around a block with proxies; if real Google results are required, the approved route is Google's paid search API
+(not built in yet).
+
+**8. `config/app.json`.** List only the engines that answered in step 7 under `searxng_engines`, so blocked ones are
+never asked:
 ```json
-"web": { "searxng_url": "http://127.0.0.1:8888" }
+"web": {
+  "searxng_url": "http://localhost:8888",
+  "backends": ["searxng", "duckduckgo", "bing"],
+  "searxng_min_results": 5,
+  "searxng_engines": ["startpage", "brave", "mojeek", "bing", "duckduckgo"],
+  "expand_queries": true,
+  "max_results": 10,
+  "auto_fetch_top": 5,
+  "boost_hosts": ["bb.org.bd", "gov.bd"],
+  "allow_hosts": ["wikipedia.org", "bb.org.bd", "gov.bd", "pcisecuritystandards.org"]
+}
 ```
-SearXNG is asked first; DuckDuckGo and Bing are used when it returns fewer than `web.searxng_min_results` (5) hits
-or is down. **Check that Google really answers** before relying on it:
 ```bash
-curl -s "http://127.0.0.1:8888/search?q=test&format=json&engines=google" | head -c 300
+python3 -m json.tool config/app.json >/dev/null && echo OK
 ```
-If `unresponsive_engines` says `access denied` / `Suspended`, Google is blocking that machine's IP (tested on the
-Arc server's connection: HTTP 403 on the first request). SearXNG then still serves its other engines (Brave,
-DuckDuckGo), but nothing comes from Google; a different network or a proxy may help, or use Google's paid
-Programmable Search API instead (not built in yet). Search queries leave your network
-(card-like numbers and e-mail addresses are stripped first); keep SearXNG bound to `127.0.0.1` or the LAN only.
+Restart the app. Order of use: SearXNG first; DuckDuckGo and Bing are scraped directly only when SearXNG is down or
+returns fewer than `searxng_min_results` hits.
+
+- `max_results`: keep it around 10. The tool output has a fixed size cap, so 25 results only crowd out the
+  excerpts of the pages actually read and slow local models.
+- `allow_hosts`: every site is allowed already. This list only stops the app from skipping a site for 24 h (1 h
+  after HTTP 429) once it has refused twice. Use it for important sites that are sometimes slow or briefly refuse
+  (gov.bd). Do not list sites that always refuse (paywalled news, social media): each search would keep trying them.
+  Already-skipped sites are in `config/web_blocked.json`.
+- Host names are matched as a domain plus all its subdomains. Write `sslcommerz.com`, **not** `*.sslcommerz.com`
+  (the `*` form matches nothing). Internal/private addresses stay blocked by the network guard either way.
+- `boost_hosts` ranks those sites higher; `allow_hosts` does not.
+
+Search queries leave your network (card-like numbers and e-mail addresses are stripped first). Keep SearXNG bound to
+`127.0.0.1`; if the app runs on another machine, firewall port 8888 to the app server only.
 On Windows run SearXNG inside WSL2 (same steps) and use the WSL address in `searxng_url`.
+
+Re-check Google later (add `"google"` back to `searxng_engines` if it returns results):
+```bash
+curl -s 'http://127.0.0.1:8888/search?q=test&format=json&engines=google' | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d["results"]), d["unresponsive_engines"])'
+```
+Update SearXNG: `sudo -u searxng -H bash -c 'cd /opt/searxng/src && git pull && .venv/bin/pip install --use-pep517 --no-build-isolation -e .' && sudo systemctl restart searxng`
+
+Remove it: `sudo systemctl disable --now searxng && sudo rm /etc/systemd/system/searxng.service && sudo systemctl daemon-reload && sudo userdel -r searxng`
 
 ## Model Sizing & MoE VRAM Tuning
 

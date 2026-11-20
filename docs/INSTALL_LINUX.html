@@ -654,20 +654,78 @@ EOF</code></pre>
   <p>It works without any setup, using DuckDuckGo and Bing. To test it, switch on the globe icon in the chat and ask for something recent: the answer should list its sources. The server needs outgoing HTTPS. Search words leave your network; card-like numbers and e-mail addresses are removed first.</p>
   <details>
     <summary>Add Google and more engines with SearXNG</summary>
+    <p>SearXNG is a search service you run on this server. The application asks it first; when it is down or finds too little, DuckDuckGo and Bing are used as before. It goes in <code>/opt/searxng</code> and runs as its own user, <strong>outside</strong> the application folder and its venv, so it cannot read the application's files.</p>
+    <p><strong>1.</strong> System packages. Run them in a normal terminal, not inside a venv (type <code>deactivate</code> first if one is active):</p>
 <pre><code>sudo apt install -y python3-venv python3-dev build-essential git libxslt-dev zlib1g-dev libffi-dev libssl-dev</code></pre>
-<pre><code>git clone https://github.com/searxng/searxng ~/searxng &amp;&amp; cd ~/searxng &amp;&amp; python3 -m venv .venv</code></pre>
-<pre><code>.venv/bin/pip install -U pip setuptools wheel pyyaml msgspec typing_extensions &amp;&amp; .venv/bin/pip install --use-pep517 --no-build-isolation -e .</code></pre>
-    <p>Create <code>~/searxng/settings.yml</code> (<code>xdg-open ~/searxng/settings.yml</code> after <code>touch ~/searxng/settings.yml</code>) with this content. Make up a long random secret:</p>
-<pre class="plain"><code>use_default_settings: true
+    <p><strong>2.</strong> Create the <code>searxng</code> user and download SearXNG:</p>
+<pre><code>sudo useradd --system --create-home --home-dir /opt/searxng --shell /usr/sbin/nologin searxng</code></pre>
+<pre><code>sudo -u searxng git clone https://github.com/searxng/searxng /opt/searxng/src</code></pre>
+    <p><strong>3.</strong> Install it in its own venv. The folder is private to <code>searxng</code>, so <code>cd /opt/searxng/src</code> as yourself says <em>Permission denied</em>. That is expected: this command runs the whole step as <code>searxng</code>. Do not <code>chmod</code> the folder.</p>
+<pre><code>sudo -u searxng -H bash -c 'cd /opt/searxng/src &amp;&amp; python3 -m venv .venv &amp;&amp; .venv/bin/pip install -U pip setuptools wheel pyyaml msgspec typing_extensions &amp;&amp; .venv/bin/pip install --use-pep517 --no-build-isolation -e .'</code></pre>
+    <p><strong>4.</strong> Create the settings file. A random secret key is made for you; never share it:</p>
+<pre><code>sudo -u searxng tee /opt/searxng/settings.yml &gt;/dev/null &lt;&lt;EOF
+use_default_settings: true
 server:
   bind_address: "127.0.0.1"
   port: 8888
-  secret_key: "[SEARXNG_SECRET]"
+  secret_key: "$(openssl rand -hex 32)"
   limiter: false
 search:
-  formats: [html, json]</code></pre>
-<pre><code>SEARXNG_SETTINGS_PATH=~/searxng/settings.yml ~/searxng/.venv/bin/python -m searx.webapp</code></pre>
-    <p>It stays in the foreground, so run it in its own <code>tmux</code> window. Then, in <code>config/app.json</code>, set <code>"web": { "searxng_url": "http://127.0.0.1:8888" }</code> and restart the application. Keep SearXNG on <code>127.0.0.1</code>.</p>
+  formats: [html, json]
+EOF
+sudo chmod 600 /opt/searxng/settings.yml</code></pre>
+    <p><strong>5.</strong> Check that port 8888 is free. No output means it is free. If something is listed, use another port (for example 8890) in <code>settings.yml</code> and in <code>searxng_url</code> below.</p>
+<pre><code>sudo ss -ltnp | grep ':8888'</code></pre>
+    <p><strong>6.</strong> Start it as a service that also starts after a reboot. This adds one new file and does not restart any other service:</p>
+<pre><code>sudo tee /etc/systemd/system/searxng.service &gt;/dev/null &lt;&lt;'EOF'
+[Unit]
+Description=SearXNG
+After=network-online.target
+[Service]
+User=searxng
+WorkingDirectory=/opt/searxng/src
+Environment=SEARXNG_SETTINGS_PATH=/opt/searxng/settings.yml
+ExecStart=/opt/searxng/src/.venv/bin/python -m searx.webapp
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/searxng
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload &amp;&amp; sudo systemctl enable --now searxng</code></pre>
+<pre><code>systemctl status searxng --no-pager</code></pre>
+    <p>It should say <code>active (running)</code>. If it does not, show the log:</p>
+<pre><code>sudo journalctl -u searxng -n 50 --no-pager</code></pre>
+    <p><strong>7.</strong> See which search engines answer from this server:</p>
+<pre><code>for e in google startpage brave mojeek bing duckduckgo qwant; do printf '%-11s ' $e; curl -s "http://127.0.0.1:8888/search?q=bangladesh+bank&amp;format=json&amp;engines=$e" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d["results"]), "results", d["unresponsive_engines"] or "")'; done</code></pre>
+    <p><code>access denied</code> means that engine blocks this server. On the Arc server Google and Qwant were blocked; Startpage (which shows Google's results), Brave, Mojeek, Bing and DuckDuckGo worked. Do not try to get around a block with a proxy.</p>
+    <p><strong>8.</strong> In <code>config/app.json</code>, make the <code>"web"</code> section look like this. Put only the engines that gave results in step 7 in <code>searxng_engines</code>:</p>
+<pre class="plain"><code>"web": {
+  "searxng_url": "http://localhost:8888",
+  "backends": ["searxng", "duckduckgo", "bing"],
+  "searxng_min_results": 5,
+  "searxng_engines": ["startpage", "brave", "mojeek", "bing", "duckduckgo"],
+  "expand_queries": true,
+  "max_results": 10,
+  "auto_fetch_top": 5,
+  "boost_hosts": ["bb.org.bd", "gov.bd"],
+  "allow_hosts": ["wikipedia.org", "bb.org.bd", "gov.bd", "pcisecuritystandards.org"]
+}</code></pre>
+    <p>Check the file, then restart the application:</p>
+<pre><code>python3 -m json.tool config/app.json &gt;/dev/null &amp;&amp; echo OK</code></pre>
+    <ul>
+      <li><strong>max_results</strong>: keep it near 10. More results only crowd out the pages that are actually read and slow the answer.</li>
+      <li><strong>allow_hosts</strong>: every site is already allowed. This list only stops the application from skipping a site for 24 hours after it refuses twice. Add important sites that are sometimes slow, such as <code>gov.bd</code>. Do not add sites that always refuse (paywalled news, social media).</li>
+      <li>Write a domain like <code>sslcommerz.com</code>, which also covers all its subdomains. <code>*.sslcommerz.com</code> does <strong>not</strong> work.</li>
+      <li><strong>boost_hosts</strong> puts those sites higher in the results; <code>allow_hosts</code> does not.</li>
+    </ul>
+    <p>Keep SearXNG on <code>127.0.0.1</code>. Search words leave your network; card-like numbers and e-mail addresses are removed first.</p>
+    <p>To update SearXNG later:</p>
+<pre><code>sudo -u searxng -H bash -c 'cd /opt/searxng/src &amp;&amp; git pull &amp;&amp; .venv/bin/pip install --use-pep517 --no-build-isolation -e .' &amp;&amp; sudo systemctl restart searxng</code></pre>
+    <p>To remove it completely:</p>
+<pre><code>sudo systemctl disable --now searxng &amp;&amp; sudo rm /etc/systemd/system/searxng.service &amp;&amp; sudo systemctl daemon-reload &amp;&amp; sudo userdel -r searxng</code></pre>
   </details>
   <h3>Code runner</h3>
   <p>An isolated Python sandbox for charts and calculations:</p>
