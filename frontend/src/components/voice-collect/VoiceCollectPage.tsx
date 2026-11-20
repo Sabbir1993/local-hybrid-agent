@@ -110,16 +110,20 @@ class Recorder {
 }
 
 const S = {
-  page: { minHeight: '100vh', background: 'var(--bg, #0f1218)', color: 'var(--text, #e6e8eb)', display: 'flex', justifyContent: 'center', padding: '24px 14px', boxSizing: 'border-box' as const, overflowY: 'auto' as const, height: '100vh' },
-  card: { width: '100%', maxWidth: 640, display: 'flex', flexDirection: 'column' as const, gap: 16 },
+  // The app's global CSS locks <body> (overflow hidden, height 100%), so this page scrolls in its own layer. Fixed to
+  // the visible screen (inset 0), not 100vh: on phones 100vh is taller than what is visible while the browser bar
+  // shows, which hid the bottom of the form. Bottom padding clears the phone's gesture bar.
+  page: { position: 'fixed' as const, inset: 0, overflowY: 'auto' as const, overflowX: 'hidden' as const, WebkitOverflowScrolling: 'touch' as const, overscrollBehavior: 'contain' as const, background: 'var(--bg, #0f1218)', color: 'var(--text, #e6e8eb)', padding: '20px 12px calc(40px + env(safe-area-inset-bottom, 0px))', boxSizing: 'border-box' as const },
+  card: { width: '100%', maxWidth: 640, margin: '0 auto', display: 'flex', flexDirection: 'column' as const, gap: 16, boxSizing: 'border-box' as const },
   h1: { fontSize: 22, margin: 0 },
   en: { fontSize: 13, opacity: 0.7, margin: 0 },
   box: { background: 'var(--panel, #171b23)', border: '1px solid var(--border, #2a303b)', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column' as const, gap: 12 },
   label: { display: 'flex', flexDirection: 'column' as const, gap: 4, fontSize: 13 },
-  input: { padding: '10px 12px', fontSize: 15, borderRadius: 8, border: '1px solid var(--border, #2a303b)', background: 'var(--bg, #0f1218)', color: 'inherit' },
+  // 16px: smaller text makes iPhone Safari zoom in on focus
+  input: { width: '100%', boxSizing: 'border-box' as const, padding: '11px 12px', fontSize: 16, borderRadius: 8, border: '1px solid var(--border, #2a303b)', background: 'var(--bg, #0f1218)', color: 'inherit' },
   btn: { padding: '12px 18px', fontSize: 15, borderRadius: 10, border: '1px solid var(--border, #2a303b)', background: 'transparent', color: 'inherit', cursor: 'pointer' },
   primary: { padding: '12px 18px', fontSize: 15, borderRadius: 10, border: 'none', background: 'var(--accent, #4f8cff)', color: '#fff', cursor: 'pointer', fontWeight: 600 },
-  line: { fontSize: 24, lineHeight: 1.5, padding: '18px 16px', borderRadius: 12, background: 'var(--panel, #171b23)', border: '1px solid var(--border, #2a303b)' },
+  line: { fontSize: 'clamp(19px, 5.5vw, 24px)', lineHeight: 1.5, overflowWrap: 'anywhere' as const, padding: '18px 16px', borderRadius: 12, background: 'var(--panel, #171b23)', border: '1px solid var(--border, #2a303b)' },
   err: { color: 'var(--red, #f87171)', fontSize: 14 },
   ok: { color: 'var(--green, #4ade80)', fontSize: 14 },
 };
@@ -397,7 +401,7 @@ export function VoiceCollectPage() {
                 {testing ? 'কথা বলুন… · Speak…' : 'মাইক পরীক্ষা (৩ সেকেন্ড) · Test mic (3 s)'}
               </button>
               {testing && <Meter level={level} />}
-              {testUrl && !testing && <audio src={testUrl} controls style={{ height: 36 }} />}
+              {testUrl && !testing && <audio src={testUrl} controls style={{ height: 36, width: '100%', maxWidth: 320 }} />}
             </div>
             {error && <div style={S.err}>{error}</div>}
             <button type="button" style={S.primary} disabled={busy} onClick={start}>
@@ -420,20 +424,20 @@ export function VoiceCollectPage() {
             <div style={S.line} lang="bn">{lines[idx].text}</div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               {recState === 'idle' && (
-                <button type="button" style={{ ...S.primary, padding: '18px 28px', fontSize: 18 }} onClick={startRec}>● রেকর্ড · Record</button>
+                <button type="button" style={{ ...S.primary, padding: '18px 28px', fontSize: 18, flex: '1 1 220px' }} onClick={startRec}>● রেকর্ড · Record</button>
               )}
               {recState === 'recording' && (
                 <>
-                  <button type="button" style={{ ...S.primary, padding: '18px 28px', fontSize: 18, background: 'var(--red, #ef4444)' }} onClick={stopRec}>■ থামুন · Stop</button>
+                  <button type="button" style={{ ...S.primary, padding: '18px 28px', fontSize: 18, background: 'var(--red, #ef4444)', flex: '1 1 220px' }} onClick={stopRec}>■ থামুন · Stop</button>
                   <Meter level={level} />
                   <span style={{ fontVariantNumeric: 'tabular-nums' }}>{secs.toFixed(1)} / {maxSecs}s</span>
                 </>
               )}
               {recState === 'review' && (
                 <>
-                  {takeUrl && <audio src={takeUrl} controls style={{ height: 40 }} />}
+                  {takeUrl && <audio src={takeUrl} controls style={{ height: 40, width: '100%', maxWidth: 360 }} />}
                   <button type="button" style={S.btn} disabled={busy} onClick={() => { setRecState('idle'); setTake(null); setTakeUrl(''); }}>↺ আবার · Re-record</button>
-                  <button type="button" style={S.primary} disabled={busy} onClick={submit}>{busy ? '…' : '✓ জমা দিন · Submit'}</button>
+                  <button type="button" style={{ ...S.primary, flex: '1 1 160px' }} disabled={busy} onClick={submit}>{busy ? '…' : '✓ জমা দিন · Submit'}</button>
                 </>
               )}
               {recState !== 'recording' && (
