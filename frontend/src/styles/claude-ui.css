@@ -387,7 +387,7 @@ header {
   padding: 0 20px !important;
   display: flex !important;
   flex-direction: column !important;
-  gap: 16px !important;
+  gap: 8px !important;              /* was 16px: message and answer read as one exchange */
 }
 
 /* Claude Style Collapsible Action / Diff Cards */
@@ -1992,7 +1992,7 @@ body.is-native-app .tri-mode-switch {
 /* 1. User message bubble - elevated soft neutral container, clean rounded corners */
 .msg.user {
   align-items: flex-end !important;
-  margin: 10px 0 2px !important;
+  margin: 6px 0 0 !important;
 }
 
 .msg.user .bubble {
@@ -2059,9 +2059,9 @@ body.is-native-app .tri-mode-switch {
   align-items: center !important;
   justify-content: flex-end !important;
   gap: 12px !important;
-  margin-top: 2px !important;
+  margin-top: 0 !important;
   padding: 0 4px !important;
-  min-height: 20px !important;
+  min-height: 18px !important;      /* hidden until hover, but it holds its row: keep it small */
   user-select: none !important;
   opacity: 0 !important;
   pointer-events: none !important;
@@ -2159,8 +2159,11 @@ body.is-native-app .tri-mode-switch {
 .msg.bot {
   align-items: stretch !important;
   width: 100% !important;
-  margin: 6px 0 18px !important;
+  margin: 0 0 10px !important;
 }
+
+/* a reply that opens with a heading or list must not add its own space above the first line */
+.msg.bot .bot-content > :first-child { margin-top: 0 !important; }
 
 .msg.bot .bubble {
   width: 100% !important;
@@ -2829,3 +2832,11 @@ body.is-native-app .tri-mode-switch {
 .stree-menu-item { padding: 7px 9px; border-radius: 6px; font-size: 12px; color: var(--text); cursor: pointer; }
 .stree-menu-item:hover { background: var(--panel2, rgba(255,255,255,0.06)); }
 .stree-menu-item.danger { color: var(--red, #f87171); }
+
+/* ---- Run timer: live beside the status line while answering, total time under the finished answer ---- */
+.run-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.run-timer, .run-total-time {
+  font-variant-numeric: tabular-nums;   /* digits keep their width, so the timer does not jitter as it counts */
+  font-size: 11.5px; color: var(--dim, #8b949e); font-style: normal; white-space: nowrap;
+}
+.run-total-time { margin-left: auto; align-self: center; padding: 2px 6px; }

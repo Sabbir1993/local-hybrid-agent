@@ -67,8 +67,9 @@ export interface ChatMessage {
   modelProvider?: string;
   thinking?: string;
   statusText?: string;
+  startedAt?: number;      // epoch ms the request was sent: the live timer while it answers
   acts?: any[];
-  secs?: number;
+  secs?: number;           // total time the answer took (shown under it once it is done)
   ntok?: number;
   promptTokens?: number;   // the server's real prompt size at the end of this reply: anchors the context ring
   tps?: number;            // generation speed: llama-server's own figure when it reported one, else tokens / total time
@@ -1374,6 +1375,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       thinking: '',
       timestamp: timeNow,
       statusText: reattachId ? 'Reconnecting to the run...' : CONNECTING_STATUS,
+      // drives the live timer beside the status line; a reattached run started earlier, elsewhere, so it has none
+      startedAt: reattachId ? undefined : Date.now(),
       check: !reattachId && get().answerCheck === 'gate' ? { state: 'pending', mode: 'gate', t0: Date.now() } : undefined,
     };
 

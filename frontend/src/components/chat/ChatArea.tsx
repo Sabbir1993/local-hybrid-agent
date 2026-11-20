@@ -247,6 +247,24 @@ const AnswerBadge: React.FC<{ m: any }> = ({ m }) => {
 };
 
 /** Copy / regenerate / thumbs under an assistant answer; visible on hover (always on touch). */
+/** "8s", "1m 12s", "1h 4m" */
+function fmtDuration(totalSec: number): string {
+  const s = Math.max(0, Math.round(totalSec));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+/** Time since the request was sent, ticking every second while the answer is being made. */
+const ElapsedTimer: React.FC<{ startedAt: number }> = ({ startedAt }) => {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  return <span className="run-timer">⏱ {fmtDuration((now - startedAt) / 1000)}</span>;
+};
+
 const BotActions: React.FC<{ m: any; isLast: boolean; streaming: boolean }> = ({ m, isLast, streaming }) => {
   const { regenerateLast, showToast, sendPrompt } = useAppStore();
   const [copied, setCopied] = useState(false);
@@ -303,6 +321,11 @@ const BotActions: React.FC<{ m: any; isLast: boolean; streaming: boolean }> = ({
           <button type="button" style={{ ...btn, color: rating === 1 ? 'var(--green, #4ade80)' : undefined }} title="Good answer" aria-pressed={rating === 1} onClick={() => rate(1)}>👍</button>
           <button type="button" style={{ ...btn, color: rating === -1 ? 'var(--red, #f87171)' : undefined }} title="Bad answer" aria-pressed={rating === -1} onClick={() => rate(-1)}>👎</button>
         </>
+      )}
+      {m.secs > 0 && (
+        <span className="run-total-time" title="Total time from sending the request to the finished answer">
+          ⏱ {fmtDuration(m.secs)}
+        </span>
       )}
     </div>
     </>
@@ -891,7 +914,7 @@ export const ChatArea: React.FC = () => {
               : null;
             return (
               <div key={String(m.id)} id={`msg-${m.id}`} className="msg bot">
-                <div className="bubble" style={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: '4px 0 12px 0' }}>
+                <div className="bubble" style={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: '2px 0 6px 0' }}>
                   {isErrorNotice ? (
                     <div>
                       <div
@@ -986,9 +1009,16 @@ export const ChatArea: React.FC = () => {
                       {!held && <BotActions m={m} isLast={messages[messages.length - 1] === m} streaming={isStreaming} />}
 
                       {/* what the run is doing right now ("Crunching tool results…"): at the bottom, just above the model line */}
-                      {m.statusText && (
-                        <div className="dim" role="status" style={{ fontSize: '12px', fontStyle: 'italic', marginTop: '10px' }}>
-                          {m.statusText === CONNECTING_STATUS ? <WorkingStatus /> : m.statusText}
+                      {/* the timer stays until the answer is finished, also while text streams with no status */}
+                      {(m.statusText || (isStreaming && isLastMsg && m.startedAt)) && (
+                        <div className="dim run-status" style={{ fontSize: '12px', marginTop: '10px' }}>
+                          {m.statusText && (
+                            <span role="status" style={{ fontStyle: 'italic' }}>
+                              {m.statusText === CONNECTING_STATUS ? <WorkingStatus /> : m.statusText}
+                            </span>
+                          )}
+                          {/* hidden from screen readers: a value that changes every second would be read out each time */}
+                          {isStreaming && isLastMsg && m.startedAt ? <span aria-hidden="true"><ElapsedTimer startedAt={m.startedAt} /></span> : null}
                         </div>
                       )}
 
