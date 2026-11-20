@@ -52,10 +52,26 @@ export const DeviceRename: React.FC = () => {
   };
 
   if (!editing) {
+    const current = getClientDeviceName() || 'This device';
     return (
-      <button className="btn ghost" title="Rename this device" onClick={start} style={{ width: 'auto', margin: 0, padding: '2px 8px', fontSize: 11 }}>
-        ✎ Rename device
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, minWidth: 0, fontSize: 12, color: 'var(--text-secondary, var(--muted, #9aa4b2))' }}>
+        <span title={current} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+          {current}
+        </span>
+        <button
+          type="button"
+          className="btn ghost"
+          title="Rename this device"
+          aria-label="Rename this device"
+          onClick={start}
+          style={{ width: 'auto', margin: 0, padding: '2px 4px', lineHeight: 0, flexShrink: 0 }}
+        >
+          <svg className="ui-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+          </svg>
+        </button>
+      </div>
     );
   }
   return (

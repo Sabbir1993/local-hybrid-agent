@@ -265,7 +265,7 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
 
       {/* Mode Switcher: ONLY in Desktop Companion App (Agent & Code only - NO Chat button) */}
       {isNative && (
-        <div className="claude-sidebar-top-block px-3 py-2 border-b border-border/40 flex items-center justify-center">
+        <div className="claude-sidebar-top-block px-3 py-2 border-b border-border/40 flex flex-col items-center justify-center">
           <div
             id="app-mode-switch"
             className="mode-switch full tri-mode-switch"
@@ -330,11 +330,16 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
               <span>Code</span>
             </button>
           </div>
+          {appMode === 'code' && (
+            <div style={{ width: '100%', marginTop: 6 }}>
+              <DeviceRename />
+            </div>
+          )}
         </div>
       )}
 
       {/* Agent / Code mode: this device's agents or projects as folders, each with its own chats (SessionTree) */}
-      {appMode === 'code' && (
+      {!isNative && appMode === 'code' && (
         <div style={{ padding: '6px 12px 0' }}>
           <DeviceRename />
         </div>
