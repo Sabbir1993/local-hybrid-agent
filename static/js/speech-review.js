@@ -85,8 +85,8 @@ async function loadSpeechReviewPanel() {
     const from = total ? offset + 1 : 0;
     const to = Math.min(total, offset + size);
     el.innerHTML = `<span class="dim">${from}–${to} of ${total}</span>
-      <button type="button" class="btn" data-p="prev" style="width:auto;padding:3px 10px" ${offset <= 0 ? 'disabled' : ''}>‹ Prev</button>
-      <button type="button" class="btn" data-p="next" style="width:auto;padding:3px 10px" ${to >= total ? 'disabled' : ''}>Next ›</button>`;
+      <button type="button" class="btn vc-sm" data-p="prev" style="width:auto" ${offset <= 0 ? 'disabled' : ''}>‹ Prev</button>
+      <button type="button" class="btn vc-sm" data-p="next" style="width:auto" ${to >= total ? 'disabled' : ''}>Next ›</button>`;
     el.querySelector('[data-p="prev"]').onclick = () => go(Math.max(0, offset - size));
     el.querySelector('[data-p="next"]').onclick = () => go(offset + size);
   };
@@ -107,7 +107,7 @@ async function loadSpeechReviewPanel() {
         ${td(c.clips || 0, 1)}${td(c.minutes || 0, 1)}
         ${td(c.flagged ? `<span style="color:var(--orange,#f59e0b)">${c.flagged}</span>` : '0', 1)}
         ${td(srWhen(c.last_upload))}
-        ${td(`<button type="button" class="btn" data-sp="${c.id}" data-label="${esc(c.name)} (${esc(c.employee_id)})" style="width:auto;padding:3px 10px">Recordings</button>`, 1)}
+        ${td(`<button type="button" class="btn vc-sm" data-sp="${c.id}" data-label="${esc(c.name)} (${esc(c.employee_id)})" style="width:auto">Recordings</button>`, 1)}
       </tr>`).join('');
     t.querySelectorAll('[data-sp]').forEach((b) => b.addEventListener('click', () => {
       S.contributor = Number(b.getAttribute('data-sp'));
@@ -126,7 +126,7 @@ async function loadSpeechReviewPanel() {
   async function loadRecordings() {
     const chip = $('#sr-chip');
     chip.innerHTML = S.contributor
-      ? `<span style="font-size:12px;padding:3px 8px;border-radius:999px;border:1px solid var(--sp-line-strong,#3a4150)">Speaker: ${esc(S.contributorLabel)} <button type="button" class="btn" id="sr-chip-x" style="width:auto;padding:0 6px;margin-left:4px;min-height:0;border:none" title="Show everyone">✕</button></span>`
+      ? `<span style="font-size:12px;padding:3px 8px;border-radius:999px;border:1px solid var(--sp-line-strong,#3a4150)">Speaker: ${esc(S.contributorLabel)} <button type="button" class="btn vc-inline" id="sr-chip-x" style="width:auto;margin-left:4px" title="Show everyone">✕</button></span>`
       : '';
     if (S.contributor) $('#sr-chip-x').onclick = () => { S.contributor = 0; S.offset = 0; loadRecordings(); };
     const { r, d } = await srGet('/control/speech/recordings?' + srQuery({
@@ -146,11 +146,11 @@ async function loadSpeechReviewPanel() {
         </div>
         <div lang="bn" style="font-size:15px;line-height:1.5">${esc(x.prompt_text)}</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <audio controls preload="none" src="/control/speech/recordings/${x.id}/audio" style="height:34px;flex:1 1 260px;min-width:220px;max-width:420px"></audio>
+          <audio controls preload="none" src="/control/speech/recordings/${x.id}/audio" style="height:32px;flex:1 1 260px;min-width:220px;max-width:420px"></audio>
           <span data-badge>${statusBadge(x.status)}</span>
           <span style="margin-left:auto;display:flex;gap:6px">
-            <button type="button" class="btn" data-set="ok" style="width:auto;padding:4px 12px" ${x.status === 'ok' ? 'disabled' : ''}>✓ OK</button>
-            <button type="button" class="btn" data-set="flagged" style="width:auto;padding:4px 12px" ${x.status === 'flagged' ? 'disabled' : ''}>⚑ Flag</button>
+            <button type="button" class="btn vc-sm" data-set="ok" style="width:auto" ${x.status === 'ok' ? 'disabled' : ''}>✓ OK</button>
+            <button type="button" class="btn vc-sm" data-set="flagged" style="width:auto" ${x.status === 'flagged' ? 'disabled' : ''}>⚑ Flag</button>
           </span>
         </div>
       </div>`;

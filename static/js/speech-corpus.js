@@ -3,6 +3,9 @@
  * Deleting a speaker needs the MFA step-up (withStepUp from mfa-panel.js). */
 'use strict';
 
+// one height for the link box and the buttons next to it (the shared .btn styles add their own margin/padding)
+const VC_ROW_BTN = 'width:auto;height:40px;min-height:40px;margin:0;padding:0 16px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;box-shadow:none';
+
 async function speechFetch(url, opts) {
   const r = await fetch(url, opts);
   const d = await r.json().catch(() => ({}));
@@ -38,10 +41,12 @@ async function loadSpeechCorpusPanel() {
       </div>
       <div style="display:flex;flex-direction:column;gap:8px">
         <div style="font-weight:600;font-size:13px">Link for colleagues</div>
-        <div id="vc-link" style="display:${st.link_path ? 'flex' : 'none'};gap:8px;align-items:center;flex-wrap:wrap">
-          <input type="text" id="vc-link-text" readonly value="${esc(st.link_path ? window.location.origin + st.link_path : '')}" style="flex:1;min-width:280px;font-family:monospace;font-size:12px">
-          <button type="button" class="btn accent" id="vc-copy" style="width:auto;padding:6px 14px">Copy link</button>
-          <button type="button" class="btn" id="vc-share" style="width:auto;padding:6px 14px">Share…</button>
+        <div id="vc-link" style="display:${st.link_path ? 'flex' : 'none'};gap:8px;align-items:stretch;flex-wrap:wrap">
+          <input type="text" id="vc-link-text" readonly value="${esc(st.link_path ? window.location.origin + st.link_path : '')}" style="flex:1 1 280px;min-width:0;height:40px;box-sizing:border-box;margin:0;font-family:monospace;font-size:12px">
+          <div style="display:flex;gap:8px">
+            <button type="button" class="btn accent" id="vc-copy" style="${VC_ROW_BTN}">Copy link</button>
+            <button type="button" class="btn" id="vc-share" style="${VC_ROW_BTN}">Share…</button>
+          </div>
         </div>
         <div id="vc-link-note" class="dim" style="font-size:12px">${
           st.link_path ? 'Share it only inside the company.'
@@ -60,7 +65,7 @@ async function loadSpeechCorpusPanel() {
               <span class="dim" style="font-size:12px;font-weight:600">Opens</span>
               <div style="display:flex;gap:6px;align-items:center">
                 <input type="datetime-local" id="vc-from" style="flex:1;min-width:0">
-                <button type="button" class="btn" data-clear="vc-from" title="Clear: open from now" style="width:auto;padding:0 10px;min-height:38px">✕</button>
+                <button type="button" class="btn" data-clear="vc-from" title="Clear: open from now" style="width:38px;padding:0 !important">✕</button>
               </div>
               <span class="dim" style="font-size:11px">Empty = open from now</span>
             </div>
@@ -68,7 +73,7 @@ async function loadSpeechCorpusPanel() {
               <span class="dim" style="font-size:12px;font-weight:600">Closes</span>
               <div style="display:flex;gap:6px;align-items:center">
                 <input type="datetime-local" id="vc-until" style="flex:1;min-width:0">
-                <button type="button" class="btn" data-clear="vc-until" title="Clear: no end date" style="width:auto;padding:0 10px;min-height:38px">✕</button>
+                <button type="button" class="btn" data-clear="vc-until" title="Clear: no end date" style="width:38px;padding:0 !important">✕</button>
               </div>
               <span class="dim" style="font-size:11px">Empty = no end date</span>
             </div>
@@ -79,10 +84,10 @@ async function loadSpeechCorpusPanel() {
           <div style="border-top:1px solid var(--sp-line,var(--border,#2a303b));padding-top:12px;display:flex;flex-direction:column;gap:8px">
             <span class="dim" style="font-size:12px;font-weight:600">Extend closing time</span>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px">
-              <button type="button" class="btn" data-extend="1" style="width:100%;padding:7px 10px">+1 day</button>
-              <button type="button" class="btn" data-extend="7" style="width:100%;padding:7px 10px">+7 days</button>
-              <button type="button" class="btn" data-extend="30" style="width:100%;padding:7px 10px">+30 days</button>
-              <button type="button" class="btn" id="vc-no-end" style="width:100%;padding:7px 10px">No end date</button>
+              <button type="button" class="btn" data-extend="1" style="width:100%">+1 day</button>
+              <button type="button" class="btn" data-extend="7" style="width:100%">+7 days</button>
+              <button type="button" class="btn" data-extend="30" style="width:100%">+30 days</button>
+              <button type="button" class="btn" id="vc-no-end" style="width:100%">No end date</button>
             </div>
           </div>
           <div class="dim" style="font-size:11px;line-height:1.5">Times are in this computer's time zone. Outside these dates the page tells people when it opens or that it has closed; someone already recording can finish their lines. Extending keeps the same link.</div>
