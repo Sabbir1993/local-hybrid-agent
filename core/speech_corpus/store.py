@@ -316,6 +316,85 @@ class CorpusStore:
             "by_category": by_category,
         }
 
+    # ---- review (admin report) ----
+    REVIEW_STATUSES = ("ok", "flagged")
+    PAGE_MAX = 100
+
+    @staticmethod
+    def _like(q: str) -> str:
+        return "%" + str(q).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+    def list_contributors(self, q: str = "", region: str = "", offset: int = 0, limit: int = 50) -> dict:
+        where, args = ["1=1"], []
+        if q:
+            where.append("(c.name LIKE ? ESCAPE '\\' OR c.employee_id LIKE ? ESCAPE '\\' OR c.speaker_code LIKE ? ESCAPE '\\')")
+            args += [self._like(q)] * 3
+        if region in REGIONS:
+            where.append("c.region = ?")
+            args.append(region)
+        w = " AND ".join(where)
+        total = self.db.execute(f"SELECT COUNT(*) FROM contributors c WHERE {w}", args).fetchone()[0]
+        rows = self.db.execute(
+            "SELECT c.id, c.speaker_code, c.name, c.employee_id, c.region, c.district, c.gender, c.age_band, c.device, "
+            "c.created_at, "
+            "SUM(CASE WHEN r.status = 'ok' THEN 1 ELSE 0 END) AS clips, "
+            "SUM(CASE WHEN r.status = 'flagged' THEN 1 ELSE 0 END) AS flagged, "
+            "ROUND(COALESCE(SUM(CASE WHEN r.status = 'ok' THEN r.seconds END), 0) / 60.0, 1) AS minutes, "
+            "MAX(r.created_at) AS last_upload "
+            f"FROM contributors c LEFT JOIN recordings r ON r.contributor_id = c.id WHERE {w} "
+            "GROUP BY c.id ORDER BY COALESCE(MAX(r.created_at), c.created_at) DESC LIMIT ? OFFSET ?",
+            args + [max(1, min(self.PAGE_MAX, int(limit))), max(0, int(offset))]).fetchall()
+        return {"total": total, "items": [dict(r) for r in rows]}
+
+    def list_recordings(self, *, contributor_id: int = 0, q: str = "", region: str = "", category: str = "",
+                        status: str = "", offset: int = 0, limit: int = 25) -> dict:
+        where, args = ["r.status != 'deleted'"], []
+        if contributor_id:
+            where.append("r.contributor_id = ?")
+            args.append(int(contributor_id))
+        if q:
+            where.append("(r.prompt_text LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\' OR c.employee_id LIKE ? ESCAPE '\\')")
+            args += [self._like(q)] * 3
+        if region in REGIONS:
+            where.append("c.region = ?")
+            args.append(region)
+        if category:
+            where.append("r.category = ?")
+            args.append(category)
+        if status in self.REVIEW_STATUSES:
+            where.append("r.status = ?")
+            args.append(status)
+        w = " AND ".join(where)
+        base = f"FROM recordings r JOIN contributors c ON c.id = r.contributor_id WHERE {w}"
+        total = self.db.execute(f"SELECT COUNT(*) {base}", args).fetchone()[0]
+        rows = self.db.execute(
+            "SELECT r.id, r.prompt_text, r.category, r.instruction, r.seconds, r.rms, r.clipped_ratio, r.created_at, "
+            f"r.status, c.speaker_code, c.name, c.employee_id, c.region {base} "
+            "ORDER BY r.created_at DESC, r.id DESC LIMIT ? OFFSET ?",
+            args + [max(1, min(self.PAGE_MAX, int(limit))), max(0, int(offset))]).fetchall()
+        return {"total": total, "items": [dict(r) for r in rows]}
+
+    def recording_file(self, rec_id: int) -> Path:
+        """The WAV of one recording, checked to be inside this corpus' audio folder."""
+        row = self.db.execute("SELECT path, status FROM recordings WHERE id = ?", (int(rec_id),)).fetchone()
+        if not row or row["status"] == "deleted" or not row["path"]:
+            raise CorpusError("No such recording.", 404)
+        p = (self.root / row["path"]).resolve()
+        if not p.is_relative_to(self.audio.resolve()) or not p.is_file():
+            raise CorpusError("The audio file is missing.", 404)
+        return p
+
+    def set_recording_status(self, rec_id: int, status: str) -> dict:
+        if status not in self.REVIEW_STATUSES:
+            raise CorpusError("Status must be 'ok' or 'flagged'.")
+        with self._lock:
+            n = self.db.execute("UPDATE recordings SET status = ? WHERE id = ? AND status != 'deleted'",
+                                (status, int(rec_id))).rowcount
+            self.db.commit()
+        if not n:
+            raise CorpusError("No such recording.", 404)
+        return {"id": int(rec_id), "status": status}
+
     def close(self) -> None:
         try:
             self.db.close()

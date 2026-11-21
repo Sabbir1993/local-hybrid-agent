@@ -400,6 +400,50 @@ class SpeechCorpusTests(unittest.TestCase):
         d = self.c.post("/control/speech/prompts", json={"jsonl": r.text}).json()
         self.assertEqual(d["rejected_count"], 0)
 
+    # ---- review report ----
+    def test_review_lists_plays_and_flags(self):
+        code = self.turn_on()
+        a = self.start(code, emp="E10", name="Rahim Uddin", region="sylhet").json()
+        b = self.start(code, emp="E11", name="Karim Mia").json()
+        for line in a["lines"][:3]:
+            self.upload(a["token"], line["id"], wav())
+        self.upload(b["token"], b["lines"][0]["id"], wav(1.5))
+
+        sp = self.c.get("/control/speech/contributors").json()
+        self.assertEqual(sp["total"], 2)
+        rahim = next(x for x in sp["items"] if x["employee_id"] == "E10")
+        self.assertEqual((rahim["clips"], rahim["region"]), (3, "sylhet"))
+        self.assertEqual(self.c.get("/control/speech/contributors", params={"q": "karim"}).json()["total"], 1)
+
+        recs = self.c.get("/control/speech/recordings").json()
+        self.assertEqual(recs["total"], 4)
+        mine = self.c.get("/control/speech/recordings", params={"contributor": rahim["id"]}).json()
+        self.assertEqual(mine["total"], 3)
+        self.assertEqual(self.c.get("/control/speech/recordings", params={"region": "sylhet"}).json()["total"], 3)
+        self.assertEqual(self.c.get("/control/speech/recordings", params={"q": "100%_"}).json()["total"], 0)   # LIKE escaped
+
+        rid = mine["items"][0]["id"]
+        audio = self.c.get(f"/control/speech/recordings/{rid}/audio")
+        self.assertEqual(audio.status_code, 200)
+        self.assertEqual(audio.headers["content-type"], "audio/wav")
+        self.assertIn("no-store", audio.headers["cache-control"])
+        self.assertEqual(audio.content[:4], b"RIFF")
+        self.assertEqual(self.c.get("/control/speech/recordings/999999/audio").status_code, 404)
+
+        self.assertEqual(self.c.post(f"/control/speech/recordings/{rid}/status", json={"status": "flagged"}).status_code, 200)
+        self.assertEqual(self.c.get("/control/speech/recordings", params={"status": "flagged"}).json()["total"], 1)
+        st = corpus_store.get_store(corpus_settings.corpus_dir()).stats()
+        self.assertEqual((st["clips"], st["flagged"]), (3, 1))
+        self.assertEqual(self.c.post(f"/control/speech/recordings/{rid}/status", json={"status": "deleted"}).status_code, 400)
+        self.assertEqual(self.c.post("/control/speech/recordings/999999/status", json={"status": "ok"}).status_code, 404)
+
+    def test_review_needs_the_permission(self):
+        app = FastAPI()
+        app.include_router(speech_routes.router)
+        c = TestClient(app)
+        for path in ("/control/speech/contributors", "/control/speech/recordings", "/control/speech/recordings/1/audio"):
+            self.assertIn(c.get(path).status_code, (401, 403), path)
+
     def test_speaker_codes_are_never_reused(self):
         code = self.turn_on()
         a = self.start(code, emp="E1").json()

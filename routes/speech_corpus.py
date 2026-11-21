@@ -273,6 +273,55 @@ async def speech_prompts(body: PromptsBody, request: Request, user: Principal = 
     return res
 
 
+# ---- review: who recorded what, listen, mark ok / flagged ----
+
+@router.get("/control/speech/contributors")
+async def speech_contributors(q: str = "", region: str = "", offset: int = 0, limit: int = 50,
+                              user: Principal = Depends(_manage)):
+    try:
+        return _admin_store().list_contributors(q=q[:80], region=region, offset=offset, limit=limit)
+    except corpus_settings.CorpusConfigError as e:
+        return _err(str(e), 409)
+
+
+@router.get("/control/speech/recordings")
+async def speech_recordings(contributor: int = 0, q: str = "", region: str = "", category: str = "", status: str = "",
+                            offset: int = 0, limit: int = 25, user: Principal = Depends(_manage)):
+    try:
+        return _admin_store().list_recordings(contributor_id=contributor, q=q[:80], region=region,
+                                              category=category[:20], status=status, offset=offset, limit=limit)
+    except corpus_settings.CorpusConfigError as e:
+        return _err(str(e), 409)
+
+
+@router.get("/control/speech/recordings/{rec_id}/audio")
+async def speech_recording_audio(rec_id: int, user: Principal = Depends(_manage)):
+    """One clip for the reviewer's player. Voices are personal data: never cached, only to speech.manage holders."""
+    try:
+        path = _admin_store().recording_file(rec_id)
+    except corpus_settings.CorpusConfigError as e:
+        return _err(str(e), 409)
+    except CorpusError as e:
+        return _err(str(e), e.status)
+    return FileResponse(path, media_type="audio/wav", headers={"Cache-Control": "no-store, private"})
+
+
+class StatusBody(BaseModel):
+    status: str = Field(default="", max_length=10)
+
+
+@router.post("/control/speech/recordings/{rec_id}/status")
+async def speech_recording_status(rec_id: int, body: StatusBody, request: Request, user: Principal = Depends(_manage)):
+    try:
+        res = _admin_store().set_recording_status(rec_id, body.status)
+    except corpus_settings.CorpusConfigError as e:
+        return _err(str(e), 409)
+    except CorpusError as e:
+        return _err(str(e), e.status)
+    audit_log(user, action="speech.review", resource=str(rec_id), detail={"status": body.status}, ip=_ip(request))
+    return res
+
+
 class DeleteBody(BaseModel):
     employee_id: str = Field(default="", max_length=40)
 

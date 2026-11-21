@@ -182,6 +182,7 @@ window.__sessionReady.then((data) => {
   if (document.getElementById('sec-runner') && window.loadRunnerPanel) loadRunnerPanel();
   if (document.getElementById('sec-mfa') && window.loadMfaPanel) loadMfaPanel();
   if (document.getElementById('sec-speech') && window.loadSpeechCorpusPanel) loadSpeechCorpusPanel();
+  if (document.getElementById('speech-review-content') && window.loadSpeechReviewPanel) loadSpeechReviewPanel();
   if (document.getElementById('sec-db')) {
     fetch('/db/list').then(r => r.json()).then(d => {
       const box = document.getElementById('settings-db-summary');

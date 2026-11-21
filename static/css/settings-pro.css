@@ -138,6 +138,8 @@
 #settings-page .settings-panel input[type="search"],
 #settings-page .settings-panel input[type="url"],
 #settings-page .settings-panel input[type="email"],
+#settings-page .settings-panel input[type="datetime-local"],
+#settings-page .settings-panel input[type="date"],
 #settings-page .settings-panel input:not([type]),
 #settings-page .settings-panel select,
 #settings-page .settings-panel textarea,
@@ -161,6 +163,10 @@
 #settings-page .ca-modal-box select:focus,
 #settings-page .ca-modal-box textarea:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--sp-tint) !important; }
 #settings-page .settings-panel input[type="range"] { accent-color: var(--accent); }
+/* native date pickers: text colour follows the theme; the calendar icon is tinted by color-scheme, which
+   speech-corpus.js sets from the panel background (light or dark theme) */
+#settings-page .settings-panel input[type="datetime-local"],
+#settings-page .settings-panel input[type="date"] { color: var(--text) !important; }
 #settings-page .mono, #settings-page .smp-val { font-family: var(--sp-mono); }
 
 #settings-page .btn {

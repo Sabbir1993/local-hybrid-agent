@@ -50,28 +50,42 @@ async function loadSpeechCorpusPanel() {
         <div>
           <button type="button" class="btn" id="vc-rotate" style="width:auto;padding:6px 14px">${st.has_code ? 'Create new link (old link stops working)' : 'Create link'}</button>
         </div>
-        <div style="margin-top:6px;padding:12px;border:1px solid var(--border,#3a4150);border-radius:10px;display:flex;flex-direction:column;gap:10px">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <div class="vc-window" style="margin-top:6px;padding:14px;border:1px solid var(--sp-line-strong,var(--border,#3a4150));border-radius:12px;display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
             <span style="font-weight:600;font-size:13px">Open dates</span>
-            <span id="vc-window-state" style="font-size:12px"></span>
+            <span id="vc-window-state" style="font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px"></span>
           </div>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-            <label style="display:flex;flex-direction:column;gap:4px;font-size:11px" class="dim">Opens (empty = now)
-              <input type="datetime-local" id="vc-from" style="width:auto">
-            </label>
-            <label style="display:flex;flex-direction:column;gap:4px;font-size:11px" class="dim">Closes (empty = no end)
-              <input type="datetime-local" id="vc-until" style="width:auto">
-            </label>
-            <button type="button" class="btn accent" id="vc-window-save" style="width:auto;padding:6px 14px">Save dates</button>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span class="dim" style="font-size:12px;font-weight:600">Opens</span>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="datetime-local" id="vc-from" style="flex:1;min-width:0">
+                <button type="button" class="btn" data-clear="vc-from" title="Clear: open from now" style="width:auto;padding:0 10px;min-height:38px">✕</button>
+              </div>
+              <span class="dim" style="font-size:11px">Empty = open from now</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span class="dim" style="font-size:12px;font-weight:600">Closes</span>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="datetime-local" id="vc-until" style="flex:1;min-width:0">
+                <button type="button" class="btn" data-clear="vc-until" title="Clear: no end date" style="width:auto;padding:0 10px;min-height:38px">✕</button>
+              </div>
+              <span class="dim" style="font-size:11px">Empty = no end date</span>
+            </div>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px">
-            <span class="dim">Extend closing time:</span>
-            <button type="button" class="btn" data-extend="1" style="width:auto;padding:4px 10px">+1 day</button>
-            <button type="button" class="btn" data-extend="7" style="width:auto;padding:4px 10px">+7 days</button>
-            <button type="button" class="btn" data-extend="30" style="width:auto;padding:4px 10px">+30 days</button>
-            <button type="button" class="btn" id="vc-no-end" style="width:auto;padding:4px 10px">No end date</button>
+          <div>
+            <button type="button" class="btn accent" id="vc-window-save" style="width:auto;padding:8px 18px">Save dates</button>
           </div>
-          <div class="dim" style="font-size:11px">Times are in this computer's time zone. Outside these dates the page tells people when it opens or that it has closed; a person already recording can finish their lines. The link itself does not change, so people can keep using the same link after you extend it.</div>
+          <div style="border-top:1px solid var(--sp-line,var(--border,#2a303b));padding-top:12px;display:flex;flex-direction:column;gap:8px">
+            <span class="dim" style="font-size:12px;font-weight:600">Extend closing time</span>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px">
+              <button type="button" class="btn" data-extend="1" style="width:100%;padding:7px 10px">+1 day</button>
+              <button type="button" class="btn" data-extend="7" style="width:100%;padding:7px 10px">+7 days</button>
+              <button type="button" class="btn" data-extend="30" style="width:100%;padding:7px 10px">+30 days</button>
+              <button type="button" class="btn" id="vc-no-end" style="width:100%;padding:7px 10px">No end date</button>
+            </div>
+          </div>
+          <div class="dim" style="font-size:11px;line-height:1.5">Times are in this computer's time zone. Outside these dates the page tells people when it opens or that it has closed; someone already recording can finish their lines. Extending keeps the same link.</div>
         </div>
       </div>
       <div>
@@ -156,10 +170,11 @@ async function loadSpeechCorpusPanel() {
     const el = box.querySelector('#vc-window-state');
     const now = Date.now() / 1000;
     const days = (s) => { const d = Math.round(s / 86400); return d >= 1 ? `${d} day${d === 1 ? '' : 's'}` : `${Math.max(1, Math.round(s / 3600))} hour(s)`; };
-    if (w.state === 'not_yet') { el.textContent = `● Not open yet · opens ${fmt(w.valid_from)}`; el.style.color = 'var(--orange,#f59e0b)'; }
-    else if (w.state === 'expired') { el.textContent = `● Closed since ${fmt(w.valid_until)}`; el.style.color = 'var(--red,#f87171)'; }
-    else if (w.valid_until) { el.textContent = `● Open · closes ${fmt(w.valid_until)} (in ${days(w.valid_until - now)})`; el.style.color = 'var(--green,#4ade80)'; }
-    else { el.textContent = '● Open · no end date'; el.style.color = 'var(--green,#4ade80)'; }
+    const pill = (text, rgb) => { el.textContent = text; el.style.color = `rgb(${rgb})`; el.style.background = `rgba(${rgb},0.14)`; };
+    if (w.state === 'not_yet') pill(`Not open yet · opens ${fmt(w.valid_from)}`, '245,158,11');
+    else if (w.state === 'expired') pill(`Closed since ${fmt(w.valid_until)}`, '248,113,113');
+    else if (w.valid_until) pill(`Open · closes ${fmt(w.valid_until)} (in ${days(w.valid_until - now)})`, '74,222,128');
+    else pill('Open · no end date', '74,222,128');
   };
   const saveWindow = async (from, until, okMsg) => {
     const { r: rr, d } = await speechPost('/control/speech/window', { valid_from: from, valid_until: until });
@@ -167,6 +182,13 @@ async function loadSpeechCorpusPanel() {
     showWindow(d);
     say(okMsg);
   };
+  // the native picker's calendar icon follows color-scheme: match the theme (light or dark panel)
+  const bg = window.getComputedStyle(document.body).backgroundColor.match(/\d+/g) || [255, 255, 255];
+  const dark = (0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]) < 128;
+  box.querySelectorAll('input[type="datetime-local"]').forEach((i) => { i.style.colorScheme = dark ? 'dark' : 'light'; });
+  box.querySelectorAll('[data-clear]').forEach((b) => b.addEventListener('click', () => {
+    box.querySelector('#' + b.getAttribute('data-clear')).value = '';
+  }));
   showWindow(st);
   box.querySelector('#vc-window-save').addEventListener('click', () =>
     saveWindow(fromInput(box.querySelector('#vc-from').value), fromInput(box.querySelector('#vc-until').value), 'Dates saved.'));
