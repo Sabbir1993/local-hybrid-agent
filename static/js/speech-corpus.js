@@ -41,6 +41,7 @@ async function loadSpeechCorpusPanel() {
         <div id="vc-link" style="display:${st.link_path ? 'flex' : 'none'};gap:8px;align-items:center;flex-wrap:wrap">
           <input type="text" id="vc-link-text" readonly value="${esc(st.link_path ? window.location.origin + st.link_path : '')}" style="flex:1;min-width:280px;font-family:monospace;font-size:12px">
           <button type="button" class="btn accent" id="vc-copy" style="width:auto;padding:6px 14px">Copy link</button>
+          <button type="button" class="btn" id="vc-share" style="width:auto;padding:6px 14px">Share…</button>
         </div>
         <div id="vc-link-note" class="dim" style="font-size:12px">${
           st.link_path ? 'Share it only inside the company.'
@@ -48,6 +49,29 @@ async function loadSpeechCorpusPanel() {
               : 'No link yet.'}</div>
         <div>
           <button type="button" class="btn" id="vc-rotate" style="width:auto;padding:6px 14px">${st.has_code ? 'Create new link (old link stops working)' : 'Create link'}</button>
+        </div>
+        <div style="margin-top:6px;padding:12px;border:1px solid var(--border,#3a4150);border-radius:10px;display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-weight:600;font-size:13px">Open dates</span>
+            <span id="vc-window-state" style="font-size:12px"></span>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:11px" class="dim">Opens (empty = now)
+              <input type="datetime-local" id="vc-from" style="width:auto">
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:11px" class="dim">Closes (empty = no end)
+              <input type="datetime-local" id="vc-until" style="width:auto">
+            </label>
+            <button type="button" class="btn accent" id="vc-window-save" style="width:auto;padding:6px 14px">Save dates</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px">
+            <span class="dim">Extend closing time:</span>
+            <button type="button" class="btn" data-extend="1" style="width:auto;padding:4px 10px">+1 day</button>
+            <button type="button" class="btn" data-extend="7" style="width:auto;padding:4px 10px">+7 days</button>
+            <button type="button" class="btn" data-extend="30" style="width:auto;padding:4px 10px">+30 days</button>
+            <button type="button" class="btn" id="vc-no-end" style="width:auto;padding:4px 10px">No end date</button>
+          </div>
+          <div class="dim" style="font-size:11px">Times are in this computer's time zone. Outside these dates the page tells people when it opens or that it has closed; a person already recording can finish their lines. The link itself does not change, so people can keep using the same link after you extend it.</div>
         </div>
       </div>
       <div>
@@ -118,6 +142,58 @@ async function loadSpeechCorpusPanel() {
       ? 'Copy it now: this server cannot store it (its keychain is unavailable), so it will not be shown again.'
       : 'Share it only inside the company. The old link no longer works.';
     say('New link created.');
+  });
+
+  // ---- open dates ----
+  const pad = (n) => String(n).padStart(2, '0');
+  const toInput = (ep) => { if (!ep) return ''; const d = new Date(ep * 1000); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const fromInput = (v) => (v ? Math.round(new Date(v).getTime() / 1000) : null);
+  const fmt = (ep) => new Date(ep * 1000).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const showWindow = (w) => {
+    st.valid_from = w.valid_from; st.valid_until = w.valid_until; st.state = w.state;
+    box.querySelector('#vc-from').value = toInput(w.valid_from);
+    box.querySelector('#vc-until').value = toInput(w.valid_until);
+    const el = box.querySelector('#vc-window-state');
+    const now = Date.now() / 1000;
+    const days = (s) => { const d = Math.round(s / 86400); return d >= 1 ? `${d} day${d === 1 ? '' : 's'}` : `${Math.max(1, Math.round(s / 3600))} hour(s)`; };
+    if (w.state === 'not_yet') { el.textContent = `● Not open yet · opens ${fmt(w.valid_from)}`; el.style.color = 'var(--orange,#f59e0b)'; }
+    else if (w.state === 'expired') { el.textContent = `● Closed since ${fmt(w.valid_until)}`; el.style.color = 'var(--red,#f87171)'; }
+    else if (w.valid_until) { el.textContent = `● Open · closes ${fmt(w.valid_until)} (in ${days(w.valid_until - now)})`; el.style.color = 'var(--green,#4ade80)'; }
+    else { el.textContent = '● Open · no end date'; el.style.color = 'var(--green,#4ade80)'; }
+  };
+  const saveWindow = async (from, until, okMsg) => {
+    const { r: rr, d } = await speechPost('/control/speech/window', { valid_from: from, valid_until: until });
+    if (!rr.ok) { say(d.error || d.detail || 'Could not save the dates.', true); showWindow(st); return; }
+    showWindow(d);
+    say(okMsg);
+  };
+  showWindow(st);
+  box.querySelector('#vc-window-save').addEventListener('click', () =>
+    saveWindow(fromInput(box.querySelector('#vc-from').value), fromInput(box.querySelector('#vc-until').value), 'Dates saved.'));
+  box.querySelectorAll('[data-extend]').forEach((b) => b.addEventListener('click', () => {
+    const n = Number(b.getAttribute('data-extend'));
+    const base = Math.max(st.valid_until || 0, Date.now() / 1000);       // an expired link is extended from now
+    const until = Math.round(base + n * 86400);
+    saveWindow(st.valid_from, until, `Extended: now closes ${fmt(until)}.`);
+  }));
+  box.querySelector('#vc-no-end').addEventListener('click', () => saveWindow(st.valid_from, null, 'The link now has no end date.'));
+
+  // ---- share ----
+  const shareText = () => {
+    const url = box.querySelector('#vc-link-text').value;
+    const until = st.valid_until ? ` Open until ${fmt(st.valid_until)}.` : '';
+    return { url, text: `আমাদের বাংলা স্পিচ মডেলের জন্য আপনার কণ্ঠ দিন: ${st.lines_per_session}টি লাইন পড়ুন, ৫-১০ মিনিট লাগবে।
+Please lend your voice to our Bangla speech model: read ${st.lines_per_session} short lines (5-10 minutes).${until}
+${url}` };
+  };
+  box.querySelector('#vc-share').addEventListener('click', async () => {
+    const { url, text } = shareText();
+    if (!url) { say('Create a link first.', true); return; }
+    if (navigator.share) {
+      try { await navigator.share({ title: 'Voice collection', text }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    try { await navigator.clipboard.writeText(text); say('Message with the link copied. Paste it into email, Teams or WhatsApp.'); }
+    catch (_) { say('Could not copy. Copy the link above instead.', true); }
   });
 
   box.querySelector('#vc-copy').addEventListener('click', async () => {

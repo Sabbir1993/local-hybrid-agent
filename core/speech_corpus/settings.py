@@ -6,6 +6,9 @@
   lines_per_session   lines handed to one session (default 15, 5..30)
   max_clip_seconds    longest accepted clip (default 20, 5..30)
   sessions_per_day    sessions one employee ID may start per 24 h (default 5)
+  valid_from / valid_until  the link's open window, epoch seconds UTC (0 = open-ended on that side). Outside it the
+                      page says when it opens / that it has closed and no new session starts; a session started
+                      inside the window may still finish its lines.
 """
 import hashlib
 import hmac
@@ -22,6 +25,8 @@ DEFAULTS = {
     "lines_per_session": 15,
     "max_clip_seconds": 20,
     "sessions_per_day": 5,
+    "valid_from": 0,        # epoch seconds (UTC); 0 = no start limit
+    "valid_until": 0,       # epoch seconds (UTC); 0 = no end
 }
 
 
@@ -151,3 +156,46 @@ def set_enabled(on: bool) -> dict:
 
 def is_enabled() -> bool:
     return bool(cfg().get("enabled"))
+
+
+MAX_WINDOW_S = 366 * 86400      # one link may stay open at most a year; extend again if needed
+
+
+def _epoch(key: str) -> int:
+    try:
+        return max(0, int(float(cfg().get(key) or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def window() -> dict:
+    """{valid_from, valid_until, state}: state is 'open', 'not_yet' or 'expired'."""
+    import time
+    start, end = _epoch("valid_from"), _epoch("valid_until")
+    now = time.time()
+    state = "not_yet" if start and now < start else "expired" if end and now >= end else "open"
+    return {"valid_from": start or None, "valid_until": end or None, "state": state}
+
+
+def set_window(valid_from, valid_until) -> dict:
+    """Both epoch seconds or None/0 (open-ended). The end must be after the start and in the future."""
+    import time
+
+    def num(v):
+        if v in (None, "", 0):
+            return 0
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            raise CorpusConfigError("Dates must be numbers of seconds.") from None
+    start, end = num(valid_from), num(valid_until)
+    if start < 0 or end < 0:
+        raise CorpusConfigError("Dates cannot be negative.")
+    if end and start and end <= start:
+        raise CorpusConfigError("The end must be after the start.")
+    if end and end <= time.time():
+        raise CorpusConfigError("The end is already in the past. Pick a later date.")
+    if end and end - max(start, int(time.time())) > MAX_WINDOW_S:
+        raise CorpusConfigError("A link can stay open for at most one year at a time.")
+    _save({"valid_from": start, "valid_until": end})
+    return window()

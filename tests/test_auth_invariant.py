@@ -83,6 +83,7 @@ PERMISSION_PINS = {
     ("GET", "/control/speech/status"): "speech.manage",
     ("POST", "/control/speech/enabled"): "speech.manage",
     ("POST", "/control/speech/code"): "speech.manage",
+    ("POST", "/control/speech/window"): "speech.manage",
     ("GET", "/control/speech/stats"): "speech.manage",
     ("POST", "/control/speech/prompts"): "speech.manage",
     ("GET", "/control/speech/prompts/sample"): "speech.manage",

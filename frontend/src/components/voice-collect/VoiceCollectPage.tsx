@@ -14,11 +14,25 @@ type Options = {
   devices: string[];
   lines_per_session: number;
   max_clip_seconds: number;
+  valid_from?: number | null;    // epoch seconds; the link's open window (null = open-ended)
+  valid_until?: number | null;
+  state?: 'open' | 'not_yet' | 'expired';
 };
 type Line = { id: number; text: string };
-type Step = 'loading' | 'closed' | 'unreachable' | 'badlink' | 'consent' | 'form' | 'record' | 'done';
+type Step = 'loading' | 'closed' | 'unreachable' | 'not_yet' | 'expired' | 'badlink' | 'consent' | 'form' | 'record' | 'done';
 
 const CODE_KEY = 'voice_collect_code';
+
+/** A link date in the reader's own time zone (Dhaka for most colleagues). */
+function when(epoch: number, lang: 'bn' | 'en'): string {
+  try {
+    return new Date(epoch * 1000).toLocaleString(lang === 'bn' ? 'bn-BD' : 'en-GB', {
+      day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+  } catch {
+    return new Date(epoch * 1000).toLocaleString();
+  }
+}
 
 const REGION_BN: Record<string, string> = {
   standard: 'প্রমিত বাংলা',
@@ -163,6 +177,7 @@ export function VoiceCollectPage() {
       if (!r.reached) { setStep('unreachable'); return; }
       if (!r.ok || !r.data.regions || typeof r.data.regions !== 'object') { setStep('closed'); return; }
       setOpts(r.data);
+      if (r.data.state === 'not_yet' || r.data.state === 'expired') { setStep(r.data.state); return; }
       setStep(code ? 'consent' : 'badlink');
     })();
     return () => { rec.current?.close(); window.clearInterval(tick.current); };
@@ -215,6 +230,11 @@ export function VoiceCollectPage() {
     });
     setBusy(false);
     if (!r.ok) {
+      if (r.status === 403 && (r.data.state === 'not_yet' || r.data.state === 'expired')) {
+        setOpts((o) => (o ? { ...o, ...r.data } : o));
+        setStep(r.data.state);
+        return;
+      }
       if (r.status === 403) { sessionStorage.removeItem(CODE_KEY); setStep('badlink'); return; }
       if (r.reached && r.status === 404) { setStep('closed'); return; }
       setError(r.data.error || 'Could not start.');
@@ -321,6 +341,20 @@ export function VoiceCollectPage() {
           </div>
         )}
 
+        {step === 'not_yet' && (
+          <div style={S.box}>
+            <div>এই লিংকটি এখনও খোলেনি।{opts?.valid_from ? <> খুলবে <strong>{when(opts.valid_from, 'bn')}</strong>।</> : null}</div>
+            <div style={S.en}>This link is not open yet.{opts?.valid_from ? ` It opens on ${when(opts.valid_from, 'en')}.` : ''}</div>
+          </div>
+        )}
+
+        {step === 'expired' && (
+          <div style={S.box}>
+            <div>এই লিংকের মেয়াদ শেষ{opts?.valid_until ? <> (<strong>{when(opts.valid_until, 'bn')}</strong>)</> : null}। নতুন লিংক চেয়ে নিন।</div>
+            <div style={S.en}>This link has expired{opts?.valid_until ? ` (${when(opts.valid_until, 'en')})` : ''}. Ask for a new link.</div>
+          </div>
+        )}
+
         {step === 'closed' && (
           <div style={S.box}>
             <div>ভয়েস সংগ্রহ এখন বন্ধ আছে।</div>
@@ -337,6 +371,12 @@ export function VoiceCollectPage() {
 
         {step === 'consent' && (
           <div style={S.box}>
+            {opts?.valid_until ? (
+              <div style={{ fontSize: 13, padding: '8px 10px', borderRadius: 8, background: 'rgba(79,140,255,0.12)' }}>
+                লিংকটি খোলা থাকবে <strong>{when(opts.valid_until, 'bn')}</strong> পর্যন্ত।
+                <div style={S.en}>Open until {when(opts.valid_until, 'en')}.</div>
+              </div>
+            ) : null}
             <strong>সম্মতি · Consent</strong>
             <div style={{ fontSize: 14, lineHeight: 1.6 }}>
               আপনি কিছু বাক্য পড়বেন, আর আপনার কণ্ঠ রেকর্ড হবে। এই রেকর্ডিং শুধু আমাদের নিজস্ব বাংলা স্পিচ-টু-টেক্সট মডেল

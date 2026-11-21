@@ -171,6 +171,54 @@ class SpeechCorpusTests(unittest.TestCase):
         self.keychain["speech-corpus-link-code"] = "some-other-code"
         self.assertIsNone(self.c.get("/control/speech/status").json()["link_path"])
 
+    # ---- open window ----
+    def test_window_not_yet_and_expired_block_new_sessions(self):
+        import time
+        code = self.turn_on()
+        now = time.time()
+        self.set_cfg("valid_from", now + 3600)
+        o = self.c.get("/media/voice-collect/options").json()
+        self.assertEqual(o["state"], "not_yet")
+        r = self.start(code)
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["state"], "not_yet")
+        self.set_cfg("valid_from", 0)
+        self.set_cfg("valid_until", now - 60)
+        self.assertEqual(self.c.get("/media/voice-collect/options").json()["state"], "expired")
+        self.assertEqual(self.start(code).json()["state"], "expired")
+
+    def test_extend_reopens_with_the_same_link(self):
+        import time
+        code = self.turn_on()
+        self.set_cfg("valid_until", time.time() - 60)
+        self.assertEqual(self.start(code).status_code, 403)
+        r = self.c.post("/control/speech/window", json={"valid_from": None, "valid_until": time.time() + 7 * 86400})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["state"], "open")
+        self.assertEqual(self.start(code).status_code, 200)           # same code still works
+        self.assertGreater(self.file_cfg["speech_corpus"]["valid_until"], time.time())
+
+    def test_window_validation(self):
+        import time
+        now = time.time()
+        bad = [
+            {"valid_from": now + 7200, "valid_until": now + 3600},    # end before start
+            {"valid_from": None, "valid_until": now - 10},            # already over
+            {"valid_from": None, "valid_until": now + 400 * 86400},   # longer than a year
+        ]
+        for body in bad:
+            self.assertEqual(self.c.post("/control/speech/window", json=body).status_code, 400, body)
+        ok = self.c.post("/control/speech/window", json={"valid_from": None, "valid_until": None}).json()
+        self.assertEqual((ok["valid_from"], ok["valid_until"], ok["state"]), (None, None, "open"))
+
+    def test_session_started_in_window_can_finish_after_it_closes(self):
+        import time
+        code = self.turn_on()
+        d = self.start(code).json()
+        self.set_cfg("valid_until", time.time() - 1)
+        self.assertEqual(self.upload(d["token"], d["lines"][0]["id"], wav()).status_code, 200)
+        self.assertEqual(self.start(code).status_code, 403)
+
     def test_wrong_and_rotated_code(self):
         code = self.turn_on()
         self.assertEqual(self.start("nope").status_code, 403)

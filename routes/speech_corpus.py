@@ -9,6 +9,7 @@ router-level auth because of the public part); deleting a speaker also needs the
 """
 import hashlib
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File as FastAPIFile, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -73,7 +74,17 @@ async def voice_options():
         return _not_found()
     return {"regions": REGIONS, "genders": sorted(GENDERS - {""}), "age_bands": sorted(AGE_BANDS - {""}),
             "devices": sorted(DEVICES - {""}), "lines_per_session": corpus_settings.lines_per_session(),
-            "max_clip_seconds": corpus_settings.max_clip_seconds()}
+            "max_clip_seconds": corpus_settings.max_clip_seconds(), **corpus_settings.window()}
+
+
+def _window_refusal():
+    """A JSON 403 when the link's open window is not now, else None. Carries the dates so the page can say them."""
+    w = corpus_settings.window()
+    if w["state"] == "open":
+        return None
+    msg = ("This link is not open yet." if w["state"] == "not_yet"
+           else "This link has expired. Ask for a new link or a later date.")
+    return JSONResponse({"error": msg, **w}, status_code=403)
 
 
 class StartBody(BaseModel):
@@ -94,6 +105,9 @@ async def voice_start(body: StartBody, request: Request):
     if store is None:
         return _not_found()
     ip = _ip(request)
+    closed = _window_refusal()
+    if closed is not None:
+        return closed
     if not buckets.allow("voice-start:" + ip, START_PER_MIN_PER_IP):
         return _err("Too many people are starting at once. Please wait a minute and try again.", 429)
     if not corpus_settings.code_ok(body.code):
@@ -168,7 +182,8 @@ def _status() -> dict:
     return {"enabled": corpus_settings.is_enabled(), "has_code": corpus_settings.has_code(), "path": "/voice",
             "link_path": f"/voice?k={code}" if code else None,
             "dir": folder, "dir_error": folder_error, "lines_per_session": corpus_settings.lines_per_session(),
-            "max_clip_seconds": corpus_settings.max_clip_seconds(), "sessions_per_day": corpus_settings.sessions_per_day()}
+            "max_clip_seconds": corpus_settings.max_clip_seconds(), "sessions_per_day": corpus_settings.sessions_per_day(),
+            **corpus_settings.window()}
 
 
 @router.get("/control/speech/status")
@@ -189,6 +204,22 @@ async def speech_enabled(body: EnabledBody, request: Request, user: Principal = 
                   ip=_ip(request))
         return _err(str(e), 409)
     audit_log(user, action="speech.enable", detail={"enabled": body.enabled}, ip=_ip(request))
+    return _status()
+
+
+class WindowBody(BaseModel):
+    valid_from: Optional[float] = None      # epoch seconds UTC; null / 0 = no start limit
+    valid_until: Optional[float] = None     # epoch seconds UTC; null / 0 = no end
+
+
+@router.post("/control/speech/window")
+async def speech_window(body: WindowBody, request: Request, user: Principal = Depends(_manage)):
+    try:
+        w = corpus_settings.set_window(body.valid_from, body.valid_until)
+    except corpus_settings.CorpusConfigError as e:
+        return _err(str(e), 400)
+    audit_log(user, action="speech.window", detail={"valid_from": w["valid_from"], "valid_until": w["valid_until"]},
+              ip=_ip(request))
     return _status()
 
 
