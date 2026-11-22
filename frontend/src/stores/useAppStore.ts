@@ -11,8 +11,37 @@ import { cleanModelName } from '../utils/models';
 export type AppMode = 'chat' | 'agent' | 'code';
 export type AgentMode = 'auto' | 'manual' | 'accept_edits' | 'plan' | 'bypass';
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'extra';
-export type DockTab = 'plan' | 'tasks' | 'files' | 'preview' | 'terminal';
+export type DockTab = 'plan' | 'tasks' | 'subagents' | 'files' | 'preview' | 'terminal';
 export type ActiveModal = 'none' | 'audit' | 'settings' | 'report' | 'db' | 'monitor' | 'customize' | 'docs' | 'preview';
+
+export interface SubagentInfo {
+  id: string;
+  index: number;
+  role: string;
+  task: string;
+  status: 'running' | 'completed' | 'failed' | 'timeout';
+  step: number;
+  max_steps: number;
+  current_tool?: string | null;
+  current_tool_args?: any;
+  elapsed_s?: number;
+  duration_s?: number;
+  output?: string;
+  error?: string;
+  failure_reason?: string;
+  lane?: string;
+  steps?: Array<{
+    step: number;
+    thought?: string;
+    duration_s?: number;
+    tools?: Array<{
+      name: string;
+      args?: any;
+      result?: any;
+      ok?: boolean;
+    }>;
+  }>;
+}
 
 export const isCompanionClient = (): boolean => {
   if (typeof window === 'undefined') return false;
@@ -126,6 +155,7 @@ interface AppState {
   dockCollapsed: boolean;
   dockExpanded: boolean;
   dockTab: DockTab;
+  activeSubagents: Record<string, SubagentInfo>;
 
   // Active Modes
   appMode: AppMode;
@@ -211,6 +241,9 @@ interface AppState {
   setDockCollapsed: (collapsed: boolean) => void;
   setDockExpanded: (expanded: boolean) => void;
   setDockTab: (tab: DockTab) => void;
+  updateSubagent: (key: string, data: Partial<SubagentInfo>) => void;
+  setSubagentsBatch: (agents: SubagentInfo[]) => void;
+  clearSubagents: () => void;
   setAppMode: (mode: AppMode) => void;
   setAgentMode: (mode: AgentMode) => void;
   setReasoningEffort: (effort: ReasoningEffort) => void;
@@ -401,6 +434,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   dockCollapsed: true,
   dockExpanded: false,
   dockTab: 'plan',
+  activeSubagents: {},
 
   appMode: getInitialAppMode(),
   agentMode: 'auto',
@@ -838,6 +872,33 @@ export const useAppStore = create<AppState>((set, get) => ({
   setDockCollapsed: (collapsed) => set({ dockCollapsed: collapsed }),
   setDockExpanded: (expanded) => set({ dockExpanded: expanded }),
   setDockTab: (dockTab) => set({ dockTab, dockCollapsed: false }),
+
+  updateSubagent: (key, data) => set((s) => ({
+    activeSubagents: {
+      ...s.activeSubagents,
+      [key]: {
+        ...(s.activeSubagents[key] || {
+          id: key,
+          index: Number(key) + 1 || 1,
+          role: 'subagent',
+          task: '',
+          status: 'running',
+          step: 0,
+          max_steps: 10,
+        }),
+        ...data,
+      },
+    },
+  })),
+  setSubagentsBatch: (agents) => set(() => {
+    const map: Record<string, SubagentInfo> = {};
+    agents.forEach((a, i) => {
+      const k = a.id || String(a.index !== undefined ? a.index - 1 : i);
+      map[k] = a;
+    });
+    return { activeSubagents: map };
+  }),
+  clearSubagents: () => set({ activeSubagents: {} }),
 
   setAppMode: (appMode) => {
     try {
@@ -1848,3 +1909,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ activeModal: 'customize', customizeTab });
   },
 }));
+
+if (typeof window !== 'undefined') {
+  (window as any).__openSubagentsDock = () => {
+    useAppStore.getState().setDockTab('subagents');
+  };
+}

@@ -3,6 +3,7 @@ import { useAppStore, type DockTab } from '../../stores/useAppStore';
 import { agentWsParam } from '../../utils/wsTarget';
 import { PlanView } from './PlanView';
 import { TasksView } from './TasksView';
+import { SubagentsView } from './SubagentsView';
 import { TerminalPanel } from './TerminalPanel';
 import { WorkspaceTree } from './WorkspaceTree';
 
@@ -16,7 +17,11 @@ export const RightDock: React.FC = () => {
     setDockCollapsed,
     setDockExpanded,
     previewModal,
+    activeSubagents,
   } = useAppStore();
+
+  const hasRunningSubagents = Object.values(activeSubagents || {}).some((s) => s.status === 'running');
+  const subagentsCount = Object.keys(activeSubagents || {}).length;
 
   // Preview tab states
   const [previewMode, setPreviewMode] = useState<'preview' | 'code'>('preview');
@@ -169,6 +174,20 @@ export const RightDock: React.FC = () => {
             🗂 Tasks
           </button>
 
+          <button
+            className={`dock-tab-btn ${dockTab === 'subagents' ? 'active' : ''}`}
+            id="dock-btn-subagents"
+            title="Sub-Agents Live View"
+            onClick={() => handleTabClick('subagents')}
+          >
+            👥 Sub-Agents
+            {hasRunningSubagents ? (
+              <span style={{ marginLeft: 5, width: 7, height: 7, background: '#38bdf8', borderRadius: '50%', display: 'inline-block', boxShadow: '0 0 6px #38bdf8' }} />
+            ) : subagentsCount > 0 ? (
+              <span style={{ fontSize: '10px', opacity: 0.7, marginLeft: 4 }}>({subagentsCount})</span>
+            ) : null}
+          </button>
+
           {showCodeAndTerminal && (
             <button
               className={`dock-tab-btn ${dockTab === 'files' ? 'active' : ''}`}
@@ -229,6 +248,11 @@ export const RightDock: React.FC = () => {
       {/* Dock View: Background tasks (polls only while this tab is open) */}
       <div className={`dock-view-body ${dockTab === 'tasks' ? 'active' : ''}`} id="dock-view-tasks">
         {dockTab === 'tasks' && !dockCollapsed && <TasksView />}
+      </div>
+
+      {/* Dock View: Sub-Agents (Interactive Application View) */}
+      <div className={`dock-view-body ${dockTab === 'subagents' ? 'active' : ''}`} id="dock-view-subagents" style={{ display: dockTab === 'subagents' ? 'flex' : 'none', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        <SubagentsView />
       </div>
 
       {/* Dock View: Files */}

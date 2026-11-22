@@ -339,6 +339,7 @@ function renderSubagentViewHtml(t: TraceItem): string {
   if (failed > 0) {
     h += `<span class="ct-pill-fail">✕ ${failed} Failed</span>`;
   }
+  h += `<button type="button" class="ct-dock-popout-btn" onclick="window.__openSubagentsDock &amp;&amp; window.__openSubagentsDock()" title="Open in side panel">⤢ Open in Dock</button>`;
   h += '</div></div>';
 
   // 2. Failure Alert Banner (if any subagent failed)

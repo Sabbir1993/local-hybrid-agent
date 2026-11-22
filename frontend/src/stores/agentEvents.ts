@@ -166,6 +166,28 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       closeThought(S);
       acts.push({ type: 'tool_call', ...d });
       L.statusText = formatToolStatus(d.name, d.args);
+      if (['spawn_parallel_agents', 'spawn_agent', 'spawn_reviewed_coder'].includes(d.name)) {
+        try {
+          const store = (typeof window !== 'undefined' && (window as any).__useAppStore)?.getState();
+          if (store) {
+            const specs = Array.isArray(d.args?.agents) ? d.args.agents : d.args?.task ? [d.args] : [];
+            if (specs.length > 0) {
+              const list = specs.map((spec: any, idx: number) => ({
+                id: String(idx),
+                index: idx + 1,
+                role: spec.role || 'subagent',
+                task: spec.task || '',
+                status: 'running',
+                step: 0,
+                max_steps: spec.max_steps || 10,
+                lane: spec.lane || 'default',
+              }));
+              store.setSubagentsBatch(list);
+              store.setDockTab('subagents');
+            }
+          }
+        } catch (_) {}
+      }
       if (SHELL_TOOLS.includes(d.name)) {
         const c = d.args && (d.args.command || d.args.cmd);
         if (c) ctx.onShell?.start(String(d.id), String(c));
@@ -186,10 +208,10 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       break;
     }
     case 'subagent_event': {
+      const key = String(d.sub_index ?? d.subagent_id ?? '0');
       const call = acts.slice().reverse().find((a) => a.type === 'tool_call' && (a.id === d.id || (!d.id && a.name === d.name)));
       if (call) {
         if (!call.subagents) call.subagents = {};
-        const key = String(d.sub_index ?? d.subagent_id ?? '0');
         const prev = call.subagents[key] || {};
         const ev = d.event;
         call.subagents[key] = {
@@ -219,6 +241,29 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
           L.statusText = `[Sub-agent ${roleLabel}] Done in ${d.duration_s || 0}s`;
         }
       }
+
+      // Sync with global AppStore for the Right Dock Subagents View
+      try {
+        const store = (typeof window !== 'undefined' && (window as any).__useAppStore)?.getState();
+        if (store) {
+          const ev = d.event;
+          store.updateSubagent(key, {
+            id: d.subagent_id || key,
+            index: (d.sub_index !== undefined ? d.sub_index : Number(key) + 1),
+            role: d.role,
+            task: d.task,
+            status: ev === 'done' ? 'completed' : ev === 'error' ? 'failed' : 'running',
+            step: d.step,
+            max_steps: d.max_steps,
+            current_tool: ev === 'tool_start' ? d.tool : (ev === 'tool_done' ? null : undefined),
+            current_tool_args: ev === 'tool_start' ? d.args : (ev === 'tool_done' ? null : undefined),
+            elapsed_s: d.elapsed_s,
+            duration_s: d.duration_s,
+            output: d.output,
+            error: d.error,
+          });
+        }
+      } catch (_) {}
       break;
     }
     case 'tool_result':
@@ -350,6 +395,34 @@ export function latestPlanItems(messages: ChatMessage[]): any[] {
       if (acts[j].type !== 'plan') continue;
       if (Array.isArray(acts[j].items) && acts[j].items.length) return acts[j].items;
       if (acts[j].cleared) return [];       // a new task started here without the old plan: older plans are not shown
+    }
+  }
+  return [];
+}
+
+/** Latest subagents list found in a conversation (drives the dock's Sub-Agents tab). */
+export function latestSubagentsFromMessages(messages: ChatMessage[]): any[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const acts = messages[i].acts;
+    if (!acts) continue;
+    for (let j = acts.length - 1; j >= 0; j--) {
+      const a = acts[j];
+      if (a.type === 'tool_call' && ['spawn_parallel_agents', 'spawn_agent', 'spawn_reviewed_coder'].includes(a.name)) {
+        if (a.subagents && Object.keys(a.subagents).length > 0) {
+          return Object.values(a.subagents);
+        }
+        if (Array.isArray(a.args?.agents)) {
+          return a.args.agents.map((ag: any, idx: number) => ({
+            id: String(idx),
+            index: idx + 1,
+            role: ag.role || 'subagent',
+            task: ag.task || '',
+            status: a.running ? 'running' : 'completed',
+            step: 0,
+            max_steps: ag.max_steps || 10,
+          }));
+        }
+      }
     }
   }
   return [];
