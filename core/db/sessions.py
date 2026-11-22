@@ -49,9 +49,17 @@ def _clean_model_name(m: Optional[str]) -> Optional[str]:
     return s.strip()[:200] or None
 
 
+def _has_table(table: str) -> bool:
+    try:
+        row = _projects_db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+
 def db_list_sessions_page(pid: Optional[int], owner_user_id: int, limit: Optional[int] = None,
                           before_id: Optional[int] = None) -> tuple:
-    """(sessions, has_more): newest first; `before_id` continues after the last id of the previous page."""
+    """(sessions, has_more): newest activity first; `before_id` continues after the last id of the previous page."""
     if pid is None or pid == 0:
         where, args = "project_id IS NULL AND user_id = ?", [owner_user_id]
     else:
@@ -61,7 +69,9 @@ def db_list_sessions_page(pid: Optional[int], owner_user_id: int, limit: Optiona
     if before_id is not None:
         where += " AND id < ?"
         args.append(int(before_id))
-    sql = f"SELECT * FROM sessions WHERE {where} ORDER BY id DESC"
+    last_at_expr = "COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.session_id = s.id), s.created_at) AS last_at" if _has_table("messages") else "s.created_at AS last_at"
+    sql = f"""SELECT s.*, {last_at_expr}
+              FROM sessions s WHERE {where} ORDER BY last_at DESC, s.id DESC"""
     if limit:
         sql += " LIMIT ?"
         args.append(int(limit) + 1)       # one extra row tells whether another page exists
@@ -73,7 +83,9 @@ def db_list_sessions_page(pid: Optional[int], owner_user_id: int, limit: Optiona
         "id": r["id"],
         "title": r["title"],
         "created_at": r["created_at"],
+        "last_at": r["last_at"],
         "agent_id": r["agent_id"] if "agent_id" in r.keys() else None,
+        "project_id": r["project_id"] if "project_id" in r.keys() else None,
         "model": _clean_model_name(r["model"]) if "model" in r.keys() else None,
         "is_pinned": bool(r["is_pinned"]) if "is_pinned" in r.keys() and r["is_pinned"] else False,
     } for r in rows], has_more)

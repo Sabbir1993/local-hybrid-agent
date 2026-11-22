@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { useAppStore, type SessionItem } from '../../stores/useAppStore';
+import { useAppStore, type SessionItem, filterRawSessions, formatSessionItem } from '../../stores/useAppStore';
 import { DeviceRename } from './DeviceRename';
 import { UserMenu } from './UserMenu';
 import { SessionTree, type TreeGroup } from './SessionTree';
@@ -93,16 +93,8 @@ export const Sidebar: React.FC = () => {
     const timer = setTimeout(async () => {
       try {
         const raw = await api.sessions.search(q);
-        const mapped: SessionItem[] = raw.map((s: any) => ({
-          id: s.id,
-          title: s.title,
-          updatedAt: s.last_at ? new Date(s.last_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent',
-          createdAt: s.last_at ? s.last_at * 1000 : (s.created_at ? s.created_at * 1000 : undefined),
-          created_at: s.created_at,
-          active: s.id === activeSessionId,
-          model: s.model || null,
-          is_pinned: Boolean(s.is_pinned),
-        }));
+        const filtered = filterRawSessions(raw, appMode, activeCustomAgent);
+        const mapped: SessionItem[] = filtered.map((s: any) => formatSessionItem(s, appMode, activeSessionId));
         setSearchResults(mapped);
       } catch (_) {
         setSearchResults([]);
@@ -111,7 +103,7 @@ export const Sidebar: React.FC = () => {
       }
     }, 250);
     return () => clearTimeout(timer);
-  }, [sessionFilter, activeSessionId]);
+  }, [sessionFilter, activeSessionId, appMode, activeCustomAgent]);
 
   useEffect(() => {
     apiFetch('/custom-agents')
@@ -277,7 +269,7 @@ export const Sidebar: React.FC = () => {
     ? `${currentUser.designation}${currentUser.department ? ` · ${currentUser.department}` : ''}`
     : (isSuperAdmin ? 'SUPER ADMIN' : (currentUser?.roles?.join(', ') || 'USER'));
 
-  const dateGroups = useMemo(() => {
+  const groupSessionsByDate = (items: SessionItem[]) => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const yesterdayStart = todayStart - 86400 * 1000;
@@ -289,22 +281,43 @@ export const Sidebar: React.FC = () => {
     const previousDays: SessionItem[] = [];
     const older: SessionItem[] = [];
 
-    (sessions || []).forEach((s) => {
+    const toMs = (raw: any): number => {
+      if (!raw) return 0;
+      if (typeof raw === 'number') {
+        return raw < 1e11 ? raw * 1000 : raw;
+      }
+      const parsed = Date.parse(String(raw));
+      return isNaN(parsed) ? 0 : parsed;
+    };
+
+    (items || []).forEach((s) => {
       if (s.is_pinned) {
         pinned.push(s);
         return;
       }
-      const ts = s.createdAt || (typeof s.created_at === 'number' ? (s.created_at < 1e11 ? s.created_at * 1000 : s.created_at) : 0);
-      if (!ts || ts >= todayStart) {
+      // Group by last activity timestamp (most recent message or session creation)
+      const activityTs = toMs(s.last_at) || toMs(s.createdAt) || toMs(s.created_at);
+
+      if (!activityTs || activityTs >= todayStart) {
         today.push(s);
-      } else if (ts >= yesterdayStart) {
+      } else if (activityTs >= yesterdayStart) {
         yesterday.push(s);
-      } else if (ts >= last7DaysStart) {
+      } else if (activityTs >= last7DaysStart) {
         previousDays.push(s);
       } else {
         older.push(s);
       }
     });
+
+    const sortByRecent = (a: SessionItem, b: SessionItem) => {
+      const tsA = toMs(a.last_at) || toMs(a.createdAt) || toMs(a.created_at);
+      const tsB = toMs(b.last_at) || toMs(b.createdAt) || toMs(b.created_at);
+      return tsB - tsA;
+    };
+    today.sort(sortByRecent);
+    yesterday.sort(sortByRecent);
+    previousDays.sort(sortByRecent);
+    older.sort(sortByRecent);
 
     const groups: { label: string; items: SessionItem[] }[] = [];
     if (pinned.length) groups.push({ label: 'Pinned', items: pinned });
@@ -313,7 +326,12 @@ export const Sidebar: React.FC = () => {
     if (previousDays.length) groups.push({ label: 'Previous 7 Days', items: previousDays });
     if (older.length) groups.push({ label: 'Older', items: older });
     return groups;
-  }, [sessions]);
+  };
+
+  const displayedGroups = useMemo(() => {
+    const activeList = sessionFilter.trim() ? searchResults : sessions;
+    return groupSessionsByDate(activeList || []);
+  }, [sessions, searchResults, sessionFilter]);
 
   const filterBar = (
     <div className="session-filter-bar" id="session-filter-bar">
@@ -364,6 +382,60 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
         : iconBtn('Add project', () => openProjectModal('create'),
           <><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><path d="M12 11v6M9 14h6" /></>)}
     </>
+  );
+
+  const renderSessionRow = (s: SessionItem) => (
+    <div
+      key={String(s.id)}
+      className={`session-row ${s.id === activeSessionId ? 'cur' : ''}`}
+      data-sid={String(s.id)}
+      onClick={() => { openSession(s.id); closeIfNarrow(); }}
+      style={{ position: 'relative' }}
+    >
+      <span
+        style={{
+          flex: 1,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          display: 'flex',
+          alignItems: 'center',
+        }}
+        title={s.title}
+      >
+        {s.is_pinned ? (
+          <Pin size={12} style={{ flexShrink: 0, marginRight: '6px', opacity: 0.9, color: 'var(--accent, #818cf8)' }} />
+        ) : (
+          <svg
+            className="session-icon"
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ flexShrink: 0, verticalAlign: '-2px', marginRight: '6px', opacity: 0.85 }}
+          >
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+        )}
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {s.title}
+        </span>
+      </span>
+
+      {runningSessions[String(s.id)] && (
+        <span title="Still working in the background" aria-label="Running" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--warm, #ffb454)', marginRight: 6, flexShrink: 0, animation: 'pulse-op 1.6s ease-in-out infinite' }} />
+      )}
+      <span
+        className="s-menu-wrap"
+        onClick={(e) => handleMenuClick(e, s)}
+      >
+        <span className={`s-menu ${menuState?.sid === s.id ? 'open' : ''}`} title="Session options">⋮</span>
+      </span>
+    </div>
   );
 
   if (sidebarCollapsed) {
@@ -573,67 +645,7 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
                 No matching chats
               </div>
             ) : (
-              (searchResults || []).map((s) => (
-                <div
-                  key={String(s.id)}
-                  className={`session-row ${s.id === activeSessionId ? 'cur' : ''}`}
-                  data-sid={String(s.id)}
-                  onClick={() => { openSession(s.id); closeIfNarrow(); }}
-                  style={{ position: 'relative' }}
-                >
-                  <span
-                    style={{
-                      flex: 1,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      display: 'flex',
-                      alignItems: 'center',
-                    }}
-                    title={s.title}
-                  >
-                    {s.is_pinned ? (
-                      <Pin size={12} style={{ flexShrink: 0, marginRight: '6px', opacity: 0.9, color: 'var(--accent, #818cf8)' }} />
-                    ) : (
-                      <svg
-                        className="session-icon"
-                        width="13"
-                        height="13"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        style={{ flexShrink: 0, verticalAlign: '-2px', marginRight: '6px', opacity: 0.85 }}
-                      >
-                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                      </svg>
-                    )}
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {s.title}
-                    </span>
-                  </span>
-
-                  {runningSessions[String(s.id)] && (
-                    <span title="Still working in the background" aria-label="Running" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--warm, #ffb454)', marginRight: 6, flexShrink: 0, animation: 'pulse-op 1.6s ease-in-out infinite' }} />
-                  )}
-                  <span
-                    className="s-menu-wrap"
-                    onClick={(e) => handleMenuClick(e, s)}
-                  >
-                    <span className={`s-menu ${menuState?.sid === s.id ? 'open' : ''}`} title="Session options">⋮</span>
-                  </span>
-                </div>
-              ))
-            )
-          ) : (
-            (sessions || []).length === 0 ? (
-              <div className="dim" style={{ fontSize: '12px', padding: '14px 6px', textAlign: 'center' }}>
-                No chats yet
-              </div>
-            ) : (
-              dateGroups.map((group) => (
+              displayedGroups.map((group) => (
                 <div key={group.label} className="session-date-group" style={{ marginBottom: 4 }}>
                   <div
                     style={{
@@ -648,59 +660,32 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
                   >
                     {group.label}
                   </div>
-                  {group.items.map((s) => (
-                    <div
-                      key={String(s.id)}
-                      className={`session-row ${s.id === activeSessionId ? 'cur' : ''}`}
-                      data-sid={String(s.id)}
-                      onClick={() => { openSession(s.id); closeIfNarrow(); }}
-                      style={{ position: 'relative' }}
-                    >
-                      <span
-                        style={{
-                          flex: 1,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          display: 'flex',
-                          alignItems: 'center',
-                        }}
-                        title={s.title}
-                      >
-                        {s.is_pinned ? (
-                          <Pin size={12} style={{ flexShrink: 0, marginRight: '6px', opacity: 0.9, color: 'var(--accent, #818cf8)' }} />
-                        ) : (
-                          <svg
-                            className="session-icon"
-                            width="13"
-                            height="13"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            style={{ flexShrink: 0, verticalAlign: '-2px', marginRight: '6px', opacity: 0.85 }}
-                          >
-                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                          </svg>
-                        )}
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {s.title}
-                        </span>
-                      </span>
-
-                      {runningSessions[String(s.id)] && (
-                        <span title="Still working in the background" aria-label="Running" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--warm, #ffb454)', marginRight: 6, flexShrink: 0, animation: 'pulse-op 1.6s ease-in-out infinite' }} />
-                      )}
-                      <span
-                        className="s-menu-wrap"
-                        onClick={(e) => handleMenuClick(e, s)}
-                      >
-                        <span className={`s-menu ${menuState?.sid === s.id ? 'open' : ''}`} title="Session options">⋮</span>
-                      </span>
-                    </div>
-                  ))}
+                  {group.items.map(renderSessionRow)}
+                </div>
+              ))
+            )
+          ) : (
+            (sessions || []).length === 0 ? (
+              <div className="dim" style={{ fontSize: '12px', padding: '14px 6px', textAlign: 'center' }}>
+                No chats yet
+              </div>
+            ) : (
+              displayedGroups.map((group) => (
+                <div key={group.label} className="session-date-group" style={{ marginBottom: 4 }}>
+                  <div
+                    style={{
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      color: 'var(--dim)',
+                      padding: '8px 10px 4px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                      opacity: 0.75,
+                    }}
+                  >
+                    {group.label}
+                  </div>
+                  {group.items.map(renderSessionRow)}
                 </div>
               ))
             )

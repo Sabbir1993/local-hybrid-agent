@@ -6038,3 +6038,50 @@ a.img-gal-cap:hover { color: var(--accent, #58a6ff); text-decoration: underline;
 .prod-link { font-size: 13px; color: var(--accent, #58a6ff); text-decoration: none; }
 .prod-link:hover { text-decoration: underline; }
 @media (max-width: 520px) { .prod-img { flex-basis: 84px; width: 84px; height: 84px; } }
+
+/* User Profile Modal Styles */
+.profile-modal-box {
+  position: relative;
+  width: min(100%, 580px);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #18191e);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.14));
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.75);
+  overflow: hidden;
+  animation: claudePopIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.profile-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.14)) !important;
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: var(--text, #ffffff) !important;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  color-scheme: dark;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.profile-input:focus {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: var(--accent, #3b82f6) !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25) !important;
+}
+
+.profile-input::placeholder {
+  color: var(--dim, #94a3b8);
+  opacity: 0.65;
+}
+
+.profile-input option {
+  background: #18191e;
+  color: #ffffff;
+}
+

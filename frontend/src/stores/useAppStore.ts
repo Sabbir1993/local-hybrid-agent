@@ -137,9 +137,12 @@ export interface SessionItem {
   updatedAt?: string;
   createdAt?: number;
   created_at?: number | string;
+  last_at?: number;
   active?: boolean;
   model?: string | null;   // the model this chat was last used with
   is_pinned?: boolean;
+  agent_id?: number | null;
+  project_id?: number | null;
 }
 
 interface AppState {
@@ -356,7 +359,7 @@ export function getActiveSessionKey(mode: AppMode = 'chat'): string {
   return 'active_chat_session_id';
 }
 
-function isCustomAgentSession(s: any): boolean {
+export function isCustomAgentSession(s: any): boolean {
   if (!s) return false;
   if (s.agent_id != null && s.agent_id !== 0 && s.agent_id !== '') return true;
   try {
@@ -365,13 +368,14 @@ function isCustomAgentSession(s: any): boolean {
   } catch (_) {}
   const title = (s.title || s.name || '').trim();
   if (!title) return false;
+  const lowerTitle = title.toLowerCase();
   for (const starter of STARTER_AGENT_SUBSTRINGS) {
-    if (title.includes(starter)) return true;
+    if (lowerTitle.includes(starter.toLowerCase())) return true;
   }
   return false;
 }
 
-function filterRawSessions(rawSessions: any[], appMode: AppMode, activeCustomAgent: any): any[] {
+export function filterRawSessions(rawSessions: any[], appMode: AppMode, activeCustomAgent: any): any[] {
   if (!Array.isArray(rawSessions)) return [];
   if (appMode === 'chat') {
     return rawSessions.filter((s: any) => !isCustomAgentSession(s));
@@ -413,26 +417,38 @@ export function generateTopicTitle(prompt: string): string {
   return formatted.length > 32 ? formatted.slice(0, 32).trim() + '…' : formatted;
 }
 
-function formatSessionItem(s: any, appMode: AppMode, activeSessionId: string | number | null): SessionItem {
-  const ts = s.last_at || s.updated_at || s.created_at;
+export function formatSessionItem(s: any, appMode: AppMode, activeSessionId: string | number | null): SessionItem {
+  const activityTs = s.last_at || s.updated_at || s.created_at;
   let dateStr = 'Recent';
-  let createdMs = 0;
-  if (ts) {
-    const ms = typeof ts === 'number' ? (ts < 1e11 ? ts * 1000 : ts) : Date.parse(ts);
+  let lastAtMs = 0;
+  if (activityTs) {
+    const ms = typeof activityTs === 'number' ? (activityTs < 1e11 ? activityTs * 1000 : activityTs) : Date.parse(activityTs);
     if (!isNaN(ms)) {
-      createdMs = ms;
+      lastAtMs = ms;
       dateStr = new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
   }
+
+  // Session creation timestamp
+  const createTs = s.created_at || s.last_at || s.updated_at;
+  let createdMs = 0;
+  if (createTs) {
+    const ms = typeof createTs === 'number' ? (createTs < 1e11 ? createTs * 1000 : createTs) : Date.parse(createTs);
+    if (!isNaN(ms)) createdMs = ms;
+  }
+
   return {
     id: s.id,
     title: s.title || s.name || (appMode === 'code' ? 'Task' : 'Chat'),
     updatedAt: dateStr,
-    createdAt: createdMs || (typeof s.created_at === 'number' ? (s.created_at < 1e11 ? s.created_at * 1000 : s.created_at) : undefined),
+    createdAt: createdMs,
     created_at: s.created_at,
+    last_at: lastAtMs || createdMs,
     active: activeSessionId === s.id,
     model: s.model ? cleanModelName(s.model) : null,
     is_pinned: Boolean(s.is_pinned),
+    agent_id: s.agent_id != null ? Number(s.agent_id) : null,
+    project_id: s.project_id != null ? Number(s.project_id) : null,
   };
 }
 
@@ -1506,6 +1522,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Persist user message to backend SQLite
     if (currentSessionId && !reattachId) {
       api.sessions.persistMessage(currentSessionId, 'user', text, userMsg.meta);
+      const nowMs = Date.now();
+      set((st) => ({
+        sessions: st.sessions.map((s) =>
+          sessionKey(s.id) === sidKey
+            ? { ...s, last_at: nowMs, updatedAt: new Date(nowMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+            : s
+        ),
+      }));
     }
 
     const ctxMessages = contextMessages(updatedMessages);
@@ -1593,6 +1617,14 @@ export const useAppStore = create<AppState>((set, get) => ({
           check: L.check?.state === 'done' ? L.check : undefined,
           timeStr: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         });
+        const nowMs = Date.now();
+        set((st) => ({
+          sessions: st.sessions.map((s) =>
+            sessionKey(s.id) === sidKey
+              ? { ...s, last_at: nowMs, updatedAt: new Date(nowMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+              : s
+          ),
+        }));
       }
       // a dropped connection is not an end: that run keeps going on the server and can still be reattached
       if (final) {
@@ -1640,6 +1672,14 @@ export const useAppStore = create<AppState>((set, get) => ({
           errorAlert: errorText ? errorText : undefined,
           timeStr: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         });
+        const nowMs = Date.now();
+        set((st) => ({
+          sessions: st.sessions.map((s) =>
+            sessionKey(s.id) === sidKey
+              ? { ...s, last_at: nowMs, updatedAt: new Date(nowMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+              : s
+          ),
+        }));
       }
       // the answer is saved here: release the server's copy (and never save it again if this browser re-attaches)
       if (detachedRun && !errorText) {
