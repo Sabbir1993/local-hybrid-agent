@@ -7,7 +7,7 @@ from unittest import mock
 from core import request_context as rc
 from core.agent_loop import execution
 from core.agent_tools import file_ops, file_state, verify_loop
-from core.agent_tools.limits import agent_limit
+from core.agent_tools.limits import agent_limit, write_cap_tokens
 from tests.test_file_not_found_hint import FOLDER, FakeCompanion
 
 OVER = agent_limit("write_file_max_tokens") + 1000     # past the configured cap, whatever this machine's config says
@@ -54,6 +54,56 @@ class OversizeMessages(Base):
             return await file_ops.tool_write_file({"path": "new.html", "content": "", "_oversize_tokens": OVER})
 
         self.assertIn("skeleton", self.go(run))
+
+
+class CompleteOversizeSalvage(Base):
+    """A write that arrives complete but past the cap used to be a hard refusal; the model then
+    regenerated the same giant file and looped. Cut writes already keep their prefix - do the same here."""
+
+    def test_complete_oversized_new_file_saves_a_prefix_and_says_continue(self):
+        from core.agent_tools.limits import CHARS_PER_TOKEN
+        need = int(write_cap_tokens() * CHARS_PER_TOKEN * 1.4) + 500   # past the cap, under MAX_EDIT_BYTES
+        body = ""
+        while len(body) < need:
+            body += f"line {len(body)}: the quick brown fox jumps over the lazy dog\n"
+
+        async def run():
+            return await file_ops.tool_write_file({"path": "big.txt", "content": body})
+
+        out = self.go(run)
+        self.assertIn("partly saved", out)
+        self.assertIn("append_file", out)
+        self.assertIn("big.txt", self.fake.files)
+        self.assertLess(len(self.fake.files["big.txt"]), len(body))
+        self.assertGreater(len(self.fake.files["big.txt"]), 100)
+
+    def test_complete_oversized_append_saves_a_prefix_and_continues(self):
+        from core.agent_tools.limits import CHARS_PER_TOKEN
+        need = int(write_cap_tokens() * CHARS_PER_TOKEN * 1.4) + 500
+        body = ("line: the quick brown fox jumps over the lazy dog\n" * (need // 50 + 1))
+        self.fake.files["notes.txt"] = "existing header\n"
+
+        async def run():
+            return await file_ops.tool_append_file({"path": "notes.txt", "content": body})
+
+        out = self.go(run)
+        self.assertIn("partly saved", out)
+        saved = self.fake.files["notes.txt"]
+        self.assertTrue(saved.startswith("existing header\n"))
+        self.assertLess(len(saved), len("existing header\n") + len(body))
+
+    def test_oversized_existing_file_is_still_refused_without_recovery(self):
+        """Never truncate over work the agent already wrote: that path says 'send the next section'."""
+        self.fake.files["big.txt"] = "already here\n"
+
+        async def run():
+            # overwrite=true gets past the "already exists" guard to the size check
+            return await file_ops.tool_write_file({"path": "big.txt", "content": "x" * (OVER * 4),
+                                                   "overwrite": True})
+
+        out = self.go(run)
+        self.assertIn("do NOT rewrite or restart", out)
+        self.assertEqual(self.fake.files["big.txt"], "already here\n")
 
 
 class RestartIsRefused(Base):

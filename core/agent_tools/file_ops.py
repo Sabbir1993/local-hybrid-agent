@@ -11,7 +11,7 @@ from . import edit_engine, salvage
 from ..small_model import APP_CONFIG
 from . import file_state
 from .diffs import _record_diff
-from .limits import agent_limit, effective_chunk_tokens, est_tokens, write_cap_tokens
+from .limits import CHARS_PER_TOKEN, agent_limit, effective_chunk_tokens, est_tokens, write_cap_tokens
 from .name_recovery import match_written
 from .verify_loop import verify_after
 from .workspace import (
@@ -94,6 +94,20 @@ def _too_big(content: str, tool: str, args: Optional[dict] = None, existing: boo
                 "one section per call, about "
                 f"{effective_chunk_tokens()} tokens each.")
     return None
+
+
+def _oversized_prefix(before: Optional[str], content: str, path_arg: str) -> str:
+    """Longest safe leading part of a COMPLETE write/append call that is past the per-call cap.
+
+    Cut calls already arrive with `_partial` and are salvaged on the `_oversize_tokens` path.
+    A complete-but-oversized call used to be a hard refusal: the model regenerated the same
+    giant text, failed again and looped (the dominant write_file/append_file failure in
+    production). Save the same kind of prefix here so the next call can continue.
+    """
+    head = content[:max(200, int(write_cap_tokens() * CHARS_PER_TOKEN * 0.9))]
+    if not head.endswith("\n"):
+        head += "\n"
+    return salvage.salvage_prefix(before, head, path_arg)
 
 
 async def tool_list_files(args: dict) -> str:
@@ -351,6 +365,12 @@ async def tool_write_file(args: dict) -> str:
     if p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".svg"):
         big = _too_big(content, "write_file", existing=before is not None)
         if big:
+            if before is None and p.suffix.lower() not in DOCUMENT_EXTS:
+                pre = _oversized_prefix(None, content, path_arg)
+                if pre:
+                    await _store(uid, p, None, pre)
+                    return (_partly_saved_msg(pre, path_arg, pre, "write_file")
+                            + await verify_after(uid, p, path_arg, pre, None, can_autorevert=False))
             return big
     if (before and not args.get("shrink_ok") and len(before) >= SHRINK_MIN_CHARS
             and len(content) < len(before) * SHRINK_RATIO and str(p).lower() in {w.lower() for w in file_state.written_paths()}):
@@ -430,6 +450,12 @@ async def _append_file(args: dict) -> str:
         return "error: content required for append_file"
     big = None if salvaged else _too_big(content, "append_file")
     if big:
+        pre = _oversized_prefix(before, content, path_arg)
+        if pre:
+            after = edit_engine.append_text(before, pre)
+            await _store(uid, p, before, after)
+            return (_partly_saved_msg(pre, path_arg, after, "append_file")
+                    + await verify_after(uid, p, path_arg, after, before, can_autorevert=False))
         return big
     if before is None:
         if not args.get("_create"):

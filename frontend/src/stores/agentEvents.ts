@@ -13,6 +13,14 @@ export interface AgentRunCtx {
     start: (id: string, cmd: string) => void;
     finish: (id: string, patch: { stdout?: string; stderr?: string; exitCode?: number }) => void;
   };
+  /** Right-Dock sub-agent monitor. Injected by the store: importing it here would be a cycle
+   *  (useAppStore imports applyAgentEvent), which is why the old `window.__useAppStore`
+   *  shortcut existed - and was never assigned, so every live update was silently dropped. */
+  onSubagents?: {
+    setBatch: (list: Array<{ id: string; index: number; role: string; task: string; status: 'running'; step: number; max_steps: number; lane: string }>) => void;
+    update: (key: string, patch: Record<string, unknown>) => void;
+    activate: () => void;
+  };
 }
 
 /** Per-run scratch state that is not part of the saved message. */
@@ -168,26 +176,21 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       acts.push({ type: 'tool_call', ...d });
       L.statusText = formatToolStatus(d.name, d.args);
       if (['spawn_parallel_agents', 'spawn_agent', 'spawn_reviewed_coder'].includes(d.name)) {
-        try {
-          const store = (typeof window !== 'undefined' && (window as any).__useAppStore)?.getState();
-          if (store) {
-            const specs = Array.isArray(d.args?.agents) ? d.args.agents : d.args?.task ? [d.args] : [];
-            if (specs.length > 0) {
-              const list = specs.map((spec: any, idx: number) => ({
-                id: String(idx),
-                index: idx + 1,
-                role: spec.role || 'subagent',
-                task: spec.task || '',
-                status: 'running',
-                step: 0,
-                max_steps: spec.max_steps || 10,
-                lane: spec.lane || 'default',
-              }));
-              store.setSubagentsBatch(list);
-              store.setDockTab('subagents');
-            }
-          }
-        } catch (_) {}
+        const specs = Array.isArray(d.args?.agents) ? d.args.agents : d.args?.task ? [d.args] : [];
+        if (specs.length > 0 && ctx.onSubagents) {
+          const list = specs.map((spec: any, idx: number) => ({
+            id: String(idx),
+            index: idx + 1,
+            role: spec.role || 'subagent',
+            task: spec.task || '',
+            status: 'running' as const,
+            step: 0,
+            max_steps: spec.max_steps || 10,
+            lane: spec.lane || 'default',
+          }));
+          ctx.onSubagents.setBatch(list);
+          ctx.onSubagents.activate();
+        }
       }
       if (SHELL_TOOLS.includes(d.name)) {
         const c = d.args && (d.args.command || d.args.cmd);
@@ -259,27 +262,22 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
         }
       }
 
-      // Sync with global AppStore for the Right Dock Subagents View
-      try {
-        const store = (typeof window !== 'undefined' && (window as any).__useAppStore)?.getState();
-        if (store) {
-          store.updateSubagent(key, {
-            id: `sub_${subIdx !== undefined ? subIdx : Number(key) + 1}`,
-            index: (subIdx !== undefined ? subIdx : Number(key) + 1),
-            role: d.role,
-            task: d.task,
-            status: subStatus,
-            step: d.step,
-            max_steps: d.max_steps,
-            current_tool: ev === 'tool_start' ? d.tool : (ev === 'tool_done' ? null : undefined),
-            current_tool_args: ev === 'tool_start' ? d.args : (ev === 'tool_done' ? null : undefined),
-            elapsed_s: d.elapsed_s,
-            duration_s: d.duration_s,
-            output: d.output,
-            error: d.error,
-          });
-        }
-      } catch (_) {}
+      // Live Right Dock update - injected by the store, no global shortcut.
+      ctx.onSubagents?.update(key, {
+        id: `sub_${subIdx !== undefined ? subIdx : Number(key) + 1}`,
+        index: (subIdx !== undefined ? subIdx : Number(key) + 1),
+        role: d.role,
+        task: d.task,
+        status: subStatus,
+        step: d.step,
+        max_steps: d.max_steps,
+        current_tool: ev === 'tool_start' ? d.tool : (ev === 'tool_done' ? null : undefined),
+        current_tool_args: ev === 'tool_start' ? d.args : (ev === 'tool_done' ? null : undefined),
+        elapsed_s: d.elapsed_s,
+        duration_s: d.duration_s,
+        output: d.output,
+        error: d.error,
+      });
       break;
     }
     case 'tool_result': {
@@ -291,7 +289,6 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
           const parsed = parseSubagentsFromText(d.result);
           if (parsed && parsed.length > 0) {
             const call = acts.slice().reverse().find((a) => a.type === 'tool_call' && (a.id === d.id || (!d.id && a.name === d.name)));
-            const store = (typeof window !== 'undefined' && (window as any).__useAppStore)?.getState();
             parsed.forEach((item: any, pIdx: number) => {
               const idx = item.index || pIdx + 1;
               const subKey = String(idx - 1);
@@ -318,9 +315,7 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
                   ...patch,
                 };
               }
-              if (store) {
-                store.updateSubagent(subKey, patch);
-              }
+              ctx.onSubagents?.update(subKey, patch);
             });
           }
         } catch (_) {}

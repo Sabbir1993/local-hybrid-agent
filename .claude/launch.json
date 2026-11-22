@@ -19,6 +19,12 @@
         "dev"
       ],
       "port": 5173
+    },
+    {
+      "name": "Bangla trainer UI (temp)",
+      "runtimeExecutable": "E:/AI/bangla-asr-trainer/.venv/Scripts/bstt.exe",
+      "runtimeArgs": ["--config", "E:/AI/bangla-asr-trainer/trainer.toml", "ui", "--port", "8772"],
+      "port": 8772
     }
   ]
 }

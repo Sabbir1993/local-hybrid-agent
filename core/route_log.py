@@ -8,6 +8,7 @@ Rows older than RETENTION_DAYS are purged on startup and after each tuner run.
 """
 
 import json
+import re
 import sys
 import time
 from typing import Optional
@@ -106,6 +107,24 @@ def _exec(sql: str, params: tuple = ()) -> None:
 # fails 6% of the time" is unactionable: the number never says which of
 # no-match / ambiguous / drift / verify-failed the model actually hit.
 _TOOL_ERR_RULES = (
+    # Production 2026-11: 79/91 write_file and 23/35 append_file failures landed in the
+    # anonymous "error" bucket because execution._dispatch returns "error: <Type>: <msg>"
+    # for a raised exception. These split the dominant classes without storing any text.
+    ("pre-save syntax validation failed", None, "syntax"),
+    ("one call may carry at most", None, "too_big"),
+    ("would grow past", None, "too_big"),
+    ("would replace", None, "shrink"),
+    ("content required for", None, "invalid_args"),
+    ("database is locked", None, "locked"),
+    ("timed out", None, "timeout"),
+    ("connection refused", None, "connectivity"),
+    ("not connected", None, "connectivity"),
+    ("RemoteProtocolError", None, "connectivity"),
+    ("ConnectError", None, "connectivity"),
+    ("no active session for plan tracking", None, "no_session"),
+    ("already finished", None, "plan_exists"),
+    ("plan already exists", None, "plan_exists"),
+    ("a plan is already in progress", None, "plan_exists"),
     ("no model is available", None, "no_model"),
     ("unknown role", None, "unknown_role"),
     ("requires a non-empty task", None, "invalid_args"),
@@ -134,6 +153,8 @@ _TOOL_ERR_RULES = (
     ("must be an integer", None, "invalid_args"),
 )
 
+_EXC_RE = re.compile(r"^error:\s*([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Timeout|Interrupt)):")
+
 
 def classify_tool_result(result) -> Optional[str]:
     """Fixed failure code for a tool result string, or None when it succeeded.
@@ -154,6 +175,12 @@ def classify_tool_result(result) -> Optional[str]:
         first, second, code = rule
         if first in result and (second is None or second in result):
             return code
+    # A raised exception is rendered as "error: ValueError: ..." by execution._dispatch.
+    # Keep only the type: a small, bounded vocabulary that tells us WHICH component
+    # failed (companion RPC, filesystem, schema) without retaining the message.
+    exc = _EXC_RE.match(result)
+    if exc:
+        return "exc:" + exc.group(1)
     return "error"
 
 

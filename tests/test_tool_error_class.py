@@ -57,6 +57,30 @@ class ToolErrorClassTests(unittest.TestCase):
         for text, want in cases.items():
             self.assertEqual(route_log.classify_tool_result(text), want, text[:60])
 
+    def test_write_and_plan_failures_are_attributable(self):
+        """Production 2026-11 collapsed these into 'error', hiding the failing component."""
+        cases = {
+            "error: pre-save syntax validation failed for x.py: invalid syntax (file was not written)": "syntax",
+            "error: this write_file content is about 11622 tokens; one call may carry at most 8192.": "too_big",
+            "error: a.txt would grow past 2048 KB - split it into several files.": "too_big",
+            "error: overwrite=true would replace 80 lines of x.py with only 12 - that deletes sections": "shrink",
+            "error: content required for append_file": "invalid_args",
+            "error: database is locked": "locked",
+            "error: timed out after 30s (config agent.exec_timeout_s)": "timeout",
+            "error: RuntimeError: companion is not connected": "connectivity",
+            "error: ConnectError: all connection attempts failed": "connectivity",
+            "error: ValueError: no active session for plan tracking (session_id missing)": "no_session",
+            "error: ValueError: the plan for this task is already finished (every step is done or failed).": "plan_exists",
+            "error: ValueError: this exact plan already exists - do not call create_plan again": "plan_exists",
+        }
+        for text, want in cases.items():
+            self.assertEqual(route_log.classify_tool_result(text), want, text[:70])
+
+    def test_raised_exceptions_keep_only_their_type(self):
+        self.assertEqual(route_log.classify_tool_result("error: RuntimeError: /secret/path/x.py boom"), "exc:RuntimeError")
+        self.assertEqual(route_log.classify_tool_result("error: ValueError: bad /home/alice/token"), "exc:ValueError")
+        self.assertEqual(route_log.classify_tool_result("error: TimeoutError: slow"), "exc:TimeoutError")
+
     def test_unknown_failure_falls_back_to_error(self):
         self.assertEqual(route_log.classify_tool_result("error: something new happened"), "error")
         self.assertEqual(route_log.classify_tool_result(""), "error")

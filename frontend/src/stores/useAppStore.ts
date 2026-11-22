@@ -1833,6 +1833,11 @@ export const useAppStore = create<AppState>((set, get) => ({
                     start: (id, cmd) => get().addTermEntry({ id, cmd, source: 'agent', status: 'running', time: Date.now() }),
                     finish: (id, patch) => get().updateTermEntry(id, { status: 'done', ...patch }),
                   },
+                  onSubagents: {
+                    setBatch: (list) => get().setSubagentsBatch(list),
+                    update: (key, patch) => get().updateSubagent(key, patch),
+                    activate: () => get().setDockTab('subagents'),
+                  },
                 });
               } catch (e: any) {
                 agentErr = e;
