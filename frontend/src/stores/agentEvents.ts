@@ -209,7 +209,14 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       break;
     }
     case 'subagent_event': {
-      const key = String(d.sub_index ?? d.subagent_id ?? '0');
+      const subIdx = d.index !== undefined
+        ? Number(d.index)
+        : d.sub_index !== undefined
+        ? Number(d.sub_index)
+        : (typeof d.subagent_id === 'string' && d.subagent_id.match(/sub_(\d+)/))
+        ? parseInt(d.subagent_id.match(/sub_(\d+)/)![1], 10)
+        : undefined;
+      const key = subIdx !== undefined ? String(subIdx - 1) : String(d.subagent_id ?? '0');
       const call = acts.slice().reverse().find((a) => a.type === 'tool_call' && (a.id === d.id || (!d.id && a.name === d.name)));
       const ev = d.event;
       const subStatus = ev === 'done'
@@ -223,8 +230,9 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
         const prev = call.subagents[key] || {};
         call.subagents[key] = {
           ...prev,
-          sub_index: d.sub_index !== undefined ? d.sub_index : prev.sub_index,
-          subagent_id: d.subagent_id || prev.subagent_id,
+          sub_index: subIdx !== undefined ? subIdx : prev.sub_index,
+          index: subIdx !== undefined ? subIdx : prev.index,
+          subagent_id: `sub_${subIdx !== undefined ? subIdx : Number(key) + 1}`,
           role: d.role || prev.role || 'subagent',
           task: d.task || prev.task || '',
           status: subStatus,
@@ -256,8 +264,8 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
         const store = (typeof window !== 'undefined' && (window as any).__useAppStore)?.getState();
         if (store) {
           store.updateSubagent(key, {
-            id: d.subagent_id || key,
-            index: (d.sub_index !== undefined ? d.sub_index : Number(key) + 1),
+            id: `sub_${subIdx !== undefined ? subIdx : Number(key) + 1}`,
+            index: (subIdx !== undefined ? subIdx : Number(key) + 1),
             role: d.role,
             task: d.task,
             status: subStatus,
@@ -475,7 +483,7 @@ export function latestSubagentsFromMessages(messages: ChatMessage[]): any[] {
                   : 'failed';
                 return {
                   ...item,
-                  status: item.status === 'running' ? canonStatus : (canonStatus !== 'completed' ? canonStatus : item.status),
+                  status: canonStatus || item.status,
                   failure_reason: p.failure_reason || item.failure_reason,
                   error: p.failure_reason || item.error,
                   output: item.output || p.output,

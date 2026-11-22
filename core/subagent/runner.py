@@ -300,13 +300,14 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
         acquire_file_lock,
         release_all_file_locks_for_holder,
     )
-    subagent_id = f"sub_{int(time.time() * 1000)}_{role or 'generic'}"
+    subagent_id = f"sub_{sub_index}"
     files_modified: set = set()
     token = _active_scope_writes.set([])
     await emit_subagent_event({
         "event": "start",
         "subagent_id": subagent_id,
         "index": sub_index,
+        "sub_index": sub_index,
         "role": role or "generic",
         "task": task[:300],
         "max_steps": steps,
@@ -354,6 +355,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                     "event": "done",
                     "subagent_id": subagent_id,
                     "index": sub_index,
+                    "sub_index": sub_index,
                     "role": role or "generic",
                     "status": "error",
                     "duration_s": round(time.time() - t_start, 2),
@@ -376,6 +378,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                     "event": "step",
                     "subagent_id": subagent_id,
                     "index": sub_index,
+                    "sub_index": sub_index,
                     "role": role or "generic",
                     "step": step_idx + 1,
                     "max_steps": steps,
@@ -388,9 +391,18 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                                      model=model_name, source=src)
                 res = None
                 try:
-                    async for ev, val in _llm_chat_stream(client, msgs, tools_for_subagent, 0.3, -1, rid=rid):
-                        if ev == "result":
-                            res = val
+                    for _attempt in range(2):
+                        try:
+                            async for ev, val in _llm_chat_stream(client, msgs, tools_for_subagent, 0.3, -1, rid=rid):
+                                if ev == "result":
+                                    res = val
+                            break
+                        except Exception as _e:
+                            import httpx
+                            if _attempt == 0 and isinstance(_e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError)):
+                                await asyncio.sleep(1.0)
+                                continue
+                            raise
                 finally:
                     req_mon = _monitor_state["active"].get(rid)
                     dt = (time.time() - req_mon["start"]) if req_mon else None
@@ -439,6 +451,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                         "event": "tool_start",
                         "subagent_id": subagent_id,
                         "index": sub_index,
+                        "sub_index": sub_index,
                         "role": role or "generic",
                         "step": step_idx + 1,
                         "tool": name,
@@ -466,6 +479,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                         "event": "tool_done",
                         "subagent_id": subagent_id,
                         "index": sub_index,
+                        "sub_index": sub_index,
                         "role": role or "generic",
                         "step": step_idx + 1,
                         "tool": name,
@@ -505,6 +519,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
         "event": "done",
         "subagent_id": subagent_id,
         "index": sub_index,
+        "sub_index": sub_index,
         "role": role or "generic",
         "status": status,
         "duration_s": round(time.time() - t_start, 2),
@@ -592,6 +607,7 @@ async def run_parallel_subagents(agent_specs: list, max_concurrency: Optional[in
                     "event": "done",
                     "subagent_id": f"sub_{idx+1}",
                     "index": idx + 1,
+                    "sub_index": idx + 1,
                     "role": role or "generic",
                     "status": "timeout",
                     "duration_s": timeout_s,
@@ -605,6 +621,7 @@ async def run_parallel_subagents(agent_specs: list, max_concurrency: Optional[in
                     "event": "error",
                     "subagent_id": f"sub_{idx+1}",
                     "index": idx + 1,
+                    "sub_index": idx + 1,
                     "role": role or "generic",
                     "status": "error",
                     "error": err_msg,
@@ -617,8 +634,12 @@ async def run_parallel_subagents(agent_specs: list, max_concurrency: Optional[in
 
     formatted = []
     for i, r in enumerate(results):
+        spec = agent_specs[i] if i < len(agent_specs) and isinstance(agent_specs[i], dict) else {}
+        spec_role = spec.get("role") or "generic"
         if isinstance(r, Exception):
-            formatted.append(f"=== Sub-agent #{i+1} ===\nerror: {type(r).__name__}: {r}")
+            err_msg = f"{type(r).__name__}: {r}"
+            title = f"Sub-agent #{i+1}" + (f" (role={spec_role})" if spec_role else "")
+            formatted.append(f"=== {title} ===\n[sub-agent · role={spec_role} · 0 msgs · status=error]\nerror: {err_msg}")
         else:
             formatted.append(str(r))
 

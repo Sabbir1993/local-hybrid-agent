@@ -16,8 +16,7 @@ def _result(content=PNG, status=200, truncated=False):
 
 class ImageProxy(unittest.TestCase):
     def setUp(self):
-        image_proxy._allowed.clear()
-        image_proxy._cache.clear()
+        image_proxy.reset_for_testing()
 
     def test_only_urls_a_search_returned_for_this_user(self):
         with mock.patch.object(net_guard, "guarded_get", return_value=_result()) as g:
@@ -65,6 +64,37 @@ class ImageProxy(unittest.TestCase):
             image_proxy.fetch(1, URL)
             image_proxy.fetch(1, URL)
             self.assertEqual(g.call_count, 1)
+
+    def test_survives_server_restart_and_query_params(self):
+        u_with_param = "https://upload.wikimedia.org/pic.jpg?utm_source=commons"
+        u_clean = "https://upload.wikimedia.org/pic.jpg"
+        image_proxy.remember(1, [u_with_param])
+
+        # Simulate server restart: RAM cleared completely
+        image_proxy._allowed.clear()
+        image_proxy._cache.clear()
+
+        # Both full URL and clean URL are still allowed for user 1 across restart
+        self.assertTrue(image_proxy.is_allowed(1, u_with_param))
+        self.assertTrue(image_proxy.is_allowed(1, u_clean))
+        # Another user is still forbidden
+        self.assertFalse(image_proxy.is_allowed(2, u_clean))
+
+    def test_disk_cache_survives_ram_cache_clear(self):
+        image_proxy.remember(1, [URL])
+        with mock.patch.object(net_guard, "guarded_get", return_value=_result()) as g:
+            # First fetch: calls network
+            res1 = image_proxy.fetch(1, URL)
+            self.assertEqual(g.call_count, 1)
+            self.assertEqual(res1, ("image/png", PNG))
+
+            # Simulate RAM cache cleared (e.g. process restart)
+            image_proxy._cache.clear()
+
+            # Second fetch: served from persistent disk cache without hitting network
+            res2 = image_proxy.fetch(1, URL)
+            self.assertEqual(g.call_count, 1)  # Still 1!
+            self.assertEqual(res2, ("image/png", PNG))
 
 
 if __name__ == "__main__":

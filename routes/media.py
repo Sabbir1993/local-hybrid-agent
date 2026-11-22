@@ -305,7 +305,7 @@ async def media_proxy(u: str = "", user: Principal = Depends(get_current_user)):
     except image_proxy.ProxyRefused as e:
         return _err(str(e), 404)
     return Response(content=data, media_type=ctype, headers={
-        "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "default-src 'none'; sandbox"})
 
 
@@ -318,5 +318,5 @@ async def media_product_image(u: str = "", i: str = "", user: Principal = Depend
     except image_proxy.ProxyRefused as e:
         return _err(str(e), 404)
     return Response(content=data, media_type=ctype, headers={
-        "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "default-src 'none'; sandbox"})

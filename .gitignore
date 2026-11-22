@@ -86,3 +86,5 @@ config/web_cache.sqlite*
 # Voice recordings are personal data: never in git (the corpus itself lives outside the app, speech_corpus.dir)
 /recordings/
 voice-corpus/
+
+.image_cache/

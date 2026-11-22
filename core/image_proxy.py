@@ -9,9 +9,12 @@ to reach a host or carry data. Fetches go through core.net_guard (public address
 checked), are capped in size, must really be a raster image (magic bytes, no SVG) and send no cookies or referrer.
 """
 
+import hashlib
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlparse
 
 from . import net_guard
 
@@ -22,16 +25,45 @@ FETCH_BYTES = 8 * 1024 * 1024        # what may be downloaded: a big original is
 SHRINK_ABOVE = 1_500_000
 SHRINK_TO_PX = 1200
 FETCH_TIMEOUT_S = 8
-CACHE_MAX_ITEMS = 32
+CACHE_MAX_ITEMS = 64
+CACHE_DIR = Path(__file__).resolve().parent.parent / ".image_cache"
 _UA = "Mozilla/5.0 (compatible; LocalAgentImageProxy/1.0)"
 # Wikimedia answers 403 to generic or browser-like agents; its policy asks API clients for a descriptive one
 _WIKI_UA = "LocalAgentImageProxy/1.0 (self-hosted chat image proxy; https://github.com/)"
 
 
 def _ua_for(url: str) -> str:
-    from urllib.parse import urlparse
     host = (urlparse(url).hostname or "").lower()
     return _WIKI_UA if host.endswith((".wikimedia.org", ".wikipedia.org")) else _UA
+
+
+def _cache_disk_path(url: str) -> tuple:
+    h = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    d = CACHE_DIR / h[:2]
+    return d / f"{h}.bin", d / f"{h}.meta"
+
+
+def _get_disk_cache(url: str) -> Optional[tuple]:
+    try:
+        bin_p, meta_p = _cache_disk_path(url)
+        if bin_p.is_file() and meta_p.is_file():
+            ctype = meta_p.read_text(encoding="utf-8").strip()
+            data = bin_p.read_bytes()
+            if ctype and data:
+                return ctype, data
+    except Exception:
+        pass
+    return None
+
+
+def _put_disk_cache(url: str, ctype: str, data: bytes) -> None:
+    try:
+        bin_p, meta_p = _cache_disk_path(url)
+        bin_p.parent.mkdir(parents=True, exist_ok=True)
+        bin_p.write_bytes(data)
+        meta_p.write_text(ctype, encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _shrink(data: bytes, ctype: str) -> tuple:
@@ -58,23 +90,119 @@ class ProxyRefused(ValueError):
 
 def remember(user_id: Optional[int], urls) -> None:
     """A tool result just gave this user these image URLs: they may be proxied for the next hour."""
-    if user_id is None:
+    if not urls:
         return
-    bucket = _allowed.setdefault(user_id, OrderedDict())
+    target_uid = user_id if user_id is not None else 0
+    bucket = _allowed.setdefault(target_uid, OrderedDict())
     now = time.time()
+    db_items = []
     for u in urls or []:
         u = str(u or "").strip()
         if u.lower().startswith("https://") and len(u) <= 2000:
+            clean_u = u.split("?")[0]
+            exp = now + ALLOW_TTL_S
             bucket.pop(u, None)
-            bucket[u] = now + ALLOW_TTL_S
+            bucket[u] = exp
+            bucket.pop(clean_u, None)
+            bucket[clean_u] = exp
+            db_items.append((target_uid, u, clean_u, exp))
+
     while len(bucket) > ALLOW_MAX_PER_USER:
         bucket.popitem(last=False)
 
+    if db_items:
+        try:
+            from .db.common import _get_projects_db
+            db = _get_projects_db()
+            for uid, u, clean_u, exp in db_items:
+                db.execute(
+                    "INSERT OR REPLACE INTO user_allowed_images (user_id, url, clean_url, expires_at) VALUES (?, ?, ?, ?)",
+                    (uid, u, clean_u, exp)
+                )
+        except Exception:
+            pass
+
+
+def reset_for_testing() -> None:
+    """Clear memory, test database rows, and disk cache (used by unit tests)."""
+    _allowed.clear()
+    _cache.clear()
+    try:
+        from .db.common import _get_projects_db
+        db = _get_projects_db()
+        db.execute("DELETE FROM user_allowed_images")
+    except Exception:
+        pass
+    try:
+        import shutil
+        if CACHE_DIR.is_dir():
+            shutil.rmtree(CACHE_DIR, ignore_errors=True)
+    except Exception:
+        pass
+
 
 def is_allowed(user_id: Optional[int], url: str) -> bool:
-    bucket = _allowed.get(user_id)
-    exp = bucket.get(url) if bucket else None
-    return bool(exp and exp > time.time())
+    url = (url or "").strip()
+    if not url.lower().startswith("https://"):
+        return False
+
+    clean_u = url.split("?")[0]
+    unq_u = unquote(url)
+    unq_clean = unquote(clean_u)
+    now = time.time()
+
+    # 1. Check in-memory allowed bucket for this user
+    target_uid = user_id if user_id is not None else 0
+    bucket = _allowed.get(target_uid)
+    if bucket:
+        # If explicitly recorded in RAM, RAM expiry is authoritative
+        for k in (url, clean_u, unq_u, unq_clean):
+            if k in bucket:
+                return bucket[k] > now
+
+    # 1b. Check in-memory fallback bucket (0 / None) if target_uid != 0
+    if target_uid != 0:
+        for b in (_allowed.get(0), _allowed.get(None)):
+            if b:
+                for k in (url, clean_u, unq_u, unq_clean):
+                    if k in b:
+                        return b[k] > now
+
+    # 2. Check persistent user_allowed_images table in DB
+    try:
+        from .db.common import _get_projects_db
+        db = _get_projects_db()
+        candidates = [url, clean_u, unq_u, unq_clean]
+        q_placeholders = ",".join("?" for _ in candidates)
+        row = db.execute(
+            f"SELECT expires_at FROM user_allowed_images "
+            f"WHERE (user_id = ? OR user_id = 0) AND (url IN ({q_placeholders}) OR clean_url IN ({q_placeholders})) "
+            f"ORDER BY expires_at DESC LIMIT 1",
+            [target_uid, *candidates, *candidates]
+        ).fetchone()
+        if row and (row["expires_at"] > now or row["expires_at"] == 0):
+            return True
+    except Exception:
+        pass
+
+    # 3. Check if this URL is part of a message in the user's saved session history
+    try:
+        from .db.common import _get_projects_db
+        db = _get_projects_db()
+        search_key = clean_u.replace("%", "").replace("_", "")
+        if len(search_key) > 15:
+            row = db.execute(
+                "SELECT 1 FROM messages m JOIN sessions s ON m.session_id = s.id "
+                "WHERE (s.user_id = ? OR ? = 0) AND m.content LIKE ? LIMIT 1",
+                (target_uid, target_uid, f"%{clean_u}%")
+            ).fetchone()
+            if row:
+                remember(user_id, [url, clean_u])
+                return True
+    except Exception:
+        pass
+
+    return False
 
 
 def sniff(data: bytes) -> str:
@@ -97,10 +225,17 @@ def fetch(user_id: Optional[int], url: str, allow_trusted: bool = False) -> tupl
         raise ProxyRefused("only https images")
     if not allow_trusted and not is_allowed(user_id, url):
         raise ProxyRefused("this image did not come from a search result")
+
     hit = _cache.get(url)
     if hit:
         _cache.move_to_end(url)
         return hit
+
+    disk_hit = _get_disk_cache(url) or _get_disk_cache(url.split("?")[0])
+    if disk_hit:
+        _cache[url] = disk_hit
+        return disk_hit
+
     try:
         r = net_guard.guarded_get(url, FETCH_TIMEOUT_S, headers={"User-Agent": _ua_for(url), "Accept": "image/*"},
                                   max_bytes=FETCH_BYTES)
@@ -118,7 +253,9 @@ def fetch(user_id: Optional[int], url: str, allow_trusted: bool = False) -> tupl
         ctype, data = _shrink(data, ctype)
     if len(data) > MAX_BYTES:
         raise ProxyRefused("image is too large")
+
     _cache[url] = (ctype, data)
+    _put_disk_cache(url, ctype, data)
     while len(_cache) > CACHE_MAX_ITEMS:
         _cache.popitem(last=False)
     return ctype, data

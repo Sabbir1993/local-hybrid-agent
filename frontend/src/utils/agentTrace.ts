@@ -347,7 +347,9 @@ function renderSubagentViewHtml(t: TraceItem): string {
     h += '<div class="ct-subagent-alert-box">';
     subagents.forEach((s: any, i: number) => {
       if (s.status === 'failed' || s.status === 'error') {
-        const name = `Sub-agent #${s.index || i + 1} (${s.role || 'generic'})`;
+        const spec = agentSpecs && agentSpecs[i] ? agentSpecs[i] : null;
+        const role = (s.role && s.role !== 'generic') ? s.role : (spec?.role || s.role || 'generic');
+        const name = `Sub-agent #${s.index || i + 1} (${role})`;
         const reason = s.failure_reason || s.final_content || 'Failed to complete execution.';
         h += `<div class="ct-alert-row"><span class="ct-alert-badge">✕ Failed</span> <strong>${escText(name)}:</strong> ${escText(reason)}</div>`;
       }
@@ -365,7 +367,7 @@ function renderSubagentViewHtml(t: TraceItem): string {
     const taskText = s.task || (spec?.task) || (t.args?.task) || '';
     const stepsArr = Array.isArray(s.steps) ? s.steps : [];
     const stepsCount = stepsArr.length || s.stepsCount || 0;
-    const roleName = s.role || spec?.role || 'generic';
+    const roleName = (s.role && s.role !== 'generic') ? s.role : (spec?.role || s.role || 'generic');
     const subIdx = s.index || i + 1;
 
     // During live execution, keep the cards open so user sees task & live tool progress!

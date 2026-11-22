@@ -88,6 +88,14 @@ def _init_projects_db() -> ThreadLocalDB:
         created_at REAL NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_doc_files_user_name ON doc_files(user_id, name);
+    CREATE TABLE IF NOT EXISTS user_allowed_images (
+        user_id INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        clean_url TEXT NOT NULL,
+        expires_at REAL NOT NULL,
+        PRIMARY KEY (user_id, url)
+    );
+    CREATE INDEX IF NOT EXISTS idx_allowed_clean_url ON user_allowed_images(user_id, clean_url);
     """)
     # migration: older DBs lack the workspace_dir column or allow_patterns
     cols = [r[1] for r in conn.execute("PRAGMA table_info(projects)")]
