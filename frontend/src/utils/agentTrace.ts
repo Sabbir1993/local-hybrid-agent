@@ -292,7 +292,7 @@ function renderSubagentViewHtml(t: TraceItem): string {
     const roleName = s.role || spec?.role || 'generic';
     const subIdx = s.index || i + 1;
 
-    h += `<details class="ct-subagent-card${!isSuccess ? ' failed' : ''}" ${!isSuccess || total === 1 ? 'open' : ''}>`;
+    h += `<details class="ct-subagent-card${!isSuccess ? ' failed' : ''}">`;
     h += '<summary class="ct-subagent-card-sum">';
     h += `<span class="ct-subagent-status-icon ${isSuccess ? 'ok' : 'fail'}">${isSuccess ? '✓' : '✕'}</span>`;
     h += `<span class="ct-subagent-card-name">Sub-agent #${subIdx} · <span class="ct-role-highlight">${escText(roleName)}</span></span>`;
@@ -413,7 +413,7 @@ function thoughtRowHtml(t: TraceItem): string {
     + `<span class="ct-chev">›</span></summary><div class="ct-drawer"><div class="ct-thought">${escText(t.text || '')}</div></div></details>`;
 }
 
-function groupHtml(items: TraceItem[], open: boolean): string {
+function groupHtml(items: TraceItem[], open = false): string {
   const tools = items.filter((i) => !i.isThought);
   const failed = tools.filter((t) => t.failed).length;
   const running = tools.some((t) => t.running);
@@ -480,12 +480,11 @@ export function traceSegments(acts: any[]): Segment[] {
 export function renderAgentTraceHtml(acts: any[], prose: (md: string) => string, live = false, workedFor = ''): string {
   const segs = traceSegments(acts || []);
   if (!segs.length) return '';
-  const lastGroup = segs.map((s) => s.kind).lastIndexOf('group');
   let h = '<div class="ct-trace">';
   if (workedFor && !live) h += `<div class="ct-worked">${escText(workedFor)}</div>`;
-  segs.forEach((s, i) => {
+  segs.forEach((s) => {
     if (s.kind === 'prose') h += `<div class="ct-prose">${prose(s.text)}</div>`;
-    else if (s.items.length) h += groupHtml(s.items, live && i === lastGroup);
+    else if (s.items.length) h += groupHtml(s.items, false);
   });
   return h + '</div>';
 }

@@ -1,5 +1,5 @@
 import { samplingBody, syncSamplingFromServer } from '../services/sampling';
-import { notifyTaskFinished, requestNotificationPermission } from '../services/notify';
+import { notifyPermissionRequested, notifyTaskFinished, requestNotificationPermission, stopFlashTitle } from '../services/notify';
 import { clipHistoryContent } from '../services/attachments';
 import { holdSession, startSessionWatch, stopSessionWatch } from '../services/session';
 import { GAP_NOTE, answerCheckEnd, applyAgentEvent, interruptRun, newAgentRunState } from './agentEvents';
@@ -604,6 +604,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   answerPermission: async (decision) => {
     const req = get().permRequest;
     set({ permRequest: null });
+    stopFlashTitle();
     if (!req) return;
     const remember = decision === 'always' || decision === 'project' || decision === 'user';
     const patternless = ['browser_eval', 'browser_open', 'device', 'edit', 'rule', 'python', 'media', 'mcp'].includes(req.kind) || req.saveable === false;
@@ -1689,7 +1690,12 @@ export const useAppStore = create<AppState>((set, get) => ({
                 applyAgentEvent(target, agentState, ev, data, {
                   replay: Boolean(reattachId),
                   toast: (msg, type) => get().showToast(msg, type),
-                  onPermission: (req) => set({ permRequest: { ...req, sid: sidKey } }),
+                  onPermission: (req) => {
+                    set({ permRequest: { ...req, sid: sidKey } });
+                    if (!reattachId) {
+                      notifyPermissionRequested({ cmd: req.cmd, kind: req.kind });
+                    }
+                  },
                   onShell: {
                     start: (id, cmd) => get().addTermEntry({ id, cmd, source: 'agent', status: 'running', time: Date.now() }),
                     finish: (id, patch) => get().updateTermEntry(id, { status: 'done', ...patch }),
@@ -1703,7 +1709,13 @@ export const useAppStore = create<AppState>((set, get) => ({
             if (agentErr) throw agentErr;
             // a replay re-sends old permission_request frames: one that has a later frame was answered long ago
             if (ev !== 'permission_request' && ['step', 'tool_call', 'tool_result', 'delta', 'delta_replace', 'thought_delta', 'done', 'error'].includes(ev)) {
-              set((st) => (st.permRequest && st.permRequest.sid === sidKey ? { permRequest: null } : {}));
+              set((st) => {
+                if (st.permRequest && st.permRequest.sid === sidKey) {
+                  stopFlashTitle();
+                  return { permRequest: null };
+                }
+                return {};
+              });
             }
             if (useAgent && !reattachId && ev === 'done' && agentState.runState !== 'completed') {
               get().showToast(`Run ${agentState.runState || 'stopped'}`, 'warn');
@@ -1780,6 +1792,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   abortGeneration: () => {
+    stopFlashTitle();
     const key = sessionKey(get().activeSessionId);
     if (!runs.has(key)) return;
     stopRun(key);

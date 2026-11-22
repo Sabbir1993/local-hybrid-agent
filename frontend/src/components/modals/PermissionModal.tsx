@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
+import { stopFlashTitle } from '../../services/notify';
 
 // Copy for requests that are not a plain shell command (mirrors showPermModal in static/js/workspace.js).
 const KIND_COPY: Record<string, { title: string; lead: string }> = {
@@ -15,6 +16,13 @@ const KIND_COPY: Record<string, { title: string; lead: string }> = {
 
 export const PermissionModal: React.FC = () => {
   const { permRequest, answerPermission, appMode, hasPerm } = useAppStore();
+
+  useEffect(() => {
+    return () => {
+      stopFlashTitle();
+    };
+  }, []);
+
   if (!permRequest) return null;
 
   const { cmd, kind, saveable, tainted, suspicious } = permRequest;

@@ -132,8 +132,9 @@ const BotContent: React.FC<{ id: string; html: string; follow?: boolean }> = ({ 
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
-    // `toggle` does not bubble, so listen in the capture phase
+    // `toggle` does not bubble, so listen in the capture phase (only record intentional user clicks)
     const onToggle = (e: Event) => {
+      if (!e.isTrusted) return;
       const el = e.target as HTMLDetailsElement | null;
       if (!el || el.tagName !== 'DETAILS') return;
       const i = Array.from(root.querySelectorAll('details')).indexOf(el);
@@ -938,7 +939,7 @@ export const ChatArea: React.FC = () => {
                     <div>
                       {/* Collapsible think block if raw reasoning exists and no acts (Hidden in Chat Mode) */}
                       {thinkingText && (!m.acts || !m.acts.length) && !isChatMode && (
-                        <details className="think antigravity-step-item" open style={{ margin: '4px 0 8px 0' }}>
+                        <details className="think antigravity-step-item" style={{ margin: '4px 0 8px 0' }}>
                           <summary
                             className="antigravity-step-row"
                             style={{

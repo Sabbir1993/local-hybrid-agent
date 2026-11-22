@@ -1,9 +1,10 @@
-// "Your task finished" alerts when the app is not in front (port of notifyTaskFinished in static/js/utils.js).
+// "Your task finished" and "Action required" alerts when the app is not in front (port of notifyTaskFinished in static/js/utils.js).
 // Nothing leaves the device: only the desktop app bridge or the browser's own Notification API is used.
 
 import { env } from '../config/env';
 
 let flashTimer: number | null = null;
+let savedBaseTitle: string | null = null;
 
 export function requestNotificationPermission() {
   try {
@@ -15,18 +16,30 @@ export function requestNotificationPermission() {
   }
 }
 
+export function stopFlashTitle() {
+  if (flashTimer) {
+    window.clearInterval(flashTimer);
+    flashTimer = null;
+  }
+  if (savedBaseTitle !== null) {
+    document.title = savedBaseTitle;
+    savedBaseTitle = null;
+  }
+}
+
 function flashTitle(text: string) {
   if (flashTimer) window.clearInterval(flashTimer);
-  const baseTitle = document.title;   // whatever the page is called right now
+  if (savedBaseTitle === null) {
+    savedBaseTitle = document.title;
+  }
+  const baseTitle = savedBaseTitle;
   let on = false;
   flashTimer = window.setInterval(() => {
     on = !on;
     document.title = on ? text : baseTitle;
   }, 1000);
   const stop = () => {
-    if (flashTimer) window.clearInterval(flashTimer);
-    flashTimer = null;
-    document.title = baseTitle;
+    stopFlashTitle();
     window.removeEventListener('focus', stop);
     document.removeEventListener('visibilitychange', onVisible);
   };
@@ -34,6 +47,28 @@ function flashTitle(text: string) {
   const onVisible = () => { if (document.visibilityState === 'visible') stop(); };
   window.addEventListener('focus', stop);
   document.addEventListener('visibilitychange', onVisible);
+}
+
+export function playNotificationChime() {
+  try {
+    const AC = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, now); // D5
+    osc.frequency.setValueAtTime(880, now + 0.12); // A5
+    gain.gain.setValueAtTime(0.08, now);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.35);
+  } catch (_) {
+    // audio autoplay or context restrictions should never throw
+  }
 }
 
 async function appInBackground(): Promise<boolean> {
@@ -65,4 +100,36 @@ export async function notifyTaskFinished(opts: { title: string; body: string }) 
     // a failed alert must never affect the run
   }
   flashTitle('Done: ' + opts.title);
+}
+
+export async function notifyPermissionRequested(opts?: { cmd?: string; kind?: string }) {
+  playNotificationChime();
+  if (!(await appInBackground())) return;
+  const bridge = window.electronAPI;
+  const cmdStr = (opts?.cmd || '').trim();
+  const cmdSnippet = cmdStr.length > 50 ? cmdStr.slice(0, 47) + '...' : cmdStr;
+  const body = cmdSnippet ? `The agent is waiting for approval to run: ${cmdSnippet}` : 'The agent is waiting for your permission to proceed.';
+  const title = `${env.projectName}: Permission required`;
+
+  try {
+    if (bridge?.notify) {
+      await bridge.notify({ title, body });
+    } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      const n = new Notification(title, {
+        body,
+        icon: '/static/logo/icon-192.png',
+        badge: '/static/logo/icon-192.png',
+        tag: 'permission-required',
+        requireInteraction: true,
+      });
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+    }
+    if (bridge?.flashFrame) await bridge.flashFrame(true);
+  } catch (_) {
+    // a failed alert must never affect the run
+  }
+  flashTitle('⚠️ Permission required');
 }
