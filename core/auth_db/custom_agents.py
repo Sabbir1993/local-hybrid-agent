@@ -251,7 +251,7 @@ def db_update_custom_agent(agent_id: int, user_id: int, data: dict) -> Optional[
 def db_list_pending_agents() -> list[dict]:
     """Agents waiting for someone with the publish permission to approve sharing them, with the owner's name."""
     rows = db().execute(
-        """SELECT a.*, u.username AS owner_name FROM user_custom_agents a
+        """SELECT a.*, u.email AS owner_name FROM user_custom_agents a
            LEFT JOIN users u ON u.id = a.user_id
            WHERE a.share_status = 'pending' AND a.user_id IS NOT NULL ORDER BY a.updated_at""").fetchall()
     return [_custom_agent_row(r) for r in rows]

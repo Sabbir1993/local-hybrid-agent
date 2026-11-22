@@ -87,12 +87,23 @@
 
   /* chat column */
   #chat-inner { padding: 0 12px !important; }
-  .msg.user .bubble { max-width: 88% !important; }
+  .msg.user .user-msg-col { max-width: 90% !important; min-width: 0 !important; }
+  .msg.user .bubble { max-width: 100% !important; word-break: break-word !important; overflow-wrap: break-word !important; overflow: hidden !important; }
+  .msg.user .user-file-pill { max-width: 100% !important; }
   .msg .meta { flex-wrap: wrap; row-gap: 2px; }
   .code-block { overflow: visible !important; }
   .code-block > pre,
   .code-block pre { overflow-x: auto !important; }
   .mermaid-viewport { height: auto !important; max-height: 60dvh !important; }
+
+  /* themed toast: display near top below header so it never covers composer, buttons or keyboard */
+  .themed-toast-container {
+    top: calc(56px + env(safe-area-inset-top, 0px)) !important;
+    bottom: auto !important;
+    max-width: calc(100vw - 24px) !important;
+    padding: 8px 14px !important;
+    font-size: 12.5px !important;
+  }
 
   /* composer: footer hugs the screen edge and clears the iPhone home indicator */
   footer { padding: 0 8px calc(8px + env(safe-area-inset-bottom)) !important; }

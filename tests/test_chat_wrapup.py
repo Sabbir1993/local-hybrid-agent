@@ -58,6 +58,16 @@ class Finish(unittest.TestCase):
     def test_strip_handles_unfinished_calls(self):
         self.assertEqual(strip_markup("a <function=x><parameter=p>v"), "a")
 
+    def test_deliver_link_promise_is_removed_when_file_saved(self):
+        from routes.chat.wrapup import wrapup_note_for
+        note = wrapup_note_for(["report.html"])
+        self.assertIn("report.html", note)
+        self.assertIn("ALREADY been saved", note)
+        raw = "The full report HTML file is ready. Press Continue and I'll deliver the download link."
+        text, replaced = finish_text(raw, 10, ["report.html"])
+        self.assertTrue(replaced)
+        self.assertEqual(text, "The full report HTML file is ready.")
+
 
 if __name__ == "__main__":
     unittest.main()

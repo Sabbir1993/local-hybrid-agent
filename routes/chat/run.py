@@ -57,7 +57,7 @@ from ..common.sampling_extra import sampler_extra
 
 from .base import router
 from .speed import SpeedTally
-from .wrapup import LOW_ROUNDS_NOTE, WRAPUP_NOTE, ToolTextFilter, finish_text
+from .wrapup import LOW_ROUNDS_NOTE, WRAPUP_NOTE, ToolTextFilter, finish_text, wrapup_note_for
 from .delivery import (
     _NO_TOOL_ANSWER,
     _WRAP_REFUSAL,
@@ -2063,10 +2063,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 wrap_filter = ToolTextFilter()
                 wrap_msgs = list(msgs)
                 if budget_hit:
+                    _cur_wrap_note = wrapup_note_for(written_files)
                     if wrap_msgs and wrap_msgs[-1].get("role") == "user":      # no two user messages in a row (strict templates refuse)
-                        wrap_msgs[-1] = {**wrap_msgs[-1], "content": str(wrap_msgs[-1].get("content") or "") + "\n\n" + WRAPUP_NOTE}
+                        wrap_msgs[-1] = {**wrap_msgs[-1], "content": str(wrap_msgs[-1].get("content") or "") + "\n\n" + _cur_wrap_note}
                     else:
-                        wrap_msgs.append({"role": "user", "content": WRAPUP_NOTE})
+                        wrap_msgs.append({"role": "user", "content": _cur_wrap_note})
                 if cloud_main and cloud.cloud_bindings(user.id).get("fallback_local", True):
                     fb_local = _local_fallback_client
                     final_rep = deck_lim["repeat_penalty"] or (req.repeat_penalty if req.repeat_penalty is not None else 1.15)

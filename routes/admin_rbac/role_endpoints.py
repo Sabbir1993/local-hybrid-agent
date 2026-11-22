@@ -25,11 +25,11 @@ async def list_role_names(user: Principal = Depends(get_current_user)):
 
 @router.get("/user_names")
 async def list_user_names(user: Principal = Depends(get_current_user)):
-    """Bare username list from users table for sanitizer and targeting pickers."""
+    """Bare user list from users table for sanitizer and targeting pickers."""
     if not (user_has_permission(user, "settings.input_guard") or user_has_permission(user, "users.manage")):
         raise HTTPException(status_code=403, detail="missing permission: settings.input_guard")
-    rows = auth_db.db().execute("SELECT id, username, display_name FROM users WHERE is_active = 1 ORDER BY username").fetchall()
-    return {"users": [{"id": r["id"], "username": r["username"], "display_name": r["display_name"] or r["username"]} for r in rows]}
+    rows = auth_db.db().execute("SELECT id, email, display_name FROM users WHERE is_active = 1 ORDER BY email").fetchall()
+    return {"users": [{"id": r["id"], "email": r["email"], "username": r["email"], "display_name": r["display_name"] or r["email"]} for r in rows]}
 
 
 @router.get("/roles")

@@ -44,16 +44,42 @@ def _has_user_column(col: str) -> bool:
         return False
 
 
-def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
-    if _has_user_column("email"):
-        return db().execute("SELECT * FROM users WHERE username = ? OR email = ?", (username, username)).fetchone()
-    return db().execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-
-
 def get_user_by_email(email: str) -> Optional[sqlite3.Row]:
-    if _has_user_column("email"):
-        return db().execute("SELECT * FROM users WHERE email = ? OR username = ?", (email, email)).fetchone()
-    return db().execute("SELECT * FROM users WHERE username = ?", (email,)).fetchone()
+    if not email:
+        return None
+    email = email.strip()
+    prefix = email.split("@")[0] if "@" in email else email
+    has_email = _has_user_column("email")
+    has_un = _has_user_column("username")
+    if has_email and has_un:
+        row = db().execute("SELECT * FROM users WHERE email = ? OR username = ?", (email, email)).fetchone()
+        if row:
+            return row
+        row = db().execute("SELECT * FROM users WHERE email = ? OR username = ?", (prefix, prefix)).fetchone()
+        if row:
+            return row
+        return db().execute("SELECT * FROM users WHERE email LIKE ? OR username LIKE ?", (f"{prefix}@%", f"{prefix}@%")).fetchone()
+    elif has_email:
+        row = db().execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        if row:
+            return row
+        row = db().execute("SELECT * FROM users WHERE email = ?", (prefix,)).fetchone()
+        if row:
+            return row
+        return db().execute("SELECT * FROM users WHERE email LIKE ?", (f"{prefix}@%",)).fetchone()
+    elif has_un:
+        row = db().execute("SELECT * FROM users WHERE username = ?", (email,)).fetchone()
+        if row:
+            return row
+        row = db().execute("SELECT * FROM users WHERE username = ?", (prefix,)).fetchone()
+        if row:
+            return row
+        return db().execute("SELECT * FROM users WHERE username LIKE ?", (f"{prefix}@%",)).fetchone()
+    return None
+
+
+def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
+    return get_user_by_email(username)
 
 
 def get_user_by_id(user_id: int) -> Optional[sqlite3.Row]:
@@ -64,16 +90,25 @@ def count_users() -> int:
     return db().execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
 
 
-def create_user(username: str, password_hash: Optional[str], is_super_admin: bool = False,
-                display_name: Optional[str] = None, email: Optional[str] = None,
+def create_user(email: str = "", password_hash: Optional[str] = None, is_super_admin: bool = False,
+                display_name: Optional[str] = None, username: Optional[str] = None,
                 auth_provider: str = "local") -> int:
     now = time.time()
-    cur = db().execute(
-        "INSERT INTO users (username, email, password_hash, auth_provider, display_name, "
-        "is_active, is_super_admin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
-        (username, email, password_hash, auth_provider, display_name or username,
-         1 if is_super_admin else 0, now, now),
-    )
+    user_email = (email or username or "").strip()
+    if _has_user_column("username"):
+        cur = db().execute(
+            "INSERT INTO users (username, email, password_hash, auth_provider, display_name, "
+            "is_active, is_super_admin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+            (user_email, user_email, password_hash, auth_provider, display_name or user_email,
+             1 if is_super_admin else 0, now, now),
+        )
+    else:
+        cur = db().execute(
+            "INSERT INTO users (email, password_hash, auth_provider, display_name, "
+            "is_active, is_super_admin, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?)",
+            (user_email, password_hash, auth_provider, display_name or user_email,
+             1 if is_super_admin else 0, now, now),
+        )
     db().commit()
     return cur.lastrowid
 
@@ -195,7 +230,7 @@ def delete_user_mcp_server(user_id: int, name: str) -> None:
 
 
 def update_user_profile(user_id: int, updates: dict) -> Optional[sqlite3.Row]:
-    allowed_cols = {"display_name", "email", "username", "image", "employee_id", "department", "designation", "dob", "gender"}
+    allowed_cols = {"display_name", "email", "image", "employee_id", "department", "designation", "dob", "gender"}
     fields = {k: v for k, v in updates.items() if k in allowed_cols}
     if not fields:
         return get_user_by_id(user_id)

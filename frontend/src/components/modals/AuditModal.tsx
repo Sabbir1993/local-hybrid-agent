@@ -353,7 +353,7 @@ export const AuditModal: React.FC = () => {
                   <option value="">All users</option>
                   {usersFacet.map((u, i) => (
                     <option key={i} value={u.user_id == null ? '0' : String(u.user_id)}>
-                      {u.username || 'system'} ({u.n})
+                      {u.email || u.username || 'system'} ({u.n})
                     </option>
                   ))}
                 </select>
@@ -463,7 +463,7 @@ export const AuditModal: React.FC = () => {
                       const isAllow = res === 'allow';
                       const isDeny = res === 'deny';
                       const badge = getActionBadge(en.action);
-                      const username = en.username || 'system';
+                      const username = (en as any).email || en.username || 'system';
                       const isSystem = username === 'system';
 
                       return (
@@ -697,7 +697,7 @@ export const AuditModal: React.FC = () => {
                   <div className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">Principal</div>
                   <div className="text-sm font-semibold text-text mt-0.5 flex items-center gap-1.5">
                     <span>👤</span>
-                    <span>{selectedEntry.username || 'system'}</span>
+                    <span>{(selectedEntry as any).email || selectedEntry.username || 'system'}</span>
                     {selectedEntry.user_id && (
                       <span className="text-[10px] text-text-muted font-mono">(ID: {selectedEntry.user_id})</span>
                     )}

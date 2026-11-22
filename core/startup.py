@@ -45,14 +45,14 @@ def _bootstrap_super_admin() -> None:
     if not username or not password:
         print("\n[auth] No users exist yet -- create the initial super-admin account.")
         try:
-            username = input("  Username: ").strip() or "admin"
+            username = input("  Email: ").strip() or "admin@localhost"
             password = getpass.getpass("  Password (leave blank to auto-generate): ")
         except (EOFError, OSError):
-            username, password = "admin", None
+            username, password = "admin@localhost", None
     if not password:
         password = secrets.token_urlsafe(16)
         print(f"[auth] Generated super-admin password (save this now): {password}")
-    uid = auth_db.create_user(username=username, password_hash=hash_password(password), is_super_admin=True)
+    uid = auth_db.create_user(email=username, password_hash=hash_password(password), is_super_admin=True)
     auth_db.assign_role(uid, "admin")
     print(f"[auth] Super-admin account '{username}' created.\n")
 

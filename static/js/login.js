@@ -39,10 +39,10 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const errBox = document.getElementById('login-err');
   errBox.textContent = '';
-  const username = document.getElementById('username').value.trim();
+  const email = (document.getElementById('email')?.value || document.getElementById('username')?.value || '').trim();
   const password = document.getElementById('password').value;
   try {
-    const { resp, data } = await postJSON('/auth/login', { username, password });
+    const { resp, data } = await postJSON('/auth/login', { email, password, username: email });
     if (!resp.ok) {
       errBox.textContent = data.detail || 'Sign in failed';
       return;

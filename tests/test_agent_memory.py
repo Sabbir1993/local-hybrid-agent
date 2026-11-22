@@ -41,7 +41,7 @@ class TempAuth(unittest.TestCase):
         now = time.time()
         for uid, name in ((1, "alice"), (2, "bob")):
             auth_db._auth_db.execute(
-                "INSERT INTO users (id, username, is_super_admin, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+                "INSERT INTO users (id, email, is_super_admin, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
                 (uid, name, now, now))
             # the memory tools check memory.use, which the built-in user role holds
             auth_db._auth_db.execute(

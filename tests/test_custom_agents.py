@@ -59,7 +59,7 @@ class _TempAuthDb(unittest.TestCase):
         now = time.time()
         for uid, name, admin in ((1, "alice", 0), (2, "bob", 0), (3, "root", 1)):
             auth_db._auth_db.execute(
-                "INSERT INTO users (id, username, is_super_admin, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO users (id, email, is_super_admin, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                 (uid, name, admin, now, now))
         auth_db._auth_db.commit()
         self._audit = mock.patch("core.audit.auth_db.insert_audit", lambda *a, **k: None)

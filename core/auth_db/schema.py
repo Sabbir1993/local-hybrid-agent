@@ -14,8 +14,7 @@ from .common import (
 SCHEMA_SCRIPT = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    email TEXT UNIQUE,
+    email TEXT UNIQUE NOT NULL,
     password_hash TEXT,
     auth_provider TEXT NOT NULL DEFAULT 'local',
     external_id TEXT,
@@ -296,9 +295,86 @@ def _seed_knowledge_classification(conn) -> None:
     conn.commit()
 
 
+def _migrate_drop_username_column(conn) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
+    if "username" not in cols:
+        return
+    try:
+        # 1. Backfill email from username where email is empty
+        conn.execute("UPDATE users SET email = username WHERE (email IS NULL OR email = '') AND username IS NOT NULL")
+        conn.execute("UPDATE users SET email = 'user_' || id || '@localhost' WHERE (email IS NULL OR email = '')")
+
+        # Handle any duplicate emails from legacy data by disambiguating with +id
+        dup_rows = conn.execute(
+            "SELECT id, email FROM users WHERE email IN (SELECT email FROM users GROUP BY email HAVING count(*) > 1) ORDER BY id"
+        ).fetchall()
+        seen = set()
+        for r in dup_rows:
+            em = r["email"]
+            uid = r["id"]
+            if em in seen:
+                if "@" in em:
+                    u_part, d_part = em.split("@", 1)
+                    new_em = f"{u_part}+{uid}@{d_part}"
+                else:
+                    new_em = f"{em}_{uid}"
+                conn.execute("UPDATE users SET email = ? WHERE id = ?", (new_em, uid))
+            else:
+                seen.add(em)
+        conn.commit()
+
+        # 2. Recreate table without username and with email TEXT UNIQUE NOT NULL
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS users_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT,
+            auth_provider TEXT NOT NULL DEFAULT 'local',
+            external_id TEXT,
+            display_name TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            is_super_admin INTEGER NOT NULL DEFAULT 0,
+            must_change_password INTEGER NOT NULL DEFAULT 0,
+            failed_login_count INTEGER NOT NULL DEFAULT 0,
+            locked_until REAL,
+            totp_secret TEXT,
+            totp_enabled INTEGER NOT NULL DEFAULT 0,
+            totp_last_counter INTEGER NOT NULL DEFAULT 0,
+            image TEXT,
+            employee_id TEXT,
+            department TEXT,
+            designation TEXT,
+            dob TEXT,
+            gender TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            last_login_at REAL
+        )
+        """)
+        target_cols = [
+            "id", "email", "password_hash", "auth_provider", "external_id", "display_name",
+            "is_active", "is_super_admin", "must_change_password", "failed_login_count",
+            "locked_until", "totp_secret", "totp_enabled", "totp_last_counter",
+            "image", "employee_id", "department", "designation", "dob", "gender",
+            "created_at", "updated_at", "last_login_at"
+        ]
+        common = [c for c in target_cols if c in cols]
+        col_str = ", ".join(common)
+        conn.execute(f"INSERT INTO users_new ({col_str}) SELECT {col_str} FROM users")
+        conn.execute("DROP TABLE users")
+        conn.execute("ALTER TABLE users_new RENAME TO users")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external ON users(auth_provider, external_id)")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.commit()
+    except Exception as e:
+        print(f"[auth_db] migration drop_username failed: {e}", file=sys.stderr)
+
+
 def init_tables(conn) -> None:
     conn.executescript(SCHEMA_SCRIPT)
     conn.commit()
+    _migrate_drop_username_column(conn)
     _cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
     for col, ddl in (("totp_secret", "TEXT"),
                      ("totp_enabled", "INTEGER NOT NULL DEFAULT 0"),
@@ -312,12 +388,6 @@ def init_tables(conn) -> None:
         if col not in _cols:
             conn.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
             conn.commit()
-    try:
-        # Sync email from username if username is an email address and email is empty
-        conn.execute("UPDATE users SET email = username WHERE (email IS NULL OR email = '') AND username LIKE '%@%'")
-        conn.commit()
-    except Exception:
-        pass
     _sess_cols = {r[1] for r in conn.execute("PRAGMA table_info(auth_sessions)")}
     if "mfa_verified" not in _sess_cols:
         conn.execute("ALTER TABLE auth_sessions ADD COLUMN mfa_verified INTEGER NOT NULL DEFAULT 0")

@@ -296,12 +296,13 @@ async def report_users(days: int = 365, start: Optional[str] = None, end: Option
         days = 365
     rows = db_report_users(days, start, end)
     names = {r["id"]: r for r in auth_db().execute(
-        "SELECT id, username, display_name, email FROM users").fetchall()}
+        "SELECT id, display_name, email FROM users").fetchall()}
     for r in rows:
         u = names.get(r["user_id"])
-        r["username"] = (u["username"] if u else None)
-        r["name"] = ((u["display_name"] or u["username"]) if u else ("Unattributed" if r["user_id"] is None else f"user {r['user_id']} (removed)"))
-        r["email"] = (u["email"] if u else None)
+        user_ident = u["email"] if u else None
+        r["email"] = user_ident
+        r["username"] = user_ident
+        r["name"] = ((u["display_name"] or user_ident) if u else ("Unattributed" if r["user_id"] is None else f"user {r['user_id']} (removed)"))
     return {"users": rows}
 
 

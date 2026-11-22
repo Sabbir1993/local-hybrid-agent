@@ -90,7 +90,7 @@ async def login(body: LoginBody, request: Request, response: Response):
     ip = request.client.host if request.client else None
     login_name = (body.email or body.username or "").strip()
     if not login_name:
-        raise HTTPException(status_code=400, detail="username or email required")
+        raise HTTPException(status_code=400, detail="email required")
     if _ip_blocked(ip):
         audit_log(None, action="login.throttled", resource=login_name, result="deny", ip=ip)
         raise HTTPException(status_code=429, detail="too many failed logins - try again later")
@@ -98,20 +98,25 @@ async def login(body: LoginBody, request: Request, response: Response):
     if not user:
         _ip_failures.setdefault(ip, []).append(time.time())
         audit_log(None, action="login.failed", resource=login_name, result="deny", ip=ip)
-        raise HTTPException(status_code=401, detail="invalid username or password")
+        raise HTTPException(status_code=401, detail="invalid email or password")
 
-    who = SimpleNamespace(id=user.id, username=user.username)
+    user_email = user.email or user.username
+    who = SimpleNamespace(id=user.id, email=user_email, username=user_email)
     # Second factor before any session exists: password OK + TOTP on -> a
     # short-lived single-use ticket, never a session. Password OK + enforcement
     # on + no TOTP yet -> an enrollment ticket (bootstrap only).
     if auth_db.totp_enabled(user.id):
         ticket = _issue_mfa_ticket(user.id, "verify", ip)
-        audit_log(who, action="login.mfa_required", resource=user.username, result="allow", ip=ip)
+        audit_log(who, action="login.mfa_required", resource=user_email, result="allow", ip=ip)
         return {"mfa_required": True, "ticket": ticket}
     row = auth_db.get_user_by_id(user.id)
+    if row and ("email" in row.keys()) and not row["email"] and "@" in login_name:
+        auth_db.db().execute("UPDATE users SET email = ? WHERE id = ?", (login_name, user.id))
+        auth_db.db().commit()
+        row = auth_db.get_user_by_id(user.id)
     if mfa_required_policy() and row is not None and row["auth_provider"] == "local":
         ticket = _issue_mfa_ticket(user.id, "enroll", ip)
-        audit_log(who, action="login.mfa_enrollment_required", resource=user.username, result="allow", ip=ip)
+        audit_log(who, action="login.mfa_enrollment_required", resource=user_email, result="allow", ip=ip)
         return {"mfa_required": True, "enroll_required": True, "ticket": ticket}
 
     raw_session = create_session(user, ip=ip, user_agent=request.headers.get("user-agent"))
@@ -119,19 +124,18 @@ async def login(body: LoginBody, request: Request, response: Response):
     secure = request.url.scheme == "https"
     _set_auth_cookies(response, raw_session, csrf, secure)
 
-    audit_log(SimpleNamespace(id=user.id, username=user.username), action="login.success",
-              resource=user.username, result="allow", ip=ip)
+    audit_log(SimpleNamespace(id=user.id, email=user_email, username=user_email), action="login.success",
+              resource=user_email, result="allow", ip=ip)
     roles = auth_db.get_user_role_names(user.id)
     perms = sorted(auth_db.get_user_permission_keys(user.id))
-    username_val = (row["username"] if row and "username" in row.keys() else None) or user.username or ""
-    email_val = (row["email"] if row and "email" in row.keys() else None) or (username_val if "@" in username_val else "")
+    email_val = (row["email"] if row and "email" in row.keys() else None) or (row["username"] if row and "username" in row.keys() else None) or user_email or ""
     raw_disp = (row["display_name"] if row and "display_name" in row.keys() else None) or getattr(user, "display_name", None)
-    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(username_val)
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(email_val)
 
     return {
         "user": {
             "id": user.id,
-            "username": username_val,
+            "username": email_val,
             "email": email_val,
             "display_name": disp_name,
             "is_super_admin": user.is_super_admin,
@@ -159,15 +163,14 @@ async def logout(request: Request, response: Response):
 async def me(user: Principal = Depends(get_current_user)):
     perms = sorted(user.permission_keys) if not user.is_super_admin else sorted(auth_db.PERMISSIONS.keys())
     row = auth_db.get_user_by_id(user.id)
-    username_val = (row["username"] if row and "username" in row.keys() else None) or user.username or ""
-    email_val = (row["email"] if row and "email" in row.keys() else None) or (username_val if "@" in username_val else "")
+    email_val = (row["email"] if row and "email" in row.keys() else None) or (row["username"] if row and "username" in row.keys() else None) or getattr(user, "email", None) or user.username or ""
     raw_disp = (row["display_name"] if row and "display_name" in row.keys() else None) or getattr(user, "display_name", None)
-    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(username_val)
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(email_val)
 
     return {
         "user": {
             "id": user.id,
-            "username": username_val,
+            "username": email_val,
             "email": email_val,
             "display_name": disp_name,
             "image": row["image"] if row and "image" in row.keys() else None,
@@ -204,28 +207,27 @@ async def update_profile(body: ProfileUpdateBody, user: Principal = Depends(get_
     target_email = updates.get("email") or updates.get("username")
     if target_email:
         existing = auth_db.db().execute(
-            "SELECT id FROM users WHERE (email = ? OR username = ?) AND id != ?",
-            (target_email, target_email, user.id)
+            "SELECT id FROM users WHERE email = ? AND id != ?",
+            (target_email, user.id)
         ).fetchone()
         if existing:
             raise HTTPException(status_code=400, detail="Email is already in use by another user")
-        # Keep both email and username synced in users table
         updates["email"] = target_email
-        updates["username"] = target_email
+        updates.pop("username", None)
 
     row = auth_db.update_user_profile(user.id, updates)
-    audit_log(user, action="user.profile_update", resource=user.username, result="allow",
+    user_email = user.email or user.username
+    audit_log(user, action="user.profile_update", resource=user_email, result="allow",
               detail={"fields": list(updates.keys())})
-    username_val = (row["username"] if row and "username" in row.keys() else None) or user.username or ""
-    email_val = (row["email"] if row and "email" in row.keys() else None) or (username_val if "@" in username_val else "")
+    email_val = (row["email"] if row and "email" in row.keys() else None) or (row["username"] if row and "username" in row.keys() else None) or user_email or ""
     raw_disp = (row["display_name"] if row and "display_name" in row.keys() else None) or getattr(user, "display_name", None)
-    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(username_val)
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(email_val)
 
     return {
         "ok": True,
         "user": {
             "id": user.id,
-            "username": username_val,
+            "username": email_val,
             "email": email_val,
             "display_name": disp_name,
             "image": row["image"] if row and "image" in row.keys() else None,
@@ -485,18 +487,17 @@ def _consume_mfa_ticket(raw: str) -> None:
     _mfa_tickets.pop(hashlib.sha256((raw or "").encode()).hexdigest(), None)
 
 
-def _login_success_response(user_id: int, username: str):
+def _login_success_response(user_id: int, user_email: str):
     roles = auth_db.get_user_role_names(user_id)
     perms = sorted(auth_db.get_user_permission_keys(user_id))
     row = auth_db.get_user_by_id(user_id)
-    username_val = (row["username"] if row and "username" in row.keys() else None) or username or ""
-    email_val = (row["email"] if row and "email" in row.keys() else None) or (username_val if "@" in username_val else "")
+    email_val = (row["email"] if row and "email" in row.keys() else None) or (row["username"] if row and "username" in row.keys() else None) or user_email or ""
     raw_disp = (row["display_name"] if row and "display_name" in row.keys() else None)
-    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(username_val)
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(email_val)
     return {
         "user": {
             "id": user_id,
-            "username": username_val,
+            "username": email_val,
             "email": email_val,
             "display_name": disp_name,
             "is_super_admin": bool(row and row["is_super_admin"]),

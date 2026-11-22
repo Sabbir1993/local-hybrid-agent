@@ -8,13 +8,16 @@ export interface PasswordCheck {
   ok: boolean;
 }
 
-export function passwordChecks(password: string, confirm: string, username = ''): PasswordCheck[] {
+export function passwordChecks(password: string, confirm: string, userIdentifier = ''): PasswordCheck[] {
   const pw = password || '';
+  const cleanId = (userIdentifier || '').toLowerCase().trim();
+  const localPart = cleanId.split('@')[0];
+  const matchesIdentifier = Boolean(cleanId && (pw.toLowerCase() === cleanId || (localPart && pw.toLowerCase() === localPart)));
   return [
     { label: `At least ${MIN_PASSWORD_LEN} characters`, ok: pw.length >= MIN_PASSWORD_LEN },
     { label: 'Contains a letter', ok: /\p{L}/u.test(pw) },
     { label: 'Contains a digit', ok: /\p{Nd}/u.test(pw) },
-    { label: 'Not the same as your username', ok: pw.length > 0 && (!username || pw.toLowerCase() !== username.toLowerCase()) },
+    { label: 'Not the same as your email', ok: pw.length > 0 && !matchesIdentifier },
     { label: 'Both new passwords match', ok: pw.length > 0 && pw === confirm },
   ];
 }

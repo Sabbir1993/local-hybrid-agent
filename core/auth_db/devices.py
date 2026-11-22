@@ -22,7 +22,7 @@ def get_companion_device(device_row_id: int) -> Optional[sqlite3.Row]:
 
 
 def list_companion_devices(user_id: Optional[int] = None) -> list:
-    sql = ("SELECT d.id, d.user_id, u.username, d.name, d.created_at, d.last_seen_at, d.revoked_at "
+    sql = ("SELECT d.id, d.user_id, u.email, u.email AS username, d.name, d.created_at, d.last_seen_at, d.revoked_at "
            "FROM companion_devices d LEFT JOIN users u ON u.id = d.user_id")
     args: tuple = ()
     if user_id is not None:

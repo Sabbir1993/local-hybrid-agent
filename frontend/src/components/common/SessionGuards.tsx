@@ -31,7 +31,7 @@ export const ForcePasswordModal: React.FC = () => {
   useEffect(() => { setError(''); }, [currentUser?.id]);
   if (!currentUser?.must_change_password) return null;
 
-  const checks = passwordChecks(next, confirm, currentUser.username);
+  const checks = passwordChecks(next, confirm, currentUser.email || currentUser.username || '');
   const rulesMet = allPasswordChecksPass(checks);
 
   const submit = async (e: React.FormEvent) => {

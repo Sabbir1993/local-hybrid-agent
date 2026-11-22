@@ -37,9 +37,10 @@ def _check_can_modify(user: Principal, target) -> None:
 
 
 def _user_public(row) -> dict:
+    email_val = (row["email"] if "email" in row.keys() else None) or (row["username"] if "username" in row.keys() else "") or ""
     return {
-        "id": row["id"], "username": row["username"], "display_name": row["display_name"],
-        "email": row["email"], "is_active": bool(row["is_active"]),
+        "id": row["id"], "username": email_val, "display_name": row["display_name"],
+        "email": email_val, "is_active": bool(row["is_active"]),
         "is_super_admin": bool(row["is_super_admin"]), "auth_provider": row["auth_provider"],
         "roles": auth_db.get_user_role_names(row["id"]),
         "last_login_at": row["last_login_at"],

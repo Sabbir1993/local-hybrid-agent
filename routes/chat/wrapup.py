@@ -12,6 +12,21 @@ WRAPUP_NOTE = ("[system note] The tool rounds for this reply are used up, so no 
                "do not write one out. In a few plain sentences say what is finished, what is not finished yet, and that the "
                "person can press Continue to carry on. No file can be saved in this step: do not write a [DOWNLOAD: ...] "
                "tag or claim a file was created.")
+
+
+def wrapup_note_for(written_files=None) -> str:
+    saved = ""
+    if written_files:
+        names = ", ".join(f"`{f}`" for f in dict.fromkeys(written_files) if f)
+        if names:
+            saved = (f" Note: The file(s) {names} have ALREADY been saved and will be delivered to the user as download link cards. "
+                     "Do not promise to deliver their download link later, do not say the download link is coming in the next turn, "
+                     "and do not tell the user to press Continue just to get the download link.")
+    return ("[system note] The tool rounds for this reply are used up, so no tools are available now. Do not call a tool and "
+            "do not write one out. In a few plain sentences say what is finished, what is not finished yet, and that the "
+            f"person can press Continue to carry on. No additional file can be saved in this step: do not write a [DOWNLOAD: ...] "
+            f"tag or claim another file was created.{saved}")
+
 # what the model is told while rounds are still left, once they are running low
 LOW_ROUNDS_NOTE = ("[system note] Only {n} tool rounds are left in this reply. Put the most important remaining work into as few "
                    "calls as possible (send many operations in ONE call), and do not retry a call that already failed in the same "
@@ -76,11 +91,19 @@ def status_text(turns: int, files, reason: str = "budget") -> str:
             "Press **Continue** and I will carry on from where it stopped.")
 
 
+_DELIVER_LINK_PROMISE = re.compile(
+    r"[ \t]*(?:press|click)\s+\*?\*?continue\*?\*?\s+(?:and|to)\s+(?:i(?:'ll| will)?\s+)?(?:deliver|provide|send|give|share)\s+(?:you\s+)?(?:the\s+)?download\s+link[^\n.]*\.?",
+    re.I
+)
+
+
 def finish_text(content: str, turns: int, files, reason: str = "budget") -> tuple:
     """(text to show, whether it replaced what the model wrote). Empty text, a provider's 'tool not available' message or
     leftover tool markup become the status; a real summary is kept with those parts removed."""
     raw = content or ""
     cleaned = _PROVIDER_NO_TOOL.sub("", strip_markup(raw)).strip()
+    if files:
+        cleaned = _DELIVER_LINK_PROMISE.sub("", cleaned).strip()
     if len(cleaned) < 20:
         return status_text(turns, files, reason=reason), True
     return cleaned, cleaned != raw.strip()

@@ -6,8 +6,9 @@ from typing import Optional
 from .common import db
 
 _TOKEN_COLS = (
-    "t.id, t.prefix, t.name, t.user_id, u.username, t.created_by, t.permissions, "
-    "t.created_at, t.expires_at, t.last_used_at, t.last_used_ip, t.revoked_at"
+    "t.id, t.prefix, t.name, t.user_id, u.email, u.email AS username, "
+    "t.created_by, t.permissions, t.created_at, t.expires_at, t.last_used_at, "
+    "t.last_used_ip, t.revoked_at"
 )
 
 

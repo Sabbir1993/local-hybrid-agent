@@ -47,7 +47,7 @@ const CSS = `
 
 export const LoginPage: React.FC = () => {
   const { setAuthenticatedUser } = useAppStore();
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [code, setCode] = useState('');
@@ -57,7 +57,7 @@ export const LoginPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [logoOk, setLogoOk] = useState(true);
 
-  const loginName = withOrgDomain(username);
+  const loginEmail = withOrgDomain(email);
 
   const finish = async (user?: any) => {
     if (user) {
@@ -71,10 +71,10 @@ export const LoginPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password) return;
+    if (!email.trim() || !password) return;
     setError('');
     setLoading(true);
-    const result = await api.auth.login(loginName, password);
+    const result = await api.auth.login(loginEmail, password);
     setLoading(false);
     if (!result.ok) {
       setError(result.error || 'Sign in failed');
@@ -155,16 +155,16 @@ export const LoginPage: React.FC = () => {
 
           {!ticket ? (
             <form onSubmit={handleSubmit}>
-              <label htmlFor="username" className="lg-label">{env.orgDomain ? 'Work email' : 'Username'}</label>
+              <label htmlFor="email" className="lg-label">{env.orgDomain ? 'Work email' : 'Email'}</label>
               <div className="lg-field">
                 <input
-                  id="username" name="username" type="text" required autoFocus autoComplete="username" spellCheck={false}
-                  placeholder={env.orgDomain ? 'first.last' : 'username'} value={username} onChange={(e) => setUsername(e.target.value)}
+                  id="email" name="email" type="text" required autoFocus autoComplete="email" spellCheck={false}
+                  placeholder={env.orgDomain ? 'first.last' : 'user@company.com'} value={email} onChange={(e) => setEmail(e.target.value)}
                 />
-                {env.orgDomain && !username.includes('@') && <span className="lg-suffix">@{env.orgDomain}</span>}
+                {env.orgDomain && !email.includes('@') && <span className="lg-suffix">@{env.orgDomain}</span>}
               </div>
               <div className="lg-hint">
-                {env.orgDomain && (username.trim() ? <>Signing in as <b>{loginName}</b></> : <>Type only the part before @{env.orgDomain}</>)}
+                {env.orgDomain && (email.trim() ? <>Signing in as <b>{loginEmail}</b></> : <>Type only the part before @{env.orgDomain}</>)}
               </div>
 
               <label htmlFor="password" className="lg-label">Password</label>
@@ -178,7 +178,7 @@ export const LoginPage: React.FC = () => {
                 </button>
               </div>
 
-              <button id="login-submit" type="submit" className="lg-btn" disabled={loading || !username.trim() || !password}>
+              <button id="login-submit" type="submit" className="lg-btn" disabled={loading || !email.trim() || !password}>
                 {loading ? 'Signing in…' : 'Sign in'}
               </button>
             </form>

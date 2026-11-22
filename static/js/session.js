@@ -73,18 +73,18 @@
     const dd = document.createElement('div');
     dd.className = 'user-menu-dropdown';
 
-    const label = user.display_name || user.username || 'User';
+    const label = user.display_name || user.email || user.username || 'User';
     const isSuper = !!user.is_super_admin;
     const canManageUsers = isSuper || (window.__perms && window.__perms.has('users.manage'));
 
     // Populate bottom profile pill in sidebar
     const whoName = document.getElementById('claude-user-name');
-    if (whoName) whoName.textContent = user.display_name || user.username || 'User';
+    if (whoName) whoName.textContent = user.display_name || user.email || user.username || 'User';
     const whoOrg = document.getElementById('claude-user-org');
     if (whoOrg) whoOrg.textContent = isSuper ? 'SUPER ADMIN' : (user.organization || 'SSLWIRELESS');
     const whoBadge = document.getElementById('claude-avatar-badge');
     if (whoBadge) {
-      const n = (user.display_name || user.username || 'SH').trim();
+      const n = (user.display_name || user.email || user.username || 'SH').trim();
       const initials = n.split(/\s+/).map(w => w[0]).join('').substring(0, 2).toUpperCase();
       whoBadge.textContent = initials || 'SH';
     }
@@ -381,8 +381,8 @@
     applyPermGating(data);
     const who = document.getElementById('whoami');
     if (who && data.user) {
-      who.textContent = data.user.display_name || data.user.username;
-      who.title = 'Signed in as ' + (data.user.display_name || data.user.username)
+      who.textContent = data.user.display_name || data.user.email || data.user.username;
+      who.title = 'Signed in as ' + (data.user.display_name || data.user.email || data.user.username)
         + (data.user.is_super_admin ? ' (super admin)' : '');
     }
     if (data.user) buildUserMenu(data.user);

@@ -105,7 +105,7 @@ def iter_audit(max_rows: int = 50000, **filters) -> list:
 def audit_facets() -> dict:
     """Distinct users / actions / results present in the log, for filter dropdowns."""
     users = [dict(r) for r in db().execute(
-        "SELECT user_id, MAX(username) AS username, COUNT(*) AS n FROM audit_log "
+        "SELECT user_id, MAX(username) AS username, MAX(username) AS email, COUNT(*) AS n FROM audit_log "
         "GROUP BY user_id ORDER BY username COLLATE NOCASE")]
     actions = [dict(r) for r in db().execute(
         "SELECT action, COUNT(*) AS n FROM audit_log GROUP BY action ORDER BY action")]

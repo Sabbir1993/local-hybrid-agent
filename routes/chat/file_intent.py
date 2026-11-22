@@ -242,6 +242,12 @@ _NEW_FILE_RE = re.compile(
 )
 
 
+_READ_ONLY_QUERY_RE = re.compile(
+    r"\b(analy[sz]\w*|summar[iy]\w*|explain\w*|review\w*|findings?|read\w*|extract\w*|what\s+(?:is|are|does)|tell\s+me\s+about|check\w*|examine\w*|inspect\w*|interpret\w*|insights?)\b",
+    re.I
+)
+
+
 def file_followup_intent(query: str, has_prior: bool, prior_files=None, asked: bool = False) -> Optional[str]:
     """'where' = user can't find / wants the existing file again;
     'edit' = user wants the existing file changed. None otherwise."""
@@ -253,6 +259,10 @@ def file_followup_intent(query: str, has_prior: bool, prior_files=None, asked: b
         return None
     if _FILE_WHERE_RE.search(q) and not _FILE_EDIT_RE.search(q):
         return "where"
+    # A request asking to analyze, summarize, explain, review or inspect an attached document / file
+    # is an informational/analytical query, NOT an edit request on the file.
+    if _READ_ONLY_QUERY_RE.search(q) and not _FILE_EDIT_RE.search(q) and not is_explicit_edit:
+        return None
     has_deck = any(str(f).lower().endswith((".pptx", ".ppt")) for f in (prior_files or []))
     if has_deck and (_DECKISH_RE.search(q) or is_explicit_edit):
         return "edit"                      # "where are the images, graphs?" after a deck: the deck already in this chat, not a new one

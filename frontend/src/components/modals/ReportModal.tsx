@@ -1071,9 +1071,9 @@ export const ReportModal: React.FC = () => {
                     <div className="bg-panel2 border border-border rounded-xl p-4 text-center overflow-hidden flex flex-col justify-center">
                       <b
                         className="block text-sm md:text-base font-mono font-bold text-text truncate max-w-full px-1"
-                        title={topUser ? (topUser.name || topUser.username || `User ${topUser.user_id}`) : ''}
+                        title={topUser ? (topUser.name || topUser.email || topUser.username || `User ${topUser.user_id}`) : ''}
                       >
-                        {topUser ? (topUser.name || topUser.username || `User ${topUser.user_id}`) : 'None'}
+                        {topUser ? (topUser.name || topUser.email || topUser.username || `User ${topUser.user_id}`) : 'None'}
                       </b>
                       <span className="text-[10px] text-text-muted uppercase tracking-wider font-semibold mt-1 block truncate">
                         Top Token Consumer ({topUser ? repTok(topUser.total_tokens) : '0'})
@@ -1202,7 +1202,7 @@ export const ReportModal: React.FC = () => {
                                     textAnchor="middle"
                                     fontWeight={isHovered ? 700 : 500}
                                   >
-                                    {(u.name || u.username || `User ${u.user_id}`).slice(0, 10)}
+                                    {(u.name || u.email || u.username || `User ${u.user_id}`).slice(0, 10)}
                                   </text>
                                   {/* Runs count */}
                                   <text
@@ -1223,7 +1223,7 @@ export const ReportModal: React.FC = () => {
                           {/* Hover Tooltip Card */}
                           {hoveredUser && (
                             <div className="bg-[#1c1c21] border border-accent/40 rounded-lg p-2.5 text-xs shadow-xl flex items-center justify-between gap-6 mt-1">
-                              <span className="font-bold text-accent">👤 {hoveredUser.name || hoveredUser.username || `User ${hoveredUser.user_id}`}</span>
+                              <span className="font-bold text-accent">👤 {hoveredUser.name || hoveredUser.email || hoveredUser.username || `User ${hoveredUser.user_id}`}</span>
                               <span>Total: <b>{repTok(hoveredUser.total_tokens)}</b> tokens</span>
                               <span className="text-orange-400">Local: <b>{repTok((hoveredUser.total_tokens || 0) - (hoveredUser.cloud_tokens || 0))}</b></span>
                               <span className="text-sky-400">Cloud: <b>{repTok(hoveredUser.cloud_tokens)}</b></span>
@@ -1255,8 +1255,8 @@ export const ReportModal: React.FC = () => {
                             return (
                               <div key={u.user_id || idx} className="flex flex-col gap-1">
                                 <div className="flex items-center justify-between text-xs">
-                                  <span className="font-medium truncate max-w-[170px]" title={u.name || u.username}>
-                                    {u.name || u.username || `User ${u.user_id}`}
+                                  <span className="font-medium truncate max-w-[170px]" title={u.name || u.email || u.username}>
+                                    {u.name || u.email || u.username || `User ${u.user_id}`}
                                   </span>
                                   <div className="flex items-center gap-2">
                                     <span className="text-accent font-mono font-semibold">
@@ -1345,7 +1345,7 @@ export const ReportModal: React.FC = () => {
                                       <td className="py-2.5 px-3 font-semibold text-text">
                                         <div className="flex items-center gap-2">
                                           <span className="w-5 h-5 flex-shrink-0 rounded-full bg-accent/20 border border-accent/40 text-accent flex items-center justify-center text-[10px] font-bold">
-                                            {(u.name || u.username || 'U')[0].toUpperCase()}
+                                            {(u.name || u.email || u.username || 'U')[0].toUpperCase()}
                                           </span>
                                           <span>{u.name || 'Unattributed'}</span>
                                         </div>

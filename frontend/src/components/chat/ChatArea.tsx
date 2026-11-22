@@ -790,7 +790,7 @@ export const ChatArea: React.FC = () => {
                       onOverflow={(over) => setOverflowPrompts((prev) => (prev[String(m.id)] === over || (!over && prev[String(m.id)] === undefined) ? prev : { ...prev, [String(m.id)]: over }))}
                     />
                     {nonImageFiles.length > 0 && (
-                      <div className="user-files-tag" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
+                      <div className="user-files-tag" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px', maxWidth: '100%', width: '100%' }}>
                         {nonImageFiles.map((fName, fIdx) => (
                           <button
                             key={`file-${fIdx}`}
@@ -802,8 +802,8 @@ export const ChatArea: React.FC = () => {
                               openPreviewModal(fName, fName, null, 'modal', true);
                             }}
                           >
-                            <span>📎</span>
-                            <span style={{ textDecoration: 'underline', textUnderlineOffset: '2px' }}>{fName}</span>
+                            <span style={{ flexShrink: 0 }}>📎</span>
+                            <span className="user-file-pill-name" style={{ textDecoration: 'underline', textUnderlineOffset: '2px' }}>{fName}</span>
                           </button>
                         ))}
                       </div>

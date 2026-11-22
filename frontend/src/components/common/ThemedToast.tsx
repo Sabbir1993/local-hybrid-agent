@@ -26,16 +26,17 @@ export const ThemedToast: React.FC = () => {
 
   return (
     <div
+      className="themed-toast-container"
       style={{
         position: 'fixed',
-        bottom: '80px',
+        bottom: '90px',
         left: '50%',
         transform: 'translateX(-50%)',
         zIndex: 99999,
         background: 'var(--panel2, #1c1c24)',
         border: `1px solid ${getBorderColor()}`,
         borderRadius: '10px',
-        padding: '10px 18px',
+        padding: '10px 16px',
         color: 'var(--text, #f3f4f6)',
         fontSize: '13px',
         fontWeight: 500,
@@ -43,13 +44,15 @@ export const ThemedToast: React.FC = () => {
         display: 'flex',
         alignItems: 'center',
         gap: '10px',
-        maxWidth: '90vw',
+        width: 'max-content',
+        maxWidth: 'calc(100vw - 32px)',
+        boxSizing: 'border-box',
         backdropFilter: 'blur(8px)',
         transition: 'all 0.2s ease',
       }}
     >
-      <span style={{ fontSize: '15px' }}>{getIcon()}</span>
-      <span style={{ lineHeight: 1.4 }}>{toast.message}</span>
+      <span style={{ fontSize: '15px', flexShrink: 0 }}>{getIcon()}</span>
+      <span style={{ lineHeight: 1.4, wordBreak: 'break-word', minWidth: 0, flex: 1 }}>{toast.message}</span>
       <button
         type="button"
         onClick={hideToast}
@@ -59,9 +62,10 @@ export const ThemedToast: React.FC = () => {
           color: 'var(--dim, #8b949e)',
           cursor: 'pointer',
           padding: '2px 4px',
-          marginLeft: '8px',
+          marginLeft: '4px',
           fontSize: '13px',
           lineHeight: 1,
+          flexShrink: 0,
         }}
         title="Dismiss"
       >

@@ -29,7 +29,7 @@ from routes.agent.base import router as agent_router
 
 def principal(uid=1):
     return Principal(id=uid, username=f"u{uid}", display_name="u", is_super_admin=False,
-                     must_change_password=False, role_names=["user"], permission_keys={"chat.use"})
+                     must_change_password=False, role_names=["user"], permission_keys={"chat.use", "memory.use"})
 
 
 class LimitsTests(unittest.TestCase):
@@ -96,8 +96,9 @@ class MemoryRoutesTests(unittest.TestCase):
         now = time.time()
         for uid in (1, 2):
             auth_db._auth_db.execute(
-                "INSERT INTO users (id, username, is_super_admin, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+                "INSERT INTO users (id, email, is_super_admin, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
                 (uid, f"u{uid}", now, now))
+            auth_db.assign_role(uid, "user")
         auth_db._auth_db.commit()
         self.app = FastAPI()
         self.app.include_router(agent_router)

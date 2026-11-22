@@ -1,5 +1,6 @@
 """User management endpoints for the admin router."""
 
+import os
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,28 +18,36 @@ router = APIRouter()
 
 @router.get("/users")
 async def list_users(user: Principal = Depends(require_verified("users.manage"))):
-    rows = auth_db.db().execute("SELECT * FROM users ORDER BY username").fetchall()
+    rows = auth_db.db().execute("SELECT * FROM users ORDER BY email COLLATE NOCASE").fetchall()
     return {"users": [_user_public(r) for r in rows]}
 
 
 @router.post("/users")
 async def create_user(body: CreateUserBody, user: Principal = Depends(require_verified("users.manage"))):
-    if auth_db.get_user_by_username(body.username):
-        raise HTTPException(status_code=409, detail="username already exists")
+    email = (body.email or body.username or "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="email required")
+    if "@" not in email:
+        org_dom = (os.environ.get("ORG_DOMAIN") or os.environ.get("VITE_ORG_DOMAIN") or "").strip().lstrip("@")
+        if org_dom:
+            email = f"{email}@{org_dom}"
+    if auth_db.get_user_by_email(email):
+        raise HTTPException(status_code=409, detail="email already exists")
     _check_assignable_roles(user, body.roles or ["user"])
-    err = password_policy_error(body.password, body.username)
+    err = password_policy_error(body.password, email)
     if err:
         raise HTTPException(status_code=400, detail=err)
+    display_name = body.display_name or (email.split("@")[0] if "@" in email else email)
     uid = auth_db.create_user(
-        username=body.username, password_hash=hash_password(body.password),
-        display_name=body.display_name, email=body.email,
+        email=email, password_hash=hash_password(body.password),
+        display_name=display_name,
     )
     # the admin chose this password: the user must replace it at first sign-in
     auth_db.db().execute("UPDATE users SET must_change_password = 1 WHERE id = ?", (uid,))
     auth_db.db().commit()
     for role_name in (body.roles or ["user"]):
         auth_db.assign_role(uid, role_name, assigned_by=user.id)
-    audit_log(user, action="users.manage", resource=body.username, result="allow")
+    audit_log(user, action="users.manage", resource=email, result="allow")
     return _user_public(auth_db.get_user_by_id(uid))
 
 
@@ -79,7 +88,8 @@ async def update_user(user_id: int, body: UpdateUserBody,
     detail = {k: v for k, v in body.model_dump().items() if v is not None}
     if body.roles is not None:
         detail["roles_before"] = before_roles
-    audit_log(user, action="users.manage", resource=target["username"], detail=detail, result="allow")
+    target_ident = target["email"] if ("email" in target.keys() and target["email"]) else str(user_id)
+    audit_log(user, action="users.manage", resource=target_ident, detail=detail, result="allow")
     return _user_public(auth_db.get_user_by_id(user_id))
 
 
@@ -91,8 +101,9 @@ async def delete_user(user_id: int, user: Principal = Depends(require_verified("
     if not target:
         raise HTTPException(status_code=404, detail="user not found")
     _check_can_modify(user, target)
+    target_ident = target["email"] if ("email" in target.keys() and target["email"]) else str(user_id)
     auth_db.delete_user(user_id)
-    audit_log(user, action="users.manage", resource=target["username"], detail={"deleted": True}, result="allow")
+    audit_log(user, action="users.manage", resource=target_ident, detail={"deleted": True}, result="allow")
     return {"ok": True}
 
 
@@ -112,7 +123,8 @@ async def reset_user_mfa(user_id: int, user: Principal = Depends(require_verifie
         raise HTTPException(status_code=403, detail="only a super admin can reset a super admin's MFA")
     was_on = auth_db.totp_enabled(user_id)
     auth_db.admin_reset_mfa(user_id)
-    audit_log(user, action="mfa.admin_reset", resource=target["username"],
+    target_ident = target["email"] if ("email" in target.keys() and target["email"]) else str(user_id)
+    audit_log(user, action="mfa.admin_reset", resource=target_ident,
               detail={"was_enabled": was_on}, result="allow")
     return {"ok": True}
 
@@ -128,7 +140,8 @@ async def reset_user_password(user_id: int, body: ResetPasswordBody,
     if user_id == user.id:
         raise HTTPException(status_code=400, detail="change your own password with Change password")
     _check_can_modify(user, target)
-    err = password_policy_error(body.password, target["username"])
+    target_ident = target["email"] if ("email" in target.keys() and target["email"]) else str(user_id)
+    err = password_policy_error(body.password, target_ident)
     if err:
         raise HTTPException(status_code=400, detail=err)
     auth_db.db().execute(
@@ -137,5 +150,5 @@ async def reset_user_password(user_id: int, body: ResetPasswordBody,
     auth_db.db().commit()
     auth_db.unlock_user(user_id)
     auth_db.revoke_all_sessions_for_user(user_id)
-    audit_log(user, action="password.admin_reset", resource=target["username"], result="allow")
+    audit_log(user, action="password.admin_reset", resource=target_ident, result="allow")
     return {"ok": True}

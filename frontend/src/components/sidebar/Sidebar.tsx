@@ -260,7 +260,7 @@ export const Sidebar: React.FC = () => {
     if (currentUser?.display_name && !currentUser.display_name.includes('@')) {
       return currentUser.display_name;
     }
-    const raw = currentUser?.display_name || currentUser?.username || currentUser?.email || '';
+    const raw = currentUser?.display_name || currentUser?.email || currentUser?.username || '';
     if (raw.includes('@')) {
       const local = raw.split('@')[0];
       const parts = local.replace(/[._-]/g, ' ').split(/\s+/).filter(Boolean);

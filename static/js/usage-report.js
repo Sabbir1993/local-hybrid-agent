@@ -240,7 +240,7 @@ function repBarHtml(card) {
   if (card === 'user') {
     return `<div class="rep-bar" id="rep-bar-user">
       <label class="rep-search${s.q ? ' active' : ''}">${REP_ICON_SEARCH}
-        <input type="search" data-card="user" data-f="q" placeholder="Search name, username or email" value="${esc(s.q)}" aria-label="Search users"></label>
+        <input type="search" data-card="user" data-f="q" placeholder="Search name or email" value="${esc(s.q)}" aria-label="Search users"></label>
       <div class="rep-group"><span class="rep-glabel">Sort</span>
         <select data-card="user" data-f="sort" aria-label="Sort by">${repOpts(REP_USER_SORTS, s.sort)}</select></div>
       ${repDateGroup('user', s)}
@@ -437,7 +437,7 @@ function repRenderUsers() {
   if (!_repUsers) return;
   const s = REP.user, q = s.q.trim().toLowerCase();
   const nm = u => String(u.name || '');
-  let rows = _repUsers.filter(u => !q || (nm(u) + ' ' + (u.username || '') + ' ' + (u.email || '')).toLowerCase().includes(q));
+  let rows = _repUsers.filter(u => !q || (nm(u) + ' ' + (u.email || u.username || '')).toLowerCase().includes(q));
   const key = { total: u => u.total_tokens, req: u => u.requests, runs: u => u.runs, cloud: u => u.cloud_tokens, recent: u => u.last_active }[s.sort];
   rows = rows.slice().sort(key ? (a, b) => (key(b) || 0) - (key(a) || 0) : (a, b) => nm(a).localeCompare(nm(b)));
   const all = _repUsers.reduce((t, u) => t + (u.total_tokens || 0), 0);

@@ -18,7 +18,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ user, onClose }) => {
   const [confirmPwd, setConfirmPwd] = useState('');
   const [pwdMsg, setPwdMsg] = useState<{ text: string; isError?: boolean } | null>(null);
   const [isSavingPwd, setIsSavingPwd] = useState(false);
-  const pwdChecks = passwordChecks(newPwd, confirmPwd, user?.username || user?.email || '');
+  const pwdChecks = passwordChecks(newPwd, confirmPwd, user?.email || user?.username || '');
   const pwdRulesMet = allPasswordChecksPass(pwdChecks);
 
   const cycleNextTheme = (e: React.MouseEvent) => {

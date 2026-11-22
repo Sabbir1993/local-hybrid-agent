@@ -267,12 +267,12 @@ export const api = {
       }
     },
 
-    login: async (username: string, password: string): Promise<{ ok: boolean; error?: string; user?: UserProfile; mfaRequired?: boolean; enrollRequired?: boolean; ticket?: string }> => {
+    login: async (email: string, password: string): Promise<{ ok: boolean; error?: string; user?: UserProfile; mfaRequired?: boolean; enrollRequired?: boolean; ticket?: string }> => {
       try {
         const res = await apiFetch('/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
+          body: JSON.stringify({ email, password, username: email }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -282,7 +282,7 @@ export const api = {
           return { ok: true, mfaRequired: true, ticket: data.ticket, enrollRequired: Boolean(data.enroll_required) };
         }
         const u = data.user || {};
-        const emailVal = u.email || (u.username && u.username.includes('@') ? u.username : (username.includes('@') ? username : ''));
+        const emailVal = u.email || email || (u.username && u.username.includes('@') ? u.username : '');
         const formatDisplayName = (rawDisp?: string, rawUser?: string) => {
           if (rawDisp && !rawDisp.includes('@')) return rawDisp;
           const src = rawDisp || rawUser || '';
@@ -296,9 +296,9 @@ export const api = {
         const profile: UserProfile = {
           must_change_password: Boolean(u.must_change_password),
           id: String(u.id || ''),
-          username: u.username || username,
+          username: emailVal,
           email: emailVal,
-          display_name: formatDisplayName(u.display_name, u.username || username),
+          display_name: formatDisplayName(u.display_name, emailVal),
           organization: u.organization || 'SSLWIRELESS',
           is_super_admin: Boolean(u.is_super_admin),
           roles: data.roles || [],

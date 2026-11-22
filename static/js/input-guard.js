@@ -56,7 +56,10 @@ async function loadInputGuardPanel() {
         const uFallback = await fetch('/admin/users');
         if (uFallback.ok) {
           const ud = await uFallback.json();
-          _guardUsers = (ud.users || []).map(u => ({ id: u.id, username: u.username, display_name: u.display_name || u.username }));
+          _guardUsers = (ud.users || []).map(u => {
+            const ident = u.email || u.username;
+            return { id: u.id, username: ident, email: ident, display_name: u.display_name || ident };
+          });
         }
       } catch (e) {
         _guardUsers = [];
@@ -276,7 +279,7 @@ function _ruleRow(r, i, cfgKey) {
             </div>
             <div class="guard-ms-items">
               ${_guardUsers.length ? _guardUsers.map(u => {
-                const uname = typeof u === 'string' ? u : u.username;
+                const uname = typeof u === 'string' ? u : (u.email || u.username);
                 const dname = (typeof u === 'object' && u.display_name && u.display_name !== uname) ? ` (${u.display_name})` : '';
                 return `
                   <label class="guard-ms-item">

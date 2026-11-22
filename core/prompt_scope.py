@@ -167,9 +167,11 @@ def pptx_intent(query: str, prior_files=None, msgs=None) -> bool:
 
 # Lean pointer shipped on every turn so the model still knows files exist.
 FILE_MANUAL_LEAN = (
-    "FILES (only when asked): you can create and share files with the "
-    "`write_file(path, content)` tool and link them as [DOWNLOAD: filename]. "
-    "Never claim you cannot create files."
+    "FILES (only when explicitly asked to create or export a file): you can create and share files with the "
+    "`write_file(path, content)` tool and link them as [DOWNLOAD: filename]. Never claim you cannot create files. "
+    "CRITICAL RULE: When the user asks to analyze, summarize, explain, review, or provide findings for an attached "
+    "document, report, or dataset, answer DIRECTLY in chat prose with structured markdown (key findings, bullets, tables). "
+    "Do NOT call write_file and do NOT generate an HTML, PDF, or document file unless the user explicitly requested a file deliverable."
 )
 
 # Full web manual: verbatim, on web intent only.

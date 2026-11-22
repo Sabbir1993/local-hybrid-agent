@@ -53,7 +53,7 @@ class _TempAuthDb(unittest.TestCase):
 
     def add_user(self, uid, role, is_super=0):
         now = time.time()
-        self.db.execute("INSERT INTO users (id, username, is_super_admin, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        self.db.execute("INSERT INTO users (id, email, is_super_admin, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                         (uid, f"user{uid}", is_super, now, now))
         self.db.execute("INSERT INTO user_roles (user_id, role_id, assigned_at) "
                         "SELECT ?, id, ? FROM roles WHERE name = ?", (uid, now, role))

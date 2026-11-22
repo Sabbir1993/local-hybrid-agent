@@ -24,9 +24,10 @@ def audit_log(principal: Optional[Principal], action: str, resource: Optional[st
                detail: Optional[dict] = None, ip: Optional[str] = None) -> None:
     # Ensure IP is never empty or None - fallback to context IP or loopback
     resolved_ip = ip or get_current_ip() or "127.0.0.1"
+    user_ident = (getattr(principal, "email", None) or getattr(principal, "username", None)) if principal else None
     auth_db.insert_audit(
         user_id=principal.id if principal else None,
-        username=principal.username if principal else None,
+        username=user_ident,
         action=action, resource=resource, permission_key=permission_key, result=result,
         detail=json.dumps(detail) if detail else None, ip=resolved_ip,
     )

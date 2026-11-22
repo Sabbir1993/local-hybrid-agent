@@ -70,6 +70,12 @@ class Principal:
     mfa_verified: bool = False        # this session proved the TOTP second factor
     email: Optional[str] = None
 
+    def __post_init__(self):
+        if not self.email and self.username:
+            self.email = self.username
+        if not self.username and self.email:
+            self.username = self.email
+
 
 def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -89,11 +95,11 @@ def _to_principal(user_id: int) -> Optional[Principal]:
         return None
     roles = auth_db.get_user_role_names(user_id)
     perms = auth_db.get_user_permission_keys(user_id)
+    email_val = (row["email"] if "email" in row.keys() else None) or (row["username"] if "username" in row.keys() else "") or ""
     raw_disp = row["display_name"] if ("display_name" in row.keys() and row["display_name"]) else None
-    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(row["username"])
-    email_val = (row["email"] if "email" in row.keys() else None) or (row["username"] if "@" in row["username"] else "")
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(email_val)
     return Principal(
-        id=row["id"], username=row["username"], display_name=disp_name, email=email_val,
+        id=row["id"], username=email_val, display_name=disp_name, email=email_val,
         is_super_admin=bool(row["is_super_admin"]), must_change_password=bool(row["must_change_password"]),
         role_names=roles, permission_keys=perms,
     )
@@ -190,8 +196,13 @@ def password_policy_error(password: str, username: str = "") -> Optional[str]:
         return f"password must be at least {MIN_PASSWORD_LEN} characters"
     if not any(c.isalpha() for c in pw) or not any(c.isdigit() for c in pw):
         return "password must contain both letters and digits"
-    if username and pw.lower() == username.lower():
-        return "password must not be the username"
+    if username:
+        clean_id = username.lower().strip()
+        if pw.lower() == clean_id:
+            return "password must not match your email or username"
+        local = clean_id.split("@")[0]
+        if local and pw.lower() == local:
+            return "password must not match your email or username"
     return None
 
 

@@ -2096,17 +2096,40 @@ body.is-native-app .tri-mode-switch {
 .msg.user .user-bar-center { display: flex !important; justify-content: center !important; }
 .msg.user .user-bar-right { display: inline-flex !important; align-items: center !important; justify-content: flex-end !important; gap: 4px !important; }
 
+.msg.user .user-files-tag {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  max-width: 100% !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
 .msg.user .user-file-pill {
   display: inline-flex !important;
   align-items: center !important;
   gap: 5px !important;
-  padding: 2px 8px !important;
-  border-radius: 4px !important;
+  padding: 3px 8px !important;
+  border-radius: 6px !important;
   background: var(--panel2, rgba(255, 255, 255, 0.08)) !important;
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.15)) !important;
   color: var(--text) !important;
   font-size: 11px !important;
   cursor: pointer !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  min-width: 0 !important;
+}
+
+.msg.user .user-file-pill span:last-child,
+.msg.user .user-file-pill .user-file-pill-name {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  display: inline-block !important;
 }
 
 .msg.user .user-msg-time {

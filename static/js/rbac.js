@@ -62,9 +62,9 @@ function renderUsersPanel(box, users) {
     </div>
     <div class="ru-pane" data-pane="users">
       <div class="cap-item" style="margin-bottom:10px;">
-        <b>Create user</b>${orgDomain() ? ` <span class="dim" style="font-size:11px;">(type the part before @${esc(orgDomain())})</span>` : ''}
+        <b>Create user</b>${orgDomain() ? ` <span class="dim" style="font-size:11px;">(email address before @${esc(orgDomain())})</span>` : ''}
         <div class="ru-create">
-          <input type="text" id="ru-username" placeholder="${orgDomain() ? 'first.last' : 'username'}" autocomplete="off">
+          <input type="text" id="ru-username" placeholder="${orgDomain() ? 'first.last' : 'email (user@company.com)'}" autocomplete="off">
           <input type="password" id="ru-password" placeholder="password (12+ characters, letters and digits)" autocomplete="new-password">
           <select id="ru-role" aria-label="Role for the new user">${roleOpts}</select>
           <button class="ru-btn primary" id="ru-create" type="button">+ Create</button>
@@ -97,18 +97,28 @@ function _rbacWire(box) {
     showPreview();
   }
   $('ru-create').onclick = async () => {
-    const username = withOrgDomain($('ru-username').value);
+    const rawVal = ($('ru-username').value || '').trim();
+    const username = withOrgDomain(rawVal);
     const password = $('ru-password').value;
     const role = $('ru-role').value;
     if (!username || !password) { toast('Username and password required', true); return; }
+    const email = username.includes('@') ? username : (orgDomain() ? `${username}@${orgDomain()}` : username);
     try {
       const r = await fetch('/admin/users', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, roles: role ? [role] : ['user'] }),
+        body: JSON.stringify({
+          username,
+          email,
+          display_name: rawVal.split('@')[0],
+          password,
+          roles: role ? [role] : ['user']
+        }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
       toast(`User '${username}' created ✓`);
+      $('ru-username').value = '';
+      $('ru-password').value = '';
       loadUsersPanel();
     } catch (e) { toast('Create failed: ' + e.message, true); }
   };
@@ -174,18 +184,19 @@ They are signed out everywhere and must choose a new password at next sign-in.
 }
 
 function userRow(u) {
+  const userIdent = u.email || u.username;
   const roleSel = _rbacRoles.map(r =>
     `<option value="${esc(r.name)}" ${u.roles.includes(r.name) ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
   const state = u.is_active ? '' : '<span class="ru-state">disabled</span>';
-  const resetBtn = `<button type="button" class="ru-btn ru-reset-pw" data-id="${u.id}" data-name="${esc(u.username)}" title="Set a temporary password for someone who forgot theirs">Reset password</button>`;
+  const resetBtn = `<button type="button" class="ru-btn ru-reset-pw" data-id="${u.id}" data-name="${esc(userIdent)}" title="Set a temporary password for someone who forgot theirs">Reset password</button>`;
   const actions = u.is_super_admin
     ? '<span class="ru-role-fixed dim">all permissions</span>' + resetBtn
-    : `<select class="ru-role-select" data-id="${u.id}" aria-label="Role for ${esc(u.username)}">${roleSel}</select>
+    : `<select class="ru-role-select" data-id="${u.id}" aria-label="Role for ${esc(userIdent)}">${roleSel}</select>
        <button type="button" class="ru-btn ru-toggle-active" data-id="${u.id}" data-active="${u.is_active ? '1' : '0'}">${u.is_active ? 'Disable' : 'Enable'}</button>
        ${resetBtn}
        <button type="button" class="ru-btn ru-delete" data-id="${u.id}">Delete</button>`;
   return `<div class="ru-row${u.is_active ? '' : ' off'}">
-    <span class="ru-name" title="${esc(u.username)}">${esc(u.username)}${u.is_super_admin ? '<span class="ru-badge">super admin</span>' : ''}${state}</span>
+    <span class="ru-name" title="${esc(userIdent)}">${esc(userIdent)}${u.is_super_admin ? '<span class="ru-badge">super admin</span>' : ''}${state}</span>
     <span class="ru-actions">${actions}</span>
   </div>`;
 }
@@ -336,7 +347,7 @@ async function loadApiTokens(box, users) {
   const fmt = t => t ? new Date(t * 1000).toLocaleString() : '—';
   const now = Date.now() / 1000;
   const userOpts = users.filter(u => u.is_active).map(u =>
-    `<option value="${esc(u.id)}">${esc(u.display_name || u.username)}</option>`).join('');
+    `<option value="${esc(u.id)}">${esc(u.display_name || u.email || u.username)}</option>`).join('');
   const permBoxes = (data.grantable || []).map(p =>
     `<label style="font-size:11px; display:inline-flex; gap:4px; align-items:center; margin-right:10px;">
        <input type="checkbox" class="tok-perm" value="${esc(p)}"${p === 'chat.use' ? ' checked' : ''}> ${esc(p)}</label>`).join('');
@@ -344,7 +355,7 @@ async function loadApiTokens(box, users) {
     const state = t.revoked_at ? 'revoked' : (t.expires_at <= now ? 'expired' : 'active');
     return `<div style="display:flex; gap:8px; align-items:center; font-size:11px; padding:4px 0; border-bottom:1px solid var(--border);">
       <code>${esc(t.prefix)}…</code><b>${esc(t.name)}</b>
-      <span class="dim">user: ${esc(t.username || t.user_id)}</span>
+      <span class="dim">user: ${esc(t.email || t.username || t.user_id)}</span>
       <span class="dim">expires ${esc(fmt(t.expires_at))}</span>
       <span class="dim">last used ${esc(fmt(t.last_used_at))}</span>
       <span class="dim" title="${esc((t.permissions || []).join(', '))}">${esc((t.permissions || []).length)} perm(s)</span>

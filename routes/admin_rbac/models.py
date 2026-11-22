@@ -4,10 +4,10 @@ from pydantic import BaseModel
 
 
 class CreateUserBody(BaseModel):
-    username: str
+    email: str | None = None
+    username: str | None = None
     password: str
     display_name: str | None = None
-    email: str | None = None
     roles: list[str] = []
 
 

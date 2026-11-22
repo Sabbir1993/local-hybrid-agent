@@ -37,6 +37,13 @@ class UserRecord:
     is_active: bool
     is_super_admin: bool
     must_change_password: bool
+    email: Optional[str] = None
+
+    def __post_init__(self):
+        if not self.email and self.username:
+            self.email = self.username
+        if not self.username and self.email:
+            self.username = self.email
 
 
 def hash_password(plain: str) -> str:
@@ -57,13 +64,14 @@ class AuthProvider(Protocol):
 
 
 class LocalAuthProvider:
-    """Verifies username/password against auth.db users.password_hash."""
+    """Verifies email/password against auth.db users.password_hash."""
 
     def supports_password_login(self) -> bool:
         return True
 
     def verify_credentials(self, username: str, password: str) -> Optional[UserRecord]:
-        row = auth_db.get_user_by_username(username)
+        email_clean = (username or "").strip()
+        row = auth_db.get_user_by_email(email_clean) or auth_db.get_user_by_username(email_clean)
         if (not row or not row["is_active"] or not row["password_hash"]
                 or row["auth_provider"] != "local" or auth_db.is_locked(row)):
             _burn_hash_time(password)
@@ -71,15 +79,17 @@ class LocalAuthProvider:
         if not verify_password(password, row["password_hash"]):
             if auth_db.record_failed_login(row["id"]):
                 from .audit import audit_log
-                audit_log(None, action="login.locked", resource=row["username"], result="deny",
+                user_email = (row["email"] if "email" in row.keys() else None) or (row["username"] if "username" in row.keys() else "") or ""
+                audit_log(None, action="login.locked", resource=user_email, result="deny",
                           detail={"lockout_s": auth_db.LOCKOUT_S})
             return None
         auth_db.touch_login(row["id"])
         from .auth import clean_display_name
+        email_val = (row["email"] if "email" in row.keys() else None) or (row["username"] if "username" in row.keys() else "") or ""
         raw_disp = row["display_name"] if ("display_name" in row.keys() and row["display_name"]) else None
-        disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(row["username"])
+        disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(email_val)
         return UserRecord(
-            id=row["id"], username=row["username"], display_name=disp_name,
+            id=row["id"], email=email_val, username=email_val, display_name=disp_name,
             is_active=bool(row["is_active"]), is_super_admin=bool(row["is_super_admin"]),
             must_change_password=bool(row["must_change_password"]),
         )
@@ -199,10 +209,11 @@ class LdapAuthProvider:
         # locally, so break-glass and pre-provisioned accounts keep working
         # under any provider. Every other username goes to the directory.
         # One generic failure either way -- never reveal which path was taken.
-        row = auth_db.get_user_by_username((username or "").strip())
+        clean_name = (username or "").strip()
+        row = auth_db.get_user_by_email(clean_name) or auth_db.get_user_by_username(clean_name)
         if (row is not None and row["auth_provider"] == "local" and row["password_hash"]
                 and row["is_active"] and not auth_db.is_locked(row)):
-            return LocalAuthProvider().verify_credentials(username, password)
+            return LocalAuthProvider().verify_credentials(clean_name, password)
         username = (username or "").strip()
         if not username or not password:
             # empty passwords bind as "unauthenticated" on some servers and
@@ -266,10 +277,11 @@ def _provision_ldap_user(username: str, dn: str) -> Optional[UserRecord]:
         if not row:
             return None
     from .auth import clean_display_name
+    email_val = (row["email"] if "email" in row.keys() else None) or (row["username"] if "username" in row.keys() else "") or ""
     raw_disp = row["display_name"] if ("display_name" in row.keys() and row["display_name"]) else None
-    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(row["username"])
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(email_val)
     return UserRecord(
-        id=row["id"], username=row["username"], display_name=disp_name,
+        id=row["id"], email=email_val, username=email_val, display_name=disp_name,
         is_active=bool(row["is_active"]), is_super_admin=bool(row["is_super_admin"]),
         must_change_password=bool(row["must_change_password"]),
     )
@@ -294,8 +306,9 @@ def verify_account_password(user_id: int, password: str) -> bool:
         if (cfg.get("provider") or "local").strip().lower() != "ldap":
             return False
         try:
+            user_ident = (row["email"] if "email" in row.keys() else None) or (row["username"] if "username" in row.keys() else "") or ""
             return LdapAuthProvider(cfg.get("ldap") or {}).check_password(
-                row["username"], password)
+                user_ident, password)
         except Exception:
             return False
     return False
