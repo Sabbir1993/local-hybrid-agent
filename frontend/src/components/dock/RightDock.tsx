@@ -178,9 +178,10 @@ export const RightDock: React.FC = () => {
             className={`dock-tab-btn ${dockTab === 'subagents' ? 'active' : ''}`}
             id="dock-btn-subagents"
             title="Sub-Agents Live View"
+            style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
             onClick={() => handleTabClick('subagents')}
           >
-            👥 Sub-Agents
+            👥 Subagents
             {hasRunningSubagents ? (
               <span style={{ marginLeft: 5, width: 7, height: 7, background: '#38bdf8', borderRadius: '50%', display: 'inline-block', boxShadow: '0 0 6px #38bdf8' }} />
             ) : subagentsCount > 0 ? (

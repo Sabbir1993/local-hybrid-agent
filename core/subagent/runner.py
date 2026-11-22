@@ -599,6 +599,18 @@ async def run_parallel_subagents(agent_specs: list, max_concurrency: Optional[in
                 })
                 title = f"Sub-agent #{idx+1}" + (f" (role={role})" if role else "")
                 return f"=== {title} ===\n[sub-agent · role={role or 'generic'} · status=timeout]\nerror: execution exceeded timeout limit ({timeout_s}s)"
+            except Exception as exc:
+                err_msg = f"{type(exc).__name__}: {exc}"
+                await emit_subagent_event({
+                    "event": "error",
+                    "subagent_id": f"sub_{idx+1}",
+                    "index": idx + 1,
+                    "role": role or "generic",
+                    "status": "error",
+                    "error": err_msg,
+                })
+                title = f"Sub-agent #{idx+1}" + (f" (role={role})" if role else "")
+                return f"=== {title} ===\n[sub-agent · role={role or 'generic'} · status=error]\nerror: {err_msg}"
 
     tasks = [_run_one(i, spec) for i, spec in enumerate(agent_specs)]
     results = await asyncio.gather(*tasks, return_exceptions=True)

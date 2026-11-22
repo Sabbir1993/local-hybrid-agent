@@ -19,7 +19,7 @@ export interface SubagentInfo {
   index: number;
   role: string;
   task: string;
-  status: 'running' | 'completed' | 'failed' | 'timeout';
+  status: 'running' | 'completed' | 'failed' | 'timeout' | 'step_exhausted' | 'error';
   step: number;
   max_steps: number;
   current_tool?: string | null;

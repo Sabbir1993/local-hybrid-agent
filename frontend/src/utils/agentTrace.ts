@@ -147,7 +147,7 @@ function rowHtml(t: TraceItem): string {
   return h;
 }
 
-function parseSubagentsFromText(rawText: unknown): any[] {
+export function parseSubagentsFromText(rawText: unknown): any[] {
   if (!rawText || typeof rawText !== 'string') return [];
   const textWithoutHeader = rawText.replace(/^\[parallel sub-agents[^\n]*\n+/i, '').trim();
   const blocks = textWithoutHeader.split(/(?:^|\n)(?==== Sub-agent #\d+)/g).filter((b) => b.trim());
@@ -595,8 +595,8 @@ export function renderAgentTraceHtml(acts: any[], prose: (md: string) => string,
     if (s.kind === 'prose') {
       h += `<div class="ct-prose">${prose(s.text)}</div>`;
     } else if (s.items.length) {
-      // Live streaming keeps latest active group open; finished groups with multiple items show their cards list open by default, with each card collapsed section-wise
-      const shouldOpen = live ? (i === lastGroup) : (s.items.length > 1);
+      // Live streaming keeps latest active group open; finished tool groups default collapsed
+      const shouldOpen = live && (i === lastGroup);
       h += groupHtml(s.items, shouldOpen);
     }
   });

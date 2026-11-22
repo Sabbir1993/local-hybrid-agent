@@ -5,7 +5,7 @@ import { latestSubagentsFromMessages } from '../../stores/agentEvents';
 export const SubagentsView: React.FC = () => {
   const activeMap = useAppStore((s) => s.activeSubagents);
   const messages = useAppStore((s) => s.messages);
-  const [filter, setFilter] = useState<'all' | 'running' | 'completed' | 'failed'>('all');
+  const [filter, setFilter] = useState<'all' | 'running' | 'completed' | 'exhausted' | 'failed'>('all');
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
 
   // Merge live store subagents with any historic subagents in the conversation
@@ -18,27 +18,29 @@ export const SubagentsView: React.FC = () => {
   const total = subagents.length;
   const running = subagents.filter((s) => s.status === 'running');
   const completed = subagents.filter((s) => s.status === 'completed' || (s.status as string) === 'success');
+  const exhausted = subagents.filter((s) => s.status === 'step_exhausted' || (s.status as string) === 'step_limit');
   const failed = subagents.filter((s) => s.status === 'failed' || (s.status as string) === 'error' || s.status === 'timeout');
 
   const filtered = useMemo(() => {
     if (filter === 'running') return running;
     if (filter === 'completed') return completed;
+    if (filter === 'exhausted') return exhausted;
     if (filter === 'failed') return failed;
     return subagents;
-  }, [subagents, filter, running, completed, failed]);
+  }, [subagents, filter, running, completed, exhausted, failed]);
 
   const toggleExpand = (id: string) => {
     setExpandedCards((prev) => ({
       ...prev,
-      [id]: prev[id] !== undefined ? !prev[id] : false, // Default is open for running
+      [id]: prev[id] !== undefined ? !prev[id] : false,
     }));
   };
 
   const isCardOpen = (s: SubagentInfo, idx: number) => {
     const key = s.id || String(idx);
     if (expandedCards[key] !== undefined) return expandedCards[key];
-    // Default: open if running, or if only 1 subagent
-    return s.status === 'running' || total <= 2;
+    // Default: open if running, or if failed/exhausted to show diagnosis, or if 2 or fewer cards
+    return s.status === 'running' || s.status === 'step_exhausted' || s.status === 'failed' || (s.status as string) === 'error' || total <= 2;
   };
 
   if (!total) {
@@ -67,8 +69,16 @@ export const SubagentsView: React.FC = () => {
               </span>
             )}
           </div>
-          <div style={{ fontSize: '11px', color: 'var(--dim)' }}>
+          <div style={{ fontSize: '11px', color: 'var(--dim)', whiteSpace: 'nowrap' }}>
             <b>{completed.length}</b>/{total} done
+            {(exhausted.length > 0 || failed.length > 0) && (
+              <span style={{ marginLeft: 5, color: failed.length > 0 ? '#ef4444' : '#f59e0b' }}>
+                ({[
+                  exhausted.length > 0 ? `${exhausted.length} exhausted` : null,
+                  failed.length > 0 ? `${failed.length} failed` : null,
+                ].filter(Boolean).join(', ')})
+              </span>
+            )}
           </div>
         </div>
 
@@ -78,14 +88,14 @@ export const SubagentsView: React.FC = () => {
             className="plan-doc-progress-fill"
             style={{
               width: `${total ? Math.round((completed.length / total) * 100) : 0}%`,
-              background: failed.length > 0 ? 'var(--amber, #f59e0b)' : 'var(--blue, #38bdf8)',
+              background: failed.length > 0 ? 'var(--red, #ef4444)' : exhausted.length > 0 ? 'var(--amber, #f59e0b)' : 'var(--blue, #38bdf8)',
               transition: 'width 0.3s ease',
             }}
           />
         </div>
 
         {/* Filter Pills */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 4, flexWrap: 'wrap' }}>
           <button
             type="button"
             className={`subagents-filter-btn ${filter === 'all' ? 'active' : ''}`}
@@ -111,6 +121,16 @@ export const SubagentsView: React.FC = () => {
               ✓ {completed.length} Done
             </button>
           )}
+          {exhausted.length > 0 && (
+            <button
+              type="button"
+              className={`subagents-filter-btn ${filter === 'exhausted' ? 'active' : ''}`}
+              style={{ color: '#f59e0b', borderColor: filter === 'exhausted' ? '#f59e0b' : undefined }}
+              onClick={() => setFilter('exhausted')}
+            >
+              ⚠️ {exhausted.length} Exhausted
+            </button>
+          )}
           {failed.length > 0 && (
             <button
               type="button"
@@ -130,6 +150,7 @@ export const SubagentsView: React.FC = () => {
           const open = isCardOpen(s, idx);
           const isRunning = s.status === 'running';
           const isSuccess = s.status === 'completed' || (s.status as string) === 'success';
+          const isExhausted = s.status === 'step_exhausted' || (s.status as string) === 'step_limit';
           const isFail = s.status === 'failed' || (s.status as string) === 'error' || s.status === 'timeout';
           const maxSteps = s.max_steps || 10;
           const curStep = s.step || 0;
@@ -138,11 +159,21 @@ export const SubagentsView: React.FC = () => {
           return (
             <div
               key={cardId}
-              className={`ct-subagent-card ${isRunning ? 'running' : ''} ${isFail ? 'failed' : ''}`}
+              className={`ct-subagent-card ${isRunning ? 'running' : ''} ${isExhausted ? 'warning' : ''} ${isFail ? 'failed' : ''}`}
               style={{
                 borderRadius: 8,
-                border: isRunning ? '1px solid rgba(56, 189, 248, 0.35)' : undefined,
-                background: isRunning ? 'rgba(56, 189, 248, 0.02)' : 'var(--surface-1, rgba(255,255,255,0.02))',
+                border: isRunning
+                  ? '1px solid rgba(56, 189, 248, 0.35)'
+                  : isExhausted
+                  ? '1px solid rgba(245, 158, 11, 0.35)'
+                  : isFail
+                  ? '1px solid rgba(239, 68, 68, 0.3)'
+                  : undefined,
+                background: isRunning
+                  ? 'rgba(56, 189, 248, 0.02)'
+                  : isExhausted
+                  ? 'rgba(245, 158, 11, 0.02)'
+                  : 'var(--surface-1, rgba(255,255,255,0.02))',
               }}
             >
               {/* Card Header */}
@@ -152,10 +183,10 @@ export const SubagentsView: React.FC = () => {
                 style={{ cursor: 'pointer', padding: '8px 10px' }}
               >
                 <span
-                  className={`ct-subagent-status-icon ${isRunning ? 'running' : isSuccess ? 'ok' : 'fail'}`}
+                  className={`ct-subagent-status-icon ${isRunning ? 'running' : isSuccess ? 'ok' : isExhausted ? 'warning' : 'fail'}`}
                   style={{ width: 18, height: 18 }}
                 >
-                  {isRunning ? '⏳' : isSuccess ? '✓' : '✕'}
+                  {isRunning ? '⏳' : isSuccess ? '✓' : isExhausted ? '⚠️' : '✕'}
                 </span>
 
                 <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, gap: 1 }}>
@@ -179,10 +210,10 @@ export const SubagentsView: React.FC = () => {
                     </span>
                   )}
                   <span
-                    className={`ct-badge-status ${isRunning ? 'running' : isSuccess ? 'ok' : 'fail'}`}
+                    className={`ct-badge-status ${isRunning ? 'running' : isSuccess ? 'ok' : isExhausted ? 'warning' : 'fail'}`}
                     style={{ fontSize: '9.5px', padding: '1px 5px' }}
                   >
-                    {s.status}
+                    {isExhausted ? 'STEP_EXHAUSTED' : isFail ? (s.status === 'timeout' ? 'TIMEOUT' : 'FAILED') : s.status}
                   </span>
                 </div>
 
@@ -206,7 +237,13 @@ export const SubagentsView: React.FC = () => {
                   style={{
                     height: '100%',
                     width: `${stepPct}%`,
-                    background: isFail ? 'var(--red, #ef4444)' : isSuccess ? 'var(--green, #22c55e)' : 'var(--accent, #38bdf8)',
+                    background: isFail
+                      ? 'var(--red, #ef4444)'
+                      : isExhausted
+                      ? 'var(--amber, #f59e0b)'
+                      : isSuccess
+                      ? 'var(--green, #22c55e)'
+                      : 'var(--accent, #38bdf8)',
                     transition: 'width 0.25s',
                   }}
                 />
@@ -263,8 +300,18 @@ export const SubagentsView: React.FC = () => {
                   )}
 
                   {/* Error / Diagnosis */}
-                  {isFail && (s.error || s.failure_reason) && (
-                    <div className="ct-sub-fail-reason" style={{ fontSize: '11px', margin: '4px 0 6px', padding: '4px 8px' }}>
+                  {(isFail || isExhausted) && (s.error || s.failure_reason) && (
+                    <div
+                      className="ct-sub-fail-reason"
+                      style={{
+                        fontSize: '11px',
+                        margin: '4px 0 6px',
+                        padding: '4px 8px',
+                        borderColor: isExhausted ? '#f59e0b' : '#ef4444',
+                        color: isExhausted ? '#fbbf24' : '#f87171',
+                        background: isExhausted ? 'rgba(245, 158, 11, 0.08)' : 'rgba(239, 68, 68, 0.06)',
+                      }}
+                    >
                       <strong>Diagnosis:</strong> {s.error || s.failure_reason}
                     </div>
                   )}

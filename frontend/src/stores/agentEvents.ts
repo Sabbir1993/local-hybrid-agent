@@ -1,6 +1,7 @@
 // Event handling for the /agent/run SSE stream. Mirrors static/js/agent-run.js + sse-stream.js:
 // every event is folded into the assistant message (`acts` is what the chat renders as the action timeline).
 import type { ChatMessage } from './useAppStore';
+import { parseSubagentsFromText } from '../utils/agentTrace';
 
 export interface AgentRunCtx {
   toast: (message: string, type?: 'info' | 'error' | 'success' | 'warn') => void;
@@ -210,17 +211,23 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
     case 'subagent_event': {
       const key = String(d.sub_index ?? d.subagent_id ?? '0');
       const call = acts.slice().reverse().find((a) => a.type === 'tool_call' && (a.id === d.id || (!d.id && a.name === d.name)));
+      const ev = d.event;
+      const subStatus = ev === 'done'
+        ? (d.status === 'step_exhausted' || d.status === 'step_limit' ? 'step_exhausted' : d.status === 'error' || d.status === 'failed' ? 'failed' : d.status === 'timeout' ? 'timeout' : 'completed')
+        : ev === 'error'
+        ? 'failed'
+        : 'running';
+
       if (call) {
         if (!call.subagents) call.subagents = {};
         const prev = call.subagents[key] || {};
-        const ev = d.event;
         call.subagents[key] = {
           ...prev,
           sub_index: d.sub_index !== undefined ? d.sub_index : prev.sub_index,
           subagent_id: d.subagent_id || prev.subagent_id,
           role: d.role || prev.role || 'subagent',
           task: d.task || prev.task || '',
-          status: ev === 'done' ? 'completed' : ev === 'error' ? 'error' : 'running',
+          status: subStatus,
           step: d.step !== undefined ? d.step : prev.step,
           max_steps: d.max_steps !== undefined ? d.max_steps : prev.max_steps,
           current_tool: ev === 'tool_start' ? d.tool : (ev === 'tool_done' ? null : prev.current_tool),
@@ -238,7 +245,9 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
           const targetShort = target ? ` (${String(target).split(/[\\/]/).pop()})` : '';
           L.statusText = `[Sub-agent ${roleLabel}] ${d.tool}${targetShort}...`;
         } else if (ev === 'done') {
-          L.statusText = `[Sub-agent ${roleLabel}] Done in ${d.duration_s || 0}s`;
+          L.statusText = `[Sub-agent ${roleLabel}] ${subStatus === 'step_exhausted' ? 'Exhausted steps' : subStatus === 'failed' ? 'Failed' : 'Done'} in ${d.duration_s || 0}s`;
+        } else if (ev === 'error') {
+          L.statusText = `[Sub-agent ${roleLabel}] Error: ${d.error || 'Execution failed'}`;
         }
       }
 
@@ -246,13 +255,12 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       try {
         const store = (typeof window !== 'undefined' && (window as any).__useAppStore)?.getState();
         if (store) {
-          const ev = d.event;
           store.updateSubagent(key, {
             id: d.subagent_id || key,
             index: (d.sub_index !== undefined ? d.sub_index : Number(key) + 1),
             role: d.role,
             task: d.task,
-            status: ev === 'done' ? 'completed' : ev === 'error' ? 'failed' : 'running',
+            status: subStatus,
             step: d.step,
             max_steps: d.max_steps,
             current_tool: ev === 'tool_start' ? d.tool : (ev === 'tool_done' ? null : undefined),
@@ -266,9 +274,49 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       } catch (_) {}
       break;
     }
-    case 'tool_result':
+    case 'tool_result': {
       acts.push({ type: 'tool_result', ...d });
       L.statusText = 'Crunching tool results...';
+      const subagentTools = ['spawn_parallel_agents', 'spawn_agent', 'spawn_reviewed_coder'];
+      if (subagentTools.includes(d.name) && d.result) {
+        try {
+          const parsed = parseSubagentsFromText(d.result);
+          if (parsed && parsed.length > 0) {
+            const call = acts.slice().reverse().find((a) => a.type === 'tool_call' && (a.id === d.id || (!d.id && a.name === d.name)));
+            const store = (typeof window !== 'undefined' && (window as any).__useAppStore)?.getState();
+            parsed.forEach((item: any, pIdx: number) => {
+              const idx = item.index || pIdx + 1;
+              const subKey = String(idx - 1);
+              const canonStatus = (item.status === 'success' || item.status === 'ok')
+                ? 'completed'
+                : (item.status === 'step_limit' || item.status === 'step_exhausted')
+                ? 'step_exhausted'
+                : item.status === 'timeout'
+                ? 'timeout'
+                : 'failed';
+              const patch = {
+                id: `sub_${idx}`,
+                index: idx,
+                role: item.role || 'subagent',
+                status: canonStatus as any,
+                failure_reason: item.failure_reason,
+                error: item.failure_reason,
+                output: item.output,
+              };
+              if (call) {
+                if (!call.subagents) call.subagents = {};
+                call.subagents[subKey] = {
+                  ...(call.subagents[subKey] || {}),
+                  ...patch,
+                };
+              }
+              if (store) {
+                store.updateSubagent(subKey, patch);
+              }
+            });
+          }
+        } catch (_) {}
+      }
       if (SHELL_TOOLS.includes(d.name)) {
         const raw = String(d.result ?? '');
         let stdout = raw;
@@ -291,6 +339,7 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
         toast(`⚠️ Failed to write ${p ? String(p).split(/[\\/]/).pop() : 'file'}`, 'error');
       }
       break;
+    }
     case 'verify':
       acts.push({ type: 'verify', ...d });
       L.statusText = 'Verifying tool changes...';
@@ -408,8 +457,57 @@ export function latestSubagentsFromMessages(messages: ChatMessage[]): any[] {
     for (let j = acts.length - 1; j >= 0; j--) {
       const a = acts[j];
       if (a.type === 'tool_call' && ['spawn_parallel_agents', 'spawn_agent', 'spawn_reviewed_coder'].includes(a.name)) {
+        const resAct = acts.find((r) => r.type === 'tool_result' && (r.id === a.id || (!r.id && r.name === a.name)));
+        const parsed = resAct?.result ? parseSubagentsFromText(resAct.result) : [];
+
         if (a.subagents && Object.keys(a.subagents).length > 0) {
-          return Object.values(a.subagents);
+          const list = Object.values(a.subagents);
+          if (parsed && parsed.length > 0) {
+            return list.map((item: any) => {
+              const p = parsed.find((pItem: any) => pItem.index === (item.index || item.sub_index));
+              if (p) {
+                const canonStatus = (p.status === 'success' || p.status === 'ok')
+                  ? 'completed'
+                  : (p.status === 'step_limit' || p.status === 'step_exhausted')
+                  ? 'step_exhausted'
+                  : p.status === 'timeout'
+                  ? 'timeout'
+                  : 'failed';
+                return {
+                  ...item,
+                  status: item.status === 'running' ? canonStatus : (canonStatus !== 'completed' ? canonStatus : item.status),
+                  failure_reason: p.failure_reason || item.failure_reason,
+                  error: p.failure_reason || item.error,
+                  output: item.output || p.output,
+                };
+              }
+              return item;
+            });
+          }
+          return list;
+        }
+        if (parsed && parsed.length > 0) {
+          return parsed.map((p: any) => {
+            const canonStatus = (p.status === 'success' || p.status === 'ok')
+              ? 'completed'
+              : (p.status === 'step_limit' || p.status === 'step_exhausted')
+              ? 'step_exhausted'
+              : p.status === 'timeout'
+              ? 'timeout'
+              : 'failed';
+            return {
+              id: `sub_${p.index}`,
+              index: p.index,
+              role: p.role,
+              task: '',
+              status: canonStatus,
+              step: p.steps || 0,
+              max_steps: 10,
+              failure_reason: p.failure_reason,
+              error: p.failure_reason,
+              output: p.output,
+            };
+          });
         }
         if (Array.isArray(a.args?.agents)) {
           return a.args.agents.map((ag: any, idx: number) => ({
