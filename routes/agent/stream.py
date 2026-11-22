@@ -157,7 +157,7 @@ from .guards import (
     _with_diff,
 )
 from .models import AgentRequest
-from .permissions import _await_permission, _perm_pending, _permission_stream, can_save_pattern, keepalive
+from .permissions import _await_permission, _perm_pending, _permission_stream, can_save_pattern, keepalive, PING
 
 # appended to a declined command: the model otherwise retries the same thing through run_python
 _NO_WORKAROUND = (" The user said no to this command. Do not run the same thing another way (run_python, another "
