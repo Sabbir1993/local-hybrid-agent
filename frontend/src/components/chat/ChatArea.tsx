@@ -939,7 +939,7 @@ export const ChatArea: React.FC = () => {
                     <div>
                       {/* Collapsible think block if raw reasoning exists and no acts (Hidden in Chat Mode) */}
                       {thinkingText && (!m.acts || !m.acts.length) && !isChatMode && (
-                        <details className="think antigravity-step-item" style={{ margin: '4px 0 8px 0' }}>
+                        <details className="think antigravity-step-item" open style={{ margin: '4px 0 8px 0' }}>
                           <summary
                             className="antigravity-step-row"
                             style={{

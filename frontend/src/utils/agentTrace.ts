@@ -480,11 +480,17 @@ export function traceSegments(acts: any[]): Segment[] {
 export function renderAgentTraceHtml(acts: any[], prose: (md: string) => string, live = false, workedFor = ''): string {
   const segs = traceSegments(acts || []);
   if (!segs.length) return '';
+  const lastGroup = segs.map((s) => s.kind).lastIndexOf('group');
   let h = '<div class="ct-trace">';
   if (workedFor && !live) h += `<div class="ct-worked">${escText(workedFor)}</div>`;
-  segs.forEach((s) => {
-    if (s.kind === 'prose') h += `<div class="ct-prose">${prose(s.text)}</div>`;
-    else if (s.items.length) h += groupHtml(s.items, false);
+  segs.forEach((s, i) => {
+    if (s.kind === 'prose') {
+      h += `<div class="ct-prose">${prose(s.text)}</div>`;
+    } else if (s.items.length) {
+      // Live streaming keeps latest active group open; finished groups with multiple items show their cards list open by default, with each card collapsed section-wise
+      const shouldOpen = live ? (i === lastGroup) : (s.items.length > 1);
+      h += groupHtml(s.items, shouldOpen);
+    }
   });
   return h + '</div>';
 }
