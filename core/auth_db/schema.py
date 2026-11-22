@@ -312,6 +312,12 @@ def init_tables(conn) -> None:
         if col not in _cols:
             conn.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
             conn.commit()
+    try:
+        # Sync email from username if username is an email address and email is empty
+        conn.execute("UPDATE users SET email = username WHERE (email IS NULL OR email = '') AND username LIKE '%@%'")
+        conn.commit()
+    except Exception:
+        pass
     _sess_cols = {r[1] for r in conn.execute("PRAGMA table_info(auth_sessions)")}
     if "mfa_verified" not in _sess_cols:
         conn.execute("ALTER TABLE auth_sessions ADD COLUMN mfa_verified INTEGER NOT NULL DEFAULT 0")

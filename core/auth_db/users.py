@@ -36,8 +36,24 @@ def delete_user(user_id: int) -> None:
         c.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
 
+def _has_user_column(col: str) -> bool:
+    try:
+        cols = {r["name"] for r in db().execute("PRAGMA table_info(users)").fetchall()}
+        return col in cols
+    except Exception:
+        return False
+
+
 def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
+    if _has_user_column("email"):
+        return db().execute("SELECT * FROM users WHERE username = ? OR email = ?", (username, username)).fetchone()
     return db().execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+
+
+def get_user_by_email(email: str) -> Optional[sqlite3.Row]:
+    if _has_user_column("email"):
+        return db().execute("SELECT * FROM users WHERE email = ? OR username = ?", (email, email)).fetchone()
+    return db().execute("SELECT * FROM users WHERE username = ?", (email,)).fetchone()
 
 
 def get_user_by_id(user_id: int) -> Optional[sqlite3.Row]:
@@ -179,10 +195,16 @@ def delete_user_mcp_server(user_id: int, name: str) -> None:
 
 
 def update_user_profile(user_id: int, updates: dict) -> Optional[sqlite3.Row]:
-    allowed_cols = {"display_name", "email", "image", "employee_id", "department", "designation", "dob", "gender"}
+    allowed_cols = {"display_name", "email", "username", "image", "employee_id", "department", "designation", "dob", "gender"}
     fields = {k: v for k, v in updates.items() if k in allowed_cols}
     if not fields:
         return get_user_by_id(user_id)
+    try:
+        col_names = {r["name"] for r in db().execute("PRAGMA table_info(users)").fetchall()}
+        if "updated_at" in col_names:
+            fields["updated_at"] = time.time()
+    except Exception:
+        pass
     set_clause = ", ".join(f"{k} = ?" for k in fields.keys())
     values = list(fields.values()) + [user_id]
     db().execute(f"UPDATE users SET {set_clause} WHERE id = ?", tuple(values))

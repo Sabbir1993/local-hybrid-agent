@@ -75,8 +75,11 @@ class LocalAuthProvider:
                           detail={"lockout_s": auth_db.LOCKOUT_S})
             return None
         auth_db.touch_login(row["id"])
+        from .auth import clean_display_name
+        raw_disp = row["display_name"] if ("display_name" in row.keys() and row["display_name"]) else None
+        disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(row["username"])
         return UserRecord(
-            id=row["id"], username=row["username"], display_name=row["display_name"] or row["username"],
+            id=row["id"], username=row["username"], display_name=disp_name,
             is_active=bool(row["is_active"]), is_super_admin=bool(row["is_super_admin"]),
             must_change_password=bool(row["must_change_password"]),
         )
@@ -262,8 +265,11 @@ def _provision_ldap_user(username: str, dn: str) -> Optional[UserRecord]:
         row = auth_db.get_user_by_id(uid)
         if not row:
             return None
+    from .auth import clean_display_name
+    raw_disp = row["display_name"] if ("display_name" in row.keys() and row["display_name"]) else None
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(row["username"])
     return UserRecord(
-        id=row["id"], username=row["username"], display_name=row["display_name"] or row["username"],
+        id=row["id"], username=row["username"], display_name=disp_name,
         is_active=bool(row["is_active"]), is_super_admin=bool(row["is_super_admin"]),
         must_change_password=bool(row["must_change_password"]),
     )

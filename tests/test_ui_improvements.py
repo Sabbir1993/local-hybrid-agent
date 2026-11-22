@@ -89,3 +89,31 @@ class TestUIImprovements(unittest.TestCase):
             self.assertEqual(updated["email"], "alice@example.com")
             self.assertEqual(updated["department"], "Engineering")
             self.assertEqual(updated["designation"], "Lead Architect")
+
+    def test_clean_display_name_and_email_lookup(self):
+        from core.auth import clean_display_name
+        self.assertEqual(clean_display_name("sabbir.hosain@sslwireless.com"), "Sabbir Hosain")
+        self.assertEqual(clean_display_name("john_doe@company.org"), "John Doe")
+        self.assertEqual(clean_display_name("alice"), "alice")
+
+        auth_conn = sqlite3.connect(":memory:", check_same_thread=False)
+        auth_conn.row_factory = sqlite3.Row
+        auth_conn.execute("""
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                email TEXT,
+                display_name TEXT
+            )
+        """)
+        auth_conn.execute("INSERT INTO users (id, username, email) VALUES (1, 'sabbir.hosain@sslwireless.com', 'sabbir.hosain@sslwireless.com')")
+        auth_conn.commit()
+
+        with mock.patch("core.auth_db.users.db", return_value=auth_conn):
+            user1 = auth_db.users.get_user_by_username("sabbir.hosain@sslwireless.com")
+            self.assertIsNotNone(user1)
+            self.assertEqual(user1["id"], 1)
+
+            user2 = auth_db.users.get_user_by_email("sabbir.hosain@sslwireless.com")
+            self.assertIsNotNone(user2)
+            self.assertEqual(user2["id"], 1)

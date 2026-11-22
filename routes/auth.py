@@ -20,6 +20,7 @@ from core.auth import (
     SESSION_COOKIE,
     Principal,
     _hash_token,
+    clean_display_name,
     create_session,
     mfa_required_policy,
     new_csrf_token,
@@ -37,7 +38,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class LoginBody(BaseModel):
-    username: str
+    username: Optional[str] = None
+    email: Optional[str] = None
     password: str
 
 
@@ -86,13 +88,16 @@ def _ip_blocked(ip) -> bool:
 async def login(body: LoginBody, request: Request, response: Response):
     provider = get_auth_provider()
     ip = request.client.host if request.client else None
+    login_name = (body.email or body.username or "").strip()
+    if not login_name:
+        raise HTTPException(status_code=400, detail="username or email required")
     if _ip_blocked(ip):
-        audit_log(None, action="login.throttled", resource=body.username, result="deny", ip=ip)
+        audit_log(None, action="login.throttled", resource=login_name, result="deny", ip=ip)
         raise HTTPException(status_code=429, detail="too many failed logins - try again later")
-    user = provider.verify_credentials(body.username, body.password)
+    user = provider.verify_credentials(login_name, body.password)
     if not user:
         _ip_failures.setdefault(ip, []).append(time.time())
-        audit_log(None, action="login.failed", resource=body.username, result="deny", ip=ip)
+        audit_log(None, action="login.failed", resource=login_name, result="deny", ip=ip)
         raise HTTPException(status_code=401, detail="invalid username or password")
 
     who = SimpleNamespace(id=user.id, username=user.username)
@@ -118,9 +123,20 @@ async def login(body: LoginBody, request: Request, response: Response):
               resource=user.username, result="allow", ip=ip)
     roles = auth_db.get_user_role_names(user.id)
     perms = sorted(auth_db.get_user_permission_keys(user.id))
+    username_val = (row["username"] if row and "username" in row.keys() else None) or user.username or ""
+    email_val = (row["email"] if row and "email" in row.keys() else None) or (username_val if "@" in username_val else "")
+    raw_disp = (row["display_name"] if row and "display_name" in row.keys() else None) or getattr(user, "display_name", None)
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(username_val)
+
     return {
-        "user": {"id": user.id, "username": user.username, "display_name": user.display_name,
-                  "is_super_admin": user.is_super_admin, "must_change_password": user.must_change_password},
+        "user": {
+            "id": user.id,
+            "username": username_val,
+            "email": email_val,
+            "display_name": disp_name,
+            "is_super_admin": user.is_super_admin,
+            "must_change_password": user.must_change_password,
+        },
         "roles": roles,
         "permissions": perms if not user.is_super_admin else sorted(auth_db.PERMISSIONS.keys()),
     }
@@ -143,12 +159,17 @@ async def logout(request: Request, response: Response):
 async def me(user: Principal = Depends(get_current_user)):
     perms = sorted(user.permission_keys) if not user.is_super_admin else sorted(auth_db.PERMISSIONS.keys())
     row = auth_db.get_user_by_id(user.id)
+    username_val = (row["username"] if row and "username" in row.keys() else None) or user.username or ""
+    email_val = (row["email"] if row and "email" in row.keys() else None) or (username_val if "@" in username_val else "")
+    raw_disp = (row["display_name"] if row and "display_name" in row.keys() else None) or getattr(user, "display_name", None)
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(username_val)
+
     return {
         "user": {
             "id": user.id,
-            "username": user.username,
-            "display_name": (row["display_name"] if row and "display_name" in row.keys() else None) or user.display_name or user.username,
-            "email": row["email"] if row and "email" in row.keys() else None,
+            "username": username_val,
+            "email": email_val,
+            "display_name": disp_name,
             "image": row["image"] if row and "image" in row.keys() else None,
             "employee_id": row["employee_id"] if row and "employee_id" in row.keys() else None,
             "department": row["department"] if row and "department" in row.keys() else None,
@@ -168,6 +189,7 @@ async def me(user: Principal = Depends(get_current_user)):
 class ProfileUpdateBody(BaseModel):
     display_name: Optional[str] = None
     email: Optional[str] = None
+    username: Optional[str] = None
     image: Optional[str] = None
     employee_id: Optional[str] = None
     department: Optional[str] = None
@@ -179,22 +201,33 @@ class ProfileUpdateBody(BaseModel):
 @router.put("/profile")
 async def update_profile(body: ProfileUpdateBody, user: Principal = Depends(get_current_user)):
     updates = {k: v.strip() if isinstance(v, str) else v for k, v in body.dict().items() if v is not None}
-    if "email" in updates and updates["email"]:
+    target_email = updates.get("email") or updates.get("username")
+    if target_email:
         existing = auth_db.db().execute(
-            "SELECT id FROM users WHERE email = ? AND id != ?", (updates["email"], user.id)
+            "SELECT id FROM users WHERE (email = ? OR username = ?) AND id != ?",
+            (target_email, target_email, user.id)
         ).fetchone()
         if existing:
             raise HTTPException(status_code=400, detail="Email is already in use by another user")
+        # Keep both email and username synced in users table
+        updates["email"] = target_email
+        updates["username"] = target_email
+
     row = auth_db.update_user_profile(user.id, updates)
     audit_log(user, action="user.profile_update", resource=user.username, result="allow",
               detail={"fields": list(updates.keys())})
+    username_val = (row["username"] if row and "username" in row.keys() else None) or user.username or ""
+    email_val = (row["email"] if row and "email" in row.keys() else None) or (username_val if "@" in username_val else "")
+    raw_disp = (row["display_name"] if row and "display_name" in row.keys() else None) or getattr(user, "display_name", None)
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(username_val)
+
     return {
         "ok": True,
         "user": {
             "id": user.id,
-            "username": user.username,
-            "display_name": (row["display_name"] if row and "display_name" in row.keys() else None) or user.display_name or user.username,
-            "email": row["email"] if row and "email" in row.keys() else None,
+            "username": username_val,
+            "email": email_val,
+            "display_name": disp_name,
             "image": row["image"] if row and "image" in row.keys() else None,
             "employee_id": row["employee_id"] if row and "employee_id" in row.keys() else None,
             "department": row["department"] if row and "department" in row.keys() else None,
@@ -456,11 +489,19 @@ def _login_success_response(user_id: int, username: str):
     roles = auth_db.get_user_role_names(user_id)
     perms = sorted(auth_db.get_user_permission_keys(user_id))
     row = auth_db.get_user_by_id(user_id)
+    username_val = (row["username"] if row and "username" in row.keys() else None) or username or ""
+    email_val = (row["email"] if row and "email" in row.keys() else None) or (username_val if "@" in username_val else "")
+    raw_disp = (row["display_name"] if row and "display_name" in row.keys() else None)
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(username_val)
     return {
-        "user": {"id": user_id, "username": username,
-                  "display_name": (row["display_name"] if row and row["display_name"] else username),
-                  "is_super_admin": bool(row and row["is_super_admin"]),
-                  "must_change_password": bool(row and row["must_change_password"])},
+        "user": {
+            "id": user_id,
+            "username": username_val,
+            "email": email_val,
+            "display_name": disp_name,
+            "is_super_admin": bool(row and row["is_super_admin"]),
+            "must_change_password": bool(row and row["must_change_password"]),
+        },
         "roles": roles,
         "permissions": perms if not (row and row["is_super_admin"]) else sorted(auth_db.PERMISSIONS.keys()),
     }

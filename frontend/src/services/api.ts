@@ -179,11 +179,22 @@ export const api = {
         if (!res || !res.ok) return null;
         const data = await res.json();
         const u = data.user || data;
+        const formatDisplayName = (rawDisp?: string, rawUser?: string) => {
+          if (rawDisp && !rawDisp.includes('@')) return rawDisp;
+          const src = rawDisp || rawUser || '';
+          if (src.includes('@')) {
+            const local = src.split('@')[0];
+            const parts = local.replace(/[._-]/g, ' ').split(/\s+/).filter(Boolean);
+            return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+          }
+          return src;
+        };
+        const emailVal = u.email || (u.username && u.username.includes('@') ? u.username : '');
         return {
           id: String(u.id || ''),
-          username: u.username || '',
-          display_name: u.display_name || u.username || '',
-          email: u.email || '',
+          username: u.username || emailVal || '',
+          display_name: formatDisplayName(u.display_name, u.username),
+          email: emailVal,
           image: u.image || '',
           employee_id: u.employee_id || '',
           department: u.department || '',
@@ -220,13 +231,24 @@ export const api = {
         const json = await res.json();
         if (!res.ok) return { ok: false, error: json.detail || 'Failed to update profile' };
         const u = json.user;
+        const formatDisplayName = (rawDisp?: string, rawUser?: string) => {
+          if (rawDisp && !rawDisp.includes('@')) return rawDisp;
+          const src = rawDisp || rawUser || '';
+          if (src.includes('@')) {
+            const local = src.split('@')[0];
+            const parts = local.replace(/[._-]/g, ' ').split(/\s+/).filter(Boolean);
+            return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+          }
+          return src;
+        };
+        const emailVal = u.email || (u.username && u.username.includes('@') ? u.username : '');
         return {
           ok: true,
           user: {
             id: String(u.id || ''),
-            username: u.username || '',
-            display_name: u.display_name || u.username || '',
-            email: u.email || '',
+            username: u.username || emailVal || '',
+            display_name: formatDisplayName(u.display_name, u.username),
+            email: emailVal,
             image: u.image || '',
             employee_id: u.employee_id || '',
             department: u.department || '',
@@ -260,11 +282,23 @@ export const api = {
           return { ok: true, mfaRequired: true, ticket: data.ticket, enrollRequired: Boolean(data.enroll_required) };
         }
         const u = data.user || {};
+        const emailVal = u.email || (u.username && u.username.includes('@') ? u.username : (username.includes('@') ? username : ''));
+        const formatDisplayName = (rawDisp?: string, rawUser?: string) => {
+          if (rawDisp && !rawDisp.includes('@')) return rawDisp;
+          const src = rawDisp || rawUser || '';
+          if (src.includes('@')) {
+            const local = src.split('@')[0];
+            const parts = local.replace(/[._-]/g, ' ').split(/\s+/).filter(Boolean);
+            return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+          }
+          return src;
+        };
         const profile: UserProfile = {
           must_change_password: Boolean(u.must_change_password),
           id: String(u.id || ''),
           username: u.username || username,
-          display_name: u.display_name || u.username || username,
+          email: emailVal,
+          display_name: formatDisplayName(u.display_name, u.username || username),
           organization: u.organization || 'SSLWIRELESS',
           is_super_admin: Boolean(u.is_super_admin),
           roles: data.roles || [],

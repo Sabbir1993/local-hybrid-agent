@@ -256,7 +256,19 @@ export const Sidebar: React.FC = () => {
     }
   };
 
-  const nameToUse = currentUser?.display_name || currentUser?.username || 'Sabbir Hossain';
+  const getNameToUse = () => {
+    if (currentUser?.display_name && !currentUser.display_name.includes('@')) {
+      return currentUser.display_name;
+    }
+    const raw = currentUser?.display_name || currentUser?.username || currentUser?.email || '';
+    if (raw.includes('@')) {
+      const local = raw.split('@')[0];
+      const parts = local.replace(/[._-]/g, ' ').split(/\s+/).filter(Boolean);
+      return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+    }
+    return raw || 'Sabbir Hossain';
+  };
+  const nameToUse = getNameToUse();
   const initials = nameToUse
     .split(/\s+/)
     .map((n) => n[0])

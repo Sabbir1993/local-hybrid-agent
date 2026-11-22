@@ -45,6 +45,17 @@ def session_idle_s() -> int:
     return p["minutes"] * 60 if p["enabled"] else SESSION_ABSOLUTE_MAX_S
 
 
+def clean_display_name(username_or_email: str) -> str:
+    """Format an email address or username into a human-friendly display name if none is explicitly set."""
+    if not username_or_email:
+        return ""
+    if "@" in username_or_email:
+        local = username_or_email.split("@")[0]
+        parts = [p.capitalize() for p in local.replace(".", " ").replace("_", " ").replace("-", " ").split()]
+        return " ".join(parts) if parts else username_or_email
+    return username_or_email
+
+
 @dataclass
 class Principal:
     id: int
@@ -57,6 +68,7 @@ class Principal:
     via_token: bool = False           # authenticated by an API token, not a browser session
     token_id: Optional[int] = None
     mfa_verified: bool = False        # this session proved the TOTP second factor
+    email: Optional[str] = None
 
 
 def _hash_token(raw: str) -> str:
@@ -77,8 +89,11 @@ def _to_principal(user_id: int) -> Optional[Principal]:
         return None
     roles = auth_db.get_user_role_names(user_id)
     perms = auth_db.get_user_permission_keys(user_id)
+    raw_disp = row["display_name"] if ("display_name" in row.keys() and row["display_name"]) else None
+    disp_name = raw_disp if (raw_disp and "@" not in raw_disp) else clean_display_name(row["username"])
+    email_val = (row["email"] if "email" in row.keys() else None) or (row["username"] if "@" in row["username"] else "")
     return Principal(
-        id=row["id"], username=row["username"], display_name=row["display_name"] or row["username"],
+        id=row["id"], username=row["username"], display_name=disp_name, email=email_val,
         is_super_admin=bool(row["is_super_admin"]), must_change_password=bool(row["must_change_password"]),
         role_names=roles, permission_keys=perms,
     )
@@ -145,7 +160,7 @@ def verify_api_token(raw_token: Optional[str], ip: Optional[str] = None) -> Opti
     auth_db.touch_api_token(row["id"], ip)
     # effective rights = token scopes AND the user's current rights: removing a role
     # from the user narrows every token they own. Never a super-admin bypass.
-    return Principal(id=base.id, username=base.username, display_name=base.display_name,
+    return Principal(id=base.id, username=base.username, display_name=base.display_name, email=base.email,
                      is_super_admin=False, must_change_password=False, role_names=base.role_names,
                      permission_keys=scopes & held, via_token=True, token_id=row["id"])
 

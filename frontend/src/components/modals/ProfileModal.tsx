@@ -10,8 +10,27 @@ interface Props {
 export const ProfileModal: React.FC<Props> = ({ onClose }) => {
   const { currentUser, showToast } = useAppStore();
 
-  const [displayName, setDisplayName] = useState(currentUser?.display_name || currentUser?.username || '');
-  const [email, setEmail] = useState(currentUser?.email || '');
+  const getInitialName = () => {
+    if (currentUser?.display_name && !currentUser.display_name.includes('@')) {
+      return currentUser.display_name;
+    }
+    const raw = currentUser?.display_name || currentUser?.username || currentUser?.email || '';
+    if (raw.includes('@')) {
+      const local = raw.split('@')[0];
+      const parts = local.replace(/[._-]/g, ' ').split(/\s+/).filter(Boolean);
+      return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+    }
+    return raw;
+  };
+
+  const getInitialEmail = () => {
+    if (currentUser?.email) return currentUser.email;
+    if (currentUser?.username && currentUser.username.includes('@')) return currentUser.username;
+    return '';
+  };
+
+  const [displayName, setDisplayName] = useState(getInitialName());
+  const [email, setEmail] = useState(getInitialEmail());
   const [image, setImage] = useState(currentUser?.image || '');
   const [employeeId, setEmployeeId] = useState(currentUser?.employee_id || '');
   const [department, setDepartment] = useState(currentUser?.department || '');
@@ -30,7 +49,7 @@ export const ProfileModal: React.FC<Props> = ({ onClose }) => {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const initials = (displayName || currentUser?.username || 'SH')
+  const initials = (displayName || 'SH')
     .split(/\s+/)
     .map((w) => w[0])
     .join('')
