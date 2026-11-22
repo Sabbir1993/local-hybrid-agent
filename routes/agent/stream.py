@@ -1994,8 +1994,20 @@ async def run_agent_stream(req, user, ctx):
                     except Exception as _de:
                         print(f"[agent] diff summary failed: {_de}", file=sys.stderr)
                         _payload = {'id': tc_id, 'name': name, 'ok': ok, 'result': result}
+                    if name in ("spawn_parallel_agents", "spawn_agent", "spawn_reviewed_coder"):
+                        try:
+                            from core.subagent import get_subagent_traces, clear_subagent_traces
+                            _sub_traces = get_subagent_traces()
+                            if _sub_traces:
+                                _payload["subagents"] = _sub_traces
+                                clear_subagent_traces()
+                        except Exception as _ste:
+                            print(f"[agent] subagent trace capture failed: {_ste}", file=sys.stderr)
                     yield _tool_result(_payload)
-                    actions_taken.append({"name": name, "args": args, "ok": ok, "result": cap_tool_result(result, tool_result_cap)})
+                    act_item = {"name": name, "args": args, "ok": ok, "result": cap_tool_result(result, tool_result_cap)}
+                    if _payload.get("subagents"):
+                        act_item["subagents"] = _payload["subagents"]
+                    actions_taken.append(act_item)
                     # what the model keeps re-reading every later step is capped once, here: an old
                     # result is never rewritten afterwards, so the provider's prompt cache stays valid
                     msgs.append({"role": "tool", "tool_call_id": tc_id,

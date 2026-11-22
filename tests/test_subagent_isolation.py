@@ -210,7 +210,7 @@ class ChildWriteTrackingTests(unittest.TestCase):
         root = Path(tmp.name).resolve()
 
         def fake_ws():
-            return Path(tmp.name)
+            return root
 
         # seed _ws_changes: parent file + the two child files + one sibling file
         with mock.patch.object(at, "active_workspace", fake_ws), \

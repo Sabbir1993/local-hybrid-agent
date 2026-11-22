@@ -15,6 +15,7 @@ export interface TraceItem {
   isThought?: boolean;
   text?: string;
   duration_s?: number;
+  subagents?: any[];
 }
 
 type Segment = { kind: 'prose'; text: string } | { kind: 'group'; items: TraceItem[] };
@@ -146,6 +147,236 @@ function rowHtml(t: TraceItem): string {
   return h;
 }
 
+function parseSubagentsFromText(rawText: unknown): any[] {
+  if (!rawText || typeof rawText !== 'string') return [];
+  const textWithoutHeader = rawText.replace(/^\[parallel sub-agents[^\n]*\n+/i, '').trim();
+  const blocks = textWithoutHeader.split(/(?:^|\n)(?==== Sub-agent #\d+)/g).filter((b) => b.trim());
+  const list: any[] = [];
+
+  if (blocks.length > 0) {
+    blocks.forEach((blk, idx) => {
+      const headMatch = blk.match(/=== Sub-agent #(\d+)(?:\s*\((.*?)\))?\s*===/);
+      const subIdx = headMatch ? parseInt(headMatch[1], 10) : idx + 1;
+      let role = headMatch && headMatch[2] ? headMatch[2].replace(/^role=/, '').trim() : 'generic';
+      let status = 'success';
+      let lane = 'default';
+      let steps = 0;
+      let failure_reason: string | null = null;
+
+      const envMatch = blk.match(/\[(?:sub-agent|Sub-agent|critic-actor)\s*·\s*([^\]]+)\]/);
+      if (envMatch) {
+        const parts = envMatch[1].split('·').map((s) => s.trim());
+        parts.forEach((p) => {
+          if (p.startsWith('role=')) role = p.replace('role=', '');
+          else if (p.startsWith('lane=')) lane = p.replace('lane=', '');
+          else if (p.startsWith('status=')) status = p.replace('status=', '');
+          else if (p.includes('msgs')) steps = parseInt(p, 10) || 0;
+        });
+      } else if (blk.includes('error:')) {
+        status = 'error';
+      }
+
+      if (status === 'step_limit' || status === 'step_exhausted') {
+        failure_reason = 'Reached maximum step limit without producing a final answer. Consider increasing max_steps.';
+      } else if (status === 'no_response') {
+        failure_reason = 'Sub-agent received no response from the model.';
+      } else if (status !== 'success') {
+        const errLine = blk.split('\n').find((l) => l.trim().startsWith('error:'));
+        failure_reason = errLine ? errLine.trim().replace(/^error:\s*/, '') : 'Sub-agent execution failed.';
+      }
+
+      const body = blk
+        .replace(/=== Sub-agent #\d+(?:\s*\(.*?\))?\s*===\n?/, '')
+        .replace(/\[(?:sub-agent|Sub-agent|critic-actor)\s*·\s*[^\]]+\]\n?/, '')
+        .trim();
+
+      list.push({
+        id: `sub_${subIdx}`,
+        index: subIdx,
+        role,
+        status,
+        lane,
+        stepsCount: steps,
+        failure_reason,
+        final_content: body,
+        steps: [],
+      });
+    });
+  } else if (rawText.includes('[sub-agent') || rawText.includes('[critic-actor')) {
+    // Single subagent format
+    const envMatch = rawText.match(/\[(?:sub-agent|Sub-agent|critic-actor)\s*·\s*([^\]]+)\]/);
+    let role = 'generic';
+    let status = 'success';
+    let lane = 'default';
+    let steps = 0;
+    let failure_reason: string | null = null;
+    if (envMatch) {
+      const parts = envMatch[1].split('·').map((s) => s.trim());
+      parts.forEach((p) => {
+        if (p.startsWith('role=')) role = p.replace('role=', '');
+        else if (p.startsWith('lane=')) lane = p.replace('lane=', '');
+        else if (p.startsWith('status=')) status = p.replace('status=', '');
+        else if (p.includes('msgs')) steps = parseInt(p, 10) || 0;
+      });
+    }
+    if (status === 'step_limit' || status === 'step_exhausted') {
+      failure_reason = 'Reached step limit without completing the task.';
+    } else if (status !== 'success') {
+      failure_reason = 'Sub-agent execution failed.';
+    }
+    const body = rawText.replace(/\[(?:sub-agent|Sub-agent|critic-actor)\s*·\s*[^\]]+\]\n?/, '').trim();
+    list.push({
+      id: 'sub_1',
+      index: 1,
+      role,
+      status,
+      lane,
+      stepsCount: steps,
+      failure_reason,
+      final_content: body,
+      steps: [],
+    });
+  }
+
+  return list;
+}
+
+function renderSubagentViewHtml(t: TraceItem): string {
+  let subagents = t.subagents;
+  if (!subagents || !subagents.length) {
+    subagents = parseSubagentsFromText(t.result);
+  }
+  if (!subagents || !subagents.length) return '';
+
+  const total = subagents.length;
+  const succeeded = subagents.filter((s: any) => s.status === 'success').length;
+  const failed = total - succeeded;
+  const anyFailed = failed > 0;
+  const agentSpecs = Array.isArray(t.args?.agents) ? t.args.agents : null;
+
+  let h = '<div class="ct-subagent-dashboard">';
+
+  // 1. Dashboard Summary Header
+  h += '<div class="ct-subagent-summary-bar">';
+  h += `<div class="ct-subagent-title">👥 Sub-Agents (${total} dispatched)</div>`;
+  h += '<div class="ct-subagent-pills">';
+  if (succeeded > 0) {
+    h += `<span class="ct-pill-ok">✓ ${succeeded} Succeeded</span>`;
+  }
+  if (failed > 0) {
+    h += `<span class="ct-pill-fail">✕ ${failed} Failed</span>`;
+  }
+  h += '</div></div>';
+
+  // 2. Failure Alert Banner (if any subagent failed)
+  if (anyFailed) {
+    h += '<div class="ct-subagent-alert-box">';
+    subagents.forEach((s: any, i: number) => {
+      if (s.status !== 'success') {
+        const name = `Sub-agent #${s.index || i + 1} (${s.role || 'generic'})`;
+        const reason = s.failure_reason || s.final_content || 'Failed to complete execution.';
+        h += `<div class="ct-alert-row"><span class="ct-alert-badge">✕ Failed</span> <strong>${escText(name)}:</strong> ${escText(reason)}</div>`;
+      }
+    });
+    h += '</div>';
+  }
+
+  // 3. Subagent Process Cards
+  h += '<div class="ct-subagent-cards">';
+  subagents.forEach((s: any, i: number) => {
+    const isSuccess = s.status === 'success';
+    const spec = agentSpecs && agentSpecs[i] ? agentSpecs[i] : null;
+    const taskText = s.task || (spec?.task) || (t.args?.task) || '';
+    const stepsArr = Array.isArray(s.steps) ? s.steps : [];
+    const stepsCount = stepsArr.length || s.stepsCount || 0;
+    const roleName = s.role || spec?.role || 'generic';
+    const subIdx = s.index || i + 1;
+
+    h += `<details class="ct-subagent-card${!isSuccess ? ' failed' : ''}" ${!isSuccess || total === 1 ? 'open' : ''}>`;
+    h += '<summary class="ct-subagent-card-sum">';
+    h += `<span class="ct-subagent-status-icon ${isSuccess ? 'ok' : 'fail'}">${isSuccess ? '✓' : '✕'}</span>`;
+    h += `<span class="ct-subagent-card-name">Sub-agent #${subIdx} · <span class="ct-role-highlight">${escText(roleName)}</span></span>`;
+    h += '<div class="ct-subagent-meta-tags">';
+    h += `<span class="ct-meta-tag">${stepsCount} msgs</span>`;
+    if (s.lane && s.lane !== 'default') h += `<span class="ct-meta-tag">${escText(s.lane)}</span>`;
+    if (s.duration_s) h += `<span class="ct-meta-tag">${s.duration_s}s</span>`;
+    h += `<span class="ct-badge-status ${isSuccess ? 'ok' : 'fail'}">${isSuccess ? 'success' : escText(s.status || 'failed')}</span>`;
+    h += '</div>';
+    h += '<span class="ct-chev">›</span>';
+    h += '</summary>';
+
+    h += '<div class="ct-subagent-card-body">';
+
+    // Assigned Task
+    if (taskText) {
+      h += '<div class="ct-sub-section"><span class="ct-sub-section-title">Assigned Task</span>';
+      h += `<div class="ct-sub-task-box">${escText(taskText)}</div></div>`;
+    }
+
+    // Failure Diagnosis
+    if (!isSuccess && s.failure_reason) {
+      h += `<div class="ct-sub-fail-reason"><strong>Diagnosis:</strong> ${escText(s.failure_reason)}</div>`;
+    }
+
+    // Steps Timeline (like regular agent!)
+    if (stepsArr.length > 0) {
+      h += `<div class="ct-sub-section"><span class="ct-sub-section-title">Execution Process (${stepsArr.length} steps)</span>`;
+      h += '<div class="ct-sub-steps-list">';
+      stepsArr.forEach((st: any) => {
+        h += '<div class="ct-sub-step-row">';
+        h += `<div class="ct-sub-step-header"><span class="ct-sub-step-badge">Step ${st.step}</span>`;
+        if (st.duration_s) h += `<span class="ct-step-duration">${st.duration_s}s</span>`;
+        h += '</div>';
+        if (st.thought && st.thought.trim()) {
+          h += `<div class="ct-sub-step-thought">${escText(st.thought.trim())}</div>`;
+        }
+        if (Array.isArray(st.tools) && st.tools.length > 0) {
+          st.tools.forEach((tc: any) => {
+            h += `<details class="ct-sub-tool-drawer"><summary class="ct-sub-tool-sum">`;
+            h += `<span class="ct-sub-tool-badge">${escText(tc.name)}</span>`;
+            const toolArg = tc.args?.path || tc.args?.file || tc.args?.query || tc.args?.pattern || tc.args?.command || '';
+            if (toolArg) {
+              h += `<span class="ct-sub-tool-target">${escText(String(toolArg).slice(0, 70))}</span>`;
+            }
+            h += `<span class="${tc.ok ? 'ct-badge-ok-mini' : 'ct-badge-fail-mini'}">${tc.ok ? 'ok' : 'fail'}</span>`;
+            h += '<span class="ct-chev">›</span>';
+            h += '</summary>';
+            h += '<div class="ct-sub-tool-content">';
+            if (tc.args && Object.keys(tc.args).length) {
+              h += `<div class="ct-label">Arguments</div><pre class="ct-pre"><code>${escText(JSON.stringify(tc.args, null, 2))}</code></pre>`;
+            }
+            if (tc.result) {
+              h += `<div class="ct-label">Result</div><pre class="ct-pre${!tc.ok ? ' ct-pre-fail' : ''}"><code>${escText(tc.result)}</code></pre>`;
+            }
+            h += '</div></details>';
+          });
+        }
+        h += '</div>';
+      });
+      h += '</div></div>';
+    }
+
+    // Final Output
+    const outputContent = s.final_content || '';
+    if (outputContent) {
+      h += '<div class="ct-sub-section"><span class="ct-sub-section-title">Final Output</span>';
+      h += `<pre class="ct-sub-output"><code>${escText(outputContent)}</code></pre></div>`;
+    }
+
+    h += '</div>';
+    h += '</details>';
+  });
+  h += '</div>';
+
+  // 4. Raw Output Toggle
+  const rawText = typeof t.result === 'string' ? t.result : JSON.stringify(t.result, null, 2);
+  h += '<details class="ct-raw-toggle"><summary>View Raw Output Text</summary>';
+  h += `<pre class="ct-pre${t.failed ? ' ct-pre-fail' : ''}"><code>${escText(rawText)}</code></pre></details>`;
+
+  h += '</div>';
+  return h;
+}
+
 function drawerHtml(t: TraceItem): string {
   let h = '<div class="ct-drawer">';
   const p = pathOf(t.args);
@@ -156,6 +387,17 @@ function drawerHtml(t: TraceItem): string {
       ? `<a class="file-action-badge" href="/agent/download?path=${encodeURIComponent(p)}" download="${pa}">⬇ Download</a>` : '';
     h += `<div class="ct-drawer-file"><span class="ct-mono">${pa}</span>${dl}</div>`;
   }
+
+  // If this is a subagent tool call, render the rich Subagent Dashboard!
+  if (t.name === 'spawn_parallel_agents' || t.name === 'spawn_agent' || t.name === 'spawn_reviewed_coder') {
+    const subHtml = renderSubagentViewHtml(t);
+    if (subHtml) {
+      h += subHtml;
+      h += '</div>';
+      return h;
+    }
+  }
+
   if (t.args && Object.keys(t.args).length) {
     h += `<div class="ct-label">Arguments</div><pre class="ct-pre"><code>${escText(JSON.stringify(t.args, null, 2))}</code></pre>`;
   }
@@ -215,7 +457,7 @@ export function traceSegments(acts: any[]): Segment[] {
         isThought: true, text, duration_s: a.duration_s || a.secs || 1 });
     } else if (a.type === 'tool_call') {
       const it: TraceItem = { id: a.id || `tc-${idx}`, name: a.name || 'tool', args: a.args || {}, result: null,
-        failed: false, running: true };
+        failed: false, running: true, subagents: a.subagents || undefined };
       group().push(it);
       if (a.id) byId.set(a.id, it);
     } else if (a.type === 'tool_result') {
@@ -223,6 +465,7 @@ export function traceSegments(acts: any[]): Segment[] {
       if (!it) return;
       it.result = a.result;
       it.running = false;
+      if (a.subagents) it.subagents = a.subagents;
       // the server's verdict decides; only older stored steps without `ok` fall back to an "error..." result
       it.failed = a.ok === false || (a.ok === undefined && typeof a.result === 'string' && /^\s*error\b/i.test(a.result));
     }

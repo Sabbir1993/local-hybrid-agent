@@ -185,7 +185,11 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       }
       break;
     }
-    case 'tool_result':
+    case 'tool_result': {
+      const call = acts.slice().reverse().find((a) => a.type === 'tool_call' && (a.id === d.id || (!d.id && a.name === d.name)));
+      if (call && d.subagents) {
+        call.subagents = d.subagents;
+      }
       acts.push({ type: 'tool_result', ...d });
       L.statusText = 'Crunching tool results...';
       if (SHELL_TOOLS.includes(d.name)) {
@@ -210,6 +214,7 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
         toast(`⚠️ Failed to write ${p ? String(p).split(/[\\/]/).pop() : 'file'}`, 'error');
       }
       break;
+    }
     case 'verify':
       acts.push({ type: 'verify', ...d });
       L.statusText = 'Verifying tool changes...';
