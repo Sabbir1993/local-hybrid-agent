@@ -15,6 +15,7 @@ export interface TraceItem {
   isThought?: boolean;
   text?: string;
   duration_s?: number;
+  subagents?: Record<string, any>;
 }
 
 type Segment = { kind: 'prose'; text: string } | { kind: 'group'; items: TraceItem[] };
@@ -241,12 +242,85 @@ function parseSubagentsFromText(rawText: unknown): any[] {
 }
 
 function renderSubagentViewHtml(t: TraceItem): string {
-  const subagents = parseSubagentsFromText(t.result);
+  let subagents = parseSubagentsFromText(t.result);
+  const isRunning = t.running || !t.result;
+  const liveMap = t.subagents || {};
+
+  // If subagents could not be parsed from result text (e.g. while actively running or unstructured result), synthesize from live events or arguments
+  if (!subagents || !subagents.length) {
+    if (Array.isArray(t.args?.agents) && t.args.agents.length > 0) {
+      subagents = t.args.agents.map((ag: any, idx: number) => {
+        const key = String(idx);
+        const live = liveMap[key] || Object.values(liveMap).find((v: any) => v.sub_index === idx || v.role === ag.role) || {};
+        const isDone = live.status === 'completed';
+        const isFailed = live.status === 'error';
+        return {
+          index: idx + 1,
+          role: live.role || ag.role || 'subagent',
+          status: isDone ? 'success' : isFailed ? 'failed' : (isRunning ? 'running' : 'success'),
+          lane: ag.lane || 'default',
+          stepsCount: live.step || 0,
+          max_steps: live.max_steps || ag.max_steps || 10,
+          current_tool: live.current_tool,
+          current_tool_args: live.current_tool_args,
+          elapsed_s: live.elapsed_s,
+          duration_s: live.duration_s,
+          task: ag.task || '',
+          steps: [],
+          final_content: isDone ? 'Subagent completed execution.' : '',
+          failure_reason: live.error || '',
+        };
+      });
+    } else if (t.args?.task) {
+      const key = '0';
+      const live = liveMap[key] || Object.values(liveMap)[0] || {};
+      const isDone = live.status === 'completed';
+      const isFailed = live.status === 'error';
+      subagents = [{
+        index: 1,
+        role: live.role || t.args.role || 'subagent',
+        status: isDone ? 'success' : isFailed ? 'failed' : (isRunning ? 'running' : 'success'),
+        lane: t.args.lane || 'default',
+        stepsCount: live.step || 0,
+        max_steps: live.max_steps || t.args.max_steps || 10,
+        current_tool: live.current_tool,
+        current_tool_args: live.current_tool_args,
+        elapsed_s: live.elapsed_s,
+        duration_s: live.duration_s,
+        task: t.args.task || '',
+        steps: [],
+        final_content: isDone ? 'Subagent completed execution.' : '',
+        failure_reason: live.error || '',
+      }];
+    } else if (Object.keys(liveMap).length > 0) {
+      subagents = Object.values(liveMap).map((live: any, idx: number) => {
+        const isDone = live.status === 'completed';
+        const isFailed = live.status === 'error';
+        return {
+          index: (live.sub_index !== undefined ? live.sub_index + 1 : idx + 1),
+          role: live.role || 'subagent',
+          status: isDone ? 'success' : isFailed ? 'failed' : (isRunning ? 'running' : 'success'),
+          stepsCount: live.step || 0,
+          max_steps: live.max_steps || 10,
+          current_tool: live.current_tool,
+          current_tool_args: live.current_tool_args,
+          elapsed_s: live.elapsed_s,
+          duration_s: live.duration_s,
+          task: live.task || '',
+          steps: [],
+          final_content: isDone ? 'Subagent completed execution.' : '',
+          failure_reason: live.error || '',
+        };
+      });
+    }
+  }
+
   if (!subagents || !subagents.length) return '';
 
   const total = subagents.length;
-  const succeeded = subagents.filter((s: any) => s.status === 'success').length;
-  const failed = total - succeeded;
+  const runningCount = subagents.filter((s: any) => s.status === 'running').length;
+  const succeeded = subagents.filter((s: any) => s.status === 'success' || s.status === 'completed').length;
+  const failed = subagents.filter((s: any) => s.status === 'failed' || s.status === 'error').length;
   const anyFailed = failed > 0;
   const agentSpecs = Array.isArray(t.args?.agents) ? t.args.agents : null;
 
@@ -256,6 +330,9 @@ function renderSubagentViewHtml(t: TraceItem): string {
   h += '<div class="ct-subagent-summary-bar">';
   h += `<div class="ct-subagent-title">👥 Sub-Agents (${total} dispatched)</div>`;
   h += '<div class="ct-subagent-pills">';
+  if (runningCount > 0) {
+    h += `<span class="ct-pill-running"><span class="ct-running"></span> ${runningCount} Running</span>`;
+  }
   if (succeeded > 0) {
     h += `<span class="ct-pill-ok">✓ ${succeeded} Succeeded</span>`;
   }
@@ -268,7 +345,7 @@ function renderSubagentViewHtml(t: TraceItem): string {
   if (anyFailed) {
     h += '<div class="ct-subagent-alert-box">';
     subagents.forEach((s: any, i: number) => {
-      if (s.status !== 'success') {
+      if (s.status === 'failed' || s.status === 'error') {
         const name = `Sub-agent #${s.index || i + 1} (${s.role || 'generic'})`;
         const reason = s.failure_reason || s.final_content || 'Failed to complete execution.';
         h += `<div class="ct-alert-row"><span class="ct-alert-badge">✕ Failed</span> <strong>${escText(name)}:</strong> ${escText(reason)}</div>`;
@@ -280,7 +357,9 @@ function renderSubagentViewHtml(t: TraceItem): string {
   // 3. Subagent Process Cards
   h += '<div class="ct-subagent-cards">';
   subagents.forEach((s: any, i: number) => {
-    const isSuccess = s.status === 'success';
+    const isRunningSub = s.status === 'running';
+    const isSuccess = s.status === 'success' || s.status === 'completed';
+    const isFail = s.status === 'failed' || s.status === 'error';
     const spec = agentSpecs && agentSpecs[i] ? agentSpecs[i] : null;
     const taskText = s.task || (spec?.task) || (t.args?.task) || '';
     const stepsArr = Array.isArray(s.steps) ? s.steps : [];
@@ -288,15 +367,29 @@ function renderSubagentViewHtml(t: TraceItem): string {
     const roleName = s.role || spec?.role || 'generic';
     const subIdx = s.index || i + 1;
 
-    h += `<details class="ct-subagent-card${!isSuccess ? ' failed' : ''}">`;
+    // During live execution, keep the cards open so user sees task & live tool progress!
+    const cardOpenAttr = isRunningSub ? ' open' : '';
+    const cardClass = isFail ? ' failed' : isRunningSub ? ' running' : '';
+
+    h += `<details class="ct-subagent-card${cardClass}"${cardOpenAttr}>`;
     h += '<summary class="ct-subagent-card-sum">';
-    h += `<span class="ct-subagent-status-icon ${isSuccess ? 'ok' : 'fail'}">${isSuccess ? '✓' : '✕'}</span>`;
+    if (isRunningSub) {
+      h += '<span class="ct-subagent-status-icon running"><span class="ct-running" style="width:10px;height:10px;"></span></span>';
+    } else {
+      h += `<span class="ct-subagent-status-icon ${isSuccess ? 'ok' : 'fail'}">${isSuccess ? '✓' : '✕'}</span>`;
+    }
     h += `<span class="ct-subagent-card-name">Sub-agent #${subIdx} · <span class="ct-role-highlight">${escText(roleName)}</span></span>`;
     h += '<div class="ct-subagent-meta-tags">';
-    h += `<span class="ct-meta-tag">${stepsCount} msgs</span>`;
-    if (s.lane && s.lane !== 'default') h += `<span class="ct-meta-tag">${escText(s.lane)}</span>`;
-    if (s.duration_s) h += `<span class="ct-meta-tag">${s.duration_s}s</span>`;
-    h += `<span class="ct-badge-status ${isSuccess ? 'ok' : 'fail'}">${isSuccess ? 'success' : escText(s.status || 'failed')}</span>`;
+    if (isRunningSub) {
+      h += `<span class="ct-meta-tag">Step ${stepsCount}/${s.max_steps || '?'}</span>`;
+      if (s.elapsed_s) h += `<span class="ct-meta-tag">${s.elapsed_s}s</span>`;
+      h += `<span class="ct-badge-status running">RUNNING</span>`;
+    } else {
+      h += `<span class="ct-meta-tag">${stepsCount} msgs</span>`;
+      if (s.lane && s.lane !== 'default') h += `<span class="ct-meta-tag">${escText(s.lane)}</span>`;
+      if (s.duration_s) h += `<span class="ct-meta-tag">${s.duration_s}s</span>`;
+      h += `<span class="ct-badge-status ${isSuccess ? 'ok' : 'fail'}">${isSuccess ? 'success' : escText(s.status || 'failed')}</span>`;
+    }
     h += '</div>';
     h += '<span class="ct-chev">›</span>';
     h += '</summary>';
@@ -309,12 +402,28 @@ function renderSubagentViewHtml(t: TraceItem): string {
       h += `<div class="ct-sub-task-box">${escText(taskText)}</div></div>`;
     }
 
+    // Active Tool / Running Status
+    if (isRunningSub) {
+      h += '<div class="ct-sub-section"><span class="ct-sub-section-title">Active Execution</span>';
+      if (s.current_tool) {
+        const argSnippet = s.current_tool_args ? (s.current_tool_args.path || s.current_tool_args.file || s.current_tool_args.query || s.current_tool_args.command || '') : '';
+        h += `<div class="ct-sub-step-row" style="background:rgba(59,130,246,0.08);border-color:rgba(59,130,246,0.25);">`;
+        h += `<div class="ct-sub-step-header"><span class="ct-sub-step-badge" style="color:#60a5fa;">Step ${stepsCount || 1}: Executing Tool</span>`;
+        h += `<span class="ct-step-duration"><span class="ct-running" style="width:8px;height:8px;margin-right:4px;"></span>In progress</span></div>`;
+        h += `<div style="font-size:12px;font-family:ui-monospace,monospace;color:#93c5fd;margin-top:2px;"><strong>${escText(s.current_tool)}</strong> ${escText(String(argSnippet).slice(0, 80))}</div>`;
+        h += '</div>';
+      } else {
+        h += `<div class="ct-sub-step-thought" style="color:#94a3b8;">Subagent is synthesizing plan and deciding next action...</div>`;
+      }
+      h += '</div>';
+    }
+
     // Failure Diagnosis
-    if (!isSuccess && s.failure_reason) {
+    if (isFail && s.failure_reason) {
       h += `<div class="ct-sub-fail-reason"><strong>Diagnosis:</strong> ${escText(s.failure_reason)}</div>`;
     }
 
-    // Steps Timeline (like regular agent!)
+    // Steps Timeline
     if (stepsArr.length > 0) {
       h += `<div class="ct-sub-section"><span class="ct-sub-section-title">Execution Process (${stepsArr.length} steps)</span>`;
       h += '<div class="ct-sub-steps-list">';
@@ -354,7 +463,7 @@ function renderSubagentViewHtml(t: TraceItem): string {
 
     // Final Output
     const outputContent = s.final_content || '';
-    if (outputContent) {
+    if (outputContent && !isRunningSub) {
       h += '<div class="ct-sub-section"><span class="ct-sub-section-title">Final Output</span>';
       h += `<pre class="ct-sub-output"><code>${escText(outputContent)}</code></pre></div>`;
     }
@@ -364,10 +473,12 @@ function renderSubagentViewHtml(t: TraceItem): string {
   });
   h += '</div>';
 
-  // 4. Raw Output Toggle
-  const rawText = typeof t.result === 'string' ? t.result : JSON.stringify(t.result, null, 2);
-  h += '<details class="ct-raw-toggle"><summary>View Raw Output Text</summary>';
-  h += `<pre class="ct-pre${t.failed ? ' ct-pre-fail' : ''}"><code>${escText(rawText)}</code></pre></details>`;
+  // 4. Raw Output Toggle (only when completed)
+  if (!isRunning && t.result) {
+    const rawText = typeof t.result === 'string' ? t.result : JSON.stringify(t.result, null, 2);
+    h += '<details class="ct-raw-toggle"><summary>View Raw Output Text</summary>';
+    h += `<pre class="ct-pre${t.failed ? ' ct-pre-fail' : ''}"><code>${escText(rawText)}</code></pre></details>`;
+  }
 
   h += '</div>';
   return h;
@@ -453,7 +564,7 @@ export function traceSegments(acts: any[]): Segment[] {
         isThought: true, text, duration_s: a.duration_s || a.secs || 1 });
     } else if (a.type === 'tool_call') {
       const it: TraceItem = { id: a.id || `tc-${idx}`, name: a.name || 'tool', args: a.args || {}, result: null,
-        failed: false, running: true };
+        failed: false, running: true, subagents: a.subagents };
       group().push(it);
       if (a.id) byId.set(a.id, it);
     } else if (a.type === 'tool_result') {
@@ -461,6 +572,7 @@ export function traceSegments(acts: any[]): Segment[] {
       if (!it) return;
       it.result = a.result;
       it.running = false;
+      if (a.subagents) it.subagents = a.subagents;
       // the server's verdict decides; only older stored steps without `ok` fall back to an "error..." result
       it.failed = a.ok === false || (a.ok === undefined && typeof a.result === 'string' && /^\s*error\b/i.test(a.result));
     }

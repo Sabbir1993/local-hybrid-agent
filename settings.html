@@ -415,6 +415,10 @@
           <span class="tab-icon">🧩</span>
           <span class="tab-label">Capabilities</span>
         </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-subagents">
+          <span class="tab-icon">👥</span>
+          <span class="tab-label">Sub-Agents</span>
+        </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-knowledge" data-perm="knowledge.manage">
           <span class="tab-icon">📚</span>
           <span class="tab-label">Knowledge Base</span>
@@ -1048,6 +1052,84 @@
         </div>
         <div id="caps-content"><div class="mon-empty">Loading…</div></div>
         <div class="cfg-note" title="Capability note">Toggles persist to config/app.json. MCP servers added or edited here connect live (no restart); first npx start may take a minute.</div>
+      </div>
+
+      <!-- Section: Sub-Agents Configuration -->
+      <div class="card settings-panel" id="sec-subagents">
+        <div class="settings-panel-head">
+          <h2>👥 Sub-Agents Configuration</h2>
+          <p class="dim">Configure runtime execution limits, timeouts, and parallel concurrency for delegated agent tasks.</p>
+        </div>
+
+        <div style="padding: 16px 20px;">
+          <table class="subagents-table" style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+            <thead>
+              <tr style="border-bottom: 1px solid var(--border, rgba(255,255,255,0.1)); text-align: left;">
+                <th style="padding: 10px 12px; font-size: 13px; font-weight: 600;">Parameter</th>
+                <th style="padding: 10px 12px; font-size: 13px; font-weight: 600; width: 110px;">Default</th>
+                <th style="padding: 10px 12px; font-size: 13px; font-weight: 600; width: 120px;">Range</th>
+                <th style="padding: 10px 12px; font-size: 13px; font-weight: 600;">Description (Antigravity / Claude Code style)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));">
+                <td style="padding: 12px;">
+                  <div style="font-weight: 600; font-size: 13.5px; color: var(--text, #e2e8f0);">Default Step Budget</div>
+                  <code style="font-size: 11.5px; color: var(--accent, #38bdf8); background: rgba(56,189,248,0.1); padding: 1px 6px; border-radius: 4px;">subagent_default_steps</code>
+                </td>
+                <td style="padding: 12px;">
+                  <input type="number" id="subagent-default-steps" class="input" min="1" max="30" style="width: 80px; text-align: center;" value="10" />
+                </td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">1 – 30</td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e); line-height: 1.45;">Steps allocated to a subagent when not explicitly set by the task.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));">
+                <td style="padding: 12px;">
+                  <div style="font-weight: 600; font-size: 13.5px; color: var(--text, #e2e8f0);">Max Steps Ceiling</div>
+                  <code style="font-size: 11.5px; color: var(--accent, #38bdf8); background: rgba(56,189,248,0.1); padding: 1px 6px; border-radius: 4px;">subagent_max_steps</code>
+                </td>
+                <td style="padding: 12px;">
+                  <input type="number" id="subagent-max-steps" class="input" min="5" max="50" style="width: 80px; text-align: center;" value="20" />
+                </td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">5 – 50</td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e); line-height: 1.45;">Absolute maximum steps a subagent is allowed to take before stopping.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));">
+                <td style="padding: 12px;">
+                  <div style="font-weight: 600; font-size: 13.5px; color: var(--text, #e2e8f0);">Execution Timeout</div>
+                  <code style="font-size: 11.5px; color: var(--accent, #38bdf8); background: rgba(56,189,248,0.1); padding: 1px 6px; border-radius: 4px;">subagent_timeout_s</code>
+                </td>
+                <td style="padding: 12px;">
+                  <div style="display: flex; align-items: center; gap: 4px;">
+                    <input type="number" id="subagent-timeout-s" class="input" min="30" max="1800" style="width: 80px; text-align: center;" value="180" />
+                    <span style="font-size: 12px; color: var(--dim, #8b949e);">s</span>
+                  </div>
+                </td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">30s – 1800s</td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e); line-height: 1.45;">Overall wall-clock timeout per subagent. If exceeded, returns partial findings with diagnostic reason.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));">
+                <td style="padding: 12px;">
+                  <div style="font-weight: 600; font-size: 13.5px; color: var(--text, #e2e8f0);">Max Parallel Concurrency</div>
+                  <code style="font-size: 11.5px; color: var(--accent, #38bdf8); background: rgba(56,189,248,0.1); padding: 1px 6px; border-radius: 4px;">subagent_max_parallel</code>
+                </td>
+                <td style="padding: 12px;">
+                  <input type="number" id="subagent-max-parallel" class="input" min="1" max="10" style="width: 80px; text-align: center;" value="4" />
+                </td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">1 – 10</td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e); line-height: 1.45;">Maximum subagents allowed to run concurrently in parallel.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 16px;">
+            <div id="subagent-save-status" style="font-size: 13px; color: var(--dim, #8b949e);"></div>
+            <div style="display: flex; gap: 10px;">
+              <button type="button" class="btn btn-secondary" id="subagent-reset-btn">Reset to Defaults</button>
+              <button type="button" class="btn btn-primary" id="subagent-save-btn">Save Subagent Settings</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Section 8: Users & Roles -->

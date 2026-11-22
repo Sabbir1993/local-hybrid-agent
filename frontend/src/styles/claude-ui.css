@@ -2797,6 +2797,7 @@ body.is-native-app .tri-mode-switch {
 .ct-subagent-pills { display: flex; align-items: center; gap: 6px; }
 .ct-pill-ok { background: rgba(34,197,94,0.15); color: #22c55e; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 4px; }
 .ct-pill-fail { background: rgba(239,68,68,0.18); color: #ef4444; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 4px; }
+.ct-pill-running { background: rgba(59,130,246,0.18); color: #60a5fa; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; }
 
 .ct-subagent-alert-box { padding: 8px 12px; border-radius: 8px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); display: flex; flex-direction: column; gap: 4px; }
 .ct-alert-row { font-size: 12px; color: #f87171; line-height: 1.4; }
@@ -2805,6 +2806,7 @@ body.is-native-app .tri-mode-switch {
 .ct-subagent-cards { display: flex; flex-direction: column; gap: 6px; }
 .ct-subagent-card { border: 1px solid var(--border, rgba(255,255,255,0.08)); border-radius: 8px; background: var(--surface-1, rgba(255,255,255,0.02)); overflow: hidden; }
 .ct-subagent-card.failed { border-color: rgba(239,68,68,0.3); }
+.ct-subagent-card.running { border-color: rgba(59,130,246,0.35); }
 .ct-subagent-card-sum { list-style: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; user-select: none; font-size: 12.5px; }
 .ct-subagent-card-sum::-webkit-details-marker { display: none; }
 .ct-subagent-card-sum:hover { background: rgba(255,255,255,0.03); }
@@ -2812,6 +2814,7 @@ body.is-native-app .tri-mode-switch {
 .ct-subagent-status-icon { width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; flex-shrink: 0; }
 .ct-subagent-status-icon.ok { background: rgba(34,197,94,0.2); color: #22c55e; }
 .ct-subagent-status-icon.fail { background: rgba(239,68,68,0.2); color: #ef4444; }
+.ct-subagent-status-icon.running { background: rgba(59,130,246,0.2); color: #60a5fa; }
 .ct-subagent-card-name { font-weight: 600; color: var(--text, #e2e8f0); }
 .ct-role-highlight { color: var(--blue, #38bdf8); font-weight: 700; }
 .ct-subagent-meta-tags { margin-left: auto; display: flex; align-items: center; gap: 5px; }
@@ -2819,6 +2822,7 @@ body.is-native-app .tri-mode-switch {
 .ct-badge-status { font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 4px; text-transform: uppercase; }
 .ct-badge-status.ok { background: rgba(34,197,94,0.15); color: #22c55e; }
 .ct-badge-status.fail { background: rgba(239,68,68,0.18); color: #ef4444; }
+.ct-badge-status.running { background: rgba(59,130,246,0.2); color: #60a5fa; }
 
 .ct-subagent-card-body { padding: 10px 14px 14px; border-top: 1px solid var(--border, rgba(255,255,255,0.06)); display: flex; flex-direction: column; gap: 10px; }
 .ct-sub-section { display: flex; flex-direction: column; gap: 4px; }

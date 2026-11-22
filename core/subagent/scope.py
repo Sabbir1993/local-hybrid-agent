@@ -22,13 +22,28 @@ def drop_child_write_tracking(files_modified: set) -> None:
         if not isinstance(changes, dict):
             return
         resolved = set()
+        from pathlib import Path
+        import os
         for _fp in files_modified:
             try:
-                resolved.add(str(_ws_resolve(_fp)))
+                res_p = str(_ws_resolve(_fp))
+                resolved.add(res_p)
+                resolved.add(os.path.normpath(res_p))
+                resolved.add(os.path.normcase(os.path.normpath(res_p)))
+                try:
+                    resolved.add(str(Path(res_p).resolve()))
+                    resolved.add(os.path.normcase(str(Path(res_p).resolve())))
+                except Exception:
+                    pass
             except Exception:
                 pass
         for _k in list(changes):
-            if _k in resolved:
+            k_norm = os.path.normcase(os.path.normpath(_k))
+            try:
+                k_res = os.path.normcase(str(Path(_k).resolve()))
+            except Exception:
+                k_res = k_norm
+            if _k in resolved or k_norm in resolved or k_res in resolved:
                 changes.pop(_k, None)
         if not changes:
             _ws_changes.pop(uid, None)

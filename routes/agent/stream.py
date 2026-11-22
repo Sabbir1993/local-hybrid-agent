@@ -1937,13 +1937,37 @@ async def run_agent_stream(req, user, ctx):
                             result = f"error: {type(_pres).__name__}: {_pres}" if isinstance(_pres, Exception) else _pres
                         else:
                             try:
-                                # the tool runs as a task so the stream keeps a heartbeat during a long command, and a
-                                # disconnect cancels it instead of leaving it running unattended
-                                async for _k, _v in keepalive(run_tool(name, args, unique_done=personal)):
-                                    if _k == 'ping':
-                                        yield _v
-                                    else:
-                                        result = _v
+                                if name in ("spawn_parallel_agents", "spawn_agent", "spawn_reviewed_coder"):
+                                    from core.subagent.runner import set_subagent_event_queue, reset_subagent_event_queue
+                                    _sub_q = asyncio.Queue()
+                                    _tok = set_subagent_event_queue(_sub_q)
+                                    _tt = asyncio.create_task(run_tool(name, args, unique_done=personal))
+                                    try:
+                                        while not _tt.done():
+                                            try:
+                                                _ev = await asyncio.wait_for(_sub_q.get(), timeout=0.5)
+                                                yield sse("subagent_event", {"id": tc_id, "name": name, **_ev})
+                                            except asyncio.TimeoutError:
+                                                yield PING
+                                        while not _sub_q.empty():
+                                            try:
+                                                _ev = _sub_q.get_nowait()
+                                                yield sse("subagent_event", {"id": tc_id, "name": name, **_ev})
+                                            except Exception:
+                                                break
+                                        result = await _tt
+                                    finally:
+                                        reset_subagent_event_queue(_tok)
+                                        if not _tt.done():
+                                            _tt.cancel()
+                                else:
+                                    # the tool runs as a task so the stream keeps a heartbeat during a long command, and a
+                                    # disconnect cancels it instead of leaving it running unattended
+                                    async for _k, _v in keepalive(run_tool(name, args, unique_done=personal)):
+                                        if _k == 'ping':
+                                            yield _v
+                                        else:
+                                            result = _v
                             finally:
                                 set_device_approved(False)
                                 mark_approved("")             # the tool ran in a copy of this context: clear our copy too

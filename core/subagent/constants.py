@@ -1,5 +1,39 @@
-MAX_SUBAGENT_STEPS = 15
-DEFAULT_SUBAGENT_STEPS = 8
+import json
+from pathlib import Path
+
+MAX_SUBAGENT_STEPS = 20
+DEFAULT_SUBAGENT_STEPS = 10
+DEFAULT_SUBAGENT_TIMEOUT_S = 180
+DEFAULT_SUBAGENT_MAX_PARALLEL = 4
+
+SUBAGENT_CONFIG_PATH = Path("config/subagents_config.json")
+
+SUBAGENT_DEFAULTS = {
+    "subagent_default_steps": DEFAULT_SUBAGENT_STEPS,
+    "subagent_max_steps": MAX_SUBAGENT_STEPS,
+    "subagent_timeout_s": DEFAULT_SUBAGENT_TIMEOUT_S,
+    "subagent_max_parallel": DEFAULT_SUBAGENT_MAX_PARALLEL,
+}
+
+def load_subagent_config() -> dict:
+    cfg = dict(SUBAGENT_DEFAULTS)
+    if SUBAGENT_CONFIG_PATH.exists():
+        try:
+            with open(SUBAGENT_CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    cfg.update({k: v for k, v in data.items() if k in SUBAGENT_DEFAULTS and v is not None})
+        except Exception:
+            pass
+    try:
+        from ..small_model import APP_CONFIG
+        app_cfg = APP_CONFIG.get("subagents") or APP_CONFIG.get("subagent") or {}
+        if isinstance(app_cfg, dict):
+            cfg.update({k: v for k, v in app_cfg.items() if k in SUBAGENT_DEFAULTS and v is not None})
+    except Exception:
+        pass
+    return cfg
+
 # run_python: sub-agents have no SSE stream to raise the approval modal on
 # media tools: cost money / long GPU jobs - only the main agent may use them
 DENIED_TOOLS = {"run_shell", "run_tests", "git_commit", "git_branch", "run_python", "spawn_agent", "spawn_parallel_agents", "spawn_reviewed_coder", "generate_image", "generate_video"}

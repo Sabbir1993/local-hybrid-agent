@@ -185,6 +185,42 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       }
       break;
     }
+    case 'subagent_event': {
+      const call = acts.slice().reverse().find((a) => a.type === 'tool_call' && (a.id === d.id || (!d.id && a.name === d.name)));
+      if (call) {
+        if (!call.subagents) call.subagents = {};
+        const key = String(d.sub_index ?? d.subagent_id ?? '0');
+        const prev = call.subagents[key] || {};
+        const ev = d.event;
+        call.subagents[key] = {
+          ...prev,
+          sub_index: d.sub_index !== undefined ? d.sub_index : prev.sub_index,
+          subagent_id: d.subagent_id || prev.subagent_id,
+          role: d.role || prev.role || 'subagent',
+          task: d.task || prev.task || '',
+          status: ev === 'done' ? 'completed' : ev === 'error' ? 'error' : 'running',
+          step: d.step !== undefined ? d.step : prev.step,
+          max_steps: d.max_steps !== undefined ? d.max_steps : prev.max_steps,
+          current_tool: ev === 'tool_start' ? d.tool : (ev === 'tool_done' ? null : prev.current_tool),
+          current_tool_args: ev === 'tool_start' ? d.args : (ev === 'tool_done' ? null : prev.current_tool_args),
+          elapsed_s: d.elapsed_s !== undefined ? d.elapsed_s : prev.elapsed_s,
+          duration_s: d.duration_s !== undefined ? d.duration_s : prev.duration_s,
+          error: d.error || prev.error,
+          last_event: ev,
+        };
+        const roleLabel = d.role || prev.role || `#${Number(key) + 1}`;
+        if (ev === 'step') {
+          L.statusText = `[Sub-agent ${roleLabel}] Step ${d.step}/${d.max_steps || '?'}`;
+        } else if (ev === 'tool_start') {
+          const target = d.args?.path || d.args?.file || d.args?.query || d.args?.command || '';
+          const targetShort = target ? ` (${String(target).split(/[\\/]/).pop()})` : '';
+          L.statusText = `[Sub-agent ${roleLabel}] ${d.tool}${targetShort}...`;
+        } else if (ev === 'done') {
+          L.statusText = `[Sub-agent ${roleLabel}] Done in ${d.duration_s || 0}s`;
+        }
+      }
+      break;
+    }
     case 'tool_result':
       acts.push({ type: 'tool_result', ...d });
       L.statusText = 'Crunching tool results...';

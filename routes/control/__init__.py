@@ -47,6 +47,10 @@ from .sampling import (
     get_sampling_config,
     save_sampling_config,
 )
+from .subagents_endpoint import (
+    get_subagents_config,
+    save_subagents_config,
+)
 
 __all__ = [
     "router",

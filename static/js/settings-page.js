@@ -172,6 +172,7 @@ window.__sessionReady.then((data) => {
   }
   if (document.getElementById('sec-sampling')) initSamplingPanel();
   if (document.getElementById('sec-caps')) loadCapabilities();
+  if (document.getElementById('sec-subagents')) initSubagentsPanel();
   if (document.getElementById('cloud-content')) loadCloudCard();
   if (document.getElementById('devices-content')) loadDevicesPanel();
   if (document.getElementById('sec-users')) loadUsersPanel();
@@ -324,3 +325,84 @@ async function loadDevicesPanel() {
     });
   }
 })();
+
+// --- Sub-Agents Settings Panel ---
+async function initSubagentsPanel() {
+  const defaultStepsInput = document.getElementById('subagent-default-steps');
+  const maxStepsInput = document.getElementById('subagent-max-steps');
+  const timeoutInput = document.getElementById('subagent-timeout-s');
+  const maxParallelInput = document.getElementById('subagent-max-parallel');
+  const saveBtn = document.getElementById('subagent-save-btn');
+  const resetBtn = document.getElementById('subagent-reset-btn');
+  const statusEl = document.getElementById('subagent-save-status');
+
+  if (!defaultStepsInput) return;
+
+  function setStatus(msg, isError = false) {
+    if (!statusEl) return;
+    statusEl.textContent = msg;
+    statusEl.style.color = isError ? 'var(--danger, #ef4444)' : 'var(--accent, #38bdf8)';
+    if (msg) setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  }
+
+  async function loadConfig() {
+    try {
+      const res = await fetch('/control/subagents');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      defaultStepsInput.value = data.subagent_default_steps ?? 10;
+      maxStepsInput.value = data.subagent_max_steps ?? 20;
+      timeoutInput.value = data.subagent_timeout_s ?? 180;
+      maxParallelInput.value = data.subagent_max_parallel ?? 4;
+    } catch (err) {
+      console.warn('Failed to load subagent settings:', err);
+      setStatus('Failed to load current settings', true);
+    }
+  }
+
+  async function saveConfig() {
+    const payload = {
+      subagent_default_steps: parseInt(defaultStepsInput.value, 10),
+      subagent_max_steps: parseInt(maxStepsInput.value, 10),
+      subagent_timeout_s: parseInt(timeoutInput.value, 10),
+      subagent_max_parallel: parseInt(maxParallelInput.value, 10),
+    };
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+    }
+    try {
+      const res = await fetch('/control/subagents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `HTTP ${res.status}`);
+      }
+      setStatus('✓ Subagent settings saved successfully');
+    } catch (err) {
+      setStatus(`Error: ${err.message}`, true);
+    } finally {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Subagent Settings';
+      }
+    }
+  }
+
+  function resetDefaults() {
+    defaultStepsInput.value = 10;
+    maxStepsInput.value = 20;
+    timeoutInput.value = 180;
+    maxParallelInput.value = 4;
+    setStatus('Reset to default values (click Save to persist)');
+  }
+
+  if (saveBtn) saveBtn.onclick = saveConfig;
+  if (resetBtn) resetBtn.onclick = resetDefaults;
+
+  loadConfig();
+}
+window.initSubagentsPanel = initSubagentsPanel;
