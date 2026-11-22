@@ -89,5 +89,43 @@ class SetConfigWithoutLoadedProfile(unittest.IsolatedAsyncioTestCase):
         hint.assert_not_called()
 
 
+class FetchAllowlistEndpoint(unittest.IsolatedAsyncioTestCase):
+    """Admin-only SSRF allowlist: validation must reject unparseable input and the
+    never-overridable ranges before anything is persisted."""
+
+    async def _post(self, cidrs):
+        from types import SimpleNamespace
+        req = SimpleNamespace(client=SimpleNamespace(host="10.0.0.1"))
+        with mock.patch.object(ce, "update_app_config") as save, \
+                mock.patch.object(ce, "audit_log") as audit:
+            out = await ce.set_fetch_allowlist(ce.FetchAllowlistRequest(cidrs=cidrs), req,
+                                               user=_principal())
+        return out, save, audit
+
+    async def test_rejects_garbage_and_never_overridable_ranges(self):
+        from fastapi import HTTPException
+        for bad in ("not-an-ip", "127.0.0.1/8", "169.254.169.254/32", "::1/128"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(HTTPException) as ctx:
+                    await self._post([bad])
+                self.assertEqual(ctx.exception.status_code, 400)
+
+    async def test_valid_range_is_persisted_and_audited(self):
+        cfg = {"security": {}}
+        with mock.patch.object(ce, "APP_CONFIG", cfg):
+            out, save, audit = await self._post(["192.168.59.0/24"])
+        self.assertEqual(out["cidrs"], ["192.168.59.0/24"])
+        self.assertEqual(cfg["security"]["fetch_allow_cidrs"], ["192.168.59.0/24"])
+        save.assert_called_once()
+        audit.assert_called_once()
+        self.assertEqual(audit.call_args.kwargs["action"], "security.fetch_allowlist")
+
+    async def test_duplicates_and_blank_lines_are_removed(self):
+        cfg = {"security": {}}
+        with mock.patch.object(ce, "APP_CONFIG", cfg):
+            out, _, _ = await self._post(["192.168.59.0/24", "", " 192.168.59.0/24 "])
+        self.assertEqual(out["cidrs"], ["192.168.59.0/24"])
+
+
 if __name__ == "__main__":
     unittest.main()

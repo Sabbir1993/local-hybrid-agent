@@ -3,9 +3,11 @@
 Run: python -m unittest tests.test_net_guard -v
 """
 
+import socket
 import sys
 import threading
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -27,6 +29,47 @@ class CheckUrlTests(unittest.TestCase):
 
     def test_public_literal_allowed(self):
         self.assertEqual(check_url("https://8.8.8.8/"), "https://8.8.8.8/")
+
+
+class FetchAllowlistTests(unittest.TestCase):
+    """Admin-configured internal ranges (security.fetch_allow_cidrs) override the private-IP
+    rule, but never the hard blocks. Without the setting the original behaviour is unchanged."""
+
+    def test_private_literal_allowed_only_when_its_range_is_configured(self):
+        with mock.patch.object(net_guard, "APP_CONFIG", {}):
+            with self.assertRaises(BlockedURLError):
+                check_url("http://192.168.59.104/hr")
+        cfg = {"security": {"fetch_allow_cidrs": ["192.168.59.0/24"]}}
+        with mock.patch.object(net_guard, "APP_CONFIG", cfg):
+            self.assertEqual(check_url("http://192.168.59.104/hr"), "http://192.168.59.104/hr")
+
+    def test_hostname_resolving_into_an_allowed_range(self):
+        fake = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.59.104", 443))]
+        cfg = {"security": {"fetch_allow_cidrs": ["192.168.59.0/24"]}}
+        with mock.patch.object(net_guard.socket, "getaddrinfo", return_value=fake), \
+                mock.patch.object(net_guard, "APP_CONFIG", cfg):
+            self.assertEqual(check_url("https://hris.sslwireless.com/x"), "https://hris.sslwireless.com/x")
+
+    def test_mixed_public_and_private_dns_answers_stay_blocked(self):
+        fake = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.59.104", 443))]
+        cfg = {"security": {"fetch_allow_cidrs": ["192.168.59.0/24"]}}
+        with mock.patch.object(net_guard.socket, "getaddrinfo", return_value=fake), \
+                mock.patch.object(net_guard, "APP_CONFIG", cfg):
+            with self.assertRaises(BlockedURLError):
+                check_url("https://mixed.example/x")
+
+    def test_metadata_endpoint_cannot_be_allowlisted(self):
+        cfg = {"security": {"fetch_allow_cidrs": ["169.254.0.0/16"]}}
+        with mock.patch.object(net_guard, "APP_CONFIG", cfg):
+            with self.assertRaises(BlockedURLError):
+                check_url("http://169.254.169.254/latest/meta-data/")
+
+    def test_localhost_cannot_be_allowlisted(self):
+        cfg = {"security": {"fetch_allow_cidrs": ["127.0.0.0/8"]}}
+        with mock.patch.object(net_guard, "APP_CONFIG", cfg):
+            with self.assertRaises(BlockedURLError):
+                check_url("http://127.0.0.1:8090/v1/models")
 
 
 class _Redirector(BaseHTTPRequestHandler):

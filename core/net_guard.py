@@ -19,10 +19,40 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from .small_model.config import APP_CONFIG
+
 _BLOCKED_HOSTNAMES = ("localhost", "localhost.localdomain", "metadata.google.internal")
 _BLOCKED_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home.arpa")
 MAX_REDIRECTS = 5
 _NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+# Never fetchable even when an admin allowlists their CIDR: cloud instance-metadata
+# endpoints (SSRF -> credentials). Loopback and this app's own services are covered by
+# _BLOCKED_HOSTNAMES / the link-local rule and are likewise not overridable.
+_HARD_BLOCKED_NETS = (
+    ipaddress.ip_network("169.254.0.0/16"),   # link-local, includes cloud instance metadata
+    ipaddress.ip_network("fd00:ec2::254/128"),
+    ipaddress.ip_network("127.0.0.0/8"),      # this app's own local services
+    ipaddress.ip_network("::1/128"),
+)
+
+
+def _fetch_allow_cidrs() -> list:
+    """Admin-configured CIDRs that may be fetched even when they resolve to private space.
+
+    Stored in config/app.json -> security.fetch_allow_cidrs, editable only by an admin
+    through Settings -> Security. Invalid entries are ignored (fail closed)."""
+    try:
+        raw = ((APP_CONFIG.get("security") or {}).get("fetch_allow_cidrs") or [])
+    except Exception:
+        return []
+    nets = []
+    for item in raw:
+        try:
+            nets.append(ipaddress.ip_network(str(item).strip(), strict=False))
+        except (ValueError, TypeError):
+            continue
+    return nets
 
 
 class BlockedURLError(ValueError):
@@ -64,8 +94,19 @@ def check_url(url: str) -> str:
             raise BlockedURLError(f"cannot resolve host '{host}': {e}") from e
         addrs = [ipaddress.ip_address(info[4][0].split("%")[0]) for info in infos]
     for a in addrs:
+        if any(a in net for net in _HARD_BLOCKED_NETS):
+            raise BlockedURLError(f"refusing to fetch '{host}': address {a} is always blocked")
+    # An explicit admin allowlist can override the private-address rule for a host,
+    # but only when ALL resolved addresses are inside an allowed range (no mixed DNS).
+    allow = _fetch_allow_cidrs()
+    if allow and all(any(a in c for c in allow) for a in addrs):
+        return url
+    for a in addrs:
         if _ip_blocked(a):
-            raise BlockedURLError(f"refusing to fetch '{host}': resolves to non-public address {a}")
+            raise BlockedURLError(
+                f"refusing to fetch '{host}': resolves to non-public address {a}. Internal hosts are blocked by default. "
+                "An admin can allow the range under Settings -> Security -> Allowed internal fetch ranges; "
+                "otherwise open the page with the browser tool on the user's device.")
     return url
 
 

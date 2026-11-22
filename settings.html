@@ -452,6 +452,10 @@
           <span class="tab-icon">🗄️</span>
           <span class="tab-label">Database Explorer</span>
         </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-network" data-perm="security.network_policy">
+          <span class="tab-icon">🌐</span>
+          <span class="tab-label">Network Access</span>
+        </button>
         <button type="button" class="settings-tab-btn tab-danger" data-tab="sec-danger" data-perm="system.danger_zone">
           <span class="tab-icon">⚠️</span>
           <span class="tab-label">Danger Zone</span>
@@ -1214,6 +1218,32 @@
             <div class="dim" style="font-size:11px;">Loading databases…</div>
           </div>
           <a href="/#db" class="btn accent" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; width:auto; padding:6px 14px; font-size:12px;" data-open-db>🗄️ Open Database Explorer Console</a>
+        </div>
+      </div>
+
+      <!-- Section: Internal fetch allowlist (SSRF policy) -->
+      <div class="card settings-panel" id="sec-network" data-perm="security.network_policy">
+        <div class="settings-panel-head">
+          <h2>🌐 Network Access</h2>
+          <p class="dim">Admin only — internal IP ranges that web_fetch may reach</p>
+        </div>
+        <div style="padding:10px 4px;">
+          <p class="dim" style="font-size:12px; line-height:1.5;">
+            By default <code>web_fetch</code> refuses any address that is not publicly routable (SSRF protection).
+            Add a CIDR here to let it reach a trusted internal service such as an intranet host on this server.
+            Cloud metadata endpoints (<code>169.254.169.254</code>), localhost and this app's own ports can
+            <strong>never</strong> be allowed. Every change is written to the audit log.
+          </p>
+          <label for="fetch-allow-cidrs" style="display:block; margin-top:10px; font-size:12px;">
+            Allowed IP ranges — one IP or CIDR per line
+          </label>
+          <textarea id="fetch-allow-cidrs" rows="5" class="mono" spellcheck="false"
+                    style="width:100%; box-sizing:border-box; margin-top:6px; font-size:12px; padding:8px;"
+                    placeholder="192.168.59.0/24"></textarea>
+          <div style="display:flex; gap:8px; margin-top:8px;">
+            <button id="btn-fetch-allow-save" class="btn primary" type="button">Save Allowed Ranges</button>
+            <span id="fetch-allow-status" class="dim" style="font-size:12px; align-self:center;"></span>
+          </div>
         </div>
       </div>
 

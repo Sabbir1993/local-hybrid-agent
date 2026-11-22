@@ -1,6 +1,11 @@
+import ipaddress
 from typing import Optional
-from fastapi import Depends
+from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from core.audit import audit_log
+from core.config import update_app_config
+from core.small_model.config import APP_CONFIG
 from core.auth import Principal
 from core.deps import get_current_user, require_permission
 from core import reasoning
@@ -104,3 +109,56 @@ async def set_config(req: ConfigRequest, model: Optional[str] = None,
             return JSONResponse({"error": str(e)}, status_code=500)
     return {"ok": True, "restarted": req.restart and was_running,
             "config": _config_for_profile(prof)}
+
+
+# ---------------------------------------------------------------------------
+# Internal fetch allowlist (SSRF policy). Danger-zone permission only.
+# ---------------------------------------------------------------------------
+
+# These can never be allowlisted: instance metadata is the classic SSRF payload.
+_META_NETS = (
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("fd00:ec2::254/128"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+)
+
+
+class FetchAllowlistRequest(BaseModel):
+    cidrs: list[str]
+
+
+def _fetch_allowlist() -> list[str]:
+    return list((APP_CONFIG.get("security") or {}).get("fetch_allow_cidrs") or [])
+
+
+@router.get("/control/fetch-allowlist")
+async def get_fetch_allowlist(user: Principal = Depends(require_permission("security.network_policy"))):
+    return {"cidrs": _fetch_allowlist()}
+
+
+@router.post("/control/fetch-allowlist")
+async def set_fetch_allowlist(req: FetchAllowlistRequest, request: Request,
+                              user: Principal = Depends(require_permission("security.network_policy"))):
+    cleaned = []
+    for item in req.cidrs:
+        text = str(item).strip()
+        if not text:
+            continue
+        try:
+            net = ipaddress.ip_network(text, strict=False)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"invalid IP or CIDR: {text[:80]}")
+        if any(net.overlaps(meta) or net in meta for meta in _META_NETS):
+            raise HTTPException(status_code=400, detail=f"this range is always blocked and cannot be allowed: {text}")
+        if text not in cleaned:
+            cleaned.append(text)
+    if len(cleaned) > 50:
+        raise HTTPException(status_code=400, detail="at most 50 ranges may be configured")
+    before = _fetch_allowlist()
+    update_app_config(lambda cfg: cfg.setdefault("security", {}).__setitem__("fetch_allow_cidrs", cleaned))
+    APP_CONFIG.setdefault("security", {})["fetch_allow_cidrs"] = cleaned
+    audit_log(user, action="security.fetch_allowlist", resource="fetch_allow_cidrs",
+              detail={"from": before, "to": cleaned}, result="allow",
+              ip=request.client.host if request.client else None)
+    return {"cidrs": cleaned}

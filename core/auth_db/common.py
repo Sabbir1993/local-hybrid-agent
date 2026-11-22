@@ -30,6 +30,7 @@ PERMISSIONS = {
     "custom_agents.publish": "Approve custom agents that users want to share with everyone",
     "terminal.admin": "Switch the terminal to Windows administrator rights on their own PC (asks every time)",
     "speech.manage": "Run the voice-collection page (/voice): switch it on/off, rotate its link code, import lines, delete a speaker",
+    "security.network_policy": "Allow web_fetch to reach admin-approved internal IP ranges (SSRF policy)",
 }
 
 # How the Users & Roles screen presents each permission: a module (the part of the product it
@@ -92,6 +93,10 @@ PERMISSION_META = {
     "speech.manage": ("knowledge", "write", "Run the voice collection page",
                       "Turns the public voice-recording page on or off, changes its shared link, imports the lines people read "
                       "and deletes a speaker's recordings. The recordings are personal data."),
+    "security.network_policy": ("access", "write", "Allow internal web fetches",
+                                "Admin-only: IP ranges web_fetch may contact even though they are private. Metadata "
+                                "endpoints, localhost and this app's own services can never be allowed. A weak model "
+                                "with web_fetch access could otherwise be tricked into scanning your network."),
     "git.push": ("sharing", "action", "Push code and open pull requests",
                  "Sends code to remote repositories using this system's saved git credentials."),
 }

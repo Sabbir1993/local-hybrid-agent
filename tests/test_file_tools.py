@@ -782,6 +782,20 @@ class RunPythonIsolationTests(Base):
         for name in paths:
             self.assertRegex(name, r'^_agent_run_[0-9a-f]{8}\.py$')
 
+    def test_result_names_the_cwd_so_relative_paths_can_be_read_back(self):
+        from core.agent_tools.file_ops import tool_run_python
+        out = self.run_(tool_run_python({"code": "print('x')"}))
+        self.assertIn("exit code 0", out)
+        self.assertIn("cwd:", out)
+        self.assertIn(str(self.python_runs[0]["cwd"]), out)
+
+    def test_read_file_missing_hint_points_at_list_files_not_a_duplicate(self):
+        from core.agent_tools.file_ops import tool_read_file
+        out = self.run_(tool_read_file({"path": "hris/recon/discovery2.txt"}))
+        self.assertIn("list_files", out)
+        self.assertIn("cwd", out)
+        self.assertNotIn("Use 'write_file' to create it", out)
+
     def test_script_removed_after_run(self):
         from core.agent_tools.file_ops import tool_run_python
         self.run_(tool_run_python({"code": "print('x')"}))

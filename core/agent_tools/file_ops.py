@@ -229,7 +229,11 @@ async def tool_read_file(args: dict) -> str:
     if text is None:
         rec = await _recover_written(uid, p, path_arg)   # read-only, so a unique close match to a file we wrote is safe
         if rec is None:
-            return await _missing_msg(uid, p, path_arg, "It does not exist yet. Use 'write_file' to create it.")
+            return await _missing_msg(
+                uid, p, path_arg,
+                "It does not exist yet. If a script wrote it, use list_files with a pattern to find the "
+                "real path (run_python's cwd is the workspace root) before reading it. Do not create a "
+                "new file unless you intend a new one.")
         p, text, new_arg = rec
         note = (f"note: '{path_arg}' was not found; this is '{new_arg}', the file you wrote. "
                 "Use that exact name from now on.\n")
@@ -660,7 +664,10 @@ async def tool_run_python(args: dict) -> str:
         return f"error: timed out after {timeout}s (config agent.exec_timeout_s){retained_note}"
     out = (data.get("stdout") or "")[-MAX_TOOL_OUTPUT:]
     err = (data.get("stderr") or "")[-4000:]
-    result = f"exit code {data.get('exit_code')}"
+    # The cwd matters: a script writing to a relative path lands under this folder, which is also
+    # where read_file/list_files resolve their paths. Without it the model guesses wrong and
+    # re-creates the output under a different name.
+    result = f"exit code {data.get('exit_code')}\ncwd: {ws}"
     if out:
         result += f"\n--- stdout ---\n{out}"
     if err:

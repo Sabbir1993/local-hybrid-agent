@@ -406,3 +406,52 @@ async function initSubagentsPanel() {
   loadConfig();
 }
 window.initSubagentsPanel = initSubagentsPanel;
+
+// Admin-only internal fetch allowlist (Settings -> Network Access).
+// This panel exists only for holders of security.network_policy (data-perm), and the
+// server re-checks that permission on both endpoints - hiding the tab is not the gate.
+(function initFetchAllowlistPanel() {
+  const area = document.getElementById('fetch-allow-cidrs');
+  const saveBtn = document.getElementById('btn-fetch-allow-save');
+  const statusEl = document.getElementById('fetch-allow-status');
+  if (!area || !saveBtn) return;
+
+  const show = (msg, bad) => {
+    if (!statusEl) return;
+    statusEl.textContent = msg;
+    statusEl.style.color = bad ? '#f43f5e' : '';
+  };
+
+  async function load() {
+    try {
+      const res = await fetch('/control/fetch-allowlist', { headers: { 'Accept': 'application/json' } });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      area.value = (data.cidrs || []).join('\n');
+    } catch (err) {
+      show('Could not load current ranges: ' + err.message, true);
+    }
+  }
+
+  saveBtn.onclick = async () => {
+    const cidrs = area.value.split(/[\r\n,]+/).map(s => s.trim()).filter(Boolean);
+    saveBtn.disabled = true;
+    try {
+      const res = await fetch('/control/fetch-allowlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ cidrs }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+      area.value = (data.cidrs || []).join('\n');
+      show('✓ Saved ' + data.cidrs.length + ' range(s)', false);
+    } catch (err) {
+      show('Error: ' + err.message, true);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
+
+  load();
+})();
